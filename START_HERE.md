@@ -31,7 +31,9 @@ You are the **implementation (clean-room) AI** for a native Rust/Bevy rewrite of
 
 ## Development loop
 
-spec -> readable Rust in the right crate -> synthetic-byte unit tests -> run against the real ISO -> record results and gaps in docs/STATUS.md -> (optionally) ask the user to have the research side send a `VER-` verification report.
+spec -> readable Rust in the right crate -> synthetic-byte unit tests -> run against the real ISO -> set that spec's status to `Implemented` in specs/README.md -> record results and gaps in docs/STATUS.md -> (optionally) ask the user to have the research side send a `VER-` verification report, then mark it `Verified` if it passes.
+
+Progress is measured as described in docs/PROGRESS.md. Keep the spec index statuses accurate and, once M2 lands, keep `--coverage` (asset coverage) up to date as decoders are added. Run Progress.cmd when reporting status.
 
 Keep `neopets-data` pure and bounded (no panics on bad input, explicit size limits). Keep `neopets-sim` free of Bevy, files, and wall-clock time. Keep Bevy in `neopets-app`.
 

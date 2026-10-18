@@ -20,6 +20,10 @@
 - Disc check is serial/version only, not a build fingerprint.
 - The status window has not been manually reviewed.
 
+## Progress tracking
+
+Progress.cmd and docs/PROGRESS.md added: code coverage (from research-side `specs/PROGRESS.md`, request R-0000), asset coverage (arrives with M2 `--coverage`), and pipeline/milestones. Currently 2 of 12 milestones done; no code or asset coverage measurable yet.
+
 ## Specs
 
 None approved yet. Open requests: R-0001 to R-0006 in specs/REQUESTS.md. M2 (archive access) is blocked on R-0001 and R-0002.

@@ -6,10 +6,13 @@ Clean-room implementers build from the specs in this folder and nothing else fro
 - `TEMPLATE.md`: the format every spec uses.
 - `SPEC-NNNN-<topic>.md`: approved format/behavior specs.
 - `VER-NNNN-<topic>.md`: black-box verification reports on clean builds.
+- `PROGRESS.md`: aggregate coverage numbers from the research side (see docs/PROGRESS.md). Numbers only.
 
 A spec is only in this folder once the user has reviewed it and `scripts/audit-specs.ps1` passes. If a spec is wrong or incomplete, add a follow-up request to `REQUESTS.md`; do not guess, and do not go and look at the original yourself.
 
 ## Index
+
+Status moves `Approved` -> `Implemented` (clean side: code + tests done, run against the ISO) -> `Verified` (a passing `VER-` report). The clean side updates this column; `Progress.cmd` and the research side's coverage count read it.
 
 | ID | Topic | Status |
 | --- | --- | --- |

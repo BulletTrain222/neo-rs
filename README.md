@@ -13,6 +13,7 @@ A native clean-room reimplementation of Neopets: The Darkest Faerie (USA 1.00, S
 3. **Inspect-ISO.cmd** checks the disc without opening a window.
 4. **Run.cmd** builds and opens the Bevy window.
 5. **Check.cmd** runs tests, the Bevy compile check, the source audit, and the spec audit.
+6. **Progress.cmd** shows how much of the game is done: code coverage, asset coverage, and milestones. See docs/PROGRESS.md.
 
 `scripts\cargo.cmd run --locked -p neopets-data -- --iso "D:\Games\Neopets.iso"` picks an explicit image; `NEOPETS_ISO` also overrides the saved path.
 
