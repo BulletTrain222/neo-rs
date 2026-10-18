@@ -1,8 +1,12 @@
 mod controls;
 mod orbit;
+mod pattern;
 
+use bevy::asset::RenderAssetUsages;
+use bevy::image::ImageSampler;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
+use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use controls::{Browser, axis, movement};
 use neopets_data::{Disc, iso_path};
 use neopets_sim::{FixedStep, PlayerInput, Simulation};
@@ -30,6 +34,10 @@ struct SimDriver {
 #[derive(Component)]
 struct Hud;
 
+/// Whether the HUD starts hidden (`--hide-hud`); Tab toggles it afterwards.
+#[derive(Resource)]
+struct HudHidden(bool);
+
 #[derive(Component)]
 struct SimText;
 
@@ -40,6 +48,8 @@ fn main() {
     let mut args = std::env::args().skip(1);
     let mut explicit = None;
     let mut smoke_test = false;
+    let mut screenshot = None;
+    let mut hide_hud = false;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -52,6 +62,13 @@ fn main() {
             );
         } else if arg == "--smoke-test" {
             smoke_test = true;
+        } else if arg == "--hide-hud" {
+            hide_hud = true;
+        } else if arg == "--screenshot" {
+            screenshot = Some(args.next().unwrap_or_else(|| {
+                eprintln!("--screenshot requires an output .png path");
+                std::process::exit(2)
+            }));
         } else {
             eprintln!("Unknown argument: {arg}");
             std::process::exit(2);
@@ -78,6 +95,7 @@ fn main() {
     };
     let mut app = App::new();
     app.insert_resource(DiscStatus(status))
+        .insert_resource(HudHidden(hide_hud))
         .insert_resource(driver)
         .init_resource::<Browser>()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
@@ -103,8 +121,38 @@ fn main() {
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
         app.add_systems(Update, smoke_exit);
+    } else if let Some(path) = screenshot {
+        app.insert_resource(bevy::winit::WinitSettings::continuous())
+            .insert_resource(ScreenshotPath(path))
+            .add_systems(Update, screenshot_and_exit);
     }
     app.run();
+}
+
+#[derive(Resource)]
+struct ScreenshotPath(String);
+
+/// Capture one frame once rendering has settled, then exit; for reviewing the window.
+/// Waits on real time, not frames: render pipelines compile asynchronously after startup,
+/// and meshes are simply not drawn until theirs are ready.
+fn screenshot_and_exit(
+    mut commands: Commands,
+    time: Res<Time<Real>>,
+    path: Res<ScreenshotPath>,
+    mut taken: Local<bool>,
+    mut exit: MessageWriter<AppExit>,
+) {
+    use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+    let elapsed = time.elapsed_secs();
+    if !*taken && elapsed >= 4.0 {
+        *taken = true;
+        commands
+            .spawn(Screenshot::primary_window())
+            .observe(save_to_disk(path.0.clone()));
+    } else if elapsed >= 6.0 {
+        // Saving runs asynchronously; exiting too soon drops the capture.
+        exit.write(AppExit::Success);
+    }
 }
 
 fn smoke_exit(
@@ -127,7 +175,36 @@ fn setup_viewer(
     mut commands: Commands,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
 ) {
+    match pattern::rgba() {
+        Ok(rgba) => {
+            let mut image = Image::new(
+                Extent3d {
+                    width: pattern::SIZE,
+                    height: pattern::SIZE,
+                    depth_or_array_layers: 1,
+                },
+                TextureDimension::D2,
+                rgba,
+                TextureFormat::Rgba8UnormSrgb,
+                RenderAssetUsages::default(),
+            );
+            image.sampler = ImageSampler::nearest();
+            commands.spawn((
+                Mesh3d(meshes.add(Rectangle::new(4.0, 4.0))),
+                MeshMaterial3d(materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(image)),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Blend,
+                    cull_mode: None,
+                    ..default()
+                })),
+                Transform::from_xyz(-3.0, 2.2, -3.0),
+            ));
+        }
+        Err(e) => error!("Synthetic test pattern failed to decode: {e}"),
+    }
     let orbit = Orbit::default();
     commands.spawn((Camera3d::default(), orbit.transform(), orbit));
     let mut unlit = |r: f32, g: f32, b: f32| {
@@ -168,7 +245,7 @@ fn setup_viewer(
     }
 }
 
-fn setup_hud(mut commands: Commands, status: Res<DiscStatus>) {
+fn setup_hud(mut commands: Commands, status: Res<DiscStatus>, hidden: Res<HudHidden>) {
     let font = |px: f32| TextFont {
         font_size: bevy::text::FontSize::Px(px),
         ..default()
@@ -180,15 +257,19 @@ fn setup_hud(mut commands: Commands, status: Res<DiscStatus>) {
                 row_gap: px(18),
                 margin: UiRect::all(px(32)),
                 max_width: percent(90),
+                display: if hidden.0 { Display::None } else { Display::Flex },
+                padding: UiRect::all(px(20)),
                 ..default()
             },
+            BackgroundColor(Color::srgba(0.02, 0.03, 0.05, 0.85)),
             Hud,
         ))
         .with_children(|ui| {
             ui.spawn((
                 Text::new(format!(
-                    "NEOPETS\nThe Darkest Faerie — rewrite workspace\n\n{}\n\nArea rendering and gameplay are not implemented yet. Original content comes from your ISO. No BIOS is used.",
-                    status.0
+                    "NEOPETS\nThe Darkest Faerie - rewrite workspace\n\n{}\n\nArea rendering and gameplay are not implemented yet. Original content comes from your ISO. No BIOS is used.",
+                    // Bevy's built-in font has no bullet glyph.
+                    status.0.replace(" • ", " | ")
                 )),
                 font(20.0),
                 TextColor(Color::srgb(0.87, 0.91, 0.97)),
@@ -207,8 +288,9 @@ fn setup_hud(mut commands: Commands, status: Res<DiscStatus>) {
             ));
             ui.spawn((
                 Text::new(
-                    "VIEWER — diagnostic grid and axes only, not game content\n\
-                     Drag with a mouse button to orbit • scroll to zoom • Tab hides this text",
+                    "VIEWER - diagnostic grid, axes, and a synthetic test pattern (generated in code, \
+                     decoded through neopets_data::gs as 4-bit indexed); none of it is game content\n\
+                     Drag with a mouse button to orbit | scroll to zoom | Tab hides this text",
                 ),
                 font(16.0),
                 TextColor(Color::srgb(0.65, 0.72, 0.95)),
@@ -325,8 +407,8 @@ fn show_sim(driver: Res<SimDriver>, mut texts: Query<&mut Text, With<SimText>>) 
     let d = &*driver;
     for mut text in &mut texts {
         text.0 = format!(
-            "SIMULATION LOOP — diagnostic scaffold, not original game timing\n\
-             Tick {} at a placeholder {} Hz • {} this frame • {} dropped • alpha {:.2}\n\
+            "SIMULATION LOOP - diagnostic scaffold, not original game timing\n\
+             Tick {} at a placeholder {} Hz | {} this frame | {} dropped | alpha {:.2}\n\
              Input: move ({}, {}) from WASD / arrows / left stick",
             d.sim.tick,
             d.clock.rate_hz(),
@@ -342,11 +424,11 @@ fn show_sim(driver: Res<SimDriver>, mut texts: Query<&mut Text, With<SimText>>) 
 fn show_browser(browser: Res<Browser>, mut texts: Query<&mut Text, With<BrowserText>>) {
     let entry = match &browser.typing {
         Some(t) => format!("Go to: {t}_   (Enter to jump, Esc to cancel)"),
-        None => "Type a number and press Enter • [ ] step 1 • PgUp/PgDn step 100".into(),
+        None => "Type a number and press Enter | [ ] step 1 | PgUp/PgDn step 100".into(),
     };
     for mut text in &mut texts {
         text.0 = format!(
-            "RESOURCE BROWSER — shell only\n\
+            "RESOURCE BROWSER - shell only\n\
              Resource #{}: not decoded yet. The archive index awaits specs R-0001 and R-0002, \
              so it is not known whether this number exists.\n{entry}",
             browser.selected

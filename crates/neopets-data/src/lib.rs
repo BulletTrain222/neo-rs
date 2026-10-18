@@ -1,5 +1,6 @@
 //! Read-only access to a user-supplied disc. No emulator or executable interpreter.
 pub mod fingerprint;
+pub mod gs;
 mod iso;
 mod mods;
 pub use iso::{Disc, Entry};
