@@ -8,6 +8,9 @@ use std::{
 const SECTOR: u64 = 2048;
 const MAX_DIRECTORY: u64 = 16 * 1024 * 1024;
 const MAX_READ: u64 = 64 * 1024 * 1024;
+/// Caps on the whole directory tree so a hostile image cannot exhaust memory while indexing.
+const MAX_ENTRIES: usize = 65_536;
+const MAX_TOTAL_DIRECTORY: u64 = 64 * 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub struct Entry {
@@ -20,6 +23,12 @@ pub struct Disc {
     file: File,
     length: u64,
     entries: BTreeMap<String, Entry>,
+}
+
+/// Bookkeeping shared across one directory-tree walk.
+struct Walk {
+    visited: BTreeSet<u64>,
+    directory_bytes: u64,
 }
 
 fn le32(b: &[u8], at: usize) -> u64 {
@@ -72,14 +81,11 @@ impl Disc {
         if pvd[156] < 34 {
             return Err("Invalid root directory record".into());
         }
-        let mut visited = BTreeSet::new();
-        disc.walk(
-            le32(&pvd, 158) * SECTOR,
-            le32(&pvd, 166),
-            "",
-            0,
-            &mut visited,
-        )?;
+        let mut walk = Walk {
+            visited: BTreeSet::new(),
+            directory_bytes: 0,
+        };
+        disc.walk(le32(&pvd, 158) * SECTOR, le32(&pvd, 166), "", 0, &mut walk)?;
         Ok(disc)
     }
 
@@ -88,11 +94,16 @@ impl Disc {
             return Err("ISO read is outside the file or exceeds the 64 MiB read limit".into());
         }
         let mut data = vec![0; size as usize];
+        self.read_at(offset, &mut data)?;
+        Ok(data)
+    }
+
+    /// The image may have been truncated or replaced since it was indexed, so I/O errors carry context.
+    fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> Result<(), String> {
         self.file
             .seek(SeekFrom::Start(offset))
-            .map_err(|e| e.to_string())?;
-        self.file.read_exact(&mut data).map_err(|e| e.to_string())?;
-        Ok(data)
+            .and_then(|_| self.file.read_exact(buf))
+            .map_err(|e| format!("ISO read of {} bytes at {offset} failed: {e}", buf.len()))
     }
 
     fn walk(
@@ -101,10 +112,14 @@ impl Disc {
         size: u64,
         prefix: &str,
         depth: usize,
-        visited: &mut BTreeSet<u64>,
+        walk: &mut Walk,
     ) -> Result<(), String> {
-        if depth > 16 || size > MAX_DIRECTORY || !visited.insert(offset) {
+        if depth > 16 || size > MAX_DIRECTORY || !walk.visited.insert(offset) {
             return Err("Invalid or cyclic ISO directory".into());
+        }
+        walk.directory_bytes += size;
+        if walk.directory_bytes > MAX_TOTAL_DIRECTORY {
+            return Err("ISO directory tree exceeds the 64 MiB limit".into());
         }
         let data = self.bytes(offset, size)?;
         let mut pos = 0;
@@ -151,10 +166,12 @@ impl Disc {
                         entry.size,
                         &format!("{path}/"),
                         depth + 1,
-                        visited,
+                        walk,
                     )?;
                 } else if self.entries.insert(path, entry).is_some() {
                     return Err("Duplicate ISO path".into());
+                } else if self.entries.len() > MAX_ENTRIES {
+                    return Err("ISO has more files than the 65536-entry limit".into());
                 }
             }
             pos += len;
@@ -166,28 +183,62 @@ impl Disc {
         &self.entries
     }
 
-    pub fn read(&mut self, name: &str) -> Result<Vec<u8>, String> {
+    /// Looks up a disc file by name and checks that `offset..offset + size` lies inside it.
+    fn span(&self, name: &str, offset: u64, size: u64) -> Result<u64, String> {
         let key = normalize(name)?;
         let e = self
             .entries
             .get(&key)
-            .ok_or_else(|| format!("Missing disc file: {key}"))?
-            .clone();
-        self.bytes(e.offset, e.size)
-    }
-
-    /// Stream archive blocks without loading the roughly 1.9 GB GAMEFILE.DAT into RAM.
-    pub fn read_range(&mut self, name: &str, offset: u64, size: u64) -> Result<Vec<u8>, String> {
-        let key = normalize(name)?;
-        let e = self
-            .entries
-            .get(&key)
-            .ok_or_else(|| format!("Missing disc file: {key}"))?
-            .clone();
+            .ok_or_else(|| format!("Missing disc file: {key}"))?;
         if offset.checked_add(size).is_none_or(|end| end > e.size) {
             return Err(format!("Read extends past {key}"));
         }
-        self.bytes(e.offset + offset, size)
+        Ok(e.offset + offset)
+    }
+
+    pub fn size(&self, name: &str) -> Result<u64, String> {
+        let key = normalize(name)?;
+        self.entries
+            .get(&key)
+            .map(|e| e.size)
+            .ok_or_else(|| format!("Missing disc file: {key}"))
+    }
+
+    pub fn read(&mut self, name: &str) -> Result<Vec<u8>, String> {
+        let size = self.size(name)?;
+        self.read_range(name, 0, size)
+    }
+
+    /// Read part of a file without loading the roughly 1.9 GB GAMEFILE.DAT into RAM.
+    pub fn read_range(&mut self, name: &str, offset: u64, size: u64) -> Result<Vec<u8>, String> {
+        let start = self.span(name, offset, size)?;
+        self.bytes(start, size)
+    }
+
+    /// Feed `offset..offset + size` of a file to `sink` in chunks of at most `chunk` bytes,
+    /// reusing one buffer, so whole-file work (hashing) never holds the file in memory.
+    pub fn stream_range(
+        &mut self,
+        name: &str,
+        offset: u64,
+        size: u64,
+        chunk: usize,
+        mut sink: impl FnMut(&[u8]) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if chunk == 0 || chunk as u64 > MAX_READ {
+            return Err("Stream chunk must be between 1 byte and 64 MiB".into());
+        }
+        let mut pos = self.span(name, offset, size)?;
+        let mut buf = vec![0; size.min(chunk as u64) as usize];
+        let mut left = size;
+        while left > 0 {
+            let n = left.min(chunk as u64) as usize;
+            self.read_at(pos, &mut buf[..n])?;
+            sink(&buf[..n])?;
+            pos += n as u64;
+            left -= n as u64;
+        }
+        Ok(())
     }
 
     pub fn verify_neopets(&mut self) -> Result<String, String> {

@@ -1,5 +1,5 @@
 //! All test bytes below are synthetic; no original executable or asset data.
-use neopets_data::{AssetSource, Disc};
+use neopets_data::{AssetSource, Disc, fingerprint};
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicUsize, Ordering},
@@ -114,4 +114,101 @@ fn mods_override_in_order_and_reject_traversal() {
     assert!(source.read("SYSTEM.CNF").unwrap().starts_with(b"BOOT2"));
     assert!(source.read("../outside").is_err());
     assert!(source.read("C:/outside").is_err());
+}
+fn stream(d: &mut Disc, offset: u64, size: u64, chunk: usize) -> Result<Vec<u8>, String> {
+    let mut out = Vec::new();
+    d.stream_range("GAMEFILE.DAT", offset, size, chunk, |b| {
+        assert!(!b.is_empty() && b.len() <= chunk);
+        out.extend_from_slice(b);
+        Ok(())
+    })?;
+    Ok(out)
+}
+/// Byte offset of a directory record in the synthetic image, found by its file name.
+fn record_at(image: &[u8], name: &[u8]) -> usize {
+    image.windows(name.len()).position(|w| w == name).unwrap() - 33
+}
+fn patched(f: &Fixture, patch: impl FnOnce(&mut Vec<u8>)) -> Result<Disc, String> {
+    let p = f.root.join("synthetic.iso");
+    let mut bytes = std::fs::read(&p).unwrap();
+    patch(&mut bytes);
+    std::fs::write(&p, bytes).unwrap();
+    Disc::open(&p)
+}
+
+#[test]
+fn streams_ranges_in_bounded_chunks() {
+    let f = fixture();
+    let mut d = open(&f);
+    for chunk in [1, 2, 3, 1 << 20] {
+        assert_eq!(stream(&mut d, 0, 5, chunk).unwrap(), b"hello");
+        assert_eq!(stream(&mut d, 1, 3, chunk).unwrap(), b"ell");
+    }
+    assert_eq!(stream(&mut d, 5, 0, 4).unwrap(), b"");
+    assert!(stream(&mut d, 0, 5, 0).is_err());
+    assert!(stream(&mut d, 0, 5, (64 << 20) + 1).is_err());
+    assert!(stream(&mut d, 3, 3, 4).is_err());
+    assert!(stream(&mut d, u64::MAX, 2, 4).is_err());
+    let mut calls = 0;
+    let stopped = d.stream_range("GAMEFILE.DAT", 0, 5, 2, |_| {
+        calls += 1;
+        Err("stop".into())
+    });
+    assert_eq!((stopped, calls), (Err("stop".into()), 1));
+}
+#[test]
+fn fingerprints_files_with_streaming_sha256() {
+    let f = fixture();
+    let mut d = open(&f);
+    // Public SHA-256 test value for the ASCII bytes "hello".
+    let hello = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+    let digest = fingerprint::sha256_file(&mut d, "gamefile.dat").unwrap();
+    assert_eq!(fingerprint::to_hex(&digest), hello);
+    let expected = fingerprint::parse_sha256(&hello.to_ascii_uppercase()).unwrap();
+    assert!(fingerprint::verify_sha256(&mut d, "GAMEFILE.DAT", &expected).is_ok());
+    assert!(fingerprint::verify_sha256(&mut d, "SYSTEM.CNF", &expected).is_err());
+    assert!(fingerprint::sha256_file(&mut d, "MISSING.BIN").is_err());
+    assert!(fingerprint::parse_sha256(&hello[1..]).is_err());
+    assert!(fingerprint::parse_sha256(&format!("+{}", &hello[1..])).is_err());
+}
+#[test]
+fn rejects_cyclic_overlong_and_out_of_bounds_records() {
+    let make_cycle = |b: &mut Vec<u8>| {
+        let r = record_at(b, b"GAMEFILE.DAT;1");
+        b[r + 2..r + 6].copy_from_slice(&20u32.to_le_bytes());
+        b[r + 10..r + 14].copy_from_slice(&2048u32.to_le_bytes());
+        b[r + 25] = 2;
+    };
+    let past_end = |b: &mut Vec<u8>| {
+        let r = record_at(b, b"GAMEFILE.DAT;1");
+        b[r + 10..r + 14].copy_from_slice(&u32::MAX.to_le_bytes());
+    };
+    let long_name = |b: &mut Vec<u8>| {
+        let r = record_at(b, b"GAMEFILE.DAT;1");
+        b[r + 32] = 200;
+    };
+    let multi_extent = |b: &mut Vec<u8>| {
+        let r = record_at(b, b"GAMEFILE.DAT;1");
+        b[r + 25] = 0x80;
+    };
+    let patches: [fn(&mut Vec<u8>); 4] = [make_cycle, past_end, long_name, multi_extent];
+    for patch in patches {
+        let f = fixture();
+        assert!(patched(&f, patch).is_err());
+    }
+}
+#[test]
+fn reports_reads_from_an_image_truncated_after_indexing() {
+    let f = fixture();
+    let p = f.root.join("synthetic.iso");
+    let mut d = open(&f);
+    std::fs::OpenOptions::new()
+        .write(true)
+        .open(&p)
+        .unwrap()
+        .set_len(21 * 2048)
+        .unwrap();
+    let err = d.read("GAMEFILE.DAT").unwrap_err();
+    assert!(err.contains("failed"), "{err}");
+    assert!(stream(&mut d, 0, 5, 2).is_err());
 }

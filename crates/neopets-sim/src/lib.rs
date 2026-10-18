@@ -2,6 +2,9 @@
 #![forbid(unsafe_code)]
 pub use ps2_float::{F, Vf};
 
+mod step;
+pub use step::FixedStep;
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PlayerInput {
     pub buttons: u32,
@@ -19,5 +22,15 @@ impl Simulation {
     /// Scaffold clock only. This is not Neopets movement, physics, or game timing proof.
     pub fn advance(&mut self, _input: PlayerInput) {
         self.tick = self.tick.wrapping_add(1);
+    }
+
+    /// Run as many fixed ticks as `elapsed_ns` of host time allows, all with the same input.
+    /// Returns the number of ticks run.
+    pub fn run_for(&mut self, clock: &mut FixedStep, elapsed_ns: u64, input: PlayerInput) -> u32 {
+        let ticks = clock.advance(elapsed_ns);
+        for _ in 0..ticks {
+            self.advance(input);
+        }
+        ticks
     }
 }

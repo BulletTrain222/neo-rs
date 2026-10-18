@@ -1,7 +1,7 @@
 @echo off
 call "%~dp0scripts\cargo.cmd" test --locked
 if errorlevel 1 goto fail
-call "%~dp0scripts\cargo.cmd" check --locked -p neopets-app
+call "%~dp0scripts\cargo.cmd" test --locked -p neopets-app
 if errorlevel 1 goto fail
 powershell -NoProfile -File "%~dp0scripts\audit-source.ps1"
 if errorlevel 1 goto fail
