@@ -1,0 +1,28 @@
+# Private paths, disc-derived output, local mods, and builds never belong in source.
+/private/
+/mods/*
+!/mods/README.md
+/target/
+**/target/
+**/__pycache__/
+**/context/
+**/kit.toml
+*.iso
+*.ISO
+*.bin
+*.BIN
+*.dat
+*.DAT
+*.elf
+*.ELF
+*.irx
+*.IRX
+*.p2s
+*.glb
+*.gltf
+*.png
+*.wav
+*.log
+
+# Never track the BIOS or ISO folders, whatever their contents.
+/bios and iso/

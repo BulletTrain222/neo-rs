@@ -1,0 +1,9 @@
+[package]
+name = "neopets-app"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+[dependencies]
+bevy.workspace = true
+neopets-data = { path = "../neopets-data" }
+neopets-sim = { path = "../neopets-sim" }

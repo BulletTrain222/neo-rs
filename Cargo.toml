@@ -1,0 +1,21 @@
+[workspace]
+resolver = "3"
+members = ["crates/neopets-data", "crates/neopets-sim", "crates/neopets-app"]
+default-members = ["crates/neopets-data", "crates/neopets-sim"]
+exclude = ["third_party/ps2-float"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+bevy = { version = "=0.19.1", default-features = false, features = ["3d", "ui"] }
+ps2-float = { path = "third_party/ps2-float" }
+
+[profile.dev]
+debug = 0
+
+[profile.test]
+opt-level = 1
+debug = 0

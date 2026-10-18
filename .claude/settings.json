@@ -1,0 +1,22 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(../neopets-research/**)",
+      "Edit(../neopets-research/**)",
+      "Read(~/Downloads/recomp/neopets-research/**)",
+      "Read(~/Downloads/recomp/PS2Recomp/**)",
+      "Read(~/Downloads/recomp/games/**)",
+      "Read(~/Downloads/recomp/tools/**)",
+      "Read(~/Downloads/recomp/game files/**)",
+      "Read(~/Downloads/recomp/ps2-decomp-kit-windows-main/**)",
+      "Read(~/Downloads/recomp/ps2-oracle-main/**)",
+      "Read(~/Downloads/recomp/ps2-recomp-Agent-SKILL/**)",
+      "Read(~/Downloads/recomp/gpu-replay-out/**)",
+      "Read(~/Downloads/recomp/*.md)",
+      "Read(~/Downloads/recomp/bios and iso/**)",
+      "Read(./bios and iso/**)",
+      "Edit(~/Downloads/recomp/bios and iso/**)",
+      "Edit(./bios and iso/**)"
+    ]
+  }
+}
