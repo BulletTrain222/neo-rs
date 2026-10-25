@@ -31,6 +31,36 @@ struct Archive {
     index: ArchiveIndex,
 }
 
+/// World height of the texture quad; its width follows the texture's aspect ratio.
+const QUAD_HEIGHT: f32 = 4.0;
+
+#[derive(Component)]
+struct TextureQuad;
+
+/// Decoded textures of the selected resource, and which one the quad shows.
+#[derive(Resource, Default)]
+struct TextureView {
+    images: Vec<(String, neopets_data::texture::Image)>,
+    current: usize,
+    dirty: bool,
+}
+
+fn rgba_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
+    let mut image = Image::new(
+        Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        rgba,
+        TextureFormat::Rgba8UnormSrgb,
+        RenderAssetUsages::default(),
+    );
+    image.sampler = ImageSampler::nearest();
+    image
+}
+
 /// Summary text for the last resource described, so the disc is read once per selection.
 #[derive(Resource, Default)]
 struct BrowserView {
@@ -66,6 +96,7 @@ fn main() {
     let mut smoke_test = false;
     let mut screenshot = None;
     let mut hide_hud = false;
+    let mut start_resource = 0u32;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -78,6 +109,14 @@ fn main() {
             );
         } else if arg == "--smoke-test" {
             smoke_test = true;
+        } else if arg == "--resource" {
+            start_resource = args
+                .next()
+                .and_then(|n| n.parse().ok())
+                .unwrap_or_else(|| {
+                    eprintln!("--resource requires a resource number");
+                    std::process::exit(2)
+                });
         } else if arg == "--hide-hud" {
             hide_hud = true;
         } else if arg == "--screenshot" {
@@ -119,8 +158,12 @@ fn main() {
     app.insert_resource(DiscStatus(status))
         .insert_resource(HudHidden(hide_hud))
         .insert_resource(driver)
-        .init_resource::<Browser>()
+        .insert_resource(Browser {
+            selected: start_resource,
+            typing: None,
+        })
         .init_resource::<BrowserView>()
+        .init_resource::<TextureView>()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -136,8 +179,9 @@ fn main() {
             Update,
             (
                 (read_input, step_sim).chain(),
-                (browse_resources, orbit_camera, toggle_hud),
+                (browse_resources, cycle_textures, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
+                apply_texture,
             )
                 .chain(),
         );
@@ -200,36 +244,34 @@ fn setup_viewer(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    match pattern::rgba() {
-        Ok(rgba) => {
-            let mut image = Image::new(
-                Extent3d {
-                    width: pattern::SIZE,
-                    height: pattern::SIZE,
-                    depth_or_array_layers: 1,
-                },
-                TextureDimension::D2,
-                rgba,
-                TextureFormat::Rgba8UnormSrgb,
-                RenderAssetUsages::default(),
-            );
-            image.sampler = ImageSampler::nearest();
-            commands.spawn((
-                Mesh3d(meshes.add(Rectangle::new(4.0, 4.0))),
-                MeshMaterial3d(materials.add(StandardMaterial {
-                    base_color_texture: Some(images.add(image)),
-                    unlit: true,
-                    alpha_mode: AlphaMode::Blend,
-                    cull_mode: None,
-                    ..default()
-                })),
-                Transform::from_xyz(-3.0, 2.2, -3.0),
-            ));
+    // The quad starts with the synthetic pattern; a selected resource's textures replace it.
+    let texture = match pattern::rgba() {
+        Ok(rgba) => Some(images.add(rgba_image(pattern::SIZE, pattern::SIZE, rgba))),
+        Err(e) => {
+            error!("Synthetic test pattern failed to decode: {e}");
+            None
         }
-        Err(e) => error!("Synthetic test pattern failed to decode: {e}"),
-    }
+    };
+    commands.spawn((
+        Mesh3d(meshes.add(Rectangle::new(QUAD_HEIGHT, QUAD_HEIGHT))),
+        MeshMaterial3d(materials.add(StandardMaterial {
+            base_color_texture: texture,
+            unlit: true,
+            alpha_mode: AlphaMode::Blend,
+            cull_mode: None,
+            ..default()
+        })),
+        Transform::from_xyz(-3.0, QUAD_HEIGHT / 2.0 + 0.2, -3.0),
+        TextureQuad,
+    ));
     let orbit = Orbit::default();
-    commands.spawn((Camera3d::default(), orbit.transform(), orbit));
+    // No tone mapping: decoded textures should show their stored colours.
+    commands.spawn((
+        Camera3d::default(),
+        bevy::core_pipeline::tonemapping::Tonemapping::None,
+        orbit.transform(),
+        orbit,
+    ));
     let mut unlit = |r: f32, g: f32, b: f32| {
         materials.add(StandardMaterial {
             base_color: Color::srgb(r, g, b),
@@ -311,8 +353,8 @@ fn setup_hud(mut commands: Commands, status: Res<DiscStatus>, hidden: Res<HudHid
             ));
             ui.spawn((
                 Text::new(
-                    "VIEWER - diagnostic grid, axes, and a synthetic test pattern (generated in code, \
-                     decoded through neopets_data::gs as 4-bit indexed); none of it is game content\n\
+                    "VIEWER - diagnostic grid and axes. The quad shows the selected resource's textures, \
+                     decoded from your ISO (or a synthetic pattern when there is no ISO)\n\
                      Drag with a mouse button to orbit | scroll to zoom | Tab hides this text",
                 ),
                 font(16.0),
@@ -448,6 +490,7 @@ fn show_browser(
     mut browser: ResMut<Browser>,
     archive: Option<ResMut<Archive>>,
     mut view: ResMut<BrowserView>,
+    mut textures: ResMut<TextureView>,
     mut texts: Query<&mut Text, With<BrowserText>>,
 ) {
     let Some(mut archive) = archive else {
@@ -458,19 +501,84 @@ fn show_browser(
     };
     let Archive { disc, index } = &mut *archive;
     browser.clamp(index.len() as u32);
-    if view.shown != Some(browser.selected) {
-        view.shown = Some(browser.selected);
-        view.text = archive_view::describe(disc, index, browser.selected)
-            .unwrap_or_else(|e| format!("Resource #{}: {e}", browser.selected));
+    let n = browser.selected;
+    if view.shown != Some(n) {
+        view.shown = Some(n);
+        view.text = archive_view::describe(disc, index, n)
+            .unwrap_or_else(|e| format!("Resource #{n}: {e}"));
+        let decoded = archive_view::textures(disc, index, n);
+        if let Err(e) = &decoded {
+            view.text.push_str(&format!("\nTextures could not be decoded: {e}"));
+        }
+        *textures = TextureView {
+            images: decoded.unwrap_or_default(),
+            current: 0,
+            dirty: true,
+        };
     }
+    let texture_line = match textures.images.get(textures.current) {
+        Some((label, image)) => format!(
+            "Texture {}/{}: {label}, {}x{} (, and . to cycle)",
+            textures.current + 1,
+            textures.images.len(),
+            image.width,
+            image.height
+        ),
+        None => "No textures in this resource.".into(),
+    };
     let entry = match &browser.typing {
         Some(t) => format!("Go to: {t}_   (Enter to jump, Esc to cancel)"),
         None => "Type a number and press Enter | [ ] step 1 | PgUp/PgDn step 100".into(),
     };
     for mut text in &mut texts {
         text.0 = format!(
-            "RESOURCE BROWSER - archive index (SPEC-0001/0002); contents not decoded yet\n{}\n{entry}",
+            "RESOURCE BROWSER - archive index (SPEC-0001/0002), textures (SPEC-0003)\n{}\n{texture_line}\n{entry}",
             view.text
         );
+    }
+}
+
+fn cycle_textures(keys: Res<ButtonInput<KeyCode>>, mut textures: ResMut<TextureView>) {
+    let len = textures.images.len();
+    if len < 2 {
+        return;
+    }
+    let forward = keys.just_pressed(KeyCode::Period) as usize;
+    let back = keys.just_pressed(KeyCode::Comma) as usize * (len - 1);
+    let step = (forward + back) % len;
+    if step != 0 {
+        textures.current = (textures.current + step) % len;
+        textures.dirty = true;
+    }
+}
+
+/// Put the current decoded texture on the quad, sized to its aspect ratio; hide the quad when
+/// the selected resource has no textures.
+fn apply_texture(
+    mut textures: ResMut<TextureView>,
+    mut quads: Query<
+        (&MeshMaterial3d<StandardMaterial>, &mut Transform, &mut Visibility),
+        With<TextureQuad>,
+    >,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    if !textures.dirty {
+        return;
+    }
+    textures.dirty = false;
+    for (material, mut transform, mut visibility) in &mut quads {
+        let Some((_, image)) = textures.images.get(textures.current) else {
+            *visibility = Visibility::Hidden;
+            continue;
+        };
+        *visibility = Visibility::Inherited;
+        transform.scale.x = image.width as f32 / image.height as f32;
+        if let Some(mut m) = materials.get_mut(&material.0) {
+            let handle = images.add(rgba_image(image.width, image.height, image.rgba.clone()));
+            if let Some(old) = m.base_color_texture.replace(handle) {
+                images.remove(&old);
+            }
+        }
     }
 }

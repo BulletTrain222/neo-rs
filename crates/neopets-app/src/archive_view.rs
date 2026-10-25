@@ -1,8 +1,10 @@
-//! Text summary of one archive resource for the browser (SPEC-0001, SPEC-0002). Shows layout
-//! facts only; contents are not decoded until the M3+ decoders land.
+//! The browser's view of one archive resource: a text summary (SPEC-0001, SPEC-0002) and its
+//! decoded textures (SPEC-0003).
 use neopets_data::Disc;
 use neopets_data::archive::ArchiveIndex;
+use neopets_data::material;
 use neopets_data::resource::{self, ChainEnd, Family};
+use neopets_data::texture::{Image, TextureChunk};
 
 /// Chunk types as a compact chain, collapsing runs: "2, 13 ×33, 4".
 pub fn chain_summary(kinds: &[u16]) -> String {
@@ -48,8 +50,61 @@ pub fn describe(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<String,
             text.push_str(&format!("\nChain stops early: {why}"));
         }
     }
-    text.push_str("\nNot decoded yet.");
     Ok(text)
+}
+
+/// Every texture of a resource's top-level chain, labelled. Textures under a shader list come
+/// once per distinct material pairing; chunks without one (front-end pictures) use each palette
+/// of the right size, since nothing on the disc pairs them.
+pub fn textures(
+    disc: &mut Disc,
+    index: &ArchiveIndex,
+    n: u32,
+) -> Result<Vec<(String, Image)>, String> {
+    if index.get(n)?.is_empty() {
+        return Ok(Vec::new());
+    }
+    let bytes = index.read(disc, n)?;
+    let family = resource::classify(&bytes);
+    if !matches!(family, Family::ChunkFile(_)) {
+        return Ok(Vec::new());
+    }
+    let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+    let mut out = Vec::new();
+    for l in material::lists_in_chain(&bytes, &chain)? {
+        let memories: Vec<_> = l.chunks.iter().map(TextureChunk::gs_memory).collect();
+        match &l.list {
+            Some(list) => {
+                let mut seen = std::collections::HashSet::new();
+                for (g, group) in list.groups.iter().enumerate() {
+                    let Some(r) = material::resolve(group, &l.chunks) else {
+                        continue;
+                    };
+                    if seen.insert(r) {
+                        let image =
+                            l.chunks[r.chunk].decode(&memories[r.chunk], r.texture, r.palette)?;
+                        out.push((format!("material group {g}"), image));
+                    }
+                }
+            }
+            None => {
+                for (ci, chunk) in l.chunks.iter().enumerate() {
+                    for t in chunk.textures().collect::<Vec<_>>() {
+                        let palettes = chunk.palettes_for(t);
+                        for &p in &palettes {
+                            let label = if palettes.len() == 1 {
+                                format!("chunk {ci} texture {t}")
+                            } else {
+                                format!("chunk {ci} texture {t}, palette {p} (pairing unknown)")
+                            };
+                            out.push((label, chunk.decode(&memories[ci], t, p)?));
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(out)
 }
 
 #[cfg(test)]

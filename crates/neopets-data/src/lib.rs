@@ -3,9 +3,13 @@ pub mod archive;
 mod elf;
 pub mod fingerprint;
 pub mod gs;
+pub mod gsmem;
 mod iso;
+pub mod material;
 mod mods;
+pub mod png;
 pub mod resource;
+pub mod texture;
 pub use iso::{Disc, Entry};
 pub use mods::AssetSource;
 
