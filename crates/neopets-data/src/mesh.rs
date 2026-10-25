@@ -74,6 +74,13 @@ fn bounds_at(b: &[u8], at: usize) -> Option<Bounds> {
 /// Walk the tree rooted at payload offset 0, following first-child and sibling links and the
 /// three extra child links of distance-cull nodes. Offsets of 0 mean "none".
 pub fn walk_tree(payload: &[u8]) -> Result<NodeTree, String> {
+    walk_tree_layers(payload, None)
+}
+
+/// As `walk_tree`, but with a world layer mask: a distance-cull (type-4) node whose 32-bit layer
+/// flags (+0x5C) are nonzero and share no bit with the mask is skipped with its subtree; its
+/// sibling is still visited (SPEC-0046, Culling; SPEC-0004 node table).
+pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeTree, String> {
     let root_bounds = bounds_at(payload, 0).ok_or("Node tree shorter than one node")?;
     let mut leaves = Vec::new();
     let mut seen = HashSet::new();
@@ -97,9 +104,17 @@ pub fn walk_tree(payload: &[u8]) -> Result<NodeTree, String> {
         if at + size > payload.len() {
             return Err(bad());
         }
-        let mut links = vec![u32_at(payload, at + 0x40).unwrap(), u32_at(payload, at + 0x44).unwrap()];
-        if kind == NODE_LOD {
-            links.extend([0x70, 0x74, 0x78].map(|o| u32_at(payload, at + o).unwrap()));
+        let hidden = kind == NODE_LOD
+            && layer_mask.is_some_and(|m| {
+                let flags = u32_at(payload, at + 0x5C).unwrap();
+                flags != 0 && flags & m == 0
+            });
+        let mut links = vec![u32_at(payload, at + 0x44).unwrap()];
+        if !hidden {
+            links.push(u32_at(payload, at + 0x40).unwrap());
+            if kind == NODE_LOD {
+                links.extend([0x70, 0x74, 0x78].map(|o| u32_at(payload, at + o).unwrap()));
+            }
         }
         for link in links {
             let link = link as usize;
@@ -461,6 +476,12 @@ mod tests {
         let mut odd = p.clone();
         odd[0x50] = 9;
         assert!(walk_tree(&odd).is_err());
+        // A layer-flagged LOD node hides its subtree when the mask shares no bit with it.
+        let mut layered = p.clone();
+        layered[0xB0 + 0x5C..0xB0 + 0x60].copy_from_slice(&0x0020_0000u32.to_le_bytes());
+        assert_eq!(walk_tree_layers(&layered, Some(0)).unwrap().leaves.len(), 0);
+        assert_eq!(walk_tree_layers(&layered, Some(0x0020_0000)).unwrap().leaves.len(), 2);
+        assert_eq!(walk_tree_layers(&layered, None).unwrap().leaves.len(), 2);
         let mut cycle = p.clone();
         cycle[0x180 + 0x44..0x180 + 0x48].copy_from_slice(&0u32.to_le_bytes());
         cycle[0x130 + 0x44..0x130 + 0x48].copy_from_slice(&0x50u32.to_le_bytes());

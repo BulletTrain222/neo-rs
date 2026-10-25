@@ -131,7 +131,16 @@ pub fn model(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<Option<Mod
     };
     // A world pack (first chunk type 31, SPEC-0006) draws as its placed static scene.
     let data = if chunks.first().is_some_and(|c| c.kind == WORLD_HEADER) {
-        model::build_world(&bytes, &chunks)?
+        // A new game: world mask word 0 and no story layer visible (SPEC-0046).
+        let mut world = model::build_world(&bytes, &chunks, 0)?;
+        // The world's sky dome by its area slot; only layer A (role 1) draws without an
+        // atmosphere zone (SPEC-0046 Sky domes).
+        let slot = neopets_data::area::AreaTable::from_disc(disc)?.slot_of(n);
+        let dome = neopets_data::area::dome_for_slot(slot);
+        if let Some((dome_bytes, dome_chunks)) = chunk_file(disc, dome)? {
+            world.append(model::build_roles(&dome_bytes, &dome_chunks, None, Some(&[1]))?);
+        }
+        world
     } else {
         let shared = if (544..=575).contains(&n) { chunk_file(disc, 7)? } else { None };
         model::build(

@@ -142,6 +142,25 @@ pub struct ModelData {
 }
 
 impl ModelData {
+    /// Add another model's parts and textures (for example the sky dome under a world).
+    pub fn append(&mut self, mut other: ModelData) {
+        let base = self.textures.len();
+        for p in &mut other.parts {
+            p.texture = p.texture.map(|t| t + base);
+            p.tree += self.trees;
+        }
+        if !other.parts.is_empty() {
+            for k in 0..3 {
+                self.min[k] = self.min[k].min(other.min[k]);
+                self.max[k] = self.max[k].max(other.max[k]);
+            }
+        }
+        self.trees += other.trees;
+        self.parts.extend(other.parts);
+        self.textures.extend(other.textures);
+        self.skipped_leaves.extend(other.skipped_leaves);
+    }
+
     /// A box around where most of the geometry is: the median vertex position, extended by
     /// the distance that covers `share` of the vertices. Level meshes reach far beyond their
     /// playable area, so the full box would frame mostly empty space.
@@ -231,11 +250,12 @@ impl Builder {
         payload: std::ops::Range<usize>,
         chain: usize,
         matrix: Option<&crate::world::Matrix>,
+        layer_mask: Option<u32>,
     ) -> Result<(), String> {
         let ti = self.out.trees;
         self.out.trees += 1;
         let payload = &bytes[payload];
-        let tree = mesh::walk_tree(payload)?;
+        let tree = mesh::walk_tree_layers(payload, layer_mask)?;
         for leaf in &tree.leaves {
             let batches = match mesh::decode_packet(payload, leaf) {
                 Ok(b) => b,
@@ -341,6 +361,16 @@ pub fn build(
     top: &[Chunk],
     shared: Option<(&[u8], &[Chunk])>,
 ) -> Result<ModelData, String> {
+    build_roles(bytes, top, shared, None)
+}
+
+/// As `build`, keeping only trees whose role id is listed (None keeps all).
+pub fn build_roles(
+    bytes: &[u8],
+    top: &[Chunk],
+    shared: Option<(&[u8], &[Chunk])>,
+    roles: Option<&[u16]>,
+) -> Result<ModelData, String> {
     let (trees, chains) = find_trees(bytes, top);
     let materials = chains
         .iter()
@@ -351,21 +381,22 @@ pub fn build(
         None => None,
     };
     let mut b = Builder::new(materials, shared);
-    for t in &trees {
-        b.add_tree(bytes, t.payload.clone(), t.chain, None)?;
+    for t in trees.iter().filter(|t| roles.is_none_or(|r| r.contains(&t.role_id))) {
+        b.add_tree(bytes, t.payload.clone(), t.chain, None, None)?;
     }
     Ok(b.finish())
 }
 
 /// Build a world pack's static scene: the level display tree in world space, and placed
 /// objects and instances transformed by their matrices, all with the pack's shader list.
-/// Trees that do not walk (stale references) are skipped and counted.
-pub fn build_world(bytes: &[u8], top: &[Chunk]) -> Result<ModelData, String> {
+/// Trees that do not walk (stale references) are skipped and counted. `layer_mask` is the world
+/// layer mask of SPEC-0046 (0 for a new game: mask word 0 and no story layer visible).
+pub fn build_world(bytes: &[u8], top: &[Chunk], layer_mask: u32) -> Result<ModelData, String> {
     let scene = crate::world::scene(bytes, top);
     let materials = vec![ChainMaterials::of(bytes, top)?];
     let mut b = Builder::new(materials, None);
     for t in &scene.trees {
-        if let Err(e) = b.add_tree(bytes, t.payload.clone(), 0, t.matrix.as_ref()) {
+        if let Err(e) = b.add_tree(bytes, t.payload.clone(), 0, t.matrix.as_ref(), Some(layer_mask)) {
             b.out.skipped_leaves.push(format!("tree at {:#x}: {e}", t.payload.start));
         }
     }

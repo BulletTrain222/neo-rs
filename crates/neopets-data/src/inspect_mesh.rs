@@ -226,3 +226,31 @@ pub fn ground(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// Check the area table against SPEC-0006's sample rows (slot, pack, world id).
+pub fn areas(disc: &mut Disc) -> Result<(), String> {
+    let t = neopets_data::area::AreaTable::from_disc(disc)?;
+    let rows = [(0usize, 678u32, 0u32), (5, 691, 11), (68, 909, 602), (107, 1121, 1362), (192, 1433, 11070)];
+    let ok = rows.iter().all(|&(s, p, w)| t.packs[s] == p && t.world_ids[s] == w);
+    let distinct: std::collections::BTreeSet<u32> = t.packs.iter().copied().collect();
+    println!(
+        "Area table: {} slots, {} distinct packs, world ids {}..{}; SPEC-0006 sample rows {}",
+        t.packs.len(),
+        distinct.len(),
+        t.world_ids[0],
+        t.world_ids[t.world_ids.len() - 1],
+        if ok { "match" } else { "DO NOT MATCH" }
+    );
+    for dome in 1..=3 {
+        let packs: Vec<u32> = (0..t.packs.len())
+            .filter(|&s| neopets_data::area::dome_for_slot(Some(s)) == dome)
+            .map(|s| t.packs[s])
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if dome > 1 {
+            println!("Dome {dome}: packs {packs:?}");
+        }
+    }
+    Ok(())
+}

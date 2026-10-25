@@ -17,6 +17,26 @@ const ENTRY_COUNT: usize = 1434;
 const EMPTY_ENTRIES: usize = 76;
 const ENTRY_SIZE: usize = 8;
 
+/// The boot program's bytes, after checking its SHA-256 against SPEC-0001. Every fixed address
+/// in the boot program is trusted only through this check.
+pub fn verified_boot_program(disc: &mut Disc) -> Result<Vec<u8>, String> {
+    let expected = fingerprint::parse_sha256(BOOT_SHA256)?;
+    fingerprint::verify_sha256(disc, BOOT_PROGRAM, &expected).map_err(|e| {
+        format!("{e}. Fixed locations are only known for SCUS-97367 v1.00.")
+    })?;
+    disc.read(BOOT_PROGRAM)
+}
+
+/// Read `count` little-endian u32 values at a virtual address of the verified boot program.
+pub fn boot_u32_table(boot: &[u8], vaddr: u32, count: usize) -> Result<Vec<u32>, String> {
+    let len = (count * 4) as u32;
+    let at = elf::file_offset(boot, vaddr, len)? as usize;
+    Ok(boot[at..at + len as usize]
+        .chunks_exact(4)
+        .map(|w| u32::from_le_bytes(w.try_into().unwrap()))
+        .collect())
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ResourceEntry {
     /// First sector, relative to the start of GAMEFILE.DAT.
@@ -49,11 +69,7 @@ pub struct ArchiveIndex {
 impl ArchiveIndex {
     /// Check the boot program's fingerprint, then read and validate the index from the disc.
     pub fn from_disc(disc: &mut Disc) -> Result<Self, String> {
-        let expected = fingerprint::parse_sha256(BOOT_SHA256)?;
-        fingerprint::verify_sha256(disc, BOOT_PROGRAM, &expected).map_err(|e| {
-            format!("{e}. The archive index location is only known for SCUS-97367 v1.00.")
-        })?;
-        let boot = disc.read(BOOT_PROGRAM)?;
+        let boot = verified_boot_program(disc)?;
         let table_len = (ENTRY_COUNT * ENTRY_SIZE) as u32;
         let at = elf::file_offset(&boot, INDEX_VADDR, table_len)? as usize;
         let table = boot
