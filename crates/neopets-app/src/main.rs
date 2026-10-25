@@ -1172,6 +1172,7 @@ fn sync_characters(
             }
             Some(c) => {
                 t.translation = Vec3::from(c.position);
+                t.rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
                 *vis = if p.pack_drawn(c.pack) { Visibility::Visible } else { Visibility::Hidden };
             }
         }

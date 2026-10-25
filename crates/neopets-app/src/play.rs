@@ -172,6 +172,9 @@ pub struct Character {
     pub facing: [f32; 3],
     pub anim: HeroAnim,
     pub model: ModelData,
+    /// The townsfolk routine (SPEC-0056), for characters on the townsfolk body bank (main
+    /// family -7, all of them class 6 on disc); other characters only idle.
+    pub townsfolk: Option<neopets_sim::npc::Townsfolk>,
 }
 
 pub struct Play {
@@ -217,6 +220,8 @@ pub struct Play {
     /// The Talk label is shown this tick, and the talked character (the speaker of its lines).
     pub talk_prompt: bool,
     pub talk_partner: Option<String>,
+    /// The character in the conversation (base state 25), by id.
+    talk_with: Option<u64>,
     /// The shared dialogue box is open (SPEC-0022: it closes only on a Square press; the hero
     /// stays in the talking state meanwhile).
     pub dialogue_open: bool,
@@ -294,6 +299,7 @@ impl Play {
             square_now: false,
             talk_prompt: false,
             talk_partner: None,
+            talk_with: None,
             dialogue_open: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
@@ -677,6 +683,7 @@ impl Play {
             if self.square_now {
                 let pack = self.characters[i].pack;
                 self.talk_partner = Some(self.characters[i].name.clone());
+                self.talk_with = Some(self.characters[i].id);
                 let actions = level::on_talk(pack, routine, &mut self.state);
                 self.apply(&actions);
             }
@@ -713,6 +720,7 @@ impl Play {
                 name: pl.name,
                 position,
                 facing: pl.facing,
+                townsfolk: (pl.skeletons[0] == -7).then(|| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
                 anim,
                 model,
             });
@@ -841,8 +849,17 @@ impl Play {
             if input.square {
                 self.dialogue_open = false;
                 self.message = None;
+                self.talk_with = None;
             }
             input = HeroInput::default();
+            // SPEC-0056 Talk facing: in the conversation the hero turns toward its partner
+            // with weight 0.1 and the partner toward the hero with weight 0.3.
+            if let Some(c) = self.talk_with.and_then(|id| self.characters.iter_mut().find(|c| c.id == id)) {
+                let h = self.loco.position();
+                let to_hero = [h[0] - c.position[0], 0.0, h[2] - c.position[2]];
+                c.facing = neopets_sim::hero::steer(c.facing, to_hero, 0.3);
+                self.loco.steer_toward(to_hero.map(|v| -v), 0.1);
+            }
         }
         if self.prompt_shown.is_some() && input.square {
             self.confirm = true;
@@ -906,7 +923,17 @@ impl Play {
         let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
         self.characters.retain(|c| resident.contains(&c.pack));
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
+        let hero = self.loco.position();
+        let talking = if self.dialogue_open { self.talk_with } else { None };
         for c in &mut self.characters {
+            // Base state 25 (conversation) freezes the routine.
+            if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
+                let clip = c.anim.clip_state();
+                let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress };
+                if let Some(id) = t.tick(&mut c.facing, view) {
+                    c.anim.play(id);
+                }
+            }
             let _ = c.anim.tick();
         }
     }
@@ -942,10 +969,18 @@ impl Play {
             },
             _ => prompt,
         };
-        let mut names: Vec<&str> = self.characters.iter().filter(|c| self.pack_drawn(c.pack)).map(|c| c.name.as_str()).collect();
+        let mut names: Vec<String> = self
+            .characters
+            .iter()
+            .filter(|c| self.pack_drawn(c.pack))
+            .map(|c| match &c.townsfolk {
+                Some(t) => format!("{} [mode {} id {}]", c.name, t.mode, c.anim.action()),
+                None => c.name.clone(),
+            })
+            .collect();
         names.dedup();
         format!(
-            "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}\nCHARACTERS (idle only, no AI): {}",
+            "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}\nCHARACTERS (townsfolk modes 0, 10 to 13; no walks or enemy AI): {}",
             self.world.pack,
             self.world.buffer,
             self.swaps,

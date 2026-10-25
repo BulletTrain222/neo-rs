@@ -8,6 +8,7 @@ pub mod contact;
 pub mod hero;
 pub mod level;
 pub mod motion;
+pub mod npc;
 mod step;
 pub mod travel;
 pub use step::FixedStep;

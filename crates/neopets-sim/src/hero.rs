@@ -111,6 +111,25 @@ pub fn turn_moving(f: Vec3, u: Vec3) -> Vec3 {
     flatten([c * f[0] + s * u[0], c * f[1] + s * u[1], c * f[2] + s * u[2]])
 }
 
+/// Steering (SPEC-0056 Steering and turn rate): the new facing is v / |v| with
+/// v = w t + (1 − w) c for current facing c, target direction t and weight w; when c · t is
+/// below −0.99, 0.1 times the side axis is added so the turn picks a side. Horizontal only.
+pub fn steer(c: Vec3, t: Vec3, w: f32) -> Vec3 {
+    let (c, t) = (flatten(c), flatten(t));
+    if dot(t, t) == 0.0 {
+        return c;
+    }
+    let mut v: Vec3 = std::array::from_fn(|k| w * t[k] + (1.0 - w) * c[k]);
+    if dot(c, t) < -0.99 {
+        let side = basis(c)[0];
+        for k in 0..3 {
+            v[k] += 0.1 * side[k];
+        }
+    }
+    let f = flatten(v);
+    if dot(f, f) == 0.0 { c } else { f }
+}
+
 /// The tier step (SPEC-0033 5.1): the state to request and the factor on the play rate, or None
 /// for no movement (v ≤ 0.1).
 pub fn tier(v: f32, run_mode: bool) -> Option<(u8, f32)> {
@@ -193,6 +212,12 @@ impl Locomotion {
 
     /// The camera's recentring gate T (SPEC-0027): the hero moved in its last motion step and
     /// is not in state 1.
+    /// Turn the facing by the steering rule (the talking hero uses weight 0.1).
+    pub fn steer_toward(&mut self, t: Vec3, w: f32) {
+        self.facing = steer(self.facing, t, w);
+        self.target = self.facing;
+    }
+
     pub fn moved(&self) -> bool {
         self.state != STANCE && self.last_motion != [0.0; 3]
     }
@@ -435,6 +460,23 @@ mod tests {
 
     fn angle(a: Vec3, b: Vec3) -> f32 {
         dot(a, b).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    #[test]
+    fn steering_matches_spec_turn_sequence() {
+        // SPEC-0056: a 90-degree turn with w = 0.3 leaves 66.80, 48.18, 34.23 degrees after
+        // ticks 1 to 3; with w = 0.1 it first drops below 10 degrees (9.77) on tick 23.
+        let t = [1.0, 0.0, 0.0];
+        let mut f = [0.0, 0.0, 1.0];
+        for want in [66.80, 48.18, 34.23, 24.13, 16.96, 11.89, 8.33] {
+            f = steer(f, t, 0.3);
+            assert!((angle(f, t) - want).abs() < 0.02, "{} vs {want}", angle(f, t));
+        }
+        let mut f = [0.0, 0.0, 1.0];
+        for _ in 0..23 {
+            f = steer(f, t, 0.1);
+        }
+        assert!((angle(f, t) - 9.77).abs() < 0.02, "{}", angle(f, t));
     }
 
     #[test]

@@ -38,6 +38,8 @@ pub struct Placement {
     pub model_set: i16,
     pub monster_type: u16,
     pub variant: u16,
+    /// Behavior code (+0x84), the AI mode the townsfolk routine starts from (SPEC-0056).
+    pub ai_code: i16,
     pub summon: bool,
 }
 
@@ -90,6 +92,7 @@ pub fn records(p: &[u8]) -> Records {
                     tables: [s(0x9E), s(0xA0), s(0xA2)],
                     model_set: s(0xA4),
                     monster_type: s(0xB4) as u16,
+                    ai_code: s(0x84),
                     variant: s(0xB2) as u16,
                     summon: p.get(data + 0xB6).is_some_and(|&b| b != 0),
                 });
