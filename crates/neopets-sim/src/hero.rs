@@ -27,6 +27,12 @@ pub const LONG_FALL: u8 = 48;
 /// SPEC-0055 death-end states: 59 arrival or return (clip 175), 60 respawn after deadly ground
 /// (clip 137).
 pub const ARRIVAL: u8 = 59;
+/// SPEC-0033 Behavior 4A.3: the shield guard.
+pub const GUARD: u8 = 20;
+/// Guard clips: 63 shield up, 64 the block reaction, 119 the guard turn.
+const ANIM_GUARD: u32 = 63;
+const ANIM_BLOCK: u32 = 64;
+const ANIM_GUARD_TURN: u32 = 119;
 pub const RESPAWN: u8 = 60;
 /// Jump states (Behavior 50): 7 standing, 8 slow, 9 walking, 10 running.
 pub const JUMP: u8 = 7;
@@ -102,6 +108,8 @@ pub struct HeroInput {
     pub attack: bool,
     /// Square pressed this pass (a press edge): confirms an interaction prompt.
     pub square: bool,
+    /// L1 held (the shield guard).
+    pub guard: bool,
 }
 
 /// The hero's playing clip as the animation pass left it on the previous tick.
@@ -193,6 +201,8 @@ pub struct Locomotion {
     last_motion: Vec3,
     request: u32,
     run_counter: u32,
+    /// The hero holds a usable shield (the guard's entry gate).
+    pub shield: bool,
 }
 
 impl Locomotion {
@@ -210,6 +220,7 @@ impl Locomotion {
             last_motion: [0.0; 3],
             request: 0,
             run_counter: RUN_RESTART,
+            shield: false,
         }
     }
 
@@ -257,6 +268,35 @@ impl Locomotion {
         self.request = ANIM_DEATH;
     }
 
+    /// SPEC-0033 Behavior 4A.3, the shield guard: L1 released goes to state 1; otherwise 63
+    /// (not while the block reaction 64 plays below progress 0.99), and a pushed stick turns the
+    /// hero to the stick direction at rate 1.0, requesting 119 when that direction is more than
+    /// about 18 degrees from the facing (dot below 0.95; R-0017). No travel step.
+    fn guard(&mut self, input: &HeroInput, stick: bool, clip: ClipState) {
+        if !input.guard {
+            self.state = STANCE;
+            return;
+        }
+        let blocking = clip.action == ANIM_BLOCK && clip.progress < 0.99;
+        if !blocking {
+            self.request = ANIM_GUARD;
+        }
+        if stick {
+            let u = self.target;
+            if dot(u, self.facing) < 0.95 && clip.action != ANIM_BLOCK {
+                self.request = ANIM_GUARD_TURN;
+            }
+            self.facing = steer(self.facing, u, 1.0);
+        }
+    }
+
+    /// SPEC-0036 Taking a hit, step 5, blocked flag 1: the block reaction (request 64).
+    pub fn block(&mut self) {
+        if self.state == GUARD {
+            self.request = ANIM_BLOCK;
+        }
+    }
+
     /// The death-state handler's clip (SPEC-0055 section 8A).
     pub fn set_death_clip(&mut self, id: u32) {
         if self.state == DEAD {
@@ -299,7 +339,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD => self.request,
             ARRIVAL => 175,
             RESPAWN => ANIM_LONG_LAND,
             _ => 0,
@@ -331,6 +371,7 @@ impl Locomotion {
                 return;
             }
             LONG_FALL => return self.long_fall(clip),
+            GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
                 if clip.action == self.action() && clip.progress >= 0.99 {
@@ -348,6 +389,11 @@ impl Locomotion {
                 let still = dot(m, self.facing) < 0.0 || dot(m, m).sqrt() < 0.01;
                 (self.phase, self.request) = if still { (2, ANIM_JUMP_STILL) } else { (4, ANIM_JUMP_MOVE) };
                 return;
+            }
+            // Behavior 4A.3 entry from the button chain: L1 with a usable shield.
+            if input.guard && self.shield {
+                self.state = GUARD;
+                return self.guard(input, v > 0.0, clip);
             }
             // Behavior 50 jump chooser: Cross on walkable ground (normal y at least 0.82).
             if !(input.jump && self.body.normal[1] >= 0.82) {

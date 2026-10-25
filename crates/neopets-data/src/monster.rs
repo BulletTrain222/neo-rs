@@ -73,6 +73,10 @@ pub struct AttackSlot {
     /// range, +0x30C inaccuracy, +0x31C spin, +0x33C spawn count, +0x36C/+0x37C status id and
     /// chance, +0x38C/+0x39C status range, +0x43C visual kind, +0x44C/+0x45C area duration and
     /// radius, +0x3CC + 2k spawn key).
+    pub blocked_charge: i32,
+    pub stun_max: f32,
+    pub stun_min: f32,
+    pub stun_type: i32,
     pub flight: i32,
     pub speed: f32,
     pub end_speed: f32,
@@ -191,6 +195,10 @@ impl MonsterTable {
             loop_min: w(0x4AC + 4 * k) as i32,
             loop_max: w(0x4BC + 4 * k) as i32,
             loop_hold: f(0x4CC + 4 * k),
+            blocked_charge: w(0x2AC + 4 * k) as i32,
+            stun_max: f(0x27C + 4 * k),
+            stun_min: f(0x28C + 4 * k),
+            stun_type: w(0x29C + 4 * k) as i32,
             flight: w(0x2BC + 4 * k) as i32,
             speed: f(0x2CC + 4 * k),
             end_speed: f(0x2DC + 4 * k),

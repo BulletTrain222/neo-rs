@@ -5,8 +5,9 @@
 //!
 //! Not covered: the effects and trails (SPEC-0034), the hold word, spells (kinds 2 to 7 never
 //! touch a character here), the poison cloud (kind 9), the mote eater and leach extras, the
-//! shield block and reflection (the hero has no guard yet), the status roll (no statuses yet),
-//! the summon of a lobbed shot (Behavior 31), the attack manager's +3.0 scatter, and the world
+//! status roll (no statuses yet), the summon of a lobbed shot (Behavior 31), the attack
+//! manager's +3.0 scatter, the owner's own block query after a reflection (enemies do not guard
+//! here), the shield Mote's charge, and the world
 //! test against static meshes, primitives and moving objects: the build tests the segment
 //! against the cell's frame-record walls instead (R-0016).
 
@@ -46,6 +47,8 @@ pub struct Shot {
     pub velocity: Vec3,
     pub life: i32,
     pub area: bool,
+    /// Hit selector 0: after a reflection the shot tests its owner instead of the hero.
+    pub at_owner: bool,
     pulse: i32,
     area_left: i32,
 }
@@ -53,8 +56,10 @@ pub struct Shot {
 /// What a pool tick does to the world.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    /// The hero takes trunc(damage) (no block: the hero has no guard yet).
-    Hero { damage: f32, owner: Option<u64> },
+    /// The hero takes trunc(damage), with the blocked flag.
+    Hero { damage: f32, owner: Option<u64>, blocked: bool },
+    /// A reflected shot hits its owner for trunc(damage).
+    Owner { id: u64, damage: f32 },
     /// A kind-8 release: the keyed summon (not spawned yet).
     Summon { key: i32, at: Vec3 },
 }
@@ -66,7 +71,13 @@ pub struct Env<'a> {
     pub hero_radius: f32,
     pub hero_height: f32,
     pub hero_gap: f32,
+    /// The hero's forward axis, its guard query, and whether it holds a shield.
+    pub hero_facing: Vec3,
+    pub guard: bool,
+    pub shield: bool,
     pub owner_exists: &'a dyn Fn(u64) -> bool,
+    /// An owner's body: position, motion-record radius and height.
+    pub owner_body: &'a dyn Fn(u64) -> Option<(Vec3, f32, f32)>,
     /// Ground height under (x, z), probed from a ceiling.
     pub ground: &'a dyn Fn(f32, f32, f32) -> Option<f32>,
     /// A wall lies on the segment.
@@ -116,7 +127,16 @@ impl Pool {
     pub fn submit(&mut self, s: Setup) -> bool {
         match self.slots.iter_mut().find(|x| x.is_none()) {
             Some(slot) => {
-                *slot = Some(Shot { s, position: s.start, velocity: s.velocity, life: s.lifetime, area: false, pulse: 0, area_left: s.area_duration });
+                *slot = Some(Shot {
+                    s,
+                    position: s.start,
+                    velocity: s.velocity,
+                    life: s.lifetime,
+                    area: false,
+                    at_owner: false,
+                    pulse: 0,
+                    area_left: s.area_duration,
+                });
                 true
             }
             None => false,
@@ -153,7 +173,7 @@ impl Pool {
                 let h = (env.hero[0] - p.position[0]).hypot(env.hero[2] - p.position[2]);
                 if p.pulse == 0 && h < p.s.area_radius && env.hero_gap < 1.0 {
                     p.pulse = 60;
-                    out.push(Event::Hero { damage: p.s.damage.max(0.0), owner: p.s.owner });
+                    out.push(Event::Hero { damage: p.s.damage.max(0.0), owner: p.s.owner, blocked: false });
                 }
                 p.area_left -= 1;
                 if p.pulse > 0 {
@@ -180,11 +200,45 @@ impl Pool {
             for k in 0..3 {
                 p.position[k] += p.velocity[k];
             }
-            // Character hit test: the hero (hit selector 1); spells and lobbed shots skip it.
-            if !matches!(p.s.kind, 2..=8) && sphere_meets_body(p.position, p.s.radius, env.hero, env.hero_radius, env.hero_height) {
-                out.push(Event::Hero { damage: p.s.damage.max(0.0), owner: p.s.owner });
-                *slot = None;
-                continue;
+            // Character hit test: the hero (hit selector 1) or, after a reflection, the owner;
+            // spells and lobbed shots skip it.
+            if !matches!(p.s.kind, 2..=8) {
+                if p.at_owner {
+                    let body = p.s.owner.and_then(|o| (env.owner_body)(o).map(|b| (o, b)));
+                    if let Some((o, (base, rb, hb))) = body {
+                        if sphere_meets_body(p.position, p.s.radius, base, rb, hb) {
+                            out.push(Event::Owner { id: o, damage: p.s.damage.max(0.0) });
+                            *slot = None;
+                            continue;
+                        }
+                    }
+                } else if sphere_meets_body(p.position, p.s.radius, env.hero, env.hero_radius, env.hero_height) {
+                    let d = unit(p.velocity);
+                    let f = env.hero_facing;
+                    let blocked = env.guard && d[0] * f[0] + d[1] * f[1] + d[2] * f[2] < 0.0;
+                    let visual_ok = matches!(p.s.visual, 0..=5 | 7..=14 | 16 | 23);
+                    // Shields have element kind 0, so the element rule passes for element 0 only.
+                    let reflectable = blocked && matches!(p.s.kind, 0 | 10) && visual_ok && env.shield && p.s.element == 0;
+                    let owner = p.s.owner.and_then(|o| (env.owner_body)(o));
+                    if let (true, Some((base, _, _))) = (reflectable, owner) {
+                        let speed = len(p.velocity);
+                        let aim = [base[0], base[1] + 2.0, base[2]];
+                        p.velocity = unit(sub(aim, p.position)).map(|c| c * speed);
+                        if p.s.kind == 10 {
+                            p.s.damage = 0.0;
+                        }
+                        p.at_owner = true;
+                    } else {
+                        let d = p.s.damage.max(0.0);
+                        out.push(if blocked {
+                            Event::Hero { damage: (0.25 * d).max(1.0), owner: p.s.owner, blocked: true }
+                        } else {
+                            Event::Hero { damage: d, owner: p.s.owner, blocked: false }
+                        });
+                        *slot = None;
+                        continue;
+                    }
+                }
             }
             // World collision, once more than 2.0 from the start point.
             if len(sub(p.position, p.s.start)) > 2.0 {
@@ -331,7 +385,19 @@ mod tests {
     use super::*;
 
     fn env<'a>(hero: Vec3, owner: &'a dyn Fn(u64) -> bool, ground: &'a dyn Fn(f32, f32, f32) -> Option<f32>, wall: &'a dyn Fn(Vec3, Vec3) -> bool) -> Env<'a> {
-        Env { hero, hero_radius: 0.5, hero_height: 3.0, hero_gap: 0.0, owner_exists: owner, ground, wall }
+        Env {
+            hero,
+            hero_radius: 0.5,
+            hero_height: 3.0,
+            hero_gap: 0.0,
+            hero_facing: [0.0, 0.0, -1.0],
+            guard: false,
+            shield: false,
+            owner_exists: owner,
+            owner_body: &|_| Some(([0.0; 3], 0.5, 3.0)),
+            ground,
+            wall,
+        }
     }
 
     fn archer() -> Missile {
@@ -355,7 +421,7 @@ mod tests {
             if tick < 10 {
                 assert!(ev.is_empty(), "tick {tick}");
             } else {
-                assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7) }]);
+                assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7), blocked: false }]);
             }
         }
         assert_eq!(pool.live(), 0);
@@ -433,7 +499,19 @@ mod tests {
         pool.reset();
         pool.submit(s);
         let (o, g, w) = (|_| true, |_, _, _| Some(4.9), |_, _| false);
-        let e = Env { hero: [3.5, 4.9, 0.0], hero_radius: 0.1, hero_height: 0.1, hero_gap: 0.0, owner_exists: &o, ground: &g, wall: &w };
+        let e = Env {
+            hero: [3.5, 4.9, 0.0],
+            hero_radius: 0.1,
+            hero_height: 0.1,
+            hero_gap: 0.0,
+            hero_facing: [1.0, 0.0, 0.0],
+            guard: false,
+            shield: false,
+            owner_exists: &o,
+            owner_body: &|_| None,
+            ground: &g,
+            wall: &w,
+        };
         // It lands once past 2.0 from the start (tick 2); the first pulse comes 61 ticks later,
         // then one every 60 (the timer is set to 60 and counts down the same tick).
         let mut hits = Vec::new();
@@ -444,6 +522,32 @@ mod tests {
         }
         assert!(pool.slots[0].is_some_and(|p| p.area) || pool.live() == 0);
         assert_eq!(hits, vec![63, 123]);
+    }
+
+    #[test]
+    fn guard_blocks_and_reflects() {
+        let mut rng = Rng::seeded(1);
+        let s = spawn(&archer(), 0, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], false, &mut rng).unwrap();
+        let (o, g, w) = (|_| true, |_, _, _| None, |_, _| false);
+        let mut e = env([0.0, 0.0, 20.0], &o, &g, &w);
+        e.guard = true;
+        // Facing the shot without a shield: blocked, not reflected, max(1, 0.25 x 10).
+        let mut pool = Pool::default();
+        pool.submit(s);
+        let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
+        assert_eq!(ev, vec![Event::Hero { damage: 2.5, owner: Some(7), blocked: true }]);
+        // With a shield, an element-0 straight shot is sent back at its owner (at the origin).
+        e.shield = true;
+        let mut pool = Pool::default();
+        pool.submit(s);
+        let ev: Vec<Event> = (0..30).flat_map(|_| pool.tick(&e)).collect();
+        assert_eq!(ev, vec![Event::Owner { id: 7, damage: 10.0 }]);
+        // From behind (facing away from the shot) the guard does not block.
+        e.hero_facing = [0.0, 0.0, 1.0];
+        let mut pool = Pool::default();
+        pool.submit(s);
+        let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
+        assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7), blocked: false }]);
     }
 
     #[test]

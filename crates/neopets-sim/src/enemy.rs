@@ -52,6 +52,12 @@ pub struct Slot {
     pub loop_min: i32,
     pub loop_max: i32,
     pub loop_hold: f32,
+    /// The blocked-charge kind (+0x2AC), the stun range (max +0x27C, min +0x28C) and type
+    /// (+0x29C) of a blocked charge.
+    pub blocked_charge: i32,
+    pub stun_max: f32,
+    pub stun_min: f32,
+    pub stun_type: i32,
     /// Spawn count (+0x33C) and the missile values of the spawners.
     pub spawn_count: i32,
     pub missile: crate::projectile::Missile,
@@ -115,6 +121,8 @@ pub struct View<'a> {
     pub speed: f32,
     /// A weapon volume touches one of the hero's bone capsules this tick (the strike test).
     pub contact: bool,
+    /// The hero guards and faces this enemy (dot of the facings at most -0.5).
+    pub hero_blocks: bool,
     /// Event bits on the current frame: 0x20 is the release event (the missile slot's spawn
     /// event, SPEC-0005 table B), and 0x1 to 0x10 on that frame pick emit points 0 to 4.
     pub spawn_bits: u32,
@@ -167,6 +175,8 @@ pub struct Strike {
     pub knockback: f32,
     pub unblockable: bool,
     pub force_blocked: bool,
+    /// The strike was blocked (the hero guards facing the enemy, or flag 0x20).
+    pub blocked: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -1125,19 +1135,16 @@ impl Enemy {
             a.face = Some((v.hero, 1.0));
         }
         let cos = dot(v.facing, unit(sub(v.hero, v.position)));
-        let strike = |e: &mut Self, a: &mut Act| -> bool {
+        let strike = |e: &mut Self, a: &mut Act| -> Option<bool> {
             if v.contact && !e.hit {
                 e.hit = true;
-                a.strike = Some(Strike {
-                    slot: k,
-                    damage: s.damage,
-                    knockback: s.knockback,
-                    unblockable: s.flags & 0x01 != 0,
-                    force_blocked: s.flags & 0x20 != 0,
-                });
-                return true;
+                let unblockable = s.flags & 0x01 != 0;
+                let force_blocked = s.flags & 0x20 != 0;
+                let blocked = force_blocked || (!unblockable && v.hero_blocks);
+                a.strike = Some(Strike { slot: k, damage: s.damage, knockback: s.knockback, unblockable, force_blocked, blocked });
+                return Some(blocked);
             }
-            false
+            None
         };
         let t = len(sub(v.position, self.start));
         match self.seq {
@@ -1175,8 +1182,9 @@ impl Enemy {
             2 => {
                 a.rate = Some(s.strike_speed);
                 let done = self.through(kb, v, a);
-                if s.kind == MELEE && strike(self, a) {
-                    self.seq = 3;
+                let struck = if s.kind == MELEE { strike(self, a) } else { None };
+                if let Some(blocked) = struck {
+                    self.seq = if blocked { 4 } else { 3 };
                 } else if s.kind == MISSILE && self.missile_step(k, v, a) {
                     self.seq = 3;
                 } else if done {
@@ -1226,8 +1234,9 @@ impl Enemy {
             7 => {
                 self.ticks += 1;
                 self.through(kb, v, a);
-                if s.charge != 2 && strike(self, a) {
-                    self.seq = 8;
+                let struck = if s.charge != 2 { strike(self, a) } else { None };
+                if let Some(blocked) = struck {
+                    self.seq = if blocked { 9 } else { 8 };
                 } else if self.ticks > 100 && v.speed <= 0.001 {
                     self.seq = 12;
                 } else {
@@ -1262,6 +1271,28 @@ impl Enemy {
                     }
                 }
             }
+            9 => {
+                // The blocked charge, by the slot's blocked-charge kind.
+                match s.blocked_charge {
+                    0 => {
+                        self.through(kd, v, a);
+                        if t >= self.charge[k] {
+                            self.seq = 12;
+                        }
+                    }
+                    1 => {
+                        if self.through(kd, v, a) {
+                            self.seq = 12;
+                        }
+                    }
+                    2 => {
+                        self.stun = rng.frange(s.stun_min, s.stun_max) as i32;
+                        self.stun_type = s.stun_type;
+                        self.enter(10, 2);
+                    }
+                    _ => self.enter(10, 3),
+                }
+            }
             12 | 15 => {
                 if self.through(ke, v, a) {
                     self.end_path(k, rng);
@@ -1280,7 +1311,7 @@ impl Enemy {
                     a.anim = Some(kb);
                 }
                 if self.loop_count == 0 {
-                    a.strike = Some(Strike { slot: k, damage: s.damage, knockback: s.knockback, unblockable: true, force_blocked: false });
+                    a.strike = Some(Strike { slot: k, damage: s.damage, knockback: s.knockback, unblockable: true, force_blocked: false, blocked: false });
                     self.loop_count = rng.range(s.loop_min, s.loop_max);
                 } else {
                     self.loop_count -= 1;
@@ -1345,6 +1376,7 @@ mod tests {
             blocked: false,
             speed: 0.0,
             contact: false,
+            hero_blocks: false,
             spawn_bits: 0,
             radii: 2.0,
             clip: Clip::default(),
@@ -1451,6 +1483,32 @@ mod tests {
         e.tick(&v, &mut rng);
         assert_eq!(e.outer, 0);
         assert!((15..=30).contains(&e.recovery));
+    }
+
+    #[test]
+    fn a_guarding_hero_blocks_the_strike() {
+        let has = |_| true;
+        let mut rng = Rng::seeded(3);
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        e.state = 19;
+        e.selected = Some(0);
+        e.enter(2, 2);
+        let mut v = view([2.0, 0.0, 0.0], &has);
+        v.clip = Clip { action: slot_anim(0, 1), progress: 0.2, finished: false };
+        v.contact = true;
+        v.hero_blocks = true;
+        let act = e.tick(&v, &mut rng);
+        assert_eq!(act.strike.map(|s| s.blocked), Some(true));
+        assert_eq!(e.seq, 4, "a blocked strike plays D");
+        // An unblockable slot (flag 0x01) is not blocked.
+        let mut p = skeleton();
+        p.slots[0].flags = 0x01;
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        e.state = 19;
+        e.selected = Some(0);
+        e.enter(2, 2);
+        assert_eq!(e.tick(&v, &mut rng).strike.map(|s| s.blocked), Some(false));
+        assert_eq!(e.seq, 3);
     }
 
     #[test]

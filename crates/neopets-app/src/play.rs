@@ -254,6 +254,8 @@ pub struct Play {
     /// The equipped weapon (item id), the item table, the hero's hit list and the weapon axis
     /// of the previous tick (D2 of the swept test).
     pub weapon: Option<u16>,
+    /// The equipped shield (item id; Tor's shields are type 5, SPEC-0036).
+    pub shield: Option<u16>,
     pub items: neopets_data::item::ItemTable,
     reach_tor: Vec<f32>,
     hit_list: Vec<u64>,
@@ -366,6 +368,7 @@ impl Play {
             attack: None,
             attack_latch: false,
             weapon: None,
+            shield: None,
             items,
             reach_tor,
             hit_list: Vec::new(),
@@ -1173,6 +1176,7 @@ impl Play {
             }
         }
         self.hero_swing();
+        self.loco.shield = self.shield.is_some();
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.pending_step();
         self.hero.request(self.loco.action(), force);
@@ -1311,6 +1315,7 @@ impl Play {
             })
             .collect();
         let bands = enemy::band_factors(self.loco.state, &self.bands.0, &self.bands.1);
+        let guarding = self.loco.state == hero_states::GUARD;
         let attackable = self.loco.state != hero_states::DEAD && !self.dialogue_open;
         let world = &self.world;
         let mut strikes = Vec::new();
@@ -1370,6 +1375,11 @@ impl Play {
             let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
             v.radii = row.radius + contact::HERO_RADIUS;
             v.spawn_bits = bits;
+            // SPEC-0036 Guard timer and per-attacker block: the guard predicate (state 20; the
+            // 40-tick threat-sense timer is not implemented) and dot(hero facing, attacker
+            // facing) at most -0.5.
+            let wf = wk.facing;
+            v.hero_blocks = guarding && hero_facing[0] * wf[0] + hero_facing[1] * wf[1] + hero_facing[2] * wf[2] <= -0.5;
             let act = e.tick(&v, &mut self.rng);
             // A missile slot's spawn event: the spawner from the emit point of the event bit
             // (attach frame n; the body middle when the frame has no bone; R-0016).
@@ -1413,11 +1423,14 @@ impl Play {
             }
         }
         // The projectile pool's update, after the region passes (SPEC-0029 Behavior 9).
-        let owners: std::collections::HashSet<u64> = self.characters.iter().map(|c| c.id).collect();
+        let owners: HashMap<u64, ([f32; 3], f32, f32)> =
+            self.characters.iter().map(|c| (c.id, (c.position, c.row.map_or(1.0, |r| r.radius), c.row.map_or(3.0, |r| r.height)))).collect();
         let gap = self.loco.body.gap;
+        let shield = self.shield.is_some();
         let events = {
             let world = &self.world;
-            let owner_exists = |id: u64| owners.contains(&id);
+            let owner_exists = |id: u64| owners.contains_key(&id);
+            let owner_body = |id: u64| owners.get(&id).copied();
             let ground = |x: f32, z: f32, c: f32| world.ground_at(x, z, c);
             let wall = |a: [f32; 3], b: [f32; 3]| world.ground.as_ref().is_some_and(|g| !g.segment_clear(a, b, true));
             let env = neopets_sim::projectile::Env {
@@ -1425,19 +1438,43 @@ impl Play {
                 hero_radius: contact::HERO_RADIUS,
                 hero_height: HERO_HEIGHT,
                 hero_gap: gap,
+                hero_facing,
+                guard: guarding,
+                shield,
                 owner_exists: &owner_exists,
+                owner_body: &owner_body,
                 ground: &ground,
                 wall: &wall,
             };
             self.shots.tick(&env)
         };
         for ev in events {
-            if let neopets_sim::projectile::Event::Hero { damage, .. } = ev {
-                self.hero_hit(damage, 0.0, hero_facing, "a shot".into());
+            match ev {
+                neopets_sim::projectile::Event::Hero { damage, blocked, .. } => {
+                    self.hero_hit(damage, 0.0, blocked, hero_facing, "a shot".into());
+                }
+                neopets_sim::projectile::Event::Owner { id, damage } => {
+                    // A reflected shot: the owner's take-hit, then its death hook at 0 HP.
+                    if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
+                        if let Some(e) = c.enemy.as_mut() {
+                            let (applied, _) = e.take_hit(damage.trunc() as i32, hero, &mut self.rng);
+                            c.hp -= applied;
+                            if c.hp <= 0 {
+                                c.hp = 0;
+                                e.die();
+                            }
+                            self.last_hit = format!("reflected shot hit {} for {applied} (hp {})", c.name, c.hp);
+                        }
+                    }
+                }
+                neopets_sim::projectile::Event::Summon { .. } => {}
             }
         }
         for (at, s, f) in strikes {
-            if self.hero_hit(s.damage, s.knockback, f, format!("slot {}", s.slot)) {
+            // SPEC-0036 Enemy attack damage to a hero: a blocked strike subtracts the shield
+            // block (stat A of the shield; no shield Mote, no armour, no petpet).
+            let block = if s.blocked { self.shield.and_then(|id| self.items.get(id)).map_or(0.0, |i| i.stats[0] as f32) } else { 0.0 };
+            if self.hero_hit(s.damage - block, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" })) {
                 // A hit that leaves the hero at 0 HP: the attacker's victory pose (state 10).
                 if let Some(c) = self.characters.iter_mut().find(|c| c.id == at) {
                     let Character { enemy: Some(e), walker: Some(wk), anim, .. } = c else { continue };
@@ -1456,13 +1493,15 @@ impl Play {
     /// so no block; no armour, Motes or petpet; status scale 1), Taking a hit (the dialogue box
     /// discards hits; a dead hero takes none; Tor's charge sub-states 1 and 10 are busy), the
     /// deduct and the default death, and the knockback. Returns whether the hero died.
-    fn hero_hit(&mut self, damage: f32, knockback: f32, attacker_facing: [f32; 3], what: String) -> bool {
+    fn hero_hit(&mut self, damage: f32, knockback: f32, blocked: bool, attacker_facing: [f32; 3], what: String) -> bool {
         if self.dialogue_open || self.loco.state == hero_states::DEAD {
             return false;
         }
         let damage = damage.max(0.0).trunc() as i32;
         let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
-        if !busy {
+        if !busy && blocked {
+            self.loco.block();
+        } else if !busy {
             self.attack = None;
             self.loco.hurt(self.weapon.is_some());
         }
@@ -1487,6 +1526,15 @@ impl Play {
         self.attack = None;
         self.hit_list.clear();
         self.loco.die();
+    }
+
+    /// Equip an item diagnostically (no inventory yet): a weapon (types 3 and 6) or one of Tor's
+    /// shields (type 5).
+    pub fn give(&mut self, id: u16) {
+        match self.items.get(id).map(|i| i.kind) {
+            Some(5) => self.shield = Some(id),
+            _ => self.weapon = Some(id),
+        }
     }
 
     /// The game-over page's quit exit. With no save or load in the session the game tears the
@@ -1676,6 +1724,10 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         loop_min: s.loop_min,
         loop_max: s.loop_max,
         loop_hold: s.loop_hold,
+        blocked_charge: s.blocked_charge,
+        stun_max: s.stun_max,
+        stun_min: s.stun_min,
+        stun_type: s.stun_type,
         spawn_count: s.spawn_count,
         missile: neopets_sim::projectile::Missile {
             flight: s.flight,
@@ -1760,6 +1812,7 @@ fn enemy_view<'a>(
         blocked: wk.blocked,
         speed,
         contact,
+        hero_blocks: false,
         spawn_bits: 0,
         radii: 0.0,
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },

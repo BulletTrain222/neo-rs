@@ -23,7 +23,7 @@ const PLAY_OUTFIT: u32 = 504;
 
 /// Play mode was asked for, in this world pack (`--pack`, default 909).
 #[derive(Resource)]
-struct PlayRequest(u32, Option<[f32; 2]>);
+struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>);
 
 /// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
 /// can show travel without a person at the controls; `--autojump` also presses Cross every 2 s.
@@ -334,7 +334,9 @@ fn main() {
     let mut flags: Vec<u16> = Vec::new();
     let mut look: Option<[f32; 2]> = None;
     let mut seed: Option<u32> = None;
-    let mut give: Option<u16> = None;
+    let mut give: Vec<u16> = Vec::new();
+    // `--guard`: the fight trace holds L1 (the shield guard) while it is close to its enemy.
+    let mut guard = false;
     let mut start: Option<[f32; 2]> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
@@ -401,7 +403,9 @@ fn main() {
                 Some([x.parse::<f32>().ok()?, z.parse::<f32>().ok()?])
             });
         } else if arg == "--give" {
-            give = args.next().and_then(|v| v.parse::<u16>().ok());
+            give.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
+        } else if arg == "--guard" {
+            guard = true;
         } else if arg == "--seed" {
             seed = args.next().and_then(|v| v.parse::<u32>().ok());
         } else if arg == "--flag" {
@@ -448,7 +452,7 @@ fn main() {
             eprintln!("{status}");
             std::process::exit(1)
         };
-        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags, seed, give, start);
+        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags, seed, &give, start, guard);
         return;
     }
     let driver = SimDriver {
@@ -461,7 +465,7 @@ fn main() {
     if let Some(archive) = archive {
         app.insert_resource(archive);
         if play_mode {
-            app.insert_resource(PlayRequest(play_pack, look));
+            app.insert_resource(PlayRequest(play_pack, look, give.clone()));
         }
         if let Some(auto) = autowalk {
             app.insert_resource(auto);
@@ -733,6 +737,8 @@ fn step_sim(
                 || gamepads.iter().any(|g| g.pressed(GamepadButton::RightTrigger)),
             jump: false,
             square: false,
+            // L1 (Q or the left bumper) holds the shield guard.
+            guard: keys.pressed(KeyCode::KeyQ) || gamepads.iter().any(|g| g.pressed(GamepadButton::LeftTrigger)),
             attack_held: keys.pressed(KeyCode::KeyF)
                 || mouse.pressed(MouseButton::Left)
                 || gamepads.iter().any(|g| g.pressed(GamepadButton::East) || g.pressed(GamepadButton::RightTrigger2)),
@@ -1402,8 +1408,9 @@ fn play_trace(
     to: Option<[f32; 2]>,
     flags: &[u16],
     seed: Option<u32>,
-    give: Option<u16>,
+    give: &[u16],
     start: Option<[f32; 2]>,
+    guard: bool,
 ) {
     let Archive { disc, index } = archive;
     let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
@@ -1417,8 +1424,11 @@ fn play_trace(
     if let Some(n) = seed {
         play.rng = neopets_sim::rng::Rng::seeded(n);
     }
-    // `--give N`: a diagnostic weapon equipped at the start; `--start x,z` places the hero.
-    play.weapon = give;
+    // `--give N` (repeatable): a diagnostic weapon or shield equipped at the start; `--start
+    // x,z` places the hero.
+    for &id in give {
+        play.give(id);
+    }
     if let Some([x, z]) = start {
         play.place_at(x, z);
     }
@@ -1512,6 +1522,7 @@ fn play_trace(
             forward,
             side,
             square: play.prompt_shown.is_some() || play.talk_prompt,
+            guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),
             attack: (jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30,
@@ -1570,6 +1581,10 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
             // `--look x,z`: diagnostic start facing.
             if let Some([x, z]) = request.1 {
                 play.face_point(x, z);
+            }
+            // `--give N`: diagnostic equipment (no inventory yet).
+            for &id in &request.2 {
+                play.give(id);
             }
             match disc.reopen() {
                 Ok(second) => commands.insert_resource(Streamer::start(second, index.clone(), play.boot.clone())),
