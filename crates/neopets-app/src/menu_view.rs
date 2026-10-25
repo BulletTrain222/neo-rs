@@ -58,6 +58,17 @@ pub fn menu_words(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> (u
     if keys.just_pressed(KeyCode::KeyE) || pad(GamepadButton::West) {
         buttons |= menus::SQUARE;
     }
+    // Start (Tab or the Start button) opens the item screen; L1 and R1 (Z and C, or the
+    // shoulder buttons) change its tab.
+    if keys.just_pressed(KeyCode::Tab) || pad(GamepadButton::Start) {
+        buttons |= menus::START;
+    }
+    if keys.just_pressed(KeyCode::KeyZ) || pad(GamepadButton::LeftTrigger) {
+        buttons |= menus::L1;
+    }
+    if keys.just_pressed(KeyCode::KeyC) || pad(GamepadButton::RightTrigger) {
+        buttons |= menus::R1;
+    }
     let mut edge = buttons;
     if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp) {
         edge |= menus::UP;
@@ -116,6 +127,8 @@ pub fn sync_menu(
     let mut draws = if flow.current == menus::PLAY { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pc()) };
     draws.extend(menus::picker_draws(&art.f, flow));
     draws.extend(menus::credits_draws(&art.f, flow));
+    let lines = _state.play.item_lines(flow.pc().items.selected);
+    draws.extend(menus::item_draws(&art.f, flow, &lines));
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {
         commands.spawn((

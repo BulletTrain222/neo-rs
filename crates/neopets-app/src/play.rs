@@ -393,6 +393,11 @@ pub struct Play {
     pub attack_latch: bool,
     /// The equipped weapon (item id), the item table, the hero's hit list and the weapon axis
     /// of the previous tick (D2 of the swept test).
+    /// The heroes' family entries and Mote words (SPEC-0021 Party inventory lists, Equipment
+    /// slots); `weapon` and `shield` mirror Tor's entries for the combat code.
+    pub equipment: neopets_sim::inventory::Equipment,
+    /// The Tattered Cloak is worn (the cloak swap; SPEC-0021 Tattered Cloak, partly).
+    pub cloak_worn: bool,
     pub weapon: Option<u16>,
     /// The equipped shield (item id; Tor's shields are type 5, SPEC-0036).
     pub shield: Option<u16>,
@@ -693,6 +698,8 @@ impl Play {
             held: false,
             loads_out: 0,
             seen_pack: 0,
+            equipment: Default::default(),
+            cloak_worn: false,
             buyable: None,
             buy_caption: None,
             price_lines: [(0, 0); 2],
@@ -1999,6 +2006,7 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
+        self.equipment_step();
         // SPEC-0035 section 15.2: each drawn pass (quick panels closed) lowers the caption
         // lines' counters.
         if !self.quick.open {
@@ -3600,13 +3608,99 @@ impl Play {
     /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is
     /// equipped; every item is also counted as held.
     pub fn give(&mut self, id: u16) {
-        match self.items.get(id).map(|i| i.kind) {
-            Some(5) => self.shield = Some(id),
-            Some(3 | 6) => self.weapon = Some(id),
+        // The add puts equipment into its family entry (equipment_step).
+        *self.state.items.entry(id).or_insert(0) += 1;
+        self.equipment_step();
+    }
+
+    /// SPEC-0021 Party inventory lists, categories 1, 2 and 5: each held equipment item goes to
+    /// its family entry by the add rule (empty, or a greater id replaces the entry; the replaced
+    /// item leaves the inventory); an entry whose item is no longer held is emptied. Tor's weapon
+    /// and shield entries are the combat code's weapon and shield.
+    fn equipment_step(&mut self) {
+        let e = &mut self.equipment;
+        for f in e.entries.iter_mut().flatten() {
+            if f.is_some_and(|id| !self.state.items.get(&id).is_some_and(|&n| n > 0)) {
+                *f = None;
+            }
+        }
+        let mut held: Vec<u16> = self.state.items.iter().filter(|e| *e.1 > 0).map(|e| *e.0).collect();
+        held.sort_unstable();
+        for id in held {
+            let kind = self.items.get(id).map_or(-1, |i| i.kind);
+            if neopets_sim::inventory::family(kind).is_none() {
+                continue;
+            }
+            match self.equipment.add(id, kind) {
+                Ok(Some(old)) => {
+                    self.state.items.remove(&old);
+                }
+                Ok(None) => {}
+                // A lesser item than the entry is refused by the add.
+                Err(()) if self.equipment.entries.iter().flatten().all(|&f| f != Some(id)) => {
+                    self.state.items.remove(&id);
+                }
+                Err(()) => {}
+            }
+        }
+        self.weapon = self.equipment.entries[0][0];
+        self.shield = self.equipment.entries[1][0];
+    }
+
+    /// The item screen's view of the party (SPEC-0035 section 14.1) for the grid ids.
+    pub fn item_view(&self, grid: &[i32; 20]) -> crate::menus::ItemView {
+        let count = |id: i32| u16::try_from(id).ok().and_then(|id| self.state.items.get(&id)).copied().unwrap_or(0);
+        let mut v = crate::menus::ItemView { marker: self.quick.marker, ..Default::default() };
+        v.grid_counts = grid.map(count);
+        let mut held: Vec<u16> = self.state.items.iter().filter(|e| *e.1 > 0).map(|e| *e.0).collect();
+        held.sort_unstable();
+        for (slot, id) in held.iter().filter(|&&id| self.design.item_category(id) == Some(8)).take(14).enumerate() {
+            v.charms[slot] = *id as i32;
+        }
+        for (slot, id) in held.iter().filter(|&&id| self.design.item_category(id) == Some(7)).take(60).enumerate() {
+            v.quests[slot] = *id as i32;
+        }
+        v.motes = self.equipment.motes[0].map(|m| m.map_or(-1, |id| id as i32));
+        let e = &self.equipment.entries;
+        v.equipped = [e[0][0].is_some(), e[2][0].is_some(), e[1][0].is_some()];
+        v.cloak = count(126) > 0;
+        v.mote_counts = std::array::from_fn(|k| count(160 + k as i32));
+        v
+    }
+
+    /// The item screen's two text lines for the selected entry (SPEC-0035 section 14.1); the
+    /// times-obtained count is not kept, so it reads 0.
+    pub fn item_lines(&self, selected: i32) -> [Vec<u8>; 2] {
+        let Ok(id) = u16::try_from(selected) else { return [b" ".to_vec(), b" ".to_vec()] };
+        let held = self.state.items.get(&id).copied().unwrap_or(0);
+        let name = self.design.item_name(id);
+        let line = neopets_sim::inventory::name_line(name.as_deref(), self.design.carry_limit(id).unwrap_or(0), 0, held);
+        let desc = if held > 0 { self.design.item_description(id).map(|d| d.into_iter().take(255).collect()).unwrap_or_else(|| b" ".to_vec()) } else { b" ".to_vec() };
+        [line, desc]
+    }
+
+    /// An item-screen command (SPEC-0035 section 14.2; SPEC-0021 Using an equipped item, Equip
+    /// and unequip rules).
+    pub fn item_command(&mut self, c: &crate::menus::Command) {
+        use crate::menus::Command;
+        match *c {
+            // A charm is never consumed: the use fails (0xA2); others take the consumable use.
+            Command::UseItem(id) if (160..=173).contains(&id) => self.cue(0xA2),
+            Command::UseItem(id) => self.use_item(id),
+            Command::Marker(m) => {
+                self.quick.marker = m;
+                if m >= 0 {
+                    self.cue(0xA3);
+                }
+            }
+            Command::EquipMote { word, id } => {
+                if self.equipment.set_mote(0, word, id) {
+                    self.cue(0xA3);
+                }
+            }
+            Command::Cloak => self.cloak_worn = !self.cloak_worn,
             _ => {}
         }
-        // An equipped item is still held (DoesHeroHaveItem).
-        *self.state.items.entry(id).or_insert(0) += 1;
     }
 
     /// The game-over page's quit exit. With no save or load in the session the game tears the

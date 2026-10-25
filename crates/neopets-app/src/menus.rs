@@ -32,6 +32,10 @@ pub const LOAD: usize = 17;
 /// The credits roll (record 14, state 18) and the Options page (record 11).
 pub const CREDITS: usize = 14;
 pub const SAVE: usize = 18;
+/// The item screen's tabs for Tor: records 6, 7 and 8 (states 8, 9 and 10; codes 0x78, 0x8C,
+/// 0xA0), whose page pictures show Tor; Roberta's are records 3 to 5 (codes 0x3C, 0x50, 0x64).
+/// The spec gives the six codes by tab and hero without the order (R-0031).
+pub const ITEMS: usize = 6;
 
 /// Menu bits of the rising-edge word (SPEC-0035 section 4).
 pub const UP: u16 = 0x1000;
@@ -43,6 +47,9 @@ pub const RIGHT: u16 = 0x2000;
 pub const LEFT: u16 = 0x8000;
 pub const SQUARE: u16 = 0x0080;
 pub const SELECT: u16 = 0x0100;
+pub const START: u16 = 0x0800;
+pub const L1: u16 = 0x0004;
+pub const R1: u16 = 0x0008;
 
 /// What the game around the front end must do.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -57,6 +64,12 @@ pub enum Command {
     Write,
     /// Apply slot k of the scanned file.
     Load(usize),
+    /// Item screen (SPEC-0035 section 14.2): use the item, set the quick-item selection marker
+    /// (-1 clears it), equip a Mote into equipment word k, or swap the Tattered Cloak.
+    UseItem(u16),
+    Marker(i32),
+    EquipMote { word: usize, id: u16 },
+    Cloak,
 }
 
 /// The slot picker of the load and save screens (SPEC-0035 section 7): the stage, the cursor,
@@ -185,21 +198,67 @@ pub struct Flow {
     pub credit_words: Option<neopets_sim::credits::Words>,
     pub roll: Option<neopets_sim::credits::Roll>,
     pub credits_shown: Vec<neopets_sim::credits::Shown>,
+    /// The item screen (SPEC-0035 section 14.1): the tab (kept for the session), the Items-tab
+    /// cursor (kept between visits), the Charms-tab and Quest-tab cursors, the grid ids (boot
+    /// 0x2DCF28) and the last item view the host gave.
+    pub item_tab: usize,
+    pub item_cursor: usize,
+    pub charm_cursor: usize,
+    pub quest_cursor: usize,
+    pub grid_ids: [i32; 20],
+    pub view: ItemView,
 }
 
 /// What the predicates read: the pass count, the option words of slots 66 to 68 (Vibration,
-/// Invert Left-Right, Invert Up-Down) and the knob positions the last apply set.
+/// Invert Left-Right, Invert Up-Down), the knob positions the last apply set, and the item
+/// screen's view.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Pc {
     pub pass: u32,
     pub words: [u32; 3],
     pub knobs: Option<[i32; 3]>,
+    pub items: ItemPc,
+}
+
+/// The item screen's predicate inputs: the tab, the cursor, the Items-tab grid ids (0 for a cell
+/// with nothing held), the selected entry's id and usability, the game's item view.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ItemPc {
+    pub tab: usize,
+    pub cursor: usize,
+    pub grid: [i32; 20],
+    pub selected: i32,
+    pub view: ItemView,
+}
+
+/// The game's side of the item screen, filled by the host each pass: the counts of the grid ids,
+/// the owned charms (category 8) and quest items (category 7) in list order (-1 past the end),
+/// the quick-item selection marker, the active hero, its Mote words (-1 empty), which of its
+/// weapon, body and shield entries is present, its cloak entry, and the counts of Motes 160 to
+/// 173.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ItemView {
+    pub grid_counts: [u32; 20],
+    pub charms: [i32; 14],
+    pub quests: [i32; 60],
+    pub marker: i32,
+    pub hero: usize,
+    pub motes: [i32; 3],
+    pub equipped: [bool; 3],
+    pub cloak: bool,
+    pub mote_counts: [u32; 14],
+}
+
+impl Default for ItemView {
+    fn default() -> Self {
+        Self { grid_counts: [0; 20], charms: [-1; 14], quests: [-1; 60], marker: -1, hero: 0, motes: [-1; 3], equipped: [false; 3], cloak: false, mote_counts: [0; 14] }
+    }
 }
 
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -215,7 +274,96 @@ impl Flow {
     /// The predicates' inputs of this pass.
     pub fn pc(&self) -> Pc {
         let b = self.options.block;
-        Pc { pass: self.pass, words: [b.vibration, b.invert_lr, b.invert_ud], knobs: self.options.knobs }
+        Pc { pass: self.pass, words: [b.vibration, b.invert_lr, b.invert_ud], knobs: self.options.knobs, items: self.item_pc() }
+    }
+
+    /// The item screen's predicate inputs for this pass.
+    fn item_pc(&self) -> ItemPc {
+        let v = &self.view;
+        let grid = std::array::from_fn(|k| if v.grid_counts[k] > 0 { self.grid_ids[k] } else { 0 });
+        let tab = self.current.saturating_sub(ITEMS).min(2);
+        let (cursor, selected) = match tab {
+            0 => (self.item_cursor, if v.grid_counts[self.item_cursor] > 0 { self.grid_ids[self.item_cursor] } else { -1 }),
+            1 => (self.charm_cursor, v.charms[self.charm_cursor.min(13)]),
+            _ => (self.quest_cursor, v.quests[self.quest_cursor.min(59)]),
+        };
+        ItemPc { tab, cursor, grid, selected, view: *v }
+    }
+
+    /// One pass of the item screen's tab states 8, 9 and 10 (SPEC-0035 sections 14.1 and 14.2).
+    fn item_screen(&mut self, tab: usize, edge: u16, second: u16, command: &mut Option<Command>) -> Option<usize> {
+        let buttons = edge | second;
+        let v = self.view;
+        if buttons & (TRIANGLE | START) != 0 {
+            self.sounds.push(0x95);
+            return Some(PLAY);
+        }
+        if buttons & L1 != 0 {
+            self.sounds.push(0x98);
+            self.item_tab = (tab + 2) % 3;
+            return Some(ITEMS + self.item_tab);
+        }
+        if buttons & R1 != 0 {
+            self.sounds.push(0x99);
+            self.item_tab = (tab + 1) % 3;
+            return Some(ITEMS + self.item_tab);
+        }
+        let (up, down, left, right) = (edge & UP != 0, edge & DOWN != 0, edge & LEFT != 0, edge & RIGHT != 0);
+        match tab {
+            0 => {
+                self.item_cursor = neopets_sim::inventory::grid_move(self.item_cursor, up, down, left, right);
+                let k = self.item_cursor;
+                let id = self.grid_ids[k];
+                let held = v.grid_counts[k] > 0 && id >= 0;
+                if buttons & CROSS != 0 {
+                    if held {
+                        *command = Some(Command::UseItem(id as u16));
+                    } else {
+                        self.sounds.push(0xA2);
+                    }
+                } else if buttons & CIRCLE != 0 && held {
+                    self.sounds.push(0x9A);
+                    *command = Some(Command::Marker(if v.marker == id { -1 } else { id }));
+                } else if buttons & SQUARE != 0 && v.cloak {
+                    *command = Some(Command::Cloak);
+                }
+            }
+            1 => {
+                // The Mote picker over the owned charms: Left and Right step through the list
+                // (with at least two entries); Cross equips word 0, Square word 1 (with a shield)
+                // and Circle word 2 (with a weapon).
+                let n = v.charms.iter().take_while(|&&c| c >= 0).count();
+                if n >= 2 && (left || up) {
+                    self.charm_cursor = (self.charm_cursor + n - 1) % n;
+                } else if n >= 2 && (right || down) {
+                    self.charm_cursor = (self.charm_cursor + 1) % n;
+                }
+                self.charm_cursor = self.charm_cursor.min(n.saturating_sub(1));
+                let id = v.charms[self.charm_cursor];
+                let word = if buttons & CROSS != 0 {
+                    Some(0)
+                } else if buttons & SQUARE != 0 && v.equipped[2] {
+                    Some(1)
+                } else if buttons & CIRCLE != 0 && v.equipped[0] {
+                    Some(2)
+                } else {
+                    None
+                };
+                if let (Some(word), true) = (word, id >= 0) {
+                    *command = Some(Command::EquipMote { word, id: id as u16 });
+                }
+            }
+            _ => {
+                let n = v.quests.iter().take_while(|&&c| c >= 0).count();
+                if n >= 2 {
+                    self.quest_cursor = neopets_sim::inventory::grid_move(self.quest_cursor, up, down, left, right).min(n - 1);
+                }
+                if buttons & (CROSS | CIRCLE) != 0 {
+                    self.sounds.push(0xA2);
+                }
+            }
+        }
+        None
     }
 
     /// Whether play was entered from the pause page on this pass (the unpause cue).
@@ -427,11 +575,24 @@ impl Flow {
                     result = Some(GAME_OVER);
                 } else if second & SELECT != 0 {
                     result = Some(PAUSE);
+                } else if (edge | second) & START != 0 {
+                    // SPEC-0035: Start opens the item screen on its current tab (Tor's records).
+                    result = Some(ITEMS + self.item_tab);
                 }
                 // Play's own buttons belong to the hero; the HUD page has no menu items.
                 generic = false;
             }
             7 if second & SELECT != 0 => result = Some(PLAY),
+            8..=10 => {
+                if self.pass == 0 && self.current == ITEMS && self.view.grid_counts[self.item_cursor] == 0 {
+                    self.item_cursor = 0;
+                }
+                if self.pass == 0 && self.current == ITEMS + 2 {
+                    self.quest_cursor = 0;
+                }
+                result = self.item_screen(state as usize - 8, edge, second, &mut command);
+                generic = false;
+            }
             26 => {
                 if !ctx.game_over {
                     result = Some(PLAY);
@@ -698,8 +859,28 @@ pub struct Ctx {
 /// Predicate table A (section 9c), the slots this build implements: 0, 2 and 56 always 1;
 /// 12, 27, 39 and 40 always 0; 66 to 68 the option words (Vibration, Invert Left-Right, Invert
 /// Up-Down); 72 the game-over page's pass count above twice the tick rate. Other slots read 0.
-fn predicate(slot: i16, _arg: u8, pc: Pc) -> i32 {
+fn predicate(slot: i16, arg: u8, pc: Pc) -> i32 {
+    let it = &pc.items;
+    let v = &it.view;
+    let a = arg as usize;
+    let count_of = |id: i32| -> u32 { if (160..=173).contains(&id) { v.mote_counts[(id - 160) as usize] } else { 0 } };
     match slot {
+        // SPEC-0035 section 9c, the item screen's slots.
+        1 => (it.tab == 0 && a < 20 && it.grid[a] != 0 && it.grid[a] == v.marker) as i32,
+        3 => (a == it.cursor) as i32,
+        4 => if it.tab == 0 && a < 20 { it.grid[a] } else { 0 },
+        5 | 7 => (it.selected >= 0 && it.tab != 2) as i32,
+        6 => (it.selected >= 0 && it.selected == v.marker) as i32,
+        8 => v.cloak as i32,
+        9 => if a == 1 { (!v.cloak) as i32 } else { 1 },
+        13 => (a < 3 && v.equipped[a]) as i32,
+        14 => (v.hero == 0) as i32,
+        52 => (v.hero == 1) as i32,
+        15 => (it.tab == 1 && v.charms.get(it.cursor).copied().unwrap_or(-1) == 160 + a as i32 % 100) as i32,
+        16 => if a < 14 { v.mote_counts[a] as i32 } else { 0 },
+        17 => (count_of(v.motes[2]) > 0) as i32,
+        19 => (count_of(v.motes[0]) > 0) as i32,
+        20 => (count_of(v.motes[1]) > 0) as i32,
         0 | 2 | 56 => 1,
         66 => pc.words[0] as i32,
         67 => pc.words[1] as i32,
@@ -807,6 +988,82 @@ pub fn credits_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
             Some(Draw::Text { font, text: text.clone(), spacing: 0, x: 256.0 - (w / 2) as f32, y: s.y, colour: [c[0], c[1], c[2], s.alpha as u8] })
         })
         .collect()
+}
+
+/// The item screen's two text lines (SPEC-0035 section 14.1): the selected entry's name line
+/// and its description, at the two value-text nodes of the record's group at (63, 388), in each
+/// node's font and colour. The lines' texts come from the host (`lines`).
+pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw> {
+    if !(ITEMS..ITEMS + 3).contains(&flow.current) {
+        return Vec::new();
+    }
+    // The group with key 0xC2 (cells, frames, counts and the action box) is a library group of
+    // record 3's tree under the slot-12 gate; the tab states of either hero draw it themselves
+    // (section 9c). The two text lines are the value-text nodes beside it.
+    let Some(g) = fe.key(0xC2) else { return Vec::new() };
+    let mut out = Vec::new();
+    // The Items tab draws the 0xC2 group; the Charms tab draws the Mote panel (key 0xC0) on its
+    // own; the Quest-items tab draws neither here.
+    let tab = flow.current - ITEMS;
+    let group = match tab {
+        0 => Some(g),
+        1 => fe.key(0xC0),
+        _ => None,
+    };
+    if let Some(n) = group {
+        let (x, y) = node_xy(fe, n);
+        let mut counter = 0;
+        draw_node(fe, n, (x, y, 1.0, 1.0), false, flow.focus, flow.pc(), &mut counter, &mut out);
+    }
+    // SPEC-0035 section 14.1: a cell with an owned count of 0 is hidden. The icon layer's
+    // predicate (slot 2) is always 1, so the rule is applied here (R-0031).
+    let pc = flow.pc();
+    out.retain(|d| match d {
+        Draw::Sprite { node, .. } => {
+            let n = fe.nodes[*node];
+            !(n.handler == 2 && pc.items.tab == 0 && (n.arg as usize) < 20 && pc.items.grid[n.arg as usize] == 0)
+        }
+        _ => true,
+    });
+    let mut nodes = Vec::new();
+    fn walk(fe: &Frontend, n: usize, out: &mut Vec<usize>) {
+        if fe.nodes[n].kind == 6 {
+            out.push(n);
+        }
+        for c in fe.children(n) {
+            walk(fe, c, out);
+        }
+    }
+    if let Some(parent) = fe.nodes[g].parent {
+        for c in fe.children(parent).into_iter().filter(|&c| c != g) {
+            walk(fe, c, &mut nodes);
+        }
+    }
+    // The name and description lines are the last two (the pair at (63, 388)).
+    let pair = &nodes[nodes.len().saturating_sub(2)..];
+    out.extend(pair.iter().zip(lines.iter()).filter_map(|(&n, text)| {
+        let v = fe.values.get(&fe.nodes[n].data)?;
+        let (x, y) = node_xy(fe, n);
+        Some(Draw::Text { font: v.font as usize, text: text.clone(), spacing: v.spacing as i32, x, y, colour: v.colour })
+    }));
+    out
+}
+
+/// A node's canvas position: its offset plus its parents' up to an absolute node or the root
+/// (the item screen's nodes have scale 1).
+fn node_xy(fe: &Frontend, n: usize) -> (f32, f32) {
+    let (mut x, mut y) = (0.0, 0.0);
+    let mut at = Some(n);
+    while let Some(i) = at {
+        let d = fe.nodes[i];
+        x += d.x as f32;
+        y += d.y as f32;
+        if d.absolute {
+            break;
+        }
+        at = d.parent;
+    }
+    (x, y)
 }
 
 /// The slot picker's rows (sections 7.1 and 14.3): four rows by the journal row drawer, each at

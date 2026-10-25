@@ -1004,6 +1004,7 @@ fn step_sim(
             if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                 let ctx = menus::Ctx { game_over: play.play.death.page.is_some() || play.play.death.flag_e };
                 m.flow.held = held;
+                m.flow.view = play.play.item_view(&m.flow.grid_ids);
                 // SPEC-0025 Clean-side mapping of the card jobs: the scans read the save file,
                 // the write job writes the whole file at once.
                 match m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx) {
@@ -1022,7 +1023,8 @@ fn step_sim(
                         m.flow.written(ok.is_ok());
                     }
                     Some(menus::Command::Load(k)) => pending = m.flow.picker.file.slot(k).cloned(),
-                    _ => {}
+                    Some(c) => play.play.item_command(&c),
+                    None => {}
                 }
                 let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER);
                 // SPEC-0023 section 4.1: opening the pause page clears the HUD timers and the
@@ -2086,7 +2088,7 @@ fn play_trace(
     }
     let mut held: Vec<(u16, u32)> = play.state.items.iter().map(|(k, v)| (*k, *v)).collect();
     held.sort_unstable();
-    println!("Held items at the end: {held:?}; {} NP", play.state.neopoints);
+    println!("Held items at the end: {held:?}; {} NP; weapon {:?}, shield {:?}, entries {:?}", play.state.neopoints, play.weapon, play.shield, play.equipment.entries);
     if save_test {
         let path = "private/saves/trace.bin";
         let mut file = read_save(path).unwrap_or_default();
@@ -2182,6 +2184,12 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                     if let Ok(boot) = neopets_data::archive::verified_boot_program(disc) {
                         if let Ok(c) = neopets_data::archive::boot_u32_table(&boot, 0x002D_CFA8, 16) {
                             flow.credit_colours = c.iter().map(|w| w.to_le_bytes()).collect();
+                        }
+                        // SPEC-0035 section 14.1: the item screen's 20 grid ids at 0x2DCF28.
+                        if let Ok(g) = neopets_data::archive::boot_u32_table(&boot, 0x002D_CF28, 20) {
+                            for (k, id) in g.iter().enumerate() {
+                                flow.grid_ids[k] = *id as i32;
+                            }
                         }
                         if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, 0x002D_CF84, 8) {
                             flow.credit_words = Some(neopets_sim::credits::Words {

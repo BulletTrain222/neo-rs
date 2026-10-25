@@ -103,6 +103,12 @@ impl DesignTables {
         self.tables.first()?.string(ptr).map(<[u8]>::to_vec).filter(|n| !n.is_empty())
     }
 
+    /// Table 0, row id: the item description (pointer at +0x20).
+    pub fn item_description(&self, id: u16) -> Option<Vec<u8>> {
+        let ptr = self.word(0, id as usize, 0x20)?;
+        self.tables.first()?.string(ptr).map(<[u8]>::to_vec).filter(|n| !n.is_empty())
+    }
+
     /// Table 0, row id: the carry limit Q (+0x08; 0 = no limit).
     pub fn carry_limit(&self, id: u16) -> Option<u32> {
         self.word(0, id as usize, 8)
