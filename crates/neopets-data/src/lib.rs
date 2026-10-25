@@ -2,6 +2,7 @@
 pub mod anim;
 pub mod area;
 pub mod archive;
+pub mod audio;
 mod elf;
 pub mod design;
 pub mod dialogue;

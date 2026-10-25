@@ -14,6 +14,7 @@ pub mod hud;
 pub mod items;
 pub mod level;
 pub mod motion;
+pub mod music;
 pub mod nav;
 pub mod projectile;
 pub mod quick;

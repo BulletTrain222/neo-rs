@@ -53,6 +53,8 @@ pub struct World {
     /// map area id (type 1001, SPEC-0006 Area names).
     pub save_points: Vec<neopets_sim::save::SavePoint>,
     pub map_area: Option<i32>,
+    /// The type-1001 record's music key and selector (SPEC-0009 Area to music row).
+    pub music: Option<(i32, u32)>,
 }
 
 impl World {
@@ -91,6 +93,7 @@ impl World {
                 .map(|r| r.save_points.iter().map(|s| neopets_sim::save::SavePoint { position: s.position, flag: s.flag }).collect())
                 .unwrap_or_default(),
             map_area: neopets_data::travel::map_area(&bytes, &chain.chunks),
+            music: neopets_data::audio::pack_record(&bytes, &chain.chunks),
         };
         Ok((world, bytes))
     }
@@ -353,6 +356,9 @@ pub struct Play {
     last_area: Option<i32>,
     pub snapshot: Option<neopets_sim::save::Slot>,
     pub reload_wanted: bool,
+    /// The music controller's stream channels (SPEC-0009 Streams) and this tick's selection.
+    pub music: neopets_sim::music::Streams,
+    pub music_selection: Option<neopets_sim::music::Selection>,
 }
 
 /// The five stat-up items with a once-per-area set, in slot order (SPEC-0025 Once-per-area sets).
@@ -554,6 +560,8 @@ impl Play {
             last_area: None,
             snapshot: None,
             reload_wanted: false,
+            music: Default::default(),
+            music_selection: None,
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
         // which for 909 loads the farm family's slots.
@@ -1339,6 +1347,7 @@ impl Play {
         }
         self.square_now = input.square;
         self.save_point_step(input.square);
+        self.music_step();
         // The attack press edge enters state 13 from the ground states (SPEC-0036); the step
         // then runs every tick and decides the clip.
         // SPEC-0021 Quick-item panel: it opens on an Up edge (not in action state 0x19) and,
@@ -2142,6 +2151,21 @@ impl Play {
         }
     }
 
+    /// SPEC-0009 Per-tick controller, the parts this build has: the current world's music row
+    /// (its type-1001 key looked up in the value table; 193, the default row, when absent), the
+    /// run-time flag, and the stream step with the ceiling trunc(Cap x Sound-effects gain). The
+    /// gains are 1.0 until options are applied (not implemented).
+    fn music_step(&mut self) {
+        let (key, selector) = self.world.music.unwrap_or((-1, 0));
+        let row = self.world_keys.1.iter().position(|&v| v as i32 == key).unwrap_or(193);
+        let r = self.design.music_row(row);
+        let state = &self.state;
+        let flag = neopets_sim::music::runtime_flag(selector, &|n| state.flag(n));
+        let s = neopets_sim::music::select(r.bank, r.stream, r.block, flag);
+        self.music.tick(s.stream, s.stop, r.cap, 1.0);
+        self.music_selection = Some(s);
+    }
+
     /// The location a save names: the current world's map area, else the last named one, else
     /// "Unknown Location" (SPEC-0025 Location, date and progress).
     pub fn location_name(&self) -> Vec<u8> {
@@ -2393,6 +2417,12 @@ impl Play {
             None => String::new(),
         };
         let job = self.job.map_or(String::new(), |j| format!(" | loading {j:?}"));
+        let ch = self.music.channels;
+        let job = format!(
+            "{job} | MUSIC (SPEC-0009): {:?}, streams [{:?} at {}/1024, {:?} at {}/1024]",
+            self.music_selection.map(|s| (s.bank, s.stream, s.block)),
+            ch[0].stream, ch[0].volume, ch[1].stream, ch[1].volume
+        );
         let prompt = match self.message {
             Some((line, _)) if self.dialogue_open => match self.world.lines.line(line as usize) {
                 // SPEC-0022 Speaker rule: the hero's talk partner names the speaker.

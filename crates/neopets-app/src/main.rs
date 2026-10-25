@@ -3,6 +3,7 @@ mod character;
 mod controls;
 mod orbit;
 mod pattern;
+mod audio_view;
 mod hud_view;
 mod menu_view;
 mod menus;
@@ -569,6 +570,7 @@ fn main() {
             ..default()
         }))
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play))
+        .add_systems(Update, audio_view::sync_music.after(step_sim))
         .add_systems(
             Update,
             (
@@ -579,6 +581,7 @@ fn main() {
             )
                 .chain(),
         );
+    audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
         app.add_systems(Update, smoke_exit);

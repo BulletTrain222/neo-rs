@@ -575,6 +575,59 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                 println!("Row drawer words 0x2DCDA8..: {shown:?}");
             }
         }
+        // SPEC-0009: the VAG clips, the KPV streams and the music rows of three packs.
+        {
+            let mut clips = Vec::new();
+            for r in 256..=274u32 {
+                if let Ok(b) = index.read(disc, r) {
+                    match neopets_data::audio::vag(&b) {
+                        Ok((pcm, name)) => clips.push(format!("{r} {name:?} {:.2}s", pcm.seconds())),
+                        Err(e) => clips.push(format!("{r} {e}")),
+                    }
+                }
+            }
+            println!("VAG clips: {clips:?}");
+            let (mut ok, mut rates, mut longest, mut total) = (0, std::collections::BTreeMap::new(), (0u32, 0.0f32), 0.0f32);
+            for r in 146..=255u32 {
+                let Ok(b) = index.read(disc, r) else { continue };
+                if let Ok(pcm) = neopets_data::audio::kpv(&b) {
+                    ok += 1;
+                    *rates.entry(pcm.rate).or_insert(0) += 1;
+                    total += pcm.seconds();
+                    if pcm.seconds() > longest.1 {
+                        longest = (r, pcm.seconds());
+                    }
+                    if r == 160 && std::env::var_os("NEOPETS_WAV").is_some() {
+                        let _ = std::fs::create_dir_all("private/audio");
+                        let mut w = Vec::new();
+                        let data = pcm.samples.len() as u32 * 2;
+                        w.extend(b"RIFF"); w.extend((36 + data).to_le_bytes()); w.extend(b"WAVEfmt ");
+                        w.extend(16u32.to_le_bytes()); w.extend(1u16.to_le_bytes()); w.extend(pcm.channels.to_le_bytes());
+                        w.extend(pcm.rate.to_le_bytes()); w.extend((pcm.rate * 2 * pcm.channels as u32).to_le_bytes());
+                        w.extend((2 * pcm.channels).to_le_bytes()); w.extend(16u16.to_le_bytes()); w.extend(b"data"); w.extend(data.to_le_bytes());
+                        for s in &pcm.samples { w.extend(s.to_le_bytes()); }
+                        let _ = std::fs::write("private/audio/stream-160.wav", w);
+                    }
+                }
+            }
+            println!("KPV streams: {ok} decoded, rates {rates:?}, {:.0} s in all, longest {longest:?}", total);
+            if let (Ok(d), Ok(boot)) = (index.read(disc, neopets_data::design::RESOURCE).and_then(|b| neopets_data::design::DesignTables::parse(&b)), neopets_data::archive::verified_boot_program(disc)) {
+                if let Ok(ids) = neopets_data::archive::boot_u32_table(&boot, 0x0031_F2B0, 193) {
+                    let rows: Vec<String> = [678u32, 691, 909, 1096]
+                        .iter()
+                        .filter_map(|&pack| {
+                            let b = index.read(disc, pack).ok()?;
+                            let c = resource::walk_chunks(&b, None).ok()?;
+                            let (key, sel) = neopets_data::audio::pack_record(&b, &c.chunks)?;
+                            let row = ids.iter().position(|&v| v as i32 == key).unwrap_or(193);
+                            let m = d.music_row(row);
+                            Some(format!("{pack}: key {key} selector {sel} row {row} -> bank {} stream {} block {} cap {} level {}", m.bank + 10, m.stream + 146, m.block + 395, m.cap, m.level))
+                        })
+                        .collect();
+                    println!("Music rows: {rows:?}");
+                }
+            }
+        }
         // SPEC-0025 Lookups: the world key table (boot 0x31EFA8 keys, 0x31F2B0 saved ids).
         if let Ok(boot) = neopets_data::archive::verified_boot_program(disc) {
             if let (Ok(keys), Ok(ids)) = (neopets_data::archive::boot_u32_table(&boot, 0x0031_EFA8, 193), neopets_data::archive::boot_u32_table(&boot, 0x0031_F2B0, 193)) {

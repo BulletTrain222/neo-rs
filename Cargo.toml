@@ -10,7 +10,7 @@ edition = "2024"
 publish = false
 
 [workspace.dependencies]
-bevy = { version = "=0.19.1", default-features = false, features = ["3d", "ui"] }
+bevy = { version = "=0.19.1", default-features = false, features = ["3d", "ui", "bevy_audio"] }
 ps2-float = { path = "third_party/ps2-float" }
 
 [profile.dev]

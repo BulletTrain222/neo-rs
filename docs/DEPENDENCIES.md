@@ -8,7 +8,7 @@ Read AGENTS.md and docs/STATUS.md first. This is the canonical setup/download gu
 | --- | --- | --- |
 | Rust + Cargo, MSVC host | https://rustup.rs/ | Install the Windows x64 rustup toolchain. This workspace was verified with rustc 1.99.0. Check `rustc --version` and `cargo --version`. Keep Cargo.lock. |
 | Visual Studio C++ Build Tools | https://visualstudio.microsoft.com/visual-cpp-build-tools/ | Install Desktop development with C++, including MSVC x64/x86 and a Windows SDK. The launcher uses vswhere to locate vcvars64.bat. |
-| Bevy and Rust dependencies | Cargo.toml and Cargo.lock in this folder | Cargo downloads these automatically on the first online build. Bevy is pinned to 0.19.1. neopets-data uses the RustCrypto `sha2` 0.10 crate for disc fingerprints. No separate Bevy editor/engine download is needed. Do not upgrade the engine merely to set up this project. |
+| Bevy and Rust dependencies | Cargo.toml and Cargo.lock in this folder | Cargo downloads these automatically on the first online build. Bevy is pinned to 0.19.1. neopets-data uses the RustCrypto `sha2` 0.10 crate for disc fingerprints. Bevy's `bevy_audio` feature is enabled for sound output (it brings in `rodio` 0.22 and `cpal` from crates.io); the game's audio is decoded by this workspace's own code from the ISO and handed to it as PCM, so no audio format decoders are enabled. No separate Bevy editor/engine download is needed. Do not upgrade the engine merely to set up this project. |
 | Git for Windows | https://git-scm.com/downloads/win | Needed for version control; not for reading the ISO. Check `git --version`. Do not publish automatically. |
 
 Run from the workspace root:

@@ -84,6 +84,14 @@ impl DesignTables {
         t.string(self.word(5, m, 0)?).map(<[u8]>::to_vec)
     }
 
+    /// Table 4: music row `id` (SPEC-0009 Track row); ids 193 and above give the defaults.
+    pub fn music_row(&self, id: usize) -> crate::audio::MusicRow {
+        if id >= 193 {
+            return crate::audio::MusicRow::DEFAULT;
+        }
+        self.tables.get(4).and_then(|t| t.record(id)).and_then(crate::audio::MusicRow::from_record).unwrap_or(crate::audio::MusicRow::DEFAULT)
+    }
+
     /// Table 9, record i: a system message box (text, first and second button labels, colour
     /// bytes R, G, B; a null colour word gives 128s).
     pub fn message(&self, i: usize) -> Option<Message> {
