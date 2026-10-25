@@ -314,6 +314,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let mut kinds = std::collections::BTreeMap::new();
     let mut of_pack = std::collections::BTreeMap::new();
     let (mut tables, mut zero_unused, mut contiguous, mut ids) = (0, 0, 0, 0);
+    let (mut planes, mut plane_packs, mut default_doors, mut scripted_packs, mut arrivals_ok) = (0, 0, 0, 0, 0);
     for pack in 533..=1433u32 {
         let Ok(bytes) = index.read(disc, pack) else { continue };
         let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
@@ -324,6 +325,19 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         let module = !boot.module_entries(&bytes, &chain.chunks).is_empty();
         *kinds.entry((format!("{kind:?}"), module)).or_insert(0usize) += 1;
         of_pack.insert(pack, kind);
+        let tp = neopets_data::ground::teleport_planes(&bytes, &chain.chunks);
+        if !tp.is_empty() {
+            planes += tp.len();
+            plane_packs += 1;
+            if boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback") {
+                scripted_packs += 1;
+            } else {
+                default_doors += tp.len();
+                println!("  default doors: pack {pack} ({kind:?}) {} door(s), arrivals {:?}", tp.len(), (0..tp.len() as i32).map(|k| Neighbours::arrivals(&bytes, &chain.chunks).get(k)).collect::<Vec<_>>());
+            }
+            let arr = Neighbours::arrivals(&bytes, &chain.chunks);
+            arrivals_ok += (0..tp.len() as i32).all(|n| arr.get(n) >= 0) as usize;
+        }
         if chain.chunks.iter().any(|c| c.kind == 15) {
             let n = Neighbours::of(&bytes, &chain.chunks);
             let used: Vec<i32> = (0..200).filter(|&k| n.get(k) != -1).collect();
@@ -338,6 +352,9 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     println!("Pack kinds (kind, has module): {kinds:?}");
     let g = |p: u32| of_pack.get(&p).copied();
     println!("Kinds of 691: {:?}, 909: {:?}, 1429: {:?}, 1008: {:?}, 1121: {:?}", g(691), g(909), g(1429), g(1008), g(1121));
+    println!(
+        "Teleport planes: {planes} in {plane_packs} packs; {scripted_packs} of those packs import RegisterTeleportCallback; {default_doors} doors in packs that do not; {arrivals_ok} packs give every door an arrival (tag 0x0E)"
+    );
     println!("Neighbour lists (tag 0x0B): {tables} with values; position 0 unused in {zero_unused}; used positions 1..m in {contiguous}; {ids} world ids");
     Ok(())
 }

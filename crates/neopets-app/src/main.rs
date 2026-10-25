@@ -58,24 +58,26 @@ struct DiscStatus(String);
 /// scene when the buffer rule will stream it.
 #[derive(Resource)]
 struct Streamer {
-    requests: std::sync::mpsc::Sender<(u32, bool, bool)>,
-    results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, Result<(play::World, Option<neopets_data::model::ModelData>), String>)>>,
+    requests: std::sync::mpsc::Sender<(u32, bool, bool, bool)>,
+    #[allow(clippy::type_complexity)]
+    results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, bool, Result<(play::World, Option<neopets_data::model::ModelData>), String>)>>,
     in_flight: std::collections::HashSet<u32>,
     scenes: std::collections::HashMap<u32, neopets_data::model::ModelData>,
 }
 
 impl Streamer {
     fn start(mut disc: Disc, index: neopets_data::archive::ArchiveIndex, boot: neopets_data::travel::BootTravel) -> Self {
-        let (requests, jobs) = std::sync::mpsc::channel::<(u32, bool, bool)>();
+        let (requests, jobs) = std::sync::mpsc::channel::<(u32, bool, bool, bool)>();
         let (done, results) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            // Each request: the pack, and whether transitions (true) or other kinds (false)
-            // stream now, and whether streaming is possible at all.
-            for (pack, transitions_stream, any) in jobs {
+            // Each request: the pack, whether transitions (true) or other kinds (false) stream
+            // now, whether streaming is possible at all, and whether a door job asked for it
+            // (its scene is always built).
+            for (pack, transitions_stream, any, job) in jobs {
                 let result = play::World::load(&mut disc, &index, &boot, pack).and_then(|(world, bytes)| {
                     let streams = any && ((world.kind == neopets_data::travel::Kind::Transition) == transitions_stream)
                         && world.kind != neopets_data::travel::Kind::Interior;
-                    let scene = if streams {
+                    let scene = if streams || job {
                         let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
                         archive_view::world_scene(&mut disc, &index, pack, &bytes, &chain.chunks, false)?
                     } else {
@@ -83,38 +85,59 @@ impl Streamer {
                     };
                     Ok((world, scene))
                 });
-                if done.send((pack, result)).is_err() {
+                if done.send((pack, job, result)).is_err() {
                     break;
                 }
             }
         });
         Self { requests, results: std::sync::Mutex::new(results), in_flight: Default::default(), scenes: Default::default() }
     }
+
+    /// Send the pending step's and the door job's requests, install finished loads; returns a
+    /// line per finished load.
+    fn pump(&mut self, p: &mut play::Play) -> Vec<String> {
+        let buffer = p.world.buffer;
+        let transitions = buffer == neopets_sim::travel::Buffer::Exterior;
+        let any = buffer != neopets_sim::travel::Buffer::Interior;
+        if let Some(pack) = p.wanted.take() {
+            if self.in_flight.insert(pack) {
+                let _ = self.requests.send((pack, transitions, any, false));
+            }
+        }
+        if let Some(pack) = p.job_pack() {
+            if self.in_flight.insert(pack) {
+                let _ = self.requests.send((pack, transitions, any, true));
+            }
+        }
+        let finished: Vec<_> = self.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
+        let mut log = Vec::new();
+        for (pack, job, result) in finished {
+            self.in_flight.remove(&pack);
+            match result {
+                Ok((world, scene)) => {
+                    log.push(format!("loaded {pack} on tick {} ({:?}, scene {}, door request {job})", p.ticks, world.kind, scene.is_some()));
+                    if let Some(scene) = scene {
+                        self.scenes.insert(pack, scene);
+                    }
+                    // A load of the job's pack finishes the job, whichever request read it.
+                    if p.job_pack() == Some(pack) {
+                        p.finish_job(world);
+                    } else {
+                        p.install(world);
+                    }
+                }
+                Err(e) => log.push(format!("load of {pack} failed: {e}")),
+            }
+        }
+        log
+    }
 }
 
 /// Send the pending step's request to the loader and install finished loads.
 fn stream_worlds(play: Option<ResMut<PlayState>>, streamer: Option<ResMut<Streamer>>) {
     let (Some(mut state), Some(mut streamer)) = (play, streamer) else { return };
-    let p = &mut state.play;
-    if let Some(pack) = p.wanted.take() {
-        if streamer.in_flight.insert(pack) {
-            let buffer = p.world.buffer;
-            let any = buffer != neopets_sim::travel::Buffer::Interior;
-            let _ = streamer.requests.send((pack, buffer == neopets_sim::travel::Buffer::Exterior, any));
-        }
-    }
-    let finished: Vec<_> = streamer.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
-    for (pack, result) in finished {
-        streamer.in_flight.remove(&pack);
-        match result {
-            Ok((world, scene)) => {
-                if let Some(scene) = scene {
-                    streamer.scenes.insert(pack, scene);
-                }
-                p.install(world);
-            }
-            Err(e) => error!("Stream load of {pack} failed: {e}"),
-        }
+    for line in streamer.pump(&mut state.play) {
+        info!("{line}");
     }
 }
 
@@ -264,6 +287,9 @@ fn main() {
                 }
                 if v == "new" {
                     return Some([f32::NAN, 0.0]);
+                }
+                if v == "door" {
+                    return Some([f32::NAN, 1.0]);
                 }
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse().ok()?, z.parse().ok()?])
@@ -593,7 +619,11 @@ fn step_sim(
             run: keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
                 || gamepads.iter().any(|g| g.pressed(GamepadButton::RightTrigger)),
             jump: false,
+            square: false,
         };
+        // Square (E or the west face button) confirms a prompt; a press edge like Cross.
+        play.play.square_latch |= keys.just_pressed(KeyCode::KeyE)
+            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::West));
         // Cross (Space or the south face button) is a press edge; keep it for the next tick
         // when this frame runs none.
         play.play.jump_latch |= keys.just_pressed(KeyCode::Space)
@@ -616,6 +646,7 @@ fn step_sim(
             || gamepads.iter().any(|g| g.just_pressed(GamepadButton::RightThumb));
         for _ in 0..ticks {
             input.jump = std::mem::take(&mut play.play.jump_latch);
+            input.square = std::mem::take(&mut play.play.square_latch);
             let pad = neopets_sim::camera::CameraPad {
                 right_x: byte(right.x),
                 right_y: byte(-right.y),
@@ -1153,11 +1184,26 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         }
     };
     println!("Grid bounds: {:?}; nearest swap point {:?}", play.bounds(), play.nearest_swap_point());
+    for (k, pl) in play.world.planes.iter().enumerate() {
+        let g = play.world.ground_at(pl.p[0] + 0.5 * pl.w * pl.d[0], pl.p[2] + 0.5 * pl.w * pl.d[2], pl.p[1] + 10.0);
+        println!("Door {k}: P {:?} F {:?} D {:?} Q {:?} w {} h {}; ground below its middle {g:?}", pl.p, pl.f, pl.d, pl.q, pl.w, pl.h);
+    }
     // `--trace-to swap` follows a searched route to the nearest reachable swap point.
     let mut route: Vec<[f32; 2]> = Vec::new();
     let mut rerouted = false;
+    let mut last_door = String::new();
+    let mut hops = 0;
     if to.is_some_and(|t| t[0].is_nan()) {
-        route = play.route_to_swap(400_000, !to.is_some_and(|t| t[1].is_nan())).unwrap_or_default();
+        let goal = match to.map(|t| t[1]) {
+            Some(g) if g == 0.0 => play::Goal::NewNeighbour,
+            Some(g) if g == 1.0 => play::Goal::Door,
+            _ => play::Goal::Swap,
+        };
+        route = if goal == play::Goal::Door {
+            play.stand_before_door(0).map(|m| vec![m]).unwrap_or_default()
+        } else {
+            play.route_to(400_000, goal).unwrap_or_default()
+        };
         println!("Route to a swap point: {} steps, ending at {:?}", route.len(), route.last());
     }
     for _ in 0..ticks {
@@ -1166,7 +1212,7 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         // After a swap along a `swap` route, go on to a cell that names a new neighbour.
         if play.swaps > 0 && to.is_some_and(|t| t[1].is_nan()) && route.len() <= 1 && !rerouted {
             rerouted = true;
-            route = play.route_to_swap(400_000, true).unwrap_or_default();
+            route = play.route_to(400_000, play::Goal::NewNeighbour).unwrap_or_default();
             println!("      rerouted on tick {} toward a new neighbour: {} steps", play.ticks, route.len());
         }
         while route.len() > 1 && {
@@ -1187,26 +1233,24 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         let input = neopets_sim::hero::HeroInput {
             forward,
             side,
+            square: play.prompt_shown.is_some(),
             jump: jump && play.ticks % 120 == 0 && play.ticks > 0,
             ..Default::default()
         };
         play.tick(&input, neopets_sim::camera::CameraPad::default());
         // Loads go through the same background loader as the window; the trace does not wait.
-        if let Some(pack) = play.wanted.take() {
-            if streamer.in_flight.insert(pack) {
-                let b = play.world.buffer;
-                let _ = streamer.requests.send((pack, b == neopets_sim::travel::Buffer::Exterior, b != neopets_sim::travel::Buffer::Interior));
-            }
+        for line in streamer.pump(&mut play) {
+            println!("      {line}");
         }
-        let finished: Vec<_> = streamer.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
-        for (pack, result) in finished {
-            streamer.in_flight.remove(&pack);
-            match result {
-                Ok((world, scene)) => {
-                    println!("      loaded {pack} on tick {} ({:?}, scene {})", play.ticks, world.kind, scene.is_some());
-                    play.install(world);
-                }
-                Err(e) => eprintln!("Stream load of {pack} failed: {e}"),
+        if !play.last_door.is_empty() && play.last_door != last_door {
+            last_door = play.last_door.clone();
+            println!("      {} on tick {}", last_door, play.ticks);
+            // A door trace goes on through door 0 of each world it arrives in, twice more.
+            let arrived = last_door.starts_with("landed") || last_door.starts_with("entered") || last_door.contains("into the") || last_door.contains("left the");
+            if arrived && to.is_some_and(|t| t[1] == 1.0) && hops < 2 {
+                hops += 1;
+                route = play.stand_before_door(0).map(|m| vec![m]).unwrap_or_default();
+                println!("      hop {hops}: standing before door 0 of {}", play.world.pack);
             }
         }
         let (p, b) = (play.loco.position(), &play.loco.body);

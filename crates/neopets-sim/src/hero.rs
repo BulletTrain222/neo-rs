@@ -77,6 +77,8 @@ pub struct HeroInput {
     pub run: bool,
     /// Cross pressed this pass (a press edge).
     pub jump: bool,
+    /// Square pressed this pass (a press edge): confirms an interaction prompt.
+    pub square: bool,
 }
 
 /// The hero's playing clip as the animation pass left it on the previous tick.
@@ -167,6 +169,22 @@ impl Locomotion {
             request: 0,
             run_counter: RUN_RESTART,
         }
+    }
+
+    /// Move the hero at once to a landing point and facing (SPEC-0006 teleport landing and the
+    /// interior arrivals): velocity cleared, action state reset to the stance.
+    pub fn teleport(&mut self, position: Vec3, facing: Vec3) {
+        let f = flatten(facing);
+        self.body.position = position;
+        self.body.velocity = [0.0; 3];
+        self.body.gain = 1.0;
+        if dot(f, f) > 0.0 {
+            self.facing = f;
+            self.target = f;
+        }
+        self.state = STANCE;
+        self.phase = 0;
+        self.last_motion = [0.0; 3];
     }
 
     pub fn position(&self) -> Vec3 {

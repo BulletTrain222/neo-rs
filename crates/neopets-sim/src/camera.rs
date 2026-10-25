@@ -211,6 +211,15 @@ impl FollowCamera {
         self.reset();
     }
 
+    /// The landing placement (SPEC-0006 Hero placement): the eye at the hero position minus
+    /// 5 times the hero's forward, then camera reset.
+    pub fn place_behind(&mut self, hero: &Followed) {
+        let f = hero.facing;
+        self.focus = hero.focus();
+        self.eye = sub(hero.position, [5.0 * f[0], 5.0 * f[1], 5.0 * f[2]]);
+        self.reset();
+    }
+
     /// Camera reset: spin cleared, both polars from the eye, t_e and m its elevation.
     pub fn reset(&mut self) {
         self.spin = 0.0;

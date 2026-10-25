@@ -395,6 +395,52 @@ impl Rectangle {
     }
 }
 
+/// A teleport plane (SPEC-0006 Entry records and teleport planes): a kind-7 rectangle whose
+/// kind mask has bit 1 and whose class is not 500 or 501. Its position in the list is its plane
+/// index, which is also the door number. Landing fields: reference point P (+0x30), normal F
+/// (+0x40), width axis D (+0x50) with extent w (+0x28), height axis Q (+0x60) with extent h
+/// (+0x24).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TeleportPlane {
+    pub p: [f32; 3],
+    pub f: [f32; 3],
+    pub d: [f32; 3],
+    pub q: [f32; 3],
+    pub w: f32,
+    pub h: f32,
+}
+
+/// The teleport plane list of a pack, in disc order.
+pub fn teleport_planes(bytes: &[u8], top: &[Chunk]) -> Vec<TeleportPlane> {
+    let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return Vec::new() };
+    let p = &bytes[c.payload.clone()];
+    let n = i32_at(p, 0x14).unwrap_or(0).clamp(0, 1 << 14) as usize;
+    let Some(list) = u32_at(p, 0x3C).map(|v| v as usize) else { return Vec::new() };
+    let u16_at = |at: usize| p.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    (0..n)
+        .filter_map(|i| {
+            let r = list + i * 0x70;
+            let (mask, class) = (u16_at(r + 0x12)?, u16_at(r + 0x1E)?);
+            if mask & 0x0002 == 0 || class == 500 || class == 501 {
+                return None;
+            }
+            let v = |at: usize| Some([f32_at(p, r + at)?, f32_at(p, r + at + 4)?, f32_at(p, r + at + 8)?]);
+            Some(TeleportPlane { p: v(0x30)?, f: v(0x40)?, d: v(0x50)?, q: v(0x60)?, w: f32_at(p, r + 0x28)?, h: f32_at(p, r + 0x24)? })
+        })
+        .collect()
+}
+
+/// Entry record i of the type-11 chunk (SPEC-0006): position and facing, or None past the end.
+pub fn entry_record(bytes: &[u8], top: &[Chunk], i: usize) -> Option<([f32; 3], [f32; 3])> {
+    let p = &bytes[top.iter().find(|c| c.kind == OBJECT_HEADER)?.payload.clone()];
+    if i >= i32_at(p, 0x24)?.max(0) as usize {
+        return None;
+    }
+    let e = u32_at(p, 0x4C)? as usize + 0x50 * i;
+    let v = |at: usize| Some([f32_at(p, at)?, f32_at(p, at + 4)?, f32_at(p, at + 8)?]);
+    Some((v(e + 0x30)?, v(e + 0x40)?))
+}
+
 /// The kind-4 (+0x40, count +0x18) and kind-7 (+0x3C, count +0x14) rectangle lists of a pack.
 pub fn rectangles(bytes: &[u8], top: &[Chunk]) -> Vec<Rectangle> {
     let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return Vec::new() };

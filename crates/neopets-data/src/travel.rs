@@ -101,6 +101,24 @@ impl BootTravel {
         !self.block_pairs.iter().any(|&(a, b)| (a, b) == (current, q) || (b, a) == (current, q))
     }
 
+    /// Whether a pack's module imports the host function `name` (import names are the function
+    /// name, two underscores and the encoded parameter list; SPEC-0030 section 2).
+    pub fn imports(&self, bytes: &[u8], top: &[Chunk], name: &str) -> bool {
+        let Some(c) = top.iter().find(|c| c.kind == MODULE) else { return false };
+        let m = &bytes[c.payload.clone()];
+        if m.get(..4) != Some(b"SNR2") {
+            return false;
+        }
+        let (Some(table), Some(count)) = (u32_at(m, 0x0C), u32_at(m, 0x10)) else { return false };
+        let prefix = [name.as_bytes(), b"__"].concat();
+        (1..count.min(1 << 16) as usize).any(|i| {
+            let r = table as usize + 12 * i;
+            let kind = u32_at(m, r + 8).map(|k| (k >> 16) & 0xFF);
+            let n = u32_at(m, r).and_then(|at| c_string(m, at as usize));
+            kind != Some(2) && n.is_some_and(|n| n.starts_with(&prefix))
+        })
+    }
+
     /// The host-table record (397 to 405) that a pack's module exports as one of the family
     /// entries, for each export that matches one, in symbol order.
     pub fn module_entries(&self, bytes: &[u8], top: &[Chunk]) -> Vec<usize> {
@@ -154,6 +172,12 @@ pub struct Neighbours {
 impl Neighbours {
     pub fn of(bytes: &[u8], top: &[Chunk]) -> Self {
         tagged_lookup(bytes, top, 0x0B).unwrap_or_default()
+    }
+
+    /// The arrival-door list (tag 0x0E): entry n gives the door at which the hero arrives in
+    /// the destination when it leaves by door n.
+    pub fn arrivals(bytes: &[u8], top: &[Chunk]) -> Self {
+        tagged_lookup(bytes, top, 0x0E).unwrap_or_default()
     }
 
     /// Entry k: the value at index k + 3, or -1 when k is at or above N (or negative).
