@@ -35,6 +35,8 @@ pub struct TextBox {
     /// choice.
     pub choice: bool,
     pub result: i32,
+    /// Emote requests the reveal reached (kind, emote id), for the caller to take.
+    pub emotes: Vec<(u8, i32)>,
 }
 
 /// Replace each substitution code (run-pass mask V - 2 with bit 5 set) by the text of slot k,
@@ -170,7 +172,7 @@ impl TextBox {
         while i < to.min(page.len()) {
             match code(&page, i) {
                 Some((len, t)) => {
-                    self.run(t);
+                    self.run(t, &page[i + 5..i + len]);
                     i += len;
                 }
                 None => i += 1,
@@ -178,16 +180,23 @@ impl TextBox {
         }
         let mut n = to.max(i);
         while let Some((len, t)) = code(&page, n) {
-            self.run(t);
+            self.run(t, &page[n + 5..n + len]);
             n += len;
         }
         n
     }
 
-    fn run(&mut self, t: u8) {
+    fn run(&mut self, t: u8, args: &[u8]) {
         match t {
             32 => self.override_hero = true,
             34 => self.override_hero = false,
+            // Emote requests (SPEC-0022 Dialogue control records): the first argument group.
+            0x10 | 0x16 | 0x17 | 0x18 => {
+                let a = decode_args(args);
+                if a.len() >= 4 {
+                    self.emotes.push((t, i32::from_le_bytes([a[0], a[1], a[2], a[3]])));
+                }
+            }
             _ => {}
         }
     }
@@ -324,5 +333,20 @@ mod tests {
         b.update(false, false);
         assert!(b.override_hero, "the type-32 code at the start runs at once");
         assert!(b.visible() >= 5, "and is stepped over");
+    }
+
+    #[test]
+    fn emote_requests_run_when_the_reveal_reaches_them() {
+        // "Hi" then a partner body emote with id 51 (one group: 0x33 0 0 0, zeros escaped).
+        let mut t = b"Hi".to_vec();
+        t.extend([0x01, 3, 13, 0x10, 4, 0x33, 0xFD, 0x40, 0xFD, 0x40, 0xFD, 0x40]);
+        t.extend(b"!");
+        let mut b = TextBox::default();
+        b.open(&t);
+        assert!(b.emotes.is_empty());
+        while !b.complete() {
+            b.update(false, false);
+        }
+        assert_eq!(b.emotes, vec![(0x10, 51)]);
     }
 }

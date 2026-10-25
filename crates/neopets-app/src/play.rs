@@ -389,6 +389,8 @@ pub struct Play {
     /// is playing (set by the audio side), the tick stinger 4 last started, and the progress
     /// flags of the last tick (a rising flag plays its table-2 stinger).
     pub stinger_requests: Vec<i32>,
+    /// Emote clips to play: (bank resource, start and length in 2,048-byte units).
+    pub emote_requests: Vec<(u32, u32, u32)>,
     pub stinger_playing: bool,
     stinger4: u64,
     flags_seen: std::collections::BTreeSet<u16>,
@@ -636,6 +638,7 @@ impl Play {
             foot_frame: None,
             last_state: 1,
             stinger_requests: Vec::new(),
+            emote_requests: Vec::new(),
             stinger_playing: false,
             stinger4: 0,
             flags_seen: Default::default(),
@@ -645,6 +648,8 @@ impl Play {
         let init = level::on_init(play.world.pack);
         play.apply(&init);
         play.activated();
+        // Flags already set when play starts are not risings (no stingers for them).
+        play.flags_seen = play.state.flags.clone();
         Ok(play)
     }
 
@@ -931,6 +936,38 @@ impl Play {
                     let point = self.world.entries.get(locator).map_or([0.0; 3], |e| e.0);
                     self.world.pens = vec![neopets_sim::whinny::Pen { inner, entrance, point, occupied: false }];
                 }
+                Action::PlaySound { cue, locator } | Action::LoopSound { cue, locator } | Action::VisitLoopSound { cue, locator } | Action::KillSound { cue, locator } => {
+                    use neopets_sim::sound::{Play as Cue, AREA};
+                    let at = locator.and_then(|i| self.world.entries.get(i)).map(|e| e.0);
+                    match a {
+                        Action::PlaySound { .. } => {
+                            self.sound.play(AREA, cue, Cue { emitter: at, ..Default::default() });
+                        }
+                        Action::LoopSound { .. } => {
+                            self.sound.play(AREA, cue, Cue { emitter: at, keep_alive: true, ..Default::default() });
+                        }
+                        Action::VisitLoopSound { .. } => self.sound.refresh(AREA, cue, at),
+                        _ => self.sound.stop(AREA, cue, at),
+                    }
+                }
+                Action::PlayHeroSound { hero, cue, locator, do_not_restart } => {
+                    // Only for -1 or the selected hero's flag (0, Tor); at the locator or the hero.
+                    if hero == -1 || hero == 0 {
+                        let at = locator.and_then(|i| self.world.entries.get(i)).map(|e| e.0).unwrap_or(self.loco.position());
+                        self.sound.play(neopets_sim::sound::VOICE, cue, neopets_sim::sound::Play { emitter: Some(at), do_not_restart, ..Default::default() });
+                    }
+                }
+                Action::PlayStinger { id, volume } => {
+                    if volume > 0.0 {
+                        self.stinger(id);
+                    }
+                }
+                Action::SetExcite { level } => {
+                    if (0..100).contains(&level) {
+                        self.intensity.e = level;
+                    }
+                }
+                Action::SetAdventure { level } => self.intensity.adventure(level),
                 Action::LoadRegion { slot, region } => {
                     let pack = self.world.pack;
                     self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
@@ -1417,6 +1454,7 @@ impl Play {
                 Some(neopets_sim::textbox::BoxEvent::Advanced) => self.cue(0x98),
                 None => {}
             }
+            self.emote_clips();
             input = HeroInput::default();
             // SPEC-0056 Talk facing: in the conversation the hero turns toward its partner
             // with weight 0.1 and the partner toward the hero with weight 0.3.
@@ -2454,6 +2492,40 @@ impl Play {
         }
     }
 
+    /// The emote requests the box's reveal reached (SPEC-0009 Emote clip lookup and playback):
+    /// each looks up its row and position; a partner request needs a talk partner. A clip is
+    /// refused while the stinger handle is busy or the bank music is not active; when a body and
+    /// a face clip come in one tick, only the face clip plays. The gestures themselves (the
+    /// actors' emote queues) are not played.
+    fn emote_clips(&mut self) {
+        use neopets_sim::emote;
+        let requests = std::mem::take(&mut self.textbox.emotes);
+        let mut clips: Vec<(bool, u32, (u32, u32))> = Vec::new();
+        for (kind, id) in requests {
+            let partner = matches!(kind, emote::PARTNER_BODY | emote::PARTNER_FACE);
+            let voice_set = if partner {
+                let Some(c) = self.talk_with.and_then(|t| self.characters.iter().find(|c| c.id == t)) else { continue };
+                c.row.map_or(-1, |r| r.voice_set)
+            } else {
+                -1
+            };
+            let row = self.design.emote(!partner, id).map(|r| emote::Row { clip: r.clip, chance: r.chance, variance: r.variance });
+            let rng = &mut self.rng;
+            let Some(pos) = emote::position(kind, row, voice_set, false, &mut |n| rng.next_u32() % n.max(1)) else { continue };
+            let (bank, dir) = if partner { (144, 0) } else { (145, 1) };
+            if let Some(e) = self.design.paths.get(dir).and_then(|d| emote::playable(pos, d)) {
+                clips.push((kind == emote::HERO_FACE, bank, e));
+            }
+        }
+        let chosen = clips.iter().find(|c| c.0).or(clips.first()).copied();
+        if let Some((_, bank, (start, len))) = chosen {
+            if !self.stinger_playing && self.bank_music.playing.is_some() {
+                self.stinger_playing = true;
+                self.emote_requests.push((bank, start, len));
+            }
+        }
+    }
+
     /// A stinger request (SPEC-0009): indices 0 to 18 only; one at a time; stinger 4 not within
     /// 40 s of its last start (from clock 0).
     pub fn stinger(&mut self, k: i32) {
@@ -2701,6 +2773,7 @@ impl Play {
         let pose = ([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
         self.restart = Some(pose);
         self.arrive(pose);
+        self.flags_seen = self.state.flags.clone();
     }
 
     /// Load a world into the other buffer (a load's key A world in T).

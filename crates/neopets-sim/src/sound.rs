@@ -214,10 +214,18 @@ impl SoundManager {
         }
     }
 
-    /// Stop the first matching voice of a slot.
-    pub fn stop(&mut self, slot: usize, cue: i32) {
+    /// VisitLoopSound: refresh the matching voice's keep-alive counter; starts nothing.
+    pub fn refresh(&mut self, slot: usize, cue: i32, emitter: Option<[f32; 3]>) {
         let block = self.slots.get(slot).copied().flatten();
-        if let Some(k) = self.voices.iter().position(|v| Some(v.block) == block && v.cue == cue) {
+        if let Some(v) = self.voices.iter_mut().find(|v| Some(v.block) == block && v.cue == cue && (emitter.is_none() || v.emitter == emitter)) {
+            v.counter += 1;
+        }
+    }
+
+    /// Stop the first matching voice of a slot (KillSound; the same-voice test).
+    pub fn stop(&mut self, slot: usize, cue: i32, emitter: Option<[f32; 3]>) {
+        let block = self.slots.get(slot).copied().flatten();
+        if let Some(k) = self.voices.iter().position(|v| Some(v.block) == block && v.cue == cue && (emitter.is_none() || v.emitter == emitter)) {
             let id = self.voices.remove(k).id;
             self.requests.push(Request::Stop { id });
         }
@@ -323,12 +331,20 @@ mod tests {
         assert_eq!(m.voices(), 2);
         m.update(&[]);
         assert_eq!(m.voices(), 1);
+        // VisitLoopSound refreshes without starting; KillSound stops the matching voice.
+        m.refresh(MAIN, 200, None);
+        assert_eq!(m.voices(), 1);
+        m.loaded.insert(347);
+        m.stop(MAIN, 5, Some([1.0, 2.0, 3.0]));
+        assert_eq!(m.voices(), 1, "a different emitter does not match");
+        m.stop(MAIN, 5, None);
+        assert_eq!(m.voices(), 0);
         // A refresh each pass keeps it.
         m.keep_alive(MAIN, 168, None);
         for _ in 0..10 {
             m.keep_alive(MAIN, 168, None);
             m.update(&[]);
         }
-        assert_eq!(m.voices(), 2);
+        assert_eq!(m.voices(), 1);
     }
 }

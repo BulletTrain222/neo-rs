@@ -448,6 +448,7 @@ pub fn sync_stingers(
     mut pcms: ResMut<Assets<Pcm>>,
     voices: Query<(Entity, Option<&AudioSink>), With<StingerVoice>>,
     mut cache: Local<HashMap<i32, Option<Handle<Pcm>>>>,
+    mut banks: Local<HashMap<u32, Option<Vec<u8>>>>,
 ) {
     let Some(mut state) = state else { return };
     // A voice whose sink has emptied has finished.
@@ -471,6 +472,22 @@ pub fn sync_stingers(
         });
         if let Some(h) = handle.clone() {
             commands.spawn((AudioPlayer(h), PlaybackSettings::ONCE, StingerVoice));
+            playing = true;
+        }
+    }
+    // Emote clips share the handle: a VAG-headed clip at its directory position (2,048-byte
+    // units) of bank 144 or 145, at volume trunc(1024 x Voice gain) (gain 1.0 here).
+    for (bank, start, len) in std::mem::take(&mut p.emote_requests) {
+        if playing {
+            continue;
+        }
+        let bytes = banks.entry(bank).or_insert_with(|| {
+            let crate::Archive { disc, index } = archive.as_deref_mut()?;
+            index.read(disc, bank).ok()
+        });
+        let clip = bytes.as_ref().and_then(|b| b.get(start as usize * 2048..((start + len) as usize * 2048).min(b.len())));
+        if let Some(Ok((pcm, _))) = clip.map(neopets_data::audio::vag) {
+            commands.spawn((AudioPlayer(pcms.add(Pcm::from(pcm))), PlaybackSettings::ONCE, StingerVoice));
             playing = true;
         }
     }

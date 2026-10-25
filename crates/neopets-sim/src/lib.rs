@@ -9,6 +9,7 @@ pub mod combat;
 pub mod contact;
 pub mod cues;
 pub mod death;
+pub mod emote;
 pub mod enemy;
 pub mod hero;
 pub mod hud;

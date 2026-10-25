@@ -32,6 +32,21 @@ pub enum Action {
     /// SlotLoad into one of the level's slots: the region resource to load, or None to empty
     /// the slot (its characters leave).
     LoadRegion { slot: u8, region: Option<u32> },
+    /// The sound host calls (SPEC-0031 Script sound calls): PlaySound (a one-shot), LoopSound (a
+    /// keep-alive start), VisitLoopSound (a refresh, starting nothing) and KillSound (stop the
+    /// first matching voice) on the area slot, at an entry record (locator) or with no position.
+    PlaySound { cue: i32, locator: Option<usize> },
+    LoopSound { cue: i32, locator: Option<usize> },
+    VisitLoopSound { cue: i32, locator: Option<usize> },
+    KillSound { cue: i32, locator: Option<usize> },
+    /// PlayHeroSound(h, cue, locator, do-not-restart) on the selected hero's voice slot, only
+    /// when h is -1 or the selected hero's flag (0 Tor).
+    PlayHeroSound { hero: i32, cue: i32, locator: Option<usize>, do_not_restart: bool },
+    /// PlayStingStream(id, volume): stingers 0 to 18 (SPEC-0030 row 227).
+    PlayStinger { id: i32, volume: f32 },
+    /// SetMidiExciteLevel(n) and SetMidiAdventureLevel(f) (SPEC-0009 Intensity inputs).
+    SetExcite { level: i32 },
+    SetAdventure { level: f32 },
 }
 
 /// Story flags (QueryGameState and SetGameState), the blackboard (AddBlackboardMessage, read by

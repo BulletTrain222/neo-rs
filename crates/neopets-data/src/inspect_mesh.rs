@@ -667,6 +667,12 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                     *cues1.entry(e.cue).or_insert(0usize) += 1;
                 }
             }
+            if let Ok(d) = index.read(disc, neopets_data::design::RESOURCE).and_then(|b| neopets_data::design::DesignTables::parse(&b)) {
+                let summary: Vec<(usize, usize, u32)> = d.paths.iter().map(|p| (p.len(), p.iter().filter(|e| e.1 == 0).count(), p.iter().map(|e| e.1).sum())).collect();
+                let live7 = (0..148).filter(|&i| d.emote(false, i).is_some_and(|r| r.chance == 100)).count();
+                let live8 = (0..193).filter(|&i| d.emote(true, i).is_some_and(|r| r.chance == 100)).count();
+                println!("Emote paths (entries, empty, units): {summary:?}; table 7 always-play rows {live7}, table 8 {live8}; row 124 of table 8 {:?}", d.emote(true, 124));
+            }
             println!("Placed emitters: {amb} ambient loops, {zones} adventure zones, {sph} sphere emitters in {:?}, sphere cues {cues1:?}", sph_packs);
             println!("Sound blocks: {blocks} parsed, {cues} cue entries ({silent} empty), {cmds} command records, {voices_ref} distinct voice records referenced; command types {kinds:?}");
             println!("Sound banks: {banks} parsed, {dirs} directory records, {voices} voice records, {samples} samples ({loops} loops), {frames} frames played, {children} music children");

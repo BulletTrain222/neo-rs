@@ -45,12 +45,36 @@ pub struct Message {
 #[derive(Clone, Debug, Default)]
 pub struct DesignTables {
     pub tables: Vec<Table>,
+    /// The path records (type-43 chunks, in order: the character emote bank 144, the hero
+    /// emote bank 145, the books 576): each entry's (start, length) in 2,048-byte units.
+    pub paths: Vec<Vec<(u32, u32)>>,
+}
+
+/// An emote row of table 7 or 8: clip index (255 none), chance in percent, variance byte.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct EmoteRow {
+    pub clip: u8,
+    pub chance: u8,
+    pub variance: u8,
 }
 
 impl DesignTables {
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
         let chain = resource::walk_chunks(bytes, None)?;
         let mut tables = Vec::new();
+        let mut paths = Vec::new();
+        for c in chain.chunks.iter().filter(|c| c.kind == 43) {
+            let p = &bytes[c.payload.clone()];
+            let n = p.get(0x100..0x104).map_or(0, |b| u32::from_le_bytes(b.try_into().unwrap())) as usize;
+            let entries = (0..n.min(1 << 14))
+                .map_while(|i| {
+                    let at = 0x104 + 8 * i;
+                    let w = |o: usize| p.get(o..o + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+                    Some((w(at)?, w(at + 4)?))
+                })
+                .collect();
+            paths.push(entries);
+        }
         for c in chain.chunks.iter().filter(|c| c.kind == TABLE) {
             let block = bytes[c.payload.clone()].to_vec();
             if block.get(..4) != Some(b"IDMX") {
@@ -60,7 +84,7 @@ impl DesignTables {
             let size = u16::from_le_bytes([block[0x0E], block[0x0F]]) as usize;
             tables.push(Table { block, count, size });
         }
-        Ok(Self { tables })
+        Ok(Self { tables, paths })
     }
 
     fn word(&self, table: usize, i: usize, at: usize) -> Option<u32> {
@@ -111,6 +135,12 @@ impl DesignTables {
             labels: [text(word(4)), text(word(8))],
             colour: if c == 0 { [128; 3] } else { [c as u8, (c >> 8) as u8, (c >> 16) as u8] },
         })
+    }
+
+    /// Table 7 (character emotes, `hero` false) or 8 (hero emotes): row `id`.
+    pub fn emote(&self, hero: bool, id: i32) -> Option<EmoteRow> {
+        let r = self.tables.get(if hero { 8 } else { 7 })?.record(usize::try_from(id).ok()?)?;
+        Some(EmoteRow { clip: r[0], chance: r[1], variance: r[2] })
     }
 
     /// Table 10: the name colour of hero variant 0 (Tor) or 1 (Roberta), bytes R, G, B.

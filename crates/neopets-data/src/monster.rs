@@ -39,6 +39,8 @@ pub struct Row {
     pub defence: f32,
     /// Death disappear timer (+0x80).
     pub disappear: u16,
+    /// The villager row's emote voice set (resource 531 row +0x14): -1 none, 0 to 15.
+    pub voice_set: i16,
 }
 
 /// One attack slot k of a row (SPEC-0038 Layout section 2).
@@ -261,6 +263,7 @@ impl MonsterTable {
         let own = i16_at(&self.rows, r + 0x36)?;
         let class = if own >= 0 { Some(own) } else { i16_at(&self.companions, c + 0x10).filter(|&k| k >= 0) };
         Some(Row {
+            voice_set: i16_at(&self.companions, c + 0x14).unwrap_or(-1),
             radius: f32_at(&self.rows, r + 0x28)?,
             height: f32_at(&self.rows, r + 0x2C)?,
             hit_points: u16::from_le_bytes(self.rows.get(r + 0x30..r + 0x32)?.try_into().ok()?),

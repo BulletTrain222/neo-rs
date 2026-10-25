@@ -1967,6 +1967,17 @@ fn play_trace(
         if !plays.is_empty() {
             println!("      cues {plays:?} on tick {}", play.ticks);
         }
+        let emotes = std::mem::take(&mut play.emote_requests);
+        if let Some(&(bank, start, len)) = emotes.first() {
+            let Archive { disc, index } = &mut *archive;
+            let clip = index.read(disc, bank).ok().and_then(|b| b.get(start as usize * 2048..(start + len) as usize * 2048).map(neopets_data::audio::vag));
+            let info = match clip {
+                Some(Ok((pcm, name))) => format!("{name:?}, {:.2} s", pcm.seconds()),
+                Some(Err(e)) => e,
+                None => "out of range".into(),
+            };
+            println!("      emote clips {emotes:?} on tick {}: {info}", play.ticks);
+        }
         let stingers = std::mem::take(&mut play.stinger_requests);
         if !stingers.is_empty() {
             println!("      stingers {stingers:?} on tick {}", play.ticks);
