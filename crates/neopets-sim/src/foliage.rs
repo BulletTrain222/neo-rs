@@ -1,9 +1,13 @@
 //! Foliage patches (SPEC-0060 Behavior 1 to 3): the family and models a key selects, and the
 //! placement of each plant (jitter, ground snap, yaw, scale) with the patch distances.
 //!
+//! The bush state machine (Behavior 6: cut, shrink, regrow, sparkle wait) and the drop rules
+//! (Behavior 7).
+//!
 //! Not covered: the zone gate, the near/far fade weights and the far batches (the LOD-node
-//! distances are not identified), the family logic (grass sway, bush cutting, drops and regrowth,
-//! the sparkle, tree trunks, reed bending and the cut-piece fall) and the once-per-area gates.
+//! distances are not identified), grass sway and fade, the bush bend and spring-back and key 5's
+//! contact helper, the debris pieces, tree trunks, reed bending, cutting and the cut-piece fall,
+//! and the once-per-area build gates.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
@@ -67,6 +71,164 @@ pub fn kind(key: u32) -> Option<Kind> {
         26 => k(Bed, Some(235), None, 0.85),
         27 => k(Bed, Some(239), None, 0.85),
         35 => k(Bed, Some(268), None, 0.85),
+        _ => None,
+    }
+}
+
+/// A bush's cut (second) model by main model (Behavior 1 bush table).
+pub fn cut_model(main: u16) -> Option<u16> {
+    Some(match main {
+        196 => 192,
+        195 => 244,
+        198 => 201,
+        222 => 251,
+        223 => 246,
+        226 => 242,
+        227 => 228,
+        229 => 230,
+        231 => 232,
+        248 => 249,
+        253 => 254,
+        256 => 257,
+        259 => 260,
+        262 => 263,
+        265 => 266,
+        271 => 272,
+        274 => 275,
+        277 => 278,
+        280 => 281,
+        _ => return None,
+    })
+}
+
+/// A bush (Behavior 6): state 2 grown, 0 cut, 1 regrowing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Bush {
+    pub state: u8,
+    pub counter: u32,
+    pub countdown: u32,
+    pub cut: bool,
+    pub wait: u32,
+    /// The base scale K.
+    pub k: f32,
+}
+
+/// The sparkle wait trunc((u + 0.5) x 60) with u in [-0.2, 0.2]: 18 to 42 ticks.
+pub fn sparkle_wait(r: &mut crate::rng::Rng) -> u32 {
+    ps2_float::fpu::mul(r.frange(-0.2, 0.2) + 0.5, 60.0) as u32
+}
+
+/// What one bush step did.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct BushStep {
+    /// Cuts made this step (each rolls a drop).
+    pub cuts: u32,
+    /// Effect 139 starts at the bush.
+    pub sparkle: bool,
+}
+
+impl Bush {
+    pub fn new(k: f32, r: &mut crate::rng::Rng) -> Self {
+        Self { state: 2, counter: 0, countdown: 0, cut: false, wait: sparkle_wait(r), k }
+    }
+
+    /// Whether the helpers (and so the hit tests) run this step: not while regrowing with the
+    /// counter at most 450, and not while cut.
+    pub fn hittable(&self) -> bool {
+        !self.cut && !(self.state == 1 && self.counter <= 450)
+    }
+
+    /// One logic step: `hits` triggers fired this step (weapon first, then each shot in range;
+    /// each cuts again), and whether the bush may sparkle. Returns the cuts and the sparkle.
+    pub fn step(&mut self, hits: u32, may_sparkle: bool, r: &mut crate::rng::Rng) -> BushStep {
+        let mut out = BushStep::default();
+        let helpers = !(self.state == 1 && self.counter <= 450);
+        if helpers {
+            if self.cut {
+                self.countdown = self.countdown.saturating_sub(1);
+                if self.countdown == 0 {
+                    self.cut = false;
+                    self.state = 1;
+                    self.counter = 0;
+                }
+            } else {
+                for _ in 0..hits {
+                    self.counter = 0;
+                    self.countdown = 3800;
+                    self.cut = true;
+                    self.state = 0;
+                    out.cuts += 1;
+                }
+            }
+        }
+        if !self.cut && self.state == 1 {
+            if self.counter < 600 {
+                self.counter += 1;
+            }
+            if self.counter >= 600 {
+                self.state = 2;
+            }
+        }
+        if self.wait > 0 {
+            self.wait -= 1;
+        } else if self.state == 2 && may_sparkle {
+            out.sparkle = true;
+            self.wait = sparkle_wait(r);
+        }
+        out
+    }
+
+    /// The draw scale v (Behavior 6 step 2), in single precision.
+    pub fn scale(&self) -> f32 {
+        use ps2_float::fpu::mul;
+        if self.cut {
+            mul(mul(self.k, self.countdown as f32), 1.0 / 3800.0)
+        } else if self.state == 1 {
+            mul(mul(self.k, self.counter as f32), 1.0 / 600.0)
+        } else {
+            self.k
+        }
+    }
+}
+
+/// A bush drop (Behavior 7) for main model `main` and roll r in [0, 100]: the items to spawn
+/// (the coin bush's four coins with `luck`), or none. `negg_open` is whether the Negg's
+/// once-per-area bit is clear.
+pub fn bush_drop(main: u16, r: i32, luck: i32, negg_open: bool) -> Vec<u16> {
+    let pick = |rules: &[(i32, u16)]| rules.iter().find(|&&(top, _)| r <= top).map(|&(_, id)| vec![id]).unwrap_or_default();
+    match main {
+        223 | 227 | 265 => pick(&[(9, 149), (24, 150)]),
+        229 => pick(&[(19, 146)]),
+        231 => pick(&[(14, 156)]),
+        248 => pick(&[(19, 157)]),
+        253 => pick(&[(49, 147)]),
+        256 | 274 => pick(&[(0, 152), (6, 155), (24, 153)]),
+        259 => pick(&[(1, 138), (11, 136), (39, 135)]),
+        262 => {
+            let v = r / 2 + 3 * luck;
+            let id = if v <= 30 {
+                135
+            } else if v <= 60 {
+                136
+            } else {
+                138
+            };
+            vec![id; 4]
+        }
+        271 if negg_open => vec![174],
+        277 if negg_open => vec![151],
+        280 if negg_open => vec![154],
+        271 | 277 | 280 => Vec::new(),
+        _ => pick(&[(0, 138), (5, 136), (19, 135)]),
+    }
+}
+
+/// The Negg item of a Negg bush model (174 Red, 151 Golden, 154 Starry).
+pub fn negg_of(main: u16) -> Option<u16> {
+    match main {
+        271 => Some(174),
+        277 => Some(151),
+        280 => Some(154),
         _ => None,
     }
 }
@@ -155,5 +317,47 @@ mod tests {
         assert!((p.position[0] + 1014.2041).abs() < 1e-3 && (p.position[2] - 1322.613).abs() < 1e-3);
         assert!((0.6..=1.0).contains(&p.scale));
         assert!(place(&k, [0.0; 4], 0.0, 0.0, 0.0, 0.0, [0; 4], &|_, _| None, &mut r).is_none());
+    }
+
+    /// Behavior 6: a cut shrinks the bush over 3,800 ticks, then it regrows over 600 and is
+    /// grown 4,400 ticks after the cut; while regrowing with counter 450 it cannot be cut, with
+    /// 451 it can; two triggers in one step cut twice.
+    #[test]
+    fn bush_cut_and_regrow() {
+        let mut r = crate::rng::Rng::seeded(3);
+        let mut b = Bush::new(0.8, &mut r);
+        assert!((18..=42).contains(&b.wait));
+        assert_eq!(b.step(2, false, &mut r).cuts, 2);
+        assert_eq!((b.state, b.countdown, b.cut), (0, 3800, true));
+        let mut ticks = 1;
+        while b.state != 2 {
+            b.step(0, false, &mut r);
+            ticks += 1;
+            if b.state == 1 && b.counter == 450 {
+                assert!(!b.hittable());
+                assert_eq!(b.step(1, false, &mut r).cuts, 0);
+                ticks += 1;
+                assert!(b.hittable());
+            }
+        }
+        assert_eq!(ticks, 4400);
+        assert_eq!(b.scale(), 0.8);
+        // The sparkle on the first grown tick when the wait is 0.
+        b.wait = 0;
+        assert!(b.step(0, true, &mut r).sparkle);
+    }
+
+    #[test]
+    fn bush_drops() {
+        assert_eq!(bush_drop(196, 0, 0, true), vec![138]);
+        assert_eq!(bush_drop(196, 5, 0, true), vec![136]);
+        assert_eq!(bush_drop(196, 19, 0, true), vec![135]);
+        assert!(bush_drop(196, 20, 0, true).is_empty());
+        assert_eq!(bush_drop(262, 100, 0, true), vec![136; 4]);
+        assert_eq!(bush_drop(262, 60, 24, true), vec![138; 4]);
+        assert_eq!(bush_drop(277, 50, 0, true), vec![151]);
+        assert!(bush_drop(277, 50, 0, false).is_empty());
+        assert_eq!(bush_drop(256, 0, 0, true), vec![152]);
+        assert_eq!(cut_model(262), Some(263));
     }
 }

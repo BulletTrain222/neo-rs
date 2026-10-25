@@ -766,7 +766,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
             )
                 .chain(),
         );
@@ -1572,10 +1572,15 @@ fn sync_worlds(
 ) {
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
     let p = &state.play;
-    let mut want = vec![WorldPart::Scene(p.world.pack), WorldPart::Foliage(p.world.pack)];
+    let mut want = vec![WorldPart::Scene(p.world.pack)];
+    if p.foliage.contains_key(&p.world.pack) {
+        want.push(WorldPart::Foliage(p.world.pack));
+    }
     if let (true, Some(o)) = (p.other_drawn(), &p.other) {
         want.push(WorldPart::Scene(o.pack));
-        want.push(WorldPart::Foliage(o.pack));
+        if p.foliage.contains_key(&o.pack) {
+            want.push(WorldPart::Foliage(o.pack));
+        }
     }
     let slot = p.boot.areas.slot_of(p.world.pack);
     want.push(WorldPart::Dome(neopets_data::area::dome_for_slot(slot)));
@@ -1593,9 +1598,9 @@ fn sync_worlds(
             continue;
         }
         if let WorldPart::Foliage(pack) = *part {
-            match foliage_view::build(disc, index, p, pack) {
-                Ok((models, plants)) => {
-                    let n = foliage_view::spawn(&mut commands, &models, &plants, *part, &mut meshes, &mut materials, &mut images);
+            match foliage_view::models(disc, index, p, pack) {
+                Ok(models) => {
+                    let n = foliage_view::spawn(&mut commands, p, pack, &models, *part, &mut meshes, &mut materials, &mut images);
                     info!("foliage of {pack}: {n} plants of {} models", models.len());
                 }
                 Err(e) => error!("foliage of {pack}: {e}"),

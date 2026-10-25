@@ -37,6 +37,9 @@ pub struct World {
     pub buffer: Buffer,
     /// The placed effects (type 39), by slot.
     pub placed_effects: Vec<neopets_data::effect::Placed>,
+    /// The foliage patches (type 16) and the registry ids of the pack's type-8 children.
+    pub patches: Vec<neopets_data::foliage::Patch>,
+    pub children: Vec<u16>,
     ground: Option<Ground>,
     /// Rectangle primitives that push characters out (SPEC-0018 box push; new-game mask 0).
     boxes: Vec<BoxShape>,
@@ -121,6 +124,8 @@ impl World {
             kind,
             buffer,
             placed_effects: neopets_data::effect::placed(&bytes, &chain.chunks),
+            patches: neopets_data::foliage::patches(&bytes, &chain.chunks),
+            children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
             boxes: ground::rectangles(&bytes, &chain.chunks)
                 .into_iter()
@@ -333,6 +338,17 @@ pub struct Parked {
     pub mp: i32,
     pub hp_max: i32,
     pub mp_max: i32,
+}
+
+/// A built foliage patch (SPEC-0060 Behavior 1 and 2): its family, the model drawn (the near
+/// model, else the far model), its centre, its placed plants and, for bushes, their states.
+#[derive(Clone, Debug)]
+pub struct LivePatch {
+    pub kind: neopets_sim::foliage::Kind,
+    pub model: u16,
+    pub centre: [f32; 3],
+    pub plants: Vec<neopets_sim::foliage::Placed>,
+    pub bushes: Vec<neopets_sim::foliage::Bush>,
 }
 
 /// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
@@ -573,6 +589,8 @@ pub struct Play {
     /// Status displays by character (the hero is u64::MAX): the display, its effect object and
     /// last tick's active statuses.
     displays: HashMap<u64, (neopets_sim::status::Display, Option<usize>, [bool; 14])>,
+    /// The resident worlds' foliage (SPEC-0060), by pack.
+    pub foliage: HashMap<u32, Vec<LivePatch>>,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -892,6 +910,7 @@ impl Play {
             r_displays: Default::default(),
             r_fx: [None; 2],
             displays: HashMap::new(),
+            foliage: HashMap::new(),
             attack: None,
             attack_latch: false,
             weapon: None,
@@ -3790,6 +3809,7 @@ impl Play {
         self.sound_step();
         self.clip_effects_step();
         self.status_display_step();
+        self.foliage_step();
         self.placed_release_step();
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
@@ -4617,6 +4637,117 @@ impl Play {
             }
             self.save_open = true;
         }
+    }
+
+    /// SPEC-0060: build each resident world's patches once (a family whose model the pack does
+    /// not register builds nothing; grass's model 283 is resource 9's), drop the patches of a
+    /// world that left, and run the bush logic of the patches within 100 units of the camera eye:
+    /// the weapon test within 5 units in the attack window (a capsule of radius 0.5 and length
+    /// 6.0 up from the base against the weapon segment), the shot test (each armed shot within
+    /// its radius + 1.5 of the base; not for key 5), the cut's drop roll and the sparkle 139.
+    fn foliage_step(&mut self) {
+        let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
+        self.foliage.retain(|p, _| resident.contains(p));
+        for pack in resident {
+            if self.foliage.contains_key(&pack) {
+                continue;
+            }
+            let Some(world) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { continue };
+            let mut rng = neopets_sim::rng::Rng::seeded(pack);
+            let mut built = Vec::new();
+            for p in &world.patches {
+                let Some(kind) = neopets_sim::foliage::kind(p.key) else { continue };
+                let Some(model) = kind.near.or(kind.far) else { continue };
+                if !((283..=320).contains(&model) || world.children.contains(&model)) {
+                    continue;
+                }
+                let j = neopets_sim::foliage::jitter(kind.family, p.jitter, p.area[3] - p.area[2], p.rows.len());
+                let ceiling = neopets_sim::foliage::probe_ceiling(&kind).unwrap_or(neopets_sim::motion::PROBE_CEILING);
+                let ground = |x: f32, z: f32| world.ground_at(x, z, p.height + ceiling);
+                let plants: Vec<_> = p
+                    .rows
+                    .iter()
+                    .flat_map(|row| row.plants.iter().map(move |q| (row.offset, q)))
+                    .filter_map(|(row, q)| neopets_sim::foliage::place(&kind, p.area, p.height, row, q.offset, j, q.colour, &ground, &mut rng))
+                    .collect();
+                let bushes = if kind.family == neopets_sim::foliage::Family::Bush { plants.iter().map(|q| neopets_sim::foliage::Bush::new(q.scale, &mut rng)).collect() } else { Vec::new() };
+                let centre = [(p.area[0] + p.area[1]) / 2.0, p.height, (p.area[2] + p.area[3]) / 2.0];
+                built.push(LivePatch { kind, model, centre, plants, bushes });
+            }
+            self.foliage.insert(pack, built);
+        }
+        // The bush logic.
+        let eye = self.camera.eye;
+        let hero = self.loco.position();
+        let weapon = self.weapon_segment();
+        let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+        let table = self.effect_table.clone();
+        let mut drops: Vec<(u32, [f32; 3], Vec<u16>)> = Vec::new();
+        let mut sparkles = Vec::new();
+        let current = self.world.pack;
+        for (&pack, patches) in self.foliage.iter_mut() {
+            for p in patches.iter_mut().filter(|p| !p.bushes.is_empty()) {
+                let d = [p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]];
+                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= 100.0 * 100.0 {
+                    continue;
+                }
+                let negg = neopets_sim::foliage::negg_of(p.model);
+                let negg_open = negg.is_none_or(|n| !self.once.contains(&(n, current)));
+                let may_sparkle = p.model == 262 || (negg.is_some() && negg_open);
+                for (q, b) in p.plants.iter().zip(p.bushes.iter_mut()) {
+                    let mut hits = 0;
+                    if b.hittable() {
+                        let near = (q.position[0] - hero[0]).powi(2) + (q.position[1] - hero[1]).powi(2) + (q.position[2] - hero[2]).powi(2) < 25.0;
+                        if let (true, Some(w)) = (near, weapon.as_ref()) {
+                            let bush = neopets_sim::combat::Cylinder::from_base(q.position, [0.0, 1.0, 0.0], 0.5, 6.0);
+                            if neopets_sim::combat::overlap(w, &bush) {
+                                hits += 1;
+                            }
+                        }
+                        if p.kind.near != Some(198) {
+                            hits += shots.iter().filter(|(s, r)| ((s[0] - q.position[0]).powi(2) + (s[1] - q.position[1]).powi(2) + (s[2] - q.position[2]).powi(2)).sqrt() < r + 1.5).count() as u32;
+                        }
+                    }
+                    let step = b.step(hits, may_sparkle, &mut self.rng);
+                    for _ in 0..step.cuts {
+                        let r = self.rng.range(0, 100);
+                        drops.push((pack, q.position, neopets_sim::foliage::bush_drop(p.model, r, self.luck, negg_open)));
+                    }
+                    if step.sparkle {
+                        sparkles.push(q.position);
+                    }
+                }
+            }
+        }
+        for at in sparkles {
+            self.effects.one_shot(&table, 139, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+        }
+        for (pack, at, ids) in drops {
+            self.last_fx = format!("bush cut at {:.1},{:.1}: drop {ids:?} on tick {}", at[0], at[2], self.ticks);
+            for (k, id) in ids.into_iter().enumerate() {
+                // The coin bush's coins after the first are offset by [0.2, 0.7] in x and z.
+                let point = if k == 0 { at } else { [at[0] + self.rng.frange(0.2, 0.7), at[1], at[2] + self.rng.frange(0.2, 0.7)] };
+                let charm = self.item_kind(id) == 17;
+                let spawn = neopets_sim::items::Spawn { id, point, placed: false, charm, s0: 0.25, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };
+                self.spawn_item(pack, spawn);
+            }
+        }
+    }
+
+    /// The hero's weapon segment as a thin cylinder while the attack window is open (frame bit
+    /// 1; SPEC-0036), from the weapon attach point along its axis over the weapon reach.
+    fn weapon_segment(&self) -> Option<neopets_sim::combat::Cylinder> {
+        if self.attack.is_none() || self.hero.frame_bits() & 1 == 0 {
+            return None;
+        }
+        let place = placement(self.loco.position(), self.loco.facing);
+        let frames = self.hero.bone_frames();
+        let &(Some(bone), angles, offset) = self.hero.bones().attach.first()? else { return None };
+        let w = place.mul(frames.get(bone)?).mul(&attach_rotation(offset, angles));
+        let axis = unit(w.cols[2]);
+        let l = self.weapon_reach() + 2.0;
+        let p0 = add(w.t, scale(axis, 0.25));
+        Some(neopets_sim::combat::Cylinder { center: add(p0, scale(axis, 0.5 * l)), axis, radius: 0.0, length: l })
     }
 
     /// The id the status displays use for the selected hero.
