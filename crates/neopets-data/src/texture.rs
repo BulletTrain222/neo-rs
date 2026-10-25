@@ -275,17 +275,32 @@ impl TextureChunk {
     /// Decode an indexed texture at its real size through the given palette entry.
     pub fn decode(&self, mem: &GsMemory, texture: usize, palette: usize) -> Result<Image, String> {
         let t = *self.entries.get(texture).ok_or("No such texture entry")?;
+        self.decode_region(mem, texture, palette, t.width, t.height)
+    }
+
+    /// Decode a `width × height` region from the texture's origin. Materials sample the
+    /// power-of-two size of their TEX0 (TW × TH), which may exceed the real size; UVs are in
+    /// those units, so model textures decode at that size.
+    pub fn decode_region(
+        &self,
+        mem: &GsMemory,
+        texture: usize,
+        palette: usize,
+        width: u32,
+        height: u32,
+    ) -> Result<Image, String> {
+        let t = *self.entries.get(texture).ok_or("No such texture entry")?;
         let need = t.palette_len().ok_or("Entry is not an indexed texture")?;
         let pal = self.palette(mem, palette)?;
         if pal.len() != need {
             return Err(format!("Texture needs {need} colours; palette has {}", pal.len()));
         }
-        if t.width == 0 || t.height == 0 || t.width > 1024 || t.height > 1024 {
-            return Err(format!("Texture size {}×{} is outside 1..=1024", t.width, t.height));
+        if width == 0 || height == 0 || width > 1024 || height > 1024 {
+            return Err(format!("Texture size {width}×{height} is outside 1..=1024"));
         }
-        let mut rgba = Vec::with_capacity((t.width * t.height * 4) as usize);
-        for y in 0..t.height {
-            for x in 0..t.width {
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            for x in 0..width {
                 let index = match t.psm {
                     PSMT8 => mem.t8(t.tbp, t.tbw, x, y),
                     _ => mem.t4(t.tbp, t.tbw, x, y),
@@ -294,8 +309,8 @@ impl TextureChunk {
             }
         }
         Ok(Image {
-            width: t.width,
-            height: t.height,
+            width,
+            height,
             rgba,
         })
     }

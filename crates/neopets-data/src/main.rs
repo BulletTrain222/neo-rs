@@ -1,3 +1,5 @@
+mod inspect_mesh;
+
 use neopets_data::archive::ArchiveIndex;
 use neopets_data::resource::{self, ChainEnd, Family};
 use neopets_data::material;
@@ -6,7 +8,7 @@ use neopets_data::{Disc, fingerprint, iso_path, png};
 use std::collections::BTreeMap;
 
 const USAGE: &str = "usage: neopets-data [--iso <path>] [--sha256 <disc file>]... \
-                     [--resources] [--resource <n>]... [--texture <n>]... [--materials] [--coverage]";
+                     [--resources] [--resource <n>]... [--texture <n>]... [--materials] [--meshes] [--coverage]";
 
 fn main() {
     if let Err(e) = run() {
@@ -23,6 +25,7 @@ fn run() -> Result<(), String> {
     let mut survey = false;
     let mut coverage = false;
     let mut materials = false;
+    let mut meshes = false;
     let mut show = Vec::new();
     let mut textures = Vec::new();
     while let Some(arg) = args.next() {
@@ -32,6 +35,7 @@ fn run() -> Result<(), String> {
             "--resources" => survey = true,
             "--coverage" => coverage = true,
             "--materials" => materials = true,
+            "--meshes" => meshes = true,
             "--texture" => {
                 let n = args.next().ok_or("--texture needs a resource number")?;
                 textures.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -59,7 +63,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(survey || coverage || materials || !show.is_empty() || !textures.is_empty()) {
+    if !(survey || coverage || materials || meshes || !show.is_empty() || !textures.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -75,6 +79,9 @@ fn run() -> Result<(), String> {
     }
     if materials {
         material_census(&mut disc, &index)?;
+    }
+    if meshes {
+        inspect_mesh::run(&mut disc, &index)?;
     }
     if survey || coverage {
         let report = survey_all(&mut disc, &index)?;
@@ -238,7 +245,7 @@ fn export_textures(
     let bytes = index.read(disc, n)?;
     let family = resource::classify(&bytes);
     let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
-    let lists = material::lists_in_chain(&bytes, &chain)?;
+    let lists = material::lists_in_chain(&bytes, &chain.chunks)?;
     let dir = root.join("private/textures");
     std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
     let write = |name: String, image: &texture::Image| -> Result<(), String> {
@@ -300,7 +307,7 @@ fn material_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> 
             continue;
         }
         let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
-        for l in material::lists_in_chain(&bytes, &chain).map_err(|e| format!("Resource {n}: {e}"))? {
+        for l in material::lists_in_chain(&bytes, &chain.chunks).map_err(|e| format!("Resource {n}: {e}"))? {
             let memories: Vec<_> = l.chunks.iter().map(TextureChunk::gs_memory).collect();
             let Some(list) = &l.list else {
                 for (ci, chunk) in l.chunks.iter().enumerate() {

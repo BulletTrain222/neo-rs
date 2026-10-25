@@ -10,6 +10,8 @@ const STATE_BLOCK_LEN: usize = 0xD0;
 /// GS register numbers of TEX0 for drawing contexts 1 and 2.
 const TEX0_1: u8 = 0x06;
 const TEX0_2: u8 = 0x07;
+/// GS register number of CLAMP for drawing context 2 (the first register set).
+const CLAMP_2: u8 = 0x09;
 /// Groups per list stay far below this on disc.
 const MAX_GROUPS: u32 = 4096;
 
@@ -31,6 +33,32 @@ pub struct Group {
     pub tex0: Option<Tex0>,
     /// TEX0 of the second register set (render pass 1, mode 2 only).
     pub tex0_pass1: Option<Tex0>,
+    /// CLAMP of the first register set: bits 0–1 the U wrap, 2–3 the V wrap (0 repeat, 1 clamp).
+    pub clamp: Option<u64>,
+    /// Pass-0 vertex program (material record, group offset 0x44): 0 and 4 are unlit, 1, 2 and
+    /// 6 are lit, 3 is the billboard program; it also sets the vertex colour scale.
+    pub program: u32,
+}
+
+impl Group {
+    /// The colour byte that means 1.0 for this group's pass-0 program (SPEC-0004, Colour).
+    pub fn colour_unit(&self) -> f32 {
+        if matches!(self.program, 1 | 2 | 6) { 16.0 } else { 128.0 }
+    }
+
+    /// U and V repeat (true) or clamp (false); repeat when the state block is unreadable.
+    pub fn repeats(&self) -> (bool, bool) {
+        let c = self.clamp.unwrap_or(0);
+        (c & 3 == 0, (c >> 2) & 3 == 0)
+    }
+}
+
+/// The registers this crate reads from a state block.
+#[derive(Default)]
+struct StateRegs {
+    tex0: Option<Tex0>,
+    tex0_pass1: Option<Tex0>,
+    clamp: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -42,23 +70,25 @@ pub struct ShaderList {
 
 /// Read a state block's packed A+D register list. A block that does not start with a GIF tag
 /// of 6 or 12 registers is malformed (5 groups of resource 528 on disc) and yields None.
-fn tex0_registers(block: &[u8]) -> Option<(Option<Tex0>, Option<Tex0>)> {
+fn state_registers(block: &[u8]) -> Option<StateRegs> {
     let nloop = (u64_at(block, 0)? & 0x7fff) as usize;
     if nloop != 6 && nloop != 12 {
         return None;
     }
-    let (mut first, mut second) = (None, None);
+    let mut regs = StateRegs::default();
     for i in 0..nloop {
         let at = 16 + i * 16;
         let value = u64_at(block, at)?;
         match *block.get(at + 8)? {
-            // Mode 1 lists only the first set, which uses register 0x07; mode 2 adds 0x06.
-            TEX0_2 => first = Some(Tex0::decode(value)),
-            TEX0_1 => second = Some(Tex0::decode(value)),
+            // Mode 1 lists only the first set, which uses registers 0x07 and 0x09; mode 2 adds
+            // the second set (0x06, 0x08).
+            TEX0_2 => regs.tex0 = Some(Tex0::decode(value)),
+            TEX0_1 => regs.tex0_pass1 = Some(Tex0::decode(value)),
+            CLAMP_2 => regs.clamp = Some(value),
             _ => {}
         }
     }
-    Some((first, second))
+    Some(regs)
 }
 
 impl ShaderList {
@@ -79,16 +109,18 @@ impl ShaderList {
                     .ok_or_else(|| format!("Material group {g} runs past the shader list"))?;
                 let mode = group[0x26];
                 let block = &group[STATE_BLOCK_0..STATE_BLOCK_0 + STATE_BLOCK_LEN];
-                let (tex0, tex0_pass1) = if mode == 0 {
-                    (None, None)
+                let regs = if mode == 0 {
+                    StateRegs::default()
                 } else {
-                    tex0_registers(block).unwrap_or((None, None))
+                    state_registers(block).unwrap_or_default()
                 };
                 Ok(Group {
                     mode,
                     texture_chunk: group[0x28],
-                    tex0,
-                    tex0_pass1,
+                    tex0: regs.tex0,
+                    tex0_pass1: regs.tex0_pass1,
+                    clamp: regs.clamp,
+                    program: u32_at(group, 0x44).unwrap_or(0),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -142,10 +174,10 @@ pub struct ListTextures {
 /// the next B type-4 chunks. Extra chunks are dropped, as the original drops them.
 pub fn lists_in_chain(
     bytes: &[u8],
-    chain: &crate::resource::ChunkChain,
+    chain: &[crate::resource::Chunk],
 ) -> Result<Vec<ListTextures>, String> {
     let mut out: Vec<ListTextures> = Vec::new();
-    for c in &chain.chunks {
+    for c in chain {
         let payload = &bytes[c.payload.clone()];
         match c.kind {
             CHUNK_TYPE => out.push(ListTextures {

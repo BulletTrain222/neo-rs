@@ -6,6 +6,8 @@ pub mod gs;
 pub mod gsmem;
 mod iso;
 pub mod material;
+pub mod mesh;
+pub mod model;
 mod mods;
 pub mod png;
 pub mod resource;

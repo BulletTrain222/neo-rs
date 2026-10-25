@@ -3,6 +3,7 @@
 use neopets_data::Disc;
 use neopets_data::archive::ArchiveIndex;
 use neopets_data::material;
+use neopets_data::model::{self, ModelData};
 use neopets_data::resource::{self, ChainEnd, Family};
 use neopets_data::texture::{Image, TextureChunk};
 
@@ -71,7 +72,7 @@ pub fn textures(
     }
     let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
     let mut out = Vec::new();
-    for l in material::lists_in_chain(&bytes, &chain)? {
+    for l in material::lists_in_chain(&bytes, &chain.chunks)? {
         let memories: Vec<_> = l.chunks.iter().map(TextureChunk::gs_memory).collect();
         match &l.list {
             Some(list) => {
@@ -105,6 +106,33 @@ pub fn textures(
         }
     }
     Ok(out)
+}
+
+/// Every node tree of a resource as mesh parts (SPEC-0004), or None when it has none. The
+/// held-item models 544–575 have no shader list and draw with resource 7's (SPEC-0004).
+pub fn model(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<Option<ModelData>, String> {
+    let chunk_file = |disc: &mut Disc, n: u32| -> Result<Option<(Vec<u8>, Vec<resource::Chunk>)>, String> {
+        if index.get(n)?.is_empty() {
+            return Ok(None);
+        }
+        let bytes = index.read(disc, n)?;
+        let family = resource::classify(&bytes);
+        if !matches!(family, Family::ChunkFile(_)) {
+            return Ok(None);
+        }
+        let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+        Ok(Some((bytes, chain.chunks)))
+    };
+    let Some((bytes, chunks)) = chunk_file(disc, n)? else {
+        return Ok(None);
+    };
+    let shared = if (544..=575).contains(&n) { chunk_file(disc, 7)? } else { None };
+    let data = model::build(
+        &bytes,
+        &chunks,
+        shared.as_ref().map(|(b, c)| (b.as_slice(), c.as_slice())),
+    )?;
+    Ok((!data.parts.is_empty()).then_some(data))
 }
 
 #[cfg(test)]

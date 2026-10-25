@@ -37,6 +37,28 @@ const QUAD_HEIGHT: f32 = 4.0;
 #[derive(Component)]
 struct TextureQuad;
 
+/// The diagnostic grid and axes, hidden while a model is shown.
+#[derive(Component)]
+struct DiagnosticGrid;
+
+/// Every entity spawned for the current model, despawned when the selection changes.
+#[derive(Component)]
+struct ModelPart;
+
+/// The selected resource's model, and whether the viewer shows it or the texture quad.
+#[derive(Resource, Default)]
+struct ModelView {
+    data: Option<neopets_data::model::ModelData>,
+    show_model: bool,
+    dirty: bool,
+}
+
+impl ModelView {
+    fn showing(&self) -> bool {
+        self.show_model && self.data.is_some()
+    }
+}
+
 /// Decoded textures of the selected resource, and which one the quad shows.
 #[derive(Resource, Default)]
 struct TextureView {
@@ -164,6 +186,7 @@ fn main() {
         })
         .init_resource::<BrowserView>()
         .init_resource::<TextureView>()
+        .init_resource::<ModelView>()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -179,9 +202,9 @@ fn main() {
             Update,
             (
                 (read_input, step_sim).chain(),
-                (browse_resources, cycle_textures, orbit_camera, toggle_hud),
+                (browse_resources, cycle_textures, toggle_view, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                apply_texture,
+                (apply_texture, apply_model),
             )
                 .chain(),
         );
@@ -269,6 +292,11 @@ fn setup_viewer(
     commands.spawn((
         Camera3d::default(),
         bevy::core_pipeline::tonemapping::Tonemapping::None,
+        Projection::Perspective(PerspectiveProjection {
+            near: 0.02,
+            far: 400_000.0,
+            ..default()
+        }),
         orbit.transform(),
         orbit,
     ));
@@ -294,11 +322,13 @@ fn setup_viewer(
             Mesh3d(line_x.clone()),
             MeshMaterial3d(grid.clone()),
             Transform::from_xyz(0.0, 0.0, at),
+            DiagnosticGrid,
         ));
         commands.spawn((
             Mesh3d(line_z.clone()),
             MeshMaterial3d(grid.clone()),
             Transform::from_xyz(at, 0.0, 0.0),
+            DiagnosticGrid,
         ));
     }
     for (center, size, material) in axes {
@@ -306,6 +336,7 @@ fn setup_viewer(
             Mesh3d(meshes.add(Cuboid::from_size(size))),
             MeshMaterial3d(material),
             Transform::from_translation(center),
+            DiagnosticGrid,
         ));
     }
 }
@@ -491,6 +522,7 @@ fn show_browser(
     archive: Option<ResMut<Archive>>,
     mut view: ResMut<BrowserView>,
     mut textures: ResMut<TextureView>,
+    mut models: ResMut<ModelView>,
     mut texts: Query<&mut Text, With<BrowserText>>,
 ) {
     let Some(mut archive) = archive else {
@@ -515,7 +547,35 @@ fn show_browser(
             current: 0,
             dirty: true,
         };
+        let model = archive_view::model(disc, index, n);
+        if let Err(e) = &model {
+            view.text.push_str(&format!("\nModel could not be built: {e}"));
+        }
+        let data = model.ok().flatten();
+        *models = ModelView {
+            show_model: data.is_some(),
+            data,
+            dirty: true,
+        };
     }
+    let model_line = match &models.data {
+        Some(m) => {
+            let verts: usize = m.parts.iter().map(|p| p.positions.len()).sum();
+            let tris: usize = m.parts.iter().map(|p| p.indices.len() / 3).sum();
+            let skipped = if m.skipped_leaves.is_empty() {
+                String::new()
+            } else {
+                format!(", {} leaves not drawn", m.skipped_leaves.len())
+            };
+            format!(
+                "Model (SPEC-0004): {} parts, {verts} vertices, {tris} triangles, {} textures{skipped}. \
+                 Unlit, no skinning yet. V switches model/texture view",
+                m.parts.len(),
+                m.textures.len()
+            )
+        }
+        None => "No models in this resource.".into(),
+    };
     let texture_line = match textures.images.get(textures.current) {
         Some((label, image)) => format!(
             "Texture {}/{}: {label}, {}x{} (, and . to cycle)",
@@ -532,7 +592,7 @@ fn show_browser(
     };
     for mut text in &mut texts {
         text.0 = format!(
-            "RESOURCE BROWSER - archive index (SPEC-0001/0002), textures (SPEC-0003)\n{}\n{texture_line}\n{entry}",
+            "RESOURCE BROWSER - archive index (SPEC-0001/0002), textures (SPEC-0003)\n{}\n{model_line}\n{texture_line}\n{entry}",
             view.text
         );
     }
@@ -556,6 +616,7 @@ fn cycle_textures(keys: Res<ButtonInput<KeyCode>>, mut textures: ResMut<TextureV
 /// the selected resource has no textures.
 fn apply_texture(
     mut textures: ResMut<TextureView>,
+    models: Res<ModelView>,
     mut quads: Query<
         (&MeshMaterial3d<StandardMaterial>, &mut Transform, &mut Visibility),
         With<TextureQuad>,
@@ -572,6 +633,10 @@ fn apply_texture(
             *visibility = Visibility::Hidden;
             continue;
         };
+        if models.showing() {
+            *visibility = Visibility::Hidden;
+            continue;
+        }
         *visibility = Visibility::Inherited;
         transform.scale.x = image.width as f32 / image.height as f32;
         if let Some(mut m) = materials.get_mut(&material.0) {
@@ -580,5 +645,110 @@ fn apply_texture(
                 images.remove(&old);
             }
         }
+    }
+}
+
+fn toggle_view(
+    keys: Res<ButtonInput<KeyCode>>,
+    mut models: ResMut<ModelView>,
+    mut textures: ResMut<TextureView>,
+) {
+    if keys.just_pressed(KeyCode::KeyV) && models.data.is_some() {
+        models.show_model = !models.show_model;
+        models.dirty = true;
+        textures.dirty = true;
+    }
+}
+
+fn model_texture(t: &neopets_data::model::ModelTexture) -> Image {
+    use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
+    let mut image = rgba_image(t.image.width, t.image.height, t.image.rgba.clone());
+    let wrap = |repeat: bool| {
+        if repeat { ImageAddressMode::Repeat } else { ImageAddressMode::ClampToEdge }
+    };
+    // Materials on disc magnify bilinearly (TEX1 MMAG = 1, SPEC-0003).
+    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: wrap(t.repeat_u),
+        address_mode_v: wrap(t.repeat_v),
+        mag_filter: ImageFilterMode::Linear,
+        min_filter: ImageFilterMode::Linear,
+        ..default()
+    });
+    image
+}
+
+/// Spawn the selected model's parts (or remove them), and frame the camera on what is shown.
+fn apply_model(
+    mut commands: Commands,
+    mut models: ResMut<ModelView>,
+    old: Query<Entity, With<ModelPart>>,
+    mut grid: Query<&mut Visibility, With<DiagnosticGrid>>,
+    mut cameras: Query<(&mut Orbit, &mut Transform)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    if !models.dirty {
+        return;
+    }
+    models.dirty = false;
+    for e in &old {
+        commands.entity(e).despawn();
+    }
+    let grid_visibility = if models.showing() { Visibility::Hidden } else { Visibility::Inherited };
+    for mut v in &mut grid {
+        *v = grid_visibility;
+    }
+    let framing = match (&models.data, models.show_model) {
+        (Some(m), true) => {
+            let handles: Vec<Handle<StandardMaterial>> = m
+                .textures
+                .iter()
+                .map(|t| {
+                    materials.add(StandardMaterial {
+                        base_color_texture: Some(images.add(model_texture(t))),
+                        unlit: true,
+                        alpha_mode: AlphaMode::Mask(0.5),
+                        cull_mode: None,
+                        ..default()
+                    })
+                })
+                .collect();
+            let untextured = materials.add(StandardMaterial {
+                unlit: true,
+                cull_mode: None,
+                ..default()
+            });
+            for part in &m.parts {
+                let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+                // The GS modulates in gamma space; Bevy blends vertex colour in linear space.
+                let colors: Vec<[f32; 4]> = part
+                    .colors
+                    .iter()
+                    .map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)])
+                    .collect();
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
+                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
+                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+                mesh.insert_indices(Indices::U32(part.indices.clone()));
+                let material = part
+                    .texture
+                    .map_or(untextured.clone(), |t| handles[t].clone());
+                commands.spawn((
+                    Mesh3d(meshes.add(mesh)),
+                    MeshMaterial3d(material),
+                    Transform::IDENTITY,
+                    ModelPart,
+                ));
+            }
+            Orbit::framing(Vec3::from(m.min), Vec3::from(m.max))
+        }
+        _ => Orbit::default(),
+    };
+    for (mut orbit, mut transform) in &mut cameras {
+        *orbit = framing.clone();
+        *transform = orbit.transform();
     }
 }

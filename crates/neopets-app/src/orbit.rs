@@ -11,8 +11,9 @@ pub struct Orbit {
 }
 
 const PITCH_LIMIT: f32 = 89.0_f32.to_radians();
-const MIN_DISTANCE: f32 = 0.5;
-const MAX_DISTANCE: f32 = 500.0;
+/// Wide enough for a 3-unit item up close and a whole world pack from outside.
+const MIN_DISTANCE: f32 = 0.05;
+const MAX_DISTANCE: f32 = 100_000.0;
 /// Radians of rotation per pixel of mouse drag.
 const DRAG_SPEED: f32 = 0.005;
 /// Fraction of the distance moved per scroll line.
@@ -30,6 +31,16 @@ impl Default for Orbit {
 }
 
 impl Orbit {
+    /// Look at a box from the default angle, far enough to see all of it.
+    pub fn framing(min: Vec3, max: Vec3) -> Self {
+        let radius = ((max - min).length() / 2.0).max(0.1);
+        Self {
+            target: (min + max) / 2.0,
+            distance: (radius * 2.2).clamp(MIN_DISTANCE, MAX_DISTANCE),
+            ..default()
+        }
+    }
+
     /// Dragging right turns the camera around the target to the right; dragging up raises it.
     pub fn drag(&mut self, pixels: Vec2) {
         self.yaw = (self.yaw - pixels.x * DRAG_SPEED).rem_euclid(std::f32::consts::TAU);
