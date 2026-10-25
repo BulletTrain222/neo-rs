@@ -655,6 +655,21 @@ impl Enemy {
 
     /// Behavior 34 (no reanimation, no flyer grounding, no drops): base state 16 and the death
     /// disappear countdown.
+    /// SetAI_Agro (SPEC-0030 row 115): a living enemy goes to state 2, the alerted search (21
+    /// when the row's Display in Default word is 0), with the search countdown drawn from the
+    /// row's search range and the last-seen point at the hero. Returns the animation it
+    /// requests (18).
+    pub fn agro_on(&mut self, hero: Vec3, rng: &mut Rng) -> Option<u32> {
+        if self.dead {
+            return None;
+        }
+        self.previous = self.state;
+        self.state = if self.p.display_default { 2 } else { 21 };
+        self.search = rng.frange(self.p.search_min, self.p.search_max) as i32;
+        self.last_seen = hero;
+        Some(18)
+    }
+
     pub fn die(&mut self) {
         if !self.dead {
             self.dead = true;

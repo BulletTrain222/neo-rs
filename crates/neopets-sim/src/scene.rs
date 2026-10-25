@@ -177,6 +177,62 @@ impl Fade {
     }
 }
 
+/// The letterbox bars of the screen effect in mode 0 (SPEC-0052 Screen effect): progress 0 to
+/// 1, its target and step, the done flag and the held flag; each bar is progress x 32 pixels of
+/// the 448-line screen.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Bars {
+    pub progress: f32,
+    pub target: f32,
+    pub step: f32,
+    pub done: bool,
+    pub held: bool,
+}
+
+/// Bar height at progress 1 (screen-effect +0x00 and +0x04).
+pub const BAR: f32 = 32.0;
+
+impl Bars {
+    /// LetterBoxOn: ignored while held; otherwise target 1 and, unless already at 1, done
+    /// cleared and step 1 / n; then held.
+    pub fn on(&mut self, n: u32) {
+        if !self.held {
+            self.target = 1.0;
+            if self.progress != 1.0 {
+                self.done = false;
+                self.step = 1.0 / n as f32;
+            }
+        }
+        self.held = true;
+    }
+
+    /// LetterBoxOff: held cleared, target 0 and, unless already at 0, done cleared and step
+    /// -1 / n.
+    pub fn off(&mut self, n: u32) {
+        self.held = false;
+        self.target = 0.0;
+        if self.progress != 0.0 {
+            self.done = false;
+            self.step = -1.0 / n as f32;
+        }
+    }
+
+    /// Steps 1 and 2 of the per-pass update (no delay is used by the callers).
+    pub fn update(&mut self) {
+        self.progress += self.step;
+        if (self.step < 0.0 && self.progress < self.target) || (self.step > 0.0 && self.progress > self.target) {
+            self.progress = self.target;
+            self.done = true;
+            self.step = 0.0;
+        }
+    }
+
+    /// The top and bottom bar height in screen pixels (0 when progress is 0 or less).
+    pub fn height(&self) -> f32 {
+        if self.progress <= 0.0 { 0.0 } else { self.progress * BAR }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,6 +290,31 @@ mod tests {
         });
         assert_eq!(end, Some((true, true)));
         assert_eq!(play.state, 0);
+    }
+
+    #[test]
+    fn letterbox_vectors() {
+        // SPEC-0052: LetterBoxOn(0.5 s) from 0: 16 px after update 15, 32 px after update 30;
+        // LetterBoxOff(0.5 s): 30.93 px after update 1, 0 after update 30.
+        let mut b = Bars::default();
+        b.on(frames(0.5));
+        let h: Vec<f32> = (0..30)
+            .map(|_| {
+                b.update();
+                b.height()
+            })
+            .collect();
+        assert!((h[14] - 16.0).abs() < 1e-3 && (h[29] - 32.0).abs() < 1e-3, "{:?}", &h[..]);
+        // A second LetterBoxOn while held is ignored.
+        b.update();
+        assert!(b.done);
+        b.off(frames(0.5));
+        b.update();
+        assert!((b.height() - 30.93).abs() < 0.01);
+        for _ in 0..29 {
+            b.update();
+        }
+        assert!(b.height() < 1e-3);
     }
 
     #[test]

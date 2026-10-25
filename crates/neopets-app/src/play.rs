@@ -281,12 +281,19 @@ pub struct Character {
     root_step: [f32; 3],
     /// A script walk to a point (SPEC-0030 rows 106 and 108; SPEC-0056 classes 23 and 25), with
     /// the final facing of the orienting form.
-    script_walk: Option<([f32; 3], Option<[f32; 3]>)>,
+    script_walk: Option<([f32; 3], Option<[f32; 3]>, f32)>,
+    /// Under script control (PlayEntityAnim, LoopEntityAnim, script walks): its AI does not
+    /// run until a release (SPEC-0030 section 4).
+    pub held: bool,
+    /// Deactivated (DeactivateEntity): not drawn, not run, not hit, until ActivateEntity.
+    pub inactive: bool,
 }
 
 /// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
 /// and what its blocking call waits for.
 struct Thread {
+    /// The world the thread's script belongs to (its entities and locators).
+    pack: u32,
     calls: std::collections::VecDeque<Action>,
     wait: Option<Wait>,
 }
@@ -298,7 +305,10 @@ enum Wait {
     Fade,
     Camera,
     HeroWalk,
-    EntityWalk(usize),
+    EntityWalk(u32, usize),
+    EntityWalks(u32, [usize; 3]),
+    EntityAnim(u32, usize, u32),
+    Bars,
     Dialog,
     Loads,
 }
@@ -359,6 +369,7 @@ pub struct Play {
     threads: Vec<Thread>,
     pub cut: Option<neopets_sim::scene::CameraPlay>,
     pub fade: neopets_sim::scene::Fade,
+    pub bars: neopets_sim::scene::Bars,
     hero_walk: Option<([f32; 3], Option<[f32; 3]>, f32)>,
     pub held: bool,
     pub loads_out: usize,
@@ -664,6 +675,7 @@ impl Play {
             threads: Vec::new(),
             cut: None,
             fade: Default::default(),
+            bars: Default::default(),
             hero_walk: None,
             held: false,
             loads_out: 0,
@@ -1014,7 +1026,7 @@ impl Play {
         if actions.is_empty() {
             return;
         }
-        self.threads.push(Thread { calls: actions.iter().copied().collect(), wait: None });
+        self.threads.push(Thread { pack: self.world.pack, calls: actions.iter().copied().collect(), wait: None });
         let i = self.threads.len() - 1;
         self.step_thread(i);
     }
@@ -1029,7 +1041,8 @@ impl Play {
                 self.threads[i].wait = None;
             }
             let Some(a) = self.threads[i].calls.pop_front() else { return };
-            if let Some(w) = self.execute(a) {
+            let pack = self.threads[i].pack;
+            if let Some(w) = self.execute(a, pack) {
                 self.threads[i].wait = Some(w);
             }
         }
@@ -1041,7 +1054,13 @@ impl Play {
             Wait::Fade => !self.fade.moving(),
             Wait::Camera => self.cut.is_none_or(|c| !c.waiting()),
             Wait::HeroWalk => self.hero_walk.is_none(),
-            Wait::EntityWalk(e) => !self.characters.iter().any(|c| c.pack == self.world.pack && c.entity == Some(e) && c.script_walk.is_some()),
+            Wait::EntityWalk(pack, e) => !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.script_walk.is_some()),
+            Wait::EntityWalks(pack, es) => !self.characters.iter().any(|c| c.pack == pack && c.entity.is_some_and(|e| es.contains(&e)) && c.script_walk.is_some()),
+            Wait::EntityAnim(pack, e, anim) => self.characters.iter().find(|c| c.pack == pack && c.entity == Some(e)).is_none_or(|c| {
+                let k = c.anim.clip_state();
+                k.action != anim || k.progress >= 0.99
+            }),
+            Wait::Bars => self.bars.done,
             Wait::Dialog => !self.dialogue_open,
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
         }
@@ -1067,14 +1086,24 @@ impl Play {
         }
     }
 
-    /// The character of the current world with entity id e.
-    fn entity_mut(&mut self, e: usize) -> Option<&mut Character> {
-        let pack = self.world.pack;
+    /// The character of world `pack` with entity id e.
+    fn entity_mut(&mut self, pack: u32, e: usize) -> Option<&mut Character> {
         self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(e))
     }
 
-    /// Carry out one script call; a blocking call returns what it waits for.
-    fn execute(&mut self, a: Action) -> Option<Wait> {
+    /// Entry (locator) record k of resident world `pack`.
+    fn locator(&self, pack: u32, k: usize) -> Option<([f32; 3], [f32; 3])> {
+        [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?.entries.get(k).copied()
+    }
+
+    /// The ground height under (x, z) in resident world `pack`, probed from c.
+    fn ground_in(&self, pack: u32, x: f32, z: f32, c: f32) -> Option<f32> {
+        [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?.ground_at(x, z, c)
+    }
+
+    /// Carry out one script call of a thread of world `pack`; a blocking call returns what it
+    /// waits for.
+    fn execute(&mut self, a: Action, pack: u32) -> Option<Wait> {
         {
             match a {
                 Action::EnterInterior { slot } if self.world.buffer == Buffer::Exterior => {
@@ -1115,7 +1144,7 @@ impl Play {
                     return Some(Wait::Dialog);
                 }
                 Action::Converse { entity, line } => {
-                    let partner = self.entity_mut(entity).map(|c| (c.id, c.name.clone()));
+                    let partner = self.entity_mut(pack, entity).map(|c| (c.id, c.name.clone()));
                     self.talk_with = partner.as_ref().map(|p| p.0);
                     self.talk_partner = partner.map(|p| p.1);
                     self.open_line(line);
@@ -1156,29 +1185,82 @@ impl Play {
                     return wait.then_some(Wait::HeroWalk);
                 }
                 Action::MoveEntity { entity, locator, face } => {
-                    let (l, g) = *self.world.entries.get(locator)?;
-                    let y = self.world.ground_at(l[0], l[2], l[1] + 4.0).unwrap_or(l[1]);
-                    let c = self.entity_mut(entity)?;
+                    let (l, g) = self.locator(pack, locator)?;
+                    let y = self.ground_in(pack, l[0], l[2], l[1] + 4.0).unwrap_or(l[1]);
+                    let c = self.entity_mut(pack, entity)?;
                     c.position = [l[0], y, l[2]];
                     c.script_walk = None;
+                    c.held = true;
                     if face {
                         c.facing = g;
                     }
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.body.position = c.position;
+                        wk.facing = c.facing;
+                    }
                 }
-                Action::WalkEntity { entity, locator, wait, orient } => {
-                    let (l, g) = *self.world.entries.get(locator)?;
-                    let y = self.world.ground_at(l[0], l[2], l[1] + 6.0).unwrap_or(l[1]);
+                Action::WalkEntity { entity, locator, wait, orient, stop } => {
+                    let (l, g) = self.locator(pack, locator)?;
+                    let y = self.ground_in(pack, l[0], l[2], l[1] + 6.0).unwrap_or(l[1]);
                     let face = orient.then(|| {
                         let len = g[0].hypot(g[2]).max(1e-6);
                         [g[0] / len, 0.0, g[2] / len]
                     });
-                    self.entity_mut(entity)?.script_walk = Some(([l[0], y, l[2]], face));
-                    return wait.then_some(Wait::EntityWalk(entity));
+                    let c = self.entity_mut(pack, entity)?;
+                    c.script_walk = Some(([l[0], y, l[2]], face, if stop > 0.0 { stop } else { 1.0 }));
+                    c.held = true;
+                    return wait.then_some(Wait::EntityWalk(pack, entity));
+                }
+                Action::WaitWalks { entities } => return Some(Wait::EntityWalks(pack, entities)),
+                Action::EntityAnim { entity, anim, looped: _, wait } => {
+                    // The clip plays as the character's animation (loops repeat as its clip
+                    // does); the entity is under script control.
+                    let c = self.entity_mut(pack, entity)?;
+                    c.held = true;
+                    c.script_walk = None;
+                    c.anim.play(anim);
+                    return wait.then_some(Wait::EntityAnim(pack, entity, anim));
+                }
+                Action::ReleaseEntity { entity } => {
+                    let c = self.entity_mut(pack, entity)?;
+                    c.held = false;
+                    c.script_walk = None;
+                    c.anim.play(0);
+                }
+                Action::Agro { entity } => {
+                    let hero = self.loco.position();
+                    let rng = &mut self.rng;
+                    let c = self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(entity))?;
+                    c.held = false;
+                    if let Some(id) = c.enemy.as_mut().and_then(|e| e.agro_on(hero, rng)) {
+                        c.anim.play(id);
+                    }
+                }
+                Action::DeactivateEntity { entity } => {
+                    let c = self.entity_mut(pack, entity)?;
+                    c.inactive = true;
+                    c.script_walk = None;
+                }
+                Action::ActivateEntity { entity } => self.entity_mut(pack, entity)?.inactive = false,
+                Action::HitPointsPercent { entity, percent } => {
+                    let c = self.entity_mut(pack, entity)?;
+                    let max = c.row.map_or(1, |r| r.hit_points as i32);
+                    c.hp = (max as f32 * percent / 100.0) as i32;
+                }
+                Action::LetterBox { on, seconds, wait } => {
+                    let n = neopets_sim::scene::frames(seconds);
+                    if on {
+                        self.bars.on(n);
+                    } else {
+                        self.bars.off(n);
+                    }
+                    return wait.then_some(Wait::Bars);
                 }
                 Action::Sleep { ticks } => return Some(Wait::Ticks(ticks)),
                 Action::WaitLoads => return Some(Wait::Loads),
                 Action::WaitDialog => return Some(Wait::Dialog),
                 Action::RegisterTrigger { index, routine } => {
+                    let _ = pack;
                     if (index as usize) < self.world.capacity {
                         self.world.routines.insert(index, routine);
                     }
@@ -1247,9 +1329,10 @@ impl Play {
     pub fn scene_status(&self) -> String {
         let walking = self.characters.iter().filter(|c| c.script_walk.is_some()).filter_map(|c| c.entity).collect::<Vec<_>>();
         format!(
-            "camera {:?} fade to {:.0} held {} hero walk {} entity walks {walking:?} threads {}",
+            "camera {:?} fade to {:.0} bars {} held {} hero walk {} entity walks {walking:?} threads {}",
             self.cut.map(|c| (c.track, c.state)),
             self.fade.target,
+            self.bars.target,
             self.held,
             self.hero_walk.is_some(),
             self.threads.len()
@@ -1336,7 +1419,7 @@ impl Play {
         self.characters
             .iter()
             .enumerate()
-            .filter(|(_, c)| c.pack == self.world.pack)
+            .filter(|(_, c)| c.pack == self.world.pack && !c.inactive)
             .filter_map(|(i, c)| {
                 let routine = level::proximity_routine(c.pack, c.entity?)?;
                 let d = [c.position[0] - p[0], c.position[1] - p[1], c.position[2] - p[2]];
@@ -1399,7 +1482,7 @@ impl Play {
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(0, |i| i.stats[0]);
         let g = self.statuses.damage_scale();
         let hero_at = self.loco.position();
-        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
             if self.hit_list.contains(&c.id) {
                 continue;
             }
@@ -1563,6 +1646,8 @@ impl Play {
                 colour: pl.colour,
                 root_step: [0.0; 3],
                 script_walk: None,
+                held: false,
+                inactive: false,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -1758,7 +1843,8 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
-        // SPEC-0052 Screen effect: the fade's per-pass update.
+        // SPEC-0052 Screen effect: the bars' and the fade's per-pass update.
+        self.bars.update();
         self.fade.update();
         // SPEC-0055: the game-state pass runs the timers before the world update; while the
         // game-over page is up the world is frozen and only the page's exit test runs.
@@ -2029,6 +2115,8 @@ impl Play {
         }
         if self.job.is_none() {
             self.trigger_step();
+            let pack = self.world.pack;
+            self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
             self.apply(&actions);
         }
@@ -2057,7 +2145,7 @@ impl Play {
             members += 1;
             penned_now += c.whinny.as_ref().is_some_and(|w| w.penned()) as usize;
         }
-        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack) {
+        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
             let (Some(wk), Some(wh)) = (c.walker.as_mut(), c.whinny.as_mut()) else { continue };
             let was = wh.penned();
             let id = wh.tick(wk, &world.navmeshes, &mut world.pens, hero, &mut self.rng);
@@ -2095,10 +2183,13 @@ impl Play {
             // steering with weight 0.3, walk clip 1; arrival within 1.0, then the turn to the
             // final facing at 0.1 until the dot is 0.99, then idle (0). The navigation mesh, the
             // hold for a near hero and root-motion travel are not used.
-            if let Some((t, face)) = c.script_walk {
+            if c.inactive {
+                continue;
+            }
+            if let Some((t, face, stop)) = c.script_walk {
                 let (dx, dz) = (t[0] - c.position[0], t[2] - c.position[2]);
                 let d = dx.hypot(dz);
-                if d >= 1.0 {
+                if d >= stop {
                     c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
                     let s = 0.083_37 / d;
                     let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
@@ -2113,6 +2204,14 @@ impl Play {
                     c.script_walk = None;
                     c.anim.play(0);
                 }
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.body.position = c.position;
+                    wk.facing = c.facing;
+                }
+                c.root_step = c.anim.tick();
+                continue;
+            }
+            if c.held {
                 c.root_step = c.anim.tick();
                 continue;
             }
@@ -2153,7 +2252,7 @@ impl Play {
         let attackable = self.loco.state != hero_states::DEAD && !self.dialogue_open;
         let world = &self.world;
         let mut strikes = Vec::new();
-        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack) {
+        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
             let Character { id, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, .. } = c else { continue };
             let p = wk.position();
             if e.dead {

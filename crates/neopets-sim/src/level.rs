@@ -11,6 +11,9 @@
 //! - 951 (SPEC-0041): Init (teleport, the chest lock, the thread body's flag, item and slot
 //!   steps), the three proximity callbacks and teleport callback 0.
 //! - 955 (SPEC-0032): teleport callback 0 (message 40, leave to slot 5).
+//! - The road module 678 (SPEC-0042), which packs 678, 686 and 691 carry: Init's slot and trigger
+//!   setup by flags, trigger 0's line, the road-fight intro (trigger 1), the fight watch and end
+//!   scene, the line handler of triggers 2, 3, 5 and 6, trigger 7's prompt and proximity P.
 //! - The lock chest press of script groups of kind 1 (SPEC-0048 Lock chests).
 //! The scenes are staged with the calls of SPEC-0052 (fades, camera plays and returns, hero and
 //! entity moves and walks, waits); the host runs each handler's list as its own script thread.
@@ -74,8 +77,9 @@ pub enum Action {
     WalkHero { locator: usize, wait: bool, orient: bool },
     /// MoveEntity(entity, locator, probe, CTL, face) (row 112), probe on.
     MoveEntity { entity: usize, locator: usize, face: bool },
-    /// WalkEntity or WalkEntityAndOrient (rows 106 and 108) with stop 0 (class 23 or 25).
-    WalkEntity { entity: usize, locator: usize, wait: bool, orient: bool },
+    /// WalkEntity or WalkEntityAndOrient (rows 106 and 108): stop 0 or less arrives within 1.0
+    /// (classes 23 and 25), a positive stop within that radius (24 and 26).
+    WalkEntity { entity: usize, locator: usize, wait: bool, orient: bool, stop: f32 },
     /// SetConversationTarget(entity), LevelMsg(line, WAIT 1), EndConversation(entity).
     Converse { entity: usize, line: u16 },
     /// Sleep(n ticks).
@@ -84,6 +88,27 @@ pub enum Action {
     WaitLoads,
     /// Wait until no dialogue box is up.
     WaitDialog,
+    /// PlayEntityAnim (row 105; WAIT waits for its end) or, with `looped`, LoopEntityAnim
+    /// (row 104): the entity plays animation id `anim` under script control.
+    EntityAnim { entity: usize, anim: u32, looped: bool, wait: bool },
+    /// ReleaseEntityControl (row 107) or ReturnEntityAnimToIdle (row 110): base state 1, idle.
+    ReleaseEntity { entity: usize },
+    /// SetAI_Agro (row 115).
+    Agro { entity: usize },
+    /// DeactivateEntity (row 114) and ActivateEntity (row 116).
+    DeactivateEntity { entity: usize },
+    ActivateEntity { entity: usize },
+    /// SetAI_HitPointsPercentage (row 49).
+    HitPointsPercent { entity: usize, percent: f32 },
+    /// LetterBoxOn and LetterBoxOff (rows 140 and 139).
+    LetterBox { on: bool, seconds: f32, wait: bool },
+    /// Sleep one tick at a time while any of these entities is still walking.
+    WaitWalks { entities: [usize; 3] },
+}
+
+/// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
+fn wait(seconds: f32) -> Action {
+    Action::Sleep { ticks: (ps2_float::fpu::mul(seconds, 60.0) as i64).max(0) as u32 }
 }
 
 /// The fade time used where a farm scene's fade has no stated time: 0.5 s, the commonest
@@ -142,6 +167,9 @@ pub struct GameState {
     pub words: HashMap<(u32, u8), i32>,
     /// The shared collected table (SPEC-0048 Script groups, Key; SPEC-0051): rows set to 1.
     pub collected: BTreeSet<u32>,
+    /// The current hit points of the current world's entities by entity id (filled by the host
+    /// before each Update; GetAI_HitPoints).
+    pub entity_hp: HashMap<usize, i32>,
 }
 
 impl GameState {
@@ -276,8 +304,96 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             out
         }
+        678 | 686 | 691 => road_init(pack, state),
         _ => Vec::new(),
     }
+}
+
+/// SPEC-0042 module 678 Init. Routine numbers: 0 trigger T0, 1 the intro S1, 2 the line
+/// handler N, 7 trigger T7.
+fn road_init(pack: u32, state: &mut GameState) -> Vec<Action> {
+    let reg = |index, routine| Action::RegisterTrigger { index, routine };
+    let region = |j: u32| Some(pack + 1 + j);
+    let mut out = Vec::new();
+    let f = |n| state.flag(n);
+    if !f(149) && f(148) {
+        state.set(149, true);
+    } else if !f(149) && !f(148) && !f(146) && !f(143) {
+        if f(126) {
+            // Thread A: slot load of set 3; proximity P on entity 9.
+            out.push(Action::LoadRegion { slot: 0, region: region(3) });
+        } else {
+            // The first visit: thread B loads set 0 (S1 waits for it) and loops animation 1
+            // on entities 1, 2 and 0; triggers S1 (index 1) and T0 (index 0).
+            out.extend([Action::LoadRegion { slot: 0, region: region(0) }, Action::WaitLoads, Action::Sleep { ticks: 1 }]);
+            for entity in [1, 2, 0] {
+                out.push(Action::EntityAnim { entity, anim: 1, looped: true, wait: false });
+            }
+            out.insert(0, reg(1, 1));
+            out.insert(0, reg(0, 0));
+        }
+    }
+    let tail = [reg(2, 2), reg(3, 2), reg(5, 2), reg(6, 2), reg(7, 7)];
+    let at = out.iter().take_while(|a| matches!(a, Action::RegisterTrigger { .. })).count();
+    out.splice(at..at, tail);
+    out
+}
+
+/// SPEC-0042 678 S1: the road-fight intro, through the hand-over to the fight. Lines 3, 7 and
+/// 8 are spoken with entity 0 as the conversation target; 4, 5 and 6 are plain LevelMsg.
+fn road_intro() -> Vec<Action> {
+    use Action::*;
+    let anim = |entity, anim| EntityAnim { entity, anim, looped: false, wait: false };
+    let looped = |entity, anim| EntityAnim { entity, anim, looped: true, wait: false };
+    let cam = |track| PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+    let walk = |entity, locator, stop, wait| WalkEntity { entity, locator, wait, orient: true, stop };
+    let mut v = vec![PlayStinger { id: 4, volume: 1.0 }, HoldHero, FadeOut { seconds: 1.0, wait: true }, WaitLoads];
+    // Step 2.
+    v.extend([LetterBox { on: true, seconds: 0.0, wait: false }, MoveHero { locator: 19 }, wait(0.5), cam(17), anim(0, 1)]);
+    v.extend([FadeIn { seconds: 1.8, wait: false }, SetExcite { level: 80 }, wait(2.3), FadeOut { seconds: 1.0, wait: true }, wait(0.6)]);
+    v.extend([cam(4), FadeIn { seconds: 0.5, wait: false }, looped(3, 75), wait(2.3), FadeOut { seconds: 0.8, wait: true }, cam(11)]);
+    v.push(FadeIn { seconds: 0.8, wait: false });
+    // Step 3: the three walk to points 23, 22 and 21 (stop 0.35); S1 waits for all three.
+    v.extend([walk(2, 23, 0.35, false), walk(1, 22, 0.35, false), Sleep { ticks: 15 }, walk(0, 21, 0.35, false), looped(3, 42)]);
+    v.push(WaitWalks { entities: [2, 1, 0] });
+    // Step 4.
+    v.extend([cam(12), MoveEntity { entity: 2, locator: 27, face: true }, anim(2, 14), cam(16), anim(3, 75), cam(5)]);
+    v.extend([walk(1, 26, 0.4, true), EntityAnim { entity: 1, anim: 3, looped: false, wait: true }, anim(1, 3), wait(1.0)]);
+    v.extend([cam(8), walk(0, 25, 0.4, true), anim(0, 14), wait(1.0)]);
+    // Step 5: the conversation.
+    v.extend([Converse { entity: 0, line: 3 }, cam(13), Sleep { ticks: 60 }, anim(0, 119), Message { line: 4 }, cam(14), anim(1, 112)]);
+    v.extend([Message { line: 5 }, cam(15), cam(16), looped(3, 111), Message { line: 6 }, ReleaseEntity { entity: 3 }, cam(6)]);
+    v.extend([Converse { entity: 0, line: 7 }, Sleep { ticks: 80 }, cam(19), anim(2, 115), anim(1, 115), anim(0, 115)]);
+    v.extend([Converse { entity: 0, line: 8 }, anim(1, 113), cam(14), cam(18), anim(2, 115), anim(1, 115), anim(0, 115)]);
+    // Step 6: the hand-over to the fight.
+    v.extend([ReleaseEntity { entity: 3 }, ReleaseEntity { entity: 2 }, ReleaseEntity { entity: 1 }, ReleaseEntity { entity: 0 }]);
+    v.extend([FadeOut { seconds: 0.7, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, MoveHero { locator: 3 }]);
+    v.extend([ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 0.7, wait: false }, Message { line: 22 }]);
+    v.extend([Agro { entity: 1 }, Agro { entity: 2 }, PlayStinger { id: 4, volume: 1.0 }]);
+    v
+}
+
+/// SPEC-0042 678 end scene, run by the fight watch once the raiders have lost 31 hit points.
+fn road_end(pack: u32) -> Vec<Action> {
+    use Action::*;
+    let anim = |entity, anim| EntityAnim { entity, anim, looped: false, wait: false };
+    let cam = |track| PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+    let walk = |entity, locator, wait| WalkEntity { entity, locator, wait, orient: false, stop: 0.0 };
+    let mut v = vec![HoldHero, FadeOut { seconds: FADE, wait: true }];
+    v.extend([MoveEntity { entity: 0, locator: 6, face: true }, MoveEntity { entity: 1, locator: 11, face: true }, MoveEntity { entity: 2, locator: 13, face: true }]);
+    v.extend([Sleep { ticks: 30 }, MoveHero { locator: 7 }, LetterBox { on: true, seconds: 0.0, wait: false }, cam(20)]);
+    v.extend([anim(1, 0), anim(2, 0), Sleep { ticks: 1 }, walk(1, 12, false), walk(2, 14, false), WalkHero { locator: 9, wait: false, orient: false }]);
+    v.extend([FadeIn { seconds: FADE, wait: false }, Sleep { ticks: 30 }, anim(0, 3), Sleep { ticks: 30 }, cam(21), anim(0, 17)]);
+    v.extend([Converse { entity: 0, line: 10 }, anim(0, 117), cam(22), Sleep { ticks: 20 }, walk(0, 4, true), FadeOut { seconds: FADE, wait: true }]);
+    v.push(DeactivateEntity { entity: 0 });
+    // Movie 3 is not played. Slot reset and the post-fight set 3; entity 10 waits.
+    v.extend([LoadRegion { slot: 0, region: Some(pack + 1 + 3) }, WaitLoads, DeactivateEntity { entity: 10 }]);
+    v.extend([FadeIn { seconds: FADE, wait: false }, MoveHero { locator: 45 }, cam(38), WalkHero { locator: 46, wait: true, orient: false }]);
+    v.extend([Sleep { ticks: 60 }, Converse { entity: 9, line: 1 }, FadeOut { seconds: FADE, wait: true }, FadeIn { seconds: FADE, wait: true }]);
+    v.extend([DeactivateEntity { entity: 9 }, ReturnCamera { preset: -1, release: true }, Sleep { ticks: 45 }, LetterBox { on: false, seconds: 0.0, wait: false }]);
+    v.extend([wait(1.0), Message { line: 2 }, ActivateEntity { entity: 10 }, PlayStinger { id: 4, volume: 1.0 }]);
+    v.extend([HitPointsPercent { entity: 10, percent: 25.0 }, EntityAnim { entity: 10, anim: 10, looped: false, wait: true }, Agro { entity: 10 }]);
+    v
 }
 
 /// Run a registered script trigger routine of a pack for one fire of its record.
@@ -342,6 +458,31 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (909, 4) if first => out.actions.push(Action::Message { line: 191 }),
         // SPEC-0045 909 routine 7 (index 8): enter world 71 (pack 950).
         (909, 7) if first => out.actions.push(Action::EnterInterior { slot: 71 }),
+        // SPEC-0042 678 T0 (index 0): line 23 once per module load (word 0).
+        (678 | 686 | 691, 0) if first && state.word(pack, 0) == 0 => {
+            state.set_word(pack, 0, 1);
+            out.actions.push(Action::Message { line: 23 });
+        }
+        // S1 (index 1): the intro, once (flag 124 is the guard); it ends by setting 124 and
+        // starting the fight (the fight watch runs in Update).
+        (678 | 686 | 691, 1) if first && !state.flag(124) => {
+            out.actions = road_intro();
+            state.set(124, true);
+        }
+        // N (indices 2, 3, 5 and 6): after the fight has started (word 1), each index's line
+        // once per load (words 2 to 6): 9 for 2 and 3, 20 for 5 and 6.
+        (678 | 686 | 691, 2) if first && state.word(pack, 1) != 0 && state.word(pack, 2 + call.index as u8) == 0 => {
+            state.set_word(pack, 2 + call.index as u8, 1);
+            out.actions.push(Action::Message { line: if call.index <= 3 { 9 } else { 20 } });
+        }
+        // T7 (index 7): the Square context 3; on the press, line 21.
+        (678 | 686 | 691, 7) if call.object && call.state != 0 => {
+            if call.square {
+                out.actions.push(Action::Message { line: 21 });
+            } else {
+                out.prompt = Some(3);
+            }
+        }
         _ => {}
     }
     out
@@ -401,7 +542,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set(115, true);
                 out.extend([Action::HoldHero, fade_out(), Action::LoadRegion { slot: 3, region: Some(927) }, Action::WaitLoads]);
                 out.extend([Action::MoveEntity { entity: 44, locator: 15, face: true }, fade_in(), camera(12)]);
-                out.extend([Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false }, fade_out(), release_camera(), fade_in()]);
+                out.extend([Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false, stop: 0.0 }, fade_out(), release_camera(), fade_in()]);
             }
             // Flag 117 (the pliers handed over): the first scene (hero to locator 17, camera 12,
             // entity 44 to locator 16, sound 12, back to locator 15, slot R with region 926),
@@ -412,17 +553,40 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set(118, true);
                 state.set_word(pack, 3, 0);
                 out.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 17 }, camera(12), fade_in()]);
-                out.push(Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false });
+                out.push(Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false, stop: 0.0 });
                 out.push(Action::PlaySound { cue: 12, locator: None });
-                out.extend([Action::WalkEntity { entity: 44, locator: 15, wait: true, orient: false }, fade_out()]);
+                out.extend([Action::WalkEntity { entity: 44, locator: 15, wait: true, orient: false, stop: 0.0 }, fade_out()]);
                 out.extend([Action::LoadRegion { slot: 3, region: Some(926) }, Action::LoadRegion { slot: 3, region: Some(928) }, Action::WaitLoads]);
                 state.set(119, true);
                 out.extend([Action::MoveEntity { entity: 45, locator: 21, face: true }, camera(15), fade_in()]);
-                out.extend([Action::WalkEntity { entity: 45, locator: 23, wait: true, orient: false }, fade_out()]);
+                out.extend([Action::WalkEntity { entity: 45, locator: 23, wait: true, orient: false, stop: 0.0 }, fade_out()]);
                 out.extend([Action::LoadRegion { slot: 3, region: None }, release_camera(), fade_in()]);
             }
             if state.flag(278) {
                 state.set(279, true);
+            }
+        }
+        // SPEC-0042 678 fight watch: with 124 set by the intro it marks the fight started
+        // (word 1), stores the start sum of entities 0, 2 and 1's hit points (word 8), then
+        // waits until they have lost 31 or more in total; the end scene follows and 125, 124
+        // and 126 are set; item 170 x100 is Kell's gift in the end scene.
+        678 | 686 | 691 => {
+            let sum: Option<i32> = [0, 2, 1].iter().map(|e| state.entity_hp.get(e).copied()).sum();
+            if state.flag(124) && !state.flag(125) && state.word(pack, 1) == 0 {
+                if let Some(sum) = sum {
+                    state.set_word(pack, 1, 1);
+                    state.set_word(pack, 8, sum);
+                }
+            } else if state.word(pack, 1) == 1 && !state.flag(125) {
+                let current = sum.unwrap_or(0);
+                if state.word(pack, 8) - current >= 31 {
+                    state.set_word(pack, 1, 2);
+                    out = road_end(pack);
+                    state.set(124, true);
+                    state.set(126, true);
+                    state.give(170, 100);
+                    state.set(125, true);
+                }
             }
         }
         _ => {}
@@ -579,6 +743,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (951, 0 | 3 | 7) => Some(0),
         (951, 1 | 4 | 8) => Some(1),
         (951, 2 | 5 | 6) => Some(2),
+        // SPEC-0042 678 proximity P on entity 9 (registered with flag 126 set).
+        (678 | 686 | 691, 9) => Some(0),
         _ => None,
     }
 }
@@ -598,6 +764,7 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
         (909, 1) => farm_routine_b(state, &mut rot),
         (909, 2) => farm_routine_c(state, &mut rot),
         (951, r) => return house_routine(r, state),
+        (678 | 686 | 691, 0) => return vec![Action::Message { line: 0 }],
         _ => None,
     };
     state.rotations.insert(key, rot);
@@ -961,7 +1128,7 @@ mod tests {
         assert!(scene(on_update(909, &mut s, true)).is_empty(), "the scene waits for the box to close");
         assert_eq!(
             scene(on_update(909, &mut s, false)),
-            vec![Action::LoadRegion { slot: 3, region: Some(927) }, Action::MoveEntity { entity: 44, locator: 15, face: true }, Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false }]
+            vec![Action::LoadRegion { slot: 3, region: Some(927) }, Action::MoveEntity { entity: 44, locator: 15, face: true }, Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false, stop: 0.0 }]
         );
         // Without the pliers Hubert's line 98 sets 116; picking them up then sets 618.
         assert_eq!(talks(909, 1, &mut s, 1), vec![98]);
@@ -1001,6 +1168,32 @@ mod tests {
         assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 58 }]);
         assert_eq!(on_talk(951, 0, &mut s), vec![Action::Message { line: 4 }]);
         assert_eq!(on_teleport(951, 0, &mut s), vec![Action::LeaveInterior { slot: 5 }]);
+    }
+
+    #[test]
+    fn road_fight_watch() {
+        // SPEC-0042 678 test vector: raiders at 80, 60 and 50 (sum 190); 55, 55 and 50 (30
+        // lost) keep waiting; 54, 55 and 50 (31 lost) run the end scene and set 125.
+        let mut s = GameState::default();
+        let init = on_init(691, &mut s);
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(692) }));
+        assert!(init.contains(&Action::RegisterTrigger { index: 1, routine: 1 }));
+        let intro = on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s);
+        assert!(s.flag(124) && intro.actions.contains(&Action::Agro { entity: 1 }));
+        let hp = |s: &mut GameState, v: [i32; 3]| s.entity_hp = [(0, v[0]), (2, v[1]), (1, v[2])].into_iter().collect();
+        hp(&mut s, [80, 60, 50]);
+        assert!(on_update(691, &mut s, false).is_empty());
+        hp(&mut s, [55, 55, 50]);
+        assert!(on_update(691, &mut s, false).is_empty());
+        assert!(!s.flag(125));
+        hp(&mut s, [54, 55, 50]);
+        let end = on_update(691, &mut s, false);
+        assert!(end.contains(&Action::LoadRegion { slot: 0, region: Some(695) }));
+        assert!(s.flag(125) && s.flag(126) && s.items[&170] == 100);
+        // The intro does not run again; the next visit loads set 3 (thread A).
+        assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
+        s.reload_module(691);
+        assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
     }
 
     #[test]

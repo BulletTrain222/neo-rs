@@ -1636,7 +1636,7 @@ fn sync_characters(
             Some(c) => {
                 t.translation = Vec3::from(c.position);
                 t.rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
-                *vis = if p.pack_drawn(c.pack) { Visibility::Visible } else { Visibility::Hidden };
+                *vis = if p.pack_drawn(c.pack) && !c.inactive { Visibility::Visible } else { Visibility::Hidden };
             }
         }
     }
@@ -2269,13 +2269,37 @@ fn play_frame(
     }
 }
 
-/// The screen effect's full-screen fade (SPEC-0052 Screen effect, draw step 5), above the HUD
-/// and the menus.
+/// The screen effect's full-screen fade and letterbox bars (SPEC-0052 Screen effect, draw step
+/// 5: the bars, then the fade on top), above the HUD and the menus.
 #[derive(Component)]
 struct FadeOverlay;
 
-fn sync_fade(mut commands: Commands, play: Option<Res<PlayState>>, mut overlay: Query<(&mut BackgroundColor, &mut Visibility), With<FadeOverlay>>) {
+#[derive(Component)]
+struct LetterBar;
+
+fn sync_fade(
+    mut commands: Commands,
+    play: Option<Res<PlayState>>,
+    mut overlay: Query<(&mut BackgroundColor, &mut Visibility), With<FadeOverlay>>,
+    mut bars: Query<(&mut Node, &mut Visibility), (With<LetterBar>, Without<FadeOverlay>)>,
+) {
     let Some(state) = play else { return };
+    if bars.is_empty() {
+        for top in [true, false] {
+            let mut node = Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Px(0.0), ..default() };
+            if top {
+                node.top = Val::Px(0.0);
+            } else {
+                node.bottom = Val::Px(0.0);
+            }
+            commands.spawn((node, BackgroundColor(Color::BLACK), Visibility::Hidden, GlobalZIndex(2999), LetterBar));
+        }
+    }
+    let h = state.play.bars.height() / 448.0 * 100.0;
+    for (mut node, mut vis) in &mut bars {
+        node.height = Val::Percent(h);
+        *vis = if h > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+    }
     if overlay.is_empty() {
         commands.spawn((
             Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
