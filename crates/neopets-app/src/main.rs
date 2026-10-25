@@ -23,7 +23,7 @@ const PLAY_OUTFIT: u32 = 504;
 
 /// Play mode was asked for, in this world pack (`--pack`, default 909).
 #[derive(Resource)]
-struct PlayRequest(u32);
+struct PlayRequest(u32, Option<[f32; 2]>);
 
 /// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
 /// can show travel without a person at the controls; `--autojump` also presses Cross every 2 s.
@@ -63,10 +63,34 @@ struct Streamer {
     results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, bool, Result<(play::World, Option<neopets_data::model::ModelData>), String>)>>,
     in_flight: std::collections::HashSet<u32>,
     scenes: std::collections::HashMap<u32, neopets_data::model::ModelData>,
+    regions: std::sync::mpsc::Sender<(u32, u8, u32)>,
+    #[allow(clippy::type_complexity)]
+    region_results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, u8, u32, Result<Vec<RegionCharacter>, String>)>>,
+}
+
+type RegionCharacter = (neopets_data::region::Placement, neopets_data::model::ModelData, character::HeroAnim);
+
+/// Read a region resource and build each placed character (summon-reserved records and records
+/// with no position are left out: they are placed by a summoner).
+fn load_region(disc: &mut Disc, index: &ArchiveIndex, region: u32) -> Result<Vec<RegionCharacter>, String> {
+    let bytes = index.read(disc, region)?;
+    let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+    let r = neopets_data::region::Region::of(&bytes, &chain.chunks);
+    let mut out = Vec::new();
+    for pl in r.records.placements.iter().filter(|p| !p.summon && p.position != [0.0; 3]) {
+        match archive_view::region_character(disc, index, &bytes, &r, pl) {
+            Ok((model, anim)) => out.push((pl.clone(), model, anim)),
+            Err(e) => eprintln!("Region {region}, {:?}: {e}", pl.name),
+        }
+    }
+    Ok(out)
 }
 
 impl Streamer {
     fn start(mut disc: Disc, index: neopets_data::archive::ArchiveIndex, boot: neopets_data::travel::BootTravel) -> Self {
+        // A second handle for the region loader.
+        let second = disc.reopen();
+        let region_index = index.clone();
         let (requests, jobs) = std::sync::mpsc::channel::<(u32, bool, bool, bool)>();
         let (done, results) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
@@ -90,7 +114,26 @@ impl Streamer {
                 }
             }
         });
-        Self { requests, results: std::sync::Mutex::new(results), in_flight: Default::default(), scenes: Default::default() }
+        let (regions, region_jobs) = std::sync::mpsc::channel::<(u32, u8, u32)>();
+        let (region_done, region_results) = std::sync::mpsc::channel();
+        if let Ok(mut disc) = second {
+            std::thread::spawn(move || {
+                for (pack, slot, region) in region_jobs {
+                    let result = load_region(&mut disc, &region_index, region);
+                    if region_done.send((pack, slot, region, result)).is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+        Self {
+            requests,
+            results: std::sync::Mutex::new(results),
+            in_flight: Default::default(),
+            scenes: Default::default(),
+            regions,
+            region_results: std::sync::Mutex::new(region_results),
+        }
     }
 
     /// Send the pending step's and the door job's requests, install finished loads; returns a
@@ -109,8 +152,22 @@ impl Streamer {
                 let _ = self.requests.send((pack, transitions, any, true));
             }
         }
-        let finished: Vec<_> = self.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
+        for (pack, slot, region) in p.region_wanted.drain(..) {
+            let _ = self.regions.send((pack, slot, region));
+        }
         let mut log = Vec::new();
+        let regions: Vec<_> = self.region_results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
+        for (pack, slot, region, result) in regions {
+            match result {
+                Ok(list) => {
+                    let names: Vec<String> = list.iter().map(|c| c.0.name.clone()).collect();
+                    log.push(format!("region {region} for slot {slot} of {pack} on tick {}: {names:?}", p.ticks));
+                    p.add_characters(pack, slot, region, list);
+                }
+                Err(e) => log.push(format!("region {region} failed: {e}")),
+            }
+        }
+        let finished: Vec<_> = self.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
         for (pack, job, result) in finished {
             self.in_flight.remove(&pack);
             match result {
@@ -247,6 +304,7 @@ fn main() {
     let mut trace: Option<u64> = None;
     let mut trace_to: Option<[f32; 2]> = None;
     let mut flags: Vec<u16> = Vec::new();
+    let mut look: Option<[f32; 2]> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -294,6 +352,11 @@ fn main() {
                 }
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse().ok()?, z.parse().ok()?])
+            });
+        } else if arg == "--look" {
+            look = args.next().and_then(|v| {
+                let (x, z) = v.trim().split_once(',')?;
+                Some([x.parse::<f32>().ok()?, z.parse::<f32>().ok()?])
             });
         } else if arg == "--flag" {
             flags.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
@@ -352,7 +415,7 @@ fn main() {
     if let Some(archive) = archive {
         app.insert_resource(archive);
         if play_mode {
-            app.insert_resource(PlayRequest(play_pack));
+            app.insert_resource(PlayRequest(play_pack, look));
         }
         if let Some(auto) = autowalk {
             app.insert_resource(auto);
@@ -385,7 +448,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters).chain(),
             )
                 .chain(),
         );
@@ -1072,6 +1135,73 @@ fn sync_worlds(
     *shown = want;
 }
 
+/// A region character's drawn root, by character id.
+#[derive(Component)]
+struct CharacterRoot(u64);
+
+/// Spawn, place, skin and relight the region characters of drawn worlds; despawn the rest.
+#[allow(clippy::too_many_arguments)]
+fn sync_characters(
+    mut commands: Commands,
+    state: Option<ResMut<PlayState>>,
+    mut roots: Query<(Entity, &CharacterRoot, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut skinned: Local<std::collections::HashMap<u64, Vec<(Handle<Mesh>, usize)>>>,
+) {
+    let Some(state) = state else { return };
+    let p = &state.play;
+    let live: std::collections::HashSet<u64> = p.characters.iter().map(|c| c.id).collect();
+    for (e, root, mut t, mut vis) in &mut roots {
+        match p.characters.iter().find(|c| c.id == root.0) {
+            None => {
+                commands.entity(e).despawn();
+                skinned.remove(&root.0);
+            }
+            Some(c) => {
+                t.translation = Vec3::from(c.position);
+                *vis = if p.pack_drawn(c.pack) { Visibility::Visible } else { Visibility::Hidden };
+            }
+        }
+    }
+    skinned.retain(|id, _| live.contains(id));
+    for c in &p.characters {
+        let rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
+        if !skinned.contains_key(&c.id) {
+            let parts = part_assets(&c.model, &mut meshes, &mut materials, &mut images);
+            let mut list = Vec::new();
+            commands
+                .spawn((Transform::from_translation(Vec3::from(c.position)).with_rotation(rotation), Visibility::Visible, CharacterRoot(c.id)))
+                .with_children(|ch| {
+                    for (i, mesh, material) in parts {
+                        if !c.model.parts[i].weights.is_empty() {
+                            list.push((mesh.clone(), i));
+                        }
+                        ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                    }
+                });
+            skinned.insert(c.id, list);
+        }
+        if !p.pack_drawn(c.pack) {
+            continue;
+        }
+        let matrices = c.anim.skin_matrices();
+        for (handle, i) in &skinned[&c.id] {
+            let part = &c.model.parts[*i];
+            let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
+            let colours = relight(part, &nrm, rotation);
+            if let Some(mut mesh) = meshes.get_mut(handle) {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
+                if let Some(col) = colours {
+                    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+                }
+            }
+        }
+    }
+}
+
 /// Bevy meshes and materials for every part of a model: (part index, mesh, material). Parts are
 /// unlit and double-sided; textured parts mask alpha at 0.5.
 fn part_assets(
@@ -1283,7 +1413,11 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
     let (Some(request), Some(mut archive)) = (request, archive) else { return };
     let Archive { disc, index } = &mut *archive;
     match play::Play::load(disc, index, request.0, PLAY_OUTFIT) {
-        Ok(play) => {
+        Ok(mut play) => {
+            // `--look x,z`: diagnostic start facing.
+            if let Some([x, z]) = request.1 {
+                play.face_point(x, z);
+            }
             match disc.reopen() {
                 Ok(second) => commands.insert_resource(Streamer::start(second, index.clone(), play.boot.clone())),
                 Err(e) => error!("No loader thread, streaming is off: {e}"),

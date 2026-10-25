@@ -2,8 +2,9 @@
 //! plus rules in the host-API vocabulary, never by running module code). This holds the game
 //! state the handlers read and write (story flags, the blackboard, held items), the actions they
 //! return for the host to carry out, and the handlers described so far:
-//! - 909 (SPEC-0045): teleport callbacks 0 and 1 (interior entries to slots 72 and 73) and the
-//!   activate-world routine's flag reset and blackboard placement.
+//! - 909 (SPEC-0045): teleport callbacks 0 and 1 (interior entries to slots 72 and 73), the
+//!   activate-world routine's flag reset and blackboard placement, and its activation thread's
+//!   slot loads by story stage (the farm family and the fourth slot).
 //! - 951 (SPEC-0041): teleport callback 0 (a line, or leave to slot 5 with message 10).
 //! - 955 (SPEC-0032): teleport callback 0 (message 40, leave to slot 5).
 //! Not covered: every other level, and in these levels the triggers, proximity talk, threads,
@@ -23,6 +24,9 @@ pub enum Action {
     MoveHero { locator: usize },
     /// LevelMsg: show dialogue line n of the current world.
     Message { line: u16 },
+    /// SlotLoad into one of the level's slots: the region resource to load, or None to empty
+    /// the slot (its characters leave).
+    LoadRegion { slot: u8, region: Option<u32> },
 }
 
 /// Story flags (QueryGameState and SetGameState), the blackboard (AddBlackboardMessage, read by
@@ -111,7 +115,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                     state.set(f, false);
                 }
             }
-            let locator = match state.take_message(2, 68) {
+            let message = state.take_message(2, 68);
+            let locator = match message {
                 10 => Some(2),
                 30 => Some(1),
                 40 => Some(3),
@@ -119,10 +124,58 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 50 => Some(4),
                 _ => None,
             };
-            locator.map(|locator| vec![Action::MoveHero { locator }]).unwrap_or_default()
+            let mut actions: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
+            actions.extend(farm_slots(state, message == 10));
+            actions
         }
         _ => Vec::new(),
     }
+}
+
+/// SPEC-0045 909 activation thread: the slot loads by story stage s (the highest of flags 1 to
+/// 6). Slot 0 is the fourth slot (regions 910 to 913); slots 1, 2 and 3 are P (914 to 919),
+/// Q (920 to 925) and R (926 to 933). The arrival step, stage events and talk thread that
+/// follow are not covered.
+fn farm_slots(state: &GameState, entry_10: bool) -> Vec<Action> {
+    let s = state.stage();
+    let f = |n| state.flag(n);
+    let load = |slot, region| Action::LoadRegion { slot, region };
+    let mut out = Vec::new();
+    match s {
+        Some(4) => out.push(load(0, Some(913))),
+        Some(2) => out.push(load(0, Some(912))),
+        None | Some(1) => out.push(load(0, Some(if f(110) { 911 } else { 910 }))),
+        _ => {}
+    }
+    let pqr = |p: Option<u32>, q: Option<u32>, r: Option<u32>| [load(1, p), load(2, q), load(3, r)];
+    let slots = match s {
+        Some(1) if entry_10 && f(119) && !f(121) => pqr(None, None, None),
+        Some(1) => {
+            let p = if f(126) { 917 } else if f(122) { 916 } else { 914 };
+            let q = if f(122) { 922 } else if f(126) { 920 } else if f(121) { 921 } else { 920 };
+            let r = if f(122) {
+                Some(930)
+            } else if f(119) {
+                None
+            } else if f(117) {
+                Some(926)
+            } else if f(114) {
+                Some(927)
+            } else {
+                Some(926)
+            };
+            pqr(Some(p), Some(q), r)
+        }
+        Some(2) if f(147) && !f(148) => pqr(None, None, None),
+        Some(2) if f(147) => pqr(Some(914), Some(920), Some(926)),
+        Some(2) => [load(2, Some(923)), load(3, Some(931)), load(1, None)],
+        Some(4) => pqr(Some(918), Some(924), Some(932)),
+        Some(5 | 6) if state.has_item(36) => pqr(Some(914), Some(920), Some(926)),
+        Some(5 | 6) => pqr(Some(919), Some(925), Some(933)),
+        _ => pqr(Some(914), Some(920), Some(926)),
+    };
+    out.extend(slots);
+    out
 }
 
 #[cfg(test)]
@@ -136,14 +189,31 @@ mod tests {
         // Leaving 955 posts 40 for eW 68; 909's activation then moves the hero to locator 3 and
         // resets the message.
         assert_eq!(on_teleport(955, 0, &mut s), vec![Action::LeaveInterior { slot: 5 }]);
-        assert_eq!(on_activate(909, &mut s), vec![Action::MoveHero { locator: 3 }]);
-        assert_eq!(on_activate(909, &mut s), vec![]);
+        assert_eq!(on_activate(909, &mut s)[0], Action::MoveHero { locator: 3 });
+        assert!(!matches!(on_activate(909, &mut s)[0], Action::MoveHero { .. }));
         // 951 with state 119 set and 122 clear shows line 126 and posts nothing.
         s.set(119, true);
         assert_eq!(on_teleport(951, 0, &mut s), vec![Action::Message { line: 126 }]);
         s.set(122, true);
         assert_eq!(on_teleport(951, 0, &mut s), vec![Action::LeaveInterior { slot: 5 }]);
-        assert_eq!(on_activate(909, &mut s), vec![Action::MoveHero { locator: 2 }]);
+        assert_eq!(on_activate(909, &mut s)[0], Action::MoveHero { locator: 2 });
+    }
+
+    #[test]
+    fn farm_family_by_stage() {
+        // No stage: fourth slot 910, then P 914, Q 920, R 926.
+        let mut s = GameState::default();
+        let load = |slot, region| Action::LoadRegion { slot, region };
+        assert_eq!(on_activate(909, &mut s), vec![load(0, Some(910)), load(1, Some(914)), load(2, Some(920)), load(3, Some(926))]);
+        // SPEC-0045 test vector: flags 1 and 122 set, no entry value 10: 910 or 911 by flag
+        // 110, P 916, Q 922, R 930.
+        s.set(1, true);
+        s.set(122, true);
+        // A finished round-up (107 to 110 all set) is kept, so flag 110 picks 911.
+        for f in 107..=110 {
+            s.set(f, true);
+        }
+        assert_eq!(on_activate(909, &mut s), vec![load(0, Some(911)), load(1, Some(916)), load(2, Some(922)), load(3, Some(930))]);
     }
 
     #[test]
@@ -165,9 +235,9 @@ mod tests {
         let mut s = GameState::default();
         s.set(6, true);
         s.blackboard.insert((2, 68), 50);
-        assert_eq!(on_activate(909, &mut s), vec![Action::MoveHero { locator: 28 }]);
+        assert_eq!(on_activate(909, &mut s)[0], Action::MoveHero { locator: 28 });
         s.items.insert(36, 1);
         s.blackboard.insert((2, 68), 50);
-        assert_eq!(on_activate(909, &mut s), vec![Action::MoveHero { locator: 4 }]);
+        assert_eq!(on_activate(909, &mut s)[0], Action::MoveHero { locator: 4 });
     }
 }

@@ -362,6 +362,27 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         let chain = resource::walk_chunks(&bytes, None)?;
         let e: Vec<_> = (0..5).filter_map(|i| neopets_data::ground::entry_record(&bytes, &chain.chunks, i)).collect();
         println!("909 entry records 0..4 (position, facing): {e:?}");
+        if let Some(c) = chain.chunks.iter().find(|c| c.kind == 32) {
+            let nested = resource::walk_chunks(&bytes[c.payload.clone()], None)?;
+            let r = neopets_data::region::Region::of(&bytes[c.payload.clone()], &nested.chunks);
+            println!("909 embedded region: {} placements, {} tables, {} model sets, skeletons {:?}, clip sets {:?}", r.records.placements.len(), r.records.tables.len(), r.model_sets.len(), r.skeletons.each_ref().map(Vec::len), r.clip_sets.each_ref().map(Vec::len));
+            for pl in r.records.placements.iter().take(6) {
+                println!("  {:?} at {:?} type {} skel {:?} tables {:?} model {} summon {}", pl.name, pl.position, pl.monster_type, pl.skeletons, pl.tables, pl.model_set, pl.summon);
+            }
+        }
+        for res in [910u32, 914, 920, 926] {
+            let b = index.read(disc, res)?;
+            let ch = resource::walk_chunks(&b, None)?;
+            let r = neopets_data::region::Region::of(&b, &ch.chunks);
+            for t in &r.records.tables {
+                let n = u32::from_le_bytes(b[t.start..t.start + 4].try_into().unwrap());
+                println!("  table at {:#x}..{:#x}: N {n}, slice {} bytes (needs {})", t.start, t.end, t.len(), 4 + 8 * n);
+            }
+            println!("Region {res}: {} placements, {} tables, {} model sets, skeletons {:?}, clip sets {:?}", r.records.placements.len(), r.records.tables.len(), r.model_sets.len(), r.skeletons.each_ref().map(Vec::len), r.clip_sets.each_ref().map(Vec::len));
+            for pl in &r.records.placements {
+                println!("  {:?} at {:?} type {} skel {:?} tables {:?} model {} summon {}", pl.name, pl.position, pl.monster_type, pl.skeletons, pl.tables, pl.model_set, pl.summon);
+            }
+        }
         let lines = neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks);
         println!("909 dialogue table: {} lines; line 0 resolves: {}", lines.len(), lines.line(0).is_some());
     }

@@ -164,6 +164,71 @@ pub fn world_scene(
     Ok((!world.parts.is_empty()).then_some(world))
 }
 
+/// A region character (SPEC-0006 kind-3 placement; SPEC-0005 families): the mesh of its model
+/// set, drawn with the region's materials, and its animation families. The main family is the
+/// region's own k-th type-22/25 pair, or a global set for a negative index (-7: header 492 and
+/// body 526; -6: Tor's main set; -5: Roberta's); sub-part and face families are the region's
+/// types 23/26 and 24/27. Each family's action table is the region's kind-2 record that the
+/// placement names. Families that are missing or out of range are left out.
+pub fn region_character(
+    disc: &mut Disc,
+    index: &ArchiveIndex,
+    bytes: &[u8],
+    region: &neopets_data::region::Region,
+    placement: &neopets_data::region::Placement,
+) -> Result<(ModelData, crate::character::HeroAnim), String> {
+    use neopets_data::anim::{BoneTable, FamilyData};
+    let set = usize::try_from(placement.model_set)
+        .ok()
+        .and_then(|k| region.model_sets.get(k))
+        .ok_or("Model set out of range")?;
+    // The region chain with only the chosen model set: shared chunks (materials, textures)
+    // stay; the other model sets drop out.
+    let chain: Vec<resource::Chunk> = region
+        .chain
+        .iter()
+        .filter(|c| !(c.kind == 18 && bytes[c.payload.clone()].starts_with(b"IDM")) || c.payload == set.payload)
+        .cloned()
+        .collect();
+    let model = model::build(bytes, &chain, None)?;
+    let nested = resource::walk_chunks(&bytes[set.payload.clone()], None)?;
+    let flat = nested
+        .chunks
+        .iter()
+        .find(|c| c.kind == 18 && !bytes[set.payload.start + c.payload.start..].starts_with(b"IDM"))
+        .ok_or("Model set has no bone table")?;
+    let bones = BoneTable::parse(&bytes[set.payload.start + flat.payload.start..set.payload.start + flat.payload.end])?;
+    let table = |i: i16| -> Option<&[u8]> {
+        let r = region.records.tables.get(usize::try_from(i).ok()?)?;
+        Some(&bytes[r.clone()])
+    };
+    let mut families = Vec::new();
+    for f in 0..3 {
+        let (s, t) = (placement.skeletons[f], placement.tables[f]);
+        let Some(table) = table(t) else { continue };
+        let family = if s >= 0 {
+            let (Some(h), Some(b)) = (region.skeletons[f].get(s as usize), region.clip_sets[f].get(s as usize)) else { continue };
+            FamilyData::parse(&bytes[h.payload.clone()], &bytes[b.payload.clone()], table)?
+        } else if f == 0 && matches!(s, -7..=-5) {
+            let (h, b) = match s {
+                -7 => (492, 526),
+                -6 => (492, 493),
+                _ => (498, 499),
+            };
+            FamilyData::parse(&index.read(disc, h)?, &index.read(disc, b)?, table)?
+        } else {
+            continue;
+        };
+        families.push(family);
+    }
+    if families.is_empty() {
+        return Err("No animation family".into());
+    }
+    let mut anim = crate::character::HeroAnim::new(bones, families);
+    anim.play(0);
+    Ok((model, anim))
+}
+
 /// A hero outfit (resources 504–519) with its hero's animation families, or None for any
 /// other resource. The bone table is the outfit's flat type-18 chunk (SPEC-0005).
 pub fn hero(

@@ -154,6 +154,19 @@ pub enum Job {
     EnterInterior(u32),
 }
 
+/// A region character standing in a world (SPEC-0006 kind-3 placement): drawn at its
+/// placement and playing its idle action. No AI, talk, streaming by distance or kill memory.
+pub struct Character {
+    pub id: u64,
+    pub pack: u32,
+    pub slot: u8,
+    pub name: String,
+    pub position: [f32; 3],
+    pub facing: [f32; 3],
+    pub anim: HeroAnim,
+    pub model: ModelData,
+}
+
 pub struct Play {
     pub loco: Locomotion,
     pub camera: FollowCamera,
@@ -194,6 +207,12 @@ pub struct Play {
     pub message: Option<(u16, u64)>,
     /// Square was pressed this tick (a script door starts only on a press edge).
     square_now: bool,
+    /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
+    /// slot loads waiting for the region loader.
+    pub characters: Vec<Character>,
+    slot_regions: HashMap<(u32, u8), u32>,
+    pub region_wanted: Vec<(u32, u8, u32)>,
+    next_character: u64,
     /// Set once the hero's meshes exist.
     pub spawned: bool,
 }
@@ -235,7 +254,7 @@ impl Play {
         if let Some(o) = &other {
             kinds.insert(o.pack, o.kind);
         }
-        Ok(Self {
+        let mut play = Self {
             loco,
             camera,
             hero,
@@ -260,8 +279,16 @@ impl Play {
             state: GameState::default(),
             message: None,
             square_now: false,
+            characters: Vec::new(),
+            slot_regions: HashMap::new(),
+            region_wanted: Vec::new(),
+            next_character: 0,
             spawned: false,
-        })
+        };
+        // The start world becomes current: its activate-world routine runs (SPEC-0006 Make
+        // current), which for 909 loads the farm family's slots.
+        play.activated();
+        Ok(play)
     }
 
     /// Grid bounds (x min, z min, x max, z max) of the current and other worlds.
@@ -512,6 +539,19 @@ impl Play {
                     }
                 }
                 Action::Message { line } => self.message = Some((line, self.ticks)),
+                Action::LoadRegion { slot, region } => {
+                    let pack = self.world.pack;
+                    self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
+                    match region {
+                        Some(r) => {
+                            self.slot_regions.insert((pack, slot), r);
+                            self.region_wanted.push((pack, slot, r));
+                        }
+                        None => {
+                            self.slot_regions.remove(&(pack, slot));
+                        }
+                    }
+                }
                 _ => self.last_door = format!("script: {a:?} refused in the {:?} buffer", self.world.buffer),
             }
         }
@@ -564,6 +604,39 @@ impl Play {
                 }
             }
         };
+    }
+
+    /// Diagnostic: turn the hero toward a point and put the camera behind it.
+    pub fn face_point(&mut self, x: f32, z: f32) {
+        let p = self.loco.position();
+        self.arrive((p, [x - p[0], 0.0, z - p[2]]));
+    }
+
+    /// Take a loaded region's characters, when the slot still wants that region.
+    pub fn add_characters(&mut self, pack: u32, slot: u8, region: u32, loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim)>) {
+        if self.slot_regions.get(&(pack, slot)) != Some(&region) {
+            return;
+        }
+        self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
+        for (pl, model, anim) in loaded {
+            self.next_character += 1;
+            self.characters.push(Character {
+                id: self.next_character,
+                pack,
+                slot,
+                name: pl.name,
+                position: pl.position,
+                facing: pl.facing,
+                anim,
+                model,
+            });
+        }
+    }
+
+    /// Whether a world's characters are drawn: the current world's, and the other world's when
+    /// it is drawn.
+    pub fn pack_drawn(&self, pack: u32) -> bool {
+        self.world.pack == pack || (self.other_drawn() && self.other.as_ref().is_some_and(|o| o.pack == pack))
     }
 
     /// The pack a pending door job wants loaded.
@@ -729,6 +802,9 @@ impl Play {
         self.door_step();
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
+        for c in &mut self.characters {
+            let _ = c.anim.tick();
+        }
     }
 
     pub fn status_camera(&self) -> String {
@@ -761,9 +837,15 @@ LINE {line}: {}: {}", l.speaker, l.text),
             },
             _ => prompt,
         };
+        let mut names: Vec<&str> = self.characters.iter().filter(|c| self.pack_drawn(c.pack)).map(|c| c.name.as_str()).collect();
+        names.dedup();
         format!(
-            "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}",
-            self.world.pack, self.world.buffer, self.swaps, self.last_door
+            "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}\nCHARACTERS (idle only, no AI): {}",
+            self.world.pack,
+            self.world.buffer,
+            self.swaps,
+            self.last_door,
+            names.join(", ")
         )
     }
 

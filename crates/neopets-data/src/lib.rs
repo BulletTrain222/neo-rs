@@ -16,6 +16,7 @@ pub mod mesh;
 pub mod model;
 mod mods;
 pub mod png;
+pub mod region;
 pub mod resource;
 pub mod texture;
 pub mod travel;
