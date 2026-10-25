@@ -353,6 +353,153 @@ impl Frontend {
         Some(Image { width, height, rgba })
     }
 
+    /// The break search of SPEC-0022 Text layout rules 3 and 4 at scale 1: line ranges of
+    /// `text` (each including its consumed break byte or newline) for a wrap width. Control
+    /// codes have width 0; a type-4 stop or a truncated code ends the text.
+    pub fn wrap(&self, font: usize, text: &[u8], width: i32, spacing: i32) -> Vec<(usize, usize)> {
+        let Some(f) = self.fonts.get(font) else { return Vec::new() };
+        let mut lines = Vec::new();
+        let (mut start, mut i, mut w) = (0usize, 0usize, 0i32);
+        let mut candidate: Option<usize> = None;
+        while i < text.len() {
+            let c = text[i];
+            if c == 0x01 {
+                let len = text.get(i + 2).copied().unwrap_or(0) as usize;
+                if len < 5 || i + len > text.len() || text.get(i + 3) == Some(&4) {
+                    break;
+                }
+                i += len;
+                continue;
+            }
+            if c == b'\n' {
+                lines.push((start, i + 1));
+                (start, w, candidate) = (i + 1, 0, None);
+                i += 1;
+                continue;
+            }
+            if c == b' ' || c == b'_' {
+                candidate = Some(i);
+            }
+            if let Some(g) = f.glyph(c) {
+                w += g.advance as i32 + spacing;
+            }
+            if w > width {
+                let end = match candidate {
+                    Some(k) => k + 1,
+                    None => i + 1,
+                };
+                lines.push((start, end));
+                (start, w, candidate) = (end, 0, None);
+                i = end;
+                continue;
+            }
+            i += 1;
+        }
+        if start < i || lines.is_empty() {
+            lines.push((start, i.max(start)));
+        }
+        lines
+    }
+
+    /// Lines of text with control codes, drawn into one image: line k's baseline at
+    /// `first + k x line_height` (the first baseline is returned), glyphs from byte 0 up to
+    /// (not including) byte `visible` of `text`, a type-2 code changing the colour from its
+    /// point on (SPEC-0022 Text layout rules 7, 8, 11 and 12).
+    #[allow(clippy::too_many_arguments)]
+    pub fn draw_lines(&self, mem: &GsMemory, font: usize, text: &[u8], lines: &[(usize, usize)], line_height: i32, visible: usize, spacing: i32, colour: [u8; 4]) -> Option<(Image, i32)> {
+        let f = self.fonts.get(font)?;
+        let (texture, palette) = self.sheet_entries(f.asset)?;
+        let tex = self.texture.as_ref()?;
+        let sheet = tex.decode(mem, texture, palette).ok()?;
+        let up = f.glyphs.iter().map(|g| g.height as i32 - g.descent as i32).max().unwrap_or(0).max(f.line_height());
+        let down = f.glyphs.iter().map(|g| g.descent as i32).max().unwrap_or(0).max(0);
+        let width = lines.iter().map(|&(a, b)| f.measure(&text[a..b.min(text.len())], spacing)).max().unwrap_or(1).max(1) as u32 + 8;
+        let height = (up + down + line_height * (lines.len() as i32 - 1).max(0)).max(1) as u32;
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        let mut colour = colour;
+        let m = |v: u8, c: u8| ((v as u32 * c as u32) / 128).min(255) as u8;
+        for (k, &(a, b)) in lines.iter().enumerate() {
+            let base = up + line_height * k as i32;
+            let mut pen = 0;
+            let mut i = a;
+            while i < b.min(text.len()) {
+                let c = text[i];
+                if c == 0x01 {
+                    let len = text.get(i + 2).copied().unwrap_or(0) as usize;
+                    if len < 5 || i + len > text.len() {
+                        break;
+                    }
+                    if i < visible && text.get(i + 3) == Some(&2) {
+                        let args = decode_args(&text[i + 5..i + len]);
+                        if args.len() >= 4 {
+                            colour = [args[0], args[1], args[2], args[3]];
+                        }
+                    }
+                    i += len;
+                    continue;
+                }
+                if i >= visible {
+                    break;
+                }
+                if let Some(g) = f.glyph(c) {
+                    let (tx, ty) = ((g.left / 16) as i32, (g.top / 16) as i32);
+                    let left = pen + g.bearing as i32;
+                    let top = base + g.descent as i32 - g.height as i32;
+                    for gy in 0..g.height as i32 {
+                        for gx in 0..g.width as i32 {
+                            let (dx, dy) = (left + gx, top + gy);
+                            if dx < 0 || dy < 0 || dx >= width as i32 || dy >= height as i32 {
+                                continue;
+                            }
+                            let (sx, sy) = ((tx + gx).clamp(0, sheet.width as i32 - 1), (ty + gy).clamp(0, sheet.height as i32 - 1));
+                            let si = ((sy as u32 * sheet.width + sx as u32) * 4) as usize;
+                            let px = &sheet.rgba[si..si + 4];
+                            if px[3] == 0 {
+                                continue;
+                            }
+                            let di = ((dy as u32 * width + dx as u32) * 4) as usize;
+                            rgba[di..di + 4].copy_from_slice(&[m(px[0], colour[0]), m(px[1], colour[1]), m(px[2], colour[2]), m(px[3], colour[3])]);
+                        }
+                    }
+                    pen += g.advance as i32 + spacing;
+                }
+                i += 1;
+            }
+        }
+        Some((Image { width, height, rgba }, up))
+    }
+
+    /// A nine-slice of a sprite's art at `width` x `height`: the borders keep their size, the
+    /// edges and centre stretch (nearest texel).
+    pub fn nine_slice(&self, mem: &GsMemory, node: usize, width: u32, height: u32, borders: [u32; 4]) -> Option<Image> {
+        let n = self.nodes.get(node)?;
+        let (sw, sh) = (n.width.max(1) as u32, n.height.max(1) as u32);
+        let src = self.sprite_image(mem, node, sw, sh)?;
+        let [l, r, t, b] = borders;
+        let map = |d: u32, size: u32, lo: u32, hi: u32, src_size: u32| -> u32 {
+            if d < lo {
+                d
+            } else if d >= size.saturating_sub(hi) {
+                src_size - (size - d)
+            } else {
+                let inner = size.saturating_sub(lo + hi).max(1);
+                let src_inner = src_size.saturating_sub(lo + hi).max(1);
+                lo + (d - lo) * src_inner / inner
+            }
+        };
+        let (width, height) = (width.max(l + r), height.max(t + b));
+        let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+        for y in 0..height {
+            let sy = map(y, height, t, b, sh).min(sh - 1);
+            for x in 0..width {
+                let sx = map(x, width, l, r, sw).min(sw - 1);
+                let i = ((sy * src.width + sx) * 4) as usize;
+                rgba.extend_from_slice(&src.rgba[i..i + 4]);
+            }
+        }
+        Some(Image { width, height, rgba })
+    }
+
     /// A line of text in a font, drawn into an image: each glyph's quad (quad width and height,
     /// from the top-left of its texel bounds) at the pen plus its x bearing, its bottom at the
     /// baseline plus its descent, colour-modulated (128 = 1.0). Returns the image and the
@@ -420,9 +567,35 @@ impl Frontend {
     }
 }
 
+/// The argument bytes of a control code with the escape rule (0xFD then 0x40..0x60 gives the
+/// value minus 0x40; 0xFD 0x02 gives 0xFD).
+pub fn decode_args(raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < raw.len() {
+        if raw[i] == 0xFD {
+            out.push(match raw.get(i + 1) {
+                Some(&b) if (0x40..=0x60).contains(&b) => b - 0x40,
+                Some(&0x02) => 0xFD,
+                _ => 0,
+            });
+            i += 2;
+        } else {
+            out.push(raw[i]);
+            i += 1;
+        }
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn escape_rule() {
+        assert_eq!(decode_args(&[0x80, 0xFD, 0x40, 0xFD, 0x60, 0xFD, 0x02]), vec![0x80, 0, 0x20, 0xFD]);
+    }
 
     #[test]
     fn database_header_and_tree() {

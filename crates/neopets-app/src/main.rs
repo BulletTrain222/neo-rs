@@ -502,7 +502,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud, hud_view::sync_textbox).chain(),
             )
                 .chain(),
         );
@@ -741,6 +741,7 @@ fn step_sim(
                 || gamepads.iter().any(|g| g.pressed(GamepadButton::RightTrigger)),
             jump: false,
             square: false,
+            cross_held: keys.pressed(KeyCode::Space) || gamepads.iter().any(|g| g.pressed(GamepadButton::South)),
             // L1 (Q or the left bumper) holds the shield guard.
             guard: keys.pressed(KeyCode::KeyQ) || gamepads.iter().any(|g| g.pressed(GamepadButton::LeftTrigger)),
             attack_held: keys.pressed(KeyCode::KeyF)
@@ -1597,7 +1598,8 @@ fn play_trace(
         let input = neopets_sim::hero::HeroInput {
             forward,
             side,
-            square: play.prompt_shown.is_some() || play.talk_prompt,
+            // An open dialogue box gets a Square press every 10 ticks (skip, Next, Finish).
+            square: play.prompt_shown.is_some() || play.talk_prompt || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),

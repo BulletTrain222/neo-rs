@@ -21,6 +21,9 @@ pub struct Line {
     pub speaker: String,
     pub text: String,
     pub colour: [u8; 3],
+    /// The raw bytes, control codes included.
+    pub raw_speaker: Vec<u8>,
+    pub raw: Vec<u8>,
 }
 
 /// Plain text of a line: every control code (marker 0x01, length at +2) is skipped; the page
@@ -88,6 +91,8 @@ impl LineTable {
             speaker: plain_text(speaker),
             text: plain_text(text),
             colour: [c[0], c[1], c[2]],
+            raw_speaker: speaker.to_vec(),
+            raw: text.to_vec(),
         })
     }
 }
@@ -120,7 +125,7 @@ mod tests {
         t.extend([10, 20, 30, 0]);
         t.extend(b"Tor\0Hi!\0");
         let table = LineTable { count: 1, table: t };
-        assert_eq!(table.line(0), Some(Line { speaker: "Tor".into(), text: "Hi!".into(), colour: [10, 20, 30] }));
+        assert_eq!(table.line(0), Some(Line { speaker: "Tor".into(), text: "Hi!".into(), colour: [10, 20, 30], raw_speaker: b"Tor".to_vec(), raw: b"Hi!".to_vec() }));
         assert_eq!(table.line(1), None);
     }
 }

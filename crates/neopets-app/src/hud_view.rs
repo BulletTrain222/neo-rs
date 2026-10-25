@@ -279,3 +279,134 @@ pub fn sync_hud(
         }
     }
 }
+
+/// The parts of the dialogue box.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BoxPart {
+    Frame,
+    Name,
+    Body,
+    Icon,
+    Label,
+}
+
+/// The images the box shows, rebuilt when what they show changes.
+#[derive(Default)]
+pub struct BoxCache {
+    key: Vec<(BoxPart, u64)>,
+    images: HashMap<BoxPart, (Handle<Image>, u32, u32, i32)>,
+}
+
+fn hash<T: std::hash::Hash>(v: T) -> u64 {
+    use std::hash::Hasher;
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
+/// SPEC-0022 Dialogue box layout on the 512 x 448 canvas: with L wrapped lines of the page
+/// (font 0, wrap 410), the base line yb = 345 - 10 L; the frame (a nine-slice of the 64 x 64 box
+/// sprite, key 0x19, borders 15, 28, 14, 26) at (30, yb - 41), 446 wide and 21 L + 45 high, in
+/// the speaker colour at alpha 45; the name (font 0, spacing -1) at x 70 on baseline yb - 30;
+/// the body (font 0) at x 50 from baseline yb, 21 per line, revealed up to the visible index;
+/// the prompt row once the page is complete: the Square icon (key 0x1B) and "Next" or "Finish"
+/// (font 1, spacing -1) grouped about x 384 on baseline yb + 21 L + 1.
+#[allow(clippy::too_many_arguments)]
+pub fn sync_textbox(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    art: Option<ResMut<HudArt>>,
+    mut images: ResMut<Assets<Image>>,
+    windows: Query<&Window>,
+    canvas: Query<Entity, With<HudCanvas>>,
+    mut parts: Query<(&BoxPart, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
+    mut cache: Local<BoxCache>,
+) {
+    let (Some(state), Some(mut art)) = (state, art) else { return };
+    let Some(window) = windows.iter().next() else { return };
+    let Ok(root) = canvas.single() else { return };
+    if parts.is_empty() {
+        for part in [BoxPart::Frame, BoxPart::Name, BoxPart::Body, BoxPart::Icon, BoxPart::Label] {
+            let e = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, part, GlobalZIndex(20))).id();
+            commands.entity(root).add_child(e);
+        }
+        return;
+    }
+    let p = &state.play;
+    let shown = p.dialogue_open && p.textbox.open;
+    if !shown {
+        for (_, _, _, mut vis) in &mut parts {
+            *vis = Visibility::Hidden;
+        }
+        return;
+    }
+    let s = (window.width() / 512.0).min(window.height() / 448.0);
+    let HudArt { f, mem, .. } = &mut *art;
+    let f: &Frontend = f;
+    let w = p.box_words;
+    let page = p.textbox.page();
+    let lines = f.wrap(0, page, w.wrap, 0);
+    let l = lines.len().max(1) as i32;
+    let h = f.fonts.first().map_or(21, |ft| ft.line_height());
+    let yb = 345 - 10 * l;
+    let (name, colour) = p.box_speaker();
+    let complete = p.textbox.complete();
+    let label: &[u8] = if p.textbox.more() { &p.box_labels.0 } else { &p.box_labels.1 };
+    let visible = p.textbox.visible();
+    let frame_h = (l * h + w.height_terms.1 + h + w.height_terms.0) as u32;
+    let frame_w = (w.wrap + w.margin + w.width_term) as u32;
+    // Rebuild the images whose content changed.
+    let wanted = vec![
+        (BoxPart::Frame, hash(frame_h)),
+        (BoxPart::Name, hash(name)),
+        (BoxPart::Body, hash((page, visible))),
+        (BoxPart::Icon, 0),
+        (BoxPart::Label, hash(label)),
+    ];
+    for (part, k) in &wanted {
+        if cache.key.contains(&(*part, *k)) && cache.images.contains_key(part) {
+            continue;
+        }
+        let made = match part {
+            BoxPart::Frame => f.key(0x19).and_then(|n| f.nine_slice(mem, n, frame_w, frame_h, [15, 28, 14, 26])).map(|i| (i, 0)),
+            BoxPart::Name => f.text_image(mem, 0, name, -1, w.name_colour),
+            BoxPart::Body => f.draw_lines(mem, 0, page, &lines, h, visible, 0, w.body_colour),
+            BoxPart::Icon => f.key(0x1B).and_then(|n| f.sprite_image(mem, n, 32, 32)).map(|i| (i, 0)),
+            BoxPart::Label => f.text_image(mem, 1, label, -1, w.prompt_colour),
+        };
+        if let Some((img, base)) = made {
+            let (iw, ih) = (img.width, img.height);
+            cache.images.insert(*part, (images.add(crate::rgba_image(iw, ih, img.rgba)), iw, ih, base));
+        }
+        cache.key.retain(|(q, _)| q != part);
+        cache.key.push((*part, *k));
+    }
+    let tw = f.fonts.get(1).map_or(0, |ft| ft.measure(label, -1));
+    let gx = w.prompt_x.1 - (tw + 16) / 2;
+    let py = yb + h * l + 1;
+    let th = f.fonts.get(1).and_then(|ft| label.iter().rev().find_map(|&c| ft.glyph(c))).map_or(0, |g| g.height as i32);
+    for (part, mut node, mut image, mut vis) in &mut parts {
+        let Some((handle, iw, ih, base)) = cache.images.get(part) else {
+            *vis = Visibility::Hidden;
+            continue;
+        };
+        let (x, y, show) = match part {
+            BoxPart::Frame => (w.anchor - w.margin, yb - w.margin - h, true),
+            BoxPart::Name => (w.anchor + w.margin, yb - w.margin - h / 2 - base, !name.is_empty()),
+            BoxPart::Body => (w.anchor, yb - base, true),
+            // The icon is centred on (gx, y) (its anchor is Medium in the spec; R-0018).
+            BoxPart::Icon => (gx - 16, py - 16, complete),
+            BoxPart::Label => (gx + 16, py + 16 - th / 2 - base, complete && !label.is_empty()),
+        };
+        *vis = if show { Visibility::Inherited } else { Visibility::Hidden };
+        node.left = Val::Px(x as f32 * s);
+        node.top = Val::Px(y as f32 * s);
+        node.width = Val::Px(*iw as f32 * s);
+        node.height = Val::Px(*ih as f32 * s);
+        image.image = handle.clone();
+        image.color = match part {
+            BoxPart::Frame => Color::srgba(colour[0] as f32 / 128.0, colour[1] as f32 / 128.0, colour[2] as f32 / 128.0, 45.0 / 128.0),
+            _ => Color::WHITE,
+        };
+    }
+}

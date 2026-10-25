@@ -196,6 +196,8 @@ pub struct Character {
     /// volumes (radius, length) of the row (SPEC-0029 Behavior 10.2).
     pub enemy: Option<Enemy>,
     weapons: [(f32, f32); 5],
+    /// The placement's colour bytes (the talk partner's frame colour).
+    colour: [u8; 3],
     /// The kind-8 record its drop placement ordinal names (SPEC-0038 Behavior 34, part B).
     drop: Option<neopets_data::region::ItemPoint>,
     root_step: [f32; 3],
@@ -300,6 +302,14 @@ pub struct Play {
     monster_words: neopets_sim::hud::MonsterWords,
     name_font: Option<(neopets_data::frontend::Font, i32)>,
     pub panel_latch: neopets_sim::quick::PanelInput,
+    /// The shared dialogue box (SPEC-0022) with its speaker name and frame colour, the hero
+    /// name colours (design table 10), the "Next" and "Finish" labels (table 13) and the box's
+    /// boot words.
+    pub textbox: neopets_sim::textbox::TextBox,
+    pub speaker: (Vec<u8>, [u8; 3]),
+    hero_colour: [u8; 3],
+    pub box_labels: (Vec<u8>, Vec<u8>),
+    pub box_words: BoxWords,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
     /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
     pub death: neopets_sim::death::DeathFlow,
@@ -347,6 +357,22 @@ impl Play {
         // and the hero divider table (bases, then steps).
         let w1 = |at: u32| words(at, 1).map(|v| v[0]);
         let dividers = words(neopets_data::item::HEALTH_TOR, 8)?;
+        let design = index.read(disc, neopets_data::design::RESOURCE).ok().and_then(|b| neopets_data::design::DesignTables::parse(&b).ok()).unwrap_or_default();
+        let hero_colour = design.hero_colour(0).unwrap_or([128; 3]);
+        let box_labels = (design.label(0x10).unwrap_or_default(), design.label(0x11).unwrap_or_default());
+        let colour = |at: u32| words(at, 1).map(|v| v[0].to_le_bytes());
+        let prompts = w1(0x002D_CC40)?;
+        let box_words = BoxWords {
+            margin: w1(0x002D_CC18)? as i32,
+            width_term: w1(0x002D_CC1C)? as i32,
+            height_terms: (w1(0x002D_CC20)? as i32, w1(0x002D_CC24)? as i32),
+            prompt_x: ((prompts & 0xFFFF) as i32, (prompts >> 16) as i32),
+            wrap: w1(0x002D_CC44)? as i32,
+            anchor: w1(0x002D_CC48)? as i32,
+            name_colour: colour(0x0031_59F0)?,
+            body_colour: colour(0x0031_59F8)?,
+            prompt_colour: colour(0x0031_5A38)?,
+        };
         let monster_words = neopets_sim::hud::MonsterWords {
             divisor: f32::from_bits(w1(0x002D_D01C)?),
             max: w1(0x002D_D020)? as i32,
@@ -468,6 +494,11 @@ impl Play {
             monster_words,
             name_font,
             panel_latch: Default::default(),
+            textbox: Default::default(),
+            speaker: (Vec::new(), [128; 3]),
+            hero_colour,
+            box_labels,
+            box_words,
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
             continued: false,
@@ -754,13 +785,10 @@ impl Play {
                 }
                 Action::Message { line } => {
                     self.talk_partner = None;
-                    self.message = Some((line, self.ticks));
-                    self.dialogue_open = self.world.lines.line(line as usize).is_some();
+                    self.talk_with = None;
+                    self.open_line(line);
                 }
-                Action::Talk { line } => {
-                    self.message = Some((line, self.ticks));
-                    self.dialogue_open = self.world.lines.line(line as usize).is_some();
-                }
+                Action::Talk { line } => self.open_line(line),
                 Action::WhinnyPen { inner, entrance, locator } => {
                     let point = self.world.entries.get(locator).map_or([0.0; 3], |e| e.0);
                     self.world.pens = vec![neopets_sim::whinny::Pen { inner, entrance, point, occupied: false }];
@@ -1072,6 +1100,7 @@ impl Play {
                 },
                 weapons: tuning.map_or([(0.0, 0.0); 5], |t| t.weapons),
                 drop: usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied()),
+                colour: pl.colour,
                 root_step: [0.0; 3],
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
@@ -1229,7 +1258,9 @@ impl Play {
         // An open dialogue box takes Square to close it, and holds the hero in place.
         let mut input = *input;
         if self.dialogue_open {
-            if input.square {
+            // SPEC-0022: the box takes Cross (held, faster reveal) and Square (skip, Next,
+            // Finish); the hero stays in place meanwhile.
+            if self.textbox.update(input.cross_held, input.square) == Some(neopets_sim::textbox::BoxEvent::Closed) {
                 self.dialogue_open = false;
                 self.message = None;
                 self.talk_with = None;
@@ -1643,6 +1674,32 @@ impl Play {
                 }
             }
         }
+    }
+
+    /// Open a table line in the shared box (SPEC-0022 Showing text, Speaker name and colour): a
+    /// "Hero" or "[Hero]" speaker (any case) or one starting with a control code names the hero
+    /// with its table-10 colour; otherwise a talk partner's own name and colour; otherwise the
+    /// record's.
+    fn open_line(&mut self, line: u16) {
+        let Some(l) = self.world.lines.line(line as usize) else { return };
+        self.message = Some((line, self.ticks));
+        let s = &l.raw_speaker;
+        let hero = s.eq_ignore_ascii_case(b"Hero") || s.eq_ignore_ascii_case(b"[Hero]") || s.first() == Some(&0x01);
+        let partner = self.talk_with.and_then(|id| self.characters.iter().find(|c| c.id == id));
+        self.speaker = if hero {
+            (b"Tor".to_vec(), self.hero_colour)
+        } else if let Some(c) = partner {
+            (c.name.as_bytes().to_vec(), c.colour)
+        } else {
+            (l.speaker.as_bytes().to_vec(), l.colour)
+        };
+        self.textbox.open(&l.raw);
+        self.dialogue_open = true;
+    }
+
+    /// The name and frame colour shown now (the type-32 override names the hero).
+    pub fn box_speaker(&self) -> (&[u8], [u8; 3]) {
+        if self.textbox.override_hero { (b"Tor", self.hero_colour) } else { (&self.speaker.0, self.speaker.1) }
     }
 
     /// SPEC-0036 Status effects and Regeneration, run in the hero update before its state
@@ -2158,6 +2215,21 @@ fn attach_rotation(t: [f32; 3], angles: [f32; 3]) -> neopets_data::anim::Affine 
     };
     let tr = neopets_data::anim::Affine { cols: neopets_data::anim::Affine::IDENTITY.cols, t };
     tr.mul(&rot(2, angles[2])).mul(&rot(1, angles[1])).mul(&rot(0, angles[0]))
+}
+
+/// The dialogue box's boot words (SPEC-0022 Box geometry constants; Dialogue box layout).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BoxWords {
+    pub margin: i32,
+    pub width_term: i32,
+    pub height_terms: (i32, i32),
+    /// The left (Triangle) and right (Circle or continue) prompt x positions.
+    pub prompt_x: (i32, i32),
+    pub wrap: i32,
+    pub anchor: i32,
+    pub name_colour: [u8; 4],
+    pub body_colour: [u8; 4],
+    pub prompt_colour: [u8; 4],
 }
 
 /// The sim's monster-row values from the disc row (SPEC-0038 Layout section 2).

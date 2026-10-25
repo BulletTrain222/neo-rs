@@ -110,6 +110,8 @@ pub struct HeroInput {
     pub square: bool,
     /// L1 held (the shield guard).
     pub guard: bool,
+    /// Cross held (the dialogue box's faster reveal).
+    pub cross_held: bool,
 }
 
 /// The hero's playing clip as the animation pass left it on the previous tick.

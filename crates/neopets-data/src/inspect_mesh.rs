@@ -585,6 +585,17 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             let _ = std::fs::write("private/hud-tree.txt", out.join("
 "));
         }
+        let logical: Vec<String> = [0x19u32, 0x1B, 0x78, 0x79]
+            .iter()
+            .map(|&k| match f.key(k) {
+                Some(n) => {
+                    let d = f.nodes[n];
+                    format!("{k:#04x} -> node {n} kind {} {}x{} sprite {:?}", d.kind, d.width, d.height, f.sprite(n).map(|s| (s.asset, s.columns, s.rows)))
+                }
+                None => format!("{k:#04x} -> none"),
+            })
+            .collect();
+        println!("Logical sprites as section C keys: {logical:?}");
         let fonts: Vec<(usize, u8, i32, i32)> = f.fonts.iter().map(|ft| (ft.glyphs.len(), ft.mode, ft.line_height(), ft.glyph(32).map_or(-1, |g| g.advance as i32))).collect();
         let sample = "Flower Monster";
         println!("Fonts (glyphs, mode, line height, space advance): {fonts:?}; {sample:?} in font 1 is {} px", f.fonts.get(1).map_or(-1, |ft| ft.measure(sample.as_bytes(), 0)));

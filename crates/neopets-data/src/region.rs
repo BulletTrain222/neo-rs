@@ -48,6 +48,8 @@ pub struct Placement {
     pub selector: u32,
     /// The drop placement ordinal (s16 +0xB0): a kind-8 record of the same region, -1 none.
     pub drop: i16,
+    /// The character's colour bytes (+0x40; the talk partner's frame colour, SPEC-0022).
+    pub colour: [u8; 3],
 }
 
 /// A kind-8 item point (SPEC-0006 Kind 8; SPEC-0021 placements).
@@ -122,6 +124,7 @@ pub fn records(p: &[u8]) -> Records {
                     emerge_distance: f32_at(p, data + 0xC0).unwrap_or(0.0),
                     selector: u32_at(p, data + 0xC8).unwrap_or(0),
                     drop: i16_at(p, data + 0xB0).unwrap_or(-1),
+                    colour: [p.get(data + 0x40).copied().unwrap_or(0), p.get(data + 0x41).copied().unwrap_or(0), p.get(data + 0x42).copied().unwrap_or(0)],
                 });
             }
             8 => {

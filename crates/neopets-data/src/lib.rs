@@ -3,6 +3,7 @@ pub mod anim;
 pub mod area;
 pub mod archive;
 mod elf;
+pub mod design;
 pub mod dialogue;
 pub mod fingerprint;
 pub mod frontend;
