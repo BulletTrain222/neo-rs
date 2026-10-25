@@ -1914,6 +1914,20 @@ fn play_trace(
         } {
             route.remove(0);
         }
+        // NEOPETS_TRACE_FOLLOW=<name>: keep within 6 units of the character with that name.
+        if let Ok(name) = std::env::var("NEOPETS_TRACE_FOLLOW") {
+            if let Some(c) = play.characters.iter().find(|c| c.name == name && c.pack == play.world.pack) {
+                let p = play.loco.position();
+                let t = [c.position[0], c.position[2]];
+                if (t[0] - p[0]).hypot(t[1] - p[2]) <= 6.0 {
+                    route.clear();
+                } else if route.last().is_none_or(|r| (r[0] - t[0]).hypot(r[1] - t[1]) > 4.0) {
+                    // A searched route to the character, refreshed when it has moved on.
+                    route = play.route_to(200_000, play::Goal::Point(t)).unwrap_or_default();
+                    route.push(t);
+                }
+            }
+        }
         let herd = to.is_some_and(|t| t[1] == 2.0);
         let fight = to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten();
         let goal = if herd {

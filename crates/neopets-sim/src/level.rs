@@ -14,6 +14,10 @@
 //! - The road module 678 (SPEC-0042), which packs 678, 686 and 691 carry: Init's slot and trigger
 //!   setup by flags, trigger 0's line, the road-fight intro (trigger 1), the fight watch and end
 //!   scene, the line handler of triggers 2, 3, 5 and 6, trigger 7's prompt and proximity P.
+//! - 1023 (SPEC-0045): the Meerca chase (trigger 17's chase-start scene, the chase thread and
+//!   the load thread's first-slot load and chase resume), the signs (triggers 3, 4 and 6 to 16),
+//!   triggers 0 to 2 and the teleports to the interiors (indices 1 to 8) and their line
+//!   branches.
 //! - The lock chest press of script groups of kind 1 (SPEC-0048 Lock chests).
 //! The scenes are staged with the calls of SPEC-0052 (fades, camera plays and returns, hero and
 //! entity moves and walks, waits); the host runs each handler's list as its own script thread.
@@ -104,6 +108,14 @@ pub enum Action {
     LetterBox { on: bool, seconds: f32, wait: bool },
     /// Sleep one tick at a time while any of these entities is still walking.
     WaitWalks { entities: [usize; 3] },
+    /// SetGameState and GiveItemToHero made by a thread at its point in the scene (not when
+    /// the handler decides).
+    SetFlag { flag: u16, on: bool },
+    GiveItem { item: u16, count: u32 },
+    /// Sleep one tick at a time while the hero is farther than `distance` from the locator.
+    WaitHeroNear { locator: usize, distance: f32 },
+    /// LoopEntityAnim with an animation drawn by Random(1, 2) from the pair.
+    RandomLoop { entity: usize, anims: [u32; 2] },
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -232,6 +244,9 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         (909, 0 | 1) => Some(13),
         (951, 0) => Some(26),
         (955, 0) => Some(13),
+        // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
+        // clear; taken as 13 here).
+        (1023, 0..=10) => Some(13),
         _ => None,
     }
 }
@@ -252,6 +267,35 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
                 vec![Action::LeaveInterior { slot: 5 }]
             }
         }
+        // SPEC-0045 1023 teleports. The exterior replacement loads of indices 0, 9 and 10 are
+        // not built; their line branches are.
+        (1023, 1 | 5) => {
+            if state.flag(10) {
+                vec![Action::Message { line: 3 }]
+            } else if !state.flag(136) {
+                vec![Action::Message { line: 5 }]
+            } else {
+                vec![Action::EnterInterior { slot: if door == 1 { 118 } else { 117 } }]
+            }
+        }
+        (1023, 2 | 3 | 4 | 6 | 7 | 8) => {
+            if !state.flag(136) {
+                vec![Action::Message { line: 5 }]
+            } else {
+                let slot = match door {
+                    2 => 125,
+                    3 => 116,
+                    4 => 113,
+                    6 => 111,
+                    7 => 112,
+                    _ => 115,
+                };
+                vec![Action::EnterInterior { slot }]
+            }
+        }
+        (1023, 0) if !state.flag(15) && !(state.flag(150) && !state.flag(11)) => vec![Action::Message { line: 23 }],
+        (1023, 9) if !state.flag(13) => vec![Action::Message { line: 3 }],
+        (1023, 10) if !state.flag(35) => vec![Action::Message { line: 6 }],
         // SPEC-0032 955: message 40 for eW 68, leave to eW 5.
         (955, 0) => {
             state.blackboard.insert((2, 68), 40);
@@ -305,8 +349,93 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             out
         }
         678 | 686 | 691 => road_init(pack, state),
+        1023 => village_init(state),
         _ => Vec::new(),
     }
+}
+
+/// SPEC-0045 1023 Init: the trigger registrations (routines: 1 the signs, 2 the square-message
+/// routine of 0 to 2, 6 the chase start) and the load thread's first-slot load (slot 0; region
+/// 1023 + 1 + j). The zone loaders (27 to 34), the greetings and the prize wheel, the cloak
+/// slots and the villager talk are not built.
+fn village_init(state: &mut GameState) -> Vec<Action> {
+    let reg = |index, routine| Action::RegisterTrigger { index, routine };
+    let mut out: Vec<Action> = [6u16, 7, 8, 9, 10, 11, 12, 13, 4, 3, 14, 15, 16].into_iter().map(|i| reg(i, 1)).collect();
+    out.extend([reg(1, 2), reg(2, 2), reg(0, 2), reg(17, 6)]);
+    if !state.flag(11) {
+        if state.flag(10) {
+            out.push(Action::LoadRegion { slot: 1, region: Some(1023 + 1 + 6) });
+        } else if state.flag(127) && !state.flag(136) {
+            // The chase resumes: set 0, the Meerca at the first waypoint whose flag is clear.
+            let k = (0..8).find(|&k| !state.flag(128 + k)).unwrap_or(8) as usize;
+            out.extend([Action::LoadRegion { slot: 0, region: Some(1024) }, Action::WaitLoads, Action::MoveEntity { entity: 0, locator: 477 + k, face: true }]);
+            out.extend(chase(state));
+        } else {
+            out.push(Action::LoadRegion { slot: 0, region: Some(1023 + 1 + 2) });
+        }
+    }
+    out
+}
+
+/// SPEC-0045 1023 chase thread: from the first waypoint k (0 to 7) whose flag 128 + k is clear
+/// through the catch at k = 8: the Meerca walks to locator 477 + k (stop 1.1), then loops
+/// animation 28 or 48 until the hero is within 30 units; below 8 the waypoint's flag is set and
+/// it plays animation 44 and waits 0.2 s; at 8 flag 136, the fade, set 2 and item 32 return
+/// (movie 4 and the zone reload are not reproduced).
+fn chase(state: &GameState) -> Vec<Action> {
+    use Action::*;
+    let first = (0..8).find(|&k| !state.flag(128 + k)).unwrap_or(8);
+    let mut v = Vec::new();
+    for k in first..=8 {
+        let locator = 477 + k as usize;
+        v.extend([WalkEntity { entity: 0, locator, wait: true, orient: true, stop: 1.1 }, RandomLoop { entity: 0, anims: [28, 48] }]);
+        v.push(WaitHeroNear { locator, distance: 30.0 });
+        if k < 8 {
+            v.extend([SetFlag { flag: 128 + k, on: true }, EntityAnim { entity: 0, anim: 44, looped: false, wait: false }, wait(0.2)]);
+        } else {
+            v.extend([SetFlag { flag: 136, on: true }, HoldHero, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 0, region: Some(1023 + 1 + 2) }]);
+            v.extend([GiveItem { item: 32, count: 1 }, WaitLoads, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
+        }
+    }
+    v
+}
+
+/// SPEC-0045 1023 trigger 17, the chase start (step 1, the cutscene; step 2, the chase). The
+/// Meerca's set (set 1) is loaded into slot 1 for the scene and released after it. PlayHeroAnim,
+/// the movement types, object 4, the navmesh assignment and the quick fades are not reproduced.
+fn chase_start(state: &mut GameState) -> Vec<Action> {
+    use Action::*;
+    let cam = |track| PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+    let cut = |track| [FadeOut { seconds: 0.7, wait: true }, PlayCamera { track, wait: false, end: 1, speed: 1.0 }, FadeIn { seconds: 0.4, wait: false }];
+    let anim = |entity, anim, wait| EntityAnim { entity, anim, looped: false, wait };
+    let walk = |entity, locator| WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 };
+    state.set(7, true);
+    // The thief (entity 0, region 1024 record 0 per SPEC-0058 step 6) and Heermedjet (entity 1,
+    // region 1025) for the scene; which set the slot-swap thread loads is R-0028.
+    let mut v = vec![HoldHero, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 1, region: Some(1023 + 1 + 1) }, LoadRegion { slot: 2, region: Some(1024) }, WaitLoads];
+    v.extend([MoveHero { locator: 488 }, FadeIn { seconds: 1.0, wait: false }, cam(8), WalkHero { locator: 489, wait: false, orient: false }, wait(2.8)]);
+    v.extend(cut(9));
+    v.extend([MoveHero { locator: 490 }, WalkHero { locator: 491, wait: true, orient: true }]);
+    v.extend(cut(10));
+    v.extend([wait(2.5), cam(11), anim(1, 41, true), anim(1, 49, true), PlayCamera { track: 12, wait: true, end: 1, speed: 1.0 }, wait(1.0)]);
+    v.extend([cam(13), anim(0, 49, true), anim(0, 41, true)]);
+    v.extend(cut(14));
+    v.extend([MoveHero { locator: 492 }, WalkHero { locator: 493, wait: true, orient: true }, walk(1, 495), wait(1.0), cam(15), wait(0.3), cam(16)]);
+    v.extend([MoveEntity { entity: 1, locator: 496, face: true }, PlaySound { cue: 12, locator: None }, MoveHero { locator: 493 }]);
+    v.extend(cut(17));
+    v.push(wait(1.0));
+    v.extend(cut(19));
+    v.extend([Message { line: 25 }, cam(20), Converse { entity: 1, line: 26 }]);
+    v.extend(cut(18));
+    v.extend([MoveEntity { entity: 0, locator: 499, face: true }, wait(0.2), walk(0, 500), wait(0.6), cam(21), Converse { entity: 1, line: 27 }]);
+    v.extend([walk(1, 499), wait(1.0), cam(22), MoveEntity { entity: 0, locator: 501, face: true }, walk(0, 502), wait(1.5)]);
+    v.extend([FadeOut { seconds: 2.0, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, MoveEntity { entity: 0, locator: 477, face: true }]);
+    v.extend([EntityAnim { entity: 0, anim: 48, looped: true, wait: false }, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
+    // Step 2: the parcel is taken and the chase starts.
+    state.remove_all(32);
+    state.set(127, true);
+    v.extend(chase(state));
+    v
 }
 
 /// SPEC-0042 module 678 Init. Routine numbers: 0 trigger T0, 1 the intro S1, 2 the line
@@ -458,6 +587,33 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (909, 4) if first => out.actions.push(Action::Message { line: 191 }),
         // SPEC-0045 909 routine 7 (index 8): enter world 71 (pack 950).
         (909, 7) if first => out.actions.push(Action::EnterInterior { slot: 71 }),
+        // SPEC-0045 1023 signs: context 3 while inside; on the press the index's line.
+        (1023, 1) if call.object && call.state != 0 => {
+            if call.square {
+                let line = match call.index {
+                    3 => 9,
+                    4 => 10,
+                    6 => 14,
+                    7 => 7,
+                    8 => 8,
+                    9 => 12,
+                    10 => 13,
+                    11 => 11,
+                    12 => 15,
+                    13 => 16,
+                    14 => 17,
+                    15 => 19,
+                    _ => 18,
+                };
+                out.actions.push(Action::Message { line });
+            } else {
+                out.prompt = Some(3);
+            }
+        }
+        // Triggers 0 to 2: with 64 set and 248 clear, line 22 (BlockPlayerControl around it).
+        (1023, 2) if first && state.flag(64) && !state.flag(248) => out.actions.push(Action::Message { line: 22 }),
+        // Trigger 17: the chase start, while flag 127 is clear.
+        (1023, 6) if first && !state.flag(127) => out.actions = chase_start(state),
         // SPEC-0042 678 T0 (index 0): line 23 once per module load (word 0).
         (678 | 686 | 691, 0) if first && state.word(pack, 0) == 0 => {
             state.set_word(pack, 0, 1);
@@ -1194,6 +1350,37 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    #[test]
+    fn village_chase() {
+        // SPEC-0045 1023: trigger 17 starts the chase (7 and 127 set, item 32 taken); the chase
+        // thread walks waypoints 477 to 485 and sets 128 to 135 and then 136 as it goes.
+        let mut s = GameState::default();
+        s.give(32, 1);
+        let init = on_init(1023, &mut s);
+        assert!(init.contains(&Action::RegisterTrigger { index: 17, routine: 6 }));
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1026) }));
+        let start = on_trigger(1023, 6, TriggerCall { index: 17, state: 1, object: true, square: false }, &mut s);
+        assert!(s.flag(7) && s.flag(127) && !s.has_item(32));
+        let flags: Vec<u16> = start.actions.iter().filter_map(|a| match a {
+            Action::SetFlag { flag, .. } => Some(*flag),
+            _ => None,
+        }).collect();
+        assert_eq!(flags, (128..=136).collect::<Vec<_>>());
+        assert!(start.actions.contains(&Action::GiveItem { item: 32, count: 1 }));
+        // A reload mid-chase (128 to 130 set) resumes at waypoint 3 (locator 480).
+        let mut s = GameState::default();
+        for f in [127, 128, 129, 130] {
+            s.set(f, true);
+        }
+        let init = on_init(1023, &mut s);
+        assert!(init.contains(&Action::MoveEntity { entity: 0, locator: 480, face: true }));
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1024) }));
+        // The shops stay shut until the catch.
+        assert_eq!(on_teleport(1023, 5, &mut s), vec![Action::Message { line: 5 }]);
+        s.set(136, true);
+        assert_eq!(on_teleport(1023, 5, &mut s), vec![Action::EnterInterior { slot: 117 }]);
     }
 
     #[test]

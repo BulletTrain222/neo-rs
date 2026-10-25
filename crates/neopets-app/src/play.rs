@@ -311,6 +311,8 @@ enum Wait {
     Bars,
     Dialog,
     Loads,
+    /// The hero within a horizontal distance of a point.
+    HeroNear([f32; 3], f32),
 }
 
 pub struct Play {
@@ -1061,6 +1063,10 @@ impl Play {
                 k.action != anim || k.progress >= 0.99
             }),
             Wait::Bars => self.bars.done,
+            Wait::HeroNear(t, d) => {
+                let p = self.loco.position();
+                (t[0] - p[0]).hypot(t[2] - p[2]) <= d
+            }
             Wait::Dialog => !self.dialogue_open,
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
         }
@@ -1212,6 +1218,18 @@ impl Play {
                     return wait.then_some(Wait::EntityWalk(pack, entity));
                 }
                 Action::WaitWalks { entities } => return Some(Wait::EntityWalks(pack, entities)),
+                Action::SetFlag { flag, on } => self.state.set(flag, on),
+                Action::GiveItem { item, count } => self.state.give(item, count),
+                Action::WaitHeroNear { locator, distance } => {
+                    let (l, _) = self.locator(pack, locator)?;
+                    return Some(Wait::HeroNear(l, distance));
+                }
+                Action::RandomLoop { entity, anims } => {
+                    let a = anims[(self.rng.range(1, 2) - 1).clamp(0, 1) as usize];
+                    let c = self.entity_mut(pack, entity)?;
+                    c.held = true;
+                    c.anim.play(a);
+                }
                 Action::EntityAnim { entity, anim, looped: _, wait } => {
                     // The clip plays as the character's animation (loops repeat as its clip
                     // does); the entity is under script control.
