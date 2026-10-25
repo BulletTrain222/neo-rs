@@ -156,6 +156,10 @@ pub enum Action {
     /// TriggerActStart(stage) (row 51; SPEC-0053 3.7). IsActStartDone is always true, so the
     /// scripts' wait after it ends at once.
     ActStart { stage: i32 },
+    /// StartEffect(slot, W = 0, camera) and StopEffect(slot) on the thread's world's placed
+    /// effects (SPEC-0030 rows 5 and 6).
+    StartEffect { slot: usize, camera: bool },
+    StopEffect { slot: usize },
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -1069,15 +1073,27 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         1217 => out = burrows_fight(state, dialog),
         1056 => out = yard_update(state, dialog),
         1163 => out = kitchen_update(state),
+        // SPEC-0045 1098 Update: effects 0, 1 and 2 are started while 642 is clear and stopped
+        // while it is set; with 642 set, effect 3 is started while 632 is clear and stopped
+        // while it is set (the start's camera flag is not given; none is passed).
+        1098 => {
+            let start = |slot| Action::StartEffect { slot, camera: false };
+            if !state.flag(642) {
+                out.extend((0..3).map(start));
+            } else {
+                out.extend((0..3).map(|slot| Action::StopEffect { slot }));
+                out.push(if state.flag(632) { Action::StopEffect { slot: 3 } } else { start(3) });
+            }
+        }
         // SPEC-0045 909 Update: the flag and item steps and the scenes.
         909 => {
-            // The Act 1 start: 707 on and 1 off sets 1 and clears 706, fades out at once and
-            // moves entity 31 to locator 69 (movies 88 and 1 and the act-start call are not
-            // reproduced; camera 30 is left out: no return of it is described, R-0025).
+            // The Act 1 start: 707 on and 1 off sets 1 and clears 706, fades out at once, makes
+            // the act-start 1 call (SPEC-0053 3.7) and moves entity 31 to locator 69 (movies 88
+            // and 1 are not played; camera 30 is left out: no return of it is described, R-0025).
             if state.flag(707) && !state.flag(1) {
                 state.set(1, true);
                 state.set(706, false);
-                out.extend([Action::FadeOut { seconds: 0.0, wait: false }, Action::MoveEntity { entity: 31, locator: 69, face: true }]);
+                out.extend([Action::FadeOut { seconds: 0.0, wait: false }, Action::ActStart { stage: 1 }, Action::MoveEntity { entity: 31, locator: 69, face: true }]);
             }
             // The talk thread (while 117 and 123 are clear): each round-up flag, the first time
             // it is seen set in this visit (words 10 to 13, cleared at each activation), plays a
@@ -3015,6 +3031,18 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    #[test]
+    fn castle_effects_by_flags() {
+        let mut s = GameState::default();
+        let start = |slot| Action::StartEffect { slot, camera: false };
+        assert_eq!(on_update(1098, &mut s, false), vec![start(0), start(1), start(2)]);
+        s.set(642, true);
+        let a = on_update(1098, &mut s, false);
+        assert!(a.contains(&Action::StopEffect { slot: 0 }) && a.contains(&start(3)));
+        s.set(632, true);
+        assert!(on_update(1098, &mut s, false).contains(&Action::StopEffect { slot: 3 }));
     }
 
     #[test]

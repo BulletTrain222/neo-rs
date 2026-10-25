@@ -402,11 +402,13 @@ pub struct EffectObject {
     /// 0 near, 1 far.
     pub state: u8,
     pub slots: [Option<usize>; 5],
+    /// A placed record's own cull (squared), used instead of the definition's.
+    pub cull: Option<f32>,
 }
 
 impl EffectObject {
     pub fn new(table: &EffectTable, id: i32, position: V3, frame: Frame) -> Self {
-        Self { def: table.find(id), position, frame, state: 0, slots: [None; 5] }
+        Self { def: table.find(id), position, frame, state: 0, slots: [None; 5], cull: None }
     }
 
     pub fn live(&self) -> bool {
@@ -469,7 +471,8 @@ impl Effects {
                     let d2 = v[0] * v[0] + v[1] * v[1] + v[2] * v[2];
                     let u = unit(v);
                     let dot = forward[0] * u[0] + forward[1] * u[1] + forward[2] * u[2];
-                    culled = (d.cull > 0.0 && d2 > d.cull) || (d.cone && dot < 0.5 && d2 > CONE_LIMIT);
+                    let cull = o.cull.unwrap_or(d.cull);
+                    culled = (cull > 0.0 && d2 > cull) || (d.cone && dot < 0.5 && d2 > CONE_LIMIT);
                     state = u8::from(d2 > d.threshold);
                 }
                 if culled {

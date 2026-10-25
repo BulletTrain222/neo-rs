@@ -1940,6 +1940,8 @@ fn play_trace(
     let mut save_prompt = false;
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
+    let placed: Vec<String> = play.world.placed_effects.iter().take(12).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
+    println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
     println!("Script volumes of {} (index, a point inside): {:?}", play.world.pack, play.world.volume_points());
     if to.is_some_and(|t| t[0].is_nan()) {
         let goal = match to.map(|t| t[1]) {

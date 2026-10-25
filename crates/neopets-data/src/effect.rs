@@ -36,3 +36,34 @@ pub fn group_images(bytes: &[u8], chain: &[crate::resource::Chunk]) -> Result<Ve
         })
         .collect())
 }
+
+/// The placed-effect chunk of a world pack (SPEC-0028 section 4; SPEC-0034 section 6).
+pub const PLACED_CHUNK: u16 = 39;
+
+/// A placed effect record (0x90 bytes): its frame rows (+0x00, +0x10, the direction +0x20),
+/// position (+0x30), effect id (+0x40), zone number (+0x44) and cull (+0x84).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Placed {
+    pub frame: [[f32; 3]; 3],
+    pub position: [f32; 3],
+    pub id: i32,
+    pub zone: u32,
+    pub cull: f32,
+}
+
+/// The placed-effect records of a walked world pack chain, in slot order (a u32 count at +0,
+/// records from +0x10, stride 0x90).
+pub fn placed(bytes: &[u8], chain: &[crate::resource::Chunk]) -> Vec<Placed> {
+    let Some(c) = chain.iter().find(|c| c.kind == PLACED_CHUNK) else { return Vec::new() };
+    let Some(p) = bytes.get(c.payload.clone()) else { return Vec::new() };
+    let f = |at: usize| p.get(at..at + 4).map(|b| f32::from_le_bytes(b.try_into().unwrap()));
+    let u = |at: usize| p.get(at..at + 4).map(|b| u32::from_le_bytes(b.try_into().unwrap()));
+    let n = u(0).unwrap_or(0) as usize;
+    (0..n.min(4096))
+        .map_while(|i| {
+            let r = 0x10 + 0x90 * i;
+            let v = |at: usize| Some([f(r + at)?, f(r + at + 4)?, f(r + at + 8)?]);
+            Some(Placed { frame: [v(0)?, v(0x10)?, v(0x20)?], position: v(0x30)?, id: u(r + 0x40)? as i32, zone: u(r + 0x44)?, cull: f(r + 0x84)? })
+        })
+        .collect()
+}

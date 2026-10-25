@@ -35,6 +35,8 @@ pub struct World {
     pub pack: u32,
     pub kind: Kind,
     pub buffer: Buffer,
+    /// The placed effects (type 39), by slot.
+    pub placed_effects: Vec<neopets_data::effect::Placed>,
     ground: Option<Ground>,
     /// Rectangle primitives that push characters out (SPEC-0018 box push; new-game mask 0).
     boxes: Vec<BoxShape>,
@@ -118,6 +120,7 @@ impl World {
             pack,
             kind,
             buffer,
+            placed_effects: neopets_data::effect::placed(&bytes, &chain.chunks),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
             boxes: ground::rectangles(&bytes, &chain.chunks)
                 .into_iter()
@@ -562,6 +565,8 @@ pub struct Play {
     /// The save-point glow (SPEC-0034 section 36): the effect objects of 400 and 404 and the
     /// world they belong to.
     save_glow: Option<(u32, [usize; 2])>,
+    /// Placed effect objects made by StartEffect, by (pack, slot).
+    placed_fx: HashMap<(u32, usize), usize>,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -877,6 +882,7 @@ impl Play {
             clip_fx: HashMap::new(),
             last_fx: String::new(),
             save_glow: None,
+            placed_fx: HashMap::new(),
             attack: None,
             attack_latch: false,
             weapon: None,
@@ -1443,6 +1449,13 @@ impl Play {
                     }
                 }
                 Action::ActStart { stage } => self.act_start(stage),
+                Action::StartEffect { slot, camera } => self.start_placed(pack, slot, camera),
+                Action::StopEffect { slot } => {
+                    let table = self.effect_table.clone();
+                    if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
+                        self.effects.stop(&table, h);
+                    }
+                }
                 Action::WalkHero { locator, wait, orient } => {
                     let (t, g) = *self.world.entries.get(locator)?;
                     self.hero_walk = Some((t, orient.then_some(g), f32::MAX));
@@ -3729,6 +3742,7 @@ impl Play {
         self.root_step = self.hero.tick();
         self.sound_step();
         self.clip_effects_step();
+        self.placed_release_step();
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
         // Dead characters disappear when their countdown ends.
@@ -4554,6 +4568,46 @@ impl Play {
                 self.restart = Some((self.loco.position(), self.loco.facing));
             }
             self.save_open = true;
+        }
+    }
+
+    /// StartEffect (SPEC-0030 row 6; SPEC-0034 section 6): placed record `slot` of world `pack`
+    /// is an effect object bound to its definition (its own cull kept when positive or -1); the
+    /// call runs one update, with the camera as the listener when `camera` is set. An index
+    /// outside the table does nothing.
+    fn start_placed(&mut self, pack: u32, slot: usize, camera: bool) {
+        let table = self.effect_table.clone();
+        let Some(r) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.placed_effects.get(slot)).copied() else { return };
+        let h = match self.placed_fx.get(&(pack, slot)) {
+            Some(&h) => h,
+            None => {
+                let mut o = neopets_sim::effect::EffectObject::new(&table, r.id, r.position, r.frame);
+                if r.cull > 0.0 || r.cull == -1.0 {
+                    o.cull = Some(r.cull);
+                }
+                let h = self.effects.add_object(o);
+                self.placed_fx.insert((pack, slot), h);
+                h
+            }
+        };
+        let listener = camera.then(|| {
+            let (eye, focus) = (self.camera.eye, self.camera.focus);
+            (eye, unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]))
+        });
+        self.effects.update(&table, h, listener, &mut self.rng);
+    }
+
+    /// World reset of the placed effects (SPEC-0034 section 6): a world no longer resident
+    /// drains and releases its started records.
+    fn placed_release_step(&mut self) {
+        let table = self.effect_table.clone();
+        let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
+        let gone: Vec<(u32, usize)> = self.placed_fx.keys().filter(|(p, _)| !resident.contains(p)).copied().collect();
+        for k in gone {
+            if let Some(h) = self.placed_fx.remove(&k) {
+                self.effects.stop(&table, h);
+                self.effects.release(h);
+            }
         }
     }
 
