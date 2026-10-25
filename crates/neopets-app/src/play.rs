@@ -467,6 +467,10 @@ pub struct Play {
     pub l1_latch: bool,
     pub r1_latch: bool,
     pub last_swap: String,
+    /// Roberta's attack step, her six shot slots and the shot rows (SPEC-0036).
+    r_attack: Option<neopets_sim::roberta::RobertaAttack>,
+    pub hero_shots: Vec<neopets_sim::roberta::Shot>,
+    shot_rows: neopets_sim::roberta::Rows,
     /// Forced binds waiting for the embedded region: (pack, ordinal).
     rebind: Vec<(u32, usize)>,
     /// Entities deactivated before their characters loaded.
@@ -688,6 +692,7 @@ impl Play {
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
+        let shot_rows = neopets_sim::roberta::Rows::from_words(&words(neopets_sim::roberta::ROWS_AT, 55)?);
         let gesture_words = {
             use neopets_sim::gesture::*;
             let int = |at: u32| words(at, 1).map(|v| v[0]);
@@ -853,6 +858,9 @@ impl Play {
             charm_words,
             last_status: String::new(),
             rebind: Vec::new(),
+            r_attack: None,
+            hero_shots: Vec::new(),
+            shot_rows,
             hero_index: 0,
             parked,
             swap_mode: neopets_sim::swap::rule_m(flags.contains(&220), flags.contains(&248)),
@@ -1824,6 +1832,180 @@ impl Play {
         true
     }
 
+    /// SPEC-0036 Attack input (Roberta), Charge completion and Attack router: the attack start
+    /// by gesture mode, the sub-state step with its requests, the power-ready check from F = 7,
+    /// and the launcher: on the release frame (event bit 0x20), unfired, with at least 1 MP, the
+    /// sub-state's burst into free shot slots (a full release pays its cost and word-2 charge at
+    /// the first shot, or at release for ids 162, 169 and 171).
+    fn roberta_step(&mut self, input: &HeroInput) {
+        use neopets_sim::roberta::*;
+        if self.r_attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
+            self.r_attack = Some(RobertaAttack::start_with(self.gesture.mode));
+        }
+        let mote = self.equipment.motes[1][2];
+        let Some(mut a) = self.r_attack.take() else { return };
+        let c = self.hero.clip_state();
+        let before = a.sub;
+        match a.tick(input.attack_held, input.attack, mote, Clip { action: c.action, progress: c.progress }) {
+            Some((action, restart)) => {
+                self.loco.set_attack(Some(action));
+                if restart {
+                    self.hero.request(action, true);
+                }
+            }
+            None => {
+                self.loco.set_attack(None);
+                return;
+            }
+        }
+        if a.cleared {
+            a.cleared = false;
+            self.hit_list.clear();
+        }
+        // Sub-state 14 (ids 162, 169 and 171) pays at release.
+        if before != 14 && a.sub == 14 {
+            let (cost, q) = self.magic.roberta_full(mote);
+            if let Some(id) = mote {
+                let s = self.weapon_stat_b();
+                self.spend_charge(2, id, charge_full(q, s));
+            }
+            self.pay_mp(cost);
+        }
+        // The power-ready check from F = 7 with a Mote in word 2.
+        if a.sub == 1 && a.f >= 7 {
+            if let Some(id) = mote {
+                let held = self.state.items.get(&id).copied().unwrap_or(0) > 0;
+                if !(self.weapon.is_some() && held && self.hero_mp >= self.magic.roberta_full(mote).0) {
+                    a.f = 0;
+                }
+            }
+        }
+        // The launcher.
+        let release = self.hero.frame_bits() & 0x20 != 0;
+        if !a.fired && release && self.hero_mp >= 1 {
+            a.fired = true;
+            self.roberta_launch(&a, mote);
+        }
+        self.r_attack = Some(a);
+    }
+
+    /// The launch of one burst for the attack's sub-state (SPEC-0036 Roberta shot projectile).
+    fn roberta_launch(&mut self, a: &neopets_sim::roberta::RobertaAttack, mote: Option<u16>) {
+        use neopets_sim::roberta::*;
+        let (class, sub, held) = (a.class(), a.sub, a.held);
+        let d = a.step_factor();
+        let (row, count) = self.shot_rows.launch(class, sub, mote);
+        let full = class == 3;
+        let p = self.loco.position();
+        let f = self.loco.facing;
+        let anchor = anchor(p, f);
+        let dir = launch_dir(anchor, default_aim(p, f));
+        // S = A x D x B x G x E; T is 1, or the attack power table value for a full release.
+        let weapon_a = self.weapon.and_then(|i| self.items.get(i)).map_or(0.0, |i| i.stats[0] as f32);
+        let b = mote.and_then(|id| self.items.get(id)).map_or(1.0, |i| neopets_sim::mote::one_plus_percent(i.stats[5] as f32));
+        let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
+        let scale = neopets_sim::charm::scale(weapon_a, d, b, self.statuses.damage_scale(), e);
+        let t = if full { mote.and_then(|id| neopets_sim::mote::power_index(1, id)).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0) } else { 1.0 };
+        let status = (full && row.reaction != -1)
+            .then(|| mote.and_then(|id| neopets_sim::mote::status_request(1, id, |k| self.design.attack_power(k))).map(|r| [row.reaction, r[1], r[2], r[3]]).unwrap_or([row.reaction, -1, -1, -1]));
+        let mut launched = 0;
+        for _ in 0..count {
+            if self.hero_shots.len() >= 6 {
+                break;
+            }
+            // The first full-release shot pays the cost and the word-2 charge.
+            if full && launched == 0 {
+                let (cost, q) = self.magic.roberta_full(mote);
+                if let Some(id) = mote {
+                    let s = self.weapon_stat_b();
+                    self.spend_charge(2, id, charge_full(q, s));
+                }
+                self.pay_mp(cost);
+            }
+            self.hero_shots.push(Shot {
+                position: anchor,
+                dir,
+                speed: row.speed,
+                radius: row.radius,
+                life: row.life,
+                homing: row.homing,
+                target: None,
+                element: neopets_sim::mote::element(mote),
+                scale,
+                t,
+                class,
+                status,
+            });
+            launched += 1;
+        }
+        self.last_hit = format!("Roberta launched {launched} shot(s) (class {class}, held {held}) on tick {}", self.ticks);
+    }
+
+    /// SPEC-0036 Roberta shot projectile, per tick: each shot steps (life, homing, move), ends
+    /// below the ground under it, then tests the hittable characters' bone capsules against its
+    /// sphere: a hit deals trunc(max(0, S x C x T - defence)), pays a quick shot's cost and
+    /// word-2 charge before the take-hit, sends a full release's status request, and disarms.
+    fn shots_step(&mut self) {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let mut shots = std::mem::take(&mut self.hero_shots);
+        let mut keep = Vec::new();
+        for mut s in shots.drain(..) {
+            let aim = s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| [c.position[0], c.position[1] + 1.5, c.position[2]]);
+            if !s.step(aim) {
+                continue;
+            }
+            let g = self.world.ground_at(s.position[0], s.position[2], s.position[1] + 3.0);
+            if g.is_some_and(|h| s.position[1] < h) {
+                continue;
+            }
+            // The first character whose bone capsule meets the shot sphere.
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some()).find_map(|(i, c)| {
+                let place = placement(c.position, c.facing);
+                let frames = c.anim.bone_frames();
+                let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
+                    if length <= 0.0 {
+                        return false;
+                    }
+                    let w = place.mul(f);
+                    let p0 = w.apply(base);
+                    let axis = unit(w.cols[1]);
+                    let v = sub_v(s.position, p0);
+                    let t = (v[0] * axis[0] + v[1] * axis[1] + v[2] * axis[2]).clamp(0.0, length);
+                    let q = add(p0, scale(axis, t));
+                    let d = sub_v(s.position, q);
+                    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= radius + s.radius
+                });
+                touches.then_some(i)
+            });
+            let Some(i) = hit else {
+                keep.push(s);
+                continue;
+            };
+            let (t_type, defence) = self.characters[i].row.map_or((0, 0.0), |r| (r.target_type as i32, r.defence));
+            let mote = self.equipment.motes[1][2];
+            let gst = mote.and_then(|id| self.items.get(id)).map_or(0.0, |i| i.stats[6] as f32);
+            let c = if neopets_sim::mote::matches(s.element, t_type) { neopets_sim::mote::one_plus_percent(gst) } else { 1.0 };
+            // trunc(max(0, S x C x T - defence)), absorbed when S x C x T > 0 and the result <= 0.
+            let (damage, absorbed) = neopets_sim::charm::damage(neopets_sim::charm::scale(s.scale, c, s.t, 1.0, 1.0), 1.0, defence, 1.0);
+            if s.class < 3 {
+                // The quick-shot payment: the class's cost and exactly Q of word-2 charge.
+                let (cost, q) = self.magic.roberta_quick(s.class, mote);
+                self.pay_mp(cost);
+                if let Some(id) = mote {
+                    self.spend_charge(2, id, q);
+                }
+            }
+            if damage > 0 || absorbed {
+                self.character_take_hit(i, damage, hero, "Roberta's shot ");
+            }
+            if let Some(r) = s.status {
+                self.character_status(i, r);
+            }
+        }
+        self.hero_shots = keep;
+    }
+
     /// The selected hero's name for the speaker rule (SPEC-0022).
     pub fn hero_name(&self) -> &'static [u8] {
         if self.hero_index == 1 { b"Roberta" } else { b"Tor" }
@@ -1891,6 +2073,8 @@ impl Play {
             Some(neopets_sim::swap::Step::Start { flash }) => {
                 // Step 2: the hero attack pools are reset.
                 self.mote_objects.clear();
+                self.hero_shots.clear();
+                self.r_attack = None;
                 if flash {
                     self.fade.out([255; 3], 37);
                 }
@@ -3153,7 +3337,9 @@ impl Play {
         } else {
             self.gesture.tick(input.forward * 87.5, input.side * 87.5, &self.gesture_words);
         }
-        // Roberta's attack step and shots are not built: only Tor attacks.
+        if self.hero_index == 1 {
+            self.roberta_step(&input);
+        }
         if self.hero_index == 0 && self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
         }
@@ -3200,6 +3386,7 @@ impl Play {
         let hits = self.hit_list.len();
         self.hero_swing();
         self.mote_objects_step();
+        self.shots_step();
         // A swing hit: power cue 2 in sub-state 10, else weapon cue 14 (no material impact).
         if self.hit_list.len() > hits {
             let power = self.attack.as_ref().is_some_and(|a| a.sub == 10);
@@ -4728,7 +4915,7 @@ impl Play {
         for (slot, id) in held.iter().filter(|&&id| self.design.item_category(id) == Some(7)).take(60).enumerate() {
             v.quests[slot] = *id as i32;
         }
-        v.motes = self.equipment.motes[0].map(|m| m.map_or(-1, |id| id as i32));
+        v.motes = self.equipment.motes[self.hero_index].map(|m| m.map_or(-1, |id| id as i32));
         let e = &self.equipment.entries;
         v.equipped = [e[0][0].is_some(), e[2][0].is_some(), e[1][0].is_some()];
         v.cloak = count(126) > 0;
@@ -4762,7 +4949,7 @@ impl Play {
                 }
             }
             Command::EquipMote { word, id } => {
-                if self.equipment.set_mote(0, word, id) {
+                if self.equipment.set_mote(self.hero_index, word, id) {
                     self.cue(0xA3);
                     self.hud.rearm_word(word);
                 }

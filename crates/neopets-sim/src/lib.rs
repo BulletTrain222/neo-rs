@@ -31,6 +31,7 @@ pub mod npc;
 pub mod options;
 pub mod petpet;
 pub mod rng;
+pub mod roberta;
 pub mod save;
 pub mod scene;
 pub mod sound;

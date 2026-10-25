@@ -81,6 +81,27 @@ impl Magic {
         self.pick(mote, (0x002D_D4C4, 0x002D_D504), (0x002D_D4B4, 0x002D_D4F4))
     }
 
+    /// Roberta's quick shot at launch class 0 to 2 (and the default row, class 4, as level 1):
+    /// the family's cost and power, or with no Mote 3, 5 or 10 MP by class and power 0.
+    pub fn roberta_quick(&self, class: u8, mote: Option<u16>) -> (i32, i32) {
+        match mote {
+            Some(_) => self.pick(mote, (0x002D_D498, 0x002D_D4D8), (0x002D_D488, 0x002D_D4C8)),
+            None => (self.w(match class {
+                0 => 0x002D_D47C,
+                2 => 0x002D_D484,
+                _ => 0x002D_D480,
+            }), 0),
+        }
+    }
+
+    /// Roberta's full release (level 3): the family's cost and power, or 10 MP and power 0.
+    pub fn roberta_full(&self, mote: Option<u16>) -> (i32, i32) {
+        match mote {
+            Some(_) => self.pick(mote, (0x002D_D4A4, 0x002D_D4E4), (0x002D_D494, 0x002D_D4D4)),
+            None => (self.w(0x002D_D484), 0),
+        }
+    }
+
     /// The armour Mote (word 0) of hero 0 (Tor) or 1 (Roberta): cost and power Q0.
     pub fn armour(&self, hero: usize, mote: Option<u16>) -> (i32, i32) {
         if hero == 0 {
