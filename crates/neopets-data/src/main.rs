@@ -34,6 +34,7 @@ fn run() -> Result<(), String> {
     let mut show = Vec::new();
     let mut textures = Vec::new();
     let mut scenes = Vec::new();
+    let mut registries = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -46,6 +47,10 @@ fn run() -> Result<(), String> {
             "--ground" => ground = true,
             "--areas" => areas = true,
             "--effects" => effects = true,
+            "--registry" => {
+                let n = args.next().ok_or("--registry needs a resource number")?;
+                registries.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
+            }
             "--scene" => {
                 let n = args.next().ok_or("--scene needs a resource number")?;
                 scenes.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -77,7 +82,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty()) {
+    if !(effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -96,6 +101,29 @@ fn run() -> Result<(), String> {
     }
     if effects {
         effect_census(&mut disc, &index)?;
+    }
+    for &n in &registries {
+        // SPEC-0060 / SPEC-0004: the trees of a resource with their kind, depth and the u16 at
+        // chunk +0x0E (the registry id of a type-8 child).
+        let bytes = index.read(&mut disc, n)?;
+        let chain = resource::walk_chunks(&bytes, None)?;
+        let (trees, _) = neopets_data::model::find_trees(&bytes, &chain.chunks);
+        let list: Vec<String> = trees.iter().filter(|t| t.depth > 0).map(|t| format!("{}:{}", t.kind, t.role_id)).collect();
+        println!("Resource {n}: {} trees; children (kind:id) {}", trees.len(), list.join(" "));
+        let patches = neopets_data::foliage::patches(&bytes, &chain.chunks);
+        if let Some(p) = patches.first() {
+            let rows: Vec<String> = p.rows.iter().map(|r| format!("({}, {:.4})", r.plants.len(), r.offset)).collect();
+            println!(
+                "  foliage: {} patches, {} plants; patch 0 box {:?} key {} height {:.4} rows {} plant 1 of row 0 at {:?}",
+                patches.len(),
+                patches.iter().flat_map(|p| &p.rows).map(|r| r.plants.len()).sum::<usize>(),
+                p.area,
+                p.key,
+                p.height,
+                rows.join(" "),
+                p.rows.first().and_then(|r| r.plants.get(1)).map(|q| q.offset)
+            );
+        }
     }
     for &n in &scenes {
         inspect_mesh::scene(&mut disc, &index, n)?;

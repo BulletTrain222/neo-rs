@@ -2,6 +2,7 @@ mod archive_view;
 mod character;
 mod controls;
 mod effect_view;
+mod foliage_view;
 mod orbit;
 mod pattern;
 mod audio_view;
@@ -1551,6 +1552,8 @@ fn apply_model(
 enum WorldPart {
     Scene(u32),
     Dome(u32),
+    /// The world's foliage patches (SPEC-0060).
+    Foliage(u32),
 }
 
 /// Keep the drawn worlds in step with the resident buffers (SPEC-0006): the current world, the
@@ -1569,9 +1572,10 @@ fn sync_worlds(
 ) {
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
     let p = &state.play;
-    let mut want = vec![WorldPart::Scene(p.world.pack)];
+    let mut want = vec![WorldPart::Scene(p.world.pack), WorldPart::Foliage(p.world.pack)];
     if let (true, Some(o)) = (p.other_drawn(), &p.other) {
         want.push(WorldPart::Scene(o.pack));
+        want.push(WorldPart::Foliage(o.pack));
     }
     let slot = p.boot.areas.slot_of(p.world.pack);
     want.push(WorldPart::Dome(neopets_data::area::dome_for_slot(slot)));
@@ -1588,6 +1592,16 @@ fn sync_worlds(
         if shown.contains(part) {
             continue;
         }
+        if let WorldPart::Foliage(pack) = *part {
+            match foliage_view::build(disc, index, p, pack) {
+                Ok((models, plants)) => {
+                    let n = foliage_view::spawn(&mut commands, &models, &plants, *part, &mut meshes, &mut materials, &mut images);
+                    info!("foliage of {pack}: {n} plants of {} models", models.len());
+                }
+                Err(e) => error!("foliage of {pack}: {e}"),
+            }
+            continue;
+        }
         let streamed = match (*part, streamer.as_deref_mut()) {
             (WorldPart::Scene(pack), Some(s)) => s.scenes.remove(&pack),
             _ => None,
@@ -1601,6 +1615,7 @@ fn sync_worlds(
                     archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false)
                 }),
             WorldPart::Dome(d) => archive_view::model(disc, index, d),
+            WorldPart::Foliage(_) => Ok(None),
         };
         match model {
             Ok(Some(m)) => {
@@ -1780,7 +1795,7 @@ fn sync_characters(
 
 /// Bevy meshes and materials for every part of a model: (part index, mesh, material). Parts are
 /// unlit and double-sided; textured parts mask alpha at 0.5.
-fn part_assets(
+pub(crate) fn part_assets(
     m: &neopets_data::model::ModelData,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,

@@ -9,6 +9,7 @@ mod elf;
 pub mod design;
 pub mod dialogue;
 pub mod effect;
+pub mod foliage;
 pub mod fingerprint;
 pub mod frontend;
 pub mod gs;
