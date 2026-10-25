@@ -4722,6 +4722,32 @@ impl Play {
         for at in sparkles {
             self.effects.one_shot(&table, 139, at, neopets_sim::effect::IDENTITY, &mut self.rng);
         }
+        // Behavior 8: a key-4 patch within 100 units of the eye moves its solid cylinder (height
+        // 25, radius 5.5 x the tree's scale) to each tree in turn and tests the hero against it;
+        // here as a horizontal push of the hero's body out of the cylinder (the shared cylinder
+        // contact response of SPEC-0018 is not built).
+        let pack = self.world.pack;
+        let trunks: Vec<([f32; 3], f32)> = self
+            .foliage
+            .get(&pack)
+            .into_iter()
+            .flatten()
+            .filter(|p| p.kind.family == neopets_sim::foliage::Family::Tree && p.kind.near == Some(200) && p.kind.far.is_none())
+            .filter(|p| (p.centre[0] - eye[0]).powi(2) + (p.centre[1] - eye[1]).powi(2) + (p.centre[2] - eye[2]).powi(2) < 100.0 * 100.0)
+            .flat_map(|p| p.plants.iter().map(|q| (q.position, 5.5 * q.scale)))
+            .collect();
+        for (base, radius) in trunks {
+            let pos = self.loco.position();
+            let (dx, dz) = (pos[0] - base[0], pos[2] - base[2]);
+            let d = (dx * dx + dz * dz).sqrt();
+            let r = radius + contact::HERO_RADIUS;
+            if d < r && d > 1e-4 && pos[1] >= base[1] - 1.0 && pos[1] <= base[1] + 25.0 {
+                let k = (r - d) / d;
+                let b = &mut self.loco.body.position;
+                b[0] += dx * k;
+                b[2] += dz * k;
+            }
+        }
         for (pack, at, ids) in drops {
             self.last_fx = format!("bush cut at {:.1},{:.1}: drop {ids:?} on tick {}", at[0], at[2], self.ticks);
             for (k, id) in ids.into_iter().enumerate() {

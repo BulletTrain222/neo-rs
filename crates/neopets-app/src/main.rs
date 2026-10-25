@@ -1983,6 +1983,8 @@ fn play_trace(
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
     let placed: Vec<String> = play.world.placed_effects.iter().take(12).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
     println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
+    let trees: Vec<String> = play.world.patches.iter().filter(|p| p.key == 4).take(3).map(|p| format!("({:.1},{:.1})", (p.area[0] + p.area[1]) / 2.0, (p.area[2] + p.area[3]) / 2.0)).collect();
+    println!("Foliage of {}: {} patches; key-4 tree patches at {}", play.world.pack, play.world.patches.len(), trees.join(" "));
     println!("Script volumes of {} (index, a point inside): {:?}", play.world.pack, play.world.volume_points());
     if to.is_some_and(|t| t[0].is_nan()) {
         let goal = match to.map(|t| t[1]) {
