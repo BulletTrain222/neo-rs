@@ -58,6 +58,8 @@ pub struct Shot {
 pub enum Event {
     /// The hero takes trunc(damage), with the blocked flag.
     Hero { damage: f32, owner: Option<u64>, blocked: bool },
+    /// After an unblocked hero hit: the status roll (status id, chance, value in seconds).
+    Status { code: i32, chance: i32, seconds: i32 },
     /// A reflected shot hits its owner for trunc(damage).
     Owner { id: u64, damage: f32 },
     /// A kind-8 release: the keyed summon (not spawned yet).
@@ -230,11 +232,14 @@ impl Pool {
                         p.at_owner = true;
                     } else {
                         let d = p.s.damage.max(0.0);
-                        out.push(if blocked {
-                            Event::Hero { damage: (0.25 * d).max(1.0), owner: p.s.owner, blocked: true }
+                        if blocked {
+                            out.push(Event::Hero { damage: (0.25 * d).max(1.0), owner: p.s.owner, blocked: true });
                         } else {
-                            Event::Hero { damage: d, owner: p.s.owner, blocked: false }
-                        });
+                            out.push(Event::Hero { damage: d, owner: p.s.owner, blocked: false });
+                            if p.s.status.0 != -1 {
+                                out.push(Event::Status { code: p.s.status.0, chance: p.s.status.1, seconds: p.s.status.2 });
+                            }
+                        }
                         *slot = None;
                         continue;
                     }
@@ -421,7 +426,8 @@ mod tests {
             if tick < 10 {
                 assert!(ev.is_empty(), "tick {tick}");
             } else {
-                assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7), blocked: false }]);
+                assert_eq!(ev[0], Event::Hero { damage: 10.0, owner: Some(7), blocked: false });
+                assert!(matches!(ev[1], Event::Status { code: 7, chance: 100, seconds: 10..=30 }), "fire at chance 100");
             }
         }
         assert_eq!(pool.live(), 0);
@@ -547,7 +553,7 @@ mod tests {
         let mut pool = Pool::default();
         pool.submit(s);
         let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
-        assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7), blocked: false }]);
+        assert_eq!(ev[0], Event::Hero { damage: 10.0, owner: Some(7), blocked: false });
     }
 
     #[test]

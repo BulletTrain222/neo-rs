@@ -1548,6 +1548,7 @@ fn play_trace(
     }
     let mut last_hurt = String::new();
     let mut last_pickup = String::new();
+    let mut statuses_shown: Vec<usize> = Vec::new();
     for _ in 0..ticks {
         // The trace waits for region loads (characters) before the next tick, up to a minute,
         // so that runs do not depend on the loader's speed.
@@ -1635,6 +1636,11 @@ fn play_trace(
                 let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", play.talk_partner.as_deref().unwrap_or(&l.speaker), l.text));
                 println!("      LevelMsg line {line} on tick {at}: {text:?}");
             }
+        }
+        let now: Vec<usize> = (0..14).filter(|&i| play.statuses.active(i)).collect();
+        if now != statuses_shown {
+            println!("      hero statuses {now:?} on tick {} (hp {}, mp {})", play.ticks, play.hero_hp, play.hero_mp);
+            statuses_shown = now;
         }
         if !play.last_pickup.is_empty() && play.last_pickup != last_pickup {
             last_pickup = play.last_pickup.clone();

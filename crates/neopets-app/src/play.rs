@@ -290,6 +290,8 @@ pub struct Play {
     heal_tables: (Vec<i32>, Vec<i32>),
     pub hero_mp: i32,
     pub hero_mp_max: i32,
+    /// The hero's 14 status timers (SPEC-0036).
+    pub statuses: neopets_sim::status::Statuses,
     pub panel_latch: neopets_sim::quick::PanelInput,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
     /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
@@ -426,6 +428,7 @@ impl Play {
             heal_tables,
             hero_mp: hero_mp_max,
             hero_mp_max,
+            statuses: Default::default(),
             panel_latch: Default::default(),
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
@@ -868,6 +871,7 @@ impl Play {
         let d2 = self.last_axis.replace(axis);
         let pack = self.world.pack;
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(0, |i| i.stats[0]);
+        let g = self.statuses.damage_scale();
         let hero_at = self.loco.position();
         for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
             if self.hit_list.contains(&c.id) {
@@ -903,7 +907,8 @@ impl Play {
                 _ => 1.0,
             };
             let x = stat_a as f32 * d_factor;
-            let y = (x - c.row.map_or(0.0, |r| r.defence)).max(0.0);
+            // y = (x - defence) x G, the attacker's status scale (curse 0.75, strength 1.5).
+            let y = ((x - c.row.map_or(0.0, |r| r.defence)) * g).max(0.0);
             let damage = y.trunc() as i32;
             // SPEC-0038 Behavior 37: the common enemy's take-hit hook (doubling on entering
             // agro, the hit reaction, facing the attacker), then the death hook at 0 HP.
@@ -1247,6 +1252,7 @@ impl Play {
         }
         self.hero_swing();
         self.loco.shield = self.shield.is_some();
+        self.status_step();
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.pending_step();
         self.hero.request(self.loco.action(), force);
@@ -1491,7 +1497,8 @@ impl Play {
             *position = wk.position();
             *facing = wk.facing;
             if let Some(s) = act.strike {
-                strikes.push((*id, s, wk.facing));
+                let m = e.p.slots[s.slot].missile;
+                strikes.push((*id, s, wk.facing, (m.status, m.status_chance, m.status_range)));
             }
         }
         // The projectile pool's update, after the region passes (SPEC-0029 Behavior 9).
@@ -1540,14 +1547,31 @@ impl Play {
                         }
                     }
                 }
+                neopets_sim::projectile::Event::Status { code, chance, seconds } => {
+                    // SPEC-0029 Behavior 9: int[0, 100] at most the chance; no stun while stunned.
+                    let r = self.rng.range(0, 100);
+                    if r <= chance && !(code == 0 && self.statuses.active(neopets_sim::status::STUN)) {
+                        self.statuses.apply(code, seconds);
+                    }
+                }
                 neopets_sim::projectile::Event::Summon { .. } => {}
             }
         }
-        for (at, s, f) in strikes {
+        for (at, s, f, status) in strikes {
             // SPEC-0036 Enemy attack damage to a hero: a blocked strike subtracts the shield
             // block (stat A of the shield; no shield Mote, no armour, no petpet).
             let block = if s.blocked { self.shield.and_then(|id| self.items.get(id)).map_or(0.0, |i| i.stats[0] as f32) } else { 0.0 };
-            if self.hero_hit(s.damage - block, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" })) {
+            let died = self.hero_hit(s.damage - block, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" }));
+            // SPEC-0038 Behavior 13 strike test: the status roll int[0, 100] strictly below the
+            // chance, for int[int(range max), int(range min)] / 60 whole seconds.
+            if status.0 != -1 && !s.blocked {
+                let r = self.rng.range(0, 100);
+                if (r as f32) < status.1 {
+                    let ticks = self.rng.range(status.2 .1 as i32, status.2 .0 as i32);
+                    self.statuses.apply(status.0, ticks / 60);
+                }
+            }
+            if died {
                 // A hit that leaves the hero at 0 HP: the attacker's victory pose (state 10).
                 if let Some(c) = self.characters.iter_mut().find(|c| c.id == at) {
                     let Character { enemy: Some(e), walker: Some(wk), anim, .. } = c else { continue };
@@ -1562,6 +1586,37 @@ impl Play {
         }
     }
 
+    /// SPEC-0036 Status effects and Regeneration, run in the hero update before its state
+    /// routine: the timers, stun (state 1, speed scale 0), the poison hit (attacker -2, blocked
+    /// flag 1), slow and speed, the regeneration statuses, then the trickle toward 10 % + 1.
+    fn status_step(&mut self) {
+        use neopets_sim::status as st;
+        let state = self.loco.state;
+        let moving = (2..=6).contains(&state) || state == 32;
+        let attacking = self.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub));
+        let t = self.statuses.tick(self.hero_hp, moving, attacking);
+        if t.stunned && state != hero_states::DEAD {
+            self.attack = None;
+            self.loco.set_end_state(hero_states::STANCE);
+        }
+        self.loco.status_scale = t.scale;
+        if let Some(d) = t.poison {
+            let f = self.loco.facing;
+            if state != hero_states::DEAD {
+                self.hero_hit(d as f32, 0.0, true, f, "poison".into());
+            }
+        }
+        self.hero_hp = (self.hero_hp + t.hp).min(self.hero_max);
+        self.hero_mp = (self.hero_mp + t.mp).min(self.hero_mp_max);
+        let poisoned = self.statuses.active(st::POISON);
+        if !poisoned {
+            self.hero_mp += neopets_sim::status::trickle(self.hero_mp, self.hero_mp_max, self.ticks, false);
+            if self.hero_hp > 0 && self.loco.state != hero_states::DEAD {
+                self.hero_hp += neopets_sim::status::trickle(self.hero_hp, self.hero_max, self.ticks, true);
+            }
+        }
+    }
+
     /// The quick panel's use step (forced): refused for a dead hero; a consumable heals pool A
     /// (health) and pool B (magic) by SPEC-0021 Consumable healing and is consumed when a pool
     /// changes. Charms run the equipped slot routine and the status and revive items their own
@@ -1571,6 +1626,58 @@ impl Play {
             return;
         }
         let Some(item) = self.items.get(id).copied() else { return };
+        use neopets_sim::status as st;
+        // SPEC-0021 Consumable effects by item id: the buffs and immunities apply only while
+        // inactive; the cure needs one of curse, poison or slow; 58 and 59 apply their
+        // regeneration before the heal check.
+        let buff = match id {
+            51 => Some(st::IMMUNE_POISON),
+            52 => Some(st::IMMUNE_CURSE),
+            53 => Some(st::IMMUNE_SLOW),
+            55 => Some(st::STRENGTH),
+            56 => Some(st::SPEED),
+            _ if !(1..=6).contains(&item.kind) && item.stats[3] > 0 => Some(st::IMMUNE_POISON),
+            _ => None,
+        };
+        let applied = match (id, buff) {
+            (_, Some(s)) => {
+                let ok = !self.statuses.active(s) && self.statuses.apply(s as i32, -1);
+                Some(ok)
+            }
+            (54, _) => {
+                let any = [st::CURSE, st::POISON, st::SLOW].iter().any(|&s| self.statuses.active(s));
+                if any {
+                    for s in [st::CURSE, st::POISON, st::SLOW] {
+                        self.statuses.clear(s);
+                    }
+                }
+                Some(any)
+            }
+            _ => None,
+        };
+        if let Some(ok) = applied {
+            if !ok {
+                self.last_pickup = format!("use of item {id} refused on tick {}", self.ticks);
+                return;
+            }
+            let left = {
+                let n = self.inventory.entry(id).or_insert(0);
+                *n = n.saturating_sub(1);
+                *n
+            };
+            self.quick.used(id as i32, left);
+            self.last_pickup = format!("used item {id} on tick {} ({left} left)", self.ticks);
+            return;
+        }
+        match id {
+            58 => {
+                self.statuses.apply(st::HEALTH_REGEN as i32, -1);
+            }
+            59 => {
+                self.statuses.apply(st::MAGIC_REGEN as i32, -1);
+            }
+            _ => {}
+        }
         let (mut pa, mut pb) = (item.stats[4] as i32, item.stats[5] as i32);
         if (1..=6).contains(&item.kind) || item.kind == 17 {
             (pa, pb) = (0, 0);
@@ -1778,6 +1885,8 @@ impl Play {
             return false;
         }
         let damage = damage.max(0.0).trunc() as i32;
+        // A hit on a living hero ends an active stun.
+        self.statuses.clear(neopets_sim::status::STUN);
         let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
         if !busy && blocked {
             self.loco.block();
@@ -1805,6 +1914,7 @@ impl Play {
     fn default_death(&mut self) {
         self.attack = None;
         self.hit_list.clear();
+        self.statuses.clear_all();
         self.loco.die();
     }
 
@@ -1918,7 +2028,7 @@ impl Play {
     pub fn status(&self) -> String {
         let p = self.loco.position();
         format!(
-            "PLAY (M7): hero at ({:.1}, {:.1}, {:.1}), state {}, phase {}, action {}, rate {:.2}, gap {:.2}, hp {}/{}, {} NP{}. \
+            "PLAY (M7): hero at ({:.1}, {:.1}, {:.1}), state {}, phase {}, action {}, rate {:.2}, gap {:.2}, hp {}/{}, mp {}/{}, {} NP{}. \
              WASD move, Shift run (R1), Space jump (Cross), J/L I/K or right stick camera, R recentre (R3)",
             p[0],
             p[1],
@@ -1930,6 +2040,8 @@ impl Play {
             self.loco.body.gap,
             self.hero_hp,
             self.hero_max,
+            self.hero_mp,
+            self.hero_mp_max,
             self.wallet,
             if self.last_hurt.is_empty() { String::new() } else { format!(" ({})", self.last_hurt) }
         ) + &if self.quick.open {

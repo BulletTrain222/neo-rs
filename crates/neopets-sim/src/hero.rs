@@ -203,6 +203,9 @@ pub struct Locomotion {
     run_counter: u32,
     /// The hero holds a usable shield (the guard's entry gate).
     pub shield: bool,
+    /// The speed scale P after the status routine (SPEC-0036 Status effects), the base of the
+    /// play rate before the speed tiers.
+    pub status_scale: f32,
 }
 
 impl Locomotion {
@@ -221,6 +224,7 @@ impl Locomotion {
             request: 0,
             run_counter: RUN_RESTART,
             shield: false,
+            status_scale: 1.0,
         }
     }
 
@@ -351,7 +355,7 @@ impl Locomotion {
     /// chooser, the facing turn and the speed tiers; in the air the air routine.
     pub fn update(&mut self, input: &HeroInput, camera_forward: Vec3, camera_left: Vec3, clip: ClipState) {
         let v = speed_value(input);
-        self.rate = 1.0;
+        self.rate = self.status_scale;
         if v > 0.0 {
             let l = v.max(f32::MIN_POSITIVE);
             let (x, z) = (input.side / l, input.forward / l);
