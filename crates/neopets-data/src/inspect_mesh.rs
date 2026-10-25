@@ -585,6 +585,23 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             let _ = std::fs::write("private/hud-tree.txt", out.join("
 "));
         }
+        let title: Vec<String> = f
+            .children(759)
+            .iter()
+            .filter(|&&n| f.nodes[n].kind == 4)
+            .map(|&n| {
+                let label = f.children(n).iter().find_map(|&c| f.label(c)).map(|l| String::from_utf8_lossy(&l.text).into_owned()).unwrap_or_default();
+                format!("{n} {label:?} {:?}", f.targets.get(&n))
+            })
+            .collect();
+        println!(
+            "Front-end text: {} label bindings ({} with text), {} pages {:?}, {} item targets; title items {title:?}",
+            f.labels.len(),
+            f.labels.values().filter(|l| !l.text.is_empty()).count(),
+            f.pages.len(),
+            { let mut v: Vec<_> = f.pages.iter().map(|(n, pg)| (*n, pg.list)).collect(); v.sort(); v },
+            f.targets.len()
+        );
         let logical: Vec<String> = [0x19u32, 0x1B, 0x78, 0x79]
             .iter()
             .map(|&k| match f.key(k) {

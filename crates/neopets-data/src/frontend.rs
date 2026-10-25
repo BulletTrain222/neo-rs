@@ -2,8 +2,9 @@
 //! section table, key-to-node map C, screen records D, sprite records E, label bindings G, the
 //! UI node tree J, value-text records K and asset paths O) and its type-4 texture sheet, whose
 //! sub-textures the sheet assets name by their TEX0 words (SPEC-0023 HUD screen and art).
-//! The fonts of the tail (SPEC-0022 Fonts) are read, with a measure and a text renderer.
-//! Strings, pages, item targets, and animation tracks and slots are not read yet.
+//! The fonts of the tail (SPEC-0022 Fonts) are read, with a measure and a text renderer, and
+//! the strings (A and T), label bindings (G), pages (H) and item targets (I). Animation tracks
+//! and slots are not read yet.
 
 use crate::resource::{self, Chunk};
 use crate::gsmem::GsMemory;
@@ -74,6 +75,29 @@ pub struct ValueText {
     pub spacing: i16,
     pub gate: u8,
     pub format: u8,
+}
+
+/// A section G label binding: the string, its start colour, letter spacing and font id.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Label {
+    pub text: Vec<u8>,
+    pub colour: [u8; 4],
+    pub spacing: i16,
+    pub font: i16,
+}
+
+/// A section H page: its default focus index and mode (1 list, 0 spatial).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Page {
+    pub focus: u16,
+    pub list: bool,
+}
+
+/// A section I item target: the Cross target (stack code or record) and the focus state.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Target {
+    pub target: i16,
+    pub state: i16,
 }
 
 /// A section D screen record.
@@ -160,6 +184,11 @@ pub struct Frontend {
     pub values: HashMap<u32, ValueText>,
     pub assets: Vec<Asset>,
     pub fonts: Vec<Font>,
+    /// Label bindings by their payload offset (a text node's data), pages and item targets by
+    /// node index.
+    pub labels: HashMap<u32, Label>,
+    pub pages: HashMap<usize, Page>,
+    pub targets: HashMap<usize, Target>,
     pub texture: Option<TextureChunk>,
 }
 
@@ -299,12 +328,60 @@ impl Frontend {
             })
             .collect::<Option<Vec<_>>>()
             .unwrap_or_default();
-        Ok(Self { nodes, keys, screens, sprites, values, assets, fonts, texture: None })
+        // Strings: A holds offsets from the start of T.
+        let (a0, t0) = (start(0)?, start(1)?);
+        let string = |i: usize| -> Vec<u8> {
+            let Some(off) = u32_at(p, a0 + 4 * i) else { return Vec::new() };
+            let s = p.get(t0 + off as usize..).unwrap_or(&[]);
+            s[..s.iter().position(|&b| b == 0).unwrap_or(s.len())].to_vec()
+        };
+        let n_strings = count(0x38)?;
+        let g0 = start(6)?;
+        let mut labels = HashMap::new();
+        for i in 0..count(0x20)? {
+            let r = g0 + 16 * i;
+            let si = u32_at(p, r + 4).ok_or_else(bad)? as usize;
+            labels.insert(
+                r as u32,
+                Label {
+                    text: if si < n_strings { string(si) } else { Vec::new() },
+                    colour: p.get(r + 8..r + 12).ok_or_else(bad)?.try_into().unwrap(),
+                    spacing: i16_at(p, r + 0x0C).ok_or_else(bad)?,
+                    font: i16_at(p, r + 0x0E).ok_or_else(bad)?,
+                },
+            );
+        }
+        let h0 = start(7)?;
+        let mut pages = HashMap::new();
+        for i in 0..count(0x24)? {
+            let r = h0 + 12 * i;
+            if let Some(n) = node_of(u32_at(p, r).ok_or_else(bad)?) {
+                pages.insert(n, Page { focus: u16_at(p, r + 6).ok_or_else(bad)?, list: p.get(r + 0x0A) == Some(&1) });
+            }
+        }
+        let i0 = start(8)?;
+        let mut targets = HashMap::new();
+        for i in 0..count(0x28)? {
+            let r = i0 + 8 * i;
+            if let Some(n) = node_of(u32_at(p, r).ok_or_else(bad)?) {
+                targets.insert(n, Target { target: i16_at(p, r + 4).ok_or_else(bad)?, state: i16_at(p, r + 6).ok_or_else(bad)? });
+            }
+        }
+        Ok(Self { nodes, keys, screens, sprites, values, assets, fonts, labels, pages, targets, texture: None })
     }
 
     /// The node a section C key names.
     pub fn key(&self, k: u32) -> Option<usize> {
         self.keys.get(&k).copied()
+    }
+
+    /// A text node's label binding.
+    pub fn label(&self, node: usize) -> Option<&Label> {
+        let n = self.nodes.get(node)?;
+        if n.kind != 2 {
+            return None;
+        }
+        self.labels.get(&n.data)
     }
 
     /// A sprite node's record.

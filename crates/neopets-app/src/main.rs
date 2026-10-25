@@ -4,6 +4,8 @@ mod controls;
 mod orbit;
 mod pattern;
 mod hud_view;
+mod menu_view;
+mod menus;
 mod play;
 
 use bevy::asset::RenderAssetUsages;
@@ -24,7 +26,7 @@ const PLAY_OUTFIT: u32 = 504;
 
 /// Play mode was asked for, in this world pack (`--pack`, default 909).
 #[derive(Resource)]
-struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>);
+struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>, bool);
 
 /// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
 /// can show travel without a person at the controls; `--autojump` also presses Cross every 2 s.
@@ -341,6 +343,9 @@ fn main() {
     let mut give: Vec<u16> = Vec::new();
     // `--guard`: the fight trace holds L1 (the shield guard) while it is close to its enemy.
     let mut guard = false;
+    // `--title`: start at the front end's card state (logo, legal screen, title) instead of in
+    // play.
+    let mut title = false;
     let mut start: Option<[f32; 2]> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
@@ -410,6 +415,8 @@ fn main() {
             give.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
         } else if arg == "--guard" {
             guard = true;
+        } else if arg == "--title" {
+            title = true;
         } else if arg == "--seed" {
             seed = args.next().and_then(|v| v.parse::<u32>().ok());
         } else if arg == "--flag" {
@@ -469,7 +476,7 @@ fn main() {
     if let Some(archive) = archive {
         app.insert_resource(archive);
         if play_mode {
-            app.insert_resource(PlayRequest(play_pack, look, give.clone()));
+            app.insert_resource(PlayRequest(play_pack, look, give.clone(), title));
         }
         if let Some(auto) = autowalk {
             app.insert_resource(auto);
@@ -502,7 +509,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud, hud_view::sync_textbox).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu).chain(),
             )
                 .chain(),
         );
@@ -720,6 +727,8 @@ fn step_sim(
     mut models: ResMut<ModelView>,
     play: Option<ResMut<PlayState>>,
     autowalk: Option<Res<AutoWalk>>,
+    mut menu: Option<ResMut<menu_view::Menu>>,
+    art: Option<Res<hud_view::HudArt>>,
 ) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
@@ -788,7 +797,23 @@ fn step_sim(
         let r3_held = keys.pressed(KeyCode::KeyR) || gamepads.iter().any(|g| g.pressed(GamepadButton::RightThumb));
         play.play.r3_latch |= keys.just_pressed(KeyCode::KeyR)
             || gamepads.iter().any(|g| g.just_pressed(GamepadButton::RightThumb));
+        // SPEC-0035: the front end runs once per tick; outside play and the game-over page the
+        // world is frozen and the hero's buttons are dropped.
+        let (mut edge, mut buttons) = menu_view::menu_words(&keys, &gamepads);
         for _ in 0..ticks {
+            if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                let ctx = menus::Ctx { game_over: play.play.death.page.is_some() || play.play.death.flag_e };
+                m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx);
+                let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER);
+                play.play.menu_open = frozen;
+                if frozen {
+                    play.play.jump_latch = false;
+                    play.play.square_latch = false;
+                    play.play.attack_latch = false;
+                    play.play.panel_latch = Default::default();
+                    continue;
+                }
+            }
             input.jump = std::mem::take(&mut play.play.jump_latch);
             input.square = std::mem::take(&mut play.play.square_latch);
             input.attack = std::mem::take(&mut play.play.attack_latch);
@@ -1697,6 +1722,12 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
             // The HUD's art: the front-end database and texture sheet of resource 532.
             match index.read(disc, neopets_data::frontend::RESOURCE).and_then(|b| neopets_data::frontend::Frontend::parse(&b)) {
                 Ok(f) => {
+                    // The front-end flow: the card state with `--title`, else play directly.
+                    let mut flow = menus::Flow::new(&f);
+                    if !request.3 {
+                        flow.set(&f, menus::PLAY);
+                    }
+                    commands.insert_resource(menu_view::Menu { flow });
                     if let Some(art) = hud_view::HudArt::new(f) {
                         commands.insert_resource(art);
                     }

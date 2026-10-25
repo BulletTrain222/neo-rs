@@ -38,7 +38,17 @@ pub struct HudArt {
     name: Option<(String, Handle<Image>, u32, u32, i32)>,
 }
 
+/// Shared read access to the front-end database and its texture memory.
+pub struct HudArtParts<'a> {
+    pub f: &'a Frontend,
+    pub mem: &'a GsMemory,
+}
+
 impl HudArt {
+    pub fn parts(&self) -> HudArtParts<'_> {
+        HudArtParts { f: &self.f, mem: &self.mem }
+    }
+
     pub fn new(f: Frontend) -> Option<Self> {
         let mem = f.memory()?;
         Some(Self { f, mem, images: HashMap::new(), name: None })
@@ -226,7 +236,7 @@ pub fn sync_hud(
     if let Some(t) = f.key(TINT) {
         subtree(f, t, &mut tinted);
     }
-    let shown = p.spawned && !p.dialogue_open && p.death.page.is_none();
+    let shown = p.spawned && !p.dialogue_open && p.death.page.is_none() && !p.menu_open;
     let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
     for (sprite, mut node, mut image, mut vis) in &mut sprites {
         let n = sprite.0;

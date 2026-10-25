@@ -327,6 +327,8 @@ pub struct Play {
     next_character: u64,
     /// Set once the hero's meshes exist.
     pub spawned: bool,
+    /// A front-end page other than play is up (the world is frozen and the HUD hidden).
+    pub menu_open: bool,
 }
 
 impl Play {
@@ -511,6 +513,7 @@ impl Play {
             region_wanted: Vec::new(),
             next_character: 0,
             spawned: false,
+            menu_open: false,
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
         // which for 909 loads the farm family's slots.
