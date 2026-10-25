@@ -74,6 +74,11 @@ impl Walker {
         self.body.position
     }
 
+    /// The current walk waypoint (the steer point of the route step).
+    pub fn waypoint(&self) -> Vec3 {
+        self.steer_point
+    }
+
     /// A fresh block: the confinement pushed during the previous tick.
     pub fn fresh_block(&self) -> bool {
         self.blocked && self.blocked_timer == 120

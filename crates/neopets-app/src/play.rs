@@ -10,7 +10,9 @@ use neopets_data::travel::{BootTravel, Kind, Neighbours};
 use neopets_data::{Disc, resource};
 use neopets_sim::camera::{self, CameraPad, FollowCamera, Followed};
 use neopets_sim::contact::{self, BoxShape, WallEdge};
-use neopets_sim::hero::{HeroInput, Locomotion};
+use neopets_sim::combat::Cylinder;
+use neopets_sim::enemy::{self, Enemy};
+use neopets_sim::hero::{self as hero_states, HeroInput, Locomotion};
 use neopets_sim::level::{self, Action, GameState};
 use neopets_sim::motion::HERO_HEIGHT;
 use neopets_sim::travel::{self as buffers, Buffer};
@@ -190,6 +192,10 @@ pub struct Character {
     /// Class-7 Whinnies: their walker (motion record and navigation) and routine.
     pub walker: Option<neopets_sim::walker::Walker>,
     pub whinny: Option<neopets_sim::whinny::Whinny>,
+    /// Class-17 common enemies (SPEC-0038) that do not fly: the AI, and the five weapon
+    /// volumes (radius, length) of the row (SPEC-0029 Behavior 10.2).
+    pub enemy: Option<Enemy>,
+    weapons: [(f32, f32); 5],
     root_step: [f32; 3],
 }
 
@@ -254,6 +260,12 @@ pub struct Play {
     last_axis: Option<[f32; 3]>,
     /// The last hit, for the status line.
     pub last_hit: String,
+    /// The hero's health and maximum (SPEC-0036 Start values), the band factor tables
+    /// (SPEC-0038 Behavior 18) and the last hit taken.
+    pub hero_hp: i32,
+    pub hero_max: i32,
+    bands: (Vec<f32>, Vec<f32>),
+    pub last_hurt: String,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
@@ -279,6 +291,11 @@ impl Play {
             .into_iter()
             .map(f32::from_bits)
             .collect();
+        let hero_max = neopets_data::archive::boot_u32_table(&boot_bytes, neopets_data::item::HEALTH_TOR, 1)?[0] as i32;
+        let floats = |at: u32| -> Result<Vec<f32>, String> {
+            Ok(neopets_data::archive::boot_u32_table(&boot_bytes, at, 7)?.into_iter().map(f32::from_bits).collect())
+        };
+        let bands = (floats(neopets_data::monster::BAND_F1)?, floats(neopets_data::monster::BAND_F2)?);
         let (world, bytes) = World::load(disc, index, &boot, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
         let (spawn, facing) = ground::spawn(&bytes, &chain.chunks).unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
@@ -347,6 +364,10 @@ impl Play {
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
+            hero_hp: hero_max,
+            hero_max,
+            bands,
+            last_hurt: String::new(),
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             region_wanted: Vec::new(),
@@ -783,7 +804,8 @@ impl Play {
         let d2 = self.last_axis.replace(axis);
         let pack = self.world.pack;
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(0, |i| i.stats[0]);
-        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.dying.is_none()) {
+        let hero_at = self.loco.position();
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
             if self.hit_list.contains(&c.id) {
                 continue;
             }
@@ -819,8 +841,20 @@ impl Play {
             let x = stat_a as f32 * d_factor;
             let y = (x - c.row.map_or(0.0, |r| r.defence)).max(0.0);
             let damage = y.trunc() as i32;
+            // SPEC-0038 Behavior 37: the common enemy's take-hit hook (doubling on entering
+            // agro, the hit reaction, facing the attacker), then the death hook at 0 HP.
+            if let Some(e) = c.enemy.as_mut() {
+                let (applied, toward) = e.take_hit(damage, hero_at, &mut self.rng);
+                if let Some(w) = c.walker.as_mut() {
+                    w.steer_to(toward, 1.0);
+                }
+                c.hp -= applied;
+                if c.hp <= 0 {
+                    c.hp = 0;
+                    e.die();
+                }
+            } else if damage > 0 && c.townsfolk.is_none() {
             // SPEC-0056: the take-hit of a townsfolk character returns at once.
-            if damage > 0 && c.townsfolk.is_none() {
                 c.hp -= damage;
                 if c.hp <= 0 {
                     c.dying = Some(c.row.map_or(60, |r| r.disappear.max(1) as u32));
@@ -884,13 +918,13 @@ impl Play {
         pack: u32,
         slot: u8,
         region: u32,
-        loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>)>,
+        loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>, Option<neopets_data::monster::Tuning>)>,
     ) {
         if self.slot_regions.get(&(pack, slot)) != Some(&region) {
             return;
         }
         self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
-        for (pl, model, anim, row) in loaded {
+        for (pl, model, anim, row, tuning) in loaded {
             self.next_character += 1;
             // Characters have motion records and settle on the ground under their placement
             // (the ground step probes 2.5 above; SPEC-0018). The fall itself is not simulated.
@@ -908,10 +942,19 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| r.class == Some(7)).map(|r| {
+                walker: row.filter(|r| r.class == Some(7) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
+                enemy: match (row, tuning) {
+                    (Some(r), Some(t)) if r.class == Some(17) && r.can_fly == 0 => Some(Enemy::new(
+                        params(&r, &t),
+                        enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector },
+                        &mut self.rng,
+                    )),
+                    _ => None,
+                },
+                weapons: tuning.map_or([(0.0, 0.0); 5], |t| t.weapons),
                 root_step: [0.0; 3],
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
@@ -1062,6 +1105,9 @@ impl Play {
         self.square_now = input.square;
         // The attack press edge enters state 13 from the ground states (SPEC-0036); the step
         // then runs every tick and decides the clip.
+        if matches!(self.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
+            input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
+        }
         if self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start());
         }
@@ -1146,7 +1192,7 @@ impl Play {
                 *t = t.saturating_sub(1);
             }
         }
-        self.characters.retain(|c| c.dying != Some(0));
+        self.characters.retain(|c| c.dying != Some(0) && !c.enemy.as_ref().is_some_and(|e| e.gone));
         // Characters and slot choices of worlds that are no longer resident are released.
         let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
         self.characters.retain(|c| resident.contains(&c.pack));
@@ -1174,6 +1220,7 @@ impl Play {
             c.position = wk.position();
             c.facing = wk.facing;
         }
+        self.enemies_step();
         for c in &mut self.characters {
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
@@ -1185,6 +1232,155 @@ impl Play {
             }
             c.root_step = c.anim.tick();
         }
+    }
+
+    /// The common enemies of the current world (SPEC-0038): their view of the hero, the think
+    /// loop, movement by the walker (navigation and root-step travel), and their strikes on the
+    /// hero (SPEC-0036 Enemy attack damage to a hero, Taking a hit, Knockback, Health and death).
+    fn enemies_step(&mut self) {
+        let hero = self.loco.position();
+        let hero_facing = self.loco.facing;
+        let hplace = placement(hero, hero_facing);
+        let hframes = self.hero.bone_frames();
+        let caps: Vec<Cylinder> = self
+            .hero
+            .bones()
+            .hurt
+            .iter()
+            .zip(&hframes)
+            .filter(|(h, _)| h.1 > 0.0)
+            .map(|(&(base, length, radius), f)| {
+                let w = hplace.mul(f);
+                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+            })
+            .collect();
+        let bands = enemy::band_factors(self.loco.state, &self.bands.0, &self.bands.1);
+        let attackable = self.loco.state != hero_states::DEAD && !self.dialogue_open;
+        let world = &self.world;
+        let mut strikes = Vec::new();
+        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack) {
+            let Character { id, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, .. } = c else { continue };
+            let p = wk.position();
+            if e.dead {
+                let clip = anim.clip_state();
+                let has = |id: u32| anim.has(id);
+                let v = enemy_view(p, wk, hero, hero_facing, bands, attackable, true, (false, false), false, 0.0, clip, &has);
+                let act = e.tick(&v, &mut self.rng);
+                if let Some(id) = act.anim {
+                    anim.request(id, false);
+                }
+                wk.body.position[1] -= act.sink;
+                *position = wk.position();
+                continue;
+            }
+            // The navmesh pick: the first ground mesh holding the enemy (SPEC-0038 Behavior 6).
+            if wk.mesh.and_then(|i| world.navmeshes.get(i)).is_none_or(|m| m.locate_full(p).is_none()) {
+                let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.locate_full(p).is_some());
+                if pick.is_some() {
+                    wk.assign_mesh(pick, &world.navmeshes);
+                }
+            }
+            let mesh = wk.mesh.and_then(|i| world.navmeshes.get(i));
+            let (route, on_mesh) = match mesh {
+                Some(m) => {
+                    let (a, b) = (m.locate_full(p), m.locate_full(hero));
+                    (a.zip(b).is_some_and(|(a, b)| a == b || m.route(a, b).is_some()), b.is_some())
+                }
+                None => (true, true),
+            };
+            // The sight line between sampled points (half the body heights; R-0015).
+            let eye = [p[0], p[1] + 0.5 * row.height, p[2]];
+            let at = [hero[0], hero[1] + 0.5 * HERO_HEIGHT, hero[2]];
+            let sight = world.ground.as_ref().is_none_or(|g| g.segment_clear(eye, at, true));
+            // The strike test: weapon N while event bit 2^(N-1) is set, a cylinder centred on
+            // attach frame N-1's anchor along its Z row, against the hero's bone capsules.
+            let bits = anim.frame_bits();
+            let place = placement(p, wk.facing);
+            let frames = anim.bone_frames();
+            let contact = (0..5).any(|n| {
+                if bits & (1 << n) == 0 {
+                    return false;
+                }
+                let Some(&(Some(bone), angles, offset)) = anim.bones().attach.get(n) else { return false };
+                let Some(bw) = frames.get(bone) else { return false };
+                let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+                let (radius, length) = weapons[n];
+                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+            });
+            let clip = anim.clip_state();
+            let has = |id: u32| anim.has(id);
+            let speed = (root_step[0].powi(2) + root_step[2].powi(2)).sqrt();
+            let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
+            v.radii = row.radius + contact::HERO_RADIUS;
+            let act = e.tick(&v, &mut self.rng);
+            if let Some(id) = act.anim {
+                anim.request(id, act.force);
+            }
+            anim.set_rate(act.rate.unwrap_or(1.0));
+            match act.go {
+                Some(enemy::Go::Toward(t)) => {
+                    wk.nav_step(&world.navmeshes, t, hero);
+                }
+                Some(enemy::Go::Facing(t)) => wk.steer_to(t, 0.3),
+                None => {}
+            }
+            if let Some((t, w)) = act.face {
+                wk.steer_to(t, w.clamp(0.0, 1.0));
+            }
+            let step = if act.stop { [0.0; 3] } else { *root_step };
+            let ground = &world.ground;
+            wk.motion_tick(step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+            *position = wk.position();
+            *facing = wk.facing;
+            if let Some(s) = act.strike {
+                strikes.push((*id, s, wk.facing));
+            }
+        }
+        for (at, s, f) in strikes {
+            if self.hero_hit(s, f) {
+                // A hit that leaves the hero at 0 HP: the attacker's victory pose (state 10).
+                if let Some(c) = self.characters.iter_mut().find(|c| c.id == at) {
+                    let Character { enemy: Some(e), walker: Some(wk), anim, .. } = c else { continue };
+                    let has = |id: u32| anim.has(id);
+                    let v = enemy_view(wk.position(), wk, hero, hero_facing, bands, false, true, (true, true), false, 0.0, anim.clip_state(), &has);
+                    let act = e.hero_down(&v, &mut self.rng);
+                    if let Some(id) = act.anim {
+                        anim.request(id, false);
+                    }
+                }
+            }
+        }
+    }
+
+    /// A common-enemy strike on the hero: SPEC-0036 Enemy attack damage to a hero (no guard,
+    /// so no block; no armour, Motes or petpet; status scale 1), Taking a hit (the dialogue box
+    /// discards hits; a dead hero takes none; Tor's charge sub-states 1 and 10 are busy), the
+    /// deduct and the default death, and the knockback. Returns whether the hero died.
+    fn hero_hit(&mut self, s: enemy::Strike, attacker_facing: [f32; 3]) -> bool {
+        if self.dialogue_open || self.loco.state == hero_states::DEAD {
+            return false;
+        }
+        let damage = s.damage.max(0.0).trunc() as i32;
+        let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
+        if !busy {
+            self.attack = None;
+            self.loco.hurt(self.weapon.is_some());
+        }
+        self.hero_hp -= damage;
+        self.last_hurt = format!("took {damage} (slot {}), hp {}", s.slot, self.hero_hp.max(0));
+        if self.hero_hp <= 0 {
+            self.hero_hp = 0;
+            self.attack = None;
+            self.loco.die();
+            return true;
+        }
+        if damage > 0 && s.knockback > 0.0 {
+            let d = unit([9.0 * attacker_facing[0], 9.0 * attacker_facing[1] + 12.0, 9.0 * attacker_facing[2]]);
+            self.attack = None;
+            self.loco.knock(scale(d, s.knockback));
+        }
+        false
     }
 
     pub fn status_camera(&self) -> String {
@@ -1230,6 +1426,19 @@ impl Play {
                     c.position[2]
                 ),
                 Some(t) => format!("{} [mode {} id {}]", c.name, t.mode, c.anim.action()),
+                None if c.enemy.is_some() => {
+                    let e = c.enemy.as_ref().unwrap();
+                    let what = if e.dead { "dead".to_string() } else { format!("state {} outer {} inner {} seq {}", e.state, e.outer, e.inner, e.seq) };
+                    format!(
+                        "{} [{what}, hp {}, id {} at {:.0},{:.1},{:.0}]",
+                        if c.name.is_empty() { "(unnamed)" } else { &c.name },
+                        c.hp,
+                        c.anim.action(),
+                        c.position[0],
+                        c.position[1],
+                        c.position[2]
+                    )
+                }
                 None => match c.row {
                     Some(r) => format!("{} [class {} hp {}]", if c.name.is_empty() { "(unnamed)" } else { &c.name }, r.class.unwrap_or(-1), r.hit_points),
                     None => c.name.clone(),
@@ -1242,7 +1451,7 @@ impl Play {
             names.push(format!("round-up flags {roundup:?}"));
         }
         format!(
-            "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}\nCHARACTERS (townsfolk modes 0, 10 to 13; no walks or enemy AI): {}",
+            "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}\nCHARACTERS (townsfolk modes 0, 10 to 13; common enemies SPEC-0038, partial): {}",
             self.world.pack,
             self.world.buffer,
             self.swaps,
@@ -1254,9 +1463,19 @@ impl Play {
     pub fn status(&self) -> String {
         let p = self.loco.position();
         format!(
-            "PLAY (M7): hero at ({:.1}, {:.1}, {:.1}), state {}, phase {}, action {}, rate {:.2}, gap {:.2}. \
+            "PLAY (M7): hero at ({:.1}, {:.1}, {:.1}), state {}, phase {}, action {}, rate {:.2}, gap {:.2}, hp {}/{}{}. \
              WASD move, Shift run (R1), Space jump (Cross), J/L I/K or right stick camera, R recentre (R3)",
-            p[0], p[1], p[2], self.loco.state, self.loco.phase, self.loco.action(), self.loco.rate, self.loco.body.gap
+            p[0],
+            p[1],
+            p[2],
+            self.loco.state,
+            self.loco.phase,
+            self.loco.action(),
+            self.loco.rate,
+            self.loco.body.gap,
+            self.hero_hp,
+            self.hero_max,
+            if self.last_hurt.is_empty() { String::new() } else { format!(" ({})", self.last_hurt) }
         )
     }
 }
@@ -1302,6 +1521,102 @@ fn attach_rotation(t: [f32; 3], angles: [f32; 3]) -> neopets_data::anim::Affine 
     };
     let tr = neopets_data::anim::Affine { cols: neopets_data::anim::Affine::IDENTITY.cols, t };
     tr.mul(&rot(2, angles[2])).mul(&rot(1, angles[1])).mul(&rot(0, angles[0]))
+}
+
+/// The sim's monster-row values from the disc row (SPEC-0038 Layout section 2).
+fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> enemy::Params {
+    let slot = |s: &neopets_data::monster::AttackSlot| enemy::Slot {
+        kind: s.kind,
+        orient: s.orient,
+        trigger_max: s.trigger_max,
+        trigger_min: s.trigger_min,
+        chance: s.chance,
+        special: s.special,
+        wind_speed: s.wind_speed,
+        strike_speed: s.strike_speed,
+        recover_speed: s.recover_speed,
+        arc: s.arc,
+        range: s.range,
+        delay_max: s.delay_max,
+        delay_min: s.delay_min,
+        charge: s.charge,
+        charge_max: s.charge_max,
+        charge_min: s.charge_min,
+        damage: s.damage,
+        knockback: s.knockback,
+        flags: s.flags,
+        spawn_cap: s.spawn_cap,
+        loopable: s.loopable,
+        loop_min: s.loop_min,
+        loop_max: s.loop_max,
+        loop_hold: s.loop_hold,
+    };
+    enemy::Params {
+        approach: t.approach,
+        hostile: r.hostile,
+        display_default: t.display_default,
+        can_fly: r.can_fly,
+        search_max: t.search_max,
+        search_min: t.search_min,
+        attack_timer_max: t.attack_timer_max,
+        attack_timer_min: t.attack_timer_min,
+        approach_timer_max: t.approach_timer_max,
+        approach_timer_min: t.approach_timer_min,
+        turn: t.turn,
+        distance_hide: t.distance_hide,
+        flying_hit: t.flying_hit,
+        anger: t.anger,
+        view_angle: t.view_angle,
+        awareness: t.awareness,
+        awareness_timer: t.awareness_timer,
+        chance_far: t.chance_far,
+        chance_near: t.chance_near,
+        range_far: t.range_far,
+        range_near: t.range_near,
+        always_sight: t.always_sight,
+        rush: t.rush,
+        desired: t.desired,
+        retreat: t.retreat,
+        strafe: t.strafe,
+        backbiter: t.backbiter,
+        disappear: r.disappear as i32,
+        slots: t.slots.each_ref().map(slot),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn enemy_view<'a>(
+    p: [f32; 3],
+    wk: &neopets_sim::walker::Walker,
+    hero: [f32; 3],
+    hero_facing: [f32; 3],
+    bands: (f32, f32),
+    attackable: bool,
+    sight: bool,
+    (route, hero_on_mesh): (bool, bool),
+    contact: bool,
+    speed: f32,
+    clip: neopets_sim::hero::ClipState,
+    has: &'a dyn Fn(u32) -> bool,
+) -> enemy::View<'a> {
+    enemy::View {
+        position: p,
+        facing: wk.facing,
+        hero,
+        hero_facing,
+        hero_attackable: attackable,
+        bands,
+        sight,
+        route,
+        hero_on_mesh,
+        waypoint: wk.waypoint(),
+        blocked: wk.blocked,
+        speed,
+        contact,
+        radii: 0.0,
+        clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },
+        has,
+    }
 }
 
 /// SPEC-0008: the seed from the local clock (seconds, minutes, hours, day, month, year).

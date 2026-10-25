@@ -2,6 +2,10 @@
 //! (companion rows of 0x60 bytes) share a header of u32 N = 112 types and N u32 first-row
 //! indices; rows start at 0x1D0. A placement's row is first[type] + variant.
 
+/// SPEC-0038 Behavior 18: the band factors F1 and F2 (seven f32 each) in the boot program.
+pub const BAND_F1: u32 = 0x002D_D5A4;
+pub const BAND_F2: u32 = 0x002D_D5C0;
+
 const HEADER_TYPES: usize = 112;
 const ROWS_AT: usize = 0x1D0;
 const ROW: usize = 0x504;
@@ -37,6 +41,71 @@ pub struct Row {
     pub disappear: u16,
 }
 
+/// One attack slot k of a row (SPEC-0038 Layout section 2).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct AttackSlot {
+    /// 0 melee, 1 missile, 0xFFFF unused (+0x16C + 2k).
+    pub kind: u16,
+    pub orient: bool,
+    pub trigger_max: f32,
+    pub trigger_min: f32,
+    pub chance: f32,
+    pub special: f32,
+    pub wind_speed: f32,
+    pub strike_speed: f32,
+    pub recover_speed: f32,
+    pub arc: f32,
+    pub range: f32,
+    pub delay_max: f32,
+    pub delay_min: f32,
+    pub charge: i32,
+    pub charge_max: f32,
+    pub charge_min: f32,
+    pub damage: f32,
+    pub knockback: f32,
+    pub flags: u32,
+    pub spawn_cap: u16,
+    pub loopable: bool,
+    pub loop_min: i32,
+    pub loop_max: i32,
+    pub loop_hold: f32,
+}
+
+/// The values the common-enemy class reads (SPEC-0038 Layout section 2) and the five weapon
+/// volumes (SPEC-0029 Behavior 10.2).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Tuning {
+    pub approach: u16,
+    pub display_default: bool,
+    pub search_max: f32,
+    pub search_min: f32,
+    pub attack_timer_max: f32,
+    pub attack_timer_min: f32,
+    pub approach_timer_max: f32,
+    pub approach_timer_min: f32,
+    pub turn: f32,
+    /// Distance hide flag (u16 +0xA0).
+    pub distance_hide: bool,
+    pub flying_hit: i32,
+    pub anger: bool,
+    pub view_angle: f32,
+    pub awareness: i32,
+    pub awareness_timer: f32,
+    pub chance_far: f32,
+    pub chance_near: f32,
+    pub range_far: f32,
+    pub range_near: f32,
+    pub always_sight: bool,
+    pub rush: (f32, f32),
+    pub desired: (f32, f32),
+    pub retreat: (f32, f32),
+    pub strafe: (f32, f32),
+    pub backbiter: f32,
+    pub slots: [AttackSlot; 4],
+    /// Weapon N: (radius +4(N-1), full length +0x14 + 4(N-1)), clamped to 40.0.
+    pub weapons: [(f32, f32); 5],
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct MonsterTable {
     rows: Vec<u8>,
@@ -64,8 +133,81 @@ impl MonsterTable {
         Some(*self.first.get(monster_type as usize)? as usize + variant as usize)
     }
 
+    /// The class-17 values of (type, variant).
+    pub fn tuning(&self, monster_type: u16, variant: u16) -> Option<Tuning> {
+        self.tuning_at(self.index(monster_type, variant)?)
+    }
+
+    /// The class-17 values of row i.
+    pub fn tuning_at(&self, i: usize) -> Option<Tuning> {
+        let r = ROWS_AT + ROW * i;
+        let b = self.rows.get(r..r + ROW)?;
+        let f = |o: usize| f32_at(b, o).unwrap_or(0.0);
+        let u = |o: usize| u16::from_le_bytes([b[o], b[o + 1]]);
+        let w = |o: usize| u32_at(b, o).unwrap_or(0);
+        let slot = |k: usize| AttackSlot {
+            kind: u(0x16C + 2 * k),
+            orient: u(0x174 + 2 * k) != 0,
+            trigger_max: f(0x17C + 4 * k),
+            trigger_min: f(0x18C + 4 * k),
+            chance: f(0x19C + 4 * k),
+            special: f(0x1AC + 4 * k),
+            wind_speed: f(0x1BC + 4 * k),
+            strike_speed: f(0x1CC + 4 * k),
+            recover_speed: f(0x1DC + 4 * k),
+            arc: f(0x1EC + 4 * k),
+            range: f(0x1FC + 4 * k),
+            delay_max: f(0x20C + 4 * k),
+            delay_min: f(0x21C + 4 * k),
+            charge: w(0x24C + 4 * k) as i32,
+            charge_max: f(0x25C + 4 * k),
+            charge_min: f(0x26C + 4 * k),
+            damage: f(0x34C + 4 * k),
+            knockback: f(0x35C + 4 * k),
+            flags: w(0x3AC + 4 * k),
+            spawn_cap: u(0x3D4 + 2 * k),
+            loopable: w(0x49C + 4 * k) != 0,
+            loop_min: w(0x4AC + 4 * k) as i32,
+            loop_max: w(0x4BC + 4 * k) as i32,
+            loop_hold: f(0x4CC + 4 * k),
+        };
+        Some(Tuning {
+            approach: u(0x38),
+            display_default: u(0x82) != 0,
+            search_max: f(0x5C),
+            search_min: f(0x60),
+            attack_timer_max: f(0x64),
+            attack_timer_min: f(0x68),
+            approach_timer_max: f(0x6C),
+            approach_timer_min: f(0x70),
+            turn: f(0x84),
+            distance_hide: u(0xA0) != 0,
+            flying_hit: w(0xAC) as i32,
+            anger: w(0x134) != 0,
+            view_angle: f(0xC0),
+            awareness: w(0xC4) as i32,
+            awareness_timer: f(0xC8),
+            chance_far: f(0xCC),
+            chance_near: f(0xD0),
+            range_far: f(0xD4),
+            range_near: f(0xD8),
+            always_sight: w(0xDC) != 0,
+            rush: (f(0x4DC), f(0x4E0)),
+            desired: (f(0x4E4), f(0x4E8)),
+            retreat: (f(0x4EC), f(0x4F0)),
+            strafe: (f(0x4F4), f(0x4F8)),
+            backbiter: f(0x500),
+            slots: std::array::from_fn(slot),
+            weapons: std::array::from_fn(|n| (f(4 * n).min(40.0), f(0x14 + 4 * n).min(40.0))),
+        })
+    }
+
     pub fn row(&self, monster_type: u16, variant: u16) -> Option<Row> {
-        let i = self.index(monster_type, variant)?;
+        self.row_at(self.index(monster_type, variant)?)
+    }
+
+    /// Row i.
+    pub fn row_at(&self, i: usize) -> Option<Row> {
         let r = ROWS_AT + ROW * i;
         let c = ROWS_AT + COMPANION * i;
         if r + ROW > self.rows.len() {
@@ -109,5 +251,6 @@ mod tests {
         let row = t.row(1, 0).unwrap();
         assert_eq!((row.hit_points, row.class, row.radius), (50, Some(6), 1.175));
         assert!(t.row(1, 1).is_none(), "past the end");
+        assert_eq!(t.tuning(1, 0).map(|u| u.slots[0].kind), Some(0));
     }
 }

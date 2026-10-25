@@ -453,6 +453,55 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             println!("Outfit 504 bones: {}, hurt capsules {caps}, attach points {:?}", t.len(), t.attach.iter().take(2).collect::<Vec<_>>());
         }
     }
+    // SPEC-0036 start values and SPEC-0038 band factors; class-17 tuning census.
+    {
+        let boot_bytes = neopets_data::archive::verified_boot_program(disc)?;
+        let hp = neopets_data::archive::boot_u32_table(&boot_bytes, neopets_data::item::HEALTH_TOR, 4)?;
+        let f1: Vec<f32> = neopets_data::archive::boot_u32_table(&boot_bytes, neopets_data::monster::BAND_F1, 7)?.into_iter().map(f32::from_bits).collect();
+        let f2: Vec<f32> = neopets_data::archive::boot_u32_table(&boot_bytes, neopets_data::monster::BAND_F2, 7)?.into_iter().map(f32::from_bits).collect();
+        println!("Hero start words (health Tor, Roberta, magic Tor, Roberta) {hp:08x?}; band F1 {f1:?}, F2 {f2:?}");
+        let t = neopets_data::monster::MonsterTable::parse(&index.read(disc, 530)?, &index.read(disc, 531)?)?;
+        let (mut c17, mut by_approach, mut slot_kinds) = (0, std::collections::BTreeMap::new(), std::collections::BTreeMap::new());
+        for i in 0..t.row_count() {
+            let (Some(r), Some(u)) = (t.row_at(i), t.tuning_at(i)) else { continue };
+            if r.class != Some(17) {
+                continue;
+            }
+            c17 += 1;
+            *by_approach.entry(u.approach).or_insert(0usize) += 1;
+            for s in u.slots.iter().filter(|s| s.kind != 0xFFFF) {
+                *slot_kinds.entry(s.kind).or_insert(0usize) += 1;
+            }
+        }
+        let flower = t.tuning_at(149).map(|u| (u.approach, u.slots.map(|s| (s.kind, s.trigger_min, s.trigger_max, s.range, s.damage, s.knockback, s.wind_speed, s.strike_speed)), u.weapons));
+        println!("Class-17 rows: {c17}, by approach {by_approach:?}, used slots by kind {slot_kinds:?}; row 149 {flower:?}");
+        // Packs whose embedded region (type 32) places ground class-17 enemies with a melee slot.
+        let mut melee_packs = Vec::new();
+        for pack in 533..=1433u32 {
+            let Ok(bytes) = index.read(disc, pack) else { continue };
+            let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
+            if chain.chunks.first().map(|c| c.kind) != Some(31) {
+                continue;
+            }
+            let Some(c) = chain.chunks.iter().find(|c| c.kind == 32) else { continue };
+            let Ok(nested) = resource::walk_chunks(&bytes[c.payload.clone()], None) else { continue };
+            let r = neopets_data::region::Region::of(&bytes[c.payload.clone()], &nested.chunks);
+            let names: Vec<String> = r
+                .records
+                .placements
+                .iter()
+                .filter(|pl| {
+                    t.row(pl.monster_type, pl.variant).is_some_and(|row| row.class == Some(17) && row.can_fly == 0)
+                        && t.tuning(pl.monster_type, pl.variant).is_some_and(|u| u.slots.iter().any(|s| s.kind == 0))
+                })
+                .map(|pl| format!("{} (state {})", pl.name, pl.ai_code))
+                .collect();
+            if !names.is_empty() {
+                melee_packs.push((pack, names.len(), names.first().cloned().unwrap_or_default()));
+            }
+        }
+        println!("Packs with embedded ground melee class-17 enemies: {} {:?}", melee_packs.len(), melee_packs.iter().take(12).collect::<Vec<_>>());
+    }
     println!("Pack kinds (kind, has module): {kinds:?}");
     {
         let bytes = index.read(disc, 909)?;

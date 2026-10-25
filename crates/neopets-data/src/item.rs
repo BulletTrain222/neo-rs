@@ -7,6 +7,8 @@ const RECORD: usize = 0x30;
 /// SPEC-0021 Weapon reach: Tor's table for ids 98 to 108 (11 f32), Roberta's for 111 to 118.
 pub const REACH_TOR: u32 = 0x002D_D5E0;
 pub const REACH_ROBERTA: u32 = 0x002D_D670;
+/// SPEC-0036 Start values: starting and maximum health of Tor (Roberta at + 4).
+pub const HEALTH_TOR: u32 = 0x0031_9BC0;
 
 fn u32_at(b: &[u8], at: usize) -> Option<u32> {
     Some(u32::from_le_bytes(b.get(at..at + 4)?.try_into().ok()?))

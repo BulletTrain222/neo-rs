@@ -66,6 +66,11 @@ impl HeroAnim {
         }
     }
 
+    /// The main family's table holds a clip for the action.
+    pub fn has(&self, action: u32) -> bool {
+        self.families.first().is_some_and(|f| f.data.clip_for(action).is_some())
+    }
+
     /// Request an action id. A change of main clip restarts the main, sub-part and face clips;
     /// the same main clip already playing starts nothing (SPEC-0005, Clip start).
     pub fn play(&mut self, action: u32) {

@@ -19,6 +19,11 @@ pub const WALK: u8 = 3;
 pub const RUN: u8 = 4;
 /// The attack step (SPEC-0036; driven by `attack::TorAttack`).
 pub const ATTACK: u8 = 13;
+/// SPEC-0036 combat states: 16 death, 17 hurt; SPEC-0033 Behavior 9B: 48 the long fall (the
+/// knockback of a common-enemy hit enters it).
+pub const DEAD: u8 = 16;
+pub const HURT: u8 = 17;
+pub const LONG_FALL: u8 = 48;
 /// Jump states (Behavior 50): 7 standing, 8 slow, 9 walking, 10 running.
 pub const JUMP: u8 = 7;
 pub const JUMP_RUN: u8 = 10;
@@ -40,6 +45,15 @@ const ANIM_FALL_STILL: u32 = 67;
 const ANIM_FALL_MOVE: u32 = 78;
 const ANIM_SOFT_LAND: u32 = 68;
 const ANIM_HARD_LAND: u32 = 118;
+/// SPEC-0036 state 17 (32 armed, 0xC0 unarmed), SPEC-0033 4A.6 death on ordinary ground (34),
+/// Behavior 9B long fall in the air (136) and its landing (137).
+const ANIM_HURT: u32 = 32;
+const ANIM_HURT_UNARMED: u32 = 0xC0;
+const ANIM_DEATH: u32 = 34;
+const ANIM_LONG_FALL: u32 = 136;
+const ANIM_LONG_LAND: u32 = 137;
+const GAIN_RISE_SWITCH: f32 = 12.0;
+const DESCENT_VELOCITY: f32 = -7.0;
 
 /// The jump speed S of states 7 to 10 (Behavior 50 table).
 fn jump_speed(state: u8) -> f32 {
@@ -227,6 +241,27 @@ impl Locomotion {
         }
     }
 
+    /// SPEC-0036 Taking a hit, step 5: the hit-reaction state 17 with its clip.
+    pub fn hurt(&mut self, armed: bool) {
+        self.state = HURT;
+        self.request = if armed { ANIM_HURT } else { ANIM_HURT_UNARMED };
+    }
+
+    /// SPEC-0036 Health and death, step 3: the death state 16 (request 34 on ordinary ground).
+    pub fn die(&mut self) {
+        self.state = DEAD;
+        self.request = ANIM_DEATH;
+    }
+
+    /// SPEC-0036 Knockback on the hero: the velocity is replaced and the hero enters the long
+    /// fall (state 48, SPEC-0033 Behavior 9B).
+    pub fn knock(&mut self, velocity: Vec3) {
+        self.body.velocity = velocity;
+        self.body.gain = 1.0;
+        self.state = LONG_FALL;
+        self.request = ANIM_LONG_FALL;
+    }
+
     /// The camera's recentring gate T (SPEC-0027): the hero moved in its last motion step and
     /// is not in state 1.
     /// Turn the facing by the steering rule (the talking hero uses weight 0.1).
@@ -248,7 +283,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL => self.request,
             _ => 0,
         }
     }
@@ -266,9 +301,19 @@ impl Locomotion {
             let left = flatten(camera_left);
             self.target = normalise([z * c[0] + x * left[0], 0.0, z * c[2] + x * left[2]]);
         }
-        if self.state == ATTACK {
+        match self.state {
             // The attack step owns the hero: no stick movement or turning.
-            return;
+            ATTACK | DEAD => return,
+            HURT => {
+                // State 17: at progress 0.99 request 0 and go to state 1 (the L2 strafe exit is
+                // not covered).
+                if clip.action == self.request && clip.progress >= 0.99 {
+                    self.state = STANCE;
+                }
+                return;
+            }
+            LONG_FALL => return self.long_fall(clip),
+            _ => {}
         }
         if !self.airborne() {
             // Behavior 9A: the walk-off check runs first in states 1 to 6.
@@ -304,6 +349,29 @@ impl Locomotion {
             });
         }
         self.air(v > 0.0, clip);
+    }
+
+    /// SPEC-0033 Behavior 9B, steps 1, 2 and 4 (no moving object; the mash speed-up is not
+    /// covered): gains by vertical velocity in the air, the landing at a gap of 1.0 or less with
+    /// the vertical velocity at most 0, then 137 to progress 0.99.
+    fn long_fall(&mut self, clip: ClipState) {
+        let vy = self.body.velocity[1];
+        if clip.action == ANIM_LONG_LAND || (self.body.gap <= LAND_GAP && vy <= 0.0) {
+            self.body.gain = 1.0;
+            self.request = ANIM_LONG_LAND;
+            if clip.action == ANIM_LONG_LAND && clip.progress >= 0.99 {
+                self.state = STANCE;
+            }
+            return;
+        }
+        self.request = ANIM_LONG_FALL;
+        self.body.gain = if vy > GAIN_RISE_SWITCH {
+            GAIN_RISE
+        } else if vy > DESCENT_VELOCITY {
+            GAIN_FALL
+        } else {
+            GAIN_DESCENT
+        };
     }
 
     /// The state setter's entry to the jump states: launch pending.

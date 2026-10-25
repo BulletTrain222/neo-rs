@@ -41,6 +41,11 @@ pub struct Placement {
     /// Behavior code (+0x84), the AI mode the townsfolk routine starts from (SPEC-0056).
     pub ai_code: i16,
     pub summon: bool,
+    /// The default state's parameter words read by the common enemies (SPEC-0038 Layout
+    /// section 1, Behavior 40): the emerge distance (f32 +0xC0) and the shared value / selector
+    /// word (+0xC8).
+    pub emerge_distance: f32,
+    pub selector: u32,
 }
 
 /// The record walk of a type-36 table: kind-3 placements and kind-2 animation tables (their
@@ -95,6 +100,8 @@ pub fn records(p: &[u8]) -> Records {
                     ai_code: s(0x84),
                     variant: s(0xB2) as u16,
                     summon: p.get(data + 0xB6).is_some_and(|&b| b != 0),
+                    emerge_distance: f32_at(p, data + 0xC0).unwrap_or(0.0),
+                    selector: u32_at(p, data + 0xC8).unwrap_or(0),
                 });
             }
             2 => out.tables.push(data..at + len),

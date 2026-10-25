@@ -66,9 +66,17 @@ struct Streamer {
     regions: std::sync::mpsc::Sender<(u32, u8, u32)>,
     #[allow(clippy::type_complexity)]
     region_results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, u8, u32, Result<Vec<RegionCharacter>, String>)>>,
+    /// Region loads sent and not yet received.
+    regions_out: usize,
 }
 
-type RegionCharacter = (neopets_data::region::Placement, neopets_data::model::ModelData, character::HeroAnim, Option<neopets_data::monster::Row>);
+type RegionCharacter = (
+    neopets_data::region::Placement,
+    neopets_data::model::ModelData,
+    character::HeroAnim,
+    Option<neopets_data::monster::Row>,
+    Option<neopets_data::monster::Tuning>,
+);
 
 /// Read a region resource and build each placed character (summon-reserved records and records
 /// with no position are left out: they are placed by a summoner).
@@ -90,7 +98,7 @@ fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::mons
     let mut out = Vec::new();
     for pl in r.records.placements.iter().filter(|p| !p.summon && p.position != [0.0; 3]) {
         match archive_view::region_character(disc, index, &bytes, &r, pl) {
-            Ok((model, anim)) => out.push((pl.clone(), model, anim, table.row(pl.monster_type, pl.variant))),
+            Ok((model, anim)) => out.push((pl.clone(), model, anim, table.row(pl.monster_type, pl.variant), table.tuning(pl.monster_type, pl.variant))),
             Err(e) => eprintln!("Region {region}, {:?}: {e}", pl.name),
         }
     }
@@ -149,6 +157,7 @@ impl Streamer {
             scenes: Default::default(),
             regions,
             region_results: std::sync::Mutex::new(region_results),
+            regions_out: 0,
         }
     }
 
@@ -169,11 +178,14 @@ impl Streamer {
             }
         }
         for (pack, slot, region) in p.region_wanted.drain(..) {
-            let _ = self.regions.send((pack, slot, region));
+            if self.regions.send((pack, slot, region)).is_ok() {
+                self.regions_out += 1;
+            }
         }
         let mut log = Vec::new();
         let regions: Vec<_> = self.region_results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
         for (pack, slot, region, result) in regions {
+            self.regions_out = self.regions_out.saturating_sub(1);
             match result {
                 Ok(list) => {
                     let names: Vec<String> = list.iter().map(|c| c.0.name.clone()).collect();
@@ -1416,7 +1428,17 @@ fn play_trace(
         };
         println!("Route to a swap point: {} steps, ending at {:?}", route.len(), route.last());
     }
+    let mut last_hurt = String::new();
     for _ in 0..ticks {
+        // The trace waits for region loads (characters) before the next tick, up to a minute,
+        // so that runs do not depend on the loader's speed.
+        let waited = std::time::Instant::now();
+        while streamer.regions_out > 0 && waited.elapsed().as_secs() < 60 {
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            for line in streamer.pump(&mut play) {
+                println!("      {line}");
+            }
+        }
         // `--trace-to x,z` steers the stick toward a point through the camera's rows.
         let (mut forward, mut side) = (0.7, 0.0);
         // After a swap along a `swap` route, go on to a cell that names a new neighbour.
@@ -1471,6 +1493,10 @@ fn play_trace(
                 let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", play.talk_partner.as_deref().unwrap_or(&l.speaker), l.text));
                 println!("      LevelMsg line {line} on tick {at}: {text:?}");
             }
+        }
+        if !play.last_hurt.is_empty() && play.last_hurt != last_hurt {
+            last_hurt = play.last_hurt.clone();
+            println!("      hero {last_hurt} on tick {}", play.ticks);
         }
         if !play.last_hit.is_empty() && play.last_hit != last_hit {
             last_hit = play.last_hit.clone();
