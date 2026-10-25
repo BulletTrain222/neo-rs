@@ -68,11 +68,11 @@ struct Streamer {
     region_results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, u8, u32, Result<Vec<RegionCharacter>, String>)>>,
 }
 
-type RegionCharacter = (neopets_data::region::Placement, neopets_data::model::ModelData, character::HeroAnim);
+type RegionCharacter = (neopets_data::region::Placement, neopets_data::model::ModelData, character::HeroAnim, Option<neopets_data::monster::Row>);
 
 /// Read a region resource and build each placed character (summon-reserved records and records
 /// with no position are left out: they are placed by a summoner).
-fn load_region(disc: &mut Disc, index: &ArchiveIndex, region: u32) -> Result<Vec<RegionCharacter>, String> {
+fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::monster::MonsterTable, region: u32) -> Result<Vec<RegionCharacter>, String> {
     let file = index.read(disc, region)?;
     let chain = neopets_data::resource::walk_chunks(&file, None)?;
     // A world pack's own characters are its embedded region: the chain inside its type-32
@@ -90,7 +90,7 @@ fn load_region(disc: &mut Disc, index: &ArchiveIndex, region: u32) -> Result<Vec
     let mut out = Vec::new();
     for pl in r.records.placements.iter().filter(|p| !p.summon && p.position != [0.0; 3]) {
         match archive_view::region_character(disc, index, &bytes, &r, pl) {
-            Ok((model, anim)) => out.push((pl.clone(), model, anim)),
+            Ok((model, anim)) => out.push((pl.clone(), model, anim, table.row(pl.monster_type, pl.variant))),
             Err(e) => eprintln!("Region {region}, {:?}: {e}", pl.name),
         }
     }
@@ -129,8 +129,13 @@ impl Streamer {
         let (region_done, region_results) = std::sync::mpsc::channel();
         if let Ok(mut disc) = second {
             std::thread::spawn(move || {
+                // The monster table (SPEC-0029 section 4), read once.
+                let table = match (region_index.read(&mut disc, 530), region_index.read(&mut disc, 531)) {
+                    (Ok(a), Ok(b)) => neopets_data::monster::MonsterTable::parse(&a, &b).unwrap_or_default(),
+                    _ => Default::default(),
+                };
                 for (pack, slot, region) in region_jobs {
-                    let result = load_region(&mut disc, &region_index, region);
+                    let result = load_region(&mut disc, &region_index, &table, region);
                     if region_done.send((pack, slot, region, result)).is_err() {
                         break;
                     }

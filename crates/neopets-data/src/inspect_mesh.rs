@@ -356,6 +356,41 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             }
         }
     }
+    // SPEC-0029 section 4 / SPEC-0056: monster rows and the class of every placement.
+    let table = neopets_data::monster::MonsterTable::parse(&index.read(disc, 530)?, &index.read(disc, 531)?)?;
+    let (mut placements, mut townsfolk, mut minus7_not6, mut classes) = (0, 0, 0, std::collections::BTreeMap::new());
+    for res in 533..=1433u32 {
+        let Ok(b) = index.read(disc, res) else { continue };
+        let Ok(ch) = resource::walk_chunks(&b, None) else { continue };
+        let regions: Vec<neopets_data::region::Region> = if ch.chunks.first().map(|c| c.kind) == Some(31) {
+            ch.chunks
+                .iter()
+                .filter(|c| c.kind == 32)
+                .filter_map(|c| {
+                    let p = &b[c.payload.clone()];
+                    let n = resource::walk_chunks(p, None).ok()?;
+                    Some(neopets_data::region::Region::of(p, &n.chunks))
+                })
+                .collect()
+        } else if ch.chunks.iter().any(|c| c.kind == 36) {
+            vec![neopets_data::region::Region::of(&b, &ch.chunks)]
+        } else {
+            continue;
+        };
+        for r in regions {
+            for pl in &r.records.placements {
+                placements += 1;
+                let class = table.row(pl.monster_type, pl.variant).and_then(|row| row.class);
+                *classes.entry(class).or_insert(0usize) += 1;
+                townsfolk += (class == Some(6)) as usize;
+                minus7_not6 += (pl.skeletons[0] == -7 && class != Some(6)) as usize;
+            }
+        }
+    }
+    println!(
+        "Monster table: {} rows; {placements} placements, {townsfolk} of class 6, {minus7_not6} main -7 placements not class 6; by class {classes:?}",
+        table.row_count()
+    );
     println!("Pack kinds (kind, has module): {kinds:?}");
     {
         let bytes = index.read(disc, 909)?;

@@ -172,8 +172,9 @@ pub struct Character {
     pub facing: [f32; 3],
     pub anim: HeroAnim,
     pub model: ModelData,
-    /// The townsfolk routine (SPEC-0056), for characters on the townsfolk body bank (main
-    /// family -7, all of them class 6 on disc); other characters only idle.
+    /// The monster row of the placement (SPEC-0029 section 4).
+    pub row: Option<neopets_data::monster::Row>,
+    /// The townsfolk routine (SPEC-0056) for class-6 characters; other classes only idle.
     pub townsfolk: Option<neopets_sim::npc::Townsfolk>,
 }
 
@@ -698,12 +699,19 @@ impl Play {
     }
 
     /// Take a loaded region's characters, when the slot still wants that region.
-    pub fn add_characters(&mut self, pack: u32, slot: u8, region: u32, loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim)>) {
+    #[allow(clippy::type_complexity)]
+    pub fn add_characters(
+        &mut self,
+        pack: u32,
+        slot: u8,
+        region: u32,
+        loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>)>,
+    ) {
         if self.slot_regions.get(&(pack, slot)) != Some(&region) {
             return;
         }
         self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
-        for (pl, model, anim) in loaded {
+        for (pl, model, anim, row) in loaded {
             self.next_character += 1;
             // Characters have motion records and settle on the ground under their placement
             // (the ground step probes 2.5 above; SPEC-0018). The fall itself is not simulated.
@@ -720,7 +728,8 @@ impl Play {
                 name: pl.name,
                 position,
                 facing: pl.facing,
-                townsfolk: (pl.skeletons[0] == -7).then(|| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
+                townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
+                row,
                 anim,
                 model,
             });
@@ -975,7 +984,10 @@ impl Play {
             .filter(|c| self.pack_drawn(c.pack))
             .map(|c| match &c.townsfolk {
                 Some(t) => format!("{} [mode {} id {}]", c.name, t.mode, c.anim.action()),
-                None => c.name.clone(),
+                None => match c.row {
+                    Some(r) => format!("{} [class {} hp {}]", if c.name.is_empty() { "(unnamed)" } else { &c.name }, r.class.unwrap_or(-1), r.hit_points),
+                    None => c.name.clone(),
+                },
             })
             .collect();
         names.dedup();
