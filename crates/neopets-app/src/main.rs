@@ -110,7 +110,7 @@ fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::
 
 /// Play mode was asked for, in this world pack (`--pack`, default 909).
 #[derive(Resource)]
-struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>, bool);
+struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>, bool, Vec<u16>);
 
 /// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
 /// can show travel without a person at the controls; `--autojump` also presses Cross every 2 s.
@@ -285,6 +285,7 @@ impl Streamer {
                 Err(e) => log.push(format!("region {region} failed: {e}")),
             }
         }
+        p.loads_out = self.regions_out;
         let finished: Vec<_> = self.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
         for (pack, job, result) in finished {
             self.in_flight.remove(&pack);
@@ -435,7 +436,7 @@ fn main() {
     // `--title`: start at the front end's card state (logo, legal screen, title) instead of in
     // play.
     let mut title = false;
-    let mut start: Option<[f32; 2]> = None;
+    let mut start: Option<[f32; 3]> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -506,9 +507,14 @@ fn main() {
                 Some([x.parse::<f32>().ok()?, z.parse::<f32>().ok()?])
             });
         } else if arg == "--start" {
+            // x,z or x,z,y: y is the height the ground probe starts from (default far above).
             start = args.next().and_then(|v| {
-                let (x, z) = v.trim().split_once(',')?;
-                Some([x.parse::<f32>().ok()?, z.parse::<f32>().ok()?])
+                let n: Vec<f32> = v.trim().split(',').map(|t| t.trim().parse::<f32>().ok()).collect::<Option<_>>()?;
+                match n[..] {
+                    [x, z] => Some([x, z, 1.0e6]),
+                    [x, z, y] => Some([x, z, y]),
+                    _ => None,
+                }
             });
         } else if arg == "--give" {
             give.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
@@ -657,7 +663,7 @@ fn main() {
     if let Some(archive) = archive {
         app.insert_resource(archive);
         if play_mode {
-            app.insert_resource(PlayRequest(play_pack, look, give.clone(), title));
+            app.insert_resource(PlayRequest(play_pack, look, give.clone(), title, flags.clone()));
         }
         if let Some(auto) = autowalk {
             app.insert_resource(auto);
@@ -691,7 +697,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
             )
                 .chain(),
         );
@@ -1779,11 +1785,11 @@ fn play_trace(
     flags: &[u16],
     seed: Option<u32>,
     give: &[u16],
-    start: Option<[f32; 2]>,
+    start: Option<[f32; 3]>,
     (guard, save_test): (bool, bool),
 ) {
     let Archive { disc, index } = &mut *archive;
-    let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
+    let mut play = match play::Play::load_with_flags(disc, index, pack, PLAY_OUTFIT, flags) {
         Ok(play) => play,
         Err(e) => {
             eprintln!("Play mode could not start: {e}");
@@ -1799,12 +1805,8 @@ fn play_trace(
     for &id in give {
         play.give(id);
     }
-    if let Some([x, z]) = start {
-        play.place_at(x, z);
-    }
-    // `--flag N`: diagnostic story flags set at the start.
-    for &f in flags {
-        play.state.set(f, true);
+    if let Some([x, z, y]) = start {
+        play.place_at(x, z, y);
     }
     let mut streamer = match disc.reopen() {
         Ok(second) => Streamer::start(second, index.clone(), play.boot.clone()),
@@ -1854,6 +1856,7 @@ fn play_trace(
     let walk_path = !legs.is_empty();
     let mut dwell = 0;
     let mut leg_pack = play.world.pack;
+    let mut scene = String::new();
     let mut last_hurt = String::new();
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
@@ -1975,6 +1978,11 @@ fn play_trace(
                 let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", play.talk_partner.as_deref().unwrap_or(&l.speaker), l.text));
                 println!("      LevelMsg line {line} on tick {at}: {text:?}");
             }
+        }
+        let now_scene = play.scene_status();
+        if now_scene != scene {
+            println!("      scene on tick {}: {now_scene}", play.ticks);
+            scene = now_scene;
         }
         let now: Vec<usize> = (0..14).filter(|&i| play.statuses.active(i)).collect();
         if now != statuses_shown {
@@ -2099,7 +2107,8 @@ fn play_trace(
 fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive: Option<ResMut<Archive>>) {
     let (Some(request), Some(mut archive)) = (request, archive) else { return };
     let Archive { disc, index } = &mut *archive;
-    match play::Play::load(disc, index, request.0, PLAY_OUTFIT) {
+    // `--flag N` (repeatable): diagnostic story flags set before the start world's Init.
+    match play::Play::load_with_flags(disc, index, request.0, PLAY_OUTFIT, &request.4) {
         Ok(mut play) => {
             // `--look x,z`: diagnostic start facing.
             if let Some([x, z]) = request.1 {
@@ -2244,9 +2253,44 @@ fn play_frame(
             }
         }
     }
-    // The follow camera owns the view in play mode: it looks from the eye at the focus.
-    let (eye, focus) = (Vec3::from(state.play.camera.eye), Vec3::from(state.play.camera.focus));
+    // The play's view: a camera play's track pose, else the follow camera (SPEC-0027). The
+    // vertical field of view is 2 atan(240 / focal) on the 480-line screen.
+    let (eye, forward, up, focal) = state.play.view();
     for (_, mut transform) in &mut cameras {
-        *transform = Transform::from_translation(eye).looking_at(focus, Vec3::Y);
+        *transform = Transform::from_translation(Vec3::from(eye)).looking_to(Vec3::from(forward), Vec3::from(up));
+    }
+    let fov = 2.0 * (neopets_sim::camera::SCREEN.1 / (2.0 * focal.max(1.0))).atan();
+    for mut projection in &mut projections {
+        if let Projection::Perspective(pp) = projection.as_mut() {
+            if (pp.fov - fov).abs() > 1e-6 {
+                pp.fov = fov;
+            }
+        }
+    }
+}
+
+/// The screen effect's full-screen fade (SPEC-0052 Screen effect, draw step 5), above the HUD
+/// and the menus.
+#[derive(Component)]
+struct FadeOverlay;
+
+fn sync_fade(mut commands: Commands, play: Option<Res<PlayState>>, mut overlay: Query<(&mut BackgroundColor, &mut Visibility), With<FadeOverlay>>) {
+    let Some(state) = play else { return };
+    if overlay.is_empty() {
+        commands.spawn((
+            Node { position_type: PositionType::Absolute, width: Val::Percent(100.0), height: Val::Percent(100.0), ..default() },
+            BackgroundColor(Color::NONE),
+            Visibility::Hidden,
+            GlobalZIndex(3000),
+            FadeOverlay,
+        ));
+        return;
+    }
+    let f = &state.play.fade;
+    for (mut colour, mut vis) in &mut overlay {
+        let a = f.opacity();
+        *vis = if a > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
+        let c = f.colour.map(|v| v as f32 / 255.0);
+        colour.0 = Color::srgba(c[0], c[1], c[2], a);
     }
 }

@@ -27,6 +27,7 @@ pub mod png;
 pub mod region;
 pub mod resource;
 pub mod texture;
+pub mod track;
 pub mod travel;
 pub mod trigger;
 pub mod world;

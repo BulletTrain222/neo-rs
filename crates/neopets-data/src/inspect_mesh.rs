@@ -316,7 +316,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let (mut tables, mut zero_unused, mut contiguous, mut ids) = (0, 0, 0, 0);
     let (mut line_tables, mut line_records, mut resolved) = (0, 0, 0);
     let (mut planes, mut plane_packs, mut default_doors, mut scripted_packs, mut arrivals_ok) = (0, 0, 0, 0, 0);
-    let mut trig: (std::collections::BTreeMap<u8, usize>, usize, usize, usize) = Default::default();
+    let mut trig: (std::collections::BTreeMap<u8, usize>, usize, usize, usize, usize, usize, usize) = Default::default();
     for pack in 533..=1433u32 {
         let Ok(bytes) = index.read(disc, pack) else { continue };
         let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
@@ -336,6 +336,19 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                 trig.2 += groups.len();
             }
             trig.3 += neopets_data::travel::placement_table(&bytes, &chain.chunks).len();
+            // SPEC-0052 camera tracks: records, keyed records, keys.
+            let tracks = neopets_data::track::camera_tracks(&bytes, &chain.chunks);
+            trig.4 += tracks.len();
+            trig.5 += tracks.iter().filter(|t| !t.keys.is_empty()).count();
+            trig.6 += tracks.iter().map(|t| t.keys.len()).sum::<usize>();
+            if std::env::var_os("NEOPETS_TRIGGERS").is_some() && matches!(pack, 909 | 951 | 985) {
+                let out: Vec<String> = tracks
+                    .iter()
+                    .enumerate()
+                    .map(|(i, t)| format!("track {i}: {} keys dt {} focal {} head {:?} first {:?}", t.keys.len(), t.dt, t.head.focal, t.head.p, t.keys.first().map(|k| (k.p, k.q))))
+                    .collect();
+                let _ = std::fs::write(format!("private/tracks-{pack}.txt"), out.join("\n"));
+            }
             if std::env::var_os("NEOPETS_TRIGGERS").is_some() && matches!(pack, 909 | 951 | 691 | 678 | 1023) {
                 let mut out: Vec<String> = vols.iter().filter(|v| v.flags & 0x0129 != 0x0001).map(|v| format!("{v:?}")).collect();
                 out.extend(groups.iter().map(|g| format!("{g:?}")));
@@ -410,6 +423,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         }
     }
     println!("Trigger volumes by kind {:?}; script groups: {} entries in {} packs; placement id entries {}", trig.0, trig.2, trig.1, trig.3);
+    println!("Camera tracks: {} records, {} keyed, {} keys", trig.4, trig.5, trig.6);
     println!(
         "Monster table: {} rows; {placements} placements, {townsfolk} of class 6, {minus7_not6} main -7 placements not class 6; by class {classes:?}",
         table.row_count()

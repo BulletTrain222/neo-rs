@@ -25,6 +25,7 @@ pub mod npc;
 pub mod options;
 pub mod rng;
 pub mod save;
+pub mod scene;
 pub mod sound;
 pub mod sequencer;
 pub mod synth;

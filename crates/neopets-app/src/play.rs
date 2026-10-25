@@ -73,6 +73,8 @@ pub struct World {
     item_points: Vec<neopets_data::region::ItemPoint>,
     locks: Vec<(i32, i32, i32)>,
     opened: std::collections::BTreeSet<usize>,
+    /// Camera tracks (type 28; SPEC-0052), by track id.
+    pub tracks: Vec<neopets_sim::scene::Track>,
 }
 
 impl World {
@@ -124,6 +126,13 @@ impl World {
             item_points: neopets_data::region::embedded_records(&bytes, &chain.chunks).map(|r| r.items).unwrap_or_default(),
             locks: Vec::new(),
             opened: Default::default(),
+            tracks: neopets_data::track::camera_tracks(&bytes, &chain.chunks)
+                .into_iter()
+                .map(|t| {
+                    let key = |k: neopets_data::track::Key| neopets_sim::scene::Key { q: k.q, p: k.p, focal: k.focal };
+                    neopets_sim::scene::Track { head: key(t.head), dt: t.dt, per_key_focal: t.per_key_focal, keys: t.keys.into_iter().map(key).collect() }
+                })
+                .collect(),
         };
         let mut world = world;
         let (ambients, spheres) = ground::sound_emitters(&bytes, &chain.chunks);
@@ -270,6 +279,28 @@ pub struct Character {
     /// The kind-8 record its drop placement ordinal names (SPEC-0038 Behavior 34, part B).
     drop: Option<neopets_data::region::ItemPoint>,
     root_step: [f32; 3],
+    /// A script walk to a point (SPEC-0030 rows 106 and 108; SPEC-0056 classes 23 and 25), with
+    /// the final facing of the orienting form.
+    script_walk: Option<([f32; 3], Option<[f32; 3]>)>,
+}
+
+/// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
+/// and what its blocking call waits for.
+struct Thread {
+    calls: std::collections::VecDeque<Action>,
+    wait: Option<Wait>,
+}
+
+/// What a blocking script call waits for.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Wait {
+    Ticks(u32),
+    Fade,
+    Camera,
+    HeroWalk,
+    EntityWalk(usize),
+    Dialog,
+    Loads,
 }
 
 pub struct Play {
@@ -322,8 +353,15 @@ pub struct Play {
     /// The shared dialogue box is open (SPEC-0022: it closes only on a Square press; the hero
     /// stays in the talking state meanwhile).
     pub dialogue_open: bool,
-    /// LevelMsg calls made while a box is up (their WAIT): shown in order as each box closes.
-    lines_queued: std::collections::VecDeque<(u16, bool)>,
+    /// Scene staging (SPEC-0052): the script threads, the camera play, the screen fade, the
+    /// hero's scripted walk (target, final facing, last distance), the script hold, and the
+    /// region loads the loader still has out.
+    threads: Vec<Thread>,
+    pub cut: Option<neopets_sim::scene::CameraPlay>,
+    pub fade: neopets_sim::scene::Fade,
+    hero_walk: Option<([f32; 3], Option<[f32; 3]>, f32)>,
+    pub held: bool,
+    pub loads_out: usize,
     /// Tor's attack step (SPEC-0036), while state 13 runs.
     pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
@@ -485,6 +523,12 @@ impl Play {
     /// Load a hero outfit and a world pack's ground and spawn point. Pack 909 starts as the new
     /// game does, with 691 resident in T.
     pub fn load(disc: &mut Disc, index: &ArchiveIndex, pack: u32, outfit: u32) -> Result<Self, String> {
+        Self::load_with_flags(disc, index, pack, outfit, &[])
+    }
+
+    /// As `load`, with story flags set before the start world's Init (a diagnostic stand-in for
+    /// a start point's flags).
+    pub fn load_with_flags(disc: &mut Disc, index: &ArchiveIndex, pack: u32, outfit: u32, flags: &[u16]) -> Result<Self, String> {
         let model = crate::archive_view::model(disc, index, outfit)?.ok_or("Outfit has no model")?;
         let hero = crate::archive_view::hero(disc, index, outfit)?.ok_or("Not a hero outfit (504–519)")?;
         let boot = BootTravel::from_disc(disc)?;
@@ -617,7 +661,12 @@ impl Play {
             talk_partner: None,
             talk_with: None,
             dialogue_open: false,
-            lines_queued: Default::default(),
+            threads: Vec::new(),
+            cut: None,
+            fade: Default::default(),
+            hero_walk: None,
+            held: false,
+            loads_out: 0,
             rng: neopets_sim::rng::Rng::seeded(clock_seed()),
             attack: None,
             attack_latch: false,
@@ -698,6 +747,9 @@ impl Play {
         // SPEC-0049 New game at start index 0: no stage rows, then flag 707 (a loaded save
         // replaces the flags later).
         play.state.set(707, true);
+        for &f in flags {
+            play.state.set(f, true);
+        }
         let init = level::on_init(play.world.pack, &mut play.state);
         play.apply(&init);
         play.activated();
@@ -956,8 +1008,74 @@ impl Play {
     }
 
     /// Carry out a level handler's actions (SPEC-0030 host calls), in order.
+    /// Start a handler's calls as a script thread and run it until it waits (SPEC-0030 section
+    /// 4): calls without a wait take effect at once.
     fn apply(&mut self, actions: &[Action]) {
-        for &a in actions {
+        if actions.is_empty() {
+            return;
+        }
+        self.threads.push(Thread { calls: actions.iter().copied().collect(), wait: None });
+        let i = self.threads.len() - 1;
+        self.step_thread(i);
+    }
+
+    /// Run thread i until a call waits or its calls run out.
+    fn step_thread(&mut self, i: usize) {
+        loop {
+            if let Some(w) = self.threads[i].wait {
+                if !self.wait_done(w) {
+                    return;
+                }
+                self.threads[i].wait = None;
+            }
+            let Some(a) = self.threads[i].calls.pop_front() else { return };
+            if let Some(w) = self.execute(a) {
+                self.threads[i].wait = Some(w);
+            }
+        }
+    }
+
+    fn wait_done(&self, w: Wait) -> bool {
+        match w {
+            Wait::Ticks(n) => n == 0,
+            Wait::Fade => !self.fade.moving(),
+            Wait::Camera => self.cut.is_none_or(|c| !c.waiting()),
+            Wait::HeroWalk => self.hero_walk.is_none(),
+            Wait::EntityWalk(e) => !self.characters.iter().any(|c| c.pack == self.world.pack && c.entity == Some(e) && c.script_walk.is_some()),
+            Wait::Dialog => !self.dialogue_open,
+            Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
+        }
+    }
+
+    /// The script step: each thread's sleep counts down, then every thread runs on until it
+    /// waits; finished threads are freed.
+    fn run_threads(&mut self) {
+        for t in &mut self.threads {
+            if let Some(Wait::Ticks(n)) = t.wait.as_mut() {
+                *n = n.saturating_sub(1);
+            }
+        }
+        let mut i = 0;
+        while i < self.threads.len() {
+            self.step_thread(i);
+            i += 1;
+        }
+        self.threads.retain(|t| t.wait.is_some() || !t.calls.is_empty());
+        // With no scene left the hero is not held by a thread that never released it.
+        if self.threads.is_empty() && self.cut.is_none() && self.hero_walk.is_none() {
+            self.held = false;
+        }
+    }
+
+    /// The character of the current world with entity id e.
+    fn entity_mut(&mut self, e: usize) -> Option<&mut Character> {
+        let pack = self.world.pack;
+        self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(e))
+    }
+
+    /// Carry out one script call; a blocking call returns what it waits for.
+    fn execute(&mut self, a: Action) -> Option<Wait> {
+        {
             match a {
                 Action::EnterInterior { slot } if self.world.buffer == Buffer::Exterior => {
                     if let Some(&pack) = self.boot.areas.packs.get(slot) {
@@ -968,7 +1086,7 @@ impl Play {
                 Action::LeaveInterior { slot } if self.world.buffer == Buffer::Interior => {
                     // E becomes current at its entry record 0 (no probe); T is reloaded with
                     // the slot's pack; E's activate-world routine runs.
-                    let Some(o) = self.other.take() else { continue };
+                    let Some(o) = self.other.take() else { return None };
                     let landing = o.entries.first().copied().unwrap_or(([0.0; 3], [0.0, 0.0, 1.0]));
                     let interior = std::mem::replace(&mut self.world, o);
                     drop(interior);
@@ -986,15 +1104,80 @@ impl Play {
                         self.last_door = format!("script: hero moved to locator {locator} of {}", self.world.pack);
                     }
                 }
-                Action::Message { line } | Action::Talk { line } if self.dialogue_open => {
-                    self.lines_queued.push_back((line, matches!(a, Action::Talk { .. })));
-                }
                 Action::Message { line } => {
                     self.talk_partner = None;
                     self.talk_with = None;
                     self.open_line(line);
+                    return Some(Wait::Dialog);
                 }
-                Action::Talk { line } => self.open_line(line),
+                Action::Talk { line } => {
+                    self.open_line(line);
+                    return Some(Wait::Dialog);
+                }
+                Action::Converse { entity, line } => {
+                    let partner = self.entity_mut(entity).map(|c| (c.id, c.name.clone()));
+                    self.talk_with = partner.as_ref().map(|p| p.0);
+                    self.talk_partner = partner.map(|p| p.1);
+                    self.open_line(line);
+                    return Some(Wait::Dialog);
+                }
+                Action::FadeOut { seconds, wait } => {
+                    self.fade.out([0; 3], neopets_sim::scene::frames(seconds));
+                    return wait.then_some(Wait::Fade);
+                }
+                Action::FadeIn { seconds, wait } => {
+                    self.fade.fade_in([0; 3], neopets_sim::scene::frames(seconds));
+                    return wait.then_some(Wait::Fade);
+                }
+                Action::PlayCamera { track, wait, end, speed } => {
+                    // A track outside the list does nothing; WAIT waits only on a keyed track.
+                    let keyed = !self.world.tracks.get(track)?.keys.is_empty();
+                    self.cut = Some(neopets_sim::scene::CameraPlay::new(track, end, speed));
+                    self.held = true;
+                    return (wait && keyed).then_some(Wait::Camera);
+                }
+                Action::ReturnCamera { preset, release } => {
+                    // The follow camera takes over behind the hero (the preset's pull-in to a
+                    // locator is not reproduced).
+                    let _ = preset;
+                    self.cut = None;
+                    let f = followed(&self.loco, &self.world);
+                    self.camera.place_behind(&f);
+                    if release {
+                        self.held = false;
+                        self.hero_walk = None;
+                    }
+                }
+                Action::HoldHero => self.held = true,
+                Action::WalkHero { locator, wait, orient } => {
+                    let (t, g) = *self.world.entries.get(locator)?;
+                    self.hero_walk = Some((t, orient.then_some(g), f32::MAX));
+                    self.held = true;
+                    return wait.then_some(Wait::HeroWalk);
+                }
+                Action::MoveEntity { entity, locator, face } => {
+                    let (l, g) = *self.world.entries.get(locator)?;
+                    let y = self.world.ground_at(l[0], l[2], l[1] + 4.0).unwrap_or(l[1]);
+                    let c = self.entity_mut(entity)?;
+                    c.position = [l[0], y, l[2]];
+                    c.script_walk = None;
+                    if face {
+                        c.facing = g;
+                    }
+                }
+                Action::WalkEntity { entity, locator, wait, orient } => {
+                    let (l, g) = *self.world.entries.get(locator)?;
+                    let y = self.world.ground_at(l[0], l[2], l[1] + 6.0).unwrap_or(l[1]);
+                    let face = orient.then(|| {
+                        let len = g[0].hypot(g[2]).max(1e-6);
+                        [g[0] / len, 0.0, g[2] / len]
+                    });
+                    self.entity_mut(entity)?.script_walk = Some(([l[0], y, l[2]], face));
+                    return wait.then_some(Wait::EntityWalk(entity));
+                }
+                Action::Sleep { ticks } => return Some(Wait::Ticks(ticks)),
+                Action::WaitLoads => return Some(Wait::Loads),
+                Action::WaitDialog => return Some(Wait::Dialog),
                 Action::RegisterTrigger { index, routine } => {
                     if (index as usize) < self.world.capacity {
                         self.world.routines.insert(index, routine);
@@ -1055,6 +1238,32 @@ impl Play {
                     }
                 }
                 _ => self.last_door = format!("script: {a:?} refused in the {:?} buffer", self.world.buffer),
+            }
+        }
+        None
+    }
+
+    /// Diagnostic: the scene state (camera play, fade, hold, scripted walk, threads).
+    pub fn scene_status(&self) -> String {
+        let walking = self.characters.iter().filter(|c| c.script_walk.is_some()).filter_map(|c| c.entity).collect::<Vec<_>>();
+        format!(
+            "camera {:?} fade to {:.0} held {} hero walk {} entity walks {walking:?} threads {}",
+            self.cut.map(|c| (c.track, c.state)),
+            self.fade.target,
+            self.held,
+            self.hero_walk.is_some(),
+            self.threads.len()
+        )
+    }
+
+    /// The view the window draws: the camera play's pose (while it plays or holds its last
+    /// pose) or the follow camera; eye, forward, up and focal length (SPEC-0027 Projection).
+    pub fn view(&self) -> ([f32; 3], [f32; 3], [f32; 3], f32) {
+        match self.cut.filter(|c| c.state != 0).and_then(|c| c.last) {
+            Some(p) => (p.eye, p.rows[2], p.rows[1], p.focal),
+            None => {
+                let (e, f) = (self.camera.eye, self.camera.focus);
+                ([e[0], e[1], e[2]], [f[0] - e[0], f[1] - e[1], f[2] - e[2]], [0.0, 1.0, 0.0], neopets_sim::camera::FOCAL)
             }
         }
     }
@@ -1291,9 +1500,9 @@ impl Play {
         Some([w.position[0] + 3.5 * dx / len, w.position[2] + 3.5 * dz / len])
     }
 
-    /// Diagnostic: put the hero at (x, z) on the current world's ground (probed from far above).
-    pub fn place_at(&mut self, x: f32, z: f32) {
-        let y = self.world.ground_at(x, z, 1.0e6).unwrap_or(self.loco.position()[1]);
+    /// Diagnostic: put the hero at (x, z) on the current world's ground, probed from height c.
+    pub fn place_at(&mut self, x: f32, z: f32, c: f32) {
+        let y = self.world.ground_at(x, z, c).unwrap_or(self.loco.position()[1]);
         let f = self.loco.facing;
         self.arrive(([x, y, z], f));
     }
@@ -1353,6 +1562,7 @@ impl Play {
                 drop: usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied()),
                 colour: pl.colour,
                 root_step: [0.0; 3],
+                script_walk: None,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -1548,6 +1758,8 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
+        // SPEC-0052 Screen effect: the fade's per-pass update.
+        self.fade.update();
         // SPEC-0055: the game-state pass runs the timers before the world update; while the
         // game-over page is up the world is frozen and only the page's exit test runs.
         if self.death.page.is_some() {
@@ -1591,6 +1803,17 @@ impl Play {
             |e| push_eye(w, e),
             |a, c| w.ground.as_ref().is_none_or(|g| g.segment_clear(a, c, true)),
         );
+        // SPEC-0027 Scripted cameras: the play is sampled and its end mode acts.
+        if let Some(cut) = self.cut.as_mut() {
+            if let neopets_sim::scene::PlayUpdate::Ended { idle, release } = cut.update(&self.world.tracks) {
+                if release {
+                    self.held = false;
+                }
+                if idle {
+                    self.cut = None;
+                }
+            }
+        }
         let (forward, left) = self.camera.rows();
         // The interaction chooser shows the prompt posted on the previous tick and sets the
         // confirm flag on a Square press edge.
@@ -1606,10 +1829,6 @@ impl Play {
                     self.dialogue_open = false;
                     self.message = None;
                     self.talk_with = None;
-                    // The next waiting LevelMsg of the same callback.
-                    if let Some((line, talk)) = self.lines_queued.pop_front() {
-                        self.apply(&[if talk { Action::Talk { line } } else { Action::Message { line } }]);
-                    }
                 }
                 Some(neopets_sim::textbox::BoxEvent::Advanced) => self.cue(0x98),
                 None => {}
@@ -1624,6 +1843,33 @@ impl Play {
                 let to_hero = [h[0] - c.position[0], 0.0, h[2] - c.position[2]];
                 c.facing = neopets_sim::hero::steer(c.facing, to_hero, 0.3);
                 self.loco.steer_toward(to_hero.map(|v| -v), 0.1);
+            }
+        }
+        // SPEC-0052 Control locks: the script hold, a running camera play and a moving fade
+        // take the hero's input; a scripted walk (SPEC-0033 4A.4 and 4A.5) steers it instead.
+        if self.held || self.cut.is_some_and(|c| c.state == 1) || self.fade.moving() {
+            input = HeroInput::default();
+        }
+        if let Some((t, face, last)) = self.hero_walk {
+            let p = self.loco.position();
+            let (dx, dz) = (t[0] - p[0], t[2] - p[2]);
+            let d = dx.hypot(dz);
+            // Arrival within 0.25 (or once the distance grows inside 1.0: the stick walk
+            // cannot always land within 0.25).
+            if d < 0.25 || (d < 1.0 && d > last) {
+                match face {
+                    Some(g) if self.loco.facing[0] * g[0] + self.loco.facing[2] * g[2] < 0.99 => {
+                        self.loco.steer_toward([g[0], 0.0, g[2]], 0.1);
+                        self.hero_walk = Some((t, face, 0.0));
+                    }
+                    _ => self.hero_walk = None,
+                }
+            } else {
+                let (f, l) = (forward, left);
+                let fl = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
+                input.forward = 0.6 * (dx * f[0] + dz * f[2]) / d / fl;
+                input.side = 0.6 * (dx * l[0] + dz * l[2]) / d;
+                self.hero_walk = Some((t, face, d));
             }
         }
         if self.prompt_shown.is_some() && input.square {
@@ -1786,6 +2032,7 @@ impl Play {
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
             self.apply(&actions);
         }
+        self.run_threads();
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
         self.sound_step();
@@ -1841,7 +2088,34 @@ impl Play {
             let (hp, max) = target.map_or((0, 1), |c| (c.hp, c.row.map_or(1, |r| r.hit_points as i32)));
             self.monster_bar.tick(hp, max, &self.monster_words);
         }
+        let world = &self.world;
         for c in &mut self.characters {
+            // SPEC-0056 Walk-to-point (classes 23 and 25), simplified: straight toward the
+            // target at the townsfolk walk speed (0.08337 a tick, move type 0) on the ground,
+            // steering with weight 0.3, walk clip 1; arrival within 1.0, then the turn to the
+            // final facing at 0.1 until the dot is 0.99, then idle (0). The navigation mesh, the
+            // hold for a near hero and root-motion travel are not used.
+            if let Some((t, face)) = c.script_walk {
+                let (dx, dz) = (t[0] - c.position[0], t[2] - c.position[2]);
+                let d = dx.hypot(dz);
+                if d >= 1.0 {
+                    c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
+                    let s = 0.083_37 / d;
+                    let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
+                    let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
+                    c.position = [x, y.unwrap_or(c.position[1]), z];
+                    if c.anim.clip_state().action != 1 {
+                        c.anim.play(1);
+                    }
+                } else if let Some(g) = face.filter(|g| c.facing[0] * g[0] + c.facing[2] * g[2] < 0.99) {
+                    c.facing = neopets_sim::hero::steer(c.facing, g, 0.1);
+                } else {
+                    c.script_walk = None;
+                    c.anim.play(0);
+                }
+                c.root_step = c.anim.tick();
+                continue;
+            }
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
                 let clip = c.anim.clip_state();

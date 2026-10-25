@@ -12,8 +12,11 @@
 //!   steps), the three proximity callbacks and teleport callback 0.
 //! - 955 (SPEC-0032): teleport callback 0 (message 40, leave to slot 5).
 //! - The lock chest press of script groups of kind 1 (SPEC-0048 Lock chests).
-//! Not covered: every other level, and in these levels the objects, effects, cameras, fades,
-//! movies, walks and cutscene staging (their flag, item and slot effects are applied).
+//! The scenes are staged with the calls of SPEC-0052 (fades, camera plays and returns, hero and
+//! entity moves and walks, waits); the host runs each handler's list as its own script thread.
+//! Not covered: every other level, and in these levels the objects, effects, movies, shakes and
+//! entity animations. Where the specs leave a fade's time, a camera's end mode or a walk's wait
+//! unstated, the choices are named at the scene (R-0025).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -57,6 +60,52 @@ pub enum Action {
     RegisterTrigger { index: u16, routine: u8 },
     /// LockChest(id, key item, message): the world's two-entry lock table (SPEC-0048).
     LockChest { id: i32, key: i32, message: i32 },
+    /// FadeScreenOut and FadeScreenIn (black) over a time in seconds; with `wait` the thread
+    /// yields until the fade reaches its target (SPEC-0030 rows 136 and 137).
+    FadeOut { seconds: f32, wait: bool },
+    FadeIn { seconds: f32, wait: bool },
+    /// PlayCamera(track, WAIT, end mode, speed) (SPEC-0030 row 34).
+    PlayCamera { track: usize, wait: bool, end: u8, speed: f32 },
+    /// ReturnToNormalCamera(preset locator or -1, release) (row 35).
+    ReturnCamera { preset: i32, release: bool },
+    /// GrabHeroControl (row 164): the hero in script hold until a release.
+    HoldHero,
+    /// WalkHero or WalkHeroAndOrient (rows 158 and 159) to a locator.
+    WalkHero { locator: usize, wait: bool, orient: bool },
+    /// MoveEntity(entity, locator, probe, CTL, face) (row 112), probe on.
+    MoveEntity { entity: usize, locator: usize, face: bool },
+    /// WalkEntity or WalkEntityAndOrient (rows 106 and 108) with stop 0 (class 23 or 25).
+    WalkEntity { entity: usize, locator: usize, wait: bool, orient: bool },
+    /// SetConversationTarget(entity), LevelMsg(line, WAIT 1), EndConversation(entity).
+    Converse { entity: usize, line: u16 },
+    /// Sleep(n ticks).
+    Sleep { ticks: u32 },
+    /// Wait until no world or character load is active.
+    WaitLoads,
+    /// Wait until no dialogue box is up.
+    WaitDialog,
+}
+
+/// The fade time used where a farm scene's fade has no stated time: 0.5 s, the commonest
+/// FadeScreenOut and FadeScreenIn time on the disc (SPEC-0030 rows 136 and 137; R-0025).
+const FADE: f32 = 0.5;
+
+fn fade_out() -> Action {
+    Action::FadeOut { seconds: FADE, wait: true }
+}
+
+fn fade_in() -> Action {
+    Action::FadeIn { seconds: FADE, wait: true }
+}
+
+/// A camera play whose end mode the spec leaves out: mode 1 (held until the scene's return),
+/// the commonest on the disc (SPEC-0030 Note on camera calls), with no wait.
+fn camera(track: usize) -> Action {
+    Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }
+}
+
+fn release_camera() -> Action {
+    Action::ReturnCamera { preset: -1, release: true }
 }
 
 /// One run of a trigger callback: the record's state word and object word as the fire step left
@@ -193,6 +242,11 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // clear.
         909 => {
             let mut out = vec![Action::WhinnyPen { inner: 0, entrance: 5, locator: 8 }];
+            // The object helper sets the word of Update's flag-110 step when 110 is already
+            // set, so that step does not run again.
+            if state.flag(110) {
+                state.set_word(pack, 5, 1);
+            }
             out.extend((0..4).map(|i| reg(i, 10)));
             out.push(reg(5, 11));
             out.push(reg(8, 7));
@@ -263,11 +317,17 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             } else if state.word(pack, 3) != 0 {
                 out.actions.push(Action::Message { line: 167 });
             } else if state.flag(111) && !state.flag(112) && state.has_item(6) {
-                out.actions.push(Action::MoveHero { locator: 29 });
+                // Fade out, hero to locator 29, camera 27, fade in, sounds 9 and 10, lines 166
+                // and 162, camera returned (objects 9, 17 to 20, effects 3 and 4 and the shake
+                // are not reproduced).
+                out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 29 }, camera(27), fade_in()]);
+                out.actions.push(Action::PlaySound { cue: 9, locator: None });
+                out.actions.push(Action::PlaySound { cue: 10, locator: None });
                 state.remove_all(6);
                 out.actions.push(Action::Message { line: 166 });
                 state.give(7, 1);
                 out.actions.push(Action::Message { line: 162 });
+                out.actions.push(release_camera());
                 state.set(112, true);
                 state.set_word(pack, 3, 1);
             } else {
@@ -292,14 +352,41 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
 pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> {
     let mut out = Vec::new();
     match pack {
-        // SPEC-0045 909 Update: the flag and item steps; the cutscenes' staging is not built,
-        // only their flag and slot effects.
+        // SPEC-0045 909 Update: the flag and item steps and the scenes.
         909 => {
-            // The Act 1 start: 707 on and 1 off sets 1 and clears 706 (movies 88 and 1, the act
-            // start, the fade, camera 30 and entity 31's move are not reproduced).
+            // The Act 1 start: 707 on and 1 off sets 1 and clears 706, fades out at once and
+            // moves entity 31 to locator 69 (movies 88 and 1 and the act-start call are not
+            // reproduced; camera 30 is left out: no return of it is described, R-0025).
             if state.flag(707) && !state.flag(1) {
                 state.set(1, true);
                 state.set(706, false);
+                out.extend([Action::FadeOut { seconds: 0.0, wait: false }, Action::MoveEntity { entity: 31, locator: 69, face: true }]);
+            }
+            // The talk thread (while 117 and 123 are clear): each round-up flag, the first time
+            // it is seen set in this visit (words 10 to 13, cleared at each activation), plays a
+            // talk with entity 31 (its cameras 30 and 31 are left out, R-0025).
+            if !state.flag(117) && !state.flag(123) {
+                for (k, f) in (107u16..=110).enumerate() {
+                    let w = 10 + k as u8;
+                    if state.flag(f) && state.word(pack, w) == 0 && !dialog {
+                        state.set_word(pack, w, 1);
+                        let talk = |line| Action::Converse { entity: 31, line };
+                        match f {
+                            107 => out.extend([talk(181), talk(182)]),
+                            108 => out.extend([Action::MoveEntity { entity: 31, locator: 69, face: true }, talk(183)]),
+                            109 => out.extend([Action::MoveEntity { entity: 31, locator: 69, face: true }, talk(184)]),
+                            _ => out.extend([Action::Sleep { ticks: 60 }, talk(185), talk(186), talk(187), talk(188)]),
+                        }
+                    }
+                }
+            }
+            // Flag 110 with its word clear (Init sets the word when 110 was set at load): hero
+            // to locator 7, camera 7, sound 5 (objects 2, 3, 10 and 11 are not reproduced). The
+            // keyed camera 7 is played with end mode 2, which frees the hero at its end (R-0025).
+            if state.flag(110) && state.word(pack, 5) == 0 {
+                state.set_word(pack, 5, 1);
+                out.extend([Action::HoldHero, Action::MoveHero { locator: 7 }, Action::PlayCamera { track: 7, wait: false, end: 2, speed: 1.0 }]);
+                out.push(Action::PlaySound { cue: 5, locator: None });
             }
             if !state.flag(111) && state.has_item(6) && state.flag(110) {
                 state.set(111, true);
@@ -307,17 +394,32 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             if !state.flag(618) && state.flag(116) && state.has_item(34) {
                 state.set(618, true);
             }
+            // Flag 114 (Hubert sends Tor for the pliers): fade out, slot R with Hubert's region
+            // 927, entity 44 to locator 15, fade in, camera 12, entity 44 walks to locator 16,
+            // fade out, camera returned, fade in. The walk waits (R-0025).
             if state.flag(114) && !state.flag(115) && !dialog {
                 state.set(115, true);
-                out.push(Action::LoadRegion { slot: 3, region: Some(927) });
+                out.extend([Action::HoldHero, fade_out(), Action::LoadRegion { slot: 3, region: Some(927) }, Action::WaitLoads]);
+                out.extend([Action::MoveEntity { entity: 44, locator: 15, face: true }, fade_in(), camera(12)]);
+                out.extend([Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false }, fade_out(), release_camera(), fade_in()]);
             }
+            // Flag 117 (the pliers handed over): the first scene (hero to locator 17, camera 12,
+            // entity 44 to locator 16, sound 12, back to locator 15, slot R with region 926),
+            // then region 928 for the second (119 set, entity 45 to locator 21, camera 15, its
+            // walk to locator 23), then slot R emptied and the camera returned. The pump word is
+            // cleared by this cutscene.
             if state.flag(117) && !state.flag(118) && !dialog {
                 state.set(118, true);
-                // The pump word is cleared by this cutscene; the second scene sets 119 and
-                // leaves slot R empty.
                 state.set_word(pack, 3, 0);
+                out.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 17 }, camera(12), fade_in()]);
+                out.push(Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false });
+                out.push(Action::PlaySound { cue: 12, locator: None });
+                out.extend([Action::WalkEntity { entity: 44, locator: 15, wait: true, orient: false }, fade_out()]);
+                out.extend([Action::LoadRegion { slot: 3, region: Some(926) }, Action::LoadRegion { slot: 3, region: Some(928) }, Action::WaitLoads]);
                 state.set(119, true);
-                out.push(Action::LoadRegion { slot: 3, region: None });
+                out.extend([Action::MoveEntity { entity: 45, locator: 21, face: true }, camera(15), fade_in()]);
+                out.extend([Action::WalkEntity { entity: 45, locator: 23, wait: true, orient: false }, fade_out()]);
+                out.extend([Action::LoadRegion { slot: 3, region: None }, release_camera(), fade_in()]);
             }
             if state.flag(278) {
                 state.set(279, true);
@@ -374,12 +476,35 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             };
             let mut actions: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
             actions.extend(farm_slots(state, message == 10));
-            // The thread's arrival step: 706 (the opening fade-in done) once the loads end.
-            state.set(706, true);
-            // Its stage events, flag effects only (the cutscene staging and movie 5 are not
-            // reproduced; the stage-6 scene is not covered).
+            // The talk thread's round-up flags: one already set when the world becomes current
+            // counts as seen, so only a flag that rises during the visit plays its talk (the
+            // spec's "first time it is seen set in this visit"; R-0025).
+            for k in 0..4u8 {
+                let seen = state.flag(107 + k as u16);
+                state.set_word(pack, 10 + k, seen as i32);
+            }
+            // The thread's arrival step: with 706 clear, set it, wait until no load is active
+            // and fade in over 1 s.
+            if !state.flag(706) {
+                state.set(706, true);
+                actions.extend([Action::WaitLoads, Action::FadeIn { seconds: 1.0, wait: false }]);
+            }
+            // Its stage events (movie 5 and the stage-6 scene are not covered).
             match state.stage() {
-                Some(1) if state.flag(122) && !state.flag(123) => state.set(123, true),
+                // Stage 1 with 122 set and 123 clear: hero to locator 13, camera 10, entity 47
+                // says line 168 and entity 39 line 169, entities 47, 39 and 33 to locators 10,
+                // 11 and 9, camera 11, the hero walks to locator 14, a fade, camera returned
+                // (object 8 and the entity animations are not reproduced; the fade is taken as
+                // out then in, R-0025).
+                Some(1) if state.flag(122) && !state.flag(123) => {
+                    state.set(123, true);
+                    actions.extend([Action::WaitLoads, Action::HoldHero, Action::MoveHero { locator: 13 }, camera(10)]);
+                    actions.extend([Action::Converse { entity: 47, line: 168 }, Action::Converse { entity: 39, line: 169 }]);
+                    for (entity, locator) in [(47, 10), (39, 11), (33, 9)] {
+                        actions.push(Action::MoveEntity { entity, locator, face: true });
+                    }
+                    actions.extend([camera(11), Action::WalkHero { locator: 14, wait: true, orient: false }, fade_out(), release_camera(), fade_in()]);
+                }
                 Some(2) if !state.flag(147) && !state.flag(145) => state.set(145, true),
                 _ => {}
             }
@@ -758,7 +883,8 @@ mod tests {
         // No stage: fourth slot 910, then P 914, Q 920, R 926.
         let mut s = GameState::default();
         let load = |slot, region| Action::LoadRegion { slot, region };
-        assert_eq!(on_activate(909, &mut s), vec![load(0, Some(910)), load(1, Some(914)), load(2, Some(920)), load(3, Some(926))]);
+        let loads = |a: Vec<Action>| a.into_iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>();
+        assert_eq!(loads(on_activate(909, &mut s)), vec![load(0, Some(910)), load(1, Some(914)), load(2, Some(920)), load(3, Some(926))]);
         // SPEC-0045 test vector: flags 1 and 122 set, no entry value 10: 910 or 911 by flag
         // 110, P 916, Q 922, R 930.
         s.set(1, true);
@@ -767,7 +893,7 @@ mod tests {
         for f in 107..=110 {
             s.set(f, true);
         }
-        assert_eq!(on_activate(909, &mut s), vec![load(0, Some(911)), load(1, Some(916)), load(2, Some(922)), load(3, Some(930))]);
+        assert_eq!(loads(on_activate(909, &mut s)), vec![load(0, Some(911)), load(1, Some(916)), load(2, Some(922)), load(3, Some(930))]);
     }
 
     #[test]
@@ -820,7 +946,10 @@ mod tests {
         on_update(909, &mut s, false);
         assert!(s.flag(111));
         let out = fire(&mut s, 11, 5, true);
-        assert_eq!(out.actions, vec![Action::MoveHero { locator: 29 }, Action::Message { line: 166 }, Action::Message { line: 162 }]);
+        let lines: Vec<&Action> = out.actions.iter().filter(|a| matches!(a, Action::Message { .. } | Action::MoveHero { .. })).collect();
+        assert_eq!(lines, vec![&Action::MoveHero { locator: 29 }, &Action::Message { line: 166 }, &Action::Message { line: 162 }]);
+        assert_eq!(out.actions.first(), Some(&Action::HoldHero));
+        assert_eq!(out.actions.last(), Some(&Action::ReturnCamera { preset: -1, release: true }));
         assert!(s.flag(112) && s.has_item(7) && !s.has_item(6));
         assert_eq!(fire(&mut s, 11, 5, true).actions, vec![Action::Message { line: 167 }]);
         // Mum's talk (routine A) takes the water; Hubert's sends Tor for the pliers.
@@ -828,8 +957,12 @@ mod tests {
         assert!(s.flag(113) && !s.has_item(7));
         assert_eq!(talks(909, 1, &mut s, 1), vec![101]);
         assert!(s.flag(114));
-        assert_eq!(on_update(909, &mut s, true), vec![], "the scene waits for the box to close");
-        assert_eq!(on_update(909, &mut s, false), vec![Action::LoadRegion { slot: 3, region: Some(927) }]);
+        let scene = |a: Vec<Action>| a.into_iter().filter(|a| matches!(a, Action::LoadRegion { .. } | Action::MoveEntity { .. } | Action::WalkEntity { .. })).collect::<Vec<_>>();
+        assert!(scene(on_update(909, &mut s, true)).is_empty(), "the scene waits for the box to close");
+        assert_eq!(
+            scene(on_update(909, &mut s, false)),
+            vec![Action::LoadRegion { slot: 3, region: Some(927) }, Action::MoveEntity { entity: 44, locator: 15, face: true }, Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false }]
+        );
         // Without the pliers Hubert's line 98 sets 116; picking them up then sets 618.
         assert_eq!(talks(909, 1, &mut s, 1), vec![98]);
         s.give(34, 1);
@@ -837,7 +970,9 @@ mod tests {
         assert!(s.flag(618));
         assert_eq!(talks(909, 1, &mut s, 1), vec![97]);
         assert!(s.flag(116) && s.flag(117) && !s.has_item(34));
-        assert_eq!(on_update(909, &mut s, false), vec![Action::LoadRegion { slot: 3, region: None }]);
+        let regions: Vec<Action> = on_update(909, &mut s, false).into_iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect();
+        let load = |region| Action::LoadRegion { slot: 3, region };
+        assert_eq!(regions, vec![load(Some(926)), load(Some(928)), load(None)]);
         assert!(s.flag(118) && s.flag(119));
     }
 
