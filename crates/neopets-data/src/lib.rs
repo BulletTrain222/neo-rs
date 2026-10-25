@@ -3,6 +3,7 @@ pub mod anim;
 pub mod area;
 pub mod archive;
 pub mod audio;
+pub mod bank;
 mod elf;
 pub mod design;
 pub mod dialogue;

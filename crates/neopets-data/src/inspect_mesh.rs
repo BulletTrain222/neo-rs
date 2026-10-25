@@ -610,6 +610,24 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                     }
                 }
             }
+            // SPEC-0031: every sound bank's groups, voices, samples and music children.
+            let (mut banks, mut dirs, mut voices, mut samples, mut children, mut loops, mut frames) = (0, 0, 0, 0, 0, 0, 0usize);
+            for r in 10..=143u32 {
+                let Ok(b) = index.read(disc, r) else { continue };
+                match neopets_data::bank::Bank::parse(&b) {
+                    Ok(bank) => {
+                        banks += 1;
+                        dirs += bank.groups.len();
+                        voices += bank.groups.iter().map(|g| g.voices.len()).sum::<usize>();
+                        samples += bank.samples.len();
+                        loops += bank.samples.values().filter(|s| s.loop_start.is_some()).count();
+                        frames += bank.samples.values().map(|s| s.pcm.len() / 28).sum::<usize>();
+                        children += bank.children.len();
+                    }
+                    Err(e) => println!("  bank {r}: {e}"),
+                }
+            }
+            println!("Sound banks: {banks} parsed, {dirs} directory records, {voices} voice records, {samples} samples ({loops} loops), {frames} frames played, {children} music children");
             println!("KPV streams: {ok} decoded, rates {rates:?}, {:.0} s in all, longest {longest:?}", total);
             if let (Ok(d), Ok(boot)) = (index.read(disc, neopets_data::design::RESOURCE).and_then(|b| neopets_data::design::DesignTables::parse(&b)), neopets_data::archive::verified_boot_program(disc)) {
                 if let Ok(ids) = neopets_data::archive::boot_u32_table(&boot, 0x0031_F2B0, 193) {

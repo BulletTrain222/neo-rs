@@ -408,6 +408,7 @@ fn main() {
     // `--save-test`: at the end of a trace, save slot 0 to private/saves/trace.bin, read it back
     // and load it into a rebuilt game.
     let mut save_test = false;
+    let mut render: Option<(u32, u32, u32, u32)> = None;
     // `--title`: start at the front end's card state (logo, legal screen, title) instead of in
     // play.
     let mut title = false;
@@ -436,6 +437,11 @@ fn main() {
             autowalk = Some(AutoWalk { jump: false });
         } else if arg == "--autojump" {
             autowalk = Some(AutoWalk { jump: true });
+        } else if arg == "--render-music" {
+            // `--render-music BANK SECONDS [G] [R2]`: render a bank's music offline to
+            // private/audio/bank-BANK.wav (for checking the sequencer and synth).
+            let mut n = || args.next().and_then(|v| v.parse::<u32>().ok());
+            render = Some((n().unwrap_or(28), n().unwrap_or(20), n().unwrap_or(0), n().unwrap_or(0)));
         } else if arg == "--play-trace" {
             trace = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
                 eprintln!("--play-trace requires a tick count");
@@ -525,6 +531,52 @@ fn main() {
         Ok((s, archive)) => (s, Some(archive)),
         Err(e) => (format!("ISO not ready\n{e}"), None),
     };
+    if let Some((bank, secs, excite, reg2)) = render {
+        let Some(mut archive) = archive else {
+            eprintln!("{status}");
+            std::process::exit(1)
+        };
+        match audio_view::load_bank(&mut archive, bank) {
+            Ok(mut engine) => {
+                engine.volume = 93;
+                engine.sequencer.excite = excite as u8;
+                let frames = (secs * neopets_sim::synth::RATE) as usize;
+                let mut out = vec![0f32; 2 * frames];
+                let mut peak_voices = 0;
+                for chunk in out.chunks_mut(2 * neopets_sim::sequencer::FRAMES_PER_TICK) {
+                    engine.sequencer.registers[2] = reg2 as u8;
+                    engine.render(chunk);
+                    peak_voices = peak_voices.max(engine.synth.active());
+                }
+                let pcm: Vec<i16> = out.iter().map(|&v| (v * 32767.0) as i16).collect();
+                let data = pcm.len() as u32 * 2;
+                let mut w = Vec::new();
+                w.extend(b"RIFF");
+                w.extend((36 + data).to_le_bytes());
+                w.extend(b"WAVEfmt ");
+                w.extend(16u32.to_le_bytes());
+                w.extend(1u16.to_le_bytes());
+                w.extend(2u16.to_le_bytes());
+                w.extend(neopets_sim::synth::RATE.to_le_bytes());
+                w.extend((neopets_sim::synth::RATE * 4).to_le_bytes());
+                w.extend(4u16.to_le_bytes());
+                w.extend(16u16.to_le_bytes());
+                w.extend(b"data");
+                w.extend(data.to_le_bytes());
+                for v in &pcm {
+                    w.extend(v.to_le_bytes());
+                }
+                let path = format!("private/audio/bank-{bank}.wav");
+                let _ = std::fs::create_dir_all("private/audio");
+                match std::fs::write(&path, w) {
+                    Ok(()) => println!("Rendered bank {bank} for {secs} s at G {excite}, register 2 {reg2}: {path}; peak voices {peak_voices}; playing children {:?}", engine.sequencer.playing()),
+                    Err(e) => eprintln!("{path}: {e}"),
+                }
+            }
+            Err(e) => eprintln!("Bank {bank}: {e}"),
+        }
+        return;
+    }
     if let Some(ticks) = trace {
         let Some(mut archive) = archive else {
             eprintln!("{status}");
@@ -570,7 +622,7 @@ fn main() {
             ..default()
         }))
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play))
-        .add_systems(Update, audio_view::sync_music.after(step_sim))
+        .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank).after(step_sim))
         .add_systems(
             Update,
             (

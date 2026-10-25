@@ -359,6 +359,9 @@ pub struct Play {
     /// The music controller's stream channels (SPEC-0009 Streams) and this tick's selection.
     pub music: neopets_sim::music::Streams,
     pub music_selection: Option<neopets_sim::music::Selection>,
+    /// The bank music's game side and the intensity inputs (SPEC-0009).
+    pub bank_music: neopets_sim::music::BankMusic,
+    pub intensity: neopets_sim::music::Intensity,
 }
 
 /// The five stat-up items with a once-per-area set, in slot order (SPEC-0025 Once-per-area sets).
@@ -562,6 +565,8 @@ impl Play {
             reload_wanted: false,
             music: Default::default(),
             music_selection: None,
+            bank_music: Default::default(),
+            intensity: Default::default(),
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
         // which for 909 loads the farm family's slots.
@@ -2164,6 +2169,11 @@ impl Play {
         let s = neopets_sim::music::select(r.bank, r.stream, r.block, flag);
         self.music.tick(s.stream, s.stop, r.cap, 1.0);
         self.music_selection = Some(s);
+        // The bank: the row's offset with the flag's +67 (added to negative offsets too).
+        self.bank_music.tick(r.bank + if flag { 67 } else { 0 }, r.level, 1.0);
+        // Intensity: k counts the characters in AI state 19 (agro) that are not dead.
+        let k = self.characters.iter().filter(|c| c.enemy.as_ref().is_some_and(|e| e.state == 19 && !e.dead)).count();
+        self.intensity.tick(k, self.hero_hp, self.hero_max);
     }
 
     /// The location a save names: the current world's map area, else the last named one, else
@@ -2419,9 +2429,11 @@ impl Play {
         let job = self.job.map_or(String::new(), |j| format!(" | loading {j:?}"));
         let ch = self.music.channels;
         let job = format!(
-            "{job} | MUSIC (SPEC-0009): {:?}, streams [{:?} at {}/1024, {:?} at {}/1024]",
+            "{job} | MUSIC (SPEC-0009): {:?}, streams [{:?} at {}/1024, {:?} at {}/1024], bank {:?} at {} (sent {}), E {} register 2 {} G {}",
             self.music_selection.map(|s| (s.bank, s.stream, s.block)),
-            ch[0].stream, ch[0].volume, ch[1].stream, ch[1].volume
+            ch[0].stream, ch[0].volume, ch[1].stream, ch[1].volume,
+            self.bank_music.playing, self.bank_music.volume, self.bank_music.sent(),
+            self.intensity.e, self.intensity.register2, self.intensity.excite
         );
         let prompt = match self.message {
             Some((line, _)) if self.dialogue_open => match self.world.lines.line(line as usize) {
