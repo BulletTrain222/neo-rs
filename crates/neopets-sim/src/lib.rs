@@ -6,6 +6,7 @@ pub mod camera;
 pub mod clip;
 pub mod contact;
 pub mod hero;
+pub mod level;
 pub mod motion;
 mod step;
 pub mod travel;

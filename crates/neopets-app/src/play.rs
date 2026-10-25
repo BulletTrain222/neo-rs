@@ -11,6 +11,7 @@ use neopets_data::{Disc, resource};
 use neopets_sim::camera::{self, CameraPad, FollowCamera, Followed};
 use neopets_sim::contact::{self, BoxShape, WallEdge};
 use neopets_sim::hero::{HeroInput, Locomotion};
+use neopets_sim::level::{self, Action, GameState};
 use neopets_sim::motion::HERO_HEIGHT;
 use neopets_sim::travel::{self as buffers, Buffer};
 use std::cell::Cell;
@@ -102,9 +103,9 @@ impl World {
     /// The door the hero touches, if any. The hero's own door test is only partly specified
     /// (R-0012): here its body (feet to 3.5 above) must overlap the door rectangle's height,
     /// its centre lie within the width, and its distance to the plane be at most the body
-    /// radius plus 0.25.
+    /// radius plus 1.5 (951's exit door stands 2.66 behind the wall that stops the hero).
     pub fn touched_door(&self, p: [f32; 3]) -> Option<usize> {
-        self.door_within(p, contact::HERO_RADIUS + 0.25)
+        self.door_within(p, contact::HERO_RADIUS + 1.5)
     }
 
     fn door_within(&self, p: [f32; 3], reach: f32) -> Option<usize> {
@@ -146,6 +147,8 @@ pub enum Job {
     Replace(u32, i32),
     /// Reload T with the pack it held when the interior was entered.
     ReloadTransition(u32),
+    /// A script's StartEnterInterior: enter the pack as an interior at entry record 0.
+    EnterInterior(u32),
 }
 
 pub struct Play {
@@ -182,6 +185,12 @@ pub struct Play {
     interior_t: Option<u32>,
     /// What the last door did.
     pub last_door: String,
+    /// Story flags, blackboard and items read by the level handlers.
+    pub state: GameState,
+    /// The dialogue line a handler showed, and the tick it was shown.
+    pub message: Option<(u16, u64)>,
+    /// Square was pressed this tick (a script door starts only on a press edge).
+    square_now: bool,
     /// Set once the hero's meshes exist.
     pub spawned: bool,
 }
@@ -245,6 +254,9 @@ impl Play {
             job: None,
             interior_t: None,
             last_door: String::new(),
+            state: GameState::default(),
+            message: None,
+            square_now: false,
             spawned: false,
         })
     }
@@ -455,7 +467,51 @@ impl Play {
             self.other = Some(std::mem::replace(&mut self.world, o));
         }
         self.arrive(landing);
+        self.activated();
         true
+    }
+
+    /// SPEC-0006 Make current: the new world's script runs its activate-world routine.
+    fn activated(&mut self) {
+        let actions = level::on_activate(self.world.pack, &mut self.state);
+        self.apply(&actions);
+    }
+
+    /// Carry out a level handler's actions (SPEC-0030 host calls), in order.
+    fn apply(&mut self, actions: &[Action]) {
+        for &a in actions {
+            match a {
+                Action::EnterInterior { slot } if self.world.buffer == Buffer::Exterior => {
+                    if let Some(&pack) = self.boot.areas.packs.get(slot) {
+                        self.job = Some(Job::EnterInterior(pack));
+                        self.last_door = format!("script: entering slot {slot} (pack {pack}) as an interior");
+                    }
+                }
+                Action::LeaveInterior { slot } if self.world.buffer == Buffer::Interior => {
+                    // E becomes current at its entry record 0 (no probe); T is reloaded with
+                    // the slot's pack; E's activate-world routine runs.
+                    let Some(o) = self.other.take() else { continue };
+                    let landing = o.entries.first().copied().unwrap_or(([0.0; 3], [0.0, 0.0, 1.0]));
+                    let interior = std::mem::replace(&mut self.world, o);
+                    drop(interior);
+                    self.interior_t = None;
+                    self.arrive(landing);
+                    if let Some(&pack) = self.boot.areas.packs.get(slot) {
+                        self.job = Some(Job::ReloadTransition(pack));
+                    }
+                    self.last_door = format!("script: left the interior to {}, reloading slot {slot}", self.world.pack);
+                    self.activated();
+                }
+                Action::MoveHero { locator } => {
+                    if let Some(&e) = self.world.entries.get(locator) {
+                        self.arrive(e);
+                        self.last_door = format!("script: hero moved to locator {locator} of {}", self.world.pack);
+                    }
+                }
+                Action::Message { line } => self.message = Some((line, self.ticks)),
+                _ => self.last_door = format!("script: {a:?} refused in the {:?} buffer", self.world.buffer),
+            }
+        }
     }
 
     /// SPEC-0006 Doors, default rule, for door n of the current world (already confirmed).
@@ -510,7 +566,7 @@ impl Play {
     /// The pack a pending door job wants loaded.
     pub fn job_pack(&self) -> Option<u32> {
         match self.job? {
-            Job::FromExterior { pack: p, .. } | Job::Replace(p, _) | Job::ReloadTransition(p) => Some(p),
+            Job::FromExterior { pack: p, .. } | Job::Replace(p, _) | Job::ReloadTransition(p) | Job::EnterInterior(p) => Some(p),
         }
     }
 
@@ -525,8 +581,9 @@ impl Play {
                 self.other = Some(world);
                 let landed = self.land_in_other(plane, reverse, false);
                 self.last_door = format!("landed in transition {} at its door {plane}: {landed}", self.world.pack);
+                self.activated();
             }
-            Job::FromExterior { .. } => {
+            Job::FromExterior { .. } | Job::EnterInterior(_) => {
                 // T is released and its pack remembered; E stays resident as the other world.
                 if self.other.as_ref().is_some_and(|o| o.buffer == Buffer::Transition) {
                     self.interior_t = self.other.take().map(|o| o.pack);
@@ -537,6 +594,7 @@ impl Play {
                 let l = self.world.snap(l, 6.0);
                 self.arrive((l, g));
                 self.last_door = format!("entered interior {} at entry record 0", self.world.pack);
+                self.activated();
             }
             Job::Replace(_, plane) => {
                 self.world = world;
@@ -547,6 +605,7 @@ impl Play {
                 });
                 self.arrive(landing.unwrap_or(([0.0; 3], [1.0, 0.0, 0.0])));
                 self.last_door = format!("replaced the exterior with {}, arriving at door {plane}", self.world.pack);
+                self.activated();
             }
             Job::ReloadTransition(_) => {
                 if self.world.buffer == Buffer::Exterior {
@@ -565,7 +624,23 @@ impl Play {
         let p = self.loco.position();
         let Some(n) = self.world.touched_door(p) else { return };
         if self.world.scripted_doors {
-            self.last_door = format!("door {n}: a script door (needs the level-script runtime)");
+            // SPEC-0006 Doors, item 5: the registered callback decides. Context 0 starts on
+            // contact; otherwise the door posts the context as its prompt and the callback starts
+            // on a Square press edge with the confirm flag set, which it never clears.
+            match level::teleport_context(self.world.pack, n) {
+                None => self.last_door = format!("door {n}: script door of {} not described yet", self.world.pack),
+                Some(0) => {
+                    let actions = level::on_teleport(self.world.pack, n, &mut self.state);
+                    self.apply(&actions);
+                }
+                Some(c) => {
+                    self.door_prompt = Some(c);
+                    if self.square_now && self.confirm {
+                        let actions = level::on_teleport(self.world.pack, n, &mut self.state);
+                        self.apply(&actions);
+                    }
+                }
+            }
             return;
         }
         if self.world.ground.as_ref().is_none_or(|g| g.cell_value(p[0], p[2]) < 0) {
@@ -600,6 +675,7 @@ impl Play {
         if self.prompt_shown.is_some() && input.square {
             self.confirm = true;
         }
+        self.square_now = input.square;
         self.loco.update(input, forward, left, self.hero.clip_state());
         self.pending_step();
         self.hero.play(self.loco.action());
@@ -644,6 +720,7 @@ impl Play {
             if let Some(o) = self.other.take() {
                 self.other = Some(std::mem::replace(&mut self.world, o));
                 self.swaps += 1;
+                self.activated();
             }
         }
         self.door_step();
@@ -668,10 +745,15 @@ impl Play {
         let other = self.other.as_ref().map_or("none".into(), |o| format!("{} ({:?})", o.pack, o.buffer));
         let prompt = match self.prompt_shown {
             Some(13) => " | E (Square): Enter (prompt 13)".to_string(),
-            Some(id) => format!(" | E (Square): Exit (prompt {id})"),
+            Some(26) => " | E (Square): Exit (prompt 26)".to_string(),
+            Some(id) => format!(" | E (Square): prompt {id}"),
             None => String::new(),
         };
         let job = self.job.map_or(String::new(), |j| format!(" | loading {j:?}"));
+        let prompt = match self.message {
+            Some((line, at)) if self.ticks < at + 240 => format!("{prompt} | LevelMsg line {line}"),
+            _ => prompt,
+        };
         format!(
             "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}",
             self.world.pack, self.world.buffer, self.swaps, self.last_door

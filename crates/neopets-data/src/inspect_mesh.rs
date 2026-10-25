@@ -350,6 +350,12 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         }
     }
     println!("Pack kinds (kind, has module): {kinds:?}");
+    {
+        let bytes = index.read(disc, 909)?;
+        let chain = resource::walk_chunks(&bytes, None)?;
+        let e: Vec<_> = (0..5).filter_map(|i| neopets_data::ground::entry_record(&bytes, &chain.chunks, i)).collect();
+        println!("909 entry records 0..4 (position, facing): {e:?}");
+    }
     let g = |p: u32| of_pack.get(&p).copied();
     println!("Kinds of 691: {:?}, 909: {:?}, 1429: {:?}, 1008: {:?}, 1121: {:?}", g(691), g(909), g(1429), g(1008), g(1121));
     println!(
