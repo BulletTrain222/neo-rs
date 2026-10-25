@@ -1048,8 +1048,7 @@ fn step_sim(
                         m.flow.title_seen = true;
                     }
                     if m.flow.title_seen {
-                        let bank = (m.flow.current == menus::TITLE).then_some(25);
-                        play.play.frontend_music(bank, m.flow.current == menus::PAUSE);
+                        play.play.frontend_music(m.flow.bank_override, m.flow.current == menus::PAUSE);
                     }
                     play.play.jump_latch = false;
                     play.play.square_latch = false;
@@ -2104,6 +2103,28 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                         flow.messages = (0..27).map(|i| d.message(i).unwrap_or_default()).collect();
                     }
                     flow.slots = vec![b"1".to_vec(), b"106".to_vec()];
+                    // SPEC-0026 Credits: table 15's rows, the colour table at 0x2DCFA8 (two sets
+                    // of 8 words) and the roll's words at 0x2DCF84 to 0x2DCFA0.
+                    if let Ok(d) = index.read(disc, neopets_data::design::RESOURCE).and_then(|b| neopets_data::design::DesignTables::parse(&b)) {
+                        flow.credit_rows = d.credits();
+                    }
+                    if let Ok(boot) = neopets_data::archive::verified_boot_program(disc) {
+                        if let Ok(c) = neopets_data::archive::boot_u32_table(&boot, 0x002D_CFA8, 16) {
+                            flow.credit_colours = c.iter().map(|w| w.to_le_bytes()).collect();
+                        }
+                        if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, 0x002D_CF84, 8) {
+                            flow.credit_words = Some(neopets_sim::credits::Words {
+                                pitch: f32::from_bits(w[0]),
+                                slow: f32::from_bits(w[1]),
+                                fast: f32::from_bits(w[2]),
+                                drop: -(w[3] as i32),
+                                offset: w[4] as i32,
+                                fade_top: w[5] as i32,
+                                fade_bottom: w[6] as i32,
+                                ramp: f32::from_bits(w[7]),
+                            });
+                        }
+                    }
                     if let Ok(w) = neopets_data::archive::verified_boot_program(disc).and_then(|b| neopets_data::archive::boot_u32_table(&b, 0x002D_D410, 1)) {
                         flow.busy_hold = (f32::from_bits(w[0]) * 60.0) as u32;
                     }

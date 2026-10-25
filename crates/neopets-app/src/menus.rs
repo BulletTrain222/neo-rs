@@ -29,6 +29,8 @@ pub const GAME_OVER: usize = 23;
 pub const LOGO: usize = 30;
 /// The load prompt (record 17, state 21) and the save prompt (record 18, state 22).
 pub const LOAD: usize = 17;
+/// The credits roll (record 14, state 18) and the Options page (record 11).
+pub const CREDITS: usize = 14;
 pub const SAVE: usize = 18;
 
 /// Menu bits of the rising-edge word (SPEC-0035 section 4).
@@ -173,6 +175,16 @@ pub struct Flow {
     pub held: u16,
     /// The title has been shown (the music controller's front-end pass gate).
     pub title_seen: bool,
+    /// The music bank override the front end holds (SPEC-0035 Behavior 3a): the title sets 25,
+    /// the credits 8 (it stays on the Options page); the pause page and play clear it.
+    pub bank_override: Option<i32>,
+    /// The credits (SPEC-0026 Credits): the rows (text, style, colour set), the colour table
+    /// (two sets of 8 words), the roll's words, the roll and the rows shown this pass.
+    pub credit_rows: Vec<(Option<Vec<u8>>, u16, u16)>,
+    pub credit_colours: Vec<[u8; 4]>,
+    pub credit_words: Option<neopets_sim::credits::Words>,
+    pub roll: Option<neopets_sim::credits::Roll>,
+    pub credits_shown: Vec<neopets_sim::credits::Shown>,
 }
 
 /// What the predicates read: the pass count, the option words of slots 66 to 68 (Vibration,
@@ -187,7 +199,7 @@ pub struct Pc {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -327,6 +339,9 @@ impl Flow {
     /// count at 0 and its default focus.
     fn enter(&mut self, fe: &Frontend, r: usize, ctx: &Ctx) {
         self.came_from = Some(self.current);
+        if matches!(r, PLAY | PAUSE) {
+            self.bank_override = None;
+        }
         match Self::back_code(fe, r) {
             -1 => {
                 if self.stack.last() != Some(&r) && self.stack.len() < 32 {
@@ -394,6 +409,7 @@ impl Flow {
                 }
             }
             12 => {
+                self.bank_override = Some(25);
                 if self.pass >= 1 {
                     self.idle = if edge == 0 { self.idle + 1 } else { 0 };
                 } else {
@@ -421,6 +437,28 @@ impl Flow {
                     result = Some(PLAY);
                 }
                 generic = false;
+            }
+            // SPEC-0026 Credits (state 18): the roll from pass 0; the bank override 8 each pass;
+            // the end returns "back" (no cue) to the Options page. Triangle leaves early through
+            // the generic back rule from pass 2.
+            18 => {
+                self.bank_override = Some(8);
+                if self.pass == 0 {
+                    self.roll = self.credit_words.map(|w| neopets_sim::credits::Roll::new(448, &w));
+                }
+                let styles: Vec<(bool, u16)> = self.credit_rows.iter().map(|r| (r.0.is_some(), r.1)).collect();
+                match (self.roll.as_mut(), self.credit_words) {
+                    (Some(roll), Some(w)) => {
+                        self.credits_shown = roll.step(&styles, 448, &w);
+                        if roll.ended(styles.len()) {
+                            self.credits_shown.clear();
+                            self.roll = None;
+                            self.back(fe, ctx);
+                            return command;
+                        }
+                    }
+                    _ => self.credits_shown.clear(),
+                }
             }
             // SPEC-0035 section 7.2 and SPEC-0025 Load scan, mapped onto the clean side's file:
             // the busy record 15 for its minimum, the read, then the picker (Cross loads the
@@ -750,6 +788,25 @@ pub fn draw_list(fe: &Frontend, record: usize, focus: usize, pc: Pc) -> Vec<Draw
     let mut counter = 0usize;
     draw_node(fe, root, (0.0, 0.0, 1.0, 1.0), false, focus, pc, &mut counter, &mut out);
     out
+}
+
+/// The credits rows of this pass: centred at x 256 in font 0 (the spec names no font; R-0023),
+/// in the colour of the row's style and set, with the roll's alpha.
+pub fn credits_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
+    if flow.current != CREDITS {
+        return Vec::new();
+    }
+    let font = 0usize;
+    flow.credits_shown
+        .iter()
+        .filter_map(|s| {
+            let (text, style, set) = flow.credit_rows.get(s.row)?;
+            let text = text.as_ref()?;
+            let c = flow.credit_colours.get(*set as usize * 8 + *style as usize).copied().unwrap_or([128; 4]);
+            let w = fe.fonts.get(font).map_or(0, |f| f.measure(text, 0));
+            Some(Draw::Text { font, text: text.clone(), spacing: 0, x: 256.0 - (w / 2) as f32, y: s.y, colour: [c[0], c[1], c[2], s.alpha as u8] })
+        })
+        .collect()
 }
 
 /// The slot picker's rows (sections 7.1 and 14.3): four rows by the journal row drawer, each at

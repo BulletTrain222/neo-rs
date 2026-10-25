@@ -750,8 +750,8 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             }
         }
         if std::env::var_os("NEOPETS_PAGE_TREES").is_some() {
-            // The load (17), save (18) and journal (22) records' trees.
-            for r in [17usize, 18, 22] {
+            // The load (17), save (18), journal (22), credits (14) and Options (11) records' trees.
+            for r in [17usize, 18, 22, 14, 11] {
                 let mut out = Vec::new();
                 if let Some(n) = f.screens.get(r).and_then(|s| s.node) {
                     walk(&f, n, 0, &mut out);

@@ -115,6 +115,7 @@ pub fn sync_menu(
     let flow = &menu.flow;
     let mut draws = if flow.current == menus::PLAY { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pc()) };
     draws.extend(menus::picker_draws(&art.f, flow));
+    draws.extend(menus::credits_draws(&art.f, flow));
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {
         commands.spawn((
@@ -188,15 +189,17 @@ pub fn sync_menu(
                 cache.labels.get(&node).map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32 * scale, *w as f32 * scale, *h as f32 * scale, Color::WHITE))
             }
             Draw::Text { font, text, spacing, x, y, colour } => {
-                let key = (font, text, spacing, colour);
+                // The alpha is applied to the drawn image, so a fading row reuses its image.
+                let alpha = colour[3];
+                let key = (font, text, spacing, [colour[0], colour[1], colour[2], 128]);
                 if !cache.texts.contains_key(&key) {
-                    let made = f.text_image(mem, font, &key.1, spacing, colour).map(|(img, base)| {
+                    let made = f.text_image(mem, font, &key.1, spacing, key.3).map(|(img, base)| {
                         let (w, h) = (img.width, img.height);
                         (images.add(crate::rgba_image(w, h, img.rgba)), w, h, base)
                     });
                     cache.texts.insert(key.clone(), made);
                 }
-                cache.texts[&key].as_ref().map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32, *w as f32, *h as f32, Color::WHITE))
+                cache.texts[&key].as_ref().map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32, *w as f32, *h as f32, Color::srgba(1.0, 1.0, 1.0, (alpha as f32 / 128.0).min(1.0))))
             }
         });
     }

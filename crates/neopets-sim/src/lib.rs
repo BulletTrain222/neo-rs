@@ -7,6 +7,7 @@ pub mod camera;
 pub mod clip;
 pub mod combat;
 pub mod contact;
+pub mod credits;
 pub mod cues;
 pub mod death;
 pub mod emote;

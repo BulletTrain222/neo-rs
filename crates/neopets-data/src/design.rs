@@ -143,6 +143,18 @@ impl DesignTables {
         Some(EmoteRow { clip: r[0], chance: r[1], variance: r[2] })
     }
 
+    /// Table 15: the credits rows: (text or None for a spacer, style index, colour set).
+    pub fn credits(&self) -> Vec<(Option<Vec<u8>>, u16, u16)> {
+        let Some(t) = self.tables.get(15) else { return Vec::new() };
+        (0..t.count)
+            .filter_map(|i| {
+                let r = t.record(i)?;
+                let ptr = u32::from_le_bytes(r[0..4].try_into().ok()?);
+                Some((t.string(ptr).map(<[u8]>::to_vec), u16::from_le_bytes([r[4], r[5]]), u16::from_le_bytes([r[6], r[7]])))
+            })
+            .collect()
+    }
+
     /// Table 10: the name colour of hero variant 0 (Tor) or 1 (Roberta), bytes R, G, B.
     pub fn hero_colour(&self, variant: usize) -> Option<[u8; 3]> {
         let r = self.tables.get(10)?.record(variant)?;
