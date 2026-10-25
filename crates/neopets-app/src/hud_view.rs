@@ -49,6 +49,9 @@ impl HudArt {
 pub struct HudText;
 
 #[derive(Component)]
+pub struct HudCaption;
+
+#[derive(Component)]
 pub struct HudCanvas;
 
 #[derive(Component)]
@@ -71,6 +74,7 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
         42 => (node.arg as i32) < p.health_dividers,
         45 => (node.arg as i32) < p.pool_dividers,
         41 => p.monster,
+        25 => p.square,
         _ => false,
     };
     match node.mode {
@@ -115,6 +119,8 @@ struct Inputs {
     pool_dividers: i32,
     /// The monster bar's draw rule (T not 0 and the quick panel closed; SPEC-0023 10.2).
     monster: bool,
+    /// The Square prompt slot is shown this pass (predicate slot 25).
+    square: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -126,7 +132,9 @@ pub fn sync_hud(
     windows: Query<&Window>,
     mut canvas: Query<(Entity, &mut Node), With<HudCanvas>>,
     mut sprites: Query<(&HudSprite, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudText>)>,
-    mut texts: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudText>, Without<HudCanvas>, Without<HudSprite>)>,
+    mut texts: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudText>, Without<HudCanvas>, Without<HudSprite>, Without<HudCaption>)>,
+    mut captions: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
+    mut caption_image: Local<Option<(Vec<u8>, Handle<Image>, u32, u32, i32)>>,
 ) {
     let (Some(state), Some(mut art)) = (state, art) else { return };
     let HudArt { f, mem, images: cache, name: name_image } = &mut *art;
@@ -137,10 +145,19 @@ pub fn sync_hud(
     let (ox, oy) = ((window.width() - 512.0 * s) / 2.0, (window.height() - 448.0 * s) / 2.0);
     let Some(bars) = f.key(BARS) else { return };
     let monster = f.key(MONSTER);
+    // The button-prompt group: the parent of the HUD page's node gated by predicate slot 25.
+    let mut page = Vec::new();
+    if let Some(root) = f.screens.get(9).and_then(|s| s.node) {
+        subtree(f, root, &mut page);
+    }
+    let prompts = page.iter().copied().find(|&n| f.nodes[n].handler == 25).and_then(|n| f.nodes[n].parent);
     let mut nodes = Vec::new();
     subtree(f, bars, &mut nodes);
     if let Some(m) = monster {
         subtree(f, m, &mut nodes);
+    }
+    if let Some(g) = prompts {
+        subtree(f, g, &mut nodes);
     }
     let Ok((root, mut root_node)) = canvas.single_mut() else {
         let root = commands
@@ -152,6 +169,8 @@ pub fn sync_hud(
         }
         let text = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudText)).id();
         commands.entity(root).add_child(text);
+        let caption = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudCaption)).id();
+        commands.entity(root).add_child(caption);
         return;
     };
     let _ = root;
@@ -168,6 +187,7 @@ pub fn sync_hud(
         health_dividers: hud.health.dividers,
         pool_dividers: hud.pool.dividers,
         monster: mb.t != 0 && !p.quick.open,
+        square: p.square_caption().is_some(),
     };
     let key = |k: u32| f.key(k).unwrap_or(usize::MAX);
     let node_x = |k: u32| f.key(k).map_or(0, |n| f.nodes[n].x as i32);
@@ -212,7 +232,23 @@ pub fn sync_hud(
         let n = sprite.0;
         // Visible when every node from the sprite up to the bars group passes its condition.
         let mut ok = shown;
-        let top = if in_monster(n) { monster.unwrap_or(bars) } else { bars };
+        let in_prompts = |n: usize| {
+            let mut at = Some(n);
+            while let Some(i) = at {
+                if Some(i) == prompts {
+                    return true;
+                }
+                at = f.nodes[i].parent;
+            }
+            false
+        };
+        let top = if in_monster(n) {
+            monster.unwrap_or(bars)
+        } else if in_prompts(n) {
+            prompts.unwrap_or(bars)
+        } else {
+            bars
+        };
         let mut at = Some(n);
         while let Some(i) = at {
             ok &= condition(f, i, &inputs);
@@ -240,7 +276,13 @@ pub fn sync_hud(
         let base = f.sprite(n).map_or([128; 4], |sp| sp.colour);
         let rgb = if tinted.contains(&n) { [hud.tint[0], hud.tint[1], hud.tint[2]] } else { [base[0], base[1], base[2]] };
         let c = |v: u8| v as f32 / 128.0;
-        let a = if in_monster(n) { neopets_sim::hud::alpha(mb.t) } else { hud.bars_alpha };
+        let a = if in_monster(n) {
+            neopets_sim::hud::alpha(mb.t)
+        } else if in_prompts(n) {
+            128
+        } else {
+            hud.bars_alpha
+        };
         image.color = Color::srgba(c(rgb[0]), c(rgb[1]), c(rgb[2]), c(a).min(1.0));
         match cache.get(&(n, w as u32, h as u32)) {
             Some(handle) => image.image = handle.clone(),
@@ -270,6 +312,29 @@ pub fn sync_hud(
                 image.image = handle.clone();
                 image.color = Color::srgba(1.0, 1.0, 1.0, (neopets_sim::hud::alpha(mb.t) as f32 / 128.0).min(1.0));
             }
+        }
+    }
+    // SPEC-0023 section 30: the Square caption at its slot cell (327, 395), in the default
+    // caption colour (boot 0x315A38) and font 1 (the prompt font; R-0018), baseline at the cell.
+    if let Ok((mut node, mut image, mut vis)) = captions.single_mut() {
+        match p.square_caption().filter(|_| shown) {
+            Some(text) => {
+                if caption_image.as_ref().is_none_or(|c| c.0 != text) {
+                    if let Some((img, base)) = f.text_image(mem, 1, text, 0, p.box_words.prompt_colour) {
+                        let (w, h) = (img.width, img.height);
+                        *caption_image = Some((text.to_vec(), images.add(crate::rgba_image(w, h, img.rgba)), w, h, base));
+                    }
+                }
+                if let Some((_, handle, w, h, base)) = caption_image.as_ref() {
+                    node.left = Val::Px(327.0 * s);
+                    node.top = Val::Px((395 - base) as f32 * s);
+                    node.width = Val::Px(*w as f32 * s);
+                    node.height = Val::Px(*h as f32 * s);
+                    image.image = handle.clone();
+                    *vis = Visibility::Inherited;
+                }
+            }
+            None => *vis = Visibility::Hidden,
         }
     }
     for (n, w, h) in wanted {
@@ -319,7 +384,7 @@ pub fn sync_textbox(
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
     canvas: Query<Entity, With<HudCanvas>>,
-    mut parts: Query<(&BoxPart, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
+    mut parts: Query<(&BoxPart, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>)>,
     mut cache: Local<BoxCache>,
 ) {
     let (Some(state), Some(mut art)) = (state, art) else { return };

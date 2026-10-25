@@ -309,6 +309,8 @@ pub struct Play {
     pub speaker: (Vec<u8>, [u8; 3]),
     hero_colour: [u8; 3],
     pub box_labels: (Vec<u8>, Vec<u8>),
+    /// The action labels of design table 13 (the Square captions).
+    pub labels: Vec<Vec<u8>>,
     pub box_words: BoxWords,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
     /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
@@ -360,6 +362,7 @@ impl Play {
         let design = index.read(disc, neopets_data::design::RESOURCE).ok().and_then(|b| neopets_data::design::DesignTables::parse(&b).ok()).unwrap_or_default();
         let hero_colour = design.hero_colour(0).unwrap_or([128; 3]);
         let box_labels = (design.label(0x10).unwrap_or_default(), design.label(0x11).unwrap_or_default());
+        let labels: Vec<Vec<u8>> = (0..36).map(|i| design.label(i).unwrap_or_default()).collect();
         let colour = |at: u32| words(at, 1).map(|v| v[0].to_le_bytes());
         let prompts = w1(0x002D_CC40)?;
         let box_words = BoxWords {
@@ -498,6 +501,7 @@ impl Play {
             speaker: (Vec::new(), [128; 3]),
             hero_colour,
             box_labels,
+            labels,
             box_words,
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
@@ -1695,6 +1699,17 @@ impl Play {
         };
         self.textbox.open(&l.raw);
         self.dialogue_open = true;
+    }
+
+    /// The Square caption shown this pass (SPEC-0023 section 33; SPEC-0022 Interaction prompts):
+    /// the talk prompt (label 8), else the door prompt the chooser shows (13 Enter, 26 Exit or a
+    /// script door's context); none while a box or a quick panel is up.
+    pub fn square_caption(&self) -> Option<&[u8]> {
+        if self.dialogue_open || self.quick.open {
+            return None;
+        }
+        let id = if self.talk_prompt { Some(8) } else { self.prompt_shown };
+        self.labels.get(id? as usize).map(Vec::as_slice).filter(|l| !l.is_empty())
     }
 
     /// The name and frame colour shown now (the type-32 override names the hero).
