@@ -72,6 +72,157 @@ impl Decodable for Pcm {
 pub fn register(app: &mut App) {
     app.add_audio_source::<Pcm>();
     app.add_audio_source::<MusicSource>();
+    app.add_audio_source::<EffectsSource>();
+}
+
+/// A sound block for the sim's cue engine: cues, commands and the voices the commands name,
+/// each with its decoded sample. Noise voices (flag 0x8) are left out: noise is not synthesised.
+pub fn block_def(number: u32, b: &neopets_data::block::Block) -> neopets_sim::cues::BlockDef {
+    use neopets_sim::cues::{BlockDef, Cmd, CueDef};
+    use neopets_sim::synth::{Sample, VoiceDef};
+    let cues = b.cues.iter().map(|c| CueDef { volume: c.volume, pan: c.pan, count: c.count, limit: c.limit, flags: c.flags, first: c.first }).collect();
+    let commands = b.commands.iter().map(|c| Cmd { operand: c.operand, kind: c.kind, delay: c.delay }).collect();
+    let mut samples: HashMap<(u32, u32), Sample> = HashMap::new();
+    let voices = b
+        .voices
+        .iter()
+        .filter(|(_, v)| v.flags & 0x8 == 0)
+        .filter_map(|(&off, v)| {
+            let s = b.samples.get(&(v.offset, v.length))?;
+            let sample = samples.entry((v.offset, v.length)).or_insert_with(|| Sample { pcm: Arc::new(s.pcm.clone()), loop_start: s.loop_start }).clone();
+            let def = VoiceDef {
+                priority: v.priority,
+                volume: 0,
+                centre: v.centre,
+                fine: v.fine,
+                pan: v.pan,
+                low: 0,
+                high: 127,
+                bend: v.bend,
+                adsr1: v.adsr1,
+                adsr2: v.adsr2,
+                flags: v.flags,
+                sample: usize::MAX,
+            };
+            Some((off, (def, v.level, sample)))
+        })
+        .collect();
+    BlockDef { number, cues, commands, voices }
+}
+
+/// The sound blocks' driver side as an endless audio source.
+#[derive(Asset, TypePath, Clone)]
+pub struct EffectsSource {
+    engine: Arc<Mutex<neopets_sim::cues::Effects>>,
+}
+
+pub struct EffectsDecoder {
+    engine: Arc<Mutex<neopets_sim::cues::Effects>>,
+    buffer: Vec<f32>,
+    at: usize,
+}
+
+impl Iterator for EffectsDecoder {
+    type Item = bevy::audio::Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.at >= self.buffer.len() {
+            if let Ok(mut e) = self.engine.lock() {
+                e.render(&mut self.buffer);
+            }
+            self.at = 0;
+        }
+        let s = self.buffer[self.at];
+        self.at += 1;
+        Some(s)
+    }
+}
+
+impl Source for EffectsDecoder {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> ChannelCount {
+        ChannelCount::new(2).unwrap_or(ChannelCount::MIN)
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        SampleRate::new(neopets_sim::synth::RATE).unwrap_or(SampleRate::MIN)
+    }
+
+    fn total_duration(&self) -> Option<Duration> {
+        None
+    }
+}
+
+impl Decodable for EffectsSource {
+    type Decoder = EffectsDecoder;
+
+    fn decoder(&self) -> Self::Decoder {
+        EffectsDecoder { engine: self.engine.clone(), buffer: vec![0.0; 2 * neopets_sim::sequencer::FRAMES_PER_TICK], at: usize::MAX }
+    }
+}
+
+/// The sound blocks' link: the shared engine and the loaded blocks.
+#[derive(Default)]
+pub struct EffectsLink {
+    engine: Arc<Mutex<neopets_sim::cues::Effects>>,
+    blocks: HashMap<u32, Option<Arc<neopets_sim::cues::BlockDef>>>,
+    spawned: bool,
+}
+
+/// Load the blocks the slots want, pass the game's cue requests to the engine, and report the
+/// instances the engine finished back to the game.
+pub fn sync_effects(
+    mut commands: Commands,
+    state: Option<ResMut<PlayState>>,
+    mut archive: Option<ResMut<crate::Archive>>,
+    mut link: Local<EffectsLink>,
+    mut sources: ResMut<Assets<EffectsSource>>,
+) {
+    let Some(mut state) = state else { return };
+    if !link.spawned {
+        link.spawned = true;
+        let h = sources.add(EffectsSource { engine: link.engine.clone() });
+        commands.spawn((AudioPlayer(h), PlaybackSettings::LOOP));
+    }
+    let p = &mut state.play;
+    let wanted: Vec<u32> = p.sound.slots.iter().flatten().copied().collect();
+    for b in wanted {
+        if !link.blocks.contains_key(&b) {
+            let def = archive.as_deref_mut().and_then(|a| {
+                let crate::Archive { disc, index } = a;
+                let bytes = index.read(disc, b).ok()?;
+                match neopets_data::block::Block::parse(&bytes) {
+                    Ok(blk) => Some(Arc::new(block_def(b, &blk))),
+                    Err(e) => {
+                        error!("Block {b}: {e}");
+                        None
+                    }
+                }
+            });
+            link.blocks.insert(b, def);
+        }
+        if link.blocks.get(&b).is_some_and(Option::is_some) {
+            p.sound.loaded.insert(b);
+        }
+    }
+    let requests = std::mem::take(&mut p.sound.requests);
+    if let Ok(mut e) = link.engine.lock() {
+        for r in requests {
+            match r {
+                neopets_sim::sound::Request::Play { id, block, cue, volume, pan } => {
+                    if let Some(Some(def)) = link.blocks.get(&block) {
+                        e.play(id, def.clone(), cue, volume, pan);
+                    }
+                }
+                neopets_sim::sound::Request::Set { id, volume, pan } => e.set(id, volume, pan),
+                neopets_sim::sound::Request::Stop { id } => e.stop(id, false),
+            }
+        }
+        p.sound_finished.extend(e.take_finished());
+    }
 }
 
 /// A bank's instruments and child tracks for the sim's engine: the directory groups with their

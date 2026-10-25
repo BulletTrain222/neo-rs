@@ -238,7 +238,7 @@ impl Engine {
                 self.sequencer.tick(&self.instruments, &mut self.synth);
             }
             self.frame = (self.frame + 1) % crate::sequencer::FRAMES_PER_TICK;
-            let (l, r) = self.synth.frame(&self.instruments);
+            let (l, r) = self.synth.frame();
             let g = self.volume as f32 / 127.0 / 32768.0;
             pair[0] = (l as f32 * g).clamp(-1.0, 1.0);
             if pair.len() > 1 {

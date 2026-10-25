@@ -362,6 +362,47 @@ pub struct Play {
     /// The bank music's game side and the intensity inputs (SPEC-0009).
     pub bank_music: neopets_sim::music::BankMusic,
     pub intensity: neopets_sim::music::Intensity,
+    /// The cue call's game side (SPEC-0031): slots, voices and requests for the audio side;
+    /// the instances the driver finished since the last pass; the footstep rule's remembered
+    /// (clip, frame) and the last tick's hero state (for landings).
+    pub sound: neopets_sim::sound::SoundManager,
+    pub sound_finished: Vec<usize>,
+    foot_frame: Option<(usize, i32)>,
+    last_state: u8,
+}
+
+/// The footstep surface offset o(k) by ground material code (SPEC-0031 Footsteps).
+fn surface_offset(k: u32) -> Option<i32> {
+    match k {
+        0 | 18 => Some(0),
+        1 => Some(2),
+        3 => Some(3),
+        4 => Some(4),
+        5 => Some(9),
+        6 => Some(1),
+        7 => Some(8),
+        8 | 11 => Some(7),
+        9 => Some(5),
+        10 => Some(6),
+        _ => None,
+    }
+}
+
+/// The landing cue by ground material code (SPEC-0031 Landings).
+fn landing_cue(k: u32) -> Option<i32> {
+    match k {
+        0 => Some(66),
+        1 => Some(65),
+        3 => Some(62),
+        4 => Some(63),
+        5 => Some(67),
+        6 => Some(60),
+        7 => Some(68),
+        8 | 11 => Some(64),
+        9 => Some(61),
+        10 => Some(69),
+        _ => None,
+    }
 }
 
 /// The five stat-up items with a once-per-area set, in slot order (SPEC-0025 Once-per-area sets).
@@ -567,6 +608,10 @@ impl Play {
             music_selection: None,
             bank_music: Default::default(),
             intensity: Default::default(),
+            sound: Default::default(),
+            sound_finished: Vec::new(),
+            foot_frame: None,
+            last_state: 1,
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
         // which for 909 loads the farm family's slots.
@@ -1332,10 +1377,16 @@ impl Play {
         if self.dialogue_open {
             // SPEC-0022: the box takes Cross (held, faster reveal) and Square (skip, Next,
             // Finish); the hero stays in place meanwhile.
-            if self.textbox.update(input.cross_held, input.square) == Some(neopets_sim::textbox::BoxEvent::Closed) {
-                self.dialogue_open = false;
-                self.message = None;
-                self.talk_with = None;
+            match self.textbox.update(input.cross_held, input.square) {
+                // SPEC-0022: an advance plays 0x98; the box host plays 0x97 when the box closes.
+                Some(neopets_sim::textbox::BoxEvent::Closed) => {
+                    self.cue(0x97);
+                    self.dialogue_open = false;
+                    self.message = None;
+                    self.talk_with = None;
+                }
+                Some(neopets_sim::textbox::BoxEvent::Advanced) => self.cue(0x98),
+                None => {}
             }
             input = HeroInput::default();
             // SPEC-0056 Talk facing: in the conversation the hero turns toward its partner
@@ -1480,6 +1531,7 @@ impl Play {
         }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
+        self.sound_step();
         // Dead characters disappear when their countdown ends.
         for c in &mut self.characters {
             if let Some(t) = c.dying.as_mut() {
@@ -1877,9 +1929,12 @@ impl Play {
         };
         if let Some(ok) = applied {
             if !ok {
+                self.cue(162);
                 self.last_pickup = format!("use of item {id} refused on tick {}", self.ticks);
                 return;
             }
+            // A buff or immunity plays 0xA0; the cure 0x9F.
+            self.cue(if id == 54 { 159 } else { 160 });
             let left = {
                 let n = self.inventory.entry(id).or_insert(0);
                 *n = n.saturating_sub(1);
@@ -1912,8 +1967,17 @@ impl Play {
         let a = neopets_sim::quick::heal(ta, pa, self.hero_hp, self.hero_max, true);
         let b = neopets_sim::quick::heal(tb, pb, self.hero_mp, self.hero_mp_max, true);
         if a.is_none() && b.is_none() {
+            self.cue(162);
             self.last_pickup = format!("use of item {id} refused on tick {}", self.ticks);
             return;
+        }
+        // A heal plays 0x9F (0xA0 for 58 and 59), then 0x9B or 0x9C above 10 percent (pool B's
+        // replaces pool A's).
+        self.cue(if matches!(id, 58 | 59) { 160 } else { 159 });
+        if pb > 10 && b.is_some() {
+            self.cue(156);
+        } else if pa > 10 && a.is_some() {
+            self.cue(155);
         }
         if let Some(hp) = a {
             self.hero_hp = hp;
@@ -2085,6 +2149,7 @@ impl Play {
             if value > 0 {
                 self.wallet = self.wallet.checked_add(value).unwrap_or(0).max(0);
             }
+            self.cue(165);
             self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.wallet, self.ticks);
         } else {
             let count = if it.charm { 100 } else { 1 };
@@ -2116,6 +2181,11 @@ impl Play {
         }
         self.hero_hp -= damage;
         self.last_hurt = format!("took {damage} ({what}) on tick {}, hp {}", self.ticks, self.hero_hp.max(0));
+        // SPEC-0031 Hero impact: melee or projectile with no armour plays 170; the voice slot
+        // plays hit big (1) on a fair draw of 0, else hit small (0).
+        self.cue(170);
+        let big = self.rng.next_u32() % 2 == 0;
+        self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
         if self.hero_hp <= 0 {
             self.hero_hp = 0;
             self.default_death();
@@ -2132,6 +2202,9 @@ impl Play {
     /// SPEC-0036 Health and death, step 3 (no death callback is registered by any level here):
     /// state 16, the melee hit list cleared.
     fn default_death(&mut self) {
+        // The "knocked out" voice cue, at the hero, do-not-restart.
+        let p = self.loco.position();
+        self.sound.play(neopets_sim::sound::VOICE, 2, neopets_sim::sound::Play { emitter: Some(p), do_not_restart: true, ..Default::default() });
         self.attack = None;
         self.hit_list.clear();
         self.statuses.clear_all();
@@ -2148,12 +2221,88 @@ impl Play {
         let busy = hero_states::busy_state(self.loco.state);
         let r = self.save_points.step(&self.world.save_points, self.loco.position(), gate, square, busy);
         self.save_prompt = r.prompt;
+        // Cue 0xA8 is kept alive within 15 units, with no emitter (the zero-flag branch's quirk).
+        if r.cue {
+            self.sound.keep_alive(neopets_sim::sound::MAIN, 0xA8, None);
+        }
         if r.open {
             if r.restart {
                 self.restart = Some((self.loco.position(), self.loco.facing));
             }
             self.save_open = true;
         }
+    }
+
+    /// SPEC-0031 per pass: the slots' blocks (Tor's voice, weapon, shield and power blocks, the
+    /// area block of the music row), the listener from the camera, the footsteps and landings of
+    /// the grounded hero, the low-health cue, then the voice update.
+    fn sound_step(&mut self) {
+        use neopets_sim::sound::{self as snd, Play};
+        let s = &mut self.sound;
+        s.slots[snd::VOICE] = Some(348);
+        s.slots[snd::WEAPON] = Some(snd::weapon_block(false, self.weapon));
+        s.slots[snd::SHIELD] = Some(snd::shield_block(false, self.shield));
+        s.slots[snd::POWER] = Some(snd::power_block(None));
+        if let Some(sel) = self.music_selection {
+            match sel.block {
+                Some(b) => s.slots[snd::AREA] = Some(b),
+                None => {
+                    let r = self.design.music_row(self.world.music.and_then(|(k, _)| self.world_keys.1.iter().position(|&v| v as i32 == k)).unwrap_or(193));
+                    if r.block < -1 {
+                        s.slots[snd::AREA] = None;
+                    }
+                }
+            }
+        }
+        // The listener: the camera position plus 5 x its forward axis; rows right, up, forward.
+        let (eye, focus) = (self.camera.eye, self.camera.focus);
+        let f = unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]);
+        let r = unit([f[1] * UP[2] - f[2] * UP[1], f[2] * UP[0] - f[0] * UP[2], f[0] * UP[1] - f[1] * UP[0]]);
+        let u = [r[1] * f[2] - r[2] * f[1], r[2] * f[0] - r[0] * f[2], r[0] * f[1] - r[1] * f[0]];
+        s.listener = snd::Listener::from_camera(eye, [r, u, f]);
+        let p = self.loco.position();
+        let state = self.loco.state;
+        let grounded = self.loco.body.gap < 0.1;
+        let code = self.world.probe(p[0], p[2], p[1] + neopets_sim::motion::PROBE_CEILING).kind;
+        // Footsteps: a new layer-0 frame with bit 0x80 or 0x100 while grounded; gait by state.
+        let frame = self.hero.layer0();
+        if frame.map(|f| f.0) != self.foot_frame.map(|f| f.0) {
+            self.foot_frame = None;
+        }
+        if grounded && self.hero.frame_bits() & 0x180 != 0 && frame != self.foot_frame {
+            self.foot_frame = frame;
+            let gait = match state {
+                4 => 40,
+                3 => 20,
+                _ => 0,
+            };
+            if let Some(o) = code.and_then(surface_offset) {
+                self.sound.play(snd::MAIN, gait + o, Play { emitter: Some(p), ..Default::default() });
+            }
+        }
+        // Landing: the hero leaves a jump or fall state onto the ground.
+        let airborne = |s: u8| (hero_states::JUMP..=hero_states::JUMP_RUN).contains(&s) || s == 11 || s == 12 || s == hero_states::LONG_FALL;
+        if airborne(self.last_state) && !airborne(state) && grounded {
+            if let Some(c) = code.and_then(landing_cue) {
+                self.sound.play(snd::MAIN, c, Play { emitter: Some(p), ..Default::default() });
+            }
+        }
+        // Jump take-off: voice cue 10.
+        if !airborne(self.last_state) && (hero_states::JUMP..=hero_states::JUMP_RUN).contains(&state) {
+            self.sound.play(snd::VOICE, 10, Play::default());
+        }
+        self.last_state = state;
+        // Low health: cue 157 every tick below 0.15 of the maximum, with do-not-restart.
+        if self.hero_hp > 0 && (self.hero_hp as f32) < 0.15 * self.hero_max as f32 {
+            self.sound.play(snd::MAIN, 157, Play { do_not_restart: true, ..Default::default() });
+        }
+        let finished = std::mem::take(&mut self.sound_finished);
+        self.sound.update(&finished);
+    }
+
+    /// A cue on the main slot with no position (menus, items, the HUD).
+    pub fn cue(&mut self, cue: i32) {
+        self.sound.play(neopets_sim::sound::MAIN, cue, neopets_sim::sound::Play::default());
     }
 
     /// SPEC-0009 Per-tick controller, the parts this build has: the current world's music row

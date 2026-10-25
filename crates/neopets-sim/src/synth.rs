@@ -3,7 +3,9 @@
 //! window, the pitch register 4096 x 2^(((note - centre) x 128 + fine + centre fine) / 1536), the
 //! bank form of the volume step with the equal-power pan table and the rear-half inversion, the
 //! SPU2 ADSR envelope from the voice's two register words (the public SPU envelope rule), sample
-//! loops, sustain, pitch bend and the voice allocator of range 1 (24 voices).
+//! loops, sustain, pitch bend and the voice allocator (24 voices per range). Sound-block voices
+//! (section 7) use the same voices with the block form of the volume step, key 60 and an
+//! instance's request volume and pan, which follow the emitter each frame.
 //!
 //! Deviations: samples are read with linear interpolation (the SPU2 uses a 4-point Gaussian
 //! filter); the music volume scales the mix instead of each voice's level (the truncation order
@@ -81,6 +83,15 @@ pub fn bend_value(b: i32) -> i32 {
 /// The channel pan angle from a controller-10 value.
 pub fn pan_angle(v: i32) -> i32 {
     if v < 64 { 270 + 90 * v / 64 } else { 90 * (v - 64) / 63 }
+}
+
+/// X of the block form: A = floor(V x 127 / 1024), B = trunc(Vc^2 / 127), D = trunc(Lv^2 / 127),
+/// C the instance level (127).
+pub fn block_x(v: i32, vc: i32, lv: i32, c: i32) -> i32 {
+    let a = v.max(0) * 127 / 1024;
+    let b = vc * vc / 127;
+    let d = lv.max(0) * lv.max(0) / 127;
+    (b * 258 * d / 127 * c / 127 * a / 127).min(32_766)
 }
 
 /// The volume and pan step (bank form): levels L and R from X and the angle theta, with the
@@ -186,6 +197,9 @@ impl Envelope {
 struct Voice {
     owner: (usize, usize, u8),
     def: VoiceDef,
+    sample: Sample,
+    /// A block voice's cue volume, voice level and voice pan, for a new request volume or pan.
+    block: Option<(i32, i32, i32)>,
     note_value_base: i32,
     pos: f64,
     step: f64,
@@ -238,6 +252,7 @@ impl Synth {
     pub fn note_on(&mut self, inst: &Instruments, owner: (usize, usize), ch: ChannelState, note: u8, velocity: u8) {
         let Some(group) = inst.groups.get(ch.program) else { return };
         for def in group.voices.iter().filter(|v| (v.low as i32..=v.high as i32).contains(&(note as i32))).take(32) {
+            let Some(sample) = inst.samples.get(def.sample).cloned() else { continue };
             let Some(k) = self.allocate(def.priority) else { continue };
             let x = level_x(velocity as i32, ch.volume, group.volume as i32, def.volume as i32, 127);
             let (left, right) = levels(x, ch.pan + group.pan as i32 + def.pan as i32);
@@ -247,6 +262,8 @@ impl Synth {
             self.voices[k] = Some(Voice {
                 owner: (owner.0, owner.1, note),
                 def: *def,
+                sample,
+                block: None,
                 note_value_base: base,
                 pos: 0.0,
                 step: pitch(n, def.centre, def.fine) as f64 / 4096.0,
@@ -257,6 +274,57 @@ impl Synth {
                 start: self.clock,
             });
         }
+    }
+
+    /// Start a sound-block voice for instance `owner` at key 60: request volume `v` (1,024 =
+    /// 1.0), cue volume `vc`, voice level `lv`, pan angle `pan` (the instance's, added to the
+    /// voice's) and the instance bend. Returns whether a voice was taken.
+    #[allow(clippy::too_many_arguments)]
+    pub fn start_block(&mut self, owner: usize, def: VoiceDef, sample: Sample, v: i32, vc: i32, lv: i32, pan: i32, bend: i32) -> bool {
+        let Some(k) = self.allocate(def.priority) else { return false };
+        let (left, right) = levels(block_x(v, vc, lv, 127), pan + def.pan as i32);
+        let base = 60 * 128;
+        self.clock += 1;
+        self.voices[k] = Some(Voice {
+            owner: (owner, 0, 0),
+            def,
+            sample,
+            block: Some((vc, lv, def.pan as i32)),
+            note_value_base: base,
+            pos: 0.0,
+            step: pitch(base + bend_term(bend, def.bend), def.centre, def.fine) as f64 / 4096.0,
+            env: Envelope::new(def.adsr1, def.adsr2),
+            left: left >> 1,
+            right: right >> 1,
+            held: false,
+            start: self.clock,
+        });
+        true
+    }
+
+    /// A new request volume and pan for an instance's block voices.
+    pub fn set_instance(&mut self, owner: usize, v: i32, pan: i32) {
+        for voice in self.voices.iter_mut().flatten().filter(|x| x.owner.0 == owner) {
+            if let Some((vc, lv, pv)) = voice.block {
+                let (l, r) = levels(block_x(v, vc, lv, 127), pan + pv);
+                voice.left = l >> 1;
+                voice.right = r >> 1;
+            }
+        }
+    }
+
+    /// Stop an instance's voices at once.
+    pub fn kill(&mut self, owner: usize) {
+        for slot in &mut self.voices {
+            if slot.as_ref().is_some_and(|v| v.owner.0 == owner) {
+                *slot = None;
+            }
+        }
+    }
+
+    /// The voices an instance still has sounding.
+    pub fn sounding(&self, owner: usize) -> usize {
+        self.voices.iter().flatten().filter(|v| v.owner.0 == owner && !v.env.off()).count()
     }
 
     /// Note-off: release the channel's voices for that note (held while sustain is on).
@@ -302,7 +370,7 @@ impl Synth {
     }
 
     /// Mix one 48 kHz stereo frame (levels in 1/32768).
-    pub fn frame(&mut self, inst: &Instruments) -> (i32, i32) {
+    pub fn frame(&mut self) -> (i32, i32) {
         let (mut l, mut r) = (0i64, 0i64);
         for slot in &mut self.voices {
             let Some(v) = slot.as_mut() else { continue };
@@ -310,10 +378,7 @@ impl Synth {
                 *slot = None;
                 continue;
             }
-            let Some(sample) = inst.samples.get(v.def.sample) else {
-                *slot = None;
-                continue;
-            };
+            let sample = &v.sample;
             let pcm = &sample.pcm;
             let i = v.pos as usize;
             if i >= pcm.len() {
@@ -331,9 +396,9 @@ impl Synth {
             r += s * e / 0x8000 * v.right as i64 / 0x4000;
             v.env.step();
             v.pos += v.step;
-            if v.pos >= pcm.len() as f64 {
-                match sample.loop_start {
-                    Some(ls) if ls < pcm.len() => v.pos -= (pcm.len() - ls) as f64,
+            if v.pos >= v.sample.pcm.len() as f64 {
+                match v.sample.loop_start {
+                    Some(ls) if ls < v.sample.pcm.len() => v.pos -= (v.sample.pcm.len() - ls) as f64,
                     _ => *slot = None,
                 }
             }
@@ -403,13 +468,13 @@ mod tests {
         s.note_on(&inst, (1, 0), ch, 60, 127);
         assert_eq!(s.active(), 2, "the 60-127 and 0-127 windows");
         for _ in 0..100 {
-            s.frame(&inst);
+            s.frame();
         }
-        let (l, r) = s.frame(&inst);
+        let (l, r) = s.frame();
         assert!(l > 0 && l == r);
         s.note_off((1, 0), 60, false);
         for _ in 0..200_000 {
-            s.frame(&inst);
+            s.frame();
         }
         assert_eq!(s.active(), 0);
         // A program past the directory plays nothing.

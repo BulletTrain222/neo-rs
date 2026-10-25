@@ -627,6 +627,28 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                     Err(e) => println!("  bank {r}: {e}"),
                 }
             }
+            // SPEC-0031 section 7: every sound block.
+            let (mut blocks, mut cues, mut cmds, mut silent, mut voices_ref, mut kinds) = (0, 0, 0, 0, 0, std::collections::BTreeMap::new());
+            for r in 347..=490u32 {
+                let Ok(b) = index.read(disc, r) else { continue };
+                match neopets_data::block::Block::parse(&b) {
+                    Ok(blk) => {
+                        blocks += 1;
+                        cues += blk.cues.len();
+                        silent += blk.cues.iter().filter(|c| c.count == 0).count();
+                        cmds += blk.commands.len();
+                        voices_ref += blk.voices.len();
+                        for c in &blk.commands {
+                            *kinds.entry(c.kind).or_insert(0usize) += 1;
+                        }
+                        if r == 347 {
+                            println!("  block 347: {} cues, {} commands", blk.cues.len(), blk.commands.len());
+                        }
+                    }
+                    Err(e) => println!("  block {r}: {e}"),
+                }
+            }
+            println!("Sound blocks: {blocks} parsed, {cues} cue entries ({silent} empty), {cmds} command records, {voices_ref} distinct voice records referenced; command types {kinds:?}");
             println!("Sound banks: {banks} parsed, {dirs} directory records, {voices} voice records, {samples} samples ({loops} loops), {frames} frames played, {children} music children");
             println!("KPV streams: {ok} decoded, rates {rates:?}, {:.0} s in all, longest {longest:?}", total);
             if let (Ok(d), Ok(boot)) = (index.read(disc, neopets_data::design::RESOURCE).and_then(|b| neopets_data::design::DesignTables::parse(&b)), neopets_data::archive::verified_boot_program(disc)) {

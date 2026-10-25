@@ -160,12 +160,17 @@ pub struct Flow {
     pub messages: Vec<neopets_data::design::Message>,
     pub slots: Vec<Vec<u8>>,
     pub busy_hold: u32,
+    /// Front-end sounds this pass, as main-block cue ids (SPEC-0031 cue use table; SPEC-0035
+    /// menu sounds: cursor move 0x9A, select 0x98, back 0x99, save complete 0xA9).
+    pub sounds: Vec<i32>,
+    /// The screen current before the last screen change.
+    came_from: Option<usize>,
 }
 
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120 };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -176,6 +181,11 @@ impl Flow {
         self.current = r;
         self.pass = 0;
         self.default_focus(fe, &Ctx::default());
+    }
+
+    /// Whether play was entered from the pause page on this pass (the unpause cue).
+    pub fn stack_was_pause(&self) -> bool {
+        self.came_from == Some(PAUSE)
     }
 
     /// The save screen's opening from a save point (SPEC-0035 section 7.3): a direct set of
@@ -203,6 +213,7 @@ impl Flow {
             return;
         }
         if ok {
+            self.sounds.push(0xA9);
             self.card = None;
             self.picker.stage = S_DONE;
             self.picker.wait = 0;
@@ -246,6 +257,7 @@ impl Flow {
         c.text.update(false, edge & SQUARE != 0);
         if let Some(a) = c.text.choose(edge & CIRCLE != 0, edge & TRIANGLE != 0) {
             c.answer = Some(a);
+            self.sounds.push(if a == 1 { 0x98 } else { 0x99 });
             c.passes = 0;
         }
         None
@@ -278,6 +290,7 @@ impl Flow {
         let filled = self.picker.file.filled();
         let down = edge & DOWN != 0;
         if down || edge & UP != 0 {
+            self.sounds.push(0x9A);
             self.picker.cursor = save::cursor_step(self.picker.cursor, down, load, filled);
             self.picker.pulse = self.rows.pulse_max;
         }
@@ -290,6 +303,7 @@ impl Flow {
     /// Enter a record by its parent-index rule (section 9), then make it current with its pass
     /// count at 0 and its default focus.
     fn enter(&mut self, fe: &Frontend, r: usize, ctx: &Ctx) {
+        self.came_from = Some(self.current);
         match Self::back_code(fe, r) {
             -1 => {
                 if self.stack.last() != Some(&r) && self.stack.len() < 32 {
@@ -544,6 +558,9 @@ impl Flow {
         if result.is_none() && generic && self.pass >= 2 {
             if edge & CROSS != 0 {
                 if let Some(t) = list.get(self.focus).and_then(|i| fe.targets.get(i)) {
+                    if t.target != -3 {
+                        self.sounds.push(0x98);
+                    }
                     match t.target {
                         -3 => {}
                         -1 => {
@@ -557,12 +574,14 @@ impl Flow {
             } else if edge & TRIANGLE != 0 {
                 let code = Self::back_code(fe, self.current);
                 if code != -3 && code != -2 {
+                    self.sounds.push(0x99);
                     self.back(fe, ctx);
                     return command;
                 }
             } else if page_of(fe, self.current).is_some_and(|p| p.list) && edge & (DOWN | UP) != 0 {
                 let passing: Vec<usize> = (0..list.len()).filter(|&k| item_ok(fe, list[k], self.current, ctx, self)).collect();
                 if let Some(at) = passing.iter().position(|&k| k == self.focus) {
+                    self.sounds.push(0x9A);
                     let n = passing.len();
                     self.focus = passing[if edge & DOWN != 0 { (at + 1) % n } else { (at + n - 1) % n }];
                 }

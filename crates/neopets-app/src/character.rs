@@ -142,6 +142,13 @@ impl HeroAnim {
         &self.bones
     }
 
+    /// The layer-0 family's playing clip and the integer part of its frame cursor (the footstep
+    /// rule's remembered frame, SPEC-0031).
+    pub fn layer0(&self) -> Option<(usize, i32)> {
+        let f = self.families.first()?;
+        Some((f.current?, f.record.cursor() as i32))
+    }
+
     /// Table-B frame bits on the current frame of every family's playing clip, ORed (the
     /// attack window query of SPEC-0005/SPEC-0036, single-frame form).
     pub fn frame_bits(&self) -> u32 {

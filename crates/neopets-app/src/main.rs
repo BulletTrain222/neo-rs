@@ -60,6 +60,28 @@ fn save_date() -> Vec<u8> {
     neopets_sim::save::date_text(month as u32, day as u32, year as u32, (rem / 3600) as u32, (rem % 3600 / 60) as u32).into_bytes()
 }
 
+/// A 16-bit PCM WAV file image.
+fn wav(pcm: &[i16], channels: u16, rate: u32) -> Vec<u8> {
+    let data = pcm.len() as u32 * 2;
+    let mut w = Vec::with_capacity(44 + data as usize);
+    w.extend(b"RIFF");
+    w.extend((36 + data).to_le_bytes());
+    w.extend(b"WAVEfmt ");
+    w.extend(16u32.to_le_bytes());
+    w.extend(1u16.to_le_bytes());
+    w.extend(channels.to_le_bytes());
+    w.extend(rate.to_le_bytes());
+    w.extend((rate * 2 * channels as u32).to_le_bytes());
+    w.extend((2 * channels).to_le_bytes());
+    w.extend(16u16.to_le_bytes());
+    w.extend(b"data");
+    w.extend(data.to_le_bytes());
+    for v in pcm {
+        w.extend(v.to_le_bytes());
+    }
+    w
+}
+
 /// SPEC-0025 Loading: the game rebuilt in the slot's worlds and the slot applied. Key B (the
 /// exterior) becomes the current world and key A (the transition) is put in T; with neither
 /// found the current world is kept. The original posts the two loads and applies the slot over
@@ -409,6 +431,7 @@ fn main() {
     // and load it into a rebuilt game.
     let mut save_test = false;
     let mut render: Option<(u32, u32, u32, u32)> = None;
+    let mut render_cue: Option<(u32, i32)> = None;
     // `--title`: start at the front end's card state (logo, legal screen, title) instead of in
     // play.
     let mut title = false;
@@ -437,6 +460,11 @@ fn main() {
             autowalk = Some(AutoWalk { jump: false });
         } else if arg == "--autojump" {
             autowalk = Some(AutoWalk { jump: true });
+        } else if arg == "--render-cue" {
+            // `--render-cue BLOCK CUE`: render one sound-block cue for 3 s to
+            // private/audio/cue-BLOCK-CUE.wav.
+            let mut n = || args.next().and_then(|v| v.parse::<i32>().ok());
+            render_cue = Some((n().unwrap_or(347) as u32, n().unwrap_or(20)));
         } else if arg == "--render-music" {
             // `--render-music BANK SECONDS [G] [R2]`: render a bank's music offline to
             // private/audio/bank-BANK.wav (for checking the sequencer and synth).
@@ -531,6 +559,40 @@ fn main() {
         Ok((s, archive)) => (s, Some(archive)),
         Err(e) => (format!("ISO not ready\n{e}"), None),
     };
+    if let Some((number, cue)) = render_cue {
+        let Some(mut archive) = archive else {
+            eprintln!("{status}");
+            std::process::exit(1)
+        };
+        let Archive { disc, index } = &mut archive;
+        let block = index.read(disc, number).and_then(|b| neopets_data::block::Block::parse(&b));
+        match block {
+            Ok(b) => {
+                if std::env::var_os("NEOPETS_CUE_DUMP").is_some() {
+                    if let Some(c) = b.cues.get(cue as usize) {
+                        println!("cue {c:?}");
+                        for cmd in &b.commands[c.first..c.first + c.count as usize] {
+                            println!("  {cmd:?} voice {:?}", b.voices.get(&cmd.value()));
+                        }
+                    }
+                }
+                let def = std::sync::Arc::new(audio_view::block_def(number, &b));
+                let mut fx = neopets_sim::cues::Effects::default();
+                let started = fx.play(1, def, cue, 1024, None);
+                let mut out = vec![0f32; 2 * 3 * neopets_sim::synth::RATE as usize];
+                fx.render(&mut out);
+                let peak = out.iter().fold(0f32, |a, &b| a.max(b.abs()));
+                let last = out.chunks(2).rposition(|f| f[0] != 0.0 || f[1] != 0.0).unwrap_or(0);
+                let pcm: Vec<i16> = out.iter().map(|&v| (v * 32767.0) as i16).collect();
+                let path = format!("private/audio/cue-{number}-{cue}.wav");
+                let _ = std::fs::create_dir_all("private/audio");
+                let _ = std::fs::write(&path, wav(&pcm, 2, neopets_sim::synth::RATE));
+                println!("Cue {cue} of block {number}: started {started}, peak {peak:.3}, sound until {:.3} s; {path}", last as f32 / neopets_sim::synth::RATE as f32);
+            }
+            Err(e) => eprintln!("Block {number}: {e}"),
+        }
+        return;
+    }
     if let Some((bank, secs, excite, reg2)) = render {
         let Some(mut archive) = archive else {
             eprintln!("{status}");
@@ -622,7 +684,7 @@ fn main() {
             ..default()
         }))
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play))
-        .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank).after(step_sim))
+        .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects).after(step_sim))
         .add_systems(
             Update,
             (
@@ -960,6 +1022,13 @@ fn step_sim(
                 if m.flow.current == menus::PAUSE && !play.play.menu_open {
                     play.play.hud.hide_all();
                     play.play.monster_bar.t = 0;
+                    // SPEC-0031: pause and unpause cues (148, 149).
+                    play.play.cue(148);
+                } else if m.flow.current == menus::PLAY && play.play.menu_open && m.flow.stack_was_pause() {
+                    play.play.cue(149);
+                }
+                for c in std::mem::take(&mut m.flow.sounds) {
+                    play.play.cue(c);
                 }
                 play.play.menu_open = frozen;
                 if frozen {
@@ -1883,6 +1952,20 @@ fn play_trace(
         if play.ticks % 60 == 0 {
             println!("      {}", play.status_camera());
             println!("      {}", play.status_worlds());
+        }
+        // The trace has no audio side: every slot's block counts as loaded, and the cue
+        // requests are printed (one-shot plays only).
+        let slots: Vec<u32> = play.sound.slots.iter().flatten().copied().collect();
+        play.sound.loaded.extend(slots);
+        let plays: Vec<String> = std::mem::take(&mut play.sound.requests)
+            .into_iter()
+            .filter_map(|r| match r {
+                neopets_sim::sound::Request::Play { block, cue, volume, pan, .. } => Some(format!("{block}:{cue} at {volume}{}", pan.map_or(String::new(), |p| format!(" pan {p}")))),
+                _ => None,
+            })
+            .collect();
+        if !plays.is_empty() {
+            println!("      cues {plays:?} on tick {}", play.ticks);
         }
         if play.save_prompt != save_prompt {
             save_prompt = play.save_prompt;

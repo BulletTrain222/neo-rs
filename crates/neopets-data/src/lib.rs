@@ -4,6 +4,7 @@ pub mod area;
 pub mod archive;
 pub mod audio;
 pub mod bank;
+pub mod block;
 mod elf;
 pub mod design;
 pub mod dialogue;
