@@ -8,6 +8,7 @@ pub mod contact;
 pub mod hero;
 pub mod motion;
 mod step;
+pub mod travel;
 pub use step::FixedStep;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

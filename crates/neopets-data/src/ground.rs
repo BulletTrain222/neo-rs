@@ -159,6 +159,11 @@ impl Ground {
         (hit.height, hit.normal)
     }
 
+    /// The grid's extent: x min, z min, x max, z max.
+    pub fn bounds(&self) -> [f32; 4] {
+        [self.x_min, self.z_min, self.x_min + self.cell * self.nx as f32, self.z_min + self.cell * self.nz as f32]
+    }
+
     /// The grid cell record containing (x, z), if the cell is not empty.
     fn cell_at(&self, x: f32, z: f32) -> Option<usize> {
         let cx = ((x - self.x_min) / self.cell).floor() as i64;
@@ -177,7 +182,7 @@ impl Ground {
     /// the camera profile in SPEC-0027).
     pub fn probe_hit(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         const UP: [f32; 3] = [0.0, 1.0, 0.0];
-        let none = |height| ProbeHit { height, normal: UP, kind: None };
+        let none = |height| ProbeHit { height, normal: UP, kind: None, found: false };
         let Some(rec) = self.cell_at(x, z) else {
             return none(0.0);
         };
@@ -195,7 +200,7 @@ impl Ground {
             let Some(Some(p)) = self.patches.get(index as usize) else { continue };
             let Some((h, n)) = self.sample(p, x, z) else { continue };
             sampled = true;
-            let hit = ProbeHit { height: h, normal: n, kind: u32_at(&self.set, p.at + 0x38) };
+            let hit = ProbeHit { height: h, normal: n, kind: u32_at(&self.set, p.at + 0x38), found: true };
             if h > best.height && h <= c {
                 best = hit;
             } else {
@@ -207,6 +212,12 @@ impl Ground {
             (true, true) => best,
             (true, false) => rejected.unwrap_or(none(MISS)),
         }
+    }
+
+    /// The exit value of the cell under (x, z): the low 16 bits of the word at cell record
+    /// +0x18 (SPEC-0006 Pending step), or -1 when there is no cell.
+    pub fn cell_value(&self, x: f32, z: f32) -> i32 {
+        self.cell_at(x, z).and_then(|rec| u32_at(&self.grid, rec + 0x18)).map_or(-1, |w| (w & 0xFFFF) as i32)
     }
 
     /// SPEC-0018 Segment query: blocked when the endpoints differ in height by more than 50, or
@@ -418,6 +429,8 @@ pub struct ProbeHit {
     pub height: f32,
     pub normal: [f32; 3],
     pub kind: Option<u32>,
+    /// A candidate was sampled: the world has ground here (SPEC-0006 world swap).
+    pub found: bool,
 }
 
 /// A frame record (0x70 bytes): a wall edge named by a grid cell's entry items (SPEC-0018,

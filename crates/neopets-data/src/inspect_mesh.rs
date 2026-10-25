@@ -269,7 +269,7 @@ pub fn ground(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
 }
 
 /// Check the area table against SPEC-0006's sample rows (slot, pack, world id).
-pub fn areas(disc: &mut Disc) -> Result<(), String> {
+pub fn areas(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let t = neopets_data::area::AreaTable::from_disc(disc)?;
     let rows = [(0usize, 678u32, 0u32), (5, 691, 11), (68, 909, 602), (107, 1121, 1362), (192, 1433, 11070)];
     let ok = rows.iter().all(|&(s, p, w)| t.packs[s] == p && t.world_ids[s] == w);
@@ -293,5 +293,51 @@ pub fn areas(disc: &mut Disc) -> Result<(), String> {
             println!("Dome {dome}: packs {packs:?}");
         }
     }
+    travel_census(disc, index)
+}
+
+/// SPEC-0006 travel data over every game pack: module families by host-record group, the
+/// neighbour lists' shape, and the boot tables.
+fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    use neopets_data::travel::{BootTravel, Neighbours};
+    let boot = BootTravel::from_disc(disc)?;
+    let names: Vec<usize> = boot.family_names.iter().map(Vec::len).collect();
+    let distinct = boot.family_names.iter().collect::<std::collections::BTreeSet<_>>().len();
+    println!(
+        "Travel tables: {} area pairs ({} non-zero), {} no-swap packs, {} block pairs; family names: {} distinct, lengths {names:?}",
+        boot.area_pairs.len(),
+        boot.area_pairs.iter().filter(|p| p.0 != 0).count(),
+        boot.no_swap.len(),
+        boot.block_pairs.len(),
+        distinct
+    );
+    let mut kinds = std::collections::BTreeMap::new();
+    let mut of_pack = std::collections::BTreeMap::new();
+    let (mut tables, mut zero_unused, mut contiguous, mut ids) = (0, 0, 0, 0);
+    for pack in 533..=1433u32 {
+        let Ok(bytes) = index.read(disc, pack) else { continue };
+        let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
+        if chain.chunks.first().map(|c| c.kind) != Some(31) {
+            continue;
+        }
+        let kind = boot.kind(pack, &bytes, &chain.chunks);
+        let module = !boot.module_entries(&bytes, &chain.chunks).is_empty();
+        *kinds.entry((format!("{kind:?}"), module)).or_insert(0usize) += 1;
+        of_pack.insert(pack, kind);
+        if chain.chunks.iter().any(|c| c.kind == 15) {
+            let n = Neighbours::of(&bytes, &chain.chunks);
+            let used: Vec<i32> = (0..200).filter(|&k| n.get(k) != -1).collect();
+            if !used.is_empty() || n != Neighbours::default() {
+                tables += 1;
+                zero_unused += (n.get(0) == -1) as usize;
+                contiguous += used.iter().enumerate().all(|(i, &k)| k == i as i32 + 1) as usize;
+                ids += used.len();
+            }
+        }
+    }
+    println!("Pack kinds (kind, has module): {kinds:?}");
+    let g = |p: u32| of_pack.get(&p).copied();
+    println!("Kinds of 691: {:?}, 909: {:?}, 1429: {:?}, 1008: {:?}, 1121: {:?}", g(691), g(909), g(1429), g(1008), g(1121));
+    println!("Neighbour lists (tag 0x0B): {tables} with values; position 0 unused in {zero_unused}; used positions 1..m in {contiguous}; {ids} world ids");
     Ok(())
 }

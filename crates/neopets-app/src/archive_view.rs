@@ -130,26 +130,38 @@ pub fn model(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<Option<Mod
         return Ok(None);
     };
     // A world pack (first chunk type 31, SPEC-0006) draws as its placed static scene.
-    let data = if chunks.first().is_some_and(|c| c.kind == WORLD_HEADER) {
-        // A new game: world mask word 0 and no story layer visible (SPEC-0046).
-        let mut world = model::build_world(&bytes, &chunks, 0)?;
+    if chunks.first().is_some_and(|c| c.kind == WORLD_HEADER) {
+        return world_scene(disc, index, n, &bytes, &chunks, true);
+    }
+    let shared = if (544..=575).contains(&n) { chunk_file(disc, 7)? } else { None };
+    let data = model::build(&bytes, &chunks, shared.as_ref().map(|(b, c)| (b.as_slice(), c.as_slice())))?;
+    Ok((!data.parts.is_empty()).then_some(data))
+}
+
+/// A world pack's placed static scene (mask 0, no story layer; SPEC-0046), with its sky dome's
+/// layer A when `dome` is set (only the current world's dome is drawn in play).
+pub fn world_scene(
+    disc: &mut Disc,
+    index: &ArchiveIndex,
+    n: u32,
+    bytes: &[u8],
+    chunks: &[resource::Chunk],
+    dome: bool,
+) -> Result<Option<ModelData>, String> {
+    let mut world = model::build_world(bytes, chunks, 0)?;
+    if dome {
         // The world's sky dome by its area slot; only layer A (role 1) draws without an
         // atmosphere zone (SPEC-0046 Sky domes).
         let slot = neopets_data::area::AreaTable::from_disc(disc)?.slot_of(n);
-        let dome = neopets_data::area::dome_for_slot(slot);
-        if let Some((dome_bytes, dome_chunks)) = chunk_file(disc, dome)? {
-            world.append(model::build_roles(&dome_bytes, &dome_chunks, None, Some(&[1]))?);
+        let d = neopets_data::area::dome_for_slot(slot);
+        if !index.get(d)?.is_empty() {
+            let dome_bytes = index.read(disc, d)?;
+            let family = resource::classify(&dome_bytes);
+            let chain = resource::walk_chunks(&dome_bytes, resource::chunk_limit(d, family))?;
+            world.append(model::build_roles(&dome_bytes, &chain.chunks, None, Some(&[1]))?);
         }
-        world
-    } else {
-        let shared = if (544..=575).contains(&n) { chunk_file(disc, 7)? } else { None };
-        model::build(
-            &bytes,
-            &chunks,
-            shared.as_ref().map(|(b, c)| (b.as_slice(), c.as_slice())),
-        )?
-    };
-    Ok((!data.parts.is_empty()).then_some(data))
+    }
+    Ok((!world.parts.is_empty()).then_some(world))
 }
 
 /// A hero outfit (resources 504–519) with its hero's animation families, or None for any

@@ -102,7 +102,7 @@ fn run() -> Result<(), String> {
         inspect_anim::run(&mut disc, &index)?;
     }
     if areas {
-        inspect_mesh::areas(&mut disc)?;
+        inspect_mesh::areas(&mut disc, &index)?;
     }
     if ground {
         inspect_mesh::ground(&mut disc, &index)?;

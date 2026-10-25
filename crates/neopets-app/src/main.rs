@@ -157,6 +157,7 @@ fn main() {
     let mut shot_at = 4.0f32;
     let mut start_resource = 0u32;
     let mut trace: Option<u64> = None;
+    let mut trace_to: Option<[f32; 2]> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -190,6 +191,14 @@ fn main() {
             play_pack = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
                 eprintln!("--pack requires a world pack resource number");
                 std::process::exit(2)
+            });
+        } else if arg == "--trace-to" {
+            trace_to = args.next().and_then(|v| {
+                if v == "swap" {
+                    return Some([f32::NAN, f32::NAN]);
+                }
+                let (x, z) = v.trim().split_once(',')?;
+                Some([x.parse().ok()?, z.parse().ok()?])
             });
         } else if arg == "--play" {
             play_mode = true;
@@ -233,7 +242,7 @@ fn main() {
             eprintln!("{status}");
             std::process::exit(1)
         };
-        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump));
+        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to);
         return;
     }
     let driver = SimDriver {
@@ -279,7 +288,7 @@ fn main() {
                 (read_input, step_sim).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, play_frame).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame).chain(),
             )
                 .chain(),
         );
@@ -496,6 +505,7 @@ fn step_sim(
     mut models: ResMut<ModelView>,
     play: Option<ResMut<PlayState>>,
     autowalk: Option<Res<AutoWalk>>,
+    mut archive: Option<ResMut<Archive>>,
 ) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
@@ -546,6 +556,13 @@ fn step_sim(
                 r3_pressed: std::mem::take(&mut play.play.r3_latch),
             };
             play.play.tick(&input, pad);
+            // The pending step's stream load runs between ticks (synchronously here; the
+            // original loads in the background).
+            if let Some(Archive { disc, index }) = archive.as_deref_mut() {
+                if let Err(e) = play.play.stream(disc, index) {
+                    error!("Stream load failed: {e}");
+                }
+            }
         }
     }
 }
@@ -651,7 +668,9 @@ fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<H
 
 fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Query<&mut Text, With<SimText>>) {
     let d = &*driver;
-    let play_line = play.map(|p| format!("{}\n{}\n", p.play.status(), p.play.status_camera())).unwrap_or_default();
+    let play_line = play
+        .map(|p| format!("{}\n{}\n{}\n", p.play.status(), p.play.status_camera(), p.play.status_worlds()))
+        .unwrap_or_default();
     for mut text in &mut texts {
         text.0 = play_line.clone() + &format!(
             "SIMULATION LOOP - fixed 1/60 s step (SPEC-0007); no gameplay systems yet\n\
@@ -675,6 +694,7 @@ fn show_browser(
     mut textures: ResMut<TextureView>,
     mut models: ResMut<ModelView>,
     mut texts: Query<&mut Text, With<BrowserText>>,
+    play_request: Option<Res<PlayRequest>>,
 ) {
     let Some(mut archive) = archive else {
         for mut text in &mut texts {
@@ -698,7 +718,8 @@ fn show_browser(
             current: 0,
             dirty: true,
         };
-        let model = archive_view::model(disc, index, n);
+        // In play mode the resident worlds are drawn by `sync_worlds` instead.
+        let model = if play_request.is_some() { Ok(None) } else { archive_view::model(disc, index, n) };
         if let Err(e) = &model {
             view.text.push_str(&format!("\nModel could not be built: {e}"));
         }
@@ -736,6 +757,7 @@ fn show_browser(
                 m.textures.len()
             )
         }
+        None if play_request.is_some() => "Play mode draws the resident worlds (SPEC-0006).".into(),
         None => "No models in this resource.".into(),
     };
     let model_line = match &models.hero {
@@ -846,6 +868,7 @@ fn model_texture(t: &neopets_data::model::ModelTexture) -> Image {
 /// Spawn the selected model's parts (or remove them), and frame the camera on what is shown.
 fn apply_model(
     mut commands: Commands,
+    play_request: Option<Res<PlayRequest>>,
     mut models: ResMut<ModelView>,
     old: Query<Entity, With<ModelPart>>,
     mut grid: Query<&mut Visibility, With<DiagnosticGrid>>,
@@ -861,7 +884,7 @@ fn apply_model(
     for e in &old {
         commands.entity(e).despawn();
     }
-    let grid_visibility = if models.showing() { Visibility::Hidden } else { Visibility::Inherited };
+    let grid_visibility = if models.showing() || play_request.is_some() { Visibility::Hidden } else { Visibility::Inherited };
     for mut v in &mut grid {
         *v = grid_visibility;
     }
@@ -884,6 +907,69 @@ fn apply_model(
         *orbit = framing.clone();
         *transform = orbit.transform();
     }
+}
+
+/// A drawn piece of a resident world in play mode: a world pack's scene or a sky dome.
+#[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum WorldPart {
+    Scene(u32),
+    Dome(u32),
+}
+
+/// Keep the drawn worlds in step with the resident buffers (SPEC-0006): the current world, the
+/// other world when the neighbour-world test passes, and the current world's sky dome.
+#[allow(clippy::too_many_arguments)]
+fn sync_worlds(
+    mut commands: Commands,
+    play: Option<Res<PlayState>>,
+    archive: Option<ResMut<Archive>>,
+    parts: Query<(Entity, &WorldPart)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut shown: Local<Vec<WorldPart>>,
+) {
+    let (Some(state), Some(mut archive)) = (play, archive) else { return };
+    let p = &state.play;
+    let mut want = vec![WorldPart::Scene(p.world.pack)];
+    if let (true, Some(o)) = (p.other_drawn(), &p.other) {
+        want.push(WorldPart::Scene(o.pack));
+    }
+    let slot = p.boot.areas.slot_of(p.world.pack);
+    want.push(WorldPart::Dome(neopets_data::area::dome_for_slot(slot)));
+    if *shown == want {
+        return;
+    }
+    for (e, part) in &parts {
+        if !want.contains(part) {
+            commands.entity(e).despawn();
+        }
+    }
+    let Archive { disc, index } = &mut *archive;
+    for part in &want {
+        if shown.contains(part) {
+            continue;
+        }
+        let model = match *part {
+            WorldPart::Scene(pack) => index
+                .read(disc, pack)
+                .and_then(|bytes| {
+                    let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+                    archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false)
+                }),
+            WorldPart::Dome(d) => archive_view::model(disc, index, d),
+        };
+        match model {
+            Ok(Some(m)) => {
+                for (_, mesh, material) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
+                    commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part));
+                }
+            }
+            Ok(None) => {}
+            Err(e) => error!("{part:?} could not be built: {e}"),
+        }
+    }
+    *shown = want;
 }
 
 /// Bevy meshes and materials for every part of a model: (part index, mesh, material). Parts are
@@ -984,7 +1070,7 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
 
 /// Diagnostic (`--play-trace <ticks>`): run play mode without a window, walking forward along
 /// the spawn facing (and jumping every 120 ticks with `--autojump`), and print each tick.
-fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool) {
+fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Option<[f32; 2]>) {
     let Archive { disc, index } = archive;
     let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
         Ok(play) => play,
@@ -993,13 +1079,41 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool) {
             std::process::exit(1)
         }
     };
+    println!("Grid bounds: {:?}; nearest swap point {:?}", play.bounds(), play.nearest_swap_point());
+    // `--trace-to swap` follows a searched route to the nearest reachable swap point.
+    let mut route: Vec<[f32; 2]> = Vec::new();
+    if to.is_some_and(|t| t[0].is_nan()) {
+        route = play.route_to_swap(400_000).unwrap_or_default();
+        println!("Route to a swap point: {} steps, ending at {:?}", route.len(), route.last());
+    }
     for _ in 0..ticks {
+        // `--trace-to x,z` steers the stick toward a point through the camera's rows.
+        let (mut forward, mut side) = (0.7, 0.0);
+        while route.len() > 1 && {
+            let p = play.loco.position();
+            (route[0][0] - p[0]).powi(2) + (route[0][1] - p[2]).powi(2) < 4.0
+        } {
+            route.remove(0);
+        }
+        let goal = route.first().copied().or(to.filter(|t| !t[0].is_nan()));
+        if let Some([tx, tz]) = goal {
+            let p = play.loco.position();
+            let (f, l) = play.camera.rows();
+            let (dx, dz) = (tx - p[0], tz - p[2]);
+            let len = (dx * dx + dz * dz).sqrt().max(1e-6);
+            forward = 0.7 * (dx * f[0] + dz * f[2]) / len / (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
+            side = 0.7 * (dx * l[0] + dz * l[2]) / len;
+        }
         let input = neopets_sim::hero::HeroInput {
-            forward: 0.7,
+            forward,
+            side,
             jump: jump && play.ticks % 120 == 0 && play.ticks > 0,
             ..Default::default()
         };
         play.tick(&input, neopets_sim::camera::CameraPad::default());
+        if let Err(e) = play.stream(disc, index) {
+            eprintln!("Stream load failed: {e}");
+        }
         let (p, b) = (play.loco.position(), &play.loco.body);
         println!(
             "{:5} pos ({:9.3} {:8.3} {:9.3}) state {:2} phase {:2} action {:3} gap {:8.3} vy {:7.3} n ({:.2} {:.2} {:.2})",
@@ -1008,6 +1122,7 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool) {
         );
         if play.ticks % 60 == 0 {
             println!("      {}", play.status_camera());
+            println!("      {}", play.status_worlds());
         }
     }
 }

@@ -17,6 +17,7 @@ mod mods;
 pub mod png;
 pub mod resource;
 pub mod texture;
+pub mod travel;
 pub mod world;
 pub use iso::{Disc, Entry};
 pub use mods::AssetSource;
