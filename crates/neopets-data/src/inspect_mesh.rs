@@ -219,6 +219,23 @@ pub fn ground(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             }
         }
     }
+    // Rectangle census (SPEC-0028 6.1): records, pushing boxes, and the axes' unit length.
+    let (mut rects, mut pushing, mut worst) = (0usize, 0usize, 0f32);
+    for n in 533..index.len() as u32 {
+        let bytes = index.read(disc, n)?;
+        let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
+        if chain.chunks.first().map(|c| c.kind) != Some(31) {
+            continue;
+        }
+        for r in neopets_data::ground::rectangles(&bytes, &chain.chunks) {
+            rects += 1;
+            pushing += r.pushes(0) as usize;
+            for a in r.axes {
+                worst = worst.max(((a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt() - 1.0).abs());
+            }
+        }
+    }
+    println!("Rectangles: {rects} (SPEC-0028: 6,524), {pushing} pass the box-push gate at mask 0; largest axis length error {worst:.2e}");
     println!("x-major breakdown: no cell {}, miss {}, <0.5 {}, <2 {}, <10 {}, farther {}", kinds[0], kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]);
     for (k, label) in ["x-major", "z-major"].iter().enumerate() {
         let (hit, all) = totals[k];

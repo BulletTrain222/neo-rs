@@ -315,3 +315,54 @@ mod tests {
         assert_eq!(spawn_height(&g, [15.0, 3.0, 5.0]), 0.0, "0.0 is not below -1e-7");
     }
 }
+
+/// A rectangle primitive of the type-11 chunk (SPEC-0028 section 6.1): kind 4 or 7, its header
+/// flags and gate mask, low corner, unit axes V (+0x60), A (+0x50) and B (+0x40), and signed
+/// extents along them (+0x24, +0x28, +0x2C).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rectangle {
+    pub kind: u8,
+    pub flags: u16,
+    pub mask: u16,
+    pub origin: [f32; 3],
+    pub axes: [[f32; 3]; 3],
+    pub extents: [f32; 3],
+}
+
+impl Rectangle {
+    /// The box-push gate of SPEC-0018: class 3 or class 0 (flag bits 3 or 0), the mask gate
+    /// against the world mask, and a positive B extent (zero or less is a contact plane).
+    pub fn pushes(&self, world_mask: u16) -> bool {
+        self.flags & 0b1001 != 0
+            && (self.mask == 0 || self.mask & world_mask != 0)
+            && self.extents[2] > 0.0
+    }
+}
+
+/// The kind-4 (+0x40, count +0x18) and kind-7 (+0x3C, count +0x14) rectangle lists of a pack.
+pub fn rectangles(bytes: &[u8], top: &[Chunk]) -> Vec<Rectangle> {
+    let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return Vec::new() };
+    let p = &bytes[c.payload.clone()];
+    let mut out = Vec::new();
+    for (kind, count_at, list_at) in [(4u8, 0x18, 0x40), (7, 0x14, 0x3C)] {
+        let n = i32_at(p, count_at).unwrap_or(0).clamp(0, 1 << 14) as usize;
+        let Some(list) = u32_at(p, list_at).map(|v| v as usize) else { continue };
+        for i in 0..n {
+            let r = list + i * 0x70;
+            let v = |at: usize| Some([f32_at(p, r + at)?, f32_at(p, r + at + 4)?, f32_at(p, r + at + 8)?]);
+            let (Some(origin), Some(av), Some(aa), Some(ab), Some(e), Some(flags), Some(mask)) = (
+                v(0x30),
+                v(0x60),
+                v(0x50),
+                v(0x40),
+                v(0x24),
+                p.get(r + 0x12..r + 0x14).map(|b| u16::from_le_bytes([b[0], b[1]])),
+                p.get(r + 0x1A..r + 0x1C).map(|b| u16::from_le_bytes([b[0], b[1]])),
+            ) else {
+                break;
+            };
+            out.push(Rectangle { kind, flags, mask, origin, axes: [av, aa, ab], extents: e });
+        }
+    }
+    out
+}

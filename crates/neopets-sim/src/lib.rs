@@ -3,6 +3,7 @@
 pub use ps2_float::{F, Vf};
 
 pub mod clip;
+pub mod contact;
 pub mod hero;
 mod step;
 pub use step::FixedStep;

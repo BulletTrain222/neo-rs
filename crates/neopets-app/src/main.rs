@@ -150,6 +150,7 @@ fn main() {
     let mut catch_up = MAX_CATCH_UP;
     let mut play_mode = false;
     let mut autowalk = false;
+    let mut shot_at = 4.0f32;
     let mut start_resource = 0u32;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
@@ -179,6 +180,11 @@ fn main() {
             catch_up = 1;
         } else if arg == "--hide-hud" {
             hide_hud = true;
+        } else if arg == "--screenshot-at" {
+            shot_at = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+                eprintln!("--screenshot-at requires seconds");
+                std::process::exit(2)
+            });
         } else if arg == "--screenshot" {
             screenshot = Some(args.next().unwrap_or_else(|| {
                 eprintln!("--screenshot requires an output .png path");
@@ -257,14 +263,14 @@ fn main() {
         app.add_systems(Update, smoke_exit);
     } else if let Some(path) = screenshot {
         app.insert_resource(bevy::winit::WinitSettings::continuous())
-            .insert_resource(ScreenshotPath(path))
+            .insert_resource(ScreenshotPath(path, shot_at.max(1.0)))
             .add_systems(Update, screenshot_and_exit);
     }
     app.run();
 }
 
 #[derive(Resource)]
-struct ScreenshotPath(String);
+struct ScreenshotPath(String, f32);
 
 /// Capture one frame once rendering has settled, then exit; for reviewing the window.
 /// Waits on real time, not frames: render pipelines compile asynchronously after startup,
@@ -278,12 +284,12 @@ fn screenshot_and_exit(
 ) {
     use bevy::render::view::screenshot::{Screenshot, save_to_disk};
     let elapsed = time.elapsed_secs();
-    if !*taken && elapsed >= 4.0 {
+    if !*taken && elapsed >= path.1 {
         *taken = true;
         commands
             .spawn(Screenshot::primary_window())
             .observe(save_to_disk(path.0.clone()));
-    } else if elapsed >= 6.0 {
+    } else if elapsed >= path.1 + 2.0 {
         // Saving runs asynchronously; exiting too soon drops the capture.
         exit.write(AppExit::Success);
     }

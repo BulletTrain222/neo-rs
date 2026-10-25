@@ -6,6 +6,7 @@ use neopets_data::archive::ArchiveIndex;
 use neopets_data::ground::{self, CellOrder, Ground};
 use neopets_data::model::ModelData;
 use neopets_data::{Disc, resource};
+use neopets_sim::contact::{self, BoxShape};
 use neopets_sim::hero::{HeroInput, Locomotion};
 
 pub struct Play {
@@ -13,6 +14,8 @@ pub struct Play {
     pub hero: HeroAnim,
     pub model: ModelData,
     ground: Option<Ground>,
+    /// Rectangle primitives that push characters out (SPEC-0018 box push; new-game mask 0).
+    boxes: Vec<BoxShape>,
     root_step: [f32; 3],
     /// Set once the hero's meshes exist.
     pub spawned: bool,
@@ -28,11 +31,17 @@ impl Play {
         let ground = Ground::of(&bytes, &chain.chunks, CellOrder::XMajor);
         let (spawn, facing) = ground::spawn(&bytes, &chain.chunks).unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
         let y = ground.as_ref().map_or(spawn[1], |g| ground::spawn_height(g, spawn));
+        let boxes = ground::rectangles(&bytes, &chain.chunks)
+            .into_iter()
+            .filter(|r| r.pushes(0))
+            .map(|r| BoxShape { origin: r.origin, axes: r.axes, extents: r.extents })
+            .collect();
         Ok(Self {
             loco: Locomotion::spawn([spawn[0], y, spawn[2]], facing),
             hero,
             model,
             ground,
+            boxes,
             root_step: [0.0; 3],
             spawned: false,
         })
@@ -49,6 +58,9 @@ impl Play {
         self.loco.travel(self.root_step, |x, z, c| {
             ground.map_or(ground::MISS, |g| g.probe(x, z, c))
         });
+        // Push the feet out of box primitives with the contact radius (SPEC-0018). Not
+        // implemented: cylinders, frame records, the slide response and contact recovery.
+        contact::resolve(&mut self.loco.position, &self.boxes, contact::CONTACT_RADIUS);
         self.root_step = self.hero.tick();
     }
 
@@ -56,7 +68,7 @@ impl Play {
         let p = self.loco.position;
         format!(
             "PLAY (M7 groundwork): hero at ({:.1}, {:.1}, {:.1}), state {}, action {}, rate {:.2}. \
-             WASD move, Shift run (R1), drag to turn the camera. No gravity, walls or jumps yet",
+             WASD move, Shift run (R1), drag to turn the camera. Box walls only; no gravity or jumps yet",
             p[0], p[1], p[2], self.loco.state, self.loco.action(), self.loco.rate
         )
     }
