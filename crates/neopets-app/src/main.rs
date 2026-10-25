@@ -1983,7 +1983,7 @@ fn play_trace(
     let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
     // releases a power attack).
-    let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(80);
+    let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(240);
     let mice = std::env::var_os("NEOPETS_TRACE_MICE").is_some();
     // NEOPETS_TRACE_PRESSES="a,b,...": attack press edges at these offsets of every 120 ticks
     // (the first held 10 ticks), for combos.

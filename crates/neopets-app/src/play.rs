@@ -567,6 +567,9 @@ pub struct Play {
     save_glow: Option<(u32, [usize; 2])>,
     /// Placed effect objects made by StartEffect, by (pack, slot).
     placed_fx: HashMap<(u32, usize), usize>,
+    /// Roberta's hold effect and leap glow (SPEC-0036): their timers and effect objects.
+    r_displays: neopets_sim::roberta::Displays,
+    r_fx: [Option<usize>; 2],
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -883,6 +886,8 @@ impl Play {
             last_fx: String::new(),
             save_glow: None,
             placed_fx: HashMap::new(),
+            r_displays: Default::default(),
+            r_fx: [None; 2],
             attack: None,
             attack_latch: false,
             weapon: None,
@@ -1998,6 +2003,43 @@ impl Play {
             launched += 1;
         }
         self.last_hit = format!("Roberta launched {launched} shot(s) (class {class}, held {held}) on tick {}", self.ticks);
+    }
+
+    /// SPEC-0036 Roberta full-charge hold effect and Timed glow: effect 239 at the hero's frame
+    /// (started, then updated there each pass) and effect 0xF1 at the hero + (0, 0.5, 0) on its
+    /// flat facing (started when not live, then moved); each stops when its timer says so.
+    fn roberta_displays_step(&mut self) {
+        let (sub, f) = match (self.hero_index, self.r_attack.as_ref()) {
+            (1, Some(a)) => (a.sub, a.f),
+            _ => (0, 0),
+        };
+        let shown = self.r_displays.step(sub, f);
+        let table = self.effect_table.clone();
+        let p = self.loco.position();
+        let fw = unit([self.loco.facing[0], 0.0, self.loco.facing[2]]);
+        let frame = [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw];
+        for (k, (show, id, at)) in [(shown.0, neopets_sim::roberta::HOLD_EFFECT, p), (shown.1, neopets_sim::roberta::GLOW_EFFECT, [p[0], p[1] + 0.5, p[2]])].into_iter().enumerate() {
+            match (show, self.r_fx[k]) {
+                (true, None) => {
+                    let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, at, frame));
+                    self.effects.update(&table, h, None, &mut self.rng);
+                    self.r_fx[k] = Some(h);
+                    self.last_fx = format!("Roberta effect {id} started (sub-state {sub}, F {f}) on tick {}", self.ticks);
+                }
+                (true, Some(h)) => {
+                    self.effects.set_position(h, at);
+                    if k == 0 {
+                        self.effects.update(&table, h, None, &mut self.rng);
+                    }
+                }
+                (false, Some(h)) => {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                    self.r_fx[k] = None;
+                }
+                (false, None) => {}
+            }
+        }
     }
 
     /// SPEC-0036 Roberta shot projectile, per tick: each shot steps (life, homing, move), ends
@@ -3583,6 +3625,7 @@ impl Play {
         if self.hero_index == 1 {
             self.roberta_step(&input);
         }
+        self.roberta_displays_step();
         if self.hero_index == 0 && self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
         }

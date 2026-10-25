@@ -348,6 +348,39 @@ pub fn fan_draw(rng: &mut Rng) -> f32 {
     rng.frange(-1.0, 1.0)
 }
 
+/// The attack-family driver's two timed displays of Roberta (SPEC-0036 Roberta full-charge
+/// hold effect and Timed glow): each accumulates the tick length by a truncating add while its
+/// gate holds and is reset to 0 when it fails.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Displays {
+    hold: f32,
+    glow: f32,
+}
+
+/// Effect 239 (the full-charge hold) and 0xF1 (the leap glow).
+pub const HOLD_EFFECT: i32 = 239;
+pub const GLOW_EFFECT: i32 = 0xF1;
+
+impl Displays {
+    /// One driver pass: returns (hold shown, glow shown). The hold shows from the pass on which
+    /// the accumulator of sub-state 1 with F at least 80 reaches 0.8 s; the glow while the
+    /// accumulator of sub-state 8 is in [0.5, 0.8).
+    pub fn step(&mut self, sub: u8, f: u32) -> (bool, bool) {
+        let dt = 1.0f32 / 60.0;
+        if sub == 1 && f >= 80 {
+            self.hold = ps2_float::fpu::add(self.hold, dt);
+        } else {
+            self.hold = 0.0;
+        }
+        if sub == 8 {
+            self.glow = ps2_float::fpu::add(self.glow, dt);
+        } else {
+            self.glow = 0.0;
+        }
+        (self.hold >= 0.8, self.glow >= 0.5 && self.glow < 0.8)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -432,5 +465,25 @@ mod tests {
         assert!((s.dir[0] - 0.816441).abs() < 1e-4);
         // The full release's charge: lesser 25 and greater 40 with S = 100.
         assert_eq!((charge_full(25, 100.0), charge_full(40, 100.0)), (25, 40));
+    }
+
+    /// SPEC-0036 test vectors: the hold shows on pass 49 (F at least 80), not with F = 79; the
+    /// glow shows from tick 31 through 48 of the leap and resets on another sub-state.
+    #[test]
+    fn hold_and_glow_timers() {
+        let mut d = Displays::default();
+        assert!(!d.step(1, 79).0);
+        let shown: Vec<bool> = (1..=49).map(|_| d.step(1, 80).0).collect();
+        assert!(!shown[47] && shown[48]);
+        assert!(!d.step(13, 80).0);
+        let mut d = Displays::default();
+        let glow: Vec<bool> = (1..=49).map(|_| d.step(8, 0).1).collect();
+        assert!(!glow[29] && glow[30] && glow[47] && !glow[48]);
+        let mut d = Displays::default();
+        for _ in 0..40 {
+            d.step(8, 0);
+        }
+        assert_eq!(d.step(13, 0), (false, false));
+        assert_eq!(d.glow, 0.0);
     }
 }
