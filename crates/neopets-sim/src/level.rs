@@ -14,6 +14,10 @@
 //! - The road module 678 (SPEC-0042), which packs 678, 686 and 691 carry: Init's slot and trigger
 //!   setup by flags, trigger 0's line, the road-fight intro (trigger 1), the fight watch and end
 //!   scene, the line handler of triggers 2, 3, 5 and 6, trigger 7's prompt and proximity P.
+//! - 1023 (SPEC-0045) villager talk: the three line templates (story chains; the arena and
+//!   wheel talk need flags 381 to 385 and 480, which nothing sets yet, and their draws are not
+//!   taken), entities 74, 65 and 90, and the return locators of the activate-world routine.
+//! - 1148, 1133 (SPEC-0039) and 1150 (SPEC-0042): the Recruitment Centre errands.
 //! - 1023 (SPEC-0045): the Meerca chase (trigger 17's chase-start scene, the chase thread and
 //!   the load thread's first-slot load and chase resume), the signs (triggers 3, 4 and 6 to 16),
 //!   triggers 0 to 2 and the teleports to the interiors (indices 1 to 8) and their line
@@ -116,6 +120,11 @@ pub enum Action {
     WaitHeroNear { locator: usize, distance: f32 },
     /// LoopEntityAnim with an animation drawn by Random(1, 2) from the pair.
     RandomLoop { entity: usize, anims: [u32; 2] },
+    /// LevelPrompt(line): a yes or no question; the answer runs `on_answer(pack, routine)` in
+    /// the same thread.
+    Prompt { line: u16, routine: u8 },
+    /// Give the item held in a module word (1148's traded-item word; 0 means its file value).
+    GiveWordItem { word: u8, default: u16 },
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -182,6 +191,11 @@ pub struct GameState {
     /// The current hit points of the current world's entities by entity id (filled by the host
     /// before each Update; GetAI_HitPoints).
     pub entity_hp: HashMap<usize, i32>,
+    /// The wallet (GetNeopoints, RemoveNeopoints).
+    pub neopoints: i32,
+    /// The pack that was current before this one (the "last active world" an activate-world
+    /// routine reads).
+    pub last_pack: Option<u32>,
 }
 
 impl GameState {
@@ -228,6 +242,16 @@ impl GameState {
     /// RemoveAllOfItemFromHero(item).
     pub fn remove_all(&mut self, item: u16) {
         self.items.remove(&item);
+    }
+
+    /// RemoveItemFromHero(item, n).
+    pub fn take(&mut self, item: u16, n: u32) {
+        if let Some(c) = self.items.get_mut(&item) {
+            *c = c.saturating_sub(n);
+            if *c == 0 {
+                self.items.remove(&item);
+            }
+        }
     }
 
     /// The farm story stage: the highest of story flags 1 to 6 that is set (SPEC-0045, 909
@@ -350,6 +374,12 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         678 | 686 | 691 => road_init(pack, state),
         1023 => village_init(state),
+        // SPEC-0039 1148 thread 1: set 0 (region 1149) when flag 496 is set.
+        1148 if state.flag(496) => vec![Action::LoadRegion { slot: 0, region: Some(1149) }],
+        // SPEC-0042 1150 thread T: set 0 (region 1151) while flag 142 is clear.
+        1150 if !state.flag(142) => vec![Action::LoadRegion { slot: 0, region: Some(1151) }],
+        // SPEC-0039 1133 thread 1: set 1 with flag 10, else set 0.
+        1133 => vec![Action::LoadRegion { slot: 0, region: Some(1133 + 1 + state.flag(10) as u32) }],
         _ => Vec::new(),
     }
 }
@@ -830,8 +860,273 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             actions
         }
+        1023 => village_return(state).into_iter().collect(),
         _ => Vec::new(),
     }
+}
+
+/// SPEC-0045 1023 activate-world routine: the hero goes back to the return locator of the
+/// world it came from (eW 106 pack 1098 to 16, 109/1129 to 17, 111/1131 to 10, 112/1133 to 9,
+/// 113/1136 to 7, 114/1139 to 12, 115/1140 to 15, 116/1143 to 13, 117/1148 to 11, 118/1150
+/// to 8, 125/1172 to 14). The arena return (value 10 for eW 90) is not built.
+fn village_return(state: &GameState) -> Option<Action> {
+    let locator = match state.last_pack? {
+        1098 => 16,
+        1129 => 17,
+        1131 => 10,
+        1133 => 9,
+        1136 => 7,
+        1139 => 12,
+        1140 => 15,
+        1143 => 13,
+        1148 => 11,
+        1150 => 8,
+        1172 => 14,
+        _ => return None,
+    };
+    Some(Action::MoveHero { locator })
+}
+
+/// The 1023 villager routines: (entities, template, first line b). Template 0 is A, 1 B, 2 C;
+/// 3 is entity 74's lines 0 then 1, 2; 4 is the wheel host's 1023 to 1025.
+const VILLAGERS: [(&[usize], u8, u16); 34] = [
+    (&[69], 0, 84), (&[70], 0, 107), (&[71], 0, 246), (&[5], 0, 362), (&[6], 0, 385), (&[4], 0, 408),
+    (&[7], 0, 431), (&[57], 0, 454), (&[83], 0, 477), (&[82], 0, 500), (&[58], 0, 523), (&[63], 0, 546),
+    (&[76, 78], 0, 650), (&[68], 0, 702), (&[77], 0, 725), (&[87], 0, 748), (&[79], 0, 858),
+    (&[80], 1, 130), (&[86], 1, 159), (&[81], 1, 188), (&[64], 1, 217), (&[60, 61], 1, 569), (&[89, 93], 1, 598),
+    (&[62, 95], 1, 673), (&[85, 92], 1, 800), (&[67], 1, 829), (&[84, 88, 91], 1, 929), (&[73], 1, 958), (&[59, 96], 1, 987),
+    (&[3], 2, 310), (&[2], 2, 336), (&[74], 3, 0), (&[65], 4, 1023), (&[], 0, 0),
+];
+
+fn villager(e: usize) -> Option<usize> {
+    VILLAGERS.iter().position(|(es, _, _)| es.contains(&e))
+}
+
+/// The story chains of the templates (the arena talk needs two or more arena wins and the
+/// wheel talk flag 480; neither can hold yet, so their draws are not taken: R-0029).
+fn village_talk(k: u8, s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
+    let (_, template, b) = *VILLAGERS.get(k as usize)?;
+    let three = |o: u16| cycle(&[b + o, b + o + 1, b + o + 2]);
+    match template {
+        3 => rot.pick(0, &Lines::FirstOnce(0, vec![1, 2])),
+        4 => rot.pick(0, &cycle(&[1023, 1024, 1025])),
+        2 if s.flag(138) && !s.flag(141) => {
+            let line = rot.pick(10, &three(14));
+            if line == Some(b + 14) && !s.flag(644) {
+                s.set(644, true);
+            }
+            line
+        }
+        2 => cascade(s, rot, &[(202, three(23)), (193, three(20)), (150, three(17)), (7, three(11))]).flatten(),
+        1 => cascade(s, rot, &[(301, three(26)), (216, three(23)), (202, three(20)), (193, three(17)), (150, three(14)), (7, three(11))]).flatten(),
+        _ => cascade(s, rot, &[(202, three(20)), (193, three(17)), (150, three(14)), (7, three(11))]).flatten(),
+    }
+}
+
+/// SPEC-0045 1023 entity 90: the story lines, the 136-clear line and the one prompt by flags
+/// 485 to 488 (its answer is stored in word 20 and read by nothing else).
+fn village_90(s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
+    let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
+    if let Some(l) = cascade(s, rot, &[(301, cycle(&[269, 270, 271])), (216, cycle(&[272, 273, 274]))]) {
+        return talk(l);
+    }
+    if !s.flag(136) {
+        return talk(Some(287));
+    }
+    match s.word(1023, 20) {
+        0 if s.flag(488) => talk(Some(288)),
+        0 => {
+            let line = if s.flag(487) { 289 } else if s.flag(486) { 292 } else if s.flag(485) { 295 } else { 298 };
+            vec![Action::Prompt { line, routine: 90 }]
+        }
+        1 => {
+            s.set_word(1023, 20, 2);
+            Vec::new()
+        }
+        _ => talk(cascade(s, rot, &[(202, cycle(&[275, 276, 277])), (193, cycle(&[278, 279, 280])), (150, cycle(&[281, 282, 283]))]).flatten().or_else(|| rot.pick(9, &cycle(&[284, 285, 286])))),
+    }
+}
+
+/// SPEC-0039 1148 handlers 2 to 5 (routines 0 to 3).
+fn recruitment_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Option<Vec<Action>> {
+    let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]);
+    match r {
+        3 => talk(rot.pick(0, &cycle(&[0, 1, 2]))),
+        0 => talk(cascade(s, rot, &[(202, cycle(&[49, 50, 51])), (150, cycle(&[55, 56, 57]))]).flatten().or(Some(if s.flag(139) { 58 } else { 59 }))),
+        1 => {
+            if let Some(l) = cascade(s, rot, &[(202, cycle(&[8, 9, 10])), (151, cycle(&[12, 13, 14])), (150, cycle(&[15, 16, 17]))]) {
+                return talk(l);
+            }
+            if s.flag(143) {
+                if s.has_item(0) {
+                    for f in [150, 142, 3, 8] {
+                        s.set(f, true);
+                    }
+                    s.take(0, 1);
+                    s.give(120, 1);
+                    return talk(Some(18));
+                }
+                return talk(rot.pick(3, &cycle(&[19, 20, 21])));
+            }
+            if s.flag(142) {
+                if s.has_item(38) {
+                    for f in [143, 17, 2] {
+                        s.set(f, true);
+                    }
+                    s.remove_all(38);
+                    return talk(Some(22));
+                }
+                return talk(rot.pick(4, &cycle(&[23, 24, 25])));
+            }
+            if s.flag(138) {
+                return talk(rot.pick(5, &cycle(&[26, 27, 28])));
+            }
+            if s.flag(137) {
+                if s.has_item(106) {
+                    s.set(138, true);
+                    s.give(39, 1);
+                    return talk(Some(29));
+                }
+                return talk(rot.pick(6, &cycle(&[30, 31, 32])));
+            }
+            s.remove_all(32);
+            s.set(137, true);
+            if s.has_item(106) {
+                s.set(138, true);
+                s.give(39, 1);
+                return talk(Some(34));
+            }
+            talk(Some(33))
+        }
+        2 => {
+            if s.flag(140) {
+                return talk(rot.pick(0, &cycle(&[35, 36, 37])));
+            }
+            if !s.flag(139) {
+                return talk(rot.pick(1, &cycle(&[38, 39, 40])));
+            }
+            let line = if s.word(1148, 0) == 0 { 41 } else { 42 };
+            s.set_word(1148, 0, 1);
+            Some(vec![Action::Talk { line }, Action::Prompt { line: 43, routine: 0 }])
+        }
+        _ => None,
+    }
+}
+
+/// SPEC-0039 1148 walk-back sequence, after the shop's line, when 140 is set, 143 clear and
+/// the hero holds neither item 98 nor 99.
+fn walk_back(s: &GameState) -> Vec<Action> {
+    use Action::*;
+    if !(s.flag(140) && !s.flag(143) && !s.has_item(98) && !s.has_item(99)) {
+        return Vec::new();
+    }
+    let walk = |entity, locator, wait| WalkEntity { entity, locator, wait, orient: true, stop: 1.1 };
+    vec![
+        WaitDialog,
+        Message { line: 60 },
+        WalkHero { locator: 4, wait: false, orient: true },
+        walk(3, 3, false),
+        walk(0, 6, true),
+        Message { line: 61 },
+        walk(0, 5, true),
+        Message { line: 62 },
+        GiveWordItem { word: 1, default: 99 },
+        walk(0, 7, false),
+    ]
+}
+
+/// The answer to a LevelPrompt made by a routine of a pack (yes = Circle).
+pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Action> {
+    let line = |line| Action::Message { line };
+    match (pack, routine, yes) {
+        // 1148 prompt 43: buy item 42 for 100 Neopoints.
+        (1148, 0, true) if s.neopoints >= 100 => {
+            s.neopoints -= 100;
+            s.give(42, 1);
+            s.set(140, true);
+            s.set(644, true);
+            let mut v = vec![line(44)];
+            v.extend(walk_back(s));
+            v
+        }
+        (1148, 0, true) => vec![line(45)],
+        (1148, 0, false) => vec![Action::Prompt { line: 46, routine: 1 }],
+        // Prompt 46: trade the sword (98, else 99) for item 42 (the quirk: with neither held it
+        // still gives item 42).
+        (1148, 1, true) => {
+            for item in [98u16, 99] {
+                if s.has_item(item) {
+                    s.remove_all(item);
+                    s.set_word(1148, 1, item as i32);
+                    break;
+                }
+            }
+            s.give(42, 1);
+            s.set(140, true);
+            s.set(644, true);
+            let mut v = vec![line(47)];
+            v.extend(walk_back(s));
+            v
+        }
+        (1148, 1, false) => vec![line(48)],
+        // 1023 entity 90: the answer lines by the flag that chose the prompt; P becomes 1 or 2.
+        (1023, 90, _) => {
+            s.set_word(1023, 20, if yes { 1 } else { 2 });
+            let base = if s.flag(487) { 289 } else if s.flag(486) { 292 } else if s.flag(485) { 295 } else { 298 };
+            vec![line(base + if yes { 1 } else { 2 })]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// SPEC-0042 1150 P0 to P4 (routines 0 to 4).
+fn barracks_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
+    if r == 4 {
+        // Master Torak: line 4 gives item 38 by its dialogue command.
+        if s.flag(142) {
+            return rot.pick(0, &cycle(&[5, 6, 7]));
+        }
+        if s.flag(139) {
+            if s.has_item(60) {
+                s.remove_all(60);
+                s.remove_all(39);
+                s.set(142, true);
+                return Some(4);
+            }
+            return rot.pick(1, &cycle(&[1, 2, 3]));
+        }
+        if s.flag(138) {
+            s.set(139, true);
+            return Some(0);
+        }
+        return Some(8);
+    }
+    // P0 to P3: step 4 of the shared structure (the arena and wheel branches need flags 381 to
+    // 385 and 480; their draws are not taken: R-0029).
+    let b = [9u16, 38, 67, 96][r as usize];
+    let three = |o: u16| cycle(&[b + o, b + o + 1, b + o + 2]);
+    cascade(s, rot, &[(202, three(26)), (193, three(23)), (150, three(20)), (142, three(17)), (138, three(14))]).flatten().or_else(|| rot.pick(9, &three(11)))
+}
+
+/// SPEC-0039 1133 handler 3, with the trade of items 40 to 43 for item 60.
+fn smithy_talk(s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
+    let three = |a: u16| cycle(&[a, a + 1, a + 2]);
+    if let Some(l) = cascade(s, rot, &[(301, three(19)), (216, three(22)), (202, three(25)), (150, three(28)), (141, three(31))]) {
+        return l;
+    }
+    if s.flag(138) {
+        let held = [40u16, 41, 42, 43].iter().filter(|&&i| s.has_item(i)).count();
+        if held == 4 {
+            for i in [41, 42, 43, 40] {
+                s.remove_all(i);
+            }
+            s.give(60, 1);
+            s.set(141, true);
+            return Some(34);
+        }
+        return Some([38, 37, 36, 35][held]);
+    }
+    rot.pick(9, &three(39))
 }
 
 /// A line choice of a proximity routine (SPEC-0022 Line rotation patterns). Lines given as
@@ -901,6 +1196,15 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (951, 2 | 5 | 6) => Some(2),
         // SPEC-0042 678 proximity P on entity 9 (registered with flag 126 set).
         (678 | 686 | 691, 9) => Some(0),
+        // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
+        (1148, 0..=3) => Some(entity as u8),
+        // SPEC-0042 1150: P0 to P4 on entities 0 to 4.
+        (1150, 0..=4) => Some(entity as u8),
+        // SPEC-0039 1133: entity 1 with flag 10 set, else entity 0.
+        (1133, 0 | 1) => Some(0),
+        (1023, 90) => Some(90),
+        // SPEC-0045 1023 villagers (routine numbers: the index in VILLAGERS, 100 + k).
+        (1023, e) => villager(e).map(|k| 100 + k as u8),
         _ => None,
     }
 }
@@ -920,6 +1224,19 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
         (909, 1) => farm_routine_b(state, &mut rot),
         (909, 2) => farm_routine_c(state, &mut rot),
         (951, r) => return house_routine(r, state),
+        (1148, r) => {
+            let a = recruitment_talk(r, state, &mut rot).unwrap_or_default();
+            state.rotations.insert(key, rot);
+            return a;
+        }
+        (1150, r) => barracks_talk(r, state, &mut rot),
+        (1133, _) => smithy_talk(state, &mut rot),
+        (1023, r) if r >= 100 => village_talk(r - 100, state, &mut rot),
+        (1023, 90) => {
+            let a = village_90(state, &mut rot);
+            state.rotations.insert(key, rot);
+            return a;
+        }
         (678 | 686 | 691, 0) => return vec![Action::Message { line: 0 }],
         _ => None,
     };
@@ -1381,6 +1698,69 @@ mod tests {
         assert_eq!(on_teleport(1023, 5, &mut s), vec![Action::Message { line: 5 }]);
         s.set(136, true);
         assert_eq!(on_teleport(1023, 5, &mut s), vec![Action::EnterInterior { slot: 117 }]);
+    }
+
+    #[test]
+    fn recruitment_errands() {
+        // SPEC-0058 step 7 through the handlers: the recruiter takes the parcel (137) and, with
+        // the shield (106), gives the knight's letter (39, 138); Torak sets 139; the shop sells
+        // item 42 (140, 644); the smithy trades 40 to 43 for 60 (141); Torak takes 60 and 39
+        // (142; line 4 gives 38); the recruiter takes 38 (143, 17, 2).
+        let mut s = GameState::default();
+        s.give(32, 1);
+        s.give(106, 1);
+        s.neopoints = 150;
+        assert_eq!(on_talk(1148, 1, &mut s), vec![Action::Talk { line: 34 }]);
+        assert!(s.flag(137) && s.flag(138) && s.has_item(39) && !s.has_item(32));
+        assert_eq!(on_talk(1150, 4, &mut s), vec![Action::Talk { line: 0 }]);
+        assert!(s.flag(139));
+        let shop = on_talk(1148, 2, &mut s);
+        assert_eq!(shop, vec![Action::Talk { line: 41 }, Action::Prompt { line: 43, routine: 0 }]);
+        let bought = on_answer(1148, 0, true, &mut s);
+        assert_eq!(bought[0], Action::Message { line: 44 });
+        assert!(bought.contains(&Action::GiveWordItem { word: 1, default: 99 }), "the walk-back sequence gives item 99");
+        assert!(s.flag(140) && s.flag(644) && s.has_item(42) && s.neopoints == 50);
+        assert_eq!(on_talk(1133, 0, &mut s), vec![Action::Talk { line: 37 }], "one of the four");
+        for i in [40, 41, 43] {
+            s.give(i, 1);
+        }
+        assert_eq!(on_talk(1133, 0, &mut s), vec![Action::Talk { line: 34 }]);
+        assert!(s.flag(141) && s.has_item(60) && !s.has_item(42));
+        assert_eq!(on_talk(1150, 4, &mut s), vec![Action::Talk { line: 4 }]);
+        assert!(s.flag(142) && !s.has_item(60) && !s.has_item(39));
+        s.give(38, 1);
+        assert_eq!(on_talk(1148, 1, &mut s), vec![Action::Talk { line: 22 }]);
+        assert!(s.flag(143) && s.flag(17) && s.flag(2) && !s.has_item(38));
+        // The trade answer: prompt 46 yes with the sword held.
+        let mut s = GameState::default();
+        s.set(139, true);
+        s.give(98, 1);
+        assert_eq!(on_answer(1148, 0, false, &mut s), vec![Action::Prompt { line: 46, routine: 1 }]);
+        // The walk-back sequence then gives the traded sword (word 1 = 98) back.
+        let traded = on_answer(1148, 1, true, &mut s);
+        assert_eq!(traded[0], Action::Message { line: 47 });
+        assert!(traded.contains(&Action::GiveWordItem { word: 1, default: 99 }));
+        assert!(!s.has_item(98) && s.has_item(42) && s.word(1148, 1) == 98);
+    }
+
+    #[test]
+    fn village_templates() {
+        // Template A (entity 69, b 84): flag 7 gives b+11 to b+13; nothing set: silent.
+        let mut s = GameState::default();
+        let r = proximity_routine(1023, 69).unwrap();
+        assert!(on_talk(1023, r, &mut s).is_empty());
+        s.set(7, true);
+        assert_eq!(talks(1023, r, &mut s, 4), vec![95, 96, 97, 95]);
+        // Template C (entity 3, b 310): 138 set and 141 clear: b+14 sets 644.
+        s.set(138, true);
+        let c = proximity_routine(1023, 3).unwrap();
+        assert_eq!(talks(1023, c, &mut s, 2), vec![324, 325]);
+        assert!(s.flag(644));
+        // Shared routine 76 and 78.
+        assert_eq!(proximity_routine(1023, 76), proximity_routine(1023, 78));
+        // The return from the Recruitment Centre (eW 117) puts the hero at locator 11.
+        s.last_pack = Some(1148);
+        assert_eq!(on_activate(1023, &mut s), vec![Action::MoveHero { locator: 11 }]);
     }
 
     #[test]

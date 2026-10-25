@@ -313,6 +313,8 @@ enum Wait {
     Loads,
     /// The hero within a horizontal distance of a point.
     HeroNear([f32; 3], f32),
+    /// A LevelPrompt's answer, then `on_answer` of the pack's routine.
+    Choice(u8),
 }
 
 pub struct Play {
@@ -375,6 +377,8 @@ pub struct Play {
     hero_walk: Option<([f32; 3], Option<[f32; 3]>, f32)>,
     pub held: bool,
     pub loads_out: usize,
+    /// The pack last made current (the "last active world" of the next activation).
+    seen_pack: u32,
     /// Tor's attack step (SPEC-0036), while state 13 runs.
     pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
@@ -398,12 +402,11 @@ pub struct Play {
     pub last_hurt: String,
     /// The enemy projectile pool (SPEC-0029 Behavior 9).
     pub shots: neopets_sim::projectile::Pool,
-    /// World items (SPEC-0021): one pool per resident world, the wallet (the party's item counts
-    /// are the level state's `items`), the once-per-area pickups (id, world), the luck value,
+    /// World items (SPEC-0021): one pool per resident world (the wallet and the party's item
+    /// counts are the level state's `neopoints` and `items`), the once-per-area pickups (id, world), the luck value,
     /// the coin denominations, ids and motion words, enemy payouts due this tick, and the last
     /// pickup.
     pub pools: HashMap<u32, neopets_sim::items::ItemPool>,
-    pub wallet: i32,
     once: std::collections::HashSet<(u16, u32)>,
     pub luck: i32,
     coins: (Vec<i32>, Vec<u16>, Option<neopets_sim::items::CoinWords>),
@@ -681,6 +684,7 @@ impl Play {
             hero_walk: None,
             held: false,
             loads_out: 0,
+            seen_pack: 0,
             rng: neopets_sim::rng::Rng::seeded(clock_seed()),
             attack: None,
             attack_latch: false,
@@ -697,7 +701,6 @@ impl Play {
             last_hurt: String::new(),
             shots: Default::default(),
             pools: HashMap::new(),
-            wallet: 0,
             once: Default::default(),
             luck: 0,
             coins,
@@ -1009,6 +1012,10 @@ impl Play {
             self.slot_regions.insert((pack, EMBEDDED_SLOT), pack);
             self.region_wanted.push((pack, EMBEDDED_SLOT, pack));
         }
+        if self.seen_pack != self.world.pack {
+            self.state.last_pack = Some(self.seen_pack).filter(|&p| p != 0);
+            self.seen_pack = self.world.pack;
+        }
         let actions = level::on_activate(self.world.pack, &mut self.state);
         self.apply(&actions);
         // The pool's slots are reset when a world starts (here: when a world is made current).
@@ -1041,6 +1048,14 @@ impl Play {
                     return;
                 }
                 self.threads[i].wait = None;
+                // A prompt's answer continues the thread with the routine's answer calls.
+                if let Wait::Choice(routine) = w {
+                    let pack = self.threads[i].pack;
+                    let answer = level::on_answer(pack, routine, self.textbox.result == 1, &mut self.state);
+                    for a in answer.into_iter().rev() {
+                        self.threads[i].calls.push_front(a);
+                    }
+                }
             }
             let Some(a) = self.threads[i].calls.pop_front() else { return };
             let pack = self.threads[i].pack;
@@ -1063,6 +1078,7 @@ impl Play {
                 k.action != anim || k.progress >= 0.99
             }),
             Wait::Bars => self.bars.done,
+            Wait::Choice(_) => !self.dialogue_open,
             Wait::HeroNear(t, d) => {
                 let p = self.loco.position();
                 (t[0] - p[0]).hypot(t[2] - p[2]) <= d
@@ -1223,6 +1239,20 @@ impl Play {
                 Action::WaitHeroNear { locator, distance } => {
                     let (l, _) = self.locator(pack, locator)?;
                     return Some(Wait::HeroNear(l, distance));
+                }
+                Action::Prompt { line, routine } => {
+                    self.talk_partner = None;
+                    self.talk_with = None;
+                    self.open_line(line);
+                    if let Some(l) = self.world.lines.line(line as usize) {
+                        self.textbox.open_choice(&l.raw);
+                    }
+                    return Some(Wait::Choice(routine));
+                }
+                Action::GiveWordItem { word, default } => {
+                    let v = self.state.words.get(&(pack, word)).copied().unwrap_or(0);
+                    let item = if v > 0 { v as u16 } else { default };
+                    self.state.give(item, 1);
                 }
                 Action::RandomLoop { entity, anims } => {
                     let a = anims[(self.rng.range(1, 2) - 1).clamp(0, 1) as usize];
@@ -1926,6 +1956,13 @@ impl Play {
         if self.dialogue_open {
             // SPEC-0022: the box takes Cross (held, faster reveal) and Square (skip, Next,
             // Finish); the hero stays in place meanwhile.
+            // SPEC-0022 Choices: Circle (yes) or Triangle (no) answers a question box.
+            if self.textbox.asking() && self.textbox.choose(input.attack, std::mem::take(&mut self.panel_latch.triangle)).is_some() {
+                self.cue(0x97);
+                self.dialogue_open = false;
+                self.message = None;
+                self.talk_with = None;
+            }
             match self.textbox.update(input.cross_held, input.square) {
                 // SPEC-0022: an advance plays 0x98; the box host plays 0x97 when the box closes.
                 Some(neopets_sim::textbox::BoxEvent::Closed) => {
@@ -2795,10 +2832,10 @@ impl Play {
         if coin {
             let value = self.coins.1.iter().position(|&c| c == it.id).map_or(0, |k| self.coins.0[k]);
             if value > 0 {
-                self.wallet = self.wallet.checked_add(value).unwrap_or(0).max(0);
+                self.state.neopoints = self.state.neopoints.checked_add(value).unwrap_or(0).max(0);
             }
             self.cue(165);
-            self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.wallet, self.ticks);
+            self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.state.neopoints, self.ticks);
         } else {
             let count = if it.charm { 100 } else { 1 };
             *self.state.items.entry(it.id).or_insert(0) += count;
@@ -3058,6 +3095,26 @@ impl Play {
     /// partner's (none without a partner). A row with no clip still queues its gesture.
     fn emote_requests(&mut self) {
         use neopets_sim::emote;
+        // SPEC-0022 Dialogue control records 0x11 to 0x13: set or clear progress flags (the range
+        // rule) and give items (a count of exactly 18 gives 1; item 135 is a Neopoint reward).
+        for (kind, a0, a1) in std::mem::take(&mut self.textbox.commands) {
+            let range = |a0: i32, a1: i32| if a1 < 1 || a1 <= a0 { a0..=a0 } else { a0..=a1 };
+            match kind {
+                0x11 | 0x12 => {
+                    for f in range(a0, a1) {
+                        if let Ok(f) = u16::try_from(f) {
+                            self.state.set(f, kind == 0x11);
+                        }
+                    }
+                }
+                _ if a0 == 135 => self.state.neopoints += a1.max(0),
+                _ => {
+                    if let Ok(item) = u16::try_from(a0) {
+                        self.state.give(item, if a1 == 18 { 1 } else { a1.max(0) as u32 });
+                    }
+                }
+            }
+        }
         for (kind, id) in std::mem::take(&mut self.textbox.emotes) {
             let partner = matches!(kind, emote::PARTNER_BODY | emote::PARTNER_FACE);
             let who = if partner {
@@ -3259,7 +3316,7 @@ impl Play {
             s.set_flag(n, true);
         }
         s.0[at::MOVIES..at::MOVIES + 368].fill(0);
-        s.set_i32(at::WALLET, self.wallet);
+        s.set_i32(at::WALLET, self.state.neopoints);
         s.set_i32(at::STASH, 0);
         s.set_i32(at::LUCK, self.luck);
         s.set_maximum_words(0, self.hero_max, self.hero_mp_max);
@@ -3357,7 +3414,7 @@ impl Play {
         self.state.items.clear();
         self.weapon = None;
         self.shield = None;
-        self.wallet = s.i32(at::WALLET);
+        self.state.neopoints = s.i32(at::WALLET);
         for (c, g, i, id, v) in s.adds() {
             let Ok(id) = u16::try_from(id) else { continue };
             if c != 0 {
@@ -3550,7 +3607,7 @@ impl Play {
             self.hero_max,
             self.hero_mp,
             self.hero_mp_max,
-            self.wallet,
+            self.state.neopoints,
             if self.last_hurt.is_empty() { String::new() } else { format!(" ({})", self.last_hurt) }
         ) + &if self.quick.open {
             format!("\nQUICK ITEMS (SPEC-0021): entries Right/Up/Left/Down {:?}, selected {}; Space uses, F sets, T closes", self.quick.entries, self.quick.selection)

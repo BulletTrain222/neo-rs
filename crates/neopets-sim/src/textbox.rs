@@ -37,6 +37,9 @@ pub struct TextBox {
     pub result: i32,
     /// Emote requests the reveal reached (kind, emote id), for the caller to take.
     pub emotes: Vec<(u8, i32)>,
+    /// Set-flags (0x11), clear-flags (0x12) and give-items (0x13) commands the reveal reached
+    /// (kind, arg0, arg1), for the caller to carry out.
+    pub commands: Vec<(u8, i32, i32)>,
 }
 
 /// Replace each substitution code (run-pass mask V - 2 with bit 5 set) by the text of slot k,
@@ -195,6 +198,15 @@ impl TextBox {
                 let a = decode_args(args);
                 if a.len() >= 4 {
                     self.emotes.push((t, i32::from_le_bytes([a[0], a[1], a[2], a[3]])));
+                }
+            }
+            // SPEC-0022 Dialogue control records: 0x11 set flags, 0x12 clear flags, 0x13 give
+            // items, each with two argument groups.
+            0x11..=0x13 => {
+                let a = decode_args(args);
+                if a.len() >= 8 {
+                    let w = |k: usize| i32::from_le_bytes([a[k], a[k + 1], a[k + 2], a[k + 3]]);
+                    self.commands.push((t, w(0), w(4)));
                 }
             }
             _ => {}

@@ -424,6 +424,24 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     }
     println!("Trigger volumes by kind {:?}; script groups: {} entries in {} packs; placement id entries {}", trig.0, trig.2, trig.1, trig.3);
     println!("Camera tracks: {} records, {} keyed, {} keys", trig.4, trig.5, trig.6);
+    // NEOPETS_ITEM_KEYS=a,b,...: the item points (embedded or region resources) whose key is
+    // one of the listed item ids.
+    if let Ok(list) = std::env::var("NEOPETS_ITEM_KEYS") {
+        let keys: Vec<i16> = list.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        for res in 533..=1433u32 {
+            let Ok(bytes) = index.read(disc, res) else { continue };
+            let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
+            let recs = neopets_data::region::embedded_records(&bytes, &chain.chunks).or_else(|| {
+                let c = chain.chunks.iter().find(|c| c.kind == neopets_data::region::RECORDS)?;
+                Some(neopets_data::region::records(bytes.get(c.payload.clone())?))
+            });
+            for (i, it) in recs.map(|r| r.items).unwrap_or_default().iter().enumerate() {
+                if keys.contains(&it.key) {
+                    println!("  item {} at resource {res} ordinal {i}: {:?} flags {}", it.key, it.position, it.flags);
+                }
+            }
+        }
+    }
     println!(
         "Monster table: {} rows; {placements} placements, {townsfolk} of class 6, {minus7_not6} main -7 placements not class 6; by class {classes:?}",
         table.row_count()

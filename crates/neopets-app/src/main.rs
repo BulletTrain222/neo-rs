@@ -1854,6 +1854,10 @@ fn play_trace(
         .map(|v| v.split(';').filter_map(|w| w.trim().split_once(',').and_then(|(x, z)| Some([x.parse().ok()?, z.parse().ok()?]))).collect())
         .unwrap_or_default();
     let walk_path = !legs.is_empty();
+    // NEOPETS_NEOPOINTS=n: a diagnostic starting wallet.
+    if let Some(n) = std::env::var("NEOPETS_NEOPOINTS").ok().and_then(|v| v.parse().ok()) {
+        play.state.neopoints = n;
+    }
     let mut dwell = 0;
     let mut leg_pack = play.world.pack;
     let mut scene = String::new();
@@ -1924,6 +1928,7 @@ fn play_trace(
                 } else if route.last().is_none_or(|r| (r[0] - t[0]).hypot(r[1] - t[1]) > 4.0) {
                     // A searched route to the character, refreshed when it has moved on.
                     route = play.route_to(200_000, play::Goal::Point(t)).unwrap_or_default();
+                    println!("      following {name} at {:?}: {} route steps", c.position, route.len());
                     route.push(t);
                 }
             }
@@ -1956,7 +1961,8 @@ fn play_trace(
             guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),
-            attack: (jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30,
+            // A question box gets Circle (yes) every 10 ticks.
+            attack: ((jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30) || (play.textbox.asking() && play.ticks % 10 == 5),
             // On the game-over page the trace taps Cross every 60 ticks.
             jump: (jump && play.ticks % 240 == 0 && play.ticks > 0) || (play.death.page.is_some() && play.ticks % 60 == 0),
             ..Default::default()
@@ -2078,6 +2084,9 @@ fn play_trace(
             println!("      save screen opened on tick {}; restart point {:?}", play.ticks, play.restart);
         }
     }
+    let mut held: Vec<(u16, u32)> = play.state.items.iter().map(|(k, v)| (*k, *v)).collect();
+    held.sort_unstable();
+    println!("Held items at the end: {held:?}; {} NP", play.state.neopoints);
     if save_test {
         let path = "private/saves/trace.bin";
         let mut file = read_save(path).unwrap_or_default();
