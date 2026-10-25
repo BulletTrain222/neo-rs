@@ -12,6 +12,7 @@ pub mod credits;
 pub mod cues;
 pub mod death;
 pub mod emote;
+pub mod gesture;
 pub mod enemy;
 pub mod hero;
 pub mod hud;

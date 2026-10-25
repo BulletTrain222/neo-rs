@@ -1884,9 +1884,13 @@ fn play_trace(
     let mut last_status = String::new();
     let mut last_pet = String::new();
     let mut last_boss = String::new();
+    let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
     // releases a power attack).
     let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(80);
+    // NEOPETS_TRACE_PRESSES="a,b,...": attack press edges at these offsets of every 120 ticks
+    // (the first held 10 ticks), for combos.
+    let presses: Vec<u64> = std::env::var("NEOPETS_TRACE_PRESSES").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     // NEOPETS_TRACE_LEVEL="flag@tick,...": diagnostic level flags set on given ticks.
     let level_at: Vec<(u16, u64)> = std::env::var("NEOPETS_TRACE_LEVEL")
         .unwrap_or_default()
@@ -2000,9 +2004,11 @@ fn play_trace(
             square: play.prompt_shown.is_some() || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
-            attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..30 + hold).contains(&(play.ticks % 120)),
-            // A question box gets Circle (yes) every 10 ticks.
-            attack: ((jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30) || (play.textbox.asking() && play.ticks % 10 == 5),
+            attack_held: ((jump || fight.is_some_and(|f| f.1)) && (30..30 + hold).contains(&(play.ticks % 120)))
+                || presses.first().is_some_and(|&p| (p..p + 10).contains(&(play.ticks % 120))),
+            // A question box gets Circle (yes) every 10 ticks; NEOPETS_TRACE_PRESSES adds press
+            // edges at its tick offsets in every 120 (a combo).
+            attack: ((jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30) || (play.textbox.asking() && play.ticks % 10 == 5) || presses.contains(&(play.ticks % 120)),
             // On the game-over page the trace taps Cross every 60 ticks.
             jump: (jump && play.ticks % 240 == 0 && play.ticks > 0) || (play.death.page.is_some() && play.ticks % 60 == 0),
             ..Default::default()
@@ -2072,6 +2078,12 @@ fn play_trace(
         if !play.last_pet.is_empty() && play.last_pet != last_pet {
             last_pet = play.last_pet.clone();
             println!("      {last_pet}");
+        }
+        if play.state.flags != flags_seen {
+            let on: Vec<u16> = play.state.flags.difference(&flags_seen).copied().collect();
+            let off: Vec<u16> = flags_seen.difference(&play.state.flags).copied().collect();
+            println!("      flags on {on:?} off {off:?} on tick {}", play.ticks);
+            flags_seen = play.state.flags.clone();
         }
         if !play.last_boss.is_empty() && play.last_boss != last_boss {
             last_boss = play.last_boss.clone();

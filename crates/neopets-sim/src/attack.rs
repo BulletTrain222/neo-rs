@@ -2,8 +2,10 @@
 //! windows, Attack router): the hold with its 50-tick power threshold, the three-swing combo with
 //! its press windows, the chained variant (at most 3 repeats), the power step and the requests
 //! each sub-state makes. Sub-states end when their clip reaches progress 0.99.
-//! Not covered: the stick-gesture starts (sub-states 7, 8, 9), the power-ready check, Mote
-//! choice of the power clip (no Mote: 0x1B), sounds and voices, Roberta.
+//! The gesture starts (SPEC-0036 Attack router: gesture mode 1 the flick lunge, sub-state 9; 2
+//! the clockwise attack, 7; 3 the counter-clockwise attack, 8) wait for their clip's end.
+//! Not covered: the stick step of sub-states 7, 8 and 10 (the hero's move along the stick while
+//! the attack window is on), the Mote choice of the power clip (no Mote: 0x1B), Roberta.
 
 /// Animation ids Tor requests (main family).
 pub const HOLD_START: u32 = 22;
@@ -13,6 +15,9 @@ pub const SWING_2: u32 = 15;
 pub const FINISHER: u32 = 16;
 pub const CHAINED: u32 = 17;
 pub const POWER_NO_MOTE: u32 = 0x1B;
+pub const CLOCKWISE: u32 = 19;
+pub const COUNTER_CLOCKWISE: u32 = 18;
+pub const LUNGE: u32 = 20;
 const POWER_THRESHOLD: u32 = 50;
 
 /// The playing clip as the attack step reads it.
@@ -47,7 +52,19 @@ impl TorAttack {
     /// The attack start (the R2 or Circle press edge entering state 13): the reset, then the
     /// hold (gesture mode 0).
     pub fn start() -> Self {
-        Self { sub: 1, cleared: true, ..Default::default() }
+        Self::start_with(0)
+    }
+
+    /// The attack start with the gesture mode word M: 0 the hold, 1 the flick lunge (9), 2 the
+    /// clockwise attack (7), 3 the counter-clockwise attack (8).
+    pub fn start_with(mode: u8) -> Self {
+        let sub = match mode {
+            1 => 9,
+            2 => 7,
+            3 => 8,
+            _ => 1,
+        };
+        Self { sub, cleared: true, ..Default::default() }
     }
 
     fn go(&mut self, sub: u8) {
@@ -109,6 +126,16 @@ impl TorAttack {
                     self.go(0);
                 }
             }
+            7 | 8 | 9 => {
+                let id = match self.sub {
+                    7 => CLOCKWISE,
+                    8 => COUNTER_CLOCKWISE,
+                    _ => LUNGE,
+                };
+                if done(self, id) {
+                    self.go(0);
+                }
+            }
             _ => self.go(0),
         }
         if self.sub != 1 && self.sub != 0 {
@@ -127,6 +154,9 @@ impl TorAttack {
             3 => SWING_2,
             4 => FINISHER,
             6 => CHAINED,
+            7 => CLOCKWISE,
+            8 => COUNTER_CLOCKWISE,
+            9 => LUNGE,
             _ => POWER_NO_MOTE,
         };
         Some(Request { action, restart: std::mem::take(&mut self.restart) })
@@ -166,6 +196,17 @@ mod tests {
             }
         }
         log
+    }
+
+    #[test]
+    fn gesture_starts() {
+        // Mode 2 starts the clockwise attack (request 19) and returns to the stance at its end.
+        let mut a = TorAttack::start_with(2);
+        assert_eq!(a.sub, 7);
+        let r = a.tick(true, false, Clip { action: 0, progress: 0.0 }).unwrap();
+        assert_eq!(r.action, CLOCKWISE);
+        assert!(a.tick(true, false, Clip { action: CLOCKWISE, progress: 0.99 }).is_none());
+        assert_eq!((TorAttack::start_with(3).sub, TorAttack::start_with(1).sub, TorAttack::start_with(0).sub), (8, 9, 1));
     }
 
     #[test]

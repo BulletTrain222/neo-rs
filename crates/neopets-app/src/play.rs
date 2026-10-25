@@ -439,6 +439,9 @@ pub struct Play {
     pub last_mote: String,
     /// The last status applied to an enemy, for the status line.
     pub last_status: String,
+    /// The stick gesture machine and its words (SPEC-0033 Behavior 52).
+    gesture: neopets_sim::gesture::Gesture,
+    gesture_words: neopets_sim::gesture::Words,
     /// Forced binds waiting for the embedded region: (pack, ordinal).
     rebind: Vec<(u32, usize)>,
     /// Entities deactivated before their characters loaded.
@@ -654,6 +657,11 @@ impl Play {
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
+        let gesture_words = {
+            use neopets_sim::gesture::*;
+            let int = |at: u32| words(at, 1).map(|v| v[0]);
+            Words { n: int(TOR_CCW_STEPS)?, w: int(TOR_SPIN_HOLD)?, flick: int(FLICK_HOLD)? }
+        };
         let juppie_words = {
             use neopets_sim::juppie::*;
             let int = |at: u32| words(at, 1).map(|v| v[0] as i32);
@@ -813,6 +821,8 @@ impl Play {
             charm_words,
             last_status: String::new(),
             rebind: Vec::new(),
+            gesture: Default::default(),
+            gesture_words,
             pending_off: Default::default(),
             juppie_words,
             boss_hits: Vec::new(),
@@ -1460,6 +1470,7 @@ impl Play {
                     return Some(Wait::Loads);
                 }
                 Action::LevelState { flag, on } => self.state.set_level(flag, on),
+                Action::RefillMagic => self.hero_mp = self.hero_mp_max,
                 Action::Bits { word, set, clear } => {
                     let w = self.state.word_of(pack, word);
                     self.state.set_word(pack, word, (w | set) & !clear);
@@ -1863,6 +1874,11 @@ impl Play {
         // SPEC-0036 Damage, take-hit: in the power step a status request of the word-2 Mote
         // also goes to the target (SPEC-0029 Behavior 27.1).
         let request = mote_id.filter(|_| sub == 10).and_then(|id| neopets_sim::mote::status_request(0, id, |k| self.design.attack_power(k)));
+        for &(i, _) in &hits {
+            if let Some(e) = self.characters.get(i).and_then(|c| c.entity) {
+                self.state.hero.hits.push(e);
+            }
+        }
         for (i, damage) in hits {
             self.character_take_hit(i, damage, hero_at, "");
             if let Some(r) = request {
@@ -1887,6 +1903,9 @@ impl Play {
     /// attacker), then the death hook at 0 HP; SPEC-0056, a townsfolk take-hit returns at once.
     fn character_take_hit(&mut self, i: usize, damage: i32, from: [f32; 3], by: &str) {
         let hero_at = from;
+        // The script's undamageable entities (SPEC-0044 1056 Update) take no damage.
+        let pack = self.world.pack;
+        let damage = if self.characters.get(i).and_then(|c| c.entity).is_some_and(|e| level::undamageable(pack).contains(&e)) { 0 } else { damage };
         let Some(c) = self.characters.get_mut(i) else { return };
         {
             if let Some(e) = c.enemy.as_mut() {
@@ -2830,8 +2849,15 @@ impl Play {
         if matches!(self.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
             input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
         }
+        // SPEC-0033 Behavior 52: the stick gesture machine (reset while busy or in a box), in
+        // the dead-zoned stick units (87.5 at a full push).
+        if neopets_sim::hero::busy_state(self.loco.state) || self.dialogue_open {
+            self.gesture.reset();
+        } else {
+            self.gesture.tick(input.forward * 87.5, input.side * 87.5, &self.gesture_words);
+        }
         if self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
-            self.attack = Some(neopets_sim::attack::TorAttack::start());
+            self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
         }
         let mut force = false;
         if let Some(a) = self.attack.as_mut() {
@@ -2864,6 +2890,8 @@ impl Play {
                 2 | 3 => &[(WEAPON, 3), (VOICE, 5)],
                 4 => &[(WEAPON, 4), (VOICE, 6)],
                 6 => &[(WEAPON, 9), (VOICE, 4)],
+                7 | 8 => &[(WEAPON, 7)],
+                9 => &[(WEAPON, 8)],
                 10 => &[(VOICE, 6), (VOICE, 8)],
                 _ => &[],
             };
@@ -2956,7 +2984,13 @@ impl Play {
             self.trigger_step();
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
+            self.state.hero.sub = self.attack.as_ref().map_or(0, |a| a.sub);
+            self.state.hero.occupied = neopets_sim::hero::busy_state(self.loco.state) && self.loco.state != hero_states::ATTACK || self.held;
+            self.state.hero.attack_mote = self.equipment.motes[0][2];
+            self.state.hero.shield_mote = self.equipment.motes[0][1];
+            self.state.hero.tick = self.ticks;
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
+            self.state.hero.hits.clear();
             self.apply(&actions);
         }
         self.run_threads();

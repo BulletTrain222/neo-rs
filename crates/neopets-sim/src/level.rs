@@ -138,6 +138,8 @@ pub enum Action {
     Equip { on: bool },
     /// StartExteriorReplacementLoad of an eW slot, arriving on a plane (-1: entry record 0).
     ReplaceExterior { slot: usize, plane: i32 },
+    /// The hero's magic refilled (the 1056 mote area).
+    RefillMagic,
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -217,6 +219,25 @@ pub struct GameState {
     pub talk_roll: i32,
     /// The hero is in a conversation (a box is up), for the routines that wait on it.
     pub talking: bool,
+    /// What the host reports of the hero before each Update (the lesson rules of SPEC-0044
+    /// 1056 read it).
+    pub hero: HeroView,
+}
+
+/// The hero as the lesson Update reads it this tick.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HeroView {
+    /// Tor's attack sub-state (0: no melee attack).
+    pub sub: u8,
+    /// The entities of the current world the hero's swing hit this tick.
+    pub hits: Vec<usize>,
+    /// The hero is occupied (a busy state or a scripted hold).
+    pub occupied: bool,
+    /// The Motes in equipment words 2 (attack) and 1 (shield).
+    pub attack_mote: Option<u16>,
+    pub shield_mote: Option<u16>,
+    /// The game clock in ticks.
+    pub tick: u64,
 }
 
 impl GameState {
@@ -316,6 +337,8 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
         // clear; taken as 13 here).
         (1023, 0..=10) => Some(13),
+        // SPEC-0044 1056: the arrival registers indices 0 to 2 with message 13.
+        (1056, 0..=2) => Some(13),
         // SPEC-0045 1217: context 0 (on contact).
         (1217, 0 | 1) => Some(0),
         // SPEC-0045 1098: 0, 1 and 3 act on contact; 4, 6 and 7 show context 26; 2 and 5 show
@@ -401,6 +424,21 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             state.blackboard.insert((2, 90), 20);
             vec![Action::ReplaceExterior { slot: 109, plane: -1 }, wait(3.0)]
         }
+        // SPEC-0044 1056 teleports: index 1 to eW 122 (value 50) and index 0 to eW 106 (value
+        // 40) unless flag 30 is set (line 71); index 2 to eW 106 with value 30.
+        (1056, 0 | 1) if state.flag(30) => vec![Action::Message { line: 71 }],
+        (1056, 1) => {
+            state.blackboard.insert((2, 122), 50);
+            vec![Action::ReplaceExterior { slot: 122, plane: -1 }]
+        }
+        (1056, 0) => {
+            state.blackboard.insert((2, 106), 40);
+            vec![Action::ReplaceExterior { slot: 106, plane: -1 }]
+        }
+        (1056, 2) => {
+            state.blackboard.insert((2, 106), 30);
+            vec![Action::ReplaceExterior { slot: 106, plane: -1 }]
+        }
         // SPEC-0045 1098 transitions (s is the castle stage: the highest of flags 31 to 21 set).
         (1098, 0) => vec![Action::EnterInterior { slot: 121 }],
         (1098, 1) => vec![Action::EnterInterior { slot: 120 }],
@@ -477,6 +515,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         1023 => village_init(state),
         1184 => woods_init(state),
         1098 => castle_init(state),
+        1056 => yard_init(state),
         1217 => burrows_init(state),
         // SPEC-0050 section 5: the Market Town shops' x4 prices until flag 298, once the
         // shopkeeper's set (1 with flag 86, else 0) has loaded with the stock.
@@ -700,6 +739,21 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             state.blackboard.insert((3, 130), 0);
             out.actions.push(Action::ReplaceExterior { slot: 130, plane: -1 });
         }
+        // SPEC-0044 1056 triggers 0 and 1 (inside, not occupied, not talking): line 77 with flag
+        // 653 and line 78 with flag 652, once each.
+        (1056, 1) if call.state != 0 && !state.talking && !state.hero.occupied && !state.flag(653) => {
+            state.set(653, true);
+            out.actions.push(Action::Message { line: 77 });
+        }
+        (1056, 2) if call.state != 0 && !state.talking && !state.hero.occupied && !state.flag(652) => {
+            state.set(652, true);
+            out.actions.push(Action::Message { line: 78 });
+        }
+        // The zone triggers: the hero-inside mark of this tick (module word 0, bit = index).
+        (1056, 5) if call.state != 0 => {
+            let w = state.word(1056, 0);
+            state.set_word(1056, 0, w | (1 << call.index));
+        }
         // SPEC-0045 1098 trigger 0, the rest prompt (context 32): on Square, the first case of
         // the story (152 with 22 clear: movie 7, regions 1104 and 1103, camera 9, line 50,
         // flags 22, 642 and 153; 191 with 27 clear: line 376, flags 27 and 193; 204 with 29
@@ -864,6 +918,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
         }
         1217 => out = burrows_fight(state, dialog),
+        1056 => out = yard_update(state, dialog),
         // SPEC-0045 909 Update: the flag and item steps and the scenes.
         909 => {
             // The Act 1 start: 707 on and 1 off sets 1 and clears 706, fades out at once and
@@ -994,6 +1049,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
         1184 => woods_activate(state),
         1098 => castle_activate(state),
+        1056 => yard_activate(state),
         // SPEC-0045 909 activate-world routine: an unfinished round-up (flags 107 to 110 not
         // all set) is cleared; the type-2 message for eW 68 places the hero.
         909 => {
@@ -1271,6 +1327,341 @@ fn woods_activate(state: &mut GameState) -> Vec<Action> {
         }
         _ => Vec::new(),
     }
+}
+
+/// SPEC-0044 1056 Init: the lesson flags (23 from 158, 24 from 167, 26 from 180 or 185), triggers
+/// 0 and 1 and the zone triggers 5, 6, 7, 9, 10, 11, 12 and 14, and the setup thread's slot
+/// loads and trainer choice. The breakables, the other dialogue routines (their entities come
+/// from a module table), the prompt routines and the shield lesson's launcher are not built.
+fn yard_init(state: &mut GameState) -> Vec<Action> {
+    let reg = |index, routine| Action::RegisterTrigger { index, routine };
+    if state.flag(158) {
+        state.set(23, true);
+    }
+    if state.flag(167) {
+        state.set(24, true);
+    }
+    if state.flag(180) || state.flag(185) {
+        state.set(26, true);
+    }
+    let mut out = vec![reg(0, 1), reg(1, 2)];
+    out.extend([5, 6, 7, 9, 10, 11, 12, 14].map(|i| reg(i, 5)));
+    let load = |slot, j: u32| Action::LoadRegion { slot, region: Some(1056 + 1 + j) };
+    let (a, b): (Option<u32>, Option<u32>) = if state.flag(30) {
+        (Some(6), None)
+    } else if state.flag(191) && !state.flag(29) {
+        (None, Some(7))
+    } else if state.flag(26) {
+        (Some(4), Some(7))
+    } else if state.flag(24) {
+        (Some(2), Some(if state.flag(174) { 7 } else { 8 }))
+    } else if state.flag(23) {
+        (Some(1), Some(7))
+    } else {
+        (state.flag(22).then_some(0), Some(7))
+    };
+    out.extend(a.map(|j| load(0, j)));
+    out.extend(b.map(|j| load(1, j)));
+    // The trainer per stage, stored +1 in module word 11 (0: none).
+    let trainer = if state.flag(30) || state.flag(191) {
+        0
+    } else if state.flag(26) {
+        25
+    } else if state.flag(24) {
+        13
+    } else if state.flag(23) {
+        11
+    } else {
+        6
+    };
+    state.set_word(1056, 11, trainer);
+    out
+}
+
+/// SPEC-0044 1056 arrival: the type-2 value for eW 92 (30 locator 4, 40 locator 2, 50 locator
+/// 3), reset to 0.
+fn yard_activate(state: &mut GameState) -> Vec<Action> {
+    let v = state.take_message(2, 92);
+    state.blackboard.insert((2, 92), 0);
+    match v {
+        30 => vec![Action::MoveHero { locator: 4 }, release_camera()],
+        40 => vec![Action::MoveHero { locator: 2 }, release_camera()],
+        50 => vec![Action::MoveHero { locator: 3 }, release_camera()],
+        _ => Vec::new(),
+    }
+}
+
+/// The entities 1056's Update makes undamageable each tick (the lesson targets).
+pub fn undamageable(pack: u32) -> &'static [usize] {
+    match pack {
+        1056 => &[4, 7, 8, 9, 20, 21, 14],
+        _ => &[],
+    }
+}
+
+/// SPEC-0044 1056 trainer routine (lines 0 to 70; nothing while the hero talks). Each branch
+/// sets its marker flag; "cycle" is three lines in turn.
+fn trainer_talk(s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
+    let trainer = s.word(1056, 11) - 1;
+    if trainer < 0 || s.talking {
+        return Vec::new();
+    }
+    let say = |line: Option<u16>| line.map(|line| vec![Action::Converse { entity: trainer as usize, line }]).unwrap_or_default();
+    let three = |b: u16| cycle(&[b, b + 1, b + 2]);
+    if s.flag(26) {
+        if s.flag(190) {
+            s.set(191, true);
+            return say(rot.pick(0, &cycle(&[0, 1, 2])));
+        }
+        if s.flag(189) {
+            return say(Some(3));
+        }
+        if s.flag(188) {
+            return say(Some(4));
+        }
+        s.set(187, true);
+        s.give(160, 20);
+        s.set(188, true);
+        return [say(Some(5)), say(Some(4))].concat();
+    }
+    if s.flag(25) {
+        if s.flag(182) {
+            s.set(635, true);
+            return say(rot.pick(1, &three(65)));
+        }
+        s.set(181, true);
+        return say(rot.pick(2, &three(68)));
+    }
+    if s.flag(24) {
+        return if s.flag(179) {
+            say(Some(64))
+        } else if s.flag(174) {
+            say(rot.pick(3, &three(61)))
+        } else if s.flag(173) {
+            s.set(634, true);
+            say(rot.pick(4, &three(6)))
+        } else if s.flag(658) {
+            say(Some(9))
+        } else if s.flag(172) && s.flag(171) {
+            say(Some(10))
+        } else if s.flag(171) {
+            say(Some(11))
+        } else if s.flag(170) {
+            say(Some(12))
+        } else {
+            s.set(169, true);
+            say(Some(13))
+        };
+    }
+    if s.flag(23) {
+        return if s.flag(161) {
+            s.set(633, true);
+            say(rot.pick(5, &three(14)))
+        } else if s.flag(648) {
+            s.set(633, true);
+            say(rot.pick(6, &cycle(&[32, 15, 16])))
+        } else {
+            s.set(160, true);
+            say(rot.pick(7, &three(33)))
+        };
+    }
+    if s.flag(155) || s.flag(647) {
+        s.set(632, true);
+        return say(rot.pick(8, &three(36)));
+    }
+    s.set(154, true);
+    say(rot.pick(9, &three(58)))
+}
+
+/// The remark cycles (remark 1 to 11).
+const REMARKS: [[u16; 3]; 11] = [
+    [54, 53, 52],
+    [48, 47, 46],
+    [51, 50, 49],
+    [45, 44, 43],
+    [42, 41, 40],
+    [57, 56, 55],
+    [28, 27, 26],
+    [19, 18, 17],
+    [25, 24, 23],
+    [31, 30, 29],
+    [22, 21, 20],
+];
+
+/// SPEC-0044 1056 Update (per tick): the melee edge (level states 2 and 3), the lesson of the
+/// first set stage flag while 191 is clear (the chain, spin and mote lessons; the shield
+/// lesson's launcher is not built), the remarks and the auto-talk. Module words: 0 the zone
+/// marks of this tick, 1 the spin marks, 2 the previous sub-state, 3 the pending remark, 4 the
+/// chain's hit on entity 4, 5 to 7 the last jab start ticks, 9 a pending auto-talk, 10 the
+/// mote item's activation, 11 the trainer + 1.
+fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
+    let w = |s: &GameState, k: u8| s.word(1056, k);
+    let zones = w(s, 0);
+    let inside = |i: u16| zones & (1 << i) != 0;
+    let sub = s.hero.sub;
+    let prev = w(s, 2) as u8;
+    let started = sub != prev && sub != 0;
+    let ended = prev != 0 && sub != prev;
+    s.set_word(1056, 2, sub as i32);
+    // The melee edge.
+    if sub != 0 {
+        let first = !s.level(2);
+        s.set_level(3, first);
+        s.set_level(2, true);
+    } else {
+        s.set_level(2, false);
+        s.set_level(3, false);
+    }
+    let hit = |s: &GameState, e: usize| s.hero.hits.contains(&e);
+    let mut talk_now = false;
+    let mut remark = 0;
+    if !s.flag(191) {
+        if s.flag(26) {
+            // The shield lesson: the trainer's first talk; the launcher is not built.
+            if !s.flag(188) {
+                talk_now = true;
+            }
+        } else if s.flag(24) {
+            let fire = |m: Option<u16>| matches!(m, Some(160 | 161));
+            if s.flag(173) {
+            } else if s.flag(658) {
+                s.set(173, true);
+                talk_now = true;
+            } else if !s.flag(169) {
+                talk_now = true;
+            } else {
+                if !s.flag(170) && s.has_item(160) {
+                    s.set(170, true);
+                    talk_now = true;
+                } else if s.flag(170) && !s.flag(171) && fire(s.hero.attack_mote) {
+                    s.set(171, true);
+                    s.set_word(1056, 9, 1);
+                } else if s.flag(171) && !s.flag(172) && sub != 0 && hit(s, 14) {
+                    s.set(172, true);
+                    s.set_word(1056, 9, 1);
+                } else if s.flag(171) && s.flag(172) && sub == 10 && hit(s, 14) {
+                    s.set(658, true);
+                    talk_now = true;
+                }
+                if s.flag(170) && !s.flag(658) && sub == 0 && !fire(s.hero.attack_mote) {
+                    s.set(171, false);
+                }
+            }
+        } else if s.flag(23) {
+            if !s.flag(160) {
+                talk_now = true;
+            } else if !s.flag(161) {
+                let spin = matches!(sub, 7 | 8);
+                let mut marks = w(s, 1);
+                if spin {
+                    for (k, e) in [7, 8, 9].into_iter().enumerate() {
+                        if hit(s, e) {
+                            marks |= 1 << k;
+                        }
+                    }
+                } else {
+                    marks = 0;
+                }
+                s.set_word(1056, 1, marks);
+                if marks == 7 {
+                    s.set(161, true);
+                    s.set_word(1056, 9, 1);
+                } else if inside(6) {
+                    remark = match sub {
+                        4 if started => 8,
+                        12 if started => 9,
+                        9 if started => 10,
+                        _ if ended && matches!(prev, 7 | 8) => 11,
+                        0 if prev == 3 => 7,
+                        _ => 0,
+                    };
+                }
+            }
+        } else if s.flag(22) {
+            if !s.flag(154) {
+                talk_now = true;
+            } else if !s.flag(155) {
+                if sub == 4 && hit(s, 4) {
+                    s.set(155, true);
+                    talk_now = true;
+                } else if inside(5) {
+                    if sub == 4 && s.hero.hits.contains(&4) {
+                        s.set_word(1056, 4, 1);
+                    }
+                    remark = match sub {
+                        _ if ended && prev == 4 && w(s, 4) == 0 => 5,
+                        _ if started && matches!(sub, 7 | 8) => 2,
+                        12 if started => 3,
+                        9 if started => 4,
+                        0 if prev == 3 => 1,
+                        _ => 0,
+                    };
+                    if ended && prev == 4 {
+                        s.set_word(1056, 4, 0);
+                    }
+                    // The jab tracker: three starts of attack state 2 within 3.0 s.
+                    if started && sub == 2 {
+                        let t = s.hero.tick as i32;
+                        let (a, b) = (w(s, 5), w(s, 6));
+                        s.set_word(1056, 5, b);
+                        s.set_word(1056, 6, t);
+                        if a != 0 && t - a <= 180 {
+                            remark = 6;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    if remark != 0 {
+        s.set_word(1056, 3, remark);
+    }
+    if w(s, 9) != 0 && sub == 0 {
+        s.set_word(1056, 9, 0);
+        talk_now = true;
+    }
+    let mut out = Vec::new();
+    let trainer = w(s, 11) - 1;
+    // The stage's talk zone: chain 10, spin 11, mote 12, shield 14.
+    let zone = if s.flag(26) {
+        14
+    } else if s.flag(24) {
+        12
+    } else if s.flag(23) {
+        11
+    } else {
+        10
+    };
+    let free = !dialog && !s.hero.occupied && !s.talking;
+    if talk_now && trainer >= 0 && free && inside(zone) {
+        let mut rot = s.rotations.get(&(1056, 0)).copied().unwrap_or_default();
+        out = trainer_talk(s, &mut rot);
+        s.rotations.insert((1056, 0), rot);
+    } else if talk_now {
+        // Not in the talk zone yet: the talk waits.
+        s.set_word(1056, 9, 1);
+    }
+    // A pending remark is spoken on the first tick with no melee attack active.
+    let pending = w(s, 3);
+    if out.is_empty() && pending > 0 && sub == 0 && trainer >= 0 && free {
+        s.set_word(1056, 3, 0);
+        let mut rot = s.rotations.get(&(1056, 60)).copied().unwrap_or_default();
+        let lines = REMARKS[(pending - 1) as usize];
+        if let Some(line) = rot.pick(pending as u16, &cycle(&lines)) {
+            out.push(Action::Converse { entity: trainer as usize, line });
+        }
+        s.rotations.insert((1056, 60), rot);
+    }
+    // The mote area: magic refilled; with no fire alignment and no item 160, 160 x100.
+    if s.flag(24) && !s.flag(191) && inside(7) {
+        out.push(Action::RefillMagic);
+        if !matches!(s.hero.attack_mote, Some(160 | 161)) && !s.has_item(160) {
+            s.give(160, 100);
+        }
+    }
+    // The zone marks last one tick.
+    s.set_word(1056, 0, 0);
+    out
 }
 
 /// SPEC-0045 1098: the castle stage s, the highest of flags 31 down to 21 that is set.
@@ -1864,6 +2255,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (1133, 0 | 1) => Some(0),
         (1023, 90) => Some(90),
         (1098, e) => castle_routine(e),
+        // SPEC-0044 1056: the trainer of the current stage (entity 5, 10, 12 or 24).
+        (1056, 5 | 10 | 12 | 24) => Some(0),
         // SPEC-0045 1023 villagers (routine numbers: the index in VILLAGERS, 100 + k).
         (1023, e) => villager(e).map(|k| 100 + k as u8),
         _ => None,
@@ -1891,6 +2284,11 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
             return a;
         }
         (1150, r) => barracks_talk(r, state, &mut rot),
+        (1056, 0) => {
+            let a = trainer_talk(state, &mut rot);
+            state.rotations.insert(key, rot);
+            return a;
+        }
         (1098, r) => {
             let a = castle_talk(r, state, &mut rot);
             state.rotations.insert(key, rot);
@@ -2333,6 +2731,60 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    #[test]
+    fn courtyard_lessons() {
+        // SPEC-0044 1056. Chain lesson: Init with 22 picks trainer entity 5 and loads 1057 and
+        // 1064; in talk zone 10 the auto-talk shows lines 58 to 60 (flag 154).
+        let mut s = GameState::default();
+        s.set(22, true);
+        let init = on_init(1056, &mut s);
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1057) }) && init.contains(&Action::LoadRegion { slot: 1, region: Some(1064) }));
+        let zone = |s: &mut GameState, i: u16| on_trigger(1056, 5, TriggerCall { index: i, state: 1, object: true, square: false }, s);
+        zone(&mut s, 10);
+        assert_eq!(on_update(1056, &mut s, false), vec![Action::Converse { entity: 5, line: 58 }]);
+        assert!(s.flag(154));
+        // In the chain area, a finisher (attack state 4) that misses entity 4 gives remark 5
+        // (lines 42, 41, 40), spoken once no attack is active.
+        zone(&mut s, 5);
+        s.hero.sub = 4;
+        on_update(1056, &mut s, false);
+        zone(&mut s, 5);
+        s.hero.sub = 0;
+        assert_eq!(on_update(1056, &mut s, false), vec![Action::Converse { entity: 5, line: 42 }]);
+        // A finisher hitting entity 4 sets 155; the talk waits for zone 10.
+        s.hero.sub = 4;
+        s.hero.hits = vec![4];
+        assert!(on_update(1056, &mut s, false).is_empty() && s.flag(155));
+        s.hero = HeroView::default();
+        zone(&mut s, 10);
+        assert_eq!(on_update(1056, &mut s, false), vec![Action::Converse { entity: 5, line: 36 }]);
+        assert!(s.flag(632));
+        // Spin lesson: one spin (state 7) marking entities 7, 8 and 9 sets 161.
+        let mut s = GameState::default();
+        for f in [22, 23, 160] {
+            s.set(f, true);
+        }
+        on_init(1056, &mut s);
+        for e in [7, 8, 9] {
+            s.hero = HeroView { sub: 7, hits: vec![e], ..HeroView::default() };
+            on_update(1056, &mut s, false);
+        }
+        assert!(s.flag(161));
+        // Mote lesson: with 169 set, holding item 160 sets 170; a fire Mote in word 2 sets 171.
+        let mut s = GameState::default();
+        for f in [22, 24, 169] {
+            s.set(f, true);
+        }
+        on_init(1056, &mut s);
+        s.give(160, 100);
+        on_update(1056, &mut s, false);
+        assert!(s.flag(170));
+        s.hero.attack_mote = Some(160);
+        on_update(1056, &mut s, false);
+        assert!(s.flag(171));
+        assert_eq!(undamageable(1056), &[4, 7, 8, 9, 20, 21, 14]);
     }
 
     #[test]
