@@ -651,6 +651,17 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             })
             .collect();
         println!("Journal row parts as section C keys: {row_keys:?}");
+        {
+            // SPEC-0023 section 11: the item-icon node 1000 and the HUD's value texts.
+            let kids = f.children(1000);
+            let first: Vec<String> = kids.iter().take(6).map(|&k| format!("{k} k{} {}x{} sprite {:?}", f.nodes[k].kind, f.nodes[k].width, f.nodes[k].height, f.sprite(k).map(|s| (s.asset, s.frame)))).collect();
+            println!("Item-icon node 1000: kind {} parent {:?}, {} children, first {first:?}", f.nodes.get(1000).map_or(0, |n| n.kind), f.nodes.get(1000).and_then(|n| n.parent), kids.len());
+            let vt: Vec<String> = [345usize, 355, 364, 376, 697, 716, 724, 734, 754, 755, 601]
+                .iter()
+                .filter_map(|&n| f.values.get(&f.nodes[n].data).map(|v| format!("{n}: var {} font {} spacing {} gate {} format {} colour {:?}", v.variable, v.font, v.spacing, v.gate, v.format, v.colour)))
+                .collect();
+            println!("HUD value texts: {vt:?}");
+        }
         for k in [0x34u32, 0x33] {
             if let Some(n) = f.key(k) {
                 println!("  row text {k:#04x}: {:?}", f.label(n).map(|l| (l.font, l.spacing, l.colour, String::from_utf8_lossy(&l.text).into_owned())));

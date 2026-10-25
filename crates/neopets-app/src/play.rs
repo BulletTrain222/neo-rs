@@ -229,6 +229,8 @@ pub struct Play {
     pub jump_latch: bool,
     /// An R3 press waiting for the next tick.
     pub r3_latch: bool,
+    /// An L3 press waiting for the next tick (it re-arms every HUD group; SPEC-0023 section 4).
+    pub l3_latch: bool,
     /// Ticks run so far.
     pub ticks: u64,
     /// Number of world swaps so far.
@@ -475,6 +477,7 @@ impl Play {
             root_step: [0.0; 3],
             jump_latch: false,
             r3_latch: false,
+            l3_latch: false,
             ticks: 0,
             swaps: 0,
             door_prompt: None,
@@ -1348,7 +1351,16 @@ impl Play {
         let inv = &self.inventory;
         let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
         let was_open = self.quick.open;
+        let marker = self.quick.marker;
         let out = self.quick.tick(panel, self.loco.state != 0x19, &self.quick_rows, &owns);
+        // SPEC-0023 section 4: selecting or using a quick item re-arms G0, G1 and C; L3 re-arms
+        // every group.
+        if out.use_item.is_some() || self.quick.marker != marker {
+            self.hud.rearm_quick();
+        }
+        if std::mem::take(&mut self.l3_latch) {
+            self.hud.rearm_all();
+        }
         if out.consumed || was_open {
             input.jump = false;
             input.attack = false;

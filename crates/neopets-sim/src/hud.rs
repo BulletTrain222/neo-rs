@@ -1,13 +1,14 @@
 //! The in-play HUD's bar rules (SPEC-0023 Behavior 1 to 4): the change detector C and the
-//! group timers G0 (bars 0x31) and G1 (quick-item panel 0x30), the bar update with its watched
+//! group timers G0 (bars 0x31), G1 (quick-item panel 0x30) and G2 to G4 (equipment panels 0x1C,
+//! 0x1D and 0x1E) with their alpha pushes and re-arms, the bar update with its watched
 //! values, the bar widths L = trunc(max x K) and F = trunc(current x K), the frame layout, the
 //! upgrade dividers, alpha(t), and the red and green tint pulses of the health frame (0x3B).
 //!
 //! The monster health bar (section 10): the arm with its 600-tick timer, the zero-health cut,
 //! the frame width from the maximum and the name width, the fill width.
 //!
-//! Not covered: the equipment panels and their timers G2 to G4, the D-pad hint, the loss
-//! effects, the petpet meter, the journal icon, the portrait swing and the countdown texts.
+//! Not covered: the D-pad hint and its timer D, the loss effects, the petpet meter, the journal
+//! icon, the portrait swing and the countdown texts.
 
 /// Bar scale K (float32 0.6666667).
 pub const K: f32 = 0.666_666_7;
@@ -68,6 +69,10 @@ pub struct Hud {
     pub c: i32,
     pub g0: i32,
     pub g1: i32,
+    /// G2, G3 and G4: the equipment panels 0x1C (weapon slot 2), 0x1D (slot 0) and 0x1E (slot 1).
+    pub g: [i32; 3],
+    /// The alpha last pushed to groups 0x30, 0x1C, 0x1D and 0x1E.
+    pub panel_alpha: [u8; 4],
     watched: [i32; 4],
     seen: Option<Values>,
     pulse: Option<Pulse>,
@@ -82,7 +87,7 @@ pub struct Hud {
 impl Default for Hud {
     fn default() -> Self {
         // The full reset after a load: all timers 0, C = -1.
-        Self { c: -1, g0: 0, g1: 0, watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default() }
+        Self { c: -1, g0: 0, g1: 0, g: [0; 3], panel_alpha: [128; 4], watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default() }
     }
 }
 
@@ -99,6 +104,23 @@ impl Hud {
 
     pub fn pool_drawn(&self, v: &Values) -> bool {
         self.c != 0 && v.mp_max > 0
+    }
+
+    /// L3 (and a hero switch with the extra flag): C and G0 to G4 to 240.
+    pub fn rearm_all(&mut self) {
+        (self.c, self.g0, self.g1) = (240, 240, 240);
+        self.g = [240; 3];
+    }
+
+    /// Selecting or using a quick item: G0, G1 and C to 240.
+    pub fn rearm_quick(&mut self) {
+        (self.c, self.g0, self.g1) = (240, 240, 240);
+    }
+
+    /// Opening the pause page or the item screen (section 4.1): G0 to G4 and C to 0.
+    pub fn hide_all(&mut self) {
+        (self.c, self.g0, self.g1) = (0, 0, 0);
+        self.g = [0; 3];
     }
 
     fn start_pulse(&mut self, target: [u8; 4], w: &Words) {
@@ -163,8 +185,16 @@ impl Hud {
                 self.c -= 1;
             }
         }
+        // The group fades, in order (0x30, G1), (0x1C, G2), (0x1D, G3), (0x1E, G4), (0x31, G0).
         if self.g1 > 0 {
+            self.panel_alpha[0] = alpha(self.g1);
             self.g1 -= 1;
+        }
+        for k in 0..3 {
+            if self.g[k] > 0 {
+                self.panel_alpha[k + 1] = alpha(self.g[k]);
+                self.g[k] -= 1;
+            }
         }
         if self.g0 > 0 {
             self.bars_alpha = alpha(self.g0);
@@ -294,5 +324,30 @@ mod tests {
         }
         assert_eq!(peak, [200, 0, 0, 128]);
         assert!((38..=41).contains(&n), "{n}");
+    }
+
+    #[test]
+    fn panel_timers_fade_and_rearm() {
+        let w = Words { half: 20.0, red: [200, 0, 0, 128], green: [0, 200, 0, 128], cap: -9, inset: 6, base: (150, 90), step: (25, 15) };
+        let v = Values { hp: 150, hp_max: 150, mp: 90, mp_max: 90, poisoned: false };
+        let mut h = Hud::default();
+        h.tick(v, false, &w);
+        assert_eq!(h.g, [0; 3]);
+        // L3: every group at 240; full alpha for 210 ticks, then the fade, hidden at 0.
+        h.rearm_all();
+        for _ in 0..215 {
+            h.tick(v, false, &w);
+        }
+        assert_eq!((h.g, h.panel_alpha), ([25; 3], [110; 4]), "pushed at 26 before the decrement");
+        for _ in 0..25 {
+            h.tick(v, false, &w);
+        }
+        assert_eq!(h.g, [0; 3]);
+        assert_eq!(h.panel_alpha[1], 4);
+        // A quick item re-arms G0, G1 and C only; the pause page clears them all.
+        h.rearm_quick();
+        assert_eq!((h.g0, h.g1, h.c, h.g), (240, 240, 240, [0; 3]));
+        h.hide_all();
+        assert_eq!((h.g0, h.g1, h.c), (0, 0, 0));
     }
 }

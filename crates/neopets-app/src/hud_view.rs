@@ -28,6 +28,14 @@ const PLATE_CENTRE: u32 = 0x21;
 const PLATE_RIGHT: u32 = 0x22;
 const MONSTER_FILL: u32 = 0x23;
 const MONSTER_NAME: u32 = 0x32;
+/// SPEC-0023 section 11: the selected quick item panel, the equipment panels (weapon slot 2,
+/// armour slot 0, shield slot 1), the right quick-item cross icon (its group is the cross), and
+/// the item-icon elements whose art comes from the children of the item-icon node (key 0x9F) by
+/// an item kind that no spec defines yet (R-0020), so they are not drawn.
+const ITEM_PANEL: u32 = 0x30;
+const EQUIP: [u32; 3] = [0x1C, 0x1D, 0x1E];
+const CROSS_RIGHT: u32 = 0x9C;
+const ITEM_ICONS: [u32; 6] = [0x9C, 0x9B, 0x9E, 0x9D, 0xA0, 0xA1];
 
 #[derive(Resource)]
 pub struct HudArt {
@@ -67,11 +75,42 @@ pub struct HudCanvas;
 #[derive(Component)]
 pub struct HudSprite(usize);
 
+/// A value-text node (kind 6) of the panels, its number drawn in its record's font, or a label
+/// node (kind 2), its binding's text.
+#[derive(Component)]
+pub struct HudValue(usize);
+
 fn subtree(f: &Frontend, n: usize, out: &mut Vec<usize>) {
     out.push(n);
     for c in f.children(n) {
         subtree(f, c, out);
     }
+}
+
+/// The panel root a node belongs to, if any.
+fn panel_root(f: &Frontend, n: usize, roots: &[usize]) -> Option<usize> {
+    let mut at = Some(n);
+    while let Some(i) = at {
+        if roots.contains(&i) {
+            return Some(i);
+        }
+        at = f.nodes[i].parent;
+    }
+    None
+}
+
+/// The alpha last pushed to the fade group a node is under (0x30, 0x1C, 0x1D, 0x1E); the
+/// cross has no fade group and stays at 128.
+fn group_alpha(f: &Frontend, n: usize, pushed: &[u8; 4]) -> u8 {
+    let groups = [ITEM_PANEL, EQUIP[0], EQUIP[1], EQUIP[2]].map(|k| f.key(k));
+    let mut at = Some(n);
+    while let Some(i) = at {
+        if let Some(k) = groups.iter().position(|&g| g == Some(i)) {
+            return pushed[k];
+        }
+        at = f.nodes[i].parent;
+    }
+    128
 }
 
 /// The node's condition (mode 0 draws; 2 while the predicate is nonzero; 3 while it is zero).
@@ -85,6 +124,30 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
         45 => (node.arg as i32) < p.pool_dividers,
         41 => p.monster,
         25 => p.square,
+        // SPEC-0035 9c and SPEC-0023 section 4: the quick-item cross and the panels.
+        32 => p.quick_open,
+        11 => p.counts.get(p.selection).is_some_and(|&c| c > 0),
+        28 => p.selection == node.arg as usize,
+        29 => p.counts[match node.arg {
+            0 => 1,
+            1 => 0,
+            2 => 3,
+            _ => 2,
+        }] > 0,
+        30 => p.counts[0] > 0,
+        33 => p.counts[1] > 0,
+        34 => p.counts[2] > 0,
+        36 => p.counts[3] > 0,
+        49 => p.marker >= 0,
+        51 => p.g1 != 0,
+        53 => p.g[0] != 0 && p.weapon,
+        54 => p.g[1] != 0,
+        55 => p.g[2] != 0 && p.shield,
+        56 => true,
+        // The active hero is Tor (14), not Roberta (52).
+        14 => true,
+        52 => false,
+        // 17, 19 and 20 (an equipment word's item count above 0): no Motes are equipped yet.
         _ => false,
     };
     match node.mode {
@@ -131,6 +194,18 @@ struct Inputs {
     monster: bool,
     /// The Square prompt slot is shown this pass (predicate slot 25).
     square: bool,
+    /// The quick panel: open, its selection, its four entries' owned counts, the effective
+    /// marker and its count; G1 and G2 to G4; whether Tor's weapon (category 1) and shield
+    /// (category 2) entries are filled.
+    quick_open: bool,
+    selection: usize,
+    counts: [i32; 4],
+    marker: i32,
+    marker_count: i32,
+    g1: i32,
+    g: [i32; 3],
+    weapon: bool,
+    shield: bool,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -144,7 +219,9 @@ pub fn sync_hud(
     mut sprites: Query<(&HudSprite, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudText>)>,
     mut texts: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudText>, Without<HudCanvas>, Without<HudSprite>, Without<HudCaption>)>,
     mut captions: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
+    mut values: Query<(&HudValue, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
     mut caption_image: Local<Option<(Vec<u8>, Handle<Image>, u32, u32, i32)>>,
+    mut value_images: Local<HashMap<(usize, String), (Handle<Image>, u32, u32, i32)>>,
 ) {
     let (Some(state), Some(mut art)) = (state, art) else { return };
     let HudArt { f, mem, images: cache, name: name_image } = &mut *art;
@@ -161,6 +238,21 @@ pub fn sync_hud(
         subtree(f, root, &mut page);
     }
     let prompts = page.iter().copied().find(|&n| f.nodes[n].handler == 25).and_then(|n| f.nodes[n].parent);
+    // The panel roots: the cross (the topmost predicate-32 group above the right cross icon),
+    // the item panel 0x30 and the equipment panels' group.
+    let cross = f.key(CROSS_RIGHT).map(|n| {
+        let (mut at, mut top) = (Some(n), n);
+        while let Some(i) = at {
+            if f.nodes[i].handler == 32 {
+                top = i;
+            }
+            at = f.nodes[i].parent;
+        }
+        top
+    });
+    let item_panel = f.key(ITEM_PANEL);
+    let equip = f.key(EQUIP[0]).and_then(|n| f.nodes[n].parent);
+    let panels: Vec<usize> = [cross, item_panel, equip].into_iter().flatten().collect();
     let mut nodes = Vec::new();
     subtree(f, bars, &mut nodes);
     if let Some(m) = monster {
@@ -169,6 +261,12 @@ pub fn sync_hud(
     if let Some(g) = prompts {
         subtree(f, g, &mut nodes);
     }
+    let mut panel_nodes = Vec::new();
+    for &r in &panels {
+        subtree(f, r, &mut panel_nodes);
+    }
+    let icons: Vec<usize> = ITEM_ICONS.iter().filter_map(|&k| f.key(k)).collect();
+    nodes.extend(panel_nodes.iter().copied().filter(|n| !icons.contains(n)));
     let Ok((root, mut root_node)) = canvas.single_mut() else {
         let root = commands
             .spawn((Node { position_type: PositionType::Absolute, ..default() }, HudCanvas, GlobalZIndex(10)))
@@ -181,6 +279,10 @@ pub fn sync_hud(
         commands.entity(root).add_child(text);
         let caption = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudCaption)).id();
         commands.entity(root).add_child(caption);
+        for &n in panel_nodes.iter().filter(|&&n| matches!(f.nodes[n].kind, 2 | 6)) {
+            let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudValue(n))).id();
+            commands.entity(root).add_child(child);
+        }
         return;
     };
     let _ = root;
@@ -190,6 +292,8 @@ pub fn sync_hud(
     root_node.height = Val::Px(448.0 * s);
     let hud = &p.hud;
     let mb = &p.monster_bar;
+    // The owned count of an item id (0 for -1 or an item not held).
+    let count = |id: i32| u16::try_from(id).ok().and_then(|id| p.inventory.get(&id)).map_or(0, |&n| n as i32);
     let inputs = Inputs {
         c: hud.c,
         g0: hud.g0,
@@ -198,6 +302,15 @@ pub fn sync_hud(
         pool_dividers: hud.pool.dividers,
         monster: mb.t != 0 && !p.quick.open,
         square: p.square_caption().is_some(),
+        quick_open: p.quick.open,
+        selection: p.quick.selection,
+        counts: p.quick.entries.map(|id| count(id)),
+        marker: p.quick.effective(&|id| count(id) > 0),
+        marker_count: count(p.quick.effective(&|id| count(id) > 0)),
+        g1: hud.g1,
+        g: hud.g,
+        weapon: p.weapon.is_some(),
+        shield: p.shield.is_some(),
     };
     let key = |k: u32| f.key(k).unwrap_or(usize::MAX);
     let node_x = |k: u32| f.key(k).map_or(0, |n| f.nodes[n].x as i32);
@@ -252,12 +365,13 @@ pub fn sync_hud(
             }
             false
         };
+        let panel = panel_root(f, n, &panels);
         let top = if in_monster(n) {
             monster.unwrap_or(bars)
         } else if in_prompts(n) {
             prompts.unwrap_or(bars)
         } else {
-            bars
+            panel.unwrap_or(bars)
         };
         let mut at = Some(n);
         while let Some(i) = at {
@@ -290,6 +404,8 @@ pub fn sync_hud(
             neopets_sim::hud::alpha(mb.t)
         } else if in_prompts(n) {
             128
+        } else if panel.is_some() {
+            group_alpha(f, n, &hud.panel_alpha)
         } else {
             hud.bars_alpha
         };
@@ -346,6 +462,63 @@ pub fn sync_hud(
             }
             None => *vis = Visibility::Hidden,
         }
+    }
+    // SPEC-0023 sections 5 and 11, SPEC-0035 section K: the panels' counts, as plain decimal in
+    // the record's font, spacing and colour, aligned by the node's width, baseline at its y.
+    // Which number each shows follows its predicate (the cross entries' counts, the equipment
+    // words' counts) or, ungated, the selected item's count; the variable table at 0x2DD200
+    // holds run-time pointers and is not read.
+    for (value, mut node, mut image, mut vis) in &mut values {
+        let n = value.0;
+        // A label draws its binding's text (SPEC-0035 section 12, Text node draw); a value text
+        // its number (section K).
+        let (text, font, spacing, colour, ok0) = if f.nodes[n].kind == 2 {
+            match f.label(n).filter(|l| l.font >= 0) {
+                Some(l) => (String::from_utf8_lossy(&l.text).into_owned(), l.font as usize, l.spacing as i32, l.colour, true),
+                None => continue,
+            }
+        } else {
+            let Some(v) = f.values.get(&f.nodes[n].data).copied() else { continue };
+            let number = match f.nodes[n].handler {
+                30 => inputs.counts[0],
+                33 => inputs.counts[1],
+                34 => inputs.counts[2],
+                36 => inputs.counts[3],
+                17 | 19 | 20 => 0,
+                _ => inputs.marker_count,
+            };
+            (number.to_string(), v.font as usize, v.spacing as i32, v.colour, v.gate != 0 && v.format == 1)
+        };
+        let mut ok = shown && ok0;
+        let top = panel_root(f, n, &panels).unwrap_or(n);
+        let mut at = Some(n);
+        while let Some(i) = at {
+            ok &= condition(f, i, &inputs);
+            if i == top {
+                break;
+            }
+            at = f.nodes[i].parent;
+        }
+        if !ok {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        let key = (n, text.clone());
+        if !value_images.contains_key(&key) {
+            if let Some((img, base)) = f.text_image(mem, font, text.as_bytes(), spacing, colour) {
+                let (w, h) = (img.width, img.height);
+                value_images.insert(key.clone(), (images.add(crate::rgba_image(w, h, img.rgba)), w, h, base));
+            }
+        }
+        let Some((handle, w, h, base)) = value_images.get(&key) else { continue };
+        let (x, y, sx, sy) = place(f, n, &xs, &ws);
+        node.left = Val::Px(x * s);
+        node.top = Val::Px((y - *base as f32 * sy) * s);
+        node.width = Val::Px(*w as f32 * sx * s);
+        node.height = Val::Px(*h as f32 * sy * s);
+        image.image = handle.clone();
+        image.color = Color::srgba(1.0, 1.0, 1.0, (group_alpha(f, n, &hud.panel_alpha) as f32 / 128.0).min(1.0));
+        *vis = Visibility::Inherited;
     }
     for (n, w, h) in wanted {
         if let Some(img) = f.sprite_image(mem, n, w, h) {

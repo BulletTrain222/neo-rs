@@ -865,6 +865,9 @@ fn step_sim(
         let r3_held = keys.pressed(KeyCode::KeyR) || gamepads.iter().any(|g| g.pressed(GamepadButton::RightThumb));
         play.play.r3_latch |= keys.just_pressed(KeyCode::KeyR)
             || gamepads.iter().any(|g| g.just_pressed(GamepadButton::RightThumb));
+        // L3 (X or the left stick button) shows every HUD group again.
+        play.play.l3_latch |= keys.just_pressed(KeyCode::KeyX)
+            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::LeftThumb));
         // SPEC-0035: the front end runs once per tick; outside play and the game-over page the
         // world is frozen and the hero's buttons are dropped.
         let (mut edge, mut buttons) = menu_view::menu_words(&keys, &gamepads);
@@ -897,12 +900,19 @@ fn step_sim(
                     _ => {}
                 }
                 let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER);
+                // SPEC-0023 section 4.1: opening the pause page clears the HUD timers and the
+                // monster bar timer, so the HUD stays hidden on return until a re-arm.
+                if m.flow.current == menus::PAUSE && !play.play.menu_open {
+                    play.play.hud.hide_all();
+                    play.play.monster_bar.t = 0;
+                }
                 play.play.menu_open = frozen;
                 if frozen {
                     play.play.jump_latch = false;
                     play.play.square_latch = false;
                     play.play.attack_latch = false;
                     play.play.panel_latch = Default::default();
+                    play.play.l3_latch = false;
                     continue;
                 }
             }
