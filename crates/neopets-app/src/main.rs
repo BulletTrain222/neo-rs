@@ -1872,6 +1872,7 @@ fn play_trace(
     let mut scene = String::new();
     let mut last_hurt = String::new();
     let mut last_mote = String::new();
+    let mut last_status = String::new();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
     // releases a power attack).
     let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(80);
@@ -2037,6 +2038,10 @@ fn play_trace(
         if !play.last_mote.is_empty() && play.last_mote != last_mote {
             last_mote = play.last_mote.clone();
             println!("      {last_mote}");
+        }
+        if !play.last_status.is_empty() && play.last_status != last_status {
+            last_status = play.last_status.clone();
+            println!("      {last_status}");
         }
         if !play.last_door.is_empty() && play.last_door != last_door {
             last_door = play.last_door.clone();

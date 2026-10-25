@@ -170,6 +170,29 @@ pub fn power_index(hero: usize, mote: u16) -> Option<usize> {
     Some(if hero == 0 { *i } else { i + 30 })
 }
 
+/// The status a Mote's attack sends (SPEC-0036 Layout, Mote status words; SPEC-0021): the
+/// code by id, and the duration, amount and period from the attack power table records after
+/// the Mote's power index (whole numbers, -1 for a field the Mote does not have). None for the
+/// Motes with no status. `table` reads record i of the table.
+pub fn status_request(hero: usize, id: u16, table: impl Fn(usize) -> Option<f32>) -> Option<[i32; 4]> {
+    let code = match id {
+        160 | 161 => 7,
+        163 => 0,
+        164 | 165 => 2,
+        166 | 167 => 3,
+        168 | 169 => 1,
+        170 | 171 => 6,
+        _ => return None,
+    };
+    let k = power_index(hero, id)?;
+    let word = |n: usize| table(k + n).map_or(-1, |v| v as i32);
+    Some(match id {
+        160 | 161 | 164 => [code, word(1), word(2), word(3)],
+        165 => [code, -1, -1, -1],
+        _ => [code, word(1), -1, -1],
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,5 +257,18 @@ mod tests {
         assert_eq!(m.armour(1, Some(163)), (at(0x002D_D49C), at(0x002D_D4DC)));
         assert_eq!((power_index(0, 160), power_index(0, 173), power_index(1, 163), power_index(0, 98)), (Some(0), Some(29), Some(39), None));
         assert_eq!(shield_cost(161), (2, 1));
+    }
+
+    #[test]
+    fn status_words() {
+        // Synthetic table: record i holds i. Tor's Lava (index 4): fire with records 5, 6, 7;
+        // Water (index 9): stun for record 10; Rock: poison with the defaults; Nova: none.
+        let t = |i: usize| (i < 60).then_some(i as f32);
+        assert_eq!(status_request(0, 161, t), Some([7, 5, 6, 7]));
+        assert_eq!(status_request(0, 163, t), Some([0, 10, -1, -1]));
+        assert_eq!(status_request(1, 164, t), Some([2, 42, 43, 44]));
+        assert_eq!(status_request(0, 165, t), Some([2, -1, -1, -1]));
+        assert_eq!(status_request(0, 172, t), None);
+        assert_eq!(status_request(0, 162, t), None);
     }
 }

@@ -13,10 +13,15 @@
 //! states 5 to 7 (they stand and notice), retreat home (state 14) and the distance-hide gate,
 //! the melee and missile defences (outers 5 to 8), the counter-attack choice (Behavior 14), the
 //! confused outer 11, the attack manager and the wait in line (outer 12), projectiles (missile
-//! slots play their strike with no shot), the grab-and-throw, statuses, theft and Mote drain,
+//! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
 //! ghosts, reanimation (state 16 of rows 224, 226, 227), drops and coins, and flyers (the AI is
 //! not run for rows that can fly). The alerted search (state 2) only aims at the last-seen point
 //! until its countdown ends (R-0015).
+//!
+//! Statuses (SPEC-0029 Behavior 27): the apply with its element immunity and defaults, the
+//! stunned state 4, poison and fire hits, the slow and speed scales and the outgoing curse and
+//! strength scales. Not covered: confusion's outer 11 (the timer runs but the enemy is not
+//! confused) and the status display.
 
 use crate::hero::Vec3;
 use crate::rng::Rng;
@@ -197,6 +202,8 @@ pub struct Act {
     pub stop: bool,
     /// Sink the corpse by this much along world up.
     pub sink: f32,
+    /// This tick's poison and fire hits (Behavior 27.2 steps 3 and 8), each a take-hit.
+    pub status_hits: [Option<i32>; 2],
 }
 
 fn sub(a: Vec3, b: Vec3) -> Vec3 {
@@ -312,6 +319,11 @@ pub struct Enemy {
     through: Option<u32>,
     through_seen: bool,
     force: bool,
+    /// The 14 status timers in ticks (0x808 to 0x83C) and the poison and fire (amount, period)
+    /// words (0xCB4 to 0xCC0; -1 the defaults).
+    timers: [i32; 14],
+    poison: (i32, i32),
+    fire: (i32, i32),
 }
 
 impl Enemy {
@@ -357,6 +369,9 @@ impl Enemy {
             anger_count: 0,
             hit_recovery: 0,
             start: [0.0; 3],
+            timers: [0; 14],
+            poison: (-1, -1),
+            fire: (-1, -1),
             ticks: 0,
             loop_count: 0,
             reentered: false,
@@ -628,7 +643,8 @@ impl Enemy {
             self.previous = self.state;
             self.state = 19;
         }
-        if !(self.outer == 10 && self.react == 2 && self.stun_type == 1) {
+        // Behavior 37 step 7: no hit reaction while stunned (status 0).
+        if !self.status(0) && !(self.outer == 10 && self.react == 2 && self.stun_type == 1) {
             let kind = if self.p.can_fly != 0 {
                 match self.p.flying_hit {
                     1 => Some(7),
@@ -647,7 +663,8 @@ impl Enemy {
             }
         }
         self.hit_recovery = 90;
-        self.force = true;
+        // Step 13: the force-start only when not stunned.
+        self.force = !self.status(0);
         self.alert = true;
         if self.p.anger {
             self.anger_count += 1;
@@ -686,6 +703,111 @@ impl Enemy {
         a
     }
 
+    /// SPEC-0029 Behavior 27.1, the enemy's status apply: code, duration in whole seconds (-1:
+    /// the default) and the poison or fire amount and period (-1: the default). Nothing on a
+    /// dead enemy or one immune by its target type; stun enters state 4 at once. Returns whether
+    /// a timer was set.
+    pub fn apply_status(&mut self, code: i32, seconds: i32, amount: i32, period: i32) -> bool {
+        if self.dead {
+            return false;
+        }
+        let t = self.p.element;
+        let default = match code {
+            0 if t != 4 => 5,
+            1 if t != 6 => 60,
+            2 if t != 2 => 120,
+            3 if t != 5 => 60,
+            6 if t != 3 => 30,
+            7 if t != 1 => 5,
+            4 | 5 => 60,
+            11 => 30,
+            _ => return false,
+        };
+        let seconds = if seconds == -1 { default } else { seconds };
+        if seconds < 0 {
+            return false;
+        }
+        match code {
+            0 => {
+                self.previous = self.state;
+                self.state = 4;
+            }
+            2 => self.poison = (amount, period),
+            7 => self.fire = (amount, period),
+            _ => {}
+        }
+        self.timers[code as usize] = seconds * 60;
+        true
+    }
+
+    /// Whether status `code` is active (its timer is 1 or more).
+    pub fn status(&self, code: usize) -> bool {
+        self.timers.get(code).is_some_and(|&t| t >= 1)
+    }
+
+    /// The outgoing damage scale of the enemy's projectiles (Behavior 13): x 0.5 under curse, x
+    /// 1.5 under strength.
+    pub fn shot_scale(&self) -> f32 {
+        let mut g = 1.0;
+        if self.status(1) {
+            g *= 0.5;
+        }
+        if self.status(4) {
+            g *= 1.5;
+        }
+        g
+    }
+
+    /// The attacker's status scale G of a strike on a hero (SPEC-0036 Enemy attack damage to a
+    /// hero): 0.75 under curse, 1.5 under strength, 1.125 with both.
+    pub fn strike_scale(&self) -> f32 {
+        let mut g = 1.0;
+        if self.status(1) {
+            g *= 0.75;
+        }
+        if self.status(4) {
+            g *= 1.5;
+        }
+        g
+    }
+
+    /// Behavior 27.2 steps 1 to 4 and 8 (the timers, stun, poison and fire): returns the poison
+    /// and fire hits of this tick. The scales of steps 4 and 6 are applied to the act after the
+    /// think tick (status_scale).
+    fn status_tick(&mut self) -> [Option<i32>; 2] {
+        for t in self.timers.iter_mut() {
+            if *t >= 1 {
+                *t -= 1;
+            }
+        }
+        if self.status(0) {
+            self.state = 4;
+        }
+        let dot = |timer: i32, (amount, period): (i32, i32), (a0, p0): (i32, i32)| {
+            let p = if period < 0 { p0 } else { period };
+            let a = if amount < 0 { a0 } else { amount };
+            (timer >= 1 && p > 0 && timer % (p * 60) == 0).then_some(a)
+        };
+        [dot(self.timers[2], self.poison, (2, 4)), dot(self.timers[7], self.fire, (2, 2))]
+    }
+
+    /// Steps 4 and 6: slow halves the scale when moving or attacking; speed doubles it when
+    /// moving (tests A and B read as moving and attacking; Medium); stun sets it to 0.
+    fn status_scale(&self, a: &Act) -> f32 {
+        if self.status(0) {
+            return 0.0;
+        }
+        let moving = a.go.is_some();
+        let mut s = 1.0;
+        if self.status(3) && (moving || self.outer == 2) {
+            s *= 0.5;
+        }
+        if self.status(5) && moving {
+            s *= 2.0;
+        }
+        s
+    }
+
     /// The sequencer's end path: outer 0, the recovery countdown and the slot cooldown.
     fn end_path(&mut self, k: usize, rng: &mut Rng) {
         let s = self.p.slots[k];
@@ -720,6 +842,17 @@ impl Enemy {
         if self.dead {
             return self.dead_tick(v);
         }
+        let dots = self.status_tick();
+        let mut a = self.think(v, rng);
+        a.status_hits = dots;
+        let s = self.status_scale(&a);
+        if s != 1.0 {
+            a.rate = Some(a.rate.unwrap_or(1.0) * s);
+        }
+        a
+    }
+
+    fn think(&mut self, v: &View, rng: &mut Rng) -> Act {
         let mut a = Act { force: std::mem::take(&mut self.force), ..Act::default() };
         // Pre-step (Behavior 2): awareness countdown, alert flag, the state switch.
         if self.awareness < 0 {
@@ -733,6 +866,8 @@ impl Enemy {
         }
         match self.state {
             0 => self.set(self.default_state as u32, v, rng, &mut a),
+            // State 4 (stunned): back to agro once status 0 is no longer active.
+            4 if !self.status(0) => self.set(19, v, rng, &mut a),
             8 => self.emerge_step(v, rng, &mut a),
             3 | 5..=7 | 9 => {
                 if self.notice(v, rng) {
@@ -1399,6 +1534,52 @@ mod tests {
             clip: Clip::default(),
             has,
         }
+    }
+
+    #[test]
+    fn status_vectors() {
+        // SPEC-0029 Behavior 27 test vectors.
+        let has = |_| true;
+        let mut rng = Rng::seeded(1);
+        let mut run = |t: i32, code: i32, s: i32, amt: i32, per: i32| {
+            let mut p = skeleton();
+            p.element = t;
+            let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+            let applied = e.apply_status(code, s, amt, per);
+            let mut total = 0;
+            for _ in 0..if s == -1 { 7300 } else { s.max(0) * 60 + 5 } {
+                let a = e.tick(&view([50.0, 0.0, 0.0], &has), &mut rng);
+                total += a.status_hits.iter().flatten().sum::<i32>();
+            }
+            (applied, total)
+        };
+        // Tor's Leaf: 34 s, 5 HP every 4 s: 8 hits, 40 HP; nothing on T = 2.
+        assert_eq!(run(0, 2, 34, 5, 4), (true, 40));
+        assert_eq!(run(2, 2, 34, 5, 4), (false, 0));
+        // Fire 12 s, 5 HP every 2 s: 25 HP. The default poison: 2 HP every 4 s for 120 s.
+        assert_eq!(run(0, 7, 12, 5, 2), (true, 25));
+        assert_eq!(run(0, 2, -1, -1, -1), (true, 2 * 29));
+        // Duration 0: the timer is set to 0 and nothing is active.
+        assert_eq!(run(0, 7, 0, 5, 2), (true, 0));
+        // Stun: nothing on T = 4; otherwise state 4 at once, timer 300, then back to agro.
+        let mut p = skeleton();
+        p.element = 4;
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        assert!(!e.apply_status(0, -1, -1, -1));
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        assert!(e.apply_status(0, -1, -1, -1));
+        assert_eq!((e.state, e.timers[0]), (4, 300));
+        let a = e.tick(&view([50.0, 0.0, 0.0], &has), &mut rng);
+        assert_eq!((e.state, a.rate), (4, Some(0.0)));
+        for _ in 0..300 {
+            e.tick(&view([50.0, 0.0, 0.0], &has), &mut rng);
+        }
+        assert_eq!(e.state, 19);
+        // Outgoing scales.
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        e.apply_status(1, -1, -1, -1);
+        e.apply_status(4, -1, -1, -1);
+        assert_eq!((e.shot_scale(), e.strike_scale()), (0.75, 1.125));
     }
 
     #[test]

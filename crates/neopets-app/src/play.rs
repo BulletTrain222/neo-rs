@@ -407,6 +407,8 @@ pub struct Play {
     magic: neopets_sim::mote::Magic,
     /// The last Mote charge or magic payment, for the status line.
     pub last_mote: String,
+    /// The last status applied to an enemy, for the status line.
+    pub last_status: String,
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     mote_objects: Vec<neopets_sim::charm::Object>,
     charm_words: neopets_sim::charm::Words,
@@ -735,6 +737,7 @@ impl Play {
             last_mote: String::new(),
             mote_objects: Vec::new(),
             charm_words,
+            last_status: String::new(),
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -1720,8 +1723,14 @@ impl Play {
             }
             hits.push((i, damage));
         }
+        // SPEC-0036 Damage, take-hit: in the power step a status request of the word-2 Mote
+        // also goes to the target (SPEC-0029 Behavior 27.1).
+        let request = mote_id.filter(|_| sub == 10).and_then(|id| neopets_sim::mote::status_request(0, id, |k| self.design.attack_power(k)));
         for (i, damage) in hits {
             self.character_take_hit(i, damage, hero_at, "");
+            if let Some(r) = request {
+                self.character_status(i, r);
+            }
         }
         // A landed Tor hit outside the power step pays the level-0 cost, then uses word-2 charge.
         if sub != 10 {
@@ -1771,6 +1780,17 @@ impl Play {
         }
     }
 
+    /// A status request to character i: the enemy's apply (SPEC-0029 Behavior 27.1); other
+    /// characters ignore it.
+    fn character_status(&mut self, i: usize, [code, d, a, t]: [i32; 4]) {
+        let Some(c) = self.characters.get_mut(i) else { return };
+        if let Some(e) = c.enemy.as_mut() {
+            if e.apply_status(code, d, a, t) {
+                self.last_status = format!("status {code} on {} ({d} s, {a}, {t}) on tick {}", c.name, self.ticks);
+            }
+        }
+    }
+
     /// SPEC-0036 Charm attack hits, per tick: each live Mote object updates, then walks the
     /// hittable characters of the world against their body cylinders; a target not on its
     /// list (and with a free slot) is listed and takes trunc((scale x C - defence) x P).
@@ -1793,8 +1813,13 @@ impl Play {
                 let (damage, _) = neopets_sim::charm::damage(o.scale, cf, r.defence, p);
                 hits.push((i, damage));
             }
+            // Tor's Lava orbit sends fire with Tor's Lava values (SPEC-0029 Behavior 27.1).
+            let request = (o.id == 161).then(|| neopets_sim::mote::status_request(0, 161, |k| self.design.attack_power(k))).flatten();
             for (i, damage) in hits {
                 self.character_take_hit(i, damage, hero, &format!("Mote {} object ", o.id));
+                if let Some(r) = request {
+                    self.character_status(i, r);
+                }
             }
         }
         self.mote_objects = objects;
@@ -1877,8 +1902,8 @@ impl Play {
 
     /// SPEC-0036 Enemy attack damage to a hero (shared enemy class): the shield block (with the
     /// shield Mote's charge and cost), the armour Mote and the body item, for an attack of
-    /// damage d0 and element `element`. G and the petpet factor are 1.
-    fn enemy_damage(&mut self, d0: f32, blocked: bool, element: i32) -> f32 {
+    /// damage d0, element `element` and the attacker's status scale G. The petpet factor is 1.
+    fn enemy_damage(&mut self, d0: f32, blocked: bool, element: i32, g: f32) -> f32 {
         use neopets_sim::mote;
         let stat = |p: &Self, id: u16, k: usize| p.items.get(id).map_or(0.0, |i| i.stats[k] as f32);
         let mut b = 0.0;
@@ -1910,7 +1935,7 @@ impl Play {
             }
             d = mote::armour_body(d, stat(self, body, 0));
         }
-        mote::taken(d, 1.0) as f32
+        mote::taken(d, g) as f32
     }
 
     /// Diagnostic fight goal: the nearest living class-17 character of the current world, and
@@ -2636,6 +2661,7 @@ impl Play {
         let attackable = self.loco.state != hero_states::DEAD && !self.dialogue_open;
         let world = &self.world;
         let mut strikes = Vec::new();
+        let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
             let Character { id, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, .. } = c else { continue };
             let p = wk.position();
@@ -2712,7 +2738,9 @@ impl Play {
                 let to = unit(sub_v(p, cam.eye));
                 let out_of_cone = fwd[0] * to[0] + fwd[1] * to[1] + fwd[2] * to[2] < 0.85;
                 let slot = &e.p.slots[req.slot];
-                if let Some(setup) = neopets_sim::projectile::spawn(&slot.missile, e.p.element, *id, launch, hero, out_of_cone, &mut self.rng) {
+                if let Some(mut setup) = neopets_sim::projectile::spawn(&slot.missile, e.p.element, *id, launch, hero, out_of_cone, &mut self.rng) {
+                    // Behavior 13: the damage times the enemy damage scale (curse, strength).
+                    setup.damage = (setup.damage * e.shot_scale()).max(0.0);
                     self.shots.submit(setup);
                 }
             }
@@ -2737,7 +2765,16 @@ impl Play {
             *facing = wk.facing;
             if let Some(s) = act.strike {
                 let m = e.p.slots[s.slot].missile;
-                strikes.push((*id, s, wk.facing, (m.status, m.status_chance, m.status_range)));
+                strikes.push((*id, s, wk.facing, (m.status, m.status_chance, m.status_range), e.strike_scale(), e.status(11)));
+            }
+            for amount in act.status_hits.into_iter().flatten() {
+                dots.push((*id, amount));
+            }
+        }
+        // SPEC-0029 Behavior 27.2 steps 3 and 8: each poison or fire hit is a take-hit.
+        for (id, amount) in dots {
+            if let Some(i) = self.characters.iter().position(|c| c.id == id) {
+                self.character_take_hit(i, amount, hero, "status ");
             }
         }
         // The projectile pool's update, after the region passes (SPEC-0029 Behavior 9).
@@ -2796,11 +2833,16 @@ impl Play {
                 neopets_sim::projectile::Event::Summon { .. } => {}
             }
         }
-        for (at, s, f, status) in strikes {
+        for (at, s, f, status, g, poison_attack) in strikes {
             // SPEC-0036 Enemy attack damage to a hero: the shield block, the armour Mote and the
             // body item, by the attack's damage alignment (no petpet).
             let element = self.characters.iter().find(|c| c.id == at).and_then(|c| c.enemy.as_ref()).map_or(0, |e| e.p.slots[s.slot].alignment);
-            let damage = self.enemy_damage(s.damage, s.blocked, element);
+            let damage = self.enemy_damage(s.damage, s.blocked, element, g);
+            // Status 11 (poison attack): a landed melee hit also poisons the hero at the default
+            // (SPEC-0029 Behavior 27.1), through the hero's apply.
+            if poison_attack && !s.blocked {
+                self.statuses.apply(neopets_sim::status::POISON as i32, -1);
+            }
             let died = self.hero_hit(damage, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" }));
             // SPEC-0038 Behavior 13 strike test: the status roll int[0, 100] strictly below the
             // chance, for int[int(range max), int(range min)] / 60 whole seconds.
