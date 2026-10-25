@@ -99,6 +99,9 @@ pub struct AttackSlot {
     pub spawn_key: u16,
     /// The damage alignment of the attack (+0x3BC + 4k; SPEC-0029 Layout 4): its element.
     pub alignment: i32,
+    /// The six effect ids of a shot (u16 at +0x46C + 2k + 8j, j = 0 to 5; 0xFFFF is -1):
+    /// flight 0 and 1, blocked hit, expiry, world impact, unblocked hit (SPEC-0029 Behavior 9).
+    pub effects: [i32; 6],
 }
 
 /// The values the common-enemy class reads (SPEC-0038 Layout section 2) and the five weapon
@@ -222,6 +225,7 @@ impl MonsterTable {
             area_radius: f(0x45C + 4 * k),
             spawn_key: u(0x3CC + 2 * k),
             alignment: w(0x3BC + 4 * k) as i32,
+            effects: std::array::from_fn(|j| u(0x46C + 2 * k + 8 * j) as i16 as i32),
         };
         Some(Tuning {
             approach: u(0x38),

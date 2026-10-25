@@ -38,6 +38,8 @@ pub struct Setup {
     pub ignore_world: bool,
     /// Status id (-1 none), chance and value.
     pub status: (i32, i32, i32),
+    /// The six effect ids (flight 0 and 1, blocked, expiry, world impact, hit; -1 none).
+    pub effects: [i32; 6],
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -68,6 +70,8 @@ pub enum Event {
     Owner { id: u64, damage: f32 },
     /// A kind-8 release: the keyed summon (not spawned yet).
     Summon { key: i32, at: Vec3 },
+    /// One of the shot's effect ids plays at a point (ids 2 to 5; -1 is not sent).
+    Effect { id: i32, at: Vec3 },
 }
 
 /// The damage a hero takes from a shot hit of reduced damage D: max(1, 0.25 D) when blocked
@@ -197,6 +201,7 @@ impl Pool {
                 continue;
             }
             if p.life < 0 {
+                effect(p, 3, p.position, &mut out);
                 *slot = None;
                 continue;
             }
@@ -240,9 +245,11 @@ impl Pool {
                             p.s.damage = 0.0;
                         }
                         p.at_owner = true;
+                        effect(p, 2, p.position, &mut out);
                         out.push(Event::Reflected { element: p.s.element });
                     } else {
                         let d = p.s.damage.max(0.0);
+                        effect(p, if blocked { 2 } else { 5 }, p.position, &mut out);
                         if blocked {
                             out.push(Event::Hero { damage: d, owner: p.s.owner, blocked: true, element: p.s.element });
                         } else {
@@ -259,7 +266,10 @@ impl Pool {
             // World collision, once more than 2.0 from the start point.
             if len(sub(p.position, p.s.start)) > 2.0 {
                 let ground = (env.ground)(p.position[0], p.position[2], p.position[1] + 2.5);
-                if ground.is_some_and(|h| p.position[1] - p.s.radius < h) {
+                if let Some(h) = ground.filter(|&h| p.position[1] - p.s.radius < h) {
+                    if !(p.s.kind == 9 || (p.s.ignore_world && !matches!(p.s.kind, 1..=8))) {
+                        effect(p, 4, [p.position[0], h, p.position[2]], &mut out);
+                    }
                     match p.s.kind {
                         1 => {
                             p.area = true;
@@ -295,6 +305,13 @@ impl Pool {
     }
 }
 
+/// Send effect id j of a shot when it is not -1.
+fn effect(p: &Shot, j: usize, at: Vec3, out: &mut Vec<Event>) {
+    if p.s.effects[j] != -1 {
+        out.push(Event::Effect { id: p.s.effects[j], at });
+    }
+}
+
 /// The missile values of one attack slot (SPEC-0038 Layout section 2, + 4k).
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Missile {
@@ -317,6 +334,8 @@ pub struct Missile {
     pub status: i32,
     pub status_chance: f32,
     pub status_range: (f32, f32),
+    /// The six shot effect ids.
+    pub effects: [i32; 6],
 }
 
 fn ballistic(launch: Vec3, aim: Vec3, s: f32) -> (Vec3, i32) {
@@ -365,6 +384,7 @@ pub fn spawn(m: &Missile, element: i32, owner: u64, launch: Vec3, hero: Vec3, ou
         key: -1,
         ignore_world: m.flags & 0x10 != 0 && straight,
         status: (m.status, m.status_chance as i32, status_value),
+        effects: m.effects,
     };
     let life = |v: f32| if v > 0.0 { (m.range / v) as i32 } else { 0 };
     if lobbed {
@@ -417,7 +437,7 @@ mod tests {
     }
 
     fn archer() -> Missile {
-        Missile { flight: 0, speed: 2.0, range: 70.0, radius: 0.05, damage: 10.0, visual: 23, status: 7, status_chance: 100.0, status_range: (600.0, 1800.0), ..Missile::default() }
+        Missile { flight: 0, speed: 2.0, range: 70.0, radius: 0.05, damage: 10.0, visual: 23, status: 7, status_chance: 100.0, status_range: (600.0, 1800.0), effects: [-1; 6], ..Missile::default() }
     }
 
     #[test]
@@ -442,6 +462,27 @@ mod tests {
             }
         }
         assert_eq!(pool.live(), 0);
+    }
+
+    /// Behavior 9's six effect ids: the unblocked hit plays id 5 at the shot, expiry id 3, and
+    /// -1 plays nothing.
+    #[test]
+    fn shot_effect_ids() {
+        let mut rng = Rng::seeded(1);
+        let m = Missile { effects: [1400, 1400, 1399, -1, 1399, 1398], ..archer() };
+        let s = spawn(&m, 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], false, &mut rng).unwrap();
+        let mut pool = Pool::default();
+        pool.submit(s);
+        let (o, g, w) = (|_| true, |_, _, _| None, |_, _| false);
+        let e = env([0.0, 0.0, 20.0], &o, &g, &w);
+        let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
+        assert!(matches!(ev[0], Event::Effect { id: 1398, at } if at[2] > 19.0));
+        // Expiry with id 3 = -1: nothing.
+        let s = spawn(&m, 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 200.0], false, &mut rng).unwrap();
+        pool.submit(s);
+        let far = env([0.0, 0.0, 500.0], &o, &g, &w);
+        let ev: Vec<Event> = (0..60).flat_map(|_| pool.tick(&far)).collect();
+        assert!(ev.is_empty() && pool.live() == 0);
     }
 
     #[test]
@@ -482,7 +523,7 @@ mod tests {
     #[test]
     fn flower_seed_ballistic_launch() {
         // SPEC-0038 vector: v 0.5, v_end 0.1, band 3 to 60; launch (0, 1, 0), hero (20, 0, 0).
-        let m = Missile { flight: 1, speed: 0.5, end_speed: 0.1, band: (3.0, 60.0), ..Missile::default() };
+        let m = Missile { flight: 1, speed: 0.5, end_speed: 0.1, band: (3.0, 60.0), effects: [-1; 6], ..Missile::default() };
         let s = spawn(&m, 0, 1, [0.0, 1.0, 0.0], [20.0, 0.0, 0.0], false, &mut Rng::seeded(1)).unwrap();
         assert_eq!((s.kind, s.lifetime), (1, 3961));
         assert!((s.velocity[0] - 0.30302).abs() < 1e-4, "{:?}", s.velocity);
@@ -508,6 +549,7 @@ mod tests {
             key: -1,
             ignore_world: false,
             status: (-1, 0, 0),
+            effects: [-1; 6],
         };
         for _ in 0..SLOTS {
             assert!(pool.submit(s));

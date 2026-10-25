@@ -1,6 +1,7 @@
 mod archive_view;
 mod character;
 mod controls;
+mod effect_view;
 mod orbit;
 mod pattern;
 mod audio_view;
@@ -30,6 +31,54 @@ const PLAY_OUTFIT: u32 = 504;
 const SAVE_FILE: &str = "private/saves/savegame.bin";
 
 /// The save scan's read: the file when it exists and is exactly 0xC400 bytes.
+/// SPEC-0034 test vectors 70 to 72: one node of a definition run alone with every draw at its
+/// midpoint, at the origin with an identity frame.
+fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    use neopets_sim::effect::*;
+    let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
+    let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+    let range = neopets_data::effect::table_in_chain(&bytes, &chain.chunks).ok_or("no effect table")?;
+    let table = EffectTable::parse(&bytes[range])?;
+    println!("Effect table: {} definitions, {} nodes; id 101 -> {:?}, 159 -> {:?}, 1201 -> {:?}, 938 -> {:?}, 4007 -> {:?}, 162 -> {:?}", table.definitions.len(), table.nodes.len(), table.find(101), table.find(159), table.find(1201), table.find(938), table.find(4007), table.find(162));
+    for (id, node, ticks) in [(1201, 414usize, 300u32), (159, 1371, 370), (400, 446, 70)] {
+        let mut t = table.clone();
+        let Some(d) = t.find(id) else { continue };
+        t.definitions[d].nodes = vec![node];
+        let n = &t.nodes[node];
+        println!("Vector: id {id} node {node} (A {}, B {}, C {})", n.a, n.b, n.c);
+        if std::env::var_os("NEOPETS_EFFECT_DUMP").is_some() {
+            println!("  B {:?}
+  A rates {:?} thresholds {:?} size {:?}", t.b[n.b], t.a[n.a].size_rates, t.a[n.a].thresholds, t.a[n.a].size);
+        }
+        let mut fx = Effects::new();
+        let h = fx.add_object(EffectObject::new(&t, id, [0.0; 3], IDENTITY));
+        fx.update(&t, h, None, &mut Midpoint);
+        let first = |fx: &Effects| fx.particles.iter().flatten().next().cloned();
+        let mut bursts = Vec::new();
+        let mut last = 0;
+        for tick in 1..=ticks {
+            let before = fx.spawners.iter().flatten().map(|s| s.bursts).sum::<u32>();
+            fx.tick(&t, &mut Midpoint);
+            let after = fx.spawners.iter().flatten().map(|s| s.bursts).sum::<u32>();
+            if after > before && bursts.len() < 5 {
+                bursts.push(tick);
+            }
+            if [1, 30, 31, 32, 60, 61, 240].contains(&tick) {
+                if let Some(p) = first(&fx) {
+                    println!("  tick {tick}: P ({:.4}, {:.4}, {:.4}) v ({:.4}, {:.4}, {:.4}) colour {:?} bytes {:?} size {:.4} half {:?} elapsed {:.4}", p.position[0], p.position[1], p.position[2], p.velocity[0], p.velocity[1], p.velocity[2], p.colour.map(|c| (c * 10000.0).round() / 10000.0), p.bytes(), p.size[0], p.half.map(|h| (h * 10000.0).round() / 10000.0), p.elapsed);
+                }
+            }
+            if fx.live_particles() > 0 {
+                last = tick;
+            }
+            if tick == ticks {
+                println!("  bursts on ticks {bursts:?}; live {} particles, {} spawners at tick {tick}; last live tick {last}", fx.live_particles(), fx.live_spawners());
+            }
+        }
+    }
+    Ok(())
+}
+
 fn read_save(path: &str) -> Option<neopets_sim::save::SaveFile> {
     std::fs::read(path).ok().and_then(|b| neopets_sim::save::SaveFile::parse(&b).ok())
 }
@@ -433,6 +482,8 @@ fn main() {
     let mut save_test = false;
     let mut render: Option<(u32, u32, u32, u32)> = None;
     let mut render_cue: Option<(u32, i32)> = None;
+    // `--effects-check`: run SPEC-0034's per-tick vectors 70 to 72 on the disc's records.
+    let mut effects_check = false;
     // `--title`: start at the front end's card state (logo, legal screen, title) instead of in
     // play.
     let mut title = false;
@@ -466,6 +517,8 @@ fn main() {
             // private/audio/cue-BLOCK-CUE.wav.
             let mut n = || args.next().and_then(|v| v.parse::<i32>().ok());
             render_cue = Some((n().unwrap_or(347) as u32, n().unwrap_or(20)));
+        } else if arg == "--effects-check" {
+            effects_check = true;
         } else if arg == "--render-music" {
             // `--render-music BANK SECONDS [G] [R2]`: render a bank's music offline to
             // private/audio/bank-BANK.wav (for checking the sequencer and synth).
@@ -565,6 +618,17 @@ fn main() {
         Ok((s, archive)) => (s, Some(archive)),
         Err(e) => (format!("ISO not ready\n{e}"), None),
     };
+    if effects_check {
+        let Some(mut archive) = archive else {
+            eprintln!("{status}");
+            std::process::exit(1)
+        };
+        let Archive { disc, index } = &mut archive;
+        if let Err(e) = check_effects(disc, index) {
+            eprintln!("{e}");
+        }
+        return;
+    }
     if let Some((number, cue)) = render_cue {
         let Some(mut archive) = archive else {
             eprintln!("{status}");
@@ -697,7 +761,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
             )
                 .chain(),
         );
@@ -965,6 +1029,15 @@ fn step_sim(
             l.right |= keys.just_pressed(KeyCode::Numpad6) || pad(GamepadButton::DPadRight);
             l.down |= keys.just_pressed(KeyCode::Numpad2) || pad(GamepadButton::DPadDown);
             l.triangle |= keys.just_pressed(KeyCode::KeyT) || pad(GamepadButton::North);
+        }
+        // NEOPETS_TRACE_EFFECT="id": a diagnostic one-shot of that effect 3 units in front of
+        // the hero every 120 play ticks.
+        if let Some(id) = std::env::var("NEOPETS_TRACE_EFFECT").ok().and_then(|v| v.trim().parse::<i32>().ok()) {
+            static LAST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+            let n = play.play.ticks / 120;
+            if LAST.swap(n, std::sync::atomic::Ordering::Relaxed) != n {
+                play.play.diagnostic_effect(id);
+            }
         }
         // NEOPETS_TRACE_SWITCH also works in the window: the chord on those play ticks.
         if std::env::var("NEOPETS_TRACE_SWITCH").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| (k..k + 3).contains(&(play.play.ticks + 1)))) {

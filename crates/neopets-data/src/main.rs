@@ -30,6 +30,7 @@ fn run() -> Result<(), String> {
     let mut clips = false;
     let mut ground = false;
     let mut areas = false;
+    let mut effects = false;
     let mut show = Vec::new();
     let mut textures = Vec::new();
     let mut scenes = Vec::new();
@@ -44,6 +45,7 @@ fn run() -> Result<(), String> {
             "--clips" => clips = true,
             "--ground" => ground = true,
             "--areas" => areas = true,
+            "--effects" => effects = true,
             "--scene" => {
                 let n = args.next().ok_or("--scene needs a resource number")?;
                 scenes.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -75,7 +77,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty()) {
+    if !(effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -91,6 +93,9 @@ fn run() -> Result<(), String> {
     }
     if materials {
         material_census(&mut disc, &index)?;
+    }
+    if effects {
+        effect_census(&mut disc, &index)?;
     }
     for &n in &scenes {
         inspect_mesh::scene(&mut disc, &index, n)?;
@@ -115,6 +120,23 @@ fn run() -> Result<(), String> {
         if coverage {
             write_coverage(&root, &report)?;
         }
+    }
+    Ok(())
+}
+
+/// SPEC-0034 Layout section 2: where the resource-9 effect table is, and the blend of the shader
+/// list's groups (the records are read by the sim's parser; the app's `--effects` checks them).
+fn effect_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    use neopets_data::effect;
+    let bytes = index.read(disc, effect::RESOURCE)?;
+    let chain = resource::walk_chunks(&bytes, None)?;
+    let range = effect::table_in_chain(&bytes, &chain.chunks).ok_or("Resource 9 has no type-34 chunk")?;
+    let chunk = chain.chunks.iter().find(|c| c.kind == effect::CHUNK_TYPE).map_or(0, |c| c.offset);
+    println!("Effect table: type-34 chunk at {chunk:#x}, payload {} bytes", range.len());
+    let materials = neopets_data::material::lists_in_chain(&bytes, &chain.chunks)?;
+    if let Some(list) = materials.iter().find_map(|l| l.list.as_ref()) {
+        let additive = list.groups.iter().filter(|g| g.additive()).count();
+        println!("  shader list: {} groups, {additive} additive", list.groups.len());
     }
     Ok(())
 }

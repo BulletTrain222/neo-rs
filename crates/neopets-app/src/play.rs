@@ -547,6 +547,15 @@ pub struct Play {
     pub continued: bool,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
+    /// Effects (SPEC-0034): the resource-9 definition table, its material images, the shared
+    /// pools and the footstep dust table (28 ids at 0x3150A8).
+    pub effect_table: std::sync::Arc<neopets_sim::effect::EffectTable>,
+    pub effect_images: std::sync::Arc<Vec<neopets_data::effect::GroupImage>>,
+    pub effects: neopets_sim::effect::Effects,
+    dust_ids: Vec<i32>,
+    /// The flight effect objects (ids 0 and 1) of each projectile slot, with the shot's start
+    /// point that tells a new shot in the same slot.
+    shot_fx: Vec<Option<([f32; 3], [Option<usize>; 2])>>,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -722,6 +731,14 @@ impl Play {
                 stun_table: std::array::from_fn(|k| table[k] as i32),
             }
         };
+        let (effect_table, effect_images) = {
+            let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
+            let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+            let range = neopets_data::effect::table_in_chain(&bytes, &chain.chunks).ok_or("Resource 9 has no effect table")?;
+            let table = neopets_sim::effect::EffectTable::parse(&bytes[range])?;
+            (std::sync::Arc::new(table), std::sync::Arc::new(neopets_data::effect::group_images(&bytes, &chain.chunks)?))
+        };
+        let dust_ids: Vec<i32> = words(0x0031_50A8, 28)?.into_iter().map(|w| w as i32).collect();
         let magic = neopets_sim::mote::Magic::new(words(neopets_sim::mote::MAGIC_AT, neopets_sim::mote::MAGIC_WORDS)?.into_iter().map(|w| w as i32).collect());
         let design = index.read(disc, neopets_data::design::RESOURCE).ok().and_then(|b| neopets_data::design::DesignTables::parse(&b).ok()).unwrap_or_default();
         let hero_colour = design.hero_colour(0).unwrap_or([128; 3]);
@@ -846,6 +863,11 @@ impl Play {
             buy_template: boot_string(&boot_bytes, 0x0031_9528),
             exorbitant: boot_string(&boot_bytes, 0x0031_5A48),
             rng: neopets_sim::rng::Rng::seeded(clock_seed()),
+            effect_table,
+            effect_images,
+            effects: neopets_sim::effect::Effects::new(),
+            dust_ids,
+            shot_fx: vec![None; neopets_sim::projectile::SLOTS],
             attack: None,
             attack_latch: false,
             weapon: None,
@@ -2021,6 +2043,44 @@ impl Play {
         self.hero_shots = keep;
     }
 
+    /// SPEC-0029 Behavior 9 Visual update: a shot's flight effects (ids 0 and 1) are effect
+    /// objects placed at the shot each tick and updated with no listener; they stop when the
+    /// shot ends.
+    fn shot_effects_step(&mut self) {
+        let table = self.effect_table.clone();
+        for k in 0..neopets_sim::projectile::SLOTS {
+            let shot = self.shots.slots[k];
+            let same = matches!((&self.shot_fx[k], shot), (Some((start, _)), Some(s)) if *start == s.s.start);
+            if !same {
+                if let Some((_, objects)) = self.shot_fx[k].take() {
+                    for h in objects.into_iter().flatten() {
+                        self.effects.stop(&table, h);
+                        self.effects.release(h);
+                    }
+                }
+                if let Some(s) = shot {
+                    let objects = [0, 1].map(|j| {
+                        (s.s.effects[j] != -1).then(|| self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, s.s.effects[j], s.position, neopets_sim::effect::IDENTITY)))
+                    });
+                    self.shot_fx[k] = Some((s.s.start, objects));
+                }
+            }
+            if let (Some(s), Some((_, objects))) = (shot, self.shot_fx[k]) {
+                for h in objects.into_iter().flatten() {
+                    self.effects.set_position(h, s.position);
+                    self.effects.update(&table, h, None, &mut self.rng);
+                }
+            }
+        }
+    }
+
+    /// A diagnostic one-shot of effect `id` 3 units in front of the hero, 1.5 above its feet.
+    pub fn diagnostic_effect(&mut self, id: i32) {
+        let (p, f) = (self.loco.position(), self.loco.facing);
+        let table = self.effect_table.clone();
+        self.effects.one_shot(&table, id, [p[0] + 3.0 * f[0], p[1] + 1.5, p[2] + 3.0 * f[2]], neopets_sim::effect::IDENTITY, &mut self.rng);
+    }
+
     /// The selected hero's name for the speaker rule (SPEC-0022).
     pub fn hero_name(&self) -> &'static [u8] {
         if self.hero_index == 1 { b"Roberta" } else { b"Tor" }
@@ -3019,6 +3079,9 @@ impl Play {
             }
             if let Some((damage, push)) = act.hero_damage {
                 self.hero_hit(damage as f32, push, false, [-hf[0], 0.0, -hf[2]], "the Juppie's head slam".into());
+                // The shared hit flash 222, detached, at the impact point (SPEC-0015; SPEC-0029).
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, 222, head, neopets_sim::effect::IDENTITY, &mut self.rng);
             }
             if let Some(p) = act.blocker {
                 // The head cylinder (radius 4.0, length 10.0) pushes the hero's body out.
@@ -3565,6 +3628,8 @@ impl Play {
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
         self.sound_step();
+        let table = self.effect_table.clone();
+        self.effects.tick(&table, &mut self.rng);
         // Dead characters disappear when their countdown ends.
         for c in &mut self.characters {
             if let Some(t) = c.dying.as_mut() {
@@ -3881,8 +3946,13 @@ impl Play {
                     }
                 }
                 neopets_sim::projectile::Event::Summon { .. } => {}
+                neopets_sim::projectile::Event::Effect { id, at } => {
+                    let table = self.effect_table.clone();
+                    self.effects.one_shot(&table, id, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+                }
             }
         }
+        self.shot_effects_step();
         for (at, s, f, status, g, poison_attack) in strikes {
             // SPEC-0036 Enemy attack damage to a hero: the shield block, the armour Mote and the
             // body item, by the attack's damage alignment (no petpet).
@@ -4431,6 +4501,23 @@ impl Play {
             };
             if let Some(o) = code.and_then(surface_offset) {
                 self.sound.play(snd::MAIN, gait + o, Play { emitter: Some(p), ..Default::default() });
+            }
+            // SPEC-0034 3.16 footstep dust: entry 1 dirt (codes 0 and 18), 2 grass (1), 5 muck
+            // (5), 8 water (8 and 11), 9 wood (9), at joint 28 on a 0x80 frame, else joint 31.
+            let entry = match code {
+                Some(0 | 18) => Some(1),
+                Some(1) => Some(2),
+                Some(5) => Some(5),
+                Some(8 | 11) => Some(8),
+                Some(9) => Some(9),
+                _ => None,
+            };
+            if let Some(&id) = entry.and_then(|e| self.dust_ids.get(e)) {
+                let joint = if self.hero.frame_bits() & 0x80 != 0 { 28 } else { 31 };
+                let frames = self.hero.bone_frames();
+                let at = frames.get(joint).map_or(p, |f| placement(p, self.loco.facing).mul(f).t);
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, id, at, neopets_sim::effect::IDENTITY, &mut self.rng);
             }
         }
         // Landing: the hero leaves a jump or fall state onto the ground.
@@ -5158,6 +5245,9 @@ impl Play {
         if let (Some(p), Some(c)) = (self.petpet.as_ref(), self.pet_char.and_then(|id| self.characters.iter().find(|c| c.id == id))) {
             names.push(format!("petpet [kind {} (present {:?}) state {} T {} anim {} at {:.1},{:.1}]", p.kind, self.pet_kind(), p.state, p.t, c.anim.action(), c.position[0], c.position[2]));
         }
+        if self.effects.live_spawners() > 0 || self.effects.live_particles() > 0 {
+            names.push(format!("effects [{} spawners, {} particles]", self.effects.live_spawners(), self.effects.live_particles()));
+        }
         let roundup: Vec<u16> = (107..=110).filter(|&f| self.state.flag(f)).collect();
         if !roundup.is_empty() {
             names.push(format!("round-up flags {roundup:?}"));
@@ -5314,6 +5404,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
             status: s.status,
             status_chance: s.status_chance,
             status_range: (s.status_range.0, s.status_range.1),
+            effects: s.effects,
         },
     };
     enemy::Params {

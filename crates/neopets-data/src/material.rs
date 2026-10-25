@@ -12,6 +12,9 @@ const TEX0_1: u8 = 0x06;
 const TEX0_2: u8 = 0x07;
 /// GS register number of CLAMP for drawing context 2 (the first register set).
 const CLAMP_2: u8 = 0x09;
+/// GS register numbers of ALPHA for drawing contexts 1 and 2 (public GS documentation).
+const ALPHA_1: u8 = 0x42;
+const ALPHA_2: u8 = 0x43;
 /// Groups per list stay far below this on disc.
 const MAX_GROUPS: u32 = 4096;
 
@@ -35,12 +38,21 @@ pub struct Group {
     pub tex0_pass1: Option<Tex0>,
     /// CLAMP of the first register set: bits 0–1 the U wrap, 2–3 the V wrap (0 repeat, 1 clamp).
     pub clamp: Option<u64>,
+    /// The ALPHA register of the state block (context 2's, else context 1's): fields A, B, C
+    /// and D in bits 0 to 7 and FIX in bits 32 to 39 (SPEC-0034 2.8).
+    pub alpha: Option<u64>,
     /// Pass-0 vertex program (material record, group offset 0x44): 0 and 4 are unlit, 1, 2 and
     /// 6 are lit, 3 is the billboard program; it also sets the vertex colour scale.
     pub program: u32,
 }
 
 impl Group {
+    /// The blend's B field is 2 (zero): source x alpha + destination, the additive rule of
+    /// SPEC-0034 2.8. Every other setting (or none) blends by alpha.
+    pub fn additive(&self) -> bool {
+        self.alpha.is_some_and(|a| (a >> 2) & 3 == 2)
+    }
+
     /// The colour byte that means 1.0 for this group's pass-0 program (SPEC-0004, Colour).
     pub fn colour_unit(&self) -> f32 {
         if matches!(self.program, 1 | 2 | 6) { 16.0 } else { 128.0 }
@@ -59,6 +71,7 @@ struct StateRegs {
     tex0: Option<Tex0>,
     tex0_pass1: Option<Tex0>,
     clamp: Option<u64>,
+    alpha: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -85,6 +98,8 @@ fn state_registers(block: &[u8]) -> Option<StateRegs> {
             TEX0_2 => regs.tex0 = Some(Tex0::decode(value)),
             TEX0_1 => regs.tex0_pass1 = Some(Tex0::decode(value)),
             CLAMP_2 => regs.clamp = Some(value),
+            ALPHA_2 => regs.alpha = Some(value),
+            ALPHA_1 => regs.alpha = regs.alpha.or(Some(value)),
             _ => {}
         }
     }
@@ -120,6 +135,7 @@ impl ShaderList {
                     tex0: regs.tex0,
                     tex0_pass1: regs.tex0_pass1,
                     clamp: regs.clamp,
+                    alpha: regs.alpha,
                     program: u32_at(group, 0x44).unwrap_or(0),
                 })
             })
