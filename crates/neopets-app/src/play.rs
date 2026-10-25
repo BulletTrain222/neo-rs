@@ -3448,7 +3448,13 @@ impl Play {
             self.default_death();
         }
         if self.loco.state == hero_states::DEAD {
-            let id = self.death.handler(deadly, self.hero.clip_state(), false);
+            // SPEC-0053 3.8 d: with the death clip at 0.95, a switch to the partner (both flags
+            // and the extra flag set) is requested every tick; a running or accepted switch
+            // keeps the game going, a refusal or a dead partner leads to game over.
+            let clip = self.hero.clip_state();
+            let at_end = deadly.is_none() && clip.progress >= 0.95;
+            let takes_over = at_end && (self.swap.is_some() || self.request_switch(true, true, true));
+            let id = self.death.handler(deadly, clip, takes_over);
             self.loco.set_death_clip(id);
         }
         // World swap: a hit in the other buffer makes it current (the original waits for the
@@ -3936,6 +3942,28 @@ impl Play {
     /// effects, which are not implemented: their use is refused.
     fn use_item(&mut self, id: u16) {
         if self.loco.state == hero_states::DEAD {
+            return;
+        }
+        // SPEC-0053 3.8 b: the Potion of Revival (item 50), in mode 2 with the partner dead,
+        // heals the partner to its maximum and requests a switch to it (extra flag set).
+        if id == 50 {
+            let revive = self.swap_mode == 2 && self.parked.as_ref().is_some_and(|p| p.hp <= 0);
+            if revive {
+                if let Some(p) = self.parked.as_mut() {
+                    p.hp = p.hp_max;
+                }
+                if self.request_switch(true, true, true) {
+                    let left = {
+                        let n = self.state.items.entry(id).or_insert(0);
+                        *n = n.saturating_sub(1);
+                        *n
+                    };
+                    self.quick.used(id as i32, left);
+                    self.last_pickup = format!("used item 50 on tick {}: the partner is revived", self.ticks);
+                }
+            } else {
+                self.cue(0xA2);
+            }
             return;
         }
         let Some(item) = self.items.get(id).copied() else { return };

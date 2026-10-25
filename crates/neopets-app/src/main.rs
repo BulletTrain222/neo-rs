@@ -1827,6 +1827,10 @@ fn play_trace(
     if let Some([x, z, y]) = start {
         play.place_at(x, z, y);
     }
+    // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic).
+    if let Some(hp) = std::env::var("NEOPETS_TRACE_HP").ok().and_then(|v| v.parse::<i32>().ok()) {
+        play.hero_hp = hp;
+    }
     // NEOPETS_TRACE_PET="type,T": a diagnostic petpet activated by type at the start (F = T).
     if let Ok(v) = std::env::var("NEOPETS_TRACE_PET") {
         let mut it = v.split(',').filter_map(|t| t.trim().parse::<i32>().ok());
