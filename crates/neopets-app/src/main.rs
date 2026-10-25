@@ -684,7 +684,7 @@ fn main() {
             ..default()
         }))
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play))
-        .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects).after(step_sim))
+        .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
             Update,
             (
@@ -1967,6 +1967,11 @@ fn play_trace(
         if !plays.is_empty() {
             println!("      cues {plays:?} on tick {}", play.ticks);
         }
+        let stingers = std::mem::take(&mut play.stinger_requests);
+        if !stingers.is_empty() {
+            println!("      stingers {stingers:?} on tick {}", play.ticks);
+        }
+        play.stinger_playing = false;
         if play.save_prompt != save_prompt {
             save_prompt = play.save_prompt;
             println!("      save prompt {} on tick {}", if save_prompt { "shown" } else { "hidden" }, play.ticks);

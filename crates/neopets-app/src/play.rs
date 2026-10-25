@@ -55,6 +55,11 @@ pub struct World {
     pub map_area: Option<i32>,
     /// The type-1001 record's music key and selector (SPEC-0009 Area to music row).
     pub music: Option<(i32, u32)>,
+    /// Placed sound emitters (SPEC-0031): the fourth list's ambient loops and adventure zones
+    /// with their start-delay counters (cleared at load), and the sphere emitters.
+    pub ambients: Vec<neopets_data::ground::Ambient>,
+    ambient_counters: Vec<u8>,
+    pub spheres: Vec<neopets_data::ground::SphereEmitter>,
 }
 
 impl World {
@@ -94,7 +99,15 @@ impl World {
                 .unwrap_or_default(),
             map_area: neopets_data::travel::map_area(&bytes, &chain.chunks),
             music: neopets_data::audio::pack_record(&bytes, &chain.chunks),
+            ambients: Vec::new(),
+            ambient_counters: Vec::new(),
+            spheres: Vec::new(),
         };
+        let mut world = world;
+        let (ambients, spheres) = ground::sound_emitters(&bytes, &chain.chunks);
+        world.ambient_counters = vec![0; ambients.len()];
+        world.ambients = ambients;
+        world.spheres = spheres;
         Ok((world, bytes))
     }
 
@@ -198,6 +211,9 @@ pub struct Character {
     /// Hit points (from the row), and the death countdown once they reach 0.
     pub hp: i32,
     pub dying: Option<u32>,
+    /// The action whose sound word was last seen, and the creature blocks the main table names.
+    sound_action: Option<u32>,
+    sound_blocks: Vec<u32>,
     /// The townsfolk routine (SPEC-0056) for class-6 characters; other classes only idle.
     pub townsfolk: Option<neopets_sim::npc::Townsfolk>,
     /// Class-7 Whinnies: their walker (motion record and navigation) and routine.
@@ -369,6 +385,13 @@ pub struct Play {
     pub sound_finished: Vec<usize>,
     foot_frame: Option<(usize, i32)>,
     last_state: u8,
+    /// Stingers (SPEC-0009 Effect and stinger index): requests for the audio side, whether one
+    /// is playing (set by the audio side), the tick stinger 4 last started, and the progress
+    /// flags of the last tick (a rising flag plays its table-2 stinger).
+    pub stinger_requests: Vec<i32>,
+    pub stinger_playing: bool,
+    stinger4: u64,
+    flags_seen: std::collections::BTreeSet<u16>,
 }
 
 /// The footstep surface offset o(k) by ground material code (SPEC-0031 Footsteps).
@@ -612,6 +635,10 @@ impl Play {
             sound_finished: Vec::new(),
             foot_frame: None,
             last_state: 1,
+            stinger_requests: Vec::new(),
+            stinger_playing: false,
+            stinger4: 0,
+            flags_seen: Default::default(),
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
         // which for 909 loads the farm family's slots.
@@ -1215,6 +1242,8 @@ impl Play {
                 root_step: [0.0; 3],
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
+                sound_action: None,
+                sound_blocks: anim.sound_blocks(),
                 row,
                 anim,
                 model,
@@ -1453,13 +1482,34 @@ impl Play {
                 }
             }
         }
-        if self.attack.as_ref().is_some_and(|a| a.cleared) {
+        if let Some(sub) = self.attack.as_ref().filter(|a| a.cleared).map(|a| a.sub) {
             self.hit_list.clear();
             if let Some(a) = self.attack.as_mut() {
                 a.cleared = false;
             }
+            // SPEC-0036 Attack router, Tor: into 2 and from 2 into 3, weapon 3 and voice 5; into
+            // 4, weapon 4 and voice 6; entering 6 and each repeat, weapon 9 and voice 4; into 10,
+            // voice 6, then voice 8.
+            use neopets_sim::sound::{Play as Cue, VOICE, WEAPON};
+            let plays: &[(usize, i32)] = match sub {
+                2 | 3 => &[(WEAPON, 3), (VOICE, 5)],
+                4 => &[(WEAPON, 4), (VOICE, 6)],
+                6 => &[(WEAPON, 9), (VOICE, 4)],
+                10 => &[(VOICE, 6), (VOICE, 8)],
+                _ => &[],
+            };
+            for &(slot, cue) in plays {
+                self.sound.play(slot, cue, Cue::default());
+            }
         }
+        let hits = self.hit_list.len();
         self.hero_swing();
+        // A swing hit: power cue 2 in sub-state 10, else weapon cue 14 (no material impact).
+        if self.hit_list.len() > hits {
+            let power = self.attack.as_ref().is_some_and(|a| a.sub == 10);
+            let (slot, cue) = if power { (neopets_sim::sound::POWER, 2) } else { (neopets_sim::sound::WEAPON, 14) };
+            self.sound.play(slot, cue, neopets_sim::sound::Play::default());
+        }
         self.loco.shield = self.shield.is_some();
         self.status_step();
         self.loco.update(&input, forward, left, self.hero.clip_state());
@@ -2174,6 +2224,8 @@ impl Play {
         self.statuses.clear(neopets_sim::status::STUN);
         let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
         if !busy && blocked {
+            // The shield slot's "block small".
+            self.sound.play(neopets_sim::sound::SHIELD, 0, neopets_sim::sound::Play::default());
             self.loco.block();
         } else if !busy {
             self.attack = None;
@@ -2202,6 +2254,9 @@ impl Play {
     /// SPEC-0036 Health and death, step 3 (no death callback is registered by any level here):
     /// state 16, the melee hit list cleared.
     fn default_death(&mut self) {
+        // SPEC-0055 Death cue test: sound event 3 (stinger 3, "Character Dies") while the other
+        // hero is not dead (Roberta is not in this build and counts as alive).
+        self.stinger(3);
         // The "knocked out" voice cue, at the hero, do-not-restart.
         let p = self.loco.position();
         self.sound.play(neopets_sim::sound::VOICE, 2, neopets_sim::sound::Play { emitter: Some(p), do_not_restart: true, ..Default::default() });
@@ -2296,8 +2351,123 @@ impl Play {
         if self.hero_hp > 0 && (self.hero_hp as f32) < 0.15 * self.hero_max as f32 {
             self.sound.play(snd::MAIN, 157, Play { do_not_restart: true, ..Default::default() });
         }
+        self.creature_sounds();
+        self.emitters();
         let finished = std::mem::take(&mut self.sound_finished);
         self.sound.update(&finished);
+    }
+
+    /// Creature blocks and animation sounds (SPEC-0031): the blocks the resident characters'
+    /// main tables name are held in slots 6 to 24 while referenced; a character whose animation
+    /// changes to one with a sound word plays its cue once at its position, or keeps a
+    /// keep-alive voice refreshed while that animation stays current.
+    fn creature_sounds(&mut self) {
+        use neopets_sim::sound::{Play, SLOTS};
+        let mut wanted: Vec<u32> = self.characters.iter().flat_map(|c| c.sound_blocks.iter().copied()).collect();
+        wanted.sort_unstable();
+        wanted.dedup();
+        for k in 6..SLOTS {
+            if self.sound.slots[k].is_some_and(|b| !wanted.contains(&b)) {
+                self.sound.slots[k] = None;
+            }
+        }
+        for b in wanted {
+            if !self.sound.slots.contains(&Some(b)) {
+                if let Some(k) = (6..SLOTS).find(|&k| self.sound.slots[k].is_none()) {
+                    self.sound.slots[k] = Some(b);
+                }
+            }
+        }
+        let mut plays = Vec::new();
+        for c in &mut self.characters {
+            if c.dying.is_some() {
+                continue;
+            }
+            let action = c.anim.action();
+            let changed = c.sound_action != Some(action);
+            c.sound_action = Some(action);
+            let Some(w) = c.anim.sound_word(action) else { continue };
+            let (Some(block), Some((cue, keep))) = (crate::character::sound_block(w), crate::character::sound_cue(w)) else { continue };
+            if changed || keep {
+                plays.push((block, cue, keep, c.position));
+            }
+        }
+        for (block, cue, keep, at) in plays {
+            let Some(slot) = self.sound.slots.iter().position(|&s| s == Some(block)) else { continue };
+            if keep {
+                self.sound.keep_alive(slot, cue, Some(at));
+            } else {
+                self.sound.play(slot, cue, Play { emitter: Some(at), ..Default::default() });
+            }
+        }
+    }
+
+    /// Placed sound emitters and adventure zones of the current world (SPEC-0031 Placed sound
+    /// emitters; SPEC-0009 Intensity inputs). Every record is tested (the original walks the
+    /// camera cell's list A; the sphere gates decide the same).
+    fn emitters(&mut self) {
+        use neopets_sim::sound::{Play, AREA};
+        let l = self.sound.listener.point;
+        let dist = |c: [f32; 3]| ((c[0] - l[0]).powi(2) + (c[1] - l[1]).powi(2) + (c[2] - l[2]).powi(2)).sqrt();
+        let hero = self.loco.position();
+        let hero_d = |c: [f32; 3]| ((c[0] - hero[0]).powi(2) + (c[1] - hero[1]).powi(2) + (c[2] - hero[2]).powi(2)).sqrt();
+        let default = self.sound.default_volume;
+        for i in 0..self.world.ambients.len() {
+            let a = self.world.ambients[i];
+            if a.subkind != 0 {
+                // Adventure zone: the listener inside the sphere widened by 1; f from the hero.
+                if dist(a.centre) < a.radius + 1.0 {
+                    let d = hero_d(a.centre);
+                    let f = if d <= a.inner || d >= a.radius { 1.0 } else { 1.0 - (d - a.inner) / (a.radius - a.inner) };
+                    self.intensity.adventure(f);
+                }
+                continue;
+            }
+            if dist(a.centre) >= a.radius {
+                self.world.ambient_counters[i] = 0;
+                continue;
+            }
+            if a.factor < 0.0 || a.cue < 0 {
+                continue;
+            }
+            let emitter = a.positioned.then_some(a.centre);
+            if self.sound.has(AREA, a.cue, emitter) {
+                self.sound.keep_alive(AREA, a.cue, emitter);
+                self.world.ambient_counters[i] = 0;
+            } else if self.world.ambient_counters[i] < 6 {
+                self.world.ambient_counters[i] += 1;
+                if self.world.ambient_counters[i] >= 3 {
+                    let volume = (default as f32 * a.factor) as i32;
+                    self.sound.play(AREA, a.cue, Play { emitter, do_not_restart: true, keep_alive: true, volume: Some(volume), radius: Some((a.radius, a.inner)), ..Default::default() });
+                }
+            }
+        }
+        for s in self.world.spheres.clone() {
+            if dist(s.centre) >= s.radius + 1.0 {
+                continue;
+            }
+            if self.sound.has(AREA, s.cue, Some(s.centre)) {
+                self.sound.keep_alive(AREA, s.cue, Some(s.centre));
+            } else {
+                self.sound.play(AREA, s.cue, Play { emitter: Some(s.centre), do_not_restart: true, keep_alive: true, radius: Some((s.hearing.max(30.0), 0.0)), ..Default::default() });
+            }
+        }
+    }
+
+    /// A stinger request (SPEC-0009): indices 0 to 18 only; one at a time; stinger 4 not within
+    /// 40 s of its last start (from clock 0).
+    pub fn stinger(&mut self, k: i32) {
+        if !(0..19).contains(&k) || self.stinger_playing {
+            return;
+        }
+        if k == 4 {
+            if self.ticks < self.stinger4 + 40 * 60 {
+                return;
+            }
+            self.stinger4 = self.ticks;
+        }
+        self.stinger_playing = true;
+        self.stinger_requests.push(k);
     }
 
     /// A cue on the main slot with no position (menus, items, the HUD).
@@ -2319,7 +2489,18 @@ impl Play {
         self.music.tick(s.stream, s.stop, r.cap, 1.0);
         self.music_selection = Some(s);
         // The bank: the row's offset with the flag's +67 (added to negative offsets too).
-        self.bank_music.tick(r.bank + if flag { 67 } else { 0 }, r.level, 1.0);
+        let duck = if self.stinger_playing { 0.7 } else { 1.0 };
+        self.bank_music.tick(r.bank + if flag { 67 } else { 0 }, r.level, duck);
+        // A progress flag that rose since the last tick plays its table-2 stinger (v - 1).
+        let risen: Vec<u16> = self.state.flags.difference(&self.flags_seen).copied().collect();
+        self.flags_seen = self.state.flags.clone();
+        for n in risen {
+            if let Some((_, v)) = self.design.flag_cue(n) {
+                if v >= 1 {
+                    self.stinger(v - 1);
+                }
+            }
+        }
         // Intensity: k counts the characters in AI state 19 (agro) that are not dead.
         let k = self.characters.iter().filter(|c| c.enemy.as_ref().is_some_and(|e| e.state == 19 && !e.dead)).count();
         self.intensity.tick(k, self.hero_hp, self.hero_max);

@@ -444,6 +444,8 @@ pub struct FamilyData {
     pub def: SkeletonDef,
     pub clips: Vec<Clip>,
     pub actions: Vec<u32>,
+    /// Word B of each entry: the packed sound word (SPEC-0031 Layout section 10).
+    pub sounds: Vec<u32>,
 }
 
 impl FamilyData {
@@ -458,7 +460,8 @@ impl FamilyData {
         let actions = (0..n.min(4096))
             .map(|i| u32_at(table, 4 + 8 * i).ok_or("Action table past the end"))
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(Self { def, clips, actions })
+        let sounds = (0..n.min(4096)).map(|i| u32_at(table, 8 + 8 * i).unwrap_or(0xFFFF_FFFF)).collect();
+        Ok(Self { def, clips, actions, sounds })
     }
 
     /// The clip for an action id: word A bits 0–11; an id past the table or 0xFFF is a lookup

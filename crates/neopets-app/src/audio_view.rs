@@ -434,3 +434,45 @@ pub fn sync_music(
         }
     }
 }
+
+/// A playing stinger voice (one at a time; SPEC-0009 Stinger and emote-clip playback).
+#[derive(Component)]
+pub struct StingerVoice;
+
+/// Play requested stingers: clip k is VAG resource 256 + k at volume trunc(1024 x
+/// Sound-effects gain) (gain 1.0 here), as a one-shot; the game learns whether one is playing.
+pub fn sync_stingers(
+    mut commands: Commands,
+    state: Option<ResMut<PlayState>>,
+    mut archive: Option<ResMut<crate::Archive>>,
+    mut pcms: ResMut<Assets<Pcm>>,
+    voices: Query<(Entity, Option<&AudioSink>), With<StingerVoice>>,
+    mut cache: Local<HashMap<i32, Option<Handle<Pcm>>>>,
+) {
+    let Some(mut state) = state else { return };
+    // A voice whose sink has emptied has finished.
+    let mut playing = false;
+    for (e, sink) in &voices {
+        if sink.is_some_and(|s| s.empty()) {
+            commands.entity(e).despawn();
+        } else {
+            playing = true;
+        }
+    }
+    let p = &mut state.play;
+    for k in std::mem::take(&mut p.stinger_requests) {
+        if playing {
+            continue;
+        }
+        let handle = cache.entry(k).or_insert_with(|| {
+            let crate::Archive { disc, index } = archive.as_deref_mut()?;
+            let bytes = index.read(disc, 256 + k as u32).ok()?;
+            neopets_data::audio::vag(&bytes).ok().map(|(pcm, _)| pcms.add(Pcm::from(pcm)))
+        });
+        if let Some(h) = handle.clone() {
+            commands.spawn((AudioPlayer(h), PlaybackSettings::ONCE, StingerVoice));
+            playing = true;
+        }
+    }
+    p.stinger_playing = playing;
+}

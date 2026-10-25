@@ -142,6 +142,20 @@ impl HeroAnim {
         &self.bones
     }
 
+    /// The packed sound word (word B) of an action in the main family's table (SPEC-0031
+    /// section 10).
+    pub fn sound_word(&self, action: u32) -> Option<u32> {
+        self.families.first()?.data.sounds.get(action as usize).copied()
+    }
+
+    /// The blocks the first 167 entries of the main table name (creature-block references).
+    pub fn sound_blocks(&self) -> Vec<u32> {
+        let mut out: Vec<u32> = self.families.first().map_or(&[][..], |f| &f.data.sounds[..]).iter().take(167).filter_map(|&w| sound_block(w)).collect();
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+
     /// The layer-0 family's playing clip and the integer part of its frame cursor (the footstep
     /// rule's remembered frame, SPEC-0031).
     pub fn layer0(&self) -> Option<(usize, i32)> {
@@ -257,5 +271,39 @@ mod tests {
         // Weights are not renormalised.
         let (p, _) = skin_part(&m, &[[1.0, 0.0, 0.0]], &[], &[[0.5, 0.25, 0.0]], &[[0, 1, 0]]);
         assert_eq!(p[0], [0.75, 0.5, 0.5]);
+    }
+}
+
+/// The block a packed sound word names: bits 0 to 7 the index (255 none), bits 8 to 10 the group
+/// (0: 347 + index, 1: 350 + index, 2: 395 + index).
+pub fn sound_block(w: u32) -> Option<u32> {
+    let index = w & 0xFF;
+    if index == 255 {
+        return None;
+    }
+    match (w >> 8) & 7 {
+        0 => Some(347 + index),
+        1 => Some(350 + index),
+        2 => Some(395 + index),
+        _ => None,
+    }
+}
+
+/// The cue of a packed sound word (bits 11 to 19; 511 none) and its keep-alive bit (31).
+pub fn sound_cue(w: u32) -> Option<(i32, bool)> {
+    let cue = (w >> 11) & 0x1FF;
+    (cue != 511).then_some((cue as i32, w & 0x8000_0000 != 0))
+}
+
+#[cfg(test)]
+mod sound_word_tests {
+    use super::*;
+
+    #[test]
+    fn packed_sound_word() {
+        // 0x80002101: index 1, group 1, cue 4, keep-alive: block 351, cue 4.
+        assert_eq!(sound_block(0x8000_2101), Some(351));
+        assert_eq!(sound_cue(0x8000_2101), Some((4, true)));
+        assert_eq!(sound_block(0x0000_21FF), None);
     }
 }

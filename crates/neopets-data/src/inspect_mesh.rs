@@ -648,6 +648,26 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                     Err(e) => println!("  block {r}: {e}"),
                 }
             }
+            // SPEC-0031 Placed sound emitters: kind 8 (ambient loops, adventure zones) and kind 1.
+            let (mut amb, mut zones, mut sph, mut sph_packs, mut cues1) = (0usize, 0usize, 0usize, Vec::new(), std::collections::BTreeMap::new());
+            for pack in 533..=1433u32 {
+                let Ok(b) = index.read(disc, pack) else { continue };
+                let Ok(c) = resource::walk_chunks(&b, None) else { continue };
+                if c.chunks.first().map(|c| c.kind) != Some(31) {
+                    continue;
+                }
+                let (a, s) = neopets_data::ground::sound_emitters(&b, &c.chunks);
+                amb += a.iter().filter(|x| x.subkind == 0).count();
+                zones += a.iter().filter(|x| x.subkind != 0).count();
+                sph += s.len();
+                if !s.is_empty() {
+                    sph_packs.push((pack, s.len()));
+                }
+                for e in &s {
+                    *cues1.entry(e.cue).or_insert(0usize) += 1;
+                }
+            }
+            println!("Placed emitters: {amb} ambient loops, {zones} adventure zones, {sph} sphere emitters in {:?}, sphere cues {cues1:?}", sph_packs);
             println!("Sound blocks: {blocks} parsed, {cues} cue entries ({silent} empty), {cmds} command records, {voices_ref} distinct voice records referenced; command types {kinds:?}");
             println!("Sound banks: {banks} parsed, {dirs} directory records, {voices} voice records, {samples} samples ({loops} loops), {frames} frames played, {children} music children");
             println!("KPV streams: {ok} decoded, rates {rates:?}, {:.0} s in all, longest {longest:?}", total);

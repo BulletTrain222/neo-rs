@@ -92,6 +92,12 @@ impl DesignTables {
         self.tables.get(4).and_then(|t| t.record(id)).and_then(crate::audio::MusicRow::from_record).unwrap_or(crate::audio::MusicRow::DEFAULT)
     }
 
+    /// Table 2, row n: the journal kind and the stinger value v of progress flag n (v - 1 is the
+    /// stinger played when the flag rises; 0 none).
+    pub fn flag_cue(&self, n: u16) -> Option<(i32, i32)> {
+        Some((self.word(2, n as usize, 0)? as i32, self.word(2, n as usize, 4)? as i32))
+    }
+
     /// Table 9, record i: a system message box (text, first and second button labels, colour
     /// bytes R, G, B; a null colour word gives 128s).
     pub fn message(&self, i: usize) -> Option<Message> {

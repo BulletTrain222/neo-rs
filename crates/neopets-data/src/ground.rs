@@ -487,6 +487,61 @@ pub fn rectangles(bytes: &[u8], top: &[Chunk]) -> Vec<Rectangle> {
     out
 }
 
+/// A kind-8 fourth-list record (SPEC-0028 section 6.5; SPEC-0031 Placed sound emitters): an
+/// ambient loop (sub-kind 0) or an adventure zone (sub-kind not 0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Ambient {
+    pub centre: [f32; 3],
+    pub radius: f32,
+    pub inner: f32,
+    pub factor: f32,
+    pub cue: i32,
+    pub positioned: bool,
+    pub subkind: u8,
+}
+
+/// A kind-1 sphere emitter: a sphere record whose header flags have bit 0x10, its cue (header
+/// +0x1E), the radius at +0x28 and the centre and radius at +0x30 and +0x3C.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SphereEmitter {
+    pub centre: [f32; 3],
+    pub radius: f32,
+    pub hearing: f32,
+    pub cue: i32,
+}
+
+/// The pack's placed sound emitters: the fourth list (pointer +0x54, count +0x2C) and the
+/// sphere list (pointer +0x30, count +0x08) records with flag bit 0x10.
+pub fn sound_emitters(bytes: &[u8], top: &[Chunk]) -> (Vec<Ambient>, Vec<SphereEmitter>) {
+    let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return (Vec::new(), Vec::new()) };
+    let p = &bytes[c.payload.clone()];
+    let v = |at: usize| Some([f32_at(p, at)?, f32_at(p, at + 4)?, f32_at(p, at + 8)?]);
+    let mut ambients = Vec::new();
+    let n4 = i32_at(p, 0x2C).unwrap_or(0).clamp(0, 1 << 14) as usize;
+    if let Some(list) = u32_at(p, 0x54).map(|x| x as usize) {
+        for i in 0..n4 {
+            let r = list + i * 0x50;
+            let (Some(centre), Some(radius), Some(inner), Some(factor), Some(cue)) = (v(r + 0x30), f32_at(p, r + 0x3C), f32_at(p, r + 0x40), f32_at(p, r + 0x44), i32_at(p, r + 0x48)) else { break };
+            let byte = |o: usize| p.get(r + o).copied().unwrap_or(0);
+            ambients.push(Ambient { centre, radius, inner, factor, cue, positioned: byte(0x4D) != 0, subkind: byte(0x4E) });
+        }
+    }
+    let mut spheres = Vec::new();
+    let n1 = i32_at(p, 0x08).unwrap_or(0).clamp(0, 1 << 14) as usize;
+    if let Some(list) = u32_at(p, 0x30).map(|x| x as usize) {
+        for i in 0..n1 {
+            let r = list + i * 0x40;
+            let Some(flags) = p.get(r + 0x12..r + 0x14).map(|b| u16::from_le_bytes([b[0], b[1]])) else { break };
+            if flags & 0x10 == 0 {
+                continue;
+            }
+            let (Some(centre), Some(radius), Some(hearing), Some(cue)) = (v(r + 0x30), f32_at(p, r + 0x3C), f32_at(p, r + 0x28), p.get(r + 0x1E..r + 0x20).map(|b| i16::from_le_bytes([b[0], b[1]]) as i32)) else { break };
+            spheres.push(SphereEmitter { centre, radius, hearing, cue });
+        }
+    }
+    (ambients, spheres)
+}
+
 /// A probe result: height, surface normal and the chosen patch's ground kind (+0x38).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct ProbeHit {

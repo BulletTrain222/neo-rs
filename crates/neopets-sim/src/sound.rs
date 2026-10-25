@@ -103,6 +103,8 @@ pub struct Play {
     pub looped: bool,
     /// Volume (1,024 = 1.0); None for the default.
     pub volume: Option<i32>,
+    /// Hearing and full-volume radii (R, r0); None for the manager radius and 0.
+    pub radius: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Debug)]
@@ -180,8 +182,9 @@ impl SoundManager {
         if self.voices.len() >= POOL {
             return false;
         }
+        let (r, r0) = how.radius.filter(|x| x.0 > 0.0).unwrap_or((RADIUS, 0.0));
         let (volume, pan) = match how.emitter {
-            Some(e) => match self.listener.volume(e, base, RADIUS, 0.0) {
+            Some(e) => match self.listener.volume(e, base, r, r0) {
                 Some(v) if v > 0 => (v, Some(self.listener.pan(e))),
                 _ => return false,
             },
@@ -189,9 +192,15 @@ impl SoundManager {
         };
         let id = self.next;
         self.next += 1;
-        self.voices.push(Voice { id, slot, block, cue, emitter: how.emitter, base, r: RADIUS, r0: 0.0, mode, counter: 4 });
+        self.voices.push(Voice { id, slot, block, cue, emitter: how.emitter, base, r, r0, mode, counter: 4 });
         self.requests.push(Request::Play { id, block, cue, volume, pan });
         true
+    }
+
+    /// The same-voice test for a slot, cue and emitter.
+    pub fn has(&self, slot: usize, cue: i32, emitter: Option<[f32; 3]>) -> bool {
+        let block = self.slots.get(slot).copied().flatten();
+        self.voices.iter().any(|v| Some(v.block) == block && v.cue == cue && (emitter.is_none() || v.emitter == emitter))
     }
 
     /// A keep-alive refresh: the matching voice's counter goes up by 1; with none, a start.
