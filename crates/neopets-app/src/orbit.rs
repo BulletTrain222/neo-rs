@@ -47,6 +47,14 @@ impl Orbit {
         self.pitch = (self.pitch + pixels.y * DRAG_SPEED).clamp(-PITCH_LIMIT, PITCH_LIMIT);
     }
 
+    /// Move the target in the camera's ground frame: x right, y up, z back (toward the eye).
+    pub fn fly(&mut self, step: Vec3) {
+        let (sy, cy) = self.yaw.sin_cos();
+        let back = Vec3::new(sy, 0.0, cy);
+        let right = Vec3::new(cy, 0.0, -sy);
+        self.target += right * step.x + Vec3::Y * step.y + back * step.z;
+    }
+
     /// Positive lines zoom in.
     pub fn zoom(&mut self, lines: f32) {
         let factor = (1.0 - ZOOM_STEP).powf(lines);
@@ -89,6 +97,20 @@ mod tests {
         assert_eq!(o.pitch, -PITCH_LIMIT);
         // looking_at stays well-defined because the eye is never straight above the target.
         assert!(o.transform().rotation.is_finite());
+    }
+
+    #[test]
+    fn fly_moves_in_the_ground_frame() {
+        let mut o = Orbit {
+            yaw: 0.0,
+            ..default()
+        };
+        // At yaw 0 the eye is on +Z of the target, so "back" is +Z and "right" is +X.
+        o.fly(Vec3::new(1.0, 2.0, -3.0));
+        assert!((o.target - Vec3::new(1.0, 2.0, -3.0)).length() < 1e-5);
+        let before = o.eye().distance(o.target);
+        o.fly(Vec3::new(5.0, 0.0, 0.0));
+        assert!((o.eye().distance(o.target) - before).abs() < 1e-4, "flying keeps the distance");
     }
 
     #[test]

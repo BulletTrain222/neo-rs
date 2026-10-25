@@ -130,6 +130,44 @@ pub struct ModelData {
     pub max: [f32; 3],
     /// Leaves not drawn: other packet kinds (CPU-animated water) or decode errors.
     pub skipped_leaves: Vec<String>,
+    /// Trees added (including ones whose leaves were all skipped).
+    pub trees: usize,
+    /// World placements whose references do not resolve (stale data on disc).
+    pub unresolved_placements: usize,
+    /// Built from a world pack's static scene (world space).
+    pub world: bool,
+}
+
+impl ModelData {
+    /// A box around where most of the geometry is: the median vertex position, extended by
+    /// the distance that covers `share` of the vertices. Level meshes reach far beyond their
+    /// playable area, so the full box would frame mostly empty space.
+    pub fn dense_box(&self, share: f32) -> ([f32; 3], [f32; 3]) {
+        let total: usize = self.parts.iter().map(|p| p.positions.len()).sum();
+        if total == 0 {
+            return (self.min, self.max);
+        }
+        let step = (total / 20_000).max(1);
+        let sample: Vec<[f32; 3]> = self
+            .parts
+            .iter()
+            .flat_map(|p| p.positions.iter().copied())
+            .step_by(step)
+            .collect();
+        let median = |k: usize| {
+            let mut v: Vec<f32> = sample.iter().map(|p| p[k]).collect();
+            v.sort_by(f32::total_cmp);
+            v[v.len() / 2]
+        };
+        let c = [median(0), median(1), median(2)];
+        let mut d: Vec<f32> = sample
+            .iter()
+            .map(|p| ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt())
+            .collect();
+        d.sort_by(f32::total_cmp);
+        let r = d[((d.len() - 1) as f32 * share.clamp(0.0, 1.0)) as usize];
+        (c.map(|v| v - r), c.map(|v| v + r))
+    }
 }
 
 /// The shader list and texture chunks that a chain's trees draw with.
@@ -160,44 +198,54 @@ fn colour_factor(byte: u8, unit: f32) -> f32 {
     (byte as f32 * 128.0 / unit).min(255.0) / 128.0
 }
 
-/// Build every node tree of a resource into mesh parts. `shared` supplies the shader list for
-/// chains without one: resources 544–575 draw with resource 7's list (SPEC-0004).
-pub fn build(
-    bytes: &[u8],
-    top: &[Chunk],
-    shared: Option<(&[u8], &[Chunk])>,
-) -> Result<ModelData, String> {
-    let (trees, chains) = find_trees(bytes, top);
-    let mut materials: Vec<Option<ChainMaterials>> = chains
-        .iter()
-        .map(|c| ChainMaterials::of(&bytes[c.base..], &c.chunks))
-        .collect::<Result<_, _>>()?;
-    let mut shared = match shared {
-        Some((b, chunks)) => ChainMaterials::of(b, chunks)?,
-        None => None,
-    };
-    let mut out = ModelData {
-        min: [f32::INFINITY; 3],
-        max: [f32::NEG_INFINITY; 3],
-        ..Default::default()
-    };
-    let mut cache: HashMap<(usize, TextureRef, u8, u8), usize> = HashMap::new();
-    for (ti, t) in trees.iter().enumerate() {
-        let payload = &bytes[t.payload.clone()];
+/// Turns node trees into mesh parts, resolving each leaf's material against its chain's
+/// shader list and decoding each texture once.
+struct Builder {
+    materials: Vec<Option<ChainMaterials>>,
+    shared: Option<ChainMaterials>,
+    cache: HashMap<(usize, TextureRef, u8, u8), usize>,
+    out: ModelData,
+}
+
+impl Builder {
+    fn new(materials: Vec<Option<ChainMaterials>>, shared: Option<ChainMaterials>) -> Self {
+        Self {
+            materials,
+            shared,
+            cache: HashMap::new(),
+            out: ModelData {
+                min: [f32::INFINITY; 3],
+                max: [f32::NEG_INFINITY; 3],
+                ..Default::default()
+            },
+        }
+    }
+
+    /// Add one tree, drawn with chain `chain`'s materials and placed by `matrix`.
+    fn add_tree(
+        &mut self,
+        bytes: &[u8],
+        payload: std::ops::Range<usize>,
+        chain: usize,
+        matrix: Option<&crate::world::Matrix>,
+    ) -> Result<(), String> {
+        let ti = self.out.trees;
+        self.out.trees += 1;
+        let payload = &bytes[payload];
         let tree = mesh::walk_tree(payload)?;
         for leaf in &tree.leaves {
             let batches = match mesh::decode_packet(payload, leaf) {
                 Ok(b) => b,
                 Err(e) => {
-                    out.skipped_leaves.push(format!("tree {ti} leaf {:#x}: {e}", leaf.offset));
+                    self.out.skipped_leaves.push(format!("tree {ti} leaf {:#x}: {e}", leaf.offset));
                     continue;
                 }
             };
             let Some(first) = batches.first() else { continue };
             // Trees in a chain without a shader list use the shared list, keyed apart.
-            let (mats, key) = match materials[t.chain].as_mut() {
-                Some(m) => (Some(m), t.chain),
-                None => (shared.as_mut(), usize::MAX),
+            let (mats, key) = match self.materials.get_mut(chain).and_then(|m| m.as_mut()) {
+                Some(m) => (Some(m), chain),
+                None => (self.shared.as_mut(), usize::MAX),
             };
             let group = mats
                 .as_ref()
@@ -207,16 +255,18 @@ pub fn build(
             if let (Some(m), Some(g)) = (mats, group) {
                 if let (Some(r), Some(t0)) = (material::resolve(&g, &m.chunks), g.tex0) {
                     let k = (key, r, t0.tw, t0.th);
-                    texture = match cache.get(&k) {
+                    texture = match self.cache.get(&k) {
                         Some(&i) => Some(i),
                         None => {
-                            let mem = m.memories[r.chunk].get_or_insert_with(|| m.chunks[r.chunk].gs_memory());
+                            let mem = m.memories[r.chunk]
+                                .get_or_insert_with(|| m.chunks[r.chunk].gs_memory());
                             let (w, h) = (1u32 << t0.tw.min(10), 1u32 << t0.th.min(10));
-                            let image = m.chunks[r.chunk].decode_region(mem, r.texture, r.palette, w, h)?;
+                            let image =
+                                m.chunks[r.chunk].decode_region(mem, r.texture, r.palette, w, h)?;
                             let (repeat_u, repeat_v) = g.repeats();
-                            out.textures.push(ModelTexture { image, repeat_u, repeat_v });
-                            cache.insert(k, out.textures.len() - 1);
-                            Some(out.textures.len() - 1)
+                            self.out.textures.push(ModelTexture { image, repeat_u, repeat_v });
+                            self.cache.insert(k, self.out.textures.len() - 1);
+                            Some(self.out.textures.len() - 1)
                         }
                     };
                 }
@@ -247,20 +297,72 @@ pub fn build(
                     part.normals.extend_from_slice(&b.normals);
                 }
             }
-            for p in &part.positions {
-                for k in 0..3 {
-                    out.min[k] = out.min[k].min(p[k]);
-                    out.max[k] = out.max[k].max(p[k]);
+            if let Some(m) = matrix {
+                for p in &mut part.positions {
+                    *p = crate::world::transform_point(m, *p);
+                }
+                for n in &mut part.normals {
+                    *n = crate::world::transform_normal(m, *n);
                 }
             }
-            out.parts.push(part);
+            for p in &part.positions {
+                for k in 0..3 {
+                    self.out.min[k] = self.out.min[k].min(p[k]);
+                    self.out.max[k] = self.out.max[k].max(p[k]);
+                }
+            }
+            self.out.parts.push(part);
+        }
+        Ok(())
+    }
+
+    fn finish(mut self) -> ModelData {
+        if self.out.parts.is_empty() {
+            self.out.min = [0.0; 3];
+            self.out.max = [0.0; 3];
+        }
+        self.out
+    }
+}
+
+/// Build every node tree of a resource into mesh parts. `shared` supplies the shader list for
+/// chains without one: resources 544–575 draw with resource 7's list (SPEC-0004).
+pub fn build(
+    bytes: &[u8],
+    top: &[Chunk],
+    shared: Option<(&[u8], &[Chunk])>,
+) -> Result<ModelData, String> {
+    let (trees, chains) = find_trees(bytes, top);
+    let materials = chains
+        .iter()
+        .map(|c| ChainMaterials::of(&bytes[c.base..], &c.chunks))
+        .collect::<Result<_, _>>()?;
+    let shared = match shared {
+        Some((b, chunks)) => ChainMaterials::of(b, chunks)?,
+        None => None,
+    };
+    let mut b = Builder::new(materials, shared);
+    for t in &trees {
+        b.add_tree(bytes, t.payload.clone(), t.chain, None)?;
+    }
+    Ok(b.finish())
+}
+
+/// Build a world pack's static scene: the level display tree in world space, and placed
+/// objects and instances transformed by their matrices, all with the pack's shader list.
+/// Trees that do not walk (stale references) are skipped and counted.
+pub fn build_world(bytes: &[u8], top: &[Chunk]) -> Result<ModelData, String> {
+    let scene = crate::world::scene(bytes, top);
+    let materials = vec![ChainMaterials::of(bytes, top)?];
+    let mut b = Builder::new(materials, None);
+    for t in &scene.trees {
+        if let Err(e) = b.add_tree(bytes, t.payload.clone(), 0, t.matrix.as_ref()) {
+            b.out.skipped_leaves.push(format!("tree at {:#x}: {e}", t.payload.start));
         }
     }
-    if out.parts.is_empty() {
-        out.min = [0.0; 3];
-        out.max = [0.0; 3];
-    }
-    Ok(out)
+    b.out.unresolved_placements = scene.unresolved;
+    b.out.world = true;
+    Ok(b.finish())
 }
 
 #[cfg(test)]

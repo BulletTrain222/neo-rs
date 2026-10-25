@@ -131,3 +131,33 @@ pub fn run(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     }
     Ok(())
 }
+
+/// List a world pack's placed trees with their source chunk type and transformed bounds.
+pub fn scene(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<(), String> {
+    use neopets_data::world;
+    let bytes = index.read(disc, n)?;
+    let family = resource::classify(&bytes);
+    let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+    let s = world::scene(&bytes, &chain.chunks);
+    println!("Resource {n}: {} placed trees, {} unresolved references", s.trees.len(), s.unresolved);
+    for (i, t) in s.trees.iter().enumerate() {
+        let payload = &bytes[t.payload.clone()];
+        let Ok(tree) = mesh::walk_tree(payload) else {
+            println!("  {i:>4} type {:>2}: does not walk", t.source);
+            continue;
+        };
+        let b = tree.root_bounds;
+        let (lo, hi) = (b.min, [b.min[0] + b.size[0], b.min[1] + b.size[1], b.min[2] + b.size[2]]);
+        let (lo, hi) = match &t.matrix {
+            Some(m) => (world::transform_point(m, lo), world::transform_point(m, hi)),
+            None => (lo, hi),
+        };
+        println!(
+            "  {i:>4} type {:>2}: {:>4} leaves, box ({:.0}, {:.0}, {:.0}) .. ({:.0}, {:.0}, {:.0})",
+            t.source,
+            tree.leaves.len(),
+            lo[0], lo[1], lo[2], hi[0], hi[1], hi[2]
+        );
+    }
+    Ok(())
+}

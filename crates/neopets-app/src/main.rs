@@ -466,8 +466,11 @@ fn browse_resources(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<Browser
 
 fn orbit_camera(
     buttons: Res<ButtonInput<MouseButton>>,
+    keys: Res<ButtonInput<KeyCode>>,
     motion: Res<AccumulatedMouseMotion>,
     scroll: Res<AccumulatedMouseScroll>,
+    time: Res<Time<Real>>,
+    models: Res<ModelView>,
     mut cameras: Query<(&mut Orbit, &mut Transform)>,
 ) {
     let dragging = buttons.any_pressed([MouseButton::Left, MouseButton::Right, MouseButton::Middle]);
@@ -475,15 +478,29 @@ fn orbit_camera(
         MouseScrollUnit::Line => scroll.delta.y,
         MouseScrollUnit::Pixel => scroll.delta.y / PIXELS_PER_LINE,
     };
-    if !(dragging && motion.delta != Vec2::ZERO) && lines == 0.0 {
+    // While a model is shown, WASD and Q/E move the point the camera orbits (a fly camera).
+    let held = |k: KeyCode| keys.pressed(k) as i32 as f32;
+    let fly = if models.showing() {
+        Vec3::new(
+            held(KeyCode::KeyD) - held(KeyCode::KeyA),
+            held(KeyCode::KeyE) - held(KeyCode::KeyQ),
+            held(KeyCode::KeyS) - held(KeyCode::KeyW),
+        )
+    } else {
+        Vec3::ZERO
+    };
+    if !(dragging && motion.delta != Vec2::ZERO) && lines == 0.0 && fly == Vec3::ZERO {
         return;
     }
+    let boost = if keys.pressed(KeyCode::ShiftLeft) { 4.0 } else { 1.0 };
     for (mut orbit, mut transform) in &mut cameras {
         if dragging {
             // Screen y grows downward; dragging up should raise the camera.
             orbit.drag(Vec2::new(motion.delta.x, -motion.delta.y));
         }
         orbit.zoom(lines);
+        let step = orbit.distance * 0.75 * boost * time.delta_secs();
+        orbit.fly(fly * step);
         *transform = orbit.transform();
     }
 }
@@ -562,14 +579,16 @@ fn show_browser(
         Some(m) => {
             let verts: usize = m.parts.iter().map(|p| p.positions.len()).sum();
             let tris: usize = m.parts.iter().map(|p| p.indices.len() / 3).sum();
-            let skipped = if m.skipped_leaves.is_empty() {
-                String::new()
-            } else {
-                format!(", {} leaves not drawn", m.skipped_leaves.len())
-            };
+            let mut skipped = String::new();
+            if !m.skipped_leaves.is_empty() {
+                skipped += &format!(", {} leaves not drawn", m.skipped_leaves.len());
+            }
+            if m.unresolved_placements > 0 {
+                skipped += &format!(", {} stale placements skipped", m.unresolved_placements);
+            }
             format!(
                 "Model (SPEC-0004): {} parts, {verts} vertices, {tris} triangles, {} textures{skipped}. \
-                 Unlit, no skinning yet. V switches model/texture view",
+                 Unlit, no skinning yet. V switches model/texture view; WASD/QE fly",
                 m.parts.len(),
                 m.textures.len()
             )
@@ -743,7 +762,8 @@ fn apply_model(
                     ModelPart,
                 ));
             }
-            Orbit::framing(Vec3::from(m.min), Vec3::from(m.max))
+            let (lo, hi) = if m.world { m.dense_box(0.6) } else { (m.min, m.max) };
+            Orbit::framing(Vec3::from(lo), Vec3::from(hi))
         }
         _ => Orbit::default(),
     };

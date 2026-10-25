@@ -7,6 +7,9 @@ use neopets_data::model::{self, ModelData};
 use neopets_data::resource::{self, ChainEnd, Family};
 use neopets_data::texture::{Image, TextureChunk};
 
+/// Chunk type of a world pack's header (SPEC-0006).
+const WORLD_HEADER: u16 = 31;
+
 /// Chunk types as a compact chain, collapsing runs: "2, 13 ×33, 4".
 pub fn chain_summary(kinds: &[u16]) -> String {
     let mut parts: Vec<String> = Vec::new();
@@ -126,12 +129,17 @@ pub fn model(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<Option<Mod
     let Some((bytes, chunks)) = chunk_file(disc, n)? else {
         return Ok(None);
     };
-    let shared = if (544..=575).contains(&n) { chunk_file(disc, 7)? } else { None };
-    let data = model::build(
-        &bytes,
-        &chunks,
-        shared.as_ref().map(|(b, c)| (b.as_slice(), c.as_slice())),
-    )?;
+    // A world pack (first chunk type 31, SPEC-0006) draws as its placed static scene.
+    let data = if chunks.first().is_some_and(|c| c.kind == WORLD_HEADER) {
+        model::build_world(&bytes, &chunks)?
+    } else {
+        let shared = if (544..=575).contains(&n) { chunk_file(disc, 7)? } else { None };
+        model::build(
+            &bytes,
+            &chunks,
+            shared.as_ref().map(|(b, c)| (b.as_slice(), c.as_slice())),
+        )?
+    };
     Ok((!data.parts.is_empty()).then_some(data))
 }
 
