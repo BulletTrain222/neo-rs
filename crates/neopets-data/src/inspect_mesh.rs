@@ -314,6 +314,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let mut kinds = std::collections::BTreeMap::new();
     let mut of_pack = std::collections::BTreeMap::new();
     let (mut tables, mut zero_unused, mut contiguous, mut ids) = (0, 0, 0, 0);
+    let (mut line_tables, mut line_records, mut resolved) = (0, 0, 0);
     let (mut planes, mut plane_packs, mut default_doors, mut scripted_packs, mut arrivals_ok) = (0, 0, 0, 0, 0);
     for pack in 533..=1433u32 {
         let Ok(bytes) = index.read(disc, pack) else { continue };
@@ -325,6 +326,12 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         let module = !boot.module_entries(&bytes, &chain.chunks).is_empty();
         *kinds.entry((format!("{kind:?}"), module)).or_insert(0usize) += 1;
         of_pack.insert(pack, kind);
+        let lt = neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks);
+        if !lt.is_empty() {
+            line_tables += 1;
+            line_records += lt.len();
+            resolved += (0..lt.len()).filter(|&i| lt.line(i).is_some()).count();
+        }
         let tp = neopets_data::ground::teleport_planes(&bytes, &chain.chunks);
         if !tp.is_empty() {
             planes += tp.len();
@@ -355,12 +362,15 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         let chain = resource::walk_chunks(&bytes, None)?;
         let e: Vec<_> = (0..5).filter_map(|i| neopets_data::ground::entry_record(&bytes, &chain.chunks, i)).collect();
         println!("909 entry records 0..4 (position, facing): {e:?}");
+        let lines = neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks);
+        println!("909 dialogue table: {} lines; line 0 resolves: {}", lines.len(), lines.line(0).is_some());
     }
     let g = |p: u32| of_pack.get(&p).copied();
     println!("Kinds of 691: {:?}, 909: {:?}, 1429: {:?}, 1008: {:?}, 1121: {:?}", g(691), g(909), g(1429), g(1008), g(1121));
     println!(
         "Teleport planes: {planes} in {plane_packs} packs; {scripted_packs} of those packs import RegisterTeleportCallback; {default_doors} doors in packs that do not; {arrivals_ok} packs give every door an arrival (tag 0x0E)"
     );
+    println!("Dialogue line tables: {line_tables} with {line_records} records, {resolved} resolve to speaker and text");
     println!("Neighbour lists (tag 0x0B): {tables} with values; position 0 unused in {zero_unused}; used positions 1..m in {contiguous}; {ids} world ids");
     Ok(())
 }

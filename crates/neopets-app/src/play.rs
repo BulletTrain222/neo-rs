@@ -38,6 +38,8 @@ pub struct World {
     /// The module imports RegisterTeleportCallback: its doors are script doors, which need the
     /// level-script runtime (not implemented), so they do nothing here.
     pub scripted_doors: bool,
+    /// The dialogue line table (type 1000) that LevelMsg reads.
+    pub lines: neopets_data::dialogue::LineTable,
 }
 
 impl World {
@@ -65,6 +67,7 @@ impl World {
             arrivals: Neighbours::arrivals(&bytes, &chain.chunks),
             entries: (0..4096).map_while(|i| ground::entry_record(&bytes, &chain.chunks, i)).collect(),
             scripted_doors: boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback"),
+            lines: neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks),
         };
         Ok((world, bytes))
     }
@@ -751,7 +754,11 @@ impl Play {
         };
         let job = self.job.map_or(String::new(), |j| format!(" | loading {j:?}"));
         let prompt = match self.message {
-            Some((line, at)) if self.ticks < at + 240 => format!("{prompt} | LevelMsg line {line}"),
+            Some((line, at)) if self.ticks < at + 240 => match self.world.lines.line(line as usize) {
+                Some(l) => format!("{prompt}
+LINE {line}: {}: {}", l.speaker, l.text),
+                None => format!("{prompt} | LevelMsg line {line} (no such line)"),
+            },
             _ => prompt,
         };
         format!(

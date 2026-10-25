@@ -246,6 +246,7 @@ fn main() {
     let mut start_resource = 0u32;
     let mut trace: Option<u64> = None;
     let mut trace_to: Option<[f32; 2]> = None;
+    let mut flags: Vec<u16> = Vec::new();
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -294,6 +295,8 @@ fn main() {
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse().ok()?, z.parse().ok()?])
             });
+        } else if arg == "--flag" {
+            flags.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
         } else if arg == "--play" {
             play_mode = true;
         } else if arg == "--original-pacing" {
@@ -336,7 +339,7 @@ fn main() {
             eprintln!("{status}");
             std::process::exit(1)
         };
-        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to);
+        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags);
         return;
     }
     let driver = SimDriver {
@@ -1167,7 +1170,7 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
 
 /// Diagnostic (`--play-trace <ticks>`): run play mode without a window, walking forward along
 /// the spawn facing (and jumping every 120 ticks with `--autojump`), and print each tick.
-fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Option<[f32; 2]>) {
+fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Option<[f32; 2]>, flags: &[u16]) {
     let Archive { disc, index } = archive;
     let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
         Ok(play) => play,
@@ -1176,6 +1179,10 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             std::process::exit(1)
         }
     };
+    // `--flag N`: diagnostic story flags set at the start.
+    for &f in flags {
+        play.state.set(f, true);
+    }
     let mut streamer = match disc.reopen() {
         Ok(second) => Streamer::start(second, index.clone(), play.boot.clone()),
         Err(e) => {
@@ -1241,6 +1248,12 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         // Loads go through the same background loader as the window; the trace does not wait.
         for line in streamer.pump(&mut play) {
             println!("      {line}");
+        }
+        if let Some((line, at)) = play.message {
+            if at == play.ticks {
+                let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", l.speaker, l.text));
+                println!("      LevelMsg line {line} on tick {at}: {text:?}");
+            }
         }
         if !play.last_door.is_empty() && play.last_door != last_door {
             last_door = play.last_door.clone();
