@@ -379,6 +379,14 @@ pub struct Play {
     pub loads_out: usize,
     /// The pack last made current (the "last active world" of the next activation).
     seen_pack: u32,
+    /// Shops (SPEC-0050 sections 3 and 9): the buyable item this tick (its pool index), the
+    /// "Buy <name>" caption, the price caption's two lines (value, shown counter), and the boot
+    /// texts (the "Buy %s" template at 0x319528 and "Exorbitant!" at 0x315A48).
+    pub buyable: Option<usize>,
+    buy_caption: Option<Vec<u8>>,
+    pub price_lines: [(i32, u32); 2],
+    buy_template: Vec<u8>,
+    pub exorbitant: Vec<u8>,
     /// Tor's attack step (SPEC-0036), while state 13 runs.
     pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
@@ -685,6 +693,11 @@ impl Play {
             held: false,
             loads_out: 0,
             seen_pack: 0,
+            buyable: None,
+            buy_caption: None,
+            price_lines: [(0, 0); 2],
+            buy_template: boot_string(&boot_bytes, 0x0031_9528),
+            exorbitant: boot_string(&boot_bytes, 0x0031_5A48),
             rng: neopets_sim::rng::Rng::seeded(clock_seed()),
             attack: None,
             attack_latch: false,
@@ -1249,6 +1262,13 @@ impl Play {
                     }
                     return Some(Wait::Choice(routine));
                 }
+                Action::ScalePrices { factor } => {
+                    if let Some(pool) = self.pools.get_mut(&pack) {
+                        for it in pool.slots.iter_mut().flatten().filter(|it| it.flag == 1) {
+                            it.price = neopets_sim::shop::scaled(it.price, factor);
+                        }
+                    }
+                }
                 Action::GiveWordItem { word, default } => {
                     let v = self.state.words.get(&(pack, word)).copied().unwrap_or(0);
                     let item = if v > 0 { v as u16 } else { default };
@@ -1455,6 +1475,94 @@ impl Play {
         let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
         let j = if region == pack { 0xFF } else { u8::try_from(region.checked_sub(pack + 1)?).ok()? };
         world.entities.iter().position(|&(r, o)| r == j && o as usize == ordinal)
+    }
+
+    /// SPEC-0050 sections 3 and 9 and SPEC-0022 chooser step 1: the buyable item (it beats
+    /// talk). Without a press the caption is "Buy" with the item name and the price caption shows
+    /// the price and the balance; with Square the buy action runs. Returns whether it claimed.
+    fn buy_step(&mut self) -> bool {
+        self.buy_caption = None;
+        self.buyable = None;
+        let pack = self.world.pack;
+        let Some(pool) = self.pools.get(&pack) else { return false };
+        let slots: Vec<(usize, neopets_sim::items::WorldItem)> = pool.slots.iter().enumerate().filter_map(|(i, s)| Some((i, (*s)?))).collect();
+        let cands: Vec<neopets_sim::shop::Candidate> = slots.iter().map(|(_, it)| neopets_sim::shop::Candidate { position: it.position, flag: it.flag, ready: it.ready() }).collect();
+        let Some(k) = neopets_sim::shop::buyable(&cands, self.loco.position(), self.loco.facing) else { return false };
+        let (i, it) = slots[k];
+        self.buyable = Some(i);
+        if !self.square_now {
+            let name = self.design.item_name(it.id).unwrap_or_else(|| it.id.to_string().into_bytes());
+            let mut text = Vec::new();
+            match self.buy_template.windows(2).position(|w| w == b"%s") {
+                Some(at) => {
+                    text.extend_from_slice(&self.buy_template[..at]);
+                    text.extend_from_slice(&name);
+                    text.extend_from_slice(&self.buy_template[at + 2..]);
+                }
+                None => text.extend_from_slice(&name),
+            }
+            self.buy_caption = Some(text);
+            self.price_lines[1] = (self.state.neopoints, 1);
+            self.price_lines[0] = (it.price as i32, 1);
+            return true;
+        }
+        self.buy(i, it);
+        true
+    }
+
+    /// SPEC-0050 section 3, the buy action on pool item i: the buy hook's line (handled 0, so
+    /// the purchase goes on), the price tests, the add with the carry limit, the charge, and the
+    /// take-or-copy and sold-out rules of section 8.
+    fn buy(&mut self, i: usize, it: neopets_sim::items::WorldItem) {
+        let pack = self.world.pack;
+        let hook = level::on_buy(pack, it.id, &self.state);
+        self.apply(&hook);
+        let limit = self.design.carry_limit(it.id).unwrap_or(0);
+        let held = self.state.items.get(&it.id).copied().unwrap_or(0);
+        let add_ok = limit == 0 || held < limit;
+        match neopets_sim::shop::decide(it.price, self.state.neopoints, add_ok) {
+            neopets_sim::shop::Buy::NeedMore(n) => {
+                // The need-more text of SPEC-0050 (its currency glyph is not given; R-0030).
+                let text = format!("I need another {n}!").into_bytes();
+                self.open_text(b"Tor", &text);
+                self.last_pickup = format!("buy refused: need {n} more NP for item {} on tick {}", it.id, self.ticks);
+            }
+            neopets_sim::shop::Buy::Bought => {
+                self.state.neopoints -= it.price as i32;
+                self.state.neopoints = self.state.neopoints.max(0);
+                self.state.give(it.id, 1);
+                let taken = neopets_sim::shop::takes(it.id, self.item_kind(it.id));
+                if let Some(pool) = self.pools.get_mut(&pack) {
+                    if taken {
+                        pool.take(i);
+                    }
+                    // Sold out: holding the carry limit removes every world item of that id.
+                    if limit > 0 && held + 1 >= limit {
+                        for s in pool.slots.iter_mut() {
+                            if s.is_some_and(|w| w.id == it.id) {
+                                *s = None;
+                            }
+                        }
+                    }
+                }
+                if matches!(it.id, 19 | 20 | 151 | 154 | 174) {
+                    self.once.insert((it.id, pack));
+                }
+                self.last_pickup = format!("bought item {} for {} NP (wallet {}) on tick {}", it.id, it.price, self.state.neopoints, self.ticks);
+            }
+            other => {
+                // The never-affordable and can't-buy-now texts are not given (R-0030).
+                self.last_pickup = format!("buy refused ({other:?}) for item {} on tick {}", it.id, self.ticks);
+            }
+        }
+    }
+
+    /// Open the box on a text that is not a level line (the shop's refusal), with a speaker.
+    fn open_text(&mut self, speaker: &[u8], text: &[u8]) {
+        self.message = None;
+        self.speaker = (speaker.to_vec(), self.hero_colour);
+        self.textbox.open(text);
+        self.dialogue_open = true;
     }
 
     /// SPEC-0022 Interaction range and target choice, simplified: the nearest character of the
@@ -1891,6 +1999,13 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
+        // SPEC-0035 section 15.2: each drawn pass (quick panels closed) lowers the caption
+        // lines' counters.
+        if !self.quick.open {
+            for l in &mut self.price_lines {
+                l.1 = l.1.saturating_sub(1);
+            }
+        }
         // SPEC-0052 Screen effect: the bars' and the fade's per-pass update.
         self.bars.update();
         self.fade.update();
@@ -2165,7 +2280,7 @@ impl Play {
         }
         // The interaction chooser: a talk candidate claims Square before the doors.
         self.talk_prompt = false;
-        if !self.dialogue_open && !self.talk_step() {
+        if !self.dialogue_open && !self.buy_step() && !self.talk_step() {
             self.door_step();
         }
         if self.job.is_none() {
@@ -2526,6 +2641,9 @@ impl Play {
         }
         // The "Save Game" caption (label 25) is set first in the pass, so the chooser's talk
         // and door captions replace it.
+        if let Some(c) = self.buy_caption.as_deref() {
+            return Some(c);
+        }
         let id = if self.talk_prompt {
             Some(8)
         } else if self.prompt_shown.is_some() {
@@ -2715,6 +2833,7 @@ impl Play {
                 direction: Some(p.facing),
                 flag: p.flags,
                 map: p.map,
+                price: p.count,
             };
             self.spawn_item(pack, spawn);
         }
@@ -2762,6 +2881,7 @@ impl Play {
             direction: None,
             flag: p.flags,
             map: p.map,
+            price: 0,
         };
         if p.key >= 0 {
             let id = p.key as u16;
@@ -2834,6 +2954,10 @@ impl Play {
             if value > 0 {
                 self.state.neopoints = self.state.neopoints.checked_add(value).unwrap_or(0).max(0);
             }
+            // SPEC-0035 section 15.2: line 1 shows the gain, or the running total within 3 s.
+            let l1 = &mut self.price_lines[0];
+            l1.0 = if l1.1 > 0 { l1.0 + value } else { value };
+            l1.1 = 180;
             self.cue(165);
             self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.state.neopoints, self.ticks);
         } else {
@@ -3835,4 +3959,11 @@ fn push_eye(world: &World, e: &mut [f32; 3]) {
         contact::resolve_walls(e, &walls, camera::EYE_RADIUS);
     }
     contact::resolve(e, &world.boxes, camera::EYE_RADIUS);
+}
+
+/// A NUL-terminated string of the boot program's data at a virtual address (at most 64 bytes).
+fn boot_string(boot: &[u8], va: u32) -> Vec<u8> {
+    let words = neopets_data::archive::boot_u32_table(boot, va, 16).unwrap_or_default();
+    let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
+    bytes.into_iter().take_while(|&b| b != 0).collect()
 }

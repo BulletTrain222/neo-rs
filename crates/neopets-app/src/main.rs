@@ -1957,7 +1957,7 @@ fn play_trace(
             forward,
             side,
             // An open dialogue box gets a Square press every 10 ticks (skip, Next, Finish).
-            square: play.prompt_shown.is_some() || play.talk_prompt || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
+            square: play.prompt_shown.is_some() || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),

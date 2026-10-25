@@ -125,6 +125,8 @@ pub enum Action {
     Prompt { line: u16, routine: u8 },
     /// Give the item held in a module word (1148's traded-item word; 0 means its file value).
     GiveWordItem { word: u8, default: u16 },
+    /// The price multiplier (SPEC-0050 section 5): every live flag-1 item of the world.
+    ScalePrices { factor: f32 },
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -374,6 +376,20 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         678 | 686 | 691 => road_init(pack, state),
         1023 => village_init(state),
+        // SPEC-0050 section 5: the Market Town shops' x4 prices until flag 298, once the
+        // shopkeeper's set (1 with flag 86, else 0) has loaded with the stock.
+        1005 | 1008 | 1011 | 1014 | 1020 => {
+            let mut out = vec![Action::LoadRegion { slot: 0, region: Some(pack + 1 + state.flag(86) as u32) }, Action::WaitLoads];
+            if !state.flag(298) {
+                out.push(Action::ScalePrices { factor: 4.0 });
+            }
+            out
+        }
+        // SPEC-0050 section 4: pack 1140 registers its buy hook only when flag 10 is set.
+        1140 => {
+            state.set_word(pack, 0, state.flag(10) as i32);
+            Vec::new()
+        }
         // SPEC-0039 1148 thread 1: set 0 (region 1149) when flag 496 is set.
         1148 if state.flag(496) => vec![Action::LoadRegion { slot: 0, region: Some(1149) }],
         // SPEC-0042 1150 thread T: set 0 (region 1151) while flag 142 is clear.
@@ -1033,6 +1049,19 @@ fn walk_back(s: &GameState) -> Vec<Action> {
         GiveWordItem { word: 1, default: 99 },
         walk(0, 7, false),
     ]
+}
+
+/// SPEC-0050 section 4: the buy hooks. Each shows its line on a buy of its item while its flag
+/// is clear; every hook passes handled 0, so the purchase then completes.
+pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
+    let line = match (pack, item) {
+        (856, 113) if !s.flag(220) => 19,
+        (859, 130) if !s.flag(220) => 34,
+        (1140, 116) if !s.flag(220) && s.word(1140, 0) == 1 => 0,
+        (1429, 109) if !s.flag(248) => 20,
+        _ => return Vec::new(),
+    };
+    vec![Action::Message { line }]
 }
 
 /// The answer to a LevelPrompt made by a routine of a pack (yes = Circle).

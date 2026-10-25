@@ -69,6 +69,11 @@ pub struct HudText;
 #[derive(Component)]
 pub struct HudCaption;
 
+/// A line of the price caption (SPEC-0035 section 15.2): 0 the price or coin gain, 1 the
+/// balance.
+#[derive(Component)]
+pub struct HudPrice(usize);
+
 #[derive(Component)]
 pub struct HudCanvas;
 
@@ -222,6 +227,7 @@ pub fn sync_hud(
     mut values: Query<(&HudValue, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
     mut caption_image: Local<Option<(Vec<u8>, Handle<Image>, u32, u32, i32)>>,
     mut value_images: Local<HashMap<(usize, String), (Handle<Image>, u32, u32, i32)>>,
+    mut prices: Query<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>)>,
 ) {
     let (Some(state), Some(mut art)) = (state, art) else { return };
     let HudArt { f, mem, images: cache, name: name_image } = &mut *art;
@@ -279,6 +285,10 @@ pub fn sync_hud(
         commands.entity(root).add_child(text);
         let caption = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudCaption)).id();
         commands.entity(root).add_child(caption);
+        for line in 0..2 {
+            let price = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudPrice(line))).id();
+            commands.entity(root).add_child(price);
+        }
         for &n in panel_nodes.iter().filter(|&&n| matches!(f.nodes[n].kind, 2 | 6)) {
             let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudValue(n))).id();
             commands.entity(root).add_child(child);
@@ -459,6 +469,45 @@ pub fn sync_hud(
                     image.image = handle.clone();
                     *vis = Visibility::Inherited;
                 }
+            }
+            None => *vis = Visibility::Hidden,
+        }
+    }
+    // SPEC-0035 section 15.2: the price caption, font 0, right edge at x 410, baselines 115 and
+    // 140, while its counter runs and the quick panel is closed. Line 1: "Exorbitant!" for 32767,
+    // else the nine-cell number in (160, 160, 90) or (128, 60, 90) above the balance; line 2 the
+    // balance in (128, 128, 128).
+    for (line, mut node, mut image, mut vis) in &mut prices {
+        let (value, counter) = p.price_lines[line.0];
+        if counter == 0 || p.quick.open {
+            *vis = Visibility::Hidden;
+            continue;
+        }
+        let (text, colour) = if line.0 == 1 {
+            (neopets_sim::shop::number_field(value, 9), [128, 128, 128, 127])
+        } else if value == 32767 {
+            (p.exorbitant.clone(), [128, 60, 90, 127])
+        } else if value > p.state.neopoints {
+            (neopets_sim::shop::number_field(value, 9), [128, 60, 90, 127])
+        } else {
+            (neopets_sim::shop::number_field(value, 9), [160, 160, 90, 127])
+        };
+        let key = (9000 + line.0, format!("{}{colour:?}", String::from_utf8_lossy(&text)));
+        if !value_images.contains_key(&key) {
+            if let Some((img, base)) = f.text_image(mem, 0, &text, 0, colour) {
+                let (w, h) = (img.width, img.height);
+                value_images.insert(key.clone(), (images.add(crate::rgba_image(w, h, img.rgba)), w, h, base));
+            }
+        }
+        match value_images.get(&key) {
+            Some((handle, w, h, base)) => {
+                let y = if line.0 == 0 { 115 } else { 140 };
+                node.left = Val::Px((410.0 - *w as f32) * s);
+                node.top = Val::Px((y - base) as f32 * s);
+                node.width = Val::Px(*w as f32 * s);
+                node.height = Val::Px(*h as f32 * s);
+                image.image = handle.clone();
+                *vis = Visibility::Inherited;
             }
             None => *vis = Visibility::Hidden,
         }

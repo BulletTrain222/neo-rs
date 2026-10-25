@@ -64,6 +64,8 @@ pub struct Spawn {
     /// The placement's flag byte (+0x20) and map byte (+0x2C).
     pub flag: u8,
     pub map: u8,
+    /// The placement's fixed count (+0x2A): the buy price of a flag-1 shop item (SPEC-0050).
+    pub price: i16,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -88,6 +90,8 @@ pub struct WorldItem {
     pub flag: u8,
     pub map: u8,
     pub charm: bool,
+    /// The buy price (record +0x8A; SPEC-0050).
+    pub price: i16,
 }
 
 impl WorldItem {
@@ -188,6 +192,7 @@ impl ItemPool {
             delay: s.delay,
             token,
             flag: s.flag,
+            price: s.price,
             map: s.map,
             charm: s.charm,
         });
@@ -430,7 +435,7 @@ mod tests {
         let mut pool = ItemPool::default();
         let mut q: Vec<f32> = draws.to_vec();
         let mut d = |_: f32, _: f32| if q.is_empty() { 0.5 } else { q.remove(0) };
-        let s = Spawn { id, point: [0.0, 1.0, 0.0], placed: false, charm, s0: 0.25, s1: 1.0, delay, larg: -1.0, direction, flag: 0, map: 0 };
+        let s = Spawn { id, point: [0.0, 1.0, 0.0], placed: false, charm, s0: 0.25, s1: 1.0, delay, larg: -1.0, direction, flag: 0, map: 0, price: 0 };
         assert!(pool.spawn(s, &flat, &mut d));
         (pool, q)
     }
@@ -565,7 +570,7 @@ mod tests {
         assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175), None, "age 0.8 is not ready");
         let mut full = ItemPool::default();
         let mut d = |_: f32, _: f32| 0.5;
-        let s = Spawn { id: 146, point: [0.0; 3], placed: true, charm: false, s0: 1.0, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0 };
+        let s = Spawn { id: 146, point: [0.0; 3], placed: true, charm: false, s0: 1.0, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };
         for _ in 0..SLOTS {
             assert!(full.spawn(s, &flat, &mut d));
         }

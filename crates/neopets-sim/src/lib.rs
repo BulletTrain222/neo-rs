@@ -28,6 +28,7 @@ pub mod save;
 pub mod scene;
 pub mod sound;
 pub mod sequencer;
+pub mod shop;
 pub mod synth;
 pub mod status;
 mod step;
