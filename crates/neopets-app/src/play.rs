@@ -3754,7 +3754,22 @@ impl Play {
         let deadly = (hp.found && hp.kind == Some(2))
             .then(|| neopets_sim::death::Deadly { respawn: hp.respawn.unwrap_or(0xFF), surface: hp.surface.unwrap_or(0) });
         if neopets_sim::death::deadly_kill(deadly, self.loco.body.gap) {
+            // The death effect of the surface (0x81 hot burst, 0xBC water splash; SPEC-0055 8A,
+            // SPEC-0034 section 37) when the hero enters the death state.
+            if self.loco.state != hero_states::DEAD {
+                if let Some(e) = neopets_sim::death::death_clip(deadly).1 {
+                    let table = self.effect_table.clone();
+                    self.effects.one_shot(&table, e as i32, self.loco.position(), neopets_sim::effect::IDENTITY, &mut self.rng);
+                }
+            }
             self.default_death();
+        } else if self.loco.state != hero_states::DEAD
+            && neopets_sim::death::hurting_tick(hp.found.then_some(hp.surface).flatten(), deadly.is_some(), self.loco.body.gap, self.ticks as f32 / 60.0, 1.0 / 60.0)
+        {
+            // SPEC-0057 7A rule 2: a normal hit of 10 with no knockback (overlay rule 3 is not
+            // built: the overlay entry's point test is not read).
+            let f = self.loco.facing;
+            self.hero_hit(neopets_sim::death::HURT_DAMAGE, 0.0, false, f, "a hurting surface".into());
         }
         if self.loco.state == hero_states::DEAD {
             // SPEC-0053 3.8 d: with the death clip at 0.95, a switch to the partner (both flags

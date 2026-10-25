@@ -158,6 +158,17 @@ pub fn respawn_penalty(health: i32) -> i32 {
     if health > 5 { 5 } else { (health - 1).max(0) }
 }
 
+/// SPEC-0057 7A rule 2 (SPEC-0055 section 9): a non-deadly ground entry with surface word 2
+/// hurts while the gap is below 0.2, on each tick where clock - trunc(clock x 0.4) x 2.5 < dt
+/// (once every 2.5 s of game clock, phased by the clock), for 10 HP.
+pub fn hurting_tick(surface: Option<u16>, deadly: bool, gap: f32, clock: f32, dt: f32) -> bool {
+    use ps2_float::fpu::{mul, sub};
+    surface == Some(2) && !deadly && gap < 0.2 && sub(clock, mul((mul(clock, 0.4) as i32) as f32, 2.5)) < dt
+}
+
+/// The hurting surface's hit.
+pub const HURT_DAMAGE: f32 = 10.0;
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -219,5 +230,19 @@ mod tests {
         // Newly pressed on page pass 122: exit.
         assert!(d.page_pass(true));
         assert!(!d.flag_e && d.page.is_none());
+    }
+
+    /// SPEC-0057 TV-G1 to G3 and G5: hits at the clock times 2.5 and 5.0 only, none above the
+    /// 0.2 gap, none on deadly ground.
+    #[test]
+    fn hurting_surface_phase() {
+        let dt = 1.0f32 / 60.0;
+        let hits: Vec<u32> = (0..200u32).filter(|&t| hurting_tick(Some(2), false, 0.1, 2.49 + t as f32 * dt, dt)).collect();
+        let times: Vec<f32> = hits.iter().map(|&t| 2.49 + t as f32 * dt).collect();
+        assert_eq!(times.len(), 2, "{times:?}");
+        assert!((times[0] - 2.5).abs() < dt && (times[1] - 5.0).abs() < dt);
+        assert!(!hurting_tick(Some(2), false, 0.25, 2.5, dt));
+        assert!(!hurting_tick(Some(2), true, 0.1, 2.5, dt));
+        assert!(!hurting_tick(Some(0), false, 0.1, 2.5, dt));
     }
 }
