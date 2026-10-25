@@ -164,7 +164,7 @@ impl Play {
     /// reachable point where the current world has no ground and the other world has. A step
     /// is walkable when both ends have ground in either world, the ground rises at most 1.5
     /// and no frame record of the current world crosses it 1.5 above the ground.
-    pub fn route_to_swap(&self, max_nodes: usize) -> Option<Vec<[f32; 2]>> {
+    pub fn route_to_swap(&self, max_nodes: usize, new_neighbour: bool) -> Option<Vec<[f32; 2]>> {
         let o = self.other.as_ref()?;
         let p = self.loco.position();
         let step = 4.0;
@@ -207,7 +207,12 @@ impl Play {
                     continue;
                 }
                 came.insert(n, (k, h));
-                if other {
+                let goal = if new_neighbour {
+                    !other && self.neighbour_at(nx, nz).is_some_and(|t| !self.resident(t))
+                } else {
+                    other
+                };
+                if goal {
                     let mut route = vec![[nx, nz]];
                     let mut c = k;
                     while c != start {
@@ -229,16 +234,42 @@ impl Play {
         self.other.as_ref().is_some_and(|o| self.boot.neighbour_ok(self.world.pack, self.world.kind, o.pack))
     }
 
-    /// Service the pending step's request: read the wanted pack (once, to learn its kind) and,
-    /// when the buffer rule streams it, make it the other world.
-    pub fn stream(&mut self, disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
-        let Some(pack) = self.wanted.take() else { return Ok(()) };
-        let (world, _) = World::load(disc, index, &self.boot, pack)?;
-        self.kinds.insert(pack, world.kind);
-        if buffers::stream_buffer(self.world.buffer, world.kind == Kind::Transition) == Some(world.buffer) {
+    /// Whether a loaded world of this kind would be streamed into the other buffer now.
+    pub fn streams(&self, kind: Kind) -> bool {
+        let buffer = match kind {
+            Kind::Transition => Buffer::Transition,
+            Kind::Exterior => Buffer::Exterior,
+            Kind::Interior => Buffer::Interior,
+        };
+        buffers::stream_buffer(self.world.buffer, kind == Kind::Transition) == Some(buffer)
+    }
+
+    /// Take a loaded world (from `stream` or a loader thread): remember its kind and make it
+    /// the other world when the buffer rule streams it and it is not already resident.
+    pub fn install(&mut self, world: World) {
+        self.kinds.insert(world.pack, world.kind);
+        let resident = self.world.pack == world.pack || self.other.as_ref().is_some_and(|o| o.pack == world.pack);
+        if !resident && self.streams(world.kind) {
             self.other = Some(world);
         }
-        Ok(())
+    }
+
+    /// The neighbour pack the cell under (x, z) names (tag 0x0B, tables B and A), unless it is
+    /// paired with the current pack.
+    fn neighbour_at(&self, x: f32, z: f32) -> Option<u32> {
+        let v = self.world.ground.as_ref().map_or(-1, |g| g.cell_value(x, z));
+        let id = self.world.neighbours.get(v);
+        if id < 0 {
+            return None;
+        }
+        let areas = &self.boot.areas;
+        let slot = areas.world_ids.iter().position(|&w| w == id as u32)?;
+        let target = areas.packs[slot];
+        (!self.boot.paired(self.world.pack, target)).then_some(target)
+    }
+
+    fn resident(&self, pack: u32) -> bool {
+        self.world.pack == pack || self.other.as_ref().is_some_and(|o| o.pack == pack)
     }
 
     /// SPEC-0006 Pending step: the cell value under the hero names a neighbour (tag 0x0B, then
@@ -246,15 +277,8 @@ impl Play {
     /// the other buffer when the buffer rule allows and it is not resident there already.
     fn pending_step(&mut self) {
         let p = self.loco.position();
-        let v = self.world.ground.as_ref().map_or(-1, |g| g.cell_value(p[0], p[2]));
-        let id = self.world.neighbours.get(v);
-        if id < 0 {
-            return;
-        }
-        let areas = &self.boot.areas;
-        let Some(slot) = areas.world_ids.iter().position(|&w| w == id as u32) else { return };
-        let target = areas.packs[slot];
-        if self.boot.paired(self.world.pack, target) || self.other.as_ref().is_some_and(|o| o.pack == target) {
+        let Some(target) = self.neighbour_at(p[0], p[2]) else { return };
+        if self.resident(target) {
             return;
         }
         match self.kinds.get(&target) {

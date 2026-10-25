@@ -20,6 +20,7 @@ pub struct Entry {
 
 /// Minimal bounded ISO9660 reader; unsupported layouts fail instead of being guessed.
 pub struct Disc {
+    path: std::path::PathBuf,
     file: File,
     length: u64,
     entries: BTreeMap<String, Entry>,
@@ -52,10 +53,16 @@ pub(crate) fn normalize(name: &str) -> Result<String, String> {
 }
 
 impl Disc {
+    /// Open the same image again with its own file handle (for a loader thread).
+    pub fn reopen(&self) -> Result<Self, String> {
+        Self::open(&self.path)
+    }
+
     pub fn open(path: &Path) -> Result<Self, String> {
         let file = File::open(path).map_err(|e| format!("Open ISO {}: {e}", path.display()))?;
         let length = file.metadata().map_err(|e| e.to_string())?.len();
         let mut disc = Self {
+            path: path.to_path_buf(),
             file,
             length,
             entries: BTreeMap::new(),

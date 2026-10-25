@@ -53,6 +53,71 @@ const PIXELS_PER_LINE: f32 = 40.0;
 #[derive(Resource)]
 struct DiscStatus(String);
 
+/// Background loads for overworld streaming (SPEC-0006 Stream loads are asynchronous): a
+/// thread with its own disc handle reads a requested pack, learns its kind, and builds its
+/// scene when the buffer rule will stream it.
+#[derive(Resource)]
+struct Streamer {
+    requests: std::sync::mpsc::Sender<(u32, bool, bool)>,
+    results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, Result<(play::World, Option<neopets_data::model::ModelData>), String>)>>,
+    in_flight: std::collections::HashSet<u32>,
+    scenes: std::collections::HashMap<u32, neopets_data::model::ModelData>,
+}
+
+impl Streamer {
+    fn start(mut disc: Disc, index: neopets_data::archive::ArchiveIndex, boot: neopets_data::travel::BootTravel) -> Self {
+        let (requests, jobs) = std::sync::mpsc::channel::<(u32, bool, bool)>();
+        let (done, results) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // Each request: the pack, and whether transitions (true) or other kinds (false)
+            // stream now, and whether streaming is possible at all.
+            for (pack, transitions_stream, any) in jobs {
+                let result = play::World::load(&mut disc, &index, &boot, pack).and_then(|(world, bytes)| {
+                    let streams = any && ((world.kind == neopets_data::travel::Kind::Transition) == transitions_stream)
+                        && world.kind != neopets_data::travel::Kind::Interior;
+                    let scene = if streams {
+                        let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+                        archive_view::world_scene(&mut disc, &index, pack, &bytes, &chain.chunks, false)?
+                    } else {
+                        None
+                    };
+                    Ok((world, scene))
+                });
+                if done.send((pack, result)).is_err() {
+                    break;
+                }
+            }
+        });
+        Self { requests, results: std::sync::Mutex::new(results), in_flight: Default::default(), scenes: Default::default() }
+    }
+}
+
+/// Send the pending step's request to the loader and install finished loads.
+fn stream_worlds(play: Option<ResMut<PlayState>>, streamer: Option<ResMut<Streamer>>) {
+    let (Some(mut state), Some(mut streamer)) = (play, streamer) else { return };
+    let p = &mut state.play;
+    if let Some(pack) = p.wanted.take() {
+        if streamer.in_flight.insert(pack) {
+            let buffer = p.world.buffer;
+            let any = buffer != neopets_sim::travel::Buffer::Interior;
+            let _ = streamer.requests.send((pack, buffer == neopets_sim::travel::Buffer::Exterior, any));
+        }
+    }
+    let finished: Vec<_> = streamer.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
+    for (pack, result) in finished {
+        streamer.in_flight.remove(&pack);
+        match result {
+            Ok((world, scene)) => {
+                if let Some(scene) = scene {
+                    streamer.scenes.insert(pack, scene);
+                }
+                p.install(world);
+            }
+            Err(e) => error!("Stream load of {pack} failed: {e}"),
+        }
+    }
+}
+
 /// The opened disc and its archive index, present only when the ISO validated.
 #[derive(Resource)]
 struct Archive {
@@ -197,6 +262,9 @@ fn main() {
                 if v == "swap" {
                     return Some([f32::NAN, f32::NAN]);
                 }
+                if v == "new" {
+                    return Some([f32::NAN, 0.0]);
+                }
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse().ok()?, z.parse().ok()?])
             });
@@ -285,7 +353,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                (read_input, step_sim).chain(),
+                (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, play_frame).chain(),
@@ -505,7 +573,6 @@ fn step_sim(
     mut models: ResMut<ModelView>,
     play: Option<ResMut<PlayState>>,
     autowalk: Option<Res<AutoWalk>>,
-    mut archive: Option<ResMut<Archive>>,
 ) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
@@ -556,13 +623,6 @@ fn step_sim(
                 r3_pressed: std::mem::take(&mut play.play.r3_latch),
             };
             play.play.tick(&input, pad);
-            // The pending step's stream load runs between ticks (synchronously here; the
-            // original loads in the background).
-            if let Some(Archive { disc, index }) = archive.as_deref_mut() {
-                if let Err(e) = play.play.stream(disc, index) {
-                    error!("Stream load failed: {e}");
-                }
-            }
         }
     }
 }
@@ -923,6 +983,7 @@ fn sync_worlds(
     mut commands: Commands,
     play: Option<Res<PlayState>>,
     archive: Option<ResMut<Archive>>,
+    mut streamer: Option<ResMut<Streamer>>,
     parts: Query<(Entity, &WorldPart)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -950,7 +1011,12 @@ fn sync_worlds(
         if shown.contains(part) {
             continue;
         }
+        let streamed = match (*part, streamer.as_deref_mut()) {
+            (WorldPart::Scene(pack), Some(s)) => s.scenes.remove(&pack),
+            _ => None,
+        };
         let model = match *part {
+            WorldPart::Scene(_) if streamed.is_some() => Ok(streamed),
             WorldPart::Scene(pack) => index
                 .read(disc, pack)
                 .and_then(|bytes| {
@@ -1079,16 +1145,30 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             std::process::exit(1)
         }
     };
+    let mut streamer = match disc.reopen() {
+        Ok(second) => Streamer::start(second, index.clone(), play.boot.clone()),
+        Err(e) => {
+            eprintln!("No loader thread: {e}");
+            std::process::exit(1)
+        }
+    };
     println!("Grid bounds: {:?}; nearest swap point {:?}", play.bounds(), play.nearest_swap_point());
     // `--trace-to swap` follows a searched route to the nearest reachable swap point.
     let mut route: Vec<[f32; 2]> = Vec::new();
+    let mut rerouted = false;
     if to.is_some_and(|t| t[0].is_nan()) {
-        route = play.route_to_swap(400_000).unwrap_or_default();
+        route = play.route_to_swap(400_000, !to.is_some_and(|t| t[1].is_nan())).unwrap_or_default();
         println!("Route to a swap point: {} steps, ending at {:?}", route.len(), route.last());
     }
     for _ in 0..ticks {
         // `--trace-to x,z` steers the stick toward a point through the camera's rows.
         let (mut forward, mut side) = (0.7, 0.0);
+        // After a swap along a `swap` route, go on to a cell that names a new neighbour.
+        if play.swaps > 0 && to.is_some_and(|t| t[1].is_nan()) && route.len() <= 1 && !rerouted {
+            rerouted = true;
+            route = play.route_to_swap(400_000, true).unwrap_or_default();
+            println!("      rerouted on tick {} toward a new neighbour: {} steps", play.ticks, route.len());
+        }
         while route.len() > 1 && {
             let p = play.loco.position();
             (route[0][0] - p[0]).powi(2) + (route[0][1] - p[2]).powi(2) < 4.0
@@ -1111,8 +1191,23 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             ..Default::default()
         };
         play.tick(&input, neopets_sim::camera::CameraPad::default());
-        if let Err(e) = play.stream(disc, index) {
-            eprintln!("Stream load failed: {e}");
+        // Loads go through the same background loader as the window; the trace does not wait.
+        if let Some(pack) = play.wanted.take() {
+            if streamer.in_flight.insert(pack) {
+                let b = play.world.buffer;
+                let _ = streamer.requests.send((pack, b == neopets_sim::travel::Buffer::Exterior, b != neopets_sim::travel::Buffer::Interior));
+            }
+        }
+        let finished: Vec<_> = streamer.results.lock().map(|r| r.try_iter().collect()).unwrap_or_default();
+        for (pack, result) in finished {
+            streamer.in_flight.remove(&pack);
+            match result {
+                Ok((world, scene)) => {
+                    println!("      loaded {pack} on tick {} ({:?}, scene {})", play.ticks, world.kind, scene.is_some());
+                    play.install(world);
+                }
+                Err(e) => eprintln!("Stream load of {pack} failed: {e}"),
+            }
         }
         let (p, b) = (play.loco.position(), &play.loco.body);
         println!(
@@ -1131,7 +1226,13 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
     let (Some(request), Some(mut archive)) = (request, archive) else { return };
     let Archive { disc, index } = &mut *archive;
     match play::Play::load(disc, index, request.0, PLAY_OUTFIT) {
-        Ok(play) => commands.insert_resource(PlayState { play, skinned: Vec::new() }),
+        Ok(play) => {
+            match disc.reopen() {
+                Ok(second) => commands.insert_resource(Streamer::start(second, index.clone(), play.boot.clone())),
+                Err(e) => error!("No loader thread, streaming is off: {e}"),
+            }
+            commands.insert_resource(PlayState { play, skinned: Vec::new() })
+        }
         Err(e) => error!("Play mode could not start: {e}"),
     }
 }
