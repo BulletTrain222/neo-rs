@@ -90,6 +90,70 @@ pub struct Records {
     /// Kind-4 save points in walk order (at most 8), and the number dropped past the eighth.
     pub save_points: Vec<SavePointRecord>,
     pub save_points_dropped: usize,
+    /// Kind-16 effect lists in walk order (SPEC-0034 Layout section 1); a clip's effect index
+    /// names one by position.
+    pub effect_lists: Vec<Vec<EffectEntry>>,
+}
+
+/// An attach slot value: the low three bits name matrix slot 0 to 7; 0x4FFFFFFF is none.
+pub fn attach_slot(raw: u32) -> Option<u8> {
+    (raw != 0x4FFF_FFFF).then_some((raw & 7) as u8)
+}
+
+/// One effect-list entry (SPEC-0034 1.1, 0x50 bytes).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EffectEntry {
+    /// Point offsets in attach slot A's and B's frames (w = 1).
+    pub offset_a: [f32; 3],
+    pub offset_b: [f32; 3],
+    pub slot_a: Option<u8>,
+    pub slot_b: Option<u8>,
+    /// Start and end as fractions of the clip duration.
+    pub start: f32,
+    pub end: f32,
+    /// Effect definition id (-1 none).
+    pub id: i32,
+    pub rumble_seconds: f32,
+    pub intensity: f32,
+    /// +0x3C: probe 8.0 below point 1; +0x3D: the owner's ground height.
+    pub probe: bool,
+    pub owner_ground: bool,
+    /// Positional mode; 255 none.
+    pub positional: u8,
+    pub inner: f32,
+    pub outer: f32,
+    /// +0x48 = 0 starts a swing trail instead.
+    pub trail: bool,
+    /// +0x49: the effect object gets slot A's whole frame.
+    pub full_frame: bool,
+}
+
+fn effect_list(p: &[u8], data: usize) -> Vec<EffectEntry> {
+    let n = u32_at(p, data + 4).unwrap_or(0) as usize;
+    (0..n)
+        .filter_map(|i| {
+            let e = data + 0x10 + 0x50 * i;
+            let v = |o: usize| Some([f32_at(p, e + o)?, f32_at(p, e + o + 4)?, f32_at(p, e + o + 8)?]);
+            Some(EffectEntry {
+                offset_a: v(0)?,
+                offset_b: v(0x10)?,
+                slot_a: attach_slot(u32_at(p, e + 0x20)?),
+                slot_b: attach_slot(u32_at(p, e + 0x24)?),
+                start: f32_at(p, e + 0x28)?,
+                end: f32_at(p, e + 0x2C)?,
+                id: u32_at(p, e + 0x30)? as i32,
+                rumble_seconds: f32_at(p, e + 0x34)?,
+                intensity: f32_at(p, e + 0x38)?,
+                probe: *p.get(e + 0x3C)? != 0,
+                owner_ground: *p.get(e + 0x3D)? == 1,
+                positional: *p.get(e + 0x3E)?,
+                inner: f32_at(p, e + 0x40)?,
+                outer: f32_at(p, e + 0x44)?,
+                trail: *p.get(e + 0x48)? == 0,
+                full_frame: *p.get(e + 0x49)? != 0,
+            })
+        })
+        .collect()
 }
 
 /// Walk a type-36 payload; any other kind ends the walk (SPEC-0006).
@@ -165,6 +229,7 @@ pub fn records(p: &[u8]) -> Records {
                 }
             }
             2 => out.tables.push(data..at + len),
+            16 => out.effect_lists.push(effect_list(p, data)),
             _ => {}
         }
         at += len;
@@ -223,6 +288,28 @@ impl Region {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SPEC-0034 test vector 10 and a synthetic one-entry list.
+    #[test]
+    fn effect_lists_and_attach_slots() {
+        assert_eq!((attach_slot(0x15), attach_slot(0x4FFF_FFFF)), (Some(5), None));
+        let mut p = vec![0u8; 0x10 + 0x10 + 0x50 + 0x10];
+        p[0] = 16;
+        p[0x14] = 1;
+        let e = 0x20;
+        p[e + 0x20..e + 0x24].copy_from_slice(&7u32.to_le_bytes());
+        p[e + 0x24..e + 0x28].copy_from_slice(&0x4FFF_FFFFu32.to_le_bytes());
+        p[e + 0x28..e + 0x2C].copy_from_slice(&0.3f32.to_le_bytes());
+        p[e + 0x2C..e + 0x30].copy_from_slice(&1.0f32.to_le_bytes());
+        p[e + 0x30..e + 0x34].copy_from_slice(&474i32.to_le_bytes());
+        p[e + 0x3E] = 255;
+        p[e + 0x48] = 255;
+        p[0x70] = 0x7F;
+        let r = records(&p);
+        assert_eq!(r.effect_lists.len(), 1);
+        let x = r.effect_lists[0][0];
+        assert_eq!((x.slot_a, x.slot_b, x.start, x.end, x.id, x.trail, x.positional), (Some(7), None, 0.3, 1.0, 474, false, 255));
+    }
 
     #[test]
     fn save_points_are_read_and_capped_at_eight() {

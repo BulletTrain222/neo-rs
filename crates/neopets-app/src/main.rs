@@ -234,10 +234,14 @@ fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::mons
         _ => (file, chain.chunks),
     };
     let r = neopets_data::region::Region::of(&bytes, &chunks);
+    let lists = std::sync::Arc::new(r.records.effect_lists.clone());
     let mut out = Vec::new();
     for pl in r.records.placements.iter().filter(|p| !p.summon && p.position != [0.0; 3]) {
         match archive_view::region_character(disc, index, &bytes, &r, pl) {
-            Ok((model, anim)) => out.push((pl.clone(), model, anim, table.row(pl.monster_type, pl.variant), table.tuning(pl.monster_type, pl.variant))),
+            Ok((model, mut anim)) => {
+                anim.set_effect_lists(lists.clone());
+                out.push((pl.clone(), model, anim, table.row(pl.monster_type, pl.variant), table.tuning(pl.monster_type, pl.variant)))
+            }
             Err(e) => eprintln!("Region {region}, {:?}: {e}", pl.name),
         }
     }
@@ -1972,6 +1976,7 @@ fn play_trace(
     let mut last_pet = String::new();
     let mut last_boss = String::new();
     let mut last_swap = String::new();
+    let mut last_fx = String::new();
     let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
@@ -2200,6 +2205,10 @@ fn play_trace(
             let off: Vec<u16> = flags_seen.difference(&play.state.flags).copied().collect();
             println!("      flags on {on:?} off {off:?} on tick {}", play.ticks);
             flags_seen = play.state.flags.clone();
+        }
+        if !play.last_fx.is_empty() && play.last_fx != last_fx {
+            last_fx = play.last_fx.clone();
+            println!("      {last_fx}");
         }
         if !play.last_swap.is_empty() && play.last_swap != last_swap {
             last_swap = play.last_swap.clone();

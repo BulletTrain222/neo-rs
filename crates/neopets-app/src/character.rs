@@ -25,6 +25,8 @@ pub struct HeroAnim {
     /// The face override id (SPEC-0040 Behavior 3D): its face clip plays instead of the main
     /// id's until it reaches progress 0.99, then the main id's face clip returns.
     face: Option<u32>,
+    /// The region's kind-16 effect lists (SPEC-0034 Layout section 1), shared by its characters.
+    effect_lists: std::sync::Arc<Vec<Vec<neopets_data::region::EffectEntry>>>,
 }
 
 /// Action ids valid for the hero tables (SPEC-0005: ids 0 to 192).
@@ -58,13 +60,36 @@ impl HeroAnim {
                 state
             })
             .collect();
-        let mut hero = Self { bones, families, action: 0, face: None };
+        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default() };
         hero.play(3);
         hero
     }
 
     pub fn action(&self) -> u32 {
         self.action
+    }
+
+    pub fn set_effect_lists(&mut self, lists: std::sync::Arc<Vec<Vec<neopets_data::region::EffectEntry>>>) {
+        self.effect_lists = lists;
+    }
+
+    /// SPEC-0034 1.2 clip-to-list lookup: the main table entry's word A bits 14 to 21 name the
+    /// region's effect list (0xFF none; an index past the table or the lists is none).
+    pub fn effect_list(&self) -> Option<(usize, &[neopets_data::region::EffectEntry])> {
+        let f = self.families.first()?;
+        let a = *f.data.actions.get(self.action as usize)?;
+        let i = ((a >> 14) & 0xFF) as usize;
+        if i == 0xFF {
+            return None;
+        }
+        self.effect_lists.get(i).map(|l| (i, l.as_slice()))
+    }
+
+    /// The main layer's cursor t, the clip's frame count D and the speed L in frames per tick.
+    pub fn layer0_window(&self) -> Option<(f32, f32, f32)> {
+        let f = self.families.first()?;
+        let c = f.current?;
+        Some((f.record.cursor(), f.data.clips[c].frames as f32, f.record.speed()))
     }
 
     /// The main family's playing clip, for the hero update of the next tick.

@@ -556,6 +556,9 @@ pub struct Play {
     /// The flight effect objects (ids 0 and 1) of each projectile slot, with the shot's start
     /// point that tells a new shot in the same slot.
     shot_fx: Vec<Option<([f32; 3], [Option<usize>; 2])>>,
+    /// Each character's running clip effects: its list index and an effect object per entry.
+    clip_fx: HashMap<u64, (Option<usize>, Vec<Option<usize>>)>,
+    pub last_fx: String,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -868,6 +871,8 @@ impl Play {
             effects: neopets_sim::effect::Effects::new(),
             dust_ids,
             shot_fx: vec![None; neopets_sim::projectile::SLOTS],
+            clip_fx: HashMap::new(),
+            last_fx: String::new(),
             attack: None,
             attack_latch: false,
             weapon: None,
@@ -2072,6 +2077,97 @@ impl Play {
                 }
             }
         }
+    }
+
+    /// SPEC-0034 1.2 and 5.1: each character's clip effect list. With t the layer-0 cursor, D
+    /// the frame count and L the speed, an entry starts its effect while t is in [s, s + L)
+    /// (s = start x D, or L for a start of 0) and stops it while t is in [e, e + L) (e = end x
+    /// D, at most D - 1); a new list stops every effect of the old one. The point is attach
+    /// slot A's frame applied to the entry's offset, with the ground rules of +0x3C and +0x3D;
+    /// running effects follow it. Matrix slot k is taken as attach point k (R-0044). Trails,
+    /// the positional sound, shake and rumble are not reproduced.
+    fn clip_effects_step(&mut self) {
+        let table = self.effect_table.clone();
+        let live: std::collections::HashSet<u64> = self.characters.iter().map(|c| c.id).collect();
+        let gone: Vec<u64> = self.clip_fx.keys().filter(|id| !live.contains(id)).copied().collect();
+        for id in gone {
+            if let Some((_, handles)) = self.clip_fx.remove(&id) {
+                for h in handles.into_iter().flatten() {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
+            }
+        }
+        for i in 0..self.characters.len() {
+            let c = &self.characters[i];
+            if c.inactive {
+                continue;
+            }
+            let list = c.anim.effect_list().map(|(k, l)| (k, l.to_vec()));
+            let window = c.anim.layer0_window();
+            let key = list.as_ref().map(|l| l.0);
+            let id = c.id;
+            let entry = self.clip_fx.entry(id).or_insert((None, Vec::new()));
+            if entry.0 != key {
+                let old = std::mem::take(&mut entry.1);
+                entry.0 = key;
+                entry.1 = vec![None; list.as_ref().map_or(0, |l| l.1.len())];
+                for h in old.into_iter().flatten() {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
+            }
+            let (Some((_, entries)), Some((t, d, l))) = (list, window) else { continue };
+            for (j, e) in entries.iter().enumerate() {
+                if e.id == -1 || e.trail {
+                    continue;
+                }
+                let s = if e.start * d == 0.0 { l } else { e.start * d };
+                let end = if e.end * d >= d { d - 1.0 } else { e.end * d };
+                let handle = self.clip_fx.get(&id).and_then(|x| x.1.get(j).copied().flatten());
+                let (point, frame) = self.clip_point(i, e);
+                if handle.is_none() && t >= s && t < s + l {
+                    let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, e.id, point, frame));
+                    self.last_fx = format!("clip effect {} (list {:?} entry {j}, action {}) on {} on tick {}", e.id, self.clip_fx.get(&id).and_then(|x| x.0), self.characters[i].anim.action(), self.characters[i].name, self.ticks);
+                    self.effects.update(&table, h, None, &mut self.rng);
+                    if let Some(x) = self.clip_fx.get_mut(&id).and_then(|x| x.1.get_mut(j)) {
+                        *x = Some(h);
+                    }
+                } else if let Some(h) = handle {
+                    if t >= end && t < end + l {
+                        self.effects.stop(&table, h);
+                        self.effects.release(h);
+                        if let Some(x) = self.clip_fx.get_mut(&id).and_then(|x| x.1.get_mut(j)) {
+                            *x = None;
+                        }
+                    } else {
+                        self.effects.set_position(h, point);
+                    }
+                }
+            }
+        }
+    }
+
+    /// An entry's point 1 and frame on character i (SPEC-0034 5.1 and 1.1).
+    fn clip_point(&self, i: usize, e: &neopets_data::region::EffectEntry) -> ([f32; 3], neopets_sim::effect::Frame) {
+        let c = &self.characters[i];
+        let place = placement(c.position, c.facing);
+        let m = e
+            .slot_a
+            .and_then(|k| c.anim.bones().attach.get(k as usize).copied())
+            .and_then(|(bone, angles, offset)| Some(place.mul(c.anim.bone_frames().get(bone?)?).mul(&attach_rotation(offset, angles))))
+            .unwrap_or(place);
+        let mut p = m.apply(e.offset_a);
+        let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == c.pack);
+        if e.owner_ground {
+            p[1] = c.position[1];
+        } else if e.probe {
+            if let Some(h) = world.and_then(|w| w.ground_at(p[0], p[2], p[1])).filter(|&h| h >= p[1] - 8.0) {
+                p[1] = h;
+            }
+        }
+        let frame = if e.full_frame { [m.cols[0], m.cols[1], m.cols[2]] } else { neopets_sim::effect::IDENTITY };
+        (p, frame)
     }
 
     /// A diagnostic one-shot of effect `id` 3 units in front of the hero, 1.5 above its feet.
@@ -3628,6 +3724,7 @@ impl Play {
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
         self.sound_step();
+        self.clip_effects_step();
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
         // Dead characters disappear when their countdown ends.
