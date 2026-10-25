@@ -570,6 +570,9 @@ pub struct Play {
     /// Roberta's hold effect and leap glow (SPEC-0036): their timers and effect objects.
     r_displays: neopets_sim::roberta::Displays,
     r_fx: [Option<usize>; 2],
+    /// Status displays by character (the hero is u64::MAX): the display, its effect object and
+    /// last tick's active statuses.
+    displays: HashMap<u64, (neopets_sim::status::Display, Option<usize>, [bool; 14])>,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -888,6 +891,7 @@ impl Play {
             placed_fx: HashMap::new(),
             r_displays: Default::default(),
             r_fx: [None; 2],
+            displays: HashMap::new(),
             attack: None,
             attack_latch: false,
             weapon: None,
@@ -3785,6 +3789,7 @@ impl Play {
         self.root_step = self.hero.tick();
         self.sound_step();
         self.clip_effects_step();
+        self.status_display_step();
         self.placed_release_step();
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
@@ -4612,6 +4617,71 @@ impl Play {
             }
             self.save_open = true;
         }
+    }
+
+    /// The id the status displays use for the selected hero.
+    const HERO_DISPLAY: u64 = u64::MAX;
+
+    /// SPEC-0036 Status display and cues for the hero and the common enemies: a status that
+    /// became active this tick runs the display start (codes 8 to 10 play their one-shot), the
+    /// rotation steps, the shown status's effect follows the character (curse 1.5 above), and a
+    /// stun that ended plays 0xCD. The effects sit at the character's origin: the main attach
+    /// point is not identified (R-0045).
+    fn status_display_step(&mut self) {
+        let table = self.effect_table.clone();
+        let mut who: Vec<(u64, [bool; 14], [f32; 3])> = vec![(Self::HERO_DISPLAY, std::array::from_fn(|c| self.statuses.active(c)), self.loco.position())];
+        for c in &self.characters {
+            if let Some(e) = c.enemy.as_ref().filter(|e| !e.dead && !c.inactive) {
+                who.push((c.id, std::array::from_fn(|k| e.status(k)), c.position));
+            }
+        }
+        let live: std::collections::HashSet<u64> = who.iter().map(|w| w.0).collect();
+        let gone: Vec<u64> = self.displays.keys().filter(|k| !live.contains(k)).copied().collect();
+        for k in gone {
+            if let Some((_, Some(h), _)) = self.displays.remove(&k) {
+                self.effects.stop(&table, h);
+                self.effects.release(h);
+            }
+        }
+        for (id, active, at) in who {
+            let (mut d, mut h, prev) = self.displays.get(&id).copied().unwrap_or_default();
+            let mut changed = false;
+            for code in 0..14 {
+                if active[code] && !prev[code] {
+                    if (8..=10).contains(&code) {
+                        if let Some(e) = neopets_sim::status::display_effect(code as i32) {
+                            self.effects.one_shot(&table, e, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+                        }
+                    }
+                    changed |= d.start(code as i32);
+                }
+            }
+            if prev[0] && !active[0] {
+                self.effects.one_shot(&table, neopets_sim::status::STUN_END_EFFECT, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            changed |= d.tick(&|c: i32| active.get(c as usize).copied().unwrap_or(false));
+            let point = if d.shown == 1 { [at[0], at[1] + 1.5, at[2]] } else { at };
+            if changed {
+                if let Some(old) = h.take() {
+                    self.effects.stop(&table, old);
+                    self.effects.release(old);
+                }
+                if let Some(e) = neopets_sim::status::display_effect(d.shown).filter(|_| (0..=7).contains(&d.shown)) {
+                    let o = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, e, point, neopets_sim::effect::IDENTITY));
+                    self.effects.update(&table, o, None, &mut self.rng);
+                    h = Some(o);
+                }
+            } else if let Some(o) = h {
+                self.effects.set_position(o, point);
+            }
+            self.displays.insert(id, (d, h, active));
+        }
+    }
+
+    /// The steady status tint of the hero (None) or a character (SPEC-0034 5.4).
+    pub fn status_tint(&self, id: Option<u64>) -> Option<[f32; 3]> {
+        let (d, ..) = self.displays.get(&id.unwrap_or(Self::HERO_DISPLAY))?;
+        neopets_sim::status::tint(d.shown, if id.is_none() { self.hero_index } else { 0 })
     }
 
     /// StartEffect (SPEC-0030 row 6; SPEC-0034 section 6): placed record `slot` of world `pack`

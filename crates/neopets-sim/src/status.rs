@@ -3,7 +3,10 @@
 //! its 1 HP floor, slow and speed scales, the regeneration statuses with the timer-12 quirk), the
 //! low-level trickle regeneration of health and magic, and the curse and strength damage scale.
 //!
-//! Not covered: the status display, its tints, effects and cues, and the enemies' statuses.
+//! The status display (SPEC-0036 Status display and cues; SPEC-0034 5.4): the shown status, its
+//! 4 s rotation over codes 0 to 7, the effect ids and the steady tint.
+//!
+//! Not covered: the display's cues and the pair managers of its emitters.
 
 pub const STUN: usize = 0;
 pub const CURSE: usize = 1;
@@ -160,6 +163,96 @@ pub fn trickle(current: i32, max: i32, frame: u64, health: bool) -> i32 {
     gain.min(target - current)
 }
 
+/// The effect of a shown status (0xCC stun, 0xBE curse, 0xC8 poison, 0xCB slow, 0xBF strength,
+/// 0xC0 speed, 0xC9 confusion, 0xCA fire); codes 8 to 10 play the one-shots 0xC2 to 0xC4.
+pub fn display_effect(code: i32) -> Option<i32> {
+    Some(match code {
+        0 => 0xCC,
+        1 => 0xBE,
+        2 => 0xC8,
+        3 => 0xCB,
+        4 => 0xBF,
+        5 => 0xC0,
+        6 => 0xC9,
+        7 => 0xCA,
+        8 => 0xC2,
+        9 => 0xC3,
+        10 => 0xC4,
+        _ => return None,
+    })
+}
+
+/// The one-shot when a stun ends.
+pub const STUN_END_EFFECT: i32 = 0xCD;
+
+/// The steady tint of a shown status for hero slot `hero` (curse differs for Roberta): each
+/// factor channel capped at 1.0; None when all three come out 1.0 (the tint is cleared) or the
+/// status sets no tint.
+pub fn tint(code: i32, hero: usize) -> Option<[f32; 3]> {
+    let f = match code {
+        1 if hero == 1 => [0.5, 0.0, 0.4],
+        1 => [0.4, 0.0, 0.5],
+        2 => [0.2, 1.5, 0.6],
+        3 => [0.0, 0.5, 1.5],
+        4 => [1.8, 0.3, 0.2],
+        5 => [2.0, 2.0, 0.3],
+        7 => [1.5, 1.5, 1.0],
+        _ => return None,
+    };
+    let t = f.map(|c: f32| c.min(1.0));
+    (t != [1.0; 3]).then_some(t)
+}
+
+/// A character's status display: the shown status (-1 none) and the 240-tick rotation timer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Display {
+    pub shown: i32,
+    timer: i32,
+}
+
+impl Default for Display {
+    fn default() -> Self {
+        Self { shown: -1, timer: 0 }
+    }
+}
+
+impl Display {
+    /// The display start of an apply: a code other than the shown one becomes shown with the
+    /// timer reset. Returns whether the shown status changed.
+    pub fn start(&mut self, code: i32) -> bool {
+        if code == self.shown {
+            return false;
+        }
+        self.shown = code;
+        self.timer = 240;
+        true
+    }
+
+    /// The next active status after the shown one among codes 0 to 7, wrapping round.
+    fn next(&self, active: &dyn Fn(i32) -> bool) -> i32 {
+        let from = self.shown.clamp(-1, 7);
+        (1..=8).map(|k| (from + k).rem_euclid(8)).find(|&c| active(c)).unwrap_or(-1)
+    }
+
+    /// One tick: a shown status no longer active gives way to the next active one (or none);
+    /// otherwise the timer drops and at 0 the next active status is shown and the timer
+    /// re-armed. Returns whether the shown status changed.
+    pub fn tick(&mut self, active: &dyn Fn(i32) -> bool) -> bool {
+        let before = self.shown;
+        if self.shown >= 0 && !active(self.shown) {
+            self.shown = self.next(active);
+            self.timer = 240;
+        } else if self.shown >= 0 {
+            self.timer -= 1;
+            if self.timer <= 0 {
+                self.shown = self.next(active);
+                self.timer = 240;
+            }
+        }
+        self.shown != before
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -228,5 +321,30 @@ mod tests {
         let gains: Vec<u64> = (1..=60u64).filter(|&f| trickle(5, 150, f, true) > 0).collect();
         assert_eq!(gains, vec![29, 58]);
         assert_eq!(trickle(16, 150, 29, true), 0, "at the target 16 nothing is gained");
+    }
+
+    /// SPEC-0036 Status display test vectors: slow tints (0, 0.5, 1.0), fire clears the tint,
+    /// speed (1.0, 1.0, 0.3); the rotation shows the next active status after 240 ticks.
+    #[test]
+    fn display_tint_and_rotation() {
+        assert_eq!(tint(3, 0), Some([0.0, 0.5, 1.0]));
+        assert_eq!(tint(7, 0), None);
+        assert_eq!(tint(5, 0), Some([1.0, 1.0, 0.3]));
+        assert_eq!((tint(1, 0), tint(1, 1)), (Some([0.4, 0.0, 0.5]), Some([0.5, 0.0, 0.4])));
+        let mut d = Display::default();
+        let active = |c: i32| c == 2 || c == 5;
+        assert!(d.start(2));
+        assert!(!d.start(2));
+        for _ in 0..239 {
+            assert!(!d.tick(&active));
+        }
+        assert!(d.tick(&active));
+        assert_eq!(d.shown, 5);
+        // The shown status ends: the next active one, or none.
+        let only = |c: i32| c == 2;
+        assert!(d.tick(&only));
+        assert_eq!(d.shown, 2);
+        assert!(d.tick(&|_| false));
+        assert_eq!(d.shown, -1);
     }
 }

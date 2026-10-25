@@ -1043,6 +1043,17 @@ fn step_sim(
                 play.play.diagnostic_effect(id);
             }
         }
+        // NEOPETS_TRACE_STATUS="code,seconds": a diagnostic status on the hero once, at play
+        // tick 60.
+        if let Some((code, secs)) = std::env::var("NEOPETS_TRACE_STATUS").ok().and_then(|v| {
+            let (a, b) = v.split_once(',')?;
+            Some((a.trim().parse::<usize>().ok()?, b.trim().parse::<i32>().ok()?))
+        }) {
+            static DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if play.play.ticks >= 60 && !DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                play.play.statuses.apply(code as i32, secs);
+            }
+        }
         // NEOPETS_TRACE_SWITCH also works in the window: the chord on those play ticks.
         if std::env::var("NEOPETS_TRACE_SWITCH").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| (k..k + 3).contains(&(play.play.ticks + 1)))) {
             play.play.l1_latch = true;
@@ -1751,10 +1762,11 @@ fn sync_characters(
             continue;
         }
         let matrices = c.anim.skin_matrices();
+        let tint = p.status_tint(Some(c.id));
         for (handle, i) in &skinned[&c.id] {
             let part = &c.model.parts[*i];
             let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-            let colours = relight(part, &nrm, rotation);
+            let colours = tinted(part, relight(part, &nrm, rotation), tint);
             if let Some(mut mesh) = meshes.get_mut(handle) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
@@ -1813,6 +1825,15 @@ fn part_assets(
             (i, meshes.add(mesh), material)
         })
         .collect()
+}
+
+/// The status tint (SPEC-0034 5.4) on a part's linear vertex colours: the lit colours, or the
+/// unlit part's own colours, multiplied per channel. With no tint the lit colours pass and an
+/// unlit part gets its own colours back (so a cleared tint is undone).
+fn tinted(part: &neopets_data::model::MeshPart, lit: Option<Vec<[f32; 4]>>, tint: Option<[f32; 3]>) -> Option<Vec<[f32; 4]>> {
+    let base = lit.unwrap_or_else(|| part.colors.iter().map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)]).collect());
+    let t = tint.unwrap_or([1.0; 3]).map(|c| c.max(0.0).powf(2.2));
+    Some(base.into_iter().map(|c| [c[0] * t[0], c[1] * t[1], c[2] * t[2], c[3]]).collect())
 }
 
 /// Relight a lit part from its skinned normals turned into world space by `rotation`, with the
@@ -2479,10 +2500,11 @@ fn play_frame(
         t.rotation = rotation;
     }
     let matrices = state.play.hero.skin_matrices();
+    let tint = state.play.status_tint(None);
     for (handle, i) in &state.skinned {
         let part = &state.play.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-        let colours = relight(part, &nrm, rotation);
+        let colours = tinted(part, relight(part, &nrm, rotation), tint);
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
