@@ -436,6 +436,23 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         println!("Navigation meshes: {meshes} (by kind {kinds_nav:?}), {verts} vertices, {short} route tables short of 2T^2/8 bytes, {one_way} one-way links");
         println!("Pack 722 mesh 2 (kind, neighbours, route rows): {pack722:?}");
     }
+    // SPEC-0021 item table and SPEC-0005 hurt capsules (Tor's outfit 504 for attach points).
+    {
+        let items = neopets_data::item::ItemTable::parse(&index.read(disc, 529)?)?;
+        let mut by_type = std::collections::BTreeMap::new();
+        for it in &items.items {
+            *by_type.entry(it.kind).or_insert(0usize) += 1;
+        }
+        let weapons: Vec<(u16, i16)> = items.items.iter().filter(|i| i.is_weapon()).map(|i| (i.id, i.stats[0])).collect();
+        println!("Item table: {} records, by type {by_type:?}; weapons (id, stat A) {weapons:?}", items.items.len());
+        let b = index.read(disc, 504)?;
+        let ch = resource::walk_chunks(&b, None)?;
+        if let Some(c) = ch.chunks.iter().find(|c| c.kind == 18 && !b[c.payload.clone()].starts_with(b"IDM")) {
+            let t = neopets_data::anim::BoneTable::parse(&b[c.payload.clone()])?;
+            let caps = t.hurt.iter().filter(|h| h.1 > 0.0).count();
+            println!("Outfit 504 bones: {}, hurt capsules {caps}, attach points {:?}", t.len(), t.attach.iter().take(2).collect::<Vec<_>>());
+        }
+    }
     println!("Pack kinds (kind, has module): {kinds:?}");
     {
         let bytes = index.read(disc, 909)?;

@@ -322,6 +322,8 @@ fn main() {
     let mut flags: Vec<u16> = Vec::new();
     let mut look: Option<[f32; 2]> = None;
     let mut seed: Option<u32> = None;
+    let mut give: Option<u16> = None;
+    let mut start: Option<[f32; 2]> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -370,6 +372,9 @@ fn main() {
                 if v == "herd" {
                     return Some([f32::NAN, 2.0]);
                 }
+                if v == "fight" {
+                    return Some([f32::NAN, 3.0]);
+                }
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse().ok()?, z.parse().ok()?])
             });
@@ -378,6 +383,13 @@ fn main() {
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse::<f32>().ok()?, z.parse::<f32>().ok()?])
             });
+        } else if arg == "--start" {
+            start = args.next().and_then(|v| {
+                let (x, z) = v.trim().split_once(',')?;
+                Some([x.parse::<f32>().ok()?, z.parse::<f32>().ok()?])
+            });
+        } else if arg == "--give" {
+            give = args.next().and_then(|v| v.parse::<u16>().ok());
         } else if arg == "--seed" {
             seed = args.next().and_then(|v| v.parse::<u32>().ok());
         } else if arg == "--flag" {
@@ -424,7 +436,7 @@ fn main() {
             eprintln!("{status}");
             std::process::exit(1)
         };
-        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags, seed);
+        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags, seed, give, start);
         return;
     }
     let driver = SimDriver {
@@ -1335,7 +1347,17 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
 /// Diagnostic (`--play-trace <ticks>`): run play mode without a window, walking forward along
 /// the spawn facing (and jumping every 120 ticks with `--autojump`), and print each tick.
 #[allow(clippy::too_many_arguments)]
-fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Option<[f32; 2]>, flags: &[u16], seed: Option<u32>) {
+fn play_trace(
+    archive: &mut Archive,
+    pack: u32,
+    ticks: u64,
+    jump: bool,
+    to: Option<[f32; 2]>,
+    flags: &[u16],
+    seed: Option<u32>,
+    give: Option<u16>,
+    start: Option<[f32; 2]>,
+) {
     let Archive { disc, index } = archive;
     let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
         Ok(play) => play,
@@ -1347,6 +1369,11 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
     // `--seed N`: a fixed seed for the random stream (SPEC-0008 developer option).
     if let Some(n) = seed {
         play.rng = neopets_sim::rng::Rng::seeded(n);
+    }
+    // `--give N`: a diagnostic weapon equipped at the start; `--start x,z` places the hero.
+    play.weapon = give;
+    if let Some([x, z]) = start {
+        play.place_at(x, z);
     }
     // `--flag N`: diagnostic story flags set at the start.
     for &f in flags {
@@ -1373,13 +1400,14 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
     let mut rerouted = false;
     let mut last_door = String::new();
     let mut hops = 0;
+    let mut last_hit = String::new();
     if to.is_some_and(|t| t[0].is_nan()) {
         let goal = match to.map(|t| t[1]) {
             Some(g) if g == 0.0 => play::Goal::NewNeighbour,
             Some(g) if g == 1.0 => play::Goal::Door,
             _ => play::Goal::Swap,
         };
-        route = if to.is_some_and(|t| t[1] == 2.0) {
+        route = if to.is_some_and(|t| t[1] >= 2.0) {
             Vec::new()
         } else if goal == play::Goal::Door {
             play.stand_before_door(0).map(|m| vec![m]).unwrap_or_default()
@@ -1404,7 +1432,14 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             route.remove(0);
         }
         let herd = to.is_some_and(|t| t[1] == 2.0);
-        let goal = if herd { play.herd_goal() } else { route.first().copied().or(to.filter(|t| !t[0].is_nan())) };
+        let fight = to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten();
+        let goal = if herd {
+            play.herd_goal()
+        } else if let Some((g, close)) = fight {
+            (!close).then_some(g)
+        } else {
+            route.first().copied().or(to.filter(|t| !t[0].is_nan()))
+        };
         if let Some([tx, tz]) = goal.filter(|g| {
             let p = play.loco.position();
             route.len() > 1 || to.is_some_and(|t| t[0].is_nan()) || (g[0] - p[0]).hypot(g[1] - p[2]) > 2.0
@@ -1421,8 +1456,8 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             side,
             square: play.prompt_shown.is_some() || play.talk_prompt,
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
-            attack_held: jump && (30..40).contains(&(play.ticks % 120)),
-            attack: jump && play.ticks % 120 == 30,
+            attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),
+            attack: (jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30,
             jump: jump && play.ticks % 240 == 0 && play.ticks > 0,
             ..Default::default()
         };
@@ -1436,6 +1471,10 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
                 let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", play.talk_partner.as_deref().unwrap_or(&l.speaker), l.text));
                 println!("      LevelMsg line {line} on tick {at}: {text:?}");
             }
+        }
+        if !play.last_hit.is_empty() && play.last_hit != last_hit {
+            last_hit = play.last_hit.clone();
+            println!("      {last_hit} on tick {}", play.ticks);
         }
         if !play.last_door.is_empty() && play.last_door != last_door {
             last_door = play.last_door.clone();

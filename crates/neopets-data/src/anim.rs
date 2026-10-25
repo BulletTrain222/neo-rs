@@ -75,6 +75,12 @@ pub struct BoneTable {
     pub parents: Vec<Option<usize>>,
     pub rest_local: Vec<[f32; 3]>,
     pub rest_position: Vec<[f32; 3]>,
+    /// Hurt capsules (SPEC-0005 bone record +0x30, +0x40, +0x44): bone-local base point,
+    /// length (above 0: a capsule) and radius.
+    pub hurt: Vec<([f32; 3], f32, f32)>,
+    /// Pose entries (attach points; 9 of 0x30 bytes): bone index (None: none), angles (x, y,
+    /// z, radians) and offset.
+    pub attach: Vec<(Option<usize>, [f32; 3], [f32; 3])>,
 }
 
 impl BoneTable {
@@ -88,6 +94,8 @@ impl BoneTable {
             parents: Vec::new(),
             rest_local: Vec::new(),
             rest_position: Vec::new(),
+            hurt: Vec::new(),
+            attach: Vec::new(),
         };
         for i in 0..n {
             let r = records + 0x50 * i;
@@ -98,6 +106,20 @@ impl BoneTable {
             };
             t.rest_local.push(v(r + 0x10).ok_or("Bone record past the end")?);
             t.rest_position.push(v(r + 0x20).ok_or("Bone record past the end")?);
+            t.hurt.push((
+                v(r + 0x30).ok_or("Bone record past the end")?,
+                f32_at(b, r + 0x40).unwrap_or(0.0),
+                f32_at(b, r + 0x44).unwrap_or(0.0),
+            ));
+        }
+        let entries = u32_at(b, 0x24).unwrap_or(0) as usize;
+        let count = u16_at(b, 0x3A).unwrap_or(0).min(16) as usize;
+        for k in 0..count {
+            let e = entries + 0x30 * k;
+            let v = |at: usize| -> Option<[f32; 3]> { Some([f32_at(b, at)?, f32_at(b, at + 4)?, f32_at(b, at + 8)?]) };
+            let (Some(bone), Some(angles), Some(offset)) = (u32_at(b, e + 4), v(e + 0x10), v(e + 0x20)) else { break };
+            let bone = (bone as i32 >= 0 && (bone as usize) < n).then_some(bone as usize);
+            t.attach.push((bone, angles, offset));
         }
         Ok(t)
     }
@@ -642,6 +664,8 @@ mod tests {
             parents: vec![None, Some(0)],
             rest_local: vec![[0.0, 1.0, 0.0], [0.0, 2.0, 0.0]],
             rest_position: vec![[0.0, 1.0, 0.0], [0.0, 3.0, 0.0]],
+            hurt: Vec::new(),
+            attach: Vec::new(),
         };
         let def = SkeletonDef { parents: vec![None, Some(0)], partners: vec![0, 1] };
         let rest = skin_matrices(&bones, &Family { def: &def, skin_base: 0, joints: &[None, None] }, &[]);

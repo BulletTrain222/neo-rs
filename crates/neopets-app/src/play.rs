@@ -182,6 +182,9 @@ pub struct Character {
     pub model: ModelData,
     /// The monster row of the placement (SPEC-0029 section 4).
     pub row: Option<neopets_data::monster::Row>,
+    /// Hit points (from the row), and the death countdown once they reach 0.
+    pub hp: i32,
+    pub dying: Option<u32>,
     /// The townsfolk routine (SPEC-0056) for class-6 characters; other classes only idle.
     pub townsfolk: Option<neopets_sim::npc::Townsfolk>,
     /// Class-7 Whinnies: their walker (motion record and navigation) and routine.
@@ -242,6 +245,15 @@ pub struct Play {
     pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
     pub attack_latch: bool,
+    /// The equipped weapon (item id), the item table, the hero's hit list and the weapon axis
+    /// of the previous tick (D2 of the swept test).
+    pub weapon: Option<u16>,
+    pub items: neopets_data::item::ItemTable,
+    reach_tor: Vec<f32>,
+    hit_list: Vec<u64>,
+    last_axis: Option<[f32; 3]>,
+    /// The last hit, for the status line.
+    pub last_hit: String,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
@@ -261,6 +273,12 @@ impl Play {
         let model = crate::archive_view::model(disc, index, outfit)?.ok_or("Outfit has no model")?;
         let hero = crate::archive_view::hero(disc, index, outfit)?.ok_or("Not a hero outfit (504–519)")?;
         let boot = BootTravel::from_disc(disc)?;
+        let items = neopets_data::item::ItemTable::parse(&index.read(disc, neopets_data::item::ITEM_CONFIG)?)?;
+        let boot_bytes = neopets_data::archive::verified_boot_program(disc)?;
+        let reach_tor = neopets_data::archive::boot_u32_table(&boot_bytes, neopets_data::item::REACH_TOR, 11)?
+            .into_iter()
+            .map(f32::from_bits)
+            .collect();
         let (world, bytes) = World::load(disc, index, &boot, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
         let (spawn, facing) = ground::spawn(&bytes, &chain.chunks).unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
@@ -323,6 +341,12 @@ impl Play {
             rng: neopets_sim::rng::Rng::seeded(clock_seed()),
             attack: None,
             attack_latch: false,
+            weapon: None,
+            items,
+            reach_tor,
+            hit_list: Vec::new(),
+            last_axis: None,
+            last_hit: String::new(),
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             region_wanted: Vec::new(),
@@ -730,6 +754,98 @@ impl Play {
         true
     }
 
+    /// The weapon reach W (SPEC-0021): Tor's table value for swords 98 to 108, 1.5 unarmed.
+    fn weapon_reach(&self) -> f32 {
+        self.weapon.and_then(|id| self.reach_tor.get(id.checked_sub(98)? as usize).copied()).unwrap_or(1.5)
+    }
+
+    /// SPEC-0036 Hero swing, per tick while the attack window (bit 0x1) is on: the weapon
+    /// cylinder from attach point 0 (radius 1, length L = W + 2, base P0 = A + 0.25 D1) against
+    /// each bone capsule of every hittable character within 65.0 (static overlap, then the swept
+    /// test), skipping the hit list; a hit deals the melee damage of SPEC-0036 (no Mote, no
+    /// petpet or status factors). Uses this tick's poses (the original reads the previous pass).
+    fn hero_swing(&mut self) {
+        let (Some(a), true) = (self.attack.as_ref(), self.hero.frame_bits() & 1 != 0) else {
+            self.last_axis = None;
+            return;
+        };
+        let sub = a.sub;
+        let p = self.loco.position();
+        let place = placement(p, self.loco.facing);
+        let frames = self.hero.bone_frames();
+        let Some(&(Some(bone), angles, offset)) = self.hero.bones().attach.first() else { return };
+        let Some(bw) = frames.get(bone) else { return };
+        let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+        let (anchor, axis) = (w.t, unit(w.cols[2]));
+        let l = self.weapon_reach() + 2.0;
+        let p0 = add(anchor, scale(axis, 0.25));
+        let weapon = neopets_sim::combat::Cylinder { center: add(p0, scale(axis, 0.5 * l)), axis, radius: 1.0, length: l };
+        let d2 = self.last_axis.replace(axis);
+        let pack = self.world.pack;
+        let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(0, |i| i.stats[0]);
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.dying.is_none()) {
+            if self.hit_list.contains(&c.id) {
+                continue;
+            }
+            let d = sub_v(c.position, p);
+            if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 65.0 {
+                continue;
+            }
+            let cplace = placement(c.position, c.facing);
+            let cframes = c.anim.bone_frames();
+            let hit = c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
+                if length <= 0.0 {
+                    return false;
+                }
+                let wf = cplace.mul(f);
+                let cap = neopets_sim::combat::Cylinder::from_base(wf.apply(base), unit(wf.cols[1]), radius, length);
+                neopets_sim::combat::overlap(&weapon, &cap)
+                    || d2.is_some_and(|d2| {
+                        let (b, cc) = (add(p0, scale(axis, l)), add(p0, scale(d2, l)));
+                        b != cc && neopets_sim::combat::swept(p0, b, cc, &cap)
+                    })
+            });
+            if !hit {
+                continue;
+            }
+            self.hit_list.push(c.id);
+            // SPEC-0036 Damage: x = P A B C D E (P, B, C, E are 1 without a Mote or petpet), y = x
+            // − defence, truncated; D by sub-state.
+            let d_factor = match sub {
+                4 | 12 => 2.0,
+                5 | 6 => 0.75,
+                _ => 1.0,
+            };
+            let x = stat_a as f32 * d_factor;
+            let y = (x - c.row.map_or(0.0, |r| r.defence)).max(0.0);
+            let damage = y.trunc() as i32;
+            // SPEC-0056: the take-hit of a townsfolk character returns at once.
+            if damage > 0 && c.townsfolk.is_none() {
+                c.hp -= damage;
+                if c.hp <= 0 {
+                    c.dying = Some(c.row.map_or(60, |r| r.disappear.max(1) as u32));
+                }
+            }
+            self.last_hit = format!("hit {} for {damage} (hp {})", if c.name.is_empty() { "(unnamed)" } else { &c.name }, c.hp.max(0));
+        }
+    }
+
+    /// Diagnostic fight goal: the nearest living class-17 character of the current world, and
+    /// whether it is within 3 units.
+    pub fn fight_goal(&self) -> Option<([f32; 2], bool)> {
+        let p = self.loco.position();
+        let c = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == self.world.pack && c.dying.is_none() && c.row.is_some_and(|r| r.class == Some(17)))
+            .min_by(|a, b| {
+                let d = |c: &Character| (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
+                d(a).total_cmp(&d(b))
+            })?;
+        let d = (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
+        Some(([c.position[0], c.position[2]], d < 3.0))
+    }
+
     /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
     /// side from the pen point.
     pub fn herd_goal(&self) -> Option<[f32; 2]> {
@@ -746,6 +862,13 @@ impl Play {
         let (dx, dz) = (w.position[0] - pen[0], w.position[2] - pen[2]);
         let len = dx.hypot(dz).max(1e-6);
         Some([w.position[0] + 3.5 * dx / len, w.position[2] + 3.5 * dz / len])
+    }
+
+    /// Diagnostic: put the hero at (x, z) on the current world's ground (probed from far above).
+    pub fn place_at(&mut self, x: f32, z: f32) {
+        let y = self.world.ground_at(x, z, 1.0e6).unwrap_or(self.loco.position()[1]);
+        let f = self.loco.facing;
+        self.arrive(([x, y, z], f));
     }
 
     /// Diagnostic: turn the hero toward a point and put the camera behind it.
@@ -790,6 +913,8 @@ impl Play {
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
                 root_step: [0.0; 3],
+                hp: row.map_or(1, |r| r.hit_points as i32),
+                dying: None,
                 row,
                 anim,
                 model,
@@ -954,6 +1079,13 @@ impl Play {
                 }
             }
         }
+        if self.attack.as_ref().is_some_and(|a| a.cleared) {
+            self.hit_list.clear();
+            if let Some(a) = self.attack.as_mut() {
+                a.cleared = false;
+            }
+        }
+        self.hero_swing();
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.pending_step();
         self.hero.request(self.loco.action(), force);
@@ -1008,6 +1140,13 @@ impl Play {
         }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
+        // Dead characters disappear when their countdown ends.
+        for c in &mut self.characters {
+            if let Some(t) = c.dying.as_mut() {
+                *t = t.saturating_sub(1);
+            }
+        }
+        self.characters.retain(|c| c.dying != Some(0));
         // Characters and slot choices of worlds that are no longer resident are released.
         let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
         self.characters.retain(|c| resident.contains(&c.pack));
@@ -1120,6 +1259,49 @@ impl Play {
             p[0], p[1], p[2], self.loco.state, self.loco.phase, self.loco.action(), self.loco.rate, self.loco.body.gap
         )
     }
+}
+
+fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+}
+
+fn sub_v(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn scale(a: [f32; 3], s: f32) -> [f32; 3] {
+    a.map(|c| c * s)
+}
+
+fn unit(a: [f32; 3]) -> [f32; 3] {
+    let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+    if l > 0.0 { scale(a, 1.0 / l) } else { a }
+}
+
+/// A character's placement: translation to its position, turned so +Z is its facing.
+fn placement(p: [f32; 3], f: [f32; 3]) -> neopets_data::anim::Affine {
+    let th = f[0].atan2(f[2]);
+    let (s, c) = th.sin_cos();
+    neopets_data::anim::Affine { cols: [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]], t: p }
+}
+
+/// SPEC-0005 attach point transform: Translate(t) × Rz(rz) × Ry(ry) × Rx(rx); angles of
+/// magnitude 0.001 or less are identity.
+fn attach_rotation(t: [f32; 3], angles: [f32; 3]) -> neopets_data::anim::Affine {
+    let rot = |axis: usize, a: f32| {
+        if a.abs() <= 0.001 {
+            return neopets_data::anim::Affine::IDENTITY;
+        }
+        let (s, c) = a.sin_cos();
+        let cols = match axis {
+            0 => [[1.0, 0.0, 0.0], [0.0, c, s], [0.0, -s, c]],
+            1 => [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]],
+            _ => [[c, s, 0.0], [-s, c, 0.0], [0.0, 0.0, 1.0]],
+        };
+        neopets_data::anim::Affine { cols, t: [0.0; 3] }
+    };
+    let tr = neopets_data::anim::Affine { cols: neopets_data::anim::Affine::IDENTITY.cols, t };
+    tr.mul(&rot(2, angles[2])).mul(&rot(1, angles[1])).mul(&rot(0, angles[0]))
 }
 
 /// SPEC-0008: the seed from the local clock (seconds, minutes, hours, day, month, year).

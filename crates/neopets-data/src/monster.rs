@@ -31,6 +31,10 @@ pub struct Row {
     pub weight: f32,
     /// Can fly (+0x94): 0 never, 1 while grounded countdown ≤ 0, 2 always.
     pub can_fly: i32,
+    /// Enemy defence (Damage Reduction, +0x114).
+    pub defence: f32,
+    /// Death disappear timer (+0x80).
+    pub disappear: u16,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -77,6 +81,8 @@ impl MonsterTable {
             hostile: i16_at(&self.rows, r + 0x3E)? != 0,
             weight: f32_at(&self.rows, r + 0x118)?,
             can_fly: u32_at(&self.rows, r + 0x94)? as i32,
+            defence: f32_at(&self.rows, r + 0x114)?,
+            disappear: u16::from_le_bytes(self.rows.get(r + 0x80..r + 0x82)?.try_into().ok()?),
         })
     }
 }

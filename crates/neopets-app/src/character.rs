@@ -132,6 +132,35 @@ impl HeroAnim {
         root
     }
 
+    /// The bone table the animation poses.
+    pub fn bones(&self) -> &BoneTable {
+        &self.bones
+    }
+
+    /// Table-B frame bits on the current frame of every family's playing clip, ORed (the
+    /// attack window query of SPEC-0005/SPEC-0036, single-frame form).
+    pub fn frame_bits(&self) -> u32 {
+        self.families
+            .iter()
+            .filter_map(|f| {
+                let c = f.current?;
+                if f.record.finished() {
+                    return None;
+                }
+                f.data.clips[c].frame_bits.get(f.record.cursor() as usize).copied()
+            })
+            .fold(0, |a, b| a | b)
+    }
+
+    /// Bone world frames in model space: W_i = S_i × translate(rest position_i).
+    pub fn bone_frames(&self) -> Vec<Affine> {
+        self.skin_matrices()
+            .into_iter()
+            .zip(&self.bones.rest_position)
+            .map(|(s, &rest)| Affine { cols: s.cols, t: s.apply(rest) })
+            .collect()
+    }
+
     pub fn skin_matrices(&self) -> Vec<Affine> {
         fn family(f: &FamilyState) -> Family<'_> {
             Family {

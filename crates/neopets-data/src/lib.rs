@@ -8,6 +8,7 @@ pub mod fingerprint;
 pub mod gs;
 pub mod ground;
 pub mod gsmem;
+pub mod item;
 mod iso;
 pub mod light;
 pub mod lzo;
