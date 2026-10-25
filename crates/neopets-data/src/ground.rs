@@ -459,6 +459,16 @@ pub fn entry_record(bytes: &[u8], top: &[Chunk], i: usize) -> Option<([f32; 3], 
     Some((v(e + 0x30)?, v(e + 0x40)?))
 }
 
+/// The locator tag of entry record i (u16 at +0x1E; 0 for none; SPEC-0006 Locator lookup).
+pub fn entry_tag(bytes: &[u8], top: &[Chunk], i: usize) -> Option<u16> {
+    let p = &bytes[top.iter().find(|c| c.kind == OBJECT_HEADER)?.payload.clone()];
+    if i >= i32_at(p, 0x24)?.max(0) as usize {
+        return None;
+    }
+    let e = u32_at(p, 0x4C)? as usize + 0x50 * i + 0x1E;
+    Some(u16::from_le_bytes(p.get(e..e + 2)?.try_into().ok()?))
+}
+
 /// The kind-4 (+0x40, count +0x18) and kind-7 (+0x3C, count +0x14) rectangle lists of a pack.
 pub fn rectangles(bytes: &[u8], top: &[Chunk]) -> Vec<Rectangle> {
     let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return Vec::new() };

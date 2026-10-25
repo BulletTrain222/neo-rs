@@ -24,6 +24,8 @@ const UP: [f32; 3] = [0.0, 1.0, 0.0];
 const EMBEDDED_SLOT: u8 = 255;
 /// The region slot the live petpet's package loads into (SPEC-0047 Activation).
 const PET_SLOT: u8 = 254;
+/// The slot a forced bind reloads the embedded region into (SPEC-0045 1217 Stage spawns).
+const REBIND_SLOT: u8 = 253;
 /// SPEC-0006 Default start: pack 691 in T and 909 in E, the exterior current.
 const START_EXTERIOR: u32 = 909;
 const START_TRANSITION: u32 = 691;
@@ -41,6 +43,8 @@ pub struct World {
     pub planes: Vec<TeleportPlane>,
     arrivals: Neighbours,
     entries: Vec<([f32; 3], [f32; 3])>,
+    /// The entry records' locator tags (u16 +0x1E), by list position.
+    tags: Vec<u16>,
     /// The module imports RegisterTeleportCallback: its doors are script doors, which need the
     /// level-script runtime (not implemented), so they do nothing here.
     pub scripted_doors: bool,
@@ -103,6 +107,7 @@ impl World {
             planes: ground::teleport_planes(&bytes, &chain.chunks),
             arrivals: Neighbours::arrivals(&bytes, &chain.chunks),
             entries: (0..4096).map_while(|i| ground::entry_record(&bytes, &chain.chunks, i)).collect(),
+            tags: (0..4096).map_while(|i| ground::entry_tag(&bytes, &chain.chunks, i)).collect(),
             scripted_doors: boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback"),
             lines: neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks),
             entities: neopets_data::travel::entity_table(&bytes, &chain.chunks),
@@ -289,6 +294,8 @@ pub struct Character {
     pub held: bool,
     /// Deactivated (DeactivateEntity): not drawn, not run, not hit, until ActivateEntity.
     pub inactive: bool,
+    /// The Juppie boss controller (class 18, SPEC-0015).
+    pub boss: Option<neopets_sim::juppie::Juppie>,
 }
 
 /// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
@@ -411,6 +418,14 @@ pub struct Play {
     pub last_mote: String,
     /// The last status applied to an enemy, for the status line.
     pub last_status: String,
+    /// Forced binds waiting for the embedded region: (pack, ordinal).
+    rebind: Vec<(u32, usize)>,
+    /// Entities deactivated before their characters loaded.
+    pending_off: std::collections::HashSet<(u32, usize)>,
+    /// The Juppie tuning words and the boss hits of this tick's swing (character id, damage).
+    juppie_words: neopets_sim::juppie::Words,
+    boss_hits: Vec<(u64, i32)>,
+    pub last_boss: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
     /// pending save values, the bonus words and the low-time mark.
     pub petpet: Option<neopets_sim::petpet::Live>,
@@ -618,6 +633,30 @@ impl Play {
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
+        let juppie_words = {
+            use neopets_sim::juppie::*;
+            let int = |at: u32| words(at, 1).map(|v| v[0] as i32);
+            let cd = words(COOLDOWNS, 6)?;
+            let counts = words(COUNTS, 3)?;
+            let table = words(STUN_TABLE, 3)?;
+            Words {
+                slam_min: float(SLAM_MIN)?,
+                slam_max: float(SLAM_MAX)?,
+                slam_chance: int(SLAM_CHANCE)?,
+                slam_damage: int(SLAM_DAMAGE)?,
+                stun_min: float(STUN_MIN)?,
+                stun_max: float(STUN_MAX)?,
+                counts: std::array::from_fn(|k| counts[k] as i32),
+                spit_distance: float(SPIT_DISTANCE)?,
+                spit_chance: int(SPIT_CHANCE)?,
+                cooldown: std::array::from_fn(|k| (f32::from_bits(cd[2 * k]), f32::from_bits(cd[2 * k + 1]))),
+                impact: float(IMPACT)?,
+                push: float(SLAM_PUSH)?,
+                cone: float(LOCATOR_CONE)?,
+                locator_distance: float(LOCATOR_DISTANCE)?,
+                stun_table: std::array::from_fn(|k| table[k] as i32),
+            }
+        };
         let magic = neopets_sim::mote::Magic::new(words(neopets_sim::mote::MAGIC_AT, neopets_sim::mote::MAGIC_WORDS)?.into_iter().map(|w| w as i32).collect());
         let design = index.read(disc, neopets_data::design::RESOURCE).ok().and_then(|b| neopets_data::design::DesignTables::parse(&b).ok()).unwrap_or_default();
         let hero_colour = design.hero_colour(0).unwrap_or([128; 3]);
@@ -752,6 +791,11 @@ impl Play {
             mote_objects: Vec::new(),
             charm_words,
             last_status: String::new(),
+            rebind: Vec::new(),
+            pending_off: Default::default(),
+            juppie_words,
+            boss_hits: Vec::new(),
+            last_boss: String::new(),
             petpet: None,
             pet_char: None,
             pet_spawn: None,
@@ -1365,11 +1409,48 @@ impl Play {
                     }
                 }
                 Action::DeactivateEntity { entity } => {
-                    let c = self.entity_mut(pack, entity)?;
+                    // An entity whose region has not loaded yet is deactivated when it arrives
+                    // (an Init's deactivations and streaming refusals run before the load).
+                    let Some(c) = self.entity_mut(pack, entity) else {
+                        self.pending_off.insert((pack, entity));
+                        return None;
+                    };
                     c.inactive = true;
                     c.script_walk = None;
                 }
-                Action::ActivateEntity { entity } => self.entity_mut(pack, entity)?.inactive = false,
+                Action::ActivateEntity { entity } => {
+                    self.pending_off.remove(&(pack, entity));
+                    if let Some(c) = self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(entity) && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+                        c.inactive = false;
+                        return None;
+                    }
+                    // A dead or released embedded entity is bound again from its record (the
+                    // forced bind of SPEC-0045 1217): the embedded region is read again and the
+                    // thread waits for it.
+                    let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+                    let &(r, o) = world.entities.get(entity)?;
+                    if r != 0xFF {
+                        return None;
+                    }
+                    self.characters.retain(|c| !(c.pack == pack && c.entity == Some(entity)));
+                    self.rebind.push((pack, o as usize));
+                    self.slot_regions.insert((pack, REBIND_SLOT), pack);
+                    self.region_wanted.push((pack, REBIND_SLOT, pack));
+                    return Some(Wait::Loads);
+                }
+                Action::LevelState { flag, on } => self.state.set_level(flag, on),
+                Action::Bits { word, set, clear } => {
+                    let w = self.state.word_of(pack, word);
+                    self.state.set_word(pack, word, (w | set) & !clear);
+                }
+                // PlayHeroAnim and the equipment display are not reproduced.
+                Action::HeroAnim { .. } | Action::Equip { .. } => {}
+                Action::ReplaceExterior { slot, plane } => {
+                    if let Some(&p) = self.boot.areas.packs.get(slot) {
+                        self.job = Some(Job::Replace(p, plane));
+                        self.last_door = format!("script: replacing the exterior with slot {slot} (pack {p}), plane {plane}");
+                    }
+                }
                 Action::HitPointsPercent { entity, percent } => {
                     let c = self.entity_mut(pack, entity)?;
                     let max = c.row.map_or(1, |r| r.hit_points as i32);
@@ -1750,6 +1831,11 @@ impl Play {
             if damage > 0 || absorbed {
                 landed += 1;
             }
+            // A boss takes its hits through its own controller (SPEC-0015 counted hits).
+            if c.boss.is_some() {
+                self.boss_hits.push((c.id, damage));
+                continue;
+            }
             hits.push((i, damage));
         }
         // SPEC-0036 Damage, take-hit: in the power step a status request of the word-2 Mote
@@ -1972,16 +2058,43 @@ impl Play {
         mote::taken(d, g) as f32
     }
 
-    /// Diagnostic fight goal: the nearest living class-17 character of the current world, and
+    /// Diagnostic fight goal: a stunned boss, else the nearest living active class-17 character
+    /// of the current world, and
     /// whether it is within 4.5 units.
     pub fn fight_goal(&self) -> Option<([f32; 2], bool)> {
         let p = self.loco.position();
+        // A Juppie in a stage with no living enemy about: stand on the stage's first unused
+        // locator so its slam reaches it (diagnostic only).
+        let enemies = self.characters.iter().any(|c| c.pack == self.world.pack && !c.inactive && c.enemy.as_ref().is_some_and(|e| !e.dead) && c.dying.is_none());
+        if let Some((c, b)) = self.characters.iter().filter(|c| c.pack == self.world.pack && !c.held).find_map(|c| Some((c, c.boss.as_ref()?))) {
+            let stunned = matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3));
+            if stunned {
+                // The stunned head (bone 15) lies on the ground: go for it.
+                let head = c.anim.bone_frames().get(neopets_sim::juppie::HEAD_BONE).map(|f| placement(c.position, c.facing).mul(f).t);
+                if let Some(h) = head {
+                    let d = (h[0] - p[0]).hypot(h[2] - p[2]);
+                    return Some((if d < 9.0 { [p[0], p[2]] } else { [h[0], h[2]] }, d < 9.0));
+                }
+            }
+            if !enemies && !stunned && b.stage > 0 {
+                let w = &self.world;
+                let spot = neopets_sim::juppie::stage_locators(b.stage)
+                    .iter()
+                    .filter(|(_, f)| !self.state.level(*f))
+                    .find_map(|&(k, _)| w.tags.iter().position(|&t| t as usize == k).and_then(|i| w.entries.get(i)));
+                if let Some((at, _)) = spot {
+                    return Some(([at[0], at[2]], false));
+                }
+            }
+        }
         let c = self
             .characters
             .iter()
-            .filter(|c| c.pack == self.world.pack && c.dying.is_none() && c.row.is_some_and(|r| r.class == Some(17)))
+            .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
+            // A stunned boss is fought first; otherwise the nearest class-17 enemy.
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
-                let d = |c: &Character| (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
+                let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
             })?;
         let d = (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
@@ -2032,12 +2145,29 @@ impl Play {
         if self.slot_regions.get(&(pack, slot)) != Some(&region) {
             return;
         }
-        self.region_items(pack, &items);
-        self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
+        if slot != REBIND_SLOT {
+            self.region_items(pack, &items);
+            self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
+        }
         if slot == PET_SLOT {
             self.pet_loaded(pack, loaded);
             return;
         }
+        // A forced bind: only the wanted embedded records come in, as embedded characters.
+        let wanted: Vec<usize> = if slot == REBIND_SLOT {
+            let w = self.rebind.iter().filter(|(p, _)| *p == pack).map(|&(_, o)| o).collect();
+            self.rebind.retain(|(p, _)| *p != pack);
+            w
+        } else {
+            Vec::new()
+        };
+        let loaded: Vec<_> = if slot == REBIND_SLOT { loaded.into_iter().filter(|(pl, ..)| wanted.contains(&pl.ordinal)).collect() } else { loaded };
+        let (slot, region) = if slot == REBIND_SLOT {
+            self.slot_regions.remove(&(pack, REBIND_SLOT));
+            (EMBEDDED_SLOT, pack)
+        } else {
+            (slot, region)
+        };
         for (pl, model, anim, row, tuning) in loaded {
             self.next_character += 1;
             // Characters have motion records and settle on the ground under their placement
@@ -2074,7 +2204,8 @@ impl Play {
                 root_step: [0.0; 3],
                 script_walk: None,
                 held: false,
-                inactive: false,
+                inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
+                boss: row.filter(|r| r.class == Some(18)).map(|_| neopets_sim::juppie::Juppie::default()),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -2121,6 +2252,7 @@ impl Play {
             script_walk: None,
             held: false,
             inactive: false,
+            boss: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -2212,6 +2344,115 @@ impl Play {
         if act.leave {
             self.last_pet = format!("petpet left on tick {}", self.ticks);
             self.deactivate_pet();
+        }
+    }
+
+    /// SPEC-0015 per tick for each Juppie of the current world that the script does not hold:
+    /// its controller with the head bone (15), the boss-side action-frame query, the level
+    /// flags, the stage locators and this tick's swing hits; then its animation, turn, slam hit
+    /// on the hero (raw, with the push along the reverse of the hero's facing), HP loss, level
+    /// flags, death sequence and the head cylinder blocker.
+    fn boss_step(&mut self) {
+        let hits = std::mem::take(&mut self.boss_hits);
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.boss.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let world = &self.world;
+            // The locator lookup by tag: the first entry record with the tag.
+            let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
+            let c = &mut self.characters[i];
+            let place = placement(c.position, c.facing);
+            let frames = c.anim.bone_frames();
+            let head = frames.get(neopets_sim::juppie::HEAD_BONE).map_or([c.position[0], c.position[1] + 2.0, c.position[2]], |f| place.mul(f).t);
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::juppie::View {
+                position: c.position,
+                facing: c.facing,
+                head,
+                hero,
+                clip: (clip.action, clip.progress, clip.progress >= 0.99),
+                can_act: c.anim.frame_bits() & 0x1F != 0,
+                hp: c.hp,
+                max_hp: c.row.map_or(1, |r| r.hit_points as i32),
+                level: &level,
+                locator: &locator,
+                hero_hit: hits.iter().find(|(h, _)| *h == id).map(|&(_, d)| d),
+            };
+            let Some(boss) = c.boss.as_mut() else { continue };
+            let before = boss.top;
+            let act = boss.tick(&v, &self.juppie_words, &mut self.rng);
+            let after = boss.top;
+            if let Some(a) = act.anim {
+                if clip.action != a || (clip.progress >= 0.99 && before != after) {
+                    c.anim.play(a);
+                }
+            }
+            if let Some(rate) = act.face {
+                let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
+                c.facing = neopets_sim::hero::steer(c.facing, to, rate);
+            }
+            c.hp -= act.hp_loss;
+            if act.death {
+                c.hp = 1;
+            }
+            if act.hp_loss > 0 {
+                self.last_boss = format!("Juppie lost {} (hp {}) on tick {}", act.hp_loss, c.hp, self.ticks);
+            }
+            if before != after {
+                // With the stage locators' horizontal distance and facing dot from the boss
+                // and their distance from the head, for the slam's stage events.
+                let locs: Vec<String> = (101..=106)
+                    .filter_map(|k| {
+                        let p = locator(k)?;
+                        let (dx, dz) = (p[0] - c.position[0], p[2] - c.position[2]);
+                        let l = dx.hypot(dz).max(1e-6);
+                        let dot = (dx * c.facing[0] + dz * c.facing[2]) / l;
+                        let h = ((head[0] - p[0]).powi(2) + (head[1] - p[1]).powi(2) + (head[2] - p[2]).powi(2)).sqrt();
+                        Some(format!("{k}: {l:.1} dot {dot:.2} head {h:.1}"))
+                    })
+                    .collect();
+                self.last_boss = format!("Juppie {:?} -> {:?} (stage {}, hp {}) on tick {}; at {:.1},{:.1}; locators [{}]", before, after, boss.stage, c.hp, self.ticks, c.position[0], c.position[2], locs.join(", "));
+            }
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            for &f in &act.clear_level {
+                self.state.set_level(f, false);
+            }
+            if act.death {
+                // Every other living non-townsfolk character takes 10000.
+                for o in self.characters.iter_mut().filter(|o| o.id != id && o.pack == pack && o.townsfolk.is_none() && o.dying.is_none()) {
+                    if let Some(e) = o.enemy.as_mut() {
+                        if !e.dead {
+                            o.hp = 0;
+                            e.die();
+                        }
+                    } else if o.boss.is_none() && o.whinny.is_none() && o.row.is_some() {
+                        o.hp -= 10000;
+                    }
+                }
+            }
+            if let Some((damage, push)) = act.hero_damage {
+                self.hero_hit(damage as f32, push, false, [-hf[0], 0.0, -hf[2]], "the Juppie's head slam".into());
+            }
+            if let Some(p) = act.blocker {
+                // The head cylinder (radius 4.0, length 10.0) pushes the hero's body out.
+                let pos = self.loco.position();
+                let (dx, dz) = (pos[0] - p[0], pos[2] - p[2]);
+                let d = (dx * dx + dz * dz).sqrt();
+                let r = 4.0 + contact::HERO_RADIUS;
+                if d < r && d > 1e-4 && (pos[1] - p[1]).abs() <= 5.0 {
+                    let k = (r - d) / d;
+                    let b = &mut self.loco.body.position;
+                    b[0] += dx * k;
+                    b[2] += dz * k;
+                }
+            }
         }
     }
 
@@ -2710,6 +2951,7 @@ impl Play {
         let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
         let pet = self.pet_char;
         self.characters.retain(|c| resident.contains(&c.pack) || Some(c.id) == pet);
+        self.pending_off.retain(|(p, _)| resident.contains(p));
         self.pools.retain(|pack, _| resident.contains(pack));
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
         let hero = self.loco.position();
@@ -2736,6 +2978,7 @@ impl Play {
             c.facing = wk.facing;
         }
         self.pet_step();
+        self.boss_step();
         self.enemies_step();
         self.items_step();
         // SPEC-0023: the in-play HUD steps only while the in-play state runs, so not while a

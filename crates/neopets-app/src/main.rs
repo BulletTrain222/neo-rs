@@ -1881,9 +1881,19 @@ fn play_trace(
     let mut last_mote = String::new();
     let mut last_status = String::new();
     let mut last_pet = String::new();
+    let mut last_boss = String::new();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
     // releases a power attack).
     let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(80);
+    // NEOPETS_TRACE_LEVEL="flag@tick,...": diagnostic level flags set on given ticks.
+    let level_at: Vec<(u16, u64)> = std::env::var("NEOPETS_TRACE_LEVEL")
+        .unwrap_or_default()
+        .split(',')
+        .filter_map(|t| {
+            let (f, k) = t.trim().split_once('@')?;
+            Some((f.parse().ok()?, k.parse().ok()?))
+        })
+        .collect();
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
     for _ in 0..ticks {
@@ -1956,6 +1966,12 @@ fn play_trace(
             }
         }
         let herd = to.is_some_and(|t| t[1] == 2.0);
+        for &(f, k) in &level_at {
+            if play.ticks == k {
+                play.state.set_level(f, true);
+                println!("      diagnostic: level flag {f} set on tick {k}");
+            }
+        }
         let fight = to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten();
         let goal = if herd {
             play.herd_goal()
@@ -2054,6 +2070,10 @@ fn play_trace(
         if !play.last_pet.is_empty() && play.last_pet != last_pet {
             last_pet = play.last_pet.clone();
             println!("      {last_pet}");
+        }
+        if !play.last_boss.is_empty() && play.last_boss != last_boss {
+            last_boss = play.last_boss.clone();
+            println!("      {last_boss}");
         }
         if !play.last_door.is_empty() && play.last_door != last_door {
             last_door = play.last_door.clone();

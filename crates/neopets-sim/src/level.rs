@@ -127,6 +127,17 @@ pub enum Action {
     GiveWordItem { word: u8, default: u16 },
     /// The price multiplier (SPEC-0050 section 5): every live flag-1 item of the world.
     ScalePrices { factor: f32 },
+    /// SetLevelState: a level flag of the current world (the boss's and the script's shared
+    /// flags, SPEC-0014; SPEC-0015), set or cleared at this point of the thread.
+    LevelState { flag: u16, on: bool },
+    /// Set and clear bits of a module word of the thread's pack at this point of the thread.
+    Bits { word: u8, set: i32, clear: i32 },
+    /// PlayHeroAnim.
+    HeroAnim { anim: u32, wait: bool },
+    /// The hero's equipment display on or off.
+    Equip { on: bool },
+    /// StartExteriorReplacementLoad of an eW slot, arriving on a plane (-1: entry record 0).
+    ReplaceExterior { slot: usize, plane: i32 },
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -198,11 +209,32 @@ pub struct GameState {
     /// The pack that was current before this one (the "last active world" an activate-world
     /// routine reads).
     pub last_pack: Option<u32>,
+    /// The current world's level flags (SetLevelState and the boss posts; cleared when a world
+    /// loads).
+    pub level_flags: BTreeSet<u16>,
 }
 
 impl GameState {
     pub fn flag(&self, f: u16) -> bool {
         self.flags.contains(&f)
+    }
+
+    /// A level flag of the current world.
+    pub fn level(&self, f: u16) -> bool {
+        self.level_flags.contains(&f)
+    }
+
+    pub fn set_level(&mut self, f: u16, on: bool) {
+        if on {
+            self.level_flags.insert(f);
+        } else {
+            self.level_flags.remove(&f);
+        }
+    }
+
+    /// An entity of the current world counts as dead when its hit points are 0 or it is gone.
+    pub fn entity_dead(&self, e: usize) -> bool {
+        self.entity_hp.get(&e).is_none_or(|&hp| hp <= 0)
     }
 
     pub fn set(&mut self, f: u16, on: bool) {
@@ -226,13 +258,19 @@ impl GameState {
     pub fn reload_module(&mut self, pack: u32) {
         self.rotations.retain(|(p, _), _| *p != pack);
         self.words.retain(|(p, _), _| *p != pack);
+        self.level_flags.clear();
     }
 
     fn word(&self, pack: u32, w: u8) -> i32 {
         self.words.get(&(pack, w)).copied().unwrap_or(0)
     }
 
-    fn set_word(&mut self, pack: u32, w: u8, v: i32) {
+    /// A module word (for the host's Bits action).
+    pub fn word_of(&self, pack: u32, w: u8) -> i32 {
+        self.word(pack, w)
+    }
+
+    pub fn set_word(&mut self, pack: u32, w: u8, v: i32) {
         self.words.insert((pack, w), v);
     }
 
@@ -280,6 +318,18 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0045 1217 teleports (context 0, on contact): index 0 routine 13, value 50 for eW
+        // 68 and the exterior replacement to eW 68 (pack 909); index 1 routine 14, value 2 for eW
+        // 129 under types 2 and 3, and the replacement to eW 129 (pack 1184) with argument 2.
+        (1217, 0) => {
+            state.blackboard.insert((2, 68), 50);
+            vec![Action::ReplaceExterior { slot: 68, plane: -1 }]
+        }
+        (1217, 1) => {
+            state.blackboard.insert((2, 129), 2);
+            state.blackboard.insert((3, 129), 2);
+            vec![Action::ReplaceExterior { slot: 129, plane: 2 }]
+        }
         // SPEC-0045 909: routine 8 enters world 72 (pack 951), routine 9 world 73 (pack 955).
         (909, 0) => vec![Action::EnterInterior { slot: 72 }],
         (909, 1) => vec![Action::EnterInterior { slot: 73 }],
@@ -376,6 +426,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         678 | 686 | 691 => road_init(pack, state),
         1023 => village_init(state),
+        1184 => woods_init(state),
+        1217 => burrows_init(state),
         // SPEC-0050 section 5: the Market Town shops' x4 prices until flag 298, once the
         // shopkeeper's set (1 with flag 86, else 0) has loaded with the stock.
         1005 | 1008 | 1011 | 1014 | 1020 => {
@@ -576,6 +628,33 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
     let mut out = TriggerOut::default();
     let first = call.state == 1 && call.object;
     match (pack, routine) {
+        // SPEC-0042 1184 trigger 0 (E0): with 145 set, the first time (645), line 14.
+        (1184, 1) if first && state.flag(145) && !state.flag(645) => {
+            state.set(645, true);
+            out.actions.push(Action::Message { line: 14 });
+        }
+        // E7 (220 set, 277 clear): 277, the fade, movie 40 (not played), type 3 value 1 for eW
+        // 131, the hero to locator 44.
+        (1184, 3) if first && !state.flag(277) => {
+            state.set(277, true);
+            state.blackboard.insert((3, 131), 1);
+            out.actions.extend([Action::FadeOut { seconds: 0.25, wait: true }, Action::MoveHero { locator: 44 }]);
+        }
+        // E9 (220 set): type 3 value 1 for eW 130 and the replacement load without a fade.
+        (1184, 5) if first => {
+            state.blackboard.insert((3, 130), 1);
+            out.actions.push(Action::ReplaceExterior { slot: 130, plane: -1 });
+        }
+        // E11 (220 clear): type 3 value 0 for eW 130 and the replacement load.
+        (1184, 6) if first => {
+            state.blackboard.insert((3, 130), 0);
+            out.actions.push(Action::ReplaceExterior { slot: 130, plane: -1 });
+        }
+        // SPEC-0045 1217 script trigger 0 (Act 1): the start bit.
+        (1217, 1) if first => {
+            let w = state.word(1217, 0);
+            state.set_word(1217, 0, w | 1);
+        }
         // SPEC-0045 909 trigger routine 10 (indices 0 to 3): words A (0) and B (1), the line-192
         // once-word (2). Cameras 5 and 6 are not played.
         (909, 10) if first => {
@@ -695,6 +774,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
 pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> {
     let mut out = Vec::new();
     match pack {
+        // SPEC-0042 1184 thread B: while 512 is set and 513 clear, holding item 73 sets 513.
+        1184 => {
+            if state.flag(512) && !state.flag(513) && state.has_item(73) {
+                state.set(513, true);
+            }
+        }
+        1217 => out = burrows_fight(state, dialog),
         // SPEC-0045 909 Update: the flag and item steps and the scenes.
         909 => {
             // The Act 1 start: 707 on and 1 off sets 1 and clears 706, fades out at once and
@@ -823,6 +909,7 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 /// Run a pack's activate-world routine when its world becomes current.
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        1184 => woods_activate(state),
         // SPEC-0045 909 activate-world routine: an unfinished round-up (flags 107 to 110 not
         // all set) is cleared; the type-2 message for eW 68 places the hero.
         909 => {
@@ -1049,6 +1136,226 @@ fn walk_back(s: &GameState) -> Vec<Action> {
         GiveWordItem { word: 1, default: 99 },
         walk(0, 7, false),
     ]
+}
+
+/// SPEC-0042 1184 Init: trigger 0 (and flag 661), the 220-dependent triggers 7 to 9 or 11, and
+/// thread A's slot-B load by the story set (regions 1215, 1200 or 1201, 1192 or 1193). Thread
+/// C's loads (triggers 2 to 6) read a 21-entry list in the module data that no spec gives
+/// (R-0036), so those triggers are not registered. Update's display and collision masks and E8's
+/// world-load override are not reproduced.
+fn woods_init(state: &mut GameState) -> Vec<Action> {
+    let reg = |index, routine| Action::RegisterTrigger { index, routine };
+    let mut out = vec![reg(0, 1)];
+    if !state.flag(661) {
+        state.set(661, true);
+    }
+    if state.flag(220) {
+        out.extend([reg(7, 3), reg(9, 5)]);
+    } else {
+        out.push(reg(11, 6));
+    }
+    let alt = state.flag(512) && !state.flag(513);
+    let j = if state.flag(84) {
+        Some(30)
+    } else if state.flag(83) {
+        None
+    } else if state.flag(82) {
+        Some(if alt { 16 } else { 15 })
+    } else {
+        Some(if alt { 8 } else { 7 })
+    };
+    if let Some(j) = j {
+        out.push(Action::LoadRegion { slot: 1, region: Some(1184 + 1 + j) });
+    }
+    out
+}
+
+/// SPEC-0042 1184 activate-world A: the type-3 value for eW 129. 1 arrives at locator 45 and
+/// walks to 46 under camera 10; 2 places the hero at locator 50 (both clear the values).
+fn woods_activate(state: &mut GameState) -> Vec<Action> {
+    match state.take_message(3, 129) {
+        1 => vec![
+            Action::MoveHero { locator: 45 },
+            Action::FadeIn { seconds: 0.5, wait: false },
+            Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+            Action::WalkHero { locator: 46, wait: true, orient: false },
+            release_camera(),
+        ],
+        2 => {
+            state.blackboard.remove(&(2, 129));
+            vec![Action::Sleep { ticks: 1 }, Action::MoveHero { locator: 50 }, release_camera()]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The 1217 stage word (module word 0): bit 0 start, 1 intro done, 2 boss dead, 3 outro done,
+/// 4 to 9 the stage scenes (requested, done), 10 the stage-1 spawn, 11 to 13 the stage-start
+/// requests; bit 15 marks a controller scene running (the controller is one thread).
+const BUSY: i32 = 1 << 15;
+
+/// SPEC-0045 1217 Init (Act 1, flag 83 clear): flags 81 (and 83 with 248), the fight-due test;
+/// on the fight-due branch script trigger 0, thread routine 1 (region 1218 into the slot),
+/// thread routine 12 (entity 3 loops animation 94) and the streaming filter of callback 6
+/// (only embedded ordinal 3, Lucy, binds; the others wait for their explicit activation).
+/// Callback 5 (not due) refuses every ordinal. The Act 3 branch, the gate, cage and main object
+/// records and the effects are not built.
+fn burrows_init(state: &mut GameState) -> Vec<Action> {
+    state.set(81, true);
+    if state.flag(248) {
+        state.set(83, true);
+    }
+    let act3 = state.flag(83);
+    let due = if act3 { !state.flag(278) } else { state.flag(145) && !state.flag(82) };
+    let off = |e| Action::DeactivateEntity { entity: e };
+    let mut out = Vec::new();
+    if due && !act3 {
+        out.push(Action::RegisterTrigger { index: 0, routine: 1 });
+        out.extend([0, 1, 2, 4, 5, 6].map(off));
+        out.push(Action::LoadRegion { slot: 0, region: Some(1218) });
+        out.push(Action::EntityAnim { entity: 3, anim: 94, looped: true, wait: false });
+    } else {
+        out.extend((0..7).map(off));
+    }
+    out
+}
+
+/// The stage spawns of 1217: spawn 1 entity 0 at locator 13 (bit 10); spawn 2 entities 0 and 1
+/// at 14 and 15 (level flag 4); spawn 3 entities 0 to 2 at 16 to 18 (level flag 9). Each place
+/// is ActivateEntity, MoveEntity with facing, SetAI_Agro.
+fn burrows_spawn(n: u8) -> Vec<Action> {
+    let place = |e, k| [Action::ActivateEntity { entity: e }, Action::MoveEntity { entity: e, locator: k, face: true }, Action::Agro { entity: e }];
+    match n {
+        1 => {
+            let mut v = place(0, 13).to_vec();
+            v.push(Action::Bits { word: 0, set: 1 << 10, clear: 0 });
+            v
+        }
+        2 => {
+            let mut v: Vec<Action> = [place(0, 14), place(1, 15)].concat();
+            v.push(Action::LevelState { flag: 4, on: true });
+            v
+        }
+        _ => {
+            let mut v: Vec<Action> = [place(0, 16), place(1, 17), place(2, 18)].concat();
+            v.push(Action::LevelState { flag: 9, on: true });
+            v
+        }
+    }
+}
+
+/// SPEC-0045 1217 fight controller (Act 1), one step per pass while no controller scene runs:
+/// the intro A, the win with outro A, the stage starts, the stage scenes and the fight monitor.
+/// The skip intro (button 5 at the intro's start) is not read; the main records' scenes are
+/// not played (they are object animations), so the death step of the records counts as done
+/// when the entities are dead.
+fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
+    use Action::*;
+    let w = state.word(1217, 0);
+    if w & BUSY != 0 || dialog || state.flag(83) {
+        return Vec::new();
+    }
+    let bit = |b: i32| w & (1 << b) != 0;
+    let busy = |state: &mut GameState| state.set_word(1217, 0, w | BUSY);
+    let done = |b: i32| Bits { word: 0, set: 1 << b, clear: BUSY };
+    let cut = |track| [FadeOut { seconds: 0.7, wait: true }, PlayCamera { track, wait: false, end: 1, speed: 1.0 }, FadeIn { seconds: 0.4, wait: false }];
+    let cam_wait = |track| PlayCamera { track, wait: true, end: 1, speed: 1.0 };
+    let anim = |anim, wait| EntityAnim { entity: 7, anim, looped: false, wait };
+    // 1. The intro (A).
+    if !bit(1) && bit(0) {
+        busy(state);
+        let mut v = vec![HoldHero, FadeOut { seconds: 0.5, wait: true }, WaitLoads, ActivateEntity { entity: 7 }, LetterBox { on: true, seconds: 1.0, wait: false }];
+        v.extend([MoveHero { locator: 88 }, Equip { on: false }, FadeIn { seconds: 0.5, wait: false }, camera(4), WalkHero { locator: 89, wait: true, orient: true }]);
+        v.extend([Sleep { ticks: 30 }, cam_wait(7)]);
+        v.extend(cut(10));
+        v.extend([wait(3.0), cam_wait(8), Sleep { ticks: 60 }]);
+        v.extend(cut(6));
+        v.extend([Message { line: 6 }, MoveHero { locator: 90 }, Equip { on: true }]);
+        v.extend(cut(9));
+        v.extend([wait(0.5), anim(5, true), EntityAnim { entity: 7, anim: 2, looped: true, wait: false }, wait(1.0), cam_wait(12)]);
+        v.extend([HeroAnim { anim: 158, wait: false }, Sleep { ticks: 120 }]);
+        v.extend(cut(11));
+        v.extend([Sleep { ticks: 60 }, anim(6, true), anim(7, false), ReleaseEntity { entity: 7 }]);
+        v.extend(burrows_spawn(1));
+        v.extend([LetterBox { on: false, seconds: 1.0, wait: false }, release_camera(), done(1)]);
+        return v;
+    }
+    if !bit(1) || bit(3) {
+        return Vec::new();
+    }
+    // 2. The win: flags 82 and 147, then outro A.
+    if bit(2) {
+        busy(state);
+        state.set(82, true);
+        state.set(147, true);
+        let mut v = vec![HoldHero, FadeOut { seconds: 1.0, wait: true }, LetterBox { on: true, seconds: 1.0, wait: false }, camera(14), MoveHero { locator: 93 }];
+        v.extend([FadeIn { seconds: 0.5, wait: false }, wait(0.5), anim(0, true), LevelState { flag: 18, on: true }, Sleep { ticks: 20 }, camera(10)]);
+        v.extend([Sleep { ticks: 15 * 11 }, wait(2.0), DeactivateEntity { entity: 7 }, camera(15), WalkHero { locator: 94, wait: true, orient: false }, wait(2.0)]);
+        v.extend(cut(17));
+        v.extend([MoveHero { locator: 92 }, MoveEntity { entity: 3, locator: 91, face: true }, Converse { entity: 3, line: 10 }, camera(16)]);
+        v.extend([Converse { entity: 3, line: 11 }, camera(17), Converse { entity: 3, line: 12 }, Converse { entity: 3, line: 13 }]);
+        v.extend([WalkEntity { entity: 3, locator: 95, wait: false, orient: false, stop: 1.1 }, wait(2.0)]);
+        v.extend(cut(14));
+        v.extend([wait(2.0), FadeOut { seconds: 0.7, wait: true }, DeactivateEntity { entity: 3 }, release_camera()]);
+        v.extend([LetterBox { on: false, seconds: 0.0, wait: false }, FadeIn { seconds: 0.5, wait: false }, done(3)]);
+        return v;
+    }
+    // A stage start: SetLevelState 1, 5 or 10 and the stage's scene bits.
+    for (req, flag, bits) in [(11, 1, (4, 5)), (12, 5, (6, 7)), (13, 10, (8, 9))] {
+        if bit(req) {
+            state.set_word(1217, 0, (w | (1 << bits.0) | (1 << bits.1)) & !(1 << req));
+            return vec![LevelState { flag, on: true }];
+        }
+    }
+    // A stage scene (Act 1): fade, camera, letterbox, the line, then the stage start. Which of
+    // cameras 10 and 6 each scene uses is not given (R-0036): 10 for the first, 6 after.
+    for (req, partner, line, flag, track) in [(4, 5, 7, 1, 10), (6, 7, 8, 5, 6), (8, 9, 9, 10, 6)] {
+        if bit(req) && !bit(partner) {
+            busy(state);
+            let mut v = vec![HoldHero, FadeOut { seconds: 0.7, wait: true }, camera(track), LetterBox { on: true, seconds: 1.0, wait: false }, FadeIn { seconds: 0.4, wait: false }];
+            v.extend([Message { line }, LetterBox { on: false, seconds: 1.0, wait: false }, release_camera(), LevelState { flag, on: true }]);
+            v.push(Bits { word: 0, set: 1 << partner, clear: BUSY });
+            return v;
+        }
+    }
+    // 3. The fight monitor.
+    let mut v = Vec::new();
+    let set = |state: &mut GameState, b: i32| {
+        let w = state.word(1217, 0);
+        state.set_word(1217, 0, w | (1 << b));
+    };
+    if state.level(14) {
+        set(state, 2);
+    }
+    for (f, spawn, clears) in [(15u16, 1u8, &[2u16][..]), (16, 2, &[6, 7]), (17, 3, &[11, 12, 13])] {
+        if state.level(f) {
+            state.set_level(f, false);
+            for &c in clears {
+                state.set_level(c, false);
+            }
+            v.extend(burrows_spawn(spawn));
+        }
+    }
+    if !state.level(1) {
+        if bit(10) && state.entity_dead(0) {
+            set(state, if bit(4) { 11 } else { 4 });
+        }
+    } else if !state.level(5) {
+        if state.level(3) && !state.level(4) {
+            state.set_level(4, true);
+            v.extend(burrows_spawn(2));
+        } else if state.level(4) && state.entity_dead(0) && state.entity_dead(1) {
+            set(state, if bit(6) { 12 } else { 6 });
+        }
+    } else if !state.level(10) {
+        if state.level(8) && !state.level(9) {
+            state.set_level(9, true);
+            v.extend(burrows_spawn(3));
+        } else if state.level(9) && (0..3).all(|e| state.entity_dead(e)) {
+            set(state, if bit(8) { 13 } else { 8 });
+        }
+    }
+    v
 }
 
 /// SPEC-0050 section 4: the buy hooks. Each shows its line on a buy of its item while its flag
@@ -1696,6 +2003,57 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    #[test]
+    fn burrows_fight_controller() {
+        // SPEC-0045 1217, Act 1: Init sets 81, registers trigger 0 and loads region 1218 when
+        // 145 is set and 82 clear; not due, every embedded ordinal is refused.
+        let mut s = GameState::default();
+        let init = on_init(1217, &mut s);
+        assert!(s.flag(81) && !init.iter().any(|a| matches!(a, Action::RegisterTrigger { .. })));
+        s.set(145, true);
+        let init = on_init(1217, &mut s);
+        assert!(init.contains(&Action::RegisterTrigger { index: 0, routine: 1 }) && init.contains(&Action::LoadRegion { slot: 0, region: Some(1218) }));
+        // Trigger 0 sets the start bit; the next update runs intro A once (line 6, spawn 1).
+        let call = TriggerCall { index: 0, state: 1, object: true, square: false };
+        on_trigger(1217, 1, call, &mut s);
+        let intro = on_update(1217, &mut s, false);
+        assert!(intro.contains(&Action::Message { line: 6 }) && intro.contains(&Action::MoveEntity { entity: 0, locator: 13, face: true }));
+        assert!(on_update(1217, &mut s, false).is_empty(), "one controller scene at a time");
+        // The intro's last calls: bit 10 (spawn 1) and bit 1, clearing the busy mark.
+        for a in &intro {
+            if let Action::Bits { word, set, clear } = *a {
+                let w = s.word(1217, word);
+                s.set_word(1217, word, (w | set) & !clear);
+            }
+        }
+        // Entity 0 dead before stage 1: the scene request (bit 4), then its scene (line 7 and
+        // level state 1).
+        s.entity_hp.insert(0, 0);
+        assert!(on_update(1217, &mut s, false).is_empty());
+        let scene = on_update(1217, &mut s, false);
+        assert!(scene.contains(&Action::Message { line: 7 }) && scene.contains(&Action::LevelState { flag: 1, on: true }));
+        for a in &scene {
+            match *a {
+                Action::Bits { word, set, clear } => {
+                    let w = s.word(1217, word);
+                    s.set_word(1217, word, (w | set) & !clear);
+                }
+                Action::LevelState { flag, on } => s.set_level(flag, on),
+                _ => {}
+            }
+        }
+        // Stage 1: the boss's level flag 3 runs spawn 2 once (level flag 4).
+        s.set_level(3, true);
+        let spawn = on_update(1217, &mut s, false);
+        assert!(spawn.contains(&Action::MoveEntity { entity: 1, locator: 15, face: true }) && s.level(4));
+        // The boss's death (level flag 14): flags 82 and 147 and outro A.
+        s.set_level(14, true);
+        on_update(1217, &mut s, false);
+        let outro = on_update(1217, &mut s, false);
+        assert!(s.flag(82) && s.flag(147) && !s.flag(5));
+        assert!(outro.contains(&Action::Converse { entity: 3, line: 13 }) && outro.contains(&Action::LevelState { flag: 18, on: true }));
     }
 
     #[test]
