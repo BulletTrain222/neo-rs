@@ -988,6 +988,7 @@ fn step_sim(
         // SPEC-0035: the front end runs once per tick; outside play and the game-over page the
         // world is frozen and the hero's buttons are dropped.
         let (mut edge, mut buttons) = menu_view::menu_words(&keys, &gamepads);
+        let held = menu_view::menu_held(&keys, &gamepads);
         // A slot to apply after this frame's ticks (a load, or Continue with the snapshot).
         let mut pending: Option<neopets_sim::save::Slot> = None;
         for _ in 0..ticks {
@@ -996,6 +997,7 @@ fn step_sim(
             }
             if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                 let ctx = menus::Ctx { game_over: play.play.death.page.is_some() || play.play.death.flag_e };
+                m.flow.held = held;
                 // SPEC-0025 Clean-side mapping of the card jobs: the scans read the save file,
                 // the write job writes the whole file at once.
                 match m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx) {
@@ -1027,11 +1029,28 @@ fn step_sim(
                 } else if m.flow.current == menus::PLAY && play.play.menu_open && m.flow.stack_was_pause() {
                     play.play.cue(149);
                 }
+                // Menu-table sounds play at the fixed 1,024; the save-complete cue at the default.
                 for c in std::mem::take(&mut m.flow.sounds) {
-                    play.play.cue(c);
+                    if c == 0xA9 {
+                        play.play.cue(c);
+                    } else {
+                        play.play.cue_fixed(c);
+                    }
                 }
+                // The front end owns the options; play reads them.
+                play.play.options = m.flow.options;
                 play.play.menu_open = frozen;
                 if frozen {
+                    // SPEC-0009 Pass gate: once the title has been shown the music controller
+                    // also runs on front-end passes: the title's bank override 25, the pause
+                    // page's level, the stream gate closed.
+                    if m.flow.current == menus::TITLE {
+                        m.flow.title_seen = true;
+                    }
+                    if m.flow.title_seen {
+                        let bank = (m.flow.current == menus::TITLE).then_some(25);
+                        play.play.frontend_music(bank, m.flow.current == menus::PAUSE);
+                    }
                     play.play.jump_latch = false;
                     play.play.square_latch = false;
                     play.play.attack_latch = false;
@@ -1044,8 +1063,9 @@ fn step_sim(
             input.square = std::mem::take(&mut play.play.square_latch);
             input.attack = std::mem::take(&mut play.play.attack_latch);
             let pad = neopets_sim::camera::CameraPad {
-                right_x: byte(right.x),
-                right_y: byte(-right.y),
+                // SPEC-0035 Behavior 3: the invert flags complement the right-stick bytes.
+                right_x: if play.play.options.invert.0 { 255 - byte(right.x) } else { byte(right.x) },
+                right_y: if play.play.options.invert.1 { 255 - byte(-right.y) } else { byte(-right.y) },
                 r3_held,
                 r3_pressed: std::mem::take(&mut play.play.r3_latch),
             };
@@ -1064,6 +1084,9 @@ fn step_sim(
             match load_game(archive, &play.play, &slot) {
                 Ok(new) => {
                     play.play = new;
+                    if let Some(m) = menu.as_deref_mut() {
+                        m.flow.options = play.play.options;
+                    }
                     match archive.disc.reopen() {
                         Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
                         Err(e) => error!("No loader thread, streaming is off: {e}"),
@@ -2051,6 +2074,8 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                     let mut flow = menus::Flow::new(&f);
                     if !request.3 {
                         flow.set(&f, menus::PLAY);
+                        // A direct play start counts as past the title for the music gate.
+                        flow.title_seen = true;
                     }
                     // SPEC-0035 section 14.3: the row drawer's words (wrap 0x2DCDA8, pulse
                     // 0x2DCDB4 to 0x2DCDBC, bar width 0x2DCDC0, colours 0x2DCDC8 and 0x2DCDD0).

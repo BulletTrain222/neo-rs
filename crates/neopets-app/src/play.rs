@@ -393,6 +393,8 @@ pub struct Play {
     pub emote_requests: Vec<(u32, u32, u32)>,
     pub stinger_playing: bool,
     stinger4: u64,
+    /// The live options and gains (SPEC-0035 Behavior 3), kept in step with the front end.
+    pub options: neopets_sim::options::Options,
     flags_seen: std::collections::BTreeSet<u16>,
 }
 
@@ -641,6 +643,7 @@ impl Play {
             emote_requests: Vec::new(),
             stinger_playing: false,
             stinger4: 0,
+            options: Default::default(),
             flags_seen: Default::default(),
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
@@ -2519,7 +2522,7 @@ impl Play {
         }
         let chosen = clips.iter().find(|c| c.0).or(clips.first()).copied();
         if let Some((_, bank, (start, len))) = chosen {
-            if !self.stinger_playing && self.bank_music.playing.is_some() {
+            if !self.stinger_playing && self.bank_music.playing.is_some() && self.emote_volume() > 0 {
                 self.stinger_playing = true;
                 self.emote_requests.push((bank, start, len));
             }
@@ -2529,7 +2532,7 @@ impl Play {
     /// A stinger request (SPEC-0009): indices 0 to 18 only; one at a time; stinger 4 not within
     /// 40 s of its last start (from clock 0).
     pub fn stinger(&mut self, k: i32) {
-        if !(0..19).contains(&k) || self.stinger_playing {
+        if !(0..19).contains(&k) || self.stinger_playing || self.stinger_volume() <= 0 {
             return;
         }
         if k == 4 {
@@ -2543,6 +2546,44 @@ impl Play {
     }
 
     /// A cue on the main slot with no position (menus, items, the HUD).
+    /// A front-end menu sound (the menu sound table): always at the fixed volume 1,024.
+    pub fn cue_fixed(&mut self, cue: i32) {
+        self.sound.play(neopets_sim::sound::MAIN, cue, neopets_sim::sound::Play { volume: Some(1024), ..Default::default() });
+    }
+
+    /// The music controller on a front-end pass (SPEC-0009 Pass gate; SPEC-0035 Behaviors 3a and
+    /// 3b): a bank override (the title's 25) replaces the row's bank offset, unshifted by the
+    /// flag; the pause page's one-tick level is trunc(400 x Music gain); the stream gate is closed,
+    /// so the stream step is skipped. The default cue volume and the voice update still run.
+    pub fn frontend_music(&mut self, bank_override: Option<i32>, pause: bool) {
+        let (key, selector) = self.world.music.unwrap_or((-1, 0));
+        let row = self.world_keys.1.iter().position(|&v| v as i32 == key).unwrap_or(193);
+        let r = self.design.music_row(row);
+        let state = &self.state;
+        let flag = neopets_sim::music::runtime_flag(selector, &|n| state.flag(n));
+        let bank = bank_override.unwrap_or(r.bank + if flag { 67 } else { 0 });
+        let duck = if self.stinger_playing { 0.7 } else { 1.0 };
+        if pause {
+            let level = (400.0 * self.options.music()) as i32;
+            self.bank_music.tick(bank, level, duck);
+        } else {
+            self.bank_music.tick(bank, r.level, self.options.music() * duck);
+        }
+        self.sound.default_volume = (r.scale as f32 * self.options.effects()) as i32;
+        let finished = std::mem::take(&mut self.sound_finished);
+        self.sound.update(&finished);
+    }
+
+    /// The stinger volume, trunc(1024 x Sound-effects gain), and the emote-clip volume,
+    /// trunc(1024 x Voice gain).
+    pub fn stinger_volume(&self) -> i32 {
+        (1024.0 * self.options.effects()) as i32
+    }
+
+    pub fn emote_volume(&self) -> i32 {
+        (1024.0 * self.options.voice()) as i32
+    }
+
     pub fn cue(&mut self, cue: i32) {
         self.sound.play(neopets_sim::sound::MAIN, cue, neopets_sim::sound::Play::default());
     }
@@ -2558,11 +2599,13 @@ impl Play {
         let state = &self.state;
         let flag = neopets_sim::music::runtime_flag(selector, &|n| state.flag(n));
         let s = neopets_sim::music::select(r.bank, r.stream, r.block, flag);
-        self.music.tick(s.stream, s.stop, r.cap, 1.0);
+        self.music.tick(s.stream, s.stop, r.cap, self.options.effects());
+        // The default cue volume: trunc(row Scale x Sound-effects gain).
+        self.sound.default_volume = (r.scale as f32 * self.options.effects()) as i32;
         self.music_selection = Some(s);
         // The bank: the row's offset with the flag's +67 (added to negative offsets too).
         let duck = if self.stinger_playing { 0.7 } else { 1.0 };
-        self.bank_music.tick(r.bank + if flag { 67 } else { 0 }, r.level, duck);
+        self.bank_music.tick(r.bank + if flag { 67 } else { 0 }, r.level, self.options.music() * duck);
         // A progress flag that rose since the last tick plays its table-2 stinger (v - 1).
         let risen: Vec<u16> = self.state.flags.difference(&self.flags_seen).copied().collect();
         self.flags_seen = self.state.flags.clone();
@@ -2702,21 +2745,17 @@ impl Play {
         s.set_u32(at::SWAP_MODE, 2);
         let cloak = self.inventory.get(&126).is_some_and(|&n| n > 0);
         s.0[at::CLOAK..at::CLOAK + 3].copy_from_slice(&[cloak as u8, 0, 0]);
-        // The options block's start-up defaults (SPEC-0025 Options block).
-        for (k, v) in [0u32, 0, 1, 1, 0].into_iter().enumerate() {
-            s.set_u32(at::OPTIONS + 4 * k, v);
-        }
-        for k in 0..3 {
-            s.set_f32(at::OPTIONS + 0x14 + 4 * k, 75.0);
-        }
+        // A copy of the live options block (SPEC-0025 Options block).
+        s.0[at::OPTIONS..at::OPTIONS + 32].copy_from_slice(&self.options.block.to_bytes());
     }
 
-    /// Apply a slot to this freshly loaded game (SPEC-0025 Loading, apply steps 2, 7 to 12 and
+    /// Apply a slot to this freshly loaded game (SPEC-0025 Loading, apply steps 2, 7 to 12, 15 and
     /// the end-of-pass apply), for Tor: progress flags, wallet, the party's entries re-added
     /// (carry limit on the general and quest lists), the cloak, the once-per-area sets, the
-    /// status restore, luck, maxima and current pools, then the restart point and the hero's
-    /// placement at vectors A and B. Not applied: Roberta, the stash, the petpet, movies,
-    /// per-world tables, treasure sets, the count table, options, swap mode and Motes.
+    /// status restore, luck, maxima and current pools, the restart point and the hero's
+    /// placement at vectors A and B, and the options with their apply rule. Not applied:
+    /// Roberta, the stash, the petpet, movies, per-world tables, treasure sets, the count table,
+    /// swap mode and Motes.
     pub fn apply_slot(&mut self, s: &neopets_sim::save::Slot) {
         use neopets_sim::save::{self as sv, Group, at};
         self.state.flags.clear();
@@ -2774,6 +2813,9 @@ impl Play {
         self.restart = Some(pose);
         self.arrive(pose);
         self.flags_seen = self.state.flags.clone();
+        // Options (Loading, step 15): the slot's block, then the apply rule.
+        self.options.block = neopets_sim::options::Block::from_bytes(&s.0[at::OPTIONS..at::OPTIONS + 32]);
+        self.options.apply();
     }
 
     /// Load a world into the other buffer (a load's key A world in T).

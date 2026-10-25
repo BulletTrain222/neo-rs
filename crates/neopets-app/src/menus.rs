@@ -37,6 +37,8 @@ pub const DOWN: u16 = 0x4000;
 pub const CROSS: u16 = 0x0040;
 pub const TRIANGLE: u16 = 0x0010;
 pub const CIRCLE: u16 = 0x0020;
+pub const RIGHT: u16 = 0x2000;
+pub const LEFT: u16 = 0x8000;
 pub const SQUARE: u16 = 0x0080;
 pub const SELECT: u16 = 0x0100;
 
@@ -165,12 +167,27 @@ pub struct Flow {
     pub sounds: Vec<i32>,
     /// The screen current before the last screen change.
     came_from: Option<usize>,
+    /// The live options (SPEC-0035 Behavior 3) and the held menu word of this pass (sliders act
+    /// on held Left and Right).
+    pub options: neopets_sim::options::Options,
+    pub held: u16,
+    /// The title has been shown (the music controller's front-end pass gate).
+    pub title_seen: bool,
+}
+
+/// What the predicates read: the pass count, the option words of slots 66 to 68 (Vibration,
+/// Invert Left-Right, Invert Up-Down) and the knob positions the last apply set.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pc {
+    pub pass: u32,
+    pub words: [u32; 3],
+    pub knobs: Option<[i32; 3]>,
 }
 
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -181,6 +198,12 @@ impl Flow {
         self.current = r;
         self.pass = 0;
         self.default_focus(fe, &Ctx::default());
+    }
+
+    /// The predicates' inputs of this pass.
+    pub fn pc(&self) -> Pc {
+        let b = self.options.block;
+        Pc { pass: self.pass, words: [b.vibration, b.invert_lr, b.invert_ud], knobs: self.options.knobs }
     }
 
     /// Whether play was entered from the pause page on this pass (the unpause cue).
@@ -545,6 +568,36 @@ impl Flow {
         }
         if result.is_none() {
             let focus_state = list.get(self.focus).and_then(|i| fe.targets.get(i)).map_or(-1, |t| t.state);
+            // SPEC-0035 Behavior 3: the option rows. A toggle changes once per Left or Right
+            // press; an invert row and a slider run the apply rule on every pass; sliders act on
+            // held Left and Right. Option changes are silent.
+            use neopets_sim::options as opt;
+            let press = edge & (LEFT | RIGHT) != 0;
+            let (hl, hr) = (self.held & LEFT != 0, self.held & RIGHT != 0);
+            let b = &mut self.options.block;
+            match focus_state {
+                13 if press => b.vibration = opt::toggle(b.vibration),
+                14 => {
+                    if press {
+                        if self.focus == 1 {
+                            b.invert_lr = opt::toggle(b.invert_lr);
+                        } else {
+                            b.invert_ud = opt::toggle(b.invert_ud);
+                        }
+                    }
+                    self.options.apply();
+                }
+                15..=17 => {
+                    let v = match focus_state {
+                        15 => &mut b.music,
+                        16 => &mut b.effects,
+                        _ => &mut b.voice,
+                    };
+                    *v = opt::slide(*v, hl, hr);
+                    self.options.apply();
+                }
+                _ => {}
+            }
             match focus_state {
                 5 if second & CROSS != 0 => result = Some(PLAY),
                 6 if second & CROSS != 0 => {
@@ -605,12 +658,15 @@ pub struct Ctx {
 }
 
 /// Predicate table A (section 9c), the slots this build implements: 0, 2 and 56 always 1;
-/// 12, 27, 39 and 40 always 0; 66 to 68 the option words (all 0 here); 72 the game-over page's
-/// pass count above twice the tick rate. Other slots read 0.
-fn predicate(slot: i16, _arg: u8, pass: u32) -> i32 {
+/// 12, 27, 39 and 40 always 0; 66 to 68 the option words (Vibration, Invert Left-Right, Invert
+/// Up-Down); 72 the game-over page's pass count above twice the tick rate. Other slots read 0.
+fn predicate(slot: i16, _arg: u8, pc: Pc) -> i32 {
     match slot {
         0 | 2 | 56 => 1,
-        72 => (pass > 120) as i32,
+        66 => pc.words[0] as i32,
+        67 => pc.words[1] as i32,
+        68 => pc.words[2] as i32,
+        72 => (pc.pass > 120) as i32,
         _ => 0,
     }
 }
@@ -626,9 +682,9 @@ fn mode_passes(fe: &Frontend, n: usize, p: i32, focused: bool) -> bool {
 }
 
 /// The predicate value a node's own handler gives (1 with none).
-fn own_predicate(fe: &Frontend, n: usize, pass: u32) -> i32 {
+fn own_predicate(fe: &Frontend, n: usize, pc: Pc) -> i32 {
     let node = fe.nodes[n];
-    if node.handler >= 0 { predicate(node.handler, node.arg, pass) } else { 1 }
+    if node.handler >= 0 { predicate(node.handler, node.arg, pc) } else { 1 }
 }
 
 /// A selectable item passes when the mode tests from its parent up to the record's node pass.
@@ -637,7 +693,7 @@ fn item_ok(fe: &Frontend, item: usize, record: usize, _ctx: &Ctx, flow: &Flow) -
     let mut at = fe.nodes[item].parent;
     while let Some(i) = at {
         let n = fe.nodes[i];
-        let p = if n.handler >= 0 { predicate(n.handler, n.arg, flow.pass) } else { 1 };
+        let p = if n.handler >= 0 { predicate(n.handler, n.arg, flow.pc()) } else { 1 };
         let ok = match n.mode {
             0 | 1 => true,
             2 => p != 0,
@@ -688,11 +744,11 @@ fn page_of(fe: &Frontend, record: usize) -> Option<neopets_data::frontend::Page>
 /// The draw list of a record's tree (section 12): conditions with the nearest handler's
 /// predicate, the focused flag under the focused kind-4 item, row spacing over visible
 /// siblings, alignment by the node's width, and scale.
-pub fn draw_list(fe: &Frontend, record: usize, focus: usize, pass: u32) -> Vec<Draw> {
+pub fn draw_list(fe: &Frontend, record: usize, focus: usize, pc: Pc) -> Vec<Draw> {
     let mut out = Vec::new();
     let Some(root) = fe.screens.get(record).and_then(|s| s.node) else { return out };
     let mut counter = 0usize;
-    draw_node(fe, root, (0.0, 0.0, 1.0, 1.0), false, focus, pass, &mut counter, &mut out);
+    draw_node(fe, root, (0.0, 0.0, 1.0, 1.0), false, focus, pc, &mut counter, &mut out);
     out
 }
 
@@ -768,11 +824,11 @@ pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
     out
 }
 
-fn nearest_predicate(fe: &Frontend, n: usize, pass: u32) -> i32 {
+fn nearest_predicate(fe: &Frontend, n: usize, pc: Pc) -> i32 {
     let mut at = Some(n);
     while let Some(i) = at {
         if fe.nodes[i].handler >= 0 {
-            return own_predicate(fe, i, pass);
+            return own_predicate(fe, i, pc);
         }
         at = fe.nodes[i].parent;
     }
@@ -780,9 +836,9 @@ fn nearest_predicate(fe: &Frontend, n: usize, pass: u32) -> i32 {
 }
 
 #[allow(clippy::too_many_arguments)]
-fn draw_node(fe: &Frontend, n: usize, t: (f32, f32, f32, f32), focused: bool, focus: usize, pass: u32, counter: &mut usize, out: &mut Vec<Draw>) {
+fn draw_node(fe: &Frontend, n: usize, t: (f32, f32, f32, f32), focused: bool, focus: usize, pc: Pc, counter: &mut usize, out: &mut Vec<Draw>) {
     let node = fe.nodes[n];
-    if node.kind != 4 && !mode_passes(fe, n, nearest_predicate(fe, n, pass), focused) {
+    if node.kind != 4 && !mode_passes(fe, n, nearest_predicate(fe, n, pc), focused) {
         return;
     }
     let (px, py, psx, psy) = t;
@@ -809,7 +865,7 @@ fn draw_node(fe: &Frontend, n: usize, t: (f32, f32, f32, f32), focused: bool, fo
     let mut visible_after_first = 0;
     for (i, &c) in children.iter().enumerate() {
         let cn = fe.nodes[c];
-        let passes = cn.kind == 4 || mode_passes(fe, c, nearest_predicate(fe, c, pass), child_focused);
+        let passes = cn.kind == 4 || mode_passes(fe, c, nearest_predicate(fe, c, pc), child_focused);
         if i > 0 && passes {
             visible_after_first += 1;
         }
@@ -821,9 +877,14 @@ fn draw_node(fe: &Frontend, n: usize, t: (f32, f32, f32, f32), focused: bool, fo
             2 => cn.width as f32 * csx,
             _ => 0.0,
         };
-        let cx = bx + cn.x as f32 * bsx - shift;
+        // A slider knob (elements 0xCE to 0xD0) sits at the x the last apply wrote.
+        let x0 = match (cn.key, pc.knobs) {
+            (0xCE..=0xD0, Some(k)) => k[(cn.key - 0xCE) as usize] as f32,
+            _ => cn.x as f32,
+        };
+        let cx = bx + x0 * bsx - shift;
         let cy = by + (cn.y as f32 + node.spacing as f32 * rows as f32) * bsy;
-        draw_node(fe, c, (cx, cy, bsx, bsy), child_focused, focus, pass, counter, out);
+        draw_node(fe, c, (cx, cy, bsx, bsy), child_focused, focus, pc, counter, out);
     }
 }
 
@@ -1035,9 +1096,41 @@ mod tests {
     }
 
     #[test]
+    fn option_rows() {
+        // A page of three items with focus states 15 (Music), 14 (Invert) and 13 (Vibration).
+        let mut f = fe();
+        f.targets.insert(3, Target { target: -3, state: 15 });
+        f.targets.insert(4, Target { target: -3, state: 14 });
+        f.targets.insert(5, Target { target: -3, state: 13 });
+        let ctx = Ctx::default();
+        let mut flow = Flow::new(&f);
+        flow.set(&f, TITLE);
+        assert_eq!(flow.options.gains, [1.0; 3], "1.0 until the first apply");
+        // The Music row applies on every pass, held or not: 0.75 from the defaults; held Right
+        // adds 1.0 per pass.
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.options.gains, [0.75; 3]);
+        flow.held = RIGHT;
+        for _ in 0..10 {
+            flow.tick(&f, 0, 0, &ctx);
+        }
+        assert_eq!(flow.options.block.music, 85.0);
+        flow.held = 0;
+        // Focus 1 is the invert row: a Left press toggles Invert Left-Right.
+        flow.focus = 1;
+        flow.tick(&f, LEFT, 0, &ctx);
+        assert_eq!((flow.options.block.invert_lr, flow.options.invert.0), (1, true));
+        // The Vibration row toggles once per press.
+        flow.focus = 2;
+        flow.tick(&f, RIGHT, 0, &ctx);
+        assert_eq!(flow.options.block.vibration, 0);
+        assert_eq!(flow.pc().words, [0, 1, 0]);
+    }
+
+    #[test]
     fn list_items_are_spaced_by_visible_rows() {
         let f = fe();
-        let draws = draw_list(&f, TITLE, 0, 0);
+        let draws = draw_list(&f, TITLE, 0, Pc::default());
         assert!(draws.is_empty(), "items have no sprites here");
         let mut g = fe();
         for i in [3, 4, 5] {
@@ -1052,7 +1145,7 @@ mod tests {
             g.nodes[*item].child = Some(at);
             g.sprites.insert(1000 + k as u32, neopets_data::frontend::Sprite { colour: [128; 4], ..Default::default() });
         }
-        let ys: Vec<f32> = draw_list(&g, TITLE, 0, 0)
+        let ys: Vec<f32> = draw_list(&g, TITLE, 0, Pc::default())
             .iter()
             .filter_map(|d| match d {
                 Draw::Sprite { y, .. } => Some(*y),

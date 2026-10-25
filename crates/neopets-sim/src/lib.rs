@@ -21,6 +21,7 @@ pub mod nav;
 pub mod projectile;
 pub mod quick;
 pub mod npc;
+pub mod options;
 pub mod rng;
 pub mod save;
 pub mod sound;

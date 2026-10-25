@@ -23,6 +23,19 @@ pub struct MenuItem(usize);
 #[derive(Component)]
 pub struct MenuBackdrop;
 
+/// The held menu word: Left and Right (arrows or A/D, the D-pad) for the sliders.
+pub fn menu_held(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> u16 {
+    let pad = |b: GamepadButton| gamepads.iter().any(|g| g.pressed(b));
+    let mut w = 0;
+    if keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft) {
+        w |= menus::LEFT;
+    }
+    if keys.pressed(KeyCode::ArrowRight) || keys.pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight) {
+        w |= menus::RIGHT;
+    }
+    w
+}
+
 /// The menu words of this frame: the rising-edge word (stick and D-pad directions included) and
 /// the button-only word (SPEC-0035 section 4).
 pub fn menu_words(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> (u16, u16) {
@@ -51,6 +64,12 @@ pub fn menu_words(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> (u
     }
     if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) || pad(GamepadButton::DPadDown) {
         edge |= menus::DOWN;
+    }
+    if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft) {
+        edge |= menus::LEFT;
+    }
+    if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight) {
+        edge |= menus::RIGHT;
     }
     (edge, buttons)
 }
@@ -94,7 +113,7 @@ pub fn sync_menu(
     let (Some(_state), Some(menu), Some(art)) = (state, menu, art) else { return };
     let Some(window) = windows.iter().next() else { return };
     let flow = &menu.flow;
-    let mut draws = if flow.current == menus::PLAY { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pass) };
+    let mut draws = if flow.current == menus::PLAY { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pc()) };
     draws.extend(menus::picker_draws(&art.f, flow));
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {

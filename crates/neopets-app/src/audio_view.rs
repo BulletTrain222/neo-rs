@@ -471,7 +471,8 @@ pub fn sync_stingers(
             neopets_data::audio::vag(&bytes).ok().map(|(pcm, _)| pcms.add(Pcm::from(pcm)))
         });
         if let Some(h) = handle.clone() {
-            commands.spawn((AudioPlayer(h), PlaybackSettings::ONCE, StingerVoice));
+            let v = p.stinger_volume() as f32 / 1024.0;
+            commands.spawn((AudioPlayer(h), PlaybackSettings::ONCE.with_volume(Volume::Linear(v)), StingerVoice));
             playing = true;
         }
     }
@@ -487,7 +488,8 @@ pub fn sync_stingers(
         });
         let clip = bytes.as_ref().and_then(|b| b.get(start as usize * 2048..((start + len) as usize * 2048).min(b.len())));
         if let Some(Ok((pcm, _))) = clip.map(neopets_data::audio::vag) {
-            commands.spawn((AudioPlayer(pcms.add(Pcm::from(pcm))), PlaybackSettings::ONCE, StingerVoice));
+            let v = p.emote_volume() as f32 / 1024.0;
+            commands.spawn((AudioPlayer(pcms.add(Pcm::from(pcm))), PlaybackSettings::ONCE.with_volume(Volume::Linear(v)), StingerVoice));
             playing = true;
         }
     }
