@@ -555,6 +555,13 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                 neopets_data::travel::map_area(&b, &c.chunks)
             });
             let (a909, a691, a678) = (area(909), area(691), area(678));
+            // SPEC-0025 Card message records: the records the clean side's card mapping shows.
+            for r in [5usize, 6, 7, 9, 10, 14, 15, 17] {
+                if let Some(m) = d.message(r) {
+                    let codes = m.text.iter().filter(|&&b| b == 1).count();
+                    println!("  message {r}: {} bytes, {codes} codes, labels {:?}, colour {:?}", m.text.len(), m.labels.iter().map(|l| l.as_ref().map(|t| String::from_utf8_lossy(t).into_owned())).collect::<Vec<_>>(), m.colour);
+                }
+            }
             println!(
                 "Map areas: 909 {a909:?} {:?}, 691 {a691:?}, 678 {a678:?}; names 5 {:?}, 7 {:?}, 43 {:?}; categories 98 {:?}, 126 {:?}, 164 {:?}, 146 {:?}; limits 146 {:?}",
                 a909.and_then(|m| name(m as usize)), name(5), name(7), name(43),

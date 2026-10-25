@@ -37,6 +37,14 @@ pub fn menu_words(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> (u
     if keys.just_pressed(KeyCode::Escape) || pad(GamepadButton::Select) {
         buttons |= menus::SELECT;
     }
+    // Circle (Y or F, the east face button) and Square (E, the west face button) answer and
+    // page the card boxes.
+    if keys.just_pressed(KeyCode::KeyY) || keys.just_pressed(KeyCode::KeyF) || pad(GamepadButton::East) {
+        buttons |= menus::CIRCLE;
+    }
+    if keys.just_pressed(KeyCode::KeyE) || pad(GamepadButton::West) {
+        buttons |= menus::SQUARE;
+    }
     let mut edge = buttons;
     if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp) {
         edge |= menus::UP;

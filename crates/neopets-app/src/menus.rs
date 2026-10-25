@@ -10,13 +10,15 @@
 //!
 //! Not covered: the memory card (the card state passes at once), movies (the attract goes
 //! straight to the title), the quit box (Quit goes back to the card state without asking, and
-//! the world is not torn down), the card message boxes (the overwrite and save questions, the
-//! busy text, the failure and cancel boxes), options, credits, the item screens, journal and
-//! maps (their pages open and Triangle leaves them), sounds, key masks and animation slots,
-//! spatial pages, and the predicates other than those listed in `predicate`.
+//! the world is not torn down), options, credits, the item screens, journal and maps (their
+//! pages open and Triangle leaves them), sounds (the menu moves, the save-complete cue), key masks
+//! and animation slots, spatial pages, and the predicates other than those listed in
+//! `predicate`. The card boxes cover the clean side's jobs only: no card, format or card-gone
+//! records.
 
 use neopets_data::frontend::Frontend;
 use neopets_sim::save::{self, SaveFile};
+use neopets_sim::textbox::{self, TextBox};
 
 pub const CARD: usize = 0;
 pub const ATTRACT: usize = 1;
@@ -34,6 +36,8 @@ pub const UP: u16 = 0x1000;
 pub const DOWN: u16 = 0x4000;
 pub const CROSS: u16 = 0x0040;
 pub const TRIANGLE: u16 = 0x0010;
+pub const CIRCLE: u16 = 0x0020;
+pub const SQUARE: u16 = 0x0080;
 pub const SELECT: u16 = 0x0100;
 
 /// What the game around the front end must do.
@@ -43,8 +47,10 @@ pub enum Command {
     Quit,
     /// Read the save file and report it with `Flow::scanned` (the load or the save scan).
     Scan,
-    /// Rebuild slot k from the live game, write the file and report with `Flow::written`.
-    Save(usize),
+    /// Rebuild slot k of the scanned file from the live game and set the session snapshot.
+    Rebuild(usize),
+    /// Write the scanned file (with its rebuilt slot) and report with `Flow::written`.
+    Write,
     /// Apply slot k of the scanned file.
     Load(usize),
 }
@@ -56,17 +62,57 @@ pub struct Picker {
     pub stage: u8,
     pub cursor: usize,
     pub file: SaveFile,
-    /// The scan found no readable file (the load screen leaves).
+    /// The scan found no readable file (the load screen shows record 14).
     failed: bool,
+    /// The rows are up (from the end of a scan until the next scan).
+    pub rows: bool,
+    /// Passes counted by a waiting stage.
+    wait: u32,
     pub pulse: f32,
     step: f32,
 }
 
 impl Default for Picker {
     fn default() -> Self {
-        Self { stage: 0, cursor: 0, file: SaveFile::empty(), failed: false, pulse: 0.0, step: 0.0 }
+        Self { stage: 0, cursor: 0, file: SaveFile::empty(), failed: false, rows: false, wait: 0, pulse: 0.0, step: 0.0 }
     }
 }
+
+/// A card message in the shared box (SPEC-0025 Card message records): a table-9 record, its
+/// labels and colour; a question waits for Circle (1) or Triangle (0) and returns two passes
+/// after the answer; a busy record has no labels and takes no input.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CardBox {
+    pub record: usize,
+    pub text: TextBox,
+    pub labels: [Vec<u8>; 2],
+    pub colour: [u8; 3],
+    pub busy: bool,
+    passes: u32,
+    answer: Option<i32>,
+}
+
+/// Busy box: 3 passes, then trunc(2.0 x 60) = 120 more before the card operation runs (the
+/// seconds word at 0x2DD410 is read at start-up into `Flow::busy_hold`).
+const BUSY_FIRST: u32 = 3;
+
+// Load screen stages (state 21).
+const L_BUSY: u8 = 0;
+const L_READ: u8 = 1;
+const L_PICK: u8 = 2;
+const L_FAILED: u8 = 3;
+const L_CANCEL: u8 = 4;
+const L_AFTER: u8 = 5;
+// Save screen stages (state 22).
+const S_SCAN: u8 = 0;
+const S_SCANNED: u8 = 1;
+const S_PICK: u8 = 2;
+const S_ASK: u8 = 3;
+const S_BUSY: u8 = 4;
+const S_WRITE: u8 = 5;
+const S_DONE: u8 = 6;
+const S_FAILED: u8 = 7;
+const S_CANCEL: u8 = 8;
 
 /// The row drawer's data words (SPEC-0035 section 14.3; boot 0x2DCDA8 to 0x2DCDD4): the pulse
 /// bounds and step, the bar width, the objective wrap width, the title and objective colours.
@@ -108,12 +154,18 @@ pub struct Flow {
     idle: u32,
     pub picker: Picker,
     pub rows: RowWords,
+    /// The card message on screen, the table-9 records, the substitution slots (0: the card
+    /// slot "1"; 1: the needed KB) and the busy hold in passes.
+    pub card: Option<CardBox>,
+    pub messages: Vec<neopets_data::design::Message>,
+    pub slots: Vec<Vec<u8>>,
+    pub busy_hold: u32,
 }
 
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120 };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -144,16 +196,64 @@ impl Flow {
         }
     }
 
-    /// The write job's result: written, or not (the save screen scans again).
-    pub fn written(&mut self, fe: &Frontend, ok: bool) {
-        if self.current != SAVE {
+    /// The write job's result: written (the box clears and two passes later play resumes), or
+    /// not (record 6, Save failed: Retry or Cancel save).
+    pub fn written(&mut self, ok: bool) {
+        if self.current != SAVE || self.picker.stage != S_WRITE {
             return;
         }
         if ok {
-            self.enter(fe, PLAY, &Ctx::default());
+            self.card = None;
+            self.picker.stage = S_DONE;
+            self.picker.wait = 0;
         } else {
-            self.picker.stage = 0;
+            self.show(6, false);
+            self.picker.stage = S_FAILED;
         }
+    }
+
+    /// Open a card message: a busy record, or a question.
+    fn show(&mut self, record: usize, busy: bool) {
+        let m = self.messages.get(record).cloned().unwrap_or_default();
+        let mut text = TextBox::default();
+        let body = textbox::substitute(&m.text, &self.slots);
+        if busy {
+            text.open(&body);
+        } else {
+            text.open_choice(&body);
+        }
+        let [a, b] = m.labels;
+        self.card = Some(CardBox { record, text, labels: [a.unwrap_or_default(), b.unwrap_or_default()], colour: m.colour, busy, passes: 0, answer: None });
+    }
+
+    /// One pass of the card box: the reveal and paging, then the answer (returned two passes
+    /// after it was given); a busy box counts its passes.
+    fn card_pass(&mut self, edge: u16) -> Option<i32> {
+        let c = self.card.as_mut()?;
+        if c.busy {
+            c.text.update(false, false);
+            c.passes += 1;
+            return None;
+        }
+        if let Some(a) = c.answer {
+            c.passes += 1;
+            if c.passes >= 2 {
+                self.card = None;
+                return Some(a);
+            }
+            return None;
+        }
+        c.text.update(false, edge & SQUARE != 0);
+        if let Some(a) = c.text.choose(edge & CIRCLE != 0, edge & TRIANGLE != 0) {
+            c.answer = Some(a);
+            c.passes = 0;
+        }
+        None
+    }
+
+    /// The busy box has been up for its minimum (3 + the hold passes).
+    fn busy_done(&self) -> bool {
+        self.card.as_ref().is_some_and(|c| c.busy && c.passes >= BUSY_FIRST + self.busy_hold)
     }
 
     /// The picker's pulse, once per pass: add the step, bounce at the bounds.
@@ -285,28 +385,47 @@ impl Flow {
                 }
                 generic = false;
             }
-            // SPEC-0035 section 7.2, the load screen: the scan (stages 0 and 1 keep Triangle
-            // from acting), then the picker; Cross loads the chosen slot and returns to play.
+            // SPEC-0035 section 7.2 and SPEC-0025 Load scan, mapped onto the clean side's file:
+            // the busy record 15 for its minimum, the read, then the picker (Cross loads the
+            // chosen slot); a missing or bad file shows record 14 (Retry, or Cancel load and
+            // record 17); no filled slot leaves at once. Only the picker lets Triangle back out.
             21 => {
                 if self.pass == 0 {
-                    self.picker.stage = 0;
+                    self.picker.stage = L_BUSY;
+                    self.card = None;
                 }
+                generic = false;
+                let answer = self.card_pass(edge);
                 match self.picker.stage {
-                    0 => {
+                    L_BUSY => {
+                        self.picker.rows = false;
+                        self.show(15, true);
+                        self.picker.stage = L_READ;
+                    }
+                    L_READ if self.busy_done() => {
                         command = Some(Command::Scan);
-                        self.picker.stage = 1;
-                        generic = false;
+                        self.card = None;
+                        self.picker.stage = L_AFTER;
+                        self.picker.wait = 0;
                     }
-                    1 => {
-                        if self.picker.failed || !self.picker.file.filled().contains(&true) {
-                            self.back(fe, ctx);
-                            return command;
+                    L_AFTER => {
+                        self.picker.wait += 1;
+                        if self.picker.wait >= 2 {
+                            if self.picker.failed {
+                                self.show(14, false);
+                                self.picker.stage = L_FAILED;
+                            } else if !self.picker.file.filled().contains(&true) {
+                                self.back(fe, ctx);
+                                return command;
+                            } else {
+                                self.picker.stage = L_PICK;
+                                self.picker.rows = true;
+                                self.picker.pulse = self.rows.pulse_max;
+                            }
                         }
-                        self.picker.stage = 2;
-                        self.picker.pulse = self.rows.pulse_max;
-                        generic = false;
                     }
-                    _ => {
+                    L_PICK => {
+                        generic = true;
                         self.pulse_tick();
                         self.picker_moves(edge, true);
                         if edge & CROSS != 0 {
@@ -317,31 +436,89 @@ impl Flow {
                             generic = false;
                         }
                     }
+                    L_FAILED => match answer {
+                        Some(1) => self.picker.stage = L_BUSY,
+                        Some(_) => {
+                            self.show(17, false);
+                            self.picker.stage = L_CANCEL;
+                        }
+                        None => {}
+                    },
+                    L_CANCEL => match answer {
+                        Some(1) => {
+                            self.back(fe, ctx);
+                            return command;
+                        }
+                        Some(_) => self.picker.stage = L_BUSY,
+                        None => {}
+                    },
+                    _ => {}
                 }
             }
-            // Section 7.3, the save screen: scan, picker, write; Triangle in the picker returns
-            // to play without writing.
+            // Section 7.3 and SPEC-0025 Save write, mapped onto the clean side's file: scan,
+            // picker; Cross rebuilds the slot and asks record 7 (overwrite) or 10 (save to the
+            // card); Yes holds the busy record 5, then writes the whole file; No scans again. A
+            // failed write shows record 6 (Retry scans again; Cancel save asks record 9, whose
+            // Yes returns to play without writing: the original's save-complete cue on that path
+            // is a quirk this build drops). Triangle in the picker returns to play.
             22 => {
                 generic = false;
+                let answer = self.card_pass(edge);
                 match self.picker.stage {
-                    0 => {
+                    S_SCAN => {
+                        self.picker.rows = false;
                         command = Some(Command::Scan);
-                        self.picker.stage = 1;
+                        self.picker.stage = S_SCANNED;
                     }
-                    1 => {
-                        self.picker.stage = 2;
+                    S_SCANNED => {
+                        self.picker.stage = S_PICK;
+                        self.picker.rows = true;
                         self.picker.pulse = self.rows.pulse_max;
                     }
-                    2 => {
+                    S_PICK => {
                         self.pulse_tick();
                         self.picker_moves(edge, false);
                         if edge & CROSS != 0 {
-                            command = Some(Command::Save(self.picker.cursor.min(save::SLOTS - 1)));
-                            self.picker.stage = 3;
+                            let k = self.picker.cursor.min(save::SLOTS - 1);
+                            let present = self.picker.file.slots[k].present();
+                            command = Some(Command::Rebuild(k));
+                            self.show(if present { 7 } else { 10 }, false);
+                            self.picker.stage = S_ASK;
                         } else if edge & TRIANGLE != 0 {
                             result = Some(PLAY);
                         }
                     }
+                    S_ASK => match answer {
+                        Some(1) => {
+                            self.show(5, true);
+                            self.picker.stage = S_BUSY;
+                        }
+                        Some(_) => self.picker.stage = S_SCAN,
+                        None => self.pulse_tick(),
+                    },
+                    S_BUSY if self.busy_done() => {
+                        command = Some(Command::Write);
+                        self.picker.stage = S_WRITE;
+                    }
+                    S_DONE => {
+                        self.picker.wait += 1;
+                        if self.picker.wait >= 2 {
+                            result = Some(PLAY);
+                        }
+                    }
+                    S_FAILED => match answer {
+                        Some(1) => self.picker.stage = S_SCAN,
+                        Some(_) => {
+                            self.show(9, false);
+                            self.picker.stage = S_CANCEL;
+                        }
+                        None => {}
+                    },
+                    S_CANCEL => match answer {
+                        Some(1) => result = Some(PLAY),
+                        Some(_) => self.picker.stage = S_SCAN,
+                        None => {}
+                    },
                     _ => {}
                 }
             }
@@ -392,7 +569,10 @@ impl Flow {
             }
         }
         match result {
-            Some(r) => self.enter(fe, r, ctx),
+            Some(r) => {
+                self.card = None;
+                self.enter(fe, r, ctx);
+            }
             None => self.pass = (self.pass + 1).min(9999),
         }
         command
@@ -501,7 +681,7 @@ pub fn draw_list(fe: &Frontend, record: usize, focus: usize, pass: u32) -> Vec<D
 /// offset p below the first; the cursor's row has its bar pulsed. Shown from the picker stage.
 pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
     let mut out = Vec::new();
-    if !matches!(flow.current, LOAD | SAVE) || flow.picker.stage < 2 {
+    if !matches!(flow.current, LOAD | SAVE) || !flow.picker.rows {
         return out;
     }
     let w = &flow.rows;
@@ -722,6 +902,30 @@ mod tests {
         assert_eq!(flow.current, PLAY);
     }
 
+    /// Run passes until the flow emits a command (or a limit).
+    fn until(flow: &mut Flow, f: &Frontend, ctx: &Ctx, limit: usize) -> (Option<Command>, usize) {
+        for n in 1..=limit {
+            if let Some(c) = flow.tick(f, 0, 0, ctx) {
+                return (Some(c), n);
+            }
+        }
+        (None, limit)
+    }
+
+    /// Reveal the open card box and answer it (Circle 1 or Triangle 0), then the two passes.
+    fn answer(flow: &mut Flow, f: &Frontend, ctx: &Ctx, circle: bool) {
+        for _ in 0..400 {
+            if flow.card.as_ref().is_some_and(|c| c.text.asking()) {
+                break;
+            }
+            flow.tick(f, SQUARE, 0, ctx);
+        }
+        let b = if circle { CIRCLE } else { TRIANGLE };
+        flow.tick(f, b, b, ctx);
+        flow.tick(f, 0, 0, ctx);
+        flow.tick(f, 0, 0, ctx);
+    }
+
     #[test]
     fn load_and_save_pickers() {
         let mut f = fe();
@@ -730,40 +934,77 @@ mod tests {
         let ctx = Ctx::default();
         let mut flow = Flow::new(&f);
         flow.rows.pulse_max = 1.8;
+        flow.messages = vec![neopets_data::design::Message { text: b"Message".to_vec(), labels: [Some(b"Yes".to_vec()), Some(b"No".to_vec())], colour: [128; 3] }; 27];
         flow.set(&f, TITLE);
-        // The load screen with no save data leaves at once.
+        // The load screen: busy record 15 for 123 passes, then the read.
         flow.enter(&f, LOAD, &ctx);
-        assert_eq!(flow.tick(&f, 0, 0, &ctx), Some(Command::Scan));
+        let (c, n) = until(&mut flow, &f, &ctx, 400);
+        assert_eq!((c, n), (Some(Command::Scan), 124), "the busy box holds 3 + 120 passes first");
+        assert_eq!(flow.card.as_ref().map(|c| c.record), None);
+        // A missing file: record 14; Cancel load, then Yes on record 17 leaves.
         flow.scanned(None);
         flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.card.as_ref().map(|c| c.record), Some(14));
+        answer(&mut flow, &f, &ctx, false);
+        assert_eq!(flow.card.as_ref().map(|c| c.record), Some(17));
+        answer(&mut flow, &f, &ctx, true);
         assert_eq!(flow.current, TITLE);
-        // With slots 1 and 3 filled the cursor starts on 1 and skips 2.
+        // With slots 1 and 3 filled the cursor starts on 1 and skips 2; Cross loads.
         let mut file = SaveFile::empty();
         file.slots[1].set_key(0, 11);
         file.slots[3].set_key(0, 602);
         flow.enter(&f, LOAD, &ctx);
-        flow.tick(&f, 0, 0, &ctx);
+        until(&mut flow, &f, &ctx, 400);
         flow.scanned(Some(file.clone()));
         flow.tick(&f, 0, 0, &ctx);
-        assert_eq!((flow.picker.stage, flow.picker.cursor), (2, 1));
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!((flow.picker.stage, flow.picker.cursor, flow.picker.rows), (L_PICK, 1, true));
         flow.tick(&f, DOWN, 0, &ctx);
         assert_eq!(flow.picker.cursor, 3);
         assert_eq!(flow.tick(&f, CROSS, CROSS, &ctx), Some(Command::Load(3)));
         assert_eq!(flow.current, PLAY);
-        // The save screen: opened at slot 0, moves by one, Cross saves, a good write returns.
+        // The save screen: opened at slot 0; Cross on filled slot 1 rebuilds it and asks
+        // record 7; Yes holds busy record 5, then writes; a good write returns to play.
         flow.open_save(&f);
         assert_eq!(flow.tick(&f, 0, 0, &ctx), Some(Command::Scan));
-        flow.scanned(Some(file));
+        flow.scanned(Some(file.clone()));
         flow.tick(&f, 0, 0, &ctx);
         flow.tick(&f, DOWN, 0, &ctx);
         assert_eq!(flow.picker.cursor, 1);
-        assert_eq!(flow.tick(&f, CROSS, CROSS, &ctx), Some(Command::Save(1)));
-        flow.written(&f, false);
-        assert_eq!((flow.current, flow.picker.stage), (SAVE, 0), "a failed write scans again");
+        assert_eq!(flow.tick(&f, CROSS, CROSS, &ctx), Some(Command::Rebuild(1)));
+        assert_eq!(flow.card.as_ref().map(|c| c.record), Some(7));
+        answer(&mut flow, &f, &ctx, true);
+        assert_eq!(flow.card.as_ref().map(|c| (c.record, c.busy)), Some((5, true)));
+        let (c, _) = until(&mut flow, &f, &ctx, 400);
+        assert_eq!(c, Some(Command::Write));
+        flow.written(true);
         flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.current, PLAY);
+        // An empty slot asks record 10; No scans again with the cursor kept.
+        flow.open_save(&f);
+        flow.tick(&f, 0, 0, &ctx);
+        flow.scanned(Some(file.clone()));
+        flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, DOWN, 0, &ctx);
+        flow.tick(&f, DOWN, 0, &ctx);
+        assert_eq!(flow.tick(&f, CROSS, CROSS, &ctx), Some(Command::Rebuild(2)));
+        assert_eq!(flow.card.as_ref().map(|c| c.record), Some(10));
+        answer(&mut flow, &f, &ctx, false);
+        assert_eq!(flow.tick(&f, 0, 0, &ctx), Some(Command::Scan));
+        assert_eq!(flow.picker.cursor, 2);
+        // A failed write: record 6; Cancel save, then Yes on record 9 returns to play.
+        flow.scanned(Some(file));
         flow.tick(&f, 0, 0, &ctx);
         flow.tick(&f, CROSS, CROSS, &ctx);
-        flow.written(&f, true);
+        answer(&mut flow, &f, &ctx, true);
+        until(&mut flow, &f, &ctx, 400);
+        flow.written(false);
+        assert_eq!(flow.card.as_ref().map(|c| c.record), Some(6));
+        answer(&mut flow, &f, &ctx, false);
+        assert_eq!(flow.card.as_ref().map(|c| c.record), Some(9));
+        answer(&mut flow, &f, &ctx, true);
         assert_eq!(flow.current, PLAY);
         // Triangle in the picker returns to play without writing.
         flow.open_save(&f);

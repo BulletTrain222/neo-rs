@@ -880,16 +880,18 @@ fn step_sim(
                 // the write job writes the whole file at once.
                 match m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx) {
                     Some(menus::Command::Scan) => m.flow.scanned(read_save(SAVE_FILE)),
-                    Some(menus::Command::Save(k)) => {
-                        let mut file = m.flow.picker.file.clone();
-                        play.play.write_slot(&mut file.slots[k], &save_date());
-                        // The snapshot and the pending flag are set before the write's result.
-                        play.play.snapshot = Some(file.slots[k].clone());
-                        let ok = write_save(SAVE_FILE, &file);
+                    Some(menus::Command::Rebuild(k)) => {
+                        play.play.write_slot(&mut m.flow.picker.file.slots[k], &save_date());
+                        // The snapshot and the pending flag are set at the confirm, before the
+                        // write's question and result.
+                        play.play.snapshot = Some(m.flow.picker.file.slots[k].clone());
+                    }
+                    Some(menus::Command::Write) => {
+                        let ok = write_save(SAVE_FILE, &m.flow.picker.file);
                         if let Err(e) = &ok {
                             error!("Save failed: {e}");
                         }
-                        m.flow.written(&a.f, ok.is_ok());
+                        m.flow.written(ok.is_ok());
                     }
                     Some(menus::Command::Load(k)) => pending = m.flow.picker.file.slot(k).cloned(),
                     _ => {}
@@ -1901,6 +1903,16 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                             };
                         }
                         Err(e) => error!("No row drawer words: {e}"),
+                    }
+                    // SPEC-0025 Card message records: table 9 of resource 533, the substitution
+                    // slots (0: card slot "1"; 1: the needed KB, 106 by the card side's rule) and
+                    // the busy hold, trunc(seconds word 0x2DD410 x 60).
+                    if let Ok(d) = index.read(disc, neopets_data::design::RESOURCE).and_then(|b| neopets_data::design::DesignTables::parse(&b)) {
+                        flow.messages = (0..27).map(|i| d.message(i).unwrap_or_default()).collect();
+                    }
+                    flow.slots = vec![b"1".to_vec(), b"106".to_vec()];
+                    if let Ok(w) = neopets_data::archive::verified_boot_program(disc).and_then(|b| neopets_data::archive::boot_u32_table(&b, 0x002D_D410, 1)) {
+                        flow.busy_hold = (f32::from_bits(w[0]) * 60.0) as u32;
                     }
                     commands.insert_resource(menu_view::Menu { flow });
                     if let Some(art) = hud_view::HudArt::new(f) {

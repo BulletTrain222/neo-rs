@@ -361,8 +361,19 @@ pub enum BoxPart {
     Frame,
     Name,
     Body,
+    /// The right prompt group (Square with "Next" or "Finish", or Circle with the first choice
+    /// label) and the left one (Triangle with the second choice label).
     Icon,
     Label,
+    Icon2,
+    Label2,
+}
+
+/// The box's prompt row (SPEC-0022 Text window draw layout).
+enum Prompt<'a> {
+    None,
+    Continue(&'a [u8]),
+    Choice(&'a [u8], &'a [u8]),
 }
 
 /// The images the box shows, rebuilt when what they show changes.
@@ -390,6 +401,7 @@ fn hash<T: std::hash::Hash>(v: T) -> u64 {
 pub fn sync_textbox(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
+    menu: Option<Res<crate::menu_view::Menu>>,
     art: Option<ResMut<HudArt>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
@@ -401,77 +413,117 @@ pub fn sync_textbox(
     let Some(window) = windows.iter().next() else { return };
     let Ok(root) = canvas.single() else { return };
     if parts.is_empty() {
-        for part in [BoxPart::Frame, BoxPart::Name, BoxPart::Body, BoxPart::Icon, BoxPart::Label] {
-            let e = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, part, GlobalZIndex(20))).id();
+        // Above the front-end pages: a card message shows over the save and load screens.
+        for part in [BoxPart::Frame, BoxPart::Name, BoxPart::Body, BoxPart::Icon, BoxPart::Label, BoxPart::Icon2, BoxPart::Label2] {
+            let e = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, part, GlobalZIndex(1000))).id();
             commands.entity(root).add_child(e);
         }
         return;
     }
     let p = &state.play;
-    let shown = p.dialogue_open && p.textbox.open;
-    if !shown {
-        for (_, _, _, mut vis) in &mut parts {
-            *vis = Visibility::Hidden;
+    // SPEC-0025 Card message records: a card box of the front end, else the dialogue box.
+    let card = menu.as_deref().and_then(|m| m.flow.card.as_ref()).filter(|c| c.text.open);
+    let (text, name, colour, prompt) = match card {
+        Some(c) => {
+            let prompt = if c.busy {
+                Prompt::None
+            } else if c.text.more() {
+                Prompt::Continue(&p.box_labels.0)
+            } else {
+                Prompt::Choice(&c.labels[0], &c.labels[1])
+            };
+            (&c.text, &[][..], c.colour, prompt)
         }
-        return;
-    }
+        None if p.dialogue_open && p.textbox.open && !p.menu_open => {
+            let (name, colour) = p.box_speaker();
+            (&p.textbox, name, colour, Prompt::Continue(if p.textbox.more() { &p.box_labels.0 } else { &p.box_labels.1 }))
+        }
+        None => {
+            for (_, _, _, mut vis) in &mut parts {
+                *vis = Visibility::Hidden;
+            }
+            return;
+        }
+    };
     let s = (window.width() / 512.0).min(window.height() / 448.0);
     let HudArt { f, mem, .. } = &mut *art;
     let f: &Frontend = f;
     let w = p.box_words;
-    let page = p.textbox.page();
+    let page = text.page();
     let lines = f.wrap(0, page, w.wrap, 0);
     let l = lines.len().max(1) as i32;
     let h = f.fonts.first().map_or(21, |ft| ft.line_height());
     let yb = 345 - 10 * l;
-    let (name, colour) = p.box_speaker();
-    let complete = p.textbox.complete();
-    let label: &[u8] = if p.textbox.more() { &p.box_labels.0 } else { &p.box_labels.1 };
-    let visible = p.textbox.visible();
+    let complete = text.complete();
+    let visible = text.visible();
     let frame_h = (l * h + w.height_terms.1 + h + w.height_terms.0) as u32;
     let frame_w = (w.wrap + w.margin + w.width_term) as u32;
+    // The prompt groups: (icon key, label, x) for the right and the left group.
+    let (right, left): (Option<(u32, &[u8], i32)>, Option<(u32, &[u8], i32)>) = match prompt {
+        Prompt::None => (None, None),
+        Prompt::Continue(label) => (Some((0x1B, label, w.prompt_x.1)), None),
+        Prompt::Choice(first, second) => (Some((0x79, first, w.prompt_x.1)), Some((0x78, second, w.prompt_x.0))),
+    };
     // Rebuild the images whose content changed.
     let wanted = vec![
         (BoxPart::Frame, hash(frame_h)),
         (BoxPart::Name, hash(name)),
         (BoxPart::Body, hash((page, visible))),
-        (BoxPart::Icon, 0),
-        (BoxPart::Label, hash(label)),
+        (BoxPart::Icon, hash(right.map(|r| r.0))),
+        (BoxPart::Label, hash(right.map(|r| r.1))),
+        (BoxPart::Icon2, hash(left.map(|r| r.0))),
+        (BoxPart::Label2, hash(left.map(|r| r.1))),
     ];
     for (part, k) in &wanted {
         if cache.key.contains(&(*part, *k)) && cache.images.contains_key(part) {
             continue;
         }
+        let icon = |g: Option<(u32, &[u8], i32)>| g.and_then(|(key, _, _)| f.key(key)).and_then(|n| f.sprite_image(mem, n, 32, 32)).map(|i| (i, 0));
+        let label = |g: Option<(u32, &[u8], i32)>| g.and_then(|(_, t, _)| f.text_image(mem, 1, t, -1, w.prompt_colour));
         let made = match part {
             BoxPart::Frame => f.key(0x19).and_then(|n| f.nine_slice(mem, n, frame_w, frame_h, [15, 28, 14, 26])).map(|i| (i, 0)),
             BoxPart::Name => f.text_image(mem, 0, name, -1, w.name_colour),
             BoxPart::Body => f.draw_lines(mem, 0, page, &lines, h, visible, 0, w.body_colour),
-            BoxPart::Icon => f.key(0x1B).and_then(|n| f.sprite_image(mem, n, 32, 32)).map(|i| (i, 0)),
-            BoxPart::Label => f.text_image(mem, 1, label, -1, w.prompt_colour),
+            BoxPart::Icon => icon(right),
+            BoxPart::Label => label(right),
+            BoxPart::Icon2 => icon(left),
+            BoxPart::Label2 => label(left),
         };
-        if let Some((img, base)) = made {
-            let (iw, ih) = (img.width, img.height);
-            cache.images.insert(*part, (images.add(crate::rgba_image(iw, ih, img.rgba)), iw, ih, base));
+        match made {
+            Some((img, base)) => {
+                let (iw, ih) = (img.width, img.height);
+                cache.images.insert(*part, (images.add(crate::rgba_image(iw, ih, img.rgba)), iw, ih, base));
+            }
+            None => {
+                cache.images.remove(part);
+            }
         }
         cache.key.retain(|(q, _)| q != part);
         cache.key.push((*part, *k));
     }
-    let tw = f.fonts.get(1).map_or(0, |ft| ft.measure(label, -1));
-    let gx = w.prompt_x.1 - (tw + 16) / 2;
     let py = yb + h * l + 1;
-    let th = f.fonts.get(1).and_then(|ft| label.iter().rev().find_map(|&c| ft.glyph(c))).map_or(0, |g| g.height as i32);
+    // A group's left gx = x - (tw + E/2) / 2 with E = 32; the icon is centred on (gx, y) (its
+    // anchor is Medium in the spec; R-0018) and the text sits at gx + E/2.
+    let group = |g: Option<(u32, &[u8], i32)>| {
+        g.map(|(_, label, x)| {
+            let tw = f.fonts.get(1).map_or(0, |ft| ft.measure(label, -1));
+            let th = f.fonts.get(1).and_then(|ft| label.iter().rev().find_map(|&c| ft.glyph(c))).map_or(0, |g| g.height as i32);
+            (x - (tw + 16) / 2, th, !label.is_empty())
+        })
+    };
+    let (gr, gl) = (group(right), group(left));
     for (part, mut node, mut image, mut vis) in &mut parts {
         let Some((handle, iw, ih, base)) = cache.images.get(part) else {
             *vis = Visibility::Hidden;
             continue;
         };
-        let (x, y, show) = match part {
-            BoxPart::Frame => (w.anchor - w.margin, yb - w.margin - h, true),
-            BoxPart::Name => (w.anchor + w.margin, yb - w.margin - h / 2 - base, !name.is_empty()),
-            BoxPart::Body => (w.anchor, yb - base, true),
-            // The icon is centred on (gx, y) (its anchor is Medium in the spec; R-0018).
-            BoxPart::Icon => (gx - 16, py - 16, complete),
-            BoxPart::Label => (gx + 16, py + 16 - th / 2 - base, complete && !label.is_empty()),
+        let (x, y, show) = match (part, gr, gl) {
+            (BoxPart::Frame, _, _) => (w.anchor - w.margin, yb - w.margin - h, true),
+            (BoxPart::Name, _, _) => (w.anchor + w.margin, yb - w.margin - h / 2 - base, !name.is_empty()),
+            (BoxPart::Body, _, _) => (w.anchor, yb - base, true),
+            (BoxPart::Icon, Some((gx, _, _)), _) | (BoxPart::Icon2, _, Some((gx, _, _))) => (gx - 16, py - 16, complete),
+            (BoxPart::Label, Some((gx, th, any)), _) | (BoxPart::Label2, _, Some((gx, th, any))) => (gx + 16, py + 16 - th / 2 - base, complete && any),
+            _ => (0, 0, false),
         };
         *vis = if show { Visibility::Inherited } else { Visibility::Hidden };
         node.left = Val::Px(x as f32 * s);

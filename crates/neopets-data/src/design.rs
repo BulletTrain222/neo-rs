@@ -2,7 +2,8 @@
 //! relocation): the k-th type-42 chunk is table k, an IDMX block of fixed-size records with a
 //! string pool behind it; pointer fields are offsets from the block's start. Accessors cover
 //! table 0 (the item text rows: category and carry limit, SPEC-0021), table 5 (location names,
-//! SPEC-0051 Map area names), table 10 (hero name colours) and table 13 (action labels).
+//! SPEC-0051 Map area names), table 9 (system message boxes), table 10 (hero name colours) and
+//! table 13 (action labels).
 
 use crate::resource;
 
@@ -30,6 +31,15 @@ impl Table {
         let s = self.block.get(ptr as usize..)?;
         Some(&s[..s.iter().position(|&b| b == 0).unwrap_or(s.len())])
     }
+}
+
+/// A system message box (table 9).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Message {
+    pub text: Vec<u8>,
+    /// The first (Circle) and second (Triangle) button labels.
+    pub labels: [Option<Vec<u8>>; 2],
+    pub colour: [u8; 3],
 }
 
 #[derive(Clone, Debug, Default)]
@@ -72,6 +82,21 @@ impl DesignTables {
     pub fn location_name(&self, m: usize) -> Option<Vec<u8>> {
         let t = self.tables.get(5)?;
         t.string(self.word(5, m, 0)?).map(<[u8]>::to_vec)
+    }
+
+    /// Table 9, record i: a system message box (text, first and second button labels, colour
+    /// bytes R, G, B; a null colour word gives 128s).
+    pub fn message(&self, i: usize) -> Option<Message> {
+        let t = self.tables.get(9)?;
+        let r = t.record(i)?;
+        let word = |at: usize| u32::from_le_bytes(r[at..at + 4].try_into().unwrap());
+        let text = |ptr: u32| t.string(ptr).map(<[u8]>::to_vec);
+        let c = word(12);
+        Some(Message {
+            text: text(word(0)).unwrap_or_default(),
+            labels: [text(word(4)), text(word(8))],
+            colour: if c == 0 { [128; 3] } else { [c as u8, (c >> 8) as u8, (c >> 16) as u8] },
+        })
     }
 
     /// Table 10: the name colour of hero variant 0 (Tor) or 1 (Roberta), bytes R, G, B.
