@@ -112,6 +112,17 @@ impl Hud {
         self.g = [240; 3];
     }
 
+    /// Equipping Mote word k, or spending charge from the Mote in it (section 4 re-arms): word 0
+    /// re-arms G3 (panel 0x1D), word 1 G4 (0x1E) and word 2 G2 (0x1C).
+    pub fn rearm_word(&mut self, word: usize) {
+        match word {
+            0 => self.g[1] = 240,
+            1 => self.g[2] = 240,
+            2 => self.g[0] = 240,
+            _ => {}
+        }
+    }
+
     /// Selecting or using a quick item: G0, G1 and C to 240.
     pub fn rearm_quick(&mut self) {
         (self.c, self.g0, self.g1) = (240, 240, 240);
@@ -324,6 +335,17 @@ mod tests {
         }
         assert_eq!(peak, [200, 0, 0, 128]);
         assert!((38..=41).contains(&n), "{n}");
+    }
+
+    #[test]
+    fn mote_word_rearms() {
+        // SPEC-0023 section 4: word 2 G2, word 1 G4, word 0 G3; C, G0 and G1 untouched.
+        let mut h = Hud::default();
+        h.rearm_word(2);
+        assert_eq!((h.g, h.c, h.g0, h.g1), ([240, 0, 0], -1, 0, 0));
+        h.rearm_word(1);
+        h.rearm_word(0);
+        assert_eq!(h.g, [240; 3]);
     }
 
     #[test]

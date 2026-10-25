@@ -1739,7 +1739,7 @@ impl Play {
                 self.pay_mp(cost);
                 if let Some(id) = mote_id {
                     let n = neopets_sim::mote::charge_tor(q, self.weapon_stat_b());
-                    self.spend_charge(id, n);
+                    self.spend_charge(2, id, n);
                 }
             }
         }
@@ -1839,10 +1839,12 @@ impl Play {
 
     /// SPEC-0036 Mote charge use: a use of n below the remaining charge subtracts n; otherwise
     /// the Mote leaves the inventory and every equipment word holding it is cleared.
-    fn spend_charge(&mut self, id: u16, n: i32) {
+    fn spend_charge(&mut self, word: usize, id: u16, n: i32) {
         if n <= 0 {
             return;
         }
+        // SPEC-0023 section 4: the use re-arms the panel of the word it spends from.
+        self.hud.rearm_word(word);
         let left = self.state.items.get(&id).copied().unwrap_or(0);
         if (n as u32) < left {
             self.state.items.insert(id, left - n as u32);
@@ -1882,7 +1884,7 @@ impl Play {
         let (cost, q) = self.magic.tor_power(mote);
         if let Some(id) = mote {
             let n = neopets_sim::mote::charge_tor(q, self.weapon_stat_b());
-            self.spend_charge(id, n);
+            self.spend_charge(2, id, n);
             // The object of the word-2 Mote at the hero position plus facing x reach, storing
             // the scale A x D x B x G x E (D = 1 at sub-state 10; E = 1, no petpet).
             let hero = self.loco.position();
@@ -1918,7 +1920,7 @@ impl Play {
                     _ => 0.0,
                 };
                 let (cost, q) = mote::shield_cost(m1);
-                self.spend_charge(m1, mote::charge_tor(q, s));
+                self.spend_charge(1, m1, mote::charge_tor(q, s));
                 self.pay_mp(cost);
             }
         }
@@ -1929,7 +1931,7 @@ impl Play {
                 let charge = self.state.items.get(&m0).copied().unwrap_or(0) as i32;
                 if q0 <= charge && self.hero_mp >= cost && mote::element_passes(element, mote::element(Some(m0))) {
                     d = mote::armour_mote(d, stat(self, m0, 7));
-                    self.spend_charge(m0, mote::charge_armour(q0, stat(self, body, 1)));
+                    self.spend_charge(0, m0, mote::charge_armour(q0, stat(self, body, 1)));
                     self.pay_mp(cost);
                 }
             }
@@ -2805,8 +2807,21 @@ impl Play {
         };
         for ev in events {
             match ev {
-                neopets_sim::projectile::Event::Hero { damage, blocked, .. } => {
-                    self.hero_hit(damage, 0.0, blocked, hero_facing, "a shot".into());
+                neopets_sim::projectile::Event::Hero { damage, blocked, element, .. } => {
+                    // SPEC-0029 Behavior 9: D = max(0, F(damage - S)) with the shield block, the
+                    // armour and the body item of SPEC-0036 (the curse and strength scale was
+                    // applied at spawn), then the blocked quarter.
+                    let d = self.enemy_damage(damage, blocked, element, 1.0);
+                    self.hero_hit(neopets_sim::projectile::taken(d, blocked), 0.0, blocked, hero_facing, "a shot".into());
+                }
+                neopets_sim::projectile::Event::Reflected { element } => {
+                    // The shield Mote's charge for a reflection (no MP; R-0034).
+                    if let (Some(shield), Some(m1)) = (self.equipment.entries[1][0], self.equipment.motes[0][1]) {
+                        if neopets_sim::mote::element_passes(element, neopets_sim::mote::element(Some(m1))) {
+                            let s = if self.item_kind(shield) == 5 { self.items.get(shield).map_or(0.0, |i| i.stats[1] as f32) } else { 0.0 };
+                            self.spend_charge(1, m1, neopets_sim::mote::charge_tor(1, s));
+                        }
+                    }
                 }
                 neopets_sim::projectile::Event::Owner { id, damage } => {
                     // A reflected shot: the owner's take-hit, then its death hook at 0 HP.
@@ -3947,6 +3962,7 @@ impl Play {
             Command::EquipMote { word, id } => {
                 if self.equipment.set_mote(0, word, id) {
                     self.cue(0xA3);
+                    self.hud.rearm_word(word);
                 }
             }
             Command::Cloak => self.cloak_worn = !self.cloak_worn,

@@ -56,14 +56,24 @@ pub struct Shot {
 /// What a pool tick does to the world.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Event {
-    /// The hero takes trunc(damage), with the blocked flag.
-    Hero { damage: f32, owner: Option<u64>, blocked: bool },
+    /// The hero is hit by a shot of this damage and element, with the blocked flag. The caller
+    /// computes D = max(0, F(damage - S)) (the shield block, armour and global factor of
+    /// SPEC-0036) and the hero takes trunc(D), or max(1, 0.25 D) when blocked (`taken`).
+    Hero { damage: f32, owner: Option<u64>, blocked: bool, element: i32 },
+    /// A blocked shot was reflected: the shield's charge is updated (SPEC-0036).
+    Reflected { element: i32 },
     /// After an unblocked hero hit: the status roll (status id, chance, value in seconds).
     Status { code: i32, chance: i32, seconds: i32 },
     /// A reflected shot hits its owner for trunc(damage).
     Owner { id: u64, damage: f32 },
     /// A kind-8 release: the keyed summon (not spawned yet).
     Summon { key: i32, at: Vec3 },
+}
+
+/// The damage a hero takes from a shot hit of reduced damage D: max(1, 0.25 D) when blocked
+/// (not reflected), else D.
+pub fn taken(d: f32, blocked: bool) -> f32 {
+    if blocked { (0.25 * d).max(1.0) } else { d }
 }
 
 /// The world as the pool sees it this tick.
@@ -175,7 +185,7 @@ impl Pool {
                 let h = (env.hero[0] - p.position[0]).hypot(env.hero[2] - p.position[2]);
                 if p.pulse == 0 && h < p.s.area_radius && env.hero_gap < 1.0 {
                     p.pulse = 60;
-                    out.push(Event::Hero { damage: p.s.damage.max(0.0), owner: p.s.owner, blocked: false });
+                    out.push(Event::Hero { damage: p.s.damage.max(0.0), owner: p.s.owner, blocked: false, element: p.s.element });
                 }
                 p.area_left -= 1;
                 if p.pulse > 0 {
@@ -230,12 +240,13 @@ impl Pool {
                             p.s.damage = 0.0;
                         }
                         p.at_owner = true;
+                        out.push(Event::Reflected { element: p.s.element });
                     } else {
                         let d = p.s.damage.max(0.0);
                         if blocked {
-                            out.push(Event::Hero { damage: (0.25 * d).max(1.0), owner: p.s.owner, blocked: true });
+                            out.push(Event::Hero { damage: d, owner: p.s.owner, blocked: true, element: p.s.element });
                         } else {
-                            out.push(Event::Hero { damage: d, owner: p.s.owner, blocked: false });
+                            out.push(Event::Hero { damage: d, owner: p.s.owner, blocked: false, element: p.s.element });
                             if p.s.status.0 != -1 {
                                 out.push(Event::Status { code: p.s.status.0, chance: p.s.status.1, seconds: p.s.status.2 });
                             }
@@ -426,7 +437,7 @@ mod tests {
             if tick < 10 {
                 assert!(ev.is_empty(), "tick {tick}");
             } else {
-                assert_eq!(ev[0], Event::Hero { damage: 10.0, owner: Some(7), blocked: false });
+                assert_eq!(ev[0], Event::Hero { damage: 10.0, owner: Some(7), blocked: false, element: 1 });
                 assert!(matches!(ev[1], Event::Status { code: 7, chance: 100, seconds: 10..=30 }), "fire at chance 100");
             }
         }
@@ -541,19 +552,20 @@ mod tests {
         let mut pool = Pool::default();
         pool.submit(s);
         let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
-        assert_eq!(ev, vec![Event::Hero { damage: 2.5, owner: Some(7), blocked: true }]);
+        assert_eq!(ev, vec![Event::Hero { damage: 10.0, owner: Some(7), blocked: true, element: 0 }]);
+        assert_eq!((taken(10.0, true), taken(2.0, true), taken(10.0, false)), (2.5, 1.0, 10.0));
         // With a shield, an element-0 straight shot is sent back at its owner (at the origin).
         e.shield = true;
         let mut pool = Pool::default();
         pool.submit(s);
         let ev: Vec<Event> = (0..30).flat_map(|_| pool.tick(&e)).collect();
-        assert_eq!(ev, vec![Event::Owner { id: 7, damage: 10.0 }]);
+        assert_eq!(ev, vec![Event::Reflected { element: 0 }, Event::Owner { id: 7, damage: 10.0 }]);
         // From behind (facing away from the shot) the guard does not block.
         e.hero_facing = [0.0, 0.0, 1.0];
         let mut pool = Pool::default();
         pool.submit(s);
         let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
-        assert_eq!(ev[0], Event::Hero { damage: 10.0, owner: Some(7), blocked: false });
+        assert_eq!(ev[0], Event::Hero { damage: 10.0, owner: Some(7), blocked: false, element: 0 });
     }
 
     #[test]
