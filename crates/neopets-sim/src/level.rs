@@ -144,6 +144,18 @@ pub enum Action {
     /// Behavior 28).
     MiamouseInit { field: i32, cage: i32 },
     MiamouseDisable,
+    /// SetHeroSwapMode (SPEC-0030 row 167; SPEC-0053 3.1).
+    SwapMode { mode: u32 },
+    /// SwitchHero(h, a, b) (row 173; SPEC-0053 3.2 and 3.5): a request to hero h with a as the
+    /// first flag (swap sound and effects), b as the second (the white flash) and extra flag 0;
+    /// no request when h is -1 or already selected.
+    SwitchHero { hero: i32, effects: bool, flash: bool },
+    /// ActivateHero(h, locator, block, fade, cue) (row 187): MoveHero(locator) on the hero
+    /// selected now, then SwitchHero(h, fade, cue), then BlockPlayerControl(h) when block is set.
+    ActivateHero { hero: i32, locator: usize, block: bool, fade: bool, cue: bool },
+    /// TriggerActStart(stage) (row 51; SPEC-0053 3.7). IsActStartDone is always true, so the
+    /// scripts' wait after it ends at once.
+    ActStart { stage: i32 },
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -242,6 +254,12 @@ pub struct HeroView {
     pub shield_mote: Option<u16>,
     /// The game clock in ticks.
     pub tick: u64,
+    /// GetHeroSwapMode, the selected hero (0 Tor, 1 Roberta), IsHeroDead by hero and
+    /// IsHeroSwapInProgress (SPEC-0053 3.3).
+    pub swap_mode: u32,
+    pub selected: usize,
+    pub dead: [bool; 2],
+    pub swapping: bool,
 }
 
 impl GameState {
@@ -490,6 +508,16 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0039 1244 Init: SetGameState(271, 1); with 273 clear (objects 5, 0, 1 and 4 are
+        // not reproduced) handlers 1 to 5 on triggers 0, 1, 2, 4 and 3.
+        1244 => {
+            state.set(271, true);
+            if state.flag(273) {
+                Vec::new()
+            } else {
+                vec![reg(0, 1), reg(1, 2), reg(2, 3), reg(4, 4), reg(3, 5)]
+            }
+        }
         // SPEC-0045 909 Init: SetWhinnyPenmesh first (inner 0, entrance 5, locator 8); script
         // triggers 0 to 3 routine 10, 5 routine 11, 8 routine 7, and 7 routine 4 while 117 is
         // clear.
@@ -736,6 +764,100 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
     let mut out = TriggerOut::default();
     let first = call.state == 1 && call.object;
     match (pack, routine) {
+        // SPEC-0039 1244 trigger 0 (handler 1): the first fire with 272 clear in swap mode 2, the
+        // story switch to Roberta at locator 16 and her scene; it ends locked to Roberta (mode
+        // 1). NeedHeroAlive and the weapon sheathe sound are not reproduced.
+        (1244, 1) if first && !state.flag(272) && state.hero.swap_mode == 2 => {
+            out.actions.extend([
+                Action::HoldHero,
+                Action::Equip { on: false },
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::ActivateHero { hero: 1, locator: 16, block: false, fade: false, cue: false },
+                Action::Sleep { ticks: 30 },
+                Action::FadeIn { seconds: 1.0, wait: false },
+                Action::LetterBox { on: true, seconds: 0.0, wait: false },
+                Action::PlayCamera { track: 4, wait: true, end: 1, speed: 0.3 },
+            ]);
+            out.actions.extend((0..=10).map(|line| Action::Message { line }));
+            out.actions.extend([
+                Action::MoveHero { locator: 14 },
+                camera(11),
+                Action::Message { line: 11 },
+                Action::LetterBox { on: false, seconds: 0.0, wait: false },
+                Action::ReturnCamera { preset: 19, release: true },
+                Action::SwapMode { mode: 1 },
+            ]);
+        }
+        // Triggers 1 and 2 (handlers 2 and 3), 273 clear: line 13 (12) and the walk to locator 13
+        // (14). The hero is held by the walk and the box, so a stay inside does not repeat it.
+        (1244, 2 | 3) if call.state != 0 && call.object && !state.flag(273) && !state.talking && !state.hero.occupied => {
+            let (line, locator) = if routine == 2 { (13, 13) } else { (12, 14) };
+            out.actions.extend([Action::Message { line }, Action::WalkHero { locator, wait: true, orient: false }]);
+        }
+        // Trigger 4 (handler 4), 272 and level state 0 clear: level state 0, Roberta's walk to
+        // locator 20 with lines 14 to 16 under cameras 12, 13 and 16, and the walk to 21.
+        (1244, 4) if call.state != 0 && !state.flag(272) && !state.level(0) => {
+            state.set_level(0, true);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::LetterBox { on: true, seconds: 1.0, wait: false },
+                Action::WalkHero { locator: 20, wait: false, orient: true },
+                Action::PlayCamera { track: 12, wait: true, end: 1, speed: 1.0 },
+                Action::Message { line: 14 },
+                camera(13),
+                Action::Message { line: 15 },
+                camera(16),
+                Action::Message { line: 16 },
+                Action::WalkHero { locator: 21, wait: false, orient: false },
+                Action::LetterBox { on: false, seconds: 1.0, wait: false },
+                release_camera(),
+            ]);
+        }
+        // Trigger 3 (handler 5), the first fire with 272 clear: the break scene (objects 5, 4, 1
+        // and 6, their animations, the shake and Break of breakables 17 to 24 are not
+        // reproduced: R-0040), then the story switch back to Tor at locator 12 in mode 0, and
+        // 272, which ends the module's triggers for good.
+        (1244, 5) if first && !state.flag(272) => {
+            out.actions.extend([
+                Action::LetterBox { on: true, seconds: 0.0, wait: false },
+                Action::HoldHero,
+                Action::MoveHero { locator: 22 },
+                Action::Equip { on: false },
+                Action::Message { line: 17 },
+                Action::PlayCamera { track: 14, wait: true, end: 1, speed: 1.0 },
+                camera(16),
+                Action::PlaySound { cue: 7, locator: None },
+                Action::KillSound { cue: 7, locator: None },
+                Action::PlaySound { cue: 8, locator: None },
+                Action::Sleep { ticks: 20 },
+                camera(17),
+                Action::HeroAnim { anim: 125, wait: true },
+                Action::HoldHero,
+                Action::Sleep { ticks: 10 },
+                camera(16),
+                Action::PlayHeroSound { hero: -1, cue: 1, locator: None, do_not_restart: false },
+                Action::Message { line: 18 },
+                Action::PlaySound { cue: 9, locator: None },
+                Action::KillSound { cue: 9, locator: None },
+                camera(16),
+                Action::Message { line: 19 },
+                Action::Sleep { ticks: 1 },
+                fade_out(),
+                Action::MoveHero { locator: 12 },
+                camera(5),
+                Action::FadeIn { seconds: FADE, wait: false },
+                Action::SwapMode { mode: 0 },
+                Action::ActivateHero { hero: 0, locator: 12, block: false, fade: false, cue: false },
+                Action::Message { line: 20 },
+                Action::Message { line: 21 },
+                Action::SetFlag { flag: 272, on: true },
+                fade_out(),
+                Action::LetterBox { on: false, seconds: 0.0, wait: false },
+                release_camera(),
+                Action::Sleep { ticks: 30 },
+                Action::FadeIn { seconds: FADE, wait: false },
+            ]);
+        }
         // SPEC-0042 1184 trigger 0 (E0): with 145 set, the first time (645), line 14.
         (1184, 1) if first && state.flag(145) && !state.flag(645) => {
             state.set(645, true);
@@ -2893,6 +3015,34 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    #[test]
+    fn hero_swap_scene_1244() {
+        let mut s = GameState::default();
+        let init = on_init(1244, &mut s);
+        assert!(s.flag(271));
+        assert_eq!(init.len(), 5);
+        let call = TriggerCall { index: 0, state: 1, object: true, square: false };
+        // Not in swap mode 2: no scene.
+        s.hero.swap_mode = 1;
+        assert!(on_trigger(1244, 1, call, &mut s).actions.is_empty());
+        s.hero.swap_mode = 2;
+        let a = on_trigger(1244, 1, call, &mut s).actions;
+        assert!(a.contains(&Action::ActivateHero { hero: 1, locator: 16, block: false, fade: false, cue: false }));
+        assert_eq!(a.last(), Some(&Action::SwapMode { mode: 1 }));
+        // The break scene ends on Tor in mode 0 and sets 272, which closes triggers 0, 3 and 4.
+        let b = on_trigger(1244, 5, TriggerCall { index: 3, ..call }, &mut s).actions;
+        let mode = b.iter().position(|x| *x == Action::SwapMode { mode: 0 }).unwrap();
+        assert_eq!(b[mode + 1], Action::ActivateHero { hero: 0, locator: 12, block: false, fade: false, cue: false });
+        assert!(b.contains(&Action::SetFlag { flag: 272, on: true }));
+        s.set(272, true);
+        assert!(on_trigger(1244, 1, call, &mut s).actions.is_empty());
+        assert!(on_trigger(1244, 4, TriggerCall { index: 4, ..call }, &mut s).actions.is_empty());
+        // Trigger 4 runs once per level-state 0.
+        s.set(272, false);
+        assert!(!on_trigger(1244, 4, TriggerCall { index: 4, ..call }, &mut s).actions.is_empty());
+        assert!(on_trigger(1244, 4, TriggerCall { index: 4, ..call }, &mut s).actions.is_empty());
     }
 
     #[test]

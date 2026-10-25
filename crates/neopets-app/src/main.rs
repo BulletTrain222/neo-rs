@@ -1917,6 +1917,11 @@ fn play_trace(
             Some((f.parse().ok()?, k.parse().ok()?))
         })
         .collect();
+    // NEOPETS_TRACE_ACT="stage@tick": a diagnostic TriggerActStart(stage) on the given tick.
+    let act_at: Option<(i32, u64)> = std::env::var("NEOPETS_TRACE_ACT").ok().and_then(|v| {
+        let (st, k) = v.trim().split_once('@')?;
+        Some((st.parse().ok()?, k.parse().ok()?))
+    });
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
     for _ in 0..ticks {
@@ -1989,6 +1994,10 @@ fn play_trace(
             }
         }
         let herd = to.is_some_and(|t| t[1] == 2.0);
+        if let Some((st, k)) = act_at.filter(|&(_, k)| play.ticks == k) {
+            play.act_start(st);
+            println!("      diagnostic: act start {st} on tick {k}");
+        }
         for &(f, k) in &level_at {
             if play.ticks == k {
                 play.state.set_level(f, true);

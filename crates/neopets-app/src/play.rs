@@ -1397,6 +1397,21 @@ impl Play {
                     }
                 }
                 Action::HoldHero => self.held = true,
+                Action::SwapMode { mode } => {
+                    self.swap_mode = mode;
+                    self.last_swap = format!("script: swap mode {mode} on tick {}", self.ticks);
+                }
+                Action::SwitchHero { hero, effects, flash } => self.script_switch(hero, effects, flash),
+                Action::ActivateHero { hero, locator, block, fade, cue } => {
+                    if let Some(&e) = self.world.entries.get(locator) {
+                        self.arrive(e);
+                    }
+                    self.script_switch(hero, fade, cue);
+                    if block {
+                        self.held = true;
+                    }
+                }
+                Action::ActStart { stage } => self.act_start(stage),
                 Action::WalkHero { locator, wait, orient } => {
                     let (t, g) = *self.world.entries.get(locator)?;
                     self.hero_walk = Some((t, orient.then_some(g), f32::MAX));
@@ -2023,6 +2038,58 @@ impl Play {
         self.swap = Some(neopets_sim::swap::Task::new(1 - self.hero_index, extra, effects, flash, self.loco.state, dead));
         self.last_swap = format!("switch to hero {} accepted on tick {}", 1 - self.hero_index, self.ticks);
         true
+    }
+
+    /// SwitchHero(h, a, b) (SPEC-0053 3.2): no request when h is -1 or selected; otherwise a
+    /// request with extra flag 0 and the two flags.
+    fn script_switch(&mut self, hero: i32, effects: bool, flash: bool) {
+        if hero < 0 || hero as usize == self.hero_index {
+            return;
+        }
+        self.request_switch(false, effects, flash);
+    }
+
+    /// TriggerActStart(stage) (SPEC-0053 3.7): the swap mode, the hero (stage 1 by a normal
+    /// switch request, stages 2 and 3 selected directly with no task and both heroes placed at
+    /// the world's entry record 0), the story flag and the heal of the heroes in the mask (hit
+    /// points to the maximum, status timers cleared). The Act 2 stash copy and Roberta's fresh
+    /// kit (SPEC-0025) are not reproduced (R-0042).
+    pub fn act_start(&mut self, stage: i32) {
+        let (mode, select, flag, heal) = neopets_sim::swap::act_start(stage);
+        self.swap_mode = mode;
+        match select {
+            Some((h, true)) => {
+                if h != self.hero_index {
+                    self.request_switch(false, false, false);
+                }
+            }
+            Some((h, false)) => {
+                self.swap = None;
+                if h != self.hero_index {
+                    self.exchange_heroes();
+                    self.loco.state = 1;
+                }
+                if let Some(&e) = self.world.entries.first() {
+                    self.arrive(e);
+                }
+            }
+            None => {}
+        }
+        if let Some(f) = flag {
+            self.state.set(f, true);
+        }
+        for hero in 0..2 {
+            if heal & (1 << hero) == 0 {
+                continue;
+            }
+            if hero == self.hero_index {
+                self.hero_hp = self.hero_max;
+                self.statuses.clear_all();
+            } else if let Some(p) = self.parked.as_mut() {
+                p.hp = p.hp_max;
+            }
+        }
+        self.last_swap = format!("act start {stage}: mode {mode}, hero {} on tick {}", self.hero_index, self.ticks);
     }
 
     /// The exchange of SPEC-0053 3.4 steps 6 to 9: the incoming hero takes the outgoing hero's
@@ -3476,6 +3543,12 @@ impl Play {
             }
         }
         if self.job.is_none() {
+            self.state.hero.swap_mode = self.swap_mode;
+            self.state.hero.selected = self.hero_index;
+            let parked_dead = self.parked.as_ref().is_some_and(|p| p.hp <= 0);
+            let live_dead = self.loco.state == hero_states::DEAD;
+            self.state.hero.dead = if self.hero_index == 0 { [live_dead, parked_dead] } else { [parked_dead, live_dead] };
+            self.state.hero.swapping = self.swap.is_some();
             self.trigger_step();
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
