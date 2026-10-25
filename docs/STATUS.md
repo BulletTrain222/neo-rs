@@ -87,7 +87,7 @@ Progress.cmd and docs/PROGRESS.md: code coverage (research-side specs/PROGRESS.m
 
 ## Next task
 
-Recent increments built combat (enemy AI, projectiles, guard, death and game over), items (drops, pickups, the quick panel, statuses) and the UI from the disc (HUD bars and monster bar, fonts, the dialogue box, the Square prompt, the front-end title and pause pages). Next candidates, in rough order: the NPC colour presets (SPEC-0040 Behavior 26); the village chase (SPEC-0045 pack 1023; SPEC-0058 step 6); the item icons once R-0020 is answered; Options toggles; more level scripts (SPEC-0030, SPEC-0037 to SPEC-0045) so the story can progress past the farm; Roberta and hero switching (SPEC-0053); petpets (SPEC-0047); effects (SPEC-0034). Open questions are R-0008 to R-0026 in specs/REQUESTS.md.
+Recent increments built combat (enemy AI, projectiles, guard, death and game over), items (drops, pickups, the quick panel, statuses) and the UI from the disc (HUD bars and monster bar, fonts, the dialogue box, the Square prompt, the front-end title and pause pages). Next candidates, in rough order: the NPC colours once R-0027 is answered (characters other than the heroes draw mostly white: the part-to-colour-slot mapping of the character draw is not specified); the village chase (SPEC-0045 pack 1023; SPEC-0058 step 6); the item icons once R-0020 is answered; Options toggles; more level scripts (SPEC-0030, SPEC-0037 to SPEC-0045) so the story can progress past the farm; Roberta and hero switching (SPEC-0053); petpets (SPEC-0047); effects (SPEC-0034). Open questions are R-0008 to R-0026 in specs/REQUESTS.md.
 
 ## Check log
 
