@@ -2,7 +2,7 @@
 ///
 /// Time is kept as an exact remainder (nanoseconds × rate), so rates that do not divide a
 /// second evenly, such as 60 Hz, never drift. The host supplies elapsed time; this type never
-/// reads a clock. The original game's tick rate is not specified yet, so callers choose it.
+/// reads a clock. The game itself runs at 60 Hz (SPEC-0007); callers pass the rate.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FixedStep {
     rate_hz: u32,

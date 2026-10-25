@@ -3,6 +3,7 @@ mod character;
 mod controls;
 mod orbit;
 mod pattern;
+mod play;
 
 use bevy::asset::RenderAssetUsages;
 use bevy::image::ImageSampler;
@@ -15,10 +16,34 @@ use neopets_data::{Disc, iso_path};
 use neopets_sim::{FixedStep, PlayerInput, Simulation};
 use orbit::Orbit;
 
-/// Placeholder rate: the original's game-logic tick rate is not specified yet (request R-0007).
-const SCAFFOLD_TICK_HZ: u32 = 60;
-/// At most this many ticks per rendered frame; the rest are counted as dropped.
-const MAX_CATCH_UP: u32 = 8;
+/// Play mode's world and hero: the new-game exterior (SPEC-0006 Default start) and Tor's first
+/// outfit.
+const PLAY_PACK: u32 = 909;
+const PLAY_OUTFIT: u32 = 504;
+
+#[derive(Resource)]
+struct PlayRequest;
+
+/// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
+/// can show travel without a person at the controls.
+#[derive(Resource)]
+struct AutoWalk;
+
+/// The play-mode hero entity; its children are the outfit's meshes.
+#[derive(Component)]
+struct HeroRoot;
+
+#[derive(Resource)]
+struct PlayState {
+    play: play::Play,
+    skinned: Vec<(Handle<Mesh>, usize)>,
+}
+
+/// Game logic runs a fixed 1/60 s step, one input snapshot per tick (SPEC-0007).
+const GAME_TICK_HZ: u32 = 60;
+/// Ticks run per rendered frame at most; the rest are dropped. The original never catches up
+/// (an overlong pass slows the game), which `--original-pacing` reproduces with a cap of 1.
+const MAX_CATCH_UP: u32 = 4;
 /// Pixel-unit scroll (touchpads) per line-unit scroll step.
 const PIXELS_PER_LINE: f32 = 40.0;
 
@@ -122,6 +147,9 @@ fn main() {
     let mut smoke_test = false;
     let mut screenshot = None;
     let mut hide_hud = false;
+    let mut catch_up = MAX_CATCH_UP;
+    let mut play_mode = false;
+    let mut autowalk = false;
     let mut start_resource = 0u32;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
@@ -143,6 +171,12 @@ fn main() {
                     eprintln!("--resource requires a resource number");
                     std::process::exit(2)
                 });
+        } else if arg == "--autowalk" {
+            autowalk = true;
+        } else if arg == "--play" {
+            play_mode = true;
+        } else if arg == "--original-pacing" {
+            catch_up = 1;
         } else if arg == "--hide-hud" {
             hide_hud = true;
         } else if arg == "--screenshot" {
@@ -173,19 +207,25 @@ fn main() {
     };
     let driver = SimDriver {
         sim: Simulation::default(),
-        clock: FixedStep::new(SCAFFOLD_TICK_HZ, MAX_CATCH_UP).expect("Positive tick rate"),
+        clock: FixedStep::new(GAME_TICK_HZ, catch_up).expect("Positive tick rate"),
         input: PlayerInput::default(),
         last_ticks: 0,
     };
     let mut app = App::new();
     if let Some(archive) = archive {
         app.insert_resource(archive);
+        if play_mode {
+            app.insert_resource(PlayRequest);
+        }
+        if autowalk {
+            app.insert_resource(AutoWalk);
+        }
     }
     app.insert_resource(DiscStatus(status))
         .insert_resource(HudHidden(hide_hud))
         .insert_resource(driver)
         .insert_resource(Browser {
-            selected: start_resource,
+            selected: if play_mode { PLAY_PACK } else { start_resource },
             typing: None,
         })
         .init_resource::<BrowserView>()
@@ -201,14 +241,14 @@ fn main() {
             }),
             ..default()
         }))
-        .add_systems(Startup, (setup_viewer, setup_hud))
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play))
         .add_systems(
             Update,
             (
                 (read_input, step_sim).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero).chain(),
+                (apply_texture, apply_model, skin_hero, play_frame).chain(),
             )
                 .chain(),
         );
@@ -417,7 +457,15 @@ fn read_input(
     driver.input = movement(keyboard, gamepads.iter().map(|pad| pad.left_stick()));
 }
 
-fn step_sim(time: Res<Time>, mut driver: ResMut<SimDriver>, mut models: ResMut<ModelView>) {
+fn step_sim(
+    time: Res<Time>,
+    keys: Res<ButtonInput<KeyCode>>,
+    mut driver: ResMut<SimDriver>,
+    mut models: ResMut<ModelView>,
+    play: Option<ResMut<PlayState>>,
+    autowalk: Option<Res<AutoWalk>>,
+    cameras: Query<&Orbit>,
+) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
         sim, clock, input, ..
@@ -426,7 +474,25 @@ fn step_sim(time: Res<Time>, mut driver: ResMut<SimDriver>, mut models: ResMut<M
     driver.last_ticks = ticks;
     if let Some(hero) = models.hero.as_mut() {
         for _ in 0..ticks {
-            hero.tick();
+            let _ = hero.tick();
+        }
+    }
+    if let (Some(mut play), Some(orbit)) = (play, cameras.iter().next()) {
+        // Camera ground basis: the eye sits at yaw around the target, so forward points away.
+        let (sy, cy) = orbit.yaw.sin_cos();
+        let forward = [-sy, 0.0, -cy];
+        let left = [-cy, 0.0, sy];
+        let i = driver.input;
+        let mut input = neopets_sim::hero::HeroInput {
+            side: -(i.move_x as f32) / i16::MAX as f32,
+            forward: i.move_y as f32 / i16::MAX as f32,
+            run: keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+        };
+        if autowalk.is_some() {
+            input.forward = 0.7;
+        }
+        for _ in 0..ticks {
+            play.play.tick(&input, forward, left);
         }
     }
 }
@@ -480,6 +546,7 @@ fn orbit_camera(
     scroll: Res<AccumulatedMouseScroll>,
     time: Res<Time<Real>>,
     models: Res<ModelView>,
+    play: Option<Res<PlayState>>,
     mut cameras: Query<(&mut Orbit, &mut Transform)>,
 ) {
     let dragging = buttons.any_pressed([MouseButton::Left, MouseButton::Right, MouseButton::Middle]);
@@ -489,7 +556,7 @@ fn orbit_camera(
     };
     // While a model is shown, WASD and Q/E move the point the camera orbits (a fly camera).
     let held = |k: KeyCode| keys.pressed(k) as i32 as f32;
-    let fly = if models.showing() {
+    let fly = if models.showing() && play.is_none() {
         Vec3::new(
             held(KeyCode::KeyD) - held(KeyCode::KeyA),
             held(KeyCode::KeyE) - held(KeyCode::KeyQ),
@@ -525,12 +592,13 @@ fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<H
     }
 }
 
-fn show_sim(driver: Res<SimDriver>, mut texts: Query<&mut Text, With<SimText>>) {
+fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Query<&mut Text, With<SimText>>) {
     let d = &*driver;
+    let play_line = play.map(|p| format!("{}\n", p.play.status())).unwrap_or_default();
     for mut text in &mut texts {
-        text.0 = format!(
-            "SIMULATION LOOP - diagnostic scaffold, not original game timing\n\
-             Tick {} at a placeholder {} Hz | {} this frame | {} dropped | alpha {:.2}\n\
+        text.0 = play_line.clone() + &format!(
+            "SIMULATION LOOP - fixed 1/60 s step (SPEC-0007); no gameplay systems yet\n\
+             Tick {} at {} Hz | {} this frame | {} dropped | alpha {:.2}\n\
              Input: move ({}, {}) from WASD / arrows / left stick",
             d.sim.tick,
             d.clock.rate_hz(),
@@ -729,7 +797,6 @@ fn apply_model(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
-    use bevy::mesh::{Indices, PrimitiveTopology};
     if !models.dirty {
         return;
     }
@@ -744,50 +811,11 @@ fn apply_model(
     let mut skinned = Vec::new();
     let framing = match (&models.data, models.show_model) {
         (Some(m), true) => {
-            let handles: Vec<Handle<StandardMaterial>> = m
-                .textures
-                .iter()
-                .map(|t| {
-                    materials.add(StandardMaterial {
-                        base_color_texture: Some(images.add(model_texture(t))),
-                        unlit: true,
-                        alpha_mode: AlphaMode::Mask(0.5),
-                        cull_mode: None,
-                        ..default()
-                    })
-                })
-                .collect();
-            let untextured = materials.add(StandardMaterial {
-                unlit: true,
-                cull_mode: None,
-                ..default()
-            });
-            for (i, part) in m.parts.iter().enumerate() {
-                let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
-                // The GS modulates in gamma space; Bevy blends vertex colour in linear space.
-                let colors: Vec<[f32; 4]> = part
-                    .colors
-                    .iter()
-                    .map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)])
-                    .collect();
-                mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
-                mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
-                mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
-                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-                mesh.insert_indices(Indices::U32(part.indices.clone()));
-                let material = part
-                    .texture
-                    .map_or(untextured.clone(), |t| handles[t].clone());
-                let handle = meshes.add(mesh);
-                if !part.weights.is_empty() {
-                    skinned.push((handle.clone(), i));
+            for (i, mesh, material) in part_assets(m, &mut meshes, &mut materials, &mut images) {
+                if !m.parts[i].weights.is_empty() {
+                    skinned.push((mesh.clone(), i));
                 }
-                commands.spawn((
-                    Mesh3d(handle),
-                    MeshMaterial3d(material),
-                    Transform::IDENTITY,
-                    ModelPart,
-                ));
+                commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, ModelPart));
             }
             let (lo, hi) = if m.world { m.dense_box(0.6) } else { (m.min, m.max) };
             Orbit::framing(Vec3::from(lo), Vec3::from(hi))
@@ -799,6 +827,55 @@ fn apply_model(
         *orbit = framing.clone();
         *transform = orbit.transform();
     }
+}
+
+/// Bevy meshes and materials for every part of a model: (part index, mesh, material). Parts are
+/// unlit and double-sided; textured parts mask alpha at 0.5.
+fn part_assets(
+    m: &neopets_data::model::ModelData,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+    images: &mut Assets<Image>,
+) -> Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>)> {
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let handles: Vec<Handle<StandardMaterial>> = m
+        .textures
+        .iter()
+        .map(|t| {
+            materials.add(StandardMaterial {
+                base_color_texture: Some(images.add(model_texture(t))),
+                unlit: true,
+                alpha_mode: AlphaMode::Mask(0.5),
+                cull_mode: None,
+                ..default()
+            })
+        })
+        .collect();
+    let untextured = materials.add(StandardMaterial {
+        unlit: true,
+        cull_mode: None,
+        ..default()
+    });
+    m.parts
+        .iter()
+        .enumerate()
+        .map(|(i, part)| {
+            let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+            // The GS modulates in gamma space; Bevy blends vertex colour in linear space.
+            let colors: Vec<[f32; 4]> = part
+                .colors
+                .iter()
+                .map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)])
+                .collect();
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+            mesh.insert_indices(Indices::U32(part.indices.clone()));
+            let material = part.texture.map_or(untextured.clone(), |t| handles[t].clone());
+            (i, meshes.add(mesh), material)
+        })
+        .collect()
 }
 
 fn choose_action(keys: Res<ButtonInput<KeyCode>>, mut models: ResMut<ModelView>) {
@@ -825,5 +902,71 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
         }
+    }
+}
+
+fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive: Option<ResMut<Archive>>) {
+    let (Some(_), Some(mut archive)) = (request, archive) else { return };
+    let Archive { disc, index } = &mut *archive;
+    match play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT) {
+        Ok(play) => commands.insert_resource(PlayState { play, skinned: Vec::new() }),
+        Err(e) => error!("Play mode could not start: {e}"),
+    }
+}
+
+/// Spawn the hero once, then each frame place it, skin it and keep the camera on it.
+#[allow(clippy::too_many_arguments)]
+fn play_frame(
+    mut commands: Commands,
+    play: Option<ResMut<PlayState>>,
+    mut heroes: Query<&mut Transform, (With<HeroRoot>, Without<Orbit>)>,
+    mut cameras: Query<(&mut Orbit, &mut Transform), Without<HeroRoot>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Some(mut state) = play else { return };
+    let p = state.play.loco.position;
+    let f = state.play.loco.facing;
+    // Characters face +Z in model space (SPEC-0004); turn that onto the facing.
+    let rotation = Quat::from_rotation_y(f[0].atan2(f[2]));
+    if !state.play.spawned {
+        state.play.spawned = true;
+        let parts = part_assets(&state.play.model, &mut meshes, &mut materials, &mut images);
+        let mut skinned = Vec::new();
+        commands
+            .spawn((Transform::from_translation(Vec3::from(p)).with_rotation(rotation), Visibility::Visible, HeroRoot))
+            .with_children(|c| {
+                for (i, mesh, material) in parts {
+                    if !state.play.model.parts[i].weights.is_empty() {
+                        skinned.push((mesh.clone(), i));
+                    }
+                    c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                }
+            });
+        state.skinned = skinned;
+        for (mut orbit, _) in &mut cameras {
+            // Start behind the hero, a little above.
+            orbit.yaw = (-f[0]).atan2(-f[2]);
+            orbit.pitch = 18.0_f32.to_radians();
+            orbit.distance = 11.0;
+        }
+    }
+    for mut t in &mut heroes {
+        t.translation = Vec3::from(p);
+        t.rotation = rotation;
+    }
+    let matrices = state.play.hero.skin_matrices();
+    for (handle, i) in &state.skinned {
+        let part = &state.play.model.parts[*i];
+        let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
+        if let Some(mut mesh) = meshes.get_mut(handle) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
+        }
+    }
+    for (mut orbit, mut transform) in &mut cameras {
+        orbit.target = Vec3::from(p) + Vec3::Y * 1.7;
+        *transform = orbit.transform();
     }
 }

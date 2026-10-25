@@ -84,6 +84,18 @@ impl PlaybackRecord {
         };
     }
 
+    /// Recompute the speed from a new play rate without restarting (heroes do this every pass;
+    /// SPEC-0005 Playback 1a).
+    pub fn set_rate(&mut self, rate: f32) {
+        if let Some(c) = self.clip {
+            self.speed = clip_speed(c.speed_byte, rate);
+        }
+    }
+
+    pub fn speed(&self) -> f32 {
+        self.speed
+    }
+
     pub fn clip(&self) -> Option<ClipInfo> {
         self.clip
     }

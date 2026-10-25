@@ -161,3 +161,68 @@ pub fn scene(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<(), String
     }
     Ok(())
 }
+
+/// Check the ground probe against each world pack's level-mesh vertices for both cell orders: a
+/// vertex counts as a hit when the probe from just above it lands within 0.5 units. Walls and
+/// props also have vertices, so a correct order still misses many; the comparison is relative.
+pub fn ground(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    use neopets_data::ground::{CellOrder, Ground, MISS, navmesh_vertices, spawn, spawn_height};
+    let mut totals = [(0u64, 0u64); 2];
+    // x-major breakdown: no cell (0.0), miss, |dh| < 0.5, < 2, < 10, larger.
+    let mut kinds = [0u64; 6];
+    for n in 533..index.len() as u32 {
+        let bytes = index.read(disc, n)?;
+        if !matches!(resource::classify(&bytes), Family::ChunkFile(_)) {
+            continue;
+        }
+        let chain = resource::walk_chunks(&bytes, None)?;
+        if chain.chunks.first().map(|c| c.kind) != Some(31) {
+            continue;
+        }
+        let _ = navmesh_vertices;
+        // Level display tree vertices (world space), sampled: terrain lies on the patches.
+        let mut verts = Vec::new();
+        for c in chain.chunks.iter().filter(|c| c.kind == 3) {
+            let payload = &bytes[c.payload.clone()];
+            let Ok(tree) = mesh::walk_tree(payload) else { continue };
+            for leaf in tree.leaves.iter().step_by(3) {
+                if let Ok(batches) = mesh::decode_packet(payload, leaf) {
+                    verts.extend(batches.iter().flat_map(|b| b.positions.iter().copied()).step_by(5));
+                }
+            }
+        }
+        for (k, order) in [CellOrder::XMajor, CellOrder::ZMajor].into_iter().enumerate() {
+            let Some(g) = Ground::of(&bytes, &chain.chunks, order) else { continue };
+            for v in verts.iter() {
+                let h = g.probe(v[0], v[2], v[1] + 0.5);
+                totals[k].1 += 1;
+                totals[k].0 += (h != MISS && (h - v[1]).abs() < 0.5) as u64;
+                if k == 0 {
+                    let d = (h - v[1]).abs();
+                    kinds[match () {
+                        _ if h == 0.0 => 0,
+                        _ if h == MISS => 1,
+                        _ if d < 0.5 => 2,
+                        _ if d < 2.0 => 3,
+                        _ if d < 10.0 => 4,
+                        _ => 5,
+                    }] += 1;
+                }
+            }
+            if n == 909 {
+                if let Some((s, f)) = spawn(&bytes, &chain.chunks) {
+                    println!(
+                        "Pack 909 spawn ({order:?}): record ({:.2}, {:.2}, {:.2}) facing ({:.2}, {:.2}, {:.2}); ground height {:.3}",
+                        s[0], s[1], s[2], f[0], f[1], f[2], spawn_height(&g, s)
+                    );
+                }
+            }
+        }
+    }
+    println!("x-major breakdown: no cell {}, miss {}, <0.5 {}, <2 {}, <10 {}, farther {}", kinds[0], kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]);
+    for (k, label) in ["x-major", "z-major"].iter().enumerate() {
+        let (hit, all) = totals[k];
+        println!("Probe on level-mesh vertices, {label} cells: {hit} of {all} within 0.5 units");
+    }
+    Ok(())
+}

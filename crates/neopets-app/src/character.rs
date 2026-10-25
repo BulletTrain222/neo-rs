@@ -80,10 +80,27 @@ impl HeroAnim {
         }
     }
 
-    /// One game tick: step each family's record and combine its sample into its joints.
-    pub fn tick(&mut self) {
+    /// Set the play rate R of every family (hero clip speeds follow R every pass).
+    pub fn set_rate(&mut self, rate: f32) {
         for f in &mut self.families {
+            f.record.set_rate(rate);
+        }
+    }
+
+    /// One game tick: step each family's record and combine its sample into its joints. Returns
+    /// the main layer's root step for the next tick: the root record of the current key times
+    /// the clip speed, doubled while a finished one-shot is held (SPEC-0040 Behavior 14C).
+    pub fn tick(&mut self) -> [f32; 3] {
+        let mut root = [0.0; 3];
+        for (i, f) in self.families.iter_mut().enumerate() {
             let (Some(c), Some(s)) = (f.current, f.record.tick()) else { continue };
+            if i == 0 {
+                let clip = &f.data.clips[c];
+                let scale = f.record.speed() * if f.record.finished() { 2.0 } else { 1.0 };
+                if let Some(r) = clip.root.get(s.key as usize) {
+                    root = r.map(|v| v * scale);
+                }
+            }
             anim::sample_into(
                 &f.data.clips[c],
                 s.key as usize,
@@ -95,6 +112,7 @@ impl HeroAnim {
                 s.blend,
             );
         }
+        root
     }
 
     pub fn skin_matrices(&self) -> Vec<Affine> {

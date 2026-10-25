@@ -4,6 +4,7 @@ pub mod archive;
 mod elf;
 pub mod fingerprint;
 pub mod gs;
+pub mod ground;
 pub mod gsmem;
 mod iso;
 pub mod lzo;
