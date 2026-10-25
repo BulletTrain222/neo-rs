@@ -1848,6 +1848,8 @@ fn play_trace(
     let mut last_hit = String::new();
     let mut save_prompt = false;
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
+    println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
+    println!("Script volumes of {} (index, a point inside): {:?}", play.world.pack, play.world.volume_points());
     if to.is_some_and(|t| t[0].is_nan()) {
         let goal = match to.map(|t| t[1]) {
             Some(g) if g == 0.0 => play::Goal::NewNeighbour,

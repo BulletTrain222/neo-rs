@@ -84,6 +84,27 @@ pub struct World {
 }
 
 impl World {
+    /// The script volumes' trigger indices and a point inside each (diagnostic).
+    pub fn volume_points(&self) -> Vec<(u16, [i32; 3])> {
+        use neopets_sim::trigger::Shape;
+        self.volumes
+            .iter()
+            .map(|v| {
+                let p = match v.shape {
+                    Shape::Sphere { centre, .. } => centre,
+                    Shape::Cylinder { base, axis, length, .. } => std::array::from_fn(|k| base[k] + 0.5 * length * axis[k]),
+                    Shape::Rectangle { origin, axes, extents } => std::array::from_fn(|k| origin[k] + 0.5 * (extents[0] * axes[0][k] + extents[1] * axes[1][k])),
+                };
+                (v.index, p.map(|c| c as i32))
+            })
+            .collect()
+    }
+
+    /// The entity table: (region j or 0xFF for the embedded region, ordinal) by entity id.
+    pub fn entity_table(&self) -> Vec<(u8, u16)> {
+        self.entities.iter().map(|&(r, o)| (r, o as u16)).collect()
+    }
+
     pub fn load(disc: &mut Disc, index: &ArchiveIndex, boot: &BootTravel, pack: u32) -> Result<(Self, Vec<u8>), String> {
         let bytes = index.read(disc, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
@@ -1741,6 +1762,7 @@ impl Play {
                 // SetConversationTarget clears both characters' emote queues.
                 self.hero_emotes.clear();
                 self.characters[i].emotes.clear();
+                self.state.talk_roll = self.rng.range(1, 3);
                 let actions = level::on_talk(pack, routine, &mut self.state);
                 self.apply(&actions);
             }
@@ -2539,6 +2561,7 @@ impl Play {
             }
             let Some(&routine) = self.world.routines.get(&i) else { continue };
             let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square };
+            self.state.talking = self.dialogue_open;
             let out = level::on_trigger(self.world.pack, routine, call, &mut self.state);
             if out.prompt.is_some() && self.door_prompt.is_none() && !self.talk_prompt {
                 self.door_prompt = out.prompt;

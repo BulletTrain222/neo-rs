@@ -212,6 +212,11 @@ pub struct GameState {
     /// The current world's level flags (SetLevelState and the boss posts; cleared when a world
     /// loads).
     pub level_flags: BTreeSet<u16>,
+    /// A Random(1, 3) draw the host makes before each proximity routine (the routines that
+    /// draw read it; the shared generator is the host's).
+    pub talk_roll: i32,
+    /// The hero is in a conversation (a box is up), for the routines that wait on it.
+    pub talking: bool,
 }
 
 impl GameState {
@@ -311,6 +316,13 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
         // clear; taken as 13 here).
         (1023, 0..=10) => Some(13),
+        // SPEC-0045 1217: context 0 (on contact).
+        (1217, 0 | 1) => Some(0),
+        // SPEC-0045 1098: 0, 1 and 3 act on contact; 4, 6 and 7 show context 26; 2 and 5 show
+        // a square-button prompt whose context is not given (13 here; R-0037).
+        (1098, 0 | 1 | 3) => Some(0),
+        (1098, 4 | 6 | 7) => Some(26),
+        (1098, 2 | 5) => Some(13),
         _ => None,
     }
 }
@@ -343,8 +355,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
                 vec![Action::LeaveInterior { slot: 5 }]
             }
         }
-        // SPEC-0045 1023 teleports. The exterior replacement loads of indices 0, 9 and 10 are
-        // not built; their line branches are.
+        // SPEC-0045 1023 teleports.
         (1023, 1 | 5) => {
             if state.flag(10) {
                 vec![Action::Message { line: 3 }]
@@ -369,9 +380,47 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
                 vec![Action::EnterInterior { slot }]
             }
         }
-        (1023, 0) if !state.flag(15) && !(state.flag(150) && !state.flag(11)) => vec![Action::Message { line: 23 }],
+        // Index 0: the castle (eW 106, pack 1098) by flags 150, 11 and 15; index 9 the dark
+        // village (eW 114) with flag 13; index 10 the sewer entrance (eW 109) with flag 35 and
+        // the type-2 value 20 for eW 109 and eW 90. Each load is followed by Wait(3 s).
+        (1023, 0) => {
+            let (f150, f11, f15) = (state.flag(150), state.flag(11), state.flag(15));
+            if (f150 && !f11) || (!f150 && f15) || (f150 && f11 && f15) {
+                vec![Action::ReplaceExterior { slot: 106, plane: -1 }, wait(3.0)]
+            } else if !f15 {
+                vec![Action::Message { line: 23 }]
+            } else {
+                Vec::new()
+            }
+        }
         (1023, 9) if !state.flag(13) => vec![Action::Message { line: 3 }],
+        (1023, 9) => vec![Action::ReplaceExterior { slot: 114, plane: -1 }, wait(3.0)],
         (1023, 10) if !state.flag(35) => vec![Action::Message { line: 6 }],
+        (1023, 10) => {
+            state.blackboard.insert((2, 109), 20);
+            state.blackboard.insert((2, 90), 20);
+            vec![Action::ReplaceExterior { slot: 109, plane: -1 }, wait(3.0)]
+        }
+        // SPEC-0045 1098 transitions (s is the castle stage: the highest of flags 31 to 21 set).
+        (1098, 0) => vec![Action::EnterInterior { slot: 121 }],
+        (1098, 1) => vec![Action::EnterInterior { slot: 120 }],
+        (1098, 3) => vec![Action::Message { line: 17 }],
+        (1098, 2) if castle_stage(state) == 30 => vec![Action::Message { line: 17 }],
+        (1098, 2) => {
+            state.blackboard.insert((2, 119), 90);
+            vec![Action::ReplaceExterior { slot: 119, plane: -1 }]
+        }
+        (1098, 4 | 7) if castle_stage(state) == 30 => vec![Action::Message { line: 16 }],
+        (1098, 4 | 7) => {
+            state.blackboard.insert((2, 92), if door == 4 { 30 } else { 40 });
+            vec![Action::ReplaceExterior { slot: 92, plane: -1 }]
+        }
+        (1098, 5) => {
+            state.blackboard.insert((2, 122), 100);
+            vec![Action::ReplaceExterior { slot: 122, plane: -1 }]
+        }
+        (1098, 6) if castle_stage(state) == 30 || state.word(1098, 0) != 0 => vec![Action::Message { line: 16 }],
+        (1098, 6) => vec![Action::ReplaceExterior { slot: 90, plane: -1 }],
         // SPEC-0032 955: message 40 for eW 68, leave to eW 5.
         (955, 0) => {
             state.blackboard.insert((2, 68), 40);
@@ -427,6 +476,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         678 | 686 | 691 => road_init(pack, state),
         1023 => village_init(state),
         1184 => woods_init(state),
+        1098 => castle_init(state),
         1217 => burrows_init(state),
         // SPEC-0050 section 5: the Market Town shops' x4 prices until flag 298, once the
         // shopkeeper's set (1 with flag 86, else 0) has loaded with the stock.
@@ -649,6 +699,39 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1184, 6) if first => {
             state.blackboard.insert((3, 130), 0);
             out.actions.push(Action::ReplaceExterior { slot: 130, plane: -1 });
+        }
+        // SPEC-0045 1098 trigger 0, the rest prompt (context 32): on Square, the first case of
+        // the story (152 with 22 clear: movie 7, regions 1104 and 1103, camera 9, line 50,
+        // flags 22, 642 and 153; 191 with 27 clear: line 376, flags 27 and 193; 204 with 29
+        // clear: flags 29, 205 and 63 and movie 10). The hit-point percentage it sets is not
+        // given; the movies are not played.
+        (1098, 1) if call.state != 0 && call.object => {
+            out.prompt = Some(32);
+            if call.square {
+                out.actions.extend(castle_rest(state));
+            }
+        }
+        // Trigger 1 (30 and 31 clear at load): line 51 when the hero is not talking.
+        (1098, 2) if first && !state.talking => out.actions.push(Action::Message { line: 51 }),
+        // Triggers 11 and 12 (30 and 31 clear): slot A 1101 and slot B 1112; slot A 1102.
+        (1098, 11) if first && !state.flag(30) && !state.flag(31) => {
+            out.actions.extend([Action::LoadRegion { slot: 0, region: Some(1101) }, Action::LoadRegion { slot: 1, region: Some(1112) }]);
+        }
+        (1098, 12) if first && !state.flag(30) && !state.flag(31) => out.actions.push(Action::LoadRegion { slot: 0, region: Some(1102) }),
+        // Trigger 14: slot A 1105 or 1107 and slot B one of 1110, 1111, 1114 or 1115 by flags
+        // 194 to 196 and 204 to 206; the table is not given (R-0037): 1105 with 1110 (entity
+        // 35) before 194, 1111 (entity 36) after it, 1114 from 204, and 1115 from 205 here.
+        (1098, 14) if first && !state.flag(30) && !state.flag(31) => {
+            let b = if state.flag(205) || state.flag(206) {
+                1115
+            } else if state.flag(204) {
+                1114
+            } else if state.flag(194) || state.flag(195) || state.flag(196) || state.word(1098, 1) != 0 {
+                1111
+            } else {
+                1110
+            };
+            out.actions.extend([Action::LoadRegion { slot: 0, region: Some(1105) }, Action::LoadRegion { slot: 1, region: Some(b) }]);
         }
         // SPEC-0045 1217 script trigger 0 (Act 1): the start bit.
         (1217, 1) if first => {
@@ -910,6 +993,7 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
         1184 => woods_activate(state),
+        1098 => castle_activate(state),
         // SPEC-0045 909 activate-world routine: an unfinished round-up (flags 107 to 110 not
         // all set) is cleared; the type-2 message for eW 68 places the hero.
         909 => {
@@ -1186,6 +1270,246 @@ fn woods_activate(state: &mut GameState) -> Vec<Action> {
             vec![Action::Sleep { ticks: 1 }, Action::MoveHero { locator: 50 }, release_camera()]
         }
         _ => Vec::new(),
+    }
+}
+
+/// SPEC-0045 1098: the castle stage s, the highest of flags 31 down to 21 that is set.
+fn castle_stage(s: &GameState) -> u16 {
+    (21..=31).rev().find(|&f| s.flag(f)).unwrap_or(0)
+}
+
+/// SPEC-0045 1098 Init: the flag steps (21; 25 with 182; 202 and 28 with 201; 151), the rest
+/// prompt (trigger 0), trigger 1 with 30 and 31 clear, the slot triggers 11, 12 and 14, the
+/// slot thread's loads (31: j 1; 30: j 9 and j 0; 501 with item 72 not held and 503 and 504
+/// clear: j 21), and the module word that blocks teleport 6 when s is 31. The other story
+/// triggers (4 to 10, 17 to 20), the objects, effects, navmesh steps and the hero-death
+/// callback are not built.
+fn castle_init(state: &mut GameState) -> Vec<Action> {
+    let reg = |index, routine| Action::RegisterTrigger { index, routine };
+    state.set(21, true);
+    if state.flag(182) {
+        state.set(25, true);
+    }
+    if state.flag(201) {
+        state.set(202, true);
+        state.set(28, true);
+    }
+    if !state.flag(151) {
+        state.set(151, true);
+    }
+    if castle_stage(state) == 31 {
+        state.set_word(1098, 0, 1);
+    }
+    let mut out = vec![reg(0, 1)];
+    let (f30, f31) = (state.flag(30), state.flag(31));
+    if !f30 && !f31 {
+        out.extend([reg(1, 2), reg(11, 11), reg(12, 12), reg(14, 14)]);
+    }
+    if f31 {
+        out.push(Action::LoadRegion { slot: 4, region: Some(1098 + 1 + 1) });
+    } else if f30 {
+        out.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 9) }, Action::LoadRegion { slot: 4, region: Some(1098 + 1) }]);
+    } else if state.flag(501) && !state.has_item(72) && !state.flag(504) && !state.flag(503) {
+        out.push(Action::LoadRegion { slot: 3, region: Some(1098 + 1 + 21) });
+    }
+    out
+}
+
+/// SPEC-0045 1098 activate-world: the type-2 value for eW 106 picks the return locator.
+fn castle_activate(state: &mut GameState) -> Vec<Action> {
+    let locator = match state.take_message(2, 106) {
+        10 => 6,
+        20 => 5,
+        30 => 9,
+        40 => 8,
+        50 => 7,
+        60 => 4,
+        70 => 3,
+        90 => 1,
+        100 => 10,
+        _ => return Vec::new(),
+    };
+    vec![Action::MoveHero { locator }, release_camera()]
+}
+
+/// The rest prompt's press (trigger 0).
+fn castle_rest(state: &mut GameState) -> Vec<Action> {
+    let mut v = vec![Action::HoldHero, Action::FadeOut { seconds: 1.5, wait: true }, Action::MoveHero { locator: 12 }];
+    if !state.flag(22) && state.flag(152) {
+        for f in [22, 642, 153] {
+            state.set(f, true);
+        }
+        v.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 5) }, Action::LoadRegion { slot: 1, region: Some(1098 + 1 + 4) }, Action::WaitLoads]);
+        v.extend([camera(9), Action::FadeIn { seconds: 1.0, wait: false }, Action::Message { line: 50 }, Action::FadeOut { seconds: 1.0, wait: true }, release_camera()]);
+    } else if !state.flag(27) && state.flag(191) {
+        state.set(27, true);
+        state.set(193, true);
+        v.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 5) }, Action::LoadRegion { slot: 1, region: Some(1098 + 1 + 4) }, Action::WaitLoads]);
+        v.extend([camera(9), Action::FadeIn { seconds: 1.0, wait: false }, Action::Message { line: 376 }, Action::FadeOut { seconds: 1.0, wait: true }, release_camera()]);
+    } else if !state.flag(29) && state.flag(204) {
+        for f in [29, 205, 63] {
+            state.set(f, true);
+        }
+    }
+    v.push(Action::FadeIn { seconds: 1.0, wait: true });
+    v
+}
+
+/// The template-W entities of 1098 and their first lines (SPEC-0045 1098 Proximity routines).
+const CASTLE_W: [(&[usize], u16); 13] = [
+    (&[44], 97),
+    (&[47], 115),
+    (&[38, 43], 133),
+    (&[46], 151),
+    (&[45], 169),
+    (&[15], 205),
+    (&[40, 42], 223),
+    (&[32], 241),
+    (&[41], 259),
+    (&[48], 277),
+    (&[16], 295),
+    (&[37], 313),
+    (&[50], 349),
+];
+
+/// The proximity routine of a 1098 entity (shared routines share one number).
+fn castle_routine(e: usize) -> Option<u8> {
+    Some(match e {
+        39 => 0,
+        35 | 36 => 1,
+        21 => 2,
+        20 => 3,
+        24 => 4,
+        25 => 5,
+        49 => 6,
+        34 => 7,
+        19 | 22 | 31 => 8,
+        23 | 33 => 9,
+        17 | 18 => 10,
+        _ => 20 + CASTLE_W.iter().position(|(es, _)| es.contains(&e))? as u8,
+    })
+}
+
+/// SPEC-0045 1098 proximity routines. The two story scenes (entity 39's cameras 20 to 24 with
+/// lines 30 to 41, and the trigger-10 scene of lines 19 to 23) are shown as their lines in
+/// order, without their cameras.
+fn castle_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
+    let three = |b: u16| cycle(&[b, b + 1, b + 2]);
+    let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
+    let one = |l: u16| vec![Action::Talk { line: l }];
+    match r {
+        0 if s.flag(205) && !s.flag(206) => {
+            s.set(206, true);
+            one(3)
+        }
+        0 if s.flag(196) => talk(rot.pick(0, &three(0))),
+        0 => {
+            s.set(196, true);
+            (30..=41).map(|line| Action::Converse { entity: 39, line }).collect()
+        }
+        1 => {
+            if s.flag(204) {
+                one(4)
+            } else if s.flag(203) {
+                one(5)
+            } else if s.flag(202) {
+                one(6)
+            } else if s.flag(28) {
+                s.set(202, true);
+                one(7)
+            } else if s.flag(194) {
+                talk(rot.pick(0, &three(8)))
+            } else if s.flag(193) {
+                s.set(194, true);
+                (19..=23).map(|line| Action::Talk { line }).collect()
+            } else if s.flag(152) {
+                talk(rot.pick(1, &three(11)))
+            } else {
+                s.set(152, true);
+                s.set(151, true);
+                one(14)
+            }
+        }
+        2 => one(if s.flag(204) { if s.flag(503) { 52 } else { 53 } } else if s.flag(203) { 54 } else { 55 }),
+        3 => one(if s.flag(204) { if s.flag(504) { 56 } else { 57 } } else if s.flag(203) { 58 } else { 59 }),
+        4 => one(if s.flag(204) { 60 } else if s.flag(203) { 61 } else { 62 }),
+        5 if !s.flag(204) && !s.flag(203) => one(385),
+        5 => Vec::new(),
+        6 => {
+            if s.flag(29) {
+                talk(rot.pick(0, &three(63)))
+            } else if s.flag(28) {
+                one(66)
+            } else if s.flag(27) {
+                talk(rot.pick(1, &three(67)))
+            } else if s.flag(24) && s.flag(634) {
+                if s.flag(179) {
+                    s.set(180, true);
+                    s.set(185, true);
+                    talk(rot.pick(2, &three(70)))
+                } else if s.flag(174) {
+                    talk(rot.pick(3, &three(73)))
+                } else {
+                    s.set(174, true);
+                    one(76)
+                }
+            } else {
+                talk(rot.pick(4, &three(77)))
+            }
+        }
+        7 => {
+            if s.flag(29) {
+                talk(rot.pick(0, &three(80)))
+            } else if s.flag(28) {
+                one(83)
+            } else if s.flag(27) {
+                talk(rot.pick(1, &three(84)))
+            } else if s.flag(25) && s.flag(635) {
+                if s.flag(185) {
+                    talk(rot.pick(2, &three(90)))
+                } else if s.flag(183) {
+                    talk(rot.pick(3, &three(93)))
+                } else {
+                    s.set(183, true);
+                    one(96)
+                }
+            } else {
+                talk(rot.pick(4, &three(87)))
+            }
+        }
+        8 => talk(if s.flag(29) { rot.pick(0, &three(187)) } else if s.flag(204) { rot.pick(1, &three(190)) } else { rot.pick(2, &three(193)) }),
+        9 if s.flag(200) => talk(rot.pick(0, &three(202))),
+        9 => Vec::new(),
+        10 => talk(if s.flag(29) {
+            rot.pick(0, &three(367))
+        } else if s.flag(28) {
+            rot.pick(1, &three(370))
+        } else if s.flag(195) {
+            rot.pick(2, &three(373))
+        } else if s.flag(193) {
+            rot.pick(3, &Lines::FirstOnce(376, vec![377, 378, 379]))
+        } else {
+            rot.pick(4, &three(380))
+        }),
+        _ => {
+            // Template W (18 lines from b).
+            let Some(&(_, b)) = CASTLE_W.get((r as usize).wrapping_sub(20)) else { return Vec::new() };
+            talk(if s.flag(29) {
+                rot.pick(0, &three(b))
+            } else if s.flag(28) {
+                Some(b + 3)
+            } else if s.flag(27) {
+                rot.pick(1, &three(b + 4))
+            } else if s.flag(153) {
+                if s.talk_roll == 1 {
+                    Some([(26, 7), (25, 17), (24, 8), (23, 9)].iter().find(|(f, _)| s.flag(*f)).map_or(b + 10, |&(_, o)| b + o))
+                } else {
+                    rot.pick(2, &three(b + 11))
+                }
+            } else {
+                rot.pick(3, &three(b + 14))
+            })
+        }
     }
 }
 
@@ -1539,6 +1863,7 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0039 1133: entity 1 with flag 10 set, else entity 0.
         (1133, 0 | 1) => Some(0),
         (1023, 90) => Some(90),
+        (1098, e) => castle_routine(e),
         // SPEC-0045 1023 villagers (routine numbers: the index in VILLAGERS, 100 + k).
         (1023, e) => villager(e).map(|k| 100 + k as u8),
         _ => None,
@@ -1566,6 +1891,11 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
             return a;
         }
         (1150, r) => barracks_talk(r, state, &mut rot),
+        (1098, r) => {
+            let a = castle_talk(r, state, &mut rot);
+            state.rotations.insert(key, rot);
+            return a;
+        }
         (1133, _) => smithy_talk(state, &mut rot),
         (1023, r) if r >= 100 => village_talk(r - 100, state, &mut rot),
         (1023, 90) => {
@@ -2003,6 +2333,34 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    #[test]
+    fn castle_story_steps() {
+        // SPEC-0045 1098: Init sets 21 and 151; Master Torak (entity 35) sets 152 with line 14,
+        // then rotates 11 to 13; the rest prompt's press with 152 sets 22, 642 and 153 and
+        // shows line 50; the return locator for value 90 is 1.
+        let mut s = GameState::default();
+        on_init(1098, &mut s);
+        assert!(s.flag(21) && s.flag(151));
+        let r = proximity_routine(1098, 35).unwrap();
+        assert_eq!(proximity_routine(1098, 36), Some(r));
+        assert_eq!(on_talk(1098, r, &mut s), vec![Action::Talk { line: 14 }]);
+        assert!(s.flag(152));
+        let lines: Vec<_> = (0..4).map(|_| on_talk(1098, r, &mut s)).collect();
+        assert_eq!(lines, [11, 12, 13, 11].map(|line| vec![Action::Talk { line }]));
+        let call = TriggerCall { index: 0, state: 1, object: true, square: true };
+        let out = on_trigger(1098, 1, call, &mut s);
+        assert!(out.prompt == Some(32) && out.actions.contains(&Action::Message { line: 50 }));
+        assert!(s.flag(22) && s.flag(642) && s.flag(153));
+        s.blackboard.insert((2, 106), 90);
+        assert_eq!(on_activate(1098, &mut s)[0], Action::MoveHero { locator: 1 });
+        // Template W with 153 and a roll of 1: the first set of 26, 25, 24, 23 (none: b + 10).
+        let w = proximity_routine(1098, 44).unwrap();
+        s.talk_roll = 1;
+        assert_eq!(on_talk(1098, w, &mut s), vec![Action::Talk { line: 107 }]);
+        s.set(24, true);
+        assert_eq!(on_talk(1098, w, &mut s), vec![Action::Talk { line: 105 }]);
     }
 
     #[test]
