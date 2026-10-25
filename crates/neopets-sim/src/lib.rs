@@ -15,6 +15,7 @@ pub mod level;
 pub mod motion;
 pub mod nav;
 pub mod projectile;
+pub mod quick;
 pub mod npc;
 pub mod rng;
 mod step;

@@ -283,6 +283,14 @@ pub struct Play {
     coins: (Vec<i32>, Vec<u16>, Option<neopets_sim::items::CoinWords>),
     payouts: Vec<(u32, [f32; 3], Option<neopets_data::region::ItemPoint>)>,
     pub last_pickup: String,
+    /// The quick-item panel (SPEC-0021), its candidate rows and the heal tables; the hero's
+    /// magic (pool B); the panel's button edges waiting for the next tick.
+    pub quick: neopets_sim::quick::QuickPanel,
+    quick_rows: [[i32; 8]; 4],
+    heal_tables: (Vec<i32>, Vec<i32>),
+    pub hero_mp: i32,
+    pub hero_mp_max: i32,
+    pub panel_latch: neopets_sim::quick::PanelInput,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
     /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
     pub death: neopets_sim::death::DeathFlow,
@@ -319,6 +327,13 @@ impl Play {
         };
         let bands = (floats(neopets_data::monster::BAND_F1)?, floats(neopets_data::monster::BAND_F2)?);
         let words = |at: u32, n: usize| neopets_data::archive::boot_u32_table(&boot_bytes, at, n);
+        let rows = words(neopets_data::item::QUICK_ROWS, 32)?;
+        let quick_rows: [[i32; 8]; 4] = std::array::from_fn(|r| std::array::from_fn(|k| rows[8 * r + k] as i32));
+        let heal_tables = (
+            words(neopets_data::item::HEAL_A, 4)?.into_iter().map(|w| w as i32).collect(),
+            words(neopets_data::item::HEAL_B, 2)?.into_iter().map(|w| w as i32).collect(),
+        );
+        let hero_mp_max = words(neopets_data::item::MAGIC_TOR, 1)?[0] as i32;
         let coins = (
             words(neopets_data::item::COIN_DENOMINATIONS, 5)?.into_iter().map(|w| w as i32).collect(),
             words(neopets_data::item::COIN_IDS, 5)?.into_iter().map(|w| w as u16).collect(),
@@ -406,6 +421,12 @@ impl Play {
             coins,
             payouts: Vec::new(),
             last_pickup: String::new(),
+            quick: Default::default(),
+            quick_rows,
+            heal_tables,
+            hero_mp: hero_mp_max,
+            hero_mp_max,
+            panel_latch: Default::default(),
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
             continued: false,
@@ -1180,6 +1201,24 @@ impl Play {
         self.square_now = input.square;
         // The attack press edge enters state 13 from the ground states (SPEC-0036); the step
         // then runs every tick and decides the clip.
+        // SPEC-0021 Quick-item panel: it opens on an Up edge (not in action state 0x19) and,
+        // while open, takes Cross and Circle; Triangle with it closed uses the marker.
+        let mut panel = std::mem::take(&mut self.panel_latch);
+        if self.quick.open {
+            panel.cross |= input.jump;
+            panel.circle |= input.attack;
+        }
+        let inv = &self.inventory;
+        let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
+        let was_open = self.quick.open;
+        let out = self.quick.tick(panel, self.loco.state != 0x19, &self.quick_rows, &owns);
+        if out.consumed || was_open {
+            input.jump = false;
+            input.attack = false;
+        }
+        if let Some(id) = out.use_item {
+            self.use_item(id as u16);
+        }
         if matches!(self.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
             input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
         }
@@ -1523,6 +1562,47 @@ impl Play {
         }
     }
 
+    /// The quick panel's use step (forced): refused for a dead hero; a consumable heals pool A
+    /// (health) and pool B (magic) by SPEC-0021 Consumable healing and is consumed when a pool
+    /// changes. Charms run the equipped slot routine and the status and revive items their own
+    /// effects, which are not implemented: their use is refused.
+    fn use_item(&mut self, id: u16) {
+        if self.loco.state == hero_states::DEAD {
+            return;
+        }
+        let Some(item) = self.items.get(id).copied() else { return };
+        let (mut pa, mut pb) = (item.stats[4] as i32, item.stats[5] as i32);
+        if (1..=6).contains(&item.kind) || item.kind == 17 {
+            (pa, pb) = (0, 0);
+        }
+        match id {
+            58 => pa = 100,
+            59 => pb = 100,
+            _ => {}
+        }
+        let ta = self.heal_tables.0.first().copied().unwrap_or(500);
+        let tb = self.heal_tables.1.first().copied().unwrap_or(300);
+        let a = neopets_sim::quick::heal(ta, pa, self.hero_hp, self.hero_max, true);
+        let b = neopets_sim::quick::heal(tb, pb, self.hero_mp, self.hero_mp_max, true);
+        if a.is_none() && b.is_none() {
+            self.last_pickup = format!("use of item {id} refused on tick {}", self.ticks);
+            return;
+        }
+        if let Some(hp) = a {
+            self.hero_hp = hp;
+        }
+        if let Some(mp) = b {
+            self.hero_mp = mp;
+        }
+        let left = {
+            let n = self.inventory.entry(id).or_insert(0);
+            *n = n.saturating_sub(1);
+            *n
+        };
+        self.quick.used(id as i32, left);
+        self.last_pickup = format!("used item {id} on tick {}: hp {}, mp {} ({left} left)", self.ticks, self.hero_hp, self.hero_mp);
+    }
+
     /// The item type of an id (config type; -1 when the table has no record).
     fn item_kind(&self, id: u16) -> i16 {
         self.items.get(id).map_or(-1, |i| i.kind)
@@ -1728,12 +1808,13 @@ impl Play {
         self.loco.die();
     }
 
-    /// Equip an item diagnostically (no inventory yet): a weapon (types 3 and 6) or one of Tor's
-    /// shields (type 5).
+    /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is
+    /// equipped; any other item goes to the party's counts.
     pub fn give(&mut self, id: u16) {
         match self.items.get(id).map(|i| i.kind) {
             Some(5) => self.shield = Some(id),
-            _ => self.weapon = Some(id),
+            Some(3 | 6) => self.weapon = Some(id),
+            _ => *self.inventory.entry(id).or_insert(0) += 1,
         }
     }
 
@@ -1851,7 +1932,13 @@ impl Play {
             self.hero_max,
             self.wallet,
             if self.last_hurt.is_empty() { String::new() } else { format!(" ({})", self.last_hurt) }
-        ) + &match (self.death.page, self.death.flag_e) {
+        ) + &if self.quick.open {
+            format!("\nQUICK ITEMS (SPEC-0021): entries Right/Up/Left/Down {:?}, selected {}; Space uses, F sets, T closes", self.quick.entries, self.quick.selection)
+        } else if self.quick.marker >= 0 {
+            format!(" Quick item {} (T uses).", self.quick.marker)
+        } else {
+            String::new()
+        } + &match (self.death.page, self.death.flag_e) {
             (Some(n), _) => format!("\nGAME OVER page (SPEC-0055; the front end's sprites are not drawn): Continue with Space (Cross) from page pass 122, now {n}"),
             (None, true) => "\nGAME OVER".to_string(),
             _ => String::new(),

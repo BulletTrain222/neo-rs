@@ -14,6 +14,12 @@ pub const HEALTH_TOR: u32 = 0x0031_9BC0;
 pub const COIN_DENOMINATIONS: u32 = 0x0030_F6F0;
 pub const COIN_IDS: u32 = 0x0030_F708;
 pub const COIN_WORDS: u32 = 0x002E_B3E8;
+/// SPEC-0021 Where it lives: the quick-item panel's candidate rows (4 rows of 8 s32), the heal
+/// tables (pool A, 4 words; pool B, 2 words) and Tor's starting magic (SPEC-0036 Start values).
+pub const QUICK_ROWS: u32 = 0x0031_5C68;
+pub const HEAL_A: u32 = 0x0031_9BE0;
+pub const HEAL_B: u32 = 0x0031_9BE8;
+pub const MAGIC_TOR: u32 = 0x0031_9BC8;
 /// The sub-tables and drop groups follow the item records at this offset of resource 529.
 const DROP_TABLES_AT: usize = 0x2710;
 

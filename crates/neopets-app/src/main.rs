@@ -752,6 +752,17 @@ fn step_sim(
         play.play.attack_latch |= keys.just_pressed(KeyCode::KeyF)
             || mouse.just_pressed(MouseButton::Left)
             || gamepads.iter().any(|g| g.just_pressed(GamepadButton::East) || g.just_pressed(GamepadButton::RightTrigger2));
+        // The quick-item panel (SPEC-0021): the D-pad or numpad 8/4/6/2 for its directions, T or
+        // the north face button for Triangle; Cross and Circle are the jump and attack edges.
+        {
+            let pad = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
+            let l = &mut play.play.panel_latch;
+            l.up |= keys.just_pressed(KeyCode::Numpad8) || pad(GamepadButton::DPadUp);
+            l.left |= keys.just_pressed(KeyCode::Numpad4) || pad(GamepadButton::DPadLeft);
+            l.right |= keys.just_pressed(KeyCode::Numpad6) || pad(GamepadButton::DPadRight);
+            l.down |= keys.just_pressed(KeyCode::Numpad2) || pad(GamepadButton::DPadDown);
+            l.triangle |= keys.just_pressed(KeyCode::KeyT) || pad(GamepadButton::North);
+        }
         // Square (E or the west face button) confirms a prompt; a press edge like Cross.
         play.play.square_latch |= keys.just_pressed(KeyCode::KeyE)
             || gamepads.iter().any(|g| g.just_pressed(GamepadButton::West));
@@ -1593,6 +1604,27 @@ fn play_trace(
             jump: (jump && play.ticks % 240 == 0 && play.ticks > 0) || (play.death.page.is_some() && play.ticks % 60 == 0),
             ..Default::default()
         };
+        // In a fight below half health the trace drinks: it opens the quick panel, selects the
+        // first entry it owns and presses Cross (or closes the panel with Triangle).
+        let mut input = input;
+        if fight.is_some() && play.hero_hp > 0 && play.hero_hp < play.hero_max / 2 {
+            let owned = (0..4).find(|&k| {
+                let id = play.quick.entries[k];
+                id >= 0 && play.inventory.get(&(id as u16)).is_some_and(|&n| n > 0)
+            });
+            if !play.quick.open {
+                play.panel_latch.up |= play.ticks % 20 == 0;
+            } else {
+                match owned {
+                    Some(k) if play.quick.selection == k => input.jump = true,
+                    Some(0) => play.panel_latch.right = true,
+                    Some(1) => play.panel_latch.up = true,
+                    Some(2) => play.panel_latch.left = true,
+                    Some(_) => play.panel_latch.down = true,
+                    None => play.panel_latch.triangle = true,
+                }
+            }
+        }
         play.tick(&input, neopets_sim::camera::CameraPad::default());
         // Loads go through the same background loader as the window; the trace does not wait.
         for line in streamer.pump(&mut play) {
