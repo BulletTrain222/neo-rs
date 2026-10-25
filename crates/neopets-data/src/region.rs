@@ -46,6 +46,23 @@ pub struct Placement {
     /// word (+0xC8).
     pub emerge_distance: f32,
     pub selector: u32,
+    /// The drop placement ordinal (s16 +0xB0): a kind-8 record of the same region, -1 none.
+    pub drop: i16,
+}
+
+/// A kind-8 item point (SPEC-0006 Kind 8; SPEC-0021 placements).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ItemPoint {
+    pub position: [f32; 3],
+    pub facing: [f32; 3],
+    /// Flags (+0x20), drop group (+0x22, -1 none), primary key (+0x24, -1 none), luck gate
+    /// (+0x28), fixed count (+0x2A) and the treasure-map byte (+0x2C).
+    pub flags: u8,
+    pub group: i16,
+    pub key: i16,
+    pub luck: i16,
+    pub count: i16,
+    pub map: u8,
 }
 
 /// The record walk of a type-36 table: kind-3 placements and kind-2 animation tables (their
@@ -54,6 +71,8 @@ pub struct Placement {
 pub struct Records {
     pub placements: Vec<Placement>,
     pub tables: Vec<std::ops::Range<usize>>,
+    /// Kind-8 item points in walk order (their ordinals).
+    pub items: Vec<ItemPoint>,
 }
 
 /// Walk a type-36 payload; any other kind ends the walk (SPEC-0006).
@@ -102,6 +121,21 @@ pub fn records(p: &[u8]) -> Records {
                     summon: p.get(data + 0xB6).is_some_and(|&b| b != 0),
                     emerge_distance: f32_at(p, data + 0xC0).unwrap_or(0.0),
                     selector: u32_at(p, data + 0xC8).unwrap_or(0),
+                    drop: i16_at(p, data + 0xB0).unwrap_or(-1),
+                });
+            }
+            8 => {
+                let v = |o: usize| [f32_at(p, data + o).unwrap_or(0.0), f32_at(p, data + o + 4).unwrap_or(0.0), f32_at(p, data + o + 8).unwrap_or(0.0)];
+                let s = |o: usize| i16_at(p, data + o).unwrap_or(-1);
+                out.items.push(ItemPoint {
+                    position: v(0),
+                    facing: v(0x10),
+                    flags: p.get(data + 0x20).copied().unwrap_or(0),
+                    group: s(0x22),
+                    key: s(0x24),
+                    luck: s(0x28),
+                    count: s(0x2A),
+                    map: p.get(data + 0x2C).copied().unwrap_or(0),
                 });
             }
             2 => out.tables.push(data..at + len),

@@ -65,7 +65,7 @@ struct Streamer {
     scenes: std::collections::HashMap<u32, neopets_data::model::ModelData>,
     regions: std::sync::mpsc::Sender<(u32, u8, u32)>,
     #[allow(clippy::type_complexity)]
-    region_results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, u8, u32, Result<Vec<RegionCharacter>, String>)>>,
+    region_results: std::sync::Mutex<std::sync::mpsc::Receiver<(u32, u8, u32, Result<RegionLoad, String>)>>,
     /// Region loads sent and not yet received.
     regions_out: usize,
 }
@@ -78,9 +78,12 @@ type RegionCharacter = (
     Option<neopets_data::monster::Tuning>,
 );
 
+/// A loaded region: its characters and its kind-8 item points.
+type RegionLoad = (Vec<RegionCharacter>, Vec<neopets_data::region::ItemPoint>);
+
 /// Read a region resource and build each placed character (summon-reserved records and records
 /// with no position are left out: they are placed by a summoner).
-fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::monster::MonsterTable, region: u32) -> Result<Vec<RegionCharacter>, String> {
+fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::monster::MonsterTable, region: u32) -> Result<RegionLoad, String> {
     let file = index.read(disc, region)?;
     let chain = neopets_data::resource::walk_chunks(&file, None)?;
     // A world pack's own characters are its embedded region: the chain inside its type-32
@@ -91,7 +94,7 @@ fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::mons
             let nested = neopets_data::resource::walk_chunks(&payload, None)?;
             (payload, nested.chunks)
         }
-        _ if chain.chunks.first().is_some_and(|f| f.kind == 31) => return Ok(Vec::new()),
+        _ if chain.chunks.first().is_some_and(|f| f.kind == 31) => return Ok((Vec::new(), Vec::new())),
         _ => (file, chain.chunks),
     };
     let r = neopets_data::region::Region::of(&bytes, &chunks);
@@ -102,7 +105,7 @@ fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::mons
             Err(e) => eprintln!("Region {region}, {:?}: {e}", pl.name),
         }
     }
-    Ok(out)
+    Ok((out, r.records.items))
 }
 
 impl Streamer {
@@ -187,10 +190,10 @@ impl Streamer {
         for (pack, slot, region, result) in regions {
             self.regions_out = self.regions_out.saturating_sub(1);
             match result {
-                Ok(list) => {
+                Ok((list, items)) => {
                     let names: Vec<String> = list.iter().map(|c| c.0.name.clone()).collect();
-                    log.push(format!("region {region} for slot {slot} of {pack} on tick {}: {names:?}", p.ticks));
-                    p.add_characters(pack, slot, region, list);
+                    log.push(format!("region {region} for slot {slot} of {pack} on tick {}: {names:?}, {} item points", p.ticks, items.len()));
+                    p.add_characters(pack, slot, region, list, items);
                 }
                 Err(e) => log.push(format!("region {region} failed: {e}")),
             }
@@ -498,7 +501,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items).chain(),
             )
                 .chain(),
         );
@@ -1233,6 +1236,65 @@ fn sync_shots(
     }
 }
 
+/// A world item's marker, by (pack, pool slot).
+#[derive(Component)]
+struct ItemMarker(u32, usize);
+
+/// World items are drawn as small plain markers (gold for coins, blue for charms, green for
+/// other items), turned by their spin angle and scaled by their drawn scale: the item display
+/// models of SPEC-0021 are not loaded, so this is a diagnostic stand-in.
+fn sync_items(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut assets: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
+) {
+    let Some(state) = state else { return };
+    let p = &state.play;
+    let (mesh, mats) = assets.get_or_insert_with(|| {
+        let colour = |r, g, b| StandardMaterial { base_color: Color::srgb(r, g, b), unlit: true, ..default() };
+        (
+            meshes.add(Cuboid::new(0.5, 0.5, 0.15)),
+            [materials.add(colour(1.0, 0.8, 0.1)), materials.add(colour(0.3, 0.7, 1.0)), materials.add(colour(0.3, 0.9, 0.3))],
+        )
+    });
+    let mut seen = std::collections::HashSet::new();
+    for (e, m, mut t, mut vis) in &mut markers {
+        match p.pools.get(&m.0).and_then(|pool| pool.slots.get(m.1).copied().flatten()) {
+            Some(it) if p.pack_drawn(m.0) => {
+                t.translation = Vec3::from(it.position);
+                t.rotation = Quat::from_rotation_y(it.angle);
+                t.scale = Vec3::splat(it.drawn_scale().max(0.001));
+                *vis = Visibility::Visible;
+                seen.insert((m.0, m.1));
+            }
+            Some(_) => {
+                *vis = Visibility::Hidden;
+                seen.insert((m.0, m.1));
+            }
+            None => commands.entity(e).despawn(),
+        }
+    }
+    for (&pack, pool) in &p.pools {
+        for (i, it) in pool.slots.iter().enumerate() {
+            let Some(it) = it else { continue };
+            if seen.contains(&(pack, i)) {
+                continue;
+            }
+            let k = if neopets_sim::items::is_coin(it.id) {
+                0
+            } else if it.charm {
+                1
+            } else {
+                2
+            };
+            commands.spawn((ItemMarker(pack, i), Mesh3d(mesh.clone()), MeshMaterial3d(mats[k].clone()), Transform::from_translation(Vec3::from(it.position)), Visibility::Hidden));
+        }
+    }
+}
+
 /// A region character's drawn root, by character id.
 #[derive(Component)]
 struct CharacterRoot(u64);
@@ -1474,6 +1536,7 @@ fn play_trace(
         println!("Route to a swap point: {} steps, ending at {:?}", route.len(), route.last());
     }
     let mut last_hurt = String::new();
+    let mut last_pickup = String::new();
     for _ in 0..ticks {
         // The trace waits for region loads (characters) before the next tick, up to a minute,
         // so that runs do not depend on the loader's speed.
@@ -1540,6 +1603,10 @@ fn play_trace(
                 let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", play.talk_partner.as_deref().unwrap_or(&l.speaker), l.text));
                 println!("      LevelMsg line {line} on tick {at}: {text:?}");
             }
+        }
+        if !play.last_pickup.is_empty() && play.last_pickup != last_pickup {
+            last_pickup = play.last_pickup.clone();
+            println!("      {last_pickup}");
         }
         if !play.last_hurt.is_empty() && play.last_hurt != last_hurt {
             last_hurt = play.last_hurt.clone();

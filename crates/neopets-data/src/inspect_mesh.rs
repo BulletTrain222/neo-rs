@@ -445,6 +445,13 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         }
         let weapons: Vec<(u16, i16)> = items.items.iter().filter(|i| i.is_weapon()).map(|i| (i.id, i.stats[0])).collect();
         println!("Item table: {} records, by type {by_type:?}; weapons (id, stat A) {weapons:?}", items.items.len());
+        println!(
+            "Drop tables: {} sub-tables {:?}; {} groups {:?}",
+            items.sub_tables.len(),
+            items.sub_tables.iter().map(Vec::len).collect::<Vec<_>>(),
+            items.groups.len(),
+            items.groups.iter().map(|g| (g.chance, g.min, g.max, g.entries.clone())).collect::<Vec<_>>()
+        );
         let b = index.read(disc, 504)?;
         let ch = resource::walk_chunks(&b, None)?;
         if let Some(c) = ch.chunks.iter().find(|c| c.kind == 18 && !b[c.payload.clone()].starts_with(b"IDM")) {
@@ -477,6 +484,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         println!("Class-17 rows: {c17}, by approach {by_approach:?}, used slots by kind {slot_kinds:?}; row 149 {flower:?}");
         // Packs whose embedded region (type 32) places ground class-17 enemies with a melee slot.
         let mut melee_packs = Vec::new();
+        let (mut item_points, mut drop_points) = (0usize, 0usize);
         for pack in 533..=1433u32 {
             let Ok(bytes) = index.read(disc, pack) else { continue };
             let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
@@ -486,6 +494,8 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             let Some(c) = chain.chunks.iter().find(|c| c.kind == 32) else { continue };
             let Ok(nested) = resource::walk_chunks(&bytes[c.payload.clone()], None) else { continue };
             let r = neopets_data::region::Region::of(&bytes[c.payload.clone()], &nested.chunks);
+            item_points += r.records.items.len();
+            drop_points += r.records.items.iter().filter(|i| i.key == -1).count();
             let names: Vec<String> = r
                 .records
                 .placements
@@ -501,6 +511,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             }
         }
         println!("Packs with embedded ground melee class-17 enemies: {} {:?}", melee_packs.len(), melee_packs.iter().take(12).collect::<Vec<_>>());
+        println!("Embedded kind-8 item points: {item_points}, of them {drop_points} with key -1");
         // SPEC-0055 Layout: deadly ground entries (kind 2), with and without a respawn index.
         let (mut deadly, mut indexed, mut deadly_packs, mut surfaces) = (0, 0, 0, std::collections::BTreeMap::new());
         let mut first = None;

@@ -196,6 +196,8 @@ pub struct Character {
     /// volumes (radius, length) of the row (SPEC-0029 Behavior 10.2).
     pub enemy: Option<Enemy>,
     weapons: [(f32, f32); 5],
+    /// The kind-8 record its drop placement ordinal names (SPEC-0038 Behavior 34, part B).
+    drop: Option<neopets_data::region::ItemPoint>,
     root_step: [f32; 3],
 }
 
@@ -270,6 +272,17 @@ pub struct Play {
     pub last_hurt: String,
     /// The enemy projectile pool (SPEC-0029 Behavior 9).
     pub shots: neopets_sim::projectile::Pool,
+    /// World items (SPEC-0021): one pool per resident world, the wallet, the party's item
+    /// counts, the once-per-area pickups (id, world), the luck value, the coin denominations,
+    /// ids and motion words, enemy payouts due this tick, and the last pickup.
+    pub pools: HashMap<u32, neopets_sim::items::ItemPool>,
+    pub wallet: i32,
+    pub inventory: HashMap<u16, u32>,
+    once: std::collections::HashSet<(u16, u32)>,
+    pub luck: i32,
+    coins: (Vec<i32>, Vec<u16>, Option<neopets_sim::items::CoinWords>),
+    payouts: Vec<(u32, [f32; 3], Option<neopets_data::region::ItemPoint>)>,
+    pub last_pickup: String,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
     /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
     pub death: neopets_sim::death::DeathFlow,
@@ -305,6 +318,12 @@ impl Play {
             Ok(neopets_data::archive::boot_u32_table(&boot_bytes, at, 7)?.into_iter().map(f32::from_bits).collect())
         };
         let bands = (floats(neopets_data::monster::BAND_F1)?, floats(neopets_data::monster::BAND_F2)?);
+        let words = |at: u32, n: usize| neopets_data::archive::boot_u32_table(&boot_bytes, at, n);
+        let coins = (
+            words(neopets_data::item::COIN_DENOMINATIONS, 5)?.into_iter().map(|w| w as i32).collect(),
+            words(neopets_data::item::COIN_IDS, 5)?.into_iter().map(|w| w as u16).collect(),
+            neopets_sim::items::CoinWords::from_words(&words(neopets_data::item::COIN_WORDS, 8)?.into_iter().map(f32::from_bits).collect::<Vec<_>>()),
+        );
         let (world, bytes) = World::load(disc, index, &boot, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
         let (spawn, facing) = ground::spawn(&bytes, &chain.chunks).unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
@@ -379,6 +398,14 @@ impl Play {
             bands,
             last_hurt: String::new(),
             shots: Default::default(),
+            pools: HashMap::new(),
+            wallet: 0,
+            inventory: HashMap::new(),
+            once: Default::default(),
+            luck: 0,
+            coins,
+            payouts: Vec::new(),
+            last_pickup: String::new(),
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
             continued: false,
@@ -865,9 +892,10 @@ impl Play {
                     w.steer_to(toward, 1.0);
                 }
                 c.hp -= applied;
-                if c.hp <= 0 {
+                if c.hp <= 0 && !e.dead {
                     c.hp = 0;
                     e.die();
+                    self.payouts.push((c.pack, c.position, c.drop));
                 }
             } else if damage > 0 && c.townsfolk.is_none() {
             // SPEC-0056: the take-hit of a townsfolk character returns at once.
@@ -935,10 +963,12 @@ impl Play {
         slot: u8,
         region: u32,
         loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>, Option<neopets_data::monster::Tuning>)>,
+        items: Vec<neopets_data::region::ItemPoint>,
     ) {
         if self.slot_regions.get(&(pack, slot)) != Some(&region) {
             return;
         }
+        self.region_items(pack, &items);
         self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
         for (pl, model, anim, row, tuning) in loaded {
             self.next_character += 1;
@@ -971,6 +1001,7 @@ impl Play {
                     _ => None,
                 },
                 weapons: tuning.map_or([(0.0, 0.0); 5], |t| t.weapons),
+                drop: usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied()),
                 root_step: [0.0; 3],
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
@@ -1256,6 +1287,7 @@ impl Play {
         // Characters and slot choices of worlds that are no longer resident are released.
         let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
         self.characters.retain(|c| resident.contains(&c.pack));
+        self.pools.retain(|pack, _| resident.contains(pack));
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
         let hero = self.loco.position();
         let talking = if self.dialogue_open { self.talk_with } else { None };
@@ -1281,6 +1313,7 @@ impl Play {
             c.facing = wk.facing;
         }
         self.enemies_step();
+        self.items_step();
         for c in &mut self.characters {
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
@@ -1459,9 +1492,10 @@ impl Play {
                         if let Some(e) = c.enemy.as_mut() {
                             let (applied, _) = e.take_hit(damage.trunc() as i32, hero, &mut self.rng);
                             c.hp -= applied;
-                            if c.hp <= 0 {
+                            if c.hp <= 0 && !e.dead {
                                 c.hp = 0;
                                 e.die();
+                                self.payouts.push((c.pack, c.position, c.drop));
                             }
                             self.last_hit = format!("reflected shot hit {} for {applied} (hp {})", c.name, c.hp);
                         }
@@ -1486,6 +1520,172 @@ impl Play {
                     }
                 }
             }
+        }
+    }
+
+    /// The item type of an id (config type; -1 when the table has no record).
+    fn item_kind(&self, id: u16) -> i16 {
+        self.items.get(id).map_or(-1, |i| i.kind)
+    }
+
+    /// SPEC-0021 Pickup dispatch, region start-up: for each kind-8 point, the luck gate (one
+    /// draw r = int[0, 100] when its gate field is set), for keys 0 or more the equipment veto
+    /// and the once-per-area and held vetoes, then the flag test (0 or 1 spawn, placed, with the
+    /// key as the id: a negative key is refused by the spawn).
+    fn region_items(&mut self, pack: u32, items: &[neopets_data::region::ItemPoint]) {
+        for p in items {
+            if p.luck != 0 {
+                let r = self.rng.range(0, 100);
+                if !neopets_sim::items::luck_passes(self.luck, r) {
+                    continue;
+                }
+            }
+            if p.key >= 0 && self.vetoed(p.key as u16, pack) {
+                continue;
+            }
+            if p.flags > 1 || p.key < 0 {
+                continue;
+            }
+            let id = p.key as u16;
+            let spawn = neopets_sim::items::Spawn {
+                id,
+                point: p.position,
+                placed: true,
+                charm: self.item_kind(id) == 17,
+                s0: 1.0,
+                s1: 1.0,
+                delay: 0.0,
+                larg: -1.0,
+                direction: Some(p.facing),
+                flag: p.flags,
+                map: p.map,
+            };
+            self.spawn_item(pack, spawn);
+        }
+    }
+
+    /// The equipment veto (types 1 to 6; Tor's entries for 4 to 6) and the quest-style vetoes
+    /// (once-per-area ids 19, 20, 151, 154 and 174; item 126 when held; map 175 not covered).
+    fn vetoed(&self, id: u16, pack: u32) -> bool {
+        let kind = self.item_kind(id);
+        if (4..=6).contains(&kind) {
+            let equipped = [self.weapon, self.shield].into_iter().flatten().find(|&e| self.item_kind(e) == kind);
+            if equipped.is_some_and(|e| id <= e) {
+                return true;
+            }
+        }
+        match id {
+            19 | 20 | 151 | 154 | 174 => self.once.contains(&(id, pack)),
+            126 => self.inventory.get(&126).is_some_and(|&n| n > 0),
+            _ => false,
+        }
+    }
+
+    fn spawn_item(&mut self, pack: u32, s: neopets_sim::items::Spawn) -> bool {
+        let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+        let ground = |x: f32, z: f32, c: f32| world.and_then(|w| w.ground_at(x, z, c));
+        let rng = &mut self.rng;
+        let mut draw = |lo: f32, hi: f32| rng.frange(lo, hi);
+        self.pools.entry(pack).or_default().spawn(s, &ground, &mut draw)
+    }
+
+    /// SPEC-0038 Behavior 34 parts B and D for a first death tick (no direct-item word and no
+    /// carried Neopoints yet): the drop placement's key spawns that item; a key of -1 runs the
+    /// drop action (money roll, coin split or item roll; SPEC-0021 Drop and money flow).
+    fn pay_out(&mut self, pack: u32, at: [f32; 3], drop: Option<neopets_data::region::ItemPoint>) {
+        let Some(p) = drop else { return };
+        let drop_spawn = |id: u16, charm: bool| neopets_sim::items::Spawn {
+            id,
+            point: at,
+            placed: false,
+            charm,
+            s0: 0.25,
+            s1: 1.0,
+            delay: 0.0,
+            larg: -1.0,
+            direction: None,
+            flag: p.flags,
+            map: p.map,
+        };
+        if p.key >= 0 {
+            let id = p.key as u16;
+            let charm = self.item_kind(id) == 17;
+            self.spawn_item(pack, drop_spawn(id, charm));
+            return;
+        }
+        let group = usize::try_from(p.group).ok().and_then(|g| self.items.groups.get(g)).map(|g| neopets_sim::items::Group {
+            chance: g.chance as i32,
+            min: g.min as i32,
+            max: g.max as i32,
+            entries: g.entries.clone(),
+        });
+        let roll = {
+            let rng = std::cell::RefCell::new(&mut self.rng);
+            let mut index = |n: u32| rng.borrow_mut().index(n);
+            let mut range = |a: i32, b: i32| rng.borrow_mut().range(a, b);
+            neopets_sim::items::drop_roll(group.as_ref(), &self.items.sub_tables, p.count, &mut index, &mut range)
+        };
+        match roll {
+            neopets_sim::items::Drop::Coins(m) => {
+                for id in neopets_sim::items::coin_split(m, &self.coins.0, &self.coins.1) {
+                    self.spawn_item(pack, drop_spawn(id, false));
+                }
+            }
+            neopets_sim::items::Drop::Item(id) => {
+                let charm = self.item_kind(id) == 17;
+                self.spawn_item(pack, drop_spawn(id, charm));
+            }
+            neopets_sim::items::Drop::Nothing => {}
+        }
+    }
+
+    /// The world items' per-tick step for the resident worlds' pools, the enemy payouts due,
+    /// and the hero's pickup in the current world (SPEC-0021 Pickup, Auto-collect, Coin pickups).
+    fn items_step(&mut self) {
+        for (pack, at, drop) in std::mem::take(&mut self.payouts) {
+            self.pay_out(pack, at, drop);
+        }
+        let Some(coins) = self.coins.2 else { return };
+        let packs: Vec<u32> = self.pools.keys().copied().collect();
+        for pack in packs {
+            let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+            let ground = |x: f32, z: f32, c: f32| world.and_then(|w| w.ground_at(x, z, c));
+            let rng = &mut self.rng;
+            let mut draw = |lo: f32, hi: f32| rng.frange(lo, hi);
+            if let Some(pool) = self.pools.get_mut(&pack) {
+                pool.tick(&coins, &ground, &mut draw);
+            }
+        }
+        let p = self.loco.position();
+        let pack = self.world.pack;
+        let base = self.items.get(146).map_or(1.5, |i| i.pickup_base);
+        let Some(i) = self.pools.get(&pack).and_then(|pool| pool.collectable(p, base, contact::HERO_RADIUS)) else { return };
+        let Some(it) = self.pools.get(&pack).and_then(|pool| pool.slots[i]) else { return };
+        let coin = neopets_sim::items::is_coin(it.id);
+        let mote = (160..=173).contains(&it.id);
+        let state = self.loco.state;
+        if !coin && (matches!(state, 0x19 | 0x21 | 0x33 | 0x37) || (!mote && (7..=0x3C).contains(&state))) {
+            return;
+        }
+        if it.id >= 191 && !it.charm {
+            return;
+        }
+        if let Some(pool) = self.pools.get_mut(&pack) {
+            pool.take(i);
+        }
+        if coin {
+            let value = self.coins.1.iter().position(|&c| c == it.id).map_or(0, |k| self.coins.0[k]);
+            if value > 0 {
+                self.wallet = self.wallet.checked_add(value).unwrap_or(0).max(0);
+            }
+            self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.wallet, self.ticks);
+        } else {
+            let count = if it.charm { 100 } else { 1 };
+            *self.inventory.entry(it.id).or_insert(0) += count;
+            if matches!(it.id, 19 | 20 | 151 | 154 | 174) {
+                self.once.insert((it.id, pack));
+            }
+            self.last_pickup = format!("picked up item {} (held {}) on tick {}", it.id, self.inventory[&it.id], self.ticks);
         }
     }
 
@@ -1616,6 +1816,10 @@ impl Play {
         if self.shots.live() > 0 {
             names.push(format!("enemy shots {}", self.shots.live()));
         }
+        if let Some(pool) = self.pools.get(&self.world.pack).filter(|p| p.live() > 0) {
+            let ids: Vec<u16> = pool.slots.iter().flatten().map(|i| i.id).collect();
+            names.push(format!("world items {ids:?}"));
+        }
         let roundup: Vec<u16> = (107..=110).filter(|&f| self.state.flag(f)).collect();
         if !roundup.is_empty() {
             names.push(format!("round-up flags {roundup:?}"));
@@ -1633,7 +1837,7 @@ impl Play {
     pub fn status(&self) -> String {
         let p = self.loco.position();
         format!(
-            "PLAY (M7): hero at ({:.1}, {:.1}, {:.1}), state {}, phase {}, action {}, rate {:.2}, gap {:.2}, hp {}/{}{}. \
+            "PLAY (M7): hero at ({:.1}, {:.1}, {:.1}), state {}, phase {}, action {}, rate {:.2}, gap {:.2}, hp {}/{}, {} NP{}. \
              WASD move, Shift run (R1), Space jump (Cross), J/L I/K or right stick camera, R recentre (R3)",
             p[0],
             p[1],
@@ -1645,6 +1849,7 @@ impl Play {
             self.loco.body.gap,
             self.hero_hp,
             self.hero_max,
+            self.wallet,
             if self.last_hurt.is_empty() { String::new() } else { format!(" ({})", self.last_hurt) }
         ) + &match (self.death.page, self.death.flag_e) {
             (Some(n), _) => format!("\nGAME OVER page (SPEC-0055; the front end's sprites are not drawn): Continue with Space (Cross) from page pass 122, now {n}"),
