@@ -364,6 +364,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         println!("909 entry records 0..4 (position, facing): {e:?}");
         if let Some(c) = chain.chunks.iter().find(|c| c.kind == 32) {
             let nested = resource::walk_chunks(&bytes[c.payload.clone()], None)?;
+            println!("909 type-32 payload: {} bytes, starts {:02x?}; nested kinds {:?}", c.payload.len(), &bytes[c.payload.start..c.payload.start + 32], nested.chunks.iter().map(|k| k.kind).collect::<Vec<_>>());
             let r = neopets_data::region::Region::of(&bytes[c.payload.clone()], &nested.chunks);
             println!("909 embedded region: {} placements, {} tables, {} model sets, skeletons {:?}, clip sets {:?}", r.records.placements.len(), r.records.tables.len(), r.model_sets.len(), r.skeletons.each_ref().map(Vec::len), r.clip_sets.each_ref().map(Vec::len));
             for pl in r.records.placements.iter().take(6) {
@@ -383,6 +384,8 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                 println!("  {:?} at {:?} type {} skel {:?} tables {:?} model {} summon {}", pl.name, pl.position, pl.monster_type, pl.skeletons, pl.tables, pl.model_set, pl.summon);
             }
         }
+        let ents = neopets_data::travel::entity_table(&bytes, &chain.chunks);
+        println!("909 entity table: {} entries; 31..=50: {:?}", ents.len(), ents.get(31..51));
         let lines = neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks);
         println!("909 dialogue table: {} lines; line 0 resolves: {}", lines.len(), lines.line(0).is_some());
     }

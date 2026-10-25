@@ -18,6 +18,8 @@ use std::cell::Cell;
 use std::collections::HashMap;
 
 const UP: [f32; 3] = [0.0, 1.0, 0.0];
+/// The slot number used here for a world's embedded region.
+const EMBEDDED_SLOT: u8 = 255;
 /// SPEC-0006 Default start: pack 691 in T and 909 in E, the exterior current.
 const START_EXTERIOR: u32 = 909;
 const START_TRANSITION: u32 = 691;
@@ -40,6 +42,8 @@ pub struct World {
     pub scripted_doors: bool,
     /// The dialogue line table (type 1000) that LevelMsg reads.
     pub lines: neopets_data::dialogue::LineTable,
+    /// The entity-id table (tag 0x12): (region byte, ordinal) per entity id.
+    entities: Vec<(u8, u8)>,
 }
 
 impl World {
@@ -68,6 +72,7 @@ impl World {
             entries: (0..4096).map_while(|i| ground::entry_record(&bytes, &chain.chunks, i)).collect(),
             scripted_doors: boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback"),
             lines: neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks),
+            entities: neopets_data::travel::entity_table(&bytes, &chain.chunks),
         };
         Ok((world, bytes))
     }
@@ -160,6 +165,8 @@ pub struct Character {
     pub id: u64,
     pub pack: u32,
     pub slot: u8,
+    /// Entity id (tag 0x12 reverse rule), when the pack's table names this character.
+    pub entity: Option<usize>,
     pub name: String,
     pub position: [f32; 3],
     pub facing: [f32; 3],
@@ -207,6 +214,12 @@ pub struct Play {
     pub message: Option<(u16, u64)>,
     /// Square was pressed this tick (a script door starts only on a press edge).
     square_now: bool,
+    /// The Talk label is shown this tick, and the talked character (the speaker of its lines).
+    pub talk_prompt: bool,
+    pub talk_partner: Option<String>,
+    /// The shared dialogue box is open (SPEC-0022: it closes only on a Square press; the hero
+    /// stays in the talking state meanwhile).
+    pub dialogue_open: bool,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -279,6 +292,9 @@ impl Play {
             state: GameState::default(),
             message: None,
             square_now: false,
+            talk_prompt: false,
+            talk_partner: None,
+            dialogue_open: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             region_wanted: Vec::new(),
@@ -431,6 +447,7 @@ impl Play {
     /// the other world when the buffer rule streams it and it is not already resident.
     pub fn install(&mut self, world: World) {
         self.kinds.insert(world.pack, world.kind);
+        self.state.reload_module(world.pack);
         let resident = self.world.pack == world.pack || self.other.as_ref().is_some_and(|o| o.pack == world.pack);
         if !resident && self.streams(world.kind) {
             self.other = Some(world);
@@ -503,6 +520,12 @@ impl Play {
 
     /// SPEC-0006 Make current: the new world's script runs its activate-world routine.
     fn activated(&mut self) {
+        // The world's own region (its embedded type-32 characters), slot 255, once per load.
+        let pack = self.world.pack;
+        if !self.slot_regions.contains_key(&(pack, EMBEDDED_SLOT)) {
+            self.slot_regions.insert((pack, EMBEDDED_SLOT), pack);
+            self.region_wanted.push((pack, EMBEDDED_SLOT, pack));
+        }
         let actions = level::on_activate(self.world.pack, &mut self.state);
         self.apply(&actions);
     }
@@ -538,7 +561,15 @@ impl Play {
                         self.last_door = format!("script: hero moved to locator {locator} of {}", self.world.pack);
                     }
                 }
-                Action::Message { line } => self.message = Some((line, self.ticks)),
+                Action::Message { line } => {
+                    self.talk_partner = None;
+                    self.message = Some((line, self.ticks));
+                    self.dialogue_open = self.world.lines.line(line as usize).is_some();
+                }
+                Action::Talk { line } => {
+                    self.message = Some((line, self.ticks));
+                    self.dialogue_open = self.world.lines.line(line as usize).is_some();
+                }
                 Action::LoadRegion { slot, region } => {
                     let pack = self.world.pack;
                     self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
@@ -606,6 +637,53 @@ impl Play {
         };
     }
 
+    /// SPEC-0006 reverse id: the first entity-table entry whose region byte is the character's
+    /// region (0xFF for the embedded region, else j of region P + 1 + j) and whose ordinal is
+    /// its kind-3 ordinal.
+    fn entity_of(&self, pack: u32, region: u32, ordinal: usize) -> Option<usize> {
+        let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+        let j = if region == pack { 0xFF } else { u8::try_from(region.checked_sub(pack + 1)?).ok()? };
+        world.entities.iter().position(|&(r, o)| r == j && o as usize == ordinal)
+    }
+
+    /// SPEC-0022 Interaction range and target choice, simplified: the nearest character of the
+    /// current world with a registered talk routine, at most 20.0 away and within the hero's
+    /// facing cone (cosine 0.5). The 90-tick leader hold, the reorder rule and the lock-on
+    /// list are not reproduced. Returns (index, distance, routine).
+    fn talk_candidate(&self) -> Option<(usize, f32, u8)> {
+        let p = self.loco.position();
+        let f = self.loco.facing;
+        self.characters
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.pack == self.world.pack)
+            .filter_map(|(i, c)| {
+                let routine = level::proximity_routine(c.pack, c.entity?)?;
+                let d = [c.position[0] - p[0], c.position[1] - p[1], c.position[2] - p[2]];
+                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                let cos = (d[0] * f[0] + d[2] * f[2]) / (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-6);
+                (len <= 20.0 && cos >= 0.5).then_some((i, len, routine))
+            })
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// The talk entry (SPEC-0022): within 5.8 the "Talk" label (8) is shown and Square starts
+    /// the routine; a candidate with a routine claims the press at any range. Returns whether
+    /// the press was claimed.
+    fn talk_step(&mut self) -> bool {
+        let Some((i, d, routine)) = self.talk_candidate() else { return false };
+        if d < 5.8 {
+            self.talk_prompt = true;
+            if self.square_now {
+                let pack = self.characters[i].pack;
+                self.talk_partner = Some(self.characters[i].name.clone());
+                let actions = level::on_talk(pack, routine, &mut self.state);
+                self.apply(&actions);
+            }
+        }
+        true
+    }
+
     /// Diagnostic: turn the hero toward a point and put the camera behind it.
     pub fn face_point(&mut self, x: f32, z: f32) {
         let p = self.loco.position();
@@ -620,12 +698,20 @@ impl Play {
         self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
         for (pl, model, anim) in loaded {
             self.next_character += 1;
+            // Characters have motion records and settle on the ground under their placement
+            // (the ground step probes 2.5 above; SPEC-0018). The fall itself is not simulated.
+            let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+            let position = match world.and_then(|w| w.ground_at(pl.position[0], pl.position[2], pl.position[1] + 2.5)) {
+                Some(h) => [pl.position[0], h, pl.position[2]],
+                None => pl.position,
+            };
             self.characters.push(Character {
                 id: self.next_character,
                 pack,
                 slot,
+                entity: self.entity_of(pack, region, pl.ordinal),
                 name: pl.name,
-                position: pl.position,
+                position,
                 facing: pl.facing,
                 anim,
                 model,
@@ -651,6 +737,7 @@ impl Play {
     pub fn finish_job(&mut self, world: World) {
         let Some(job) = self.job.take() else { return };
         self.kinds.insert(world.pack, world.kind);
+        self.state.reload_module(world.pack);
         match job {
             Job::FromExterior { plane, reverse, .. } if world.kind == Kind::Transition => {
                 // E current, D a transition: it takes T and the hero lands on its door.
@@ -748,11 +835,20 @@ impl Play {
         let (forward, left) = self.camera.rows();
         // The interaction chooser shows the prompt posted on the previous tick and sets the
         // confirm flag on a Square press edge.
+        // An open dialogue box takes Square to close it, and holds the hero in place.
+        let mut input = *input;
+        if self.dialogue_open {
+            if input.square {
+                self.dialogue_open = false;
+                self.message = None;
+            }
+            input = HeroInput::default();
+        }
         if self.prompt_shown.is_some() && input.square {
             self.confirm = true;
         }
         self.square_now = input.square;
-        self.loco.update(input, forward, left, self.hero.clip_state());
+        self.loco.update(&input, forward, left, self.hero.clip_state());
         self.pending_step();
         self.hero.play(self.loco.action());
         self.hero.set_rate(self.loco.rate);
@@ -799,9 +895,17 @@ impl Play {
                 self.activated();
             }
         }
-        self.door_step();
+        // The interaction chooser: a talk candidate claims Square before the doors.
+        self.talk_prompt = false;
+        if !self.dialogue_open && !self.talk_step() {
+            self.door_step();
+        }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
+        // Characters and slot choices of worlds that are no longer resident are released.
+        let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
+        self.characters.retain(|c| resident.contains(&c.pack));
+        self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
         for c in &mut self.characters {
             let _ = c.anim.tick();
         }
@@ -822,7 +926,8 @@ impl Play {
 
     pub fn status_worlds(&self) -> String {
         let other = self.other.as_ref().map_or("none".into(), |o| format!("{} ({:?})", o.pack, o.buffer));
-        let prompt = match self.prompt_shown {
+        let prompt = match self.prompt_shown.or(self.talk_prompt.then_some(8)) {
+            Some(8) => " | E (Square): Talk (label 8)".to_string(),
             Some(13) => " | E (Square): Enter (prompt 13)".to_string(),
             Some(26) => " | E (Square): Exit (prompt 26)".to_string(),
             Some(id) => format!(" | E (Square): prompt {id}"),
@@ -830,9 +935,9 @@ impl Play {
         };
         let job = self.job.map_or(String::new(), |j| format!(" | loading {j:?}"));
         let prompt = match self.message {
-            Some((line, at)) if self.ticks < at + 240 => match self.world.lines.line(line as usize) {
-                Some(l) => format!("{prompt}
-LINE {line}: {}: {}", l.speaker, l.text),
+            Some((line, _)) if self.dialogue_open => match self.world.lines.line(line as usize) {
+                // SPEC-0022 Speaker rule: the hero's talk partner names the speaker.
+                Some(l) => format!("{prompt}\nLINE {line}: {}: {}", self.talk_partner.as_deref().unwrap_or(&l.speaker), l.text),
                 None => format!("{prompt} | LevelMsg line {line} (no such line)"),
             },
             _ => prompt,

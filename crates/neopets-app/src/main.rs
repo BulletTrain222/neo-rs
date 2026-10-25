@@ -73,9 +73,20 @@ type RegionCharacter = (neopets_data::region::Placement, neopets_data::model::Mo
 /// Read a region resource and build each placed character (summon-reserved records and records
 /// with no position are left out: they are placed by a summoner).
 fn load_region(disc: &mut Disc, index: &ArchiveIndex, region: u32) -> Result<Vec<RegionCharacter>, String> {
-    let bytes = index.read(disc, region)?;
-    let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
-    let r = neopets_data::region::Region::of(&bytes, &chain.chunks);
+    let file = index.read(disc, region)?;
+    let chain = neopets_data::resource::walk_chunks(&file, None)?;
+    // A world pack's own characters are its embedded region: the chain inside its type-32
+    // chunk, with offsets relative to that chunk's payload.
+    let (bytes, chunks) = match chain.chunks.iter().find(|c| c.kind == neopets_data::region::EMBEDDED) {
+        Some(c) if chain.chunks.first().is_some_and(|f| f.kind == 31) => {
+            let payload = file[c.payload.clone()].to_vec();
+            let nested = neopets_data::resource::walk_chunks(&payload, None)?;
+            (payload, nested.chunks)
+        }
+        _ if chain.chunks.first().is_some_and(|f| f.kind == 31) => return Ok(Vec::new()),
+        _ => (file, chain.chunks),
+    };
+    let r = neopets_data::region::Region::of(&bytes, &chunks);
     let mut out = Vec::new();
     for pl in r.records.placements.iter().filter(|p| !p.summon && p.position != [0.0; 3]) {
         match archive_view::region_character(disc, index, &bytes, &r, pl) {
@@ -1359,7 +1370,10 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             route.remove(0);
         }
         let goal = route.first().copied().or(to.filter(|t| !t[0].is_nan()));
-        if let Some([tx, tz]) = goal {
+        if let Some([tx, tz]) = goal.filter(|g| {
+            let p = play.loco.position();
+            route.len() > 1 || to.is_some_and(|t| t[0].is_nan()) || (g[0] - p[0]).hypot(g[1] - p[2]) > 2.0
+        }) {
             let p = play.loco.position();
             let (f, l) = play.camera.rows();
             let (dx, dz) = (tx - p[0], tz - p[2]);
@@ -1370,7 +1384,7 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         let input = neopets_sim::hero::HeroInput {
             forward,
             side,
-            square: play.prompt_shown.is_some(),
+            square: play.prompt_shown.is_some() || play.talk_prompt,
             jump: jump && play.ticks % 120 == 0 && play.ticks > 0,
             ..Default::default()
         };
@@ -1381,7 +1395,7 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         }
         if let Some((line, at)) = play.message {
             if at == play.ticks {
-                let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", l.speaker, l.text));
+                let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", play.talk_partner.as_deref().unwrap_or(&l.speaker), l.text));
                 println!("      LevelMsg line {line} on tick {at}: {text:?}");
             }
         }

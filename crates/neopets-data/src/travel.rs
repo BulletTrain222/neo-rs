@@ -189,6 +189,38 @@ impl Neighbours {
     }
 }
 
+/// The entity-id table (tag 0x12, SPEC-0006 Tagged tables): entry e gives the region byte
+/// (0xFF for the pack's embedded region, else the slot-load number j of region P + 1 + j) and
+/// the ordinal of a kind-3 record in that region.
+pub fn entity_table(bytes: &[u8], top: &[Chunk]) -> Vec<(u8, u8)> {
+    let Some(c) = top.iter().find(|c| c.kind == TAGGED) else { return Vec::new() };
+    let p = &bytes[c.payload.clone()];
+    let mut at = 0usize;
+    while at + 0x10 <= p.len() {
+        let Some(t) = u32_at(p, at) else { break };
+        let len = match t {
+            0x0B | 0x0D | 0x0E => {
+                let n = p.get(at + 0x10..at + 0x12).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize);
+                (0x10 + (n + 3) * 2).div_ceil(16) * 16
+            }
+            0x0A => {
+                let n = p.get(at + 0x10..at + 0x12).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]) as usize);
+                (0x10 + 4 * n + 2).div_ceil(16) * 16
+            }
+            0x12 | 0x13 => {
+                let size = u32_at(p, at + 8).unwrap_or(0) as usize & !0xF;
+                if t == 0x12 {
+                    return (0..size / 16).filter_map(|i| Some((*p.get(at + 0x10 + 16 * i)?, *p.get(at + 0x11 + 16 * i)?))).collect();
+                }
+                0x10 + size
+            }
+            _ => break,
+        };
+        at += len.max(0x10);
+    }
+    Vec::new()
+}
+
 /// Walk the type-15 tagged records and read the lookup table with the given tag.
 fn tagged_lookup(bytes: &[u8], top: &[Chunk], tag: u32) -> Option<Neighbours> {
     let c = top.iter().find(|c| c.kind == TAGGED)?;

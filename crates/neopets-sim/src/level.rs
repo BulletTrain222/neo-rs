@@ -24,6 +24,9 @@ pub enum Action {
     MoveHero { locator: usize },
     /// LevelMsg: show dialogue line n of the current world.
     Message { line: u16 },
+    /// The proximity talk frame around a line: SetConversationTarget(entity, 1), LevelMsg(line,
+    /// wait 1), EndConversation(entity).
+    Talk { line: u16 },
     /// SlotLoad into one of the level's slots: the region resource to load, or None to empty
     /// the slot (its characters leave).
     LoadRegion { slot: u8, region: Option<u32> },
@@ -37,6 +40,9 @@ pub struct GameState {
     /// (message type, eW slot) to value; a read resets it to -1 (absent).
     pub blackboard: HashMap<(u8, usize), i32>,
     pub items: HashMap<u16, u32>,
+    /// Rotation words of the proximity routines, by (pack, routine). Module data: a pack's
+    /// words return to 0 when it is loaded again (`reload_module`).
+    pub rotations: HashMap<(u32, u8), Rotation>,
 }
 
 impl GameState {
@@ -59,6 +65,11 @@ impl GameState {
     /// Read and reset a blackboard message (-1 when none).
     pub fn take_message(&mut self, kind: u8, slot: usize) -> i32 {
         self.blackboard.remove(&(kind, slot)).unwrap_or(-1)
+    }
+
+    /// A pack was loaded again: its module data words return to their file values.
+    pub fn reload_module(&mut self, pack: u32) {
+        self.rotations.retain(|(p, _), _| *p != pack);
     }
 
     /// The farm story stage: the highest of story flags 1 to 6 that is set (SPEC-0045, 909
@@ -132,6 +143,222 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     }
 }
 
+/// A line choice of a proximity routine (SPEC-0022 Line rotation patterns). Lines given as
+/// (Tor, Roberta) pairs pick by the active hero; the hero is Tor here.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Lines {
+    One(u16),
+    /// "a, b, c": in turn, then again from a.
+    Cycle(Vec<u16>),
+    /// "a; then b, c": a once per reset, then b, c in turn.
+    FirstOnce(u16, Vec<u16>),
+    /// Lines shown once in order, then the cycle (909 routine A's flag-111 branch).
+    Then(Vec<u16>, Vec<u16>),
+}
+
+/// The rotation words of one routine (module data: back to 0 when the pack loads again).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Rotation {
+    marker: u16,
+    counter: u16,
+}
+
+impl Rotation {
+    /// Reset check, show, step for branch k (marker k + 1, so the file value 0 means none).
+    fn pick(&mut self, k: u16, lines: &Lines) -> Option<u16> {
+        if self.marker != k + 1 {
+            self.marker = k + 1;
+            self.counter = 0;
+        }
+        let c = self.counter as usize;
+        let (line, next) = match lines {
+            Lines::One(a) => (*a, 0),
+            Lines::Cycle(v) => (v[c % v.len()], ((c + 1) % v.len()) as u16),
+            Lines::FirstOnce(a, v) => {
+                if c == 0 {
+                    (*a, 1)
+                } else {
+                    let i = (c - 1) % v.len();
+                    (v[i], (1 + (i + 1) % v.len()) as u16)
+                }
+            }
+            Lines::Then(first, v) => {
+                if c < first.len() {
+                    (first[c], (c + 1) as u16)
+                } else {
+                    let i = (c - first.len()) % v.len();
+                    (v[i], (first.len() + (i + 1) % v.len()) as u16)
+                }
+            }
+        };
+        self.counter = next;
+        Some(line)
+    }
+}
+
+/// The proximity routine registered for an entity id of a pack (RegisterEntityProximityCallback
+/// with the range flag set), as a routine number local to that pack.
+pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
+    match (pack, entity) {
+        // SPEC-0045 909: entities 37 to 42 routine A, 43 to 50 routine B, 31 to 36 routine C.
+        (909, 37..=42) => Some(0),
+        (909, 43..=50) => Some(1),
+        (909, 31..=36) => Some(2),
+        _ => None,
+    }
+}
+
+/// One cycle branch: (flag, lines).
+fn cycle(lines: &[u16]) -> Lines {
+    Lines::Cycle(lines.to_vec())
+}
+
+/// Run a proximity routine: the first branch whose test holds picks a line (with its side
+/// effects); the talk frame (SetConversationTarget, LevelMsg, EndConversation) wraps it.
+pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
+    let key = (pack, routine);
+    let mut rot = state.rotations.get(&key).copied().unwrap_or_default();
+    let line = match (pack, routine) {
+        (909, 0) => farm_routine_a(state, &mut rot),
+        (909, 1) => farm_routine_b(state, &mut rot),
+        (909, 2) => farm_routine_c(state, &mut rot),
+        _ => None,
+    };
+    state.rotations.insert(key, rot);
+    line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// The (flag, lines) cascade shared by the farm routines' story branches: the first set flag
+/// in the list picks its lines.
+fn cascade(state: &GameState, rot: &mut Rotation, list: &[(u16, Lines)]) -> Option<Option<u16>> {
+    let k = list.iter().position(|(f, _)| state.flag(*f))?;
+    Some(rot.pick(k as u16, &list[k].1))
+}
+
+/// SPEC-0045 909 routine A (entities 37 to 42; Tor's lines of the x/y pairs).
+fn farm_routine_a(s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
+    let story = [
+        (302, cycle(&[0, 2, 4])),
+        (278, cycle(&[6, 8, 10])),
+        (216, cycle(&[12, 13, 14])),
+        (202, cycle(&[15, 16, 17])),
+        (193, cycle(&[18, 19, 20])),
+        (150, cycle(&[21, 22, 23])),
+        (147, cycle(&[24, 25, 26])),
+        (143, cycle(&[27, 28, 29])),
+        (126, cycle(&[30, 31, 32])),
+        (122, cycle(&[33, 34, 35])),
+        (119, cycle(&[36, 37, 38])),
+        (117, cycle(&[39, 40, 41])),
+        (113, cycle(&[42, 43, 44])),
+    ];
+    if let Some(line) = cascade(s, rot, &story) {
+        return line;
+    }
+    let k = story.len() as u16;
+    if s.flag(112) {
+        s.set(113, true);
+        s.items.remove(&7);
+        return rot.pick(k, &Lines::One(45));
+    }
+    if s.flag(111) {
+        // 46, then 189 once (the computed selector), then 47, 48, 46 in turn.
+        return rot.pick(k + 1, &Lines::Then(vec![46, 189], vec![47, 48, 46]));
+    }
+    if s.flag(110) {
+        s.set(111, true);
+        return rot.pick(k + 2, &Lines::One(49));
+    }
+    rot.pick(k + 3, &Lines::FirstOnce(50, vec![51, 52]))
+}
+
+/// SPEC-0045 909 routine B (entities 43 to 50).
+fn farm_routine_b(s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
+    if s.flag(587) && !s.flag(588) {
+        s.items.remove(&85);
+        *s.items.entry(86).or_insert(0) += 1;
+        s.set(588, true);
+        return rot.pick(0, &Lines::One(53));
+    }
+    if s.flag(516) && !s.flag(518) {
+        if s.has_item(76) {
+            s.items.remove(&74);
+            s.items.remove(&76);
+            s.set(518, true);
+            return rot.pick(1, &Lines::One(55));
+        }
+        return rot.pick(2, &Lines::One(57));
+    }
+    let story = [
+        (302, cycle(&[59, 61, 63])),
+        (278, cycle(&[65, 67, 69])),
+        (216, cycle(&[71, 72, 73])),
+        (202, cycle(&[74, 75, 76])),
+        (193, cycle(&[77, 78, 79])),
+        (150, cycle(&[80, 81, 82])),
+        (147, cycle(&[83, 84, 85])),
+        (143, cycle(&[86, 87, 88])),
+        (126, cycle(&[89, 90, 91])),
+        (122, cycle(&[92, 93, 94])),
+        (119, Lines::One(95)),
+    ];
+    // Story branches are numbered after the three item branches.
+    if let Some(k) = story.iter().position(|(f, _)| s.flag(*f)) {
+        return rot.pick(3 + k as u16, &story[k].1);
+    }
+    let k = 3 + story.len() as u16;
+    if s.flag(117) {
+        s.set(119, true);
+        return rot.pick(k, &Lines::One(96));
+    }
+    if s.flag(114) {
+        if s.has_item(34) {
+            s.set(117, true);
+            s.set(116, true);
+            s.items.remove(&34);
+            return rot.pick(k + 1, &Lines::One(97));
+        }
+        let line = rot.pick(k + 2, &cycle(&[98, 99, 100]));
+        if line == Some(98) {
+            s.set(116, true);
+        }
+        return line;
+    }
+    if s.flag(113) {
+        s.set(114, true);
+        return rot.pick(k + 3, &Lines::One(101));
+    }
+    let tail = [(112, cycle(&[102, 103, 104])), (111, Lines::One(105)), (110, cycle(&[106, 107, 108]))];
+    if let Some(i) = tail.iter().position(|(f, _)| s.flag(*f)) {
+        return rot.pick(k + 4 + i as u16, &tail[i].1);
+    }
+    rot.pick(k + 7, &Lines::FirstOnce(109, vec![110, 111]))
+}
+
+/// SPEC-0045 909 routine C (entities 31 to 36). The second flag-110 test is dead (line 156).
+fn farm_routine_c(s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
+    let story = [
+        (302, cycle(&[112, 113, 114])),
+        (278, cycle(&[118, 119, 120])),
+        (216, cycle(&[124, 125, 126])),
+        (202, cycle(&[127, 128, 129])),
+        (193, cycle(&[130, 131, 132])),
+        (150, cycle(&[133, 134, 135])),
+        (147, cycle(&[136, 137, 138])),
+        (126, cycle(&[139, 140, 141])),
+        (122, cycle(&[142, 143, 144])),
+        (114, cycle(&[145, 146, 147, 148, 149])),
+        (111, cycle(&[150, 151, 152])),
+        (110, cycle(&[153, 154, 155])),
+        (109, Lines::One(157)),
+        (108, Lines::One(158)),
+    ];
+    if let Some(line) = cascade(s, rot, &story) {
+        return line;
+    }
+    rot.pick(story.len() as u16, &cycle(&[159, 160, 161]))
+}
+
 /// SPEC-0045 909 activation thread: the slot loads by story stage s (the highest of flags 1 to
 /// 6). Slot 0 is the fourth slot (regions 910 to 913); slots 1, 2 and 3 are P (914 to 919),
 /// Q (920 to 925) and R (926 to 933). The arrival step, stage events and talk thread that
@@ -181,6 +408,59 @@ fn farm_slots(state: &GameState, entry_10: bool) -> Vec<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn talks(pack: u32, routine: u8, s: &mut GameState, n: usize) -> Vec<u16> {
+        (0..n)
+            .filter_map(|_| match on_talk(pack, routine, s).first() {
+                Some(Action::Talk { line }) => Some(*line),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn farm_routine_a_test_vectors() {
+        // SPEC-0045: flags 302 to 111 clear; with 110 clear, talks 1 to 5 show 50, 51, 52, 51,
+        // 52; with 110 set, talk 1 shows 49 and sets 111, then 46, 189, 47, 48, 46, 47, 48.
+        let mut s = GameState::default();
+        assert_eq!(talks(909, 0, &mut s, 5), vec![50, 51, 52, 51, 52]);
+        let mut s = GameState::default();
+        s.set(110, true);
+        assert_eq!(talks(909, 0, &mut s, 8), vec![49, 46, 189, 47, 48, 46, 47, 48]);
+        assert!(s.flag(111));
+    }
+
+    #[test]
+    fn farm_routine_b_item_handoffs() {
+        // SPEC-0045 test vector: 516 set, 518 clear, item 76 held: items 74 and 76 removed, 518
+        // set. 587 set, 588 clear: item 85 removed, item 86 given, 588 set.
+        let mut s = GameState::default();
+        s.set(516, true);
+        s.items.insert(74, 1);
+        s.items.insert(76, 1);
+        assert_eq!(talks(909, 1, &mut s, 1), vec![55]);
+        assert!(s.flag(518) && !s.has_item(74) && !s.has_item(76));
+        let mut s = GameState::default();
+        s.set(587, true);
+        s.items.insert(85, 1);
+        assert_eq!(talks(909, 1, &mut s, 1), vec![53]);
+        assert!(s.flag(588) && s.has_item(86) && !s.has_item(85));
+        // New game: 109; then 110, 111.
+        assert_eq!(talks(909, 1, &mut GameState::default(), 4), vec![109, 110, 111, 110]);
+    }
+
+    #[test]
+    fn rotation_restarts_on_a_branch_change_and_reload() {
+        let mut s = GameState::default();
+        assert_eq!(talks(909, 2, &mut s, 2), vec![159, 160]);
+        s.set(108, true);
+        assert_eq!(talks(909, 2, &mut s, 1), vec![158]);
+        s.set(108, false);
+        assert_eq!(talks(909, 2, &mut s, 1), vec![159], "a new branch restarts the count");
+        talks(909, 2, &mut s, 1);
+        s.reload_module(909);
+        assert_eq!(talks(909, 2, &mut s, 1), vec![159]);
+    }
 
     #[test]
     fn farm_doors_and_returns() {

@@ -26,6 +26,8 @@ fn r16(x: usize) -> usize {
 /// A kind-3 character placement (SPEC-0006 table; offsets from the record's data).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Placement {
+    /// Index among the region's kind-3 records (the ordinal entity ids name).
+    pub ordinal: usize,
     pub position: [f32; 3],
     pub facing: [f32; 3],
     pub name: String,
@@ -80,6 +82,7 @@ pub fn records(p: &[u8]) -> Records {
                 let name: String = name_bytes.iter().take_while(|&&c| c != 0).map(|&c| c as char).collect();
                 let s = |o: usize| i16_at(p, data + o).unwrap_or(-1);
                 out.placements.push(Placement {
+                    ordinal: out.placements.len(),
                     position: v(0),
                     facing: v(0x10),
                     name,
