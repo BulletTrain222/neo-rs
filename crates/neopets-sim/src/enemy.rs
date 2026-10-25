@@ -58,6 +58,8 @@ pub struct Slot {
     pub stun_max: f32,
     pub stun_min: f32,
     pub stun_type: i32,
+    /// The attack's damage alignment (its element; SPEC-0029 Layout 4).
+    pub alignment: i32,
     /// Spawn count (+0x33C) and the missile values of the spawners.
     pub spawn_count: i32,
     pub missile: crate::projectile::Missile,

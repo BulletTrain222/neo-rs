@@ -1807,6 +1807,13 @@ fn play_trace(
     for &id in give {
         play.give(id);
     }
+    // NEOPETS_TRACE_MOTES="w0,w1,w2": diagnostic Mote ids set into Tor's equipment words 0 to
+    // 2 (each must be held; "-" leaves a word empty).
+    if let Ok(m) = std::env::var("NEOPETS_TRACE_MOTES") {
+        for (word, id) in m.split(',').enumerate().filter_map(|(k, t)| Some((k, t.trim().parse::<u16>().ok()?))) {
+            play.item_command(&menus::Command::EquipMote { word, id });
+        }
+    }
     if let Some([x, z, y]) = start {
         play.place_at(x, z, y);
     }
@@ -1864,6 +1871,7 @@ fn play_trace(
     let mut leg_pack = play.world.pack;
     let mut scene = String::new();
     let mut last_hurt = String::new();
+    let mut last_mote = String::new();
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
     for _ in 0..ticks {
@@ -2022,6 +2030,10 @@ fn play_trace(
         if !play.last_hit.is_empty() && play.last_hit != last_hit {
             last_hit = play.last_hit.clone();
             println!("      {last_hit} on tick {}", play.ticks);
+        }
+        if !play.last_mote.is_empty() && play.last_mote != last_mote {
+            last_mote = play.last_mote.clone();
+            println!("      {last_mote}");
         }
         if !play.last_door.is_empty() && play.last_door != last_door {
             last_door = play.last_door.clone();

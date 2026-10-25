@@ -17,6 +17,7 @@ pub mod hud;
 pub mod inventory;
 pub mod items;
 pub mod level;
+pub mod mote;
 pub mod motion;
 pub mod music;
 pub mod nav;

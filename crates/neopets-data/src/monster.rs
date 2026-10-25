@@ -41,6 +41,9 @@ pub struct Row {
     pub disappear: u16,
     /// The villager row's emote voice set (resource 531 row +0x14): -1 none, 0 to 15.
     pub voice_set: i16,
+    /// The target type T (Alignment, +0x3C; SPEC-0029 Layout 4): 0 none, 1 to 7 the Mote
+    /// element classes of the match rule (SPEC-0036 Damage).
+    pub target_type: i16,
 }
 
 /// One attack slot k of a row (SPEC-0038 Layout section 2).
@@ -94,6 +97,8 @@ pub struct AttackSlot {
     pub area_duration: f32,
     pub area_radius: f32,
     pub spawn_key: u16,
+    /// The damage alignment of the attack (+0x3BC + 4k; SPEC-0029 Layout 4): its element.
+    pub alignment: i32,
 }
 
 /// The values the common-enemy class reads (SPEC-0038 Layout section 2) and the five weapon
@@ -216,6 +221,7 @@ impl MonsterTable {
             area_duration: f(0x44C + 4 * k),
             area_radius: f(0x45C + 4 * k),
             spawn_key: u(0x3CC + 2 * k),
+            alignment: w(0x3BC + 4 * k) as i32,
         };
         Some(Tuning {
             approach: u(0x38),
@@ -264,6 +270,7 @@ impl MonsterTable {
         let class = if own >= 0 { Some(own) } else { i16_at(&self.companions, c + 0x10).filter(|&k| k >= 0) };
         Some(Row {
             voice_set: i16_at(&self.companions, c + 0x14).unwrap_or(-1),
+            target_type: i16_at(&self.rows, r + 0x3C)?,
             radius: f32_at(&self.rows, r + 0x28)?,
             height: f32_at(&self.rows, r + 0x2C)?,
             hit_points: u16::from_le_bytes(self.rows.get(r + 0x30..r + 0x32)?.try_into().ok()?),

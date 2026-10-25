@@ -403,6 +403,10 @@ pub struct Play {
     pub shield: Option<u16>,
     pub items: neopets_data::item::ItemTable,
     reach_tor: Vec<f32>,
+    /// The Magic table's cost and power words (SPEC-0036 Magic).
+    magic: neopets_sim::mote::Magic,
+    /// The last Mote charge or magic payment, for the status line.
+    pub last_mote: String,
     hit_list: Vec<u64>,
     last_axis: Option<[f32; 3]>,
     /// The last hit, for the status line.
@@ -584,6 +588,7 @@ impl Play {
         // and the hero divider table (bases, then steps).
         let w1 = |at: u32| words(at, 1).map(|v| v[0]);
         let dividers = words(neopets_data::item::HEALTH_TOR, 8)?;
+        let magic = neopets_sim::mote::Magic::new(words(neopets_sim::mote::MAGIC_AT, neopets_sim::mote::MAGIC_WORDS)?.into_iter().map(|w| w as i32).collect());
         let design = index.read(disc, neopets_data::design::RESOURCE).ok().and_then(|b| neopets_data::design::DesignTables::parse(&b).ok()).unwrap_or_default();
         let hero_colour = design.hero_colour(0).unwrap_or([128; 3]);
         let box_labels = (design.label(0x10).unwrap_or_default(), design.label(0x11).unwrap_or_default());
@@ -712,6 +717,8 @@ impl Play {
             shield: None,
             items,
             reach_tor,
+            magic,
+            last_mote: String::new(),
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -1537,7 +1544,7 @@ impl Play {
             neopets_sim::shop::Buy::Bought => {
                 self.state.neopoints -= it.price as i32;
                 self.state.neopoints = self.state.neopoints.max(0);
-                self.state.give(it.id, 1);
+                self.state.give(it.id, if neopets_sim::mote::is_mote(it.id) { 100 } else { 1 });
                 let taken = neopets_sim::shop::takes(it.id, self.item_kind(it.id));
                 if let Some(pool) = self.pools.get_mut(&pack) {
                     if taken {
@@ -1644,6 +1651,15 @@ impl Play {
         let pack = self.world.pack;
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(0, |i| i.stats[0]);
         let g = self.statuses.damage_scale();
+        // SPEC-0036 Damage: the attack Mote in word 2 gives B and C; P is the attack power table
+        // value only in the power step (sub-state 10).
+        let mote_id = self.equipment.motes[0][2];
+        let mote = mote_id.and_then(|id| self.items.get(id)).map(|i| neopets_sim::mote::AttackMote { f: i.stats[5] as f32, g: i.stats[6] as f32, kind: neopets_sim::mote::element(mote_id) });
+        let power = match mote_id {
+            Some(id) if sub == 10 => neopets_sim::mote::power_index(0, id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0),
+            _ => 1.0,
+        };
+        let mut landed = 0;
         let hero_at = self.loco.position();
         for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
             if self.hit_list.contains(&c.id) {
@@ -1678,10 +1694,13 @@ impl Play {
                 5 | 6 => 0.75,
                 _ => 1.0,
             };
-            let x = stat_a as f32 * d_factor;
-            // y = (x - defence) x G, the attacker's status scale (curse 0.75, strength 1.5).
-            let y = ((x - c.row.map_or(0.0, |r| r.defence)) * g).max(0.0);
-            let damage = y.trunc() as i32;
+            // y = (x - defence) x G, the attacker's status scale (curse 0.75, strength 1.5); E is
+            // 1 (no petpet).
+            let t = c.row.map_or(0, |r| r.target_type as i32);
+            let (damage, absorbed) = neopets_sim::mote::melee(power, stat_a as f32, mote, t, d_factor, 1.0, c.row.map_or(0.0, |r| r.defence), g);
+            if damage > 0 || absorbed {
+                landed += 1;
+            }
             // SPEC-0038 Behavior 37: the common enemy's take-hit hook (doubling on entering
             // agro, the hit reaction, facing the attacker), then the death hook at 0 HP.
             if let Some(e) = c.enemy.as_mut() {
@@ -1710,10 +1729,121 @@ impl Play {
             }
             self.last_hit = format!("hit {} for {damage} (hp {})", if c.name.is_empty() { "(unnamed)" } else { &c.name }, c.hp.max(0));
         }
+        // A landed Tor hit outside the power step pays the level-0 cost, then uses word-2 charge.
+        if sub != 10 {
+            for _ in 0..landed {
+                let (cost, q) = self.magic.tor_swing(mote_id);
+                self.pay_mp(cost);
+                if let Some(id) = mote_id {
+                    let n = neopets_sim::mote::charge_tor(q, self.weapon_stat_b());
+                    self.spend_charge(id, n);
+                }
+            }
+        }
+    }
+
+    /// Stat B (S) of Tor's weapon entry; 0 with no weapon.
+    fn weapon_stat_b(&self) -> f32 {
+        self.weapon.and_then(|id| self.items.get(id)).map_or(0.0, |i| i.stats[1] as f32)
+    }
+
+    /// Spending more magic than the hero has sets it to 0 (SPEC-0036 Magic).
+    fn pay_mp(&mut self, cost: i32) {
+        if cost > 0 {
+            self.hero_mp = (self.hero_mp - cost).max(0);
+        }
+    }
+
+    /// SPEC-0036 Mote charge use: a use of n below the remaining charge subtracts n; otherwise
+    /// the Mote leaves the inventory and every equipment word holding it is cleared.
+    fn spend_charge(&mut self, id: u16, n: i32) {
+        if n <= 0 {
+            return;
+        }
+        let left = self.state.items.get(&id).copied().unwrap_or(0);
+        if (n as u32) < left {
+            self.state.items.insert(id, left - n as u32);
+        } else {
+            self.state.items.remove(&id);
+            for w in self.equipment.motes.iter_mut().flatten() {
+                if *w == Some(id) {
+                    *w = None;
+                }
+            }
+        }
+        self.last_mote = format!("Mote {id} used {n} charge ({} left), mp {} on tick {}", self.state.items.get(&id).copied().unwrap_or(0), self.hero_mp, self.ticks);
+    }
+
+    /// SPEC-0036 Power-ready check, each held tick from F = 50: with a Mote in word 2 the hero
+    /// needs a weapon, the Mote held with charge above 0 and MP at least the release cost; a
+    /// failure returns F to 0 (the HUD timers of the failure are not driven).
+    fn power_ready_step(&mut self) {
+        if !self.attack.as_ref().is_some_and(|a| a.sub == 1 && a.f >= 50) {
+            return;
+        }
+        let Some(id) = self.equipment.motes[0][2] else { return };
+        let held = self.state.items.get(&id).copied().unwrap_or(0) > 0;
+        let ready = self.weapon.is_some() && held && self.hero_mp >= self.magic.tor_power(Some(id)).0;
+        if !ready {
+            if let Some(a) = self.attack.as_mut() {
+                a.f = 0;
+            }
+            self.last_mote = format!("power attack not ready (Mote {id}, mp {}) on tick {}", self.hero_mp, self.ticks);
+        }
+    }
+
+    /// SPEC-0036 Power attack and full release, Tor: at release, word-2 charge (level 1), then
+    /// the MP cost; no damage at release (the Mote power-attack object is not spawned).
+    fn power_release(&mut self) {
+        let mote = self.equipment.motes[0][2];
+        let (cost, q) = self.magic.tor_power(mote);
+        if let Some(id) = mote {
+            let n = neopets_sim::mote::charge_tor(q, self.weapon_stat_b());
+            self.spend_charge(id, n);
+        }
+        self.pay_mp(cost);
+    }
+
+    /// SPEC-0036 Enemy attack damage to a hero (shared enemy class): the shield block (with the
+    /// shield Mote's charge and cost), the armour Mote and the body item, for an attack of
+    /// damage d0 and element `element`. G and the petpet factor are 1.
+    fn enemy_damage(&mut self, d0: f32, blocked: bool, element: i32) -> f32 {
+        use neopets_sim::mote;
+        let stat = |p: &Self, id: u16, k: usize| p.items.get(id).map_or(0.0, |i| i.stats[k] as f32);
+        let mut b = 0.0;
+        if let (true, Some(shield)) = (blocked, self.equipment.entries[1][0]) {
+            let m1 = self.equipment.motes[0][1];
+            b = mote::shield_block(stat(self, shield, 0), m1.is_some());
+            if let Some(m1) = m1.filter(|&m| mote::element_passes(element, mote::element(Some(m)))) {
+                // s is the shield's stat B for type 5 (Tor's shields), stat D for type 3.
+                let s = match self.item_kind(shield) {
+                    5 => stat(self, shield, 1),
+                    3 => stat(self, shield, 3),
+                    _ => 0.0,
+                };
+                let (cost, q) = mote::shield_cost(m1);
+                self.spend_charge(m1, mote::charge_tor(q, s));
+                self.pay_mp(cost);
+            }
+        }
+        let mut d = mote::less_block(d0, b);
+        if let Some(body) = self.equipment.entries[2][0] {
+            if let Some(m0) = self.equipment.motes[0][0] {
+                let (cost, q0) = self.magic.armour(0, Some(m0));
+                let charge = self.state.items.get(&m0).copied().unwrap_or(0) as i32;
+                if q0 <= charge && self.hero_mp >= cost && mote::element_passes(element, mote::element(Some(m0))) {
+                    d = mote::armour_mote(d, stat(self, m0, 7));
+                    self.spend_charge(m0, mote::charge_armour(q0, stat(self, body, 1)));
+                    self.pay_mp(cost);
+                }
+            }
+            d = mote::armour_body(d, stat(self, body, 0));
+        }
+        mote::taken(d, 1.0) as f32
     }
 
     /// Diagnostic fight goal: the nearest living class-17 character of the current world, and
-    /// whether it is within 3 units.
+    /// whether it is within 4.5 units.
     pub fn fight_goal(&self) -> Option<([f32; 2], bool)> {
         let p = self.loco.position();
         let c = self
@@ -1725,7 +1855,7 @@ impl Play {
                 d(a).total_cmp(&d(b))
             })?;
         let d = (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
-        Some(([c.position[0], c.position[2]], d < 3.0))
+        Some(([c.position[0], c.position[2]], d < 4.5))
     }
 
     /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
@@ -2191,7 +2321,11 @@ impl Play {
                 }
             }
         }
+        self.power_ready_step();
         if let Some(sub) = self.attack.as_ref().filter(|a| a.cleared).map(|a| a.sub) {
+            if sub == 10 {
+                self.power_release();
+            }
             self.hit_list.clear();
             if let Some(a) = self.attack.as_mut() {
                 a.cleared = false;
@@ -2591,10 +2725,11 @@ impl Play {
             }
         }
         for (at, s, f, status) in strikes {
-            // SPEC-0036 Enemy attack damage to a hero: a blocked strike subtracts the shield
-            // block (stat A of the shield; no shield Mote, no armour, no petpet).
-            let block = if s.blocked { self.shield.and_then(|id| self.items.get(id)).map_or(0.0, |i| i.stats[0] as f32) } else { 0.0 };
-            let died = self.hero_hit(s.damage - block, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" }));
+            // SPEC-0036 Enemy attack damage to a hero: the shield block, the armour Mote and the
+            // body item, by the attack's damage alignment (no petpet).
+            let element = self.characters.iter().find(|c| c.id == at).and_then(|c| c.enemy.as_ref()).map_or(0, |e| e.p.slots[s.slot].alignment);
+            let damage = self.enemy_damage(s.damage, s.blocked, element);
+            let died = self.hero_hit(damage, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" }));
             // SPEC-0038 Behavior 13 strike test: the status roll int[0, 100] strictly below the
             // chance, for int[int(range max), int(range min)] / 60 whole seconds.
             if status.0 != -1 && !s.blocked {
@@ -3608,8 +3743,10 @@ impl Play {
     /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is
     /// equipped; every item is also counted as held.
     pub fn give(&mut self, id: u16) {
-        // The add puts equipment into its family entry (equipment_step).
-        *self.state.items.entry(id).or_insert(0) += 1;
+        // The add puts equipment into its family entry (equipment_step); a Mote adds its
+        // charge of 100 (SPEC-0021 Inventory).
+        let n = if neopets_sim::mote::is_mote(id) { 100 } else { 1 };
+        *self.state.items.entry(id).or_insert(0) += n;
         self.equipment_step();
     }
 
@@ -3930,6 +4067,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         stun_max: s.stun_max,
         stun_min: s.stun_min,
         stun_type: s.stun_type,
+        alignment: s.alignment,
         spawn_count: s.spawn_count,
         missile: neopets_sim::projectile::Missile {
             flight: s.flight,

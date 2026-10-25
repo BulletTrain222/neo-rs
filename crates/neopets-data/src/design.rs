@@ -114,6 +114,11 @@ impl DesignTables {
         self.word(0, id as usize, 8)
     }
 
+    /// Table 16, record i: the attack power table's f32 (SPEC-0036 Layout, Attack power table).
+    pub fn attack_power(&self, i: usize) -> Option<f32> {
+        self.word(16, i, 0).map(f32::from_bits)
+    }
+
     /// Table 5, row m: the name of map area m.
     pub fn location_name(&self, m: usize) -> Option<Vec<u8>> {
         let t = self.tables.get(5)?;
