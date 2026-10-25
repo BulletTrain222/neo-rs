@@ -501,6 +501,29 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             }
         }
         println!("Packs with embedded ground melee class-17 enemies: {} {:?}", melee_packs.len(), melee_packs.iter().take(12).collect::<Vec<_>>());
+        // SPEC-0055 Layout: deadly ground entries (kind 2), with and without a respawn index.
+        let (mut deadly, mut indexed, mut deadly_packs, mut surfaces) = (0, 0, 0, std::collections::BTreeMap::new());
+        let mut first = None;
+        for pack in 533..=1433u32 {
+            let Ok(bytes) = index.read(disc, pack) else { continue };
+            let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
+            if chain.chunks.first().map(|c| c.kind) != Some(31) {
+                continue;
+            }
+            let Some(g) = neopets_data::ground::Ground::of(&bytes, &chain.chunks, neopets_data::ground::CellOrder::XMajor) else { continue };
+            let d = g.deadly_entries();
+            if d.is_empty() {
+                continue;
+            }
+            deadly_packs += 1;
+            deadly += d.len();
+            indexed += d.iter().filter(|e| e.0 != 0xFF).count();
+            for e in &d {
+                *surfaces.entry(e.1).or_insert(0usize) += 1;
+            }
+            first.get_or_insert((pack, d[0]));
+        }
+        println!("Deadly ground entries: {deadly} in {deadly_packs} packs, {indexed} with a respawn index; surfaces {surfaces:?}; first {first:?}");
     }
     println!("Pack kinds (kind, has module): {kinds:?}");
     {

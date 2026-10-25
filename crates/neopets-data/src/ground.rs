@@ -178,11 +178,22 @@ impl Ground {
         u32_at(&self.grid, self.table + 4 * index).filter(|&r| r != 0).map(|r| r as usize)
     }
 
+    /// The deadly-ground entries of the model set (kind 2 at +0x38): their respawn entry index
+    /// (+0x0D) and surface word (+0x40) (SPEC-0055 Layout).
+    pub fn deadly_entries(&self) -> Vec<(u8, u16)> {
+        self.patches
+            .iter()
+            .flatten()
+            .filter(|p| u32_at(&self.set, p.at + 0x38) == Some(2))
+            .map(|p| (self.set.get(p.at + 0x0D).copied().unwrap_or(0xFF), self.set.get(p.at + 0x40..p.at + 0x42).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]))))
+            .collect()
+    }
+
     /// The probe with the chosen entry's ground kind (the u32 at entry +0x38, which selects
     /// the camera profile in SPEC-0027).
     pub fn probe_hit(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         const UP: [f32; 3] = [0.0, 1.0, 0.0];
-        let none = |height| ProbeHit { height, normal: UP, kind: None, found: false };
+        let none = |height| ProbeHit { height, normal: UP, kind: None, found: false, respawn: None, surface: None };
         let Some(rec) = self.cell_at(x, z) else {
             return none(0.0);
         };
@@ -200,7 +211,14 @@ impl Ground {
             let Some(Some(p)) = self.patches.get(index as usize) else { continue };
             let Some((h, n)) = self.sample(p, x, z) else { continue };
             sampled = true;
-            let hit = ProbeHit { height: h, normal: n, kind: u32_at(&self.set, p.at + 0x38), found: true };
+            let hit = ProbeHit {
+                height: h,
+                normal: n,
+                kind: u32_at(&self.set, p.at + 0x38),
+                found: true,
+                respawn: self.set.get(p.at + 0x0D).copied(),
+                surface: self.set.get(p.at + 0x40..p.at + 0x42).map(|b| u16::from_le_bytes([b[0], b[1]])),
+            };
             if h > best.height && h <= c {
                 best = hit;
             } else {
@@ -477,6 +495,10 @@ pub struct ProbeHit {
     pub kind: Option<u32>,
     /// A candidate was sampled: the world has ground here (SPEC-0006 world swap).
     pub found: bool,
+    /// The entry's respawn entry index (+0x0D, 0xFF none) and surface word (+0x40), read by
+    /// the deadly-ground rules (SPEC-0055 Layout).
+    pub respawn: Option<u8>,
+    pub surface: Option<u16>,
 }
 
 /// A frame record (0x70 bytes): a wall edge named by a grid cell's entry items (SPEC-0018,

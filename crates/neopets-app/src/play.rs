@@ -142,7 +142,7 @@ impl World {
     }
 
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
-        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false }, |g| g.probe_hit(x, z, c))
+        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None }, |g| g.probe_hit(x, z, c))
     }
 }
 
@@ -268,6 +268,11 @@ pub struct Play {
     pub last_hurt: String,
     /// The enemy projectile pool (SPEC-0029 Behavior 9).
     pub shots: neopets_sim::projectile::Pool,
+    /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
+    /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
+    pub death: neopets_sim::death::DeathFlow,
+    penalty_due: bool,
+    pub continued: bool,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
@@ -371,6 +376,9 @@ impl Play {
             bands,
             last_hurt: String::new(),
             shots: Default::default(),
+            death: neopets_sim::death::DeathFlow::new(),
+            penalty_due: false,
+            continued: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             region_wanted: Vec::new(),
@@ -1074,6 +1082,34 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
+        // SPEC-0055: the game-state pass runs the timers before the world update; while the
+        // game-over page is up the world is frozen and only the page's exit test runs.
+        if self.death.page.is_some() {
+            if self.death.page_pass(input.jump) {
+                self.continue_placeholder();
+            }
+            return;
+        }
+        if self.death.flag_e {
+            self.death.hand_over();
+            return;
+        }
+        let pass = self.death.pass();
+        if let Some(i) = pass.respawn {
+            // Timer F: the start pose becomes entry record i; the respawn at the start pose,
+            // in state 60 for death mode 2.
+            let pose = self.world.entries.get(i as usize).copied().unwrap_or((self.loco.position(), self.loco.facing));
+            self.arrive(pose);
+            if self.death.mode == 2 {
+                self.loco.set_end_state(hero_states::RESPAWN);
+                self.penalty_due = true;
+            }
+            self.death.mode = 0;
+        }
+        if std::mem::take(&mut self.penalty_due) {
+            // State 60's first tick: the plain deduct of min(5, health - 1).
+            self.hero_hp -= neopets_sim::death::respawn_penalty(self.hero_hp);
+        }
         // SPEC-0027 Update order: the camera runs first, from the hero's previous pose.
         let w = &self.world;
         self.camera.update(
@@ -1175,6 +1211,21 @@ impl Play {
                 contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
             },
         );
+        // SPEC-0055 8A: the deadly-ground kill (kind 2, gap 0.085 or less; no health change),
+        // then the death-state handler of state 16.
+        let hp = {
+            let p = self.loco.position();
+            self.world.probe(p[0], p[2], p[1] + neopets_sim::motion::PROBE_CEILING)
+        };
+        let deadly = (hp.found && hp.kind == Some(2))
+            .then(|| neopets_sim::death::Deadly { respawn: hp.respawn.unwrap_or(0xFF), surface: hp.surface.unwrap_or(0) });
+        if neopets_sim::death::deadly_kill(deadly, self.loco.body.gap) {
+            self.default_death();
+        }
+        if self.loco.state == hero_states::DEAD {
+            let id = self.death.handler(deadly, self.hero.clip_state(), false);
+            self.loco.set_death_clip(id);
+        }
         // World swap: a hit in the other buffer makes it current (the original waits for the
         // next frame; here it takes effect before the next tick).
         if swap.get() {
@@ -1419,8 +1470,7 @@ impl Play {
         self.last_hurt = format!("took {damage} ({what}) on tick {}, hp {}", self.ticks, self.hero_hp.max(0));
         if self.hero_hp <= 0 {
             self.hero_hp = 0;
-            self.attack = None;
-            self.loco.die();
+            self.default_death();
             return true;
         }
         if damage > 0 && knockback > 0.0 {
@@ -1429,6 +1479,27 @@ impl Play {
             self.loco.knock(scale(d, knockback));
         }
         false
+    }
+
+    /// SPEC-0036 Health and death, step 3 (no death callback is registered by any level here):
+    /// state 16, the melee hit list cleared.
+    fn default_death(&mut self) {
+        self.attack = None;
+        self.hit_list.clear();
+        self.loco.die();
+    }
+
+    /// The game-over page's quit exit. With no save or load in the session the game tears the
+    /// world down and goes to the card state and the title flow, which this build does not have:
+    /// as a placeholder (not the game's behaviour) the hero comes back at the current world's
+    /// entry record 0 with full health in state 59, and `continued` is set.
+    fn continue_placeholder(&mut self) {
+        let pose = self.world.entries.first().copied().unwrap_or((self.loco.position(), self.loco.facing));
+        self.arrive(pose);
+        self.hero_hp = self.hero_max;
+        self.loco.set_end_state(hero_states::ARRIVAL);
+        self.continued = true;
+        self.last_hurt = format!("continued on tick {} (placeholder for the title flow)", self.ticks);
     }
 
     pub fn status_camera(&self) -> String {
@@ -1527,7 +1598,11 @@ impl Play {
             self.hero_hp,
             self.hero_max,
             if self.last_hurt.is_empty() { String::new() } else { format!(" ({})", self.last_hurt) }
-        )
+        ) + &match (self.death.page, self.death.flag_e) {
+            (Some(n), _) => format!("\nGAME OVER page (SPEC-0055; the front end's sprites are not drawn): Continue with Space (Cross) from page pass 122, now {n}"),
+            (None, true) => "\nGAME OVER".to_string(),
+            _ => String::new(),
+        }
     }
 }
 

@@ -1515,7 +1515,8 @@ fn play_trace(
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),
             attack: (jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30,
-            jump: jump && play.ticks % 240 == 0 && play.ticks > 0,
+            // On the game-over page the trace taps Cross every 60 ticks.
+            jump: (jump && play.ticks % 240 == 0 && play.ticks > 0) || (play.death.page.is_some() && play.ticks % 60 == 0),
             ..Default::default()
         };
         play.tick(&input, neopets_sim::camera::CameraPad::default());

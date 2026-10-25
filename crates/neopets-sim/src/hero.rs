@@ -24,6 +24,10 @@ pub const ATTACK: u8 = 13;
 pub const DEAD: u8 = 16;
 pub const HURT: u8 = 17;
 pub const LONG_FALL: u8 = 48;
+/// SPEC-0055 death-end states: 59 arrival or return (clip 175), 60 respawn after deadly ground
+/// (clip 137).
+pub const ARRIVAL: u8 = 59;
+pub const RESPAWN: u8 = 60;
 /// Jump states (Behavior 50): 7 standing, 8 slow, 9 walking, 10 running.
 pub const JUMP: u8 = 7;
 pub const JUMP_RUN: u8 = 10;
@@ -253,6 +257,18 @@ impl Locomotion {
         self.request = ANIM_DEATH;
     }
 
+    /// The death-state handler's clip (SPEC-0055 section 8A).
+    pub fn set_death_clip(&mut self, id: u32) {
+        if self.state == DEAD {
+            self.request = id;
+        }
+    }
+
+    /// A death-end state (59 or 60), written by the respawn at the start pose.
+    pub fn set_end_state(&mut self, state: u8) {
+        self.state = state;
+    }
+
     /// SPEC-0036 Knockback on the hero: the velocity is replaced and the hero enters the long
     /// fall (state 48, SPEC-0033 Behavior 9B).
     pub fn knock(&mut self, velocity: Vec3) {
@@ -284,6 +300,8 @@ impl Locomotion {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
             JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL => self.request,
+            ARRIVAL => 175,
+            RESPAWN => ANIM_LONG_LAND,
             _ => 0,
         }
     }
@@ -313,6 +331,13 @@ impl Locomotion {
                 return;
             }
             LONG_FALL => return self.long_fall(clip),
+            ARRIVAL | RESPAWN => {
+                // At progress 0.99 of the state's clip: state 1.
+                if clip.action == self.action() && clip.progress >= 0.99 {
+                    self.state = STANCE;
+                }
+                return;
+            }
             _ => {}
         }
         if !self.airborne() {
