@@ -74,6 +74,13 @@ impl Walker {
         self.body.position
     }
 
+    /// Place the body at a point with its velocity cleared (a scripted placement).
+    pub fn place(&mut self, p: Vec3) {
+        self.body.position = p;
+        self.body.velocity = [0.0; 3];
+        self.saved = p;
+    }
+
     /// The current walk waypoint (the steer point of the route step).
     pub fn waypoint(&self) -> Vec3 {
         self.steer_point

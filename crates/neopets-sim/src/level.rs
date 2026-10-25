@@ -140,6 +140,10 @@ pub enum Action {
     ReplaceExterior { slot: usize, plane: i32 },
     /// The hero's magic refilled (the 1056 mote area).
     RefillMagic,
+    /// InitMiamouseBehavior(field mesh, cage mesh) and MiamiceCatchDisable (SPEC-0029
+    /// Behavior 28).
+    MiamouseInit { field: i32, cage: i32 },
+    MiamouseDisable,
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -337,6 +341,9 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
         // clear; taken as 13 here).
         (1023, 0..=10) => Some(13),
+        // SPEC-0045 1163: index 0 on contact (kind 26, no prompt), index 1 context 26.
+        (1163, 0) => Some(0),
+        (1163, 1) => Some(26),
         // SPEC-0044 1056: the arrival registers indices 0 to 2 with message 13.
         (1056, 0..=2) => Some(13),
         // SPEC-0045 1217: context 0 (on contact).
@@ -423,6 +430,17 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             state.blackboard.insert((2, 109), 20);
             state.blackboard.insert((2, 90), 20);
             vec![Action::ReplaceExterior { slot: 109, plane: -1 }, wait(3.0)]
+        }
+        // SPEC-0045 1163: index 0 value 100 for eW 106 and the castle; index 1 unless s is 30,
+        // value 50 for eW 92 and the courtyard, then Wait(3 s); with s 30 line 13.
+        (1163, 0) => {
+            state.blackboard.insert((2, 106), 100);
+            vec![Action::ReplaceExterior { slot: 106, plane: -1 }]
+        }
+        (1163, 1) if castle_stage(state) == 30 => vec![Action::Message { line: 13 }],
+        (1163, 1) => {
+            state.blackboard.insert((2, 92), 50);
+            vec![Action::ReplaceExterior { slot: 92, plane: -1 }, wait(3.0)]
         }
         // SPEC-0044 1056 teleports: index 1 to eW 122 (value 50) and index 0 to eW 106 (value
         // 40) unless flag 30 is set (line 71); index 2 to eW 106 with value 30.
@@ -516,6 +534,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         1184 => woods_init(state),
         1098 => castle_init(state),
         1056 => yard_init(state),
+        1163 => kitchen_init(state),
         1217 => burrows_init(state),
         // SPEC-0050 section 5: the Market Town shops' x4 prices until flag 298, once the
         // shopkeeper's set (1 with flag 86, else 0) has loaded with the stock.
@@ -739,6 +758,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             state.blackboard.insert((3, 130), 0);
             out.actions.push(Action::ReplaceExterior { slot: 130, plane: -1 });
         }
+        // SPEC-0045 1163 trigger 0: the square-button prompt (context 13); the press with 155
+        // clear or s 30 shows line 12.
+        (1163, 1) if call.state != 0 && call.object => {
+            out.prompt = Some(13);
+            if call.square && (!state.flag(155) || castle_stage(state) == 30) {
+                out.actions.push(Action::Message { line: 12 });
+            }
+        }
         // SPEC-0044 1056 triggers 0 and 1 (inside, not occupied, not talking): line 77 with flag
         // 653 and line 78 with flag 652, once each.
         (1056, 1) if call.state != 0 && !state.talking && !state.hero.occupied && !state.flag(653) => {
@@ -919,6 +946,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         1217 => out = burrows_fight(state, dialog),
         1056 => out = yard_update(state, dialog),
+        1163 => out = kitchen_update(state),
         // SPEC-0045 909 Update: the flag and item steps and the scenes.
         909 => {
             // The Act 1 start: 707 on and 1 off sets 1 and clears 706, fades out at once and
@@ -1050,6 +1078,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         1184 => woods_activate(state),
         1098 => castle_activate(state),
         1056 => yard_activate(state),
+        1163 => kitchen_activate(state),
         // SPEC-0045 909 activate-world routine: an unfinished round-up (flags 107 to 110 not
         // all set) is cleared; the type-2 message for eW 68 places the hero.
         909 => {
@@ -1324,6 +1353,130 @@ fn woods_activate(state: &mut GameState) -> Vec<Action> {
         2 => {
             state.blackboard.remove(&(2, 129));
             vec![Action::Sleep { ticks: 1 }, Action::MoveHero { locator: 50 }, release_camera()]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The Miamice game start (and restart): level state 0 on and 1 to 5 off, InitMiamouseBehavior
+/// with the field mesh 0 and the cage mesh 1, and the game word (module word 0).
+fn mice_start(state: &mut GameState) -> Vec<Action> {
+    state.set_word(1163, 0, 1);
+    let mut v = vec![Action::LevelState { flag: 0, on: true }];
+    v.extend((1..=5).map(|flag| Action::LevelState { flag, on: false }));
+    v.push(Action::MiamouseInit { field: 0, cage: 1 });
+    v
+}
+
+/// SPEC-0045 1163 Init: trigger 0 with 155 clear (or s 30) and the slot thread (slot word 1
+/// with j 2, 1 or 0 by flags 31, 11 and 30; slot word 4 with j 5 while 29 is clear). The
+/// shared entity-control records are not run.
+fn kitchen_init(state: &mut GameState) -> Vec<Action> {
+    let mut out = Vec::new();
+    if !state.flag(155) || castle_stage(state) == 30 {
+        out.push(Action::RegisterTrigger { index: 0, routine: 1 });
+    }
+    let j = if state.flag(31) || state.flag(11) {
+        2
+    } else if state.flag(30) {
+        1
+    } else {
+        0
+    };
+    out.push(Action::LoadRegion { slot: 0, region: Some(1163 + 1 + j) });
+    if !state.flag(29) {
+        out.push(Action::LoadRegion { slot: 3, region: Some(1163 + 1 + 5) });
+    }
+    out
+}
+
+/// SPEC-0045 1163 activate-world: a game in progress (156 set; 30, 31 and 158 clear) restarts;
+/// otherwise catching is turned off. Then the type-2 value for eW 122 places the hero.
+fn kitchen_activate(state: &mut GameState) -> Vec<Action> {
+    let mut out = if !state.flag(30) && !state.flag(31) && !state.flag(158) && state.flag(156) { mice_start(state) } else { vec![Action::MiamouseDisable] };
+    match state.take_message(2, 122) {
+        50 => out.extend([Action::MoveHero { locator: 15 }, release_camera()]),
+        100 => out.extend([Action::MoveHero { locator: 0 }, release_camera()]),
+        _ => {}
+    }
+    out
+}
+
+/// SPEC-0045 1163 Update while the game word is set: level state 5 wins (flags 158 and 23, the
+/// keeper's line 4); level states 1 to 4 show lines 43 to 46 the first time each is seen on, in
+/// order (the phase word, module word 1).
+fn kitchen_update(state: &mut GameState) -> Vec<Action> {
+    if state.word(1163, 0) == 0 {
+        return Vec::new();
+    }
+    if state.level(5) {
+        state.set(158, true);
+        state.set(23, true);
+        state.set_word(1163, 0, 0);
+        return vec![Action::Converse { entity: 0, line: 4 }];
+    }
+    let phase = state.word(1163, 1);
+    for n in 1..=4u16 {
+        if state.level(n) && phase < n as i32 {
+            state.set_word(1163, 1, n as i32);
+            return vec![Action::Message { line: 42 + n }];
+        }
+    }
+    Vec::new()
+}
+
+/// SPEC-0045 1163 proximity routines: the keeper (0), entity 7 (lines only; its serving scene
+/// with flags 25 and 635 is not built) and Sir Harlag (15, with his cutscene as its lines).
+fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
+    let three = |b: u16| cycle(&[b, b + 1, b + 2]);
+    let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
+    match r {
+        0 => {
+            if s.flag(30) {
+                talk(Some(0))
+            } else if s.flag(160) {
+                talk(rot.pick(0, &three(1)))
+            } else if s.flag(158) {
+                talk(Some(4))
+            } else if s.flag(156) {
+                talk(rot.pick(1, &three(5)))
+            } else if s.flag(632) {
+                s.set(156, true);
+                let mut v = mice_start(s);
+                v.push(Action::Talk { line: 8 });
+                v
+            } else {
+                talk(rot.pick(2, &three(9)))
+            }
+        }
+        7 => talk(if s.flag(29) {
+            rot.pick(0, &three(49))
+        } else if s.flag(28) {
+            Some(52)
+        } else if s.flag(27) {
+            rot.pick(1, &three(53))
+        } else if s.flag(25) && s.flag(635) {
+            if s.flag(185) {
+                rot.pick(2, &three(59))
+            } else if s.flag(183) {
+                rot.pick(3, &three(62))
+            } else {
+                Some(65)
+            }
+        } else {
+            rot.pick(4, &three(56))
+        }),
+        15 => {
+            if s.flag(200) {
+                talk(rot.pick(0, &cycle(&[85, 86])))
+            } else if s.flag(195) {
+                talk(rot.pick(1, &three(84)))
+            } else if s.flag(194) {
+                s.set(195, true);
+                (21..=26).map(|line| Action::Converse { entity: 15, line }).collect()
+            } else {
+                talk(rot.pick(2, &three(87)))
+            }
         }
         _ => Vec::new(),
     }
@@ -2255,6 +2408,10 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (1133, 0 | 1) => Some(0),
         (1023, 90) => Some(90),
         (1098, e) => castle_routine(e),
+        // SPEC-0045 1163: the Miamice keeper (entities 0 and 10), entity 7 and Sir Harlag (15).
+        (1163, 0 | 10) => Some(0),
+        (1163, 7) => Some(7),
+        (1163, 15) => Some(15),
         // SPEC-0044 1056: the trainer of the current stage (entity 5, 10, 12 or 24).
         (1056, 5 | 10 | 12 | 24) => Some(0),
         // SPEC-0045 1023 villagers (routine numbers: the index in VILLAGERS, 100 + k).
@@ -2284,6 +2441,11 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
             return a;
         }
         (1150, r) => barracks_talk(r, state, &mut rot),
+        (1163, r) => {
+            let a = kitchen_talk(r, state, &mut rot);
+            state.rotations.insert(key, rot);
+            return a;
+        }
         (1056, 0) => {
             let a = trainer_talk(state, &mut rot);
             state.rotations.insert(key, rot);
@@ -2731,6 +2893,32 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    #[test]
+    fn miamice_game() {
+        // SPEC-0045 1163: the keeper with 632 starts the game (line 8, flag 156, level state 0,
+        // the catch on); deliveries 1 to 4 show lines 43 to 46 once each; level state 5 wins
+        // (158 and 23, the keeper's line 4). A return with 156 set and 158 clear restarts.
+        let mut s = GameState::default();
+        s.set(632, true);
+        let r = proximity_routine(1163, 10).unwrap();
+        let start = on_talk(1163, r, &mut s);
+        assert!(start.contains(&Action::Talk { line: 8 }) && start.contains(&Action::MiamouseInit { field: 0, cage: 1 }) && s.flag(156));
+        for n in 1..=4u16 {
+            s.level_flags = [n].into();
+            assert_eq!(on_update(1163, &mut s, false), vec![Action::Message { line: 42 + n }]);
+            assert!(on_update(1163, &mut s, false).is_empty(), "once each");
+        }
+        s.level_flags = [5].into();
+        assert_eq!(on_update(1163, &mut s, false), vec![Action::Converse { entity: 0, line: 4 }]);
+        assert!(s.flag(158) && s.flag(23));
+        let mut s = GameState::default();
+        s.set(156, true);
+        assert!(on_activate(1163, &mut s).contains(&Action::MiamouseInit { field: 0, cage: 1 }));
+        s.set(158, true);
+        assert!(on_activate(1163, &mut s).contains(&Action::MiamouseDisable));
+        assert!(on_init(1163, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1164) }));
     }
 
     #[test]

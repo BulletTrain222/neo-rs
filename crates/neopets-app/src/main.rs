@@ -941,6 +941,7 @@ fn step_sim(
                 || gamepads.iter().any(|g| g.pressed(GamepadButton::RightTrigger)),
             jump: false,
             square: false,
+            square_held: keys.pressed(KeyCode::KeyE) || gamepads.iter().any(|g| g.pressed(GamepadButton::West)),
             cross_held: keys.pressed(KeyCode::Space) || gamepads.iter().any(|g| g.pressed(GamepadButton::South)),
             // L1 (Q or the left bumper) holds the shield guard.
             guard: keys.pressed(KeyCode::KeyQ) || gamepads.iter().any(|g| g.pressed(GamepadButton::LeftTrigger)),
@@ -1888,6 +1889,7 @@ fn play_trace(
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
     // releases a power attack).
     let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(80);
+    let mice = std::env::var_os("NEOPETS_TRACE_MICE").is_some();
     // NEOPETS_TRACE_PRESSES="a,b,...": attack press edges at these offsets of every 120 ticks
     // (the first held 10 ticks), for combos.
     let presses: Vec<u64> = std::env::var("NEOPETS_TRACE_PRESSES").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
@@ -1979,7 +1981,15 @@ fn play_trace(
             }
         }
         let fight = to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten();
-        let goal = if herd {
+        // NEOPETS_TRACE_MICE: while carrying a Miamouse, walk to the cage's middle; otherwise
+        // sneak (Square held) up behind the nearest catchable one.
+        let cage = mice.then(|| play.cage_goal()).flatten();
+        let stalk = if mice && cage.is_none() { play.mouse_goal() } else { None };
+        let goal = if let Some(c) = cage {
+            Some(c)
+        } else if let Some(g) = stalk {
+            Some(g)
+        } else if herd {
             play.herd_goal()
         } else if let Some((g, close)) = fight {
             (!close).then_some(g)
@@ -2001,7 +2011,12 @@ fn play_trace(
             forward,
             side,
             // An open dialogue box gets a Square press every 10 ticks (skip, Next, Finish).
-            square: play.prompt_shown.is_some() || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
+            // With NEOPETS_TRACE_MICE the drop prompt is pressed only inside the cage, and a
+            // stalk starts the sneak with one press.
+            square_held: stalk.is_some(),
+            square: (play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()))
+                || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
+                || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: ((jump || fight.is_some_and(|f| f.1)) && (30..30 + hold).contains(&(play.ticks % 120)))

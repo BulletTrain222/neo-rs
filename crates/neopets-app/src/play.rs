@@ -317,6 +317,8 @@ pub struct Character {
     pub inactive: bool,
     /// The Juppie boss controller (class 18, SPEC-0015).
     pub boss: Option<neopets_sim::juppie::Juppie>,
+    /// The Miamouse routine (class 21, SPEC-0029 Behavior 28).
+    pub miamouse: Option<neopets_sim::miamouse::Miamouse>,
 }
 
 /// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
@@ -442,6 +444,9 @@ pub struct Play {
     /// The stick gesture machine and its words (SPEC-0033 Behavior 52).
     gesture: neopets_sim::gesture::Gesture,
     gesture_words: neopets_sim::gesture::Words,
+    /// The Miamouse catch switch, meshes and count, and the carried Miamouse (character id).
+    pub catch: neopets_sim::miamouse::Catch,
+    carried: Option<u64>,
     /// Forced binds waiting for the embedded region: (pack, ordinal).
     rebind: Vec<(u32, usize)>,
     /// Entities deactivated before their characters loaded.
@@ -821,6 +826,8 @@ impl Play {
             charm_words,
             last_status: String::new(),
             rebind: Vec::new(),
+            catch: Default::default(),
+            carried: None,
             gesture: Default::default(),
             gesture_words,
             pending_off: Default::default(),
@@ -1471,6 +1478,8 @@ impl Play {
                 }
                 Action::LevelState { flag, on } => self.state.set_level(flag, on),
                 Action::RefillMagic => self.hero_mp = self.hero_mp_max,
+                Action::MiamouseInit { field, cage } => self.catch.init(field, cage),
+                Action::MiamouseDisable => self.catch.on = false,
                 Action::Bits { word, set, clear } => {
                     let w = self.state.word_of(pack, word);
                     self.state.set_word(pack, word, (w | set) & !clear);
@@ -1779,6 +1788,160 @@ impl Play {
             }
         }
         true
+    }
+
+    /// SPEC-0029 Behavior 28 and SPEC-0033 Behavior 18: the "Catch Miamouse" prompt (label 27)
+    /// for the first catchable Miamouse within 4.0 in front of a free hero, and the "Drop
+    /// Miamouse" prompt (label 28) while carrying; Square catches (state 57) or drops.
+    fn catch_step(&mut self) -> bool {
+        if self.loco.state == hero_states::CARRY {
+            if matches!(self.loco.carry, 1 | 2) && self.carried.is_some() {
+                self.door_prompt = Some(28);
+                if self.square_now {
+                    self.loco.drop_carry();
+                }
+                return true;
+            }
+            return false;
+        }
+        if neopets_sim::hero::busy_state(self.loco.state) || !self.catch.on {
+            return false;
+        }
+        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let pack = self.world.pack;
+        let Some(id) = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == pack && !c.inactive)
+            .find(|c| c.miamouse.as_ref().is_some_and(|m| neopets_sim::miamouse::catchable(&self.catch, m, c.position, hero, f)))
+            .map(|c| c.id)
+        else {
+            return false;
+        };
+        self.door_prompt = Some(27);
+        if self.square_now {
+            self.loco.start_carry();
+            self.carried = Some(id);
+        }
+        true
+    }
+
+    /// Diagnostic: a point 2.5 behind the nearest catchable Miamouse while catching is on (the
+    /// mouse itself once the hero is behind it).
+    pub fn mouse_goal(&self) -> Option<[f32; 2]> {
+        if !self.catch.on || self.carried.is_some() {
+            return None;
+        }
+        let p = self.loco.position();
+        let c = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == self.world.pack && c.miamouse.as_ref().is_some_and(|m| m.catchable))
+            .min_by(|a, b| (a.position[0] - p[0]).hypot(a.position[2] - p[2]).total_cmp(&(b.position[0] - p[0]).hypot(b.position[2] - p[2])))?;
+        let f = c.facing;
+        let behind = [c.position[0] - 2.5 * f[0], c.position[2] - 2.5 * f[2]];
+        let d = (behind[0] - p[0]).hypot(behind[1] - p[2]);
+        Some(if d < 1.0 { [c.position[0], c.position[2]] } else { behind })
+    }
+
+    /// Diagnostic: the cage mesh's middle while a Miamouse is carried.
+    pub fn cage_goal(&self) -> Option<[f32; 2]> {
+        self.carried?;
+        let m = self.world.navmeshes.get(usize::try_from(self.catch.cage).ok()?)?;
+        let n = m.len();
+        let c = (0..n).map(|t| m.centroid(t)).fold([0.0f32; 3], |a, b| [a[0] + b[0], a[1] + b[1], a[2] + b[2]]);
+        // First a point 11 north of the cage's middle (round the posts), then straight south at
+        // it, so the hero faces the cage at the fence.
+        let (x, z) = (c[0] / n.max(1) as f32, c[2] / n.max(1) as f32);
+        let p = self.loco.position();
+        let near = (p[0] - x).abs() < 3.0 && p[2] < z + 12.5;
+        Some(if near { [x, z] } else { [x + 1.5, z + 11.0] })
+    }
+
+    /// Diagnostic: the release point (the held point + 1.0 forward) is in the cage zone.
+    pub fn hero_in_cage(&self) -> bool {
+        let (h, f) = (self.held_point(), self.loco.facing);
+        neopets_sim::miamouse::Catch::in_mesh(&self.world.navmeshes, self.catch.cage, [h[0] + f[0], h[1], h[2] + f[2]])
+    }
+
+    /// The point a carried Miamouse is held at: the hero's attach point 0 (SPEC-0005 Attach
+    /// points and carrying; the damage-bit choice of points 1 to 4 and the Miamouse's optional
+    /// offset are not applied).
+    fn held_point(&self) -> [f32; 3] {
+        let (p, f) = (self.loco.position(), self.loco.facing);
+        let frames = self.hero.bone_frames();
+        self.hero
+            .bones()
+            .attach
+            .first()
+            .and_then(|&(bone, angles, offset)| Some(placement(p, f).mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).t))
+            .unwrap_or([p[0] + 0.8 * f[0], p[1] + 1.2, p[2] + 0.8 * f[2]])
+    }
+
+    /// The Miamice per tick: the carry hold (from the pick-up clip's second tick, through the put
+    /// down's first tick), the release on the tick after clip 181 starts (or at once when state
+    /// 57 is left another way), then each free Miamouse's routine and walk, and the delivery
+    /// step on the level states.
+    fn mice_step(&mut self) {
+        let hclip = self.hero.clip_state();
+        let held_at = self.held_point();
+        let forward = self.loco.facing;
+        let carrying = self.loco.state == hero_states::CARRY;
+        if let Some(id) = self.carried {
+            let release = !carrying || (self.loco.carry == 3 && hclip.action == 181);
+            if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
+                if let (Some(m), Some(wk)) = (c.miamouse.as_mut(), c.walker.as_mut()) {
+                    if release {
+                        m.release(wk, &self.world.navmeshes, &self.catch, held_at, forward);
+                        c.anim.play(neopets_sim::miamouse::CLIP_RELEASED);
+                        c.position = wk.position();
+                        self.carried = None;
+                    } else if !(self.loco.carry == 0 && hclip.action != 178) {
+                        wk.place(held_at);
+                        c.position = held_at;
+                        c.facing = forward;
+                        if c.anim.clip_state().action != neopets_sim::miamouse::CLIP_HELD {
+                            c.anim.play(neopets_sim::miamouse::CLIP_HELD);
+                        }
+                    }
+                }
+            }
+        }
+        let hero = self.loco.position();
+        let hero_state = self.loco.state;
+        let pack = self.world.pack;
+        let carried = self.carried;
+        let mut delivered = 0;
+        let world = &self.world;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && Some(c.id) != carried) {
+            let (Some(m), Some(wk)) = (c.miamouse.as_mut(), c.walker.as_mut()) else { continue };
+            // Its own navmesh: the first mesh holding its position, once.
+            if wk.mesh.is_none() && m.state != 3 {
+                let pick = world.navmeshes.iter().position(|n| n.locate_full(wk.position()).is_some());
+                wk.assign_mesh(pick, &world.navmeshes);
+            }
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::miamouse::View { hero, hero_state, clip: clip.action, progress: clip.progress, gap: wk.body.gap };
+            let id = m.tick(wk, &world.navmeshes, &self.catch, &v, &mut self.rng);
+            if m.delivered {
+                delivered += 1;
+            }
+            if clip.action != id {
+                c.anim.play(id);
+            }
+            let ground = &world.ground;
+            wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+            c.position = wk.position();
+            c.facing = wk.facing;
+        }
+        for _ in 0..delivered {
+            let flags = self.state.level_flags.clone();
+            let level = |k: u16| flags.contains(&k);
+            let state = &mut self.state;
+            let mut set = |k: u16, on: bool| state.set_level(k, on);
+            self.catch.deliver(&level, &mut set);
+            self.last_pickup = format!("Miamouse delivered ({} in the cage) on tick {}", self.catch.count, self.ticks);
+        }
     }
 
     /// The weapon reach W (SPEC-0021): Tor's table value for swords 98 to 108, 1.5 unarmed.
@@ -2227,7 +2390,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| r.class == Some(7) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 21)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -2247,6 +2410,7 @@ impl Play {
                 held: false,
                 inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 boss: row.filter(|r| r.class == Some(18)).map(|_| neopets_sim::juppie::Juppie::default()),
+                miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -2294,6 +2458,7 @@ impl Play {
             held: false,
             inactive: false,
             boss: None,
+            miamouse: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -2977,8 +3142,12 @@ impl Play {
         }
         // The interaction chooser: a talk candidate claims Square before the doors.
         self.talk_prompt = false;
-        if !self.dialogue_open && !self.buy_step() && !self.talk_step() {
+        if !self.dialogue_open && !self.buy_step() && !self.talk_step() && !self.catch_step() {
             self.door_step();
+            // The chooser's last fallback: Square with no target enters the sneak.
+            if self.square_now && self.door_prompt.is_none() && self.prompt_shown.is_none() {
+                self.loco.sneak();
+            }
         }
         if self.job.is_none() {
             self.trigger_step();
@@ -3036,6 +3205,7 @@ impl Play {
         }
         self.pet_step();
         self.boss_step();
+        self.mice_step();
         self.enemies_step();
         self.items_step();
         // SPEC-0023: the in-play HUD steps only while the in-play state runs, so not while a
@@ -4507,6 +4677,10 @@ impl Play {
             .iter()
             .filter(|c| self.pack_drawn(c.pack))
             .map(|c| match &c.townsfolk {
+                _ if c.miamouse.is_some() => {
+                    let m = c.miamouse.as_ref().unwrap();
+                    format!("Miamouse [state {} sub {} catchable {} at {:.1},{:.1}; catching {} count {}]", m.state, m.sub, m.catchable, c.position[0], c.position[2], self.catch.on, self.catch.count)
+                }
                 _ if c.whinny.is_some() => format!(
                     "Whinny [{:?} at {:.0},{:.0}]",
                     c.whinny.as_ref().map(|w| w.mode).unwrap(),

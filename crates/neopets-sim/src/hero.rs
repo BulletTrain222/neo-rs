@@ -29,6 +29,15 @@ pub const LONG_FALL: u8 = 48;
 pub const ARRIVAL: u8 = 59;
 /// SPEC-0033 Behavior 4A.3: the shield guard.
 pub const GUARD: u8 = 20;
+/// Carry a Miamouse (SPEC-0033 Behavior 18).
+pub const CARRY: u8 = 57;
+/// Sneak idle and sneak walk (SPEC-0033 Behavior 4A.1; the helper state 39 is not entered).
+pub const SNEAK: u8 = 22;
+pub const SNEAK_WALK: u8 = 40;
+const ANIM_PICK_UP: u32 = 178;
+const ANIM_CARRY_STAND: u32 = 179;
+const ANIM_CARRY_WALK: u32 = 180;
+const ANIM_PUT_DOWN: u32 = 181;
 /// Guard clips: 63 shield up, 64 the block reaction, 119 the guard turn.
 const ANIM_GUARD: u32 = 63;
 const ANIM_BLOCK: u32 = 64;
@@ -115,6 +124,8 @@ pub struct HeroInput {
     pub attack: bool,
     /// Square pressed this pass (a press edge): confirms an interaction prompt.
     pub square: bool,
+    /// Square held (the sneak lasts while it is held).
+    pub square_held: bool,
     /// L1 held (the shield guard).
     pub guard: bool,
     /// Cross held (the dialogue box's faster reveal).
@@ -215,6 +226,8 @@ pub struct Locomotion {
     /// The speed scale P after the status routine (SPEC-0036 Status effects), the base of the
     /// play rate before the speed tiers.
     pub status_scale: f32,
+    /// State 57's sub-state: 0 pick up, 1 stand, 2 walk, 3 put down.
+    pub carry: u8,
 }
 
 impl Locomotion {
@@ -234,6 +247,67 @@ impl Locomotion {
             run_counter: RUN_RESTART,
             shield: false,
             status_scale: 1.0,
+            carry: 0,
+        }
+    }
+
+    /// Square with no target (the chooser's last fallback): sneak (state 22) when not busy and
+    /// not in states 20, 32, 43 to 46, 22, 39 or 40 (SPEC-0033 Behavior 1A).
+    pub fn sneak(&mut self) {
+        if !busy_state(self.state) && !matches!(self.state, 20 | 32 | 43..=46 | 22 | 39 | 40) {
+            self.state = SNEAK;
+        }
+    }
+
+    /// The catch: state 57, sub-state 0 (SPEC-0033 Behavior 18).
+    pub fn start_carry(&mut self) {
+        self.state = CARRY;
+        self.carry = 0;
+        self.request = ANIM_PICK_UP;
+    }
+
+    /// The drop prompt's Square press: sub-state 3 from 1 or 2. Returns whether it was taken.
+    pub fn drop_carry(&mut self) -> bool {
+        if self.state == CARRY && matches!(self.carry, 1 | 2) {
+            self.carry = 3;
+            self.request = ANIM_PUT_DOWN;
+            return true;
+        }
+        false
+    }
+
+    /// State 57 per tick: sub-state 0 requests 178 and goes to 1 at 0.99; 1 stands with 179 and
+    /// goes to 2 on a stick push (turning); 2 walks with 180, turning at 0.25, back to 1 when the
+    /// stick centres; 3 puts down with 181 and returns to state 1 at 0.99.
+    fn carry_step(&mut self, moving: bool, clip: ClipState) {
+        match self.carry {
+            0 => {
+                self.request = ANIM_PICK_UP;
+                if clip.action == ANIM_PICK_UP && clip.progress >= 0.99 {
+                    self.carry = 1;
+                }
+            }
+            3 => {
+                self.request = ANIM_PUT_DOWN;
+                if clip.action == ANIM_PUT_DOWN && clip.progress >= 0.99 {
+                    self.state = STANCE;
+                    self.carry = 1;
+                }
+            }
+            2 => {
+                self.request = ANIM_CARRY_WALK;
+                self.facing = steer(self.facing, self.target, 0.25);
+                if !moving {
+                    self.carry = 1;
+                }
+            }
+            _ => {
+                if moving {
+                    self.facing = turn_moving(self.facing, self.target);
+                    self.carry = 2;
+                }
+                self.request = ANIM_CARRY_STAND;
+            }
         }
     }
 
@@ -352,8 +426,10 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY => self.request,
             ARRIVAL => 175,
+            SNEAK => 87,
+            SNEAK_WALK => 85,
             RESPAWN => ANIM_LONG_LAND,
             _ => 0,
         }
@@ -384,6 +460,7 @@ impl Locomotion {
                 return;
             }
             LONG_FALL => return self.long_fall(clip),
+            CARRY => return self.carry_step(v > 0.0, clip),
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -412,6 +489,15 @@ impl Locomotion {
             if !(input.jump && self.body.normal[1] >= 0.82) {
                 if v > 0.0 {
                     self.facing = turn_moving(self.facing, self.target);
+                }
+                // Sneak: while Square is held the tiers give 22 (stopped) or 40 (no factor);
+                // released, the hero is back in state 1.
+                if matches!(self.state, SNEAK | 39 | SNEAK_WALK) {
+                    if input.square_held {
+                        self.state = if v <= 0.1 { SNEAK } else { SNEAK_WALK };
+                        return;
+                    }
+                    self.state = STANCE;
                 }
                 self.run_counter = if self.state == RUN { 0 } else { (self.run_counter + 1).min(RUN_RESTART) };
                 let run_mode = input.run && (self.state == RUN || self.run_counter >= RUN_RESTART);
