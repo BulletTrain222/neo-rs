@@ -2,10 +2,12 @@
 //! target distance, the eye on its sphere about the focus, the critically damped spring, the
 //! chase and manual elevation, ground clearance, the eye wall push (through a caller hook) and
 //! the R3 recentre, plus the load placement with the pull-in setter.
-//! Not covered: profile selection by ground kind (profile 0 is used), the camera-locked hero
-//! states, the hold and lean terms (no targets yet), the spring's contact-normal exception, the
-//! eye pass failure flag and stuck timer, the line-of-sight timer and the line test of the
-//! recentre (the segment query), scripted plays, shakes, the fade ramp and modes other than 0.
+//! Profiles are selected by the ground kind under the hero; the line-of-sight timer and the
+//! recentre's line test use the caller's segment query (`clear`).
+//! Not covered: the script override profile, the camera-locked hero states, the hold and lean
+//! terms (no targets yet), the spring's contact-normal exception, the eye pass failure flag and
+//! stuck timer, the camera visibility test, scripted plays, shakes, the fade ramp and modes
+//! other than 0.
 
 use crate::hero::Vec3;
 
@@ -34,6 +36,24 @@ pub struct Profile {
 impl Profile {
     /// Profile 0, the main camera.
     pub const MAIN: Profile = Profile { distance: 10.0, elevation: 0.2, stiffness: 0.085, spin_gain: 0.005, spin_decay: 0.125 };
+
+    /// Profiles 0 to 3 (main, interior, small room, special); only distance and elevation
+    /// differ.
+    pub fn table(index: usize) -> Profile {
+        let (distance, elevation) = [(10.0, 0.2), (9.0, 0.25), (10.0, 0.2), (15.0, 0.6)][index.min(3)];
+        Profile { distance, elevation, ..Self::MAIN }
+    }
+
+    /// The profile chosen by the ground kind (entry +0x38) under the hero: 3 gives 2, 4 gives
+    /// 1, 5 or 6 give 3, any other value 0.
+    pub fn for_ground(kind: u32) -> usize {
+        match kind {
+            3 => 2,
+            4 => 1,
+            5 | 6 => 3,
+            _ => 0,
+        }
+    }
 
     fn damping(&self) -> f32 {
         2.0 * self.stiffness.sqrt()
@@ -116,6 +136,8 @@ pub struct Followed {
     pub height: f32,
     /// Recentring gate T: the hero moved in its last motion step and is not in state 1.
     pub moving: bool,
+    /// Ground kind of the patch the hero stands on (None: no patch this tick).
+    pub ground_kind: Option<u32>,
 }
 
 impl Followed {
@@ -141,6 +163,9 @@ pub struct FollowCamera {
     pub manual_flag: bool,
     side_offset: f32,
     r3_latch: bool,
+    profile_index: Option<usize>,
+    /// Consecutive ticks with the eye-to-focus line blocked.
+    blocked: u32,
 }
 
 impl FollowCamera {
@@ -161,7 +186,10 @@ impl FollowCamera {
             manual_flag: false,
             side_offset: 0.0,
             r3_latch: false,
+            profile_index: None,
+            blocked: 0,
         };
+        cam.select_profile(hero);
         let d = cam.target_distance(0.0);
         let f = hero.facing;
         let wanted = sub(hero.position, [d * f[0], 0.0, d * f[2]]);
@@ -201,14 +229,28 @@ impl FollowCamera {
         self.profile.distance * shrink + self.side_offset
     }
 
-    /// One follow tick (SPEC-0027 Follow camera, steps 2 to 11).
+    /// Step 2: the profile follows the ground kind; with no ground patch it is kept.
+    fn select_profile(&mut self, hero: &Followed) {
+        if let Some(kind) = hero.ground_kind {
+            let index = Profile::for_ground(kind);
+            if self.profile_index != Some(index) {
+                self.profile_index = Some(index);
+                self.profile = Profile::table(index);
+            }
+        }
+    }
+
+    /// One follow tick (SPEC-0027 Follow camera, steps 2 to 11). `clear(a, b)` is the segment
+    /// query with the restriction flag set.
     pub fn update(
         &mut self,
         hero: &Followed,
         pad: CameraPad,
         ground: impl Fn(f32, f32, f32) -> f32,
         push: impl Fn(&mut Vec3),
+        clear: impl Fn(Vec3, Vec3) -> bool,
     ) {
+        self.select_profile(hero);
         // Step 3: stick value s and spin input D (no leans yet).
         let s = -converter_a(pad.right_y) / 87.5;
         let b = -converter_a(pad.right_x) / 87.5;
@@ -250,11 +292,21 @@ impl FollowCamera {
         // Step 11: ground clearance, walls, R3 recentre.
         self.clear_ground(&ground);
         push(&mut self.eye);
+        // Line-of-sight timer: the 61st consecutive blocked tick runs the recentre pass.
+        if clear(self.eye, self.focus) {
+            self.blocked = 0;
+        } else {
+            self.blocked += 1;
+            if self.blocked > 60 {
+                self.blocked = 0;
+                self.recentre(hero, &ground, &push, &clear);
+            }
+        }
         if !pad.r3_held && self.r3_latch {
             self.r3_latch = false;
         }
         if pad.r3_pressed && !self.r3_latch {
-            self.recentre(hero, &ground, &push);
+            self.recentre(hero, &ground, &push, &clear);
         }
     }
 
@@ -303,10 +355,17 @@ impl FollowCamera {
         }
     }
 
-    /// The recentre pass: the eye behind the hero at the default elevation, shrunk toward the
-    /// focus by 0.25 while the candidate is buried (ground more than 5 above the focus), then
-    /// the wall push and camera reset. The line test is not implemented.
-    pub fn recentre(&mut self, hero: &Followed, ground: &impl Fn(f32, f32, f32) -> f32, push: &impl Fn(&mut Vec3)) {
+    /// The recentre pass: the eye behind the hero at the default elevation, or in front when
+    /// the line from behind is blocked, shrunk toward the focus by 0.25 while its line is
+    /// blocked or it is buried (ground more than 5 above the focus), then the wall push and
+    /// camera reset. When both candidates are blocked the behind one is shrunk (Medium).
+    pub fn recentre(
+        &mut self,
+        hero: &Followed,
+        ground: &impl Fn(f32, f32, f32) -> f32,
+        push: &impl Fn(&mut Vec3),
+        clear: &impl Fn(Vec3, Vec3) -> bool,
+    ) {
         self.r3_latch = true;
         self.manual_flag = false;
         let before = self.eye;
@@ -315,11 +374,17 @@ impl FollowCamera {
         let behind = polar([-d * hero.facing[0], 0.0, -d * hero.facing[2]]);
         let mut p = [behind[0], behind[1], self.profile.elevation];
         self.elevation_target = p[2];
-        let buried = |p: [f32; 3]| {
+        if !clear(add(f, sphere(p)), f) {
+            let front = polar([d * hero.facing[0], 0.0, d * hero.facing[2]]);
+            if clear(add(f, sphere(front)), f) {
+                p = [front[0], front[1], self.profile.elevation];
+            }
+        }
+        let blocked = |p: [f32; 3]| {
             let e = add(f, sphere(p));
-            ground(e[0], e[2], f[1] + 5.0) > f[1] + 5.0
+            !clear(e, f) || ground(e[0], e[2], f[1] + 5.0) > f[1] + 5.0
         };
-        while p[0] > 1.0 && buried(p) {
+        while p[0] > 1.0 && blocked(p) {
             p[0] -= 0.25;
         }
         self.eye = add(f, sphere(p));
@@ -351,7 +416,7 @@ mod tests {
     }
 
     fn still(height: f32) -> Followed {
-        Followed { position: [0.0; 3], facing: [0.0, 0.0, 1.0], height, moving: false }
+        Followed { position: [0.0; 3], facing: [0.0, 0.0, 1.0], height, moving: false, ground_kind: None }
     }
 
     fn camera_at(eye: Vec3, hero: &Followed) -> FollowCamera {
@@ -391,7 +456,7 @@ mod tests {
         let want = [(1, 10.0100, 0.0508), (5, 9.9955, 0.0652), (10, 9.9740, 0.1007), (20, 9.8865, 0.1774), (30, 9.7914, 0.1965), (60, 9.7439, 0.2000)];
         let mut got = Vec::new();
         for t in 1..=60 {
-            c.update(&hero, CameraPad::default(), none, |_| {});
+            c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
             got.push((t, polar(sub(c.eye, c.focus))));
         }
         for (t, r, e) in want {
@@ -409,7 +474,7 @@ mod tests {
         let pad = CameraPad { right_x: 255, ..Default::default() };
         let mut spins = Vec::new();
         for _ in 0..60 {
-            c.update(&hero, pad, none, |_| {});
+            c.update(&hero, pad, none, |_| {}, |_, _| true);
             spins.push(c.spin);
         }
         for (t, want) in [(1, -0.0065), (2, -0.012188), (6, -0.028663), (20, -0.048401), (60, -0.051983)] {
@@ -445,7 +510,7 @@ mod tests {
         let pad = CameraPad { right_y: 0, ..Default::default() };
         let mut got = Vec::new();
         for _ in 0..120 {
-            c.update(&hero, pad, none, |_| {});
+            c.update(&hero, pad, none, |_| {}, |_, _| true);
             got.push(polar(sub(c.eye, c.focus)));
         }
         for (t, e, r) in [(30, 0.6185, 8.5087), (60, 1.1375, 5.3794), (120, 1.5, 3.5330)] {
@@ -458,11 +523,53 @@ mod tests {
     fn pull_in_drops_to_focus_height_and_halves_under_high_ground() {
         // SPEC-0027 Placement: P (10, 0, 5), f (0.6, 0, 0.8), height H: the posed eye (4, ·, -3)
         // becomes (4, H, -3), or (7, H, 1) when the ground there is above H + 5.
-        let hero = Followed { position: [10.0, 0.0, 5.0], facing: [0.6, 0.0, 0.8], height: 3.5, moving: false };
+        let hero = Followed { position: [10.0, 0.0, 5.0], facing: [0.6, 0.0, 0.8], height: 3.5, moving: false, ground_kind: None };
         let mut c = FollowCamera::attach(&hero, none, |_| {});
         c.pull_in(&hero, [4.0, 2.5, -3.0], none, |_| {});
         assert!((c.eye[0] - 4.0).abs() < 1e-5 && c.eye[1] == 3.5 && (c.eye[2] + 3.0).abs() < 1e-5);
         c.pull_in(&hero, [4.0, 2.5, -3.0], |_, _, _| 9.0, |_| {});
         assert!((c.eye[0] - 7.0).abs() < 1e-5 && (c.eye[2] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn profiles_follow_the_ground_kind() {
+        assert_eq!([3, 4, 5, 6, 0, 7].map(Profile::for_ground), [2, 1, 3, 3, 0, 0]);
+        let mut hero = still(2.0);
+        let mut c = camera_at([0.0, 2.0, -10.0], &hero);
+        hero.ground_kind = Some(5);
+        c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
+        assert_eq!((c.profile.distance, c.profile.elevation), (15.0, 0.6));
+        // Profile 3 at elevation 0.6: target distance 11.8915.
+        assert!((c.target_distance(0.6) - 11.8915).abs() < 1e-3);
+        hero.ground_kind = None;
+        c.update(&hero, CameraPad::default(), none, |_| {}, |_, _| true);
+        assert_eq!(c.profile.distance, 15.0, "kept without a ground patch");
+    }
+
+    #[test]
+    fn blocked_line_recentres_on_the_61st_tick() {
+        let hero = still(2.0);
+        let mut c = camera_at([3.0, 2.0, 9.0], &hero);
+        for _ in 0..60 {
+            c.update(&hero, CameraPad::default(), none, |_| {}, |a, _| a[2] < 0.0);
+        }
+        assert!(c.eye[2] > 0.0, "still in front after 60 blocked ticks");
+        c.update(&hero, CameraPad::default(), none, |_| {}, |a, _| a[2] < 0.0);
+        assert!(c.eye[2] < 0.0, "behind the hero after the 61st: {:?}", c.eye);
+    }
+
+    #[test]
+    fn recentre_shrinks_while_the_line_is_blocked() {
+        // Behind is clear only within 3.0; the front is always blocked.
+        let hero = still(2.0);
+        let mut c = camera_at([0.0, 2.0, 9.0], &hero);
+        let f = c.focus;
+        let clear = |a: Vec3, b: Vec3| {
+            let v = sub(a, b);
+            (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt() <= 3.0 + 1e-4 && a[2] < 0.0
+        };
+        c.recentre(&hero, &none, &|_: &mut Vec3| {}, &clear);
+        let r = polar(sub(c.eye, f))[0];
+        assert!(r <= 3.0 + 1e-4 && r > 2.75, "{r}");
     }
 }

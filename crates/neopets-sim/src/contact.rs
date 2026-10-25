@@ -118,7 +118,9 @@ impl WallEdge {
         if a.abs() >= r || s <= 0.0 || s >= self.length || self.top[1] == 0.0 {
             return None;
         }
-        if self.edge_height(p) <= p[1] + 0.25 {
+        // The wall hangs H below its top edge: the top-plane value is 0 at its bottom. A body
+        // whose feet are 3.5 (the hero height) or more below the bottom is not touched.
+        if self.edge_height(p) <= p[1] + 0.25 || plane(self.top, p) <= -3.5 {
             return None;
         }
         let side = if a < 0.0 { -1.0 } else { 1.0 };
@@ -212,6 +214,8 @@ mod tests {
         assert_eq!(w.push([1.2, 0.0, 5.0], 1.175), None, "beyond the radius");
         assert_eq!(w.push([0.5, 0.0, 10.5], 1.175), None, "past the run end");
         assert_eq!(w.push([0.5, 4.6, 5.0], 1.175), None, "top 4.75 is within 0.25 of the feet");
+        assert_eq!(w.push([0.5, -3.6, 5.0], 1.175), None, "feet 3.5 or more below the bottom");
+        assert!(w.push([0.5, -3.4, 5.0], 1.175).is_some());
         let mut flat = w;
         flat.face = [0.0, 1.0, 0.0, 0.0];
         assert_eq!(flat.push([0.0, 0.5, 5.0], 1.175), None, "near-horizontal face");

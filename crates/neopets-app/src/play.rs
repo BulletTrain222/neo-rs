@@ -49,7 +49,7 @@ impl Play {
             .collect();
         let loco = Locomotion::spawn([spawn[0], y, spawn[2]], facing);
         let camera = FollowCamera::attach(
-            &followed(&loco),
+            &followed(&loco, ground.as_ref()),
             |x, z, c| probe(ground.as_ref(), x, z, c),
             |e| push_eye(ground.as_ref(), &boxes, e),
         );
@@ -76,7 +76,13 @@ impl Play {
         self.ticks += 1;
         // SPEC-0027 Update order: the camera runs first, from the hero's previous pose.
         let (g, b) = (self.ground.as_ref(), &self.boxes);
-        self.camera.update(&followed(&self.loco), pad, |x, z, c| probe(g, x, z, c), |e| push_eye(g, b, e));
+        self.camera.update(
+            &followed(&self.loco, g),
+            pad,
+            |x, z, c| probe(g, x, z, c),
+            |e| push_eye(g, b, e),
+            |a, c| g.is_none_or(|g| g.segment_clear(a, c, true)),
+        );
         let (forward, left) = self.camera.rows();
         self.loco.update(input, forward, left, self.hero.clip_state());
         self.hero.play(self.loco.action());
@@ -108,7 +114,7 @@ impl Play {
     pub fn status_camera(&self) -> String {
         let c = &self.camera;
         let p = camera::polar(std::array::from_fn(|k| c.eye[k] - c.focus[k]));
-        format!("CAMERA (SPEC-0027 mode 0): distance {:.2}, yaw {:.1} deg, elevation {:.3}, spin {:.4}", p[0], p[1].to_degrees(), p[2], c.spin)
+        format!("CAMERA (SPEC-0027 mode 0): profile distance {:.0}, distance {:.2}, yaw {:.1} deg, elevation {:.3}, spin {:.4}", c.profile.distance, p[0], p[1].to_degrees(), p[2], c.spin)
     }
 
     pub fn status(&self) -> String {
@@ -121,8 +127,12 @@ impl Play {
     }
 }
 
-fn followed(loco: &Locomotion) -> Followed {
-    Followed { position: loco.position(), facing: loco.facing, height: HERO_HEIGHT, moving: loco.moved() }
+/// The hero as the camera sees it, with the ground kind of the patch under its feet (the same
+/// probe as its ground step, 2.5 above the feet).
+fn followed(loco: &Locomotion, ground: Option<&Ground>) -> Followed {
+    let p = loco.position();
+    let ground_kind = ground.and_then(|g| g.probe_hit(p[0], p[2], p[1] + 2.5).kind);
+    Followed { position: p, facing: loco.facing, height: HERO_HEIGHT, moving: loco.moved(), ground_kind }
 }
 
 /// The camera's ground probe: MISS without a ground grid.

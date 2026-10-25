@@ -155,26 +155,38 @@ impl Ground {
     /// The probe with its surface normal: the chosen candidate's (or the last rejected one's);
     /// straight up when the grid gives no cell or no candidate is sampled.
     pub fn probe_normal(&self, x: f32, z: f32, c: f32) -> (f32, [f32; 3]) {
-        const UP: [f32; 3] = [0.0, 1.0, 0.0];
+        let hit = self.probe_hit(x, z, c);
+        (hit.height, hit.normal)
+    }
+
+    /// The grid cell record containing (x, z), if the cell is not empty.
+    fn cell_at(&self, x: f32, z: f32) -> Option<usize> {
         let cx = ((x - self.x_min) / self.cell).floor() as i64;
         let cz = ((z - self.z_min) / self.cell).floor() as i64;
         if cx < 0 || cz < 0 || cx >= self.nx as i64 || cz >= self.nz as i64 {
-            return (0.0, UP);
+            return None;
         }
         let index = match self.order {
             CellOrder::XMajor => cx + cz * self.nx as i64,
             CellOrder::ZMajor => cz + cx * self.nz as i64,
         } as usize;
-        let Some(rec) = u32_at(&self.grid, self.table + 4 * index).filter(|&r| r != 0) else {
-            return (0.0, UP);
+        u32_at(&self.grid, self.table + 4 * index).filter(|&r| r != 0).map(|r| r as usize)
+    }
+
+    /// The probe with the chosen entry's ground kind (the u32 at entry +0x38, which selects
+    /// the camera profile in SPEC-0027).
+    pub fn probe_hit(&self, x: f32, z: f32, c: f32) -> ProbeHit {
+        const UP: [f32; 3] = [0.0, 1.0, 0.0];
+        let none = |height| ProbeHit { height, normal: UP, kind: None };
+        let Some(rec) = self.cell_at(x, z) else {
+            return none(0.0);
         };
-        let rec = rec as usize;
         let count = i32_at(&self.grid, rec + 0x08).unwrap_or(0).max(0) as usize;
         let entries = rec + u32_at(&self.grid, rec + 0x0C).unwrap_or(0) as usize;
         if count == 0 {
-            return (0.0, UP);
+            return none(0.0);
         }
-        let (mut best, mut normal, mut rejected, mut sampled) = (MISS, UP, None, false);
+        let (mut best, mut rejected, mut sampled) = (none(MISS), None, false);
         for e in 0..count.min(MAX_ENTRIES) {
             let at = entries + CELL_ENTRY * e;
             let (Some(0), Some(index)) = (i32_at(&self.grid, at), i32_at(&self.grid, at + 4)) else {
@@ -183,17 +195,34 @@ impl Ground {
             let Some(Some(p)) = self.patches.get(index as usize) else { continue };
             let Some((h, n)) = self.sample(p, x, z) else { continue };
             sampled = true;
-            if h > best && h <= c {
-                (best, normal) = (h, n);
+            let hit = ProbeHit { height: h, normal: n, kind: u32_at(&self.set, p.at + 0x38) };
+            if h > best.height && h <= c {
+                best = hit;
             } else {
-                rejected = Some((h, n));
+                rejected = Some(hit);
             }
         }
-        match (sampled, best > MISS) {
-            (false, _) => (MISS, UP),
-            (true, true) => (best, normal),
-            (true, false) => rejected.unwrap_or((MISS, UP)),
+        match (sampled, best.height > MISS) {
+            (false, _) => none(MISS),
+            (true, true) => best,
+            (true, false) => rejected.unwrap_or(none(MISS)),
         }
+    }
+
+    /// SPEC-0018 Segment query: blocked when the endpoints differ in height by more than 50, or
+    /// when the segment crosses a frame record of either endpoint's cell (type 6 skipped while
+    /// `restrict` is set). Not applied: the +1.5 horizontal endpoint shift, whose coordinate the
+    /// spec leaves open. Returns true when clear.
+    pub fn segment_clear(&self, p0: [f32; 3], p1: [f32; 3], restrict: bool) -> bool {
+        if (p0[1] - p1[1]).abs() > 50.0 {
+            return false;
+        }
+        let (c0, c1) = (self.cell_at(p0[0], p0[2]), self.cell_at(p1[0], p1[2]));
+        let mut frames = self.frames_at(p0[0], p0[2]);
+        if c1 != c0 {
+            frames.extend(self.frames_at(p1[0], p1[2]));
+        }
+        !frames.iter().any(|f| !(restrict && f.kind == 6) && f.crossed_by(p0, p1))
     }
 }
 
@@ -383,6 +412,14 @@ pub fn rectangles(bytes: &[u8], top: &[Chunk]) -> Vec<Rectangle> {
     out
 }
 
+/// A probe result: height, surface normal and the chosen patch's ground kind (+0x38).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ProbeHit {
+    pub height: f32,
+    pub normal: [f32; 3],
+    pub kind: Option<u32>,
+}
+
 /// A frame record (0x70 bytes): a wall edge named by a grid cell's entry items (SPEC-0018,
 /// Items of an entry). Fields as used by the edge tests of SPEC-0033 Behavior 37: the start
 /// point (+0x00), the face plane (+0x10, unit normal and offset), the run plane (+0x20, unit
@@ -399,20 +436,44 @@ pub struct FrameRecord {
     pub height: f32,
 }
 
+impl FrameRecord {
+    fn plane(q: [f32; 4], p: [f32; 3]) -> f32 {
+        q[0] * p[0] + q[1] * p[1] + q[2] * p[2] + q[3]
+    }
+
+    /// The top-plane value at p: 0 at the wall's bottom, H at its top edge (the start point).
+    /// On disc the start point lies on the face and run planes and has top-plane value H, so
+    /// the record is a wall of depth H hanging below its top edge (`--ground` census).
+    pub fn depth_at(&self, p: [f32; 3]) -> f32 {
+        Self::plane(self.top, p)
+    }
+
+    /// SPEC-0018 Segment versus a rectangle, read onto a frame record: the face plane is the
+    /// plane, the run plane gives s in [−0.25, L + 0.25] and the top plane u in [−0.25,
+    /// H − 0.25]. Both faces block. The axis reading is this build's (Medium-Low in the spec).
+    pub fn crossed_by(&self, p0: [f32; 3], p1: [f32; 3]) -> bool {
+        let (d0, d1) = (Self::plane(self.face, p0), Self::plane(self.face, p1));
+        if d0 == d1 || self.top[1] == 0.0 {
+            return false;
+        }
+        let t = d0 / (d0 - d1);
+        if !(-0.02..=1.02).contains(&t) {
+            return false;
+        }
+        let q: [f32; 3] = std::array::from_fn(|k| p0[k] + t * (p1[k] - p0[k]));
+        let s = Self::plane(self.run, q);
+        let u = Self::plane(self.top, q);
+        (-0.25..=self.length + 0.25).contains(&s) && (-0.25..=self.height - 0.25).contains(&u)
+    }
+}
+
 impl Ground {
     /// The frame records named by the items of the cell containing (x, z), for the pack's own
     /// model set (patch id 0).
     pub fn frames_at(&self, x: f32, z: f32) -> Vec<FrameRecord> {
-        let cx = ((x - self.x_min) / self.cell).floor() as i64;
-        let cz = ((z - self.z_min) / self.cell).floor() as i64;
-        if cx < 0 || cz < 0 || cx >= self.nx as i64 || cz >= self.nz as i64 {
-            return Vec::new();
-        }
-        let index = (cx + cz * self.nx as i64) as usize;
-        let Some(rec) = u32_at(&self.grid, self.table + 4 * index).filter(|&r| r != 0) else {
+        let Some(rec) = self.cell_at(x, z) else {
             return Vec::new();
         };
-        let rec = rec as usize;
         let count = i32_at(&self.grid, rec + 0x08).unwrap_or(0).clamp(0, 1 << 12) as usize;
         let entries = rec + u32_at(&self.grid, rec + 0x0C).unwrap_or(0) as usize;
         let table = u32_at(&self.set, 8).unwrap_or(0) as usize;
@@ -445,5 +506,36 @@ impl Ground {
             }
         }
         out
+    }
+}
+
+#[cfg(test)]
+mod frame_tests {
+    use super::FrameRecord;
+
+    /// A wall in the plane x = 0, running along +z for 10 from its top corner (0, 5, 0), 5 deep:
+    /// the top-plane value is y and H = 5.
+    fn wall(kind: i8) -> FrameRecord {
+        FrameRecord {
+            kind,
+            start: [0.0, 5.0, 0.0],
+            face: [1.0, 0.0, 0.0, 0.0],
+            run: [0.0, 0.0, 1.0, 0.0],
+            top: [0.0, 1.0, 0.0, 0.0],
+            length: 10.0,
+            height: 5.0,
+        }
+    }
+
+    #[test]
+    fn segment_crosses_inside_the_margins() {
+        let w = wall(0);
+        assert!(w.crossed_by([-1.0, 2.0, 5.0], [1.0, 2.0, 5.0]));
+        assert!(w.crossed_by([-1.0, 2.0, 10.2], [1.0, 2.0, 10.2]), "run margin +0.25");
+        assert!(!w.crossed_by([-1.0, 2.0, 10.3], [1.0, 2.0, 10.3]));
+        assert!(!w.crossed_by([-1.0, 4.8, 5.0], [1.0, 4.8, 5.0]), "top margin: u above H - 0.25");
+        assert!(!w.crossed_by([-1.0, 2.0, 5.0], [-0.5, 2.0, 5.0]), "t beyond 1.02");
+        assert!(!w.crossed_by([0.0, 1.0, 5.0], [0.0, 3.0, 5.0]), "parallel to the plane");
+        assert_eq!(w.depth_at(w.start), w.height);
     }
 }

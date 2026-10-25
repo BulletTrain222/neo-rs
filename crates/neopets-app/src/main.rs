@@ -21,8 +21,9 @@ use orbit::Orbit;
 const PLAY_PACK: u32 = 909;
 const PLAY_OUTFIT: u32 = 504;
 
+/// Play mode was asked for, in this world pack (`--pack`, default 909).
 #[derive(Resource)]
-struct PlayRequest;
+struct PlayRequest(u32);
 
 /// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
 /// can show travel without a person at the controls; `--autojump` also presses Cross every 2 s.
@@ -151,6 +152,7 @@ fn main() {
     let mut hide_hud = false;
     let mut catch_up = MAX_CATCH_UP;
     let mut play_mode = false;
+    let mut play_pack = PLAY_PACK;
     let mut autowalk = None;
     let mut shot_at = 4.0f32;
     let mut start_resource = 0u32;
@@ -184,6 +186,11 @@ fn main() {
                 eprintln!("--play-trace requires a tick count");
                 std::process::exit(2)
             }));
+        } else if arg == "--pack" {
+            play_pack = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+                eprintln!("--pack requires a world pack resource number");
+                std::process::exit(2)
+            });
         } else if arg == "--play" {
             play_mode = true;
         } else if arg == "--original-pacing" {
@@ -226,7 +233,7 @@ fn main() {
             eprintln!("{status}");
             std::process::exit(1)
         };
-        play_trace(&mut archive, ticks, autowalk.is_some_and(|a| a.jump));
+        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump));
         return;
     }
     let driver = SimDriver {
@@ -239,7 +246,7 @@ fn main() {
     if let Some(archive) = archive {
         app.insert_resource(archive);
         if play_mode {
-            app.insert_resource(PlayRequest);
+            app.insert_resource(PlayRequest(play_pack));
         }
         if let Some(auto) = autowalk {
             app.insert_resource(auto);
@@ -249,7 +256,7 @@ fn main() {
         .insert_resource(HudHidden(hide_hud))
         .insert_resource(driver)
         .insert_resource(Browser {
-            selected: if play_mode { PLAY_PACK } else { start_resource },
+            selected: if play_mode { play_pack } else { start_resource },
             typing: None,
         })
         .init_resource::<BrowserView>()
@@ -977,9 +984,9 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
 
 /// Diagnostic (`--play-trace <ticks>`): run play mode without a window, walking forward along
 /// the spawn facing (and jumping every 120 ticks with `--autojump`), and print each tick.
-fn play_trace(archive: &mut Archive, ticks: u64, jump: bool) {
+fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool) {
     let Archive { disc, index } = archive;
-    let mut play = match play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT) {
+    let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
         Ok(play) => play,
         Err(e) => {
             eprintln!("Play mode could not start: {e}");
@@ -999,13 +1006,16 @@ fn play_trace(archive: &mut Archive, ticks: u64, jump: bool) {
             play.ticks, p[0], p[1], p[2], play.loco.state, play.loco.phase, play.loco.action(), b.gap, b.velocity[1],
             b.normal[0], b.normal[1], b.normal[2]
         );
+        if play.ticks % 60 == 0 {
+            println!("      {}", play.status_camera());
+        }
     }
 }
 
 fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive: Option<ResMut<Archive>>) {
-    let (Some(_), Some(mut archive)) = (request, archive) else { return };
+    let (Some(request), Some(mut archive)) = (request, archive) else { return };
     let Archive { disc, index } = &mut *archive;
-    match play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT) {
+    match play::Play::load(disc, index, request.0, PLAY_OUTFIT) {
         Ok(play) => commands.insert_resource(PlayState { play, skinned: Vec::new() }),
         Err(e) => error!("Play mode could not start: {e}"),
     }

@@ -242,6 +242,7 @@ pub fn ground(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         let chain = resource::walk_chunks(&bytes, None)?;
         if let Some(g) = Ground::of(&bytes, &chain.chunks, CellOrder::XMajor) {
             let (mut n, mut unit, mut vertical, mut kinds) = (0, 0, 0, std::collections::BTreeMap::new());
+            let (mut on_planes, mut top_above) = (0, 0);
             let len = |a: [f32; 4]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
             for dx in -10..10 {
                 for dz in -10..10 {
@@ -250,10 +251,13 @@ pub fn ground(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
                         unit += ((len(f.face) - 1.0).abs() < 1e-3 && (len(f.run) - 1.0).abs() < 1e-3) as usize;
                         vertical += (f.face[1].abs() <= 0.2) as usize;
                         *kinds.entry(f.kind).or_insert(0usize) += 1;
+                        let pv = |q: [f32; 4]| q[0] * f.start[0] + q[1] * f.start[1] + q[2] * f.start[2] + q[3];
+                        on_planes += (pv(f.face).abs() < 1e-2 && pv(f.run).abs() < 1e-2) as usize;
+                        top_above += ((f.depth_at(f.start) - f.height).abs() < 1e-2 && f.height > 0.0) as usize;
                     }
                 }
             }
-            println!("Frame records near 909's spawn (with repeats): {n}; unit face and run {unit}; near-vertical face {vertical}; types {kinds:?}");
+            println!("Frame records near 909's spawn (with repeats): {n}; unit face and run {unit}; near-vertical face {vertical}; start on the face and run planes {on_planes}; top-plane value H at the start (H > 0) {top_above}; types {kinds:?}");
         }
     }
     println!("x-major breakdown: no cell {}, miss {}, <0.5 {}, <2 {}, <10 {}, farther {}", kinds[0], kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]);
