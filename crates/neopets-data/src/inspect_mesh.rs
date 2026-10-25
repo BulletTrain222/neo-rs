@@ -236,6 +236,26 @@ pub fn ground(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         }
     }
     println!("Rectangles: {rects} (SPEC-0028: 6,524), {pushing} pass the box-push gate at mask 0; largest axis length error {worst:.2e}");
+    // Frame records referenced around pack 909's spawn: check the assumed axis layout.
+    {
+        let bytes = index.read(disc, 909)?;
+        let chain = resource::walk_chunks(&bytes, None)?;
+        if let Some(g) = Ground::of(&bytes, &chain.chunks, CellOrder::XMajor) {
+            let (mut n, mut unit, mut vertical, mut kinds) = (0, 0, 0, std::collections::BTreeMap::new());
+            let len = |a: [f32; 4]| (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
+            for dx in -10..10 {
+                for dz in -10..10 {
+                    for f in g.frames_at(-1852.8 + dx as f32 * 8.0, 1137.5 + dz as f32 * 8.0) {
+                        n += 1;
+                        unit += ((len(f.face) - 1.0).abs() < 1e-3 && (len(f.run) - 1.0).abs() < 1e-3) as usize;
+                        vertical += (f.face[1].abs() <= 0.2) as usize;
+                        *kinds.entry(f.kind).or_insert(0usize) += 1;
+                    }
+                }
+            }
+            println!("Frame records near 909's spawn (with repeats): {n}; unit face and run {unit}; near-vertical face {vertical}; types {kinds:?}");
+        }
+    }
     println!("x-major breakdown: no cell {}, miss {}, <0.5 {}, <2 {}, <10 {}, farther {}", kinds[0], kinds[1], kinds[2], kinds[3], kinds[4], kinds[5]);
     for (k, label) in ["x-major", "z-major"].iter().enumerate() {
         let (hit, all) = totals[k];

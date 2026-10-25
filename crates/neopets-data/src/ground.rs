@@ -366,3 +366,68 @@ pub fn rectangles(bytes: &[u8], top: &[Chunk]) -> Vec<Rectangle> {
     }
     out
 }
+
+/// A frame record (0x70 bytes): a wall edge named by a grid cell's entry items (SPEC-0018,
+/// Items of an entry). Fields as used by the edge tests of SPEC-0033 Behavior 37: the start
+/// point (+0x00), the face plane (+0x10, unit normal and offset), the run plane (+0x20, unit
+/// direction along the edge and offset), the top plane (+0x30), the length L (+0x40), the
+/// height value H (+0x44) and the type byte (+0x4C). The value of a plane at p is n·p + w.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct FrameRecord {
+    pub kind: i8,
+    pub start: [f32; 3],
+    pub face: [f32; 4],
+    pub run: [f32; 4],
+    pub top: [f32; 4],
+    pub length: f32,
+    pub height: f32,
+}
+
+impl Ground {
+    /// The frame records named by the items of the cell containing (x, z), for the pack's own
+    /// model set (patch id 0).
+    pub fn frames_at(&self, x: f32, z: f32) -> Vec<FrameRecord> {
+        let cx = ((x - self.x_min) / self.cell).floor() as i64;
+        let cz = ((z - self.z_min) / self.cell).floor() as i64;
+        if cx < 0 || cz < 0 || cx >= self.nx as i64 || cz >= self.nz as i64 {
+            return Vec::new();
+        }
+        let index = (cx + cz * self.nx as i64) as usize;
+        let Some(rec) = u32_at(&self.grid, self.table + 4 * index).filter(|&r| r != 0) else {
+            return Vec::new();
+        };
+        let rec = rec as usize;
+        let count = i32_at(&self.grid, rec + 0x08).unwrap_or(0).clamp(0, 1 << 12) as usize;
+        let entries = rec + u32_at(&self.grid, rec + 0x0C).unwrap_or(0) as usize;
+        let table = u32_at(&self.set, 8).unwrap_or(0) as usize;
+        let mut out = Vec::new();
+        for e in 0..count {
+            let at = entries + CELL_ENTRY * e;
+            let (Some(0), Some(index)) = (i32_at(&self.grid, at), i32_at(&self.grid, at + 4)) else {
+                continue;
+            };
+            let Some(entry) = u32_at(&self.set, table + 4 * index as usize).map(|v| v as usize) else { continue };
+            let n = i32_at(&self.grid, at + 0x0C).unwrap_or(0).clamp(0, 1 << 12) as usize;
+            let items = entries + u32_at(&self.grid, at + 0x10).unwrap_or(0) as usize;
+            for k in 0..n {
+                let Some(item) = u32_at(&self.grid, items + 4 * k) else { break };
+                let r = entry + item as usize;
+                let v = |o: usize| {
+                    Some([f32_at(&self.set, r + o)?, f32_at(&self.set, r + o + 4)?, f32_at(&self.set, r + o + 8)?, f32_at(&self.set, r + o + 12)?])
+                };
+                if let (Some(start), Some(face), Some(run), Some(top), Some(length), Some(height), Some(kind)) = (
+                    v(0x00),
+                    v(0x10),
+                    v(0x20),
+                    v(0x30),
+                    f32_at(&self.set, r + 0x40),
+                    f32_at(&self.set, r + 0x44),
+                    self.set.get(r + 0x4C).copied(),
+                ) {
+                    out.push(FrameRecord { kind: kind as i8, start: [start[0], start[1], start[2]], face, run, top, length, height });
+                }
+            }
+        }
+        out
+    }
+}

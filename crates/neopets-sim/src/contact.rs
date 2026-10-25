@@ -5,8 +5,11 @@
 
 use crate::hero::Vec3;
 
-/// SPEC-0018 Constants: the contact push radius for box primitives.
+/// SPEC-0018 Constants: the 1.25 push radius. SPEC-0040 assigns it to the follow camera's eye
+/// pass; characters push with their motion-record radius instead.
 pub const CONTACT_RADIUS: f32 = 1.25;
+/// SPEC-0040 Layout, body size: both heroes have radius 1.175 and height 3.5.
+pub const HERO_RADIUS: f32 = 1.175;
 const TOP_MARGIN: f32 = 0.1;
 const BOTTOM_BIAS: f32 = 0.75;
 
@@ -76,6 +79,67 @@ pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
     hit
 }
 
+/// A wall edge (a frame record, SPEC-0018 and SPEC-0033 Behavior 37): the face plane (unit
+/// normal, offset), the run plane, the top plane, the length L and the height value H.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct WallEdge {
+    pub face: [f32; 4],
+    pub run: [f32; 4],
+    pub top: [f32; 4],
+    pub length: f32,
+    pub height: f32,
+}
+
+fn plane(q: [f32; 4], p: Vec3) -> f32 {
+    q[0] * p[0] + q[1] * p[1] + q[2] * p[2] + q[3]
+}
+
+impl WallEdge {
+    /// SPEC-0033 Behavior 37: the height where the top plane reaches H, lowered by 0.25.
+    pub fn edge_height(&self, p: Vec3) -> f32 {
+        let m = self.top;
+        (self.height - m[0] * p[0] - m[2] * p[2] - m[3]) / m[1] - 0.25
+    }
+
+    /// Two-sided wall correction of a body of radius r at p. The ordinary-wall rule of SPEC-0018
+    /// (Petpet frame-record wall pass): the correction is r − |a| along the face normal, toward
+    /// the side the point is on, where a is the face-plane value. Gates taken from the edge
+    /// tests of SPEC-0033 Behavior 37: a near-vertical face (|n_y| ≤ 0.2) and a run-plane value
+    /// inside (0, L). The height gate (the top more than 0.25 above the feet, so a low step is not
+    /// a wall) is this implementation's choice: the hero's own wall routine is not specified in
+    /// that detail (Medium-Low; R-0011).
+    pub fn push(&self, p: Vec3, r: f32) -> Option<Vec3> {
+        let n = [self.face[0], self.face[1], self.face[2]];
+        if n[1].abs() > 0.2 || self.length <= 0.0 {
+            return None;
+        }
+        let a = plane(self.face, p);
+        let s = plane(self.run, p);
+        if a.abs() >= r || s <= 0.0 || s >= self.length || self.top[1] == 0.0 {
+            return None;
+        }
+        if self.edge_height(p) <= p[1] + 0.25 {
+            return None;
+        }
+        let side = if a < 0.0 { -1.0 } else { 1.0 };
+        let d = (r - a.abs()) * side;
+        Some([n[0] * d, 0.0, n[2] * d])
+    }
+}
+
+/// Push a point out of each wall it touches, in order. Reports whether any wall pushed.
+pub fn resolve_walls(p: &mut Vec3, walls: &[WallEdge], r: f32) -> bool {
+    let mut hit = false;
+    for w in walls {
+        if let Some(d) = w.push(*p, r) {
+            p[0] += d[0];
+            p[2] += d[2];
+            hit = true;
+        }
+    }
+    hit
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -124,5 +188,33 @@ mod tests {
         b.extents = [6.0, -2.0, 2.0];
         assert!(push([9.0, 1.0, -4.0], &b, 1.25).is_some());
         assert!(push([9.0, 1.0, -4.0], &b, 1.0).is_none());
+    }
+
+    /// A wall at x = 0 facing +x, running along z from z = 0 for 10, top plane y with H = 5.
+    fn wall() -> WallEdge {
+        WallEdge { face: [1.0, 0.0, 0.0, 0.0], run: [0.0, 0.0, 1.0, 0.0], top: [0.0, 1.0, 0.0, 0.0], length: 10.0, height: 5.0 }
+    }
+
+    #[test]
+    fn wall_push_is_two_sided_to_the_radius() {
+        // SPEC-0018 Petpet vector: radius 1.0, x = 0.6 moves to 1.0; x = -0.6 moves to -1.0.
+        let mut p = [0.6, 0.0, 5.0];
+        assert!(resolve_walls(&mut p, &[wall()], 1.0));
+        assert!((p[0] - 1.0).abs() < 1e-6);
+        let mut p = [-0.6, 0.0, 5.0];
+        resolve_walls(&mut p, &[wall()], 1.0);
+        assert!((p[0] + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn wall_gates() {
+        let w = wall();
+        assert_eq!(w.push([1.2, 0.0, 5.0], 1.175), None, "beyond the radius");
+        assert_eq!(w.push([0.5, 0.0, 10.5], 1.175), None, "past the run end");
+        assert_eq!(w.push([0.5, 4.6, 5.0], 1.175), None, "top 4.75 is within 0.25 of the feet");
+        let mut flat = w;
+        flat.face = [0.0, 1.0, 0.0, 0.0];
+        assert_eq!(flat.push([0.0, 0.5, 5.0], 1.175), None, "near-horizontal face");
+        assert!((w.edge_height([0.0, 0.0, 0.0]) - 4.75).abs() < 1e-6);
     }
 }

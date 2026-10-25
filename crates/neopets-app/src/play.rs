@@ -6,7 +6,7 @@ use neopets_data::archive::ArchiveIndex;
 use neopets_data::ground::{self, CellOrder, Ground};
 use neopets_data::model::ModelData;
 use neopets_data::{Disc, resource};
-use neopets_sim::contact::{self, BoxShape};
+use neopets_sim::contact::{self, BoxShape, WallEdge};
 use neopets_sim::hero::{HeroInput, Locomotion};
 
 pub struct Play {
@@ -58,9 +58,19 @@ impl Play {
         self.loco.travel(self.root_step, |x, z, c| {
             ground.map_or(ground::MISS, |g| g.probe(x, z, c))
         });
-        // Push the feet out of box primitives with the contact radius (SPEC-0018). Not
-        // implemented: cylinders, frame records, the slide response and contact recovery.
-        contact::resolve(&mut self.loco.position, &self.boxes, contact::CONTACT_RADIUS);
+        // SPEC-0040 Behavior 14A driver branch 0, in order: the cell's frame records (walls),
+        // then the box primitives, each with the hero radius. Not implemented: cell lists A and
+        // B as such, cylinders, spheres, the ledge tests, the slide response and recovery.
+        if let Some(g) = ground {
+            let p = self.loco.position;
+            let walls: Vec<WallEdge> = g
+                .frames_at(p[0], p[2])
+                .into_iter()
+                .map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height })
+                .collect();
+            contact::resolve_walls(&mut self.loco.position, &walls, contact::HERO_RADIUS);
+        }
+        contact::resolve(&mut self.loco.position, &self.boxes, contact::HERO_RADIUS);
         self.root_step = self.hero.tick();
     }
 
@@ -68,7 +78,7 @@ impl Play {
         let p = self.loco.position;
         format!(
             "PLAY (M7 groundwork): hero at ({:.1}, {:.1}, {:.1}), state {}, action {}, rate {:.2}. \
-             WASD move, Shift run (R1), drag to turn the camera. Box walls only; no gravity or jumps yet",
+             WASD move, Shift run (R1), drag to turn the camera. Frame-record and box walls; no gravity or jumps yet",
             p[0], p[1], p[2], self.loco.state, self.loco.action(), self.loco.rate
         )
     }
