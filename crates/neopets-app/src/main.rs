@@ -494,7 +494,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots).chain(),
             )
                 .chain(),
         );
@@ -1190,6 +1190,41 @@ fn sync_worlds(
         }
     }
     *shown = want;
+}
+
+/// A live enemy projectile's marker, by pool slot.
+#[derive(Component)]
+struct ShotMarker(usize);
+
+/// Enemy projectiles are drawn as small plain markers at their positions: the flight effects
+/// of SPEC-0034 are not implemented, so this is a diagnostic stand-in, not the game's visual.
+fn sync_shots(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    mut markers: Query<(&ShotMarker, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut made: Local<bool>,
+) {
+    let Some(state) = state else { return };
+    if !*made {
+        *made = true;
+        let mesh = meshes.add(Cuboid::new(0.4, 0.4, 0.4));
+        let material = materials.add(StandardMaterial { base_color: Color::srgb(1.0, 0.85, 0.2), unlit: true, ..default() });
+        for i in 0..neopets_sim::projectile::SLOTS {
+            commands.spawn((ShotMarker(i), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden));
+        }
+        return;
+    }
+    for (m, mut t, mut vis) in &mut markers {
+        match state.play.shots.slots.get(m.0).copied().flatten() {
+            Some(s) => {
+                t.translation = Vec3::from(s.position);
+                *vis = Visibility::Visible;
+            }
+            None => *vis = Visibility::Hidden,
+        }
+    }
 }
 
 /// A region character's drawn root, by character id.

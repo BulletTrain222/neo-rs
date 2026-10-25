@@ -69,6 +69,25 @@ pub struct AttackSlot {
     pub loop_min: i32,
     pub loop_max: i32,
     pub loop_hold: f32,
+    /// Missile values (+0x2BC flight, +0x2CC speed, +0x2DC end speed, +0x2EC radius, +0x2FC
+    /// range, +0x30C inaccuracy, +0x31C spin, +0x33C spawn count, +0x36C/+0x37C status id and
+    /// chance, +0x38C/+0x39C status range, +0x43C visual kind, +0x44C/+0x45C area duration and
+    /// radius, +0x3CC + 2k spawn key).
+    pub flight: i32,
+    pub speed: f32,
+    pub end_speed: f32,
+    pub radius: f32,
+    pub missile_range: f32,
+    pub inaccuracy: f32,
+    pub spin: f32,
+    pub spawn_count: i32,
+    pub status: i32,
+    pub status_chance: f32,
+    pub status_range: (f32, f32),
+    pub visual: i32,
+    pub area_duration: f32,
+    pub area_radius: f32,
+    pub spawn_key: u16,
 }
 
 /// The values the common-enemy class reads (SPEC-0038 Layout section 2) and the five weapon
@@ -76,6 +95,8 @@ pub struct AttackSlot {
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Tuning {
     pub approach: u16,
+    /// Alignment (+0x3C), the element of the enemy's projectiles.
+    pub element: u16,
     pub display_default: bool,
     pub search_max: f32,
     pub search_min: f32,
@@ -170,9 +191,25 @@ impl MonsterTable {
             loop_min: w(0x4AC + 4 * k) as i32,
             loop_max: w(0x4BC + 4 * k) as i32,
             loop_hold: f(0x4CC + 4 * k),
+            flight: w(0x2BC + 4 * k) as i32,
+            speed: f(0x2CC + 4 * k),
+            end_speed: f(0x2DC + 4 * k),
+            radius: f(0x2EC + 4 * k),
+            missile_range: f(0x2FC + 4 * k),
+            inaccuracy: f(0x30C + 4 * k),
+            spin: f(0x31C + 4 * k),
+            spawn_count: w(0x33C + 4 * k) as i32,
+            status: w(0x36C + 4 * k) as i32,
+            status_chance: f(0x37C + 4 * k),
+            status_range: (f(0x38C + 4 * k), f(0x39C + 4 * k)),
+            visual: w(0x43C + 4 * k) as i32,
+            area_duration: f(0x44C + 4 * k),
+            area_radius: f(0x45C + 4 * k),
+            spawn_key: u(0x3CC + 2 * k),
         };
         Some(Tuning {
             approach: u(0x38),
+            element: u(0x3C),
             display_default: u(0x82) != 0,
             search_max: f(0x5C),
             search_min: f(0x60),

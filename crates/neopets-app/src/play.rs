@@ -266,6 +266,8 @@ pub struct Play {
     pub hero_max: i32,
     bands: (Vec<f32>, Vec<f32>),
     pub last_hurt: String,
+    /// The enemy projectile pool (SPEC-0029 Behavior 9).
+    pub shots: neopets_sim::projectile::Pool,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
@@ -368,6 +370,7 @@ impl Play {
             hero_max,
             bands,
             last_hurt: String::new(),
+            shots: Default::default(),
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             region_wanted: Vec::new(),
@@ -614,6 +617,8 @@ impl Play {
         }
         let actions = level::on_activate(self.world.pack, &mut self.state);
         self.apply(&actions);
+        // The pool's slots are reset when a world starts (here: when a world is made current).
+        self.shots.reset();
     }
 
     /// Carry out a level handler's actions (SPEC-0030 host calls), in order.
@@ -1313,7 +1318,26 @@ impl Play {
             let speed = (root_step[0].powi(2) + root_step[2].powi(2)).sqrt();
             let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
             v.radii = row.radius + contact::HERO_RADIUS;
+            v.spawn_bits = bits;
             let act = e.tick(&v, &mut self.rng);
+            // A missile slot's spawn event: the spawner from the emit point of the event bit
+            // (attach frame n; the body middle when the frame has no bone; R-0016).
+            if let Some(req) = act.shot {
+                let launch = anim
+                    .bones()
+                    .attach
+                    .get(req.emit)
+                    .and_then(|&(bone, angles, offset)| Some(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).t))
+                    .unwrap_or([p[0], p[1] + 0.5 * row.height, p[2]]);
+                let cam = &self.camera;
+                let fwd = unit(sub_v(cam.focus, cam.eye));
+                let to = unit(sub_v(p, cam.eye));
+                let out_of_cone = fwd[0] * to[0] + fwd[1] * to[1] + fwd[2] * to[2] < 0.85;
+                let slot = &e.p.slots[req.slot];
+                if let Some(setup) = neopets_sim::projectile::spawn(&slot.missile, e.p.element, *id, launch, hero, out_of_cone, &mut self.rng) {
+                    self.shots.submit(setup);
+                }
+            }
             if let Some(id) = act.anim {
                 anim.request(id, act.force);
             }
@@ -1337,8 +1361,32 @@ impl Play {
                 strikes.push((*id, s, wk.facing));
             }
         }
+        // The projectile pool's update, after the region passes (SPEC-0029 Behavior 9).
+        let owners: std::collections::HashSet<u64> = self.characters.iter().map(|c| c.id).collect();
+        let gap = self.loco.body.gap;
+        let events = {
+            let world = &self.world;
+            let owner_exists = |id: u64| owners.contains(&id);
+            let ground = |x: f32, z: f32, c: f32| world.ground_at(x, z, c);
+            let wall = |a: [f32; 3], b: [f32; 3]| world.ground.as_ref().is_some_and(|g| !g.segment_clear(a, b, true));
+            let env = neopets_sim::projectile::Env {
+                hero,
+                hero_radius: contact::HERO_RADIUS,
+                hero_height: HERO_HEIGHT,
+                hero_gap: gap,
+                owner_exists: &owner_exists,
+                ground: &ground,
+                wall: &wall,
+            };
+            self.shots.tick(&env)
+        };
+        for ev in events {
+            if let neopets_sim::projectile::Event::Hero { damage, .. } = ev {
+                self.hero_hit(damage, 0.0, hero_facing, "a shot".into());
+            }
+        }
         for (at, s, f) in strikes {
-            if self.hero_hit(s, f) {
+            if self.hero_hit(s.damage, s.knockback, f, format!("slot {}", s.slot)) {
                 // A hit that leaves the hero at 0 HP: the attacker's victory pose (state 10).
                 if let Some(c) = self.characters.iter_mut().find(|c| c.id == at) {
                     let Character { enemy: Some(e), walker: Some(wk), anim, .. } = c else { continue };
@@ -1357,28 +1405,28 @@ impl Play {
     /// so no block; no armour, Motes or petpet; status scale 1), Taking a hit (the dialogue box
     /// discards hits; a dead hero takes none; Tor's charge sub-states 1 and 10 are busy), the
     /// deduct and the default death, and the knockback. Returns whether the hero died.
-    fn hero_hit(&mut self, s: enemy::Strike, attacker_facing: [f32; 3]) -> bool {
+    fn hero_hit(&mut self, damage: f32, knockback: f32, attacker_facing: [f32; 3], what: String) -> bool {
         if self.dialogue_open || self.loco.state == hero_states::DEAD {
             return false;
         }
-        let damage = s.damage.max(0.0).trunc() as i32;
+        let damage = damage.max(0.0).trunc() as i32;
         let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
         if !busy {
             self.attack = None;
             self.loco.hurt(self.weapon.is_some());
         }
         self.hero_hp -= damage;
-        self.last_hurt = format!("took {damage} (slot {}), hp {}", s.slot, self.hero_hp.max(0));
+        self.last_hurt = format!("took {damage} ({what}) on tick {}, hp {}", self.ticks, self.hero_hp.max(0));
         if self.hero_hp <= 0 {
             self.hero_hp = 0;
             self.attack = None;
             self.loco.die();
             return true;
         }
-        if damage > 0 && s.knockback > 0.0 {
+        if damage > 0 && knockback > 0.0 {
             let d = unit([9.0 * attacker_facing[0], 9.0 * attacker_facing[1] + 12.0, 9.0 * attacker_facing[2]]);
             self.attack = None;
-            self.loco.knock(scale(d, s.knockback));
+            self.loco.knock(scale(d, knockback));
         }
         false
     }
@@ -1446,6 +1494,9 @@ impl Play {
             })
             .collect();
         names.dedup();
+        if self.shots.live() > 0 {
+            names.push(format!("enemy shots {}", self.shots.live()));
+        }
         let roundup: Vec<u16> = (107..=110).filter(|&f| self.state.flag(f)).collect();
         if !roundup.is_empty() {
             names.push(format!("round-up flags {roundup:?}"));
@@ -1550,6 +1601,26 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         loop_min: s.loop_min,
         loop_max: s.loop_max,
         loop_hold: s.loop_hold,
+        spawn_count: s.spawn_count,
+        missile: neopets_sim::projectile::Missile {
+            flight: s.flight,
+            speed: s.speed,
+            end_speed: s.end_speed,
+            radius: s.radius,
+            range: s.missile_range,
+            inaccuracy: s.inaccuracy,
+            spin: s.spin,
+            damage: s.damage,
+            band: (s.trigger_min, s.trigger_max),
+            flags: s.flags,
+            visual: s.visual,
+            area_duration: s.area_duration,
+            area_radius: s.area_radius,
+            key: s.spawn_key,
+            status: s.status,
+            status_chance: s.status_chance,
+            status_range: (s.status_range.0, s.status_range.1),
+        },
     };
     enemy::Params {
         approach: t.approach,
@@ -1580,6 +1651,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         strafe: t.strafe,
         backbiter: t.backbiter,
         disappear: r.disappear as i32,
+        element: t.element as i32,
         slots: t.slots.each_ref().map(slot),
     }
 }
@@ -1613,6 +1685,7 @@ fn enemy_view<'a>(
         blocked: wk.blocked,
         speed,
         contact,
+        spawn_bits: 0,
         radii: 0.0,
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },
         has,

@@ -52,6 +52,9 @@ pub struct Slot {
     pub loop_min: i32,
     pub loop_max: i32,
     pub loop_hold: f32,
+    /// Spawn count (+0x33C) and the missile values of the spawners.
+    pub spawn_count: i32,
+    pub missile: crate::projectile::Missile,
 }
 
 /// The monster-row values class 17 reads (SPEC-0038 Layout section 2).
@@ -85,6 +88,8 @@ pub struct Params {
     pub strafe: (f32, f32),
     pub backbiter: f32,
     pub disappear: i32,
+    /// Alignment (+0x3C): the element of every projectile the enemy fires.
+    pub element: i32,
     pub slots: [Slot; 4],
 }
 
@@ -110,6 +115,9 @@ pub struct View<'a> {
     pub speed: f32,
     /// A weapon volume touches one of the hero's bone capsules this tick (the strike test).
     pub contact: bool,
+    /// Event bits on the current frame: 0x20 is the release event (the missile slot's spawn
+    /// event, SPEC-0005 table B), and 0x1 to 0x10 on that frame pick emit points 0 to 4.
+    pub spawn_bits: u32,
     /// Own record radius plus the hero's.
     pub radii: f32,
     pub clip: Clip,
@@ -142,6 +150,15 @@ pub enum Go {
     Facing(Vec3),
 }
 
+/// A missile slot's spawn event fired: spawner for slot k from emit point n, with the shot
+/// counter before this shot (Behavior 13, state 2).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct ShotRequest {
+    pub slot: usize,
+    pub emit: usize,
+    pub counter: u32,
+}
+
 /// A strike on the hero by slot k (Behavior 13, strike test or loop damage).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Strike {
@@ -163,6 +180,7 @@ pub struct Act {
     /// Turn toward a point with a weight.
     pub face: Option<(Vec3, f32)>,
     pub strike: Option<Strike>,
+    pub shot: Option<ShotRequest>,
     /// Discard this tick's root step (chase stop).
     pub stop: bool,
     /// Sink the corpse by this much along world up.
@@ -274,6 +292,9 @@ pub struct Enemy {
     reentered: bool,
     /// The hero is on this enemy's hit list (cleared at each attack start).
     hit: bool,
+    /// The shot counter and the spawn-pending flag of a missile slot.
+    shots: u32,
+    pending: bool,
     idle_timer: i32,
     idle_variant: Option<u32>,
     through: Option<u32>,
@@ -328,6 +349,8 @@ impl Enemy {
             loop_count: 0,
             reentered: false,
             hit: false,
+            shots: 0,
+            pending: false,
             idle_timer: 0,
             idle_variant: None,
             through: None,
@@ -568,6 +591,8 @@ impl Enemy {
                 self.seq = param;
                 self.hit = false;
                 self.reentered = false;
+                self.shots = 0;
+                self.pending = false;
             }
             10 => {
                 self.react = param;
@@ -1064,6 +1089,30 @@ impl Enemy {
         }
     }
 
+    /// State 2 of a missile slot: the spawn-pending flag and the spawn loop. True when the shot
+    /// counter has reached the spawn count (go to state 3).
+    fn missile_step(&mut self, k: usize, v: &View, a: &mut Act) -> bool {
+        let active = v.spawn_bits & 0x20 != 0;
+        if self.pending {
+            if !active {
+                self.pending = false;
+            }
+            return false;
+        }
+        if !active {
+            return false;
+        }
+        let points = v.spawn_bits & 0x1F;
+        let emit = if points == 0 { 0 } else { points.trailing_zeros() as usize };
+        a.shot = Some(ShotRequest { slot: k, emit, counter: self.shots });
+        self.shots += 1;
+        if (self.shots as i32) < self.p.slots[k].spawn_count {
+            self.pending = true;
+            return false;
+        }
+        true
+    }
+
     /// Behavior 13: the attack sequencer (outer 2).
     fn sequencer(&mut self, d: f32, v: &View, rng: &mut Rng, a: &mut Act) {
         let Some(k) = self.selected else {
@@ -1127,6 +1176,8 @@ impl Enemy {
                 a.rate = Some(s.strike_speed);
                 let done = self.through(kb, v, a);
                 if s.kind == MELEE && strike(self, a) {
+                    self.seq = 3;
+                } else if s.kind == MISSILE && self.missile_step(k, v, a) {
                     self.seq = 3;
                 } else if done {
                     self.seq = 5;
@@ -1294,6 +1345,7 @@ mod tests {
             blocked: false,
             speed: 0.0,
             contact: false,
+            spawn_bits: 0,
             radii: 2.0,
             clip: Clip::default(),
             has,
@@ -1399,6 +1451,31 @@ mod tests {
         e.tick(&v, &mut rng);
         assert_eq!(e.outer, 0);
         assert!((15..=30).contains(&e.recovery));
+    }
+
+    #[test]
+    fn spawn_count_loop() {
+        // SPEC-0038 vector: count 3; spawn event on ticks 1, 2, off 3, on 4, 5, off 6, on 7.
+        let has = |_| true;
+        let mut rng = Rng::seeded(4);
+        let mut p = skeleton();
+        p.slots[0].kind = MISSILE;
+        p.slots[0].spawn_count = 3;
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        e.state = 19;
+        e.selected = Some(0);
+        e.enter(2, 2);
+        let mut v = view([2.5, 0.0, 0.0], &has);
+        v.clip = Clip { action: slot_anim(0, 1), progress: 0.2, finished: false };
+        let mut fired = Vec::new();
+        for (tick, on) in [true, true, false, true, true, false, true].into_iter().enumerate() {
+            v.spawn_bits = if on { 0x20 } else { 0 };
+            if let Some(s) = e.tick(&v, &mut rng).shot {
+                fired.push((tick + 1, s.counter));
+            }
+        }
+        assert_eq!(fired, vec![(1, 0), (4, 1), (7, 2)]);
+        assert_eq!(e.seq, 3);
     }
 
     #[test]
