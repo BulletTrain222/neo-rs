@@ -17,6 +17,8 @@ pub const STANCE: u8 = 1;
 pub const SLOW_WALK: u8 = 2;
 pub const WALK: u8 = 3;
 pub const RUN: u8 = 4;
+/// The attack step (SPEC-0036; driven by `attack::TorAttack`).
+pub const ATTACK: u8 = 13;
 /// Jump states (Behavior 50): 7 standing, 8 slow, 9 walking, 10 running.
 pub const JUMP: u8 = 7;
 pub const JUMP_RUN: u8 = 10;
@@ -77,6 +79,9 @@ pub struct HeroInput {
     pub run: bool,
     /// Cross pressed this pass (a press edge).
     pub jump: bool,
+    /// The attack button (R2 or Circle): held, and its press edge this pass.
+    pub attack_held: bool,
+    pub attack: bool,
     /// Square pressed this pass (a press edge): confirms an interaction prompt.
     pub square: bool,
 }
@@ -210,6 +215,18 @@ impl Locomotion {
         self.body.position
     }
 
+    /// Enter or leave the attack step, and set the clip it requests.
+    pub fn set_attack(&mut self, request: Option<u32>) {
+        match request {
+            Some(id) => {
+                self.state = ATTACK;
+                self.request = id;
+            }
+            None if self.state == ATTACK => self.state = STANCE,
+            None => {}
+        }
+    }
+
     /// The camera's recentring gate T (SPEC-0027): the hero moved in its last motion step and
     /// is not in state 1.
     /// Turn the facing by the steering rule (the talking hero uses weight 0.1).
@@ -231,7 +248,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN => self.request,
+            JUMP..=JUMP_RUN | ATTACK => self.request,
             _ => 0,
         }
     }
@@ -248,6 +265,10 @@ impl Locomotion {
             let c = flatten(camera_forward);
             let left = flatten(camera_left);
             self.target = normalise([z * c[0] + x * left[0], 0.0, z * c[2] + x * left[2]]);
+        }
+        if self.state == ATTACK {
+            // The attack step owns the hero: no stick movement or turning.
+            return;
         }
         if !self.airborne() {
             // Behavior 9A: the walk-off check runs first in states 1 to 6.

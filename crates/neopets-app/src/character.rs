@@ -69,9 +69,15 @@ impl HeroAnim {
     /// Request an action id. A change of main clip restarts the main, sub-part and face clips;
     /// the same main clip already playing starts nothing (SPEC-0005, Clip start).
     pub fn play(&mut self, action: u32) {
+        self.request(action, false);
+    }
+
+    /// Request an action, restarting its clip even when it is current when `force` is set (the
+    /// forced start of SPEC-0040, used by chained attack repeats).
+    pub fn request(&mut self, action: u32, force: bool) {
         self.action = action;
         let main = self.families.first().and_then(|f| f.data.clip_for(action));
-        let restart = main.is_some() && main != self.families[0].current;
+        let restart = main.is_some() && (force || main != self.families[0].current);
         if !restart {
             return;
         }

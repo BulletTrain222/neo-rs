@@ -238,6 +238,10 @@ pub struct Play {
     /// The shared dialogue box is open (SPEC-0022: it closes only on a Square press; the hero
     /// stays in the talking state meanwhile).
     pub dialogue_open: bool,
+    /// Tor's attack step (SPEC-0036), while state 13 runs.
+    pub attack: Option<neopets_sim::attack::TorAttack>,
+    /// An attack press waiting for the next tick.
+    pub attack_latch: bool,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
@@ -317,6 +321,8 @@ impl Play {
             talk_with: None,
             dialogue_open: false,
             rng: neopets_sim::rng::Rng::seeded(clock_seed()),
+            attack: None,
+            attack_latch: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             region_wanted: Vec::new(),
@@ -929,9 +935,28 @@ impl Play {
             self.confirm = true;
         }
         self.square_now = input.square;
+        // The attack press edge enters state 13 from the ground states (SPEC-0036); the step
+        // then runs every tick and decides the clip.
+        if self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
+            self.attack = Some(neopets_sim::attack::TorAttack::start());
+        }
+        let mut force = false;
+        if let Some(a) = self.attack.as_mut() {
+            let c = self.hero.clip_state();
+            match a.tick(input.attack_held, input.attack, neopets_sim::attack::Clip { action: c.action, progress: c.progress }) {
+                Some(r) => {
+                    self.loco.set_attack(Some(r.action));
+                    force = r.restart;
+                }
+                None => {
+                    self.attack = None;
+                    self.loco.set_attack(None);
+                }
+            }
+        }
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.pending_step();
-        self.hero.play(self.loco.action());
+        self.hero.request(self.loco.action(), force);
         self.hero.set_rate(self.loco.rate);
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));

@@ -682,6 +682,7 @@ fn read_input(
 fn step_sim(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    mouse: Res<ButtonInput<MouseButton>>,
     gamepads: Query<&Gamepad>,
     mut driver: ResMut<SimDriver>,
     mut models: ResMut<ModelView>,
@@ -708,7 +709,16 @@ fn step_sim(
                 || gamepads.iter().any(|g| g.pressed(GamepadButton::RightTrigger)),
             jump: false,
             square: false,
+            attack_held: keys.pressed(KeyCode::KeyF)
+                || mouse.pressed(MouseButton::Left)
+                || gamepads.iter().any(|g| g.pressed(GamepadButton::East) || g.pressed(GamepadButton::RightTrigger2)),
+            attack: false,
         };
+        // The attack button (F, left mouse, Circle or R2): its press edge, kept for the next tick
+        // when this frame runs none.
+        play.play.attack_latch |= keys.just_pressed(KeyCode::KeyF)
+            || mouse.just_pressed(MouseButton::Left)
+            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::East) || g.just_pressed(GamepadButton::RightTrigger2));
         // Square (E or the west face button) confirms a prompt; a press edge like Cross.
         play.play.square_latch |= keys.just_pressed(KeyCode::KeyE)
             || gamepads.iter().any(|g| g.just_pressed(GamepadButton::West));
@@ -735,6 +745,7 @@ fn step_sim(
         for _ in 0..ticks {
             input.jump = std::mem::take(&mut play.play.jump_latch);
             input.square = std::mem::take(&mut play.play.square_latch);
+            input.attack = std::mem::take(&mut play.play.attack_latch);
             let pad = neopets_sim::camera::CameraPad {
                 right_x: byte(right.x),
                 right_y: byte(-right.y),
@@ -1409,7 +1420,10 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             forward,
             side,
             square: play.prompt_shown.is_some() || play.talk_prompt,
-            jump: jump && play.ticks % 120 == 0 && play.ticks > 0,
+            // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
+            attack_held: jump && (30..40).contains(&(play.ticks % 120)),
+            attack: jump && play.ticks % 120 == 30,
+            jump: jump && play.ticks % 240 == 0 && play.ticks > 0,
             ..Default::default()
         };
         play.tick(&input, neopets_sim::camera::CameraPad::default());
