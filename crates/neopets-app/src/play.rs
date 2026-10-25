@@ -407,6 +407,9 @@ pub struct Play {
     magic: neopets_sim::mote::Magic,
     /// The last Mote charge or magic payment, for the status line.
     pub last_mote: String,
+    /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
+    mote_objects: Vec<neopets_sim::charm::Object>,
+    charm_words: neopets_sim::charm::Words,
     hit_list: Vec<u64>,
     last_axis: Option<[f32; 3]>,
     /// The last hit, for the status line.
@@ -588,6 +591,17 @@ impl Play {
         // and the hero divider table (bases, then steps).
         let w1 = |at: u32| words(at, 1).map(|v| v[0]);
         let dividers = words(neopets_data::item::HEALTH_TOR, 8)?;
+        let float = |at: u32| words(at, 1).map(|v| f32::from_bits(v[0]));
+        let charm_words = {
+            use neopets_sim::charm::*;
+            Words {
+                orbit_radius: float(ORBIT_RADIUS)?,
+                orbit_seconds: float(ORBIT_SECONDS)?,
+                nova_radius: float(NOVA_RADIUS)?,
+                wind_radius: float(WIND_RADIUS)?,
+                wind_height: float(WIND_HEIGHT)?,
+            }
+        };
         let magic = neopets_sim::mote::Magic::new(words(neopets_sim::mote::MAGIC_AT, neopets_sim::mote::MAGIC_WORDS)?.into_iter().map(|w| w as i32).collect());
         let design = index.read(disc, neopets_data::design::RESOURCE).ok().and_then(|b| neopets_data::design::DesignTables::parse(&b).ok()).unwrap_or_default();
         let hero_colour = design.hero_colour(0).unwrap_or([128; 3]);
@@ -719,6 +733,8 @@ impl Play {
             reach_tor,
             magic,
             last_mote: String::new(),
+            mote_objects: Vec::new(),
+            charm_words,
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -1661,7 +1677,8 @@ impl Play {
         };
         let mut landed = 0;
         let hero_at = self.loco.position();
-        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+        let mut hits = Vec::new();
+        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
             if self.hit_list.contains(&c.id) {
                 continue;
             }
@@ -1701,8 +1718,31 @@ impl Play {
             if damage > 0 || absorbed {
                 landed += 1;
             }
-            // SPEC-0038 Behavior 37: the common enemy's take-hit hook (doubling on entering
-            // agro, the hit reaction, facing the attacker), then the death hook at 0 HP.
+            hits.push((i, damage));
+        }
+        for (i, damage) in hits {
+            self.character_take_hit(i, damage, hero_at, "");
+        }
+        // A landed Tor hit outside the power step pays the level-0 cost, then uses word-2 charge.
+        if sub != 10 {
+            for _ in 0..landed {
+                let (cost, q) = self.magic.tor_swing(mote_id);
+                self.pay_mp(cost);
+                if let Some(id) = mote_id {
+                    let n = neopets_sim::mote::charge_tor(q, self.weapon_stat_b());
+                    self.spend_charge(id, n);
+                }
+            }
+        }
+    }
+
+    /// A hit of `damage` from the hero at `from` on character i: SPEC-0038 Behavior 37, the
+    /// common enemy's take-hit hook (doubling on entering agro, the hit reaction, facing the
+    /// attacker), then the death hook at 0 HP; SPEC-0056, a townsfolk take-hit returns at once.
+    fn character_take_hit(&mut self, i: usize, damage: i32, from: [f32; 3], by: &str) {
+        let hero_at = from;
+        let Some(c) = self.characters.get_mut(i) else { return };
+        {
             if let Some(e) = c.enemy.as_mut() {
                 // SPEC-0023 10.1: the take-hit arms the monster bar before the damage.
                 if !e.dead {
@@ -1727,19 +1767,37 @@ impl Play {
                     c.dying = Some(c.row.map_or(60, |r| r.disappear.max(1) as u32));
                 }
             }
-            self.last_hit = format!("hit {} for {damage} (hp {})", if c.name.is_empty() { "(unnamed)" } else { &c.name }, c.hp.max(0));
+            self.last_hit = format!("{by}hit {} for {damage} (hp {})", if c.name.is_empty() { "(unnamed)" } else { &c.name }, c.hp.max(0));
         }
-        // A landed Tor hit outside the power step pays the level-0 cost, then uses word-2 charge.
-        if sub != 10 {
-            for _ in 0..landed {
-                let (cost, q) = self.magic.tor_swing(mote_id);
-                self.pay_mp(cost);
-                if let Some(id) = mote_id {
-                    let n = neopets_sim::mote::charge_tor(q, self.weapon_stat_b());
-                    self.spend_charge(id, n);
+    }
+
+    /// SPEC-0036 Charm attack hits, per tick: each live Mote object updates, then walks the
+    /// hittable characters of the world against their body cylinders; a target not on its
+    /// list (and with a free slot) is listed and takes trunc((scale x C - defence) x P).
+    fn mote_objects_step(&mut self) {
+        let hero = self.loco.position();
+        let pack = self.world.pack;
+        let mut objects = std::mem::take(&mut self.mote_objects);
+        objects.retain_mut(|o| o.tick(hero));
+        for o in objects.iter_mut() {
+            let p = neopets_sim::mote::power_index(0, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
+            let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
+            let mut hits = Vec::new();
+            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+                let Some(r) = c.row else { continue };
+                if !o.touches(c.position, r.radius, r.height) || !o.list(c.id) {
+                    continue;
                 }
+                let t = r.target_type as i32;
+                let cf = if neopets_sim::mote::matches(neopets_sim::mote::element(Some(o.id)), t) { neopets_sim::mote::one_plus_percent(g) } else { 1.0 };
+                let (damage, _) = neopets_sim::charm::damage(o.scale, cf, r.defence, p);
+                hits.push((i, damage));
+            }
+            for (i, damage) in hits {
+                self.character_take_hit(i, damage, hero, &format!("Mote {} object ", o.id));
             }
         }
+        self.mote_objects = objects;
     }
 
     /// Stat B (S) of Tor's weapon entry; 0 with no weapon.
@@ -1783,7 +1841,7 @@ impl Play {
         }
         let Some(id) = self.equipment.motes[0][2] else { return };
         let held = self.state.items.get(&id).copied().unwrap_or(0) > 0;
-        let ready = self.weapon.is_some() && held && self.hero_mp >= self.magic.tor_power(Some(id)).0;
+        let ready = self.mote_objects.is_empty() && self.weapon.is_some() && held && self.hero_mp >= self.magic.tor_power(Some(id)).0;
         if !ready {
             if let Some(a) = self.attack.as_mut() {
                 a.f = 0;
@@ -1800,6 +1858,19 @@ impl Play {
         if let Some(id) = mote {
             let n = neopets_sim::mote::charge_tor(q, self.weapon_stat_b());
             self.spend_charge(id, n);
+            // The object of the word-2 Mote at the hero position plus facing x reach, storing
+            // the scale A x D x B x G x E (D = 1 at sub-state 10; E = 1, no petpet).
+            let hero = self.loco.position();
+            let f = self.loco.facing;
+            let w = self.weapon_reach();
+            let at = [hero[0] + f[0] * w, hero[1], hero[2] + f[2] * w];
+            let a = self.weapon.and_then(|i| self.items.get(i)).filter(|i| i.is_weapon()).map_or(0.0, |i| i.stats[0] as f32);
+            let b = neopets_sim::mote::one_plus_percent(self.items.get(id).map_or(0.0, |i| i.stats[5] as f32));
+            let scale = neopets_sim::charm::scale(a, 1.0, b, self.statuses.damage_scale(), 1.0);
+            if let Some(o) = neopets_sim::charm::spawn_tor(id, &self.charm_words, at, hero, f, scale) {
+                self.last_mote = format!("Mote {id} power-attack object (scale {scale}, {} ticks) on tick {}", o.life, self.ticks);
+                self.mote_objects.push(o);
+            }
         }
         self.pay_mp(cost);
     }
@@ -2347,6 +2418,7 @@ impl Play {
         }
         let hits = self.hit_list.len();
         self.hero_swing();
+        self.mote_objects_step();
         // A swing hit: power cue 2 in sub-state 10, else weapon cue 14 (no material impact).
         if self.hit_list.len() > hits {
             let power = self.attack.as_ref().is_some_and(|a| a.sub == 10);

@@ -1872,6 +1872,9 @@ fn play_trace(
     let mut scene = String::new();
     let mut last_hurt = String::new();
     let mut last_mote = String::new();
+    // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
+    // releases a power attack).
+    let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(80);
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
     for _ in 0..ticks {
@@ -1970,7 +1973,7 @@ fn play_trace(
             square: play.prompt_shown.is_some() || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
-            attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),
+            attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..30 + hold).contains(&(play.ticks % 120)),
             // A question box gets Circle (yes) every 10 ticks.
             attack: ((jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30) || (play.textbox.asking() && play.ticks % 10 == 5),
             // On the game-over page the trace taps Cross every 60 ticks.

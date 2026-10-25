@@ -4,6 +4,7 @@ pub use ps2_float::{F, Vf};
 
 pub mod attack;
 pub mod camera;
+pub mod charm;
 pub mod clip;
 pub mod combat;
 pub mod contact;

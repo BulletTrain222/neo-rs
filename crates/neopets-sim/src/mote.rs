@@ -133,6 +133,11 @@ pub fn melee(p: f32, a: f32, mote: Option<AttackMote>, target_type: i32, d: f32,
     (y as i32, absorbed)
 }
 
+/// 1 + v x 0.01 (factors B and C, and the charm C(id)).
+pub fn one_plus_percent(v: f32) -> f32 {
+    add(1.0, mul(v, 0.01))
+}
+
 /// The shield block b of a blocked hit: the shield's stat A, times 1.25 with a shield Mote.
 pub fn shield_block(stat_a: f32, mote: bool) -> f32 {
     if mote { mul(1.25, stat_a) } else { stat_a }
