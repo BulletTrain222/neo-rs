@@ -1,7 +1,8 @@
 //! The game design tables of resource 533 (SPEC-0024 Container, Pointers and string
 //! relocation): the k-th type-42 chunk is table k, an IDMX block of fixed-size records with a
-//! string pool behind it; pointer fields are offsets from the block's start. Only tables 10
-//! (hero name colours) and 13 (action labels) have accessors so far.
+//! string pool behind it; pointer fields are offsets from the block's start. Accessors cover
+//! table 0 (the item text rows: category and carry limit, SPEC-0021), table 5 (location names,
+//! SPEC-0051 Map area names), table 10 (hero name colours) and table 13 (action labels).
 
 use crate::resource;
 
@@ -50,6 +51,27 @@ impl DesignTables {
             tables.push(Table { block, count, size });
         }
         Ok(Self { tables })
+    }
+
+    fn word(&self, table: usize, i: usize, at: usize) -> Option<u32> {
+        let r = self.tables.get(table)?.record(i)?;
+        Some(u32::from_le_bytes(r.get(at..at + 4)?.try_into().ok()?))
+    }
+
+    /// Table 0, row id: the item's text category (+0x04).
+    pub fn item_category(&self, id: u16) -> Option<u32> {
+        self.word(0, id as usize, 4)
+    }
+
+    /// Table 0, row id: the carry limit Q (+0x08; 0 = no limit).
+    pub fn carry_limit(&self, id: u16) -> Option<u32> {
+        self.word(0, id as usize, 8)
+    }
+
+    /// Table 5, row m: the name of map area m.
+    pub fn location_name(&self, m: usize) -> Option<Vec<u8>> {
+        let t = self.tables.get(5)?;
+        t.string(self.word(5, m, 0)?).map(<[u8]>::to_vec)
     }
 
     /// Table 10: the name colour of hero variant 0 (Tor) or 1 (Roberta), bytes R, G, B.

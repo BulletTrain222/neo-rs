@@ -192,6 +192,15 @@ impl Neighbours {
 /// The entity-id table (tag 0x12, SPEC-0006 Tagged tables): entry e gives the region byte
 /// (0xFF for the pack's embedded region, else the slot-load number j of region P + 1 + j) and
 /// the ordinal of a kind-3 record in that region.
+/// The map area id of a world pack: the s32 at payload + 0x14 of its type-1001 chunk (SPEC-0006
+/// Area names); -1 or no chunk means none.
+pub fn map_area(bytes: &[u8], chain: &[Chunk]) -> Option<i32> {
+    let c = chain.iter().find(|c| c.kind == 1001)?;
+    let p = bytes.get(c.payload.clone())?;
+    let m = i32::from_le_bytes(p.get(0x14..0x18)?.try_into().ok()?);
+    (m >= 0).then_some(m)
+}
+
 pub fn entity_table(bytes: &[u8], top: &[Chunk]) -> Vec<(u8, u8)> {
     let Some(c) = top.iter().find(|c| c.kind == TAGGED) else { return Vec::new() };
     let p = &bytes[c.payload.clone()];

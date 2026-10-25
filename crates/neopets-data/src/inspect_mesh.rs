@@ -515,11 +515,22 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         // SPEC-0055 Layout: deadly ground entries (kind 2), with and without a respawn index.
         let (mut deadly, mut indexed, mut deadly_packs, mut surfaces) = (0, 0, 0, std::collections::BTreeMap::new());
         let mut first = None;
+        // SPEC-0025 Save points: kind-4 records of each world pack's own region.
+        let (mut save_points, mut save_packs, mut save_flags, mut save_dropped, mut save_first) = (0usize, 0usize, 0usize, 0usize, None);
         for pack in 533..=1433u32 {
             let Ok(bytes) = index.read(disc, pack) else { continue };
             let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
             if chain.chunks.first().map(|c| c.kind) != Some(31) {
                 continue;
+            }
+            if let Some(r) = neopets_data::region::embedded_records(&bytes, &chain.chunks) {
+                if !r.save_points.is_empty() {
+                    save_packs += 1;
+                    save_points += r.save_points.len();
+                    save_flags += r.save_points.iter().filter(|s| s.flag != 0).count();
+                    save_first.get_or_insert((pack, r.save_points[0].position));
+                }
+                save_dropped += r.save_points_dropped;
             }
             let Some(g) = neopets_data::ground::Ground::of(&bytes, &chain.chunks, neopets_data::ground::CellOrder::XMajor) else { continue };
             let d = g.deadly_entries();
@@ -535,6 +546,39 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             first.get_or_insert((pack, d[0]));
         }
         println!("Deadly ground entries: {deadly} in {deadly_packs} packs, {indexed} with a respawn index; surfaces {surfaces:?}; first {first:?}");
+        println!("Save points: {save_points} in {save_packs} world packs, {save_flags} with a nonzero flag, {save_dropped} dropped past eight; first {save_first:?}");
+        // SPEC-0051 Map area names and SPEC-0021 categories, as the save writer reads them.
+        if let Ok(d) = index.read(disc, neopets_data::design::RESOURCE).and_then(|b| neopets_data::design::DesignTables::parse(&b)) {
+            let name = |m: usize| d.location_name(m).map(|t| String::from_utf8_lossy(&t).into_owned());
+            let mut area = |pack: u32| index.read(disc, pack).ok().and_then(|b| {
+                let c = resource::walk_chunks(&b, None).ok()?;
+                neopets_data::travel::map_area(&b, &c.chunks)
+            });
+            let (a909, a691, a678) = (area(909), area(691), area(678));
+            println!(
+                "Map areas: 909 {a909:?} {:?}, 691 {a691:?}, 678 {a678:?}; names 5 {:?}, 7 {:?}, 43 {:?}; categories 98 {:?}, 126 {:?}, 164 {:?}, 146 {:?}; limits 146 {:?}",
+                a909.and_then(|m| name(m as usize)), name(5), name(7), name(43),
+                d.item_category(98), d.item_category(126), d.item_category(164), d.item_category(146), d.carry_limit(146)
+            );
+        }
+        // SPEC-0035 section 14.3: the row drawer's words, raw.
+        if let Ok(boot) = neopets_data::archive::verified_boot_program(disc) {
+            if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, 0x002D_CDA8, 12) {
+                let shown: Vec<String> = w.iter().map(|v| format!("{v:#x}/{}", f32::from_bits(*v))).collect();
+                println!("Row drawer words 0x2DCDA8..: {shown:?}");
+            }
+        }
+        // SPEC-0025 Lookups: the world key table (boot 0x31EFA8 keys, 0x31F2B0 saved ids).
+        if let Ok(boot) = neopets_data::archive::verified_boot_program(disc) {
+            if let (Ok(keys), Ok(ids)) = (neopets_data::archive::boot_u32_table(&boot, 0x0031_EFA8, 193), neopets_data::archive::boot_u32_table(&boot, 0x0031_F2B0, 193)) {
+                let f = |k: i32| keys.iter().position(|&v| v as i16 == k as i16).map(|i| (i, ids[i]));
+                let distinct = ids.iter().collect::<std::collections::BTreeSet<_>>().len();
+                println!(
+                    "World keys: 678 {:?}, 691 {:?}, 909 {:?}, 1391 {:?}, 1414 {:?}, 1433 {:?}; {distinct} distinct ids, max {:?}",
+                    f(678), f(691), f(909), f(1391), f(1414), f(1433), ids.iter().max()
+                );
+            }
+        }
     }
     // SPEC-0035 / SPEC-0023: the front-end UI database and the HUD's art.
     {
@@ -577,6 +621,32 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             ));
             for c in f.children(n) {
                 walk(f, c, depth + 1, out);
+            }
+        }
+        if std::env::var_os("NEOPETS_PAGE_TREES").is_some() {
+            // The load (17), save (18) and journal (22) records' trees.
+            for r in [17usize, 18, 22] {
+                let mut out = Vec::new();
+                if let Some(n) = f.screens.get(r).and_then(|s| s.node) {
+                    walk(&f, n, 0, &mut out);
+                }
+                let _ = std::fs::write(format!("private/tree-{r}.txt"), out.join("\n"));
+            }
+        }
+        let row_keys: Vec<String> = [0xD3u32, 0x37, 0x36, 0xDD, 0x34, 0x33]
+            .iter()
+            .map(|&k| match f.key(k) {
+                Some(n) => {
+                    let d = f.nodes[n];
+                    format!("{k:#04x} -> node {n} kind {} ({}, {}) {}x{}{} children {}", d.kind, d.x, d.y, d.width, d.height, if d.absolute { " abs" } else { "" }, f.children(n).len())
+                }
+                None => format!("{k:#04x} -> none"),
+            })
+            .collect();
+        println!("Journal row parts as section C keys: {row_keys:?}");
+        for k in [0x34u32, 0x33] {
+            if let Some(n) = f.key(k) {
+                println!("  row text {k:#04x}: {:?}", f.label(n).map(|l| (l.font, l.spacing, l.colour, String::from_utf8_lossy(&l.text).into_owned())));
             }
         }
         if std::env::var_os("NEOPETS_HUD_TREE").is_some() {

@@ -2,17 +2,21 @@
 //! stack with its parent-index and back rules, the generic menu step (Cross to the focused
 //! item's target, Triangle back, Down and Up on list pages with wrap, off for a screen's first
 //! two passes), the focus rules, the states of the card check (0), logo countdown (29),
-//! attract (1), title (12), play (11), pause page (7), Resume (5) and Quit (6) focus states and
-//! the game-over page (26), and the page draw list (condition modes and predicates, the focused
-//! flag of kind-4 items, row spacing, alignment and scale).
+//! attract (1), title (12), play (11), pause page (7), Resume (5) and Quit (6) focus states, the
+//! game-over page (26), the load (21) and save (22) screens with their slot picker (section 7;
+//! the card jobs mapped onto the clean side's own file, SPEC-0025), and the page draw list
+//! (condition modes and predicates, the focused flag of kind-4 items, row spacing, alignment and
+//! scale) with the picker's rows by the journal row drawer (section 14.3).
 //!
 //! Not covered: the memory card (the card state passes at once), movies (the attract goes
 //! straight to the title), the quit box (Quit goes back to the card state without asking, and
-//! the world is not torn down), loading, saving, options, credits, the item screens, journal
-//! and maps (their pages open and Triangle leaves them), sounds, key masks and animation slots,
+//! the world is not torn down), the card message boxes (the overwrite and save questions, the
+//! busy text, the failure and cancel boxes), options, credits, the item screens, journal and
+//! maps (their pages open and Triangle leaves them), sounds, key masks and animation slots,
 //! spatial pages, and the predicates other than those listed in `predicate`.
 
 use neopets_data::frontend::Frontend;
+use neopets_sim::save::{self, SaveFile};
 
 pub const CARD: usize = 0;
 pub const ATTRACT: usize = 1;
@@ -21,6 +25,9 @@ pub const PLAY: usize = 9;
 pub const TITLE: usize = 10;
 pub const GAME_OVER: usize = 23;
 pub const LOGO: usize = 30;
+/// The load prompt (record 17, state 21) and the save prompt (record 18, state 22).
+pub const LOAD: usize = 17;
+pub const SAVE: usize = 18;
 
 /// Menu bits of the rising-edge word (SPEC-0035 section 4).
 pub const UP: u16 = 0x1000;
@@ -34,15 +41,60 @@ pub const SELECT: u16 = 0x0100;
 pub enum Command {
     NewGame,
     Quit,
+    /// Read the save file and report it with `Flow::scanned` (the load or the save scan).
+    Scan,
+    /// Rebuild slot k from the live game, write the file and report with `Flow::written`.
+    Save(usize),
+    /// Apply slot k of the scanned file.
+    Load(usize),
 }
 
+/// The slot picker of the load and save screens (SPEC-0035 section 7): the stage, the cursor,
+/// the scanned file, the selected row's pulse and its direction.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Picker {
+    pub stage: u8,
+    pub cursor: usize,
+    pub file: SaveFile,
+    /// The scan found no readable file (the load screen leaves).
+    failed: bool,
+    pub pulse: f32,
+    step: f32,
+}
+
+impl Default for Picker {
+    fn default() -> Self {
+        Self { stage: 0, cursor: 0, file: SaveFile::empty(), failed: false, pulse: 0.0, step: 0.0 }
+    }
+}
+
+/// The row drawer's data words (SPEC-0035 section 14.3; boot 0x2DCDA8 to 0x2DCDD4): the pulse
+/// bounds and step, the bar width, the objective wrap width, the title and objective colours.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct RowWords {
+    pub pulse_min: f32,
+    pub pulse_max: f32,
+    pub pulse_step: f32,
+    pub bar_width: f32,
+    pub wrap: i32,
+    pub title_colour: [u8; 4],
+    pub text_colour: [u8; 4],
+}
+
+/// The save and load picker's bar colour (section 7.1; a constant of the row drawer, not a data
+/// word).
+const PICKER_BAR: [u8; 3] = [78, 119, 174];
+
 /// One thing to draw on the canvas.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Draw {
-    /// A sprite node's quad: canvas rect, the node's colour.
-    Sprite { node: usize, x: f32, y: f32, w: f32, h: f32, colour: [u8; 4] },
+    /// A sprite node's quad: canvas rect, the node's colour, and the texels it samples (one
+    /// per pixel before the node scale; a wider quad shows more texels, section 12).
+    Sprite { node: usize, x: f32, y: f32, w: f32, h: f32, colour: [u8; 4], texels: [u32; 2] },
     /// A label node's text, with its baseline at y.
     Label { node: usize, x: f32, y: f32, scale: f32 },
+    /// A run of text in a font, with its baseline at y.
+    Text { font: usize, text: Vec<u8>, spacing: i32, x: f32, y: f32, colour: [u8; 4] },
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,12 +106,14 @@ pub struct Flow {
     pub focus: usize,
     attract_visits: u32,
     idle: u32,
+    pub picker: Picker,
+    pub rows: RowWords,
 }
 
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0 };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -70,6 +124,63 @@ impl Flow {
         self.current = r;
         self.pass = 0;
         self.default_focus(fe, &Ctx::default());
+    }
+
+    /// The save screen's opening from a save point (SPEC-0035 section 7.3): a direct set of
+    /// record 18 with the stage and the slot cursor at 0.
+    pub fn open_save(&mut self, fe: &Frontend) {
+        self.set(fe, SAVE);
+        self.picker.stage = 0;
+        self.picker.cursor = 0;
+    }
+
+    /// The scan's result: the file read (`None`: missing, unreadable or not 0xC400 bytes). The
+    /// save scan does not check its read, so it goes on with four empty slots.
+    pub fn scanned(&mut self, file: Option<SaveFile>) {
+        self.picker.failed = file.is_none();
+        self.picker.file = file.unwrap_or_default();
+        if self.current == LOAD {
+            self.picker.cursor = save::load_start(self.picker.file.filled());
+        }
+    }
+
+    /// The write job's result: written, or not (the save screen scans again).
+    pub fn written(&mut self, fe: &Frontend, ok: bool) {
+        if self.current != SAVE {
+            return;
+        }
+        if ok {
+            self.enter(fe, PLAY, &Ctx::default());
+        } else {
+            self.picker.stage = 0;
+        }
+    }
+
+    /// The picker's pulse, once per pass: add the step, bounce at the bounds.
+    fn pulse_tick(&mut self) {
+        let (lo, hi) = (self.rows.pulse_min, self.rows.pulse_max);
+        let p = &mut self.picker;
+        if p.step == 0.0 {
+            p.step = self.rows.pulse_step;
+        }
+        p.pulse += p.step;
+        if p.pulse > hi {
+            p.pulse = hi;
+            p.step = -p.step;
+        } else if p.pulse < lo {
+            p.pulse = lo;
+            p.step = -p.step;
+        }
+    }
+
+    /// The picker's Down and Up (Down tested first); every move sets the pulse to its maximum.
+    fn picker_moves(&mut self, edge: u16, load: bool) {
+        let filled = self.picker.file.filled();
+        let down = edge & DOWN != 0;
+        if down || edge & UP != 0 {
+            self.picker.cursor = save::cursor_step(self.picker.cursor, down, load, filled);
+            self.picker.pulse = self.rows.pulse_max;
+        }
     }
 
     fn back_code(fe: &Frontend, r: usize) -> i16 {
@@ -173,6 +284,66 @@ impl Flow {
                     result = Some(PLAY);
                 }
                 generic = false;
+            }
+            // SPEC-0035 section 7.2, the load screen: the scan (stages 0 and 1 keep Triangle
+            // from acting), then the picker; Cross loads the chosen slot and returns to play.
+            21 => {
+                if self.pass == 0 {
+                    self.picker.stage = 0;
+                }
+                match self.picker.stage {
+                    0 => {
+                        command = Some(Command::Scan);
+                        self.picker.stage = 1;
+                        generic = false;
+                    }
+                    1 => {
+                        if self.picker.failed || !self.picker.file.filled().contains(&true) {
+                            self.back(fe, ctx);
+                            return command;
+                        }
+                        self.picker.stage = 2;
+                        self.picker.pulse = self.rows.pulse_max;
+                        generic = false;
+                    }
+                    _ => {
+                        self.pulse_tick();
+                        self.picker_moves(edge, true);
+                        if edge & CROSS != 0 {
+                            if self.picker.cursor < save::SLOTS {
+                                command = Some(Command::Load(self.picker.cursor));
+                                result = Some(PLAY);
+                            }
+                            generic = false;
+                        }
+                    }
+                }
+            }
+            // Section 7.3, the save screen: scan, picker, write; Triangle in the picker returns
+            // to play without writing.
+            22 => {
+                generic = false;
+                match self.picker.stage {
+                    0 => {
+                        command = Some(Command::Scan);
+                        self.picker.stage = 1;
+                    }
+                    1 => {
+                        self.picker.stage = 2;
+                        self.picker.pulse = self.rows.pulse_max;
+                    }
+                    2 => {
+                        self.pulse_tick();
+                        self.picker_moves(edge, false);
+                        if edge & CROSS != 0 {
+                            command = Some(Command::Save(self.picker.cursor.min(save::SLOTS - 1)));
+                            self.picker.stage = 3;
+                        } else if edge & TRIANGLE != 0 {
+                            result = Some(PLAY);
+                        }
+                    }
+                    _ => {}
+                }
             }
             _ => {}
         }
@@ -326,6 +497,78 @@ pub fn draw_list(fe: &Frontend, record: usize, focus: usize, pass: u32) -> Vec<D
     out
 }
 
+/// The slot picker's rows (sections 7.1 and 14.3): four rows by the journal row drawer, each at
+/// offset p below the first; the cursor's row has its bar pulsed. Shown from the picker stage.
+pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
+    let mut out = Vec::new();
+    if !matches!(flow.current, LOAD | SAVE) || flow.picker.stage < 2 {
+        return out;
+    }
+    let w = &flow.rows;
+    let node = |k: u32| fe.key(k);
+    let (Some(left), Some(right), Some(bar), Some(icons), Some(title), Some(objective)) =
+        (node(0xD3), node(0x37), node(0x36), node(0xDD), node(0x34), node(0x33))
+    else {
+        return out;
+    };
+    let font_of = |n: usize| fe.label(n).filter(|l| l.font >= 0).map(|l| (l.font as usize, l.spacing as i32));
+    // The fonts come from the two label bindings; the objective binding's spacing word (9990
+    // on disc) is not a letter spacing, so both texts are drawn with spacing 0 (R-0019).
+    let (Some((title_font, _)), Some((text_font, _))) = (font_of(title), font_of(objective)) else { return out };
+    let (title_spacing, text_spacing) = (0, 0);
+    let line = fe.fonts.get(text_font).map_or(14, |f| f.line_height());
+    let sprite = |n: usize, p: f32, w0: Option<f32>, colour: Option<[u8; 4]>| {
+        let d = fe.nodes[n];
+        let width = w0.unwrap_or(d.width as f32);
+        Draw::Sprite {
+            node: n,
+            x: d.x as f32,
+            y: d.y as f32 + p,
+            w: width,
+            h: d.height as f32,
+            texels: [width.max(1.0) as u32, d.height.max(1) as u32],
+            colour: colour.unwrap_or_else(|| fe.sprite(n).map_or([128; 4], |s| s.colour)),
+        }
+    };
+    let mut p = 0.0f32;
+    for (k, slot) in flow.picker.file.slots.iter().enumerate() {
+        let (kind, line1, line2): (usize, &[u8], &[u8]) = if slot.is_empty() {
+            (7, b"Empty", b"")
+        } else {
+            ((slot.tier() as i32 + 2).clamp(0, 7) as usize, slot.location(), slot.date())
+        };
+        let lines = fe.wrap(text_font, line2, w.wrap, text_spacing);
+        let limit = ((360.0 - (128.0 + p)) / line as f32).trunc() as i32 + 2;
+        let shown = lines.len().min(limit.max(0) as usize);
+        let next = p + 79f32.max(75.0 + line as f32 * shown as f32);
+        if next >= 360.0 {
+            break;
+        }
+        let colour = if k == flow.picker.cursor {
+            let c = |v: u8| (v as f32 * flow.picker.pulse).round().clamp(0.0, 255.0) as u8;
+            [c(PICKER_BAR[0]), c(PICKER_BAR[1]), c(PICKER_BAR[2]), 128]
+        } else {
+            [PICKER_BAR[0], PICKER_BAR[1], PICKER_BAR[2], 128]
+        };
+        out.push(sprite(left, p, None, None));
+        out.push(sprite(right, p, None, None));
+        out.push(sprite(bar, p, Some(w.bar_width), Some(colour)));
+        if let Some(&icon) = fe.children(icons).get(kind) {
+            out.push(sprite(icon, p, None, None));
+        }
+        let (tx, ty) = (fe.nodes[title].x as f32, fe.nodes[title].y as f32 + p);
+        out.push(Draw::Text { font: title_font, text: line1.to_vec(), spacing: title_spacing, x: tx, y: ty, colour: w.title_colour });
+        let (ox, oy) = (fe.nodes[objective].x as f32, fe.nodes[objective].y as f32 + p);
+        if limit != 0 {
+            for (i, &(a, b)) in lines.iter().take(shown).enumerate() {
+                out.push(Draw::Text { font: text_font, text: line2[a..b].to_vec(), spacing: text_spacing, x: ox, y: oy + (line as usize * i) as f32, colour: w.text_colour });
+            }
+        }
+        p = next;
+    }
+    out
+}
+
 fn nearest_predicate(fe: &Frontend, n: usize, pass: u32) -> i32 {
     let mut at = Some(n);
     while let Some(i) = at {
@@ -352,7 +595,7 @@ fn draw_node(fe: &Frontend, n: usize, t: (f32, f32, f32, f32), focused: bool, fo
     match node.kind {
         1 => {
             if let Some(s) = fe.sprite(n) {
-                out.push(Draw::Sprite { node: n, x, y, w: w * sx, h: h * sy, colour: s.colour });
+                out.push(Draw::Sprite { node: n, x, y, w: w * sx, h: h * sy, colour: s.colour, texels: [node.width.max(1) as u32, node.height.max(1) as u32] });
             }
         }
         2 => out.push(Draw::Label { node: n, x, y, scale: sx }),
@@ -476,6 +719,58 @@ mod tests {
         flow.tick(&f, 0, 0, &Ctx { game_over: true });
         assert_eq!(flow.current, GAME_OVER);
         flow.tick(&f, 0, 0, &Ctx { game_over: false });
+        assert_eq!(flow.current, PLAY);
+    }
+
+    #[test]
+    fn load_and_save_pickers() {
+        let mut f = fe();
+        f.screens[LOAD] = Screen { node: Some(6), back: -1, state: 21 };
+        f.screens[SAVE] = Screen { node: Some(6), back: -2, state: 22 };
+        let ctx = Ctx::default();
+        let mut flow = Flow::new(&f);
+        flow.rows.pulse_max = 1.8;
+        flow.set(&f, TITLE);
+        // The load screen with no save data leaves at once.
+        flow.enter(&f, LOAD, &ctx);
+        assert_eq!(flow.tick(&f, 0, 0, &ctx), Some(Command::Scan));
+        flow.scanned(None);
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.current, TITLE);
+        // With slots 1 and 3 filled the cursor starts on 1 and skips 2.
+        let mut file = SaveFile::empty();
+        file.slots[1].set_key(0, 11);
+        file.slots[3].set_key(0, 602);
+        flow.enter(&f, LOAD, &ctx);
+        flow.tick(&f, 0, 0, &ctx);
+        flow.scanned(Some(file.clone()));
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!((flow.picker.stage, flow.picker.cursor), (2, 1));
+        flow.tick(&f, DOWN, 0, &ctx);
+        assert_eq!(flow.picker.cursor, 3);
+        assert_eq!(flow.tick(&f, CROSS, CROSS, &ctx), Some(Command::Load(3)));
+        assert_eq!(flow.current, PLAY);
+        // The save screen: opened at slot 0, moves by one, Cross saves, a good write returns.
+        flow.open_save(&f);
+        assert_eq!(flow.tick(&f, 0, 0, &ctx), Some(Command::Scan));
+        flow.scanned(Some(file));
+        flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, DOWN, 0, &ctx);
+        assert_eq!(flow.picker.cursor, 1);
+        assert_eq!(flow.tick(&f, CROSS, CROSS, &ctx), Some(Command::Save(1)));
+        flow.written(&f, false);
+        assert_eq!((flow.current, flow.picker.stage), (SAVE, 0), "a failed write scans again");
+        flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, 0, 0, &ctx);
+        flow.tick(&f, CROSS, CROSS, &ctx);
+        flow.written(&f, true);
+        assert_eq!(flow.current, PLAY);
+        // Triangle in the picker returns to play without writing.
+        flow.open_save(&f);
+        flow.tick(&f, 0, 0, &ctx);
+        flow.scanned(None);
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.tick(&f, TRIANGLE, TRIANGLE, &ctx), None);
         assert_eq!(flow.current, PLAY);
     }
 

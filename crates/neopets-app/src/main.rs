@@ -24,6 +24,67 @@ use orbit::Orbit;
 const PLAY_PACK: u32 = 909;
 const PLAY_OUTFIT: u32 = 504;
 
+/// The clean side's own save file (SPEC-0025 Summary and Clean-side mapping of the card jobs):
+/// one 0xC400-byte file of four slots, kept under private/ (never committed).
+const SAVE_FILE: &str = "private/saves/savegame.bin";
+
+/// The save scan's read: the file when it exists and is exactly 0xC400 bytes.
+fn read_save(path: &str) -> Option<neopets_sim::save::SaveFile> {
+    std::fs::read(path).ok().and_then(|b| neopets_sim::save::SaveFile::parse(&b).ok())
+}
+
+fn write_save(path: &str, file: &neopets_sim::save::SaveFile) -> Result<(), String> {
+    if let Some(dir) = std::path::Path::new(path).parent() {
+        std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(path, file.to_bytes()).map_err(|e| e.to_string())
+}
+
+/// The save's date text from the system clock, in UTC: the console's time-zone and
+/// daylight-saving offset have no counterpart here (a deviation; the original converts its
+/// real-time clock to local time).
+fn save_date() -> Vec<u8> {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs()) as i64;
+    let (days, rem) = (secs.div_euclid(86_400), secs.rem_euclid(86_400));
+    // Civil date from days since 1970-01-01 (proleptic Gregorian).
+    let z = days + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + (month <= 2) as i64;
+    neopets_sim::save::date_text(month as u32, day as u32, year as u32, (rem / 3600) as u32, (rem % 3600 / 60) as u32).into_bytes()
+}
+
+/// SPEC-0025 Loading: the game rebuilt in the slot's worlds and the slot applied. Key B (the
+/// exterior) becomes the current world and key A (the transition) is put in T; with neither
+/// found the current world is kept. The original posts the two loads and applies the slot over
+/// the live objects instead of rebuilding them (a simplification here); key C is not read.
+fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::Slot) -> Result<play::Play, String> {
+    let (keys, ids) = &old.world_keys;
+    let pack_of = |k: usize| {
+        let key = slot.key(k);
+        if key < 0 {
+            return None;
+        }
+        keys.get(neopets_sim::save::reverse(ids, key as u32)).copied()
+    };
+    let (t, e) = (pack_of(0), pack_of(1));
+    let current = e.or(t).unwrap_or(old.world.pack);
+    let Archive { disc, index } = archive;
+    let mut play = play::Play::load(disc, index, current, PLAY_OUTFIT)?;
+    if let Some(t) = t.filter(|&t| t != current && play.other.as_ref().is_none_or(|o| o.pack != t)) {
+        play.load_other(disc, index, t)?;
+    }
+    play.spawned = old.spawned;
+    play.snapshot = Some(slot.clone());
+    play.apply_slot(slot);
+    Ok(play)
+}
+
 /// Play mode was asked for, in this world pack (`--pack`, default 909).
 #[derive(Resource)]
 struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>, bool);
@@ -343,6 +404,9 @@ fn main() {
     let mut give: Vec<u16> = Vec::new();
     // `--guard`: the fight trace holds L1 (the shield guard) while it is close to its enemy.
     let mut guard = false;
+    // `--save-test`: at the end of a trace, save slot 0 to private/saves/trace.bin, read it back
+    // and load it into a rebuilt game.
+    let mut save_test = false;
     // `--title`: start at the front end's card state (logo, legal screen, title) instead of in
     // play.
     let mut title = false;
@@ -415,6 +479,8 @@ fn main() {
             give.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
         } else if arg == "--guard" {
             guard = true;
+        } else if arg == "--save-test" {
+            save_test = true;
         } else if arg == "--title" {
             title = true;
         } else if arg == "--seed" {
@@ -463,7 +529,7 @@ fn main() {
             eprintln!("{status}");
             std::process::exit(1)
         };
-        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags, seed, &give, start, guard);
+        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags, seed, &give, start, (guard, save_test));
         return;
     }
     let driver = SimDriver {
@@ -729,6 +795,8 @@ fn step_sim(
     autowalk: Option<Res<AutoWalk>>,
     mut menu: Option<ResMut<menu_view::Menu>>,
     art: Option<Res<hud_view::HudArt>>,
+    mut archive: Option<ResMut<Archive>>,
+    mut commands: Commands,
 ) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
@@ -800,10 +868,32 @@ fn step_sim(
         // SPEC-0035: the front end runs once per tick; outside play and the game-over page the
         // world is frozen and the hero's buttons are dropped.
         let (mut edge, mut buttons) = menu_view::menu_words(&keys, &gamepads);
+        // A slot to apply after this frame's ticks (a load, or Continue with the snapshot).
+        let mut pending: Option<neopets_sim::save::Slot> = None;
         for _ in 0..ticks {
+            if pending.is_some() {
+                break;
+            }
             if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                 let ctx = menus::Ctx { game_over: play.play.death.page.is_some() || play.play.death.flag_e };
-                m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx);
+                // SPEC-0025 Clean-side mapping of the card jobs: the scans read the save file,
+                // the write job writes the whole file at once.
+                match m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx) {
+                    Some(menus::Command::Scan) => m.flow.scanned(read_save(SAVE_FILE)),
+                    Some(menus::Command::Save(k)) => {
+                        let mut file = m.flow.picker.file.clone();
+                        play.play.write_slot(&mut file.slots[k], &save_date());
+                        // The snapshot and the pending flag are set before the write's result.
+                        play.play.snapshot = Some(file.slots[k].clone());
+                        let ok = write_save(SAVE_FILE, &file);
+                        if let Err(e) = &ok {
+                            error!("Save failed: {e}");
+                        }
+                        m.flow.written(&a.f, ok.is_ok());
+                    }
+                    Some(menus::Command::Load(k)) => pending = m.flow.picker.file.slot(k).cloned(),
+                    _ => {}
+                }
                 let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER);
                 play.play.menu_open = frozen;
                 if frozen {
@@ -824,6 +914,28 @@ fn step_sim(
                 r3_pressed: std::mem::take(&mut play.play.r3_latch),
             };
             play.play.tick(&input, pad);
+            // A save point's Square press opens the save screen (a direct set of record 18).
+            if std::mem::take(&mut play.play.save_open) {
+                if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                    m.flow.open_save(&a.f);
+                }
+            }
+            if std::mem::take(&mut play.play.reload_wanted) {
+                pending = play.play.snapshot.clone();
+            }
+        }
+        if let (Some(slot), Some(archive)) = (pending, archive.as_deref_mut()) {
+            match load_game(archive, &play.play, &slot) {
+                Ok(new) => {
+                    play.play = new;
+                    match archive.disc.reopen() {
+                        Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
+                        Err(e) => error!("No loader thread, streaming is off: {e}"),
+                    }
+                    info!("Loaded: {}", play.play.status());
+                }
+                Err(e) => error!("Load failed: {e}"),
+            }
         }
     }
 }
@@ -1510,9 +1622,9 @@ fn play_trace(
     seed: Option<u32>,
     give: &[u16],
     start: Option<[f32; 2]>,
-    guard: bool,
+    (guard, save_test): (bool, bool),
 ) {
-    let Archive { disc, index } = archive;
+    let Archive { disc, index } = &mut *archive;
     let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
         Ok(play) => play,
         Err(e) => {
@@ -1558,6 +1670,8 @@ fn play_trace(
     let mut last_door = String::new();
     let mut hops = 0;
     let mut last_hit = String::new();
+    let mut save_prompt = false;
+    println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
     if to.is_some_and(|t| t[0].is_nan()) {
         let goal = match to.map(|t| t[1]) {
             Some(g) if g == 0.0 => play::Goal::NewNeighbour,
@@ -1624,7 +1738,7 @@ fn play_trace(
             forward,
             side,
             // An open dialogue box gets a Square press every 10 ticks (skip, Next, Finish).
-            square: play.prompt_shown.is_some() || play.talk_prompt || (play.dialogue_open && play.ticks % 10 == 0),
+            square: play.prompt_shown.is_some() || play.talk_prompt || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: (jump || fight.is_some_and(|f| f.1)) && (30..40).contains(&(play.ticks % 120)),
@@ -1703,6 +1817,51 @@ fn play_trace(
             println!("      {}", play.status_camera());
             println!("      {}", play.status_worlds());
         }
+        if play.save_prompt != save_prompt {
+            save_prompt = play.save_prompt;
+            println!("      save prompt {} on tick {}", if save_prompt { "shown" } else { "hidden" }, play.ticks);
+        }
+        if std::mem::take(&mut play.save_open) {
+            println!("      save screen opened on tick {}; restart point {:?}", play.ticks, play.restart);
+        }
+    }
+    if save_test {
+        let path = "private/saves/trace.bin";
+        let mut file = read_save(path).unwrap_or_default();
+        play.write_slot(&mut file.slots[0], &save_date());
+        let s = &file.slots[0];
+        println!(
+            "Saved slot 0: keys {:?}, location {:?}, date {:?}, tier {}, wallet {}, pools {:?}, maxima {:?}, entries {:?}",
+            [s.key(0), s.key(1), s.key(2)],
+            String::from_utf8_lossy(s.location()),
+            String::from_utf8_lossy(s.date()),
+            s.tier(),
+            s.i32(neopets_sim::save::at::WALLET),
+            s.pools(0),
+            s.maximum_words(0),
+            s.adds().iter().map(|a| (a.0, a.1, a.3, a.4)).collect::<Vec<_>>()
+        );
+        if let Err(e) = write_save(path, &file) {
+            eprintln!("Save failed: {e}");
+            std::process::exit(1);
+        }
+        let back = read_save(path).expect("the file just written reads back");
+        assert_eq!(back, file);
+        println!("Before: {}", play.status());
+        match load_game(archive, &play, &back.slots[0]) {
+            Ok(loaded) => {
+                println!("Loaded: {}", loaded.status());
+                println!("        {}", loaded.status_worlds());
+                let summary = |p: &play::Play| {
+                    let mut inv: Vec<_> = p.inventory.iter().map(|(k, v)| (*k, *v)).collect();
+                    inv.sort();
+                    format!("weapon {:?}, shield {:?}, items {inv:?}, flags {:?}, luck {}, statuses {:?}, restart {:?}", p.weapon, p.shield, p.state.flags, p.luck, p.statuses.timers, p.restart)
+                };
+                println!("Round trip before: {}", summary(&play));
+                println!("Round trip after:  {}", summary(&loaded));
+            }
+            Err(e) => eprintln!("Load failed: {e}"),
+        }
     }
 }
 
@@ -1726,6 +1885,22 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                     let mut flow = menus::Flow::new(&f);
                     if !request.3 {
                         flow.set(&f, menus::PLAY);
+                    }
+                    // SPEC-0035 section 14.3: the row drawer's words (wrap 0x2DCDA8, pulse
+                    // 0x2DCDB4 to 0x2DCDBC, bar width 0x2DCDC0, colours 0x2DCDC8 and 0x2DCDD0).
+                    match neopets_data::archive::verified_boot_program(disc).and_then(|b| neopets_data::archive::boot_u32_table(&b, 0x002D_CDA8, 11)) {
+                        Ok(w) => {
+                            flow.rows = menus::RowWords {
+                                wrap: w[0] as i32,
+                                pulse_min: f32::from_bits(w[3]),
+                                pulse_max: f32::from_bits(w[4]),
+                                pulse_step: f32::from_bits(w[5]),
+                                bar_width: w[6] as f32,
+                                title_colour: w[8].to_le_bytes(),
+                                text_colour: w[10].to_le_bytes(),
+                            };
+                        }
+                        Err(e) => error!("No row drawer words: {e}"),
                     }
                     commands.insert_resource(menu_view::Menu { flow });
                     if let Some(art) = hud_view::HudArt::new(f) {

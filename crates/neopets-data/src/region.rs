@@ -67,6 +67,18 @@ pub struct ItemPoint {
     pub map: u8,
 }
 
+/// A kind-4 save point (SPEC-0006 Kind 4; SPEC-0025 Save points): position (+0x00), facing
+/// (+0x10, not used by the save-point step) and the flag word (+0x20).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SavePointRecord {
+    pub position: [f32; 3],
+    pub facing: [f32; 3],
+    pub flag: u32,
+}
+
+/// A region keeps at most this many save points; further kind-4 records are dropped.
+pub const SAVE_POINTS: usize = 8;
+
 /// The record walk of a type-36 table: kind-3 placements and kind-2 animation tables (their
 /// data: a u32 count N, then N 8-byte entries; ranges relative to the walked bytes).
 #[derive(Clone, Debug, Default)]
@@ -75,6 +87,9 @@ pub struct Records {
     pub tables: Vec<std::ops::Range<usize>>,
     /// Kind-8 item points in walk order (their ordinals).
     pub items: Vec<ItemPoint>,
+    /// Kind-4 save points in walk order (at most 8), and the number dropped past the eighth.
+    pub save_points: Vec<SavePointRecord>,
+    pub save_points_dropped: usize,
 }
 
 /// Walk a type-36 payload; any other kind ends the walk (SPEC-0006).
@@ -141,6 +156,14 @@ pub fn records(p: &[u8]) -> Records {
                     map: p.get(data + 0x2C).copied().unwrap_or(0),
                 });
             }
+            4 => {
+                let v = |o: usize| [f32_at(p, data + o).unwrap_or(0.0), f32_at(p, data + o + 4).unwrap_or(0.0), f32_at(p, data + o + 8).unwrap_or(0.0)];
+                if out.save_points.len() < SAVE_POINTS {
+                    out.save_points.push(SavePointRecord { position: v(0), facing: v(0x10), flag: u32_at(p, data + 0x20).unwrap_or(0) });
+                } else {
+                    out.save_points_dropped += 1;
+                }
+            }
             2 => out.tables.push(data..at + len),
             _ => {}
         }
@@ -160,6 +183,16 @@ pub struct Region {
     pub clip_sets: [Vec<Chunk>; 3],
     /// The chain the chunks belong to (offsets are within the bytes it was read from).
     pub chain: Vec<Chunk>,
+}
+
+/// The records of a world pack's own character region (its type-32 chunk's type-36 table), or
+/// none when the pack embeds no region.
+pub fn embedded_records(bytes: &[u8], chain: &[Chunk]) -> Option<Records> {
+    let c = chain.iter().find(|c| c.kind == EMBEDDED)?;
+    let payload = bytes.get(c.payload.clone())?;
+    let nested = crate::resource::walk_chunks(payload, None).ok()?;
+    let t = nested.chunks.iter().find(|c| c.kind == RECORDS)?;
+    Some(records(payload.get(t.payload.clone())?))
 }
 
 impl Region {
@@ -190,6 +223,23 @@ impl Region {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn save_points_are_read_and_capped_at_eight() {
+        let mut p = vec![0u8; 0x40 * 9 + 0x10];
+        for k in 0..9 {
+            let at = 0x40 * k;
+            p[at] = 4;
+            p[at + 0x10..at + 0x14].copy_from_slice(&(k as f32).to_le_bytes());
+            p[at + 0x30] = k as u8;
+        }
+        p[0x40 * 9] = 0x7F;
+        let r = records(&p);
+        assert_eq!(r.save_points.len(), 8);
+        assert_eq!(r.save_points_dropped, 1);
+        assert_eq!(r.save_points[3].position, [3.0, 0.0, 0.0]);
+        assert_eq!(r.save_points[5].flag, 5);
+    }
 
     #[test]
     fn record_walk_reads_placements_and_tables() {

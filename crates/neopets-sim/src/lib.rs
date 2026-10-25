@@ -19,6 +19,7 @@ pub mod projectile;
 pub mod quick;
 pub mod npc;
 pub mod rng;
+pub mod save;
 pub mod status;
 mod step;
 pub mod textbox;

@@ -37,6 +37,13 @@ pub const RESPAWN: u8 = 60;
 /// Jump states (Behavior 50): 7 standing, 8 slow, 9 walking, 10 running.
 pub const JUMP: u8 = 7;
 pub const JUMP_RUN: u8 = 10;
+
+/// SPEC-0033 busy predicate, the state list: 7 to 19, 21, 23 to 30, 35, 37, 38, 41, 43 to 49,
+/// 53, 54 and 56 to 60 are busy. The two sub-predicates and the global input lock are not
+/// covered.
+pub fn busy_state(s: u8) -> bool {
+    matches!(s, 7..=19 | 21 | 23..=30 | 35 | 37 | 38 | 41 | 43..=49 | 53 | 54 | 56..=60)
+}
 /// Behavior 50 constants: launch vertical velocity, the gains and the phase thresholds.
 const LAUNCH: f32 = 8.75;
 const GAIN_RISE: f32 = 0.35;

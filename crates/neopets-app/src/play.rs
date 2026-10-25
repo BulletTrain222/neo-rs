@@ -49,6 +49,10 @@ pub struct World {
     /// Navigation meshes (type 21) and the Whinny pens the level sets.
     pub navmeshes: Vec<neopets_sim::nav::NavMesh>,
     pens: Vec<neopets_sim::whinny::Pen>,
+    /// The save points of the pack's own region (kind-4 records, at most 8; SPEC-0025) and its
+    /// map area id (type 1001, SPEC-0006 Area names).
+    pub save_points: Vec<neopets_sim::save::SavePoint>,
+    pub map_area: Option<i32>,
 }
 
 impl World {
@@ -83,6 +87,10 @@ impl World {
                 .map(|m| neopets_sim::nav::NavMesh { kind: m.kind, triangles: m.triangles, neighbours: m.neighbours, table: m.table })
                 .collect(),
             pens: Vec::new(),
+            save_points: neopets_data::region::embedded_records(&bytes, &chain.chunks)
+                .map(|r| r.save_points.iter().map(|s| neopets_sim::save::SavePoint { position: s.position, flag: s.flag }).collect())
+                .unwrap_or_default(),
+            map_area: neopets_data::travel::map_area(&bytes, &chain.chunks),
         };
         Ok((world, bytes))
     }
@@ -329,7 +337,24 @@ pub struct Play {
     pub spawned: bool,
     /// A front-end page other than play is up (the world is frozen and the HUD hidden).
     pub menu_open: bool,
+    /// The save game (SPEC-0025): the world key table (keys, saved ids), the growth words, the
+    /// item text and location tables, the save-point state, whether the "Save Game" prompt
+    /// shows this tick, a save-screen opening for the front end, the hero's restart point, the
+    /// last named map area, the session snapshot and a Continue that wants it applied.
+    pub world_keys: (Vec<u32>, Vec<u32>),
+    pub growth: neopets_sim::save::Growth,
+    design: neopets_data::design::DesignTables,
+    save_points: neopets_sim::save::SavePoints,
+    pub save_prompt: bool,
+    pub save_open: bool,
+    pub restart: Option<([f32; 3], [f32; 3])>,
+    last_area: Option<i32>,
+    pub snapshot: Option<neopets_sim::save::Slot>,
+    pub reload_wanted: bool,
 }
+
+/// The five stat-up items with a once-per-area set, in slot order (SPEC-0025 Once-per-area sets).
+const ONCE_ITEMS: [u16; 5] = [19, 20, 151, 174, 154];
 
 impl Play {
     /// Load a hero outfit and a world pack's ground and spawn point. Pack 909 starts as the new
@@ -405,6 +430,8 @@ impl Play {
             words(neopets_data::item::COIN_IDS, 5)?.into_iter().map(|w| w as u16).collect(),
             neopets_sim::items::CoinWords::from_words(&words(neopets_data::item::COIN_WORDS, 8)?.into_iter().map(f32::from_bits).collect::<Vec<_>>()),
         );
+        let world_keys = (words(0x0031_EFA8, 193)?, words(0x0031_F2B0, 193)?);
+        let growth = neopets_sim::save::Growth::from_words(&words(neopets_data::item::HEALTH_TOR, 12)?).unwrap_or_default();
         let (world, bytes) = World::load(disc, index, &boot, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
         let (spawn, facing) = ground::spawn(&bytes, &chain.chunks).unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
@@ -514,6 +541,16 @@ impl Play {
             next_character: 0,
             spawned: false,
             menu_open: false,
+            world_keys,
+            growth,
+            design,
+            save_points: Default::default(),
+            save_prompt: false,
+            save_open: false,
+            restart: None,
+            last_area: None,
+            snapshot: None,
+            reload_wanted: false,
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
         // which for 909 loads the farm family's slots.
@@ -757,6 +794,12 @@ impl Play {
         self.apply(&actions);
         // The pool's slots are reset when a world starts (here: when a world is made current).
         self.shots.reset();
+        // SPEC-0025: the region reset clears the remembered glow indices; a named map area is
+        // the location a save names.
+        self.save_points = Default::default();
+        if let Some(m) = self.world.map_area {
+            self.last_area = Some(m);
+        }
     }
 
     /// Carry out a level handler's actions (SPEC-0030 host calls), in order.
@@ -1226,7 +1269,13 @@ impl Play {
         // game-over page is up the world is frozen and only the page's exit test runs.
         if self.death.page.is_some() {
             if self.death.page_pass(input.jump) {
-                self.continue_placeholder();
+                // SPEC-0025 Session snapshot: with a save or load in the session, Continue
+                // applies the snapshot; otherwise the placeholder for the title flow.
+                if self.snapshot.is_some() {
+                    self.reload_wanted = true;
+                } else {
+                    self.continue_placeholder();
+                }
             }
             return;
         }
@@ -1286,6 +1335,7 @@ impl Play {
             self.confirm = true;
         }
         self.square_now = input.square;
+        self.save_point_step(input.square);
         // The attack press edge enters state 13 from the ground states (SPEC-0036); the step
         // then runs every tick and decides the clip.
         // SPEC-0021 Quick-item panel: it opens on an Up edge (not in action state 0x19) and,
@@ -1711,7 +1761,17 @@ impl Play {
         if self.dialogue_open || self.quick.open {
             return None;
         }
-        let id = if self.talk_prompt { Some(8) } else { self.prompt_shown };
+        // The "Save Game" caption (label 25) is set first in the pass, so the chooser's talk
+        // and door captions replace it.
+        let id = if self.talk_prompt {
+            Some(8)
+        } else if self.prompt_shown.is_some() {
+            self.prompt_shown
+        } else if self.save_prompt {
+            Some(25)
+        } else {
+            None
+        };
         self.labels.get(id? as usize).map(Vec::as_slice).filter(|l| !l.is_empty())
     }
 
@@ -2050,6 +2110,229 @@ impl Play {
         self.hit_list.clear();
         self.statuses.clear_all();
         self.loco.die();
+    }
+
+    /// SPEC-0025 Save points, per tick for the current world's own region: the nearest point,
+    /// the prompt within 5 units, and on a Square press edge with the hero not busy the restart
+    /// point (zero-flag branch) and the save screen's opening. The gate is game-state code 0:
+    /// no door job and no death or game-over state. The glow (effects 400 and 404) and cue 0xA8
+    /// are not played (no effects or sound yet).
+    fn save_point_step(&mut self, square: bool) {
+        let gate = self.job.is_none() && self.death.page.is_none() && !self.death.flag_e;
+        let busy = hero_states::busy_state(self.loco.state);
+        let r = self.save_points.step(&self.world.save_points, self.loco.position(), gate, square, busy);
+        self.save_prompt = r.prompt;
+        if r.open {
+            if r.restart {
+                self.restart = Some((self.loco.position(), self.loco.facing));
+            }
+            self.save_open = true;
+        }
+    }
+
+    /// The location a save names: the current world's map area, else the last named one, else
+    /// "Unknown Location" (SPEC-0025 Location, date and progress).
+    pub fn location_name(&self) -> Vec<u8> {
+        self.world
+            .map_area
+            .or(self.last_area)
+            .and_then(|m| self.design.location_name(m as usize))
+            .unwrap_or_else(|| b"Unknown Location".to_vec())
+    }
+
+    fn world_index(&self, pack: u32) -> usize {
+        neopets_sim::save::world_index(&self.world_keys.0, &self.world_keys.1, pack as i32)
+    }
+
+    /// Rebuild a slot from the live game (SPEC-0025 Saving, step 3). Only Tor is in this build:
+    /// Roberta's words hold her start pools, her timers are inactive and her entries empty;
+    /// the stash, petpet, movies, per-world tables, treasure sets and count table have no live
+    /// state yet and are written empty; the options block holds the start-up defaults.
+    pub fn write_slot(&self, s: &mut neopets_sim::save::Slot, date: &[u8]) {
+        use neopets_sim::save::{self as sv, Group, at};
+        let p = self.loco.position();
+        let f = self.loco.facing;
+        s.set_vec4(at::POSITION, [p[0], p[1], p[2], 1.0]);
+        s.set_vec4(at::FACING, [f[0], f[1], f[2], 0.0]);
+        s.set_u32(at::ACTIVE_HERO, 0);
+        // Keys A, B and C: the worlds in T, E and I as saved ids (0xFFFF for an empty buffer,
+        // like a lookup miss, so the slot stays present).
+        let mut packs = [None; 3];
+        for w in std::iter::once(&self.world).chain(self.other.as_ref()) {
+            let k = match w.buffer {
+                Buffer::Transition => 0,
+                Buffer::Exterior => 1,
+                Buffer::Interior => 2,
+            };
+            packs[k] = Some(w.pack);
+        }
+        if packs[0].is_none() {
+            packs[0] = self.interior_t;
+        }
+        let (keys, ids) = &self.world_keys;
+        for (k, pack) in packs.iter().enumerate() {
+            s.set_key(k, pack.map_or(0xFFFF, |pk| sv::forward(keys, ids, pk as i32) as i32));
+        }
+        s.clear_flags();
+        for &n in &self.state.flags {
+            s.set_flag(n, true);
+        }
+        s.0[at::MOVIES..at::MOVIES + 368].fill(0);
+        s.set_i32(at::WALLET, self.wallet);
+        s.set_i32(at::STASH, 0);
+        s.set_i32(at::LUCK, self.luck);
+        s.set_maximum_words(0, self.hero_max, self.hero_mp_max);
+        s.set_maximum_words(1, self.growth.start[1], self.growth.start[3]);
+        s.set_i32(at::PET_TYPE, -1);
+        s.set_i32(at::PET_TIME, 0);
+        s.set_i32(at::PET_FULL, 0);
+        // Container A from the party's counts by text category, in id order; the equipped
+        // weapon and shield are Tor's entries (entry 0) of the weapon and shield families.
+        let mut lists: HashMap<&str, Vec<(u16, u32)>> = HashMap::new();
+        let mut held: Vec<(&u16, &u32)> = self.inventory.iter().filter(|(_, n)| **n > 0).collect();
+        held.sort();
+        for (&id, &n) in held {
+            // The equipment families and the tail are written from the equipped items below;
+            // the cloak (category 9) is carried by the cloak flags.
+            let category = self.design.item_category(id);
+            let g = match category.map(Group::of_category) {
+                Some(Some(Group::Quest)) => "quest",
+                Some(Some(Group::Charm)) => "charm",
+                Some(Some(Group::General)) | None => "general",
+                Some(_) => continue,
+            };
+            lists.entry(g).or_default().push((id, n));
+        }
+        let family = |e: Option<u16>| e.map(|id| vec![(id, 1u32)]).unwrap_or_default();
+        for g in Group::ORDER {
+            let list = match g {
+                Group::General => lists.remove("general").unwrap_or_default(),
+                Group::Quest => lists.remove("quest").unwrap_or_default(),
+                Group::Charm => lists.remove("charm").unwrap_or_default(),
+                Group::Weapon => family(self.weapon),
+                Group::Shield => family(self.shield),
+                Group::Tail => Vec::new(),
+            };
+            for i in 0..g.capacity() {
+                match list.get(i) {
+                    Some(&(id, n)) => s.set_entry(0, g, i, Some(id), n as i32),
+                    None => s.set_entry(0, g, i, None, 0),
+                }
+                s.set_entry(1, g, i, None, 0);
+            }
+        }
+        for h in 0..2 {
+            let (hp, mp) = if h == 0 { (self.hero_hp, self.hero_mp) } else { (self.growth.start[1], self.growth.start[3]) };
+            s.set_pools(h, hp, mp);
+            for i in 0..14 {
+                let ticks = if h == 0 { self.statuses.timers[i] } else { -1 };
+                s.set_status(h, i, sv::status_seconds(ticks));
+            }
+            for k in 0..4 {
+                s.set_status_word(h, k, -1);
+            }
+            for i in 0..3 {
+                s.set_mote(h, i, -1);
+            }
+        }
+        s.0[at::T1..at::ONCE].fill(0);
+        for set in 0..5 {
+            for w in 0..sv::WORLDS {
+                s.set_once(set, w, false);
+            }
+        }
+        for &(id, pack) in &self.once {
+            if let Some(set) = ONCE_ITEMS.iter().position(|&i| i == id) {
+                s.set_once(set, self.world_index(pack), true);
+            }
+        }
+        s.0[at::TREASURE..at::LOCATION].fill(0);
+        s.set_location(&self.location_name());
+        s.set_date(date);
+        s.0[at::TIER] = sv::tier(|n| self.state.flag(n));
+        s.0[at::COUNTS..at::COUNTS + sv::COUNTS].fill(0);
+        s.set_u32(at::SWAP_MODE, 2);
+        let cloak = self.inventory.get(&126).is_some_and(|&n| n > 0);
+        s.0[at::CLOAK..at::CLOAK + 3].copy_from_slice(&[cloak as u8, 0, 0]);
+        // The options block's start-up defaults (SPEC-0025 Options block).
+        for (k, v) in [0u32, 0, 1, 1, 0].into_iter().enumerate() {
+            s.set_u32(at::OPTIONS + 4 * k, v);
+        }
+        for k in 0..3 {
+            s.set_f32(at::OPTIONS + 0x14 + 4 * k, 75.0);
+        }
+    }
+
+    /// Apply a slot to this freshly loaded game (SPEC-0025 Loading, apply steps 2, 7 to 12 and
+    /// the end-of-pass apply), for Tor: progress flags, wallet, the party's entries re-added
+    /// (carry limit on the general and quest lists), the cloak, the once-per-area sets, the
+    /// status restore, luck, maxima and current pools, then the restart point and the hero's
+    /// placement at vectors A and B. Not applied: Roberta, the stash, the petpet, movies,
+    /// per-world tables, treasure sets, the count table, options, swap mode and Motes.
+    pub fn apply_slot(&mut self, s: &neopets_sim::save::Slot) {
+        use neopets_sim::save::{self as sv, Group, at};
+        self.state.flags.clear();
+        for n in 0..sv::FLAGS {
+            if s.flag(n) {
+                self.state.flags.insert(n);
+            }
+        }
+        self.inventory.clear();
+        self.weapon = None;
+        self.shield = None;
+        self.wallet = s.i32(at::WALLET);
+        for (c, g, i, id, v) in s.adds() {
+            let Ok(id) = u16::try_from(id) else { continue };
+            if c != 0 {
+                continue;
+            }
+            match g {
+                Group::Weapon | Group::Shield if i == 0 => self.give(id),
+                Group::General | Group::Quest => {
+                    let limit = self.design.carry_limit(id).unwrap_or(0);
+                    let n = if limit > 0 { (v as u32).min(limit) } else { v as u32 };
+                    *self.inventory.entry(id).or_insert(0) += n;
+                }
+                Group::Charm => *self.inventory.entry(id).or_insert(0) += v as u32,
+                _ => {}
+            }
+        }
+        if s.0[at::CLOAK] != 0 {
+            self.inventory.insert(126, 1);
+        }
+        self.once.clear();
+        for (set, &id) in ONCE_ITEMS.iter().enumerate() {
+            for w in 0..sv::WORLDS {
+                if s.once(set, w) {
+                    if let Some(&pack) = self.world_keys.0.get(w) {
+                        self.once.insert((id, pack));
+                    }
+                }
+            }
+        }
+        self.statuses.clear_all();
+        for i in 0..14 {
+            self.statuses.apply(i as i32, sv::restore_seconds(s.status(0, i)));
+        }
+        self.luck = sv::restore_luck(s.i32(at::LUCK));
+        let m = sv::maxima(s, &self.growth);
+        self.hero_max = m[0][0];
+        self.hero_mp_max = m[0][1];
+        let (hp, mp) = s.pools(0);
+        self.hero_hp = hp.min(self.hero_max);
+        self.hero_mp = mp.min(self.hero_mp_max);
+        let (a, b) = (s.vec4(at::POSITION), s.vec4(at::FACING));
+        let pose = ([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
+        self.restart = Some(pose);
+        self.arrive(pose);
+    }
+
+    /// Load a world into the other buffer (a load's key A world in T).
+    pub fn load_other(&mut self, disc: &mut Disc, index: &ArchiveIndex, pack: u32) -> Result<(), String> {
+        let (w, _) = World::load(disc, index, &self.boot, pack)?;
+        self.kinds.insert(w.pack, w.kind);
+        self.other = Some(w);
+        Ok(())
     }
 
     /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is

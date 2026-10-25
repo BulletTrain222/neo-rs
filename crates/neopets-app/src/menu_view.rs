@@ -1,6 +1,7 @@
 //! The front-end screens in the window (SPEC-0035): the menu flow of `menus` as a resource, its
 //! input word from the keyboard and pads, and the current page drawn from the disc tree with
-//! its sprites, full-screen pictures (resources 577 to 677) and labels on the 512 x 448 canvas.
+//! its sprites, full-screen pictures (resources 577 to 677) and labels on the 512 x 448 canvas,
+//! then the slot picker's rows on the load and save screens.
 
 use crate::hud_view::HudArt;
 use crate::menus::{self, Draw, Flow};
@@ -64,6 +65,7 @@ fn picture(archive: &mut crate::Archive, resource: u32) -> Option<neopets_data::
 pub struct MenuCache {
     sprites: HashMap<(usize, u32, u32), Handle<Image>>,
     labels: HashMap<usize, (Handle<Image>, u32, u32, i32)>,
+    texts: HashMap<(usize, Vec<u8>, i32, [u8; 4]), Option<(Handle<Image>, u32, u32, i32)>>,
     pictures: HashMap<u32, Option<neopets_data::texture::Image>>,
 }
 
@@ -84,7 +86,8 @@ pub fn sync_menu(
     let (Some(_state), Some(menu), Some(art)) = (state, menu, art) else { return };
     let Some(window) = windows.iter().next() else { return };
     let flow = &menu.flow;
-    let draws = if flow.current == menus::PLAY { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pass) };
+    let mut draws = if flow.current == menus::PLAY { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pass) };
+    draws.extend(menus::picker_draws(&art.f, flow));
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {
         commands.spawn((
@@ -100,7 +103,8 @@ pub fn sync_menu(
     }
     if *pool < draws.len() {
         for i in *pool..draws.len() + 8 {
-            commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, MenuItem(i), GlobalZIndex(30)));
+            // Each item is stacked by its draw index, so later draws cover earlier ones.
+            commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, MenuItem(i), GlobalZIndex(30 + i as i32)));
         }
         *pool = draws.len() + 8;
         return;
@@ -111,10 +115,9 @@ pub fn sync_menu(
     // Build what the draws need.
     let mut placed: Vec<Option<(Handle<Image>, f32, f32, f32, f32, Color)>> = Vec::with_capacity(draws.len());
     for d in &draws {
-        placed.push(match *d {
-            Draw::Sprite { node, x, y, w, h, colour } => {
-                let n = f.nodes[node];
-                let (iw, ih) = (n.width.max(1) as u32, n.height.max(1) as u32);
+        placed.push(match d.clone() {
+            Draw::Sprite { node, x, y, w, h, colour, texels } => {
+                let [iw, ih] = texels;
                 let key = (node, iw, ih);
                 if !cache.sprites.contains_key(&key) {
                     let asset = f.sprite(node).map(|sp| sp.asset);
@@ -156,6 +159,17 @@ pub fn sync_menu(
                     }
                 }
                 cache.labels.get(&node).map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32 * scale, *w as f32 * scale, *h as f32 * scale, Color::WHITE))
+            }
+            Draw::Text { font, text, spacing, x, y, colour } => {
+                let key = (font, text, spacing, colour);
+                if !cache.texts.contains_key(&key) {
+                    let made = f.text_image(mem, font, &key.1, spacing, colour).map(|(img, base)| {
+                        let (w, h) = (img.width, img.height);
+                        (images.add(crate::rgba_image(w, h, img.rgba)), w, h, base)
+                    });
+                    cache.texts.insert(key.clone(), made);
+                }
+                cache.texts[&key].as_ref().map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32, *w as f32, *h as f32, Color::WHITE))
             }
         });
     }
