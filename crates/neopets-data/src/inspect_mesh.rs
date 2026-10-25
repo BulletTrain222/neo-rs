@@ -536,6 +536,68 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         }
         println!("Deadly ground entries: {deadly} in {deadly_packs} packs, {indexed} with a respawn index; surfaces {surfaces:?}; first {first:?}");
     }
+    // SPEC-0035 / SPEC-0023: the front-end UI database and the HUD's art.
+    {
+        let f = neopets_data::frontend::Frontend::parse(&index.read(disc, neopets_data::frontend::RESOURCE)?)?;
+        let mut by_kind = std::collections::BTreeMap::new();
+        for n in &f.nodes {
+            *by_kind.entry(n.kind).or_insert(0usize) += 1;
+        }
+        let sheets = f.assets.iter().filter(|a| matches!(a, neopets_data::frontend::Asset::Sheet(_))).count();
+        let resolved = (0..f.assets.len() as u32).filter(|&i| f.sheet_entries(i).is_some()).count();
+        let pictures = f.assets.iter().filter(|a| matches!(a, neopets_data::frontend::Asset::Picture(_))).count();
+        let hud = f.screens.get(9).map(|s| (s.node, s.state));
+        let keys: Vec<(u32, Option<usize>)> = [0x01, 0x02, 0x06, 0x07, 0x08, 0x09, 0x31, 0x3B, 0x12, 0xD1].iter().map(|&k| (k, f.key(k))).collect();
+        println!(
+            "Front end: {} nodes by kind {by_kind:?}, {} screens, {} sprites, {} value texts, {} keys; assets: {sheets} sheets ({resolved} resolve to the texture chunk), {pictures} pictures; HUD record 9 (node, state) {hud:?}; keys {keys:?}",
+            f.nodes.len(),
+            f.screens.len(),
+            f.sprites.len(),
+            f.values.len(),
+            f.keys.len()
+        );
+        // The HUD's bars group 0x31 subtree: depth, node, kind, mode, handler, arg, key, x, y, w, h.
+        fn walk(f: &neopets_data::frontend::Frontend, n: usize, depth: usize, out: &mut Vec<String>) {
+            let d = f.nodes[n];
+            out.push(format!(
+                "{}{n} k{} m{} h{} a{} key{:x} ({},{}) {}x{} s{} al{}{}",
+                "  ".repeat(depth),
+                d.kind,
+                d.mode,
+                d.handler,
+                d.arg,
+                d.key,
+                d.x,
+                d.y,
+                d.width,
+                d.height,
+                d.scale_x,
+                d.align,
+                if d.absolute { " abs" } else { "" }
+            ));
+            for c in f.children(n) {
+                walk(f, c, depth + 1, out);
+            }
+        }
+        if std::env::var_os("NEOPETS_HUD_TREE").is_some() {
+            let mut out = Vec::new();
+            walk(&f, 322, 0, &mut out);
+            let _ = std::fs::write("private/hud-tree.txt", out.join("
+"));
+        }
+        if let Some(mem) = f.memory() {
+            for k in [0x01u32, 0x07, 0x06] {
+                let Some(n) = f.key(k) else { continue };
+                let node = f.nodes[n];
+                if let Some(img) = f.sprite_image(&mem, n, node.width.max(1) as u32, node.height.max(1) as u32) {
+                    let path = format!("private/textures/hud-key-{k:02x}.png");
+                    let _ = std::fs::create_dir_all("private/textures");
+                    let _ = std::fs::write(&path, neopets_data::png::encode_rgba(img.width, img.height, &img.rgba)?);
+                    println!("  HUD key {k:#04x}: node {n} {}x{} at ({}, {}), colour {:?} -> {path}", node.width, node.height, node.x, node.y, f.sprite(n).map(|s| s.colour));
+                }
+            }
+        }
+    }
     println!("Pack kinds (kind, has module): {kinds:?}");
     {
         let bytes = index.read(disc, 909)?;

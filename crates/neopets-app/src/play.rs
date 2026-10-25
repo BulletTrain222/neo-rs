@@ -292,6 +292,9 @@ pub struct Play {
     pub hero_mp_max: i32,
     /// The hero's 14 status timers (SPEC-0036).
     pub statuses: neopets_sim::status::Statuses,
+    /// The in-play HUD's bar rules (SPEC-0023) and their boot words.
+    pub hud: neopets_sim::hud::Hud,
+    hud_words: neopets_sim::hud::Words,
     pub panel_latch: neopets_sim::quick::PanelInput,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
     /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
@@ -336,6 +339,19 @@ impl Play {
             words(neopets_data::item::HEAL_B, 2)?.into_iter().map(|w| w as i32).collect(),
         );
         let hero_mp_max = words(neopets_data::item::MAGIC_TOR, 1)?[0] as i32;
+        // SPEC-0023 Layout: pulse half-length, red and green tints, bar offset tables A and B,
+        // and the hero divider table (bases, then steps).
+        let w1 = |at: u32| words(at, 1).map(|v| v[0]);
+        let dividers = words(neopets_data::item::HEALTH_TOR, 8)?;
+        let hud_words = neopets_sim::hud::Words {
+            half: f32::from_bits(w1(0x002D_CDDC)?),
+            red: w1(0x002D_CDE8)?.to_le_bytes(),
+            green: w1(0x002D_CDE0)?.to_le_bytes(),
+            cap: w1(0x002D_CE00)? as u16 as i16 as i32,
+            inset: w1(0x002D_CE08)? as u16 as i16 as i32,
+            base: (dividers[0] as i32, dividers[2] as i32),
+            step: (dividers[4] as i32, dividers[6] as i32),
+        };
         let coins = (
             words(neopets_data::item::COIN_DENOMINATIONS, 5)?.into_iter().map(|w| w as i32).collect(),
             words(neopets_data::item::COIN_IDS, 5)?.into_iter().map(|w| w as u16).collect(),
@@ -429,6 +445,8 @@ impl Play {
             hero_mp: hero_mp_max,
             hero_mp_max,
             statuses: Default::default(),
+            hud: Default::default(),
+            hud_words,
             panel_latch: Default::default(),
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
@@ -1359,6 +1377,18 @@ impl Play {
         }
         self.enemies_step();
         self.items_step();
+        // SPEC-0023: the in-play HUD steps only while the in-play state runs, so not while a
+        // dialogue box is up.
+        if !self.dialogue_open {
+            let v = neopets_sim::hud::Values {
+                hp: self.hero_hp,
+                hp_max: self.hero_max,
+                mp: self.hero_mp,
+                mp_max: self.hero_mp_max,
+                poisoned: self.statuses.active(neopets_sim::status::POISON),
+            };
+            self.hud.tick(v, self.quick.open, &self.hud_words);
+        }
         for c in &mut self.characters {
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {

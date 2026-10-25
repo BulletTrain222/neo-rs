@@ -10,6 +10,7 @@ pub mod contact;
 pub mod death;
 pub mod enemy;
 pub mod hero;
+pub mod hud;
 pub mod items;
 pub mod level;
 pub mod motion;

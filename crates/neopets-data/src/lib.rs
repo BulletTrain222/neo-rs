@@ -5,6 +5,7 @@ pub mod archive;
 mod elf;
 pub mod dialogue;
 pub mod fingerprint;
+pub mod frontend;
 pub mod gs;
 pub mod ground;
 pub mod gsmem;

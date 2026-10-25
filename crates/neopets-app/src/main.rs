@@ -3,6 +3,7 @@ mod character;
 mod controls;
 mod orbit;
 mod pattern;
+mod hud_view;
 mod play;
 
 use bevy::asset::RenderAssetUsages;
@@ -37,8 +38,8 @@ struct AutoWalk {
 struct HeroRoot;
 
 #[derive(Resource)]
-struct PlayState {
-    play: play::Play,
+pub(crate) struct PlayState {
+    pub(crate) play: play::Play,
     skinned: Vec<(Handle<Mesh>, usize)>,
 }
 
@@ -275,7 +276,7 @@ struct TextureView {
     dirty: bool,
 }
 
-fn rgba_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
+pub(crate) fn rgba_image(width: u32, height: u32, rgba: Vec<u8>) -> Image {
     let mut image = Image::new(
         Extent3d {
             width,
@@ -501,7 +502,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, sync_items, hud_view::sync_hud).chain(),
             )
                 .chain(),
         );
@@ -1690,6 +1691,15 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
             // `--give N`: diagnostic equipment (no inventory yet).
             for &id in &request.2 {
                 play.give(id);
+            }
+            // The HUD's art: the front-end database and texture sheet of resource 532.
+            match index.read(disc, neopets_data::frontend::RESOURCE).and_then(|b| neopets_data::frontend::Frontend::parse(&b)) {
+                Ok(f) => {
+                    if let Some(art) = hud_view::HudArt::new(f) {
+                        commands.insert_resource(art);
+                    }
+                }
+                Err(e) => error!("No HUD art: {e}"),
             }
             match disc.reopen() {
                 Ok(second) => commands.insert_resource(Streamer::start(second, index.clone(), play.boot.clone())),
