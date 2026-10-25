@@ -15,6 +15,7 @@ pub mod material;
 pub mod mesh;
 pub mod model;
 pub mod monster;
+pub mod navmesh;
 mod mods;
 pub mod png;
 pub mod region;

@@ -321,6 +321,7 @@ fn main() {
     let mut trace_to: Option<[f32; 2]> = None;
     let mut flags: Vec<u16> = Vec::new();
     let mut look: Option<[f32; 2]> = None;
+    let mut seed: Option<u32> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -366,6 +367,9 @@ fn main() {
                 if v == "door" {
                     return Some([f32::NAN, 1.0]);
                 }
+                if v == "herd" {
+                    return Some([f32::NAN, 2.0]);
+                }
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse().ok()?, z.parse().ok()?])
             });
@@ -374,6 +378,8 @@ fn main() {
                 let (x, z) = v.trim().split_once(',')?;
                 Some([x.parse::<f32>().ok()?, z.parse::<f32>().ok()?])
             });
+        } else if arg == "--seed" {
+            seed = args.next().and_then(|v| v.parse::<u32>().ok());
         } else if arg == "--flag" {
             flags.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
         } else if arg == "--play" {
@@ -418,7 +424,7 @@ fn main() {
             eprintln!("{status}");
             std::process::exit(1)
         };
-        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags);
+        play_trace(&mut archive, play_pack, ticks, autowalk.is_some_and(|a| a.jump), trace_to, &flags, seed);
         return;
     }
     let driver = SimDriver {
@@ -1317,7 +1323,8 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
 
 /// Diagnostic (`--play-trace <ticks>`): run play mode without a window, walking forward along
 /// the spawn facing (and jumping every 120 ticks with `--autojump`), and print each tick.
-fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Option<[f32; 2]>, flags: &[u16]) {
+#[allow(clippy::too_many_arguments)]
+fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Option<[f32; 2]>, flags: &[u16], seed: Option<u32>) {
     let Archive { disc, index } = archive;
     let mut play = match play::Play::load(disc, index, pack, PLAY_OUTFIT) {
         Ok(play) => play,
@@ -1326,6 +1333,10 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             std::process::exit(1)
         }
     };
+    // `--seed N`: a fixed seed for the random stream (SPEC-0008 developer option).
+    if let Some(n) = seed {
+        play.rng = neopets_sim::rng::Rng::seeded(n);
+    }
     // `--flag N`: diagnostic story flags set at the start.
     for &f in flags {
         play.state.set(f, true);
@@ -1338,6 +1349,10 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         }
     };
     println!("Grid bounds: {:?}; nearest swap point {:?}", play.bounds(), play.nearest_swap_point());
+    for q in [[-1840.4f32, 48.8, 1125.2], [-1854.0, 49.0, 1144.0], [-1845.75, 49.7, 1143.8]] {
+        let inside: Vec<usize> = (0..play.world.navmeshes.len()).filter(|&i| play.world.navmeshes[i].locate_full(q).is_some()).collect();
+        println!("Meshes containing {q:?}: {inside:?}");
+    }
     for (k, pl) in play.world.planes.iter().enumerate() {
         let g = play.world.ground_at(pl.p[0] + 0.5 * pl.w * pl.d[0], pl.p[2] + 0.5 * pl.w * pl.d[2], pl.p[1] + 10.0);
         println!("Door {k}: P {:?} F {:?} D {:?} Q {:?} w {} h {}; ground below its middle {g:?}", pl.p, pl.f, pl.d, pl.q, pl.w, pl.h);
@@ -1353,7 +1368,9 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
             Some(g) if g == 1.0 => play::Goal::Door,
             _ => play::Goal::Swap,
         };
-        route = if goal == play::Goal::Door {
+        route = if to.is_some_and(|t| t[1] == 2.0) {
+            Vec::new()
+        } else if goal == play::Goal::Door {
             play.stand_before_door(0).map(|m| vec![m]).unwrap_or_default()
         } else {
             play.route_to(400_000, goal).unwrap_or_default()
@@ -1375,7 +1392,8 @@ fn play_trace(archive: &mut Archive, pack: u32, ticks: u64, jump: bool, to: Opti
         } {
             route.remove(0);
         }
-        let goal = route.first().copied().or(to.filter(|t| !t[0].is_nan()));
+        let herd = to.is_some_and(|t| t[1] == 2.0);
+        let goal = if herd { play.herd_goal() } else { route.first().copied().or(to.filter(|t| !t[0].is_nan())) };
         if let Some([tx, tz]) = goal.filter(|g| {
             let p = play.loco.position();
             route.len() > 1 || to.is_some_and(|t| t[0].is_nan()) || (g[0] - p[0]).hypot(g[1] - p[2]) > 2.0

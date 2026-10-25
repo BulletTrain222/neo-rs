@@ -8,10 +8,13 @@ pub mod contact;
 pub mod hero;
 pub mod level;
 pub mod motion;
+pub mod nav;
 pub mod npc;
 pub mod rng;
 mod step;
 pub mod travel;
+pub mod walker;
+pub mod whinny;
 pub use step::FixedStep;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

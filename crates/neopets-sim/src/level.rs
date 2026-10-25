@@ -27,6 +27,8 @@ pub enum Action {
     /// The proximity talk frame around a line: SetConversationTarget(entity, 1), LevelMsg(line,
     /// wait 1), EndConversation(entity).
     Talk { line: u16 },
+    /// SetWhinnyPenmesh(world, inner, entrance, locator k): one pen (SPEC-0029 Behavior 5).
+    WhinnyPen { inner: usize, entrance: usize, locator: usize },
     /// SlotLoad into one of the level's slots: the region resource to load, or None to empty
     /// the slot (its characters leave).
     LoadRegion { slot: u8, region: Option<u32> },
@@ -111,6 +113,15 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             state.blackboard.insert((2, 68), 40);
             vec![Action::LeaveInterior { slot: 5 }]
         }
+        _ => Vec::new(),
+    }
+}
+
+/// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
+pub fn on_init(pack: u32) -> Vec<Action> {
+    match pack {
+        // SPEC-0045 909 Init: SetWhinnyPenmesh first (inner 0, entrance 5, locator 8).
+        909 => vec![Action::WhinnyPen { inner: 0, entrance: 5, locator: 8 }],
         _ => Vec::new(),
     }
 }

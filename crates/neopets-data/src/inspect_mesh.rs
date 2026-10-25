@@ -391,6 +391,51 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         "Monster table: {} rows; {placements} placements, {townsfolk} of class 6, {minus7_not6} main -7 placements not class 6; by class {classes:?}",
         table.row_count()
     );
+    // SPEC-0018 navigation meshes and SPEC-0056 route tables over every game pack.
+    {
+        let (mut meshes, mut kinds_nav, mut verts, mut short, mut one_way) = (0, std::collections::BTreeMap::new(), 0, 0, 0);
+        let mut pack722 = None;
+        for pack in 533..=1433u32 {
+            let Ok(b) = index.read(disc, pack) else { continue };
+            let Ok(ch) = resource::walk_chunks(&b, None) else { continue };
+            if ch.chunks.first().map(|c| c.kind) != Some(31) {
+                continue;
+            }
+            let ms = neopets_data::navmesh::navmeshes(&b, &ch.chunks);
+            for m in &ms {
+                meshes += 1;
+                *kinds_nav.entry(m.kind).or_insert(0usize) += 1;
+                let t = m.triangles.len();
+                verts += 3 * t;
+                short += (m.table.len() < (2 * t * t).div_ceil(8)) as usize;
+                for (a, nb) in m.neighbours.iter().enumerate() {
+                    for &n in nb {
+                        if n >= 0 && !m.neighbours.get(n as usize).is_some_and(|x| x.contains(&(a as i32))) {
+                            one_way += 1;
+                        }
+                    }
+                }
+            }
+            if pack == 722 {
+                pack722 = ms.get(2).map(|m| (m.kind, m.neighbours.clone(), (0..5).map(|a| (0..5).map(|b| m.route(a, b).unwrap_or(9)).collect::<Vec<_>>()).collect::<Vec<_>>()));
+            }
+        }
+        {
+            let b = index.read(disc, 909)?;
+            let ch = resource::walk_chunks(&b, None)?;
+            let e8 = neopets_data::ground::entry_record(&b, &ch.chunks, 8);
+            println!("  909 locator 8 (pen point): {e8:?}");
+            for (i, m) in neopets_data::navmesh::navmeshes(&b, &ch.chunks).iter().enumerate() {
+                let xs = m.triangles.iter().flatten().map(|v| v[0]);
+                let zs = m.triangles.iter().flatten().map(|v| v[2]);
+                let (x0, x1) = xs.fold((f32::MAX, f32::MIN), |a, x| (a.0.min(x), a.1.max(x)));
+                let (z0, z1) = zs.fold((f32::MAX, f32::MIN), |a, z| (a.0.min(z), a.1.max(z)));
+                println!("  909 mesh {i}: kind {}, {} triangles, x {x0:.1}..{x1:.1}, z {z0:.1}..{z1:.1}", m.kind, m.triangles.len());
+            }
+        }
+        println!("Navigation meshes: {meshes} (by kind {kinds_nav:?}), {verts} vertices, {short} route tables short of 2T^2/8 bytes, {one_way} one-way links");
+        println!("Pack 722 mesh 2 (kind, neighbours, route rows): {pack722:?}");
+    }
     println!("Pack kinds (kind, has module): {kinds:?}");
     {
         let bytes = index.read(disc, 909)?;

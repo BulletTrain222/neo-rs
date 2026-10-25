@@ -44,6 +44,9 @@ pub struct World {
     pub lines: neopets_data::dialogue::LineTable,
     /// The entity-id table (tag 0x12): (region byte, ordinal) per entity id.
     entities: Vec<(u8, u8)>,
+    /// Navigation meshes (type 21) and the Whinny pens the level sets.
+    pub navmeshes: Vec<neopets_sim::nav::NavMesh>,
+    pens: Vec<neopets_sim::whinny::Pen>,
 }
 
 impl World {
@@ -73,6 +76,11 @@ impl World {
             scripted_doors: boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback"),
             lines: neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks),
             entities: neopets_data::travel::entity_table(&bytes, &chain.chunks),
+            navmeshes: neopets_data::navmesh::navmeshes(&bytes, &chain.chunks)
+                .into_iter()
+                .map(|m| neopets_sim::nav::NavMesh { kind: m.kind, triangles: m.triangles, neighbours: m.neighbours, table: m.table })
+                .collect(),
+            pens: Vec::new(),
         };
         Ok((world, bytes))
     }
@@ -176,6 +184,10 @@ pub struct Character {
     pub row: Option<neopets_data::monster::Row>,
     /// The townsfolk routine (SPEC-0056) for class-6 characters; other classes only idle.
     pub townsfolk: Option<neopets_sim::npc::Townsfolk>,
+    /// Class-7 Whinnies: their walker (motion record and navigation) and routine.
+    pub walker: Option<neopets_sim::walker::Walker>,
+    pub whinny: Option<neopets_sim::whinny::Whinny>,
+    root_step: [f32; 3],
 }
 
 pub struct Play {
@@ -226,6 +238,8 @@ pub struct Play {
     /// The shared dialogue box is open (SPEC-0022: it closes only on a Square press; the hero
     /// stays in the talking state meanwhile).
     pub dialogue_open: bool,
+    /// The game's random generator (SPEC-0008): one stream, seeded once.
+    pub rng: neopets_sim::rng::Rng,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -302,14 +316,17 @@ impl Play {
             talk_partner: None,
             talk_with: None,
             dialogue_open: false,
+            rng: neopets_sim::rng::Rng::seeded(clock_seed()),
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             region_wanted: Vec::new(),
             next_character: 0,
             spawned: false,
         };
-        // The start world becomes current: its activate-world routine runs (SPEC-0006 Make
-        // current), which for 909 loads the farm family's slots.
+        // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
+        // which for 909 loads the farm family's slots.
+        let init = level::on_init(play.world.pack);
+        play.apply(&init);
         play.activated();
         Ok(play)
     }
@@ -458,6 +475,7 @@ impl Play {
         let resident = self.world.pack == world.pack || self.other.as_ref().is_some_and(|o| o.pack == world.pack);
         if !resident && self.streams(world.kind) {
             self.other = Some(world);
+            self.init_other();
         }
     }
 
@@ -525,6 +543,16 @@ impl Play {
         true
     }
 
+    /// A newly loaded other world runs its Init (its actions apply to that world).
+    fn init_other(&mut self) {
+        if let Some(o) = self.other.take() {
+            let init = level::on_init(o.pack);
+            let current = std::mem::replace(&mut self.world, o);
+            self.apply(&init);
+            self.other = Some(std::mem::replace(&mut self.world, current));
+        }
+    }
+
     /// SPEC-0006 Make current: the new world's script runs its activate-world routine.
     fn activated(&mut self) {
         // The world's own region (its embedded type-32 characters), slot 255, once per load.
@@ -576,6 +604,10 @@ impl Play {
                 Action::Talk { line } => {
                     self.message = Some((line, self.ticks));
                     self.dialogue_open = self.world.lines.line(line as usize).is_some();
+                }
+                Action::WhinnyPen { inner, entrance, locator } => {
+                    let point = self.world.entries.get(locator).map_or([0.0; 3], |e| e.0);
+                    self.world.pens = vec![neopets_sim::whinny::Pen { inner, entrance, point, occupied: false }];
                 }
                 Action::LoadRegion { slot, region } => {
                     let pack = self.world.pack;
@@ -692,6 +724,24 @@ impl Play {
         true
     }
 
+    /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
+    /// side from the pen point.
+    pub fn herd_goal(&self) -> Option<[f32; 2]> {
+        let pen = self.world.pens.first()?.point;
+        let p = self.loco.position();
+        let w = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == self.world.pack && c.whinny.as_ref().is_some_and(|w| !w.penned()))
+            .min_by(|a, b| {
+                let d = |c: &Character| (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
+                d(a).total_cmp(&d(b))
+            })?;
+        let (dx, dz) = (w.position[0] - pen[0], w.position[2] - pen[2]);
+        let len = dx.hypot(dz).max(1e-6);
+        Some([w.position[0] + 3.5 * dx / len, w.position[2] + 3.5 * dz / len])
+    }
+
     /// Diagnostic: turn the hero toward a point and put the camera behind it.
     pub fn face_point(&mut self, x: f32, z: f32) {
         let p = self.loco.position();
@@ -729,6 +779,11 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
+                walker: row.filter(|r| r.class == Some(7)).map(|r| {
+                    neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
+                }),
+                whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
+                root_step: [0.0; 3],
                 row,
                 anim,
                 model,
@@ -934,6 +989,27 @@ impl Play {
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
         let hero = self.loco.position();
         let talking = if self.dialogue_open { self.talk_with } else { None };
+        // Whinnies: routine, group count after each member (SPEC-0049), motion-record tick.
+        let world = &mut self.world;
+        let (mut members, mut penned_now) = (0, 0);
+        for c in self.characters.iter().filter(|c| c.pack == world.pack && c.whinny.is_some()) {
+            members += 1;
+            penned_now += c.whinny.as_ref().is_some_and(|w| w.penned()) as usize;
+        }
+        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack) {
+            let (Some(wk), Some(wh)) = (c.walker.as_mut(), c.whinny.as_mut()) else { continue };
+            let was = wh.penned();
+            let id = wh.tick(wk, &world.navmeshes, &mut world.pens, hero, &mut self.rng);
+            penned_now = penned_now + wh.penned() as usize - was as usize;
+            neopets_sim::whinny::group_count(&mut self.state, members, penned_now);
+            c.anim.play(id);
+            let ground = &world.ground;
+            wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| {
+                ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl))
+            });
+            c.position = wk.position();
+            c.facing = wk.facing;
+        }
         for c in &mut self.characters {
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
@@ -943,7 +1019,7 @@ impl Play {
                     c.anim.play(id);
                 }
             }
-            let _ = c.anim.tick();
+            c.root_step = c.anim.tick();
         }
     }
 
@@ -983,6 +1059,12 @@ impl Play {
             .iter()
             .filter(|c| self.pack_drawn(c.pack))
             .map(|c| match &c.townsfolk {
+                _ if c.whinny.is_some() => format!(
+                    "Whinny [{:?} at {:.0},{:.0}]",
+                    c.whinny.as_ref().map(|w| w.mode).unwrap(),
+                    c.position[0],
+                    c.position[2]
+                ),
                 Some(t) => format!("{} [mode {} id {}]", c.name, t.mode, c.anim.action()),
                 None => match c.row {
                     Some(r) => format!("{} [class {} hp {}]", if c.name.is_empty() { "(unnamed)" } else { &c.name }, r.class.unwrap_or(-1), r.hit_points),
@@ -991,6 +1073,10 @@ impl Play {
             })
             .collect();
         names.dedup();
+        let roundup: Vec<u16> = (107..=110).filter(|&f| self.state.flag(f)).collect();
+        if !roundup.is_empty() {
+            names.push(format!("round-up flags {roundup:?}"));
+        }
         format!(
             "WORLDS (SPEC-0006): current {} ({:?}), other {other}, swaps {}{prompt}{job} | {}\nCHARACTERS (townsfolk modes 0, 10 to 13; no walks or enemy AI): {}",
             self.world.pack,
@@ -1009,6 +1095,14 @@ impl Play {
             p[0], p[1], p[2], self.loco.state, self.loco.phase, self.loco.action(), self.loco.rate, self.loco.body.gap
         )
     }
+}
+
+/// SPEC-0008: the seed from the local clock (seconds, minutes, hours, day, month, year).
+fn clock_seed() -> u32 {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+    let (s, m, h) = ((secs % 60) as u8, (secs / 60 % 60) as u8, (secs / 3600 % 24) as u8);
+    let days = secs / 86_400;
+    neopets_sim::rng::Rng::clock_seed(s, m, h, (days % 28 + 1) as u8, (days / 30 % 12 + 1) as u8, (1970 + days / 365 % 100) as u8)
 }
 
 /// The hero as the camera sees it, with the ground kind of the patch under its feet (the same
