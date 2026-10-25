@@ -38,6 +38,7 @@ pub mod sequencer;
 pub mod shop;
 pub mod synth;
 pub mod status;
+pub mod swap;
 mod step;
 pub mod textbox;
 pub mod travel;

@@ -321,6 +321,17 @@ pub struct Character {
     pub miamouse: Option<neopets_sim::miamouse::Miamouse>,
 }
 
+/// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
+/// is selected (the original reloads the shared hero pool on each swap; this build keeps both).
+pub struct Parked {
+    pub anim: HeroAnim,
+    pub model: ModelData,
+    pub hp: i32,
+    pub mp: i32,
+    pub hp_max: i32,
+    pub mp_max: i32,
+}
+
 /// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
 /// and what its blocking call waits for.
 struct Thread {
@@ -447,6 +458,15 @@ pub struct Play {
     /// The Miamouse catch switch, meshes and count, and the carried Miamouse (character id).
     pub catch: neopets_sim::miamouse::Catch,
     carried: Option<u64>,
+    /// Hero switching (SPEC-0053): the selected hero (0 Tor, 1 Roberta), the parked hero, the
+    /// swap mode, the running swap task and the L1 and R1 press edges kept for the next tick.
+    pub hero_index: usize,
+    pub parked: Option<Parked>,
+    pub swap_mode: u32,
+    pub swap: Option<neopets_sim::swap::Task>,
+    pub l1_latch: bool,
+    pub r1_latch: bool,
+    pub last_swap: String,
     /// Forced binds waiting for the embedded region: (pack, ordinal).
     rebind: Vec<(u32, usize)>,
     /// Entities deactivated before their characters loaded.
@@ -624,6 +644,12 @@ impl Play {
     pub fn load_with_flags(disc: &mut Disc, index: &ArchiveIndex, pack: u32, outfit: u32, flags: &[u16]) -> Result<Self, String> {
         let model = crate::archive_view::model(disc, index, outfit)?.ok_or("Outfit has no model")?;
         let hero = crate::archive_view::hero(disc, index, outfit)?.ok_or("Not a hero outfit (504–519)")?;
+        // Roberta (outfit 512, her first; which outfit the save selects is not read) waits parked
+        // with her start pools (SPEC-0036 Start values; the growth words' starts).
+        let roberta = match (crate::archive_view::model(disc, index, 512), crate::archive_view::hero(disc, index, 512)) {
+            (Ok(Some(m)), Ok(Some(a))) => Some((m, a)),
+            _ => None,
+        };
         let boot = BootTravel::from_disc(disc)?;
         let items = neopets_data::item::ItemTable::parse(&index.read(disc, neopets_data::item::ITEM_CONFIG)?)?;
         let boot_bytes = neopets_data::archive::verified_boot_program(disc)?;
@@ -738,6 +764,7 @@ impl Play {
         );
         let world_keys = (words(0x0031_EFA8, 193)?, words(0x0031_F2B0, 193)?);
         let growth = neopets_sim::save::Growth::from_words(&words(neopets_data::item::HEALTH_TOR, 12)?).unwrap_or_default();
+        let parked = roberta.map(|(model, anim)| Parked { anim, model, hp: growth.start[1], mp: growth.start[3], hp_max: growth.start[1], mp_max: growth.start[3] });
         let (world, bytes) = World::load(disc, index, &boot, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
         let (spawn, facing) = ground::spawn(&bytes, &chain.chunks).unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
@@ -826,6 +853,13 @@ impl Play {
             charm_words,
             last_status: String::new(),
             rebind: Vec::new(),
+            hero_index: 0,
+            parked,
+            swap_mode: neopets_sim::swap::rule_m(flags.contains(&220), flags.contains(&248)),
+            swap: None,
+            l1_latch: false,
+            r1_latch: false,
+            last_swap: String::new(),
             catch: Default::default(),
             carried: None,
             gesture: Default::default(),
@@ -1787,6 +1821,95 @@ impl Play {
                 self.apply(&actions);
             }
         }
+        true
+    }
+
+    /// The selected hero's name for the speaker rule (SPEC-0022).
+    pub fn hero_name(&self) -> &'static [u8] {
+        if self.hero_index == 1 { b"Roberta" } else { b"Tor" }
+    }
+
+    /// SPEC-0053 3.2: a switch request to the other hero. Refused by the mode, a dead partner
+    /// (a parked hero with no hit points) or a running task. Returns whether it was accepted.
+    pub fn request_switch(&mut self, extra: bool, effects: bool, flash: bool) -> bool {
+        let Some(parked) = self.parked.as_ref() else { return false };
+        if self.swap.is_some() || !neopets_sim::swap::allowed(self.swap_mode, self.hero_index) || parked.hp <= 0 {
+            self.last_swap = format!("switch refused (mode {}) on tick {}", self.swap_mode, self.ticks);
+            return false;
+        }
+        let dead = self.loco.state == hero_states::DEAD;
+        self.swap = Some(neopets_sim::swap::Task::new(1 - self.hero_index, extra, effects, flash, self.loco.state, dead));
+        self.last_swap = format!("switch to hero {} accepted on tick {}", 1 - self.hero_index, self.ticks);
+        true
+    }
+
+    /// The exchange of SPEC-0053 3.4 steps 6 to 9: the incoming hero takes the outgoing hero's
+    /// place and facing (the locomotion record stays), its model and pools come in, its status
+    /// timers are cleared, and the renderer re-spawns the hero.
+    fn exchange_heroes(&mut self) {
+        let Some(mut p) = self.parked.take() else { return };
+        std::mem::swap(&mut self.hero, &mut p.anim);
+        std::mem::swap(&mut self.model, &mut p.model);
+        std::mem::swap(&mut self.hero_hp, &mut p.hp);
+        std::mem::swap(&mut self.hero_mp, &mut p.mp);
+        std::mem::swap(&mut self.hero_max, &mut p.hp_max);
+        std::mem::swap(&mut self.hero_mp_max, &mut p.mp_max);
+        self.parked = Some(p);
+        self.hero_index = 1 - self.hero_index;
+        self.statuses.clear_all();
+        self.attack = None;
+        self.hero_colour = self.design.hero_colour(self.hero_index).unwrap_or([128; 3]);
+        self.weapon = self.equipment.entries[0][self.hero_index];
+        self.shield = self.equipment.entries[1][self.hero_index];
+        self.spawned = false;
+        self.last_swap = format!("hero {} selected on tick {}", self.hero_index, self.ticks);
+    }
+
+    /// SPEC-0053 3.8 c and 3.12: the L1 and R1 chord with the switch-ready gate, then the swap
+    /// task's step of this tick. Returns whether a swap is in progress (game-state code 5).
+    fn swap_step(&mut self, input: &HeroInput) -> bool {
+        let (l1, r1) = (std::mem::take(&mut self.l1_latch), std::mem::take(&mut self.r1_latch));
+        if self.swap.is_none() && neopets_sim::swap::chord(input.guard, l1, input.run, r1) {
+            let r = neopets_sim::swap::Ready {
+                dialogue: self.dialogue_open,
+                quick_open: self.quick.open,
+                code_zero: !self.dialogue_open,
+                state: self.loco.state,
+                height: self.loco.body.gap.max(0.0),
+                grounded: self.loco.body.gap <= 0.15,
+                v: neopets_sim::hero::speed_value(input),
+                stunned: self.statuses.active(neopets_sim::status::STUN),
+                fade_moving: self.fade.alpha != self.fade.target,
+            };
+            if neopets_sim::swap::ready(&r) {
+                self.request_switch(true, true, true);
+            }
+        }
+        let Some(mut task) = self.swap.take() else { return false };
+        let done = self.fade.alpha == self.fade.target;
+        match task.tick(done) {
+            Some(neopets_sim::swap::Step::Start { flash }) => {
+                // Step 2: the hero attack pools are reset.
+                self.mote_objects.clear();
+                if flash {
+                    self.fade.out([255; 3], 37);
+                }
+            }
+            Some(neopets_sim::swap::Step::Exchange) => self.exchange_heroes(),
+            Some(neopets_sim::swap::Step::FadeIn) => self.fade.fade_in([255; 3], 8),
+            Some(neopets_sim::swap::Step::Carry { state, extra }) => {
+                self.loco.state = state;
+                if extra {
+                    self.hud.rearm_all();
+                }
+            }
+            Some(neopets_sim::swap::Step::Done) => {
+                self.last_swap = format!("switch done on tick {}", self.ticks);
+                return false;
+            }
+            None => {}
+        }
+        self.swap = Some(task);
         true
     }
 
@@ -2847,6 +2970,15 @@ impl Play {
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
         self.equipment_step();
+        // SPEC-0053: while a swap runs (game-state code 5) the hero takes no input.
+        let swapping = self.swap_step(input);
+        let held_input;
+        let input = if swapping {
+            held_input = HeroInput::default();
+            &held_input
+        } else {
+            input
+        };
         // SPEC-0035 section 15.2: each drawn pass (quick panels closed) lowers the caption
         // lines' counters.
         if !self.quick.open {
@@ -3021,7 +3153,8 @@ impl Play {
         } else {
             self.gesture.tick(input.forward * 87.5, input.side * 87.5, &self.gesture_words);
         }
-        if self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
+        // Roberta's attack step and shots are not built: only Tor attacks.
+        if self.hero_index == 0 && self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
         }
         let mut force = false;
@@ -3530,7 +3663,7 @@ impl Play {
         let hero = s.eq_ignore_ascii_case(b"Hero") || s.eq_ignore_ascii_case(b"[Hero]") || s.first() == Some(&0x01);
         let partner = self.talk_with.and_then(|id| self.characters.iter().find(|c| c.id == id));
         self.speaker = if hero {
-            (b"Tor".to_vec(), self.hero_colour)
+            (self.hero_name().to_vec(), self.hero_colour)
         } else if let Some(c) = partner {
             (c.name.as_bytes().to_vec(), c.colour)
         } else {
@@ -3566,7 +3699,7 @@ impl Play {
 
     /// The name and frame colour shown now (the type-32 override names the hero).
     pub fn box_speaker(&self) -> (&[u8], [u8; 3]) {
-        if self.textbox.override_hero { (b"Tor", self.hero_colour) } else { (&self.speaker.0, self.speaker.1) }
+        if self.textbox.override_hero { (self.hero_name(), self.hero_colour) } else { (&self.speaker.0, self.speaker.1) }
     }
 
     /// SPEC-0036 Status effects and Regeneration, run in the hero update before its state
@@ -4334,7 +4467,7 @@ impl Play {
         let f = self.loco.facing;
         s.set_vec4(at::POSITION, [p[0], p[1], p[2], 1.0]);
         s.set_vec4(at::FACING, [f[0], f[1], f[2], 0.0]);
-        s.set_u32(at::ACTIVE_HERO, 0);
+        s.set_u32(at::ACTIVE_HERO, self.hero_index as u32);
         // Keys A, B and C: the worlds in T, E and I as saved ids (0xFFFF for an empty buffer,
         // like a lookup miss, so the slot stays present).
         let mut packs = [None; 3];
@@ -4361,8 +4494,13 @@ impl Play {
         s.set_i32(at::WALLET, self.state.neopoints);
         s.set_i32(at::STASH, 0);
         s.set_i32(at::LUCK, self.luck);
-        s.set_maximum_words(0, self.hero_max, self.hero_mp_max);
-        s.set_maximum_words(1, self.growth.start[1], self.growth.start[3]);
+        // Each hero's maxima, by index (the parked hero's from its record).
+        let parked = self.parked.as_ref().map_or((self.growth.start[1], self.growth.start[3], self.growth.start[1], self.growth.start[3]), |p| (p.hp, p.mp, p.hp_max, p.mp_max));
+        let live = (self.hero_hp, self.hero_mp, self.hero_max, self.hero_mp_max);
+        let by_hero = if self.hero_index == 0 { [live, parked] } else { [parked, live] };
+        for (h, v) in by_hero.iter().enumerate() {
+            s.set_maximum_words(h, v.2, v.3);
+        }
         // SPEC-0047 Save: the live petpet's type, T and F (-1 with no pet or T below 1).
         let (ty, t, f) = neopets_sim::petpet::save_fields(self.petpet.as_ref().map(|p| (p.type_id, p.t, p.f)));
         s.set_i32(at::PET_TYPE, ty);
@@ -4404,10 +4542,9 @@ impl Play {
             }
         }
         for h in 0..2 {
-            let (hp, mp) = if h == 0 { (self.hero_hp, self.hero_mp) } else { (self.growth.start[1], self.growth.start[3]) };
-            s.set_pools(h, hp, mp);
+            s.set_pools(h, by_hero[h].0, by_hero[h].1);
             for i in 0..14 {
-                let ticks = if h == 0 { self.statuses.timers[i] } else { -1 };
+                let ticks = if h == self.hero_index { self.statuses.timers[i] } else { -1 };
                 s.set_status(h, i, sv::status_seconds(ticks));
             }
             for k in 0..4 {
@@ -4433,7 +4570,7 @@ impl Play {
         s.set_date(date);
         s.0[at::TIER] = sv::tier(|n| self.state.flag(n));
         s.0[at::COUNTS..at::COUNTS + sv::COUNTS].fill(0);
-        s.set_u32(at::SWAP_MODE, 2);
+        s.set_u32(at::SWAP_MODE, self.swap_mode);
         let cloak = self.state.items.get(&126).is_some_and(|&n| n > 0);
         s.0[at::CLOAK..at::CLOAK + 3].copy_from_slice(&[cloak as u8, 0, 0]);
         // A copy of the live options block (SPEC-0025 Options block).
@@ -4496,11 +4633,26 @@ impl Play {
         // SPEC-0047: the save load fills the pending petpet values for the next scene start.
         self.pet_pending = neopets_sim::petpet::Pending::load(s.i32(at::PET_TYPE), s.i32(at::PET_TIME), s.i32(at::PET_FULL));
         let m = sv::maxima(s, &self.growth);
+        // Tor's pools come in live and Roberta's parked; the slot's active hero is then
+        // selected (SPEC-0053), and the swap mode comes from save word 0x307C.
+        if self.hero_index == 1 {
+            self.exchange_heroes();
+        }
         self.hero_max = m[0][0];
         self.hero_mp_max = m[0][1];
         let (hp, mp) = s.pools(0);
         self.hero_hp = hp.min(self.hero_max);
         self.hero_mp = mp.min(self.hero_mp_max);
+        if let Some(p) = self.parked.as_mut() {
+            let (hp, mp) = s.pools(1);
+            (p.hp_max, p.mp_max) = (m[1][0], m[1][1]);
+            (p.hp, p.mp) = (hp.min(p.hp_max), mp.min(p.mp_max));
+        }
+        self.swap_mode = s.u32(at::SWAP_MODE);
+        self.swap = None;
+        if s.u32(at::ACTIVE_HERO) == 1 {
+            self.exchange_heroes();
+        }
         let (a, b) = (s.vec4(at::POSITION), s.vec4(at::FACING));
         let pose = ([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
         self.restart = Some(pose);
@@ -4559,8 +4711,8 @@ impl Play {
                 Err(()) => {}
             }
         }
-        self.weapon = self.equipment.entries[0][0];
-        self.shield = self.equipment.entries[1][0];
+        self.weapon = self.equipment.entries[0][self.hero_index];
+        self.shield = self.equipment.entries[1][self.hero_index];
     }
 
     /// The item screen's view of the party (SPEC-0035 section 14.1) for the grid ids.

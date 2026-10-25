@@ -966,6 +966,15 @@ fn step_sim(
             l.down |= keys.just_pressed(KeyCode::Numpad2) || pad(GamepadButton::DPadDown);
             l.triangle |= keys.just_pressed(KeyCode::KeyT) || pad(GamepadButton::North);
         }
+        // NEOPETS_TRACE_SWITCH also works in the window: the chord on those play ticks.
+        if std::env::var("NEOPETS_TRACE_SWITCH").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| (k..k + 3).contains(&(play.play.ticks + 1)))) {
+            play.play.l1_latch = true;
+            play.play.r1_latch = true;
+        }
+        // The hero switch chord's press edges: L1 (Q or the left bumper) and R1 (Shift or the
+        // right bumper), kept for the next tick (SPEC-0053 3.8 c).
+        play.play.l1_latch |= keys.just_pressed(KeyCode::KeyQ) || gamepads.iter().any(|g| g.just_pressed(GamepadButton::LeftTrigger));
+        play.play.r1_latch |= keys.any_just_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) || gamepads.iter().any(|g| g.just_pressed(GamepadButton::RightTrigger));
         // Square (E or the west face button) confirms a prompt; a press edge like Cross.
         play.play.square_latch |= keys.just_pressed(KeyCode::KeyE)
             || gamepads.iter().any(|g| g.just_pressed(GamepadButton::West));
@@ -1885,6 +1894,8 @@ fn play_trace(
     let mut last_status = String::new();
     let mut last_pet = String::new();
     let mut last_boss = String::new();
+    let mut last_swap = String::new();
+    let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
     // releases a power attack).
@@ -2007,6 +2018,10 @@ fn play_trace(
             forward = 0.7 * (dx * f[0] + dz * f[2]) / len / (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
             side = 0.7 * (dx * l[0] + dz * l[2]) / len;
         }
+        // Around a diagnostic switch the stick rests (the chord needs a standing hero).
+        if switch_at.iter().any(|&k| play.ticks + 30 >= k && play.ticks <= k + 60) {
+            (forward, side) = (0.0, 0.0);
+        }
         let input = neopets_sim::hero::HeroInput {
             forward,
             side,
@@ -2099,6 +2114,15 @@ fn play_trace(
             let off: Vec<u16> = flags_seen.difference(&play.state.flags).copied().collect();
             println!("      flags on {on:?} off {off:?} on tick {}", play.ticks);
             flags_seen = play.state.flags.clone();
+        }
+        if !play.last_swap.is_empty() && play.last_swap != last_swap {
+            last_swap = play.last_swap.clone();
+            println!("      {last_swap}");
+        }
+        // NEOPETS_TRACE_SWITCH="tick,...": the chord (L1 held, R1 newly pressed) on those ticks.
+        if switch_at.contains(&(play.ticks + 1)) {
+            play.l1_latch = true;
+            play.r1_latch = true;
         }
         if !play.last_boss.is_empty() && play.last_boss != last_boss {
             last_boss = play.last_boss.clone();
@@ -2311,6 +2335,7 @@ fn play_frame(
     mut commands: Commands,
     play: Option<ResMut<PlayState>>,
     mut heroes: Query<&mut Transform, (With<HeroRoot>, Without<Orbit>)>,
+    hero_roots: Query<Entity, With<HeroRoot>>,
     mut cameras: Query<(&mut Orbit, &mut Transform), Without<HeroRoot>>,
     mut projections: Query<&mut Projection>,
     mut meshes: ResMut<Assets<Mesh>>,
@@ -2324,6 +2349,10 @@ fn play_frame(
     let rotation = Quat::from_rotation_y(f[0].atan2(f[2]));
     if !state.play.spawned {
         state.play.spawned = true;
+        // A hero switch re-spawns the hero with the incoming model.
+        for e in &hero_roots {
+            commands.entity(e).despawn();
+        }
         let parts = part_assets(&state.play.model, &mut meshes, &mut materials, &mut images);
         let mut skinned = Vec::new();
         commands
