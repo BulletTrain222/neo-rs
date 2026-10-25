@@ -3,9 +3,11 @@
 //! values, the bar widths L = trunc(max x K) and F = trunc(current x K), the frame layout, the
 //! upgrade dividers, alpha(t), and the red and green tint pulses of the health frame (0x3B).
 //!
+//! The monster health bar (section 10): the arm with its 600-tick timer, the zero-health cut,
+//! the frame width from the maximum and the name width, the fill width.
+//!
 //! Not covered: the equipment panels and their timers G2 to G4, the D-pad hint, the loss
-//! effects, the petpet meter, the journal icon, the portrait swing, the countdown texts and the
-//! monster bar.
+//! effects, the petpet meter, the journal icon, the portrait swing and the countdown texts.
 
 /// Bar scale K (float32 0.6666667).
 pub const K: f32 = 0.666_666_7;
@@ -171,9 +173,86 @@ impl Hud {
     }
 }
 
+/// The monster bar's tuning words (SPEC-0023 Layout): frame divisor, maximum and minimum,
+/// name margin, and the two piece offsets.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MonsterWords {
+    pub divisor: f32,
+    pub max: i32,
+    pub min: i32,
+    pub margin: i32,
+    pub cap: i32,
+    pub plate: i32,
+}
+
+/// SPEC-0023 section 10: one bar for the monster armed most recently.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MonsterBar {
+    pub t: i32,
+    pub target: Option<u64>,
+    pub name: String,
+    /// The name's measured width N (10 when empty), the frame width B and the fill width.
+    pub name_width: i32,
+    pub frame: i32,
+    pub fill: i32,
+}
+
+impl MonsterBar {
+    /// Arm: target, name (first 31 characters), T = trunc(60 x 10.0) = 600, then the layout.
+    pub fn arm(&mut self, target: u64, name: &str, name_width: i32, hp: i32, max: i32, w: &MonsterWords) {
+        self.target = Some(target);
+        self.name = name.chars().take(31).collect();
+        self.name_width = if self.name.is_empty() { 10 } else { name_width };
+        self.t = 600;
+        self.layout(hp, max, w);
+    }
+
+    fn layout(&mut self, hp: i32, max: i32, w: &MonsterWords) {
+        let m = max.max(1) as f32;
+        let b = ((max as f32 / w.divisor + 1.0) as i32).clamp(w.min, w.max).max(self.name_width + w.margin);
+        self.frame = b;
+        self.fill = ((hp as f32 * (b as f32 / m) + 1.0) as i32).min(b);
+        if hp == 0 && self.t as f32 > 60.0 {
+            self.t = 60;
+        }
+    }
+
+    /// Each in-play tick while T is not 0: T - 1, then the layout with the zero-health cut.
+    pub fn tick(&mut self, hp: i32, max: i32, w: &MonsterWords) {
+        if self.t != 0 {
+            self.t -= 1;
+            self.layout(hp, max, w);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const MW: MonsterWords = MonsterWords { divisor: 1.5, max: 250, min: 64, margin: 24, cap: -5, plate: -5 };
+
+    #[test]
+    fn monster_bar_widths_and_timer() {
+        // Section 10.3 examples.
+        let mut b = MonsterBar::default();
+        b.arm(1, "", 0, 150, 150, &MW);
+        assert_eq!((b.t, b.frame, b.fill), (600, 101, 101));
+        b.arm(1, "", 0, 60, 60, &MW);
+        assert_eq!(b.frame, 64);
+        b.arm(1, "", 0, 600, 600, &MW);
+        assert_eq!(b.frame, 250);
+        b.arm(1, "Spyder", 60, 60, 60, &MW);
+        assert_eq!(b.frame, 84);
+        // A kill: the cut to 60 on the next tick, the 1-pixel fill, hidden after 60 more.
+        b.arm(2, "", 0, 16, 16, &MW);
+        b.tick(0, 16, &MW);
+        assert_eq!((b.t, b.fill), (60, 1));
+        for _ in 0..60 {
+            b.tick(0, 16, &MW);
+        }
+        assert_eq!(b.t, 0);
+    }
 
     const W: Words = Words { half: 20.0, red: [200, 0, 0, 128], green: [0, 200, 0, 128], cap: -9, inset: 6, base: (150, 90), step: (25, 15) };
 

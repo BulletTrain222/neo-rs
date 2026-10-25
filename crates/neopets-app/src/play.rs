@@ -292,9 +292,13 @@ pub struct Play {
     pub hero_mp_max: i32,
     /// The hero's 14 status timers (SPEC-0036).
     pub statuses: neopets_sim::status::Statuses,
-    /// The in-play HUD's bar rules (SPEC-0023) and their boot words.
+    /// The in-play HUD's bar rules (SPEC-0023) and their boot words; the monster bar, its words,
+    /// and the font and letter spacing of its name text (the value text of key 0x32).
     pub hud: neopets_sim::hud::Hud,
     hud_words: neopets_sim::hud::Words,
+    pub monster_bar: neopets_sim::hud::MonsterBar,
+    monster_words: neopets_sim::hud::MonsterWords,
+    name_font: Option<(neopets_data::frontend::Font, i32)>,
     pub panel_latch: neopets_sim::quick::PanelInput,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
     /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
@@ -343,6 +347,19 @@ impl Play {
         // and the hero divider table (bases, then steps).
         let w1 = |at: u32| words(at, 1).map(|v| v[0]);
         let dividers = words(neopets_data::item::HEALTH_TOR, 8)?;
+        let monster_words = neopets_sim::hud::MonsterWords {
+            divisor: f32::from_bits(w1(0x002D_D01C)?),
+            max: w1(0x002D_D020)? as i32,
+            min: w1(0x002D_D024)? as i32,
+            margin: w1(0x002D_D028)? as i32,
+            cap: w1(0x002D_D02C)? as i32,
+            plate: w1(0x002D_D030)? as i32,
+        };
+        let name_font = index.read(disc, neopets_data::frontend::RESOURCE).ok().and_then(|b| neopets_data::frontend::Frontend::parse(&b).ok()).and_then(|f| {
+            let node = f.nodes.get(f.key(0x32)?)?;
+            let v = f.values.get(&node.data)?;
+            Some((f.fonts.get(v.font as usize)?.clone(), v.spacing as i32))
+        });
         let hud_words = neopets_sim::hud::Words {
             half: f32::from_bits(w1(0x002D_CDDC)?),
             red: w1(0x002D_CDE8)?.to_le_bytes(),
@@ -447,6 +464,9 @@ impl Play {
             statuses: Default::default(),
             hud: Default::default(),
             hud_words,
+            monster_bar: Default::default(),
+            monster_words,
+            name_font,
             panel_latch: Default::default(),
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
@@ -931,6 +951,12 @@ impl Play {
             // SPEC-0038 Behavior 37: the common enemy's take-hit hook (doubling on entering
             // agro, the hit reaction, facing the attacker), then the death hook at 0 HP.
             if let Some(e) = c.enemy.as_mut() {
+                // SPEC-0023 10.1: the take-hit arms the monster bar before the damage.
+                if !e.dead {
+                    let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                    let max = c.row.map_or(1, |r| r.hit_points as i32);
+                    self.monster_bar.arm(c.id, &c.name, width, c.hp, max, &self.monster_words);
+                }
                 let (applied, toward) = e.take_hit(damage, hero_at, &mut self.rng);
                 if let Some(w) = c.walker.as_mut() {
                     w.steer_to(toward, 1.0);
@@ -1388,6 +1414,9 @@ impl Play {
                 poisoned: self.statuses.active(neopets_sim::status::POISON),
             };
             self.hud.tick(v, self.quick.open, &self.hud_words);
+            let target = self.monster_bar.target.and_then(|id| self.characters.iter().find(|c| c.id == id));
+            let (hp, max) = target.map_or((0, 1), |c| (c.hp, c.row.map_or(1, |r| r.hit_points as i32)));
+            self.monster_bar.tick(hp, max, &self.monster_words);
         }
         for c in &mut self.characters {
             // Base state 25 (conversation) freezes the routine.

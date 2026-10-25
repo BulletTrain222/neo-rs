@@ -585,6 +585,15 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             let _ = std::fs::write("private/hud-tree.txt", out.join("
 "));
         }
+        let fonts: Vec<(usize, u8, i32, i32)> = f.fonts.iter().map(|ft| (ft.glyphs.len(), ft.mode, ft.line_height(), ft.glyph(32).map_or(-1, |g| g.advance as i32))).collect();
+        let sample = "Flower Monster";
+        println!("Fonts (glyphs, mode, line height, space advance): {fonts:?}; {sample:?} in font 1 is {} px", f.fonts.get(1).map_or(-1, |ft| ft.measure(sample.as_bytes(), 0)));
+        if let Some(mem) = f.memory() {
+            if let Some((img, base)) = f.text_image(&mem, 0, "Neopets: The Darkest Faerie".as_bytes(), 0, [128; 4]) {
+                std::fs::write("private/textures/font0-sample.png", neopets_data::png::encode_rgba(img.width, img.height, &img.rgba)?).map_err(|e| e.to_string())?;
+                println!("  font 0 sample: {}x{}, baseline {base}", img.width, img.height);
+            }
+        }
         if let Some(mem) = f.memory() {
             for k in [0x01u32, 0x07, 0x06] {
                 let Some(n) = f.key(k) else { continue };

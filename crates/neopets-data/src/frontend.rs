@@ -2,7 +2,8 @@
 //! section table, key-to-node map C, screen records D, sprite records E, label bindings G, the
 //! UI node tree J, value-text records K and asset paths O) and its type-4 texture sheet, whose
 //! sub-textures the sheet assets name by their TEX0 words (SPEC-0023 HUD screen and art).
-//! Strings, pages, item targets, animation tracks and slots, and fonts are not read yet.
+//! The fonts of the tail (SPEC-0022 Fonts) are read, with a measure and a text renderer.
+//! Strings, pages, item targets, and animation tracks and slots are not read yet.
 
 use crate::resource::{self, Chunk};
 use crate::gsmem::GsMemory;
@@ -91,6 +92,63 @@ pub enum Asset {
     Other,
 }
 
+/// A glyph record (18 bytes): texel bounds in 1/16 texel, quad size, advance, x bearing and
+/// descent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Glyph {
+    pub left: i16,
+    pub top: i16,
+    pub right: i16,
+    pub bottom: i16,
+    pub width: i16,
+    pub height: i16,
+    pub advance: i16,
+    pub bearing: i8,
+    pub descent: i8,
+}
+
+/// A font descriptor (0x110 bytes) with its glyph records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Font {
+    /// The section O asset whose TEX0 names the glyph sheet.
+    pub asset: u32,
+    pub mode: u8,
+    pub first: u8,
+    pub last: u8,
+    pub map: Vec<u8>,
+    pub glyphs: Vec<Glyph>,
+}
+
+impl Font {
+    /// The lookup rule: mode 4 through the code map (composites beyond N are not drawn here);
+    /// modes 0 and 2 by code minus the first code; mode 1 folds a to z first.
+    pub fn glyph(&self, code: u8) -> Option<&Glyph> {
+        let n = self.glyphs.len();
+        match self.mode {
+            4 => {
+                let v = *self.map.get(code as usize)? as usize;
+                (v >= 1 && v - 1 < n).then(|| &self.glyphs[v - 1])
+            }
+            _ => {
+                let c = if self.mode == 1 { code.to_ascii_uppercase() } else { code };
+                let i = c.checked_sub(self.first)? as usize;
+                (i < n && (self.mode == 2 || c <= self.last)).then(|| &self.glyphs[i])
+            }
+        }
+    }
+
+    /// The line height (glyph record 1's height).
+    pub fn line_height(&self) -> i32 {
+        self.glyphs.get(1).map_or(0, |g| g.height as i32)
+    }
+
+    /// The width of one line at scale 1: each drawable glyph's advance plus the letter spacing
+    /// (SPEC-0022 Text layout, rules 2, 3 and 7).
+    pub fn measure(&self, text: &[u8], spacing: i32) -> i32 {
+        text.iter().filter_map(|&c| self.glyph(c)).map(|g| g.advance as i32 + spacing).sum()
+    }
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Frontend {
     pub nodes: Vec<Node>,
@@ -101,6 +159,7 @@ pub struct Frontend {
     pub sprites: HashMap<u32, Sprite>,
     pub values: HashMap<u32, ValueText>,
     pub assets: Vec<Asset>,
+    pub fonts: Vec<Font>,
     pub texture: Option<TextureChunk>,
 }
 
@@ -213,7 +272,34 @@ impl Frontend {
             })
             .collect::<Option<Vec<_>>>()
             .ok_or_else(bad)?;
-        Ok(Self { nodes, keys, screens, sprites, values, assets, texture: None })
+        // The tail: the font descriptors, each naming its glyph records by payload offset.
+        let tail = start(15)?;
+        let fonts = (0..count(0x44)?.min(8))
+            .map(|i| {
+                let d = tail + 0x110 * i;
+                let n = *p.get(d + 4)? as usize;
+                let at = u32_at(p, d + 0x10C)? as usize;
+                let glyphs = (0..n)
+                    .map(|g| {
+                        let r = at + 18 * g;
+                        Some(Glyph {
+                            left: i16_at(p, r)?,
+                            top: i16_at(p, r + 2)?,
+                            right: i16_at(p, r + 4)?,
+                            bottom: i16_at(p, r + 6)?,
+                            width: i16_at(p, r + 8)?,
+                            height: i16_at(p, r + 0x0A)?,
+                            advance: i16_at(p, r + 0x0C)?,
+                            bearing: *p.get(r + 0x0E)? as i8,
+                            descent: *p.get(r + 0x0F)? as i8,
+                        })
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                Some(Font { asset: u32_at(p, d)?, mode: *p.get(d + 5)?, first: *p.get(d + 6)?, last: *p.get(d + 7)?, map: p.get(d + 0x0C..d + 0x10C)?.to_vec(), glyphs })
+            })
+            .collect::<Option<Vec<_>>>()
+            .unwrap_or_default();
+        Ok(Self { nodes, keys, screens, sprites, values, assets, fonts, texture: None })
     }
 
     /// The node a section C key names.
@@ -265,6 +351,53 @@ impl Frontend {
             }
         }
         Some(Image { width, height, rgba })
+    }
+
+    /// A line of text in a font, drawn into an image: each glyph's quad (quad width and height,
+    /// from the top-left of its texel bounds) at the pen plus its x bearing, its bottom at the
+    /// baseline plus its descent, colour-modulated (128 = 1.0). Returns the image and the
+    /// baseline's y in it.
+    pub fn text_image(&self, mem: &GsMemory, font: usize, text: &[u8], spacing: i32, colour: [u8; 4]) -> Option<(Image, i32)> {
+        let f = self.fonts.get(font)?;
+        let (texture, palette) = self.sheet_entries(f.asset)?;
+        let tex = self.texture.as_ref()?;
+        let sheet = tex.decode(mem, texture, palette).ok()?;
+        let mut glyphs: Vec<(i32, &Glyph)> = Vec::new();
+        let mut pen = 0;
+        for &c in text {
+            if let Some(g) = f.glyph(c) {
+                glyphs.push((pen, g));
+                pen += g.advance as i32 + spacing;
+            }
+        }
+        let up = glyphs.iter().map(|(_, g)| g.height as i32 - g.descent as i32).max().unwrap_or(0).max(f.line_height());
+        let down = glyphs.iter().map(|(_, g)| g.descent as i32).max().unwrap_or(0).max(0);
+        let width = glyphs.iter().map(|(x, g)| x + g.bearing as i32 + g.width as i32).max().unwrap_or(1).max(1) as u32;
+        let height = (up + down).max(1) as u32;
+        let mut rgba = vec![0u8; (width * height * 4) as usize];
+        let m = |v: u8, c: u8| ((v as u32 * c as u32) / 128).min(255) as u8;
+        for (x, g) in glyphs {
+            let (tx, ty) = ((g.left / 16) as i32, (g.top / 16) as i32);
+            let left = x + g.bearing as i32;
+            let top = up + g.descent as i32 - g.height as i32;
+            for gy in 0..g.height as i32 {
+                for gx in 0..g.width as i32 {
+                    let (dx, dy) = (left + gx, top + gy);
+                    if dx < 0 || dy < 0 || dx >= width as i32 || dy >= height as i32 {
+                        continue;
+                    }
+                    let (sx, sy) = ((tx + gx).clamp(0, sheet.width as i32 - 1), (ty + gy).clamp(0, sheet.height as i32 - 1));
+                    let si = ((sy as u32 * sheet.width + sx as u32) * 4) as usize;
+                    let di = ((dy as u32 * width + dx as u32) * 4) as usize;
+                    let px = &sheet.rgba[si..si + 4];
+                    if px[3] == 0 {
+                        continue;
+                    }
+                    rgba[di..di + 4].copy_from_slice(&[m(px[0], colour[0]), m(px[1], colour[1]), m(px[2], colour[2]), m(px[3], colour[3])]);
+                }
+            }
+        }
+        Some((Image { width, height, rgba }, up))
     }
 
     /// The texture sheet's emulated GS memory (build once, pass to `sprite_image`).
