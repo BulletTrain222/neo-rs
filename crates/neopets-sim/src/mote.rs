@@ -138,6 +138,11 @@ pub fn one_plus_percent(v: f32) -> f32 {
     add(1.0, mul(v, 0.01))
 }
 
+/// d x f (the petpet intake factor and other single-precision scales).
+pub fn scaled(d: f32, f: f32) -> f32 {
+    mul(d, f)
+}
+
 /// The shield block b of a blocked hit: the shield's stat A, times 1.25 with a shield Mote.
 pub fn shield_block(stat_a: f32, mote: bool) -> f32 {
     if mote { mul(1.25, stat_a) } else { stat_a }

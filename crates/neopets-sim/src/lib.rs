@@ -26,6 +26,7 @@ pub mod projectile;
 pub mod quick;
 pub mod npc;
 pub mod options;
+pub mod petpet;
 pub mod rng;
 pub mod save;
 pub mod scene;

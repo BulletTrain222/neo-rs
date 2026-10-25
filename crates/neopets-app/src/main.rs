@@ -1817,6 +1817,13 @@ fn play_trace(
     if let Some([x, z, y]) = start {
         play.place_at(x, z, y);
     }
+    // NEOPETS_TRACE_PET="type,T": a diagnostic petpet activated by type at the start (F = T).
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_PET") {
+        let mut it = v.split(',').filter_map(|t| t.trim().parse::<i32>().ok());
+        if let (Some(ty), Some(t)) = (it.next(), it.next()) {
+            play.activate_pet(ty, t, t);
+        }
+    }
     let mut streamer = match disc.reopen() {
         Ok(second) => Streamer::start(second, index.clone(), play.boot.clone()),
         Err(e) => {
@@ -1873,6 +1880,7 @@ fn play_trace(
     let mut last_hurt = String::new();
     let mut last_mote = String::new();
     let mut last_status = String::new();
+    let mut last_pet = String::new();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
     // releases a power attack).
     let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(80);
@@ -2042,6 +2050,10 @@ fn play_trace(
         if !play.last_status.is_empty() && play.last_status != last_status {
             last_status = play.last_status.clone();
             println!("      {last_status}");
+        }
+        if !play.last_pet.is_empty() && play.last_pet != last_pet {
+            last_pet = play.last_pet.clone();
+            println!("      {last_pet}");
         }
         if !play.last_door.is_empty() && play.last_door != last_door {
             last_door = play.last_door.clone();

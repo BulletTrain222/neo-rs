@@ -22,6 +22,8 @@ use std::collections::HashMap;
 const UP: [f32; 3] = [0.0, 1.0, 0.0];
 /// The slot number used here for a world's embedded region.
 const EMBEDDED_SLOT: u8 = 255;
+/// The region slot the live petpet's package loads into (SPEC-0047 Activation).
+const PET_SLOT: u8 = 254;
 /// SPEC-0006 Default start: pack 691 in T and 909 in E, the exterior current.
 const START_EXTERIOR: u32 = 909;
 const START_TRANSITION: u32 = 691;
@@ -409,6 +411,15 @@ pub struct Play {
     pub last_mote: String,
     /// The last status applied to an enemy, for the status line.
     pub last_status: String,
+    /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
+    /// pending save values, the bonus words and the low-time mark.
+    pub petpet: Option<neopets_sim::petpet::Live>,
+    pet_char: Option<u64>,
+    pet_spawn: Option<[f32; 3]>,
+    pub pet_pending: neopets_sim::petpet::Pending,
+    pet_bonus: neopets_sim::petpet::Bonus,
+    pet_low: i32,
+    pub last_pet: String,
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     mote_objects: Vec<neopets_sim::charm::Object>,
     charm_words: neopets_sim::charm::Words,
@@ -604,6 +615,9 @@ impl Play {
                 wind_height: float(WIND_HEIGHT)?,
             }
         };
+        let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
+        let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
+        let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
         let magic = neopets_sim::mote::Magic::new(words(neopets_sim::mote::MAGIC_AT, neopets_sim::mote::MAGIC_WORDS)?.into_iter().map(|w| w as i32).collect());
         let design = index.read(disc, neopets_data::design::RESOURCE).ok().and_then(|b| neopets_data::design::DesignTables::parse(&b).ok()).unwrap_or_default();
         let hero_colour = design.hero_colour(0).unwrap_or([128; 3]);
@@ -738,6 +752,13 @@ impl Play {
             mote_objects: Vec::new(),
             charm_words,
             last_status: String::new(),
+            petpet: None,
+            pet_char: None,
+            pet_spawn: None,
+            pet_pending: Default::default(),
+            pet_bonus,
+            pet_low,
+            last_pet: String::new(),
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -1064,6 +1085,12 @@ impl Play {
         }
         let actions = level::on_activate(self.world.pack, &mut self.state);
         self.apply(&actions);
+        // SPEC-0047 Scene start restore.
+        match self.pet_pending.scene_start() {
+            neopets_sim::petpet::Restore::Spawn { type_id, t, f } => self.activate_pet(type_id, t, f),
+            neopets_sim::petpet::Restore::Deactivate => self.deactivate_pet(),
+            neopets_sim::petpet::Restore::Nothing => {}
+        }
         // The pool's slots are reset when a world starts (here: when a world is made current).
         self.shots.reset();
         // SPEC-0025: the region reset clears the remembered glow indices; a named map area is
@@ -1680,6 +1707,8 @@ impl Play {
         };
         let mut landed = 0;
         let hero_at = self.loco.position();
+        // Factor E: the live petpet of kind 0 or 7 (SPEC-0047 Passive bonuses).
+        let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let mut hits = Vec::new();
         for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
             if self.hit_list.contains(&c.id) {
@@ -1717,7 +1746,7 @@ impl Play {
             // y = (x - defence) x G, the attacker's status scale (curse 0.75, strength 1.5); E is
             // 1 (no petpet).
             let t = c.row.map_or(0, |r| r.target_type as i32);
-            let (damage, absorbed) = neopets_sim::mote::melee(power, stat_a as f32, mote, t, d_factor, 1.0, c.row.map_or(0.0, |r| r.defence), g);
+            let (damage, absorbed) = neopets_sim::mote::melee(power, stat_a as f32, mote, t, d_factor, e_factor, c.row.map_or(0.0, |r| r.defence), g);
             if damage > 0 || absorbed {
                 landed += 1;
             }
@@ -1893,7 +1922,8 @@ impl Play {
             let at = [hero[0] + f[0] * w, hero[1], hero[2] + f[2] * w];
             let a = self.weapon.and_then(|i| self.items.get(i)).filter(|i| i.is_weapon()).map_or(0.0, |i| i.stats[0] as f32);
             let b = neopets_sim::mote::one_plus_percent(self.items.get(id).map_or(0.0, |i| i.stats[5] as f32));
-            let scale = neopets_sim::charm::scale(a, 1.0, b, self.statuses.damage_scale(), 1.0);
+            let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
+            let scale = neopets_sim::charm::scale(a, 1.0, b, self.statuses.damage_scale(), e);
             if let Some(o) = neopets_sim::charm::spawn_tor(id, &self.charm_words, at, hero, f, scale) {
                 self.last_mote = format!("Mote {id} power-attack object (scale {scale}, {} ticks) on tick {}", o.life, self.ticks);
                 self.mote_objects.push(o);
@@ -1904,7 +1934,7 @@ impl Play {
 
     /// SPEC-0036 Enemy attack damage to a hero (shared enemy class): the shield block (with the
     /// shield Mote's charge and cost), the armour Mote and the body item, for an attack of
-    /// damage d0, element `element` and the attacker's status scale G. The petpet factor is 1.
+    /// damage d0, element `element` and the attacker's status scale G, with the petpet factor.
     fn enemy_damage(&mut self, d0: f32, blocked: bool, element: i32, g: f32) -> f32 {
         use neopets_sim::mote;
         let stat = |p: &Self, id: u16, k: usize| p.items.get(id).map_or(0.0, |i| i.stats[k] as f32);
@@ -1937,6 +1967,8 @@ impl Play {
             }
             d = mote::armour_body(d, stat(self, body, 0));
         }
+        // The petpet factor 0.9 for kinds 1 and 7 (SPEC-0047 Passive bonuses).
+        d = mote::scaled(d, self.pet_bonus.intake_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t)));
         mote::taken(d, g) as f32
     }
 
@@ -2002,6 +2034,10 @@ impl Play {
         }
         self.region_items(pack, &items);
         self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
+        if slot == PET_SLOT {
+            self.pet_loaded(pack, loaded);
+            return;
+        }
         for (pl, model, anim, row, tuning) in loaded {
             self.next_character += 1;
             // Characters have motion records and settle on the ground under their placement
@@ -2048,6 +2084,134 @@ impl Play {
                 anim,
                 model,
             });
+        }
+    }
+
+    /// The petpet package's character record ordinal 0 becomes the live petpet's character at
+    /// the spawn point, playing animation 6 (SPEC-0047 Spawn).
+    #[allow(clippy::type_complexity)]
+    fn pet_loaded(&mut self, pack: u32, loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>, Option<neopets_data::monster::Tuning>)>) {
+        let (Some(_), Some(at), Some((pl, model, mut anim, row, _))) = (self.petpet.as_ref(), self.pet_spawn.take(), loaded.into_iter().next()) else { return };
+        self.characters.retain(|c| Some(c.id) != self.pet_char);
+        self.next_character += 1;
+        let position = match self.world.ground_at(at[0], at[2], at[1] + 2.5) {
+            Some(h) => [at[0], h, at[2]],
+            None => at,
+        };
+        let facing = self.loco.facing;
+        let (radius, weight) = row.map_or((0.5, 1.0), |r| (r.radius, r.weight.max(0.1)));
+        anim.play(6);
+        self.pet_char = Some(self.next_character);
+        self.characters.push(Character {
+            id: self.next_character,
+            pack,
+            slot: PET_SLOT,
+            entity: None,
+            name: pl.name,
+            position,
+            facing,
+            townsfolk: None,
+            walker: Some(neopets_sim::walker::Walker::new(position, facing, radius, weight, self.next_character as u32)),
+            whinny: None,
+            enemy: None,
+            weapons: [(0.0, 0.0); 5],
+            drop: None,
+            colour: pl.colour,
+            root_step: [0.0; 3],
+            script_walk: None,
+            held: false,
+            inactive: false,
+            hp: row.map_or(1, |r| r.hit_points as i32),
+            dying: None,
+            sound_action: None,
+            emotes: Default::default(),
+            sound_blocks: anim.sound_blocks(),
+            row,
+            anim,
+            model,
+        });
+        self.last_pet = format!("petpet {} (kind {}) spawned at {position:?} on tick {}", self.petpet.as_ref().map_or(-1, |p| p.type_id), self.petpet.as_ref().map_or(0, |p| p.kind), self.ticks);
+    }
+
+    /// SPEC-0047 Activation by type (fresh): the current petpet is deactivated, then the kind's
+    /// package (resource 534 + kind) loads and the petpet spawns 7 units ahead of the hero with
+    /// T and F. A type with no kind spawns nothing.
+    pub fn activate_pet(&mut self, type_id: i32, t: i32, f: i32) {
+        let Some(live) = neopets_sim::petpet::Live::new(type_id, t, f) else { return };
+        self.deactivate_pet();
+        let region = neopets_sim::petpet::package(live.kind);
+        self.petpet = Some(live);
+        self.pet_spawn = Some(neopets_sim::petpet::spawn_point(self.loco.position(), self.loco.facing));
+        let pack = self.world.pack;
+        self.slot_regions.insert((pack, PET_SLOT), region);
+        self.region_wanted.push((pack, PET_SLOT, region));
+    }
+
+    /// Deactivate: the petpet and its character are removed.
+    pub fn deactivate_pet(&mut self) {
+        self.petpet = None;
+        if let Some(id) = self.pet_char.take() {
+            self.characters.retain(|c| c.id != id);
+        }
+        self.slot_regions.retain(|(_, s), _| *s != PET_SLOT);
+    }
+
+    /// The live petpet's present kind (T at least 1).
+    pub fn pet_kind(&self) -> Option<u8> {
+        self.petpet.as_ref().and_then(|p| p.present())
+    }
+
+    /// One petpet tick (SPEC-0047 class 34): the controller, its animation request and walk; T
+    /// counts down only in the in-play state (no dialogue box). The petpet follows the hero
+    /// from world to world: it is moved to the current world and, when it is more than 60 units
+    /// away (a new world), placed 7 units ahead of the hero (unverified; R-0035).
+    fn pet_step(&mut self) {
+        let Some(id) = self.pet_char else { return };
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let idle = matches!(self.loco.state, hero_states::STANCE);
+        let counting = !self.dialogue_open;
+        let pack = self.world.pack;
+        let Some(c) = self.characters.iter_mut().find(|c| c.id == id) else { return };
+        let Some(live) = self.petpet.as_mut() else { return };
+        if c.pack != pack || neopets_sim::petpet::Live::far(c.position, hero) {
+            c.pack = pack;
+            let at = neopets_sim::petpet::spawn_point(hero, hf);
+            let y = self.world.ground_at(at[0], at[2], at[1] + 2.5).unwrap_or(hero[1]);
+            c.position = [at[0], y, at[2]];
+            c.walker = Some(neopets_sim::walker::Walker::new(c.position, hf, c.row.map_or(0.5, |r| r.radius), c.row.map_or(1.0, |r| r.weight.max(0.1)), id as u32));
+        }
+        let clip = c.anim.clip_state();
+        let v = neopets_sim::petpet::View {
+            position: c.position,
+            facing: c.facing,
+            hero,
+            hero_facing: hf,
+            hero_right: [hf[2], 0.0, -hf[0]],
+            hero_idle: idle,
+            counting,
+            contact: false,
+            clip_done: clip.progress >= 0.99,
+        };
+        let act = live.tick(&v, self.pet_low, &mut self.rng);
+        if let Some(a) = act.anim {
+            if clip.action != a {
+                c.anim.play(a);
+            }
+        }
+        if let Some(wk) = c.walker.as_mut() {
+            if let Some((t, w)) = act.toward {
+                wk.steer_to(t, w);
+            }
+            let world = &self.world;
+            let ground = &world.ground;
+            wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+            c.position = wk.position();
+            c.facing = wk.facing;
+        }
+        if act.leave {
+            self.last_pet = format!("petpet left on tick {}", self.ticks);
+            self.deactivate_pet();
         }
     }
 
@@ -2544,7 +2708,8 @@ impl Play {
         self.characters.retain(|c| c.dying != Some(0) && !c.enemy.as_ref().is_some_and(|e| e.gone));
         // Characters and slot choices of worlds that are no longer resident are released.
         let resident: Vec<u32> = std::iter::once(self.world.pack).chain(self.other.as_ref().map(|o| o.pack)).collect();
-        self.characters.retain(|c| resident.contains(&c.pack));
+        let pet = self.pet_char;
+        self.characters.retain(|c| resident.contains(&c.pack) || Some(c.id) == pet);
         self.pools.retain(|pack, _| resident.contains(pack));
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
         let hero = self.loco.position();
@@ -2570,6 +2735,7 @@ impl Play {
             c.position = wk.position();
             c.facing = wk.facing;
         }
+        self.pet_step();
         self.enemies_step();
         self.items_step();
         // SPEC-0023: the in-play HUD steps only while the in-play state runs, so not while a
@@ -2956,11 +3122,21 @@ impl Play {
         self.hero_hp = (self.hero_hp + t.hp).min(self.hero_max);
         self.hero_mp = (self.hero_mp + t.mp).min(self.hero_mp_max);
         let poisoned = self.statuses.active(st::POISON);
+        // SPEC-0047 Passive bonuses: the petpet point is added to the item trickle of the same
+        // tick before the cap, with no alive or poison gate.
+        let (kind, t) = (self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
+        let (mut hp, mut mp) = (self.pet_bonus.hp_point(kind, t), self.pet_bonus.mp_point(kind, t));
         if !poisoned {
-            self.hero_mp += neopets_sim::status::trickle(self.hero_mp, self.hero_mp_max, self.ticks, false);
+            mp += neopets_sim::status::trickle(self.hero_mp, self.hero_mp_max, self.ticks, false);
             if self.hero_hp > 0 && self.loco.state != hero_states::DEAD {
-                self.hero_hp += neopets_sim::status::trickle(self.hero_hp, self.hero_max, self.ticks, true);
+                hp += neopets_sim::status::trickle(self.hero_hp, self.hero_max, self.ticks, true);
             }
+        }
+        if hp > 0 {
+            self.hero_hp = (self.hero_hp + hp).min(self.hero_max);
+        }
+        if mp > 0 {
+            self.hero_mp = (self.hero_mp + mp).min(self.hero_mp_max);
         }
     }
 
@@ -3717,9 +3893,11 @@ impl Play {
         s.set_i32(at::LUCK, self.luck);
         s.set_maximum_words(0, self.hero_max, self.hero_mp_max);
         s.set_maximum_words(1, self.growth.start[1], self.growth.start[3]);
-        s.set_i32(at::PET_TYPE, -1);
-        s.set_i32(at::PET_TIME, 0);
-        s.set_i32(at::PET_FULL, 0);
+        // SPEC-0047 Save: the live petpet's type, T and F (-1 with no pet or T below 1).
+        let (ty, t, f) = neopets_sim::petpet::save_fields(self.petpet.as_ref().map(|p| (p.type_id, p.t, p.f)));
+        s.set_i32(at::PET_TYPE, ty);
+        s.set_i32(at::PET_TIME, t);
+        s.set_i32(at::PET_FULL, f);
         // Container A from the party's counts by text category, in id order; the equipped
         // weapon and shield are Tor's entries (entry 0) of the weapon and shield families.
         let mut lists: HashMap<&str, Vec<(u16, u32)>> = HashMap::new();
@@ -3845,6 +4023,8 @@ impl Play {
             self.statuses.apply(i as i32, sv::restore_seconds(s.status(0, i)));
         }
         self.luck = sv::restore_luck(s.i32(at::LUCK));
+        // SPEC-0047: the save load fills the pending petpet values for the next scene start.
+        self.pet_pending = neopets_sim::petpet::Pending::load(s.i32(at::PET_TYPE), s.i32(at::PET_TIME), s.i32(at::PET_FULL));
         let m = sv::maxima(s, &self.growth);
         self.hero_max = m[0][0];
         self.hero_mp_max = m[0][1];
@@ -4060,6 +4240,9 @@ impl Play {
         if let Some(pool) = self.pools.get(&self.world.pack).filter(|p| p.live() > 0) {
             let ids: Vec<u16> = pool.slots.iter().flatten().map(|i| i.id).collect();
             names.push(format!("world items {ids:?}"));
+        }
+        if let (Some(p), Some(c)) = (self.petpet.as_ref(), self.pet_char.and_then(|id| self.characters.iter().find(|c| c.id == id))) {
+            names.push(format!("petpet [kind {} (present {:?}) state {} T {} anim {} at {:.1},{:.1}]", p.kind, self.pet_kind(), p.state, p.t, c.anim.action(), c.position[0], c.position[2]));
         }
         let roundup: Vec<u16> = (107..=110).filter(|&f| self.state.flag(f)).collect();
         if !roundup.is_empty() {
