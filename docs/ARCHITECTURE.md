@@ -7,7 +7,7 @@ The runtime never executes the original program. This workspace has no oracle or
 
 ## Data and portability
 
-The ISO reader supports ordinary 2048-byte ISO9660 sectors, bounded recursive directory indexing, and range reads. It rejects multi-extent and interleaved files. A single read is capped at 64 MiB; large GAMEFILE.DAT blocks must be streamed by range. Current disc checks verify SYSTEM.CNF serial/version, required files, and ELF header, not a cryptographic revision fingerprint. Add the boot-program fingerprint check from the archive spec (R-0001) before using any fixed locations against arbitrary images.
+The ISO reader supports ordinary 2048-byte ISO9660 sectors, bounded recursive directory indexing, and range reads. It rejects multi-extent and interleaved files. A single read is capped at 64 MiB; large GAMEFILE.DAT blocks must be streamed by range. Disc checks verify SYSTEM.CNF serial/version, required files, and the ELF header; before any fixed location is used, `ArchiveIndex::from_disc` also requires the boot program's SHA-256 to match SPEC-0001. Fixed locations (the index table address and entry count) are trusted only behind that check.
 
 Build GAMEFILE.DAT decoding from approved specs in specs/, then texture/model/animation/world loading. Read tuning tables from the user's disc at runtime. Do not paste extracted tables into Rust.
 

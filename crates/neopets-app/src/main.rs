@@ -1,3 +1,4 @@
+mod archive_view;
 mod controls;
 mod orbit;
 mod pattern;
@@ -8,6 +9,7 @@ use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseSc
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use controls::{Browser, axis, movement};
+use neopets_data::archive::ArchiveIndex;
 use neopets_data::{Disc, iso_path};
 use neopets_sim::{FixedStep, PlayerInput, Simulation};
 use orbit::Orbit;
@@ -21,6 +23,20 @@ const PIXELS_PER_LINE: f32 = 40.0;
 
 #[derive(Resource)]
 struct DiscStatus(String);
+
+/// The opened disc and its archive index, present only when the ISO validated.
+#[derive(Resource)]
+struct Archive {
+    disc: Disc,
+    index: ArchiveIndex,
+}
+
+/// Summary text for the last resource described, so the disc is read once per selection.
+#[derive(Resource, Default)]
+struct BrowserView {
+    shown: Option<u32>,
+    text: String,
+}
 
 /// Host side of the input -> sim -> render loop. All game logic stays in neopets-sim.
 #[derive(Resource)]
@@ -78,14 +94,17 @@ fn main() {
     let result = iso_path(&root, explicit).and_then(|path| {
         let mut disc = Disc::open(&path)?;
         let name = disc.verify_neopets()?;
-        Ok(format!(
-            "{name}\n{} disc files indexed. Opened read-only.",
-            disc.files().len()
-        ))
+        let index = ArchiveIndex::from_disc(&mut disc)?;
+        let status = format!(
+            "{name}\n{} disc files indexed. Opened read-only. Boot fingerprint matches; {} archive resources.",
+            disc.files().len(),
+            index.len()
+        );
+        Ok((status, Archive { disc, index }))
     });
-    let status = match result {
-        Ok(s) => s,
-        Err(e) => format!("ISO not ready\n{e}"),
+    let (status, archive) = match result {
+        Ok((s, archive)) => (s, Some(archive)),
+        Err(e) => (format!("ISO not ready\n{e}"), None),
     };
     let driver = SimDriver {
         sim: Simulation::default(),
@@ -94,10 +113,14 @@ fn main() {
         last_ticks: 0,
     };
     let mut app = App::new();
+    if let Some(archive) = archive {
+        app.insert_resource(archive);
+    }
     app.insert_resource(DiscStatus(status))
         .insert_resource(HudHidden(hide_hud))
         .insert_resource(driver)
         .init_resource::<Browser>()
+        .init_resource::<BrowserView>()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
@@ -421,17 +444,33 @@ fn show_sim(driver: Res<SimDriver>, mut texts: Query<&mut Text, With<SimText>>) 
     }
 }
 
-fn show_browser(browser: Res<Browser>, mut texts: Query<&mut Text, With<BrowserText>>) {
+fn show_browser(
+    mut browser: ResMut<Browser>,
+    archive: Option<ResMut<Archive>>,
+    mut view: ResMut<BrowserView>,
+    mut texts: Query<&mut Text, With<BrowserText>>,
+) {
+    let Some(mut archive) = archive else {
+        for mut text in &mut texts {
+            text.0 = "RESOURCE BROWSER\nNo validated ISO, so the archive is unavailable.".into();
+        }
+        return;
+    };
+    let Archive { disc, index } = &mut *archive;
+    browser.clamp(index.len() as u32);
+    if view.shown != Some(browser.selected) {
+        view.shown = Some(browser.selected);
+        view.text = archive_view::describe(disc, index, browser.selected)
+            .unwrap_or_else(|e| format!("Resource #{}: {e}", browser.selected));
+    }
     let entry = match &browser.typing {
         Some(t) => format!("Go to: {t}_   (Enter to jump, Esc to cancel)"),
         None => "Type a number and press Enter | [ ] step 1 | PgUp/PgDn step 100".into(),
     };
     for mut text in &mut texts {
         text.0 = format!(
-            "RESOURCE BROWSER - shell only\n\
-             Resource #{}: not decoded yet. The archive index awaits specs R-0001 and R-0002, \
-             so it is not known whether this number exists.\n{entry}",
-            browser.selected
+            "RESOURCE BROWSER - archive index (SPEC-0001/0002); contents not decoded yet\n{}\n{entry}",
+            view.text
         );
     }
 }

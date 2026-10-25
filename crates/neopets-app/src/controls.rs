@@ -62,6 +62,11 @@ impl Browser {
     pub fn step(&mut self, delta: i64) {
         self.selected = (self.selected as i64 + delta).clamp(0, u32::MAX as i64) as u32;
     }
+
+    /// Keep the selection inside an archive of `count` resources.
+    pub fn clamp(&mut self, count: u32) {
+        self.selected = self.selected.min(count.saturating_sub(1));
+    }
 }
 
 #[cfg(test)]
@@ -122,5 +127,9 @@ mod tests {
         b.selected = u32::MAX - 1;
         b.step(100);
         assert_eq!(b.selected, u32::MAX);
+        b.clamp(1434);
+        assert_eq!(b.selected, 1433);
+        b.clamp(0);
+        assert_eq!(b.selected, 0);
     }
 }

@@ -1,4 +1,4 @@
-# Project status — 2026-10-18
+# Project status — 2026-10-25
 
 ## Implemented
 
@@ -8,9 +8,10 @@
 - Engine-independent simulation boundary. Only a scaffold tick counter; no original gameplay.
 - Bevy 0.19.1 status window with 3D/UI features enabled for later viewers.
 - **Range-read hardening (groundwork, no spec):** `Disc::stream_range` feeds any file range to a callback in bounded chunks with one reused buffer; whole-tree caps on indexing (65,536 files, 64 MiB of directory data); I/O errors after indexing (e.g. image truncated) report offset and length. `read`/`read_range` share one bounds check.
-- **Fingerprint plumbing (groundwork for R-0001):** `neopets_data::fingerprint` streams SHA-256 over any disc file (`sha2` 0.10 crate), compares against an expected digest, and parses 64-digit hex. The inspector takes `--sha256 <disc file>` (repeatable) and prints digests without comparing them. Which file to hash and the expected digest are deliberately not chosen: they must come from the R-0001 spec. SHA-256 itself is an assumption; if the spec names another hash, swap it there.
+- **Fingerprint plumbing:** `neopets_data::fingerprint` streams SHA-256 over any disc file (`sha2` 0.10 crate), compares against an expected digest, and parses 64-digit hex. The inspector takes `--sha256 <disc file>` (repeatable). SPEC-0001's boot-program digest is now enforced by the archive index.
 - **Fixed-timestep loop (groundwork, no spec):** `neopets_sim::FixedStep` converts host-supplied elapsed nanoseconds into whole ticks with an exact integer remainder (no drift at 60 Hz), caps catch-up per call and counts dropped ticks, and gives an interpolation alpha. `Simulation::run_for` runs the due ticks with one input. The app samples WASD/arrows/left stick into `PlayerInput` (movement only, buttons unmapped), steps the sim, then draws a diagnostic HUD. The 60 Hz rate and 8-tick catch-up cap are placeholders pending R-0007.
-- **Resource-browser shell (groundwork, no spec):** the app has a resource-number picker (type digits + Enter, `[`/`]` ±1, PgUp/PgDn ±100). Every number shows "not decoded yet"; nothing is read from GAMEFILE.DAT. Labeled on screen as a shell.
+- **M2 archive access (SPEC-0001, SPEC-0002):** `neopets_data::archive::ArchiveIndex::from_disc` requires the boot program's SHA-256 to match SPEC-0001, maps the index table's virtual address to a file offset through the ELF program headers (`elf.rs`, public ELF format), reads the 1434 entries, and checks invariants 1–4 (starts at 0, contiguous, covers GAMEFILE.DAT exactly, 76 empty). Resources are read by number with range checks; empty placeholders read as no bytes. `neopets_data::resource` classifies families by first bytes and walks IDM chunk chains (stop on type 0, buffer end, or an implausible header; one-chunk limit for texture packs and 544–575). The inspector gains `--resource <n>`, `--resources` (survey of every resource), and `--coverage` (writes private/asset-coverage.txt; every decoded count is 0 until decoders land).
+- **Resource browser:** picks a resource number (type digits + Enter, `[`/`]` ±1, PgUp/PgDn ±100), clamped to the index, and shows its sectors, size, family, and chunk-type chain from the real disc. Contents are not decoded; labeled on screen.
 - **Viewer scaffold (groundwork for M3/M4/M6, no spec):** the app now renders through a 3D orbit camera (drag any mouse button to orbit, scroll to zoom, pitch clamped short of the poles) over a diagnostic grid with X/Y/Z axes, labeled on screen as not game content. Tab hides the HUD. This is viewer tooling, not the original game's camera. Input mapping and the browser picker moved into `neopets-app/src/controls.rs`, orbit math into `orbit.rs`, both unit-tested; Check.cmd now runs `cargo test -p neopets-app` instead of only `check`.
 - **GS pixel formats (groundwork for M3, public hardware documentation only):** `neopets_data::gs::decode` turns linear PSMCT32, PSMCT16, PSMT8, and PSMT4 pixels (with 32- or 16-bit palettes, CSM1 or linear) into straight RGBA8, with GS alpha scaling (0x80 = opaque) and TEXA handling for 16-bit alpha. Size-checked (1..=1024 per side), no panics on short input. Not covered: PSMCT24, GS memory swizzled layouts, mipmaps. Whether the game uses any of these, and how, still needs R-0003.
 - **Viewer test pattern:** a 64×64 4-bit indexed pattern generated in code is decoded through `gs` and shown on a quad, labeled synthetic. `--screenshot <png>` captures the window after 4 s of real time (render pipelines compile asynchronously, so earlier frames show no meshes), and `--hide-hud` starts with the HUD hidden. The HUD uses ASCII separators because Bevy's built-in font lacks `•` and `—`.
@@ -23,21 +24,22 @@
 
 ## Not implemented / not verified
 
-- No archive index, texture, model, animation, area, gameplay, audio, save, or mod UI.
-- Disc check is serial/version only, not a build fingerprint.
-- The status window has not been manually reviewed.
+- No texture, model, animation, area, gameplay, audio, save, or mod UI decoding yet (specs for all of these are now approved).
+- Nested chunk walking (type-8 and type-32 children) is not surveyed yet; only top-level chains are.
+- The optional GAMEFILE.DAT and SYSTEM.CNF fingerprints in SPEC-0001 are not checked (the boot-program digest is the required one).
+- Live mouse orbit, Tab, the keyboard picker, and gamepad input have not been tried in a running window.
 
 ## Progress tracking
 
-Progress.cmd and docs/PROGRESS.md added: code coverage (from research-side `specs/PROGRESS.md`, request R-0000), asset coverage (arrives with M2 `--coverage`), and pipeline/milestones. Currently 2 of 12 milestones done; no code or asset coverage measurable yet.
+Progress.cmd and docs/PROGRESS.md: code coverage (research-side specs/PROGRESS.md, first delivered with this batch), asset coverage (`neopets-data --coverage` now writes private/asset-coverage.txt: 1358 non-empty resources in 8 families, 0 decoded), and pipeline/milestones (M0–M2 done).
 
 ## Specs
 
-None approved yet. Open requests: R-0001 to R-0007 in specs/REQUESTS.md. M2 (archive access) is blocked on R-0001 and R-0002.
+60 specs approved (SPEC-0001 to SPEC-0060), copied in by the user on 2026-10-25 and passing the clean-room audit. SPEC-0001 and SPEC-0002 are Implemented; the rest are Approved. R-0001 to R-0007 are answered.
 
 ## Next task
 
-START_HERE.md step 4 groundwork is done. Next: have the user review the window (Run.cmd) and make the first commit. Then wait for SPEC for R-0001/R-0002 and implement M2. Other unblocked options until then: a free-fly camera mode for the M6 area viewer, or a viewer hook that shows the selected resource's raw byte length once M2 lands.
+M3: implement SPEC-0003 (textures) and show a real texture from the ISO in the viewer, starting with a front-end texture pack (one 512×512 8-bit indexed picture each). Then M4 (SPEC-0004 models), M5 (SPEC-0005), M6 (SPEC-0006 areas). Replace the 60 Hz placeholder with SPEC-0007 timing when M7 starts.
 
 ## Check log
 
@@ -49,3 +51,4 @@ START_HERE.md step 4 groundwork is done. Next: have the user review the window (
 - 2026-10-18 (same session, loop + browser shell): Check.cmd passed: 8 neopets-data tests, 5 new neopets-sim tests (60 Hz exact over uneven frames, carry/alpha, catch-up cap and dropped count incl. u64::MAX elapsed, zero rate rejected, run_for tick count), neopets-app check, both audits. `neopets-app --smoke-test` exited 0 after five frames (sim at tick 18, catch-up path exercised). Not done: manual visual review of the window and HUD, keyboard/gamepad input in a live window, and app-side unit tests (neopets-app is not a default member, so Check.cmd only compile-checks it).
 - 2026-10-18 (same session, viewer scaffold + app tests): Check.cmd passed: 8 data + 5 sim + 7 new app tests (key axes, strongest stick wins and clamps, browser typing/commit/cancel/overflow/non-digit, saturating steps, orbit distance invariant, pitch limit with finite rotation, yaw wrap and zoom clamp), both audits. `--smoke-test` exited 0 with the 3D scene (tick 20 after five frames). The first `cargo test -p neopets-app` builds Bevy at the test profile's opt-level 1: about 8.5 minutes cold, cached afterwards. Not verified: how the window looks, mouse orbit and Tab in a live window, and gamepad input.
 - 2026-10-18 (same session, GS formats + visual check): Check.cmd passed: 5 new gs unit tests + 8 data integration + 5 sim + 8 app (new: pattern decode with transparent entry 0), both audits; smoke test passed. Visual check by screenshot (private/screenshots/, not committed, Vulkan and DX12 on an RX 6700S): the first captures at frame 30 showed only the clear color, because pipelines had not finished compiling; at 4 s the grid, axes, and test pattern render correctly, palette entry 0 is transparent, and the HUD is legible after the font and backing-panel fixes. Still not verified: live mouse orbit, Tab, keyboard picker, and gamepad input.
+- 2026-10-25 (M2): User copied 60 specs and PROGRESS.md into specs/. The spec audit passed before any spec was read; an extra count of risky patterns (decompiler-style names, control-flow code, register names) found none, and the few EE-range addresses in SPEC-0001/0002 are data-table locations, which CLEAN_ROOM.md allows. Check.cmd passed: 15 data unit tests (new: ELF address mapping and malformed headers; SPEC-0001 index test vector and broken invariants; SPEC-0002 chunk test vector, three-letter tag check, limits, buffer end, six malformed-header cases, family classification), 8 data integration, 5 sim, 9 app (new: chain summary, browser clamp), both audits. Real ISO: boot fingerprint matched; 1434 entries, invariants 1–4 hold. Survey of all resources matched SPEC-0002 exactly: 76 empty, 823 chunk files, 101 texture packs, 1 chunk file with format 0xCD, 134 sound banks, 144 sound blocks, 21 VAG, 110 stereo streams, 24 headerless; 792 chains end on a terminator and 133 at the one-chunk limit, none malformed; 65 type-13, 165 type-32, 192 type-31 chunks; resource 7 holds 33 type-13 chunks. Screenshot confirmed the browser shows resource 0 (58 sectors, chunks 2, 8, 4).

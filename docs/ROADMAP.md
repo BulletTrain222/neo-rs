@@ -6,7 +6,7 @@ Every milestone after M1 is built only from approved specs in `specs/` (see [CLE
 | --- | --- | --- | --- |
 | M0 | Foundation | — | ISO reader, mod resolver, sim boundary, Bevy status window. **Done.** |
 | M1 | Clean-room split | — | Research tooling moved out, spec channel and audits in place. **Done 2026-10-18.** |
-| M2 | Archive access | R-0001, R-0002 | `neopets-data` reads the resource index from the ISO at runtime, checks the disc fingerprint, streams any resource by number with bounds checks, and identifies its type. The inspector's `--coverage` flag reports resources by type, decoded vs total (docs/PROGRESS.md). Synthetic tests for malformed indexes. |
+| M2 | Archive access | R-0001, R-0002 | `neopets-data` reads the resource index from the ISO at runtime, checks the disc fingerprint, streams any resource by number with bounds checks, and identifies its type. The inspector's `--coverage` flag reports resources by type, decoded vs total (docs/PROGRESS.md). Synthetic tests for malformed indexes. **Done 2026-10-25** (SPEC-0001, SPEC-0002). |
 | M3 | Texture viewer | R-0003 | One real texture decoded from the ISO and shown in a Bevy viewer (resource browser: pick a number, see it). |
 | M4 | Model viewer | R-0004 | One real static model with its textures shown in Bevy with an orbit camera. |
 | M5 | Animated character | R-0005 | Player model skinned and playing an animation. |
