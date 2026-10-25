@@ -143,6 +143,35 @@ pub fn model(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<Option<Mod
     Ok((!data.parts.is_empty()).then_some(data))
 }
 
+/// A hero outfit (resources 504–519) with its hero's animation families, or None for any
+/// other resource. The bone table is the outfit's flat type-18 chunk (SPEC-0005).
+pub fn hero(
+    disc: &mut Disc,
+    index: &ArchiveIndex,
+    n: u32,
+) -> Result<Option<crate::character::HeroAnim>, String> {
+    use neopets_data::anim::{BoneTable, FamilyData, hero_resources};
+    if !(504..=519).contains(&n) {
+        return Ok(None);
+    }
+    let bytes = index.read(disc, n)?;
+    let chain = resource::walk_chunks(&bytes, None)?;
+    let table = chain
+        .chunks
+        .iter()
+        .find(|c| c.kind == 18 && !bytes[c.payload.clone()].starts_with(b"IDM"))
+        .ok_or("Outfit has no bone table")?;
+    let bones = BoneTable::parse(&bytes[table.payload.clone()])?;
+    let hero = if n >= 512 { 1 } else { 0 };
+    let families = hero_resources(hero)
+        .into_iter()
+        .map(|(h, b, t)| {
+            FamilyData::parse(&index.read(disc, h)?, &index.read(disc, b)?, &index.read(disc, t)?)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+    Ok(Some(crate::character::HeroAnim::new(bones, families)))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

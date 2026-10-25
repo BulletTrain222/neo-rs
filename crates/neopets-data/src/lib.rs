@@ -1,10 +1,12 @@
 //! Read-only access to a user-supplied disc. No emulator or executable interpreter.
+pub mod anim;
 pub mod archive;
 mod elf;
 pub mod fingerprint;
 pub mod gs;
 pub mod gsmem;
 mod iso;
+pub mod lzo;
 pub mod material;
 pub mod mesh;
 pub mod model;

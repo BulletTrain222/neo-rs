@@ -2,6 +2,7 @@
 #![forbid(unsafe_code)]
 pub use ps2_float::{F, Vf};
 
+pub mod clip;
 mod step;
 pub use step::FixedStep;
 

@@ -1,3 +1,4 @@
+mod inspect_anim;
 mod inspect_mesh;
 
 use neopets_data::archive::ArchiveIndex;
@@ -8,7 +9,7 @@ use neopets_data::{Disc, fingerprint, iso_path, png};
 use std::collections::BTreeMap;
 
 const USAGE: &str = "usage: neopets-data [--iso <path>] [--sha256 <disc file>]... \
-                     [--resources] [--resource <n>]... [--texture <n>]... [--materials] [--meshes] [--scene <n>]... [--coverage]";
+                     [--resources] [--resource <n>]... [--texture <n>]... [--materials] [--meshes] [--clips] [--scene <n>]... [--coverage]";
 
 fn main() {
     if let Err(e) = run() {
@@ -26,6 +27,7 @@ fn run() -> Result<(), String> {
     let mut coverage = false;
     let mut materials = false;
     let mut meshes = false;
+    let mut clips = false;
     let mut show = Vec::new();
     let mut textures = Vec::new();
     let mut scenes = Vec::new();
@@ -37,6 +39,7 @@ fn run() -> Result<(), String> {
             "--coverage" => coverage = true,
             "--materials" => materials = true,
             "--meshes" => meshes = true,
+            "--clips" => clips = true,
             "--scene" => {
                 let n = args.next().ok_or("--scene needs a resource number")?;
                 scenes.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -68,7 +71,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(survey || coverage || materials || meshes || !show.is_empty() || !textures.is_empty() || !scenes.is_empty()) {
+    if !(survey || coverage || materials || meshes || clips || !show.is_empty() || !textures.is_empty() || !scenes.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -90,6 +93,9 @@ fn run() -> Result<(), String> {
     }
     if meshes {
         inspect_mesh::run(&mut disc, &index)?;
+    }
+    if clips {
+        inspect_anim::run(&mut disc, &index)?;
     }
     if survey || coverage {
         let report = survey_all(&mut disc, &index)?;

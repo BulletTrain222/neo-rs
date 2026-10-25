@@ -1,4 +1,5 @@
 mod archive_view;
+mod character;
 mod controls;
 mod orbit;
 mod pattern;
@@ -51,6 +52,9 @@ struct ModelView {
     data: Option<neopets_data::model::ModelData>,
     show_model: bool,
     dirty: bool,
+    /// Meshes of skinned parts (layout A) and their part index, for per-frame skinning.
+    skinned: Vec<(Handle<Mesh>, usize)>,
+    hero: Option<character::HeroAnim>,
 }
 
 impl ModelView {
@@ -202,9 +206,9 @@ fn main() {
             Update,
             (
                 (read_input, step_sim).chain(),
-                (browse_resources, cycle_textures, toggle_view, orbit_camera, toggle_hud),
+                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model),
+                (apply_texture, apply_model, skin_hero).chain(),
             )
                 .chain(),
         );
@@ -413,13 +417,18 @@ fn read_input(
     driver.input = movement(keyboard, gamepads.iter().map(|pad| pad.left_stick()));
 }
 
-fn step_sim(time: Res<Time>, mut driver: ResMut<SimDriver>) {
+fn step_sim(time: Res<Time>, mut driver: ResMut<SimDriver>, mut models: ResMut<ModelView>) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
         sim, clock, input, ..
     } = &mut *driver;
     let ticks = sim.run_for(clock, elapsed, *input);
     driver.last_ticks = ticks;
+    if let Some(hero) = models.hero.as_mut() {
+        for _ in 0..ticks {
+            hero.tick();
+        }
+    }
 }
 
 fn browse_resources(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<Browser>) {
@@ -569,10 +578,19 @@ fn show_browser(
             view.text.push_str(&format!("\nModel could not be built: {e}"));
         }
         let data = model.ok().flatten();
+        let hero = match archive_view::hero(disc, index, n) {
+            Ok(h) => h,
+            Err(e) => {
+                view.text.push_str(&format!("\nAnimation could not be loaded: {e}"));
+                None
+            }
+        };
         *models = ModelView {
             show_model: data.is_some(),
             data,
             dirty: true,
+            skinned: Vec::new(),
+            hero,
         };
     }
     let model_line = match &models.data {
@@ -588,12 +606,16 @@ fn show_browser(
             }
             format!(
                 "Model (SPEC-0004): {} parts, {verts} vertices, {tris} triangles, {} textures{skipped}. \
-                 Unlit, no skinning yet. V switches model/texture view; WASD/QE fly",
+                 Unlit. V switches model/texture view; WASD/QE fly",
                 m.parts.len(),
                 m.textures.len()
             )
         }
         None => "No models in this resource.".into(),
+    };
+    let model_line = match &models.hero {
+        Some(h) => format!("{model_line}\n{}", h.status()),
+        None => model_line,
     };
     let texture_line = match textures.images.get(textures.current) {
         Some((label, image)) => format!(
@@ -719,6 +741,7 @@ fn apply_model(
     for mut v in &mut grid {
         *v = grid_visibility;
     }
+    let mut skinned = Vec::new();
     let framing = match (&models.data, models.show_model) {
         (Some(m), true) => {
             let handles: Vec<Handle<StandardMaterial>> = m
@@ -739,7 +762,7 @@ fn apply_model(
                 cull_mode: None,
                 ..default()
             });
-            for part in &m.parts {
+            for (i, part) in m.parts.iter().enumerate() {
                 let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
                 // The GS modulates in gamma space; Bevy blends vertex colour in linear space.
                 let colors: Vec<[f32; 4]> = part
@@ -755,8 +778,12 @@ fn apply_model(
                 let material = part
                     .texture
                     .map_or(untextured.clone(), |t| handles[t].clone());
+                let handle = meshes.add(mesh);
+                if !part.weights.is_empty() {
+                    skinned.push((handle.clone(), i));
+                }
                 commands.spawn((
-                    Mesh3d(meshes.add(mesh)),
+                    Mesh3d(handle),
                     MeshMaterial3d(material),
                     Transform::IDENTITY,
                     ModelPart,
@@ -767,8 +794,36 @@ fn apply_model(
         }
         _ => Orbit::default(),
     };
+    models.skinned = skinned;
     for (mut orbit, mut transform) in &mut cameras {
         *orbit = framing.clone();
         *transform = orbit.transform();
+    }
+}
+
+fn choose_action(keys: Res<ButtonInput<KeyCode>>, mut models: ResMut<ModelView>) {
+    let Some(hero) = models.hero.as_mut() else { return };
+    let a = hero.action();
+    if keys.just_pressed(KeyCode::Equal) {
+        hero.play((a + 1) % character::ACTIONS);
+    } else if keys.just_pressed(KeyCode::Minus) {
+        hero.play((a + character::ACTIONS - 1) % character::ACTIONS);
+    }
+}
+
+/// Re-skin the hero's layout-A parts from its current pose (CPU skinning, every frame).
+fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
+    let (Some(hero), Some(data)) = (&models.hero, &models.data) else { return };
+    if !models.showing() {
+        return;
+    }
+    let matrices = hero.skin_matrices();
+    for (handle, i) in &models.skinned {
+        let part = &data.parts[*i];
+        let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
+        if let Some(mut mesh) = meshes.get_mut(handle) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
+            mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
+        }
     }
 }

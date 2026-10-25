@@ -120,6 +120,9 @@ pub struct MeshPart {
     pub colors: Vec<[f32; 4]>,
     pub indices: Vec<u32>,
     pub texture: Option<usize>,
+    /// Layout A only: three skin weights and three skin bone indices (slot byte / 3) per vertex.
+    pub weights: Vec<[f32; 3]>,
+    pub bones: Vec<[u16; 3]>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -283,6 +286,8 @@ impl Builder {
                 colors: Vec::new(),
                 indices: Vec::new(),
                 texture,
+                weights: Vec::new(),
+                bones: Vec::new(),
             };
             for b in &batches {
                 let base = part.positions.len() as u32;
@@ -290,6 +295,10 @@ impl Builder {
                 part.positions.extend_from_slice(&b.positions);
                 part.uvs.extend_from_slice(&b.uvs);
                 part.colors.extend(b.colors.iter().map(|c| c.map(|v| colour_factor(v, unit))));
+                if !b.weights.is_empty() {
+                    part.weights.extend_from_slice(&b.weights);
+                    part.bones.extend(b.bones.iter().map(|s| [0, 1, 2].map(|k| s[k] as u16 / 3)));
+                }
                 if b.normals.is_empty() {
                     // Mixed layouts in one leaf do not occur; keep arrays aligned anyway.
                     part.normals.extend(std::iter::repeat_n([0.0, 1.0, 0.0], b.positions.len()));
