@@ -115,9 +115,14 @@ pub struct MeshPart {
     /// Layout B has no normals; its parts get +Y placeholders (it is drawn unlit).
     pub normals: Vec<[f32; 3]>,
     pub uvs: Vec<[f32; 2]>,
-    /// Texture modulation per vertex, 1.0 = unchanged, in the GS's gamma space. Lit programs
-    /// assume a light level of 1.0 until lighting (SPEC-0046) is implemented.
+    /// Texture modulation per vertex, 1.0 = unchanged, in the GS's gamma space: the vertex
+    /// program's output / 128. Lit parts are lit with the scene default lights in the space they
+    /// are built in (world space for world scenes).
     pub colors: Vec<[f32; 4]>,
+    /// The stored colour bytes, for relighting moving lit parts (skinned characters).
+    pub raw_colors: Vec<[u8; 4]>,
+    /// Drawn by a lit program (1, 2 or 6).
+    pub lit: bool,
     pub indices: Vec<u32>,
     pub texture: Option<usize>,
     /// Layout A only: three skin weights and three skin bone indices (slot byte / 3) per vertex.
@@ -214,10 +219,29 @@ impl ChainMaterials {
     }
 }
 
-/// GS output for a colour byte: lit programs scale 16 to 1.0 times the light level (taken
-/// as 128 here), unlit programs use the byte as is; the GS then modulates by output / 128.
+/// GS output for a colour byte at a light level of 128 (lit programs: 16 means 1.0) or for an
+/// unlit program (128 means 1.0); the GS then modulates by output / 128.
 fn colour_factor(byte: u8, unit: f32) -> f32 {
     (byte as f32 * 128.0 / unit).min(255.0) / 128.0
+}
+
+/// Texture modulation for each vertex of a part: lit parts through the scene default lights on
+/// the part's normals, unlit parts by their colour bytes.
+pub fn vertex_colours(part: &MeshPart, unit: f32) -> Vec<[f32; 4]> {
+    if part.lit {
+        lit_colours(&part.raw_colors, &part.normals, &crate::light::Lights::scene_default())
+    } else {
+        part.raw_colors.iter().map(|c| c.map(|v| colour_factor(v, unit))).collect()
+    }
+}
+
+/// Lit modulation (output / 128) for colour bytes and normals in the lights' space.
+pub fn lit_colours(colours: &[[u8; 4]], normals: &[[f32; 3]], lights: &crate::light::Lights) -> Vec<[f32; 4]> {
+    colours
+        .iter()
+        .zip(normals)
+        .map(|(c, n)| lights.vertex(*n, *c).map(|v| v as f32 / 128.0))
+        .collect()
 }
 
 /// Turns node trees into mesh parts, resolving each leaf's material against its chain's
@@ -308,13 +332,15 @@ impl Builder {
                 texture,
                 weights: Vec::new(),
                 bones: Vec::new(),
+                raw_colors: Vec::new(),
+                lit: group.is_some_and(|g| matches!(g.program, 1 | 2 | 6)),
             };
             for b in &batches {
                 let base = part.positions.len() as u32;
                 part.indices.extend(b.triangles().iter().flat_map(|t| t.map(|i| i + base)));
                 part.positions.extend_from_slice(&b.positions);
                 part.uvs.extend_from_slice(&b.uvs);
-                part.colors.extend(b.colors.iter().map(|c| c.map(|v| colour_factor(v, unit))));
+                part.raw_colors.extend_from_slice(&b.colors);
                 if !b.weights.is_empty() {
                     part.weights.extend_from_slice(&b.weights);
                     part.bones.extend(b.bones.iter().map(|s| [0, 1, 2].map(|k| s[k] as u16 / 3)));
@@ -334,6 +360,7 @@ impl Builder {
                     *n = crate::world::transform_normal(m, *n);
                 }
             }
+            part.colors = vertex_colours(&part, unit);
             for p in &part.positions {
                 for k in 0..3 {
                     self.out.min[k] = self.out.min[k].min(p[k]);

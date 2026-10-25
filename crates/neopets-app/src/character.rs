@@ -147,7 +147,8 @@ impl HeroAnim {
 }
 
 /// Skin one part: v' = Σ w_k S_(bone_k) v for positions; normals turn with the first bone's
-/// rotation only, as the vertex program does (SPEC-0004), renormalised for display.
+/// rotation only, as the vertex program does (SPEC-0004). The normal is renormalised here; the
+/// lit program uses it for lighting.
 pub fn skin_part(
     matrices: &[Affine],
     positions: &[[f32; 3]],

@@ -8,6 +8,7 @@ pub mod gs;
 pub mod ground;
 pub mod gsmem;
 mod iso;
+pub mod light;
 pub mod lzo;
 pub mod material;
 pub mod mesh;

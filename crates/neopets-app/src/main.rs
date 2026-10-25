@@ -878,6 +878,22 @@ fn part_assets(
         .collect()
 }
 
+/// Relight a lit part from its skinned normals turned into world space by `rotation`, with the
+/// scene default lights (SPEC-0046), as linear vertex colours. None for unlit parts.
+fn relight(part: &neopets_data::model::MeshPart, normals: &[[f32; 3]], rotation: Quat) -> Option<Vec<[f32; 4]>> {
+    if !part.lit {
+        return None;
+    }
+    let world: Vec<[f32; 3]> = normals.iter().map(|n| (rotation * Vec3::from(*n)).to_array()).collect();
+    let lights = neopets_data::light::Lights::scene_default();
+    Some(
+        neopets_data::model::lit_colours(&part.raw_colors, &world, &lights)
+            .into_iter()
+            .map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)])
+            .collect(),
+    )
+}
+
 fn choose_action(keys: Res<ButtonInput<KeyCode>>, mut models: ResMut<ModelView>) {
     let Some(hero) = models.hero.as_mut() else { return };
     let a = hero.action();
@@ -898,9 +914,13 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
     for (handle, i) in &models.skinned {
         let part = &data.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
+        let colours = relight(part, &nrm, Quat::IDENTITY);
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
+            if let Some(c) = colours {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, c);
+            }
         }
     }
 }
@@ -960,9 +980,13 @@ fn play_frame(
     for (handle, i) in &state.skinned {
         let part = &state.play.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
+        let colours = relight(part, &nrm, rotation);
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
+            if let Some(c) = colours {
+                mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, c);
+            }
         }
     }
     for (mut orbit, mut transform) in &mut cameras {
