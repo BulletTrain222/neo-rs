@@ -173,6 +173,12 @@ impl Locomotion {
         self.body.position
     }
 
+    /// The camera's recentring gate T (SPEC-0027): the hero moved in its last motion step and
+    /// is not in state 1.
+    pub fn moved(&self) -> bool {
+        self.state != STANCE && self.last_motion != [0.0; 3]
+    }
+
     pub fn airborne(&self) -> bool {
         (JUMP..=JUMP_RUN).contains(&self.state)
     }

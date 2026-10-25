@@ -15,6 +15,8 @@ const TOLERANCE: f32 = -0.1;
 const GROUNDED: f32 = 0.1;
 /// SPEC-0040 Layout, body size: both heroes weigh 5.5.
 pub const HERO_WEIGHT: f32 = 5.5;
+/// SPEC-0040 Layout, body size: both heroes are 3.5 high (the camera's focus height).
+pub const HERO_HEIGHT: f32 = 3.5;
 /// SPEC-0018: the character ground step probes 2.5 above the record's height.
 pub const PROBE_CEILING: f32 = 2.5;
 

@@ -489,7 +489,6 @@ fn step_sim(
     mut models: ResMut<ModelView>,
     play: Option<ResMut<PlayState>>,
     autowalk: Option<Res<AutoWalk>>,
-    cameras: Query<&Orbit>,
 ) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
@@ -502,11 +501,7 @@ fn step_sim(
             let _ = hero.tick();
         }
     }
-    if let (Some(mut play), Some(orbit)) = (play, cameras.iter().next()) {
-        // Camera ground basis: the eye sits at yaw around the target, so forward points away.
-        let (sy, cy) = orbit.yaw.sin_cos();
-        let forward = [-sy, 0.0, -cy];
-        let left = [-cy, 0.0, sy];
+    if let Some(mut play) = play {
         let i = driver.input;
         let mut input = neopets_sim::hero::HeroInput {
             side: -(i.move_x as f32) / i16::MAX as f32,
@@ -525,9 +520,25 @@ fn step_sim(
                 play.play.jump_latch = true;
             }
         }
+        // The right stick as PS2 pad bytes (X right 255, Y up 0); J/L and I/K stand in for it
+        // on the keyboard, R for R3.
+        let mut right = gamepads.iter().map(|g| g.right_stick()).find(|v| v.length() > 0.2).unwrap_or(Vec2::ZERO);
+        let key = |k: KeyCode| keys.pressed(k) as i32 as f32;
+        right.x += key(KeyCode::KeyL) - key(KeyCode::KeyJ);
+        right.y += key(KeyCode::KeyI) - key(KeyCode::KeyK);
+        let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
+        let r3_held = keys.pressed(KeyCode::KeyR) || gamepads.iter().any(|g| g.pressed(GamepadButton::RightThumb));
+        play.play.r3_latch |= keys.just_pressed(KeyCode::KeyR)
+            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::RightThumb));
         for _ in 0..ticks {
             input.jump = std::mem::take(&mut play.play.jump_latch);
-            play.play.tick(&input, forward, left);
+            let pad = neopets_sim::camera::CameraPad {
+                right_x: byte(right.x),
+                right_y: byte(-right.y),
+                r3_held,
+                r3_pressed: std::mem::take(&mut play.play.r3_latch),
+            };
+            play.play.tick(&input, pad);
         }
     }
 }
@@ -584,6 +595,10 @@ fn orbit_camera(
     play: Option<Res<PlayState>>,
     mut cameras: Query<(&mut Orbit, &mut Transform)>,
 ) {
+    // In play mode the follow camera owns the view.
+    if play.is_some() {
+        return;
+    }
     let dragging = buttons.any_pressed([MouseButton::Left, MouseButton::Right, MouseButton::Middle]);
     let lines = match scroll.unit {
         MouseScrollUnit::Line => scroll.delta.y,
@@ -629,7 +644,7 @@ fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<H
 
 fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Query<&mut Text, With<SimText>>) {
     let d = &*driver;
-    let play_line = play.map(|p| format!("{}\n", p.play.status())).unwrap_or_default();
+    let play_line = play.map(|p| format!("{}\n{}\n", p.play.status(), p.play.status_camera())).unwrap_or_default();
     for mut text in &mut texts {
         text.0 = play_line.clone() + &format!(
             "SIMULATION LOOP - fixed 1/60 s step (SPEC-0007); no gameplay systems yet\n\
@@ -971,15 +986,13 @@ fn play_trace(archive: &mut Archive, ticks: u64, jump: bool) {
             std::process::exit(1)
         }
     };
-    let f = play.loco.facing;
-    let (forward, left) = (f, [f[2], 0.0, -f[0]]);
     for _ in 0..ticks {
         let input = neopets_sim::hero::HeroInput {
             forward: 0.7,
             jump: jump && play.ticks % 120 == 0 && play.ticks > 0,
             ..Default::default()
         };
-        play.tick(&input, forward, left);
+        play.tick(&input, neopets_sim::camera::CameraPad::default());
         let (p, b) = (play.loco.position(), &play.loco.body);
         println!(
             "{:5} pos ({:9.3} {:8.3} {:9.3}) state {:2} phase {:2} action {:3} gap {:8.3} vy {:7.3} n ({:.2} {:.2} {:.2})",
@@ -1005,6 +1018,7 @@ fn play_frame(
     play: Option<ResMut<PlayState>>,
     mut heroes: Query<&mut Transform, (With<HeroRoot>, Without<Orbit>)>,
     mut cameras: Query<(&mut Orbit, &mut Transform), Without<HeroRoot>>,
+    mut projections: Query<&mut Projection>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
@@ -1029,11 +1043,15 @@ fn play_frame(
                 }
             });
         state.skinned = skinned;
-        for (mut orbit, _) in &mut cameras {
-            // Start behind the hero, a little above.
-            orbit.yaw = (-f[0]).atan2(-f[2]);
-            orbit.pitch = 18.0_f32.to_radians();
-            orbit.distance = 11.0;
+        // SPEC-0027 Projection: 50.2 degrees vertical (S 512 on 480 lines), near 1.0. The far
+        // plane is SPEC-0046's widest (10560) so the sky dome is kept.
+        for mut projection in &mut projections {
+            *projection = Projection::Perspective(PerspectiveProjection {
+                fov: neopets_sim::camera::vertical_fov(),
+                near: neopets_sim::camera::NEAR,
+                far: 10_560.0,
+                ..default()
+            });
         }
     }
     for mut t in &mut heroes {
@@ -1053,8 +1071,9 @@ fn play_frame(
             }
         }
     }
-    for (mut orbit, mut transform) in &mut cameras {
-        orbit.target = Vec3::from(p) + Vec3::Y * 1.7;
-        *transform = orbit.transform();
+    // The follow camera owns the view in play mode: it looks from the eye at the focus.
+    let (eye, focus) = (Vec3::from(state.play.camera.eye), Vec3::from(state.play.camera.focus));
+    for (_, mut transform) in &mut cameras {
+        *transform = Transform::from_translation(eye).looking_at(focus, Vec3::Y);
     }
 }
