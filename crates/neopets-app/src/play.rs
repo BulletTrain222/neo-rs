@@ -214,6 +214,8 @@ pub struct Character {
     /// The action whose sound word was last seen, and the creature blocks the main table names.
     sound_action: Option<u32>,
     sound_blocks: Vec<u32>,
+    /// The character's emote queues (cleared at spawn).
+    emotes: neopets_sim::emote::Queues<(u32, u32, u32)>,
     /// The townsfolk routine (SPEC-0056) for class-6 characters; other classes only idle.
     pub townsfolk: Option<neopets_sim::npc::Townsfolk>,
     /// Class-7 Whinnies: their walker (motion record and navigation) and routine.
@@ -391,6 +393,8 @@ pub struct Play {
     pub stinger_requests: Vec<i32>,
     /// Emote clips to play: (bank resource, start and length in 2,048-byte units).
     pub emote_requests: Vec<(u32, u32, u32)>,
+    /// The hero's emote queues (SPEC-0040 Behavior 22); each character holds its own.
+    hero_emotes: neopets_sim::emote::Queues<(u32, u32, u32)>,
     pub stinger_playing: bool,
     stinger4: u64,
     /// The live options and gains (SPEC-0035 Behavior 3), kept in step with the front end.
@@ -641,6 +645,7 @@ impl Play {
             last_state: 1,
             stinger_requests: Vec::new(),
             emote_requests: Vec::new(),
+            hero_emotes: Default::default(),
             stinger_playing: false,
             stinger4: 0,
             options: Default::default(),
@@ -1079,6 +1084,9 @@ impl Play {
                 let pack = self.characters[i].pack;
                 self.talk_partner = Some(self.characters[i].name.clone());
                 self.talk_with = Some(self.characters[i].id);
+                // SetConversationTarget clears both characters' emote queues.
+                self.hero_emotes.clear();
+                self.characters[i].emotes.clear();
                 let actions = level::on_talk(pack, routine, &mut self.state);
                 self.apply(&actions);
             }
@@ -1283,6 +1291,7 @@ impl Play {
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
+                emotes: Default::default(),
                 sound_blocks: anim.sound_blocks(),
                 row,
                 anim,
@@ -1457,7 +1466,8 @@ impl Play {
                 Some(neopets_sim::textbox::BoxEvent::Advanced) => self.cue(0x98),
                 None => {}
             }
-            self.emote_clips();
+            self.emote_requests();
+            self.emote_consumers();
             input = HeroInput::default();
             // SPEC-0056 Talk facing: in the conversation the hero turns toward its partner
             // with weight 0.1 and the partner toward the hero with weight 0.3.
@@ -1555,7 +1565,10 @@ impl Play {
         self.status_step();
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.pending_step();
-        self.hero.request(self.loco.action(), force);
+        // While a conversation runs the emote consumer owns the hero's main id.
+        if !self.dialogue_open {
+            self.hero.request(self.loco.action(), force);
+        }
         self.hero.set_rate(self.loco.rate);
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
@@ -2495,38 +2508,71 @@ impl Play {
         }
     }
 
-    /// The emote requests the box's reveal reached (SPEC-0009 Emote clip lookup and playback):
-    /// each looks up its row and position; a partner request needs a talk partner. A clip is
-    /// refused while the stinger handle is busy or the bank music is not active; when a body and
-    /// a face clip come in one tick, only the face clip plays. The gestures themselves (the
-    /// actors' emote queues) are not played.
-    fn emote_clips(&mut self) {
+    /// The emote requests the box's reveal reached (SPEC-0022; SPEC-0009 Emote clip lookup): each
+    /// looks up its row and directory position now and queues (clip, emote id) on its actor
+    /// (SPEC-0040 Behavior 22): hero kinds on the hero's queues, partner kinds on the talk
+    /// partner's (none without a partner). A row with no clip still queues its gesture.
+    fn emote_requests(&mut self) {
         use neopets_sim::emote;
-        let requests = std::mem::take(&mut self.textbox.emotes);
-        let mut clips: Vec<(bool, u32, (u32, u32))> = Vec::new();
-        for (kind, id) in requests {
+        for (kind, id) in std::mem::take(&mut self.textbox.emotes) {
             let partner = matches!(kind, emote::PARTNER_BODY | emote::PARTNER_FACE);
-            let voice_set = if partner {
-                let Some(c) = self.talk_with.and_then(|t| self.characters.iter().find(|c| c.id == t)) else { continue };
-                c.row.map_or(-1, |r| r.voice_set)
+            let who = if partner {
+                let Some(k) = self.talk_with.and_then(|t| self.characters.iter().position(|c| c.id == t)) else { continue };
+                Some(k)
             } else {
-                -1
+                None
             };
+            let voice_set = who.map_or(-1, |k| self.characters[k].row.map_or(-1, |r| r.voice_set));
             let row = self.design.emote(!partner, id).map(|r| emote::Row { clip: r.clip, chance: r.chance, variance: r.variance });
             let rng = &mut self.rng;
-            let Some(pos) = emote::position(kind, row, voice_set, false, &mut |n| rng.next_u32() % n.max(1)) else { continue };
+            let pos = emote::position(kind, row, voice_set, false, &mut |n| rng.next_u32() % n.max(1));
             let (bank, dir) = if partner { (144, 0) } else { (145, 1) };
-            if let Some(e) = self.design.paths.get(dir).and_then(|d| emote::playable(pos, d)) {
-                clips.push((kind == emote::HERO_FACE, bank, e));
+            let clip = pos.and_then(|p| self.design.paths.get(dir).and_then(|d| emote::playable(p, d))).map(|(start, len)| (bank, start, len));
+            let entry = emote::Entry { clip, id };
+            match who {
+                Some(k) => self.characters[k].emotes.push(kind, entry),
+                None => self.hero_emotes.push(kind, entry),
             }
         }
-        let chosen = clips.iter().find(|c| c.0).or(clips.first()).copied();
-        if let Some((_, bank, (start, len))) = chosen {
+    }
+
+    /// SPEC-0040 Behavior 22, the consumer, once per tick while the conversation runs: the hero
+    /// (body emotes on) and the talk partner (body emotes off in a seated or lying pose: main id
+    /// 65 to 74, 78, 97, 98, 146 or 147). A main request sets the face override and requests main
+    /// id B; otherwise only the face override is set. A clip starts only then, and is refused
+    /// while the stinger handle is busy, the bank music is not active, or the voice volume is 0.
+    fn emote_consumers(&mut self) {
+        type Clip = (u32, u32, u32);
+        let mut clips: Vec<Clip> = Vec::new();
+        let apply = |anim: &mut crate::character::HeroAnim, out: neopets_sim::emote::Consumed<Clip>| {
+            anim.set_face(u32::try_from(out.face).ok());
+            if let Some(b) = out.request_main {
+                anim.request(b.max(0) as u32, false);
+            }
+            out.clip
+        };
+        let view = self.hero.emote_view();
+        let out = self.hero_emotes.consume(view, true);
+        clips.extend(apply(&mut self.hero, out));
+        if let Some(c) = self.talk_with.and_then(|t| self.characters.iter_mut().find(|c| c.id == t)) {
+            let view = c.anim.emote_view();
+            let busy = matches!(view.main, 65..=74 | 78 | 97 | 98 | 146 | 147);
+            let out = c.emotes.consume(view, !busy);
+            clips.extend(apply(&mut c.anim, out));
+        }
+        for (bank, start, len) in clips {
             if !self.stinger_playing && self.bank_music.playing.is_some() && self.emote_volume() > 0 {
                 self.stinger_playing = true;
                 self.emote_requests.push((bank, start, len));
             }
         }
+    }
+
+    /// The talk partner's main id and face override, for the trace.
+    pub fn talk_partner_view(&self) -> Option<(String, i32, i32)> {
+        let c = self.talk_with.and_then(|t| self.characters.iter().find(|c| c.id == t))?;
+        let v = c.anim.emote_view();
+        Some((c.name.clone(), v.main, v.face))
     }
 
     /// A stinger request (SPEC-0009): indices 0 to 18 only; one at a time; stinger 4 not within

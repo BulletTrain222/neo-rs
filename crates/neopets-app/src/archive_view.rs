@@ -219,12 +219,12 @@ pub fn region_character(
         } else {
             continue;
         };
-        families.push(family);
+        families.push((f as u8, family));
     }
     if families.is_empty() {
         return Err("No animation family".into());
     }
-    let mut anim = crate::character::HeroAnim::new(bones, families);
+    let mut anim = crate::character::HeroAnim::with_roles(bones, families);
     anim.play(0);
     Ok((model, anim))
 }

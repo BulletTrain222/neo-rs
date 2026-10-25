@@ -14,12 +14,17 @@ struct FamilyState {
     /// Skin bone of the family's first joint.
     skin_base: usize,
     current: Option<usize>,
+    /// The family's role: 0 main, 1 sub-part, 2 face (region characters may lack some).
+    role: u8,
 }
 
 pub struct HeroAnim {
     bones: BoneTable,
     families: Vec<FamilyState>,
     action: u32,
+    /// The face override id (SPEC-0040 Behavior 3D): its face clip plays instead of the main
+    /// id's until it reaches progress 0.99, then the main id's face clip returns.
+    face: Option<u32>,
 }
 
 /// Action ids valid for the hero tables (SPEC-0005: ids 0 to 192).
@@ -28,12 +33,17 @@ pub const ACTIONS: u32 = 193;
 impl HeroAnim {
     /// `families` is main, sub-part, face, as in the hero resource table.
     pub fn new(bones: BoneTable, families: Vec<FamilyData>) -> Self {
-        let n_main = families.first().map_or(0, |f| f.def.len());
+        Self::with_roles(bones, families.into_iter().enumerate().map(|(i, f)| (i as u8, f)).collect())
+    }
+
+    /// Families with their roles (0 main, 1 sub-part, 2 face).
+    pub fn with_roles(bones: BoneTable, families: Vec<(u8, FamilyData)>) -> Self {
+        let n_main = families.first().map_or(0, |f| f.1.def.len());
         let mut skin_base = 0;
         let families = families
             .into_iter()
             .enumerate()
-            .map(|(i, data)| {
+            .map(|(i, (role, data))| {
                 let n = data.def.len();
                 let state = FamilyState {
                     joints: vec![None; n],
@@ -42,12 +52,13 @@ impl HeroAnim {
                     data,
                     record: PlaybackRecord::default(),
                     current: None,
+                    role,
                 };
                 skin_base += n;
                 state
             })
             .collect();
-        let mut hero = Self { bones, families, action: 0 };
+        let mut hero = Self { bones, families, action: 0, face: None };
         hero.play(3);
         hero
     }
@@ -86,8 +97,11 @@ impl HeroAnim {
         if !restart {
             return;
         }
+        let face = self.face;
         for f in &mut self.families {
-            let Some(c) = f.data.clip_for(action) else { continue };
+            // The face clip is the override's when one is set, else the main id's.
+            let id = if f.role == 2 { face.unwrap_or(action) } else { action };
+            let Some(c) = f.data.clip_for(id) else { continue };
             let clip = &f.data.clips[c];
             f.record.start(
                 ClipInfo {
@@ -113,6 +127,7 @@ impl HeroAnim {
     /// the main layer's root step for the next tick: the root record of the current key times
     /// the clip speed, doubled while a finished one-shot is held (SPEC-0040 Behavior 14C).
     pub fn tick(&mut self) -> [f32; 3] {
+        self.face_step();
         let mut root = [0.0; 3];
         for (i, f) in self.families.iter_mut().enumerate() {
             let (Some(c), Some(s)) = (f.current, f.record.tick()) else { continue };
@@ -140,6 +155,53 @@ impl HeroAnim {
     /// The bone table the animation poses.
     pub fn bones(&self) -> &BoneTable {
         &self.bones
+    }
+
+    /// The face-id setter: writes only the override (its clip starts on the next step).
+    pub fn set_face(&mut self, id: Option<u32>) {
+        self.face = id;
+    }
+
+    fn start_face(f: &mut FamilyState, id: u32) {
+        let Some(c) = f.data.clip_for(id) else { return };
+        let clip = &f.data.clips[c];
+        f.record.start(ClipInfo { frames: clip.frames as u32, looping: clip.looping, speed_byte: clip.speed_byte, fade_in: clip.fade_in }, 1.0);
+        f.current = Some(c);
+    }
+
+    /// Behavior 3D step 6: the override's face clip starts unless the face record holds it;
+    /// once it holds it at progress 0.99 or more, the override is cleared and the main id's face
+    /// clip starts at once.
+    fn face_step(&mut self) {
+        let (Some(id), action) = (self.face, self.action) else { return };
+        let Some(f) = self.families.iter_mut().find(|f| f.role == 2) else { return };
+        let wanted = f.data.clip_for(id);
+        if wanted.is_some() && f.current != wanted {
+            Self::start_face(f, id);
+        } else if wanted.is_some() && f.record.progress() >= 0.99 {
+            self.face = None;
+            Self::start_face(f, action);
+        }
+    }
+
+    /// The main clip's and the face clip's progress and loop flags (SPEC-0040 Behavior 22B).
+    pub fn emote_view(&self) -> neopets_sim::emote::Actor {
+        let state = |role: u8| {
+            self.families.iter().find(|f| f.role == role).map_or((1.0, false), |f| {
+                let looping = f.current.is_some_and(|c| f.data.clips[c].looping);
+                (if f.record.finished() { 1.0 } else { f.record.progress() }, looping)
+            })
+        };
+        let (mp, ml) = state(0);
+        let (fp, fl) = state(2);
+        neopets_sim::emote::Actor {
+            main: self.action as i32,
+            main_progress: mp,
+            main_looping: ml,
+            face: self.face.map_or(-1, |f| f as i32),
+            face_progress: fp,
+            face_looping: fl,
+        }
     }
 
     /// The packed sound word (word B) of an action in the main family's table (SPEC-0031

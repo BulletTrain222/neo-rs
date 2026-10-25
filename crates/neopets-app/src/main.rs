@@ -2001,6 +2001,10 @@ fn play_trace(
             };
             println!("      emote clips {emotes:?} on tick {}: {info}", play.ticks);
         }
+        if play.dialogue_open && play.ticks % 15 == 0 {
+            let partner = play.talk_partner_view();
+            println!("      talking: hero main {} | partner {partner:?}", play.hero.action());
+        }
         let stingers = std::mem::take(&mut play.stinger_requests);
         if !stingers.is_empty() {
             println!("      stingers {stingers:?} on tick {}", play.ticks);
