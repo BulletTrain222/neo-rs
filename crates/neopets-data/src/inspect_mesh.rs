@@ -316,11 +316,33 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let (mut tables, mut zero_unused, mut contiguous, mut ids) = (0, 0, 0, 0);
     let (mut line_tables, mut line_records, mut resolved) = (0, 0, 0);
     let (mut planes, mut plane_packs, mut default_doors, mut scripted_packs, mut arrivals_ok) = (0, 0, 0, 0, 0);
+    let mut trig: (std::collections::BTreeMap<u8, usize>, usize, usize, usize) = Default::default();
     for pack in 533..=1433u32 {
         let Ok(bytes) = index.read(disc, pack) else { continue };
         let Ok(chain) = resource::walk_chunks(&bytes, None) else { continue };
         if chain.chunks.first().map(|c| c.kind) != Some(31) {
             continue;
+        }
+        {
+            // SPEC-0028 sections 6 and 11: the type-11 volumes by kind, the type-40 script groups
+            // and the type-15 placement id tables.
+            let (_, vols) = neopets_data::trigger::volumes(&bytes, &chain.chunks);
+            for v in &vols {
+                *trig.0.entry(v.kind).or_insert(0usize) += 1;
+            }
+            let groups = neopets_data::trigger::script_groups(&bytes, &chain.chunks);
+            if !groups.is_empty() {
+                trig.1 += 1;
+                trig.2 += groups.len();
+            }
+            trig.3 += neopets_data::travel::placement_table(&bytes, &chain.chunks).len();
+            if std::env::var_os("NEOPETS_TRIGGERS").is_some() && matches!(pack, 909 | 951 | 691 | 678 | 1023) {
+                let mut out: Vec<String> = vols.iter().filter(|v| v.flags & 0x0129 != 0x0001).map(|v| format!("{v:?}")).collect();
+                out.extend(groups.iter().map(|g| format!("{g:?}")));
+                out.push(format!("placements {:?}", neopets_data::travel::placement_table(&bytes, &chain.chunks)));
+                let _ = std::fs::write(format!("private/triggers-{pack}.txt"), out.join("
+"));
+            }
         }
         let kind = boot.kind(pack, &bytes, &chain.chunks);
         let module = !boot.module_entries(&bytes, &chain.chunks).is_empty();
@@ -387,6 +409,7 @@ fn travel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             }
         }
     }
+    println!("Trigger volumes by kind {:?}; script groups: {} entries in {} packs; placement id entries {}", trig.0, trig.2, trig.1, trig.3);
     println!(
         "Monster table: {} rows; {placements} placements, {townsfolk} of class 6, {minus7_not6} main -7 placements not class 6; by class {classes:?}",
         table.row_count()

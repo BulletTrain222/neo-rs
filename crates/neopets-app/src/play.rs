@@ -60,6 +60,19 @@ pub struct World {
     pub ambients: Vec<neopets_data::ground::Ambient>,
     ambient_counters: Vec<u8>,
     pub spheres: Vec<neopets_data::ground::SphereEmitter>,
+    /// Script triggers (SPEC-0030 Triggers; SPEC-0028 section 13): the trigger capacity, the
+    /// volumes that carry an index, the routine registered per index and the records; the script
+    /// groups (type 40), the placement id table, the embedded region's item points, the lock
+    /// table and the groups opened in this load.
+    capacity: usize,
+    volumes: Vec<neopets_sim::trigger::Volume>,
+    routines: HashMap<u16, u8>,
+    records: HashMap<u16, neopets_sim::trigger::Record>,
+    groups: Vec<neopets_data::trigger::ScriptGroup>,
+    placements: Vec<(u8, u8)>,
+    item_points: Vec<neopets_data::region::ItemPoint>,
+    locks: Vec<(i32, i32, i32)>,
+    opened: std::collections::BTreeSet<usize>,
 }
 
 impl World {
@@ -102,12 +115,37 @@ impl World {
             ambients: Vec::new(),
             ambient_counters: Vec::new(),
             spheres: Vec::new(),
+            capacity: 0,
+            volumes: Vec::new(),
+            routines: HashMap::new(),
+            records: HashMap::new(),
+            groups: neopets_data::trigger::script_groups(&bytes, &chain.chunks),
+            placements: neopets_data::travel::placement_table(&bytes, &chain.chunks),
+            item_points: neopets_data::region::embedded_records(&bytes, &chain.chunks).map(|r| r.items).unwrap_or_default(),
+            locks: Vec::new(),
+            opened: Default::default(),
         };
         let mut world = world;
         let (ambients, spheres) = ground::sound_emitters(&bytes, &chain.chunks);
         world.ambient_counters = vec![0; ambients.len()];
         world.ambients = ambients;
         world.spheres = spheres;
+        let (capacity, volumes) = neopets_data::trigger::volumes(&bytes, &chain.chunks);
+        world.capacity = capacity;
+        world.volumes = volumes
+            .into_iter()
+            .map(|v| {
+                use neopets_data::trigger::Shape as D;
+                use neopets_sim::trigger::Shape as S;
+                let shape = match v.shape {
+                    D::Sphere { centre, radius } => S::Sphere { centre, radius },
+                    D::Cylinder { base, axis, length, radius } => S::Cylinder { base, axis, length, radius },
+                    D::Rectangle { origin, axes, extents } => S::Rectangle { origin, axes, extents },
+                };
+                neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }
+            })
+            .filter(|v| v.fires_on_contact(0))
+            .collect();
         Ok((world, bytes))
     }
 
@@ -171,11 +209,13 @@ impl World {
 }
 
 /// Diagnostic route goals for the trace.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Goal {
     Swap,
     NewNeighbour,
     Door,
+    /// Within 3 units of a point (x, z) of the current world.
+    Point([f32; 2]),
 }
 
 /// A world load that a door started (SPEC-0006 default door rule), serviced by the loader.
@@ -282,6 +322,8 @@ pub struct Play {
     /// The shared dialogue box is open (SPEC-0022: it closes only on a Square press; the hero
     /// stays in the talking state meanwhile).
     pub dialogue_open: bool,
+    /// LevelMsg calls made while a box is up (their WAIT): shown in order as each box closes.
+    lines_queued: std::collections::VecDeque<(u16, bool)>,
     /// Tor's attack step (SPEC-0036), while state 13 runs.
     pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
@@ -305,12 +347,12 @@ pub struct Play {
     pub last_hurt: String,
     /// The enemy projectile pool (SPEC-0029 Behavior 9).
     pub shots: neopets_sim::projectile::Pool,
-    /// World items (SPEC-0021): one pool per resident world, the wallet, the party's item
-    /// counts, the once-per-area pickups (id, world), the luck value, the coin denominations,
-    /// ids and motion words, enemy payouts due this tick, and the last pickup.
+    /// World items (SPEC-0021): one pool per resident world, the wallet (the party's item counts
+    /// are the level state's `items`), the once-per-area pickups (id, world), the luck value,
+    /// the coin denominations, ids and motion words, enemy payouts due this tick, and the last
+    /// pickup.
     pub pools: HashMap<u32, neopets_sim::items::ItemPool>,
     pub wallet: i32,
-    pub inventory: HashMap<u16, u32>,
     once: std::collections::HashSet<(u16, u32)>,
     pub luck: i32,
     coins: (Vec<i32>, Vec<u16>, Option<neopets_sim::items::CoinWords>),
@@ -575,6 +617,7 @@ impl Play {
             talk_partner: None,
             talk_with: None,
             dialogue_open: false,
+            lines_queued: Default::default(),
             rng: neopets_sim::rng::Rng::seeded(clock_seed()),
             attack: None,
             attack_latch: false,
@@ -592,7 +635,6 @@ impl Play {
             shots: Default::default(),
             pools: HashMap::new(),
             wallet: 0,
-            inventory: HashMap::new(),
             once: Default::default(),
             luck: 0,
             coins,
@@ -653,7 +695,10 @@ impl Play {
         };
         // The start world's Init, then its activate-world routine (SPEC-0006 Make current),
         // which for 909 loads the farm family's slots.
-        let init = level::on_init(play.world.pack);
+        // SPEC-0049 New game at start index 0: no stage rows, then flag 707 (a loaded save
+        // replaces the flags later).
+        play.state.set(707, true);
+        let init = level::on_init(play.world.pack, &mut play.state);
         play.apply(&init);
         play.activated();
         // Flags already set when play starts are not risings (no stingers for them).
@@ -744,6 +789,7 @@ impl Play {
                     Goal::NewNeighbour => !other && self.neighbour_at(nx, nz).is_some_and(|t| !self.resident(t)),
                     Goal::Swap => other,
                     Goal::Door => !other && !self.world.scripted_doors && self.world.door_within([nx, h, nz], 3.0).is_some(),
+                    Goal::Point(t) => !other && (t[0] - nx).hypot(t[1] - nz) <= 3.0,
                 };
                 if reached {
                     let mut route = vec![[nx, nz]];
@@ -873,11 +919,17 @@ impl Play {
         true
     }
 
+    /// The current world's Init (a world loaded by a door job).
+    fn run_init(&mut self) {
+        let init = level::on_init(self.world.pack, &mut self.state);
+        self.apply(&init);
+    }
+
     /// A newly loaded other world runs its Init (its actions apply to that world).
     fn init_other(&mut self) {
         if let Some(o) = self.other.take() {
-            let init = level::on_init(o.pack);
             let current = std::mem::replace(&mut self.world, o);
+            let init = level::on_init(self.world.pack, &mut self.state);
             self.apply(&init);
             self.other = Some(std::mem::replace(&mut self.world, current));
         }
@@ -934,12 +986,25 @@ impl Play {
                         self.last_door = format!("script: hero moved to locator {locator} of {}", self.world.pack);
                     }
                 }
+                Action::Message { line } | Action::Talk { line } if self.dialogue_open => {
+                    self.lines_queued.push_back((line, matches!(a, Action::Talk { .. })));
+                }
                 Action::Message { line } => {
                     self.talk_partner = None;
                     self.talk_with = None;
                     self.open_line(line);
                 }
                 Action::Talk { line } => self.open_line(line),
+                Action::RegisterTrigger { index, routine } => {
+                    if (index as usize) < self.world.capacity {
+                        self.world.routines.insert(index, routine);
+                    }
+                }
+                Action::LockChest { id, key, message } => {
+                    if self.world.locks.len() < 2 {
+                        self.world.locks.push((id, key, message));
+                    }
+                }
                 Action::WhinnyPen { inner, entrance, locator } => {
                     let point = self.world.entries.get(locator).map_or([0.0; 3], |e| e.0);
                     self.world.pens = vec![neopets_sim::whinny::Pen { inner, entrance, point, occupied: false }];
@@ -1334,6 +1399,7 @@ impl Play {
                 }
                 let exterior = std::mem::replace(&mut self.world, world);
                 self.other = Some(exterior);
+                self.run_init();
                 let (l, g) = self.world.entries.first().copied().unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
                 let l = self.world.snap(l, 6.0);
                 self.arrive((l, g));
@@ -1343,6 +1409,7 @@ impl Play {
             Job::Replace(_, plane) => {
                 self.world = world;
                 self.other = None;
+                self.run_init();
                 let landing = self.world.landing(plane, false, false).or_else(|| {
                     let (l, g) = self.world.entries.first().copied()?;
                     Some((self.world.snap(l, 8.0), g))
@@ -1355,6 +1422,83 @@ impl Play {
                 if self.world.buffer == Buffer::Exterior {
                     self.other = Some(world);
                 }
+            }
+        }
+    }
+
+    /// SPEC-0028 Trigger pass for the selected hero's body (the grid cell lists are not
+    /// modelled: every firing volume of the current world is tested), then the script step: the
+    /// registered routine or the lock chest of each fired index runs, then the records decay.
+    fn trigger_step(&mut self) {
+        let frame = self.ticks as i64;
+        let p = self.loco.position();
+        let mut fired: Vec<u16> = self.world.volumes.iter().filter(|v| v.touches(p)).map(|v| v.index).collect();
+        fired.sort_unstable();
+        fired.dedup();
+        for &i in &fired {
+            self.world.records.entry(i).or_default().fire(frame, true, -1);
+        }
+        // The callbacks read the pad's newly-pressed word themselves; an open box keeps it.
+        let square = self.square_now && !self.dialogue_open;
+        for i in fired {
+            let rec = self.world.records.get(&i).copied().unwrap_or_default();
+            if let Some(g) = self.world.groups.iter().position(|g| g.kind == 1 && g.triggers.first() == Some(&(i as i32))) {
+                self.chest_step(g, rec, square);
+                continue;
+            }
+            let Some(&routine) = self.world.routines.get(&i) else { continue };
+            let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square };
+            let out = level::on_trigger(self.world.pack, routine, call, &mut self.state);
+            if out.prompt.is_some() && self.door_prompt.is_none() && !self.talk_prompt {
+                self.door_prompt = out.prompt;
+            }
+            self.apply(&out.actions);
+        }
+        for r in self.world.records.values_mut() {
+            r.decay(frame);
+        }
+    }
+
+    /// SPEC-0048 Lock chests, the press rule for script group g (kind 1). The chest object's
+    /// animation, cameras, effect 790 and hero animation 162 are not reproduced; the gate's
+    /// animation test is the group's opened mark for this load and its collected row.
+    fn chest_step(&mut self, g: usize, rec: neopets_sim::trigger::Record, square: bool) {
+        let Some(group) = self.world.groups.get(g).cloned() else { return };
+        if rec.state == 0 || !rec.object || self.world.opened.contains(&g) || self.state.collected.contains(&group.key) {
+            return;
+        }
+        // The Square caption's shown count must be zero.
+        if self.door_prompt.is_some() || self.talk_prompt {
+            return;
+        }
+        self.door_prompt = Some(6);
+        if !square {
+            return;
+        }
+        match level::chest_press(&self.world.locks, g as i32, &mut self.state) {
+            level::ChestPress::Locked { line } => self.apply(&[Action::Message { line }]),
+            level::ChestPress::Open => {
+                self.world.opened.insert(g);
+                let locator = group.locators.first().and_then(|&k| usize::try_from(k).ok());
+                if let Some(k) = locator {
+                    self.apply(&[Action::MoveHero { locator: k }]);
+                }
+                self.cue(142);
+                let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+                let a = [x[0] + 2.4 * d[0], x[1] + 2.4 * d[1] + 0.4, x[2] + 2.4 * d[2]];
+                // The reward: placement id drops[0] through the placement id table (the
+                // embedded region only).
+                let point = group
+                    .drops
+                    .first()
+                    .and_then(|&id| usize::try_from(id).ok())
+                    .and_then(|id| self.world.placements.get(id))
+                    .filter(|(region, _)| *region == 0xFF)
+                    .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
+                let pack = self.world.pack;
+                self.pay_out(pack, a, point);
+                self.state.collected.insert(group.key);
+                self.last_door = format!("chest group {g} opened (key {}), reward {:?}", group.key, point.map(|p| p.key));
             }
         }
     }
@@ -1462,6 +1606,10 @@ impl Play {
                     self.dialogue_open = false;
                     self.message = None;
                     self.talk_with = None;
+                    // The next waiting LevelMsg of the same callback.
+                    if let Some((line, talk)) = self.lines_queued.pop_front() {
+                        self.apply(&[if talk { Action::Talk { line } } else { Action::Message { line } }]);
+                    }
                 }
                 Some(neopets_sim::textbox::BoxEvent::Advanced) => self.cue(0x98),
                 None => {}
@@ -1493,7 +1641,7 @@ impl Play {
             panel.cross |= input.jump;
             panel.circle |= input.attack;
         }
-        let inv = &self.inventory;
+        let inv = &self.state.items;
         let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
         let was_open = self.quick.open;
         let marker = self.quick.marker;
@@ -1632,6 +1780,11 @@ impl Play {
         self.talk_prompt = false;
         if !self.dialogue_open && !self.talk_step() {
             self.door_step();
+        }
+        if self.job.is_none() {
+            self.trigger_step();
+            let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
+            self.apply(&actions);
         }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
@@ -2040,7 +2193,7 @@ impl Play {
             // A buff or immunity plays 0xA0; the cure 0x9F.
             self.cue(if id == 54 { 159 } else { 160 });
             let left = {
-                let n = self.inventory.entry(id).or_insert(0);
+                let n = self.state.items.entry(id).or_insert(0);
                 *n = n.saturating_sub(1);
                 *n
             };
@@ -2090,7 +2243,7 @@ impl Play {
             self.hero_mp = mp;
         }
         let left = {
-            let n = self.inventory.entry(id).or_insert(0);
+            let n = self.state.items.entry(id).or_insert(0);
             *n = n.saturating_sub(1);
             *n
         };
@@ -2151,7 +2304,7 @@ impl Play {
         }
         match id {
             19 | 20 | 151 | 154 | 174 => self.once.contains(&(id, pack)),
-            126 => self.inventory.get(&126).is_some_and(|&n| n > 0),
+            126 => self.state.items.get(&126).is_some_and(|&n| n > 0),
             _ => false,
         }
     }
@@ -2257,11 +2410,11 @@ impl Play {
             self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.wallet, self.ticks);
         } else {
             let count = if it.charm { 100 } else { 1 };
-            *self.inventory.entry(it.id).or_insert(0) += count;
+            *self.state.items.entry(it.id).or_insert(0) += count;
             if matches!(it.id, 19 | 20 | 151 | 154 | 174) {
                 self.once.insert((it.id, pack));
             }
-            self.last_pickup = format!("picked up item {} (held {}) on tick {}", it.id, self.inventory[&it.id], self.ticks);
+            self.last_pickup = format!("picked up item {} (held {}) on tick {}", it.id, self.state.items[&it.id], self.ticks);
         }
     }
 
@@ -2726,7 +2879,7 @@ impl Play {
         // Container A from the party's counts by text category, in id order; the equipped
         // weapon and shield are Tor's entries (entry 0) of the weapon and shield families.
         let mut lists: HashMap<&str, Vec<(u16, u32)>> = HashMap::new();
-        let mut held: Vec<(&u16, &u32)> = self.inventory.iter().filter(|(_, n)| **n > 0).collect();
+        let mut held: Vec<(&u16, &u32)> = self.state.items.iter().filter(|(_, n)| **n > 0).collect();
         held.sort();
         for (&id, &n) in held {
             // The equipment families and the tail are written from the equipped items below;
@@ -2789,7 +2942,7 @@ impl Play {
         s.0[at::TIER] = sv::tier(|n| self.state.flag(n));
         s.0[at::COUNTS..at::COUNTS + sv::COUNTS].fill(0);
         s.set_u32(at::SWAP_MODE, 2);
-        let cloak = self.inventory.get(&126).is_some_and(|&n| n > 0);
+        let cloak = self.state.items.get(&126).is_some_and(|&n| n > 0);
         s.0[at::CLOAK..at::CLOAK + 3].copy_from_slice(&[cloak as u8, 0, 0]);
         // A copy of the live options block (SPEC-0025 Options block).
         s.0[at::OPTIONS..at::OPTIONS + 32].copy_from_slice(&self.options.block.to_bytes());
@@ -2810,7 +2963,7 @@ impl Play {
                 self.state.flags.insert(n);
             }
         }
-        self.inventory.clear();
+        self.state.items.clear();
         self.weapon = None;
         self.shield = None;
         self.wallet = s.i32(at::WALLET);
@@ -2824,14 +2977,14 @@ impl Play {
                 Group::General | Group::Quest => {
                     let limit = self.design.carry_limit(id).unwrap_or(0);
                     let n = if limit > 0 { (v as u32).min(limit) } else { v as u32 };
-                    *self.inventory.entry(id).or_insert(0) += n;
+                    *self.state.items.entry(id).or_insert(0) += n;
                 }
-                Group::Charm => *self.inventory.entry(id).or_insert(0) += v as u32,
+                Group::Charm => *self.state.items.entry(id).or_insert(0) += v as u32,
                 _ => {}
             }
         }
         if s.0[at::CLOAK] != 0 {
-            self.inventory.insert(126, 1);
+            self.state.items.insert(126, 1);
         }
         self.once.clear();
         for (set, &id) in ONCE_ITEMS.iter().enumerate() {
@@ -2873,13 +3026,15 @@ impl Play {
     }
 
     /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is
-    /// equipped; any other item goes to the party's counts.
+    /// equipped; every item is also counted as held.
     pub fn give(&mut self, id: u16) {
         match self.items.get(id).map(|i| i.kind) {
             Some(5) => self.shield = Some(id),
             Some(3 | 6) => self.weapon = Some(id),
-            _ => *self.inventory.entry(id).or_insert(0) += 1,
+            _ => {}
         }
+        // An equipped item is still held (DoesHeroHaveItem).
+        *self.state.items.entry(id).or_insert(0) += 1;
     }
 
     /// The game-over page's quit exit. With no save or load in the session the game tears the

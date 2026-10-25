@@ -5,10 +5,15 @@
 //! - 909 (SPEC-0045): teleport callbacks 0 and 1 (interior entries to slots 72 and 73), the
 //!   activate-world routine's flag reset and blackboard placement, and its activation thread's
 //!   slot loads by story stage (the farm family and the fourth slot).
-//! - 951 (SPEC-0041): teleport callback 0 (a line, or leave to slot 5 with message 10).
+//!   Its script triggers (the camera-pair volumes 0 to 3 with line 192, the pump exchange of
+//!   index 5, the tutorial line of index 7, the door of index 8) and the flag and item steps of
+//!   its Update.
+//! - 951 (SPEC-0041): Init (teleport, the chest lock, the thread body's flag, item and slot
+//!   steps), the three proximity callbacks and teleport callback 0.
 //! - 955 (SPEC-0032): teleport callback 0 (message 40, leave to slot 5).
-//! Not covered: every other level, and in these levels the triggers, proximity talk, threads,
-//! slot loads, objects, cutscenes, Update and the camera calls.
+//! - The lock chest press of script groups of kind 1 (SPEC-0048 Lock chests).
+//! Not covered: every other level, and in these levels the objects, effects, cameras, fades,
+//! movies, walks and cutscene staging (their flag, item and slot effects are applied).
 
 use std::collections::{BTreeSet, HashMap};
 
@@ -47,6 +52,29 @@ pub enum Action {
     /// SetMidiExciteLevel(n) and SetMidiAdventureLevel(f) (SPEC-0009 Intensity inputs).
     SetExcite { level: i32 },
     SetAdventure { level: f32 },
+    /// RegisterScriptTrigger(index, routine): the pack-local routine number for a trigger index
+    /// (ignored outside the world's capacity).
+    RegisterTrigger { index: u16, routine: u8 },
+    /// LockChest(id, key item, message): the world's two-entry lock table (SPEC-0048).
+    LockChest { id: i32, key: i32, message: i32 },
+}
+
+/// One run of a trigger callback: the record's state word and object word as the fire step left
+/// them, and whether Square went down this pass (the button query's newly-pressed word).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TriggerCall {
+    pub index: u16,
+    pub state: u8,
+    pub object: bool,
+    pub square: bool,
+}
+
+/// What a trigger callback did: its actions and the Square context it posted (SPEC-0023 section
+/// 33), if any.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TriggerOut {
+    pub actions: Vec<Action>,
+    pub prompt: Option<u16>,
 }
 
 /// Story flags (QueryGameState and SetGameState), the blackboard (AddBlackboardMessage, read by
@@ -60,6 +88,11 @@ pub struct GameState {
     /// Rotation words of the proximity routines, by (pack, routine). Module data: a pack's
     /// words return to 0 when it is loaded again (`reload_module`).
     pub rotations: HashMap<(u32, u8), Rotation>,
+    /// Other module data words, by (pack, word): latches and the trigger routines' words. Back to
+    /// 0 when the pack loads again.
+    pub words: HashMap<(u32, u8), i32>,
+    /// The shared collected table (SPEC-0048 Script groups, Key; SPEC-0051): rows set to 1.
+    pub collected: BTreeSet<u32>,
 }
 
 impl GameState {
@@ -87,6 +120,25 @@ impl GameState {
     /// A pack was loaded again: its module data words return to their file values.
     pub fn reload_module(&mut self, pack: u32) {
         self.rotations.retain(|(p, _), _| *p != pack);
+        self.words.retain(|(p, _), _| *p != pack);
+    }
+
+    fn word(&self, pack: u32, w: u8) -> i32 {
+        self.words.get(&(pack, w)).copied().unwrap_or(0)
+    }
+
+    fn set_word(&mut self, pack: u32, w: u8, v: i32) {
+        self.words.insert((pack, w), v);
+    }
+
+    /// GiveItemToHero(item, n).
+    pub fn give(&mut self, item: u16, n: u32) {
+        *self.items.entry(item).or_insert(0) += n;
+    }
+
+    /// RemoveAllOfItemFromHero(item).
+    pub fn remove_all(&mut self, item: u16) {
+        self.items.remove(&item);
     }
 
     /// The farm story stage: the highest of story flags 1 to 6 that is set (SPEC-0045, 909
@@ -133,11 +185,170 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
-pub fn on_init(pack: u32) -> Vec<Action> {
+pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
+    let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
-        // SPEC-0045 909 Init: SetWhinnyPenmesh first (inner 0, entrance 5, locator 8).
-        909 => vec![Action::WhinnyPen { inner: 0, entrance: 5, locator: 8 }],
+        // SPEC-0045 909 Init: SetWhinnyPenmesh first (inner 0, entrance 5, locator 8); script
+        // triggers 0 to 3 routine 10, 5 routine 11, 8 routine 7, and 7 routine 4 while 117 is
+        // clear.
+        909 => {
+            let mut out = vec![Action::WhinnyPen { inner: 0, entrance: 5, locator: 8 }];
+            out.extend((0..4).map(|i| reg(i, 10)));
+            out.push(reg(5, 11));
+            out.push(reg(8, 7));
+            if !state.flag(117) {
+                out.push(reg(7, 4));
+            }
+            out
+        }
+        // SPEC-0041 951 Init: LockChest(chest 0, key item 15, message 124); then the thread
+        // body, which runs once: the first-entry step (120, movie 2, item 15) and the slot step.
+        951 => {
+            let mut out = vec![Action::LockChest { id: 0, key: 15, message: 124 }];
+            if state.flag(119) && !state.flag(120) {
+                state.set(120, true);
+                state.give(15, 1);
+            }
+            // The first case that holds, unless 220 is set: 2 set and 147 clear does nothing.
+            if !state.flag(220) && !(state.flag(2) && !state.flag(147)) {
+                if state.flag(147) && !state.flag(148) {
+                    state.remove_all(1);
+                    state.give(0, 1);
+                    state.set(148, true);
+                } else if !state.flag(147) && !state.flag(2) && !state.flag(123) && (state.flag(121) || state.flag(119)) {
+                    // SlotCreate(world, 3, ...) with j 1: region 953.
+                    out.push(Action::LoadRegion { slot: 0, region: Some(953) });
+                }
+            }
+            out
+        }
         _ => Vec::new(),
+    }
+}
+
+/// Run a registered script trigger routine of a pack for one fire of its record.
+pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameState) -> TriggerOut {
+    let mut out = TriggerOut::default();
+    let first = call.state == 1 && call.object;
+    match (pack, routine) {
+        // SPEC-0045 909 trigger routine 10 (indices 0 to 3): words A (0) and B (1), the line-192
+        // once-word (2). Cameras 5 and 6 are not played.
+        (909, 10) if first => {
+            match call.index {
+                0 => state.set_word(pack, 0, 1),
+                1 => state.set_word(pack, 1, 1),
+                _ => {
+                    state.set_word(pack, 0, 0);
+                    state.set_word(pack, 1, 0);
+                }
+            }
+            if state.word(pack, 0) != 0 && state.word(pack, 1) != 0 {
+                if call.index == 0 {
+                    if state.word(pack, 2) == 0 && !state.flag(220) {
+                        out.actions.push(Action::Message { line: 192 });
+                        state.set_word(pack, 2, 1);
+                    }
+                    state.set_word(pack, 1, 0);
+                } else if call.index == 1 {
+                    state.set_word(pack, 0, 0);
+                }
+            }
+        }
+        // SPEC-0045 909 trigger routine 11 (index 5), the pump: word 3 is set by the exchange
+        // (and cleared by the flag-117 cutscene). The objects, effects, camera 27, fades and
+        // sounds of the exchange are not reproduced.
+        (909, 11) => {
+            if !call.square {
+                out.prompt = Some(4);
+            } else if state.word(pack, 3) != 0 {
+                out.actions.push(Action::Message { line: 167 });
+            } else if state.flag(111) && !state.flag(112) && state.has_item(6) {
+                out.actions.push(Action::MoveHero { locator: 29 });
+                state.remove_all(6);
+                out.actions.push(Action::Message { line: 166 });
+                state.give(7, 1);
+                out.actions.push(Action::Message { line: 162 });
+                state.set(112, true);
+                state.set_word(pack, 3, 1);
+            } else {
+                // The spec names lines 163 to 165 by flags 111 and 112 and items 6 and 7 without
+                // the mapping (R-0024); provisional: 163 before the task, 164 without the bucket,
+                // 165 once the water is drawn.
+                let line = if !state.flag(111) { 163 } else if !state.flag(112) { 164 } else { 165 };
+                out.actions.push(Action::Message { line });
+            }
+        }
+        // SPEC-0045 909 routine 4 (index 7): line 191 (the push and ladder hint).
+        (909, 4) if first => out.actions.push(Action::Message { line: 191 }),
+        // SPEC-0045 909 routine 7 (index 8): enter world 71 (pack 950).
+        (909, 7) if first => out.actions.push(Action::EnterInterior { slot: 71 }),
+        _ => {}
+    }
+    out
+}
+
+/// Run a pack's Update for one tick of the current world. `dialog` is whether a dialogue box
+/// is up (the "wait until no dialog is active" steps hold until it closes).
+pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> {
+    let mut out = Vec::new();
+    match pack {
+        // SPEC-0045 909 Update: the flag and item steps; the cutscenes' staging is not built,
+        // only their flag and slot effects.
+        909 => {
+            // The Act 1 start: 707 on and 1 off sets 1 and clears 706 (movies 88 and 1, the act
+            // start, the fade, camera 30 and entity 31's move are not reproduced).
+            if state.flag(707) && !state.flag(1) {
+                state.set(1, true);
+                state.set(706, false);
+            }
+            if !state.flag(111) && state.has_item(6) && state.flag(110) {
+                state.set(111, true);
+            }
+            if !state.flag(618) && state.flag(116) && state.has_item(34) {
+                state.set(618, true);
+            }
+            if state.flag(114) && !state.flag(115) && !dialog {
+                state.set(115, true);
+                out.push(Action::LoadRegion { slot: 3, region: Some(927) });
+            }
+            if state.flag(117) && !state.flag(118) && !dialog {
+                state.set(118, true);
+                // The pump word is cleared by this cutscene; the second scene sets 119 and
+                // leaves slot R empty.
+                state.set_word(pack, 3, 0);
+                state.set(119, true);
+                out.push(Action::LoadRegion { slot: 3, region: None });
+            }
+            if state.flag(278) {
+                state.set(279, true);
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+/// What a lock chest press does after its gate (SPEC-0048 Lock chests, press rule step 4).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ChestPress {
+    /// The key item is missing: show the lock message.
+    Locked { line: u16 },
+    /// The chest opens (the key item, if any, was removed).
+    Open,
+}
+
+/// The lock step for group `id` against the world's lock table of (id, key item, message).
+pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) -> ChestPress {
+    match locks.iter().find(|l| l.0 == id) {
+        Some(&(_, key, message)) if key > 0 => {
+            if state.has_item(key as u16) {
+                state.remove_all(key as u16);
+                ChestPress::Open
+            } else {
+                ChestPress::Locked { line: message.max(0) as u16 }
+            }
+        }
+        _ => ChestPress::Open,
     }
 }
 
@@ -163,6 +374,15 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             };
             let mut actions: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
             actions.extend(farm_slots(state, message == 10));
+            // The thread's arrival step: 706 (the opening fade-in done) once the loads end.
+            state.set(706, true);
+            // Its stage events, flag effects only (the cutscene staging and movie 5 are not
+            // reproduced; the stage-6 scene is not covered).
+            match state.stage() {
+                Some(1) if state.flag(122) && !state.flag(123) => state.set(123, true),
+                Some(2) if !state.flag(147) && !state.flag(145) => state.set(145, true),
+                _ => {}
+            }
             actions
         }
         _ => Vec::new(),
@@ -230,6 +450,10 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (909, 37..=42) => Some(0),
         (909, 43..=50) => Some(1),
         (909, 31..=36) => Some(2),
+        // SPEC-0041 951: callback 1 at 0, 3 and 7; callback 2 at 1, 4 and 8; 3 at 2, 5 and 6.
+        (951, 0 | 3 | 7) => Some(0),
+        (951, 1 | 4 | 8) => Some(1),
+        (951, 2 | 5 | 6) => Some(2),
         _ => None,
     }
 }
@@ -248,10 +472,34 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
         (909, 0) => farm_routine_a(state, &mut rot),
         (909, 1) => farm_routine_b(state, &mut rot),
         (909, 2) => farm_routine_c(state, &mut rot),
+        (951, r) => return house_routine(r, state),
         _ => None,
     };
     state.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// SPEC-0041 951 proximity callbacks 1 to 3 (routines 0 to 2). With 147 clear they show their
+/// line with LevelMsg alone, outside the conversation frame.
+fn house_routine(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let talk = |line| vec![Action::Talk { line }];
+    let msg = |line| vec![Action::Message { line }];
+    match routine {
+        0 if s.flag(147) => talk(0),
+        0 => msg(4),
+        1 if s.flag(147) => talk(119),
+        1 => msg(123),
+        2 if s.flag(147) => talk(55),
+        2 if !s.flag(122) && s.has_item(98) => {
+            s.give(32, 1);
+            s.set(121, true);
+            s.set(122, true);
+            msg(59)
+        }
+        2 if !s.flag(122) => msg(60),
+        2 => msg(58),
+        _ => Vec::new(),
+    }
 }
 
 /// The (flag, lines) cascade shared by the farm routines' story branches: the first set flag
@@ -534,6 +782,113 @@ mod tests {
         }
         on_activate(909, &mut s);
         assert!((107..=110).all(|f| s.flag(f)));
+    }
+
+    fn fire(s: &mut GameState, routine: u8, index: u16, square: bool) -> TriggerOut {
+        on_trigger(909, routine, TriggerCall { index, state: 1, object: true, square }, s)
+    }
+
+    #[test]
+    fn farm_camera_pair_vectors() {
+        // SPEC-0045 routine 10: fires 1, 0, 0: line 192 on the second fire, B cleared; the third
+        // plays nothing. A new load with fires 0, 1, 0: the third shows line 192.
+        let mut s = GameState::default();
+        assert!(fire(&mut s, 10, 1, false).actions.is_empty());
+        assert_eq!(fire(&mut s, 10, 0, false).actions, vec![Action::Message { line: 192 }]);
+        assert!(fire(&mut s, 10, 0, false).actions.is_empty());
+        s.reload_module(909);
+        assert!(fire(&mut s, 10, 0, false).actions.is_empty());
+        assert!(fire(&mut s, 10, 1, false).actions.is_empty(), "camera 6, A cleared");
+        assert_eq!(fire(&mut s, 10, 0, false).actions, vec![Action::Message { line: 192 }]);
+        // Once per load: a further 1, 0 crossing shows nothing.
+        fire(&mut s, 10, 1, false);
+        assert!(fire(&mut s, 10, 0, false).actions.is_empty());
+        // With flag 220 set the line never shows.
+        let mut s = GameState::default();
+        s.set(220, true);
+        fire(&mut s, 10, 1, false);
+        assert!(fire(&mut s, 10, 0, false).actions.is_empty());
+    }
+
+    #[test]
+    fn farm_pump_exchange() {
+        let mut s = GameState::default();
+        assert_eq!(fire(&mut s, 11, 5, false).prompt, Some(4));
+        s.set(110, true);
+        s.give(6, 1);
+        // Update: the bucket held after the round-up sets 111.
+        on_update(909, &mut s, false);
+        assert!(s.flag(111));
+        let out = fire(&mut s, 11, 5, true);
+        assert_eq!(out.actions, vec![Action::MoveHero { locator: 29 }, Action::Message { line: 166 }, Action::Message { line: 162 }]);
+        assert!(s.flag(112) && s.has_item(7) && !s.has_item(6));
+        assert_eq!(fire(&mut s, 11, 5, true).actions, vec![Action::Message { line: 167 }]);
+        // Mum's talk (routine A) takes the water; Hubert's sends Tor for the pliers.
+        assert_eq!(talks(909, 0, &mut s, 1), vec![45]);
+        assert!(s.flag(113) && !s.has_item(7));
+        assert_eq!(talks(909, 1, &mut s, 1), vec![101]);
+        assert!(s.flag(114));
+        assert_eq!(on_update(909, &mut s, true), vec![], "the scene waits for the box to close");
+        assert_eq!(on_update(909, &mut s, false), vec![Action::LoadRegion { slot: 3, region: Some(927) }]);
+        // Without the pliers Hubert's line 98 sets 116; picking them up then sets 618.
+        assert_eq!(talks(909, 1, &mut s, 1), vec![98]);
+        s.give(34, 1);
+        on_update(909, &mut s, false);
+        assert!(s.flag(618));
+        assert_eq!(talks(909, 1, &mut s, 1), vec![97]);
+        assert!(s.flag(116) && s.flag(117) && !s.has_item(34));
+        assert_eq!(on_update(909, &mut s, false), vec![Action::LoadRegion { slot: 3, region: None }]);
+        assert!(s.flag(118) && s.flag(119));
+    }
+
+    #[test]
+    fn house_chest_sword_and_parcel() {
+        // SPEC-0041 951: the first entry with 119 set gives item 15, sets 120 and loads 953.
+        let mut s = GameState::default();
+        s.set(119, true);
+        let init = on_init(951, &mut s);
+        assert_eq!(init, vec![Action::LockChest { id: 0, key: 15, message: 124 }, Action::LoadRegion { slot: 0, region: Some(953) }]);
+        assert!(s.flag(120) && s.has_item(15));
+        assert!(!on_init(951, &mut s).is_empty() && s.items[&15] == 1, "item 15 once");
+        // The leave door holds Tor in with line 126 until the parcel.
+        assert_eq!(on_teleport(951, 0, &mut s), vec![Action::Message { line: 126 }]);
+        // SPEC-0048: the chest takes all of item 15 and opens; without it, the lock line.
+        let locks = [(0, 15, 124)];
+        assert_eq!(chest_press(&locks, 0, &mut GameState::default()), ChestPress::Locked { line: 124 });
+        assert_eq!(chest_press(&locks, 0, &mut s), ChestPress::Open);
+        assert!(!s.has_item(15));
+        assert_eq!(chest_press(&locks, 1, &mut GameState::default()), ChestPress::Open, "no lock entry");
+        // SPEC-0041 test vector: callback 3 with 147 and 122 clear and item 98 held.
+        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 60 }]);
+        s.give(98, 1);
+        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 59 }]);
+        assert!(s.flag(121) && s.flag(122) && s.has_item(32));
+        assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 58 }]);
+        assert_eq!(on_talk(951, 0, &mut s), vec![Action::Message { line: 4 }]);
+        assert_eq!(on_teleport(951, 0, &mut s), vec![Action::LeaveInterior { slot: 5 }]);
+    }
+
+    #[test]
+    fn act_1_start() {
+        // SPEC-0058 test vector 8: 909 Update with 707 on and 1 off: flag 1 on, 706 off.
+        let mut s = GameState::default();
+        s.set(707, true);
+        on_activate(909, &mut s);
+        assert!(s.flag(706));
+        on_update(909, &mut s, false);
+        assert!(s.flag(1) && !s.flag(706));
+        assert_eq!(s.stage(), Some(1));
+        // Back from the house with the parcel (entry value 10): the flag-122 scene sets 123.
+        for f in [119, 121, 122] {
+            s.set(f, true);
+        }
+        s.blackboard.insert((2, 68), 10);
+        assert_eq!(on_activate(909, &mut s)[0], Action::MoveHero { locator: 2 });
+        assert!(s.flag(123));
+        // Stage 2 with 147 and 145 clear: 145 (Tor's sister has gone missing).
+        s.set(2, true);
+        on_activate(909, &mut s);
+        assert!(s.flag(145));
     }
 
     #[test]

@@ -1845,6 +1845,15 @@ fn play_trace(
         };
         println!("Route to a swap point: {} steps, ending at {:?}", route.len(), route.last());
     }
+    // NEOPETS_TRACE_PATH="x,z;x,z;...": waypoints walked in turn along searched routes; each is
+    // left once the hero has stood within 2 units of it for 30 ticks with no dialogue box up.
+    let mut legs: Vec<[f32; 2]> = std::env::var("NEOPETS_TRACE_PATH")
+        .ok()
+        .map(|v| v.split(';').filter_map(|w| w.trim().split_once(',').and_then(|(x, z)| Some([x.parse().ok()?, z.parse().ok()?]))).collect())
+        .unwrap_or_default();
+    let walk_path = !legs.is_empty();
+    let mut dwell = 0;
+    let mut leg_pack = play.world.pack;
     let mut last_hurt = String::new();
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
@@ -1866,7 +1875,37 @@ fn play_trace(
             route = play.route_to(400_000, play::Goal::NewNeighbour).unwrap_or_default();
             println!("      rerouted on tick {} toward a new neighbour: {} steps", play.ticks, route.len());
         }
-        while route.len() > 1 && {
+        if walk_path && play.job_pack().is_none() {
+            // Arriving in another world ends the leg that led there (a door).
+            if play.world.pack != leg_pack {
+                leg_pack = play.world.pack;
+                if legs.len() > 1 {
+                    legs.remove(0);
+                }
+                route.clear();
+                println!("      waypoint left with the world on tick {}; {} left", play.ticks, legs.len() - 1);
+            }
+            let p = play.loco.position();
+            if route.is_empty() && legs.len() > 1 {
+                route = play.route_to(200_000, play::Goal::Point(legs[0])).unwrap_or_default();
+                route.push(legs[0]);
+            }
+            while route.len() > 1 && (route[0][0] - p[0]).powi(2) + (route[0][1] - p[2]).powi(2) < 4.0 {
+                route.remove(0);
+            }
+            let near = route.len() == 1 && (route[0][0] - p[0]).powi(2) + (route[0][1] - p[2]).powi(2) < 4.0;
+            dwell = if near && !play.dialogue_open { dwell + 1 } else { 0 };
+            if dwell >= 30 && legs.len() > 1 {
+                dwell = 0;
+                legs.remove(0);
+                route.clear();
+                println!("      waypoint reached on tick {}; {} left", play.ticks, legs.len() - 1);
+            }
+            if route.is_empty() {
+                route.push(legs[0]);
+            }
+        }
+        while !walk_path && route.len() > 1 && {
             let p = play.loco.position();
             (route[0][0] - p[0]).powi(2) + (route[0][1] - p[2]).powi(2) < 4.0
         } {
@@ -1883,7 +1922,7 @@ fn play_trace(
         };
         if let Some([tx, tz]) = goal.filter(|g| {
             let p = play.loco.position();
-            route.len() > 1 || to.is_some_and(|t| t[0].is_nan()) || (g[0] - p[0]).hypot(g[1] - p[2]) > 2.0
+            (route.len() > 1 && !walk_path) || to.is_some_and(|t| t[0].is_nan()) || (g[0] - p[0]).hypot(g[1] - p[2]) > if walk_path { 1.5 } else { 2.0 }
         }) {
             let p = play.loco.position();
             let (f, l) = play.camera.rows();
@@ -1911,7 +1950,7 @@ fn play_trace(
         if fight.is_some() && play.hero_hp > 0 && play.hero_hp < play.hero_max / 2 {
             let owned = (0..4).find(|&k| {
                 let id = play.quick.entries[k];
-                id >= 0 && play.inventory.get(&(id as u16)).is_some_and(|&n| n > 0)
+                id >= 0 && play.state.items.get(&(id as u16)).is_some_and(|&n| n > 0)
             });
             if !play.quick.open {
                 play.panel_latch.up |= play.ticks % 20 == 0;
@@ -2045,7 +2084,7 @@ fn play_trace(
                 println!("Loaded: {}", loaded.status());
                 println!("        {}", loaded.status_worlds());
                 let summary = |p: &play::Play| {
-                    let mut inv: Vec<_> = p.inventory.iter().map(|(k, v)| (*k, *v)).collect();
+                    let mut inv: Vec<_> = p.state.items.iter().map(|(k, v)| (*k, *v)).collect();
                     inv.sort();
                     format!("weapon {:?}, shield {:?}, items {inv:?}, flags {:?}, luck {}, statuses {:?}, restart {:?}", p.weapon, p.shield, p.state.flags, p.luck, p.statuses.timers, p.restart)
                 };

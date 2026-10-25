@@ -202,6 +202,17 @@ pub fn map_area(bytes: &[u8], chain: &[Chunk]) -> Option<i32> {
 }
 
 pub fn entity_table(bytes: &[u8], top: &[Chunk]) -> Vec<(u8, u8)> {
+    tagged_pairs(bytes, top, 0x12)
+}
+
+/// The placement id table (SPEC-0021 Placement id table; type-15 tag 0x13): per placement id,
+/// the region byte (0xFF the embedded region, else a slot load's j) and the kind-8 ordinal.
+pub fn placement_table(bytes: &[u8], top: &[Chunk]) -> Vec<(u8, u8)> {
+    tagged_pairs(bytes, top, 0x13)
+}
+
+/// The first two bytes of each 16-byte entry of a tag-0x12 or tag-0x13 record.
+fn tagged_pairs(bytes: &[u8], top: &[Chunk], tag: u32) -> Vec<(u8, u8)> {
     let Some(c) = top.iter().find(|c| c.kind == TAGGED) else { return Vec::new() };
     let p = &bytes[c.payload.clone()];
     let mut at = 0usize;
@@ -218,7 +229,7 @@ pub fn entity_table(bytes: &[u8], top: &[Chunk]) -> Vec<(u8, u8)> {
             }
             0x12 | 0x13 => {
                 let size = u32_at(p, at + 8).unwrap_or(0) as usize & !0xF;
-                if t == 0x12 {
+                if t == tag {
                     return (0..size / 16).filter_map(|i| Some((*p.get(at + 0x10 + 16 * i)?, *p.get(at + 0x11 + 16 * i)?))).collect();
                 }
                 0x10 + size

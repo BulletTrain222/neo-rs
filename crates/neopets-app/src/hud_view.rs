@@ -293,7 +293,7 @@ pub fn sync_hud(
     let hud = &p.hud;
     let mb = &p.monster_bar;
     // The owned count of an item id (0 for -1 or an item not held).
-    let count = |id: i32| u16::try_from(id).ok().and_then(|id| p.inventory.get(&id)).map_or(0, |&n| n as i32);
+    let count = |id: i32| u16::try_from(id).ok().and_then(|id| p.state.items.get(&id)).map_or(0, |&n| n as i32);
     let inputs = Inputs {
         c: hud.c,
         g0: hud.g0,
