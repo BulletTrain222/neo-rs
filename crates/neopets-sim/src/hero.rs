@@ -1,8 +1,14 @@
 //! Hero ground locomotion (SPEC-0033 Behaviors 2 and 5; SPEC-0040 Behavior 14C): stick speed
 //! and direction, the speed tiers that pick slow walk, walk or run and the play rate, the facing
 //! turn, and travel by the root step of the playing clip turned by the facing basis.
-//! Not covered: jumps, gravity and falling, wall contacts, status factors, strafe (state 32),
-//! traversal states, and the displayed-height lag of Behavior 7.
+//! The motion record (SPEC-0040 Behavior 14A, `motion::Body`) carries the hero: gravity, the
+//! walk-off fall (SPEC-0033 9A) and the jumps, air phases, steering and landings of Behavior 50.
+//! Not covered: status factors, strafe (state 32) and strafe jumps, reverse walk (state 6) and
+//! the backward jump 11, air attacks and the plunge, grabs and traversal states, the landing
+//! event windows (Cross chain, L1 guard, the hard landing's early exit), the floor-contact flag,
+//! the in-air ledge and block-edge choosers, and the displayed-height lag of Behavior 7.
+
+use crate::motion::{Body, HERO_WEIGHT};
 
 pub type Vec3 = [f32; 3];
 
@@ -11,6 +17,37 @@ pub const STANCE: u8 = 1;
 pub const SLOW_WALK: u8 = 2;
 pub const WALK: u8 = 3;
 pub const RUN: u8 = 4;
+/// Jump states (Behavior 50): 7 standing, 8 slow, 9 walking, 10 running.
+pub const JUMP: u8 = 7;
+pub const JUMP_RUN: u8 = 10;
+/// Behavior 50 constants: launch vertical velocity, the gains and the phase thresholds.
+const LAUNCH: f32 = 8.75;
+const GAIN_RISE: f32 = 0.35;
+const GAIN_FALL: f32 = 0.3;
+const GAIN_DESCENT: f32 = 0.35;
+const LAND_GAP: f32 = 1.0;
+const HARD_FALL: f32 = 3.0;
+/// Air steering: drag per tick, stick push per tick and the speed cap for the push.
+const AIR_DRAG: f32 = 0.5;
+const AIR_PUSH: f32 = 0.6;
+const AIR_CAP: f32 = 9.0;
+/// Hero animation ids (SPEC-0033 Behaviors 9A and 50).
+const ANIM_JUMP_STILL: u32 = 70;
+const ANIM_JUMP_MOVE: u32 = 76;
+const ANIM_FALL_STILL: u32 = 67;
+const ANIM_FALL_MOVE: u32 = 78;
+const ANIM_SOFT_LAND: u32 = 68;
+const ANIM_HARD_LAND: u32 = 118;
+
+/// The jump speed S of states 7 to 10 (Behavior 50 table).
+fn jump_speed(state: u8) -> f32 {
+    match state {
+        8 => 2.0,
+        9 => 5.0,
+        10 => 9.0,
+        _ => 0.0,
+    }
+}
 /// Passes after a run ends before running may restart (0.5 s at 60 ticks per second).
 const RUN_RESTART: u32 = 30;
 
@@ -38,6 +75,16 @@ pub struct HeroInput {
     pub side: f32,
     pub forward: f32,
     pub run: bool,
+    /// Cross pressed this pass (a press edge).
+    pub jump: bool,
+}
+
+/// The hero's playing clip as the animation pass left it on the previous tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct ClipState {
+    pub action: u32,
+    pub progress: f32,
+    pub finished: bool,
 }
 
 /// Speed value v: the stick length, capped at 1.0 (SPEC-0033 Behavior 2).
@@ -84,16 +131,23 @@ pub fn tier(v: f32, run_mode: bool) -> Option<(u8, f32)> {
     })
 }
 
-/// A hero's ground position, facing and locomotion state.
+/// A hero's motion record, facing and locomotion state.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Locomotion {
-    pub position: Vec3,
+    pub body: Body,
     pub facing: Vec3,
     pub state: u8,
     /// Stick direction u (steering target): kept while the stick is centred.
     pub target: Vec3,
     /// Per-pass speed scale P, the hero's play rate R (base scale 1.0).
     pub rate: f32,
+    /// Air phase word of Behavior 50 (-1 launch pending).
+    pub phase: i8,
+    /// Take-off height stored by the jump chooser or the walk-off.
+    start_height: f32,
+    /// Position change of the last record tick (+0x160).
+    last_motion: Vec3,
+    request: u32,
     run_counter: u32,
 }
 
@@ -102,27 +156,41 @@ impl Locomotion {
         let f = flatten(facing);
         let f = if dot(f, f) == 0.0 { [1.0, 0.0, 0.0] } else { f };
         Self {
-            position,
+            body: Body::new(position, HERO_WEIGHT),
             facing: f,
             state: STANCE,
             target: f,
             rate: 1.0,
+            phase: 0,
+            start_height: position[1],
+            last_motion: [0.0; 3],
+            request: 0,
             run_counter: RUN_RESTART,
         }
     }
 
-    /// The animation id the current state plays (SPEC-0033 5.1: states 2 to 4 play ids 2 to 4;
-    /// the stance plays the base idle 0).
+    pub fn position(&self) -> Vec3 {
+        self.body.position
+    }
+
+    pub fn airborne(&self) -> bool {
+        (JUMP..=JUMP_RUN).contains(&self.state)
+    }
+
+    /// The animation id requested this pass. Ground states 2 to 4 play ids 2 to 4 and the
+    /// stance the base idle 0 (SPEC-0033 5.1); the air states request their own.
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
+            JUMP..=JUMP_RUN => self.request,
             _ => 0,
         }
     }
 
     /// The hero update of one pass: stick direction from the camera's ground forward and
-    /// screen-left vectors, the facing turn, and the speed tiers.
-    pub fn update(&mut self, input: &HeroInput, camera_forward: Vec3, camera_left: Vec3) {
+    /// screen-left vectors, then the state routine: on the ground the walk-off check, the jump
+    /// chooser, the facing turn and the speed tiers; in the air the air routine.
+    pub fn update(&mut self, input: &HeroInput, camera_forward: Vec3, camera_left: Vec3, clip: ClipState) {
         let v = speed_value(input);
         self.rate = 1.0;
         if v > 0.0 {
@@ -131,32 +199,195 @@ impl Locomotion {
             let c = flatten(camera_forward);
             let left = flatten(camera_left);
             self.target = normalise([z * c[0] + x * left[0], 0.0, z * c[2] + x * left[2]]);
-            self.facing = turn_moving(self.facing, self.target);
         }
-        self.run_counter = if self.state == RUN { 0 } else { (self.run_counter + 1).min(RUN_RESTART) };
-        let run_mode = input.run && (self.state == RUN || self.run_counter >= RUN_RESTART);
-        match tier(v, run_mode) {
-            Some((state, factor)) => {
-                self.state = state;
-                self.rate *= factor;
+        if !self.airborne() {
+            // Behavior 9A: the walk-off check runs first in states 1 to 6.
+            if self.body.gap > 3.0 && self.body.velocity[1] < -3.0 {
+                self.enter_air(JUMP);
+                let m = self.last_motion;
+                let still = dot(m, self.facing) < 0.0 || dot(m, m).sqrt() < 0.01;
+                (self.phase, self.request) = if still { (2, ANIM_JUMP_STILL) } else { (4, ANIM_JUMP_MOVE) };
+                return;
             }
-            None => self.state = STANCE,
+            // Behavior 50 jump chooser: Cross on walkable ground (normal y at least 0.82).
+            if !(input.jump && self.body.normal[1] >= 0.82) {
+                if v > 0.0 {
+                    self.facing = turn_moving(self.facing, self.target);
+                }
+                self.run_counter = if self.state == RUN { 0 } else { (self.run_counter + 1).min(RUN_RESTART) };
+                let run_mode = input.run && (self.state == RUN || self.run_counter >= RUN_RESTART);
+                match tier(v, run_mode) {
+                    Some((state, factor)) => {
+                        self.state = state;
+                        self.rate *= factor;
+                    }
+                    None => self.state = STANCE,
+                }
+                return;
+            }
+            let m = (input.side * input.side + input.forward * input.forward).sqrt();
+            self.enter_air(match m {
+                m if m == 0.0 => 7,
+                m if m < 0.3 => 8,
+                m if m < 0.6 => 9,
+                _ => 10,
+            });
+        }
+        self.air(v > 0.0, clip);
+    }
+
+    /// The state setter's entry to the jump states: launch pending.
+    fn enter_air(&mut self, state: u8) {
+        self.state = state;
+        self.phase = -1;
+        self.start_height = self.body.position[1];
+    }
+
+    fn horizontal(&self) -> Vec3 {
+        [self.body.velocity[0], 0.0, self.body.velocity[2]]
+    }
+
+    fn set_horizontal(&mut self, h: Vec3) {
+        self.body.velocity[0] = h[0];
+        self.body.velocity[2] = h[2];
+    }
+
+    /// The air routine of Behavior 50 for one pass.
+    fn air(&mut self, stick: bool, clip: ClipState) {
+        let playing = |id: u32| clip.action == id;
+        if self.phase == -1 {
+            // Launch: gain 1.0, velocity cleared, vertical 8.75, horizontal facing times S.
+            self.body.gain = 1.0;
+            let s = jump_speed(self.state);
+            let f = self.facing;
+            self.body.velocity = [f[0] * s, LAUNCH, f[2] * s];
+            (self.phase, self.request) = if s > 0.01 { (1, ANIM_JUMP_MOVE) } else { (0, ANIM_JUMP_STILL) };
+            return;
+        }
+        // Air steering in phases 0 to 5: drag, then the stick push below the speed cap.
+        if (0..=5).contains(&self.phase) {
+            let h = self.horizontal();
+            let len = dot(h, h).sqrt();
+            let mut h2 = h;
+            if len > 0.0 {
+                let d = len.min(AIR_DRAG) / len;
+                h2 = h.map(|c| c - c * d);
+            }
+            if stick && len < AIR_CAP {
+                for k in [0, 2] {
+                    h2[k] += AIR_PUSH * self.target[k];
+                }
+            }
+            self.set_horizontal(h2);
+        }
+        let vy = self.body.velocity[1];
+        let gap = self.body.gap;
+        match self.phase {
+            0 | 1 => {
+                if vy >= 12.0 {
+                    self.body.gain = GAIN_RISE;
+                } else {
+                    self.body.gain = GAIN_FALL;
+                    let h = self.horizontal();
+                    let still = dot(h, self.facing) < 0.0 || dot(h, h).sqrt() < 0.01;
+                    self.phase = if still { 2 } else { 4 };
+                }
+            }
+            2..=4 => {
+                self.body.gain = GAIN_FALL;
+                if vy < -7.0 || (vy < 0.0 && gap <= LAND_GAP) {
+                    self.phase = 5;
+                    self.body.gain = GAIN_DESCENT;
+                }
+            }
+            5 => {
+                if gap <= LAND_GAP {
+                    let fall = self.start_height - self.body.position[1];
+                    self.phase = if fall > HARD_FALL {
+                        10
+                    } else if !stick {
+                        6
+                    } else {
+                        7
+                    };
+                    self.body.gain = 1.0;
+                } else {
+                    self.body.gain = GAIN_DESCENT;
+                }
+            }
+            6 => {
+                self.request = ANIM_SOFT_LAND;
+                if gap <= 0.1 {
+                    self.set_horizontal([0.0; 3]);
+                }
+                if playing(ANIM_SOFT_LAND) && clip.progress >= 0.99 {
+                    self.state = STANCE;
+                }
+            }
+            7 => {
+                // Moving landing: the state field becomes 4 directly with request 4.
+                self.set_horizontal([0.0; 3]);
+                self.state = RUN;
+            }
+            10 => {
+                self.request = ANIM_HARD_LAND;
+                if gap <= 0.1 {
+                    self.set_horizontal([0.0; 3]);
+                    if self.body.velocity[1] > 0.0 {
+                        self.body.velocity[1] = 0.0;
+                    }
+                }
+                self.body.gain = 1.0;
+                if playing(ANIM_HARD_LAND) && clip.progress >= 0.99 {
+                    self.state = STANCE;
+                    self.body.no_gravity = false;
+                }
+            }
+            _ => {}
+        }
+        // Clip tails: 76 goes to 78 when it ends, 70 to 67.
+        if (0..=5).contains(&self.phase) && clip.finished {
+            if playing(ANIM_JUMP_MOVE) {
+                self.request = ANIM_FALL_MOVE;
+            } else if playing(ANIM_JUMP_STILL) {
+                self.request = ANIM_FALL_STILL;
+            }
         }
     }
 
-    /// The travel step of one pass: the root step written on the previous pass, discarded when
-    /// the stick points behind the facing, turned by the facing basis and added to the position.
-    /// The hero then sits on the ground found by `probe(x, z, ceiling)` from 2.5 above its
-    /// height, unless the probe misses (below -1e8).
-    pub fn travel(&mut self, root_step: Vec3, probe: impl Fn(f32, f32, f32) -> f32) {
+    /// The motion-record tick (SPEC-0040 Behavior 14, cadence): the ground step, the root
+    /// travel, the ground constraint, gravity, the contacts (`contacts` moves the position) and
+    /// the integrator.
+    pub fn record_tick(
+        &mut self,
+        root_step: Vec3,
+        probe: impl Fn(f32, f32, f32) -> (f32, Vec3),
+        contacts: impl FnOnce(&mut Vec3),
+    ) {
+        let start = self.body.position;
+        self.body.measure(probe);
+        self.travel(root_step);
+        self.body.constrain();
+        self.body.gravity();
+        contacts(&mut self.body.position);
+        self.body.integrate();
+        self.last_motion = std::array::from_fn(|k| self.body.position[k] - start[k]);
+    }
+
+    /// The travel step (SPEC-0040 Behavior 14C): the root step written on the previous pass,
+    /// discarded when the stick points behind the facing, turned by the facing basis, projected
+    /// onto the ground plane while the gap is below 1.0, and added to the position.
+    pub fn travel(&mut self, root_step: Vec3) {
         let step = if dot(self.target, self.facing) < 0.0 { [0.0; 3] } else { root_step };
         let [b1, b2, b3] = basis(self.facing);
-        for k in 0..3 {
-            self.position[k] += step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k];
+        let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
+        if self.body.gap < 1.0 {
+            let n = self.body.normal;
+            let dn = dot(d, n);
+            d = std::array::from_fn(|k| d[k] - dn * n[k]);
         }
-        let h = probe(self.position[0], self.position[2], self.position[1] + 2.5);
-        if h > -1.0e8 {
-            self.position[1] = h;
+        for k in 0..3 {
+            self.body.position[k] += d[k];
         }
     }
 }
@@ -165,13 +396,26 @@ impl Locomotion {
 mod tests {
     use super::*;
 
+    const FWD: Vec3 = [0.0, 0.0, 1.0];
+    const LEFT: Vec3 = [1.0, 0.0, 0.0];
+
+    fn flat(_: f32, _: f32, _: f32) -> (f32, Vec3) {
+        (0.0, [0.0, 1.0, 0.0])
+    }
+
+    /// One tick on flat ground with no root motion: hero update, then the record tick.
+    fn tick(h: &mut Locomotion, input: &HeroInput, probe: impl Fn(f32, f32, f32) -> (f32, Vec3)) {
+        h.update(input, FWD, LEFT, ClipState::default());
+        h.record_tick([0.0; 3], probe, |_| {});
+    }
+
     fn angle(a: Vec3, b: Vec3) -> f32 {
         dot(a, b).clamp(-1.0, 1.0).acos().to_degrees()
     }
 
     #[test]
     fn speed_value_matches_spec_tests() {
-        let v = |side, forward| speed_value(&HeroInput { side, forward, run: false });
+        let v = |side, forward| speed_value(&HeroInput { side, forward, ..Default::default() });
         assert_eq!(v(0.0, 1.0), 1.0);
         assert_eq!(v(0.8, 0.6), 1.0);
         assert!((v(0.5, 0.25) - 0.559).abs() < 1e-3);
@@ -212,13 +456,14 @@ mod tests {
         let mut h = Locomotion::spawn([0.0; 3], [0.0, 0.0, 1.0]);
         let back_left = [(0.5f32).sqrt(), 0.0, -(0.5f32).sqrt()];
         // Camera forward +Z, screen-left +X: stick fully back and left points along back_left.
-        let input = HeroInput { side: (0.5f32).sqrt(), forward: -(0.5f32).sqrt(), run: false };
+        let input = HeroInput { side: (0.5f32).sqrt(), forward: -(0.5f32).sqrt(), ..Default::default() };
         let mut moved = Vec::new();
         for _ in 0..3 {
-            h.update(&input, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
-            let before = h.position;
-            h.travel([0.0, 0.0, 0.2251], |_, _, _| 0.0);
-            moved.push(((h.position[0] - before[0]).powi(2) + (h.position[2] - before[2]).powi(2)).sqrt());
+            h.update(&input, FWD, LEFT, ClipState::default());
+            let before = h.position();
+            h.travel([0.0, 0.0, 0.2251]);
+            let p = h.position();
+            moved.push(((p[0] - before[0]).powi(2) + (p[2] - before[2]).powi(2)).sqrt());
         }
         assert!((angle(h.target, back_left)).abs() < 1e-3);
         assert_eq!(&moved[..2], &[0.0, 0.0]);
@@ -226,23 +471,96 @@ mod tests {
     }
 
     #[test]
-    fn travel_follows_the_ground_and_keeps_height_on_a_miss() {
-        let mut h = Locomotion::spawn([0.0, 5.0, 0.0], [0.0, 0.0, 1.0]);
-        h.travel([0.0, 0.0, 1.0], |_, z, c| if z > 0.5 { 4.0f32.min(c) } else { -1.0e9 });
-        assert_eq!(h.position, [0.0, 4.0, 1.0]);
-        h.travel([0.0, 0.0, 1.0], |_, _, _| -1.0e9);
-        assert_eq!(h.position, [0.0, 4.0, 2.0]);
+    fn travel_projects_onto_the_ground_plane_near_the_ground() {
+        // A 1.0 step along +z on a plane tilted toward +z (normal (0, s, -s)) loses its normal part.
+        let mut h = Locomotion::spawn([0.0; 3], [0.0, 0.0, 1.0]);
+        let r = (0.5f32).sqrt();
+        h.body.normal = [0.0, r, -r];
+        h.travel([0.0, 0.0, 1.0]);
+        let p = h.position();
+        assert!((p[1] - 0.5).abs() < 1e-6 && (p[2] - 0.5).abs() < 1e-6, "{p:?}");
     }
 
     #[test]
     fn run_needs_r1_and_the_restart_wait() {
         let mut h = Locomotion::spawn([0.0; 3], [0.0, 0.0, 1.0]);
-        let full = HeroInput { side: 0.0, forward: 1.0, run: true };
-        h.update(&full, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let full = HeroInput { forward: 1.0, run: true, ..Default::default() };
+        h.update(&full, FWD, LEFT, ClipState::default());
         assert_eq!((h.state, h.action()), (RUN, 4));
-        h.update(&HeroInput::default(), [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        h.update(&HeroInput::default(), FWD, LEFT, ClipState::default());
         assert_eq!(h.state, STANCE);
-        h.update(&full, [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        h.update(&full, FWD, LEFT, ClipState::default());
         assert_eq!(h.state, WALK, "running cannot restart for 30 passes");
+    }
+
+    #[test]
+    fn standing_jump_follows_the_spec_flight_curve() {
+        // SPEC-0033 Behavior 50: heights at ticks 0, 5, ..., 47, then -0.0177 and 0.0.
+        let mut h = Locomotion::spawn([0.0; 3], FWD);
+        let want = [
+            (0, 0.2561), (5, 1.3767), (10, 2.2306), (15, 2.8178), (20, 3.1383), (24, 3.2028),
+            (30, 2.9794), (35, 2.5000), (40, 1.7539), (45, 0.7411), (46, 0.5048), (47, 0.2329),
+            (48, -0.0177), (49, 0.0),
+        ];
+        let mut heights = Vec::new();
+        for t in 0..50 {
+            let jump = HeroInput { jump: t == 0, ..Default::default() };
+            tick(&mut h, &jump, flat);
+            heights.push(h.position()[1]);
+            if t == 46 {
+                assert_eq!(h.phase, 5, "phase 5 at tick 46");
+            }
+            if t == 47 {
+                assert_eq!(h.phase, 6, "soft landing decided at tick 47");
+            }
+        }
+        for (t, y) in want {
+            assert!((heights[t] - y).abs() < 2e-3, "tick {t}: {} vs {y}", heights[t]);
+        }
+        assert_eq!(h.body.velocity[1], 0.0);
+    }
+
+    #[test]
+    fn running_jump_drifts_by_the_spec_distances() {
+        // Behavior 50 air steering, state 10: stick centred after launch 2.85 at the landing
+        // decision (tick 47); stick held fully forward 14.0.
+        for (held, want) in [(false, 2.85), (true, 14.0)] {
+            let mut h = Locomotion::spawn([0.0; 3], FWD);
+            for t in 0..48 {
+                let input = HeroInput { forward: if t == 0 || held { 1.0 } else { 0.0 }, jump: t == 0, ..Default::default() };
+                tick(&mut h, &input, flat);
+                if t == 0 {
+                    assert_eq!(h.state, JUMP_RUN);
+                }
+            }
+            assert!((h.position()[2] - want).abs() < 0.02, "held {held}: {}", h.position()[2]);
+        }
+    }
+
+    #[test]
+    fn walk_off_from_ten_units_lands_hard() {
+        // Behavior 9A: from 10 units the gate passes, phase 5 comes 10 ticks later and the
+        // hard-landing decision 20 ticks after that, at height 0.0409.
+        let mut h = Locomotion::spawn([0.0, 10.0, 0.0], FWD);
+        let mut gate = None;
+        let mut five = None;
+        let mut decision = None;
+        for t in 0..80 {
+            let before = h.phase;
+            let air = h.airborne();
+            tick(&mut h, &HeroInput::default(), flat);
+            if !air && h.airborne() {
+                gate = Some(t);
+            }
+            if before != 5 && h.phase == 5 {
+                five = Some(t);
+            }
+            if before == 5 && h.phase == 10 {
+                decision = Some((t, h.position()[1]));
+            }
+        }
+        let (g, f, (d, y)) = (gate.unwrap(), five.unwrap(), decision.unwrap());
+        assert_eq!((f - g, d - f), (10, 20));
+        assert!((y - 0.0409).abs() < 2e-3, "{y}");
     }
 }

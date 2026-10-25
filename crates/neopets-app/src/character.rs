@@ -3,6 +3,7 @@
 //! skin matrices for the outfit's bone table.
 use neopets_data::anim::{self, Affine, BoneTable, Family, FamilyData, Joint};
 use neopets_sim::clip::{ClipInfo, PlaybackRecord};
+use neopets_sim::hero::ClipState;
 
 struct FamilyState {
     data: FamilyData,
@@ -53,6 +54,16 @@ impl HeroAnim {
 
     pub fn action(&self) -> u32 {
         self.action
+    }
+
+    /// The main family's playing clip, for the hero update of the next tick.
+    pub fn clip_state(&self) -> ClipState {
+        let record = self.families.first().map(|f| &f.record);
+        ClipState {
+            action: self.action,
+            progress: record.map_or(0.0, |r| r.progress()),
+            finished: record.is_some_and(|r| r.finished()),
+        }
     }
 
     /// Request an action id. A change of main clip restarts the main, sub-part and face clips;

@@ -106,9 +106,10 @@ impl Ground {
         })
     }
 
-    /// Height of one patch at (x, z): bilinear over the four samples of the sample square, or
-    /// None outside the patch or on an empty cell (SPEC-0018, Height at a point).
-    fn sample(&self, p: &Patch, x: f32, z: f32) -> Option<f32> {
+    /// Height and surface normal of one patch at (x, z): bilinear over the four samples of the
+    /// sample square, or None outside the patch or on an empty cell (SPEC-0018, Height at a
+    /// point; the normal from the truncated half-sums of the corner differences).
+    fn sample(&self, p: &Patch, x: f32, z: f32) -> Option<(f32, [f32; 3])> {
         if x < p.x0 || z < p.z0 {
             return None;
         }
@@ -130,9 +131,17 @@ impl Ground {
         let fx = lx / p.spacing - ix as f32;
         let fz = lz / p.spacing - iz as f32;
         let h = |i: usize, j: usize| f32_at(&self.set, heights + 4 * (i + j * p.stride));
-        let top = h(ix, iz)? * (1.0 - fx) + h(ix + 1, iz)? * fx;
-        let bottom = h(ix, iz + 1)? * (1.0 - fx) + h(ix + 1, iz + 1)? * fx;
-        Some(top * (1.0 - fz) + bottom * fz)
+        let (h00, h10, h01, h11) = (h(ix, iz)?, h(ix + 1, iz)?, h(ix, iz + 1)?, h(ix + 1, iz + 1)?);
+        let top = h00 * (1.0 - fx) + h10 * fx;
+        let bottom = h01 * (1.0 - fx) + h11 * fx;
+        let r = [
+            (-((h10 - h00) + (h11 - h01)) / 2.0).trunc(),
+            p.spacing.trunc(),
+            (-((h01 - h00) + (h11 - h10)) / 2.0).trunc(),
+        ];
+        let l = (r[0] * r[0] + r[1] * r[1] + r[2] * r[2]).sqrt();
+        let n = if l > 0.0 { r.map(|c| c / l) } else { [0.0; 3] };
+        Some((top * (1.0 - fz) + bottom * fz, n))
     }
 
     /// Ground probe with ceiling `c`: the highest sampled height above the best so far and at
@@ -140,43 +149,50 @@ impl Ground {
     /// when the grid has no cell or entries here (SPEC-0018, Ground probe). Not implemented:
     /// runtime gates (owner, mask, count), the candidate outline test, owner placement.
     pub fn probe(&self, x: f32, z: f32, c: f32) -> f32 {
+        self.probe_normal(x, z, c).0
+    }
+
+    /// The probe with its surface normal: the chosen candidate's (or the last rejected one's);
+    /// straight up when the grid gives no cell or no candidate is sampled.
+    pub fn probe_normal(&self, x: f32, z: f32, c: f32) -> (f32, [f32; 3]) {
+        const UP: [f32; 3] = [0.0, 1.0, 0.0];
         let cx = ((x - self.x_min) / self.cell).floor() as i64;
         let cz = ((z - self.z_min) / self.cell).floor() as i64;
         if cx < 0 || cz < 0 || cx >= self.nx as i64 || cz >= self.nz as i64 {
-            return 0.0;
+            return (0.0, UP);
         }
         let index = match self.order {
             CellOrder::XMajor => cx + cz * self.nx as i64,
             CellOrder::ZMajor => cz + cx * self.nz as i64,
         } as usize;
         let Some(rec) = u32_at(&self.grid, self.table + 4 * index).filter(|&r| r != 0) else {
-            return 0.0;
+            return (0.0, UP);
         };
         let rec = rec as usize;
         let count = i32_at(&self.grid, rec + 0x08).unwrap_or(0).max(0) as usize;
         let entries = rec + u32_at(&self.grid, rec + 0x0C).unwrap_or(0) as usize;
         if count == 0 {
-            return 0.0;
+            return (0.0, UP);
         }
-        let (mut best, mut rejected, mut sampled) = (MISS, None, false);
+        let (mut best, mut normal, mut rejected, mut sampled) = (MISS, UP, None, false);
         for e in 0..count.min(MAX_ENTRIES) {
             let at = entries + CELL_ENTRY * e;
             let (Some(0), Some(index)) = (i32_at(&self.grid, at), i32_at(&self.grid, at + 4)) else {
                 continue;
             };
             let Some(Some(p)) = self.patches.get(index as usize) else { continue };
-            let Some(h) = self.sample(p, x, z) else { continue };
+            let Some((h, n)) = self.sample(p, x, z) else { continue };
             sampled = true;
             if h > best && h <= c {
-                best = h;
+                (best, normal) = (h, n);
             } else {
-                rejected = Some(h);
+                rejected = Some((h, n));
             }
         }
         match (sampled, best > MISS) {
-            (false, _) => MISS,
-            (true, true) => best,
-            (true, false) => rejected.unwrap_or(MISS),
+            (false, _) => (MISS, UP),
+            (true, true) => (best, normal),
+            (true, false) => rejected.unwrap_or((MISS, UP)),
         }
     }
 }

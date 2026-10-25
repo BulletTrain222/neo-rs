@@ -25,9 +25,11 @@ const PLAY_OUTFIT: u32 = 504;
 struct PlayRequest;
 
 /// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
-/// can show travel without a person at the controls.
+/// can show travel without a person at the controls; `--autojump` also presses Cross every 2 s.
 #[derive(Resource)]
-struct AutoWalk;
+struct AutoWalk {
+    jump: bool,
+}
 
 /// The play-mode hero entity; its children are the outfit's meshes.
 #[derive(Component)]
@@ -149,9 +151,10 @@ fn main() {
     let mut hide_hud = false;
     let mut catch_up = MAX_CATCH_UP;
     let mut play_mode = false;
-    let mut autowalk = false;
+    let mut autowalk = None;
     let mut shot_at = 4.0f32;
     let mut start_resource = 0u32;
+    let mut trace: Option<u64> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
             explicit = Some(
@@ -173,7 +176,14 @@ fn main() {
                     std::process::exit(2)
                 });
         } else if arg == "--autowalk" {
-            autowalk = true;
+            autowalk = Some(AutoWalk { jump: false });
+        } else if arg == "--autojump" {
+            autowalk = Some(AutoWalk { jump: true });
+        } else if arg == "--play-trace" {
+            trace = Some(args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
+                eprintln!("--play-trace requires a tick count");
+                std::process::exit(2)
+            }));
         } else if arg == "--play" {
             play_mode = true;
         } else if arg == "--original-pacing" {
@@ -211,6 +221,14 @@ fn main() {
         Ok((s, archive)) => (s, Some(archive)),
         Err(e) => (format!("ISO not ready\n{e}"), None),
     };
+    if let Some(ticks) = trace {
+        let Some(mut archive) = archive else {
+            eprintln!("{status}");
+            std::process::exit(1)
+        };
+        play_trace(&mut archive, ticks, autowalk.is_some_and(|a| a.jump));
+        return;
+    }
     let driver = SimDriver {
         sim: Simulation::default(),
         clock: FixedStep::new(GAME_TICK_HZ, catch_up).expect("Positive tick rate"),
@@ -223,8 +241,8 @@ fn main() {
         if play_mode {
             app.insert_resource(PlayRequest);
         }
-        if autowalk {
-            app.insert_resource(AutoWalk);
+        if let Some(auto) = autowalk {
+            app.insert_resource(auto);
         }
     }
     app.insert_resource(DiscStatus(status))
@@ -466,6 +484,7 @@ fn read_input(
 fn step_sim(
     time: Res<Time>,
     keys: Res<ButtonInput<KeyCode>>,
+    gamepads: Query<&Gamepad>,
     mut driver: ResMut<SimDriver>,
     mut models: ResMut<ModelView>,
     play: Option<ResMut<PlayState>>,
@@ -492,12 +511,22 @@ fn step_sim(
         let mut input = neopets_sim::hero::HeroInput {
             side: -(i.move_x as f32) / i16::MAX as f32,
             forward: i.move_y as f32 / i16::MAX as f32,
-            run: keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]),
+            run: keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
+                || gamepads.iter().any(|g| g.pressed(GamepadButton::RightTrigger)),
+            jump: false,
         };
-        if autowalk.is_some() {
+        // Cross (Space or the south face button) is a press edge; keep it for the next tick
+        // when this frame runs none.
+        play.play.jump_latch |= keys.just_pressed(KeyCode::Space)
+            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::South));
+        if let Some(auto) = autowalk.as_deref() {
             input.forward = 0.7;
+            if auto.jump && ticks > 0 && play.play.ticks % 120 == 0 {
+                play.play.jump_latch = true;
+            }
         }
         for _ in 0..ticks {
+            input.jump = std::mem::take(&mut play.play.jump_latch);
             play.play.tick(&input, forward, left);
         }
     }
@@ -931,6 +960,35 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
     }
 }
 
+/// Diagnostic (`--play-trace <ticks>`): run play mode without a window, walking forward along
+/// the spawn facing (and jumping every 120 ticks with `--autojump`), and print each tick.
+fn play_trace(archive: &mut Archive, ticks: u64, jump: bool) {
+    let Archive { disc, index } = archive;
+    let mut play = match play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT) {
+        Ok(play) => play,
+        Err(e) => {
+            eprintln!("Play mode could not start: {e}");
+            std::process::exit(1)
+        }
+    };
+    let f = play.loco.facing;
+    let (forward, left) = (f, [f[2], 0.0, -f[0]]);
+    for _ in 0..ticks {
+        let input = neopets_sim::hero::HeroInput {
+            forward: 0.7,
+            jump: jump && play.ticks % 120 == 0 && play.ticks > 0,
+            ..Default::default()
+        };
+        play.tick(&input, forward, left);
+        let (p, b) = (play.loco.position(), &play.loco.body);
+        println!(
+            "{:5} pos ({:9.3} {:8.3} {:9.3}) state {:2} phase {:2} action {:3} gap {:8.3} vy {:7.3} n ({:.2} {:.2} {:.2})",
+            play.ticks, p[0], p[1], p[2], play.loco.state, play.loco.phase, play.loco.action(), b.gap, b.velocity[1],
+            b.normal[0], b.normal[1], b.normal[2]
+        );
+    }
+}
+
 fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive: Option<ResMut<Archive>>) {
     let (Some(_), Some(mut archive)) = (request, archive) else { return };
     let Archive { disc, index } = &mut *archive;
@@ -952,7 +1010,7 @@ fn play_frame(
     mut images: ResMut<Assets<Image>>,
 ) {
     let Some(mut state) = play else { return };
-    let p = state.play.loco.position;
+    let p = state.play.loco.position();
     let f = state.play.loco.facing;
     // Characters face +Z in model space (SPEC-0004); turn that onto the facing.
     let rotation = Quat::from_rotation_y(f[0].atan2(f[2]));

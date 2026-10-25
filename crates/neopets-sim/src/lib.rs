@@ -5,6 +5,7 @@ pub use ps2_float::{F, Vf};
 pub mod clip;
 pub mod contact;
 pub mod hero;
+pub mod motion;
 mod step;
 pub use step::FixedStep;
 
