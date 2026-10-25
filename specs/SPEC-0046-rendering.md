@@ -1,0 +1,1232 @@
+# SPEC-0046: Rendering and draw order
+
+- Answers: proactive (frame draw submission, distance culling, near and far state selection, part visibility, sort order and flush, per-object light slots; and the screen-space colour sheet; the view and projection build; camera-facing billboard draw)
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
+- Confidence: per section. Display scale clamp, fade quantizer and default colour word: High for the values; the fade quantizer's use as the draw colour scale High; Medium for the use of the scale clamp and the colour word. 3D book open angle: High (there is no blob shadow). Object lists and the special object: High, including the two fixed sets of the second-world pairing test (decoded in SPEC-0006). Frame sequence and per-frame draw order: High. Submit distance cull (350 units): High. Far flag (50 units): High for the mechanism and for its effect (one-bone skinning in the vertex program). Vertex-program state bits: High (the fade bit has no reader). Per-triangle clipping in the vertex program: High for the rules, Medium-High for the clip record values. Brightness factor and the specular alpha term of program 6: High for the arithmetic, Medium for the frame of the reference point. Distance metric: High (3D for the submit cull, the far flag and the shadow casters; horizontal for the draw class B level-of-detail flag). Draw classes: High for the dispatch (every character render object uses class B); Medium for the absence of a reader of the class B flag. Draw list capacity: High. Sort rule and translucency (character fade): High. Per-part visibility classifier: High for the steps, the side masks and the three outcomes. Corner builder and eight-corner clip test (below): High for the arithmetic; Low for the caller of the standalone builder. Projection values: High; the 600 and 10560 clip sets and the second GS variant unused in play High. Story-layer mask of world nodes: High for the rule and for the role of the world mask word. Runtime four-plane volume list: High for the mechanism, Medium-Low for its meaning, inactive on disc. Light slots: High for four slots per light context, the 5 percent blend and its direction (toward the new value). Lit draw (the consumer of the slots): High for the light block and its source, Medium-High for the vertex arithmetic. Scene default lights: High. Draw colour scale and opacity: High. The 0x50-byte records once called light templates are the swing-trail colour gradients of SPEC-0034 section 18 (used by the swing trail of SPEC-0034 3.8) (High). Hit flash (draw step 6): Medium-High for the ramp and the override value; High for the override-slot rule (the draw reads slot 0 only, so the slot-1 flash tint is never seen); Medium for the on-screen pulse. Type 30 light sets (character path only): High for the reader chain, the walk timing, the walk order, the gates, the slot rules (including the displacement and the cross-fade), the slot kinds, the type 3 weight and the dynamic point lights. Character mesh path on the main processor and the first vector unit: Medium-High. Fog: there is no fog (High). Vertex pass size: Medium. Main-character screen bounds: High for their use as the fade composite rectangle. Screen-space colour sheet (never drawn on this disc, High): layout High; colour conversion rules High; the two overlay blocks (C and D) Low; whether the sheet is player-visible or a debug display Low. View and projection build: eight 4x4 products High for the count, Medium for their use; projection scale 1.0 High; the aspect convention Medium. Camera-facing billboard draw: role Medium-High (world-space, oriented by the camera matrix, not the HUD); its inputs and the objects that use it Low. Bounding radius of a box: High for the arithmetic, Medium for its use. Packet submit size limit: Medium-High. Chain point mover, weight routines and corner routines: Low. Character shadow volumes: High for the gate, the caster choice, the light direction, the extrusion, the caps, the count colours and the resolve state; High for the visible size of the darkening (8 per channel); no rendered comparison made. Sky domes: High for the resources, the per-world choice, the buffer and the drawing; Medium-High for resource 528 being unused and for the per-frame rotation rate. Held items and character attachments: High for the pass order, the gates, the matrices and the scales; Medium for the Mote-glow anchors and the rope effect. Items marked **[Low]** must not be implemented as settled. Character light slots (the slot chooser): High for the storage and the slot choice.
+- Related specs: SPEC-0003 (material blend and alpha), SPEC-0004 (mesh batches, node culling, attach points and the item model registry key), SPEC-0005 (skeleton and skinning), SPEC-0006 (level display tree), SPEC-0007 (game timing), SPEC-0008 (platform render-state brackets), SPEC-0013 (Gelert Assassin mirror images, hidden by base state 42), SPEC-0017 (despawn flag), SPEC-0018 (ground and collision, not render), SPEC-0021 (item display slots, item model registry, item showcase), SPEC-0027 (camera, view point and fade writer), SPEC-0028 (world objects and atmosphere; placed objects are drawn by the world draw, not from the object lists of this spec), SPEC-0030 (character slot records), SPEC-0034 (effects pass), SPEC-0035 (3D book), SPEC-0040 (hero and base actor state), SPEC-0047 (petpets), SPEC-0049 (story flags), SPEC-0052 (screen fade and letterbox bars), SPEC-0060 (foliage patches: grass, bushes, trees, reeds and flowers are drawn by the foliage pass with its two shared far batches, not from the object lists of this spec).
+
+## Summary
+
+Every frame, the game does not draw objects as it finds them. It first collects the objects to draw into one short list, then issues all of the draws at once at the end of the frame. Collection walks a few fixed character lists that are updated once per frame (the two petpet asset slots, the current world's character slots, the neighbour world's character slots, the active petpet as a special object, and the hero). Each object is kept only if it is drawable and closer than 350 units to the view point. Kept objects are inserted into a sorted list that holds at most 18 entries per frame: opaque objects come before translucent (fading) ones, and within each group the farther object is drawn first. At the end of the frame the sorted list is walked once and each object draws itself. Each object's distance also selects one of two global vertex-program state sets: a near set, or a far set when the object is more than 50 units away; the far set skins each vertex with one bone. Models are culled part by part from the eight corners of each part's bounding box, with three outcomes: culled, inside, or clipped. Character shadows are stencil shadow volumes for at most three nearby casters. The full order of one frame's draws (background, sky dome, worlds, characters, effects, book, screen fade, HUD) is in Per-frame draw order. A second volume test against runtime-built four-plane volumes exists, but its list is empty on disc. Lit models (drawn with the lit vertex programs 1, 2 and 6, chosen by the material) are lit in the vertex program from a per-draw light block of one ambient and three directional lights, built from the four slots of a light context; level geometry is unlit, and there is no fog. A box bounding radius (0.7072 times the larger of the box's X and Z extents) and a size-limited packet submit are also described, with a few curve, chain and corner helpers at Low confidence. Characters also build their own four-slot light state from the area's light set and the frame's dynamic point lights, once per main-loop pass (see Lights, Character lights); that state is the light context the character's model draws with. Each world has a sky dome: on every world load one of three dome resources (1, 2 or 3) is chosen by the world's slot number and read into a fixed buffer (see Sky domes). The dome is drawn first every frame, in world space at the world origin, with one layer whose opacity follows the atmosphere-zone blend factor.
+
+A UI node of kind 8 (the front-end and HUD node tree of SPEC-0035) draws a screen-space colour sheet, but no node of that kind exists on the disc, so the sheet is never drawn: a hue spectrum block and a value ramp block, both in the colours of one chosen hue, saturation and value. The three colour indices are run-time state. They are derived from a colour record when it is loaded and are stepped by the pad. The sheet is built from quads with a colour per vertex and no texture. The frame setup also builds a view block from the camera, multiplies it by eight source matrices of the object, and sets a projection with a vertical scale of 1.0.
+
+The clean side can use this spec to build the per-frame draw order, the two distance thresholds, the per-part visibility test, the colour sheet and the view and projection build. The 18-entry limit is an original fixed size, not a rule for the clean side. A camera-facing billboard draw (a three-dimensional element oriented to the camera) is also part of rendering; it is described in its own section, with its inputs left open.
+
+## Where it lives on the disc
+
+Most values here are fixed constants of the boot program, not data words on the disc, and no data address is needed for them: the 350-unit cull, the 50-unit far threshold (both stored as squared distances, 122500 and 2500), the 128 translucency threshold, the 18-entry capacity, the 0.001 bias in the edge clip, the colour sheet's block sizes and origins, the projection scale of 1.0, and the 0x80 alpha byte of the sheet's vertices. The class B level-of-detail values (threshold 150 units for hero render records, 0 for others, margin 25.0), the shadow caster limits (three casters, squared distance 2500, kind key 720), the side masks of the classifier, the story-layer rules and the camera projection values are fixed constants too. The bounding radius factor (0.7072) and the packet size limit (1024 bytes) are also fixed constants. The factor's 32-bit and 64-bit encodings do not occur in the boot data.
+
+The display scale clamp (0.1 to 1.0), the base size pair (512 and 448), and the default colour word are fixed constants too; no disc data is needed for them. The fade quantizer's index arithmetic (the 256 multiplier and the 0 to 256 index clamp) is also fixed; its range bounds are run-time words (see below). The values below are data words in the boot program's data, read at run time. No code writes the gate words; their disc values are the values in play (High).
+
+| Value | ELF virtual address | Disc value | Use |
+| --- | --- | --- | --- |
+| Light blend weight | 0x2EC9D4 | 0.05 (32-bit float) | Step size of the kind-0 light slot update (see Light slots and the lit draw) |
+| Volume cap | 0x2EC884 | 14 (32-bit integer) | Upper bound of the runtime volume list (it is clamped to 32) |
+| Volume count | 0x2EC880 | 0 | Number of runtime volumes. Zero on disc; the list starts empty and is built at run time |
+| Book open angle start | 0x2DB2E0 | 1.2 (32-bit float) | Start value of the 3D book's open angle (see 3D book open angle) |
+| Book open angle floor | 0x2DB2E4 | 0.12 (32-bit float) | Lowest value of the 3D book's open angle |
+| Petpet and hero submit gate | 0x2D7518 | 1 (32-bit integer) | The special object and the hero are submitted while nonzero |
+| Frame copy tint gate | 0x2D752C | 1 | The frame copy with the atmosphere colour tint runs while nonzero |
+| Light-flash pass gate | 0x2D7534 | 1 | The character light-flash pass runs while nonzero |
+| Hero hit-flash force | 0x2D7600 | 0 | When nonzero, the hit flash is forced on the hero (see draw step 6) |
+| Effects pass gate | 0x2D7540 | 1 | The effects pass runs while nonzero |
+| Petpet shadow gate | 0x2D7608 | 0 | Petpet slot characters cast shadows only while nonzero (so on disc they cast none) |
+| Background fade level | 0x2D7614 | 128.0 (32-bit float) | Fade level of the wrap around the background pass |
+| Shadow pass gate | 0x2ECCD0 | 1 | The shadow volume pass runs while nonzero |
+| Shadow bracket skip | 0x2ECCD4 | 0 | When nonzero, the render-state bracket around the shadow pass is skipped: the shadow buffer is not cleared or resolved, so no shadow shows |
+| Shadow extrusion length | 0x2ECCC8 | 16.0 (32-bit float) | Length E of the shadow volume extrusion along the light direction (see Character shadow volumes) |
+| Shadow straight-down switch | 0x2ECCCC | 0 | When nonzero, every caster's shadow light direction is (0, −1, 0) |
+| Shadow light y limit | 0x2EC9E4 | −0.4 (32-bit float) | Highest y component of a shadow light direction |
+| Shadow direction ease, slot change | 0x2EC9D8 | 0.05 (32-bit float) | Rate of the shadow direction ease after a slot change; the ease has no effect (see Edge cases) |
+| Shadow direction ease, settle | 0x2EC9DC | 0.5 (32-bit float) | Scale of the settling ease rate; no effect (see Edge cases) |
+| Shadow direction ease, frames | 0x2EC9E0 | 20 (32-bit integer) | Frame count of the settling ease; no effect (see Edge cases) |
+| Shadow count colour, add | 0x323368 | 0x80080808 (packed R, G, B, A bytes 8, 8, 8, 128) | Colour of a shadow polygon whose outward side faces the camera (+8) |
+| Shadow count colour, subtract | 0x32336C | 0x80F8F8F8 (bytes 248, 248, 248, 128) | Colour of any other shadow polygon (248, that is −8 modulo 256) |
+| Shadow resolve colour | 0x2D7610 | 0x20080808 (bytes 8, 8, 8, 32) | Vertex colour of the resolve draw that darkens the frame |
+| Second-world excluded pairs | 0x31EE80 | 4 pairs of 32-bit integers: (797, 758), (797, 753), (1392, 1370), (991, 699) | Pairs of current and second world pack that never draw the second world (either order) |
+| Second-world excluded packs | 0x31EEA0 | 16 32-bit integers (listed in Object lists and the special object) | Current world packs that never draw the second world |
+| Dome step, role-2 layer | 0x2DB488 | 0.0009 (32-bit float) | Angle step in radians per frame of the role-2 sky dome layer (see Sky domes) |
+| Dome step, role-3 layer | 0x2DB48C | 0.0006 (32-bit float) | Angle step in radians per frame of the role-3 sky dome layer (see Sky domes) |
+| Dome draw switch | 0x2D7528 | 1 (32-bit integer) | The sky dome is drawn each frame while this is nonzero |
+| Sheathed weapon size | 0x2DD8AC | 2.6 (32-bit float) | Numerator of the sheathed-weapon scale (see Held items and character attachments) |
+| Sheathed weapon scale cap | 0x2DD8B0 | 0.6 (32-bit float) | Upper bound of the sheathed-weapon scale |
+| Brightness low bound | 0x2ECAE4 | 0.2 (32-bit float) | Mean brightness at or below which the brightness factor f is its floor (see Brightness factor) |
+| Brightness high bound | 0x2ECAE8 | 0.6 (32-bit float) | Mean brightness above which f is its ceiling |
+| Brightness factor floor | 0x2ECAEC | 0.3 (32-bit float) | Lowest f, and f when no light colour is nonzero |
+| Brightness factor ceiling | 0x2ECAF0 | 1.0 (32-bit float) | Highest f |
+
+The fade quantizer's range words are not on disc. Its two pairs of range bounds are at data addresses 0x3971A8 and 0x3971AC (variant A) and 0x39A1E0 and 0x39A1E4 (variant B), and its two 257-entry tables start at 0x394170 and 0x3971B0. All of these lie beyond the end of the boot file image, so they are zero on disc. They are set once, by the graphics init of the start-up frame setup, when the two tables and the variant-A reset record (data address 0x39A1F0) are built: variant A 0.008 and 1.0, variant B 0 and 1.0 (see Fade level quantizer and draw colour scale). The clean side must not read them from the disc; it uses these values.
+
+The colour sheet's three colour-state words (boot data 0x2EC8B0 to 0x2EC8C8, the three derived indices and their three sources) are zero in the boot data (all seven words). They are run-time state, not tuning constants. The clean side must not read them from the disc; it derives the colour state as described in Colour sheet.
+
+The object lists that the frame draws from are character slot records (SPEC-0030 section 4) and world character slot tables; see Object lists and the special object. They are run-time state, not disc data.
+
+The camera setup record (data address 0x35C928) is zero on disc. It is filled at boot with the fixed projection values of Camera projection; the clean side must not read it from the disc.
+
+Sky domes (High): archive resources 1, 2 and 3 of GAMEFILE.DAT (SPEC-0001, SPEC-0002) are the three sky domes. Resource 0 is a byte-identical copy of resources 1 and 2 and is never selected. Resource 528 has the dome layout but nothing loads it (Medium-High). The dome buffer is 460,800 bytes, allocated once at boot. The choice of dome is a fixed rule of the boot program (see Sky domes), not a data table.
+
+## Layout
+
+These are logical fields of the per-frame structures. Byte offsets are not part of the spec.
+
+Draw record (one per collected object, at most 18 per frame):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| Object | reference | The object whose draw method is called at flush |
+| Position copy | 3 values | The object's position at the time of submission |
+| Squared distance | float | Squared distance from the view point to the object's position |
+| Far flag | bit | Set when the squared distance is more than 2500 (50 units squared). At flush it selects the far vertex-program state set; clear selects the near set |
+| Translucency class | opaque or translucent | From the object's fade record (see Sort order) |
+| Fade record present | bit | Whether a fade record is passed with the object. If so, its draw is wrapped in the fade begin and end (see Translucency) |
+
+Frame draw list: an ordered list of draw records, a count, and a capacity of 18.
+
+Fade record (the render sub-record; one per character render object and per frame buffer): fade on (flag), fade level (integer 0 to 128; its writers are listed under Sort order), and the character's screen rectangle (see Main-character bounds).
+
+Light context (four slots; slot 0 is the ambient light, slots 1 to 3 directional lights; see Light slots and the lit draw):
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| Kind | integer | Slot kind, 1 by default. Kind 0 is the only kind that blends toward its new value |
+| Active | integer | The slot is in use when this is nonzero |
+| Entry | reference | The slot's light entry (the 0x50-byte entry layout of SPEC-0028 section 2) |
+| Weight | float | The entry's strength, or the type 3 falloff (see Character lights) |
+| Vector | 4 floats | The stored light colour (16 bytes) |
+| Second value | integer | Used by kind-0 slots only; the blend applies when it is 0 |
+
+Light block (sent with a lit draw and held by the vertex program until the next block; eight vectors of 4 floats):
+
+| Field | Count | Meaning |
+| --- | --- | --- |
+| Directions, stored transposed | 3 | With T_k = −normalize(D_k) for slots 1 to 3 (D_k the light's travel direction in the drawn model's space): vector 1 = (T_1.x, T_2.x, T_3.x, f), vector 2 = (T_1.y, T_2.y, T_3.y, 0), vector 3 = (T_1.z, T_2.z, T_3.z, 0). f is the brightness factor (see Brightness factor), read only by program 6 |
+| Fourth row | 1 | (0, 0, 0, 1) (no bias term) |
+| Light colours | 3 | C_1 to C_3, the stored colours of slots 1 to 3 |
+| Ambient | 1 | A, the stored colour of slot 0 |
+
+The diffuse terms d_k = T_k · n come out of the transposed block unchanged.
+
+Colour-scale record: a vector of 4 floats and a lane mask (1 red, 2 green, 4 blue, 8 alpha). Sending it replaces only the masked lanes of the draw colour scale s.
+
+Per-part visibility result (per model part): a signed value with three meanings: -1 culled, 0 inside, 1 clip (see Model parts).
+
+Colour sheet state (run-time, one set per colour sheet node):
+
+| Field | Range | Meaning |
+| --- | --- | --- |
+| Hue index H | 0 to 180 by pad steps | The hue is 2 H degrees |
+| Saturation index S | 0 to 63 by pad steps | The saturation byte is 4 S + 3 (3 to 255) |
+| Value index V | 0 to 63 by pad steps | The value byte is 4 V (0 to 252) |
+
+Colour sheet cell (quad vertex): position (screen units), hue, saturation, value, and a fixed alpha byte of 128. Each vertex carries three colour bytes and the alpha byte.
+
+View block (run-time, per object): four rows of a view matrix built from the camera, and two vectors used by the projection. Its width and height come from the view record (see View and projection build).
+
+Extent box (input to the bounding radius, see Bounding radius of a box): four 32-bit float values in this order: low X, high X, low Z, high Z. The rule has no Y extent.
+
+## Behavior
+
+### Per-frame draw order (High; step 1 Medium)
+
+In one frame, after the updates, draws are queued to the GPU in this order:
+
+1. **Background pass.** When the game-globals request word (values 1 or 2; cleared every frame; its setters are not identified) is 1 or 2, the atmosphere colour and render scalar are applied (SPEC-0028 section 11); otherwise another backdrop draw runs (the front-end backdrop; not described here). The pass's list is then flushed inside a fade wrap at level 128 (data word 0x2D7614 = 128.0). [Medium]
+2. **Sky dome**, while the data word 0x2D7528 is nonzero (see Sky domes).
+3. **Worlds**: the second world (when the current world is not itself the second-world slot, the second world is loaded and the pairing test passes; see Object lists and the special object), then the current world: its level display tree (with the culling of Culling), its placed objects and its world effect lists.
+4. **Held items and character attachments**: the focus hero's items, other characters' held items, world items and the item showcase (see Held items and character attachments).
+5. **World draw list flush.**
+6. **Character light-flash pass (hit flash)** (data word 0x2D7534): a hit on the hero, or a hit through the enemy class's hit method, starts a 14-frame two-stage ramp on the hit character's render object (4 frames, then 10). While the ramp runs, the pass sets that render object's colour-override slot 1 to (1.5, 0.5, 0.5, 1.0), a reddish tint. No draw reads slot 1, so this tint is never seen (quirk; the clean side should not show it). When the data word 0x2D7600 (0 on disc) is nonzero, the flash is forced on the hero. The ramp's keys, colours and stage lengths are in SPEC-0034 section 32. The pass draws nothing itself. [Medium-High for the ramp; High for slot 1 having no reader]
+   - **Colour-override slots** (High for the rule; Medium for the pulse shape on screen). Each character render object has two override slots, each holding an active flag, a target vector (r, g, b, a), an RGB-mask flag, an alpha-mask flag, a frame counter and a mode. Clearing a slot sets it inactive with the default colour-scale vector. Setting a slot that is not already active starts its counter at 0 in mode 1 and at 30 in mode 0. The character draw reads only slot 0. Each draw of the object, while slot 0 is active: if the mode is 1 the counter rises by 1; with c = counter mod 60, the weight is w = c / 30 for c up to 30 and w = (60 − c) / 30 above; for each of the object's 15 colour-scale records of the current buffer, the lane mask is set from the two mask flags and the record's vector becomes (1 − w) × its vector + w × the target. Mode 1 therefore pulses with a 60-frame period (full target at c = 30, none at c = 0); mode 0 holds w = 1, a steady tint. Users: the status display (SPEC-0034, section 5.4) sets slot 0 every tick in mode 1 with the status colour, each channel cut to 1.0, and clears it when the shown status changes or when all three channels are 1.0 (so fire shows no tint); the stun start sets slot 0 in mode 0 (a steady tint). Test vectors: mode 1, counter 0, 15, 30, 45, 60 gives w = 0, 0.5, 1, 0.5, 0; mode 0 gives w = 1 on every frame.
+7. **Shadow volumes** (see Character shadow volumes).
+8. **Characters and effects**: the character pass (the sorted list of Frame sequence of the character pass: the two petpet lists, current world, second world, petpet, hero), then the effects pass (data word 0x2D7540; SPEC-0034). While the hero's fade is on, the effects pass comes first and the character pass second.
+9. **3D book**, when it is open (SPEC-0035; see 3D book open angle).
+10. **Frame copy with the atmosphere colour tint** (data word 0x2D752C; SPEC-0028).
+11. **Screen fade and letterbox bars** (one object, SPEC-0052).
+12. **HUD and menus** (SPEC-0023, SPEC-0035), on top of the fade and the bars.
+
+Every gate word named above is 1 on disc, and nothing writes these words at run time (see Where it lives on the disc).
+
+### Held items and character attachments (draw step 4; High unless marked)
+
+Steps 3 and 4 run as one pass. In queue order it does:
+
+1. The focus hero's items (below).
+2. The world draw of step 3.
+3. The held items of the characters of the two petpet lists.
+4. The held items of the characters of the current world's character table, then of the second world's table when it is loaded.
+5. A fixed array of ten further records (their draw is not described here; Open question 87).
+6. World items.
+7. The item showcase. Its spin, offsets, modes and pose animations are described in SPEC-0021 (item showcase); this spec only places it in the pass.
+
+Everything queued here is drawn at the world draw list flush of step 5. All held-item models draw with resource 7's material list, except world items, which take their material list from the item model registry (SPEC-0021). Models come from the item model registry and the item display slots (SPEC-0021); their registry ids are in SPEC-0004 (Item model registry key). W_k are the attach-point matrices of the character (SPEC-0004, Attach-point matrices), with axes X_k, Y_k, Z_k and origin T_k.
+
+**Shared flags.** The weapon-drawn flag and the shield-raised flag live on the party inventory, so the two heroes share them. Their writers (attacks, the guard, hits, interactions, state changes, the showcase) are in SPEC-0040.
+
+**Focus hero.** Let H be the focus hero, with hero index 0 for Tor and 1 for Roberta. None of H's items (shield, weapon, held entry) is drawn when H's render-active word is not 1, or when H's body entry holds item 126 (Tattered Cloak). Otherwise:
+
+1. **Shield.** The shield entry's model is set to the shield slot's geometry.
+   - Shield-raised flag set: the shield matrix S = W_5 (on the arm).
+   - Flag clear: S has the axes (−X_8, Z_8, Y_8) and the origin T_8 (stowed on the back). When the shield entry is not empty and the shield model is loaded, the three axes are scaled by f = 1.6 / |bx − sx|, where bx is the minimum X of the model's root-node bounding box and sx its box size in X (SPEC-0004, Node tree).
+   - The shield is drawn at S only when the hero index is not 1, so Roberta's shield is never drawn.
+2. **Weapon.** The weapon entry's model is set to the weapon slot's geometry.
+   - Weapon-drawn flag set: the weapon matrix M = W_0 (in the hand).
+   - Flag clear: M has the axes (Y_6, Z_6, X_6) and the origin T_6 (sheathed). When the weapon entry is not empty and the weapon model is loaded, the axes are scaled by g = min(2.6 / |bz − sz|, 0.6), where bz is the root-node box minimum Z and sz its box size in Z. The 2.6 and 0.6 are the data words 0x2DD8AC and 0x2DD8B0.
+   - The weapon is drawn at M when the hero index is 0 or the weapon-drawn flag is set. So Tor's sword is always drawn (in the hand or sheathed), and Roberta's wand is drawn only while drawn, in her hand.
+3. **Held entry.** Only while the weapon-drawn flag is 0, and only when the current held entry e (SPEC-0021, the holder's current held entry) is not empty:
+   - The held matrix Q has the axes (Z_0, Y_0, −X_0) and the origin T_0 (the hand).
+   - e is drawn at Q when e's count is above 0 and its category is not 5 (the body family). A further test for hero action state 15 can never hold, because no code sets that state (state 15 is an empty route; High), and is left out together with one other condition that can never hold.
+   - When e is item 36 (Rope Gun), its model is the fixed slot's geometry (resource 575), and a rope effect object is drawn with it (Medium; the effect is not described here).
+   - The hero's held entry only ever holds item 36: it is set to 36 in hero state 27, and every other write clears it (High).
+4. **Hero-item effect matrices** (High for the matrix copies and update gate; Medium for the effect label): each focus-hero item-render pass copies S and M into two matrix slots of the shared auxiliary effect object, whether or not the shield and weapon are drawn. Its per-tick updater runs only when Tor is the active hero; it selects the current category-1 or category-2 inventory entry and updates or stops the corresponding effect child using the saved transform. This establishes a Tor-only effect consumer for the stored matrices. The exact visible child identity and appearance, and any use of Roberta's matrices or of these slots by other Mote effects, remain open (Open question 89).
+
+The two rescale formulas use |min − size|, the distance between the box minimum and the box size, not the box size itself. This is an original quirk with a visible effect on the stowed and sheathed sizes; reproduce it as stated.
+
+**Other characters** (petpet lists and world tables). For each active character with a render object:
+
+- **Stolen item** (a thief): while its carried-item flag is set and its countdown is above 0, the stolen item's registry model is drawn at that character's Q with its three axes scaled by 0.45, and the countdown falls by 1 per draw (also when the item has no registry model). On a draw where the flag is set and the countdown is 0 or less, the flag clears and nothing is drawn. A steal sets the countdown to 3 seconds of frames (180 at 60 frames per second), so the item shows in the thief's hand for 3 s.
+- **Held entry**: when the character's own holder has a current held entry whose item id has a registry model, it is drawn at that character's Q. There are no other conditions, no scale, and no weapon, shield or sheath logic for these characters. A non-hero character gets a held entry only at its set-up: when the 16-bit field at +0xAE of its placement record (SPEC-0006, kind 3 records) is not −1, that item is added to the holder and selected. The field is −1 in all 3,036 placement records, so on disc no petpet or world character shows a held entry; the thief's stolen item above is separate (High).
+
+**World items.** World potions draw the model of the world-item slot. There is only one world-item slot, so only one potion model is resident at a time: spawning a world potion of a different kind unloads the first kind's model, and world potions of the first kind have no model until it is loaded again (see Edge cases; slot rules in SPEC-0021).
+
+### Frame sequence of the character pass (High)
+
+This is the character pass, step 8 of Per-frame draw order. Each frame, after the game state update, in this order:
+
+0. The per-frame update pass runs over the object lists (Medium for its place in the order).
+1. Clear the frame's draw list (count to zero, no records).
+2. Open the render state for the frame (platform side, SPEC-0008).
+3. Submit the characters of the first object list, then those of the second object list (the two petpet asset slots). Each list is walked from its highest character down to character zero.
+4. Submit the scene sub-list (the current world's character slots), then the second sub-list (the neighbour world's character slots) when it is loaded and the pairing test passes.
+5. Submit the special object (the active petpet) with the far flag clear (near set) and no fade record.
+6. Submit the main character (the focus hero, SPEC-0040) with the far flag clear (near set) and its fade record. Its screen bounds are updated first (see Main-character bounds).
+7. Flush: draw every record in list order.
+8. Close the render state.
+
+Steps 5 and 6 run only while the data word 0x2D7518 is nonzero (1 on disc). Nothing is drawn during steps 3 to 6. All draws happen in step 7. The sky dome is not a draw record: it is added to the frame's material draw list right after that list is reset, before the worlds, the characters and the objects above (see Sky domes). The colour sheet is a display-tree node: it is drawn when the display tree visits it (see Colour sheet), and its quads are not draw records of this list (Open question 24).
+
+### Object lists and the special object (High)
+
+- **First and second object lists**: the two petpet asset slots (the first and the second petpet asset slot). Each is an ordinary character slot record (SPEC-0030 section 4): an active character count, character references and one active flag per character. Each list is walked from its highest character down to character 0; a character is used only when its active flag is 1.
+- **Scene sub-list**: the current world's character slot table. The table's main record, if there is one, is submitted first; then each slot record in table order whose load-result word is nonzero.
+- **Second sub-list**: the second (neighbour) world kept loaded during streaming, with the same table layout. It is submitted only when it is loaded and the pairing test passes (SPEC-0006):
+  1. the current world pack is not one of 784, 1398, 1371, 1397, 1414, 1139, 1176, 1163, 1171, 1299, 1327, 990, 1369, 1300, 989, 1056 (data words at 0x31EEA0);
+  2. the current pack is a transition (the 51-pack set of SPEC-0006), or the current world's area slot is in the 92-slot swap set (SPEC-0006, Neighbour-world test, which lists the members);
+  3. the pair (current pack, second pack) is not one of (797, 758), (797, 753), (1392, 1370), (991, 699), in either order (data words at 0x31EE80). The draw callers pass the second world's pack, so these pairs do stop the second world from being drawn (they never block a world swap; SPEC-0006).
+- **Special object**: the active petpet, which is character 0 of the pet slot that loaded it. It is also an active character of that slot, so the original submits the petpet twice per frame: once from its slot (with its own far flag) and once as the special object, with no fade record and the far flag clear. Both copies are drawn (original quirk; see Edge cases).
+- **Main character**: the focus hero (SPEC-0040), submitted last, with the far flag clear and its fade record.
+
+Every object in these lists is a character render object (draw class B, see Draw classes). Placed world objects are not in these lists; they are drawn by the world draw (Per-frame draw order, step 3).
+
+### Object submission and culling (High)
+
+For each slot of an object list:
+
+1. The slot is used only when it is marked active (its flag equals 1).
+2. The object must be drawable (see Drawable test below).
+3. Compute the squared distance from the view point to the object's position.
+4. Set the far flag when the squared distance is greater than 2500 (50 units squared). A squared distance of exactly 2500 does not set it.
+5. Submit the object with its far flag. Submission drops the object when its squared distance from the view point is 122500 (350 units squared) or more. Otherwise a draw record is appended.
+
+The submit cull and the far flag use the full 3D squared distance (x, y and z) from the view point to the object's render position (High). The view point is the translation of the camera record's matrix (the base point of SPEC-0027), read in the frame set-up after the camera update. It is taken from the camera record itself, not from the shaken render copy, so a camera shake moves the picture but not the cull and far distances (High). In the follow camera it is the eye at the end of the tick (Medium-High). Test vector: camera position (0, 5, -10) with a shake that moves the render copy 0.3 units: an object at distance 349.9 from (0, 5, -10) is still submitted on every tick of the shake.
+
+Designer properties (Medium). The monster table carries two 16-bit designer fields named draw distance and low-resolution distance. Their editor range ends at 2500; 2500 is a range bound, not a default, and the default is 0. Nothing in the draw path reads them. The clean side should use 2500 (50 units squared) for the far threshold and 350 units for the submit cull.
+
+Drawable test (High for the tests; meanings per bullet). An object is drawable only when all of the following hold:
+
+- its object record exists and its render context is set;
+- its cell flag is set. This is the character's own cell-enabled word (+0x18C), which the region update recomputes on every tick for each active slot. It is 1 when the character has no zone record, and otherwise it is the result of the zone cell test (SPEC-0006). A character whose cell is disabled for the current zone is neither updated nor drawn. (High for the write; Medium for the meaning of the cell test.)
+- its draw-state test passes (see below);
+- its despawn flag (+0xE3C, SPEC-0017) is zero. The flag is set to 1 when a dead spider (state 16) has finished its death animation 58, and cleared to 0 when its valve launches it again; it is also cleared when the character object is reset. (High.)
+- its base actor state is not 42. The excluded value is the base actor state of the character (SPEC-0053 calls it the action state). Base state 42 is the parked state. Objects are created and reset in 42, and every bind (streamed, forced, and spawn by key) sets base state 1 before the character is first drawn. A released character that is not dead is set to 42, and so is a not-dead object in an inactive slot, on every tick. Inactive slots are already skipped by the slot-active test, so in play the rule hides only bound characters whose AI has put them into 42. The only such characters are the Gelert Assassin's waiting mirror images (SPEC-0013, 4.10). (High.)
+
+Characters hidden in play by these tests (High unless marked):
+
+| Characters | When hidden | Hidden by |
+| --- | --- | --- |
+| Gelert Assassin mirror images (block slots 1 to 4) | From the fight's set-up until the boss's mirror attack wakes them, and again after each hit on them | Base state 42 |
+| Any not-dead object in an inactive slot | Always (the slot-active test already excludes it) | Slot-active test; base state 42 |
+| Townsfolk, common enemies, bosses, summons | Never by base state 42 (they are in state 1 from the bind onward) | — |
+| Spiders whose death animation 58 has finished | Until their valve launches them again; their slot stays active | Despawn flag |
+| Characters of a non-streaming block standing in a cell disabled for the current zone (Medium) | While the cell stays disabled; in a streaming block such a character is released instead | Cell flag |
+
+Draw-state test (Medium for the branches, Low for the meanings). It depends on the object's kind and on whether it has a model:
+
+- With no model: a kind check. One kind value compares against a second value, one branch also needs a sub-flag, and one branch treats a hero-type object specially.
+- With a model and no "hidden" state word: a state check against a per-object id. One branch allows the draw when a second test passes. Another branch refuses the draw when a model-group flag is set.
+
+The meaning of the per-object ids and the sub-flag is not established.
+
+### Draw classes (High for the dispatch; Medium for the absence of a reader of the level-of-detail flag)
+
+Each render object points to a method table. The flush calls one method from that table for each record, and the method draws the object. Two tables exist:
+
+- Class A: the model-part draw driver. It runs the per-part visibility test, selects the clip or inside state, sets up the light context, uploads the skin matrices once, walks the model's node tree, and draws each part with its material group. This is the class described in Model parts below. Class A exists only as the base of class B: no render object keeps class A after construction.
+- Class B: the derived class. Every character render object uses it: the three hero render records and every slot character.
+
+Class B draw, in order:
+
+1. If the object's skip-once flag is set, clear it and draw nothing this frame (the Cloud Beast air-flow states set it on two characters).
+2. Level-of-detail flag update (below).
+3. The class A model-part draw.
+
+Level-of-detail flag. Let h = (v_x − p_x)² + (v_z − p_z)², the horizontal squared distance from the view point v to the render object's position p (x and z only; y is ignored). The candidate flag is 1 when h ≥ T², else 0. The stored flag changes to the candidate only when the candidate differs from it and |h − T²| > 25.0 (a squared-distance margin). T = 150 units for the three hero render records; T = 0 for every other render object, so their flag becomes 1 once h > 25. No reader of the flag is known (Medium; Open question 80): it has no known effect, and the clean side need not implement it.
+
+### Draw list capacity (High)
+
+The frame's draw list holds at most 18 records. In the original, a 19th or later insert only prints a debug message: the record is not added, the count stays 18 and the frame goes on (nothing stops or is reset). Test vector: 20 submissions in one frame keep the first 18 (sorted as usual), print two messages and draw 18 records.
+
+Guidance for the clean side: do not limit the number of draws per frame. The 18-record size is an original fixed buffer. A clean implementation should keep every collected object and draw all of them, using whatever dynamic storage it likes. Reproducing the drop and its message is not required.
+
+### Far state at flush (High for the mechanism; Medium-High for the vertex-program effect)
+
+The far flag does not switch the model or the light set. It selects one of two global vertex-program state sets used when the record is drawn:
+
+- far flag clear: the near set (set 0);
+- far flag set: the far set (set 1).
+
+Each set is a small state record sent to the vertex program. It is re-sent only when the selected index changes from the last one used. The draw method itself does not test the flag.
+
+The vertex program keeps a state word with three bits:
+
+- clip (value 1): set per model part from the part classifier (inside 0, clip 1); it selects the clipping path for the part's batches (see Per-triangle clipping in the vertex program);
+- fade (value 2): from a separate 257-entry table, where entry k sets the bit for k > 0 and stores the fade level k/256 (0 to 1). This bit is dead (High): the vertex program stores the bit and its level but no program path reads either, and the selector of the 257-entry table has no caller in the boot program or in the level modules. The table is built at start-up only. The clean side leaves it out;
+- far (value 4): from the far flag.
+
+Only the clip bit and the far bit have effects.
+
+Effect of the far bit (High). In the skinned vertex programs (2 and 6), the far bit selects rigid skinning: each vertex is transformed by the matrix of its first bone slot only, at full weight, and the normal by that bone's rotation. With the far bit clear, the full three-bone weighted blend is used for the position (SPEC-0004, "Skinning and lighting in the vertex program"); the normal still uses the first bone's rotation. Lighting runs in both cases. The specular alpha term of program 6 runs only with the far bit clear. Unskinned programs ignore the far bit. Neither set enables fog (see Fog).
+
+Which objects get the far set: characters submitted from the petpet slots and the world slots get it beyond 50 units; the special petpet copy and the hero are always near.
+
+Clean side: beyond 50 units from the view point, skin each vertex with its first bone at full weight.
+
+### Sort order (High)
+
+Each new record is inserted so that the list is ordered as follows:
+
+1. Opaque records come before translucent records. A record is **translucent** when its fade record has fade on and a fade level below 128. Every other record is **opaque**.
+2. Within one class, a record goes before an existing record when its squared distance from the view point is larger. So within a class, the farther object is drawn first (back to front). A new record with a distance equal to an existing one goes after it.
+
+Meaning of the value 128 (High). The fade level is the character's opacity on the scale 0 to 128 (128 fully opaque). Fade records are written in exactly three places (High):
+- the camera fade ramp writes the focus hero's record (SPEC-0027, Fade writer);
+- the enemy-class character update writes the record of each monster and boss every update, from that character's fade level (see Translucency, Fading objects);
+- the background pass writes its own wrap record, at level 128 (Per-frame draw order, step 1); that record is not a draw record and never enters the sort.
+Every character submitted from a character slot record (the two object lists and both world sub-lists) carries its fade record, and so does the main character; only the special object is submitted without one. So the hero and the fading characters listed under Translucency can sort translucent; every other record is opaque.
+
+### Translucency (High)
+
+Drawing a character whose fade record has fade on:
+
+1. The character's screen rectangle (from its model bounds through the view, in GS units with the screen centre at 2048; see Main-character bounds) is clamped to the 512 by 448 screen.
+2. The character is drawn between a fade begin and a fade end. The end composites that screen rectangle back over the frame as one textured sprite whose colour is (128, 128, 128, level), so the whole character is blended at opacity level / 128.
+3. If the rectangle lies wholly off screen, nothing is composited.
+
+A character with fade on and level 128 is opaque but is still drawn inside the wrap. A character with fade off is drawn directly.
+
+While the hero's fade is on, the effects pass is drawn before the character pass instead of after it (Per-frame draw order, step 8).
+
+Fading objects (High for the writers and the per-update feed; Medium-High for the two bosses; Medium for the ghost cycle). These are the objects whose fade record is set, so they are drawn through the off-screen composite:
+- **The hero (camera-near fade)**: the camera fade ramp of SPEC-0027 writes the focus hero's record directly, so the hero fades out as the camera comes close to it.
+- **Monsters and bosses (character fade level)**: each such character keeps an integer fade level, 128 after set-up. Every update it feeds the record: a level below 128 sets fade on with that level; exactly 128 sets fade off; above 128 sets fade on with level 128 (drawn through the composite path, but sorted opaque). The level is changed by:
+  - **Ghost monsters**: the ghost opacity cycle of SPEC-0029 (monster fields Ghost Opacity Min and Ghost Opacity Max, 0 to 1) sets the level to opacity x 128, so a ghost is translucent while its opacity is below 1.
+  - **Gelert Assassin**: a fade-in counter rises by 1 per tick while its fade-in flag is set, up to 128, and the level is the counter (from 0, about 2.1 s to opaque).
+  - **Cloud Beast**: sets its level to 129, which gives fade on with level 128, so it is drawn through the composite path but sorted opaque.
+- No other writer of a character's fade level is known; with the set-up value 128 every other monster has fade off.
+
+Clean side: render a fading character to its own layer and blend that layer over the frame with opacity level / 128 (whole-character opacity, no per-triangle sorting).
+
+### Flush (High)
+
+The flush walks the sorted list once, in order. For each record:
+
+1. If the record has a fade record and its fade is on, begin the fade wrap (see Translucency).
+2. Select the vertex-program state set from the record's far flag (near or far).
+3. Call the object's draw method with the record's stored values.
+4. If the record has a fade record and its fade is on, end the fade wrap (composite the rectangle).
+
+The number of objects drawn is counted. If the count differs from the number of records, the original prints a debug message and returns as usual. The clean side should draw every record and need not check this.
+
+### Sky domes (High; Medium-High for the per-frame rate)
+
+Resources:
+- Resources 1, 2 and 3 are the sky domes. Each is a chunk chain of one shader list (SPEC-0003), one mesh container with two mesh children, role ids 1 and 10 (SPEC-0004), and one texture chunk. The textures are 8-bit indexed textures of 256 by 256, 128 by 128 and 32 by 32 texels with 16 by 16 colour tables.
+- Resources 1 and 2 are byte-identical (118,784 bytes each), so dome 2 looks the same as dome 1. Resource 3 differs (151,552 bytes, with a larger texture chunk).
+- Resource 0 is byte-identical to resources 1 and 2. No rule selects it (the dome number is never below 1).
+- Resource 528 has the dome layout (a shader list, a mesh container with 13 mesh children of role ids 0 to 4 and 100 to 107, and textures including two of 256 by 256) but no loader names it (Medium-High). The clean side need not load it.
+
+Selection on every world load:
+1. Take the world's slot number s (its row in the 193-row area table, SPEC-0006).
+2. Dome number: 2 when s is 151 to 156 or 186; 3 when s is 157 to 185; 1 for every other slot.
+3. If that dome is already the loaded dome, nothing is read.
+4. Otherwise the dome resource is read into the 460,800-byte dome buffer (set up once at boot), its chunks are fixed up, and it becomes the loaded dome.
+
+By world pack (High): dome 2 is used by the world packs 1300, 1323, 1324, 1327, 1335, 1344 and 1427. Dome 3 is used by the world packs 1350, 1353, 1358, 1363, 1369 to 1371, 1381, 1382, 1391 to 1398, 1405, 1407, 1409, 1411, 1414, 1417, 1419, 1421, 1423 and 1425. Every other world uses dome 1.
+
+Dome layers. The dome keeps the loaded dome's shader list and four mesh instances (layers), filled from the children of its mesh container by role id:
+
+| Role id | Layer | Behaviour |
+| --- | --- | --- |
+| 1 | A | Static, identity rotation |
+| 2 | B | Rotates about the world Y axis by −0.0009 radians per frame (data word 0x2DB488) |
+| 3 | C | Rotates about the world Y axis by −0.0006 radians per frame (data word 0x2DB48C) |
+| 10 | D | Static; drawn only while the atmosphere blend factor is above 0, with that factor as its master opacity |
+
+Other role ids are ignored. Domes 1, 2 and 3 hold only roles 1 and 10, so on disc no dome layer rotates. Resource 528 would fill layers A, B and C, but it is never loaded.
+
+Load: each time a different dome is read, all four layers are disabled and both angles are set to 0. Then each child with role 1, 2, 3 or 10 gets an identity matrix and its mesh, and its layer is enabled. Every layer's translation is (0, 0, 0).
+
+Each frame, while the boot data word 0x2D7528 is nonzero (1 on disc):
+1. The dome is the first thing added to the frame's material draw list, right after that list is reset and before the worlds, the characters and the other objects. Its material buckets are flushed first, so it is drawn before everything else.
+2. The dome's shader list is made current.
+3. Layer A, if enabled, is drawn with its matrix.
+4. Layer C, if enabled: angle_C = angle_C − 0.0006. It is then drawn with the rotation whose rows are (cos a, 0, −sin a), (0, 1, 0) and (sin a, 0, cos a), with a = angle_C and no translation: a point (x, y, z) goes to (x cos a + z sin a, y, −x sin a + z cos a).
+5. Layer B, if enabled: the same with angle_B and the step 0.0009.
+6. Layer D, if enabled, only when the atmosphere blend factor b is above 0. b is the blend factor of the type 41 atmosphere zone pass (SPEC-0028 section 11; the "fade fraction" of SPEC-0027), kept in the camera record at +0x500. For this draw the master opacity is b, and it is restored afterwards, so the layer's alpha scale follows b through the opacity table (see Fade level quantizer and draw colour scale).
+
+Placement: world space, centred on the world origin. The camera position is not added, so the dome does not follow the camera. Extents of domes 1 to 3: the role-1 layer spans about x −5316 to 5316, y −1324 to 3271 and z −5384 to 5384 (sphere centre (0, −1294, 0), radius 5385); the role-10 layer spans about x −4516 to 4516 and y −904 to 2313 (radius 4804).
+
+Depth: the dome uses its materials' own state (SPEC-0003): depth test GEQUAL, and an alpha test against 120 whose failing pixels are written to the frame buffer only. No special depth state is set. Because the dome is drawn first, everything else covers it.
+
+Fog: none (see Fog).
+
+Culling: the dome's distance nodes never cull while the eye is inside the dome, because the cull distance is measured to the bounding sphere's surface (max(0, d² − R²), SPEC-0004). Leaves are frustum-tested as usual.
+
+Mesh content (domes 1 to 3 share the geometry): the role-1 layer holds an untextured band at the bottom (vertex colour (62, 99, 128), alpha 0 or 128) and the textured sky (a 256 by 256 texture, ordinary blending, vertex colour 128). The role-10 layer holds an untextured cap (colour (110, 79, 122, 64)) and a textured layer whose material has two register sets (drawn twice, SPEC-0004), under a type-4 fade node with pass byte 2, fade length 10 and fade end 4000. The dome's textured materials scroll their UVs in the vector unit (UV mode 2 of SPEC-0003; High): in each of domes 1 to 3 one single-pass material scrolls along U, and the two-pass material draws two texture layers that scroll in opposite directions. The scroll speeds are material data and the offset follows the render frame counter (SPEC-0003); the dome geometry does not move for it.
+
+### Packet submission (Medium-Low)
+
+A helper builds one packet from a data block and submits it to the platform path (SPEC-0008):
+
+1. A data block longer than 1024 bytes is refused and an error is logged. Nothing is submitted.
+2. Otherwise a 1024-byte packet buffer is cleared and the data is copied to its start. Two 32-byte header blocks are taken from the helper's two inputs, and a fixed header word is set.
+3. The packet is submitted with a length equal to the data size plus 88 bytes.
+4. If the submit fails, a cleanup routine runs and an error is logged.
+
+The header formats belong to the platform spec and are not given here. The callers are not all identified (Open question 39).
+
+### Model parts (High)
+
+For each part of a model, the draw driver runs a visibility test on the part's bounding box:
+
+1. Build the part's eight corners from the box (see Corner builder and eight-corner clip test below).
+2. Classify the corners with the side mask of model parts (all sides except far; see Culling).
+3. Use the outcome:
+   - **culled** (value -1): the part is not drawn;
+   - **inside** (value 0): drawn with the clip bit clear;
+   - **clipped** (value 1): drawn with the clip bit set, so its batches take the clipping path (see Per-triangle clipping in the vertex program).
+
+The part's drawn result is then passed to its material draw. The model-part driver also selects the skinned bone matrices for the part (three source groups by bone index; SPEC-0005 and SPEC-0004) before the draw.
+
+Test vectors for the model-part classifier are in Test vectors.
+
+### Corner builder and eight-corner clip test (High for the arithmetic; Low for the standalone builder's caller)
+
+The part test is made of two steps.
+
+1. **Corner builder.** It takes a box as a centre and a half-extent on each of the three axes. It produces eight corners, one for each combination of the centre plus or minus the half-extent on each axis. The arithmetic is High. A standalone copy of the builder has no direct caller in the boot program (Open question 36); the model-part and mesh-leaf paths build their corners the same way from their boxes.
+2. **Eight-corner clip test.** It classifies the eight corners with a side mask M, by the rules of Culling: a frustum pass, then the near-plane rule, then a guard-band pass.
+
+The clip classification is written over N points, not only eight: the same all-points and no-point rules apply to any count (Medium; the callers with other counts are not identified, Open question 45). Two further corner routines are Low. One computes four corner values from two signed fixed-point inputs centred on the screen centre (2048, as in SPEC-0027). The other computes the four corners of a box or quad from vectors and scalars, projects them through a helper that is not described here, and stores six values. Their callers are not identified (Open question 45).
+
+Test vector: the corner builder, centre (0, 0, 0) and half-extent (1, 2, 3), gives eight corners: x is -1 or 1, y is -2 or 2, and z is -3 or 3, with each combination once.
+
+### Culling (High)
+
+The draw path culls at three levels. There is no grid-cell culling in the draw path.
+
+**Object level.** The 350-unit submit cull and the 50-unit far flag use the 3D distance from the view point (see Object submission and culling).
+
+**Part and leaf classifier.** Each corner gets out-code bits, one per side: +x 1, −x 2, +y 4, −y 8, far 16, near 32 (the near bit means the corner is in front of the near plane). Side mask M: 0x2F (every side except far) for model parts and mesh leaves; 0x3F (all six sides) for group nodes.
+
+1. Frustum pass, against the frustum clip matrix: if one side bit is set on all eight corners, the box is **culled** (−1). Otherwise, if no corner has any bit of M, it is **inside** (0).
+2. Near-plane rule: if any corner has the near bit and M contains the near side, the box is **clipped** (1).
+3. Guard-band pass, against the guard-band clip matrix: if any corner is outside a side of the guard band that is in M, the box is **clipped** (1); otherwise it is **inside** (0).
+
+So the far side never forces clipping for parts and leaves, while all corners beyond the far plane still cull. The sixth side bit is the near plane, handled by the near-plane rule.
+
+**World tree** (the level display tree of SPEC-0006, node layout in SPEC-0004). A type-4 node is skipped with its subtree when its layer flags are nonzero and share no bit with the world layer mask; then the distance cull of SPEC-0004 applies. The layer flags are a 32-bit word (SPEC-0004, node table).
+
+World layer mask = the world record's mask word, OR, for each story layer i that is visible, bit (20 + i) for i = 1 to 8 and bit (17 + (i − 8)) for i = 9 to 12. Layers 1 and 12 share bit 21. Story layer visibility, from the story flags of SPEC-0049 ("a and not b" means flag a set and flag b clear):
+
+- layer 1: 83 and not 5; layer 2: 10 and not 322; layer 3: 64 and not 283; layer 4: 57 and not 58;
+- layer 5: 74 and not 263; layer 6: 85 and not 298; layer 7: 92 and not 94; layer 8: flag 248 set;
+- layer 9: 332 and not 100; layer 10: 332 and not 102; layer 11: 332 and not 104; layer 12: 332 and not 106.
+
+World mask word (High). The world record's mask word is 0 when the world is set up, and only the script call SetWorldDisplayMask(W, m) writes it, with the value 2 x m (SPEC-0030). The same word is also the node filter of the world's placed-object draw. Level scripts pass only m = 1 and m = 2, so the word is 0, 2 or 4: low bit 1 (value 2) or bit 2 (value 4) is enabled after the call, and low bit 3 (value 8) is never enabled by the mask word, so a node whose only layer bit is bit 3 is never drawn (the census has one node with bit 3). Test vectors: word 4 (m = 2) with no story layer visible: layer flags 0x4 drawn, 0x2 skipped, 0x8 skipped, 0 drawn. Word 0: every node with only low bits is skipped.
+
+Disc census (High): of the 19,659 type-4 nodes in the level display trees of world packs 532 to 1433, 19,445 have layer flags 0. Layer bits 21 (34 nodes), 22 (31), 23 (30), 24 (34), 25 (31) and 26 (31) occur in early packs (678, 686, 691, 696, 699, 702 to 706, 713, 714 and others), so story layers 1 to 6 swap scenery there. Bits 18, 19 and 20 (3 nodes each, packs 1370, 1371 and 1398) are layers 9 to 11. Low bits 1 (8 nodes), 2 (5) and 3 (1), in packs 699, 703, 706, 837, 1066, 1176, 1184 and 1230, can be enabled only by the world mask word.
+
+### Camera projection (High for the values; High for the 600 and 10560 sets being unused in play)
+
+The camera render record starts from one fixed set of values, set at boot (these add to SPEC-0027, Projection):
+
+| Value | Setting |
+| --- | --- |
+| Viewport | x 0, y 0, width 512, height 448 |
+| Near plane N | 1.0 |
+| Clip far planes | 5280, 600 and 10560 (three clip matrix sets) |
+| GS projection far F | 10560 |
+| GS split | 0.001 |
+| Focal length | 512 |
+| Depth value at the far plane A | 1.0 |
+| Depth value at the near plane B | 1048576 (2^20) |
+| Widescreen | off |
+
+- Screen mapping (4:3): x_screen = 2048 + 512 × 0.8 × X / Z = 2048 + 409.6 X / Z; y uses 512 × 448 / 480 = 477.87 in the same way. The field of view is 64.0 by 50.2 degrees; the 512 by 448 buffer is shown as 4:3.
+- Depth: Z_buf(z) = k / z + c, with k = F N (B − A) / (F − N) and c = (A F − B N) / (F − N). The near plane maps to B and the far plane to A (larger is nearer). There are two GS variants, over [N, F − 0.001] and [N + 0.001, F]. Every draw in play uses the first; the second is rebuilt with it but is read only by a part-matrix packet builder that nothing calls (High).
+- Clip matrices: for each far plane, a frustum set (640 by 480 basis, focal 512) and a guard-band set (a 4094-unit basis, the GS coordinate range of ±2047 around the centre). All three pairs are rebuilt whenever the projection is rebuilt, each also composed with the view. Only the far-5280 pair is used in play: the world draw, the character parts, the shadow pass and the other part-matrix packets all load it. The composed far-600 pair has no reader, and the composed far-10560 pair is read only by a second part-matrix packet builder that nothing calls (High). The clean side needs only the far-5280 pair.
+- The per-area atmosphere render scalar (SPEC-0028, type 41) replaces B when it is not above B's start value, and the projection and clip matrices are rebuilt. It changes only the depth value at the near plane. The vertex program's copy of B (in the clip record below) is not refreshed (quirk; see Per-triangle clipping in the vertex program).
+
+The projection with a vertical scale of 1.0 under View and projection build is not this camera projection (Open question 84).
+
+### Per-triangle clipping in the vertex program (High for the rules; Medium-High for the clip record values)
+
+This runs only for batches drawn with the part's clip bit set (see Model parts). Its constants come from a clip record built once, when the camera render record is created: the viewport width W and height H (512 and 448), the focal length 512, and the near-plane depth value B (2^20). There are two copies, one per frame parity, and the copy of the frame's parity is sent each frame.
+
+For each strip vertex v that completes a triangle (its no-triangle bit clear), let dx = x − 2048 and dy = y − 2048 be its screen offsets, each multiplied by the sign of its clip w. Two sets of flags are computed:
+- **Inside flags:** |dx| ≤ W/2, |dy| ≤ H/2 and w ≥ 1.
+- **Guard flags:** |dx| ≤ 2047, |dy| ≤ 2047 and w ≥ 1.
+No far test is made in either set.
+
+Then for the triangle (v − 2, v − 1, v):
+1. All three vertices inside: keep it.
+2. All three outside the same one of the five planes (left, right, top, bottom, near): drop it by setting the no-triangle bit on v.
+3. Any vertex failing a guard flag (outside the ±2047 guard band, or nearer than w = 1): clip it.
+   - The original triangle is dropped.
+   - The polygon is clipped in homogeneous space against, in this order: w = 1, x = 2048 − W/2, x = 2048 + W/2, y = 2048 − H/2, y = 2048 + H/2 (that is x 1792 to 2304 and y 1824 to 2272).
+   - S·w, T·w, w, the colour and the homogeneous depth are interpolated linearly along the cut edges, then divided by w again.
+   - The polygon is drawn as a triangle fan (GS primitive type 5) after the batch.
+4. Otherwise: keep it; the GS scissor trims it.
+
+The homogeneous depth of a clipped-polygon input vertex is Z·w when |w| > 1, and B when |w| ≤ 1. This is the only use of B by the vertex program; it is not a fog constant. B is the clip record's copy taken at creation: when the atmosphere scalar lowers B (Camera projection), this copy keeps 2^20 (quirk), so near-plane vertices of clipped triangles keep the old near depth. The viewport never changes size in play (High): the display mode is chosen once at boot and is always 512 by 448 on this disc (SPEC-0027, Screen size), and the projection changes made in play (the atmosphere scalar and a camera track's focal length) leave the viewport size alone. So W/2 = 256 and H/2 = 224 stay valid for the whole game.
+
+There is no far clip and no back-face test.
+
+Clean side: hardware clipping gives the same image, except for the stale near depth of near-clipped vertices (negligible) and the absent far clip.
+
+### Volume test (Medium-Low; inactive on disc)
+
+A second, separate test rejects a box when all eight of its corners fail the same runtime volume. A volume is four planes. The list begins empty on disc. In the recovered boot image, neither the builder nor the volume-test routines have a direct caller in the call index, so no populated volume list or active volume rejection is established for this image. If called, the builder sorts up to 32 candidates (the cap is the smaller of 32 and the stored cap of 14 on disc) and builds one volume per candidate with a usable transform. Unindexed or external module calls remain outside this static boundary.
+
+The clean side should treat this test as absent unless a later spec shows a level that fills the list.
+
+### Light slots and the lit draw (High for the slots and the light block; Medium-High for the vertex arithmetic)
+
+A light context has four slots (see Layout). Every lit model draw uses one: a scene light context for world objects, items and other scene-lit props (it starts from the scene default lights, see Lights), and the character's own context for a character model (see Character lights). Slot kinds: a slot starts with kind 1; its first colour fill replaces the stored colour and sets the kind to 0, so every later fill of a persistent context (a character's) eases 5 percent toward the new colour, unless a dynamic light took the slot in this walk (its second value marks this; then the fill replaces). Scene light contexts are rebuilt for every use, so their fills always replace. There is no light loop or falloff in the functions that set the slots; the falloff is part of the weight.
+
+When a lit draw is prepared:
+1. For each slot with an entry: new = the entry's colour (all four lanes) × the slot weight w.
+   - If the slot's kind is 0 and its second value is 0, the stored colour moves 5 percent of the way toward the new value: stored' = 0.95 × stored + 0.05 × new. The weight 0.05 is the data word above; the rule is the same as stored + 0.05 × (new − stored).
+   - Otherwise stored' = new, and the slot's kind becomes 0.
+2. Slot 0 is the ambient light: its stored colour is the ambient colour A. Its direction is not used.
+3. Slots 1 to 3 are directional: C_k is the stored colour, and D_k is the light's travel direction in the drawn model's space:
+   - type 2: the entry direction, rotated by the transpose of the model's 3 × 3 rotation;
+   - type 3: normalize(model position − light position), rotated the same way;
+   - any other type: zero, so the slot adds nothing.
+4. The light block (see Layout) is built from A, C_1 to C_3 and D_1 to D_3 and sent with the draw. A block equal to the last block sent is not sent again.
+
+Weight w: the entry strength for types 1 and 2; the falloff of Character lights for type 3.
+
+The vertex program of a batch is the pass's material program word (SPEC-0003, Material record; SPEC-0004, Vertex program), not the mesh layout.
+
+Lit vertices (programs 1, 2 and 6, and 5, which is unused on disc), with n the vertex normal in model space (for programs 2 and 6, the skinned normal n' of SPEC-0004):
+1. For k = 1, 2, 3: d_k = clamp(n · T_k, 0, 1), with T_k = −D_k / |D_k|. There is no bias term.
+2. L = A + d_1 C_1 + d_2 C_2 + d_3 C_3, per RGB channel, in 0 to 255 units.
+3. RGB out = min(255, L × (vertex colour byte / 16) × s_rgb), truncated to an integer.
+4. Alpha out = min(255, 128 × (vertex alpha byte / 16) × s_a), truncated. Program 6 may replace it with its specular alpha (below).
+
+Unlit vertices (programs 0 and 4; layout B, and layout C drawn with program 4): out = trunc(vertex byte × s) per channel, with 128 = 1.0 and no upper limit. The GS keeps the low 8 bits of each lane, so a value of 256 or more wraps modulo 256 (see Edge cases).
+
+s is the draw colour scale (see Fade level quantizer and draw colour scale). The GS then modulates the texture by out / 128, so 128 leaves the texture unchanged. The lit colour L is therefore in GS units: L = 128 with a colour byte of 16 and s = 1 leaves the texture unchanged. The skinned lit programs 2 and 6 use the same block and formula on the skinned normal (SPEC-0004, Skinning and lighting in the vertex program); the far state uses the first bone slot alone for both position and normal.
+
+Brightness factor (High). Whenever a light block is built, a factor f is computed and stored in lane 4 of the block's first vector. For each of A, C_1, C_2 and C_3, take m = max(red, blue); the green lane is ignored (original quirk). Let K be the number of nonzero m and S their sum.
+- If K = 0: f = 0.3.
+- Otherwise b = S / (128 K), and f = 0.3 when b < 0.2, f = 1.0 when b > 0.6, and f = 0.3 + 1.75 (b − 0.2) otherwise.
+
+The bounds 0.2 and 0.6 and the values 0.3 and 1.0 are the data words 0x2ECAE4, 0x2ECAE8, 0x2ECAEC and 0x2ECAF0 (see Where it lives). Only program 6 reads f.
+
+Specular alpha term of program 6 (High for the arithmetic; Medium for the frame of the reference point). It applies in the near state only (far bit clear). There is no header flag; the term is inert when both material lanes below are 0.
+1. Let R0 be the reference point (the view point sent with the draw's matrix record, in the same space as the skinned positions) and V̂ = normalize(R0 − P), with P the skinned position.
+2. Let L′ = −(T_1.x, T_2.x, T_3.x), the negated first vector of the transposed light block (original quirk: the x components of the three light directions, not a light direction).
+3. c = 2 (n′ · V̂)(n′ · L′) − V̂ · L′: the reflection of V̂ about n′, dotted with L′.
+4. Let p be the float at group offset 0x6C and z the float at group offset 0x68 (lanes 4 and 3 of the pass-0 UV-mode data, SPEC-0003; the UV mode is 0 in every program-6 group). Let I(x) be the 32-bit pattern of float x read as a signed integer, and F(i) the reverse. Then X = F(trunc(p · I(c) + z)), truncating toward zero and saturating to the 32-bit range. This approximates g · c^p with g = 2^((z + (p − 1) · I(1.0)) / 2^23).
+5. If X > 0, the output alpha is replaced by A = trunc(255 · f · min(1, X)). Otherwise (X ≤ 0, which includes every c ≤ 0 and p = z = 0) the normal lit alpha is kept.
+
+On disc, all 146 program-6 groups have p from 3.0 to 13.59 and a negative z; for example resource 506 group 12 has p = 3.0 and z = −2134851328.0. Their GS state is ALPHA (Cs − Cd) × As + Cd with the alpha test GEQUAL 120 (failing pixels write the frame buffer only), so a weak positive highlight makes the surface see-through and a strong one brightens it (Medium: no on-screen comparison made).
+
+A draw with no light context sends no block, so it uses the last block sent. Only three kinds of model draw pass a light context: the focus hero's held items, the held entry of each world-table character (both with the character's own light state) and one test shape. Every other model draw passes none: the thief's stolen item and the other held slots of world characters, the fixed array of ten records, world items and the item showcase parts, the model particles and model effects of SPEC-0034, and the world record lists (props, debris and display entries) (High for the call sites; Medium for the role names).
+
+Character mesh path (Medium-High). A character model is drawn by one of two paths, chosen per render object, and both use the character's light block. The vector-unit-1 path is the one described above. The other path runs on the main processor and the first vector unit: the light block is loaded into the first vector unit, and a small vertex program (its microcode is a data blob at data address 0x2FB9A0) computes, per vertex:
+1. n' = R_1 n, with R_1 the rotation of the vertex's first bone.
+2. d_k = clamp(T_k · n', 0, 1) for k = 1, 2, 3, and L = A + d_1 C_1 + d_2 C_2 + d_3 C_3 (the same light formula as above).
+3. RGB out = min(255, L × vertex colour byte / 16), truncated; alpha out = 128. No draw colour scale is applied in this program.
+4. Position = w_1 M_1 p + w_2 M_2 p + w_3 M_3 p, the weighted sum of the vertex's three bone transforms (SPEC-0005).
+Which render objects take this path is not established (Open question 73).
+
+Reach: type 30 light sets reach characters only. World geometry (the level display trees, layout B) is unlit. Lit props without a light context of their own use the scene default lights. The swing-trail colour gradients of SPEC-0034 section 18 (once called light templates) never enter this path.
+
+Coordinates: model and world spaces are right-handed with +Y up (SPEC-0004, Coordinate conventions); the light directions and normals use the same axes.
+
+The light packet allocator reports a fault when its pool is full. Each view has a pool of 64 light blocks.
+
+Test vectors are in Test vectors (Lit draw and Light slot blend).
+
+### 3D book open angle (High)
+
+There is no blob shadow. The draw that writes a fixed value 127 and steps a value down to a floor of 0.12 is the 3D book draw (SPEC-0035, books):
+
+- Each book draw sets the value 127 into two register entries of every material group of the book's shader list (the groups are 0x270 bytes apart, SPEC-0003).
+- The book's open angle a starts at 1.2 (data word 0x2DB2E0) and falls by s = (1.2 − 0.12) / 75 = 0.0144 per draw. If the new value is below 0.12 (data word 0x2DB2E4), it is set to 0.12, so the angle stops at 0.12 after 75 draws.
+- s is computed from the two data words when the book is set up; it is not a separate stored value.
+
+The book is drawn after the characters and effects (Per-frame draw order, step 9).
+
+### Character shadow volumes (High unless marked; High for the visible size of the darkening (8 per channel); no rendered comparison made)
+
+Character shadows are stencil shadow volumes; there is no other kind of shadow. Each shadow-casting unit is one bone-attached hull from the model's type-33 block (SPEC-0004, "Optional per-model block (type 33)"). The steps below run as one pass per frame, while the data word 0x2ECCD0 is nonzero (1 on disc). The pass is wrapped in a render-state bracket unless the data word 0x2ECCD4 is nonzero (0 on disc).
+
+1. **Choosing casters.** Candidates:
+   - the hero, always;
+   - petpet slot characters, only while the data word 0x2D7608 is nonzero (0 on disc, so petpets cast no shadow);
+   - current-world slot characters whose spawn record kind key is 720. On disc only the two Gnarfas placements (character regions 985 and 1264) have kind key 720.
+
+   A candidate is taken only when its 3D squared distance from the view point is below 2500 (50 units). While fewer than three casters are held, it is appended. Otherwise it replaces the held caster with the largest distance among those farther than it; if none is farther, it is dropped. So the pass keeps the three nearest casters within 50 units; a candidate at the same distance as the farthest held caster does not replace it.
+2. **Moving the hull.** For each unit of a chosen instance, the sphere centre, the hull points and the triangle normals are moved into world space. The matrix used is the bone matrix that the unit's bank index names (SPEC-0004, Optional per-model block: the byte is one bone index across the render object's three bone-matrix arrays) combined with the instance's matrices. Normals take no translation.
+2a. **Light direction** (one per caster, per frame). It comes from the caster's own character light context (the four slots that light its model; see Character lights):
+   - S = the sum of w_k × D_k over the slots holding a type 3 light, plus w_j × D_j for the one type 2 slot with the largest weight (the first such slot on equal weights). w is the slot weight and D the slot's travel direction: the entry direction for type 2, normalize(character position − light position) for type 3. The ambient slot is not used. So one direction per caster, made from all its point lights and its strongest directional light.
+   - L = normalize(S). If L.y > −0.4 (data word 0x2EC9E4), L.y is set to −0.4 and L is normalised again. A zero S therefore gives (0, −1, 0).
+   - If any slot of the context is empty, or the context has no owner, the direction is (0, 0, 0) and no limit is applied. A character's context always has four full slots after its walk (Character lights), so this does not occur in play.
+   - When the data word 0x2ECCCC is nonzero (0 on disc), L = (0, −1, 0) for every caster.
+   - The original also eases this direction toward the previous frame's direction, but the previous direction is not kept, so the ease has no lasting effect (see Edge cases). The clean side uses L as stated.
+3. **Facing.** For each triangle, f = (moved normal) · L. When f ≥ 0 the triangle faces away from the light, and its facing flag is set to 1. When f < 0 it faces the light, and its flag is set to 0. The flag is rewritten every frame.
+4. **Extrusion.** E = 16.0 (data word 0x2ECCC8). The 25.0 that the instance stores beside its shadow block pointer is never read.
+   - The unit's sphere centre C is the unit centre plus the translation of the unit matrix (the centre is not rotated). Its radius R is the unit radius plus the fourth value of the matrix's translation row (1 for an ordinary matrix).
+   - The swept segment runs from P0 = C to P1 = C + E L. It is clipped against the camera's five culling planes (SPEC-0027; plane normals point into the view). [Medium-High for the plane roles]
+   - Front plane (the first of the five): let d0 and d1 be the signed distances of P0 and P1. If both are below R, the unit is skipped. If one is below R, that end moves along the segment to the plane offset by R: by t = (R − d_low) / (|d0| + |d1|) × length + 0.001, with d_low the distance of that end and length the current segment length.
+   - Each of the four side planes, in turn: if both ends are below −R, the unit is skipped. If one is, that end moves inward by t = (R + d_out) / (|d0| + |d1|) × length + 0.001, with d_out the distance of that end. The length is recomputed after every clip.
+   - With P0' and P1' the clipped ends: A = P0' − C and B = P1' − P0'.
+   - Near copy of a hull point = its moved position + A. Far copy = near copy + B. For an unclipped segment A = 0 and B = 16 L.
+5. **Silhouette edges.** For each edge of the unit, the facing flags of its two triangles are compared. Where they differ, the edge is a silhouette edge. With Pa and Pb the near copies of its two hull points, one quad (Pa, Pb, Pa + B, Pb + B) is emitted as two triangles (the shadow wall). An edge whose two triangles agree emits nothing.
+6. **Caps.** Every triangle is emitted exactly once: a triangle with flag 0 (facing the light) with its three near copies, as part of the near cap; a triangle with flag 1 with its three far copies, as part of the far cap.
+7. **Count colours.** Every emitted polygon has one colour for all of its vertices. It is +8 (R, G, B = 8, A = 128; data word 0x323368) when the camera is on the polygon's outward side, and otherwise 248, which is −8 modulo 256 (R, G, B = 248, A = 128; data word 0x32336C). With V the camera position:
+   - Cap triangle: outward when (V − P_0) · N ≥ 0, with N the triangle's moved normal and P_0 its first near copy.
+   - Wall of edge (Pa, Pb): e = Pa − Pb when the edge's first triangle has flag 0, else e = Pb − Pa; N = e × L; outward when (V − Pa) · N ≥ 0.
+8. **Shadow buffer and resolve.** One off-screen buffer of screen size with 16 bits per pixel (5 bits per colour channel and 1 alpha bit).
+   1. Clear its colour to (120, 120, 120) with the alpha bit set.
+   2. Draw all volume polygons, depth-tested against the scene depth (a polygon passes where it is nearer than the scene surface, that is where its depth value is larger), with no depth write. Blend: out = Cs × As / 128 + Cd with As = 128 and no clamp, so each channel wraps at 256. Each pixel then holds (120 + 8 k) mod 256, with k the number of camera-facing volume polygons in front of the surface minus the number of the others.
+   3. Write 0 to every pixel keeping only the top bit of each channel. A channel becomes 128 when (120 + 8 k) mod 256 ≥ 128, that is when k mod 32 is 1 to 16, and 0 otherwise.
+   4. Draw the buffer over the frame as a full-screen texture: Cs = texel (5 bits expanded to 8) × vertex colour / 128, with the vertex colour (R, G, B = 8, A = 32; data word 0x2D7610). The alpha test passes above 1. Blend: frame = max(frame − Cs, 0) per channel. Net effect: the frame's R, G and B fall by 8 where shadowed. [High]
+   - Texel alpha. The game sets the GS texture-alpha register once, in its display set-up, to 0 for a clear alpha bit and 128 for a set one (no expansion of colour-0 texels), and nothing changes it later. The buffer's alpha bit is set everywhere (the clear sets it, every volume polygon writes alpha 128, and step 3 keeps it), so each texel reads alpha 128 and the drawn alpha is 128 × 32 / 128 = 32, which passes the test. Unshadowed texels have colour 0 and subtract nothing.
+   - Darkening size. A kept channel is 16 of 31 in 5 bits, which reads as 128 in 8 bits, so Cs = 128 × 8 / 128 = 8. The resolve colour is written into the packet from data word 0x2D7610 before every send (the packet's own default of 32 per channel is always overwritten), and no code writes that word. So a shadow is a uniform drop of 8 out of 255 per channel (about 3 percent), never 32.
+   - When the data word 0x2ECCD4 is nonzero (0 on disc), steps 1, 3 and 4 are skipped, so no shadow shows.
+
+Units with no edges, triangles or hull points (the empty units) add nothing. A unit whose swept sphere lies outside the view (step 4) adds nothing either. Confidence: High for steps 1 to 8 and the 50-unit and three-instance limits; Medium-High for the roles of the five planes; High for the visible size of the resolve (no rendered comparison made). Test vectors are in Test vectors (Shadow volumes).
+
+### Display base size scale (High for the rule; Medium for use)
+
+The display setup takes a scale factor f.
+
+1. If f is below 0.1, f becomes 0.1. If f is above 1.0, f becomes 1.0.
+2. The display base size is 512 by 448. The stored width is 512 times f, and the stored height is 448 times f, each truncated toward zero to a whole number. They are stored in the display record and passed to the display-size setter.
+
+Test vectors: f = 0.05 gives f = 0.1 and a size of 51 by 44. f = 1.5 gives f = 1.0 and 512 by 448. f = 0.5 gives 256 by 224.
+
+### Fade level quantizer and draw colour scale (High)
+
+The vertex program holds a per-draw colour scale s = (s_r, s_g, s_b, s_a) (SPEC-0004, vertex colour). It is (1, 1, 1, 1) at start-up. It is changed by colour-scale records (see Layout), which replace only their masked lanes.
+
+Material draw list. Mesh leaves are collected each frame into a draw list, in buckets by material. The buckets are flushed in the order their shader lists were registered. Each entry carries a colour: the draw context colour k with its fourth lane replaced by the opacity o, and its light block. When the list is reset, the opacity is 1.0, the context colour is the default draw colour (0.5, 0.5, 0.5, 1.0) and no light block is set. At flush a new colour scale is sent only when an entry's colour differs from the previous entry's.
+
+Colour scale of an entry:
+- If k's red, green and blue all lie within 0.49 to 0.51 (as with the default colour): s = (1, 1, 1, a'), where a' is the opacity table value for o (variant A below).
+- Otherwise: s = (2 k_r, 2 k_g, 2 k_b, o) on all four lanes.
+
+Opacity o = master opacity × f. The master opacity is 1.0 unless a caller sets it (the sky dome's role-10 layer does; see Sky domes). f is the distance fade of the nearest type-4 node above the leaf (SPEC-0004, node fields F at +0x58 and E at +0x64). With q = sqrt(max(0, |centre − eye|² − R²)), the distance from the eye to the node's bounding sphere: f = (E − q) / F when F > 0 and E − F < q < E, and f = 1 otherwise. A type-4 node inside another type-4 node multiplies its f by the outer node's f.
+
+Quantizer. A level v (a real number) is quantized in two variants. Both use the same index arithmetic, and each has its own range bounds and its own table of 257 entries. Each entry is 48 bytes (0x30) and is a colour-scale record. The tables and their bounds are built at start-up.
+
+Common steps:
+
+1. Clamp v to the range [lo, hi] of the variant's bounds. A value above hi becomes hi, and a value below lo becomes lo.
+2. Multiply by 256.
+3. Add one half if the product is zero or positive, or subtract one half if it is negative (round half away from zero). Truncate to a whole number.
+4. Clamp to the range 0 to 256.
+
+The result is an index from 0 to 256 into the variant's table of 257 entries. When the index differs from the last index used, the entry is applied; when it is the same, nothing happens.
+
+Variants:
+
+- **Variant A, the opacity table** (the table starting at 0x394170; bounds lo = 0.008 and hi = 1.0). Entry i is the record (1, 1, 1, 0.008 + 0.992 × i / 256) on all four lanes. So a' = 0.008 + 0.992 × i / 256 with i = round(256 × clamp(o, 0.008, 1.0)). A negative level selects no index: it sends one separate fixed record, (1.2, 0.5, 0.5, 1.0) on all four lanes (a reddish tint). That reset record is at data address 0x39A1F0 and is built at start-up with the tables.
+- **Variant B, the darken table** (the table starting at 0x3971B0; bounds 0 and 1.0). Entry i is the record (i / 256, i / 256, i / 256, 1); its lane mask covers red, green and blue only, so it sets those three to i / 256 and leaves alpha unchanged. It has no negative branch. Nothing calls the variant B quantizer (no call, jump or stored pointer in the boot program), so no draw is ever darkened through this table; it is built at start-up and unused (High). The clean side need not build it.
+- **Variant A callers** (High): the shadow pass and the world draw each send level 1.0 (full opacity) before they draw, and the material draw sends each entry's opacity o, or the default colour scale's fourth lane (1.0) when it restores the default after a list. An entry's opacity is the colour scale given when its object was submitted. The only submitter that gives a negative scale (−1.0) is a 5 by 5 debug grid object whose enable word is never set, so in play no entry is negative and the reddish reset record is never sent (High). The other variable scale, the radial fade of a record list, is (outer radius − distance) / inner radius and is used only inside the outer radius, so it is above 0.
+
+The reset that clears both tables (when the game sends its reset sentinel) first writes a vector of four 1.0 values at a fixed address before the first table, then clears each of the 257 entries of both tables and the separate entry. The four-1.0 vector is the default colour scale (Medium).
+
+Test vectors: v = 0 gives 0. v = 0.5 gives 128. v = 0.998 gives 255 (255.988 truncated). v = 1.0 gives 256. v = 1.5 gives 256. For v = −0.001, variant A sends the fixed (1.2, 0.5, 0.5, 1.0) record, and variant B gives index 0. More are in Test vectors.
+
+### Frame flush entry points (Medium for the storage; Low for the flush)
+
+Four entry points each store a view or transform block into fixed frame globals, copying it from fixed offsets of the caller's records (about 0x60 bytes in total), and then call a flush routine (described under "Flush"). They differ as follows:
+
+- Two of them store the caller's count into the current draw list, when a current list exists and the count is not zero (for the first) or always when a list exists (for the second), and then flush.
+- The other two first make the list of the caller's record the current list, when that record names one. Each then flushes only when that list holds records.
+
+Answered in part: The world draw is a confirmed user of one list-setting entry; it supplies an identity matrix and the camera position. An object-tree draw uses a count-storing entry and supplies a model-to-world matrix and eye position. The copied block is therefore caller-selected and is used for both world-camera and per-object draws; it is not inherently camera-only. The remaining list-setting entry has no identified direct caller, so its use and the complete caller map remain open.
+
+### Default colour word (High)
+
+Two kinds of object have their own default, and each keeps it:
+- 2D draw records (draw rectangles and the 0x30-byte draw records) start with the colour word 0x80808080: three colour bytes of 128 and a fourth byte of 128, which is GS alpha 1.0 (opaque). One of the two initializers also sets a scale of 16 units.
+- The view object holds the background colour. It starts as 128, 128, 128 and a fourth byte of 0. The camera volume blend later writes all four bytes from the volume's colour, each rounded half away from zero (SPEC-0027). In the default mode the background is one full-screen sprite drawn with blending on and the blend (Cd − Cs) × Ad + Cs, where Ad is the destination alpha already in the frame buffer. The background's own fourth byte is not a weight in this blend; it is only written as the frame buffer alpha (Medium-High).
+
+### Fog (High)
+
+The game has no fog. Neither vertex-program state set enables fog, and the mesh GIF tags have the fog enable bit clear (PRIM 0x25C, 0x24C and 0x05C), so the GS fog stage is never used. The only fog-related text is the name of a source file in a text string attached to a texture error routine. The clean side must not implement fog.
+
+### Main-character bounds (High for the use; Medium for the clamp details)
+
+Before the main character is submitted, its four screen bounds (minimum x, maximum x, minimum y, maximum y, in screen units) are recomputed from its model through the matrix helper and stored on the character. A rectangle-merge routine then combines these bounds with a running screen rectangle:
+
+- If the running rectangle is empty, it is replaced by the character's rectangle.
+- Otherwise the running rectangle grows to the union of the two.
+
+The screen coordinates use the same centre convention as SPEC-0027 (screen centre 2048). The rectangle is stored on the character's fade record and is the region that the fade wrap composites back as one sprite (see Translucency).
+
+### Vertex pass (Medium for the size, Low for its use)
+
+A vertex routine transforms up to 128 positions per pass by a 4 x 4 matrix (each position with its fourth component equal to 1). The results go into a scratch area holding up to 128 positions. A second loop adds a translation to a second copy. Then edges are tested against four side planes (see Edge clip below).
+
+Edge clip (Medium). For one edge, given as two end points, against four planes on the object, each at a limit value:
+
+- For each plane that the edge crosses, the cut point is at a fraction t of the edge, where t is (signed distance of the near end minus the limit) divided by (sum of the absolute distances of both ends), plus a small bias of about 0.001 (exact value not established).
+- An edge outside any one plane at both ends is rejected (outside). Otherwise some part survives (visible).
+
+Which mesh layout feeds this routine is not established (see Open questions). The edge clip uses four planes; the volume test above uses four planes per volume. These are different tests.
+
+### Colour sheet (UI node kind 8; never drawn on this disc)
+
+Confidence: layout High; conversion and pad rules High; blocks C and D Low (only their entries are described); never drawn in the shipped game High.
+
+Reachability (High). Kind 8 is a value of the node kind byte (+0x2B) of the UI node tree that the front end and the HUD draw (SPEC-0035, node-kind draw dispatch; SPEC-0023). The only UI database on the disc is the type-38 chunk of resource 532, and its 1,366 nodes have kinds 0 to 6 only (SPEC-0035, node types on disc). No node of kind 8 exists, so the colour sheet is never drawn and the player never sees it. The clean side does not need it for the game; the rest of this section describes the code path only. Test vector: walking all 1,366 nodes of resource 532 gives no kind 8 node and no colour sheet quad.
+
+The colour sheet is UI node kind 8. When the node tree visits it, the node draws screen-space quads with a colour per vertex (no texture). It has two blocks that are always drawn, A and B, and two more (C and D) that overlay them at the same origins.
+
+Colour state. The three indices (Layout table) define the colour. They are set when the level's colour record is loaded (a reload flag):
+
+- if the record's fourth word is zero, the record holds three colour bytes (R, G, B). Convert them to hue (degrees), saturation and value with the rule below, then set H = round(hue / 2), S = round((saturation − 1) / 4) − 1 and V = round(value / 4);
+- otherwise the record holds three numbers for hue, saturation and value, used directly with the same derivation.
+
+Rounding is half away from zero.
+
+RGB to hue, saturation and value. Value = max(R, G, B). If value is 0, saturation is 0 and the hue is the grey marker 361. Otherwise saturation = (max − min) × 256 / value (truncated). Hue: 0 when max = min; when R is the maximum, hue = 60 × (G − B) / (max − min); when G is the maximum, hue = 120 + 60 × (B − R) / (max − min); when B is the maximum, hue = 240 + 60 × (R − G) / (max − min); a negative hue gets 360 added. Integer divisions are truncated.
+
+Pad steps. Each update, a pad pair steps S (clamped to 0 to 63), another pair steps H (clamped to 0 to 180) and a third pair steps V (clamped to 0 to 63). Which physical button each pair is is not in this spec (Open questions).
+
+HSV to RGB, used to colour the quads. Hue in degrees, reduced modulo 360 and split into six 60-degree sectors; saturation and value are bytes (saturation 255 is full, value 252 is the top of the value range). This is the standard conversion. The rounding of its byte outputs is not established; the clean side should use round-to-nearest unless Open questions say otherwise.
+
+Block A (origin x = 5, y = 5). Six columns by eight rows of cells; each cell is 30 units wide and 8 units tall, so the block covers x 5 to 185 and y 5 to 69. For the cell at column c (0 to 5) and row r (0 to 7), with cell left edge x0 = 5 + 30 c and top edge y0 = 5 + 8 r:
+
+- the left vertices take hue 2 (x0 − 5) degrees, and the right vertices take 2 (x0 − 5 + 29) degrees (mod 360);
+- the top vertices take saturation 4 (y0 − 5) + 3, and the bottom vertices take 4 (y0 − 5 + 8) − 1;
+- every vertex takes value 4 V.
+
+The result is a hue spectrum across the block, with saturation falling toward the top.
+
+Block B (origin x = 190, y = 5). A 16 by 64 unit ramp, drawn as two quads: the first covers y 5 to 37 and the second y 37 to 69, both 16 units wide (x 190 to 206). Hue 2 H and saturation 4 S + 3 for every vertex. Value 255 at y = 5, 128 at y = 37 (first quad), 127 at y = 37 and 0 at y = 69 (second quad). The 127 and 128 step at the join is as stated. The result is a ramp from the colour to black.
+
+Blocks C and D: drawn with the same colour rules as A and B at the same origins, overlaying them. Their layout and content are not described (Open questions).
+
+Vertex output. A screen position (float) is converted to a vertex record by rounding half away from zero, with three colour bytes and the fixed alpha byte 128.
+
+Test vectors for the colour rules are in Test vectors.
+
+### View and projection build
+
+Confidence: eight products High for the count, Medium for their use; projection scale 1.0 High; aspect Medium.
+
+Each frame, the frame setup for the object does:
+
+1. Build the view block from the camera (see SPEC-0027). Its four rows are stored in the object.
+2. Multiply the view block by eight source 4 x 4 matrices of the object. Each product takes four output rows (32 rows in all). The products are written to output blocks of the object. The source matrices are at eight places in the object; their placement is not in this spec.
+3. Set a projection with a vertical scale of 1.0 (the tangent of 45 degrees, so a 90 degree vertical field of view). This is not the camera projection (see Camera projection); which object uses it is Open question 84. The aspect term is the view record's height times the scale, divided by its width. The first argument of the projection setter is the view record's other field (its meaning is open).
+
+The projection setter is also called from a short wrapper that passes an object, a 64-bit value and three words. The wrapper's callers are not all identified.
+
+### What the render path does not contain (High, as a negative for the routines described)
+
+The routines described here have no loop over lights and no fog colour or fog distance blend. Lighting is done in the vertex program from the per-draw light block (see Light slots and the lit draw). There is no fog.
+
+Level of detail (Medium):
+
+- Characters: no model is switched by distance. The far set (one-bone skinning beyond 50 units, see Far state at flush) is the only distance-based detail change. The class B level-of-detail flag (see Draw classes) has no known effect.
+- World and models: the type-4 distance cull and distance fade of SPEC-0004 (cull and fade distances up to about 4000) are the world's level of detail; they do not choose between models. Type-20 instances carry their own draw distance (SPEC-0004).
+- The designer draw-distance and low-resolution-distance fields are not read by the draw path (see Object submission and culling).
+- The value 4000 that is sometimes taken for a level-of-detail distance on render objects is not a distance: it is the byte offset 4000 (0xFA0) of the render object's render-ready flag. The flag is set after the object's first pose and cleared on release; a render object with the flag clear draws nothing.
+
+Linked subtree (Medium-High). A model tree node of type 4 carries three subtree links (+0x70, +0x74 and +0x78), stored on the disc as offsets and turned into pointers when the model is loaded; nothing else writes them. The class A draw walk draws a type 1 node as a leaf (its children are not walked). For a type 4 node it first walks the subtree of the third link (+0x78) when that link is set, then the node's own children in sibling order; the first two links are not walked by this walk. There is no flag and no child choice: the third link adds a subtree. Test vector: a type 4 node with children A then B and a third link to a tree whose only leaf is C draws C, A, B; with the link empty it draws A, B.
+
+### Curves and bounds (not draw code)
+
+A curve evaluator (weighted sum of control points) and a tangent helper use vector-unit arithmetic, but they belong to path and track logic, not to the draw pass. A bounding-box accumulation over a point list (minimum and maximum vectors, skipping invalid entries) is used for mesh or object bounds (Medium). Neither is part of the draw sequence above.
+
+Chain point mover (Low). For each chain (a record that names its points by index in a shared point list), the chain's points are gathered into a box with a low corner and a high corner. One quarter of the largest component of one of the two accumulated vectors is used as an offset: the low corner moves down by it and the high corner moves up by it, on all three axes. Both corners are stored as the chain's pair. The pair is rebuilt from the shared points each tick, so it does not grow. Which corner and which quantity give the offset is not settled (Open question 41). The purpose (a rope, a cloth or a wobble) is not known.
+
+Weight and parameter routines (Low). One routine computes a set of weights over N points with divisions, for a divided-difference or spline parameter. Another computes a normalised parameter as (A minus B) divided by (C minus 2 D plus 1) from four helper values. Neither is known to be in the draw path. Which spec uses them is Open question 40.
+
+### Bounding radius of a box (Medium)
+
+For a box given by the four values of the Layout (low X, high X, low Z, high Z), the X extent is high X minus low X and the Z extent is high Z minus low Z. The radius is 0.7072 times the larger of the two extents. The factor is the fixed constant 0.7072. It is close to one over the square root of two (0.70711) but is not that value, so the clean side must use 0.7072. The Y extent does not enter. The recovered direct caller is the type-16 foliage patch builder: it uses this value as the base of a patch bounding sphere, adds half the near model bound, and uses the composite sphere for foliage frustum culling (SPEC-0004, Radius from a box). This does not establish a use for generic model-part bounds, collision shapes or effect range.
+
+The recovered direct caller uses the radius for foliage patch frustum culling. Generic model-part bounds, collision, effect range, and any indirect or external-module uses remain unestablished (Open question 38). Test vectors are in Test vectors.
+
+### Camera-facing billboard draw (Medium-High for the role; Low for the details)
+
+One routine in the draw path places a three-dimensional billboard, or a model, oriented with the camera's matrix. It is a world-space element that follows the camera transform. It is part of rendering, not a screen-space HUD element (the HUD is SPEC-0023). The clean side should not draw this element as a 2D overlay.
+
+One confirmed use is the Darkest Faerie class-38 loop-B sidestep projectile: its loop-B handler opens a type-3 effect entry with the computed deflection direction, and the effect-opening path submits the camera-facing four-corner primitive. This establishes one caller path, not the complete set of users. The specific texture or model identity, anchor convention, runtime visibility, and whether the output goes through the frame draw list described above remain open.
+
+### Collision routines (not render)
+
+The segment sweep and the overlap test that use vector-unit arithmetic are collision routines (SPEC-0018 and the movement specs). They are not part of this spec.
+
+## Lights
+
+Confidence: the 5 percent slot blend High; scene default lights High; character lights High (see that section).
+
+Swing-trail colour gradients (pointer; High): the 0x50-byte records once described here as light templates (a default and eight presets) are the swing-trail colour gradients of SPEC-0034 section 18 (used by the swing trail of SPEC-0034 3.8), not lights, and never reach a light context or the lit draw.
+
+### Scene default lights (High)
+
+Every scene light context starts from four default lights. They are fixed constants of the boot program, not disc data. Each is a light entry of the SPEC-0028 layout, put into an empty slot by the slot rules of Character lights (by type and flag):
+
+| Entry | Type | Flag | Strength | Slot | Direction (travel) | Colour (R, G, B) |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | 1 (ambient) | 0 | 1.0 | 0 | not used | (50, 50, 50) |
+| 1 | 2 | 1 | 0.25 | 1 | (0.666, −0.524, 0.531) | (255, 255, 195) |
+| 2 | 2 | 0 | 0.25 | 2 | (0.193, −0.598, −0.778) | (205, 205, 255) |
+| 3 | 2 | 0 | 0.25 | 3 | (−0.649, −0.665, 0.368) | (205, 205, 255) |
+
+All four have radius −1 (no radius). The directions are travel directions (they point down); the lit draw uses their negation. So with these lights, slot colours are C_1 = (63.75, 63.75, 48.75) and C_2 = C_3 = (51.25, 51.25, 63.75), and the ambient is (50, 50, 50).
+
+Resource 527 is never read by the game. Its text describes the same rig: its three directions are these travel directions, and the fourth value of each colour line is the strength (the text gives 0.25, 0.25 and 0.20; the game uses 0.25 for all three). The ambient (50, 50, 50) exists only in the code.
+
+### Character lights (High)
+
+The area's light set (SPEC-0028, section 2) is read by characters only. Timing: the walk below runs once per main-loop pass, after every effect pool has updated and published its lights, for the focus hero, the player's live petpet (the companion of SPEC-0047), and every character of that pass's active-character list (all characters of the loaded region records). It runs only while a world is loaded and the game mode is below 9 (normal play). The dynamic point-light list is emptied at the start of each pass, so every walk sees all the dynamic lights of the same pass. For each of these characters the walk runs only when the character stands on a ground entry and passes the zone query with column = the zone byte of that ground entry and key = the character's world id. This is the same test as the cell flag of SPEC-0006 (Character activation, Cell flag); the query passes when no grid is loaded. When the test fails, the walk is skipped and the character keeps the light state of the last pass that ran it. The walk fills the character's light state, which has four slots. This light state is the light context that the character's model draw builds its light block from (see Light slots and the lit draw, including the character mesh path).
+
+Order of the walk:
+
+1. Reset: clear all four slots.
+2. Own entries: for each slot still empty, take the character's own light entry for that slot. A character's own entries are the four scene default lights (the scene's light object receives them at area activation), and scene light contexts take the same four. Since they are taken first, all four slots are always full when the area's light set is walked.
+3. Pass 1: go through the area's light-set records in table order. Skip each record whose gate word is nonzero. For each other record, take its type 2 entries in order, then its type 1 entry (the first array C entry only).
+4. Pass 2: go through the records again in table order, skipping gated records. For each other record, take its type 3 entries in order.
+5. Dynamic point lights: take the pass's dynamic point lights (below) in list order, with the same gates and slot rules plus the dynamic rule.
+
+Gates, applied to each entry before its slot is chosen:
+
+- Zone gate: the entry's zone key (its low byte, 0 to 44) must pass the zone query with the light state's zone value. That value is set to -1 at initialisation, and -1 is also used when the state's first word is zero. The query passes when no grid is loaded.
+- Radius gate: for a type 1 or type 3 entry with a radius above zero, the entry is rejected unless the squared distance from the entry position to the character's position is less than the entry's radius squared. Entries with radius -1 or 0 have no radius gate.
+
+Weight, the value a slot carries for its entry:
+
+- Types 1 and 2: the weight is the entry's strength, with no falloff.
+- Type 3, with strength s, radius r, and d the distance (the length, not its square) from the entry position to the character's position:
+  - d up to 0.5 r: weight is s (full strength);
+  - d above 0.5 r and up to 0.9 r: weight falls linearly from s to 0, so weight = s × (1 − (d − 0.5 r) / (0.4 r));
+  - d above 0.9 r: weight is −1, a sentinel. Such an entry is never stored (see the slot choice).
+
+Slot choice, after the gates (w is the new entry's weight):
+
+- Type 1: slot 0, replacing any earlier occupant.
+- Type 2 with flag 1: slot 1, replacing any earlier occupant. A type 3 entry with flag 1 would also go to slot 1; none exists on disc.
+- Type 2 with flag 0, and type 3 with flag 0: a free slot of slots 2 and 3, slot 2 first. Because the own entries fill every slot, no slot is ever free here, so a displacement candidate c is chosen instead:
+  - both slots 2 and 3 hold type 2 lights: the one with the smaller weight (slot 2 on equal weights); but if exactly one of the two is locked, the unlocked one;
+  - only slot 2 holds a type 2 light: slot 2 if it is unlocked, else no candidate;
+  - only slot 3 holds a type 2 light: slot 3 if it is unlocked, else no candidate;
+  - neither holds a type 2 light: no candidate.
+- A type 2 entry with no candidate is rejected. Otherwise it replaces c when w ≥ weight(c).
+- A type 3 entry with a candidate c:
+  - if d > 0.9 r (the entry lies between 0.9 r and r, since the radius gate passed), the entry is not stored. Instead c's weight becomes (d − 0.9 r) / (0.1 r) × the strength of c's entry, and c is locked for the rest of this walk. This is a cross-fade: as the character moves from r in to 0.9 r, the directional light it displaces fades from full strength to 0, and inside 0.9 r the point light takes the slot with a weight that rises from 0;
+  - otherwise it replaces c when w ≥ 0, and is rejected when w < 0.
+- A type 3 entry with no candidate (slots 2 and 3 already hold point lights, or are locked) is rejected, unless it is a dynamic light with w > 0 (the dynamic rule). Then it replaces slot 2 when weight(2) < weight(3), and slot 3 otherwise, whatever its own weight.
+- A slot taken by a dynamic light is marked for this walk, so its colour is replaced at once at the next fill, with no 5 percent ease (see Light slots and the lit draw).
+- Any other type: not stored.
+
+So, in table order, the first two point lights within 0.9 of their radius take slots 2 and 3 from the default directional lights, and later ones are dropped; dynamic point lights then replace the weaker of the two.
+
+Dynamic point lights: they are built only by the particles of light-emitter emitters (SPEC-0034 4.5). On disc 37 emitter records are light emitters, used by 167 effect definitions (one such emitter each). Each spawner of such an emitter owns one light entry. Each live particle writes that entry each pass and appends a reference to it to the list (at most 200 per pass):
+- type 3; position = the particle's anchor position;
+- colour = the particle's curve channel 1 colour × 255, with alpha 0; strength = channel 1's alpha;
+- radius = the particle's size (the x value of curve channel 2), and its square as the radius squared.
+- The flag and zone-key words are not written, so they keep the spawner record's values, taken to be 0 [Medium-Low].
+- A spawner with k live particles is therefore listed k times, every time with the last particle's values (original quirk). By the dynamic rule a repeat can put the same light into both slots 2 and 3 (when its weight is not below the other slot's). A clean side may list each spawner once; mark the difference.
+79 placed effect spawns (type 39, SPEC-0028) in 13 packs use 11 of these effect ids (1300, 2202 to 2207, 4012, 4023, 4030 and 4031); the other light emitters are started by animations and scripts. Dynamic point lights do not come from world records.
+
+Light kinds: type 1 entries (array C of a type 30 record) are the ambient light. They fill slot 0, and their direction is not used; a type 1 entry with a positive radius is also cut off beyond it. Type 2 entries are directional lights along the entry direction, which is the light's travel direction. Type 3 is a point light at the entry position, with the falloff above; at draw time its direction is normalize(object position − light position).
+
+The swing-trail colour gradients of SPEC-0034 section 18 are not lights and never enter this walk.
+
+Type 30 light sets: the layout is in SPEC-0028, section 2. Type 30 light sets reach characters only: the character walk above is their only reader. World geometry is unlit, and other lit props use the scene default lights. Test vector: resource 685 (a world pack) has 29 records. Record 0 has counts A = 3, B = 0 and C = 1, so four entries and a size of 352 bytes. Its gate word is 1, so the character walk skips it and it never reaches a character. Record 1 has the same counts and gate word 0, so use record 1 for character-light vectors. Record 0 and record 1 differ in 21 bytes: the gate word, and in each of the four entries the radius, the radius squared and the zone key. Positions, directions, strengths and colours are the same. Record 0's first entry is type 2 with flag 1, strength 0.15, position (−294.9, −15.08, −691.0, 1), unit direction (0.1005, −0.9917, 0.0801), colour (203, 255, 143, 255) and radius −1.
+
+Negative facts:
+
+- No fog colour and no fog distance are set or used.
+- A sky dome exists (see Sky domes): one of resources 1, 2 and 3 is loaded for every world. No other backdrop is known.
+- No time-of-day lighting exists.
+- The only hint of fog is the name of a source file that appears in one text string. The routine that uses that string is not identified.
+
+### Character light slots (High for the storage and the slot choice; the weights follow Character lights)
+
+Before a character is drawn, the walk of Character lights fills the character's four light slots (0 to 3) from the area light set. The slot chooser runs once per light entry and either stores the entry in one slot or refuses it ("no slot", -1).
+
+Inputs: the character's light state; the light entry (the 0x50-byte entry of SPEC-0028 section 2: position at +0x00, colour at +0x10, type at +0x30 with values 0 to 3, strength at +0x34, flag at +0x38, radius at +0x3C, radius squared at +0x40, zone key at +0x44); the character, which supplies the model transform for the stored value; the character position; and the dynamic flag (nonzero for a dynamic point light).
+
+Per-slot storage in the light state, for slot s = 0 to 3:
+- the occupant: an entry reference at +0x1C + 4s; zero means empty. Only slots 2 and 3 are tested for emptiness.
+- the weight (float) at +0x3C + 4s, written when the slot is accepted and also by the cross-fade.
+- the lock flag at +0xD0 + 4s, so +0xD8 and +0xDC are the locks of slots 2 and 3.
+- the 16-byte value at +0x90 + 16s: the entry's colour or direction transformed for the character, written when the slot is accepted.
+
+Steps, in order:
+1. A missing entry, character or position: no slot.
+2. Zone gate: the entry's zone key must pass the zone query with the character's zone value (Character lights); otherwise no slot.
+3. Radius gate: for types 1 and 3 only, and only when the radius is above 0. Let D2 be the squared distance from the entry position to the character. D2 at or beyond the radius squared gives no slot. Types 0 and 2 skip this gate.
+4. Weight w: the strength for types 1 and 2; the falloff of Character lights for type 3, with d the distance and r the radius.
+5. Choice by type:
+   - Type 0: no slot.
+   - Type 1: slot 0.
+   - Type 2 or 3 with the flag nonzero: slot 1, with no occupancy or weight test.
+   - Type 2 with the flag 0: the first free slot of slots 2 and 3 (slot 2 first) is accepted with no weight test. Otherwise take the displacement candidate c (step 6). No candidate: no slot. w below weight(c): no slot. Otherwise accept c.
+   - Type 3 with the flag 0: the first free slot of slots 2 and 3 is accepted at once. Otherwise take the displacement candidate c. With no candidate: when the dynamic flag is nonzero and w is above 0, take slot 2 when weight(2) < weight(3) and slot 3 otherwise; else no slot. With a candidate c: if c is locked, no slot. Let x = d - 0.9 r. When x is above 0, c's weight becomes x / (0.1 r) times the strength of c's entry, c is locked, and the result is no slot. Otherwise w below 0 gives no slot, and any other w accepts c.
+6. Displacement candidate (only when slots 2 and 3 are both occupied). Let F be slot 3 when weight(2) > weight(3), otherwise slot 2.
+   - Both slots hold type 2 lights: both unlocked gives F; only slot 3 locked gives 2; only slot 2 locked gives 3; both locked gives F.
+   - Otherwise: slot 2 holding a type 2 light and unlocked gives 2; else slot 3 holding a type 2 light and unlocked gives 3; else no candidate.
+7. Accept slot s: store the entry reference in slot s, store w as its weight, and write its 16-byte value.
+
+## Edge cases and error handling
+
+- **Full draw list** (original): a 19th or later insert prints a debug message and is dropped; the frame goes on. The clean side should keep the object (see Draw list capacity).
+- **Draw count mismatch** (original): a debug message after the flush, nothing else. The clean side should not need it.
+- **Far flag** selects the near or far vertex-program state set at flush. It does not change which model or lights are used; in the skinned programs the far set skins each vertex with its first bone only and turns off the specular alpha term of program 6 (High).
+- **Active petpet drawn twice** (original quirk): the active petpet is submitted from its slot and again as the special object, so it is drawn twice per frame, once possibly with the far set and once with the near set. A clean implementation may draw it once; reproducing the double draw is not required.
+- **Fade on at level 128**: opaque in the sort, but still drawn inside the fade wrap.
+- **Fade rectangle off screen**: nothing is composited for that character.
+- **Shared vertex-program state set**: the set is rebuilt only when the selected index changes, so a draw uses the set last built for that index.
+- **Exact boundary**: a squared distance of exactly 122500 is dropped; exactly 2500 does not set the far flag.
+- **Empty sub-list entries** (load-result word zero) are not submitted.
+- **Object list slots** that are not marked active (flag not equal to 1) are skipped without checks.
+- **Part classifier, far side**: model parts and mesh leaves leave the far side out of their side mask. A part whose corners are all beyond the far plane is still culled (all-corners rule over all six bits). A part with some corners beyond the far plane only and the rest inside is inside (0), not clipped.
+- **Empty volume list**: on disc the volume test rejects nothing.
+- **Light slot with a nonzero second value**: it is replaced directly, not blended.
+- **Lit draw without a light context**: no light block is sent, so the draw uses the last block sent (order-dependent). The draws concerned are listed under Light slots and the lit draw. The clean side should use the scene default lights.
+- **Unlit colour above 255** (Medium-High): the unlit programs 0 and 4 multiply the colour byte by the colour scale with no upper limit (a scale above 1.0 is possible with a non-default draw colour). The GS keeps only the low 8 bits of each lane, so the value wraps modulo 256. Disc level-geometry colour bytes never exceed 245, so no wrap happens while every scale lane is at most 1.041 (SPEC-0004, Edge cases). The clean side reproduces the wrap for strict parity, or clamps to 255. The lit programs limit their output to 255.
+- **Fade bit**: the vertex program stores the fade bit and its level but never reads them, and the 257-entry fade-state table is never selected; it has no effect.
+- **No far clip**: the vertex program never clips against the far side. A vertex beyond F = 10,560 units gets a depth below 1.0, tending to c = (A F − B N) / (F − N) ≈ −98.3, and a negative depth wraps in the 32-bit Z buffer. No drawn part is known to reach that far (the part cull uses the 5,280 far plane). [Low]
+- **Stale near depth (quirk)**: the clip record's copy of the near-plane depth value B is taken once at camera creation and is not refreshed when the atmosphere scalar lowers B, so near-clipped vertices keep the depth 2^20.
+- **Brightness factor ignores green (quirk)**: f uses max(red, blue) of each light colour; a pure green light counts as zero.
+- **Specular light vector (quirk)**: program 6 uses the negated x components of the three light directions (the first vector of the transposed block) as its light vector, not a light direction.
+- **Negative opacity request**: selects the fixed colour scale (1.2, 0.5, 0.5, 1.0), a reddish tint, not an index of the opacity table.
+- **Distance fade window**: a type-4 node fades only while the eye's distance q to its sphere is inside (E − F, E). At q = E or beyond, f is 1 again; the node's cull distance decides whether it is drawn.
+- **Sky dome layer D with b at or below 0**: not drawn.
+- **Sky dome translations (original quirk)**: at world activation the original writes the saved translations of layers B and C into each other's instance. This is harmless, because B and C rebuild their matrices every frame and every translation is (0, 0, 0). The clean side need not reproduce it.
+- **Translucency**: a fade record with fade on and a level of 128 or more is opaque.
+- **Book open angle**: a value below 0.12 after the step is set to 0.12, so the angle stops at 0.12.
+- **Shadow casters**: at most three; petpets never cast on disc (gate word 0); a world character casts only with kind key 720.
+- **Shadow direction ease (original quirk)**: the shadow light direction routine blends toward a previous direction (rate 0.05 after a slot change, data word 0x2EC9D8; otherwise 0.5 × k / 20 with k counting frames up to 20, data words 0x2EC9DC and 0x2EC9E0), but the previous direction is not kept between frames, so the blend has no effect. Only on a context's first use is the blended value normalize(0.95 D_s + 0.05 S), with D_s the direction of the stronger of slots 2 and 3; the y limit then applies as usual. The clean side need not reproduce it and uses L of step 2a.
+- **Shadow extrusion length**: the 25.0 stored beside the instance's shadow block pointer is never read; the length is 16.0 (data word 0x2ECCC8).
+- **Shadow count wrap**: the count buffer wraps at 256 (32 steps of 8), so a pixel where camera-facing polygons are outnumbered by 16 (k = −16) also reads as shadowed, and one with k = 17 reads as lit. Reproduce the wrap only if the clean side uses the same 8-step counting.
+- **Weight −1 entries**: never stored. Own entries leave no free slot, the cross-fade path stores nothing, and the dynamic rule needs a weight above 0.
+- **Point light at exactly 0.9 r**: the computed weight is a tiny negative number (0.4 is stored as 0.39999998), so the entry is rejected, and no cross-fade happens either (d − 0.9 r is not above 0).
+- **Radius-0 point light (original quirk)**: one type 3 entry on disc has radius 0 (SPEC-0028 section 2: pack 1174, record 44, zone key 3, strength 0.65). It has no radius gate, and at any d > 0 the cross-fade divides by 0.1 × 0: the original gives the displaced directional light the largest float times its strength, so that light saturates every lit vertex facing it. The clean side treats a type 3 entry with r ≤ 0 as absent; mark the difference.
+- **Dynamic light listed k times (original quirk)**: a spawner with k live particles is listed k times with the last particle's values (Character lights).
+- **Character light slots, types 0 and 2**: the radius gate is not run for them (Character light slots, step 3). Type 0 never takes a slot.
+- **Character light slots, flag-set entries**: a type 2 or type 3 entry with the flag nonzero takes slot 1 without checking whether slot 1 is occupied, so it overwrites the occupant.
+- **Character light slots, shared weight word**: the cross-fade writes the displaced light's weight into the same word that an accept writes, so the cross-faded weight lasts until that slot is next accepted.
+- **Character light slots, first free slot**: a slot taken as the first free slot skips the weight test (type 2) and the lock test (type 3). In the character walk the own entries fill every slot, so this path is not reached there.
+- **Character light slots, dynamic fallback**: the dynamic rule can take slot 2 or 3 when both are occupied and no displacement candidate was found.
+- **Character light slots, gate boundary**: an entry whose squared distance equals the radius squared is refused (at or beyond).
+- **Grey colour record** (value 0 in the colour record): the hue is the marker 361. Its derived hue index is round(361 / 2) = 181, which is above the pad range of 0 to 180. Its saturation index, by the stated rule, is round(−1 / 4) − 1 = −1. Whether the original clamps these derived values is not established (Open questions). The clean side should clamp them to the pad ranges and mark the difference.
+- **Full-brightness colour record**: a value of 255 gives a derived value index of round(255 / 4) = 64, above the range 0 to 63 of the pad steps. The same open question applies.
+- **Zero-width colour sheet strip**: a block with no width emits no quads (for the cell loops).
+- **Colour sheet visit**: the sheet is drawn only when the UI node tree visits a kind 8 node, which never happens on this disc (see Colour sheet, Reachability).
+- **Vertical-scale-1.0 projection with a zero view width**: the builder divides by width and has no explicit zero-width guard. Its user is unidentified (Open question 84), so this is not confirmed as an in-play camera rule.
+- **Packet larger than 1024 bytes**: refused and logged; nothing is submitted (Medium-High).
+- **Chain mover with an empty chain**: not established (Open question 41).
+- **Held-item rescale (original quirk)**: the stowed shield and the sheathed weapon are scaled by 1.6 / |min − size| and min(2.6 / |min − size|, 0.6) of the model's root box, not by the box size alone. Reproduce the formulas as stated.
+- **Tattered Cloak**: while the focus hero wears item 126, none of the hero's held items is drawn, whatever the flags.
+- **Roberta's shield**: never drawn, in either flag state. Her wand is not drawn while the weapon-drawn flag is clear (she has no sheath point).
+- **Shared flags**: there is one weapon-drawn flag and one shield-raised flag for both heroes, not one pair per hero; the hero swap clears both (SPEC-0040).
+- **One world-item slot (original quirk)**: only one potion model is resident. After a world potion of a second kind is spawned, world potions of the first kind have no model, so nothing is drawn for them until that model is loaded again.
+- **Held entry and a drawn weapon**: while the weapon-drawn flag is set, the held entry is not drawn at all (the weapon takes the hand).
+
+- **Display scale.** A scale factor below 0.1 or above 1.0 is clamped before the size is computed (High).
+- **Fade level.** A level below the variant's low bound or above its high bound is clamped to that bound first (0.008 and 1.0 for variant A, 0 and 1.0 for variant B), then the index is clamped to 0 or 256 (High). Variant A with a negative level selects no index and sends the fixed scale (1.2, 0.5, 0.5, 1.0) instead (High).
+
+## Test vectors
+
+Cull (SPEC-0046 threshold, 350 units):
+- Object at 349.9 units: squared distance 122430.01, which is less than 122500. Kept.
+- Object at 350.0 units: squared distance 122500.00. Not less than 122500. Dropped.
+
+Far flag (50 units):
+- Object at 49.9 units: squared distance 2490.01. Far flag clear.
+- Object at 50.0 units: squared distance 2500.00. Far flag clear (strictly greater is needed).
+- Object at 50.1 units: squared distance 2510.01. Far flag set, so the far vertex-program state set is used at flush.
+
+Drawable test (base state, despawn flag):
+- A townsfolk record bound by streaming: its base state is 42 after the object reset, then 1 at once. It is drawable on its first frame when its slot is active, its cell flag is 1 and its despawn flag is 0.
+- Gelert Assassin fight, mirror image in block slot 2 after set-up: slot active, base state 42, so it is not drawn. The boss's animation 42 passes one half: the image's base state becomes 1 and it is drawn from the next frame, placed at +10 lateral. A hit on the image: base state 42 and a puff effect, so it is not drawn.
+- A dead spider (state 16) whose animation 58 has finished: despawn flag 1, so it is neither drawn nor updated, though its slot is still active.
+
+Translucency class (fade on):
+- Level 127: translucent. Level 128: opaque. Fade off with level 0: opaque.
+- Level 64 with fade on: sorts translucent and composites at opacity 0.5. Level 128 with fade on: opaque but still wrapped. Fade off: opaque, no wrap.
+
+Distance (view point (0, 0, 0)):
+- Object (30, 40, 0): squared distance 2500, far flag clear. Object (30, 40, 1): 2501, far flag set (y counts).
+- Object (210, 280, 0): squared distance 122500, dropped.
+
+Level-of-detail flag (T = 150, T² = 22500, stored flag 1):
+- Object at horizontal distance 149 (h = 22201): |h − T²| = 299 > 25, so the flag becomes 0.
+- Then at 150.05 (h = 22515.0): candidate 1, but |h − T²| = 15.0 is not above 25, so the flag stays 0.
+- Then at 150.1 (h = 22530.01): 30.01 > 25, so the flag becomes 1.
+- A height difference of 100 changes nothing.
+
+Shadow casters: held squared distances 100, 400 and 900. A new candidate at 225 replaces 900. A new candidate at 1000 is dropped. A candidate at 2500 is not a candidate.
+
+Shadow volumes:
+- Light direction, scene default lights only (ambient and three type 2 lights at 0.25; slot 1 wins the tie): S = 0.25 × (0.666, −0.524, 0.531), L = (0.666, −0.524, 0.531); its y is below −0.4, so there is no limit.
+- Light direction, a type 3 light in slot 2 with weight 0.5 at (0, 10, 0), caster at (3, 0, 4), slots 1 and 3 holding default lights 1 and 3 (0.25 each; slot 1 is the strongest type 2): D = (0.2683, −0.8944, 0.3578); S = (0.3007, −0.5782, 0.3116); L = (0.4162, −0.8004, 0.4314).
+- Y limit: S = (1, −0.2, 0) normalises to y = −0.196, above −0.4, so L = normalize(0.9806, −0.4, 0) = (0.9259, −0.3777, 0). S = (0, 0, 0) gives (0, −1, 0).
+- Unclipped extrusion with L = (0, −1, 0): far copy = near copy + (0, −16, 0).
+- Counts (buffer value per channel): k = 0 gives 120 (lit); k = 1 gives 128 (shadow); k = 16 gives 248 (shadow); k = 17 gives 0 (lit, wrap); k = −1 gives 112 (lit); k = −16 gives 248 (shadow, wrap). Resolve: a shadowed frame pixel (100, 60, 5) becomes (92, 52, 0).
+- Resolve: a shadowed pixel (kept channel 128, alpha bit set) with frame colour (100, 50, 5) becomes (92, 42, 0); an unshadowed pixel (kept channels 0) keeps its colour; the drawn alpha is 32 for every texel, so no texel fails the alpha test.
+
+Character lights (point light r = 10, s = 0.5):
+- Weight: d = 0 gives 0.5; d = 6 gives 0.375; d = 8 gives 0.125; d = 9.5 gives −1.
+- Cross-fade with a default directional occupant (strength 0.25): d = 9.5 sets the occupant's weight to 0.125 and the point light is not stored; d = 9.9 gives 0.225; d = 10.0 fails the radius gate (100 is not below 100), so nothing changes.
+- Slot ease (persistent context, kind 0): stored 0, new value 100 gives 5, 9.75 and 14.26 after 1, 2 and 3 fills; half way after about 13.5 fills.
+- Walk with the four default lights as own entries and one record holding two point lights within 0.5 r (strengths 0.5 and 0.3): the first replaces slot 2 (equal default weights pick slot 2; 0.5 ≥ 0); the second finds slot 3 the only type 2 slot and replaces it. A third point light in a later record finds no candidate and is dropped.
+- Character light slots, radius gate (synthetic): a type 1 entry with radius 10.0 (radius squared 100.0) and the character at 10.0 units is refused; at 9.9 units it takes slot 0.
+- Character light slots, type 0 (synthetic): a type 0 entry is refused at any distance.
+- Character light slots, first free slot (synthetic): a type 3 entry with the flag 0 and slot 2 empty takes slot 2. With slot 2 occupied and slot 3 empty, it takes slot 3.
+- Character light slots, displacement (synthetic): slots 2 and 3 hold type 2 lights with weights 3.0 and 2.0, both unlocked: the candidate is slot 3.
+- Character light slots, cross-fade (synthetic): the same setup, a type 3 entry with radius 10.0, the character 9.5 units from it, and slot 3's light of strength 0.6. Then x = 9.5 - 9.0 = 0.5, slot 3's weight becomes 0.5 / 1.0 x 0.6 = 0.3, slot 3 is locked, and the entry is refused. With the character 8.5 units away, x is negative and the entry is accepted into slot 3 (its weight is at least 0).
+
+Camera projection (A = 1, B = 2^20, N = 1, F = 10560):
+- Depth: z = 1 gives 1048576; z = 2 gives 524238.8; z = 10 gives 104769.1; z = 100 gives 10388.4; z = 1000 gives 950.4; z = 5280 gives 100.3; z = F gives 1.0.
+- Screen: X = 6.25, Z = 10 gives x = 2048 + 256 = 2304, the right edge of the 512-wide buffer.
+
+3D book: the open angle 1.2 reaches 0.12 after 75 draws (1.2 − 75 × 0.0144 = 0.12) and stays there.
+
+Story layer: a type-4 node with layer flags 0 is always drawn. A node with only bit 22 (0x400000) is drawn only while flag 10 is set and flag 322 is clear (layer 2), or while the world mask word has bit 22.
+
+Draw order: with the hero fading and one enemy at 20 units, the frame queues background, dome, world, items, flush, shadows, effects, then [enemy, hero (translucent)], book, tint, fade and bars, HUD.
+
+Sort order, example 1 (insertion order: A opaque at squared distance 10; C translucent at 30; B opaque at 20):
+- Insert A: list is [A]. Insert C: translucent goes after the opaque A: [A, C]. Insert B: opaque, and both B and A are opaque with B farther (20 over 10), so B goes before A: [B, A, C].
+- Result: B, A, C.
+
+Sort order, example 2 (insertion order: T40 translucent at 40; T60 translucent at 60; O5 opaque at 5):
+- Insert T40: [T40]. Insert T60: same class, larger, goes first: [T60, T40]. Insert O5: opaque goes before translucent: [O5, T60, T40].
+- Result: O5, T60, T40.
+
+Frame order, synthetic: with two object lists of one object each, a scene sub-list with one nonzero entry, one special object and the main character, the draws happen in step 7 in the sorted order of all five records, not in the submission order.
+
+Model-part classifier (side mask 0x2F, every side except far):
+- All eight corners beyond the far plane only: culled (−1).
+- Some corners beyond the far plane only, the others inside: inside (0).
+- One corner in front of the near plane: clipped (1).
+- One corner outside +x of the frustum but inside the guard band, no other corner outside any side: inside (0).
+- The same corner outside +x of the guard band: clipped (1).
+- No corner beyond any side: inside (0).
+
+Light slot blend (kind-0 slot, weight 0.05): stored (0, 2, −1, 0.5), new (1, 2, 1, 0.5). Result after one update (0.05, 2, −0.9, 0.5); after a second update with the same new value (0.0975, 2, −0.805, 0.5).
+
+Lit draw (scene default lights, identity model rotation, colour scale (1, 1, 1, 1)):
+- n = (0, 1, 0), vertex colour (16, 16, 16, 16): d = (0.524, 0.598, 0.665); C_1 = (63.75, 63.75, 48.75), C_2 = C_3 = (51.25, 51.25, 63.75); L = (148.13, 148.13, 156.06); output RGBA (148, 148, 156, 128).
+- n = (0, −1, 0): all d = 0; output RGB (50, 50, 50), the ambient alone.
+
+Brightness factor f (A, C_1, C_2, C_3 as listed):
+
+| Colours | f |
+| --- | --- |
+| all four (128, 128, 128) | 1.0 |
+| all four (32, 200, 32) | 0.3875 |
+| all four (51.2, 0, 0) | 0.65 |
+| all four (0, 255, 0) | 0.3 (green ignored) |
+| (64, 0, 0), (0, 0, 0), (0, 0, 0), (64, 64, 64) | b = 0.5, f = 0.825 |
+
+Specular alpha of program 6, p = 3, z = −2134851328 (vector-unit rounding may change the last bit):
+
+| c | X | A at f = 1 | A at f = 0.3875 |
+| --- | --- | --- | --- |
+| 1.0 | 0.75294 | 192 | 74 |
+| 0.9 | 0.47647 | 121 | 47 |
+| 0.5 | 0.09412 | 24 | 9 |
+| 0.1 | 0.00064 | 0 (alpha replaced by 0) | 0 |
+| 0 | — | normal alpha kept | normal alpha kept |
+
+- p ≈ 5.1176 (stored to full float precision), z = −4392340992 and c = 1.0: X = 0.66666, A = 169 at f = 1.
+- Geometry: n′ = (0, 1, 0), V̂ = (0, 1, 0), light-block vector 1 = (0, −1, 0, f), so L′ = (0, 1, 0). Then n′ · V̂ = 1, n′ · L′ = 1, V̂ · L′ = 1 and c = 1.
+
+Per-triangle clipping (W = 512, H = 448, all w = 10, clip bit set):
+- x = (2400, 2500, 2600): all outside the right edge, dropped.
+- x = (2000, 2400, 2500): not all outside one edge and inside the guard band, kept whole (the GS scissor trims it).
+- One vertex at x = 4200 (outside the guard band): clipped to x ≤ 2304 and drawn as a fan.
+- One vertex at w = 0.5: clipped at w = 1; that input vertex enters the interpolation with the homogeneous depth B = 2^20.
+- Same triangles with the clip bit clear: all drawn as stored.
+
+Draw colour scale:
+- Default colour (0.5, 0.5, 0.5, 1.0), opacity 0.5: i = 128, a' = 0.504, s = (1, 1, 1, 0.504).
+- Colour (0.25, 0.5, 0.75), opacity 1.0: s = (0.5, 1.0, 1.5, 1.0).
+- Distance fade, synthetic: F = 10, E = 4000. q = 3995 gives f = 0.5; q = 3985 and q = 4005 give f = 1.
+
+Sky dome:
+- Angles after n frames: angle_B = −0.0009 n and angle_C = −0.0006 n. Layer B makes a full turn after 6,981 frames, layer C after 10,472.
+- After 1,000 frames layer B maps (1, 0, 0) to (cos 0.9, 0, sin 0.9) = (0.6216, 0, 0.7833).
+- Layer D with the default colour and no node fade: b = 0 or below, not drawn; b = 0.5, alpha scale 0.504; b = 1.0, alpha scale 1.0.
+
+Book open angle floor (synthetic): an angle of 0.13 falls by 0.0144 to 0.1156, which is below 0.12, so it is set to 0.12. An angle of 0.30 falls to 0.2856 and is kept.
+
+Bounding radius (synthetic): low X 0, high X 2, low Z 0, high Z 4 gives an X extent of 2, a Z extent of 4 and a radius of 0.7072 x 4 = 2.8288. Low X 0, high X 4, low Z 0, high Z 2 gives the same radius, 2.8288. Low X 0, high X 1, low Z 0, high Z 1 gives 0.7072.
+
+Packet size (synthetic): a data block of 1024 bytes is submitted with a length of 1112 (1024 plus 88). A block of 1025 bytes is refused and logged.
+
+Colour sheet, cell geometry (synthetic, from the block rule):
+- Cell column 0, row 0 (x0 = 5, y0 = 5): left hue 0, right hue 58; top saturation 3, bottom saturation 31.
+- Cell column 5, row 7 (x0 = 155, y0 = 61): left hue 300, right hue 358; top saturation 227, bottom saturation 255.
+
+Colour sheet, derived indices from a colour record (synthetic, from the stated rules; the last column is the derived value index before any clamp):
+- (255, 0, 0): saturation byte 256, hue 0. H = 0, S = 63, V = 64 (outside 0 to 63; see Edge cases).
+- (64, 128, 64): value 128, saturation 128, hue 120 (green is the maximum: 120 + 60 × 0 / 128). H = 60, S = 31, V = 32.
+- (128, 128, 128): grey, hue marker 361. H = 181 (outside 0 to 180), S = −1 (outside 0 to 63), V = 32.
+
+Colour sheet, HSV to RGB (synthetic, standard conversion, rounding not established): H = 0, S = 63 (saturation 255), V = 63 (value 252) gives (252, 0, 0).
+
+Colour sheet, vertex alpha: every colour sheet vertex has alpha byte 128.
+
+View and projection (synthetic): a view record of width 640 and height 480 gives an aspect term of 480 × 1.0 / 640 = 0.75. The vertical field of view is 90 degrees.
+
+- Display size, synthetic: a factor of 0.05 gives 51 by 44 (after the clamp to 0.1). A factor of 1.5 gives 512 by 448.
+- Fade quantizer, variant A (bounds 0.008 and 1.0): v = 0.5 gives index 128 (a' = 0.504); v = 0.998 gives 255; v = 0.001 is raised to 0.008 and gives index 2 (a' = 0.01575); v = 1.5 gives 256 (a' = 1.0); v = −0.001 sends the fixed (1.2, 0.5, 0.5, 1.0). Variant B (bounds 0 and 1.0): v = −0.001 gives index 0, and v = 0.25 gives index 64 (RGB scale 0.25).
+
+Held items (root-box values from the disc models; W_k from SPEC-0004):
+
+- Tor, 98 Wooden Sword (resource 544, box min Z −0.417, size Z 2.188): weapon-drawn set, drawn at W_0. Clear, drawn at the sheath point with scale min(2.6 / 2.605, 0.6) = 0.600 (the cap applies).
+- Tor, 103 Sword of the Ancients (549): sheathed scale 2.6 / |−0.854 − 3.724| = 2.6 / 4.578 = 0.568.
+- Tor, 105 Altadorian Sword (551): sheathed scale 2.6 / 4.748 = 0.548.
+- Tor, 107 Iron Shield (561, box min X −0.773, size X 1.546): shield-raised set, drawn at W_5. Clear, drawn at the back point with scale 1.6 / |−0.773 − 1.546| = 1.6 / 2.319 = 0.690.
+- Tor, 110 Legendary Shield (564): stowed scale 1.6 / 2.396 = 0.668.
+- Roberta, 113 Enchanter's Wand (554): weapon-drawn set, drawn at W_0. Clear, not drawn.
+- Roberta with a shield equipped: no shield is drawn in either flag state.
+- Tor with item 126 worn: no shield, weapon or held entry is drawn.
+- Held entry 36 Rope Gun (575): drawn at Q (from W_0) only while the weapon-drawn flag is clear.
+- Synthetic axis swap: with W_8 the identity at origin (1, 2, 3) and f = 1, the stowed shield matrix has the axes (−1, 0, 0), (0, 0, 1), (0, 1, 0) and the origin (1, 2, 3). With W_6 the identity, the sheathed weapon matrix has the axes (0, 1, 0), (0, 0, 1), (1, 0, 0). With W_0 the identity, Q has the axes (0, 0, 1), (0, 1, 0), (−1, 0, 0).
+- Thief: a steal sets the countdown to 180; the item is drawn at scale 0.45 on 180 draws (the countdown goes 180 → 0), and on the 181st draw the flag clears and nothing is drawn.
+
+- Held entry, state test: a held entry with count 0 is not drawn in any state; hero action state 15 does not occur.
+- Status tint: a strength status sets colour-override slot 0 to (1.0, 0.3, 0.2, 1.0) in mode 1; at counter 30 the weight is 1, so each colour-scale record becomes (1.0, 0.3, 0.2). A fire status leaves slot 0 off.
+- Opacity table: submit scale 1.0 gives index 256, a' = 1.0; scale 0.5 gives index 128, a' = 0.504; scale 0.004 is clamped to 0.008 and gives index 2, a' = 0.01575. No path in play gives a negative scale.
+- Background colour: default bytes (128, 128, 128, 0); a volume colour (204.6, 99.5, 30.2, 127.4) is stored as (205, 100, 30, 127).
+- Sky dome choice: slot 0 gives dome 1; slot 150 gives 1; slot 151 gives 2; slot 156 gives 2; slot 157 gives 3; slot 185 gives 3; slot 186 gives 2; slot 187 gives 1; slot 192 gives 1. Loading slot 160 and then slot 170 reads resource 3 once (the second load finds dome 3 already loaded); then slot 186 reads resource 2; then slot 0 reads resource 1 even though its bytes equal those of resource 2.
+
+## Open questions
+
+1. Resolved: **Which object list is which.** The two object lists are the two petpet asset slots (character slot records, SPEC-0030 section 4); the scene sub-list is the current world's character slot table; the optional second sub-list is the neighbour world's table, behind the pairing test; the special object is the active petpet; the main character is the focus hero. They are characters, not the placed objects of SPEC-0028 (see Object lists and the special object). The nine-entry array of the per-frame pass is not described here. **[High]**
+2. Resolved: **Which objects use each draw class.** Every character render object uses class B; class A is only its base. Class B adds a skip-once flag and a horizontal level-of-detail flag before the class A model-part draw (see Draw classes). **[High]**
+3. Resolved: **Purpose of the far render-state set.** It is a vertex-program state bit: in the skinned programs it selects rigid one-bone skinning (first bone slot only) instead of the three-bone blend; lighting still runs, the specular alpha term of program 6 is off, and no fog is set (see Far state at flush). **[High]**
+4. Resolved: **Translucency value.** The sub-record is the character's fade record; the value is the fade level 0 to 128 (its writers are listed under Sort order), and a fading character is composited as one sprite with alpha = level (see Translucency). The second use reported in the list submit path reads a different field (the spawn record combined with the slot flag word), so there is no conflict. **[High]**
+5. **Parallel pass family.** A group of parallel submit paths reads a render-related word stored on the object. The flush does not use that word. What the parallel pass is (shadow, reflection or overlay) and what it does with the word are not established. **[Low]**
+6. Resolved: **Lighting consumer.** Every lit draw builds its light block from the four slots of its light context (see Light slots and the lit draw). Resource 527 is never read; its rig is the scene default lights, which are fixed constants (Lights, Scene default lights). **[High]**
+7. Resolved: **Light blend direction.** Toward the new value: stored' = 0.95 × stored + 0.05 × new. **[High]**
+8. Resolved: **Side bit of the part classifier.** The side left out of the model-part and mesh-leaf mask is the far side (mask 0x2F; group nodes use 0x3F). The sixth bit is the near plane; any corner in front of it makes the box clipped. So the far side only culls (all corners beyond it) and never forces clipping (see Culling). **[High]**
+9. Answered: **Volume builder trigger.** In the recovered boot image the builder has no direct caller in the call index; the volume count starts at zero, and the builder is the only recovered incrementer. No runtime population is established. Calls from unindexed or external modules remain outside this result. **[High for the boot call/data census]**
+10. Answered: **Objects tested by the volume functions.** The recovered boot call index has no direct callers for the volume rejection routines, so no object type is established as using this test in the boot image. With the count remaining zero in recovered paths, the test rejects nothing there. Calls from unindexed or external modules remain outside this result. **[High for the boot call census]**
+11. Resolved: **Distance metric.** The submit cull, the far test and the shadow caster choice use 3D distance (x, y, z). Only the class B level-of-detail flag uses horizontal distance (x, z). **[High]**
+12. Partly resolved: **Draw-distance properties.** They are 16-bit monster-table fields; 2500 is their editor range bound, not a default (the default is 0). No reader is known, and the far test uses the fixed 2500. Still open: whether any code outside the draw path reads them. **[Medium]**
+13. Resolved: **Switch node flag.** It is not a flag: the word is the third subtree link of a type 4 node, set from the disc offsets at model load; the draw walk draws that subtree first and then the node's own children, with no child choice (see Linked subtree). **[Medium-High]**
+14. **Per-part material draw and the second half of the skinned-palette upload.** Not fully described. **[Not specified]**
+15. Resolved: **Fog.** Neither state set enables fog, and the mesh GIF tags have the fog bit clear; the game has no fog (see Fog). **[High]**
+16. **Other vector-unit routines in the render-adjacent list** (some copy, divide and square-root helpers) are not described. They may contain more render math.
+17. Resolved: **View point.** It is the camera record's own position (the base point), read after the camera update and before the shake is applied to the render copy, so a shake does not move it; in the follow camera it is the end-of-tick eye (see Object submission and culling). **[High for the unshaken source; Medium-High for the eye]**
+18. Resolved: **Kind 42 exclusion.** The excluded value is base actor state 42, the parked state (creation, reset, release and inactive slots). Every bind sets base state 1, so in play the rule hides only the Gelert Assassin's waiting mirror images (see Drawable test and Open question 79). **[High]**
+19. Answered: **Scene sub-list entry flag.** It is the slot record's load-result word; only loaded slot records are submitted. **[High]**
+20. Resolved: **Overlay rectangle.** The merged screen rectangle is the fade composite region of a fading character (see Translucency). **[High]**
+21. **Vertex pass.** Which caller (the part-list draw driver) and which mesh layout use the 128-position pass, and whether 128 is a real batch limit or only a scratch limit. The batches of SPEC-0004 are of a few dozen vertices, so the link is not confirmed. **[Medium-Low]**
+22. Resolved: **Fault behaviour.** Both are debug messages only. A 19th or later insert is not added (the count stays 18) and the frame goes on; a flush count mismatch prints and returns as usual (see Draw list capacity). **[High]**
+23. Resolved: **Blob shadow.** There is no blob shadow; that draw is the 3D book's open-angle animation (0.0144 per draw down to 0.12, see 3D book open angle). Shadows are the stencil shadow volumes, gated by the data word 0x2ECCD0, with the hero and kind-key-720 world characters as casters (petpets only while 0x2D7608 is nonzero, 0 on disc) and the three nearest casters within 50 units kept (see Character shadow volumes). **[High]**
+24. Resolved: **Colour sheet: player-visible or debug.** Never drawn: kind 8 is a UI node kind, and the only UI database on the disc (resource 532) has no kind 8 node among its 1,366 nodes (see Colour sheet, Reachability). The clean side does not need to draw it. **[High]**
+25. Answered: **Colour sheet: pad buttons.** Not needed for the game: the sheet is never drawn (item 24). **[Not specified]**
+26. Answered: **Colour sheet: derived ranges.** Not needed for the game: the sheet is never drawn (item 24). **[Medium-Low]**
+27. Answered: **Colour sheet: blocks C and D.** Not needed for the game: the sheet is never drawn (item 24). **[Low]**
+28. Answered: **Colour sheet: update trigger.** Not needed for the game: the sheet is never drawn (item 24). **[Low]**
+29. Answered: **Colour sheet: HSV rounding.** Not needed for the game: the sheet is never drawn (item 24). **[Low]**
+30. **Projection: first argument.** The first argument of the projection setter (the view record's other field) and its meaning. **[Low]**
+31. Partly resolved: **Projection: aspect convention.** The camera projection shows the 512 by 448 buffer as 4:3: focal 512 with a factor 0.8 on x (409.6) and a factor 448 / 480 on y (477.87); see Camera projection. Resolved at the builder level: the vertical-scale-1.0 routine passes 1.0 × view height / view width as its aspect term and contains no explicit zero-width guard. Its user remains unidentified (Open question 84), so this is not confirmed as an in-play camera rule. **[Medium]**
+32. **View and projection: source matrices.** The placement of the eight source matrices in the object and the product convention (row or column order). The later products follow the same pattern (mostly). **[Medium]**
+33. **Projection wrapper callers.** The callers of the short wrapper around the projection setter are not all identified. **[Low]**
+34. Partly resolved: **Billboard draw: users and inputs.** One confirmed caller path is the Darkest Faerie class-38 loop-B sidestep projectile, which opens a type-3 effect entry and submits the camera-facing quad. The other users, specific texture or model identity, anchor convention, runtime visibility, and whether it goes through the frame draw list remain unknown. **[Medium-High for this caller path; Low for the remaining inputs and consumers]**
+35. **Other render-side routine.** One further routine with a render-side role and one callee has not been described, so its place in the draw path is not established. It is not described in this spec. **[Low]**
+36. **Caller of the corner builder.** The box corner builder has no direct caller and no data reference in the boot program. It is either unused or reached from code outside the boot program (for example a level module). The model-part path builds its own eight corners from the part box; whether it shares the standalone builder is not confirmed. **[Low]**
+37. Resolved: **Sixth-side check.** Bit 0x20 is the near side: after the frustum pass, any corner in front of the near plane makes the box clipped (1), before the guard-band pass (see Culling). **[High]**
+38. **Resolved in part — Bounding radius use.** The recovered direct caller is the type-16 foliage patch builder; the composite patch sphere is used for foliage frustum culling (SPEC-0004, Radius from a box). No evidence connects it to generic model-part bounds, collision or effect range. Other indirect or external-module consumers remain unestablished. [High for the recovered caller and foliage path; Low for indirect/external consumers]
+39. **Packet submit owner.** Whether the packet helper and its header formats belong to this spec or to the platform spec (SPEC-0008). Its callers are not all identified. **[Medium-Low]**
+40. **Weight and parameter routines.** Which spec uses the weight routine and the normalised parameter (the camera path spec SPEC-0027 or rendering), and where their four helper values come from. **[Low]**
+41. **Chain point mover.** Which object uses it, which corner and which quantity give the offset, and whether another caller exists. **[Low]**
+42. **Two-sprite submit.** A routine writes five low-level draw-state values for a 2D rectangle or sprite. Whether it belongs to this spec or to the HUD spec (SPEC-0023). **[Low]**
+43. **Two-sub-record wrapper.** A wrapper calls three draw helpers on two sub-records. Whether it is a model draw helper (SPEC-0004) or part of this spec. **[Low]**
+44. **Render-state reset.** A routine zeroes about 40 state fields and sets three of them to 1. Its caller and its place in the frame are not identified. **[Low]**
+45. **Corner routines and N-point clip callers.** The callers of the two corner routines and of the clip test with counts other than eight. The fixed-point steps of the screen-corner routine are assumed to use the screen centre 2048. **[Low]**
+46. **Vector clip-status loop and transform helper.** The vector clip-status loop and the transform compose helper have no direct callers in the boot program. Whether the camera or rendering uses them is not established. **[Low]**
+47. Resolved: **Default colour fourth byte.** The two defaults belong to different objects: 0x80808080 to 2D draw records (alpha 128 = opaque) and 128, 128, 128, 0 to the view object's background colour, whose fourth byte is not a blend weight (see Default colour word). **[Medium-High]**
+48. Resolved: **Fade level users.** The two 257-entry tables are the draw colour-scale tables, built at start-up: variant A is the per-draw opacity, used by every material draw list entry with the default colour; variant B is a darken that sets RGB only. Each entry is a colour-scale record (a vector and a lane mask). Which draws use variant B is Open question 77. **[High]**
+49. Resolved: **Fade range bounds.** They are written once, by the start-up graphics init, when the tables are built: 0.008 and 1.0 for variant A, 0 and 1.0 for variant B. **[High]**
+50. Resolved: **Variant A reset and default vector.** A negative level sends the separate entry, the fixed scale (1.2, 0.5, 0.5, 1.0) on all four lanes; the four-1.0 vector is the default colour scale (Medium). Every caller uses variant A (variant B has no caller): the shadow pass and the world draw send 1.0, the material draw sends the entry opacity or the default's 1.0 (see Variant A callers). No entry carries a negative opacity in play: the only negative submit scale comes from an inert debug grid, so the reddish tint is never shown (see Variant A callers). **[High]**
+51. Answered in part: **Flush entry point callers.** The world draw uses a list-setting entry with identity matrix and camera position; an object-tree draw uses a count-storing entry with a model-to-world matrix and eye position. The stored block is caller-selected, serving both cases. One list-setting entry has no identified direct caller, so its use and the complete caller map remain open. **[Medium]**
+52. Resolved: **Far-copy formula.** The extrusion length is 16.0 (data word 0x2ECCC8); the stored 25.0 is never read. The swept segment from the unit centre along 16 L is clipped against the five camera culling planes, near copy = moved point + A, far copy = near copy + B, and for an unclipped unit far copy = near copy + 16 L (see Character shadow volumes, step 4). **[High]**
+53. Resolved: **Packed light words.** The two words (data words 0x323368 and 0x32336C) are vertex colours for additive counting, +8 and −8 modulo 256 per channel with alpha 128, chosen by whether the camera is on the polygon's outward side (see Character shadow volumes, step 7). **[High]**
+54. Answered for resource 504 unit 0: the 14 listed edges are the hull-edge candidates; the 12 triangles create 18 unique triangle edges, of which four are internal triangulation diagonals joining adjacent triangles with equal or near-equal stored normals. Those four diagonals are omitted from the edge list. This establishes the count discrepancy for this unit; it does not establish that all type-33 units use this pattern. **[High for unit 0]**
+55. Resolved: **Light direction source.** One direction per caster per frame, from the caster's own character light context: the weighted sum of its point-light slots and its strongest directional slot, normalised, with y at most −0.4 (see Character shadow volumes, step 2a). **[High]**
+56. Resolved: **Sphere-first variant.** It has no caller, so it never runs and is not part of the game's behaviour; the clean side leaves it out. **[High]**
+57. Resolved: **Cap selection.** Every triangle is emitted once: facing the light (flag 0) with its near copies, facing away (flag 1) with its far copies (see Character shadow volumes, step 6). **[High]**
+58. Resolved: **Per-tick advance of a light.** The records are swing-trail colour gradients, not lights; their advance is the sample ageing of the swing trail (SPEC-0034 3.8). **[High]**
+59. Resolved: **Light slot consumer.** The lit draw reads the four slots and sends the light block with the draw; meshes drawn with the lit programs 1, 2 and 6 are lit through them (see Light slots and the lit draw and question 6). **[High]**
+60. Resolved: **Preset triggers.** The eight presets are the swing-trail colour gradients of SPEC-0034 section 18; the attacker's element picks one at each trail start (SPEC-0034 3.8). **[High]**
+61. Resolved: **Template constants.** 0.02 and 0.3 are a segment-length fade range, 1 is the colour steps per advance and 2.8 the texture length per unit of trail length, all in the swing-trail colour gradients of SPEC-0034 section 18. **[High]**
+62. Resolved: **Character own entries.** A character's own entries are the four scene default lights (the scene's light object receives them at area activation), the same four that scene light contexts take, so all four slots are full before the area's light set is walked (see Character lights). **[High]**
+63. Resolved: **Displacement rule.** With no free slot, the candidate is the weaker of two unlocked type 2 occupants of slots 2 and 3 (slot 2 on equal weights; the unlocked one when exactly one is locked), or the only unlocked type 2 occupant; a point light between 0.9 r and r cross-fades the candidate and locks it instead of taking its slot; a dynamic light with no candidate replaces the weaker of slots 2 and 3 (see Character lights). **[High]**
+64. Resolved: **Falloff distance.** The type 3 weight uses the distance (the length); only the radius gate uses the squared distance. **[High]**
+65. Resolved: **Weight -1 entries.** They are never stored: the own entries leave no free slot, the cross-fade path stores nothing, and the dynamic rule needs a weight above 0. The radius-0 entry is an edge case of its own (see Edge cases). **[High]**
+66. Resolved: **Dynamic point lights.** They come only from the particles of light-emitter emitters (37 emitter records in 167 definitions), one entry per spawner, listed once per live particle, at most 200 per pass; the dynamic rule is the last case of the slot choice (see Character lights). Still open: the flag and zone-key words of a dynamic entry are not written and are taken to be 0. **[High; Medium-Low for those two words]**
+67. Resolved: **Character slot content.** Each slot holds a light entry and a weight; its stored vector is the entry colour times the weight, and the lit draw reads the slots (see Light slots and the lit draw). Both character mesh paths apply the resulting block (Open question 73). **[High for the slot content]**
+68. Resolved: **Character walk users.** The walk runs once per main-loop pass for the focus hero, the second record and every character of the active-character list, while a world is loaded and the game mode is below 9 (see Character lights). The second record is the player's live petpet. The zone value is the zone byte of the ground entry the character stands on, tested with the character's world id, as in the SPEC-0006 cell flag; a character that fails keeps its previous light state (see Character lights). **[High]**
+69. Resolved: **Sky dome drawing.** The dome is drawn first each frame, from four layers chosen by mesh-child role id (1 static, 2 and 3 rotating about world Y, 10 drawn with the atmosphere blend factor as its opacity), in world space at the world origin, with its materials' own depth state and no fog (see Sky domes). Its textured materials also scroll their UVs in the vector unit (UV mode 2, two layers in opposite directions; Sky domes, SPEC-0003). **[High]**
+70. Partly resolved: **Resource 528.** Its mesh children have role ids 0 to 4 and 100 to 107, so it would fill the dome layers of roles 1, 2 and 3 (two of them rotating). Nothing loads it. Whether it was meant as a fourth dome is open. **[Medium-High for unused]**
+71. Resolved: **Mesh kind per path.** There is no per-packet mesh kind: every batch tag has record kind 4, and the program is the pass's material program word (SPEC-0003, group offsets 0x44 and 0x54). Programs 0 and 4 are unlit, 1 and 5 lit, and 2 and 6 skinned and lit. On disc layout B always uses program 0, layout C program 1 or 4, and layout A program 2 or 6; 26 layout-C batches use a program-2 material (SPEC-0004, Vertex program). Programs 0, 1, 2 and 6 use fixed slot orders and ignore the attribute mask. **[High]**
+72. Resolved: **Skinned extra alpha term.** It is the specular alpha term of program 6, near state only: c = 2 (n′ · V̂)(n′ · L′) − V̂ · L′, raised to the power p by the float bit-pattern approximation with the offset z (group offsets 0x6C and 0x68), and A = trunc(255 f min(1, X)) when X > 0, with f the brightness factor (data words 0x2ECAE4 to 0x2ECAF0). There is no header flag. See Light slots and the lit draw. **[High for the arithmetic]**
+73. Partly resolved: **Character mesh path.** The main-processor and first-vector-unit path loads the character's light block into the vector unit and applies the same light formula: normal rotated by the first bone, alpha 128, RGB min(255, L × colour byte / 16), position skinned by three bones, with no draw colour scale (see Light slots and the lit draw, Character mesh path). Still open: which render objects take this path. **[Medium-High; Low for the choice of path]**
+74. Resolved: **Light templates.** They are the swing-trail colour gradients of SPEC-0034 section 18, not lights, and reach no light context or lit draw. **[High]**
+75. Resolved: **Draws without a light context.** Only the focus hero's held items, the held entry of world-table characters and a test shape send a light context; every other model draw sends none (list under Light slots and the lit draw). **[High for the call sites; Medium for the role names]**
+76. Answered: **Dome step rate.** One pass of the main loop is one 1/60 s tick paced to the vertical blank (SPEC-0026, main loop steps 16 and 17), so the dome steps 60 times per second, fewer only while passes overrun a blank. **[Medium-High]**
+77. Resolved: **Darken table users.** None. The variant B quantizer has no caller, jump or stored pointer in the boot program, so the darken table is built and never used. **[High]**
+78. Resolved: **Unlit overflow.** The unlit programs 0 and 4 do not limit byte × s, and the GS keeps the low 8 bits, so the value wraps modulo 256. Disc level-geometry colour bytes never exceed 245, so no wrap happens with scale lanes up to 1.041; the default draw colour gives 1.0 (see Edge cases). **[Medium-High]**
+79. Resolved: **Base state 42 and townsfolk.** The drawable test and SPEC-0040 use the same base actor state. Every bind (streamed, forced, and spawn by key) sets state 1 after object reset and before the first draw; the streaming pass also returns kept characters found in 42 to state 1. Bound townsfolk therefore draw normally from their first active frame. State 42 remains the parked state, and the drawable rule hides a bound character only when its behavior places it there; the Gelert Assassin mirror images are the documented in-play case (Drawable test; SPEC-0040, Behavior 3). **[High]**
+80. **Reader of the class B level-of-detail flag.** No direct reader is known; an indirect read (through a pointer or a copied block) is possible. **[Medium]**
+81. Resolved: **Other clip sets and the second GS variant.** The far-600 and far-10560 pairs and the GS variant over [N + 0.001, F] are rebuilt with the projection but unused in play: the composed far-600 pair has no reader, and the far-10560 pair and the second GS variant are read only by two part-matrix packet builders that nothing calls. Every draw uses the far-5280 pair and the [N, F − 0.001] variant (see Camera projection). **[High]**
+82. Resolved: **World mask word.** It is the script display mask: 0 at world set-up and written only by SetWorldDisplayMask as 2 x m; scripts use m = 1 and 2, so low bits 1 and 2 can be enabled and bit 3 never is (see Culling, World mask word). The pairing sets are in SPEC-0006. **[High]**
+83. Resolved: **Shadow resolve.** A 16-bit off-screen buffer is cleared to 120, the volumes add +8 or −8 per polygon with wrap, only the top bit of each channel is kept, and the buffer is subtracted from the frame with the vertex colour of data word 0x2D7610. The texture-alpha register is set once at display set-up so a set alpha bit reads 128, the alpha bit is set in every texel, and the drawn alpha is 32, so the test passes everywhere; shadowed pixels lose exactly 8 per channel (the word has no writer and always overwrites the packet default of 32). See Character shadow volumes, step 8. **[High]**
+84. **Vertical-scale-1.0 projection.** The projection of View and projection build is not the camera projection; which object uses it is not established. **[Low]**
+85. Resolved: **Fade bit consumer.** None. The vertex program stores the fade bit (value 2) and its level, but no path reads either, and the selector of the 257-entry fade-state table has no caller in the boot program or in the level modules. Only the clip bit and the far bit have effects (see Far state at flush). The type-4 node fade of SPEC-0004 goes through the draw colour scale instead. **[High]**
+86. Resolved: **Near depth value and the atmosphere scalar.** The vertex program reads the near-plane depth value B only as the homogeneous depth of clipped-polygon vertices at or nearer than the near plane; it is not a fog constant, and there is no fog. Its copy is taken when the camera render record is created and is not refreshed when the atmosphere scalar lowers B (quirk; see Per-triangle clipping in the vertex program). **[High]**
+87. **Held-item pass, other entries.** The fixed array of ten records drawn in step 5 of Held items and character attachments, and a second walk over the world character tables that follows the item showcase in the same pass, are not described. **[Low]**
+88. Resolved: **Action state 15.** No code sets hero action state 15: the set-state method is never called with 15, and the calls with a computed state never produce it (one only restores a saved state). State 15 is an empty route, so the held-entry test for it never holds and is left out. **[Medium-High]**
+89. Resolved in part: the held-item pass stores shield and weapon matrices in the shared auxiliary effect object, and a Tor-only per-tick updater selects category-1 or category-2 inventory entries and uses the matching saved transform to update or stop an effect child (Held items and character attachments, step 4). Still open: the rope effect object drawn with item 36; the child effect's exact visual identity and appearance; whether Roberta or other Mote-effect paths use these matrices. **[High for the stored-matrix consumer and Tor gate; Medium for its visible effect label]**
+90. Resolved: **Held entries of other characters.** A non-hero character gets a held entry only at set-up, from the 16-bit field at +0xAE of its placement record, which is −1 (none) in all 3,036 placement records; so no non-hero shows a held entry on disc (the thief's stolen item is separate). The hero's held entry is only ever item 36 (see Held items and character attachments). **[High]**
+91. Resolved: **Hit-flash consumer.** The character draw reads colour-override slot 0 only (the status tints and the stun tint; see Colour-override slots under draw step 6). Slot 1, which the hit flash sets to (1.5, 0.5, 0.5, 1.0), has no reader, so that tint never shows. Still open: what the ramp's own vector and colour bytes (SPEC-0034 section 32) feed. **[High for the slots; Low for the ramp bytes]**
+92. **Reference point frame of program 6.** The reference point is the vector sent with the matrix record (the view point argument of the class B and part draws), and it is subtracted from the skinned positions. Whether it is the world-space eye while the bone matrices are in world space (the part loop uses an identity model matrix for that record) is not confirmed. **[Medium]**
+93. **Program 6 on screen.** No on-screen comparison has been made. The interplay of the alpha test and the blend (weak highlights see-through, strong ones brighter) is inferred from the GS state of the program-6 groups. **[Medium]**
+94. Resolved: **Clip record after a viewport change.** The viewport never changes size: the display mode is fixed at boot to 512 by 448 (SPEC-0027, Screen size), and the projection changes made in play keep the size, so W/2 = 256 and H/2 = 224 stay valid (see Per-triangle clipping in the vertex program). **[High]**
+

@@ -17,6 +17,8 @@ This is an engineering process for keeping the new code independently authored. 
 
 **One AI session = one room, for its whole life.** A session that has read anything from the research side must never write code here. Start a new session for each room. If a clean session is accidentally exposed, stop, note it in `docs/STATUS.md`, and have a different session redo any affected work.
 
+If the research folder is empty, `docs/research-kit/` holds starter AGENTS.md and START_HERE.md files (process only, no knowledge of the original) for the user to copy there.
+
 ## What may be in a spec
 
 Allowed (facts needed to interoperate with the user's disc and reproduce behavior):

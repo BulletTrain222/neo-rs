@@ -1,0 +1,2030 @@
+# SPEC-0036: Hero combat, health, magic and status effects
+
+- Answers: proactive toward R-0000 (player combat)
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
+- Confidence: per section. Hero growth: High for the start, cap and step words and the stat-up flag tests; Medium-High for the stat-up effects on both heroes; High for the luck meaning (SPEC-0021 pickup gate); Medium for the cue. The sources of the three stat-up items are in SPEC-0021 and SPEC-0060. Rock skipping shots of Roberta's Rock (165) full release (Medium-High for the setup, flight, bounce and end; High for the random turn of each bounce and the flat renormalisation); attack spawn duration (Medium-High for the formula and the data words); three-spoke spawner (High for the geometry and the speed spread); aimed timed object (Medium); oscillator, anchor sockets and follow blend (Medium-Low to Low); mode-code and flag multipliers (Medium-High for the values; meaning open); random draw helpers (Medium-High). Words that are set at start-up are marked run-time; they are not in the disc image. Roberta shot projectile and the power and full-release rules: High for the launch values, the launch gate and release frames, the launch direction, the homing steer, the block, bounce and deflect rules, the range rule, the ground test and cue order, the power clamp, the per-hit damage rule, the cost timing and the shot counts; Medium for the first tick of a release frame. Roberta's leap glow (Timed glow): High for the source, the owner, the window and the reset. Attack sweeps and attack-id spawn dispatch: Medium for the control flow, Medium-Low for the meanings; their constants are fixed program constants with no known data word (Open questions). The former “attack and charge driver” lead is withdrawn: that task is the item-showcase pose presentation (SPEC-0021, Item showcase), not hero combat. Contact routines and cues (world breakables): High for the script hook, the element gate, the break call, cue ids and static attack-object-to-handler map; encounter-specific activation remains open. The per-tick cue chooser is the hero footstep (SPEC-0031; High). Jump-direction helper with the 0.5 cap: High (SPEC-0033 Behaviors 11 and 50); it is not the state-13 attack displacement path, whose separate 0.25 factor is described below. Take-hit order and writes (the cue runs before the death-state return; state 17 is written before damage; state 1 after damage only from state 25): High for the order; Medium-High for the reaction tests (the weapon entry, the busy test and the cue pair by hero). Attack family driver: Medium. No attack animation rotation exists: the table at 0x315C68 is the quick-item panel's candidate lists (SPEC-0021; High). Charge completion: the hero thresholds (50 and 80 ticks), the held counter, the release split and the stored power formula are High; the power-ready check is High; Roberta's charged loop is a looping sound, not an animation (High). Mote charge use by attacks (whole part for Tor, round half away from zero for Roberta's full release, minimum 1 when Q is at least 1): High. Platform arithmetic (single-precision products truncate toward zero; the final damage conversion truncates with no minimum): High. Open points are listed under Open questions. Hero target pick: High for the structure, the stick-length gate, the failure return and the cooldown; Medium for the window meanings (the window flags and reference vectors are open); High for the stick divisor (taken from SPEC-0033). The event switch is the common-enemy agro outer-sub-state entry (SPEC-0038 Behavior 44; High). Hero clear-path predicate (clearance test): High for the footprint test, same-link skip and query offset source; Medium for remaining edge cases and player-side direction meaning. Combat reach test: High for the anchors, the steps, their order and the margin; Medium-High for the inputs of the callers other than the hero swing. Status timing (hero stun to state 1, slow 0.75, speed 1.85, periodic poison with a 1 HP floor, regeneration 12 and 13; no hero fire or confusion tick): High (the 0.5, 2.0, fire and confusion rules belong to the enemy per-tick routine, SPEC-0029). Status apply (one status-apply method per class, called by every source on the target; immunities 8 to 10 against every source; hero poison words always -1): High. Status display and cues: High for the effect ids, the 4 s rotation, the tint colours and the steady tint (no pulse). Mote status words in the attack power table: High for the words and the lookup, Medium for which attack path applies each. Attack homing: none exists in the hero states (High; see Attack homing). Consumable status indexes: Medium-High; slot-0 cross-reference: Medium-Low. Start values, regeneration rates, the attack-power table layout and index map, hero defence, the status "any status" test and the status default durations: High. The attack-power table source (archive resource 533) and its attack id range 0xA0 to 0xAD: Medium-High (the range is matched by two functions that read the table; the 1.0 default is the stated fallback). Damage formula shape, the regeneration gates and the status per-tick effects: High to Medium, as marked. Attack charge and combo windows: High (Combo windows). Jump speeds and landings: the five words at 0x2DD7F8 to 0x2DD824 are the horizontal jump speeds (not attack speeds), and the routines named guard and evade are the hard and soft landings; both are specified in SPEC-0033 Behavior 50 (pointers here). Button routes into the attack step and the roles of Square, Cross, L1 and L2: Medium (SPEC-0033 Controls). Roberta's shot and spin states: Medium. Magic power and cost pairing per attack step: Medium. Enemy hits on a hero (armour, armour Mote, shield block, petpet factor): High for the shared enemy class; boss melee hits bypass it and are subtracted unchanged (High); the take-hit's blocked-flag reaction High, its unread float argument Medium-High. Hurt shapes, attack windows, hit list, hittable predicate and the hero swing cylinder: High for the layouts, gates and weapon length; Medium-High for the cylinder placement; High for the swept test. Invulnerability: there is no invulnerability window after a hit (High). Checkpoint respawn: not known (Open questions). Death: gate, skip rule, default death and repeated death High (control flow); the death cue (it plays only while a hero is still alive) High; the callback's rule (once per death) Medium-High (SPEC-0055). Scene-setup heal High (code). Charm attack hits (the hits of the Mote power-attack objects): High for the damage rule, the routine identity and the callers; Medium-High for the volumes; Medium-High for the status applies that three objects send (fire, curse, confusion). Hit-volume re-arm: High for the 30-tick value and the 0.5 s word; the readiness test is open. Beam and bubble target lists: High for the list shape, Medium-Low for what the count means. Hit points by script (set, add, deduct, percentage, death state, revive): High for the quirks (set to 0 does not kill, add can go negative, deduct of a negative amount raises health without a cap, deducting exactly the current health kills), High for the percentage unit; Medium-High for the hero slot order (slot 0 Tor, slot 1 Roberta); Medium for the script value -1 (active hero); Medium-High for the revive rule, with the revive target open (Open questions). Hero action states (section "Hero action states"): High for the state numbers and the switch arms; state 13 (dispatch by hero variant, Tor's and Roberta's sub-state arm tables, and the state-20 exit rule): High for the dispatch, the exit and the attack router (start sub-states, requests, cues, restart rule and stick-gesture entries; the done ticks at the 0.99 gate are approximate, within one tick); Medium-High for Roberta's leap and landing sub-states 8 and 13; attack animation choice (six fixed ids by hero and Mote): High; state 17 (hurt): High; the traversal states 19, 21, 23, 27, 30, 35, 37, 38, 41, 47 and 58 are specified in SPEC-0033 (Behaviors 13 and 51); Low for the meanings of the charge family. timed attack-family groups (High for the owner, the add, the step count and the step rule; Medium for the effect placement) and ten-slot timed lists (Medium; High for the timer values); attack-family exclusion and attack id -1 (Medium-High); attack-family effect tables (High for the count and the layout); hit-volume records (Medium); shot spread offsets (Medium for the arithmetic, Low for their use); the factor 0.9 (High: petpet kind 1 or 7, on enemy hits taken by a hero); the low-health warning (High); the action-state routing paragraph (High). Charge parameter blocks of both heroes (High for the writes, Medium for the repeat limits and the names of the fields); the hero pre-step order (High; it runs no incoming-hit sweep) and the shot's world contact (Medium-High); line-of-fire predicates (Medium-Low); target marker (Medium). Guard timer, per-attacker block, knockback on the hero and the hit-list clear points: High. Mote object pairing: High for the pairing and for the family B, family C, Leaf and Fog rules; Medium for the family A volumes. Tor's Rock (165) sub-shots are family A objects (High). Right-stick aim mode: High for entry, exit, reticle and stored-button writes; Medium-High for interpreting the flag as a retained R2/Circle selector, because another consumer is not fully characterized.
+
+## Summary
+
+There are two playable heroes: Tor (a melee fighter) and Roberta (a ranged caster). Each has health and a second pool used for magic. Maximum health and magic rise only through stat-up items (see Hero growth); there is no experience and no level counter. The attack button (R2 or Circle) is tapped, held to charge a power attack, or pressed again inside timed windows to chain attacks. Most hero hits resolve through one damage formula: the weapon's stat A (0 with no weapon, so an unarmed swing deals nothing), times several multipliers, with the target's defence subtracted, then truncated with no minimum. A design table on the disc, keyed by the Mote in equipment word 2 (SPEC-0021), gives an extra power factor for Tor's power step, the Mote power-attack objects and Roberta's full-release shots. A full press releases one Mote power-attack object per Mote; its hits deal the hero's stored outgoing scale times the type bonus, minus defence, times that table value (Charm attack hits). Every use of a Mote spends some of its charge (SPEC-0021, Mote charge); the charge amounts are not damage. A hero has defence zero. Hits of the common enemies (class 17) and enemy pool projectiles are reduced by body armour, an armour Mote, a shield block while guarding and a petpet factor. Boss melee hits are not reduced (Enemy attack damage to a hero). All products follow the console's single-precision arithmetic, which truncates toward zero (Damage); a clean build must reproduce it. Beam and bubble attacks keep a ten-slot target list (see Beam and bubble target lists under Layout). Curse and strength status effects scale outgoing damage. Magic is spent when a normal attack lands or a quick shot hits a hittable target; Tor's power attack pays at release, and Roberta's full release pays at release (ids 162, 169 and 171) or at its first shot. Fourteen status timers drive regeneration, poison, speed and similar effects. All timings run on the 60 Hz tick (SPEC-0007). Button names follow SPEC-0033. Scripts can also read and set a hero's health, add to or deduct from it, read the percentage of health left, and revive the other hero (Hit points by script). Health is not floored or capped in every path, which the rules below spell out. The hero's swing is a cylinder on the weapon attachment, tested against the target's bone capsules during the animation's attack window (Hit detection); its swept step and the enemy and boss reach tests share one capsule-and-anchor test (see Combat reach test). The hero's combat states are the attack (state 13) and the hurt state (state 17), described in "Hero action states" below. The jump states (7 to 11 and 43 to 46, with Tor's plunge and the air attacks), the ladder and the other traversal states are in SPEC-0033 (Behaviors 13, 50 and 51), and death (state 16) is in SPEC-0055.
+
+## Where it lives on the disc
+
+- Start values: four s32 words in the boot program's data at 0x00319BC0 to 0x00319BCC (read at runtime).
+- Magic power and cost words: s32 words at 0x2DD47C through 0x2DD507 (35 words, 0x2DD47C to 0x2DD504 in steps of 4; all small positive integers from 1 to 40). They form one cost-and-power table, read by a single lookup keyed by hero, level and Mote family (odd, even or none); for Roberta's shots the level is the shot's launch class. Each value is given with its word under Magic (High).
+- Regeneration rates: f32 words at 0x2DD464 and 0x2DD474 (1.0 per second, magic) and at 0x2DD468 and 0x2DD478 (2.0 per second, health). See Regeneration.
+- Regeneration target fractions: f32 0.1 at 0x2DD460 (Tor magic), 0x2DD470 (Roberta magic), 0x2DD45C (Tor health) and 0x2DD46C (Roberta health). Each sets the target T in Regeneration (High; boot data words).
+- Jump horizontal speeds: the f32 words at 0x2DD7F8, 0x2DD818, 0x2DD81C, 0x2DD820 and 0x2DD824 are the horizontal speeds of the jump states 7 to 11, not attack speeds (SPEC-0033, Where it lives and Behavior 50). Confidence: High.
+- The status scale constants are fixed constants, not tuning words: 0.75 for curse, 1.5 for strength, and for the hero speed scale 0.75 for slow and 1.85 for speed (Status effects; the values 0.5 and 2.0 belong to the enemy per-tick routine, not the heroes, and an enemy's own curse scale is 0.5; SPEC-0029). The 0.75 value also appears as a 4-byte word in the boot program.
+- Status display: the effect ids (effect group 3, SPEC-0034) and the tint colours are code constants; the tint colours are written into run-time words at start-up (Status display and cues).
+- Hero defence: the hero class table's defence entry is a data word at 0x00319004. It points to a routine that always returns zero.
+- Attack power table: archive resource 533, an IDM chunk file. Take its type-42 chunks in order. Use the chunk at index 16 (zero-based). That chunk holds a 16-byte IDMX header and then 60 records of 4-byte f32 values (record count u16 at IDMX +0x0C, record size u16 at IDMX +0x0E, records at IDMX +0x10). Read it at start-up. Do not copy the values into code. The lookup key is the hero row and a Mote id, which takes values 0xA0 to 0xAD (decimal 160 to 173). The loaded table is reached at run time through the pointer word 0x43C48C (run-time, not in the disc image). The table value P is used only in Tor's power step, by the Mote power-attack objects and by Roberta's full-release shots; every other hit uses P = 1.0 (Damage).
+- Weapon reach tables and the reach words: SPEC-0021 (Weapon reach). The hero swing adds 2.0 (word 0x2DD694) to the reach; a second reach query scales it by 0.6 (word 0x2DD690). The swing radius 1.0, the 0.25 centre offset and the 65.0 distance gate are code constants (Hit detection).
+- Hurt shapes: the per-bone length and radius fields of the skeleton bone table (SPEC-0005, flat type-18 chunk; Layout: Hurt shapes and hit list). Attack windows: bits of animation table B (SPEC-0005; Layout).
+- Timed attack-family group constants (boot data, High): f32 0.5 at 0x2DCAD8 (timer of each entry, seconds); f32 30.0 at 0x2DCAC8 (group length factor: trunc(30.0 x tick rate) + 1 = 1801 group steps); f32 0.0 at 0x2DCAD4 (entry spread); f32 1.0 at 0x2DCB2C and at 0x2DCB38 (lifetime of a ten-slot entry, seconds). See Timed attack-family groups.
+- Petpet factor words: f32 0.1 at 0x2DD8E0 (the factor 0.9 on enemy hits taken by a hero is one minus this word; Enemy attack damage to a hero) and f32 0.25 at 0x2DD8DC (factor E = 1 + this word; Damage). Confidence: High.
+- Attack-family effect tables (effect-definition ids, SPEC-0034; not animation tables): ten tables of fourteen s32 entries at 0x315280 + 0x38 x k (k = 0 to 9), indexed by Mote id minus 160, and six tables of eight entries at 0x3154C8, 0x3154E8, 0x315508, 0x315528, 0x315548 and 0x315568. The ids are not listed here (Behavior: Attack-family effect tables). Confidence: High.
+- Supernova bolt timer (Hit volume re-arm): an f32 data word at 0x2DCBC8, value 0.5 (seconds); 30 ticks (0.5 × 60). Next to it: 0x2DCBCC = 1.0 (the bolt's scale word) and 0x2DCBD0 = 45.0 (the bolt's target reach). Confidence: High.
+- The table at 0x315C68 is the quick-item panel's candidate lists (SPEC-0021); no attack animation rotation exists.
+- Attack animation choice: six fixed animation ids in the program; there is no data table (Attack animation choice). The cue and stinger codes of the attack router are fixed program values too (Attack router).
+- Charge thresholds (immediates written when each hero is created; Layout): 50 ticks for Tor and 80 ticks for Roberta. The 0.5 in the hero's charge power is a code constant (High; see Charge completion). The boot word at 0x2DB1D8 (value 0.5) belongs to a creature rule and is not used by the hero (Charge completion).
+
+- Stick scale for the hero target pick: the word at 0x319524 is the same stick scale as SPEC-0033 (value 87.5, given there). See Hero target pick.
+- Stick displacement and state-13 words: f32 0.25 at 0x2DD6C8 (stick displacement scale; Medium for its use, see Open questions); Tor's state-13 sub-state-13 rumble request (SPEC-0033, Rumble): f32 0.8 at 0x2DD7B0 (duration, seconds); f32 0.6 at 0x2DD7B4 (intensity); integer 2 at 0x2DD7AC (preset); f32 0.3 at 0x2DD800 (the falling gravity gain of the jump states, SPEC-0033 Behavior 50).
+- Glow window (0.5 s and 0.8 s, Timed glow) and attack-driver window (2.0 s, Attack and charge driver): code constants, not established as data words.
+- Item records (charm types, weapon stats): SPEC-0021.
+- Contact handlers (Behavior: Contact routines and cues): each handler takes its attacker kind from a fixed Mote kind or an owner field. They act on world breakables (SPEC-0048) and read the breakable's script index (+0x58), material word (+0x5C) and element byte (+0x5E). They read no power value.
+- Attack spawn duration words (boot data, High): f32 2.0 at 0x2DCB54 and at 0x2DCBD4 (the divisor of the distance, one per spawn routine); f32 10.0 at 0x2DCB58 and at 0x2DCBD8 (the added constant). The two pairs have the same values. See Attack spawn.
+- Three-spoke and aimed-object words (boot data, High): f32 0.6 at 0x2DCB88 (rock spoke base speed, units per tick); f32 0.3 at 0x2DCB8C (rock spoke speed spread, units per tick); f32 6.0 at 0x2DCB44 (aimed object cycle length, seconds); f32 0.5 at 0x2DCB4C (aimed object countdown base, seconds); f32 0.1 at 0x2DCB50 (aimed object countdown spread, seconds); f32 3.5 at 0x2DCB60 (aimed object height above the ground, units). See Three-spoke spawner and Aimed timed object.
+- Roberta shot rows (boot data, High): eleven rows of five words at 0x2DD6D0 + 0x14 × r (r = 0 to 10): f32 speed (units per second), f32 radius, s32 life (seconds; ticks = seconds × 60), s32 homing mode, s32 reaction status (-1 = none). Rows in order: quick class 0 at sub-state 10; quick classes 0 and 1; quick class 2; one row the launcher never reads; then the full-release rows Water, Lava, Fire, Wind, Light, Smoke and Nova (0x2DD720 to 0x2DD798). The default row takes its speed from the second row (0x2DD6E4); its radius 3.0 is a program constant, and its life is 120 ticks. See Roberta shot projectile.
+- Mote object words (boot data, High): family B orbit radius 2.5 at 0x2DCB68 (Tor) and 0x2DCBAC (Roberta) and life 10 s at 0x2DCB64 and 0x2DCBA8; family C beam life 5 s at 0x2DCB98 and 0x2DCB9C, and its re-hit time 1 s at 0x2DCB2C; Roberta's Leaf ring start radius 1.0 at 0x2DCB70, growth 1.0 unit per second at 0x2DCB78, largest radius 5.0 at 0x2DCB74, height word at 0x2DCB80 (half-height = 0.5 × the word = 1.5), life 10 s at 0x2DCB7C, damage word 0.0 at 0x2DCB84 and its factor word 1.0 at 0x2DCB6C; Tor's Rock sub-shot interval 0.25 s at 0x2DCB94. Roberta's Fog pulse radius is the squared value 100.0 in the run-time word 0x378B44 (written at start-up). See Charm attack hits.
+- HUD display timers set by a failed power-ready check: the words 0x2DCD60, 0x2DCD64, 0x2DCD6C and 0x2DCD78 (SPEC-0023), each set to 240 ticks (Power-ready check).
+- Shot aim override: a one-shot flag word at 0x2DB458 and a run-time locator index word at 0x370630 (a world locator record, SPEC-0006). See Roberta shot projectile, launch.
+- Rock start word: f32 0.1 at 0x2DCBC4. The rock setup converts it to a whole number by truncation toward zero (0) and uses that as the bound of a random whole number below it. A bound of 0 gives 0 and consumes no random draw, so the rock's gravity is always −0.1 per tick (Rock skipping shot).
+- Run-time words (not in the disc image; set at start-up, so the clean side must set them itself): 0x368FA0 (time base, 60 ticks per second) and 0x368FA8 (the 1/60 tick length), both written once at start-up from the boot rate table at data address 0x30C598 (SPEC-0007, Rate selection; High), 0x368F98 (the pass counter used by the regeneration rule: 0 at start-up, +1 at the end of every main-loop pass, so +1 per tick; see Regeneration), 0x3932E0 (the constant up vector (0, 1, 0, 0), one of five constant vectors written once at boot by a start-up initialiser (SPEC-0026) and never changed; used by the aim blends and the body cylinder). The address 0x39BE50 is the state object of the shared Mersenne Twister generator: the range helpers pass it on to the core draw (see Random draws). It is not a table and not a tuning value.
+- Random source state: the generator reads and updates a data word at 0x2EC9B8 (zero in the disc image). Its algorithm is not specified in this spec.
+
+## Layout
+
+### Start values
+
+| Value | Address | Tor | Roberta |
+| --- | --- | --- | --- |
+| Starting and maximum health | 0x319BC0 (Tor), 0x319BC4 (Roberta) | 150 | 120 |
+| Starting and maximum magic | 0x319BC8 (Tor), 0x319BCC (Roberta) | 90 | 150 |
+
+Charge thresholds (set when the hero is created; not tunable on retail discs): Tor's full-press threshold is 50 ticks; Roberta's is 80 ticks. Tor's quick-tap threshold is 0, which disables the tap path (see Edge cases). The full set of charge fields is in "Charge parameter blocks" below.
+
+### Charge parameter blocks (creation)
+
+When a hero is created, one parameter set is written into the hero's fields. The set is chosen by the variant word at +0xF80 (0 is Tor, 1 is Roberta). The word selects the hero; it is not a mode. The values are immediates written by the creation routines, not tuning words on disc (High for the writes).
+
+| Field (hero offset) | Tor (variant 0) | Roberta (variant 1) | Meaning and confidence |
+| --- | --- | --- | --- |
+| +0x1534 | 50 | not written | Full-press threshold in ticks (High) |
+| +0x1538 | not written | 80 | Full-press threshold in ticks (High) |
+| +0x1530 | 0 | not established | Quick-tap threshold; 0 means the tap path never runs (High for Tor) |
+| Sub-state 2 press window | 20 to 33 ticks (inclusive) | 20 to 40 ticks (inclusive) | Chain window after release; an earlier press enters the chained variant (Tor) or the rapid shot (Roberta) (High) |
+| Sub-state 3 press window | 17 to 30 ticks (inclusive) | 20 to 40 ticks (inclusive) | Chain window after the second release; an earlier press as above (High) |
+| Repeat window | 11 to 19 ticks (above 10, below 20; chained variant, sub-state 6) | 11 to 49 ticks (above 10, below 50; rapid shot, sub-state 10) | High |
+| Repeat counter limit | a repeat needs the count at 2 or less: at most 3 repeats | a repeat needs the count at 4 or less: at most 5 repeats | High |
+| Spin-step limit | not established | 10 at +0x153C | Medium-High (see Attack input, Roberta, step 4) |
+| +0x1018 | 20 | 40 | Name not established |
+| +0x107C | 20 | 100 | Name not established |
+| +0x101C | 5.0 | not established | Name not established |
+| +0x1540 | not established | 5.0 | Name not established |
+| +0x1008 | 15.0 | 10.0 | Name not established |
+| +0x1500 | 10 | 10 | Plunge hold threshold, ticks: in Tor's strafe jumps a Circle hold whose counter exceeds it gives the plunge (SPEC-0033 Behavior 50) |
+
+The repeat counter is a hero counter. It is not reset by a sub-state change; only the attack-start reset (at the start of each attack) sets it back to 0 (High). The window values are kept per sub-state in five-word records at hero +0xFB8 + 0x14 × k for sub-state k (f32, s32, s32, s32 low bound, s32 high bound); the rules that use them are in Combo windows. The unnamed fields are listed under Open questions.
+
+Hero index for scripts: 0 is Tor and 1 is Roberta (Medium-High). The value -1 means the active hero (Medium). Other values are not defined (Edge cases).
+
+### Attack power table (archive resource 533, type-42 index 16)
+
+| Field | Size | Meaning |
+| --- | --- | --- |
+| IDMX +0x0C | u16 | Record count, 60 |
+| IDMX +0x0E | u16 | Record size, 4 |
+| IDMX +0x10 | 60 × f32 | Base power values, record index as below |
+
+Index map: the key is a Mote id, 160 to 173 (0xA0 to 0xAD): the Mote in equipment word 2 (SPEC-0021) for Tor's power step and Roberta's full-release shots, and the object's own Mote id for a Mote power-attack object. For each hero row, the Mote id picks one record index:
+
+| Attack id (item id) | Tor index | Roberta index |
+| --- | --- | --- |
+| 160 | 0 | 30 |
+| 161 | 4 | 34 |
+| 162 | 8 | 38 |
+| 163 | 9 | 39 |
+| 164 | 11 | 41 |
+| 165 | 15 | 45 |
+| 166 | 16 | 46 |
+| 167 | 18 | 48 |
+| 168 | 20 | 50 |
+| 169 | 22 | 52 |
+| 170 | 24 | 54 |
+| 171 | 26 | 56 |
+| 172 | 28 | 58 |
+| 173 | 29 | 59 |
+
+Any other hero kind, any id outside 160 to 173, or a missing table gives 1.0. With no Mote in word 2, Tor's power step and Roberta's full-release shots use 1.0. The values themselves are read from the table at the index; they are not listed here (see Open questions).
+
+The ids of the Mote power-attack objects are item ids, the same ids as in this table. Each object reads the record for (hero row, its own id) (High; see Charm attack hits).
+
+Mote status words (High for the words and the lookup). The records between the power indexes above hold the status a Mote's attack applies to an enemy (Status apply). With k the Mote's power index (Tor column; Roberta's words are k + 30):
+- Fire 160 and Lava 161 (status 7, fire): k + 1 duration in seconds, k + 2 amount (HP), k + 3 period in seconds.
+- Leaf 164 (status 2, poison): k + 1 duration, k + 2 amount, k + 3 period.
+- Water 163 (status 0, stun), Fog 166 and Wind 167 (status 3, slow), Smoke 168 and Shadow 169 (status 1, curse), Light 170 and Sun 171 (status 6, confusion): k + 1 duration in seconds; amount and period are -1.
+- Rock 165 (status 2, poison): no status words; duration, amount and period are -1 (the enemy defaults).
+- Bubble 162, Nova 172 and 173: no status.
+The status code is a fixed map by Mote id, not a table field; any id outside 160 to 173 also gives -1 (no status). Duration, amount and period are read as whole numbers (the stored float converted toward zero; every disc value is whole). A field the Mote does not have, an id outside 160 to 173, or a hero row other than 0 or 1 reads -1, and the clean side also returns -1 when the table is missing. A word of -1 means the default of the status at the receiver (Status apply). Each of the 60 records has exactly one use: 28 power values, 20 durations, 6 amounts and 6 periods. The values are read from the table; they are not listed here (some are given as check values under Test vectors and Edge cases). Who sends these words is under Status apply (Sources of statuses on an enemy from the heroes).
+
+### Hurt shapes and hit list
+
+Confidence: High for the layouts and the disc counts; Medium-High for the roles; Medium for the lane mapping of the posed bone frame.
+
+Bone record fields used as hurt shapes (the 0x50-byte bone record of the skeleton bone table, SPEC-0005):
+
+| Offset in bone record | Size | Type | Meaning |
+| --- | --- | --- | --- |
+| +0x30 | 16 | 4 x f32 | Base point (x, y, z, 1), bone-local; (0, 0, 0, 1) in most records |
+| +0x40 | 4 | f32 | Hurt length; a bone with length above 0 is a hurt capsule, 0 or below is skipped |
+| +0x44 | 4 | f32 | Hurt radius |
+| +0x48 | 8 | - | Fill (unused) |
+
+Disc: 1,355 bone tables, 60,766 bone records, 5,093 with a length above 0; 579 tables have none (those characters cannot be struck by a swing or a shot). The most common size is length 0.367 with radius 0.367 (424 bones).
+
+Hit list (every character, runtime): ten s32 target ids at character +0x400; -1 is an empty slot.
+
+Attack windows (animation table B of SPEC-0005, one u32 per frame): bit 0x1 is weapon 1 active, 0x2 weapon 2, 0x4 weapon 3, 0x8 weapon 4, 0x10 weapon 5. Higher bits (0x20 to 0x1000) occur but are not attack windows. Disc (17,425 clips): bit 0x1 is set in 1,105 clips (5,705 frames), 0x2 in 415, 0x4 in 649, 0x8 in 148, 0x10 in 91.
+
+### Hero action ids and clips
+
+Confidence: High for the table size and the clip indices; Medium for which family (main, sub or face) each caller plays.
+
+Each hero has three action tables, one per family (main, sub and face). Each table has 193 entries, so the valid action ids are 0 to 192. Ids 0xA6 to 0xC0 are therefore valid, and so are the attack ids 0xA0 to 0xAD. An entry gives a clip index in the clip body of that family, or none. The clip layout is in SPEC-0005. What the hero does for an id with no clip is not established here.
+
+Clip index for each action id named in this spec. A dash means no clip.
+
+| Id | Role in this spec | Tor main | Tor sub | Tor face | Roberta main | Roberta sub | Roberta face |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 0x13 | attack clip 19 (Tor's state-13 sub-state 7); its clip carries an attack window (Hit detection) | 42 | 27 | 10 | 7 | 11 | 19 |
+| 0x46 | standing jump and walk-off clip (air phases 0 and 2; SPEC-0033 Behavior 50) | 74 | 55 | 0 | 82 | 78 | 66 |
+| 0x4C | moving jump and walk-off clip (air phases 1 and 4; SPEC-0033 Behavior 50) | 79 | 54 | 0 | 84 | 69 | 66 |
+| 0x76 | hard landing (air phase 10; SPEC-0033 Behavior 50) | 144 | - | - | 99 | 112 | 101 |
+| 0x89 | long-fall landing, grounded (state 48; SPEC-0033 Behavior 9B); also the respawn clip of state 60 | 146 | 0 | - | 102 | 110 | 98 |
+| 0x8A | feed a petpet (state 49; SPEC-0047) | 147 | 0 | - | 77 | - | - |
+| 0xA6 | attack driver code (fourth of 0xA3 to 0xA6) | 154 | 72 | 58 | - | - | - |
+| 0xA7 | rope gun phase 1 (state 27; SPEC-0033 Behavior 51) | 124 | 65 | 55 | 116 | 92 | 81 |
+| 0xA8 | rope gun phase 2 (state 27) | 128 | 64 | 54 | 120 | - | 85 |
+| 0xAB | rope gun phase 4 (state 27) | 125 | 62 | 52 | 117 | 93 | 82 |
+| 0xAC | rope gun phase 3 (state 27) | 127 | 66 | 56 | 121 | 95 | 84 |
+| 0xC0 | take-hit follow-up, with no weapon or a special one (Taking a hit, step 5) | 60 | 39 | 16 | 65 | 49 | 56 |
+
+Test vectors: Tor main id 0xC0 gives clip 60. Roberta main id 0xA6 gives no clip. Roberta main id 0xA7 gives clip 116.
+
+### Beam and bubble target lists (runtime state)
+
+Not on disc. Each beam attack and each bubble attack keeps a list of ten slots. Each slot holds a target id (a signed 32-bit value, -1 = free) and a count (integer). The rules for adding a target are in Charm attack hits and Behavior section "Beam and bubble lists".
+
+### Status timers
+
+Fourteen timers, one per status, in ticks. A status is active while its timer is 1 or more. Index is the status number used throughout this spec.
+
+| Index | Status | Default duration (s) | Per-tick effect (summary) |
+| --- | --- | --- | --- |
+| 0 | Stun | 5 | Sets the hero's action state to 1 (idle) and the speed scale to 0 each tick |
+| 1 | Curse | 60 | Outgoing damage × 0.75 (when the status holder is the attacker) |
+| 2 | Poison | 120 | Damage every 4 s (default), 2 HP per period (default), never below 1 HP on a hero (see Poison) |
+| 3 | Slow | 60 | Hero speed scale × 0.75 each tick while active and the hero is moving (High; non-hero characters use × 0.5) |
+| 4 | Strength | 60 | Outgoing damage × 1.5 |
+| 5 | Speed | 60 | Hero speed scale × 1.85 each tick while active and the hero is moving (High; non-hero characters use × 2.0) |
+| 6 | Confusion | none on a hero (enemy 30) | The hero's method ignores it. (On an enemy the per-tick routine requests agro sub-state 11, a confused wander; SPEC-0029.) |
+| 7 | Fire | 5 | No damage on a hero: the fire effect only (no tint; Status display and cues). (The enemy per-tick routine deals 2 HP every 2 s by default, attacker id -1; SPEC-0029.) |
+| 8 | Immunity to curse | 30 | No per-tick effect; blocks curse from every source (High) |
+| 9 | Immunity to poison | 30 | No per-tick effect; blocks poison from every source (High) |
+| 10 | Immunity to slow | 30 | No per-tick effect; blocks slow from every source (High) |
+| 11 | Poison attack | none on a hero (enemy 30) | The hero's method ignores it. It is an enemy buff: while it is active, every melee hit that enemy lands also poisons the target for 120 s (SPEC-0029). |
+| 12 | Health regeneration | 60 | +2 HP when the status-12 timer is a multiple of 60 |
+| 13 | Magic regeneration | 60 | +2 MP when the status-12 timer (not 13) is a multiple of 60 (quirk; Status effects) |
+
+Notes: the immunities hold against every source, because every source calls the hero's own status-apply method (Status apply): while status 8 is active curse is not applied, while status 9 is active poison is not applied, and while status 10 is active slow is not applied, whether the source is a script, an item, an enemy bite, an enemy projectile or the save restore (High). Default durations for 12 and 13 are the general default (60 s); for 8, 9 and 10 they are 30 s.
+
+### Hero shot slots
+
+The hero object holds six shot slots, one after another. Slot k (k from 0 to 5) starts at hero offset 0x10D0 + k x 0xA0, and each slot is 0xA0 bytes long. Roberta's shot launch and per-tick update (Roberta shot projectile) and the enemy hit tests (SPEC-0012, SPEC-0017) use the same records. There is one layout: the hit tests address the same fields from the slot's position field, which sits 0x30 bytes into the slot. Confidence: Medium-High for the base and the field offsets (the launch, the per-tick update, the hit tests and the step helper agree on them); High for the armed test; Medium-High for the meaning "shot".
+
+| Offset in slot | Hero offset, slot 0 | Size | Type | Meaning |
+| --- | --- | --- | --- | --- |
+| +0x00 | 0x10D0 | 16 bytes | 4 x f32 | Side axis of the shot frame: unit(d x up) at launch (Roberta shot projectile, launch). |
+| +0x10 | 0x10E0 | 16 bytes | 4 x f32 | Up axis of the shot frame: unit(side x d) at launch. |
+| +0x20 | 0x10F0 | 16 bytes | 4 x f32 | Direction d (w = 0): unit(aim point - body anchor) at launch, then the steered or bounced direction. |
+| +0x30 | 0x1100 | 16 bytes | 4 x f32 | Shot position (the body anchor at launch, w = 1). Each active position update adds a displacement with w = 0 and writes the point lane back as w = 1. In the enemy bone-capsule test, the distance and projection calculations use XYZ and ignore W. Other collision routes are separate; see Open questions. |
+| +0x40 | 0x1110 | 4 bytes | f32 | Held power P, clamped to 0.1 to 1.0 at launch. The shot's motion, life, hit and damage rules do not read it (Roberta shot: stored power reader). |
+| +0x44 | 0x1114 | 4 bytes | f32 | Speed in units per second. |
+| +0x48 | 0x1118 | 4 bytes | f32 | Shot radius. |
+| +0x4C | 0x111C | 4 bytes | f32 | Damage scale S (Roberta shot projectile). |
+| +0x54 | 0x1124 | 4 bytes | s32 | Life in ticks, counted down. |
+| +0x58 | 0x1128 | 4 bytes | u32 | Armed word. Non-zero means the shot is live and armed; 0 means dead, expired or spent. |
+| +0x5C | 0x112C | 4 bytes | s32 | Homing mode, 0 to 5. |
+| +0x78 | 0x1148 | 4 bytes | s32 | Element kind, 1 to 7, or 0 with no Mote. |
+| +0x7C | 0x114C | 4 bytes | s32 | Arming counter. It is 0 at launch, is set to 15 by a bounce or deflect, and counts down to 0; it gates guard handling and homing. |
+
+There is no separate live count: the word at hero offset 0x1128 is the armed word of slot 0, and each slot has its own armed word at slot +0x58 (Medium-High). A step helper returns the launch direction times the speed times the tick length (1/60 s), which is the shot's displacement for one tick; it is not a hit test (High). The records of the hero's hit volumes (Hit volume records) are a separate structure with a different stride.
+
+## Behavior
+
+### Attack input (Tor)
+
+1. The attack button is R2 or Circle (either works). The press edge of R2 or Circle enters the attack step (state 13). In the jump states the attack input (R2 pressed or Circle held) gives the air attack instead: in states 7 to 11 Tor's plunge or Roberta's air shot, in the strafe jumps 43 to 46 Tor's plunge or air slash (SPEC-0033 Behavior 50). See SPEC-0033 Controls.
+2. While it is held, a counter of held ticks runs.
+3. On release:
+   - Fewer than 50 ticks: a normal swing.
+   - 50 or more: a power attack. No "fully charged" cue is known on the held path at 50 (Open questions).
+4. **Combo** (High; exact rules in Combo windows): during a swing, a new press of the attack button chains the next step. In the first swing a press at ticks 20 to 33 starts the second swing; in the second swing a press at ticks 17 to 30 starts the finishing swing. A press earlier than the window (below 20 in the first swing, below 17 in the second) does not close the window: it enters the chained variant (sub-state 6), which repeats on a press at ticks 11 to 19 of itself, at most 3 times per attack. A press later than the window closes the chain until the next attack start.
+5. A stick gesture made just before the press starts a variant instead of the hold: three gesture variants (a back-then-forward flick, a clockwise turn and a counter-clockwise turn; SPEC-0033, stick gesture machine) and the normal charge. A flick starts sub-state 9 (request 20), a clockwise turn sub-state 7 (request 19) and a counter-clockwise turn sub-state 8 (request 18) (Attack router).
+6. Each swing step and the power attack also start a hero voice cue; the event-to-voice table is in SPEC-0031 (Cue uses, Hero voice slot uses).
+
+### Attack input (Roberta)
+
+Roberta uses the same button and a threshold of 80 ticks (1.333 s).
+
+1. While the attack button is held, the held-tick counter runs and a charge animation plays.
+2. Quick release (fewer than 80 ticks): the release animation plays. A press at ticks 20 to 40 after the release chains a second shot, and a press at ticks 20 to 40 of that step chains a third. A press earlier than tick 20 does not close the window: it enters the rapid shot (sub-state 10), which repeats on a press at ticks 11 to 49 of itself, at most 5 times per attack; its clip lasts 20 ticks, so the usable part of that window is about ticks 11 to 19, within one tick. A press later than tick 40 closes the chain until the next attack start (High; Combo windows).
+3. Full release (80 ticks or more): when the Mote in word 2 is 161, 162, 164, 165, 166, 169, 171 or 173, its Mote power-attack object is spawned (Charm attack hits). For ids 162, 169 and 171 no projectile volley is fired: the fired flag is set, the sub-state becomes 14, and the magic cost and the Mote charge are paid at once. For every other id the launch of Roberta shot projectile runs with that id, and the first shot pays the magic cost and the Mote charge (Mote charge use by attacks). No damage is dealt at release. The held power, held ticks × (1/60) × 0.5, is clamped to the range 0.1 to 1.0 and copied into the shot's power field. The shot's motion, life, hit and damage rules do not read that field, so it does not change shot behavior (Roberta shot: stored power reader).
+4. Spin defence: a spin is a chain of cycles, each additional cycle needing the chain flag. The counter starts at 0 when the attack begins and permits up to 10 replays after the initial cycle, for at most 11 cycles total. Two spin animations are used.
+5. The magic cost of a quick shot is paid at each hit of a hittable target (Roberta shot projectile). The magic cost of a full release is paid at release (ids 162, 169 and 171) or at the first shot (see Magic).
+6. Each shot step and the power shot also start a hero voice cue; the event-to-voice table is in SPEC-0031 (Cue uses, Hero voice slot uses).
+7. A stick gesture made just before the press starts a variant (SPEC-0033, stick gesture machine): a flick starts the leap (sub-state 8, request 23, then the landing sub-state 13), a clockwise turn the spin of sub-state 6 (request 22) and a counter-clockwise turn the spin of sub-state 7 (request 21). With no gesture, a locked target closer than 5.0 (hero field +0x1540) starts the near-target swat at once (sub-state 5, request 16) instead of the hold (Attack router).
+
+The steps of the leap and landing sub-states beyond their ids are listed under Open questions.
+
+### Attack animation choice
+
+Confidence: High. The choice is a fixed rule in the program with six animation ids; it reads no data table (the boot tables that are indexed by Mote id are effect tables, see Attack-family effect tables). Its inputs are the Mote in equipment word 2 (SPEC-0021) and the hero index word (+0x14C; 0 is Tor, 1 is Roberta). The result is a main animation id (SPEC-0005); each id below is followed by its main-family clip index and its length in ticks at play rate 1.
+
+- Tor: Motes 161 and 167 give 0x1C (clip 58, 64 ticks); 162 gives 0x12 (clip 43, 64 ticks; the clip of the counter-clockwise attack); 163 and 165 give 0x1E (clip 62, 100 ticks); 169 and 171 give 0x1D (clip 61, 132 ticks); 172 and 173 give 0x1F (clip 63, 128 ticks); 160, 164, 166, 168 and 170 give 0x1B (clip 44, 44 ticks; the clip of the first swing).
+- Roberta: Motes 161 and 164 give 0x1E (clip 12, 96 ticks); 162, 169 and 171 give 0x1D (clip 20, 60 ticks); 167 and 173 give 0x1F (clip 13, 136 ticks); 168, 170 and 172 give 0x1C (clip 11, 116 ticks); 160, 163, 165 and 166 give 0x1B (clip 10, 76 ticks).
+- Fallback: with no Mote in word 2, or any value outside 160 to 173, both heroes get 0x1B.
+- Callers: Tor's sub-state 10 (the power step) requests it every tick; Roberta's sub-state 9 (full release) every tick, and her sub-state 14 until that id reaches progress 0.99, after which she requests 63 (Attack router).
+
+Exclusion test and id -1 (Medium-High). A separate test returns false for the attack ids 161, 162, 164, 165, 166, 169, 171 and 173 when the hero's mode word is 9 and the hero is Roberta (+0x14C set); otherwise it returns true for them. These eight ids are the ids for which Roberta's full release spawns a Mote power-attack object (Charm attack hits). Attack id 163 follows a separate contact-cleanup sound path (see the open question below). For the animation choice, id -1 (no Mote) gives 0x1B. The values 243 (Tor) and 240 (Roberta) for id -1 are effect ids from one of the effect-table readers, not animation codes (Attack-family effect tables).
+
+### Attack animation rotation (none)
+
+The table at 0x315C68 is the quick-item panel's candidate lists (SPEC-0021); no attack animation rotation exists (High).
+
+### Charge completion
+
+The hero's charge is a held-tick counter that runs inside the attack step (state 13). Each hero has its own charge routine, chosen by the variant word at +0xF80 (0 is Tor, 1 is Roberta). The routine's sub-state is the hero word at +0xF90 (values 0 to 14). The counter is the hero word at +0xF8C. (High)
+
+Thresholds are set when the hero is created: Tor's full-press threshold is 50 ticks and Roberta's is 80 ticks. Tor's quick-tap threshold is 0, so the quick-tap path never runs. One tick is 1/60 s, and the counter is compared with the thresholds in ticks, with no conversion. (High)
+
+While the attack button is held in sub-state 1, the counter rises by one each tick. Roberta also runs the power-ready check (below) each tick from 7 ticks on; Tor runs it from 50 ticks on. If it fails, the attack is cancelled: the counter is set to 0, a fail flag is set and four HUD display timers are set to 240 (High; Power-ready check). Roberta's "charged loop" is a looping sound, not an animation (High): from F = 8 while held, weapon-bank cue 5 loops; once F is strictly above 80 with a Mote in word 2, Mote-bank cue 0 loops instead (Attack router, sound). Her hold clip is 17, then 25 once 17 reaches progress 0.99, whatever F is. Tor's hold clip is 22, then 13 once 22 reaches 0.99; it does not change at 50 (High).
+
+On release, the counter F decides the branch (High):
+- Tor: F below 50 is a normal swing (sub-state 2). F of 50 or more is a power attack (sub-state 10).
+- Roberta: F below 80 is a quick release (sub-state 2). F of 80 or more is a full-release shot (sub-state 9).
+
+In both heroes the stored charge power is F x dt x 0.5, where dt is the run-time tick-length word (1 / frame rate) written by the frame-rate setter from the selected rate-table value (60.0 or 30.0; SPEC-0007). At 60 Hz this equals F / 120 (seconds held, halved). The 0.5 is a code constant. The frame-rate word is a separate tick-count value used by other rules; it is not the multiplier used here. Nothing caps F or the stored power in storage, so a counter that passes the threshold keeps rising until release, unless the power-ready check fails (High). Tor's stored power is not read by any damage rule. For Roberta the stored power is clamped when the shot is spawned (see Attack input (Roberta), step 3, and Roberta shot projectile).
+
+A Roberta full release uses the Mote in word 2; see Attack input (Roberta), step 3. A Tor power attack deals no damage at release: it spawns the Mote power-attack object, uses Mote charge and pays the magic cost (Power attack and full release); its damage comes from the object's hits and from melee hits in sub-state 10, which use P from the attack power table (Damage).
+
+After release, sub-state 2 opens a press window (Attack input and the sub-state table). Sub-states that wait for an animation use progress of at least 0.99 and then return to sub-state 0, which sets action state 1 (stance).
+
+The 0.5 x 60 x G gate (1800 units at a factor of 60) is not a hero rule. It tests a creature's own counter in a creature state routine and is outside this spec (SPEC-0029). The hero routines do not use that counter.
+
+Worked example: Tor holds for 60 ticks (1.0 s) and releases. 60 is at least 50, so the power attack runs, and the stored power is 60 x (1/60) x 0.5 = 0.5. Roberta holds for 60 ticks: 60 is below 80, so the release is a quick release and no power is stored. Roberta holds for 96 ticks (1.6 s): the full-release shot runs and the stored power is 96 / 120 = 0.8.
+
+### Combo windows
+
+Confidence: High.
+
+Common rules. F is the sub-state tick counter (hero +0xF8C); it is set to 0 on every sub-state transition. "Press" is the attack press edge. Every transition also clears the hit list (Hit detection) and, for Roberta, the shot fired flag (Roberta shot projectile). A step is done when F is not 0 and the clip progress is at least 0.99; it then goes to sub-state 0 (back to stance). A press after a window's upper bound closes the chain (hero flag +0xFA8) until the next attack start. A press before a window's lower bound does not close it: it enters the chained variant (Tor) or the rapid shot (Roberta). The repeat counter is reset only by the attack-start reset (Charge parameter blocks).
+
+Tor (window values written at creation):
+- Sub-state 1 (hold): F counts while the button is held. From F = 50 the power-ready check runs each tick. Release: F of 50 or more goes to 10 (the power step), otherwise to 2. The quick-tap branch needs F below 0 and never runs.
+- Sub-state 2 (first swing): a press with F below 20 goes to 6 (chained variant); 20 to 33 goes to 3; above 33 closes the chain.
+- Sub-state 3 (second swing): below 17 goes to 6; 17 to 30 goes to 4; above 30 closes.
+- Sub-states 4 (finisher), 10 (power step), 7 and 8: wait for done.
+- Sub-state 6 (chained variant): a press with the repeat count at 2 or less and F above 10 and below 20 enters 6 again and adds 1 to the count, so at most 3 repeats.
+- Sub-state 5 (never entered by Tor): below 20 goes to 6; 20 to 33 goes to 5.
+
+Roberta:
+- Sub-state 1 (hold): as Tor, with the threshold 80 and the power-ready check from F = 7; from F = 8 the charged loop sound plays (weapon-bank cue 5, or Mote-bank cue 0 once F is above 80 with a Mote in word 2; Charge completion), and the attack router starts no effect. A separate hold effect is produced by the attack-family driver after the full-charge threshold; see Attack family driver. Release: F below 80 goes to 2; otherwise to 9 with the fired flag cleared, or, for the word-2 ids 162, 169 and 171, to 14 with the fired flag set and the payment made at once.
+- Sub-state 2 (first shot): a press with F below 20 goes to 10 (rapid shot); 20 to 40 goes to 3; above 40 closes. Sub-state 3: the same windows, going to 10, 4 or closed. Sub-states 4 and 9: wait for done.
+- Sub-state 10 (rapid shot): a press with the repeat count at 4 or less and F above 10 and below 50 enters 10 again and adds 1 to the count, so at most 5 repeats. The clip lasts 20 ticks, so the usable window is F = 11 to about 19 (within one tick).
+- Sub-states 6 and 7 (spin): a press sets the step flag. When the spin clip has played past its length and its progress is below 0.2, a set flag restarts the spin (count + 1) while the counter is below 10; the counter starts at 0, so this permits ten replays after the initial cycle. Once the counter reaches 10, or the chain flag is not set, the hero plays animation 0x94 (sub-state 6) or 0x93 (sub-state 7).
+
+Clip lengths at play rate 1 (main family; a one-shot clip of F frames lasts 4(F - 1) ticks, a looping clip 4F): Tor 0x0E 44 ticks, 0x0F 60, 0x10 48, 0x11 52; Roberta 0x0C 36, 0x0D 56, 0x0E 64, 0x0F 20. The done tick at the 0.99 gate is within one tick of these lengths.
+
+Test vectors: Tor releases at F = 30 (a swing) and presses 25 ticks later: sub-state 3. A press 15 ticks into sub-state 3: sub-state 6. A press 34 ticks into sub-state 2: the chain closes. Roberta presses 12 ticks after a quick release: sub-state 10 (rapid shot: speed 30, homing mode 1, D = 0.33).
+
+### Attack router: from the press to the clip
+
+Confidence: High for the start sub-states, the requests, the cues and the restart rule; Medium-High for the sound banks. The done ticks at the 0.99 gate (word 0x2DD854) are approximate, within one tick of the exact progress rule (Open questions).
+
+All ids are main animation ids (SPEC-0005). A clip is given as (main-family clip index, length in ticks at play rate 1); a one-shot clip of F frames lasts 4(F - 1) ticks and a looping clip 4F. A request of the id already current does not restart its clip. When a transition sets the hero's restart request (+0xFAC), the arm table's common tail passes it to the animation object's force-start word, and the clip restarts that tick (SPEC-0040, forced start).
+
+Start. The R2 or Circle press edge (SPEC-0033) enters state 13, runs the attack reset, clears the hit list and requests 22. The start sub-state depends on the gesture mode word (+0x9A4), which the stick gesture machine (SPEC-0033) sets for a short window after a gesture: a back-then-forward flick sets mode 1 for 15 ticks; a clockwise turn sets mode 2 and a counter-clockwise turn mode 3, for 25 ticks (Tor) or 10 ticks (Roberta).
+- Tor: mode 0 gives sub-state 1 (the hold); mode 1 gives 9 (flick lunge); mode 2 gives 7 (clockwise attack); mode 3 gives 8 (counter-clockwise attack).
+- Roberta: mode 0 gives sub-state 1 and a request of 17, except that a locked target closer than the hero field +0x1540 (5.0) gives sub-state 5 (the near-target swat) at once. Mode 1 gives 8 (leap); mode 2 gives 6 (spin, request 22); mode 3 gives 7 (spin, request 21).
+
+Requests per sub-state, made every tick by the arm table after the charge routine (Charge completion, Combo windows):
+
+| Sub-state | Tor: id (clip, ticks) | Roberta: id (clip, ticks) |
+| --- | --- | --- |
+| 1 (hold) | 22 (52, 36) while the current id is neither 22 nor 13; 13 (54, loop 40) once 22 reaches 0.99 | 17 (5, 88) from the start; 25 (6, loop 40) once 17 reaches 0.99 |
+| 2 | 14 (44, 44), first swing | 12 (0, 36), first shot |
+| 3 | 15 (38, 60), second swing | 13 (1, 56), second shot |
+| 4 | 16 (41, 48), finisher | 14 (2, 64), third shot |
+| 5 | 12 (56, 20); never entered | 16 (4, 48), near-target swat |
+| 6 | 17 (55, 52), chained variant | spin 22 (18, loop 16); end 148 (19, 44) |
+| 7 | 19 (42, 64), clockwise attack | spin 21 (16, loop 16); end 147 (17, 44) |
+| 8 | 18 (43, 64), counter-clockwise attack | 23 (9, 68), leap; then sub-state 13 |
+| 9 | 20 (45, 40), flick lunge | full release: the Mote animation (Attack animation choice) |
+| 10 | power step: the Mote animation (Attack animation choice) | 15 (3, 20), rapid shot |
+| 11, 12 | none in state 13: 11 is written by the air slash in the strafe jumps, 12 is the plunge scan (SPEC-0033 Behavior 50) | 19 (7, 20) and 20 (8, 36), air shots |
+| 13 | 26 (57, 36), with the voice cue and the rumble | the idle picker id, requested on entry from 8, until done |
+| 14 | none | ids 162, 169 and 171: the Mote animation, then 63 (21, loop) until the Mote object ends |
+
+Sound at transitions (weapon bank +0x19C, voice bank +0x198, shield bank +0x1A0, Mote bank +0x1A8; SPEC-0031):
+- Tor: the release into 2 and the press from 2 into 3 each play weapon cue 3 and voice cue 5. The press from 3 into 4: weapon 4 and voice 6. Entering 6, and each repeat of 6: weapon 9 and voice 4. The release into 10: voice 6, then voice 8. Sub-states 7 and 8 on their first tick: weapon 7; sub-state 9: weapon 8.
+- Roberta: the release into 2: weapon 2 and voice 4; 2 into 3: weapon 3 and voice 5; 3 into 4: weapon 4 and voice 6; entering 10, and each repeat: weapon 16; the full release: weapon 0, then voice 8 with no Mote or Mote-bank cue 1 with a Mote; sub-state 8: weapon 17. While held from F = 8: a looping cue, weapon 5, or Mote-bank 0 once F is above 80 with a Mote in word 2 (Charge completion). A failed power-ready check plays global cue 162 at the release.
+- Stingers (quirk; reproduce as silence): every transition also calls the music stinger with a code in 26 to 30 (Tor: 26, 27, 28 and 30) or 50 to 54 (Roberta: 50, 51, 52 and 54). The stinger accepts only indices 0 to 18 (SPEC-0009), so these calls play nothing.
+
+Hero sound banks (Medium-High; SPEC-0031). The hero pre-step selects the banks each tick, and a bank is reloaded only when its id changes:
+- voice bank: 348 (Tor) or 349 (Roberta);
+- weapon bank: 461 + (sword id - 98) or 469 + (wand id - 111); 466 with no weapon, the same bank as sword 103 (quirk);
+- shield bank: Tor 455 + (shield id - 105), and 456 when Tor has no shield entry (quirk); Roberta always 459;
+- Mote bank: 477 + (Mote id - 160); 485 (the Smoke Mote's bank) with no Mote.
+
+Restart rule (High). The transitions into Tor's sub-state 6 (from 2, 3, 5 and each repeat) and into Roberta's sub-state 10 (from 2, 3 and each repeat) set the restart request, so every chained or rapid repeat restarts its clip and re-arms its attack window and, for Roberta, the shot release frame. Other transitions change the id and start the clip normally.
+
+Test vectors (progress = ticks since the clip start / clip ticks; t = ticks after the attack start; R2 held from the start; the done ticks are within one tick):
+- Tor, release at t10, presses at t35 and t61: at the start request 22, sub-state 1; t10 sub-state 2, request 14, weapon 3 and voice 5; t35 (F 25) sub-state 3, request 15; t61 (F 26) sub-state 4, request 16, weapon 4 and voice 6; t109 sub-state 0, state 1, request 0.
+- Tor, release at t10, presses at t20, t36 and t52: t20 (F 10) sub-state 6, request 17 with a restart; t36 and t52 repeat with a restart (repeat count 1, then 2); one more repeat is allowed (count 3), and later presses do nothing; done at t104 (52 ticks after the last restart).
+- Tor held 60 ticks: t36 request 13; t60 sub-state 10, request 0x1B; done at t104. With Mote 167: request 0x1C, done at t124.
+- Roberta, release at t10, presses at t35 and t61: at the start requests 22 then 17 (same tick); t10 sub-state 2, request 12; t35 sub-state 3, request 13; t61 sub-state 4, request 14; done at t125.
+- Roberta, release at t10, presses at t22, t36 and t50: t22 (F 12) sub-state 10, request 15 with a restart, weapon 16; the repeats at t36 and t50 restart the clip; done at t70.
+- Roberta held 100 ticks: t88 request 25; t100 sub-state 9, request 0x1B, weapon 0 and voice 8; done at t176. With Mote 169: sub-state 14, request 0x1D, Mote-bank 1; t160 request 63; sub-state 0 once no Mote object is active.
+- Roberta with a locked target at 3.0: sub-state 5 at once, request 16; done at t48.
+- Gesture mode 1, 2 or 3 at the press: Tor sub-state 9, 7 or 8 (requests 20, 19, 18); Roberta sub-state 8, 6 or 7.
+
+### Roberta leap and landing (sub-states 8 and 13)
+
+Confidence: High for the steps and the exits; Medium for what sets the body-contact flag during the leap.
+
+The leap starts from a back-then-forward flick and an attack press (gesture mode 1; Attack router). It plays action 0x17 (clip 9, 68 ticks at play rate 1). Its travel comes from the clip; the leap step sets no velocity. Each tick in sub-state 8, Roberta's charge step:
+1. Clears her body-collision flag for this tick (the flag the hero update sets back to 1 at its start). While it is clear she is left out of the character body contacts, so she neither pushes nor is pushed by other characters.
+2. Sets the shot fired flag, so the leap launches no shot, and clears the facing-step flag, so the hero auto-facing (turn toward a locked or near target, else the stick) is skipped and the leap keeps its heading.
+3. Adds 1 to the step counter. When the body-contact flag of her motion record is clear, her position is stored as the leap point; when it is set, the leap ends at once (step 5).
+4. Otherwise, when the clip has reached 0.99 progress the leap ends (step 5); else the counter goes up by 1 more. When the counter reads 2 at this point (the first leap tick), weapon-bank cue 17 plays.
+5. Leap end: sub-state 13, the idle picker id is requested, the counter is reset to 0, and the landing direction is stored as minus the current facing.
+The arm step runs no melee scan in sub-state 8, so the leap itself hits nothing. The Timed glow (Roberta's leap) runs alongside it.
+
+Landing, each tick in sub-state 13: the counter goes up by 1 and the idle picker id is requested again. When the counter is above 10, the attack ends (sub-state 0, then idle). When the dot product of the facing and the stored landing direction is above 0.98, the attack also ends; otherwise the hero turns toward the landing direction with the steering method at rate 0.25 (SPEC-0033). The melee scan runs during the landing (the hero melee route of Hit detection).
+
+So Roberta lands facing back the way she leapt (a turn of up to 180 degrees), and the landing lasts at most 11 ticks.
+
+Test vectors (synthetic): a leap with no contact ends on the tick its clip reaches 0.99 progress (about tick 68 at play rate 1) and plays cue 17 on tick 1 only. On the first landing tick the dot product is -1.0, so the hero turns; the landing ends on tick 11 (counter 11) unless the turn reaches a dot product above 0.98 first.
+
+### Power-ready check
+
+
+Confidence: High for the tests and the timers; Medium-High for the meaning of the timers.
+
+The check is true when word 2 holds no Mote. With a Mote it is true only when all of these hold: no Mote power-attack object is active, the hero has a weapon, the Mote is in the inventory with charge above 0, and the hero's MP is at least the release cost (Tor level 1, Roberta level 3 of the Magic table). It runs every held tick from F = 50 (Tor) or F = 7 (Roberta). On a failure the charge is cancelled: F returns to 0, a fail flag is set, and the four HUD display timers 0x2DCD60, 0x2DCD64, 0x2DCD6C and 0x2DCD78 are set to 240 ticks, so the HUD shows for 4 s (SPEC-0023). A new power attack therefore cannot start while any Mote object is still active.
+
+Test vector: Roberta holds with Mote 161 and MP 30 (release cost 40): at F = 7 the check fails, F returns to 0 and the four timers read 240. With MP 40 the check passes and F keeps counting.
+
+### Enemy navigation goal fallback offset (pointer)
+
+The modulo-20 offset helper belongs to the enemy navigation goal latch, not a hero shot pattern. When the current goal point cannot be located on the character's navigation mesh and the goal latch is clear, the enemy path uses the character id to offset the goal point before its nearest-triangle search. SPEC-0029 Behavior 2b gives the full rule. No hero-shot caller for this helper was found in the recovered direct-call graph.
+
+### Jump speeds (not an attack movement)
+
+Confidence: High. The five boot words at 0x2DD818, 0x2DD81C, 0x2DD820, 0x2DD7F8 and 0x2DD824 (0.0, 2.0, 5.0, 9.0 and -10.0) are the horizontal jump speeds of states 7 to 11, not attack forward speeds. The table, the 0.01 gate between the moving jump clip (0x4C) and the standing jump clip (0x46), and the units are in SPEC-0033 Behavior 50. The stick step with the 0.5 clamp on its speed term, which falls back to the camera-basis forward direction when the stick is centred, is the strafe-jump direction (SPEC-0033 Behavior 50).
+
+### Combat in the jump states (states 7 to 11 and 43 to 46)
+
+Confidence: High. States 7 to 11 and 43 to 46 are jump states (SPEC-0033 Behavior 50), not attack routines. Combat inside them: Tor's plunge attack (air phases 8 and 9: request 23 with the state-13 sub-state-12 hit scan, then request 24), Roberta's air shots from states 7 to 11, which enter state 13 in sub-state 11 or 12 (chosen by the attack id), and Tor's air slash in the strafe jumps 43 to 46, which writes sub-state 11 but keeps the strafe-jump state and, as an original quirk, deals no damage (no event-bit 0x1 window). The entry into state 18 is the Square block grab (SPEC-0033 Behavior 4A.2).
+
+### Hero action states (by state number)
+
+Confidence: High for the state numbers and for which routine each state runs; Medium-High for the state-13 tables; Low for the meanings of the state-13 sub-states. The hero has one action state. Each tick the routine for that state runs (SPEC-0033 Behaviors 1 and 3). States 7 to 11 are the jump states (SPEC-0033 Behavior 50). This section keeps the combat states 13 and 17; the other states are listed in the cross-reference table at its end.
+
+Terms used below:
+- Target: the hero's target record, which holds a direction vector, offset vectors, a height limit, a second height value and a kind value. Its fields are read by the routines below and are not all described.
+- Along-component: the projection of the target offset on the target direction. Planar distance: the distance in the horizontal plane.
+- Progress: the fraction of the current action that has played, read from the action track. The 0.99 gate uses the data word 0x2DD854. The 0.95 gate is a code constant.
+- Current action: the action id being played. "Action N is current" means the current action id equals N.
+- Stick values: the dead-zoned left-stick forward and side values of SPEC-0033 Behavior 2.
+- Sub-mode: a value of a small mode field that the routine keeps between ticks. The field is shared by several traversal states (SPEC-0033 Behavior 51).
+- Argument not shown: the routine calls a test with an argument that is not stated. Such a test is listed with "argument not shown" and is not assumed to take any value.
+
+Routing. The hero update switches on the hero's action state each tick and runs one routine per state number. About 40 state numbers have a routine; the states in this section map to those routines. Some state numbers have no routine (state 14 among them). A default branch calls the kind's play-animation hook with no animation and one helper; its details are not established. In the update's routing, states 7 to 11 go to the air routine of each hero (SPEC-0033 Behavior 50) and state 13 to the attack step.
+
+State 13 (attack step). Entered by the R2 or Circle press edge (SPEC-0033 Behavior 1A), by Roberta's air shots from the jump states 7 to 11 (sub-state 11 or 12; SPEC-0033 Behavior 50), and by an attack press with a usable weapon in the sidle (state 23; SPEC-0033 Behavior 51). The routine dispatches on the hero variant word +0xF80 (0 Tor, 1 Roberta; High): each tick it runs that hero's charge routine (Charge completion, which makes the sub-state transitions) and then that hero's arm table (below), both on the same sub-state word +0xF90. Other variant values do nothing. The routine returns at once when the hero is in state 27 (High). It writes the hero's state in two places: sub-state 0 sets state 1, and the state-20 exit below (High for the writes). Its sub-state value is read by the busy predicate (SPEC-0033 Behavior 3). A trigger press in the world (SPEC-0028, trigger section) also enters state 13: the press sets a hero value from a byte of the trigger record, through a 19-entry map, and then requests state 13 (Medium; the map and the meaning of the value are open).
+
+State 13, Tor's arm table (variant 0). Confidence: High for the sub-state table, the requests, the cues and the state-20 exit; the meaning of each sub-state is in Attack router. The sub-state is the hero word at +0xF90, the same word the charge routine moves (sub-state 2 normal swing, 10 power step; Charge completion). The restart request (+0xFAC) is passed to the animation object's force-start word in the common tail, so a clip whose id is already current restarts that tick (SPEC-0040, forced start; Attack router).
+- Sub-state 0: go to state 1; request 0; one step with the hero's +0x170 object as argument; the restart request is consumed.
+- Sub-state 1 (hold): if the current id is neither 22 nor 13, request 22; if the current id is 22 and its progress is at least 0.99 (word 0x2DD854), request 13.
+- Sub-states 2 to 6: request 14, 15, 16, 12 and 17 in that order. Sub-states 3 and 4 also arm the state-20 exit (below).
+- Sub-states 7 and 8 (the clockwise and counter-clockwise gesture attacks): request 19 (sub-state 7) or 18 (sub-state 8). On the tick the current id is not yet 19 (sub-state 7) or 18 (sub-state 8), weapon-bank cue 7 plays when the sound manager exists; it is a sound, not an effect spawn, and has no target test. Stick step: while the attack-active word (Hit detection, Attack window) is set and the stick is off centre, the hero moves along the camera-relative stick direction: the dead-zoned forward and side pair (SPEC-0033 Behavior 2), normalised, combined with the camera basis, scaled by 0.25 (word 0x2DD6C8, 0.25; Medium, see Open questions) and divided by the time factor. A centred stick gives no displacement.
+- Sub-state 9 (the flick lunge): request 20. On the tick the current id is not yet 20, weapon-bank cue 8 plays when the sound manager exists.
+- Sub-state 10 (the power step): request the Mote animation of Attack animation choice for the Mote in word 2; then the stick step of sub-states 7 and 8 runs under the same gate (attack-active word set, stick off centre).
+- Sub-states 11 and 12: no route in this table; the sub-state ends with no request. Sub-state 11 is entered only by Roberta's air shot. Tor's air slash writes sub-state 11 while staying in the strafe-jump state, so Tor's state 13 never sees it from an air attack. The sub-state-12 hit scan runs during Tor's plunge (SPEC-0033 Behavior 50).
+- Sub-state 13: when the current action is 26, nothing. Otherwise, when the sound manager exists, a voice cue plays: the cue chosen from the hero's +0x1560 word, on the hero's voice slot (SPEC-0031). Then a rumble request: preset 2 (0x2DD7AC), duration 0.8 s (0x2DD7B0), intensity 0.6 (0x2DD7B4) (SPEC-0033, Rumble). Then the hero block-reaction method runs with float 10.0, which it ignores. It may request shield-bank cue 0 when sound is available and requests animation 64; the caller then requests animation 26. This is the call order, not a claim that animation 64 is visibly played. Request 26 (High for the cue and the rumble).
+- Other sub-states: nothing.
+- Common tail (every sub-state that reaches it): pass the restart request to the force-start word and clear it; run the melee hit scan (Hit detection); then the state-20 exit check.
+- Exit to state 20 (High): sub-state 3 always arms the exit. Sub-state 4 arms it only when the current animation frame carries event flag 0x40 (an event-window bit of the current clip). When the exit is armed in the common tail, the hero goes to state 20 (stance steering, SPEC-0033 Behavior 4A.3) when the hero's shield-family entry exists and is not empty (SPEC-0021) and the pad bit 0x0004 (L1) is set in the held word or the press-edge word (+0x150 or +0x154). There is no stick test. Without a shield, or without L1, the hero stays in state 13.
+
+State 13, Roberta's arm table (variant 1; High for the map and the meanings, Medium-High for the steps of sub-states 8 and 13). The first column is the sub-state word +0xF90, the same word that Roberta's charge routine moves (sub-state 2 quick release, 9 full release, 14 the full release of ids 162, 169 and 171; Charge completion).
+
+| Sub-state | Behaviour | Request |
+| --- | --- | --- |
+| 0 | If the state is neither 7 nor 27: state 1, request 0, and the stance helper runs | 0 |
+| 1 | Hold: 17 from the start; when the current id is 17 and its progress is at least 0.99, request 25 | 17, then 25 |
+| 2 | Step | 12 |
+| 3 | Step | 13 |
+| 4 | Step | 14 |
+| 5 | Near-target swat | 16 |
+| 6 | Spin (clockwise gesture): while the current id is not 148, request 22 and steer by the stick; when it is, at progress 0.99 go to sub-state 0 | 22, then 148 |
+| 7 | Spin (counter-clockwise gesture): while the current id is not 147, request 21 and steer by the stick; when it is, at progress 0.99 go to sub-state 0 | 21, then 147 |
+| 8 | Leap (flick gesture); then sub-state 13 | 23 |
+| 9 | Full release: the Mote animation (Attack animation choice); a counter increases | Mote animation |
+| 10 | Rapid shot | 15 |
+| 11 | Air shot | 19 |
+| 12 | Air shot | 20 |
+| 13 | Landing after the leap: the idle picker id, requested on entry from 8, until done | idle picker id |
+| 14 | Full release of ids 162, 169 and 171: stick-steered step at a rate of 0.35; the Mote animation until it reaches progress 0.99, then 63 (clip 21, loop) until no Mote object is active, then sub-state 0 | Mote animation, then 63 |
+
+Common tail (High): when the attack-id field is set, the stance helper runs and the field is cleared. Then the shared post step runs, and the melee hit scan runs unless the sub-state is 8.
+
+Conflicts C3 and C4 (Resolved, High): the two tables are not rival readings of one routine. Tor's table runs for variant 0 and Roberta's for variant 1, each after that hero's charge routine on the same sub-state word. The charge routine makes the transitions (for example Roberta's sub-state 9 is the full release); the arm table requests the animations for the sub-state the hero is in. SPEC-0033 Behavior 3C describes Tor's table.
+
+State 17 (hurt). Confidence High. Entered by the take-hit reaction (Taking a hit, step 5). Each tick it requests 32 when the hero has a usable weapon (equipment slot 1), otherwise 192 (0xC0). At progress 0.99 it requests 0 and the hero goes to state 1, or to state 32 when L2 is held and the previous state was 32 (SPEC-0033 Behavior 1A).
+
+Cross-reference: the other hero action states (High for the meanings unless SPEC-0033 marks a state lower).
+
+| State | Meaning | Specified in |
+| --- | --- | --- |
+| 7 to 11, 43 to 46 | Jump and air states, strafe jumps; Tor's plunge; landings | SPEC-0033 Behavior 50 |
+| 16 | Death | SPEC-0055 |
+| 18 | Push and pull a block | SPEC-0033 Behavior 4A.2 |
+| 19 | Hang from a block's top edge (72 grab, 71, 73 hang idle, 61 and 60 shimmy, 59 pull up) | SPEC-0033 Behavior 51 |
+| 20 | Shield guard (L1) | SPEC-0033 Behavior 4A.3 |
+| 21 | Climb a climbable panel (sub-mode map) | SPEC-0033 Behavior 51 |
+| 23 | Sidle (79, 80, 81); exits to 13 on an attack press and to 1 or 22 on Square | SPEC-0033 Behavior 51 |
+| 27 | Rope gun (167, 168, 172, 171) | SPEC-0033 Behavior 51 |
+| 30 | Hang from a ledge (72, 71, 73, 61 and 60, 59) | SPEC-0033 Behavior 51 |
+| 35 | Climb up onto a ledge from a fall (75) | SPEC-0033 Behavior 51 |
+| 37, 38 | Drop off an edge into a hang or onto a climb panel | SPEC-0033 Behavior 51 |
+| 41 | Ladder | SPEC-0033 Behavior 13 |
+| 47 | Climb up onto a ledge while rising (134) | SPEC-0033 Behavior 51 |
+| 48 | Long-fall landing (136, 137) | SPEC-0033 Behavior 9B |
+| 49 | Feed a petpet (138) | SPEC-0047 |
+| 58 | Climb onto a block (70 on entry, then 134) | SPEC-0033 Behavior 51 |
+
+### Hero action-state event switch (none)
+
+The event switch is the common-enemy agro machine's outer-sub-state entry (SPEC-0038 Behavior 44); the hero has no such switch. Its codes 21, 21, 21, 23, 55 are the rush gait set of that entry.
+
+### In-air ledge chooser (states 30, 35 and 47)
+
+Confidence: Medium-High. This routine is not an attack starter. It is the in-air ledge-grab chooser of the jump states: result 0 gives the ledge hang (state 30); result 1 gives the climb-up, state 47 when the hero is rising and state 35 when it is falling. Its rule (the ledge class) is in SPEC-0033 Behavior 51.
+
+### Landings (not combat)
+
+Confidence: High. Air phase 10 is the hard landing (a fall above 3.0, or the landing flag +0x1514 set; request 0x76), air phase 6 the soft landing (stick centred; request 0x44; a Cross press edge in the event window chains a jump) and air phase 7 the moving landing (state 4). They are landings of the jump states, not a guard or an evade, and no button starts them. They are specified in SPEC-0033 Behavior 50. The hero's shield guard is state 20 (L1; SPEC-0033 Behavior 4A.3); a guarding hero's shield block is in Enemy attack damage to a hero.
+
+### Stick-forward exit to state 4 (boosted jump)
+
+Confidence: High for the clip-specific branch. While the current action is boosted-jump clip 0x85 (133), the air routine checks its animation progress. Below the 0.99 completion threshold, event bit 0x40 together with a forward stick direction and downward motion sends the hero to action state 4. At or above the threshold it requests clip 0x4E instead. Clip 0x4E has no matching action-specific exit check in either hero's air routine; a later transition to state 4 can still come from the ordinary landing path. This is part of the jump states (SPEC-0033 Behavior 50).
+
+### Attack power and the equipped attack
+
+- The power P comes from the table in the Layout section, at the index for the hero row and a Mote id. It is read from the table at start-up.
+- P is not 1.0 in three cases only: Tor's melee hits in the power step (sub-state 10, with a Mote in word 2; key = that Mote), the hits of a Mote power-attack object (key = the object's own Mote id), and Roberta's full-release shots (key = the Mote in word 2). Every other hit uses P = 1.0, including all of Roberta's melee hits (Damage).
+- The attack id is the item id of the Mote in equipment word 2 (SPEC-0021). An empty word 2 gives no attack id.
+- The table is data, not code. A clean implementation must read it, not hard-code it.
+
+### Hero target pick (stick-aligned)
+
+Confidence: High for the structure, the stick-length gate, the failure return and the cooldown; Medium for the window meanings; High for the stick divisor (taken from SPEC-0033).
+
+The routine looks for a target in front of the hero and stores it in the hero's target field (+0x9D0). It is a third target finder, separate from the actor pick of SPEC-0033 Behavior 19 and the predicate of SPEC-0033 Behavior 22 (Conflict C5, closed below). It walks the nearby-object list and considers only entries whose kind byte (at +0x4C of the entry) is -2. Kind -2 records are climbable panels: this pick is the climb-panel grab from the ground, and a success enters climb sub-mode 1 (SPEC-0033 Behavior 51, state 21) (Medium-High).
+
+Cooldown: when the hero's cooldown word at +0x9CC is 1 or more, the routine returns 0 at once and leaves the target unchanged.
+
+Otherwise each candidate is tested in the order below. The first candidate that passes every test becomes the target.
+1. Facing: two dot products must both be below -0.8. One is the candidate's direction with the hero's forward vector from the record at +0x16C; the other is the candidate's direction with a second hero vector, taken from +0x7CC through a helper. These are two different hero vectors, not two components of one vector.
+2. Range: the projection of the candidate on the +0x16C vector must lie strictly between minus R and 1.25 R, where R is the hero radius (the float at offset +8 of the record at +0x16C). This is a band on the projection, not a height test.
+3. Second window: the projection of the candidate's second axis (its +0x20 vector) on a reference vector must lie between a lower limit of +1 (or -1 when the candidate's flag at +0x54 is set) and its extent at +0x40 minus 1 (or plus 1 when the flag at +0x5C is set).
+4. Third window: the projection of the candidate's +0x30 vector on the hero's reference vector must lie between -1 and the candidate's extent at +0x44 minus 1.
+5. Stick: the stick vector is the two dead-zoned stick values of SPEC-0033 Behavior 2, divided by the stick scale 87.5 (word 0x319524). Its length must be above 0.5. The candidate's direction is not compared with the stick. A stick length of 0.5 or less skips the candidate.
+
+Success: the candidate becomes the target, the climb and ladder sub-mode word (+0x9BC; SPEC-0033 Behavior 51) is set to 1, and the routine returns 1.
+Failure: when no candidate passes, the target is set to none and the routine returns 0.
+
+Conflict C5 (closed, High): this pick, the SPEC-0033 Behavior 19 actor pick and the SPEC-0033 Behavior 22 predicate are three separate routines. The ground-input caller tries them in that order and short-circuits on success. If Behavior 19 fails, this pick runs; if this pick succeeds, it clears the pick cooldown and sends event 0x15 (state 21), then does not call Behavior 22. Behavior 22 runs only when both earlier picks fail. If it returns false, the caller continues into later near-object and interaction checks; if it returns true, those checks also continue using its stored target. The later consumer of a successful Behavior 22 target remains open. The earlier interpretation that this pick compares the candidate's direction with the stick belongs to Behavior 22, not to this pick. Synthetic vector: actor pick false, this pick true => target becomes the passing kind -2 panel, stance sub-mode 1, cooldown 0, state-21 event sent, third pick skipped.
+
+Conflict C6 (closed, Medium-High for the intent): the word +0x9BC is the climb (state-21) and ladder sub-mode, and this pick writes 1 to it on success. The write is deliberate: a successful pick enters climb sub-mode 1, the ground entry of the climb. The hero's per-tick driver runs the cascade before its state switch, so in a tick where the hero is in state 21, the pick's write comes before that tick's state-21 dispatch (High for the order). In the cascade branch that calls the pick with its flag set, a success is followed by the hero's entry into state 21 after a helper (High for the write; the other call site was not established; see Open questions).
+
+### Hero clear-path predicate (clearance test)
+
+Confidence: High for the blocker same-link skip and footprint call; Medium-High for the other steps; Medium for the blocking-rule edge cases (see Open questions).
+
+The predicate returns 0 when a blocker lies on the way and 1 when the path is clear. It is not the actor-to-actor clear path of SPEC-0018 (High). It has four steps:
+1. Height: the height of the query point must be within 0.25 of the ground height at that point (a code constant). The ground height is read by the ground helper with a ceiling of 8.0. If the height test fails, the result is blocked (0).
+2. Blockers: the hero keeps a list of sub-lists at +0x174. Each object in it is probed with the footprint family of SPEC-0018 (its one-face form), with the hero radius R and an extent of 2 times the hero's +0x16C+0xC value. One hit blocks. A blocker probe is skipped only when both the blocker and the hero's current target have nonnegative kind bytes, both have a non-null +0x48 link, and the linked records' +0x64 values match; otherwise the normal footprint probe runs (Open questions for the semantic meaning of the shared link value).
+3. Nearby objects: for each object of kind -3 in the nearby-object list, the three window tests apply in order. The range window is strict: the projection must be greater than minus R and less than 1.25 times R. The second window is inclusive from minus R through the object's extent at +0x40 plus R. The third window is inclusive from -1 through the object's extent at +0x44 minus a margin. The margin is the hero's +0x16C+0xC value plus 1.25, except that it is 0 when the helper returns 30. A nearby object blocks only when it passes all three windows. If any window fails, that object is ignored and the scan continues; a later object can still block.
+4. Result: blocked (0) if any step blocks; otherwise clear (1).
+
+Caller: the hero state 0x17 handler (the sidle, state 23) calls the predicate. Clear (1) does nothing. Blocked (0) raises the hero's event 0x50 through its state table. The query point is the hero's position plus or minus 0.25 times the motion-record side basis (row at +0x290); the caller selects the sign in its sidle branch. The mapping of those local signs to player-described left/right remains unverified.
+Synthetic vector for the nearby-object pass: let R = 1, the hero margin term be 3.25, and a candidate's extents at +0x40 and +0x44 both be 4. A candidate with range projection 0, second-window projection 0, and third-window projection 1 passes the first two windows but fails the third because its upper bound is 0.75; it is ignored. If the helper returns 30, the margin becomes 0 and that same third projection passes the third window (upper bound 4), so this candidate blocks. This vector exercises the branch rule; it does not assign a gameplay meaning to helper result 30.
+
+### Hero collision-kind contact tests
+
+Confidence: Medium for the dispatch and helper selection; Low for live use. A hero collision-kind dispatcher selects a point-style helper for primitive kind 3 and a segment-style helper for kinds 4 or 7 when the record's extent value is non-positive; positive extents select a different helper. A successful test reaches the element-aware breakable-contact handler. The two helpers use hero-associated geometry, a collision record, and a 1.5-unit vertical separation comparison. This does not establish a visibility test, a target-directed attack test, or a concrete ordinary-play caller. The dispatcher's direct caller and the collision-record owner are not established (Open questions).
+
+### Target marker
+
+Confidence: High for the static gate and state-to-kind map; Low for live use. When the hero marker-enable word is zero, or the hero virtual gate returns nonzero, the current marker object is released. Otherwise the updater refreshes the marker position and orientation from the hero and frame, then selects kind 1 for hero action state 3, kind 2 for states 4 or 6, and kind 0 for every other state; the marker update helper then runs. Kind changes can release and recreate the attached display object. This establishes the updater's state codes, not their visual meaning. The gate's gameplay meaning, on-screen appearance and ordinary-play visibility remain unknown.
+
+### Right-stick aim mode
+
+Confidence: High for the entry, exit, reticle rules and the retained R2/Circle selector. The recovered hero-object reads of +0x14B0 gate aim-mode start and aim-view mode during state 13; the saved direct-reference census finds no other explicit hero-object reader. Indirect or unrecovered consumers remain outside that census. The aim mode values go to a separate aim view object, not to the camera (SPEC-0027, "Right-stick aim mode and the camera").
+
+The hero's aim mode word (+0x1490) and aim counter (+0x1494) run once per tick in the hero's update, for a hero with a pad. The right stick values are x = −S(byte +0x12B) and y = −S(byte +0x127) of the pad record, where S(b) is the stick conversion of SPEC-0033 (b − 127.5, a dead zone of 40, the rest shifted by 40, so −87.5 to +87.5).
+
+- During state 13, if R2 or Circle is held, the hero stores 1 when R2 is held and 0 when Circle is held; R2 takes priority if both are held. If neither is held, the stored value is retained. Right-stick aim in attack sub-states 1, 9 and 14 requires the stored value to be 1. The value therefore retains the last R2/Circle choice made during the attack, though its other consumers are not fully characterized.
+- Every tick the objects of the world list that the aim scan reads have their highlight word cleared.
+- Off: the aim reticle words are set to (0, 0, 0) (hidden). Aim mode starts (counter 0) when y is not 0 and either the hero is in state 1, or the hero is in its attack step sub-state 1, 9 or 14 with the flag word +0x14B0 set. The right stick X alone never starts it.
+- On: the counter goes up by 1. From the 61st tick (counter above 60) the reticle is set: with both stick values 0 it keeps its current value and is centred; else it is set to (180, trunc(x × 0.125), trunc(y × 0.125)), so the offset is −10 to +10 pixels on each axis. When the reticle value is below 1, the counter is set back to 0.
+- On: aim mode ends when the hero is in neither state 1 nor state 13. Otherwise the aim-target scan (the rope-gun aim scan of SPEC-0033) runs, and its result (0, 1 or 2) is used below. The stored right-stick aim point that Roberta's shot uses comes from this scan (Roberta shot projectile, Launch).
+- The reticle HUD element moves its screen position 1 pixel per tick on each axis toward its base position plus the offset, and is drawn with the reticle value (180) while that value is at least 1 (SPEC-0023).
+- Aim view mode (called the camera mode value; it is not a camera mode). It is computed only while the camera mode (the camera lock word) is 0, and when the hero may steer the camera (or Roberta is in state 13 with +0x14B0 set): 4 when the scan returned 2; else 2 for Tor in aim mode; else 3 when the scan returned 1; else 1 in aim mode; else 0. Without those conditions the mode is 0. The mode, the two stick values and the aim counter go each tick to a separate aim view object, which blends its own values from them; the camera record is not changed (SPEC-0027, "Right-stick aim mode and the camera").
+
+Test vectors (synthetic): Tor in state 1, right stick Y byte 0 (y = 87.5) and X byte 128: aim mode starts; on the 61st tick after the start the reticle is (180, 0, 10). Right stick Y byte 167 or 88 (inside the dead zone): no start. Tor in aim mode entering state 7 (jump): aim mode ends that tick. During state 13, held R2 sets the flag to 1; held Circle alone sets it to 0; both held sets it to 1; neither held preserves the previous value.
+
+### Hero shot slots in enemy hit tests
+
+- A slot is armed when its armed word is non-zero. An unarmed slot is skipped by every test.
+- Point test (sphere against point): given a test point and a radius R from the caller, a slot touches when the distance between the slot position and the test point is at most R plus the slot radius. The Spyder nest's not-attacking branch uses R = 3.0 (SPEC-0017); the Black Knight's weak-point test and the Spyder nest's attacking branch use R = 5.0 (SPEC-0012, SPEC-0017). The routine returns a direction and a depth as well (the depth is R plus the slot radius minus the distance).
+- Disarm on hit: a slot that touches a target in the weak-point test of SPEC-0012 and in the attacking branch of SPEC-0017 has its armed word set to 0 at once, and that test returns a hit. The Spyder nest's not-attacking branch does not disarm the slot.
+- Synthetic vector: a slot with radius 0.5 whose position is 5.4 units from the test point touches under R = 5.0 (5.4 is less than 5.5) and is armed; at 5.6 it does not touch.
+
+### Hero body cylinder in the enemy hit tests
+
+The enemy-side tests use the hero's body as a finite cylinder with radius 1.0 (a fixed value in the routine; SPEC-0018 for the test). Its length comes from the hero's class query (its value is not established), and its centre and axis come from the hero's stored vectors (Medium-Low for the exact combination). This is the first shape of the weak-point test in SPEC-0012 and of the Spyder nest's attacking branch in SPEC-0017.
+
+### Hit detection
+
+Confidence: High for the gates, the hit list, the attack window and the weapon length; Medium-High for the cylinder placement; Medium for the swept-test internals and for the lane mapping of the posed frames.
+
+**Hurt shapes.** Three kinds of target shape exist, and each attack family tests one of them:
+- Bone capsules (hero swing, Roberta's shots, monster weapons and boss reach tests). Each bone whose hurt length (bone record +0x40) is above 0 is a finite cylinder with flat ends. Each tick it is posed: P = the bone's current world frame applied to the base point (+0x30); Y = the second basis row of that frame (the bone's local Y axis in world). The cylinder has radius = the hurt radius (+0x44), full height = the hurt length, axis Y and centre P + 0.5 x length x Y, so it runs from P to P + length x Y. Bones are tried in index order and the first hit ends the test.
+- Body cylinder (the Mote power-attack objects against characters): a vertical finite cylinder with the character's motion-record radius (+0x08) and height (+0x0C) (SPEC-0018), axis = the constant up vector (0, 1, 0, 0) at 0x3932E0 (written at boot). The character's position point is its feet, and the cylinder runs from the feet up to the feet plus the height: its centre is position + 0.5 x height x up (High). The enemy projectile pool tests characters with the same shape (SPEC-0029 Behavior 9).
+- World breakable volumes (attack sweeps and the hero's breakable walk; Attack sweeps, Contact routines and cues).
+
+**Attack window.** At the start of each hero update, before the action-state switch, the hero's attack-active word is set from event bit 0x1 of the current animation frame (table B; Layout). Over the up to four animation slots of the body: for each playing slot with frame index f (the whole part of the cursor) and per-tick frame step s, the bits of frames f, f-1, ... (s frames back) are ORed when s is above 1, otherwise frame f alone is used; when f equals the frame count and the clip loops, the value is the first frame AND the last frame; a slot past its clip gives nothing. Any slot with the bit gives true (Medium for the multi-frame rule). Hero windows at play rate 1 (frames of the main-family clips; 4 ticks per frame): Tor action 0x0F clip 38 frames 0-3; 0x17 clip 39 frames 5-16; 0x18 clip 40 frame 0; 0x10 clip 41 frames 2-9; 0x13 clip 42 frames 2-11; 0x12 clip 43 frames 2-12; 0x0E and 0x1B clip 44 frames 2-5; 0x14 clip 45 frames 3-8; 0x11 clip 55 frames 1-6; 0x0C clip 56 frames 1-5; 0x1C clip 58 frame 2; 0x1D clip 61 frame 6; 0x1E clip 62 frame 9; 0x1F clip 63 frame 9. Roberta: 0x0C clip 0 frame 3; 0x0E clip 2 frames 7-9; 0x10 clip 4 frames 0-3; 0x13 clip 7 frames 3-5; 0x14 clip 8 frames 3-4.
+
+**Windows at other play rates (High).** The hero's play rate P (the per-tick speed scale, which multiplies the animation playback rate of the hero's animation pass) is set to 1.0 at the start of every hero update. No attack step writes it. Only the hero's status routine (Status effects), the locomotion steps and the long fall change it later in the same update. During an attack the only change is slow (status 3): its second predicate is the hero's in-attack test, which is true for Tor in state 13 at sub-states 2 to 12, for Tor in the jump states 7 to 11 while the air-attack phase is 8 or 9, and for Roberta in state 13 at sub-states 5 and 12 (the swats). In those steps a slowed hero plays at P = 0.75; every other attack step (Roberta's shots, spins, leap and full release, and Tor's hold) plays at 1.0 even when slowed. Speed (status 5) applies only while moving, never in an attack. Stun sets P to 0, but it also sets the hero idle. At P = 0.75 a main-family frame lasts 16/3 ticks instead of 4, so every window and clip length above stretches by 4/3.
+
+Play-rate test vectors (synthetic, frame cursor = 0.25 x P x ticks since the clip start): Tor action 0x10 (clip 41, window frames 2-9) at P = 1 is active on ticks 8 to 39; slowed (P = 0.75) frame 2 starts at tick 11 (cursor 2.0625) and frame 10 at tick 54, so the window is ticks 11 to 53; the clip's length 48 becomes 64. Roberta's 0x0C shot (frame 3) is released on tick 12 whether or not she is slowed.
+
+**Tick order of the tests (pose timing; High).** In each pass the region character loops run before the selected hero (SPEC-0007 pass order). Each character runs its update hook, then its motion-record tick, then its animation pass, which first copies the current attachment frames to the previous ones and then poses the body again. The hero's update hook holds the attack-window update, the shot slot step (before the state switch) and the melee scans inside the attack states; the Mote objects run after the hero's animation pass. Hence:
+- The hero swing and the attack window read the hero's pose of the previous pass: D1 and P0 come from the last animation pass and D2 from the pass before it. The enemies' bone capsules they test against are this pass's (the enemies were posed earlier in the pass).
+- Roberta's shots move and test with the enemies' bone frames of this pass; the shot's own start point is the body anchor of the previous pass.
+- Enemy hits on the hero (melee reach tests and enemy attack volumes, which run in the region loops) read the hero's body cylinder and bones of the previous pass.
+- The Mote objects (Charm attack hits) are placed from the hero's pose of this pass.
+So a swing is one tick behind its animation: the first tick of a window tests the weapon where the clip was on the tick before.
+
+
+**Hittable predicate.** A character is a candidate for the hero swing, Roberta's shots and the Mote object walks only when its hittable query passes:
+- base rule: its action state is not 16, 33, 36, 53 or 54, and its word +0x7F0 is 0;
+- a hero target: also not in states 17, 25, 57, 59 or 60, not busy (SPEC-0033 Behavior 3), and not in hero mode 1 with mode code 8 or 13;
+- an enemy-kind target: not hittable when its class state (+0xA34) is 16 or when any of these six tests holds; otherwise the base rule (High for the tests):
+  1. its script-hold word (+0xC54) is set;
+  2. its agro outer sub-state (+0xAF8) is 5 or 6 (the melee dodge or the missile dodge, SPEC-0038 Behavior 44);
+  3. it is hidden by the invisible-kind rule (below);
+  4. it is the second actor (the run-time second actor record), or the pet type id of its spawn record (+0xAC) has a kind in the primary petpet table (SPEC-0047);
+  5. that pet type id has a kind in the second petpet table (SPEC-0047);
+  6. it is not script-held and its current animation is 74, 75 or 76 (the end and slide of hit-reaction kind 7, and the flyer re-launch; SPEC-0038).
+- Invisible-kind rule (test 3). Nothing is hidden while the invisibility-off word (+0xE60) is set. For a row with Display in default (row 0x82) = 0: hidden when the class state equals the spawn record's behaviour code (u16 at +0x84), or is 21 while animation 82 is not current, unless the selected hero wears the Tattered Cloak (item 126; SPEC-0038 Edge cases, SPEC-0021). For a row with Display in default non-zero: hidden while the hold word (+0xE3C) is set; otherwise, while the emerge sub-state (+0xBC0) is 0, hidden when the spawn record word +0xC4 is 0 and the current animation is the hide pick of the selector word +0xC8 (0 gives 9, 1 to 4 give 128 to 131, other values 9); while the emerge sub-state is non-zero, hidden only in class state 14 (retreat home) at phase 1 (+0xC04).
+- Test vectors (enemy-kind hittable query): a class-17 enemy in agro, outer sub-state 6 (missile dodge): not hittable. The same enemy in outer sub-state 1 playing a gait clip: hittable. A Display-in-default-0 enemy in class state 21 playing animation 82: hittable; in class state 21 playing any other animation, with the hero not wearing item 126: not hittable.
+A guarding target is still tested by the hero swing and by shots when it is not hittable (it can block).
+
+**Hit list.** Every character keeps a hit list of ten target ids at +0x400 (Layout). A target whose id is in the attacker's list is skipped. Adding takes the first -1 slot; when all ten are used a debug message is written and slot 0 is overwritten. One target is therefore hit at most once until the list is cleared.
+
+**Hit-list clear (High).** One clear sets all ten slots to -1. It runs at: every sub-state transition of both heroes' charge routines (Combo windows); entry to hero state 13; the attack-start reset; every tick of hero state 12; character creation; the enemy attack start (the start of an attack slot of the agro routine, SPEC-0029); the heroes' air attack routines (SPEC-0033 Behavior 50); and two Werelupe King routines (SPEC-0019). The default death also clears the list (Health and death).
+
+**Hero swing (Tor and Roberta), per tick.**
+1. Inside the attack routines (both heroes' state-13 tails and four more hero routines), when the attack-active word is true, the hero visits every entry of the global hittable list in order and skips targets already in its hit list.
+2. Reach test. The target must be hittable or guarding. Let A be the anchor and D1 the axis (Z row) of attachment 0 of the hero's posed body this tick (SPEC-0005 pose entry 0), and D2 the same axis from the previous tick. Gate: the full three-dimensional distance between the two character positions must be at most 65.0 (a code constant). Weapon shape: a finite cylinder of radius 1.0, full length L, centre P0 = A + 0.25 x D1, axis D1, where L = W + 2.0 and W is the hero's weapon reach (SPEC-0021 Weapon reach: 1.5 with no weapon, otherwise the per-hero table value). For each target bone capsule: static overlap (SPEC-0018 finite-cylinder test); if it misses and the tip moved (P0 + L x D1 differs from P0 + L x D2), the swept step of Combat reach test runs with that capsule against the triangle P0, P0 + L x D1, P0 + L x D2. The first hit returns true.
+3. On a hit the target id is added to the hero's hit list and the hero's on-hit hook runs. Swing hit cue (High for the branch, Medium for the material call): in sub-state 10 Mote-bank cue 2 plays (Tor's power step; Roberta's sub-state-10 clip has no attack frames). Otherwise Tor plays a material impact from the target, and when nothing played, weapon-bank cue 14 plays; Roberta always plays weapon-bank cue 14.
+4. Block: if the target guards and the hit is not a power hit, let c = dot(target facing, hero facing). If c is below the target's monster-row Blocking Angle (row +0x10C; SPEC-0029) the hit is blocked: no damage, and a block effect plays. On disc the Blocking Angle is 0.924 on 30 rows, 0.707 on 4, 0.5 on 4, 0.966 on 3, 0.991 on 1 and 0 on 217.
+5. Damage (Damage): the take-hit runs when the damage is above 0 or the hit was absorbed.
+6. After the character scan, the hero's breakable walk runs over the list at hero +0x174 (Contact routines and cues).
+
+Factor A of the damage is the weapon's stat A, not W: W changes only the reach. An unarmed hero still swings with W = 1.5 but deals 0 and lands nothing.
+
+### Combat reach test (capsule and anchor points)
+
+Confidence: High for the hero swing's anchors, the steps, their order and the margin; Medium-High for the inputs of the other callers.
+
+Input b (High): the hero swing passes the second basis row of the target bone's posed world frame as b, as it comes from the frame, with no normalisation. The test is therefore exact when that frame row has unit length (a frame with no scale).
+
+Users: the swept step of the hero swing (Hit detection, step 2), the single-weapon reach test that enemy-kind characters and several bosses share (SPEC-0029; their weapon length is a fixed 1.5), and the Werelupe King's own copy of the reach test (SPEC-0019). Other callers are listed under Open questions. One caller passes a capsule radius of 0.5 (a fixed program constant); the others take the radius and the length from +0x44 and +0x40 of a bone record, the hurt radius and hurt length of the target's bone capsule (Layout: Hurt shapes and hit list).
+
+Anchors (hero swing): A = P0 (the weapon base point of Hit detection, step 2), B = P0 + L x D1 (the tip this tick) and C = P0 + L x D2 (the tip last tick). The swept test runs only when B differs from C. The capsule is the posed bone capsule: centre p = bone base + 0.5 x length x Y, axis b = Y, radius r = the hurt radius, length h = the hurt length (full length, flat ends).
+
+Steps:
+1. n = unit((B - A) x (C - A)); c = |n . b|; s = sqrt(|1 - c^2|); dist = n . (p - A).
+2. Plane slab: L = r s + 0.5 h c. If |dist| > L: miss.
+3. Margin d = 0.4 (r c + h s). Shifted point (quirk): q = p - b x (|dist| / L); when c is exactly 0 and dist > 0, q = p + b x (dist / L). The shift is the ratio |dist| / L along b, not a length.
+4. Inside test: if q, projected on the triangle's plane, lies inside the triangle A, B, C: hit.
+5. Edge gates, for each edge V_i to V_(i+1) (AB, BC, CA), with unit direction e, length l and in-plane outward normal m: miss if m . (q - V_i) > d; miss unless -d < e . (p - V_i) < l + d (this test uses p, not q).
+6. Edge cylinder test: hit when any of the three edge segments meets the finite cylinder (centre p, axis b, radius r, length h, flat ends; the finite-cylinder test of SPEC-0018); otherwise miss.
+
+The test returns hit or miss only. The sign of n does not matter: the slab and the shift use |dist| and c = |n . b|, and the inside test and the outward normals come from the triangle itself. When c = 0 the slab limit is r; when c = 1 it is 0.5 h. For a capsule whose axis lies along the plane normal (c = 1), d = 0.4 r, which is smaller than r, so a capsule that overlaps an edge from outside by more than 0.4 r fails the first edge gate and is missed (quirk; reproduce).
+
+Test vectors (A (0, 0, 0), B (2, 0, 0), C (0, 0, 2)):
+- b = (0, 1, 0), r = 0.3, h = 1 (L = 0.5, d = 0.12): p (0.5, 0.49, 0.5) hit; (0.5, 0.51, 0.5) miss; (-0.1, 0, 1) hit; (-0.2, 0, 1) miss (the cylinder overlaps edge CA, but the edge gate fails).
+- b = (1, 0, 0), r = 0.3, h = 1 (c = 0, L = 0.3): p (0.5, 0.29, 0.5) hit (the c = 0 branch of the shift); (0.5, 0.31, 0.5) miss.
+- b = (0.6, 0.8, 0), r = 0.5, h = 1 (L = 0.7, d = 0.4): p (0.5, 0.35, 0.5) hit; (-0.3, 0.35, 1) miss; (-0.3, -0.35, 1) miss; (2.3, 0.35, 0.2) hit.
+
+### Charm attack hits
+
+Confidence: High for the damage rule, the stored scale, the spawn lists and the routine identity; Medium-High for the volumes; Medium for the family-to-Mote pairing of the volumes; Medium-High for the status applies.
+
+These are the hits of the Mote power-attack objects. They belong to the hero's Mote power-attack and charm object set, which is built once at start-up, 22 objects in all (Attack family driver). Five of the Mote objects are plain effect objects: Tor's weapon effects for 160, 164, 166, 168 and 170, which deal no hits. A full-press release spawns the object of the Mote in word 2: Tor's power attack for any of the 14 Mote ids, Roberta's full release for ids 161, 162, 164, 165, 166, 169, 171 and 173 (Power attack and full release). The object is placed along the hero's facing using the weapon reach (position + facing x reach, plus 0.2 toward a target; Medium).
+
+At spawn the object stores a scale: the hero's outgoing product A x D x B x G x E (Damage), with D taken at the release sub-state (Tor 10, so D = 1.0; Roberta 9, so D = 1.5). With no hero the scale is 1.0. On each hit of a target:
+
+    x = scale * C(id)
+    z = x - Defence ;  if x > 0 and z <= 0: absorb
+    z = max(z, 0)
+    damage = truncate(z * P(hero row, id))        (no minimum)
+
+- C(id) = 1 + G x 0.01 of the object's own Mote id when Match(element of that id, target type) holds (Mote elements and type match), else 1. It does not read word 2.
+- P(hero row, id) is the attack power table value for the hero row and the object's own id (Layout).
+- The target's take-hit receives the damage, attacker id -1 and the flag values 0, 3 and 1 (High for the Tor 161 and Roberta 169 objects; the other objects differ in their flags and reactions, Medium).
+- Some objects also apply a status to the target through the target's status-apply method: the Lava (161) objects of both heroes, Roberta's Leaf (164), Tor's Shadow (169) and Sun (171), and the Water bubble (163). Their request fields are listed under Status apply (Sources of statuses on an enemy from the heroes). An enemy whose element matches the status ignores it (SPEC-0029). The other objects start an effect at the target (effect kind 2 or 3). Roberta's Leaf object deals no damage and only applies its status (below).
+- No magic and no Mote charge is paid at a hit: both are paid at release (Mote charge use by attacks).
+
+Volumes. Each object runs once per tick from the attack family driver: first its character walk, then its breakable walk (Attack sweeps). In the character walk, every global hittable entry that passes the hittable query (Hit detection) is tested against the object volume and the target's body cylinder (Hit detection, hurt shapes); on a pass the object's hit runs. The beam and bubble objects first add the target to their ten-slot list and skip targets already there (Beam and bubble lists).
+
+| Object (filter kind; Mote ids) | Attack volume | Size source |
+| --- | --- | --- |
+| Sun/Light (3; 170, 171) | sphere | radius = object word +0x400, centre +0x410 |
+| Shadow/Smoke (6; 168, 169) | sphere | radius +0x54, centre +0x90 |
+| Nova (unfiltered; 172, 173) | vertical cylinder | radius 4.0 (word 0x2DCBB0), height 2.0 (code constant), centre +0x80 |
+| Wind/Fog (5; 166, 167) | vertical cylinder | radius 4.0 (word 0x2DCBB8), height 5.5 (word 0x2DCBBC), centre +0x80 |
+| Water/Bubble (4; 162, 163) | cylinder along the beam | radius 1.0 (word 0x2DCB3C), height 5.0 (word 0x2DCB40), centre +0xC0, axis = unit(+0xA0) |
+| Rock/Leaf (2; Roberta 165) | sphere (Rock skipping shot) | radius = the rock's effect scale (1.0 when there is none; it shrinks by 0.12 per bounce); centre = rock position; the first hit ends the walk |
+| Family A (kind from owner +0x100; Roberta 161, Tor 163, Tor 172) | vertical cylinder | radius sub-object (+0xA0) word +0xB0, height 4.0, centre +0x40 |
+For the character hit test, this cylinder is checked against the target body cylinder, not the target bone capsules. Both axes are world-up. The hit volumes overlap when the horizontal centre distance is no greater than the sum of their radii and their vertical intervals touch or overlap. For a Family A centre at yA with its 4.0-unit height, and a target feet point yT with body height hT, the vertical intervals are [yA - 2.0, yA + 2.0] and [yT, yT + hT]. Boundary contact counts as a hit. Family A stores a particle from a paired effect emitter. The particle's +0xB0 size supplies the collision radius; Family A compares its age at +0x130 plus dt against its +0x14C word. This is the Family-A cutoff comparison; the generic particle updater also uses +0x14C as the denominator for curve progression, so this spec does not assign it a universal lifespan meaning. The emitter initializes these particle fields, then its shared pair callback stores the particle; later particle allocations can overwrite that association. Pair removal can force-expire the saved particle for flagged descriptors. During one complete candidate rebuild, accepted candidates are found in active-object-array order, while their newly allocated pair records are stepped newest-first; if each pair emits, the first accepted candidate supplies the last callback among that rebuild's pairs. This conditional order does not identify the final particle stored for a named Mote: live candidate membership, rebuild timing, emission gates and other active pair records are not fixed by its setup. Setup contains candidate definitions for Roberta Lava 161 (415), Tor Water 163 (416 and 564), Tor Nova 172 (560), and Tor Rock 165 (553 and 562). Per-Mote emitter identity, selected cutoff-field value and numeric radius remain open.
+| Family B (kind from owner +0x148; Tor 161, Roberta 173) | sphere orbiting the hero | radius +0x34 (2.5, a program constant), centre +0x10 |
+| Family C (kind from owner first word; Roberta 169, 171) | horizontal beam | 20 units long from the hero's query point; 2.0 units wide (fixed collision-box width) |
+
+Object pairing (High). The spawn dispatch gives each (hero, Mote) pair one object; the volumes above keep their sizes:
+
+| Mote | Tor power attack | Roberta full release |
+| --- | --- | --- |
+| 160 Fire | weapon effect only (no hits) | no object (Fire shot) |
+| 161 Lava | family B orbit, fire status | family A object |
+| 162 Bubble | effect only, stopped when sub-state 10 ends (no hits) | Water/Bubble beam (filter 4) |
+| 163 Water | family A object (bubble, stun) | no object (Water shot) |
+| 164 Leaf | weapon effect only | expanding ring, poison only, no damage |
+| 165 Rock | three family A sub-shots (filter 2), 16 ticks apart (word 0x2DCB94) | three Rock skipping shots (filter 2) |
+| 166 Fog | weapon effect only | drifting fog cloud |
+| 167 Wind | Wind/Fog cylinder (filter 5) | no object (Wind shots) |
+| 168 Smoke | weapon effect only | no object (Smoke shots) |
+| 169 Shadow | Shadow/Smoke sphere (filter 6) | family C beam |
+| 170 Light | weapon effect only | no object (Light shots) |
+| 171 Sun | Sun/Light sphere (filter 3) | family C beam |
+| 172 Nova | family A object | no object (Nova shots) |
+| 173 Supernova | Nova cylinder (unfiltered) | family B orbit |
+
+- Tor's weapon effects for 160, 164, 166, 168 and 170, and the 162 effect, are stopped whenever Tor leaves sub-state 10. With these six Motes Tor's power attack spawns no hitting object: its damage comes only from the sub-state-10 melee swings, with P from the attack power table (Damage).
+- A new power attack cannot start while any Mote object is active (Power-ready check).
+- **Family B (orbit; Tor 161, Roberta 173):** a point circles the hero's query point at radius 2.5 (0x2DCB68 for Tor, 0x2DCBAC for Roberta) at 2π radians per second (one turn per second; a program constant), for 10 s (0x2DCB64 / 0x2DCBA8). Hit shape: a sphere of radius 2.5 against the target's body cylinder. Each hit target is listed for 60 ticks, so a target in contact is hit once per second. Damage per hit is the rule above. Tor's 161 orbit also sends fire (status 7) with D, A and T of (Tor, 161); Roberta's 173 orbit sends no status; it also fires a bolt at a nearby enemy every half second (Hit volume re-arm).
+- **Family C (beam; Roberta 169, 171):** a horizontal beam from the hero's query point, 20 units along the hero's direction (a program constant). Its collision box has a fixed transverse half-width of 1.0, so the total width is 2.0 units; the collision reader does not take this width from effect definitions 0x222 or 0x224. The other box extent and its center and axis come from the live segment/effect object. Each beam lasts 5 s (0x2DCB98 / 0x2DCB9C). Each hittable target whose body cylinder meets the beam is hit and listed for 1 s (0x2DCB2C × 60 = 60 ticks), after which it can be hit again. The element passed to the damage is 6 (Shadow) or 3 (Sun). These lists are the 1 s lists of Ten-slot timed lists.
+- **Family C has no volley (Roberta 169, 171; High).** The Shadow and Sun objects are the beams above and fire no shots of their own. The count each object holds is its life in ticks: a start sets it to trunc(5.0 × 60) = 300, each tick lowers it by 1, and the beam ends when it falls below 1, so the beam is tested on 299 ticks. Each live tick the beam is rebuilt from the hero's query point to 20.0 units along the normalized aim, then the object walks every hittable target and then the breakables (SPEC-0040 Behavior 17). A target whose body cylinder meets the beam is hit and entered in the object's ten-slot hit list for 60 ticks; while it is listed it cannot be hit again, and when all ten slots are taken no new target is hit. A target that stays in the beam is hit on beam ticks 1, 61, 121, 181 and 241. Both objects live in the hero's effect object group, so they use no hero shot slot, and they are not the hero projectile volley that ids 169 and 171 skip (Power attack and full release).
+- **Family A (Roberta 161, Tor 163, Tor 165, Tor 172):** the vertical cylinder above. The fourth user is Tor's Rock (165): its three sub-shots are family A objects with filter kind 2 (High). The volumes and lives per object are Medium (Open questions).
+  - Synthetic overlap vectors (radius values chosen for the example): Family A radius 2, centre (0, 0, 0), height 4; target body radius 1, feet at (3, 0, 0), height 2: hit at horizontal tangency. Moving the target to (3.01, 0, 0) misses. With horizontal centres coincident, target feet at y = 2 and height 2 hits at cap tangency; feet at y = 2.01 misses.
+- **Tor Rock 165 (High for the timing and the damage; High for the sub-shot motion):** the Rock object stores the release point and a countdown of trunc(60 × 0.0) = 0 ticks (word 0x2DCB90). Each tick while it is live: when the countdown is 0 and fewer than 3 sub-shots have started, the next sub-shot starts at the stored point with an empty ten-slot list, and the countdown is set to trunc(60 × 0.25) = 15 (word 0x2DCB94) unless that was the third; a positive countdown goes down by 1. So the sub-shots start on the Rock object's ticks 1, 17 and 33. Each sub-shot hit deals trunc(F × P(Tor, 165)), where F is the charm rule's value for the object's stored scale (10.0 until a spawn writes it), with take-hit flags (attacker −1, 0, 2, 0), and starts effect kind 2 at the target. Each sub-shot's position is set to the stored release point when it starts; its family-A tick does not advance that position, so it remains stationary while active. Its active state depends on an associated-particle link: the shared update clears the link when that particle's age at +0x130 plus dt is equal to or greater than its +0x14C word, after which the sub-shot is inactive. This states the Family-A comparison without assigning a universal semantic name to +0x14C. The exact linked particle and per-sub-shot cutoff value remain open. The Rock object stays live while its countdown is 0 or more or any sub-shot is live, and plays effect mode 4 at its point when it ends.
+- **Roberta Leaf 164:** a vertical cylinder around the spawn point whose radius starts at 1.0 (0x2DCB70) and grows by 1.0 unit per second (0x2DCB78) up to 5.0 (0x2DCB74), with half-height 1.5 (0.5 × the word 0x2DCB80), for 10 s (0x2DCB7C). Each target is hit once per object (a ten-slot list with no expiry). Its damage is trunc(word 0x2DCB84 × word 0x2DCB6C) and is dealt only when 0x2DCB84 is above 0; on the disc 0x2DCB84 is 0.0, so the hit deals no damage and calls no take-hit. It only sends poison (status 2) with D, A and T of (Roberta, 164).
+- **Roberta Fog 166:** the cloud effect is the Aimed timed object (cycle 6 s, height = ground + 3.5). Its launch direction is zeroed during setup, so it does not drift horizontally on the documented spawn/tick path (Behavior below; High). Each pulse tests the hittable targets within 10 units (squared radius 100.0, run-time word 0x378B44) and sends each one the message of Attack spawn (the first routine); the look-up arguments 0xA6 and 0xAD of that message are the Mote ids 166 and 173, used for the element and the attack power table (Medium-High).
+
+Test vectors (synthetic): a target standing in Tor's 161 orbit for 3 s is hit 3 times. A target inside Roberta's 169 beam for 5 s is hit 5 times. At any fixed position along the beam, its collision box spans transverse offsets -1.0 to +1.0, for total width 2.0; this width is independent of effect definitions 0x222 and 0x224. Roberta's Leaf ring 2.5 s after spawn has radius 3.5; after 4 s and later its radius is 5.0; a target inside it is poisoned once and takes no damage. Tor's power attack with Mote 164: no object hit; only the sub-state-10 swings deal damage.
+
+Ids 162, 169 and 171 for Roberta: the full release spawns the object and fires no projectile volley, so all damage of these releases comes from the object's hits (Power attack and full release).
+
+### Hit volume re-arm
+
+Confidence: High for the owner, the timer, the test and the cue; Medium for what the bolt effect does on arrival (Attack spawn).
+
+The owner is Roberta's Supernova (173) full-release object, the family B orbit (Charm attack hits). Besides its orbit hits, it fires a bolt at a nearby enemy every half second. Each tick while the object is live, after the orbit step:
+
+- When the timer is above zero, it goes down by 1, and nothing else happens this tick.
+- When the timer is zero, the bolt test runs. It passes when there is an active hero, a target is found and the effect host exists. The target is a uniform random choice among up to 10 characters of the global hittable list that pass their own hittable check, are less than 45.0 units from the hero, measured as in the shot finder (word 0x2DCBD0), and are visible along three parallel rays from the hero position + (0, 1.5, 0) to the character's aim point (the centre ray and rays offset 1.0 to each side); it is the finder of the Roberta shot modes 2 to 5 with 45 in place of 60.
+- On a pass, the bolt is posted (the second Attack spawn routine): from the orbit point toward the target's aim point, duration trunc(d ÷ 2.0 + 10.0) with d the distance between the two, damage value trunc(F × P(Roberta row, 173)) with F the object's stored scale taken through the charm scale rule for Mote 173, effect type 23 with sub-type 7, a scale word of 1.0 (word 0x2DCBCC) and the resources 0x459, 0x5E6 and 0x3D7. The timer is then set to trunc(0.5 × 60) = 30 ticks (word 0x2DCBC8), and cue 1 of sound bank 1 plays at the orbit point. This cue is the "effect id 1" of older drafts.
+- On a fail (no target in reach or sight), the timer stays at zero and the test runs again next tick.
+
+So the first bolt leaves on the first tick with a target in reach, and later bolts leave at most every 31 ticks (30 ticks of countdown, then the test tick).
+
+Test vectors (synthetic): a target 7.0 units from the orbit point gives a bolt duration of trunc(7.0 ÷ 2.0 + 10.0) = 13. With a target always in reach from the object's first tick, bolts leave on ticks 1, 32, 63, ... of the object's life: 20 bolts in its 10 s (600 ticks). With no target within 45 units, no bolt and no cue.
+
+### Hit volume records
+
+Confidence: High for the shot-slot index, cleanup path, shot-fill filter gate and child-entry gate. The records' geometry and any collision consumer remain open.
+
+The hero record has six auxiliary records starting at +0x600, with a stride of 0x1C0 bytes, parallel to its six shot slots (Hero shot slots). When a shot build selects free slot k, it passes k to the auxiliary-record builder only if the shot-fill filter returns nonzero. The filter returns zero for every attack id when the hero word at +0x14C is zero. When that word is nonzero, it returns zero for attack ids 161, 162, 164, 165, 166, 169, 171 or 173 if the attack sub-state word +0xF90 equals 9; it returns 1 for every other input with +0x14C nonzero. On a permitted build, the slot-matched auxiliary record is initialized. The child-entry gate is whether the selected child effect id is not -1; a separate companion effect-definition lookup supplies its result when present and uses id 0x193 when it is absent. Child creation does not depend on that companion lookup succeeding. A shot update also has a path that clears the record with the same slot index when the shot is no longer active.
+
+A character-update path also walks all six auxiliary records as child-state containers. For each record, it checks the matching shot-slot state; when that source is available, it updates active child entries using state and transform data from the corresponding shot slot and issues child start/update operations. When the source is unavailable, it clears the child entries. This establishes a non-collision use of the records in the shot-associated child update path. The recovered call paths still do not establish that Hit detection or Hit volume re-arm reads these records; their geometric content and any collision or re-arm use remain open.
+
+### Beam and bubble lists
+
+The object-hit callbacks for attack-table ids 173 (Roberta's Supernova) and 167 (Wind) each keep a per-object list of ten target ids (see Layout). Type 173 owns the first list and type 167 owns the second; both attack objects have a 10-second active lifetime. Adding a target:
+
+1. If any slot already holds that target id, nothing is added and the callback skips the hit.
+2. Otherwise the first free slot (id -1) takes the target id and an initial 60-tick lifetime in its parallel field. The lookup checks the id only; a separate per-object update decrements the lifetime once each active tick and clears the entry at zero. Thus a hit target can be hit again after about 1 second even while the attack object remains active (High for lookup, insertion and lifetime; Medium-High for mapping ids to attack names).
+3. If no slot is free, nothing is added. A debug message is written; nothing is shown to the player.
+
+The list starts empty when the attack object is initialized. The parallel field is a remaining-ticks counter, not a timestamp. The type-173 and type-167 attack objects end after 10 seconds; their list entries expire independently after 60 active updates.
+
+### Taking a hit (hero as target)
+
+1. If the input lock word (game-state record +0x20) is set, the hit is ignored: no cue, no damage and no reaction (High). This word is the game-state box flag, set on each pass by the dialogue-box host and the list picker (SPEC-0007), so every hit on a hero is discarded while a dialogue box or a list picker is up.
+2. The attacker is not added to the hero's hit list. The attacker hook that the take-hit routine calls does nothing in this build, so a hit leaves the hit list unchanged (Medium-High).
+3. The hit cue and the hit effect always play, including on a hero in state 16. The hit is heavy when the hero's maximum health times 0.05 is less than the damage (the 0.05 is a code constant, compared in single precision), and light otherwise. Light plays sound event 19 and heavy plays sound event 20. The branch word is the hero variant word (+0xF80): Tor plays 19 and 20, Roberta plays 43 (light) and 44 (heavy) (High). The hit effect is one of the hero's two hit effects (bank +0x198, effects 0 and 1), each with chance 1/2 (one draw from the shared random stream). A separate sound cue is selected from the shared hit bank by the hit-kind argument: kinds 2 and 3 select cue 171 for either hero; other kinds select no cue. For kinds 0 and 1, Roberta selects cue 170; Tor selects cue 170 when its equipment-list-5 item id for the stored attacker is 0, cue 187 for kind 0 or 189 for kind 1 when that id is 1, and cue 186 for kind 0 or 188 for kind 1 for every other result, including no matching item. This is distinct from the threshold-selected light/heavy stinger and the random hero hit effect (High). The Black Knight's kick, slow and angry swings, charge impact, enraged high swing, floor strike and flying sword hit pass kind 0 (SPEC-0012). Cloud Beast shock, air-flow, lightning and bouncing-bolt paths pass kind 2, but that encounter is cut (SPEC-0010). Additional exact-kind callers are identified: the hero poison tick passes kind 3 with attacker id -2 and blocked flag 1; the Faerie Sisters projectile-list updates can pass kind 3 to the active hero; and a hero-attached companion state machine passes kind 1 for a one-point hit with attacker id -1 and blocked flag 0. The companion behavior is visible, but its character identity and gameplay label are not established. These are producer mappings, not additional cue rules. Other callers remain unclassified.
+4. A hit on a hero in state 16 (the death state) then returns at once: no damage, no reaction and no stun clear. The hero stays in state 16. When the sound service is available, the hit-effect choice and its one shared random draw have already occurred before this return; a repeated hit on a dead hero therefore advances the shared random stream even though it does not damage the hero.
+5. Reaction, for a hero not in state 16. The take-hit receives (value, attacker id, blocked flag). The attacker id is stored on the hero. The hero is busy when it is in the attack step at Tor's sub-state 1 or 10, or Roberta's sub-state 1 or 9 (charging, or the power attack or full release), and its equipment word 2 is not 0; an empty word holds −1, which also counts, so in practice these four sub-states are busy (Medium-High). With blocked flag 0 and the hero not busy, the hero is written to state 17 (the hit-reaction state, number 0x11; this is a state, not an animation) and plays request 0x20 when the first entry of the hero's weapon list (equipment list 1) exists and is not empty (a positive count and a non-zero item), else request 0xC0 (the unarmed flinch) (High). With blocked flag 1 the hero does not enter state 17; unless busy, it plays its block reaction instead: shield-bank cue 0 (bank +0x1A0), then request 64 (0x40) (High). The block reaction takes a float argument that it never reads (Medium-High). A busy hero is never interrupted: with either flag value nothing is written and nothing is played (High).
+6. Damage is applied after the reaction, by the rule in Health and death: the value is subtracted from health unchanged, and the death step runs when health reaches 0. This holds for both values of the blocked flag; a blocked hit still costs its full value (example: a blocked Gnarfas whip still takes 15). The take-hit itself applies no shield block, armour, armour Mote, petpet 0.9 factor or attacker status scale (High). A lethal unblocked hit has therefore already written state 17 when the death handler runs. Hero defence is zero. The damage has already been reduced by the hero's shield block and armour only for the common enemies (class 17) and for enemy pool projectiles (Enemy attack damage to a hero); boss melee hits arrive unreduced.
+   - Callers that want a block to cost nothing pass a value of 0 with the blocked flag set (the Ixi Chieftain's forward swipe, the Werelupe King's shared hit), or skip the take-hit entirely on a block (the Gelert Assassin, the Black Knight's two swings, the Plague Serpent's lunge).
+7. After damage, if the hero is in state 25, the hero is written to state 1. This is the only state-1 write in the take-hit routine (High). The take-hit routine never writes state 16; the death handler does (Health and death).
+
+Order of the whole routine (High): the box-flag test (step 1); a let-go when the hero is in the rope-gun state 27; the attacker step (step 2); the hit cue and effect (step 3; they play only when a sound emitter is available); the state-16 return (step 4); a hit flash when the damage is not 0; the reaction (step 5: state 17 with 0xC0 or 0x20, the block reaction, or the stop call); the petpet reaction (not for attacker id -2); the stun clear (status 0 is queried and cleared, and the status display is reset when it was active); the deduct (step 6); the state-25 write (step 7); a HUD refresh. A hit on a dead hero therefore returns before the stun is cleared.
+
+A hit whose attacker id is -2 (poison and other environmental or status damage) does not change the weapon or the menu state. Other attacker ids do.
+
+A guarding hero facing the attacker blocks with a shield, and armour reduces the hits of the common enemies and of enemy pool projectiles (Enemy attack damage to a hero). Boss melee hits are not reduced; how each boss treats a block is set by the boss (step 6). No parry or dodge is known for either hero, and there is no invulnerability window (High): the take-hit sets no timer, so repeated hits from one attacker are limited only by that attacker's hit list, which is cleared at each attack start (Hit detection, Hit-list clear). A hit (a poison tick too) on a hero not in state 16 ends an active stun (the stun timer is cleared) and stops the status effect visuals.
+
+### Enemy attack damage to a hero
+
+Confidence: High for the shared enemy class; Medium for the second attacker routine; High that boss melee hits do not use this rule.
+
+This rule applies to the common enemies (the shared enemy class 17, which includes the class-17 minions and the spiders). Enemy pool projectiles (boss projectiles included) have their own hero-hit rule, which also applies shield and armour (SPEC-0029). Boss melee hits do not use it: each boss melee attack passes a fixed value or a boss tuning word straight to the take-hit, which subtracts it unchanged (Taking a hit).
+
+When an attacker of the shared enemy class hits a hero, the damage is:
+
+    d0 = the attack's damage value
+    b  = shield block (0 unless the hit is blocked)
+    d1 = Armour(d0 - b)
+    y  = max(0, d1 * G)
+    damage = truncate(y)                  (no minimum)
+
+All products are single-precision with truncation toward zero (Damage).
+
+- d0: the Damage Value of the attack in the attacker's monster row (row +0x34C + 4 x attack index; SPEC-0029). For a fixed special attack it is the value that the attack's own spec names.
+- G: the attacker's status scale: 0.75 under curse, 1.5 under strength, 1.125 with both, 1.0 otherwise. The hero's own statuses do not change the damage it takes.
+- Blocked: the hero guards and the attacker's own facing test passes. The hero guards when it is in action state 20, or Roberta is in attack sub-state 6 or 7, or the hero's guard timer (+0x1574) is above 0. In the attacker's hit routine, the facing test passes when dot(hero facing, attacker facing) is at most -0.5 (facing each other); attackers that pass a blocked flag of 0 are never blocked (SPEC-0029).
+- Shield block b, when blocked: with no shield-family entry, b = 0. With a shield and word 1 empty, b = the shield's stat A. With a shield and an item in word 1 (the shield Mote), b = 1.25 x the shield's stat A; and when the attack's element is 0, equals that item's element kind, or is 7, word-1 charge is used (SPEC-0021 Mote charge: amount trunc(1 x (s x 0.01)) with a minimum of 1, where s is the shield's stat B for type 5, stat D for type 3, else 0) and 2 MP (odd Mote) or 1 MP (even Mote) is paid.
+- Shields per hero (High): an equipment add puts types 4, 5 and 6 in Tor's entry of the family and types 1, 2 and 3 in Roberta's. Tor's shields are the type-5 shields 106 to 110; Roberta's are the type-2 books 176 to 180. So s is the type-5 stat B for Tor and 0 for Roberta (her charge amount is always the minimum, 1). Test vector: Roberta with book 178 (stat A 40), a blocked hit of 60, word 1 empty: damage 20; word 1 = Mote 161 with an attack element of 0: damage 10, 1 charge and 2 MP.
+- Armour(d), when the hero has a body-family item:
+  1. If word 0 holds a Mote (the armour Mote) whose power Q0 (6 odd, 4 even) is at most its remaining charge, the hero's MP is at least its cost (4 odd, 2 even), and the element rule of the shield block holds: d = (d x 0.01) x (100 - H), where H is that Mote's stat H (75 odd, 50 even). Then word-0 charge is used (amount trunc(Q0 x (body stat B x 0.01)), no minimum) and the cost is paid.
+  2. Then d = d x (1 - A_body x 0.01), where A_body is the body item's stat A (a percent; 0 to 70 on disc).
+- Petpet factor, always: d = d x 0.9 (one minus the word at 0x2DD8E0) when the active petpet's kind is 1 or 7 (SPEC-0047).
+- The hero's class defence stays 0 and is not used in this intake.
+- The result goes to the hero's take-hit (Taking a hit) with the attacker id and the blocked flag, and is applied to health by Health and death.
+- Poison tick damage is not an enemy hit; it has its own 1 HP floor (Status effects).
+
+### Guard timer and per-attacker block
+
+Confidence: High.
+
+- Guard timer (hero +0x1574): set to 40 ticks by the threat sense and reduced by 1 every tick in the hero update. The sense runs only in action state 1 (idle), and only with weapons drawn and a shield equipped. A threat is a live enemy projectile in front of the hero, or an attacking character (its attack-active query is true) within 10 units horizontally in front; "in front" means dot(unit horizontal vector from the hero to the threat, hero facing) > 0.5. On a threat the timer is set, and when the hero is not in state 20 the hero's equipment display turns on (weapon drawn). While the timer is above 0 the idle hero requests animation 63 (shield up) and counts as guarding for every block test. The enemy projectile pool is updated before the selected hero update in each world pass (SPEC-0026, steps 8.1.5 and 8.1.9), and this threat sense runs inside the hero's idle-state update. Therefore, a projectile collision resolved in the pool pass cannot be blocked by a timer first raised by that pass's later threat scan; that newly raised timer can affect later passes. Since the hero's pre-state update decrements a positive timer after the projectile-pool pass, a timer value of 1 still blocks a projectile hit tested in that pass, then reaches 0; zero does not block. A newly raised value of 40 therefore covers the next 40 projectile-pool passes if those tests occur, expiring after the 40th. This timing limit does not apply when the guard predicate was already true at the time of contact, such as a timer carried from an earlier pass or a hero already in state 20.
+- Guard predicate: the hero is in state 20, or Roberta is in attack sub-state 6 or 7 (the spin), or the guard timer is above 0.
+- Common-enemy strike (class 17, per attacker): the unblockable flag 0x01 of the attack skips the block. A spinning Roberta blocks the strike from any direction: no damage, no take-hit and no hit-list entry, with a block spark on each overlapping tick. Any other guard blocks when dot(hero facing, attacker facing) is at most -0.5: the hero is added to the attacker's hit list, plays its block reaction, and takes the damage of Enemy attack damage to a hero with the shield block; damage above 0 still causes knockback (below). The flag 0x20 of the attack forces the blocked flag.
+- Bosses use their own block rules (each boss spec, and Taking a hit, step 6). Enemy pool projectiles: SPEC-0029 Behavior 9. The hero's swing on a guarding enemy: Blocking Angle (Hit detection, step 4).
+
+Test vectors (synthetic): an idle hero with a shield and weapons drawn, an attacking enemy 8 units away straight ahead: the timer becomes 40 and the hero raises the shield. The same enemy 12 units away, or behind the hero: no change. Roberta spinning, struck from behind by a class-17 enemy: no damage and her id is not added to the enemy's hit list.
+
+### Knockback on the hero
+
+Confidence: High. SPEC-0029 and SPEC-0040 do not give this rule; it is stated here.
+
+- Common enemies (class 17 strike): after the take-hit, when the damage was above 0 (blocked or not), the hero's health is above 0, and the attack slot's knockback K (monster row +0x35C + 4k, SPEC-0029) is above 0: the hero's velocity is set to K × unit(9 × attacker facing + (0, 12, 0)), replacing the old velocity (horizontal part 0.6 K, vertical part 0.8 K for a horizontal facing). The grounded flag is cleared and the hero goes to action state 48 (the long-fall landing state, SPEC-0033 Behavior 9B). The grab-and-throw path enters state 48 with no velocity. On the disc 75 rows have a non-zero knockback in some slot (130 slots), with the values 1, 2, 3, 4, 5, 6, 7, 10, 12, 14, 15 and 17.
+- Damage 0 or a killing hit: no knockback.
+- Bosses: their own rules (each boss spec). Enemy pool projectiles: no knockback (SPEC-0029 Behavior 9).
+- Heroes push no enemies: the hero swing, the shots and the Mote objects apply no impulse to an enemy; the enemy reacts only with its hit-reaction animation (SPEC-0038).
+- The block push of SPEC-0029 Behavior 10.1 (capped at 40) is never reached in the game; a clean build does not need it.
+
+Test vector: K = 10, attacker facing (0, 0, 1): hero velocity (0, 8, 6) and state 48. The same hit with damage 0: no change.
+
+### Incoming hits before the state switch (none)
+
+Confidence: High for the order. The hero update runs no incoming-hit sweep. Hits on a hero come from the attacker's own routines (Enemy attack damage to a hero; SPEC-0029, SPEC-0038 and the boss specs). Before the state switch the hero update runs, in order:
+- the guard timer and two other timers;
+- the per-hero sound banks (Attack router; SPEC-0031);
+- the HUD weapon and shield icons (SPEC-0023);
+- the attack-active word (event bit 0x1; Hit detection);
+- the status tick;
+- the button-mash counter;
+- regeneration and the low-pool warnings;
+- the music danger value (SPEC-0009);
+- the stick processor and the stick gesture machine (SPEC-0033);
+- the right-stick aim mode (+0x1490; Right-stick aim mode);
+- footsteps (SPEC-0031);
+- the head look;
+- the world-item pickup check (Medium);
+- two further helpers (roles open);
+- Roberta's shot update, which holds the shot's world contact (Roberta shot projectile).
+
+### Damage
+
+Confidence: High for the rule, the factor sources and the conversion.
+
+Melee hit by a hero on one target:
+
+    x = P * A * B * C * D * E        (factors multiplied in this order)
+    y = x - Defence
+    if x > 0 and y <= 0: the target absorbs the hit (absorb effect)
+    y = y * G ;  if y < 0: y = 0
+    damage = truncate(y)             (toward zero, no minimum)
+
+| Factor | Meaning | Values |
+| --- | --- | --- |
+| P | Attack power | 1.0, except in Tor's power step (Tor in attack sub-state 10 with a Mote in word 2): the attack power table value for (Tor row, that Mote id) (Attack power and the equipped attack). Roberta's melee always uses 1.0 |
+| A | Weapon damage stat | stat A (item record +0x20) of the hero's weapon-family entry (types 3 and 6; SPEC-0021); 0 with no weapon. The per-hero 1.5-default table of SPEC-0021 is the weapon reach, not this factor |
+| B | 1 + F x 0.01, where F is stat F of the Mote in word 2, with no type test. B is 1 when no Mote is in word 2 | Mote stat F (SPEC-0021); 0 for the two Nova Motes, so B is 1 for them |
+| C | 1 + G x 0.01, where G is stat G of the Mote in word 2, when a Mote is in word 2 and Match(E_a, T) is true (see the Match table below). C is 1 otherwise | Mote stat G (SPEC-0021); C never uses stat F |
+| D | Step factor by attack sub-state (+0xF90). Tor: 2.0 at sub-states 4 and 12; 0.75 at 5 and 6; 1.0 otherwise, including the power step 10. Roberta: 2.0 at 4; 0.5 at 5 and 12; 1.5 at 9; 0.33 (single precision) at 10; 1.0 otherwise | constants (Mode-code and flag multipliers) |
+| E | 1.25 (1 + the word at 0x2DD8DC, 0.25) when the active petpet's kind is 0 or 7 (SPEC-0047), else 1.0 | data word |
+| Defence | The target's defence. Zero for a hero target: the hero's class defence always returns zero. For an enemy target it is the Damage Reduction value of the enemy's row (SPEC-0029) | 0 for heroes |
+| G | Attacker's status scale: x 0.75 under curse, x 1.5 under strength (both: 1.125) | constants |
+
+- Match(E_a, T). Let E_a be the Mote kind of the Mote in word 2, or 0 when word 2 holds no Mote. Let T be the target's type: for an enemy, the target type field of its row (SPEC-0029); heroes and the character base have T = 0. Match(E_a, T) is true for the pairs below and false otherwise.
+
+| E_a | Matches T |
+| --- | --- |
+| 1 | 4 |
+| 2 | 5 |
+| 3 | 6 |
+| 4 | 1 |
+| 5 | 2 |
+| 6 | 3 |
+| 7 | every T, including 0 and 7 |
+| 0 | none |
+
+The pairs 1 and 4, 2 and 5, and 3 and 6 match in both directions. Kind 7 (Nova) is the only kind that matches T = 0 or T = 7.
+
+- Take-hit: the target's take-hit runs with (damage, hero index, blocked flag, 0, power flag) only when the damage is above 0 or the absorb flag was set by this hit (then with damage 0). The power flag is 1 in Tor's power step. In the power step a status request (Status apply) is also sent to the target: its first field is the status code of the Mote in word 2 (Mote status words in Layout; any other id: -1), followed by the Mote's status duration D, amount A and period T for the hero's row, from the same Mote status words of the attack power table (SPEC-0024, table 16). A field the Mote does not have reads -1, which means the receiver's default.
+- Landed: a hit has landed when the damage is above 0, or it was absorbed, or a guarding target blocked it (Hit detection, step 4). On a landed Tor hit outside the power step, Tor pays the level-0 magic cost (3 for an odd Mote, 1 for an even Mote, 0 without a Mote; Magic) and then uses Mote charge of word 2 (Mote charge use by attacks). The payment step applies to Tor's melee only. In the power step nothing is paid at the hit (both were paid at release).
+- The Mote count is its remaining charge, and can exceed the initial 100 when another copy is added to an already-present Mote slot; the category-8 add rule and a numeric combat consequence are in SPEC-0021, Party inventory lists.
+- An unarmed hero (no weapon-family item) has A = 0: every swing makes 0, no take-hit runs, nothing lands and nothing is paid.
+- Power attacks and full releases deal their damage through the Mote power-attack objects (Charm attack hits), Tor's sub-state-10 melee hits (P from the table) and the full-release shots (Roberta shot projectile). No damage is dealt at release.
+
+**Platform arithmetic (reproduce; High).** Every multiply and add in the damage, scale and charge rules is a single-precision operation whose result is truncated toward zero, not rounded to nearest, as the console's floating-point unit does; the conversion to an integer also truncates toward zero. A clean build must reproduce this rule, because the results differ from round-to-nearest arithmetic in common cases: 25 x 0.01 gives 0.24999999, so 1 + 25 x 0.01 gives 1.2499999, and sword 98 (stat A 4) with Mote 161 deals 4 (4.9999995), not 5; 100 x 0.01 gives 0.99999994, so 40 x (100 x 0.01) gives 39.999996. The constants themselves (for example 0.01 and 1.1) are the nearest single-precision values.
+
+### Mote elements and type match
+
+Confidence: High for the table and the match pairs; Medium for the meaning of the target type numbers (Open questions).
+
+A Mote is a charm whose item id is 160 to 173. Its element kind is read from its item id. Every other item (weapons, shields, body items, consumables, and an empty slot) has element kind 0, so a weapon never sets an element.
+
+| Item ids | Element kind |
+| --- | --- |
+| 160, 161 | 1 |
+| 162, 163 | 4 |
+| 164, 165 | 2 |
+| 166, 167 | 5 |
+| 168, 169 | 6 |
+| 170, 171 | 3 |
+| 172, 173 | 7 |
+
+Kind 0 means no element. Kind 7 is the all-element kind.
+
+Type match. The match rule is Match(E_a, T) in the Damage section. The pairs 1 and 4, 2 and 5, and 3 and 6 match in either order. Kind 7 matches every target type, including 0 and 7. Kind 0 never matches. All other pairs do not match.
+
+Stats of the Motes that the damage factors read (SPEC-0021 holds the item records):
+
+| Stat | Even item ids (160, 162, ..., 172) | Odd item ids (161, 163, ..., 173) | Used by |
+| --- | --- | --- | --- |
+| F | 15 (0 for Nova, 172) | 25 (0 for Supernova, 173) | Factor B |
+| G | 50 | 100 | Factor C |
+| H | 50 | 75 | Armour Mote in word 0: an enemy hit is scaled by (100 - H) percent (Enemy attack damage to a hero) |
+
+For the two Nova Motes (172 and 173) stat F is 0 and stats G and H keep the values above. Stat F is not used for factor C.
+
+### Mote charge use by attacks
+
+Confidence: High for the amounts; Medium for the low-end clamp of Roberta's stored power.
+
+These amounts are Mote charge (SPEC-0021, Mote charge), never damage. Every Mote is added to the inventory with a charge of 100. A use of n subtracts n while n is below the remaining charge; when n is at least the remaining charge, the Mote is removed from the inventory and cleared from every equipment word that holds it.
+
+Let Q be the power value of the Magic table (by hero, level and family; 0 with no Mote), and S the weapon's stat B (100 for every weapon on disc; 0 with no weapon). Let x = Q x (S x 0.01), computed in that order with the platform arithmetic of Damage (for S = 100, S x 0.01 is 0.99999994).
+
+- Tor, landed swing (word 2, level 0): trunc(x), raised to 1 when it is below 1 and Q is at least 1. Lesser Mote 1, greater Mote 3.
+- Tor, power attack release (word 2, level 1): the same rule. Lesser 24, greater 39.
+- Roberta, full release (word 2, level 3), paid at release for ids 162, 169 and 171 and at the first shot for the other ids: x rounded half away from zero (add 0.5, or subtract 0.5 when x is negative, then truncate), raised to 1 when it is below 1 and Q is at least 1. Lesser 25, greater 40.
+- Roberta, quick-shot hit (word 2): exactly Q (lesser 2, greater 4), with no product.
+- Shield block (word 1) and armour (word 0): see Enemy attack damage to a hero (shield: 1 per blocked hit; armour: 3 for a lesser and 5 for a greater Mote).
+- No Mote in the word: no charge is used.
+
+Uses before a Mote is spent (charge 100, S = 100): Tor swings: lesser 100, greater 34. Tor power attacks: lesser 5, greater 3. Roberta quick-shot hits: lesser 50, greater 25. Roberta full releases: lesser 4, greater 3.
+
+The stored charge power does not change any of these amounts or any damage. For Roberta, the stored power F times (1/60) times 0.5 (equal to F / 120) is stored in the shot: values above 1.0 are set to 1.0, and values below 0.1 are set to 0.1 (Medium: the low end is set by a branch whose coverage is open). A Roberta counter of 120 ticks or more therefore gives shot power 1.0.
+
+### Power attack and full release (Tor and Roberta)
+
+Confidence: High for the thresholds, the costs, the power values, the spawn lists, the charge amounts and the payment timing.
+
+Both heroes release at a held-tick threshold: Tor's power attack at 50 ticks (sub-state 10 of Charge completion) and Roberta's full release at 80 ticks (sub-state 9). The Mote in word 2 sets the family: odd ids (161, 163, ..., 173) and even ids (160, 162, ..., 172).
+
+| Item | Tor power attack | Roberta full release |
+| --- | --- | --- |
+| Threshold | 50 ticks | 80 ticks |
+| MP cost, odd-id Mote | 40 | 40 |
+| MP cost, even-id Mote | 20 | 20 |
+| MP cost, no Mote | 0 | 10 |
+| Power Q, odd-id Mote | 40 | 40 |
+| Power Q, even-id Mote | 25 | 25 |
+| Power Q, no Mote | 0 | 0 |
+| Weapon stat S | stat B of the weapon-family entry; 0 with no weapon | the same |
+| Mote charge used (word 2) | 39 or 24 (truncation rule) | 40 or 25 (rounding rule) |
+| Spawned at release | the Mote power-attack object of the word-2 Mote (any of the 14 ids) | the object for ids 161, 162, 164, 165, 166, 169, 171 and 173 |
+| Projectile volley | none | none for ids 162, 169 and 171 (sub-state 14); otherwise 1, 2, 3, 3 or 6 shots by id (below) |
+| Damage at release | none | none |
+| Where the damage comes from | the object's hits; Tor's melee hits in sub-state 10, with P from the attack power table | the object's hits; the volley's shot hits, with T from the attack power table |
+| MP and charge timing | both at release (charge first, then MP), with no hit test | at release for ids 162, 169 and 171; at the first shot for the other ids |
+
+- Roberta shots by id: 1 for ids 160, 161 and 163; 2 for id 167; 3 for ids 168 and 170; 6 for id 172; none for ids 162, 169 and 171; the default row (one shot) for the other ids.
+- Roberta's full release with no Mote: no object and one shot of the class-2 row (speed 90, radius 1.0, 180 ticks, straight; Roberta shot projectile). It is still a full-release shot, so its cost is paid at launch: 10 MP (word 0x2DD484), no charge, T = 1.0.
+- Tor's power attack with no Mote: no object, no charge and no cost.
+- Weapon stat S is stat B of the weapon-family entry, the same weapon that supplies factor A (High). It is 100 for every weapon on disc, so the charge amounts do not vary by weapon.
+
+### Magic
+
+- Magic is spent when Tor's normal swing lands (damage above 0, absorbed, or blocked by a guarding target) or a quick shot hits a hittable target (whatever the damage, 0 included; Roberta shot projectile), at a full release (Power attack and full release), and by the shield block and the armour Mote on enemy hits (Enemy attack damage to a hero). Spending more than the current magic sets it to 0.
+- The cost and power of a landed attack come from the table below, by hero, level and family. The family is the Mote in slot 2: the odd family is item ids 161, 163, ..., 173 and the even family is item ids 160, 162, ..., 172. Each value is followed by the boot data word it is read from. These words are at 0x2DD47C to 0x2DD507 (High).
+- Level meanings (High): Tor level 0 is a normal swing and level 1 is a full press (50 ticks or more). Roberta's level is the launch class of the shot (Roberta shot projectile): level 0 for class 0 (sub-states 5, 6, 7 and 10), level 1 for class 1 and for the default row, level 2 for class 2 (sub-state 4), and level 3 for a full-release shot (80 ticks or more, with or without a Mote).
+- Power is the value Q used by the charge rules in Mote charge use by attacks. It is not a damage value.
+
+Cost and power (MP cost, then power), by hero, level and family:
+
+| Hero | Level | Odd family (cost, power) | Even family (cost, power) | No Mote in slot 2 (cost, power) |
+| --- | --- | --- | --- | --- |
+| Tor | 0 (normal swing) | 3 (0x2DD4B8), 4 (0x2DD4F8) | 1 (0x2DD4A8), 2 (0x2DD4E8) | 0, 0 (no words read) |
+| Tor | 1 (full press) | 40 (0x2DD4C4), 40 (0x2DD504) | 20 (0x2DD4B4), 25 (0x2DD4F4) | 0, 0 (no words read) |
+| Roberta | 0 to 2 (quick shot) | 3 (0x2DD498), 4 (0x2DD4D8) | 1 (0x2DD488), 2 (0x2DD4C8) | level 0: 3 (0x2DD47C); level 1: 5 (0x2DD480); level 2: 10 (0x2DD484); power 0 |
+| Roberta | 3 or more (full release) | 40 (0x2DD4A4), 40 (0x2DD4E4) | 20 (0x2DD494), 25 (0x2DD4D4) | 10 (0x2DD484); power 0 |
+
+- Roberta's 3, 5 and 10 costs above apply only when no Mote is in slot 2. With a Mote equipped, her quick shots cost 3 or 1 and her full-release shots cost 40 or 20, as the family columns show. A quick shot with no Mote still deals S times T minus defence per hit when the weapon's stat A is non-zero (Roberta shot projectile), so it deals no damage only with no weapon equipped. A quick shot with no Mote pays its cost (3, 5 or 10 MP by launch class 0, 1 or 2; the default row pays at class 1) on every hit of a hittable target, even at 0 damage, and uses no charge; a miss pays nothing (High).
+- Armour Mote (a Mote in word 0; both heroes). It acts on enemy hits only when its cost is at most the current magic and its power Q0 is at most its remaining charge (Enemy attack damage to a hero). Its cost and power come from this table (High):
+
+| Family | Cost (word) | Power Q0 (word) |
+| --- | --- | --- |
+| Odd | 4 (Tor 0x2DD4BC; Roberta 0x2DD49C) | 6 (Tor 0x2DD4FC; Roberta 0x2DD4DC) |
+| Even | 2 (Tor 0x2DD4AC; Roberta 0x2DD48C) | 4 (Tor 0x2DD4EC; Roberta 0x2DD4CC) |
+| No Mote | 0 | 0 |
+
+- Shield Mote (a Mote in word 1; both heroes): on a blocked enemy hit whose element passes, cost 2 (odd) or 1 (even) and power Q1 = 1 for both families (High; the data words of this table are not given here).
+
+Test vectors for this table are under Test vectors.
+
+### Regeneration
+
+Two separate effects.
+
+Confidence: High for the target, the gates, the rate words and the periods (the tick length and the pass counter are known start-up values).
+
+1. **Trickle toward a low level.** Each pool has a target T = int(max × 0.1) + 1, where max is the pool's maximum. While the current value is below T, the pool gains toward T and never goes above it. For example, Tor's magic (maximum 90) has T = 10, and Roberta's health (maximum 120) has T = 13.
+   - Gates: magic regenerates only when poison (status 2) is not active. Health regenerates only when health is above 0, poison is not active and the hero is not in base state 16 (dead); its entity predicate is the base-state-16 test. The other statuses do not stop the trickle (High).
+   - Rate: let rate be 1.0 per second for magic and 2.0 per second for health, and dt the tick length in seconds (1/60). Let x = rate × dt and f = x minus its whole part. Let M = int(1 / f). On each tick whose frame counter is a multiple of M, add 1 to x. The gain is the whole part of x, which is 1 on those ticks and 0 on the others. The gain is capped at T minus the current value.
+   - Periods: for magic M = 59, so +1 MP every 59 ticks, which is 60 / 59 = 1.017 MP per second. For health M = 29, so +1 HP every 29 ticks, which is 60 / 29 = 2.069 HP per second.
+   - Run-time values: dt and the frame counter are not stored in the disc image. dt is the tick length, 1/60 s, written at start-up (SPEC-0007, High). The frame counter is the pass counter at 0x368F98: 0 at start-up and +1 at the end of every main-loop pass, which is once per tick (High).
+2. **Status regeneration.** While the health regeneration status (12) is active, health gains 2 (capped at the maximum) on each tick where the status-12 timer is a multiple of 60, that is once per second of remaining status time. While the magic regeneration status (13) is active, magic gains 2 (capped at the maximum) on each tick where the **status-12** timer is a multiple of 60: the magic effect reads the health-regeneration timer, not its own (reproducible quirk; Edge cases). Neither is gated by the trickle rule, and neither is capped at T. With statuses 12 and 13 both running from the same apply, each second gives +2 HP and +2 MP.
+
+### Status effects
+
+Confidence: High for the order, the values, the floor and the two slow predicates.
+
+Each hero update, the speed scale is first set to 1.0 earlier in the update, then the hero's per-tick status routine runs, in this order:
+
+1. Timers: each timer of 1 or more drops by 1; a timer below 1 runs the status display's expire check (Status display and cues). The effects below read the reduced timers.
+2. Stun active: the hero's action state is set to 1 (idle) and the speed scale to 0, every tick while it lasts.
+3. Poison active: let P be the poison period word (4 when the word is negative) and A the poison amount word (2 when negative). When the poison timer is a multiple of P x 60, the hero takes a hit of D through the take-hit behavior with attacker id -2 and the no-reaction flag (flag values 1, 3 and 0): D = A, except when health - A < 2, then D = health - 1. Poison never takes a hero below 1 HP; at 1 HP it hits for 0, and the hit cue still plays (Taking a hit).
+4. Slow active, and the hero is moving or a second predicate holds: speed scale x 0.75. Speed active and the hero moving: speed scale x 1.85. The moving states are states 2 to 6 and 32, and states 22, 39 and 40 during action 0x55 (High for the values). The second slow predicate is the hero's in-attack test: Tor in state 13 at sub-states 2 to 12, Tor in the jump states 7 to 11 with air-attack phase 8 or 9, and Roberta in state 13 at sub-states 5 and 12 (High). The speed scale is the play rate P and multiplies the animation playback rate of the hero's animation pass (High; Hit detection, Windows at other play rates).
+
+5. Health regeneration (12) active: +2 HP, capped at the maximum, when the status-12 timer is a multiple of 60.
+6. Magic regeneration (13) active: +2 MP, capped at the maximum, when the **status-12** timer is a multiple of 60. The routine reads timer 12, not timer 13 (reproducible quirk; Edge cases).
+7. The status display tick runs (Status display and cues).
+
+There is no fire, confusion or poison-attack effect in the hero's routine. A burning hero only shows the fire effect (no tint) and takes no damage. The 0.5 slow, 2.0 speed, confusion and fire rules, and poison with no floor, belong to the enemy per-tick routine (SPEC-0029).
+
+Periodic hero status effects by id: status 2 is the only periodic damage effect; it reads the status-2 timer and deals poison on a multiple of its configured period in seconds x 60 (default 4 x 60 = 240 ticks), with the 1 HP floor above. Status 12 grants 2 HP when its own timer is a multiple of 60. Status 13 grants 2 MP on multiples of 60 of the status-12 timer, not its own timer. The other hero status ids have no periodic damage or regeneration tick in this routine; they provide state, speed, damage, immunity or display effects as described above. Fire and confusion periodic rules belong to the non-hero per-tick routine (SPEC-0029 Behavior 27).
+
+- **Hero poison is always 2 HP every 4 s.** The hero's poison and fire words (amount and period of each) are set to -1 when the hero is created. The hero's method stores a poison apply's two extra values in the poison words, but every source that applies a status to a hero passes -1 for both, so the words stay -1 and the defaults always apply (High). No source passes a zero period, so the periodic test never divides by zero (High).
+- **Poison floor (High)**: the floor is in the hero's routine only; the enemy's routine deducts the full amount with no floor (SPEC-0029).
+- **Curse and strength** scale outgoing damage in G above (hero: curse x 0.75, strength x 1.5). The status is read on the attacker.
+- **Clearing one status**: when the status is active, its timer is set to -1 (inactive). When it is not active, nothing changes. The cure uses this rule for statuses 1 to 3 (see the cure bullet under Consumable and slot-0 cross-references).
+- **Clearing all statuses**: death sets every timer to -1 (inactive). A scene setup clears all statuses too. A status apply with code -1 does the same and resets the status display.
+
+Script-driven and environmental hazards built from these rules are specified in SPEC-0057.
+
+### Status apply
+
+Confidence: High.
+
+A status is applied by calling the target character's status-apply method (class method slot 280) with a record of four words: the status code, the duration in whole seconds (-1 = default), and two extra values (the poison or fire amount and period; -1 = default). Heroes and enemies each have their own method; other characters ignore the call. Every source calls the method of the target: scripts (SetHeroStatus), items, enemy bites and projectiles, the save restore (SPEC-0025) and the plague serpent's cloud all reach the hero's method, and the hero's Mote attacks reach the enemy's method. So the hero rules below hold for every source, enemy attacks included.
+
+Hero method. There is no death gate. A conditional exception to the usual death clear follows from the enemy-projectile path (SPEC-0029 Behavior 9): an unblocked projectile applies its configured status after the hero take-hit returns. If a lethal hit runs the default death hook, state 16 and the clear of all status timers happen inside take-hit; a later passing projectile status roll can set a new status after that clear. For a stun projectile, the status can therefore be active while the hero is in state 16. This is a static ordering result, not proof of a shipped lethal-stun pairing or a recovery before the death-animation gate (SPEC-0055, open question 39).
+- Code -1: clear all fourteen timers to -1 and reset the status display.
+- 0 stun (default 5 s), 4 strength, 5 speed, 12 health regeneration, 13 magic regeneration (default 60 s): set the timer.
+- 1 curse (60 s): nothing while status 8 is active; the immunity-block effect 0xC2 plays instead.
+- 2 poison (120 s): nothing while status 9 is active; effect 0xC3 plays instead, and the extra values are not stored. Otherwise the two extra values are stored as the hero's poison amount and period words.
+- 3 slow (60 s): nothing while status 10 is active; effect 0xC4 plays instead.
+- 7 fire (5 s): the extra values are stored as the hero's fire words, which nothing reads.
+- 8, 9, 10 (30 s): if the tick count is below 1, nothing. Otherwise status 1, 2 or 3 (respectively) is cleared if it is active, then the immunity timer is set.
+- 6 confusion, 11 poison attack and any other code: nothing.
+- Timer rule: ticks = seconds x 60. When ticks >= 0 the timer is set; the status display start runs only when ticks >= 1. A negative duration other than -1 changes nothing.
+
+Enemy method (SPEC-0029 has the full rule). Nothing is applied to a dead enemy, and an enemy ignores the status of its own element (target type T: 1 fire, 2 poison, 3 confusion, 4 stun, 5 slow, 6 curse). Enemies accept confusion (default 30 s) and poison attack (default 30 s), have no immunity statuses (8 to 13 are ignored), and run the display start for a count of 0 too.
+
+Stacking and refresh (both methods). A new apply overwrites the timer and the extra words. Durations never add up. The only "already active" tests are the callers' own: consumable buffs and immunities (Consumable and slot-0 cross-references), the plague serpent's cloud (not while the hero is poisoned) and the serpent mesmerize (not while the hero is stunned).
+
+Sources of statuses on a hero:
+
+| Source | Status, duration, extras | Confidence |
+| --- | --- | --- |
+| SetHeroStatus(code, s) (SPEC-0030) | code, s, -1, -1 on the current hero | High |
+| Consumables (SPEC-0021) | 9, 8, 10, 4, 5, 12, 13 at default; the cure clears 1 to 3 | High |
+| Enemy melee hit, status roll of the monster row (SPEC-0029) | the row's status and a rolled duration, -1, -1 | High |
+| Melee hit by an enemy with status 11 active | poison at default (120 s) | High |
+| Enemy projectile status roll (SPEC-0029) | the projectile's status and value, -1, -1 | High |
+| Plague serpent cloud (SPEC-0016) | poison, slot value seconds, -1, -1; skipped while the hero is poisoned | High |
+| Serpent mesmerize (SPEC-0016) | stun 5 s; skipped while the hero is stunned | Medium |
+| Save restore (SPEC-0025) | each of the 14 codes, truncated saved seconds, -1, -1 | Medium-High |
+| Level scripts | only module 1091 (poison at default; SPEC-0057) | High |
+
+Sources of statuses on an enemy from the heroes (High for the request words; Medium-High for which objects send them). Each source sends a request (status code, D, A, T), where D, A and T are the Mote status words of the given hero row and Mote id (Layout):
+- Tor's power step: the request of the Mote in word 2 (Damage).
+- Lava (161) objects: fire (7) with D, A and T of the object's hero row. Tor's object always sends it; Roberta's sends it only when a uniform whole-number draw from {0, 1} gives 1 (chance 1/2).
+- Roberta's Leaf (164) object: poison (2) with D, A and T of Roberta's row.
+- Tor's Shadow (169) object: curse (1) with D(Tor, 169), amount and period -1.
+- Tor's Sun (171) object: confusion (6) with D(Tor, 171), amount and period -1.
+- Water bubble (163), Tor's object (Roberta's full release with 163 spawns no object; her Water shot carries its own stun request, Roberta shot projectile): the bubble stores D(hero row, 163) when it starts, and its hit sends stun (0) with that duration, amount and period -1.
+- Roberta's full-release shots: the stored request of the shot (Roberta shot projectile, table B).
+Fire damage on an enemy comes from these Fire and Lava applies.
+
+**Status-hit order (audited subset, High).** The inspected target-hit handlers for Lava (161), Roberta's Leaf (164), Tor's Shadow (169) and Tor's Sun (171) call the target's take-hit routine before their status-apply call. For Leaf, damage is conditional on a positive configured value, but its status request still follows that damage branch. Consequently, status application observes the target after that hit reaction/damage step; the enemy status receiver's dead/dying early return is specified in SPEC-0029. This ordering does not establish that every lethal hit reaches the receiver in a rejected state. The Water bubble (163), other Mote objects, and any uninspected hit routes remain unaudited, so this is not a universal Mote damage/status ordering rule.
+
+Script-driven damage (the host damage call) goes through the take-hit behavior with attacker id -1. Hazards that use these rules are specified in SPEC-0057.
+
+### Status display and cues
+
+Confidence: High for the effect ids, the rotation, the stun-end effect, the tint colours and the tint rule (no pulse).
+
+Each character has one status display: three effect emitters, a shown-status number (-1 = none), a rotation timer of 4 s (240 ticks) and a stun flag. The effects are definitions in effect group 3 (SPEC-0034), looked up by id and placed at the character's main attach point. Each of the three effect emitters has a spatial-pair manager that can retain up to five accepted emitter-particle pairs, for up to fifteen pair links across the display. These are runtime association slots for effect particles, not fifteen status-icon or status-code records. They are cleared during display initialization and when the shown status changes; they are not cleared by the per-tick status timer step.
+- Start (on an apply that runs the display start, when the code differs from the shown one): the shown effect stops and the tint is cleared; the new code is shown and the rotation timer is reset to 240. Effects by status: 0 stun 0xCC (with a model flash colour (0, 0.5, 1.7)); 1 curse 0xBE, placed 1.5 units above the attach point; 2 poison 0xC8; 3 slow 0xCB; 4 strength 0xBF; 5 speed 0xC0; 6 confusion 0xC9; 7 fire 0xCA on all three emitters (the main point and two more). 8, 9, 10: the one-shot effects 0xC2, 0xC3 and 0xC4 respectively (the same effects as an immunity block). 11, 12, 13: no effect.
+- Immunity block: when an immunity stops a curse, poison or slow, the one-shot effect 0xC2 (curse), 0xC3 (poison) or 0xC4 (slow) plays.
+- Each tick: the rotation timer drops; at 0 the next active status after the shown one, among codes 0 to 7 only and wrapping round, is shown, and the timer is re-armed. The shown status's effect follows the attach point and its tint is applied to the model.
+- Tint colours (RGB factors written at start-up): curse (0.4, 0, 0.5) for Tor and (0.5, 0, 0.4) for Roberta; poison (0.2, 1.5, 0.6); slow (0, 0.5, 1.5); strength (1.8, 0.3, 0.2); speed (2.0, 2.0, 0.3); fire (1.5, 1.5, 1.0). The tint is steady, with no pulse: each tick the shown status sets the model tint to the per-channel minimum of its factor and 1.0, so factors above 1.0 have no effect (alpha 1.0). When all three channels come out as 1.0 the tint is cleared instead. The effective tints are: curse (0.4, 0, 0.5) Tor and (0.5, 0, 0.4) Roberta; poison (0.2, 1.0, 0.6); slow (0, 0.5, 1.0); strength (1.0, 0.3, 0.2); speed (1.0, 1.0, 0.3); fire (1.0, 1.0, 1.0), so a burning character shows no tint at all (its tint is cleared every tick). Stun and confusion set no tint in the per-tick step (stun's flash colour is set once at its start). The stored records also carry a rate word (1.0, or -1.0 for the poison green channel) that nothing reads. The per-tick step of each status is specified in SPEC-0034 section 5.4 (High).
+  - Test vectors: shown status slow, factor (0, 0.5, 1.5): tint (0, 0.5, 1.0, 1.0) every tick, constant over time. Shown status fire, factor (1.5, 1.5, 1.0): tint cleared; the model draws untinted. Shown status speed (2.0, 2.0, 0.3): tint (1.0, 1.0, 0.3, 1.0).
+- When stun ends: the one-shot effect 0xCD plays.
+- When the shown status's timer is no longer active (checked on the tick after it reaches 0), the next active status is shown, or none.
+- Hits from poison use the normal hit cues (Taking a hit). The HUD's green pulse while poisoned is in SPEC-0023.
+
+### Consumable and slot-0 cross-references
+
+These link the item pass (SPEC-0021 item ids) to the status and pool rules above. Confidence: Medium-High for the status indexes, which are the indexes of the status table; High for the armour Mote.
+
+- Consumable buffs use these status indexes: 4 (strength), 5 (speed), 8 (immunity to curse), 9 (immunity to poison), 10 (immunity to slow), 12 (health regeneration) and 13 (magic regeneration) (SPEC-0021). Each applies its status with the default duration of the status table when the item's status test passes. The test passes only when the status's timer is 0 or below, that is, when the status is inactive. A buff or immunity is therefore not applied while its status is active.
+- A cure clears statuses 1 (curse), 2 (poison) and 3 (slow), each of them that is active. It does not change the other statuses.
+- Armour Mote (High; SPEC-0021, section "Slot 0: armour Mote"): the Mote in equipment word 0 acts only on enemy hits taken by the hero with a body-family item. When the hero's magic is at least its cost and its power Q0 is at most its remaining charge, the hit is scaled by (100 minus the Mote's stat H) percent, word-0 charge is used and the cost is paid; then the body item's stat A reduces the hit by that percent (Enemy attack damage to a hero).
+
+### Health and death
+
+Death. When damage takes a hero's health to zero, the hero's death handler runs for that hero with the gate allowed. Death callbacks, revive, respawn and placement after death are specified in SPEC-0055 (hero death, revive, respawn and falls); the rules below are the hero-side rules.
+
+1. Gate. If the hero is not already in state 16 and the current area has a script death callback registered, the callback is started as a background task when no earlier callback task for that area is still running. The area's per-pass update frees a finished task, so each new death starts the callback again; a death while a task is still running does not start a second one. Before that, the gate stores two values in the area's death-info record: the dying hero's index, and a both-dead flag (1 when hero 0 and hero 1 are both in state 16 at the time of the gate, which is before the default death) (High). The gate starts the callback task only when the task handle is empty, and returns the registered flag. The task calls the callback once with the address of the death-info record as its one argument, then ends (High). The callback's registered flag then decides the rest of the death. The gate runs only when the handler is called with the gate allowed: damage passes that, and the script kill does not.
+2. Skip rule. If the registered flag is set, the default death does not run at all: the hero is not put in state 16, the melee hit list and the statuses are kept, and no cue plays. The hero stays in the state the hit left it (state 17 on the normal branch).
+3. Default death. Otherwise, when no callback is registered, or when the gate was not allowed: the hero enters state 16 (the death state, which plays the death clip), its melee hit list is cleared, and all 14 status timers are set to -1 (the inactive value). The death cue (sound event 3, at full volume) plays only when at least one hero is still alive, that is, when at least one hero is not in state 16 after the change. With both heroes in state 16 there is no cue.
+4. Repeated death. If the hero is already in state 16, the gate is skipped and the default death runs in full again: state 16 is written, the melee hit list and the statuses are cleared, and the death cue test runs. A hit never reaches this case, because a hit on a hero in state 16 returns before any damage (Taking a hit, step 4). These paths do reach it: the script kills (KillCurrentHero or KillBothHeroes), the plain deducts (the DeductHitPoints host call and the state-60 respawn penalty, which do not use the take-hit routine; on a hero at 0 health any deduct that is not negative runs the death handler with the gate allowed, and since the hero is in state 16 this is the repeated death), the per-tick deadly-ground and overlay kills, and the Continue hero reset (SPEC-0055) (High).
+   - Status applies have no death gate (Status apply). An active stun forces state 1 in the hero's status tick, so a stun applied to a dead hero takes it out of state 16 at 0 health (Medium; no source that stuns a dead hero is known).
+   - Poison on a hero at 0 health outside state 16 (after a callback skip, which keeps the statuses): the tick damage is health - 1 = -1, and the deduct subtracts -1, so health becomes 1 (reproduce; Medium-High).
+5. No penalty. Death takes no money, no items and no experience.
+
+Game over: the death-state handler starts the game-over timer (timer E) when no partner can take over (SPEC-0055, section 8A).
+
+Healing above maximum is clamped to the maximum.
+
+Respawn. Area setup restores both heroes to full health and clears their statuses in the modes that end with the heal: modes 3 and 4, and any other mode value except 1 and 2. No heal is known on the mode 1 path. The ending of mode 2 was not established (Open questions). No respawn at a checkpoint is known. The checkpoint tracking in SPEC-0006 does not place the hero. Item 50, used from the item menu, also runs the partner-revive helper: a partner in the death state with swap mode 2 is revived (Medium-High). The heal branch of the same use-item routine has no state test, so a use-item heal can raise a hero who is at 0 health outside state 16 (Medium; see SPEC-0055, Edge cases).
+
+### Low-health warning
+
+Confidence: High. The warning runs in the hero update.
+
+- Each hero update tick, using the active hero's own values: if float(current health) < float(maximum health) x 0.15, cue 157 (0x9D) plays. Independently, if the current magic pool is below its maximum x 0.15, cue 158 (0x9E, the magic-pool warning) plays. Both tests use the same hero; cue 158 is not a second hero's health warning.
+- The follow-up routine is the HUD change-detector re-arm (timer C = 240; SPEC-0023 section 4). There is no visual of its own.
+- The warning fires on every tick while the value is below the threshold, not once at the crossing.
+- This is not the death cue (sound event 3 under Health and death), which plays when a hero dies while at least one hero is still alive.
+
+### Hit points by script
+
+Health is a signed 32-bit integer; each hero has a current and a maximum value. The rules below are the ones scripts see through the hero-class methods (SPEC-0030 rows 52 to 54, and the four hit-point methods named in SPEC-0030's note after its catalogue).
+
+- **Query**: current health and maximum health return their stored values. The percentage query returns current health divided by maximum health, as a fraction (0.5 for half, not 50). A maximum of 0 is not handled (Edge cases).
+- **Set**: if the supplied value exceeds maximum health, maximum health is stored first and then the health-gain notification runs, even if the stored value was already at maximum. Otherwise, if the value is above current health, the gain notification runs before the value is stored; if below, the loss notification runs before the value is stored; equality stores the same value with no notification. There is no death check: setting 0 leaves the hero alive, in the same state, with its statuses kept. Negative values are stored unchanged. The saved level-module call scan found no reached SetHitPoints callsite, so it supplies no negative integer argument; indirect or non-level reachability and later behavior remain open.
+- **Set percentage**: the new health is the maximum times the given fraction, truncated toward zero to a whole number, and then the set rule applies. A fraction above 1 gives the maximum. A finite negative fraction produces a negative health value; the set rule stores it and runs the loss notification when it is below current health, without invoking the death handler. Example: maximum 100, current 60, fraction -0.25 gives -25 and the loss notification, with no death-state transition (High for representable finite products).
+- **Add**: the amount is added to the current health, and the result is capped at the maximum. There is no floor. A negative amount can take health below 0, and no death check runs. The health-gain notification always runs.
+- **Deduct**: if the amount is less than the current health, the amount is subtracted, and the health-loss notification always runs. A negative amount is subtracted too, so health rises, with no cap. If the amount is equal to or greater than the current health, health becomes 0 and the death handler runs for the hero (see Health and death, including its gate and skip rule).
+- **Notifications**: each health-loss, health-gain and magic-refresh notification restarts the health display timer (SPEC-0023). The notifications do not move the hero, change its state or respawn it.
+- **Speed, position and camera**: none of the hit-point methods moves the hero, teleports it, or changes its speed or the camera (High for these methods).
+
+**Revive by script and by item 50.** A script can revive the non-controlled hero, which is the partner of the active hero. Item 50 (SPEC-0021) uses the same routine. The routine is gated on the swap mode word equalling 2 (free both ways; SPEC-0053) and runs only when the partner is in state 16 (dead). The partner then goes to the idle state (state 1), and its health is raised by maximum minus current, so it ends at maximum. A switch request to the partner is then made (SPEC-0053, section 3.2). The call returns 1 when the revive and the switch request both succeed. If the switch request is refused, the partner is already revived and the call returns 0. When the gate fails, the call returns 0 and changes nothing. The revived hero is not necessarily the hero named in the call. Medium-High; the target of the death test is open (Open questions). Callers and respawn are in SPEC-0055.
+
+### Contact routines and cues
+
+Confidence: High for the gates, the break call, cue ids and static attack-object-to-handler map. Encounter-specific reachability remains unestablished.
+
+These routines act on world breakables (SPEC-0048), the type-29 second-list entries (state +0x40, position +0x30, volume record +0x60, script index +0x58, material word +0x5C, element byte +0x5E). They never act on characters: the hero's swing on characters, the Mote power-attack object hits on characters and Roberta's shots on characters contain none of them. There are twelve: nine attack-family handlers, called from the family sweeps and from the walks over the hero's list at +0x174 (Attack sweeps); the hero melee route, which runs right after the hero's character scan (Hit detection, step 6); Roberta's shot route (Roberta shot projectile); and one boss route (SPEC-0012). When an attack volume overlaps a breakable that is intact (state 1 or 3) and has a volume record, the contact routine runs:
+
+1. Script hook: if a level script registered a breakable callback for the entry's script index (+0x58; RegisterScriptBreakable, SPEC-0030), that callback is started (if it is not already running), two argument words are stored ((1, 0) for the family and melee routes, (0, 1) for Roberta's shot), and nothing else happens.
+2. Element gate: let E_t be the entry's element byte (+0x5E) and E_a the attacker's Mote kind. The contact passes when E_t is 0 or E_t = E_a. Five family handlers use a fixed E_a (2, 3, 4, 5 or 6); three take E_a from their owner (the owner's +0x100 field, its +0x148 field or its first word), and the first two of these also pass when E_a is 7 (Nova); one family handler and the boss route have no gate. The hero melee route uses the Mote kind of the hero's word-2 item and also passes when E_t is 7; Roberta's shot uses its stored element kind and also passes when E_t is 7. On a mismatch the family handlers and the shot do nothing; the hero melee route makes Tor recoil with material 4 (attack sub-state 13; SPEC-0048, Element recoil), with no break and no break cue, and Roberta has no reaction.
+3. Break: the break effect of SPEC-0048 runs with a piece push of 0.25 along unit(entry position - attacker reference point). It breaks only state-1 entries; a state-3 entry stays intact.
+4. Sound: one positioned cue on the main sound slot at the entry position (+0x30), chosen by the entry's material word (+0x5C): 2 gives cue 143, 3 gives cue 145, 4 gives cue 146, and any other value gives cue 144 (SPEC-0031). Roberta's shot route always plays cue 144. The cue plays even when the entry did not break (state 3).
+
+No damage, no status and no effect id is involved: 143 to 146 are sound cue ids, not effect ids. On disc the material word is 0 in 1,557 entries, 1 in 294, 3 in 19, 4 in 203 and 2 in none (2,073 entries in 79 packs), so cue 143 is never chosen by disc data.
+
+The per-tick cue chooser is the hero footstep (SPEC-0031).
+Attack-object mapping (High for the static paths): sweep A uses the owner +0x100 handler for Roberta Lava (161), Tor Water (163), Tor Nova (172), and the three Tor Rock (165) sub-shots; the same family-A update also serves singleton item effect 57, so its helper alone does not identify a Mote. Sweep B uses the owner +0x148 handler for Tor Lava (161) and Roberta Supernova (173). Sweep C uses the owner-first-word handler for Roberta's Shadow and Sun beams (169 and 171). Sweeps D, E and F use fixed element handlers: kind 6 for Tor Shadow (169), kind 3 for Tor Sun (171), and kind 2 for Roberta's three Rock (165) skipping shots. The three additional hero-list walks use kind 4 for Roberta Water (162), no element filter for Roberta Supernova (173), and kind 5 for Tor Wind (167). These mappings identify static dispatch; they do not establish that a particular encounter activates an eligible object.
+
+Synthetic pairing check: an element-4 breakable overlapping Roberta Water (162) passes its kind-4 handler; element 5 is skipped. An element-7 breakable overlapping Roberta Supernova (173)'s extra walk passes its unfiltered handler.
+
+### Attack family driver
+
+Confidence: High for the build, the counts, the gate and the inputs; Medium for the role of each object.
+
+The objects the driver serves are the hero's Mote power-attack and charm object set (Charm attack hits; SPEC-0034 Behavior 13).
+
+- Build: a start-up initialiser builds the set: 22 top-level objects, the Mote power-attack objects and the weapon and charm effect objects. It also writes three anchor offsets: (0, 2.0, 0, 0) for two objects and (0, 1.5, 0, 0) for a third. The set is not built on first use. Teardown releases 30 effect objects; it is not reached in play.
+- Driver: it runs once per main-loop pass, for the active hero only, and only while the game-state code is below 9 (so it is frozen in pause). It also needs the hero to have a model, a skeleton and a non-zero model-state word (+0xFA0). The hero index word +0x14C picks the helper set: clear (Tor) runs Tor's helpers and Tor's attack step; set (Roberta) runs Roberta's helpers, her attack step and a follow step. A per-owner slot manager and a six-slot update follow, and then the group update.
+- Group update: all 22 objects are updated each pass. The first input is the anchor, the hero position; the three objects with an anchor offset use the hero position plus that offset. The second input is the hero's per-tick displacement x 60 (the ticks-per-second word 0x368FA0): a velocity in units per second, not a scaled offset. Five objects and three others are updated only while active; one starts a positional cue when it has a live spawner.
+- Each object's tick runs its character walk and then its breakable walk (Charm attack hits, Attack sweeps). The spawn dispatch picks the object by hero row and Mote id (Attack-id spawn dispatch).
+**Roberta full-charge hold effect (High for the gate and effect request; Medium-High for timing).** On each active-hero driver pass, when Roberta remains in attack sub-state 1 and the held counter F is at least 80, a separate accumulator increases by the tick length. At 60 ticks per second, after 49 qualifying passes the accumulator reaches or exceeds 0.8 s and the driver starts effect 239 at the hero frame supplied to the driver; it updates the effect at that frame while the gate remains true. If F is below 80 or the hero leaves sub-state 1, the effect is stopped and the accumulator is reset. This is distinct from the charged loop sound and from the leap effect 241.
+
+Test vector (synthetic, 60 Hz): while the hero is Roberta in sub-state 1, F = 79 resets the accumulator and shows no hold effect. With F = 80 held through the driver, 48 passes leave the single-precision accumulator below 0.8 s; pass 49 starts effect 239. The first pass after leaving sub-state 1 stops it and resets the accumulator.
+
+### Timed attack-family groups
+
+Confidence: High for the owner, the add, the step count, the interval and the step rule; Medium for the placement of the group effect and the entries; Medium-High for the time it takes in ticks.
+
+- Owner. There is one group for the whole game: a single global object, not the hero and not one per hero. The list count is kept at +0x610 of that object. Only the Faerie Sisters' mote eater fills and starts it (SPEC-0029 Behavior 9, kind 14).
+- Add. An id is added only when the list holds fewer than eight entries and the id is from 160 to 173; any other id is refused. Each added entry gets a timer of 0.5 s (30 ticks; 0x2DCAD8).
+- Start. Starting plays the group effect 464 at a point 4.5 units above the hero, framed on the hero's forward direction. The group then runs T = trunc(30.0 x R) + 1 group steps, where 30.0 is the word at 0x2DCAC8 and R is the tick rate (60), so T = 1801. These are group steps, not ticks. The spawn interval is I = trunc(T / n) with a minimum of 1, where n is the list count (8 entries: 225; 7 entries: 257).
+- Step. Each group step lowers the remaining count by 1. When it reaches 0 or below, the group ends and resets (every id back to -1, counters to 0). Otherwise, when the remaining count mod I is 0 and fewer than eight entries have been spawned, the next entry spawns: its Mote's paired effect (below) plays 4.0 units above the hero (the spread word at 0x2DCAD4 is 0.0), and the entry drains its Mote's charge (SPEC-0029 Behavior 9, kind 14, which holds the drain rule).
+- Who steps it. The group is not stepped by the hero tick. Each living Faerie Sister's thread steps it once per tick. On the terminal state-9 death-animation pass, the sister's handler changes its base state to 16 and the post-handler group step still runs once; on later passes its AI no longer runs and it contributes no more steps (SPEC-0029 Behavior 9; SPEC-0011). With three living sisters the 1801 group steps take about 600 ticks (10 s); each sister contributes one final step on its death pass (High).
+- Effects: the per-Mote effect table (fourteen s32 entries at 0x2DCAE8, indexed by Mote id minus 160) gives each Mote id its effect. The ids pair up, two Mote ids per effect (High):
+
+| Mote ids | Effect id |
+| --- | --- |
+| 160, 161 | 6003 |
+| 162, 163 | 6000 |
+| 164, 165 | 6004 |
+| 166, 167 | 6001 |
+| 168, 169 | 6005 |
+| 170, 171 | 6002 |
+| 172, 173 | none (-1) |
+
+- The Mote-eater drain (SPEC-0029 Behavior 9, enemy-pool kind 14; SPEC-0011) uses this table for its per-Mote effects, one effect above the hero per spawned entry; every other reader of the table gets the same pairing.
+
+### Ten-slot timed lists
+
+Confidence: High for the layout; Medium for the purpose.
+
+Two global lists of ten slots each (slot stride 8 bytes) hold an attack-family state. Each entry has a lifetime of 1 s (the two lifetime words are at 0x2DCB2C and 0x2DCB38), counted down every tick. The list with the 1 s lifetime at 0x2DCB2C is the hit list of the family C beams (Roberta 169 and 171): a target hit by the beam stays listed for 1 s and can then be hit again (High; Charm attack hits). A separate pair of per-object lists belongs to attack object types 167 and 173; each has ten target-id slots and a 60-tick lifetime counter per occupied entry. Its update decrements those counters and clears expired ids; the object itself has a 10-second active lifetime. The callback lookup checks only the id, with expiry performed by the separate update (High for mechanics; Medium-High for mapping object types to attack names).
+
+### Attack homing (none)
+
+Confidence: High. The hero states have no attack homing. The write of air phase 4 with clip 0x4C (76) is the walk-off fall (SPEC-0033 Behavior 9A); the seven-sub-mode machine of state 30 is the ledge hang (SPEC-0033 Behavior 51). The three-state homing approach of SPEC-0033 Behavior 21 has no known hero path.
+
+### Attack sweeps (breakable walks)
+
+Confidence: High for the gate and the kinds; Medium-High for the walk sources and test pairs; High for the direct caller mappings established below. The Mote caller map for sweep A is High. The three additional walks are directly called from three separate attack-driver effect subsystems, with their static call gates established below; their specific attack/Mote identities and encounter reachability remain open.
+
+Six sweeps, labelled A to F, and three more walks of the same shape test attack volumes against world breakables (SPEC-0048). For Mote attack objects that have both walks, the character walk precedes the breakable walk (Charm attack hits). Sweep A is called by the common family-A update after its active check and uses that object's position for the world-grid query. The hero object driver maps this update to Roberta Lava (161), Tor Water (163), and Tor Nova (172), one object each, plus Tor Rock (165)'s three sub-shot objects with filter kind 2. Tor Lava (161) is family B. The common family-A update is also called by the singleton item-57 effect tick, so the update function alone does not identify a Mote. Sweep B is called by the shared family-B orbit update used by Tor's Lava (161) and Roberta's Supernova (173); it walks the hero-owned world-breakable list at +0x174. Sweep C is called by the shared family-C beam update used by Roberta's Mote attacks 169 and 171; it queries the world grid at the beam object's current position. Sweep D runs in Tor Mote 169's active timed-object update, sweep E in Tor Mote 171's activation path, and sweep F in updates of Roberta Mote 165's three full-release skipping rocks. Sweeps D to F query the world-grid cell list at their respective attack objects' stored points. The three additional hero-list walks are invoked by three other effect subsystems called from the same hero attack-object driver: one runs only while its remaining tick count stays positive after decrement; the other two run only when their respective effect block is active and paired progress counters have not yet met. These are direct static call gates, not proof that an authored encounter reaches the walks. Their spawn dispatch binds the first walk to Roberta Mote 162 (request 0xA2), the second to Roberta Supernova 173 (request 0xAD), and the third to Tor Mote 167 (request 0xA7). Each request is routed through the hero attack-state path and is subject to the shared effect-set busy gate. Static code therefore establishes attack-path reachability for these ids, but it does not establish which authored encounters include an eligible active hero, equipment, and attack opportunity.
+
+1. Lists: sweeps A and C to F query the world-grid cell list at their respective attack-object points (SPEC-0028); sweep B and the three extra walks use the hero's list at +0x174, which holds world breakables. Before walking, the break source words (world +0x5780, +0x5850 and +0x5854) are copied for the pieces (SPEC-0048).
+2. Gate: an entry takes part only when its state word (+0x40) is 1 (intact) or 3 (intact, not breakable) and it has a volume record (+0x60). Any other state skips it. This is the breakable's own state, not a state of the attacker.
+3. Volume kind (the kind byte of the volume record): 1 sphere (centre +0x30, radius +0x3C); 2 never hit; 3 finite cylinder (radius +0x3C, height +0x24, axis +0x40, base +0x30, centre = base + half the height along the axis); 4 and 7 rectangle, with a static test when the float at +0x2C is 0 or below and a moving test when it is above 0. Any other kind runs no test.
+4. Test pairs: sphere families use sphere-sphere, sphere-cylinder and sphere-rectangle; cylinder families use cylinder-sphere, cylinder-cylinder and cylinder-rectangle; the moving rectangle test uses a sphere push.
+5. On a pass the contact routine runs (Contact routines and cues).
+
+Test vectors (synthetic): an entry with state 2 is skipped by every sweep. An entry with state 3 and one record of kind 2 is never hit. A kind-7 record with +0x2C at 0.0 gets the static test; the same record with +0x2C at 0.4 gets the moving test. A state-3 entry with element 0 overlapped by the Nova object: cue 144 (material 0), no break; the same entry in state 1 breaks and plays cue 144. An entry with element 4 overlapped by the Sun object: nothing.
+
+### Attack-id spawn dispatch (ids 160 to 173)
+
+Confidence: Medium-High for the case lists; Medium for the spawner details.
+
+- Input: a Mote id and the hero index word (+0x14C; clear is Tor, set is Roberta).
+- The dispatch places the Mote power-attack object for that id (Charm attack hits). An id outside 160 to 173 spawns nothing.
+- The spawner is chosen from one of two switch tables, one per hero; both have fourteen cases. Tor's table spawns an object for every id, but for 160, 162, 164, 166, 168 and 170 it is an effect with no hits (Charm attack hits, Object pairing). Roberta's spawns one only for ids 161, 162, 164, 165, 166, 169, 171 and 173; her other six ids spawn nothing.
+- The spawn point is along the hero's facing at the weapon reach (Charm attack hits).
+
+Test vectors (synthetic): Mote 0xA0 (160) for Tor spawns its object; for Roberta it spawns nothing. Mote 0xA9 (169) spawns an object for both heroes. Id 0xAE (174) spawns nothing.
+
+### Attack-family effect tables
+
+Confidence: High for the count, the layout and the id -1 values; Medium-High for the readers' callers.
+
+The boot tables indexed by Mote id are effect-definition id tables (read through the effect definition lookup of SPEC-0034), not animation tables. The attack animation choice is a fixed rule with no table (Attack animation choice).
+
+- Ten tables of fourteen entries at 0x315280 + 0x38 x k (k = 0 to 9), indexed by Mote id minus 160. The tables at 0x3152B8 and 0x3152F0 are a Tor and Roberta pair with equal contents, and so are 0x315328 and 0x315360. The readers of 0x3152B8, 0x3152F0 and 0x315398 apply no range check to the index.
+- Six tables of eight entries at 0x3154C8, 0x3154E8, 0x315508 (one group) and 0x315528, 0x315548, 0x315568 (a second group) serve id -1. They are indexed by a slot (0 to 7) and a variant (0, 1 or 2, choosing the table in the group); any other variant gives effect 0x192 or 0x193.
+- Id -1 in the reader of the 0x315328 and 0x315360 pair gives effect 243 (Tor) or 240 (Roberta). Roberta's id -1 in the reader of the 0x3152B8 and 0x3152F0 pair gives effect 245.
+- The ids themselves are read from the disc; they are not listed here.
+
+### Timed glow (Roberta's leap)
+
+Confidence: High for the source, the owner, the window bounds and their tick count, and the reset; Medium for the effect id. The bounds 0.5 s and 0.8 s are program constants with no data word.
+
+The glow is a timed display of effect id 0xF1 (241) during Roberta's leap. It is driven by Roberta's attack sub-state word (+0xF90), not by the held-tick counter of Charge completion. "Event 8" is attack sub-state 8, the leap (Attack router). Tor has no such glow: only Roberta's helper set runs it.
+
+Owner: the Mote power-attack driver object (Attack family driver), which holds the accumulator and one effect slot. It runs once per tick with the active hero, so there is one glow.
+
+1. Each tick in which Roberta's sub-state word is 8 adds one tick length dt = 0.016666668 (f32 of 1/60 s) to the accumulator, by a single-precision add that truncates toward zero (SPEC-0008).
+2. Then, when the effect bank look-up succeeds: while the accumulator is at least 0.5 and below 0.8f, effect 0xF1 is started at the hero position + (0, 0.5, 0), oriented by the hero's flat facing (forward, side and up axes), when it is not already live; while it is live it is moved to that point each tick. Because the truncating sum stays just below n/60, this is the 31st tick through the 48th (18 ticks): after 30 ticks the accumulator is 0.49999976 (not shown), and after 48 it is 0.79999948, below 0.8f, so still shown (High).
+3. At 0.8f or more (from the 49th tick), the effect is stopped.
+4. On any tick with another sub-state word (any state), the effect is stopped and the accumulator is set to zero.
+5. The glow is a separate timer: it is not the held-tick counter and not the entry timer of Timed attack-family groups.
+
+Test vectors (synthetic): thirty ticks in sub-state 8 (accumulator 0.49999976): effect 0xF1 is not shown. Thirty-one ticks: shown. Forty-eight ticks (0.79999948): still shown. Forty-nine ticks: stopped. Forty ticks in sub-state 8 then one tick in sub-state 13: the effect is stopped and the accumulator is zero; a new leap shows the glow again from its 31st tick.
+
+### Showcase pose task (pointer to SPEC-0021)
+
+Correction (High): this task is the full item-showcase presentation, not an attack or charge driver. Its selected codes 163 to 166 are showcase pose animations; its nonzero request cue enters the showcase text/name path. The full-showcase pose mapping, equipment flags, stingers, text display, minimum wait and cleanup are specified under SPEC-0021, “Item showcase.” There is no separate combat behavior here. Test vector: a full showcase for Tor's sword selects pose 164 and waits for at least 2.0 seconds and for the text cue to finish before cleanup (SPEC-0021).
+### Random draws (shared helpers)
+
+Confidence: Medium-High for the ranges and the rounding; High for the rock speed bounds. Every draw below comes from the one shared gameplay generator, a Mersenne Twister (standard 624-entry generator) whose state object is at data address 0x39BE50 and which is seeded on its first draw from the console's real-time clock (SPEC-0014, Cross-boss facts). The clean side need not match its sequence.
+
+- Uniform real between two values a and b: a + (b − a) × U, where U is uniform in [0, 1). The two values may come in either order. Used for the rock spoke blend fractions, the rock bounce turn, the rock speed, and the random offset of a timer in SPEC-0033.
+- Uniform whole number between two inclusive limits lo and hi: lo plus a uniform whole number from 0 to hi − lo. Used for the rock contact limit (−2 to +2).
+- Uniform whole number below n: a value from 0 to n − 1, and 0 when n is 0, with no draw from the generator (the rock gravity step).
+- The helpers receive an extra argument, the address 0x39BE50 in the run-time data area. It is the generator's state object: each helper passes it unchanged to the core draw, which reads and updates that state. It is not a table.
+
+### Rock skipping shot (Roberta Rock 165 full release)
+
+Confidence: Medium-High for the setup, the flight, the bounce and the end; High for the random turn and the flat renormalisation; Medium-Low for the meaning of each effect mode number.
+
+Use (High): Roberta's full release with Rock (165) in word 2 spawns three of these shots through the three-spoke spawner (below). They are the Rock/Leaf sphere shots of Charm attack hits: the hit sphere has the radius of the rock's effect scale (1.0 when there is no effect) and its centre is the rock position. The three rocks are three objects in one group, ticked together once per tick from Roberta's helper set.
+
+Fields per rock: position P (4 floats), previous position Q, flat direction d (unit, height 0), speed s (units per tick), vertical speed v, gravity g, contact counter k, contact limit K, flat distance total D, owner id, and the rock's effect (its scale is the hit radius). The rock's constructor sets D = 0 and v = 1.0. The release at the end sets k = 0, D = 0 and clears the effect; it does not reset v.
+
+Setup (given the speed s, a start point and a flat direction d):
+1. Record the owner id (the active hero's id). Set k = 0.
+2. g = −0.1 − r, with r a random whole number below trunc(0.1) = 0; r is always 0 and no draw is used, so g = −0.1.
+3. K = 8 + a uniform whole number from −2 to +2 (one draw), so K is 6 to 10.
+4. Store d, s and the start point as P and Q.
+5. Place the rock's two effect slots at P (the first with a start callback that records the rock's effect), and start effect mode 5 at P.
+
+Tick (only while the rock's effect is live):
+1. P = P + s × d, then P.y = P.y + v (the old v), then v = v + g.
+2. Ground contact: when the new v is below 0, the ground height h under P is found with a probe 8.0 units above P (SPEC-0018). There is contact when P.y − (effect scale) ≤ h.
+3. On contact the bounce (below) runs. If it ends the rock, the tick stops there.
+4. Otherwise D = D + |flat(P − Q)| (the height part removed). When D is above 250.0 the rock ends (End). Else Q = P. Effect mode 5 is updated at P.
+5. Both effect slots are moved to P. While the rock is alive, its character walk and its breakable walk run (Charm attack hits; Attack sweeps).
+
+Bounce:
+1. k = k + 1. The rock ends (End) when k is not below K, or when (effect scale − 0.12) is below 0.25.
+2. Otherwise the effect scale becomes (effect scale − 0.12) on x, y and z (w = 1.0), so the rock shrinks and its hit sphere with it.
+3. Turn: t is a uniform real from −0.1 to +0.1 (one draw from the shared random stream). n = unit(d × U), where U is the run-time up vector at 0x3932E0, (0, 1, 0, 0); for d = (0, 0, 1), n = (−1, 0, 0). The new direction is d' = (1 − t) × d + t × n. Its height part is removed and it is renormalised to unit length, so the rock keeps its speed and stays flat. One bounce turns the rock by at most about 6.3 degrees toward n (t = +0.1) or 5.2 degrees away from n (t = −0.1).
+4. v = 1.0. P.y is not snapped to the ground.
+5. Effect mode 3 plays at P.
+
+End: when a sub-object look-up succeeds, effect 0x3AA starts at P. Effect mode 4 plays at P, and the rock is released.
+
+Test vectors (synthetic): with an effect scale of 1.0 the scale after each bounce is 0.87999999, 0.75999999, 0.63999999, 0.51999998, 0.39999998 and 0.27999997 (f32, truncating subtracts); the seventh contact ends the rock (0.28 − 0.12 is below 0.25). With K = 6 the sixth contact ends it instead, so a rock bounces 5 times (K = 6, chance 1/5) or 6 times (K = 7 to 10). A rock launched at height 1.0 above flat ground (h = 0) with v = 1.0 and scale 1.0 first touches the ground on its 21st tick (P.y = 0.99999470, v = −1.0999999). Turn t = +0.2 or +0.25 (spawner) gives 14.04 or 18.43 degrees; t = +0.1 gives 6.34 degrees.
+
+### Roberta shot projectile
+
+Confidence: High for the launch gate, the release frames, the launch direction, the homing steer, the rows, the block, bounce and deflect rules, the range rule, the ground-test threshold and ordering, the ground-surface cue lookup, the power clamp, the per-hit damage rule and the payment; Medium for the first tick of a release frame and the bounce frame quirk. Open points are under Open questions.
+
+A Roberta shot is one object in one of the hero's six shot slots (Hero shot slots, which gives the slot layout).
+
+Launch gate (High). Each tick in state 13, Roberta's arm routine calls the launcher. It fires when (a) the shots of this sub-state have not been fired yet, (b) the hero has at least 1 MP, and (c) the current animation frame carries event bit 0x20 (the release frame). Word 2 may be empty. After the burst the fired flag is set. Roberta's charge routine clears the flag at every sub-state change (Combo windows), so each sub-state fires at most once, and a full-release sub-state does not fire again while the hero stays in it. The launcher checks these gates before building any shot. Each shot build also requires a free shot slot; charge and MP payment occur only inside a successful slot build. Thus a missing event, insufficient MP, a prior launch in the sub-state, or no free slot prevents that attempt from charging the hero. Test vectors (synthetic): a full-release sub-state with a free slot and enough MP but no release event creates no shot and spends no MP or Mote charge; with the event present but all six slots occupied it also creates no shot and spends nothing; with the event present, enough MP and a free slot, a volley shot is built and the existing launch-payment rule applies even if that shot later misses.
+
+Release frames (High for the bits; Medium for the first tick). The release frame is the frame with event bit 0x20 of the clip that the arm table requests (main family, 4 ticks per frame at play rate 1; frame f covers ticks 4f to 4f + 3 after the clip start):
+- Sub-state 2, action 0x0C (clip 0, 10 frames): frame 3 (about tick 12). Sub-state 3, 0x0D (clip 1, 15 frames): frame 4. Sub-state 4, 0x0E (clip 2, 17 frames): frame 7. Sub-state 10, 0x0F (clip 3, 6 frames): frame 2. Sub-state 11, 0x13 (clip 7, 6 frames): frame 3.
+- Sub-states 5, 6, 7, 8 and 12 request clips with no 0x20 bit, so they never launch (5 and 12 are melee windows only). Their rows in table A are never used.
+- Full release (sub-state 9), by the Roberta ids of Attack animation choice: 161 and 164: clip 12, frame 6; 167 and 173: clip 13, frame 8; 168, 170 and 172: clip 11, frame 4; every other id and no Mote: clip 10, frame 5. The group 162, 169 and 171 plays clip 20 (frame 0) in sub-state 14 with the fired flag already set, so it fires no volley.
+
+Launch class. The hero's sub-state word (Charge completion) gives the class: 0 for sub-states 5, 6, 7 and 10; 1 for 2, 3, 8, 11 and 12; 2 for 4; 3 for 9 and 14 (full release); 4 for every other value. Classes 0 to 2 are quick shots and use table A. Class 3 is a full release and uses table B, keyed by the attack id. The launch class is also the level of the Magic table: class 0 is level 0, class 1 and the default row (class 4) are level 1, class 2 is level 2, and a full release (with a listed Mote, an unlisted Mote or no Mote) is level 3.
+
+Table A, quick shots. Each launch makes one shot. No quick row carries a reaction (status request -1).
+
+| Class | Sub-state values | Speed (units per second) | Radius (units) | Life (ticks) | Homing mode |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 5, 6, 7 | 60 | 1.0 | 180 | 0 |
+| 0 | 10 | 30 | 1.0 | 120 | 1 |
+| 1 | 2, 3, 8, 11, 12 | 60 | 1.0 | 180 | 0 |
+| 2 | 4 | 90 | 1.0 | 180 | 0 |
+| 4 (default row) | all other values | 60 | 3.0 | 120 | 0 (straight) |
+
+The default row's homing test can be true only at sub-state 10, which has its own row, so the default row always flies straight (High).
+
+Table B, full release. Keyed by the attack id, which is the Mote in slot 2.
+
+| Attack id (Mote) | Speed (units per second) | Radius (units) | Life (ticks) | Homing mode | Shots | Reaction field |
+| --- | --- | --- | --- | --- | --- | --- |
+| 160 (Fire) | 75 | 1.0 | 180 | 0 | 1 | 7 |
+| 161 (Lava) | 75 | 1.0 | 180 | 0 | 1 | none |
+| 163 (Water) | 20 | 1.0 | 480 | 1 | 1 | 0 |
+| 167 (Wind) | 20 | 1.0 | 180 | 2 | 2 | 3 |
+| 168 (Smoke) | 20 | 1.0 | 180 | 3 | 3 | 1 |
+| 170 (Light) | 20 | 1.0 | 180 | 4 | 3 | 6 |
+| 172 (Nova) | 20 | 1.0 | 180 | 5 | 6 | none |
+| Other ids, not 162, 169 or 171 (the default row) | 60 | 3.0 | 120 | 0 | 1 | none |
+| No Mote in word 2 (the class-2 row) | 90 | 1.0 | 180 | 0 | 1 | none |
+
+The speed, radius, life, homing and reaction values are the shot rows of Where it lives (0x2DD6D0 to 0x2DD7A8). Life is given in ticks here, and the tick is 1/60 s (SPEC-0007). A full release with no Mote falls back to the class-2 row and still counts as a full-release shot (the full-release flag comes from the sub-state, 9 or 14): its cost, 10 MP (word 0x2DD484), is paid at launch, it uses no charge, and T = 1.0.
+
+Launch, per shot (High; repeated for each shot of the burst):
+1. Target, by the homing mode m of the row:
+   - m = 0 or 1: the hero's current auto-target (the first entry of the hero's 15-entry auto-target list) when its valid flag is set; else none.
+   - m = 2 to 5: scan the global character list in its stored order. Store the first ten characters whose actor eligibility method (+0xCC) passes, whose horizontal distance is less than 60 units, and whose aim point is visible along three parallel rays from the hero position + (0, 1.5, 0) (the centre ray and two rays offset 1.0 to each side). Once ten are stored, later qualifying characters do not replace them. Choose uniformly from the stored entries; return none when no character qualifies. For region characters, the eligibility method is the generic hittable predicate in Hit detection. This finder does not call the active-timed-record test used by projectile collision and does not require a positive-length hurt capsule, so a selected target can fail the separate collision prerequisite. The mode number 2 to 5 selects only this finder; modes 2, 3, 4 and 5 behave the same.
+2. Aim point: the target's aim point when a target was found; else, when the hero is in right-stick aim mode, the stored right-stick aim point (aim mode with m = 0 always uses it and drops the target); else hero position + 20 × facing + (0, 2, 0). A one-shot script override, when set, replaces the aim point with the position of a world locator (Where it lives, shot aim override).
+3. Direction d = unit(aim point - body anchor). The shot starts at the body anchor.
+4. Modes 2 to 5 only (fan): r1 = U(-1, 1) and s = unit(d × up), d1 = r1 s + (1 - |r1|) d; r2 = U(-1, 1), d2 = r2 up + (1 - |r2|) d1. d2 is not renormalised (its length is 0.6 to 1.0), so a fanned shot that is not steered flies slower than its row speed.
+5. Slot frame: side +0x00 = unit(d × up), up +0x10 = unit(side × d), direction +0x20 = d (w = 0), position +0x30 = the anchor (w = 1). Up is the constant up vector (0, 1, 0, 0).
+
+Launch test vectors (hero at the origin facing +Z, anchor (0, 1.5, 0.5)):
+- Mode 0, no target: aim point (0, 2, 20), d = (0, 0.02563, 0.99967).
+- Mode 0, auto-target aim point (10, 1.5, 0.5): d = (1, 0, 0).
+- Mode 2, no target, r1 = r2 = 0.5: d = (-0.25, 0.50641, 0.24992), length 0.6176. r1 = r2 = -0.5: (0.25, -0.49359, 0.24992). r1 = r2 = 0: unchanged.
+
+Status request (High for the words; Medium-High for the hit side). A full-release shot record carries a status request: (reaction field, D(Roberta, id), A, T), with D, A and T from the Mote status words (Layout). The duration is read for Motes 160, 163, 167, 168 and 170, and is -1 for every other id. Amount and period are read for Mote 160 only, and are -1 otherwise. A shot hit sends the stored request to the target's status-apply method (Status apply), and the shot ends. For a full-release hit with a nonempty reaction field, target damage runs before this request. The shared enemy status path ignores application when the target is already dead or dying, so a lethal hit suppresses this later request for that path (SPEC-0029); this does not establish the same behavior for other target classes or boss-specific hit paths.
+
+Per tick, while the shot is alive:
+1. Its life counter drops by 1. When the counter reaches 0 the shot expires.
+2. Homing runs (below); then the position moves by d x speed x dt, with dt = 1/60 s.
+
+Arming counter (High): slot +0x7C, signed 32-bit; launch initializes it to 0. A bounce or deflect sets it to 15 ticks. On each live shot update, a positive counter is decremented before movement and character collision; guard handling and homing run only if it is 0 after that decrement. Thus a counter of 1 becomes 0 and permits both on that update, while 2 becomes 1 and still suppresses them. Test vector: counter 1 at update start allows homing and guard handling after the decrement; counter 2 does not.
+
+Range. With no hit, a shot covers speed x life / 60 units: 180 units for a table A shot at 60 units per second with 180 ticks, and 160 units for Water (id 163) at full release.
+
+Homing (High). Mode 0 never steers. In modes 1 to 5, each tick, when the shot's target (chosen at launch) exists, is alive, and the arming counter is 0: d = unit(0.75 d + 0.25 unit(target aim point - position)), the slot frame is rebuilt from the new d, and then the shot moves. Otherwise the shot moves along the stored d. All five modes steer the same way; modes 2 to 5 differ from mode 1 only in the target finder of the launch.
+
+Homing test vector: shot at the origin, d = (1, 0, 0), speed 60, target aim point (0, 0, 10). After tick 1: d = (0.948683, 0, 0.316228) and position (0.948683, 0, 0.316228). Tick 2: d = (0.816441, 0, 0.57743). Tick 3: d = (0.639741, 0, 0.76859). With the arming counter at 5: no steer, a straight move.
+
+Charge power (Medium-High). The launch takes the held power P = clamp(F / 120, 0.1, 1.0), where F is the held tick count, and stores it in the shot. The clamped value is copied into the shot power field, but no reader in the shot motion, life, hit or damage path uses it. Therefore P does not change speed, life, radius, shot count or damage; it affects only the stored field (High; Stored charge power and Roberta shot: stored power reader).
+
+Damage scale (High). The launch first writes max(20, 40P) to the shot's scale field, and then the same routine overwrites that field with the damage scale S. The value that remains is S, so max(20, 40P) never takes effect. S = A x D x B x G x E, multiplied in that order with the platform arithmetic of Damage, where:
+- A is the stat A of the hero's weapon-family entry (SPEC-0021), 0 with no weapon;
+- D is Roberta's step factor for the sub-state at launch (Damage: 2.0 at 4; 0.5 at 5 and 12; 1.5 at 9; 0.33 at 10; 1.0 otherwise);
+- B = 1 + F x 0.01 of the Mote in word 2, using that Mote's stat F (Mote elements and type match); B = 1 with no Mote;
+- G is the hero's status scale (the hero class method at offset 0x13C; curse 0.75, strength 1.5);
+- E = 1.25 when the active petpet's kind is 0 or 7, otherwise 1.0.
+The per-shot scale T is 1.0 for a quick shot. For a full-release shot, T is the attack power table value P(Roberta row, the Mote in word 2) (Layout).
+
+Element. At launch the shot stores the element kind of the Mote in word 2 (kind 1 to 7; 0 with no Mote), from Mote elements and type match. Weapons store nothing: only the Mote sets the element.
+
+Hit on characters (one per shot; Medium-High). For each entry in the global character list, collision proceeds when the actor eligibility method passes, or when the actor guards and the shot arming counter is 0. It then requires the target's animation object (actor +0x170) to have at least one skeleton bone record whose hurt-capsule length at +0x40 is positive. This early check scans the same bone records used by the later hit test; it is not a status-timer check. The collision next rejects a target that the invisible-kind predicate marks hidden (Hit detection, Hittable predicate, test 3), then tests each positive-length bone capsule using its length (+0x40) and radius (+0x44) against the shot sphere (centre slot +0x30, radius slot +0x48; Hit detection, hurt shapes; cylinder against sphere), stopping at the first hit. The random target finder does not use this positive-capsule prerequisite; its first-ten selection and list-order rule are stated in Launch, per shot.
+- Quick shot meets a guarding target (High). With the arming counter above 0 the shot passes through: no effect, no damage, no disarm. Otherwise, when the target's deflect flag (character +0xE5C) is 0, the shot **bounces**: d and the side axis are negated; r1 = U(0, 0.5) with a random sign (fair coin), d1 = r1 side + (1 - |r1|) d; r2 is drawn the same way, d2 = r2 up + (1 - |r2|) d1 (not renormalised, so the speed falls to 61 to 100 percent); the arming counter becomes 15, so for 15 ticks the shot ignores guards and does not steer. When the deflect flag is 1, the shot is **deflected**: d = unit(current hero's aim point - shot position), the arming counter becomes 15, and the shot turns hostile: once the counter is 0 it steers toward the current hero with the homing rule above, and it tests the hero instead of enemies. No damage is dealt to the guarding target either way.
+- Deflect flag: the Black Knight's and the Gelert Assassin's deflect (guard) stance routines set it (SPEC-0012, SPEC-0013), and only character creation clears it, so after one use of the stance it stays set for the rest of the fight (reproduce).
+- Hostile shot against the hero: the shot is tested against the hero's body cylinder (motion radius and length, axis up). A guarding hero bounces it again (it stays hostile). Otherwise the hero's take-hit receives trunc(S x C x T) (hero defence 0), with the shooter's id as the attacker and blocked flag 0; a shot with a reaction field also sends its status request; the shot is disarmed. Such a hit also pays the quick-shot cost below (quirk; reproduce).
+- Full-release shot meets a guarding target: no block. A target that is also hittable takes the damage below; otherwise the shot is disarmed with no damage.
+- Bounce frame quirk (Medium): after a bounce the stored side and up axes are rebuilt from the wrong operands (up equals side, or is zero when r = 0), so a second bounce uses a degenerate up axis. Reproduce it when exact paths matter.
+- Bounce test vectors: d = (1, 0, 0), side (0, 0, 1), up (0, 1, 0). r1 = r2 = +0.3: d = (-0.49, 0.3, -0.21), length 0.6117, arming counter 15. Both signs negative with 0.5: (-0.25, -0.5, 0.25). r = 0: (-1, 0, 0).
+- Otherwise: C = 1 + G x 0.01 when the target's type matches the stored element kind (Mote elements and type match), otherwise C = 1. G is the stat G of the Mote in word 2 at the moment of the hit, not at launch. Kind 0 never matches, and kind 7 matches every type.
+- Damage = truncate(max(0, S x C x T minus the target's defence d)), with no minimum. If S x C x T is above 0 and the result before the clamp is 0 or below, the absorb effect plays and the hit still counts. The take-hit runs when the damage is above 0 or the hit was absorbed.
+- The shot is then disarmed, so it hits once.
+- Quick-shot payment (High): when a quick shot hits a target that passes the hittable query, the MP cost (Magic, at the shot's launch class) and the word-2 Mote charge (exactly Q: 2 for a lesser Mote, 4 for a greater one, 0 with no Mote; Mote charge use by attacks) are paid at once, before the take-hit decision, whatever the damage (0 included). A no-Mote quick shot therefore pays 3, 5 or 10 MP per hit and no charge. A guarding target that is not hittable (bounce or deflect) and a miss pay nothing. A full-release shot pays nothing at a hit (its cost and charge were paid at release or by the first shot).
+- **Last-charge quick-shot hit (High):** the hit's damage and element-match bonus are calculated before its quick-shot MP and Mote-charge deductions. Thus, if that charge use removes the last charge and clears the Mote from the hero's equipment, it does not change the already-calculated damage on that hit. The shot keeps the element kind saved at launch, but a later hit computes the matching stat-G bonus from the then-current word-2 item; with the Mote cleared, that bonus is 0. Do not apply this ordering to full-release shots, which do not pay on hit.
+
+Ground test and ordering (High). On each live update the shot first applies its motion and then probes the current world at the shot x/z, with a probe ceiling of shot y + 3.0. The ground sampler chooses the highest accepted patch at or below that ceiling; if it samples candidates but accepts none, its fallback is the last rejected sample, which can lie above the ceiling (SPEC-0018, Ground probe). If no candidate is sampled, it returns the miss value −1.0e9 and no entry. The shot ends only when its centre y is strictly below the returned height; equality does not end it. This ground test runs before character collision and world contact. On this end path, a returned entry supplies its surface code for the ground-cue lookup; with no entry, no ground cue is selected. A ground-ended shot is disarmed and its cleanup and any resulting cue are processed before the tick continues to the next shot slot. The probe offset is a ceiling, not a fixed distance to the floor. Whether a last-rejected above-ceiling sample occurs during normal play remains open. Test vectors (synthetic): shot centre y = 4.0, sampled height 4.0 -> continue; y = 3.99, sampled height 4.0 -> end; no sampled candidate returns −1.0e9, so a shot at y = 0 continues.
+
+World contact (High for the order, class bits, disarm, and W-lane dataflow; Medium for the inside of each shape test and whether a live contact's final Boolean changes under a hypothetical XYZ-only calculation). Each tick after the move, the shot tests the world-grid cell at its x and z (SPEC-0028). The shot's shape is its sphere: centre slot +0x30, radius slot +0x48 (the row radius, 1.0 or 3.0). The point has W=1. A census of shipped world resources 532–1433 found that all 6,518 unique first-list kind-4/7 records carry at least one nonzero W among the vectors their box helpers consume. In the second list, 237,497 helper-eligible records were found; 237,454 carry a nonzero W among the three vectors read by the surface helper, while 43 have all three W lanes zero. The helper reductions use these raw four-lane record vectors; no homogeneous transform cancels or resets W before the projection. For a concrete kind-4 vector from resource 678, let the synthetic query point equal the record's stored point `P≈(-858.3405, 48.9700, 1051.1857, 1)`, and use its +0x40 vector `A≈(0.3542007, 0, 0.9351695, -679.012)`. The helper's four-lane dot is approximately `-0.000008`, while an XYZ-only dot is approximately `679.012`. This demonstrates a changed projected geometry value for a shipped record; it does not establish a changed final contact Boolean in a reachable encounter. Whether a live contact's final Boolean differs under an XYZ-only counterfactual remains unmeasured.
+- Collider shapes in the first list, by kind byte (+0x10): kind 1 is tested as a sphere (centre +0x30, radius +0x3C); kind 2 by the cone test; kind 3 as the finite cylinder of SPEC-0018 (radius +0x3C, length +0x24, axis +0x40, base +0x30); kinds 4 and 7 as a box, with a static box test swept along this tick's motion d x speed x dt when +0x2C is 0 or below, and the moving-box test otherwise. Other kinds are skipped.
+- Class bits (the collider's +0x12 word, SPEC-0018). A collider with its trigger bit set (class 3 for kinds 1, 2 and 3; class 8 for a static box; class 5 for a moving box) is a trigger: on contact it runs that collider's world trigger with Roberta as the entity (SPEC-0030) and counts as no contact, so the shot flies on with no cue. Otherwise a collider with class 0 (solid) set is tested and can make a contact. A collider with neither bit is ignored.
+- First collider list: the first solid contact disarms the shot (armed word 0), ends the walk of this list, and chooses a cue by the collider's surface byte (+0x11): 2 gives cue 8; 4, 8, 11, 16 and 18 give 7; 5 gives 15; 6 gives 14; 7 gives 13; 9 and 14 give 25; 12 and 13 give 20; 15 gives 19; 17 gives 26; 1, 3, 10 and any other value give 6. The cue is placed at the collider's +0x30.
+- Second list: the cell's surface records (the same records the camera eye pass walks; SPEC-0018), in groups, are tested next. Records whose byte +0x4C is 6 are skipped. Each other record is tested against a small sphere of radius 0.25 (a code constant) at the shot position, swept along this tick's motion d x speed x dt. A contact disarms the shot as well and chooses the cue by the record byte +0x4D instead: 1, 13, 14, 15 and 17 give cue 15; 2 gives 13; 3 and 4 give 8; 5 gives 10; 7 gives 12; 8 and 11 give 14; 9, 18 and 19 give 7; 10 gives 11; 0, 6, 12, 16 and any other value give 6. The last match wins.
+- The chosen cue plays once from the shooter's weapon bank (+0x19C).
+World contact test vectors (synthetic): a shot whose sphere touches a kind-3 collider with flags 0x0001 (class 0 only) and surface byte 2 is disarmed and plays cue 8. The same contact with flags 0x0008 (class 3 only) runs the collider's trigger, keeps the shot armed and plays no cue. A shot whose small sphere meets a surface record with byte +0x4C = 1 and byte +0x4D = 5 is disarmed and plays cue 10; with byte +0x4C = 6 nothing happens.
+
+
+Hit on world breakables (High). When the shot's shape meets a breakable, Roberta's shot route of Contact routines and cues runs: script hook (with the argument words (0, 1)), element gate (the entry's element byte is 0, equals the shot's element kind, or is 7), break with a 0.25 piece push, and always cue 144. The shot is disarmed at the shape hit either way (Medium-High).
+
+Spawn point. The shot starts at the hero body's anchor point (High; Launch, step 3).
+
+### Attack spawn (two routines, same shape)
+
+Confidence: Medium-High for the duration formula and the data words; Medium for the message fields; High for the two senders (the Fog cloud and the Supernova orbit).
+
+
+- Inputs: the attacker's aim point (its vector field at 0xA0), and the target object that the caller passes in. The target's aim point is taken from the target's class routine (the vector at +0x294 of its class table).
+- Distance d: the length of the vector from the attacker's aim point to the target's aim point.
+- The message is posted to an object found through a run-time lookup (the effect host), not to the target.
+- Duration: D = d ÷ k + c, with k = 2.0 and c = 10.0 for both routines (the words listed under Where it lives). D is converted to a whole number by truncation toward zero and stored as the pooled object's lifetime in ticks. At the start of an update, a negative counter releases the object; otherwise it steps and the counter drops by one. A nonnegative starting value D therefore yields D + 1 active updates at counter values D through 0 (High; SPEC-0029, Behavior 9).
+- Scale: the product of two run-time scale values (one from a scale look-up on the attacker, one from an item look-up), truncated to a whole number. The look-up arguments, 0xA6 in the first routine and 0xAD in the second, are the Mote ids 166 (Fog) and 173 (Supernova); they select the element and the attack power table record (Medium-High).
+- Use: the first routine is the hit of Roberta's Fog cloud. Each pulse of the cloud sends this message to every hittable target within 10 units (Charm attack hits, Roberta Fog 166). The second routine is the bolt of Roberta's Supernova (173) orbit, posted at most once per 31 ticks toward one random target within 45 units (Hit volume re-arm; High).
+- Effect message: 160 bytes, effect type 23 (0x17), sub-type 5 in the first routine and 7 in the second
+. It carries the id field at 0x14C of the object passed in, the attacker's aim point, the target's aim point, the whole-number duration and the scale. The effect resources are 0x1C2 and 0x3D6 for the first routine, and 0x459, 0x5E6 and 0x3D7 for the second (archive numbers, Medium-Low for which id plays where). The message is posted to the effect host.
+
+### Three-spoke spawner
+
+Confidence: High for the geometry, the count and the speed spread.
+
+Use (High): this is the spawn of Roberta's Rock (165) full release (Charm attack hits, Object pairing). It does nothing while any of its three rocks is still live.
+
+- It creates the three rocks of Rock skipping shot, objects 0x180 bytes apart, all from the same start point (the release point).
+- Rock 0 uses the given direction p unchanged (blend fraction 0, no draw).
+- Rock 1 uses a blend fraction f drawn uniformly from +0.2 to +0.25; rock 2 uses f drawn from −0.25 to −0.2. Each rock's direction is (1 − f) × p + f × n, with n = unit(p × U) as in the bounce; the result has its height part removed and is renormalised to unit length.
+- Each rock's speed is 0.6 + u units per tick, with u uniform from −0.3 to +0.3 (the words 0x2DCB88 and 0x2DCB8C; the lower bound is the negation of the spread), so 0.3 to 0.9 units per tick (18 to 54 units per second).
+- Draw order per rock: the blend fraction (rocks 1 and 2 only), then the speed, then the setup's contact limit.
+- Each rock then runs the setup with its speed, the start point and its direction.
+
+The two side rocks are not mirror images: rock 1 turns 14.0 to 18.4 degrees toward n and rock 2 turns 9.5 to 11.3 degrees away from n (the angles of 0.2/0.8 to 0.25/0.75, and of 0.2/1.2 to 0.25/1.25).
+
+### Aimed timed object (spawn and tick)
+
+Confidence: High for the control flow and the zero motion field on the Fog path; Medium-High for the ground-follow interpolation.
+
+Use (Medium-High): this object is the cloud effect of Roberta's Fog (166) full release. Each countdown pulse (step 3 of the tick) tests the hittable targets within 10 units and sends each one the Attack spawn message (Charm attack hits, Roberta Fog 166).
+
+Spawn (given a motion direction and a rate):
+1. Cycle counter: 6.0 × the time base (run-time word 0x368FA0, 60 ticks per second) as a whole number of ticks, so 360 ticks at 60 per second.
+2. Countdown: trunc((0.5 + u) × the time base), with u uniform from −0.1 to +0.1, one single-precision multiply truncated toward zero. The spread bounds are the word at 0x2DCB50 and its negation, so the second bound is +0.1 (High). The countdown runs from 24 to 35 ticks, each value with chance about 1/12: at u = +0.1 the sum 0.59999996 times 60 is 35.999996, which truncates to 35.
+3. Ground reference: the height found by a ground probe 8.0 units above the object's point (the common foot probe offset, SPEC-0018). If that probe result is far from the object's own height (difference of 1e8 or more), the object's own height is used.
+4. Motion field: the input direction is normalised and stored with its rate, then the vector field is overwritten with zero before the spawn routine returns. The tick multiplies this zero vector by the rate before adding it to position, so this path contributes no translation. Height-follow movement remains as described in tick step 1.
+5. Start effect in mode 5 at the object.
+
+Tick:
+1. While the cycle counter is above 0: subtract 1. Apply the stored motion vector times its rate (1/60 s); for the Fog spawn this vector is zero, so X and Z do not change. Probe ground at the resulting point, using the same fallback as the spawn. Form the movement target's Y as trunc(ground height + 3.5) (word 0x2DCB60), then interpolate toward that target as part of the movement step. The cached ground reference remains the full floating-point probe result. This differs from spawn, which places the object at the full floating-point ground height plus 3.5.
+2. When the cycle counter reaches 0: clear the cycle and countdown, release up to four attached effect objects and clear their stored handles, then play effect mode 4 at the position.
+3. Countdown: when the cycle counter is 0 or below and the countdown is below 1, scan the global actor list. An actor qualifies when its class-specific eligibility query is nonzero and its position is within the configured 10-unit radius of the timed object's position (strict squared-distance comparison). For every qualifying actor, submit a target-specific attack-effect request through the effect host; the scan does not stop after the first match. This request uses the first Attack spawn routine (type 23, sub-type 5) and the Fog attack id 166. The test passes if at least one actor qualifies. On a pass, reset the countdown as in step 2 of the spawn and play effect mode 1. This request creates a visual effect-pool object; its active update runs effect and attachment upkeep without a target contact or damage step. It does not itself apply damage. The effect's visible appearance remains open, and any separate damage source is not established. If the countdown is 1 or more, reduce it by 1.
+
+### Oscillator
+
+Confidence: Medium-Low for the phase rule; the sine kernel is not described.
+
+- A phase advances each tick by a rate times the time step (1/60 s, run-time word 0x368FA8). If the result is above 6.283186, subtract 6.283186 once; if it is below -6.283186, add 6.283186 once. This is a single correction per tick, not a general modulo reduction.
+- An offset equal to amplitude × sine(phase) (and the matching cosine term for the second axis) is added to the object's base position each tick.
+- A time counter advances by the time step and is compared with a limit. Whenever it is at or above the limit, the stored callback is invoked. The oscillator routine itself has no one-shot latch or reset; whether later callback behavior prevents repeat calls is caller-specific and remains open. The recovered direct callers are two effect-object paths, but their object identities and callback effects are not established.
+
+### Anchor sockets, nearest object and follow
+
+Confidence: Low to Medium-Low.
+
+- Up to four anchor transforms are taken from the rows of the object's matrix (rows at offsets 0x298 to 0x2CC of the other object) and stored at owner offsets 0x220 to 0x22C, with ids at 0x260. The owner's id is at 0x14C.
+- The nearest-object pick returns the object with the smallest distance from the owner to a transformed point.
+- Follow: when the owner's attach flag at 0x14C is 1 and the look-ups succeed, the owner moves halfway to the target each tick (new = current + 0.5 × (target − current)). If the stored target id at 0x560 differs from the new id, the follow state is reset first.
+- Aim command: a distance is computed for the command, and the target position is stored at 0x120. A random draw then decides whether a second command (code 7, with three values) is also sent. The draw is a uniform whole number from {0, 1}, so the second command is sent with chance 1/2.
+
+### Mode-code and flag multipliers
+
+Confidence: High for the values and the meanings.
+
+- Table A is Tor's step factor D (Damage), keyed by the attack sub-state at hero +0xF90: 1.0 by default and for sub-states 0, 1, 2, 3, 7, 8, 9, 10 and 11; 2.0 for 4 and 12; 0.75 for 5 and 6. The power step (sub-state 10) is 1.0.
+- Table B is Roberta's step factor D, keyed by the sub-state passed in: 1.0 by default and for 2, 3, 6, 7, 8 and 11; 2.0 for 4; 0.5 for 5 and 12; 1.5 for 9; 0.33 for 10 (the single-precision value of about 0.33).
+- Flag factor: the hero's status scale G (Damage): start at 1.0, multiply by 0.75 when curse (status 1) is active and by 1.5 when strength (status 4) is active. The enemy's copy of this scale uses 0.5 in place of 0.75 (SPEC-0029); the hero damage path uses the 0.75 copy (High).
+
+## Hero growth
+
+Neither hero has an experience count or a level counter. Maximum health and maximum magic are the only growth values, and they rise only when a stat-up item is added to the party. No experience or level value is stored or derived (Medium-High: no writer for either is known).
+
+**Boot data words.** The growth values are twelve signed 32-bit words in the boot program's data. Read them at runtime; do not copy them.
+
+| Value | Tor address | Tor | Roberta address | Roberta |
+| --- | --- | --- | --- | --- |
+| Start health | 0x319BC0 | 150 | 0x319BC4 | 120 |
+| Start magic | 0x319BC8 | 90 | 0x319BCC | 150 |
+| Health step per stat-up | 0x319BD0 | 25 | 0x319BD4 | 20 |
+| Magic step per stat-up | 0x319BD8 | 15 | 0x319BDC | 25 |
+| Health cap | 0x319BE0 | 500 | 0x319BE4 | 400 |
+| Magic cap | 0x319BE8 | 300 | 0x319BEC | 500 |
+
+Confidence: High for every value.
+
+**Caps.** The health and magic caps are applied when a save is loaded (SPEC-0025, Hero maxima and restore). The stat-up add path does not check them.
+
+**Stat-up items.** When an item is added to the party (the add path, not a drop), three flags are tested. A flag passes when the item's type is 0, or 7 or higher except 17, and the stat named by the flag is at least 1. The stats are the A, B and C fields of the item's record in the item config table (archive resource 529; SPEC-0021).
+
+1. Stat A flag: for each hero, the maximum health rises by that hero's health step, and current health is set to the new maximum.
+2. Stat C flag: for each hero, the maximum magic rises by that hero's magic step, and current magic is set to the new maximum.
+3. Stat B flag: luck rises by stat B times the item count, then is clamped to 0 through 24.
+
+Each flag applies once per add, whatever the count; only the luck gain uses the count. The flag effects reach both heroes, not only the one who received the item. A successful stat-up plays sound cue 0x9F. Confidence: High for the flag tests and the boot words; Medium-High for the effects on both heroes and the refill; High for the luck meaning (SPEC-0021 pickup gate); Medium for the cue.
+
+**Implicit level.** A pool's level is (maximum minus start) divided by its step, with integer division. Each pool reaches its cap at 14 steps: (500 - 150) / 25 = 14, (400 - 120) / 20 = 14, (300 - 90) / 15 = 14, (500 - 150) / 25 = 14. The level is never stored. The game tests it in four checks whose callers are not identified (Open questions). Confidence: Medium-High.
+
+### Hero level tests
+
+Confidence: High for the formula, start and step words, front-end caller, and argument values.
+
+Four tests ask whether a hero's upgrade level is above an argument n. Each test belongs to one hero and one pool.
+
+1. The hero must be the active hero (index 0 for Tor, 1 for Roberta). Otherwise the test is false.
+2. The level is trunc((maximum minus start) / step), where the maximum is the hero's current maximum for that pool. The division truncates toward zero.
+3. The test is true when n is less than the level.
+
+| Test | Hero index | Start (boot word) | Step (boot word) |
+| --- | --- | --- | --- |
+| Tor health | 0 | 150 (0x319BC0) | 25 (0x319BD0) |
+| Tor magic | 0 | 90 (0x319BC8) | 15 (0x319BD8) |
+| Roberta health | 1 | 120 (0x319BC4) | 20 (0x319BD4) |
+| Roberta magic | 1 | 150 (0x319BCC) | 25 (0x319BDC) |
+
+The test reads the maximum, not the current value. It measures how far the maximum has grown through stat-up items, and it does not depend on how hurt the hero is. These tests are not low-health checks.
+
+Test vectors (synthetic, from the start and step words):
+
+- Tor health maximum 175: level (175 minus 150) / 25 = 1. With n = 0 the test is true.
+- Tor health maximum 150: level 0. With n = 0 the test is false.
+- Tor health maximum 140: (140 minus 150) / 25 = -0.4, which truncates to level 0. With n = 0 the test is false.
+
+## Edge cases and error handling
+
+- **Quick-tap disabled** (reproduce it): Tor's quick-tap threshold is 0, so no release counts as a tap; every short press is a normal swing.
+- **Circle during an interaction**: the interaction and attack selector runs first on the Square edge and the R2 or Circle press, so a Circle or R2 press during an interaction is a selector event, not an attack (SPEC-0033 Controls).
+- A Roberta shot with no Mote has power 0 and uses no charge; it still deals S x C x T minus defence per hit when the weapon's stat A is above 0. A quick shot with no Mote pays its cost (3, 5 or 10 MP by launch class) on every hit of a hittable target, even at 0 damage; a miss pays nothing (High). A full release with no Mote fires one class-2 shot and pays 10 MP at launch.
+- **Charge minimum** (reproduce): a Tor or Roberta charge amount whose product truncates or rounds to 0 is raised to 1 when Q is at least 1 (Mote charge use by attacks). The armour charge has no minimum; the shield charge is always at least 1.
+- **Unarmed melee** (reproduce): with no weapon-family item, factor A is 0, so a swing deals 0, calls no take-hit, lands nothing and pays no magic or charge. The swing still uses the 1.5 default reach.
+- **Platform truncation** (reproduce): the products chop toward zero, so results that are whole numbers in exact arithmetic often come out just below and truncate one lower: sword 98 with Mote 161 deals 4, not 5; a greater-Mote full release uses 40 charge (rounded) but a greater-Mote Tor power attack uses 39 (truncated). See Damage, Platform arithmetic.
+- **Rock Mote status** (reproduce): Tor's power step with the Rock Mote (165) sends (2, -1, -1, -1): Mote 165 has no duration, amount or period fields, so the enemy gets the default poison (120 s, 2 HP every 4 s). The Leaf Mote (164) sends (2, 34, 5, 4), so the greater Mote gives the weaker, default poison.
+- **No minimum damage**: a hit whose product, after defence, is below 1 deals 0; if the product was above 0 the hit is absorbed (take-hit with 0, landed), otherwise nothing happens.
+- **Poison never kills a hero** (reproduce): at 1 HP a poison tick deals 0 (the take-hit still runs with 0); at 2 HP it deals 1. Other characters have no floor.
+- **Poison and health-regeneration status on the same tick** (High): poison is processed before status 12's +2 HP. With aligned active timers (for example, timer 2 = 3841 and timer 12 = 241 at update entry; after the timer step they are 3840 and 240), and a hero at 10/100 HP, the poison tick subtracts 2 and status 12 then restores 2, leaving 10 HP. At 1 HP the poison floor makes the first change 0 and status 12 raises health to 3. This is the status-12 effect, not the separate low-health trickle; ordinary timer alignment depends on when the statuses were applied.
+- **Magic regeneration reads the health-regeneration timer** (reproduce): status 13 gives MP on the ticks where timer 12 is a multiple of 60. Status 13 alone gives nothing when timer 12 is -1 (after a clear or a death), and +2 MP on every tick when timer 12 is 0 (after status 12 expired by itself, or after a load that restored 0).
+- **No death gate on the hero's apply**: a status can be set on a dead hero after the death clear.
+- **Hero fire and confusion**: a fire status on a hero shows the fire effect (no tint) for its duration and deals no damage; confusion and poison attack are ignored by the hero's method from every source.
+- **Restore truncation** (reproduce): the save restore applies whole seconds, so a status with under 1 s left is lost (SPEC-0025).
+- **Empty or unknown attack**: no Mote in word 2, or an id outside 160 to 173, gives P = 1.0 in Tor's power step and for Roberta's full-release shots, and no Mote object is spawned.
+- **Mote object hit with no hero**: the stored scale is 1.0. With a scale of 0 (an unarmed hero, A = 0) every object hit deals 0 and nothing is absorbed.
+- **Mote object hit on a target already hit**: the beam and bubble objects skip targets in their ten-slot lists (Beam and bubble lists); the family B orbit lists a hit target for 60 ticks, the family C beam for 1 s, and Roberta's Leaf ring lists each target once per object (Charm attack hits). The other objects keep no such list (Medium).
+- **Supernova bolt with no target**: a timer at zero stays at zero while no target is in reach or in sight; no bolt and no cue.
+- **Beam or bubble list full**: a new target is not added, and no slot changes.
+- **Absorb versus damage**: with zero hero defence a hero target is never absorbed by a hero's attack product. Enemy hits on a hero have no absorb step: a shield block larger than the hit gives 0 damage (Enemy attack damage to a hero).
+- **Mote spent mid-fight**: when a use takes the last of a Mote's charge, the Mote is removed and every equipment word that held it becomes -1 at once; the next hit uses no Mote (B = C = 1, no element).
+- **Death callback skip** (reproducible behavior): when a registered death callback sets its flag, the default death is skipped in full, so the hero keeps its statuses and hit list at zero health and stays in the state the hit left it (state 17 on the normal branch). The callback runs again on the next death (SPEC-0055, Death callbacks).
+- **Repeated death**: a hit on a hero already in the death state plays the hit cue and the hit effect and changes nothing else. A script kill of such a hero (KillCurrentHero or KillBothHeroes) runs the default death again in full, including the death cue test. The gate is not consulted. A plain deduct, the deadly-ground and overlay kills and the Continue reset also reach a dead hero (Health and death, step 4).
+- **Set to zero is not death** (reproducible original behavior): setting health to 0 with the set rule leaves the hero alive in its state, with its statuses and hit list kept. Only a deduction that reaches the current health runs the death handler.
+- **Set notification ordering** (reproducible): with current 100, max 150, setting 80 runs the loss notification while 100 is still stored, then stores 80. With current 150 and max 150, setting 200 stores 150 and then runs the gain notification.
+- **Negative health by add** (reproducible): adding a negative amount can leave health below 0. No death handler runs, and the hero keeps its state.
+- **Deduct exactly the current health kills** (reproducible): with 100 health, a deduction of 100 (or more) kills, and a deduction of 99 leaves 1.
+- **Negative deduction raises health without a cap** (reproducible): with 100 health and a maximum of 150, deducting -80 gives 180.
+- **Hero index outside 0 and 1**: the hit-point methods do not check the index and read storage past the second hero (Medium). The result is not defined here, and a clean implementation must not reproduce it. The death-state query returns false for such an index.
+- **Percentage with a maximum of 0**: the result is not a finite number (Medium).
+- **Negative fraction**: see Hit points by script and the resolved item below; finite negative products are stored through the ordinary set rule and do not themselves trigger death.
+- **Contact material other than 2, 3 or 4**: cue 144 (Contact routines and cues).
+- **Contact with a mismatched element**: the family handlers and Roberta's shot skip silently (no break, no cue). The hero's melee route on a breakable does not change the action state. It sets the hero's recoil material word to 4 and requests Tor's attack sub-state 13 (the sword bounce, recoil cue 13, rumble). Roberta has no reaction (SPEC-0048, Element recoil).
+- **Contact on a state-3 breakable**: a matching attack plays the material cue but does not break it.
+- **States moved to other specs**: the edge cases of the jump states, the landings and the traversal states (19, 21, 23, 30, 41, 47 and 58) are in SPEC-0033; those of the feeding state 49 are in SPEC-0047.
+- **Cure with none of statuses 1 to 3 active**: nothing changes.
+- **Armour Mote with too little magic or charge**: when the hero's magic is below the armour Mote's cost, or its power Q0 is above the Mote's remaining charge, the (100 - H) step does not run, nothing is spent, and the body item's stat A still reduces the hit.
+- State 13 exit to state 20 without a shield: the exit is armed (sub-state 3, or sub-state 4 in an event-0x40 frame) but does not fire while the shield-family entry is missing or empty, whatever L1 does. There is no stick test.
+- Hero swing at exactly 65.0 units: tested; at 65.1 units no hit is possible whatever the shapes (the gate uses the full three-dimensional distance).
+- Hit list full: the eleventh add overwrites slot 0, so the target in slot 0 can be hit again in the same attack (reproduce).
+- Character with no hurt bones: a skeleton whose bones all have a hurt length of 0 or below cannot be struck by a swing or a shot (579 tables on disc).
+- Attack animation choice with no Mote in word 2, or an id outside 160 to 173: 0x1B for both heroes (High).
+- State 13, sub-states 7, 8 and 10 with the attack-active word clear or the stick centred: no stick step.
+- **Silent attack stingers** (reproduce): the attack transitions pass stinger codes 26 to 30 and 50 to 54, which the stinger ignores (it accepts 0 to 18), so no stinger plays (Attack router).
+- **Bank fallbacks** (reproduce): with no weapon the weapon bank is 466, the bank of sword 103; Tor with no shield entry gets shield bank 456 (Attack router, sound banks).
+- **Same-id request**: a request of the id already current does not restart its clip unless the restart request is set (Attack router).
+- State 30, sub-mode 1 with the approach action not current: request 72 and end; no steering.
+- State 30, sub-mode 4 with the ground gap at zero or below: sub-mode 4 still runs, because it is exempt from the gate.
+- Target pick with a scaled stick length of exactly 0.5: the candidate is skipped, because the length must be above 0.5 (the boundary is taken as strict; Medium).
+- Target pick with a facing dot product of exactly -0.8: not below -0.8, so the candidate fails the facing test.
+- Clearance test with a projection exactly at a band edge (minus the radius, or 1.25 times the radius): the band is taken as strict, so that entry does not block (boundary not established).
+- Clearance test same-link skip: if the blocker and current target have nonnegative kinds, non-null +0x48 links and equal linked-record +0x64 values, the blocker is skipped; changing either +0x64 value makes it use the normal footprint probe.
+- Clearance test query offset: from hero position (0, 0, 0) and side basis (1, 0, 0), the two sidle branches query (0.25, 0, 0) and (-0.25, 0, 0), respectively.
+- Combat reach test with a capsule axis b that is not a unit vector: the swing passes the bone frame row unchanged, so a scaled bone frame would give a b that is not unit; the rule assumes a unit b (n is normalised inside the test), and the result for other inputs is not defined here.
+- Combat reach test when the tip did not move (B equals C): the swept step does not run; only the static overlap counts.
+- **Combat reach shift and margin** (reproduce): the shifted point moves by the ratio |dist| / L, not by a length, and the edge margin 0.4 (r c + h s) can be smaller than r, so some edge overlaps are missed (Combat reach test).
+- **Rock contact limit and shrink**: a rock with K = 6 bounces 5 times; with K = 7 to 10 the shrink ends it at the seventh contact after 6 bounces (effect scale 1.0).
+- **Rock vertical speed on reuse**: the release does not reset v, so a reused rock starts with the vertical speed it had when it ended (negative after a final contact); only a rock's first use starts at 1.0.
+- **Rock effect scale below 0.37**: a rock whose effect scale is below 0.37 (0.25 plus 0.12) ends at its next ground contact; exactly 0.37 still bounces. With no effect the scale is 1.0.
+- **Attack duration truncation**: a distance that makes D a fraction (for example 7.0 gives 13.5) stores 13. The truncation is toward zero.
+- **Aimed object ground fallback**: when the ground probe at the new point differs from the stored ground height by 1e8 or more, the stored height is used. The sentinel is the only test.
+- **Aimed object height**: the per-tick movement target is trunc(ground height + 3.5) toward zero before interpolation; this does not truncate the cached ground reference or the initial spawn position. Fractions of the destination height are discarded (Aimed timed object; High).
+
+- **Stat-up past the cap** (Medium-High): the stat-up add path does not check the caps. After 14 health steps Tor's maximum health is 500; a 15th step makes it 525 until the next load, which caps it at 500 (SPEC-0025, Hero maxima and restore).
+- **Luck range** (Medium): every stat-up B add clamps luck to 0 through 24, so an add that would take luck above 24 stops at 24.
+
+## Test vectors
+
+- Target marker: with the marker-enable word nonzero and the virtual gate returning zero, hero state 3 selects kind 1; states 4 and 6 select kind 2; states 0, 1, 13 and any other value select kind 0. If marker-enable is zero or the virtual gate returns nonzero, the current marker object is released regardless of hero state.
+
+
+Synthetic vectors for the Mote rules (Damage, Magic, Regeneration).
+
+- Roberta shot collision position: slot position (1, 2, 3) is passed as a three-dimensional point; the displacement from a target anchor at (0, 0, 0) includes z = 3 in the shape-distance calculation. Hit/miss depends on the target capsule and slot radius.
+- Factor B: slot 2 holds Mote 161 (odd family, element 1, F 25, G 100). B = 1.25, whatever the target type. Slot 2 holds Mote 160 (even family, element 1, F 15, G 50): B = 1.15. No Mote in slot 2: B = 1.0.
+- Factor C with a type-4 target: Mote 161 (element 1) gives C = 2.0 (1 + 100/100). Mote 160 (element 1) gives C = 1.5. Mote 163 (element 4, G 100) against a type-1 target gives C = 2.0. Mote 161 against a type-1 target gives C = 1.0, because element 1 matches only type 4. No Mote gives C = 1.0.
+- Nova 172 (element 7, F 0, G 50) against a type-6 target: B = 1.0, C = 1.5. Supernova 173 (element 7, F 0, G 100) against a type-2 target: B = 1.0, C = 2.0.
+- Product with P = 2, A = 1, D = 1, E = 1, G = 1, defence 0, Mote 160 against a type-4 target: B = 1.15, C = 1.4999999 (1 + 50 x 0.01 with truncation), product 3.4499996, damage 3.
+- Contact test (breakables): the kind-3 handler against an entry element byte of 0 passes (break, cue by material), against 3 passes, and against 5 is skipped with no break and no cue. An owner-field handler with owner field 7 against element 5 passes; with owner field 3 it is skipped. The hero melee route with Mote 164 (kind 2) against element 5: Tor recoils with material 4 (attack sub-state 13, cue 13), no break, no break cue.
+- Magic, normal swing that lands with Mote 161 (odd family): cost 3, power 4, MP 90 becomes 87. A miss leaves MP at 90.
+- Magic, full press of 60 ticks that lands with Mote 160 (even family): cost 20, power 25, MP 90 becomes 70. With Mote 161 (odd family): cost 40, power 40, MP 90 becomes 50.
+- Magic, full press with Mote 161 and MP 15: cost 40 is more than MP, so MP becomes 0.
+- Magic, Roberta quick shot at level 1 that lands with Mote 160: cost 1, power 2, MP 150 becomes 149. Full release (96 ticks) with Mote 161: cost 40, power 40, MP 150 becomes 110.
+- Magic, armour Mote 169 (odd family) in word 0 with MP 5, an enemy hit lands on a hero with a body item: cost 4 is at most 5, so it acts and MP becomes 1 (charge 100 becomes 95). With MP 3 it does not act.
+- Regeneration, Tor MP at 0 with maximum 90 and no status: T = 10. Gains fall on counters 0, 59, 118, ..., 531, so MP reaches 10 after counter 531.
+- Regeneration, Roberta HP at 10 with maximum 120 and no status: T = 13. Gains fall on counters 0, 29 and 58, so HP reaches 13 at counter 58.
+- Regeneration, statuses 12 and 13 applied together at 60 s (timers 3600): +2 HP and +2 MP at the post-decrement readings 3540, 3480, ..., 60 (59 gains each), capped at the maxima and not at T.
+- Magic regeneration quirk: status 13 applied alone after a clear (timer 12 = -1): no MP at all. Status 13 applied while timer 12 is 0 (expired earlier, or after a load): +2 MP on every tick for the 60 s (capped at the maximum).
+
+- Hero target, product 44 (P = 1.0, A = 20, B = 1.10, C = 1.0, D = 2.0, E = 1.0), G = 1.0, Defence 0: 44 damage.
+- Enemy attack intake, plain (synthetic): attack damage 25, no statuses, no body item, hero at 150 HP. Damage 25; health 125. With body item 122 (stat A 40): 25 x 0.6 = 15, health 135.
+- Enemy attack intake, attacker cursed (synthetic): attack damage 25 gives 25 x 0.75 = 18.75, damage 18; health 132.
+- Enemy attack intake, attacker strong (synthetic): attack damage 25 gives 25 x 1.5 = 37.5, damage 37; health 113.
+- Enemy attack intake, attacker cursed and strong (synthetic): 25 x 1.125 = 28.125, damage 28.
+- Enemy attack intake, attack damage 0 (synthetic): damage 0; health unchanged.
+- Boss melee intake (synthetic): a hero at 100 HP with body stat A 50 and an armour Mote is hit by a boss melee value of 25: health 75 (no reduction). A blocked Gnarfas whip (value 15, blocked flag 1) on a hero at 100 HP: block cue and animation 0x40, no state 17, health 85. The same whip unblocked: state 17, health 85.
+- Poison intake at low health (synthetic): a hero at 1 HP with poison and amount 2: damage 0, health stays 1 (the take-hit runs with 0). A hero at 3 HP takes 2 and has 1 left. At 2 HP it takes 1 and has 1 left.
+- The same attack under curse (G = 0.75): 33 damage.
+- Enemy target with Defence 50 and the same product 44: the result is ≤ 0, so the attack is absorbed (0 damage, still a hit).
+- Charge, synthetic weapon stats (the rule; every weapon on disc has S = 100): Tor, Q = 40, S = 50: x = 19.999998, charge 19. Roberta full release, same: 20.
+- Charge, Q = 40, S = 37: x = 14.799998. Tor 14; Roberta full release 15.
+- Charge minimum: Q = 25, S = 1: x = 0.24999999. Tor 1; Roberta 1.
+- No weapon (S = 0), Q = 40: x = 0. Tor charge 1 and Roberta charge 1 (the minimum applies because Q is at least 1). The melee damage of that hero is 0 (A = 0).
+- Stored power: Roberta counter 96: power 0.8. Counter 150: stored 1.25, shot power 1.0.
+- Max health 150, current 10, no status active: the regeneration target is int(15) + 1 = 16. Health gains 1 every 29 ticks (about 2.069 per second), so it reaches 16 after six gains, about 2.9 s, and stops.
+- The same case with poison active: no trickle regeneration.
+- Status apply: poison with duration -1 gives 120 × 60 = 7200 ticks. Stun with duration 3 gives 180 ticks.
+- Poison on a hero at 5 HP with a 2 HP amount: damage 2, health 3. At 2 HP: damage 1, health 1. At 1 HP: damage 0. Amount 20 at 10 HP: damage 9, health 1. A non-hero character at 1 HP with amount 2 takes 2 (no floor; SPEC-0029).
+- Poison tick (synthetic): a hero at 10 HP with poison active. When the status timer reads 240 after a tick's decrement, the hero takes 2 HP (health 8), attacker id -2. At 239 or 241 nothing happens. At 480 the hero takes 2 more.
+- Fresh poison, default words (synthetic): a script apply of poison with duration -1 gives a timer of 7200 ticks. The post-decrement readings that are a multiple of 240 above 0 are 6960, 6720, ..., 240. That is 29 hits, at 4 s, 8 s, ..., 116 s after the apply, 58 HP in total before any death. The count is the same when the per-tick poison words hold their defaults (a negative value).
+- Fire on a hero (synthetic): a hero at 10 HP with fire applied at its default 5 s (300 ticks) and no other status takes no periodic damage; health stays 10. (A non-hero character in the same case takes 2 HP at the post-decrement readings 240 and 120, attacker id -1; SPEC-0029.)
+- The "any status" test: with no status active, it returns true. With poison active, it returns false.
+- Hero poison from 10 HP (synthetic): words -1, poison 120 s. Hits at the readings 6960, 6720, ...: health 8, 6, 4, 2, then 1 (damage 1), then hits of 0. The hero never dies of poison.
+- Immunity against an enemy (synthetic): a hero with status 9 active is bitten by an enemy whose row status is poison: no poison timer is set and effect 0xC3 plays. With status 10 active, an enemy projectile's slow is blocked the same way and effect 0xC4 plays.
+- Poison attack (synthetic): an enemy with status 11 active bites a hero (row status -1): the hero is poisoned for 120 s (7200 ticks). SetHeroStatus(11, -1) on a hero changes nothing.
+- Confusion on a hero (synthetic): SetHeroStatus(6, -1), or an enemy bite with row status 6: no timer is set.
+- Stun on a hero (synthetic): stun 3 s: 180 ticks; each of those ticks the hero's action state is 1 and its speed scale 0; on the tick it ends, effect 0xCD plays.
+- Fire on an enemy, Tor's Fire Mote (check values on the disc: 12 s, 5 HP, 2 s): 720 ticks, period 120: hits at the readings 600, 480, 360, 240 and 120, 25 HP in all. An enemy of target type 1 ignores it.
+- Poison on an enemy, Tor's Leaf Mote (check values on the disc: duration 34 s, amount 5, period 4 s; Roberta's amount 7): 2040 ticks, period 240: hits at the readings 1920, ..., 240, that is 8 hits, 40 HP (Roberta 56). An enemy of target type 2 ignores it.
+- Status display rotation (synthetic): poison then slow applied: slow is shown at once (start); after 240 ticks poison is shown; after 240 more, slow again.
+- Death with no callback registered: a hero at 25 health takes 30 damage. Health 0, the hero enters state 16, all statuses are set to -1 and the hit list is cleared.
+- Death with a callback registered whose flag is set: the same 30-damage hit leaves health at 0, the state is 17 (the reaction written before damage), the statuses are kept, and no cue beyond the hit cue plays.
+- Hit at health 0 while in the death state: the hit cue and hit effect play when the sound service is available; that effect choice consumes one shared random draw before the state-16 return. No damage, no status clear, no death cue and no callback.
+- Scene setup in mode 3 or 4 (the heal path): both heroes go to their maximum health (150 for Tor, 120 for Roberta) and all their statuses are cleared. Mode 1: no heal on the path read.
+- Mote object hits (target type 0 unless stated, defence 0 unless stated):
+  - Tor 161 object (P = 2.0): scale 1, 15, 22.5, 40 and 46 against type 0: damage 2, 30, 45, 80 and 92; against type 4 (C = 1.9999999): 3, 59, 89, 159 and 183; against type 0 with defence 5: 0, 20, 35, 70 and 82.
+  - Roberta 169 object (P = 1.25): scale 15, 22.5, 40 and 46 with defence 0: 18, 28, 50 and 57; with defence 5: 12, 21, 43 and 51.
+  - Stored scale: Tor with sword 105 and Mote 161 at sub-state 10: 49.999992. Tor with sword 101 and Mote 160 at sub-state 10: 17.249998. Roberta with wand 118 and Mote 169 at sub-state 9: 74.99999. With no hero: 1.0.
+- Attack power lookup (synthetic, from the index map): Roberta with attack id 0xAD (173) reads record 59; Tor with attack id 0xA0 (160) reads record 0. Attack id 0xAE (174) is outside the range and gives power 1.0. No attack equipped: power 1.0 and the table is not used.
+- Supernova bolt timer: timer 0 and a target in reach: the bolt is posted, the timer becomes 30 and cue 1 plays. Timer 0 and no target: nothing changes. After a bolt the timer reads 0 again at the end of the 30th tick after it, and the next test runs on the tick after that.
+- Beam list with target 7 at count 2: adding target 7 adds nothing. Adding target 9 takes the first free slot. A list whose ten slots all hold a count of at least 1 and that does not hold the new target: adding the target adds nothing.
+- Tor (max 150) at 100 health. SetHitPoints(0): health 0, state unchanged, no death handler, statuses kept.
+- Tor at 100 health. SetHitPoints(200): health 150.
+- Tor at 10 health. AddHitPoints(-30): health -20, no death, state unchanged.
+- Tor at 100 health. AddHitPoints(80): health 150 (capped).
+- Tor at 100 health. DeductHitPoints(40): health 60; no death handler.
+- Tor at 100 health. DeductHitPoints(99): health 1. DeductHitPoints(100): health 0 and the death handler runs.
+- Tor at 100 health. DeductHitPoints(120): health 0 and the death handler runs.
+- Tor at 100 health. DeductHitPoints(-25): health 125. DeductHitPoints(-80): health 180 (no cap, above the maximum 150).
+- Tor at 75 of 150 health. GetHitPointsPercentage: 0.5.
+- Roberta (max 120) at 60 health. GetHitPointsPercentage: 0.5. SetHitPointsPercentage(0.5) gives 60; SetHitPointsPercentage(1.5) gives 120 (capped).
+- Tor (max 150) SetHitPointsPercentage(0.35): 52 (52.5 truncated).
+- **States moved to other specs**: the test vectors of the jump speeds, the landings, the ledge hang (30), the ladder (41), the sidle (23), the climb-ups (47, 58) and the drop onto a panel (38) are in SPEC-0033; the feeding vector (49) is in SPEC-0047.
+- Full press: Tor held 49 ticks and released: normal swing, no stored power. Tor held 50 ticks: power attack, stored power 0.416667. Roberta held 79 ticks: quick release. Roberta held 80 ticks: full-release shot, stored power 0.666667.
+- Charged loop (Roberta, synthetic): held with a Mote in word 2, weapon-bank cue 5 loops from F = 8; at F = 80 it is still cue 5 (the test is strictly above 80); at F = 81 Mote-bank cue 0 loops. With no Mote, cue 5 keeps looping.
+- Cure (synthetic): statuses 1 and 4 active, cure applied: status 1 is cleared and status 4 keeps running. With statuses 1 to 3 all inactive, the cure changes nothing.
+- Armour Mote (synthetic): MP 4 with an odd armour Mote (cost 4): it acts and MP becomes 0. MP 3 with the same Mote: it does not act.
+- Target pick facing (synthetic): a candidate with a facing dot product of -0.9 passes the facing test; -0.8 does not.
+- Target pick stick length (synthetic): a candidate that passes the facing and window tests with a scaled stick length of 0.6 is accepted, whatever its direction relative to the stick. With a length of 0.5 the candidate is skipped. With the cooldown word at 1 the routine returns 0 at once and leaves the target unchanged.
+- Clearance test range window (synthetic): with a hero radius of 0.5 the range window runs from -0.5 to 0.625. An object whose projection is 0.6, and whose second and third windows also hold, blocks the path (0). With a projection of 0.7 the range window fails, so the object does not block (1).
+- Combat reach slab 1 (synthetic): c = 0, r = 0.5, h = 1.0. The limit is 0.5, so a capsule with |dist| = 0.4 passes the slab.
+- Combat reach slab 2 (synthetic): c = 1, r = 0.5, h = 1.0. The limit is 0.5, so a capsule with |dist| = 0.6 misses.
+- Timed group: T = trunc(30.0 x 60) + 1 = 1801 steps. Eight entries give an interval of trunc(1801 / 8) = 225 steps and spawn on steps 1, 226, 451, 676, 901, 1126, 1351 and 1576; seven entries give 257 and spawn on steps 2, 259, 516, 773, 1030, 1287 and 1544. The group ends on step 1801. Four entries (synthetic) give 450.
+- Low-health warning (synthetic): Tor (maximum 150) at 22 health is below 22.5 and plays cue 157; at 23 health there is no health warning. Roberta (maximum 120) at 17 health plays cue 157 (not 158); at 18 health there is no health warning. A hero with magic 13 of a maximum of 90 plays cue 158 (13 is below 13.5); at 14 it does not. Each cue repeats on every tick while its value stays below the threshold.
+
+- State 13, sub-state 10 (synthetic): attack-active word set and the stick off centre: the stick step runs. Word clear, or the stick centred: no step.
+- Attack animation choice: Tor with Mote 167 requests 0x1C; Tor with 162 requests 0x12; Roberta with 162 requests 0x1D; Roberta with 173 requests 0x1F; either hero with no Mote, with 160 or with 174 requests 0x1B.
+- State 13, exit to state 20 (synthetic, Tor): sub-state 3 with a shield equipped and L1 (0x0004) held: state 20. Sub-state 4 in a frame without event flag 0x40: no exit. Sub-state 4 in an event-0x40 frame with L1 on the press edge: state 20. No shield-family entry, L1 held: the hero stays in state 13. The stick position never matters.
+- State 30, sub-mode 1 (synthetic): the approach action is current, planar distance 0.3, progress 0.5: the hero steers at rate 0.25 and stays in sub-mode 1. Planar distance 0.2: sub-mode 2 and request 71.
+- State 30, sub-mode 4 (synthetic): action 59 is current and progress reaches 0.95: the direction mode is cleared, the hero goes to state 1 and the position is saved.
+- State 30, sub-mode 5 with side negative and along value 0.3: request 61 and a return to sub-mode 3. Sub-mode 6 with side negative and along value 0.1: return to sub-mode 3. Sub-mode 5 with side positive and along value -0.3: return to sub-mode 3.
+
+- Attack input (synthetic; SPEC-0033 Controls): R2 press edge with attack kind 0 and no action track and no stance target enters the attack step (state 13). An R2 press in the jump state 9 (Tor, air-attack flag clear, falling 1.0 above the ground) does nothing; at 2.0 above the ground or while rising it gives the plunge (air phase 8, request 23). An R2 press in strafe jump 44 (Tor, air phase 4) arms the air attack, and the next tick without the input starts the air slash (sub-state 11, second id 25, state still 44). A Circle press during an interaction is a selector event and starts no attack (Medium).
+
+- Attack spawn duration (synthetic): distance 7.0 gives 7.0 ÷ 2.0 + 10.0 = 13.5, stored as 13. Distance 0 gives 10.
+- Projectile lifetime draws (synthetic): the draw −2 gives a limit of 6 ticks; the draw 2 gives 10 ticks; the draw 0 gives 8.
+- Spoke lifetime (synthetic, second bound assumed): a draw of −0.3 gives 0.3 s, a draw of +0.3 gives 0.9 s.
+- Aimed object (synthetic, time base 60): cycle length 360 ticks. Countdown with u = +0.1 is 35 ticks (not 36: 0.59999996 × 60 truncates to 35); with u = −0.1 it is 24 ticks. The range is 24 to 35.
+- Aimed object motion (synthetic, Roberta Fog 166): launch direction (1, 0, 0), rate 0.6; setup leaves the stored motion vector at (0, 0, 0), so an active tick contributes no X or Z displacement.
+- Aimed object height (synthetic): spawn with ground height 10.2 starts at Y = 13.7. On a later tick with ground height 10.2, the movement target is Y = 13 after truncating 13.7 toward zero; the step interpolates toward 13, while the cached ground reference stays 10.2.
+- Multipliers (synthetic): table A code 4 gives 2.0; table A code 5 gives 0.75; table B code 10 gives 0.33; with status flags 1 and 4 both set the flag factor is 0.75 × 1.5 = 1.125.
+- Hash draw (synthetic; a separate, pure function from the run-time generator above, see SPEC-0033 Behavior 48): seed 1 with range 0 to 10 gives about 3.87.
+
+- **Hero growth (synthetic; item rows are a subset)**: the stats are the A, B and C fields of the item records in the item config table (archive resource 529; SPEC-0021). Golden Negg (id 151, type 12, A 25, C 15), Red Negg (174, type 12, A 25), Starry Negg (154, type 12, C 15), Four-Leaf Clover (19, type 16, B 1).
+- Start: Tor health 150 and magic 90; Roberta health 120 and magic 150. Add Golden Negg: Tor health 175 and magic 105; Roberta health 140 and magic 175. Each current value equals its new maximum.
+- Then add Red Negg: Tor health 200 and Roberta health 160, magic unchanged. Then add Starry Negg: Tor magic 120 and Roberta magic 200.
+- Luck 23, add Four-Leaf Clover: luck 24. Add it again: luck stays 24.
+- Tor health from 150 after 14 health steps: 500. A 15th step gives 525 before the next load.
+
+
+- **Roberta shot range** (synthetic): a table A shot of class 1 (speed 60, life 180) expires on tick 180 and covers 180 units. Water (id 163) at full release (speed 20, life 480) covers 160 units.
+- **Roberta shot motion** (synthetic): direction (0, 0, 1), speed 60, dt = 1/60: the shot moves 1.0 unit per tick.
+- **Charge power clamp** (synthetic): F = 6 gives P = 0.1 (0.05 clamped up); F = 96 gives 0.8; F = 150 gives 1.0. The stored P does not change the shot's speed or life.
+- **Scale survivor** (synthetic): P = 0.5. max(20, 40P) = 20 is written first; with S = 2.0 the scale field holds 2.0 after the launch.
+- **Per-hit damage**: S = 5, stored kind 1, word 2 Mote 161, quick shot: against a type-4 target (C = 1.9999999) the product is 9.999999 and the damage 9; against a type-1 target the damage is 5. Each of these hits costs 3 MP and 4 Mote charge. Full-release shot with S x T = 20 and kind 7: 39.999996, damage 39, no MP or charge at the hit. Synthetic S = 2.0 against type 4 with defence 5: 3.9999998 - 5 is below 0, so damage 0 and the absorb effect plays.
+- **Quick shot with no Mote** (synthetic): S = 2.0, no Mote (C = 1), T = 1.0, defence 0: damage 2 per hit. Roberta at MP 150 with no Mote lands a class-1 shot: MP 145, even when the damage is 0 (no weapon). The same shot misses: MP 150.
+- **Homing modes** (synthetic): Wind (id 167) at full release: homing mode 2 and 2 shots. Fire (id 160) at full release: mode 0, 1 shot, straight flight.
+- **Charge truncation and rounding** (synthetic weapon stats; platform arithmetic): Q = 25, S = 10: x = 2.4999998, Tor 2, Roberta 2. Q = 25, S = 50: x = 12.499999, Tor 12, Roberta 12. Q = 40, S = 1: both 1 (0.39999998 raised to the minimum). Q = 0: both 0. On disc (S = 100): Tor 39 or 24 at a power attack and 3 or 1 at a swing; Roberta 40 or 25 at a full release.
+- **Full-release cost timing** (synthetic): Roberta full release with Mote 161 and MP 150: the object spawns, and the first shot of the volley pays 40 MP (MP 110) and 40 charge (charge 60). Roberta full release with Mote 169 and MP 150: the object spawns, no volley, MP 110 and charge 60 at release. Tor full press with Mote 161, MP 90 and charge 100: MP 50 and charge 61 after the release, with no damage at release.
+- **No Mote, full release** (synthetic): Roberta full release with no Mote and MP 150: no object, one shot of the class-2 row (speed 90, radius 1.0, 180 ticks, straight), cost 10 at launch, MP 140, no charge. Tor full press with no Mote: no object, no cost and no charge.
+- **Shots by id** (synthetic): Smoke (id 168) at full release: 3 shots, and only the first pays the MP and the charge. Nova (id 172): 6 shots. Shadow (id 169), Bubble (162) and Sun (171): no shots.
+
+**Melee damage and intake.** Target type 0, defence 0, no status, E = 1, Tor in sub-state 2 unless stated. "Damage" is the integer passed to the take-hit.
+
+| Case | Inputs | Product | Damage | MP | Charge |
+| --- | --- | --- | --- | --- | --- |
+| Unarmed | Tor or Roberta, no weapon | 0 | no take-hit | 0 | 0 |
+| Sword tiers | ids 98 to 105, no Mote | = stat A | 4, 7, 10, 15, 20, 25, 30, 40 | 0 | 0 |
+| Wand tiers | ids 111 to 118, no Mote | = stat A | 5, 8, 10, 15, 20, 25, 50, 40 | 0 | 0 |
+| Lesser Mote | sword 101 with an even Mote 160 to 170, no match | 17.249998 | 17 | 1 | 1 |
+| Lesser, match | 101 with 160 against type 4 (also 162 against type 1) | 25.874994 | 25 | 1 | 1 |
+| Greater Mote | 101 with an odd Mote 161 to 171, no match | 18.749998 | 18 | 3 | 3 |
+| Greater, match | 101 with 161 against type 4, or 163 against type 1 | 37.499992 | 37 | 3 | 3 |
+| Nova | 101 with 172, any type | 22.499998 | 22 | 1 | 1 |
+| Supernova | 101 with 173, any type | 29.999998 | 29 | 3 | 3 |
+| Roberta melee | wand 114 with any Mote, sub-state 2 | 15 (P = 1, no payment) | 15 | none | none |
+| Tor step D | 105 with 161 against type 4: sub-state 4 or 12 / 5 or 6 / other | 199.99995 / 74.99998 / 99.99998 | 199 / 74 / 99 | 3 | 3 |
+| Roberta step D | 118 with 161 against type 4: sub-state 4 / 5 or 12 / 9 / 10 / other | | 199 / 49 / 149 / 32 / 99 | | |
+| Power step | Tor 105, sub-state 10, Mote 160, 161, ..., 173 against type 0 | | 45, 99, 91, 49, 45, 49, 68, 24, 68, 99, 68, 99, 119, 79 | 0 at the hit | 0 at the hit |
+| Status and petpet | Tor 105: curse / strength / both / E = 1.25 | | 30 / 60 / 45 / 50 | | |
+| Defence | Tor 105: defence 5 / 39 / 40 / 50; curse with defence 10 | | 35 / 1 / 0 absorbed / 0 absorbed / 22 | | |
+| Truncation | 111 + 160; 98 + 160; 98 + 161; 99 + 166; 113 + 172 against type 4; 98 + 172 against type 1 | 5.7499995; 4.6; 4.9999995; 8.05; 14.999998; 5.9999995 | 5; 4; 4; 8; 14; 5 | | |
+| Shot scale S | Roberta, wand 114, no Mote / 160 / 161: sub-state 2; sub-state 9; sub-state 10 | 15, 17.249998, 18.749998; 22.5, 25.874998, 28.124996; 4.95, 5.6924996, 6.187499 | | | |
+| Enemy hit, armour | damage value 10 / 25 / 60: no body item; body 122 (stat A 40); body 125 (stat A 70); body 125 with petpet kind 1 | 10 / 25 / 60; 6 / 15 / 36; 3.0000007 / 7.5000014 / 18.000004; 2.7 / 6.75 / 16.2 | truncated: 10/25/60; 6/15/36; 3/7/18; 2/6/16 | | |
+| Shield block | shield 108 (stat A 40), blocked, damage value 10 / 25 / 60: word 1 empty; word 1 = 161 with attack element 0 or 1; word 1 = 161 with attack element 4 | | 0/0/20; 0/0/10; 0/0/10 | 0; 2; 0 | 0; 1; 0 |
+| Armour Mote | body 122 with word 0 = 161 / 160; 161 with attack element 4; 161 with remaining charge 3; damage value 10 / 25 / 60 | 1.4999999/3.7499998/8.999999; 2.9999998/7.4999995/17.999998; 6/15/36; 6/15/36 | truncated | 4; 2; 0; 0 | 5; 3; 0; 0 |
+| Hero poison | default (2 HP per 4 s), HP 150 / 4 / 3 / 2 / 1 | | 2 / 2 / 2 / 1 / 0 | | |
+
+Uses before a Mote is spent: Tor swings, lesser 100 and greater 34; Tor power attacks, 5 and 3; Roberta quick-shot hits, 50 and 25; Roberta full releases, 4 and 3.
+
+**Swing geometry and gates (synthetic unless marked disc).**
+- Reach: no weapon W = 1.5, L = 3.5. Tor id 98: W 1.7, L 3.7. Tor id 105: W 2.87, L 4.87. Roberta id 111: W 1.2, L 3.2. Roberta id 114: W 1.0. Roberta id 118: W 1.45, L 3.45 (disc words). The second reach query with a nonzero argument gives 1.5 x 0.6 = 0.9.
+- Placement: anchor (0, 1, 0), axis (0, 0, 1), L = 3.5: centre (0, 1, 0.25); the cylinder spans z = -1.5 to 2.0 with radius 1.0.
+- Gate: hero and target 65.0 apart: tested; 65.1 apart: no hit whatever the shapes; (40, 40, 40) apart (69.3): no hit.
+- Attack window: a hero frame with table B value 0x401 is attack-active; 0x400 is not.
+- Capsule: bone frame identity at the origin, base (0, 0, 0), length 2.0, radius 0.5: cylinder centre (0, 1, 0), axis (0, 1, 0), spanning y = 0 to 2. A hero weapon cylinder centred (1.2, 1, 0) with radius 1.0, axis (0, 1, 0) and length 3.5 overlaps it (radial 1.2 is at most 1.5); at (1.6, 1, 0) it does not.
+- Hit list: with ids 3 and 7 in the list, target 7 is skipped; after ten adds an eleventh overwrites slot 0.
+- Timed object hit list: a fresh hit on target 42 stores id 42 and a 60-tick counter; a repeat during the next 59 active updates is skipped. On the 60th update, the counter reaches zero and the id is cleared before the hit scan, so target 42 can be hit again while the 10-second attack object remains active.
+- Block (hero swing): target guarding with Blocking Angle 0.924 and facing dot -1.0: blocked; dot 0.95: not blocked.
+- Wind object against a target with body radius 1.0 and height 3.0 at the same height: overlap when the horizontal distance is at most 5.0.
+
+## Open questions
+
+- **Attack power values** (Answered, High): the 14 Mote values are selected from archive resource 533 by the index map in Layout. They remain disc data for the rewrite to read; copying them into this spec is unnecessary.
+- **Hero defence** (Answered, High): zero for both heroes. Enemy defence is SPEC-0029.
+- **Block, parry, dodge and invulnerability** (Resolved, High): a guarding hero facing the attacker blocks with a shield, and armour, an armour Mote and a petpet factor reduce the hits of the common enemies and of pool projectiles (Enemy attack damage to a hero). Boss melee hits are not reduced; a block against them either cancels the attack, passes 0, or still costs the full value, as each boss decides (Taking a hit). The guard timer and the per-attacker block rules are in Guard timer and per-attacker block. No parry or dodge exists, and there is no invulnerability window after a hit (Taking a hit).
+- **Input lock gate** (Resolved, High): the word is the game-state box flag (+0x20), set on each pass by the dialogue-box host and the list picker, so heroes take no hits while a dialogue box or a list picker is up (Taking a hit, step 1).
+- **Respawn after death** (resolved in part): the only engine respawn is the deadly-ground one, at the entry record named by the ground entry (SPEC-0055, section 8A). Every other respawn comes from a script or from game over. The death path does not call area setup. Area setup heals both heroes in the modes described under Respawn. Which scene-setup path a player takes after a death is not established.
+- **Death gate, other-hero test** (Resolved, High): the gate stores in the area's death-info record the dying hero's index and a both-dead flag (1 when both heroes are in state 16 at the time of the gate, before the default death), starts the callback task when the task handle is empty, and returns the registered flag (Health and death, step 1).
+- **Death callback guard** (resolved in part): a later eligible death can start a callback only after the prior task finishes and the live-area update reaps its handle. An inactive buffered area pauses the callback task and does not reap it until that area becomes active again. Area reset and buffer replacement have separate cleanup behavior (SPEC-0055, Start guard and Open question 1). High for the active-only reaper and handle guard; transition timing and external cleanup remain open.
+- **Death callback task** (Resolved, High): the task calls the registered callback once, with one argument: the address of the area's death-info record, whose first word is the dying hero's character id and whose second word is the both-dead flag. When the callback returns, the task ends, and the area's per-pass update frees it (Health and death, step 1). Test vector: Roberta dies while Tor is alive: the callback receives a record holding (Roberta's character id, 0).
+- **Hero indices** (partly resolved): slot 0 is Tor and slot 1 is Roberta (Medium-High). The script value -1 meaning the active hero is Medium. Which scripts pass -1 or a larger value, and which hero the swap calls mean by "hero 1", are not all established. The hero swap is the L1+R1 chord in the in-play state (SPEC-0053).
+- **Non-hero death** (resolved): the death of enemies is SPEC-0038 Behaviors 34 to 36; this spec covers the hero path only.
+- **Scene-setup mode 2 ending** (Answered, High; SPEC-0055, Placement after death): mode 2 sets progress value 220 and makes Roberta the active hero; it does not heal. Only the modes other than 1 and 2 restore both heroes.
+- **Roles of Square, Cross, L1 and L2 in combat** (resolved, High; SPEC-0033 Controls): Square is the interaction and traversal-prompt button. Cross is the jump button (states 7 to 10, the strafe jumps 43 to 46, the jump off the ladder of state 41). L1 enters the shield guard (state 20). L2 holds strafe (state 32). Item use from the pad: a pad path exists through the quick-item panel (the D-pad selects an entry; Circle or Cross uses it; SPEC-0021). Item-screen use stays on the menu side (SPEC-0035).
+- **Hero action states: start sources** (resolved, High): state 13 starts from the R2 or Circle press edge, from the air attacks of the jump states and from an attack press in the sidle. State 41 (the ladder) starts from the ladder mount test (SPEC-0033 Behavior 22), not from a button.
+- **Roberta's remaining states** (Resolved, High): sub-state 5 is the near-target swat, 6 and 7 the spins, 8 the leap and 13 its landing (Attack router). The leap and landing steps are in Roberta leap and landing. The spins always play at rate 1, because slow scales only the swats among Roberta's attack steps (Hit detection, Windows at other play rates). The held-power value and its unused shot field are described in Roberta shot: stored power reader.
+- **Level meanings of the magic table** (Resolved, High): Roberta's level is the launch class of the shot: level 0 for class 0, level 1 for class 1 and the default row, level 2 for class 2, level 3 for a full release (Magic; Roberta shot projectile).
+- **Power shot rounding** (Resolved, High): the truncation and rounding rules are Mote charge amounts, not damage (Mote charge use by attacks). Tor truncates and Roberta's full release rounds half away from zero, both with a minimum of 1 when Q is at least 1.
+- **Attack record mapping** (Resolved, High): each Mote power-attack object reads the attack power record for (hero row, its own Mote id); Tor's power step and Roberta's full-release shots read the record of the word-2 Mote (index map in Layout).
+- **Charm scale** (Resolved, High): the scale is the hero's outgoing product A x D x B x G x E stored at spawn, and the object hit subtracts defence before multiplying by P (Charm attack hits).
+- **Mote object reaction request** (Resolved, High for the words, Medium-High for the senders): the request is a status apply on the target with four fields: the status code, then the duration, amount and period from the Mote status words of the attack power table (Layout). The fields per object (Lava, Leaf, Shadow, Sun and the Water bubble), Tor's power step and Roberta's full-release shots are listed under Status apply (Sources of statuses on an enemy from the heroes). No knockback is carried.
+- **Power-step status fields** (Resolved, High): the three fields after the status code in Tor's power step are the Mote's duration, amount and period for the hero's row (Damage; Layout).
+- **Aim command draw** (Resolved, Medium-High): a uniform whole number from {0, 1}; the second command is sent with chance 1/2 (Anchor sockets, nearest object and follow).
+- **Charm routine callers** (Resolved, High): the routines are the hit handlers of the Mote power-attack objects, which the attack family driver ticks; the objects are spawned by the full-press release (Charm attack hits).
+- **Hit-volume state gate** (Resolved, High): the gate of 1 or 3 is the state word of the world breakable being tested (1 intact, 3 intact and not breakable; SPEC-0048), not a state of the attacker (Attack sweeps).
+- **Hit-volume readiness test** (Resolved, High): the timer owner is Roberta's Supernova (173) orbit. The test is the bolt launch: an active hero, a random visible target within 45 units and the effect host. The "effect id 1" is cue 1 of sound bank 1 at the orbit point (Hit volume re-arm).
+- **Beam and Wind hit-list reset/lifetime**: Resolved (High for object type and expiry behavior; Medium-High for attack-name mapping). Attack object types 173 (Roberta's Supernova) and 167 (Wind) own the per-object lists; a target id is suppressed for 60 active updates, about one second, after which the entry is cleared. Each attack object has a 10-second active lifetime. The family C beam's separate one-second list and family B orbit's 60-tick list are specified in Charm attack hits.
+- **Status predicates** (Resolved, High): for the hero, the second predicate that gates the slow is the in-attack test (Status effects, item 4). For an enemy-kind character, the moving predicate is true when its current animation is one of the five gait clip words of its current gait set (+0xB58 to +0xB68), and the attacking predicate is true in class state 19 with agro outer sub-state 2 and sequencer state 0 to 3 (busy in an attack), or when the word +0xE58 is non-zero. So a slowed enemy plays at 0.5 while on a gait clip or while busy in an attack, and a sped enemy plays at 2.0 only on a gait clip. Test vector: a slowed enemy in sequencer state 5 (recovery) on a clip that is not a gait clip, with +0xE58 = 0, keeps its rate. The state-code gate once thought to block a status on the hero is the enemy's element gate of the enemy's own status-apply method (Status apply; SPEC-0029).
+- **Per-tick poison and fire words** (Resolved, High): the hero's four words are -1 from the hero's creation, and every source that applies a status to a hero passes -1, so hero poison is always 2 HP every 4 s. No source passes a zero period, so no divide by zero is reachable (Status effects).
+- **Poison floor** (Resolved, High): the hero status tick limits poison so that a hero keeps at least 1 HP; the enemy per-tick routine has no floor (Status effects).
+- **Immunities** (Resolved, High): every source calls the hero's own status-apply method, so statuses 8, 9 and 10 block curse, poison and slow from every source, enemy bites and projectiles included, and the block plays effect 0xC2, 0xC3 or 0xC4 (Status apply). No other immunity check exists in the apply.
+- **Hazard routes** (Resolved, High): there is one apply method per class, not a script route and a hit route. Fire statuses deal damage only to enemies (the hero's Fire and Lava attacks); a fire status on a hero deals none. The script-driven hazard patterns are specified in SPEC-0057.
+- **Status display pair slots** (Resolved, High): the three effect emitters each use a spatial-pair manager with five accepted-pair pointer slots. Together these are up to fifteen live emitter-particle associations, cleared on display initialization or shown-status change and refreshed by the shared pair manager. They are not icon records and are not reset by the per-tick timer step.
+- **Tint pulse** (Resolved, High): there is no pulse. The tint is the per-channel minimum of the factor and 1.0, set every tick; the rate word is never read; fire's tint comes out as (1, 1, 1) and is cleared every tick (Status display and cues; SPEC-0034 section 5.4).
+- **Mote status paths** (Resolved, Medium-High): the melee path is Tor's power step; the other paths are the Mote power-attack objects and Roberta's full-release shots. Which path applies each Mote's status is listed under Status apply (Sources of statuses on an enemy from the heroes).
+- **Item-based stats** (Resolved in part, High): word 0 holds the armour Mote, word 1 the shield Mote and word 2 the weapon Mote (SPEC-0021, Equipment slots). The item field at +0x60 read by the equipped-item query is open (SPEC-0021).
+- **Save restore scaling (RESOLVED)**: the save slot holds maximum health and magic, not experience or level, so the restore does not scale by level or experience. The restore rule is in SPEC-0025, Hero maxima and restore.
+- **Weapon factor source** (Resolved, High): factor A is the weapon's stat A (item record +0x20) for weapon types 3 and 6, and 0 with no weapon. The per-hero 1.5-default table of SPEC-0021 is the weapon reach: the swing length is reach + 2.0, and the Mote objects are placed with it (Hit detection, Charm attack hits).
+- **Charge stat** (settled, High): S is stat B of the weapon-family entry (types 3 and 6), and 0 when there is no weapon. It is 100 for every weapon on disc. It enters only the Mote charge amounts.
+- **Sources of the stat-up items**: Resolved: Golden Negg (151), Red Negg (174) and Starry Negg (154) are placed in world packs and sold in shops (SPEC-0021), and Negg bushes drop them once per area (SPEC-0060, Foliage patches). The growth steps trigger in play.
+- **Level tests: callers and argument** (Resolved, High): the in-play HUD calls each of the four predicates through the front-end node-predicate dispatcher. Each predicate has 14 reachable segment nodes with arguments 0 through 13; a segment passes when its ordinal is below the hero's upgrade level. The predicate also requires its matching hero to be active. This is a maximum-health or maximum-magic bar test, not a low-current-health test (Hero level tests; SPEC-0035 sections 9b and 9c).
+- **Charm entry for damage** (Resolved, High): both heroes read the Mote in word 2 for factors B and C and for the element; a Mote object reads its own id for C and P (Damage, Charm attack hits).
+- **Luck meaning** (Answered, High; SPEC-0021, Pickup dispatch and the luck gate; Stat-up items): the stat-B gain is the clamped luck value used by the pickup gate. For a gated pickup, the gate computes L = trunc(luck × 4.166667) from the hero's luck value, draws an integer from 0 through 100, and vetoes when L is no greater than the draw. SPEC-0021 gives the edge vectors.
+- **Revive target** (Answered, High; SPEC-0055 Revive by script): the revive acts only on a hero in the death state, always on the hero that is not selected; the script's hero argument only gates the call.
+- **Revive gate value** (Answered, High; SPEC-0053, SPEC-0055): the word is the swap mode, and 2 is free switching both ways. In swap mode 3 no call revives anyone.
+- **Negative set** (Resolved in part): SetHitPoints stores a negative value unchanged. The checked level-module call scan found no reached direct callsite and no negative caller argument. This does not rule out indirect or non-level callers; what happens after a negative value is stored remains open.
+- **Negative fraction** (Resolved, High for representable finite products): a finite negative fraction is multiplied by maximum health, truncated toward zero, and passed to the ordinary set rule. With positive maximum health the result is negative; the set rule can store it below zero and notify health loss, but does not invoke the death handler. Non-finite or out-of-range floating-point products are not covered.
+- **Integer range** (Resolved, High): add and deduct amounts are signed 32-bit values, and the health arithmetic wraps modulo 2^32 before the signed comparison or store. Add computes the wrapped sum and clamps only when that signed result is above maximum health; it does not invoke death. Deduct first compares the signed amount with current health; amounts at least as large as current health set health to 0 and invoke death, while smaller amounts subtract with 32-bit wrap and store the result. Test vectors (synthetic): at 100 health with maximum 150, adding 2,147,483,647 wraps to -2,147,483,549 and stores that negative value without death; deducting -2,147,483,648 wraps the subtraction to -2,147,483,548 and stores that negative value without death. Ordinary non-overflow behavior is described under Add and Deduct.
+- **Notification order on set (Resolved, High for the hero path)**: for supplied values at or below maximum, both gain and loss notifications run before the current-health store. For a supplied value above maximum, the maximum is stored first and then the gain notification runs; this branch also notifies when current health already equals maximum. The hero callbacks only restart the health-display timer at 240 ticks and do not read health, so the callback does not observe the old value on the before-store paths. Later HUD drawing is outside this question (SPEC-0023).
+- **Extra hero methods**: GetMaxHitPoints, SetHitPoints, AddHitPoints, DeductHitPoints and GetDispIDofLastItemPickedUp have bodies in the boot program, but no level-module call is known (SPEC-0030 note). Whether non-level code calls them is not established.
+- **Health display timer** (Answered, High; SPEC-0023, section 4): the health and pool bar group timer re-arms at 240 ticks (4 seconds) after a health or pool change; the bars remain at full alpha for 210 ticks, then fade over 30 ticks and hide at zero. The health-display timer is separate from the monster-bar timer (SPEC-0023 section 10).
+- **Jump speed gate** (resolved; moved): the 0.01 gate chooses the moving jump clip (0x4C) or the standing one (0x46) and the air phase 1 or 0; it is a fixed constant (SPEC-0033 Behavior 50).
+- **Jump speed units** (moved): the units of the jump speeds are open in SPEC-0033 Behavior 50 (Medium for the reading of velocity divided by 30 per tick).
+- **Backward step** (resolved, High): state 11 is the backward jump; its horizontal velocity is the facing times -10 from the launch (SPEC-0033 Behavior 50).
+- **Attack sub-kind 7** (resolved, High): it is air phase 7, the moving landing, which sets the state field to 4 directly (SPEC-0033 Behavior 50).
+- **Guard hold exit** (resolved): the "guard" is the hard landing (air phase 10). It requests 4 and sets its own sub-state to 4 inside the event window with the stick off centre, and does not write the hero's state (SPEC-0033 Behavior 50).
+- **Evade variants** (resolved in part): the "evade" is the soft landing (air phase 6). Its first step helper is the jump chooser (the chained jump); the second helper, with a different argument, has no known caller (SPEC-0033 Open questions).
+- **Guard and evade triggers** (resolved, High): they are the hard and soft landings of the jump states, chosen in air phase 5 (SPEC-0033 Behavior 50). No button starts either.
+- **Landing test of sub-kind 5** (resolved in part): sub-kind 5 is air phase 5. A fall height above 3.0 (word 0x2DD828) or the landing flag +0x1514 gives the hard landing; the flag is cleared on entry to the jump states. The meaning of the flag is open (SPEC-0033 Behavior 50).
+- **Hard landing final phase** (resolved, High; SPEC-0033 Behavior 50): the 0.99 completion path sets hero state 1 and requests 0, but does not write the air-phase word. It remains 10 until a later entry to the jump states.
+- **Melee steps** (resolved, High): the sub-kind values 0 to 5 are air phases, not melee steps: 0 and 1 rising, 2 to 4 falling, 5 the descent and landing chooser (SPEC-0033 Behavior 50).
+- **Contact routines: mapping** (Resolved, High for the static dispatch): all nine family handlers map to Mote attack objects in Contact routines and cues: A to Roberta Lava 161, Tor Water 163, Tor Nova 172 and Tor Rock 165 sub-shots; B to Tor Lava 161 and Roberta Supernova 173; C to Roberta Shadow/Sun beams 169/171; D to Tor Shadow 169; E to Tor Sun 171; F to Roberta Rock 165 skipping shots; the three extra walks to Roberta Water 162, Roberta Supernova 173 and Tor Wind 167. The shared family-A updater also serves singleton effect 57, but this does not establish that it is a Mote or a separately authored attack. Static mapping does not establish encounter-specific activation.
+- **Breakable element source.** The element gate reads the breakable's element byte (+0x5E; SPEC-0048). Answered: SPEC-0048, “Element gate on hits” and open question 23, establishes that the 40 nonzero-element breakables are exactly the member-1 records referenced by switch groups with two or more members. Keep these identities and values in the per-pack world data rather than duplicating the records here.
+- **Contact table identity** (Resolved, High): the contact routines read no power value; they compare Mote kinds only (Contact routines and cues).
+- **Contact type source** (Resolved, High): the value that chooses the cue is the breakable's material word (+0x5C). On disc it is 0, 1, 3 or 4 (2 never occurs).
+- **Attack family driver** (Resolved, High): the objects it ticks are the Mote power-attack and charm object set, built at start-up (22 objects). The two inputs are the anchor (the hero position, plus an offset for three objects) and the hero's velocity (per-tick displacement x 60). It runs once per main-loop pass for the active hero while the game-state code is below 9 (Attack family driver).
+- **Effect pairing of Mote ids 160 to 173** (Resolved, High): two Mote ids per effect: 160 and 161 give 6003, 162 and 163 give 6000, 164 and 165 give 6004, 166 and 167 give 6001, 168 and 169 give 6005, 170 and 171 give 6002, 172 and 173 none (Timed attack-family groups).
+- **Roberta hold visual (Resolved, High).** From F = 8 the charge routine plays the charged loop sound (Charge completion), and its router starts no effect. Separately, the attack-family driver starts and updates effect 239 after 49 qualifying 60 Hz passes at F at least 80 while Roberta remains in sub-state 1 (Attack family driver).
+- **Attack homing** (resolved, High): there is none in the hero states (Attack homing). State 30 is the ledge hang (SPEC-0033 Behavior 51).
+- **Death state number (resolved, High).** State 16 is the death state: the default death sets it, the is-dead test reads it, and hits on a hero in state 16 are ignored (SPEC-0055). The action-state switch routes state 16 to the death routine (SPEC-0033 Behavior 4A.6); the interaction reading is withdrawn.
+- **Hero action states: start sources** (resolved): states 30, 35 and 47 are written by the in-air ledge chooser; state 19 by the Cross route and the air landing chooser; state 21 from the ground, the air and state 38; state 23 by the Square sidle prompt; state 27 by the attack button with the rope gun; state 37 by an edge contact while walking; state 41 by the ladder mount test; state 49 by the Square feed prompt; state 58 by pushing into a block face for 15 ticks (SPEC-0033 Behavior 51; SPEC-0047).
+- **Attack-family starter order** (resolved, Medium-High): the starter is the in-air ledge chooser. Result 0 writes state 30; result 1 writes state 47 when rising and 35 when falling. There is no double write.
+- **Take-hit animation** (Resolved, High): with blocked flag 0 and the hero not busy, request 0x20 plays when the first weapon-list entry exists and is not empty, else 0xC0; with the blocked flag the block reaction plays (request 0x40). The branch word of the 43 and 44 cue pair is the hero variant word (Roberta). A busy hero (Tor sub-states 1 and 10, Roberta 1 and 9, with equipment word 2 not 0) gets no reaction (Taking a hit).
+- **Attack cue chooser** (Resolved, High): it is the hero footstep cue (SPEC-0031); no attack cue chooser exists.
+- **0.5 direction cap (Answered, High; SPEC-0033 Behaviors 11 and 50).** The capped camera-relative direction helper is reached by the hero jump handlers for states 7–11 and strafe jumps 43–46. State-13 attack steps use a separate stick displacement path scaled by 0.25 (Attack router); the recovered state-13 route does not call the capped helper. The earlier attack-step attribution is withdrawn.
+- **Landing into state 7** (resolved, High): state 7 is the standing jump and fall state, not an attack router. The walk-off and the state-47 flag branch enter it in a falling phase (SPEC-0033 Behaviors 9A, 50 and 51).
+- **Cancel bit** (resolved, High): the "cancel" of state 41 is the jump off the ladder, on the Cross press edge (SPEC-0033 Behavior 13).
+- **Sub-mode 3 threshold in state 30** (moved): open in SPEC-0033 Open questions (Traversal bodies).
+- **Lunge and strike sub-mode meanings** (resolved): the seven sub-modes of state 30 are the ledge hang: grab, move to the edge, hang idle, hang, pull up and the two shimmy ends (SPEC-0033 Behavior 51).
+- **Targeted approach (state 41): waypoints and predicates** (resolved, High): state 41 is the ladder. The waypoints 0.45 + 1.25 k are the rungs, the 0.6 window the rung search, 120 the mount from above, and 1.3 and 1.27 the top tests of the two rung clips (SPEC-0033 Behavior 13).
+- **Targeted approach (state 41): effect and helper calls** (resolved): index 140 is sound cue 140, one per rung step and with the mount clip; the two helpers add the jump-off push (-0.5) and lift (2.0) (SPEC-0033 Behavior 13).
+- **Attack mode value (states 13, 41)** (Answered, High): the value selecting Tor's or Roberta's attack table is the hero variant word +0xF80 (0 Tor, 1 Roberta); the 0.05 step of ladder sub-mode 8 applies to Roberta only (SPEC-0033 Behavior 13). The separate value written by a world press trigger is stored at +0x1560 and consumed as Tor's hero-voice cue index when state 13 runs sub-state 13. A valid local cue is 0–11; mapped values 12 or greater play nothing (SPEC-0031, Hero voice slot uses; Edge cases). The trigger press enters only through the Tor-gated volume handlers. This does not establish which trigger records are physically reachable during ordinary play.
+- **Grab (state 23)** (moved): state 23 is the sidle; its open points are in SPEC-0033 Open questions (Traversal bodies).
+- **Stance group (state 21): sub-routines** (moved): state 21 is the climb; its sub-mode table is in SPEC-0033 Behavior 51.
+- **Staged special (state 27)** (resolved in part): state 27 is the rope gun; its phases are in SPEC-0033 Behavior 51. One let-go gate checks the active hero's stored attacker id against its combat-manager entry and releases the rope when that entry has an associated record of type 0x7E. This identifies an attacker-context record gate, not a collision-geometry test. The record type's gameplay meaning and any separate busy gate remain open (High for the gate; Low for the type meaning).
+- **Record approach (states 19, 47 and 58): height offset** (moved): open in SPEC-0033 Open questions (Traversal bodies).
+- **Record approach (state 47): flag-set branch** (resolved, High): the value 5 is air phase 5, the descent of the jump states (SPEC-0033 Behavior 50).
+- **Exits to state 4 (states 19, 30, 35, 47 and 58)** (resolved, Medium-High): they test event bit 0x40 and the stick pushed forward (the forward value of SPEC-0033 Behavior 2 positive), the same test as the boosted-jump exit (Stick-forward exit to state 4).
+- **Targeted special (state 49)** (moved): state 49 is feeding a petpet (SPEC-0047).
+- **Sub-kind mapping (state 37)** (resolved): the test on action ids 2 to 6 is the depth check of the drop from a walk (SPEC-0033 Behavior 51).
+
+- **Attack rotation playability** (Resolved, High): the table at 0x315C68 is the quick-item panel's candidate lists, and the test is whether the party owns the item (SPEC-0021); no attack animation rotation exists.
+- **Stored charge power** (+0xFA4; Resolved, High): it is written once, at the release, as F x (1/60) x 0.5 with no cap in storage. The Roberta path passes it to the shot spawner, which clamps the copy it stores to 0.1 to 1.0 at both ends (Low-end clamp).
+- **Charge resource check and second gate** (Resolved, High): the check is the power-ready check (Power-ready check). The charged loop is a looping sound: weapon-bank cue 5 from F = 8, and Mote-bank cue 0 once F is above 80 with a Mote in word 2 (Charge completion).
+- **Tor fully-charged cue** (Answered): none on the held path at 50; no cue is stated at the threshold.
+- **Conflict C4** (Resolved, High): Tor's arm table and Roberta's arm table run after the matching charge routine on the same sub-state word; the charge routine makes the transitions and the arm table the requests (State 13).
+- **Consumable status test. Answered.** A consumable buff or immunity applies only when its status timer is 0 or below (inactive). See the consumable bullet under Consumable and slot-0 cross-references.
+- **Conflict C1** (Resolved, High): the state-20 exit has no stick test. Sub-state 3 always arms it, sub-state 4 arms it in a frame with event flag 0x40, and it fires with a shield and L1 (0x0004) held or pressed. The state-30 exit to state 4 tests the stick pushed forward (Medium-High; SPEC-0033 Behavior 51).
+- **Conflict C3** (Resolved, High): the mode value of state 13 is the hero variant. The sub-state table is Tor's arm table and the mode map is Roberta's arm table, keyed by the sub-state (State 13).
+- **Conflict C2** (Resolved, Medium-High): the placement given in State 30 is right.
+- **State-30 action tests** (moved): open in SPEC-0033 Open questions (Traversal bodies).
+- **Attack animation choice** (Resolved, High): six fixed ids in the program, with no disc location: 0x1B (the fallback, also with no Mote), 0x1C, 0x12, 0x1D, 0x1E and 0x1F. The flag word is the hero index; an id outside 160 to 173 gives 0x1B; the callers are Tor's sub-state 10 and Roberta's sub-states 9 and 14 (Attack animation choice, Attack router).
+- **State-13 lookups** (Resolved, High): the two lookups of the state-20 exit test that the hero's shield-family entry exists and is not empty.
+- **State-13 sub-state 13 helpers.** Resolved (High for method identity and request order): the effect step is a voice cue (the cue chosen from the hero's +0x1560 word, on the hero's voice slot), and the call with 0.8, 0.6 and 2 is a rumble request with preset 2, duration 0.8 s and intensity 0.6 (State 13, Tor's sub-state 13; SPEC-0033, Rumble). The float 10.0 call invokes the hero block-reaction method; that method ignores the float, may request shield-bank cue 0 when sound is available, and requests animation 64. The caller then requests animation 26. This is the request order; which animation is visibly presented is not established.
+- **State 21 sub-mode 20.** Resolved: the state-21 map lists sub-modes 0 to 18, and sub-modes 19 and above do nothing; sub-mode 20 does nothing as well.
+- **Bounce writes from state 21.** Resolved: the climb state 21 does not write state 56. Sub-mode 2 and sub-modes 13 to 16 request animation 56 as a plain request (SPEC-0033 Behavior 51).
+- **General normal-attack conversion** (Resolved, High): truncation toward zero after the clamp at 0, with no minimum; the take-hit runs only for damage above 0 or an absorbed hit (Damage).
+- **Charm routine identity** (Resolved, High): the charm routines are the Mote power-attack object hit handlers, with the rule in Charm attack hits. The step with Q x S x 0.01 and a minimum of 1 is the shield-block charge, not damage.
+- **Charm returned value** (Resolved, High): the routine that returns 1.25 times an item value is the hero's shield block (1.25 x the shield's stat A with an item in word 1), run when an enemy hits a guarding hero (Enemy attack damage to a hero).
+- **Shot record fields** (High). Resolved: the per-hit damage of a shot is the rule in Roberta shot projectile: damage = max(0, S x C x T minus the target's defence), with the damage scale S kept in the shot's scale field (slot +0x4C, Hero shot slots), the element kind stored at launch, and the Mote's stat G read at the moment of the hit. The launch first stores max(20, 40P) in the scale field and then overwrites it with S, so the first value never takes effect. The held power field (slot +0x40) is not read by the shot's motion, life, hit or damage rules (Roberta shot: stored power reader).
+- **Low-end clamp** (Resolved, High): the low value 0.1 is set on every spawn that finds a free slot, before the clamp, so the clamp always covers both ends: P below 0.1 becomes 0.1 and P above 1.0 becomes 1.0. The spawner also forms 40 x P (at least 20) in the damage-scale field and then overwrites that field with the damage scale in the same spawn, so the product has no effect. Test vectors: stored power 0.05 gives P = 0.1; 0.5 gives 0.5; 1.3 gives 1.0.
+- **Roberta spawn path** (Resolved: High): the launcher check runs at the common tail on every state-13 pass, but a launch requires its fired latch clear, at least 1 MP, an animation release event, and a free shot slot (Roberta shot projectile, Launch gate). The effective quick-shot sub-states are 2, 3, 4, 10, and 11: 2 and 3 select class 1, 4 class 2, 10 the rapid homing class-0 row, and 11 the air-shot class-1 row. Full release is sub-state 9, where the attack-choice/Mote id selects the class-3 volley record and count. Sub-state 14 selects the special full-release route but its fired latch is already set, so it makes no volley. Other sub-states do not launch because their clips lack the release event or their path has no release frame. See Roberta shot projectile, Release frames, Launch class, and tables A–B.
+- **Charge time factor** (Answered, High): the charge routines read the run-time tick-length word dt = 1 / frame rate, and the frame-rate setter writes this same word from the selected rate-table value (SPEC-0007). The release thresholds are separately stored as 50 ticks for Tor and 80 for Roberta. The former factor-G description confuses the tick-length multiplier used to form stored charge power with a separate creature counter threshold.
+- **Conversion mode** (Resolved, High): products and sums chop toward zero and the integer conversion truncates (Damage, Platform arithmetic). A clean build must reproduce this (SPEC-0008, platform rule).
+- **Target pick: stick-length gate** (resolved, High): the candidate's direction is not compared with the stick; a scaled stick length above 0.5 is required, and 0.5 or less skips the candidate. A direction match above 0.5 belongs to SPEC-0033 Behavior 22, not to this pick. The sign convention of the stick pair follows SPEC-0033 (Medium-Low there too).
+- **Target pick: facing vectors** (resolved in shape, Medium-High): the two -0.8 tests use two different hero vectors (the +0x16C vector and the vector from +0x7CC), not two components of one vector. The helper that gives the second vector was not established (Low-Medium).
+- **Target pick: second and third windows** (shape read): the second window's limits take their signs from the candidate's flags at +0x54 and +0x5C; the third window uses the +0x30 vector. The meanings of the two flags and of the reference vectors are open (see the helper item below).
+- **Target pick: failure result** (Answered, High): this climb-panel pick clears the target before scanning, so its 0 result leaves no target. The separate SPEC-0033 Behavior 22 ladder finder also clears its target before scanning and leaves it cleared on failure (SPEC-0033 Open questions, Behavior 22).
+- **Conflict C5** (Answered, High): the actor pick, climb-panel pick and Behavior 22 predicate are three separate routines. Their short-circuit order and outcomes are specified under Cascade call site and Hero target pick.
+- **Conflict C6** (resolved, Medium-High for the intent): the word +0x9BC is the stance sub-mode, and a successful pick sets it to 1 (see Hero target pick). The intent is the stance approach entry.
+- **Cascade call site** (Resolved, High for the branch order and climb-panel success; partial for the third-pick consumer): actor pick runs first; the climb-panel pick runs only after it fails, and a success clears the cooldown, sends event 0x15 (state 21), and skips the third call. Behavior 22 runs only after both earlier picks fail. The third-pick result then enters later near-object and interaction handling, whose ultimate consumer of the stored target remains open (Hero target pick).
+- **Clearance test: height failure** (resolved): the result is blocked (0).
+- **Clearance test: footprint call** (resolved, Medium-High): the clearance test probes each blocker with the footprint family of SPEC-0018.
+- **Clearance test: radius, offset and same-link skip** (Resolved in part): the radius is the hero radius; the query offset is plus or minus 0.25 times the motion-record side basis at +0x290, with sign selected by the sidle branch; and the same-link skip requires nonnegative kinds, non-null +0x48 links and matching linked-record +0x64 values. The mapping of local sign to apparent left/right and the semantic owner of the shared +0x64 value remain open. The clearance test is not the actor-to-actor clear path of SPEC-0018 (Resolved, High; Hero clear-path predicate).
+- **Clearance test: blocking rule** (Resolved in part, High): a nearby kind -3 object blocks only when all three windows pass for that object. Failure of any window skips that object and scanning continues; a later object can still block. The third-window comparison is inclusive, with effective upper bound equal to the object extent at +0x44 minus the margin described above. The helper result is a value from an object's +0x144 field; the generic setter for that field preserves the prior value at +0x7FC when it changes. The clearance call path does not establish which object's field is supplied here, so the gameplay meaning of value 30 remains open. [High for the field/accessor boundary; unresolved for the receiver and meaning.]
+- **Combat reach test: vector roles** (Resolved, High): the test axis n is the unit normal of the triangle, and b is the axis of the target's bone capsule (Combat reach test). Whether the caller normalises b is open (see the input-units item).
+- **Combat reach test: anchor points** (Resolved, High): the anchors are P0, the tip this tick and the tip last tick; the steps are the slab, the shifted point, the inside test, the three edge gates and the edge cylinder test, in that order (Combat reach test).
+- **Combat reach test: distance output** (Resolved, High): 0.4 (r c + h s) is the margin d of the edge gates; the test returns hit or miss only.
+- **Combat reach test: callers** (Resolved in part): the hero's swing runs the test as its swept step with a target bone capsule (radius +0x44, length +0x40 of the bone record) against the triangle P0, tip now, tip last tick (High). The single-weapon reach test of enemy-kind characters and several bosses uses a fixed weapon length of 1.5 (SPEC-0029). Which caller passes the radius of 0.5, and the owners of the remaining callers, are open.
+- **Combat reach test: sign of the three-point normal** (Resolved, High): the sign does not matter (Combat reach test).
+- **Helper meanings (hero reference vectors and fallback)** (partly resolved): in the target pick, the getter on the motion record returns its forward basis B3 (+0x2B0; SPEC-0040 Open question 78), and the getter on the locomotion block returns its stored heading (+0x40; SPEC-0033). They are separate inputs to the two candidate-facing tests. The no-argument getter used later in the target pick, and the helper used by the clearance test, remain unidentified; their use does not establish a camera-vector role. [High for the returned fields; Medium for their role in the pick]. See also SPEC-0033 Behaviors 19 and 22.
+- **Combat reach test: input units** (Resolved, High): n is normalised inside the test; the hero swing passes the bone frame's second row as b with no normalisation (Combat reach test, Input b).
+- **Event switch** (Resolved, High): it is the common-enemy agro outer-sub-state entry (SPEC-0038 Behavior 44), and its codes are the rush gait set; the hero has no such switch.
+- **Attack cue chooser tiers** (Resolved, High): the tiers are the footstep gaits (run, walk, other) and the kinds are ground surface kinds (SPEC-0031).
+- **Attack cue chooser gate** (Resolved, High): the footstep gate is exact integer equality of the frame cursor (SPEC-0031).
+- **Low-health warning** (Resolved, High): the tests compare the active hero's current health with 0.15 of its maximum (cue 157) and its current magic with 0.15 of its maximum (cue 158), on every tick while below; the follow-up is the HUD change-detector re-arm (SPEC-0023 section 4). 157 and 158 are cue ids.
+- **Timed attack-family group** (Resolved, High): the owner is one global object, not the hero; only the mote eater fills and starts it; it runs trunc(30.0 x R) + 1 = 1801 group steps with interval trunc(1801 / n), minimum 1; each spawned entry plays its Mote's effect and drains that Mote. Each Faerie Sister's thread contributes one group step on the terminal state-9 death-animation pass that changes her base state to 16, then stops stepping on later passes (SPEC-0029 Behavior 9; SPEC-0011; High).
+- **Ten-slot timed lists.** Resolved in part: the list with the 1 s lifetime at 0x2DCB2C is the hit list of the family C beams. The additional per-object lists used by attack object types 173 and 167 suppress repeat hits by target id for 60 active updates, then clear the entry. The owning object has a 10-second active lifetime (Ten-slot timed lists; Beam and bubble lists).
+- **Attack-family exclusion test (predicate resolved, High).** The filter returns 0 for every attack id when the hero word at +0x14C is zero. When +0x14C is nonzero, it returns 0 for ids 161, 162, 164, 165, 166, 169, 171 or 173 when the hero attack sub-state word +0xF90 equals 9, and returns 1 for all other inputs. This is the same sub-state field used by the two hero attack tables in state 13; this filter checks the value 9 but does not itself test the hero's main action state. In the shot-fill path this result also gates the slot-matched auxiliary-record builder: the selected shot-slot index is passed to that builder only when the result is nonzero. The callback's gameplay meaning and runtime reachability of each builder input remain open. **Attack id 163 contact cue (resolved in part):** Roberta's full-release Water shot sets a slot flag. On target contact, the ordinary shot damage path runs and disarms the slot; the updater's cleanup then requests positional sound cue 5 on the active hero's Mote-bank slot. Water id 163 selects sound block 480 there, where cue 5 is the Mote move-loop cue (SPEC-0031). Same-pass natural lifetime expiry skips this request. The separate tuning lookup selects float-table index 40, whose value 8.0 is returned as integer 8 and stored in the shared submanager for an indirect actor callback; the value's meaning remains open. Cue 5 is a sound request, not a visual effect, resource id, or model/material binding, and is separate from the Water shot's damage to its target and the Mote's release damage. High for the call, slot and lookup; callback meaning and any further presentation remain open. Whether id -1 is reachable during play also remains open.
+- **Attack animation tables** (Resolved, High): the boot tables indexed by Mote id are effect-definition id tables: ten of fourteen entries and six of eight entries (Attack-family effect tables). The animation choice is a fixed rule with no table, with six fixed ids (Attack animation choice).
+- **Shot-associated auxiliary records.** Resolved in part: six records at +0x600 mirror the six shot slots; the selected slot is passed to its record builder only when the shot-fill filter allows it, and cleanup clears the matching record. A character-update path also uses the records as child-state containers, updating child entries from the corresponding shot slot or clearing them when that source is unavailable. The known Hit detection and Hit volume re-arm paths do not call this child updater directly. Resolved (High): the child-entry gate is a selected child effect id other than -1; the companion effect-definition lookup is separate and falls back to id 0x193 when missing, without suppressing child creation. Still open: record geometry and whether an indirect or other collision/re-arm consumer reads them.
+- **Shot offset attribution** (answered): the modulo-20 helper is the enemy navigation goal fallback of SPEC-0029 Behavior 2b; no hero-shot use is established.
+- **Factor 0.9** (Resolved, High): it applies to enemy hits taken by a hero when the active petpet's kind is 1 or 7 (Enemy attack damage to a hero); it does not apply to the hero's outgoing damage.
+- **State 27 constants** (resolved, High): the 0.8 reel push is a fixed program constant and 0.35 gates the vertical part of the normalised aim (SPEC-0033 Behavior 51). The boot word 0x2DD7B0 is the 0.8-second rumble duration for Tor's attack sub-state 13 and is not used by the rope-gun push.
+- **Routing of states 9 and 13** (resolved, High): states 7 to 11 run the air routine of each hero (SPEC-0033 Behavior 50); state 13 the attack step.
+- **Force flag of the consumable use** (Answered, High; SPEC-0021, Consumable healing and the item-use dispatch): the quick-item panel and both item-screen paths pass force 1, so a heal applies whenever the missing amount is above zero, and the 50 percent items, the Silver Negg (152) and the full-restore items (58 and 59) are usable.
+- **Word numbering for elements** (Resolved, Medium-High): word 2 is the weapon Mote (attack element), word 1 the shield Mote (the element of a shield block, which the Darkest Faerie orb block also reads) and word 0 the armour Mote. The second quick panel writes a Mote into any of the three words (SPEC-0021).
+- **Target type meanings** (Answered; SPEC-0029 Layout 4 and 4b): T is the row's u16 at 0x3C; its per-row values and counts are High there, its labels Medium-Low.
+- **Roberta shot value** (resolved). The launch first stores the larger of 20 and 40 times the clamped charge power in the shot's scale field, then overwrites that field with the damage scale S in the same routine. The max(20, 40P) value never takes effect (Roberta shot projectile). The shot's element is stored at launch and used by the hit tests.
+- **Cost of a shot with no Mote** (Resolved, High): a quick shot with no Mote pays 3, 5 or 10 MP (launch class 0, 1 or 2) on every hit of a hittable target, even at 0 damage, and no charge; a miss pays nothing. A full release with no Mote fires one class-2 shot and pays 10 MP at launch (Roberta shot projectile).
+- **Attack sweeps: family and callers** (Resolved in part; High for the Mote caller map and sweeps B to F): the family-A update calls sweep A after its active check and queries the world grid at its object position. The hero object driver maps it to Roberta Lava (161), Tor Water (163), Tor Nova (172), and three Tor Rock (165) sub-shot objects with filter kind 2; Tor Lava (161) uses family B. The common family-A update also runs for singleton item effect 57, so its function identity alone does not name a Mote. The shared family-B orbit update used by Tor Lava (161) and Roberta Supernova (173) calls sweep B over the hero-owned world-breakable list. Roberta Mote attacks 169 and 171 use the shared family-C beam update, which calls sweep C over the world-grid cell list at the beam position. Sweep D runs in Tor Mote 169's active timed-object update, sweep E in Tor Mote 171's activation path, and sweep F in updates of Roberta Mote 165's three full-release skipping rocks. Sweeps C to F query the world grid at their attack-object points. Whether sweep C's two attacks have identical geometry or runtime reach, whether a specific authored encounter reaches them remains open (Attack sweeps). Resolved (High): the first extra walk belongs to Roberta Mote 162, the second to Roberta Supernova 173, and the third to Tor Mote 167. Their attack-state spawn requests can reach the corresponding active effect subsystems subject to shared busy and local active/progress gates; authored encounter reachability is not established.
+- **Attack sweeps: hit gate** (Resolved, High): there is one gate, the breakable's state word +0x40 (1 or 3). The owner-state reading is withdrawn.
+- **Attack sweeps: kind bytes** (Resolved, Medium-High): kind 1 sphere, 2 never hit, 3 finite cylinder, 4 and 7 rectangle (static or moving); other kinds run no test (Attack sweeps).
+- **Attack-id spawn dispatch: targets** (Resolved in part, Medium-High): the dispatch spawns the Mote power-attack object for (hero, id); Roberta's table spawns nothing for ids 160, 163, 167, 168, 170 and 172. The details of each spawner's effects are open.
+- **Timed glow: source** (Resolved, High): event 8 is Roberta's attack sub-state 8 (the leap), read each tick; any other sub-state stops the effect and resets the accumulator. The bounds 0.5 s and 0.8 s and the effect id 0xF1 are program constants (Timed glow).
+- **Timed glow and charge thresholds** (Resolved, High): the glow accumulator is its own timer, not the charge counter and not the entry timer of Timed attack-family groups.
+- **Timed glow: owner** (Resolved, High): the Mote power-attack driver object holds the accumulator and the effect slot; it runs for the active hero only, so there is one glow, and only Roberta's helper set runs it.
+- **Former attack and charge driver lead** (Answered, High; SPEC-0021, Item showcase): the routine selects full-showcase pose animations 163 to 166 and handles showcase text/stingers; it is not a hero combat or charge driver. Its nonzero request field is the showcase cue/text path, and the Tor/Roberta label is the speaker name. The broader meaning of the request state and timer unit remain open in the showcase analysis.
+- **Stance sub-modes (state 21)** (resolved, High): the map is right. The second interpretation is the climb entry, in which the queued panel is promoted to the current target (SPEC-0033 Behavior 51).
+- **Hero state 26** (resolved, Medium): state 26 turns a statue; its search finds an object of kind 1 within 3.0 (SPEC-0033 Behavior 51).
+- **Tor chained-variant counter.** Resolved (High): a repeat of the chained variant needs the repeat count at 2 or less, so at most 3 repeats; the count is reset only by the attack-start reset (Combo windows).
+- **Unnamed parameter-block fields.** The fields +0x1008 (15.0 for Tor, 10.0 for Roberta), +0x1018, +0x101C, +0x107C and +0x1540 (5.0 for Roberta) have no confirmed names beyond the uses stated in Charge parameter blocks. Their roles are open. Resolved for +0x153C (10 for Roberta): it caps spin replays after the initial cycle, allowing up to 11 total spin cycles when the chain flag is supplied at each boundary. Resolved for +0x1500 (10 in both): the plunge hold threshold in ticks (SPEC-0033 Behavior 50; High).
+- **Variant word.** The variant word +0xF80 selects the hero (0 is Tor, 1 is Roberta); it is not a mode. SPEC-0040 does not name +0xF80 or +0xF90; these words appear only in this spec, so the cross-spec link is not confirmed.
+- **Tor power-attack charge** (settled, High): truncation toward zero; Tor's power attack uses 39 or 24 charge.
+- **Charge routine versus state-37 phases** (resolved, High): the state-37 "phases" are its phase word: the depth check (4.5), the step past the edge, the turn (0.99), then state 30 (SPEC-0033 Behavior 51).
+- **State 58 animations** (resolved, High): the state setter requests 70 on entry, then the routine requests 134 (SPEC-0033 Behavior 51).
+- **State 35 phase timers** (resolved, High): 0.95 is a progress gate and 0.75 a distance gate (SPEC-0033 Behavior 51).
+- **State 48 choice** (resolved, Medium-High): state 48 is the long-fall landing; 0x88 (136) and 0x89 (137) are its falling and grounded clips (SPEC-0033 Behavior 9B).
+- **Attack family routines** (resolved in part): states 7 to 11 and 43 to 46 are jump states; the stick step is the strafe-jump direction (SPEC-0033 Behavior 50). The -1, 0 or 1 step chooser has no established role (Low).
+- **Incoming-hit routines** (Resolved, High for the order; Medium-High for the shot contact): the hero pre-step runs no incoming-hit sweep (Incoming hits before the state switch). The collider kinds and the two cue maps belong to Roberta's shot world contact (Roberta shot projectile). Resolved: the collider shapes, the trigger and solid class bits, and the second list, which holds the cell's surface records tested with a 0.25 sphere; a contact there also disarms the shot (Roberta shot projectile, World contact; Medium for the inside of each shape test).
+
+- **Hero collision-kind contact tests and target marker.** The hero collision-kind dispatcher selects the two geometry helpers by primitive kind and sends a successful result to the breakable-contact handler. The dispatcher's direct caller, the collision-record owner and ordinary-play reachability are not established. Resolved in part (High for the exact gate): the target-marker updater releases its current object when the hero marker-enable word is zero or when both locomotion scalars exceed 0.1, the hero is in a jump or strafe-jump state (7–11 or 43–46), and its mode word +0x1508 is neither 9 nor 10. Otherwise it updates the marker transform and maps hero states 3, 4/6 and all others to marker kinds 1, 2 and 0. The motion-scalar meanings, visible use and visual meaning of the kinds remain open. Synthetic vectors: with both scalars 0.2, base state 7 and mode 8 release the marker; changing the mode to 9 or the base state to 13 preserves it; changing either scalar to exactly 0.1 also preserves it.
+- **Owner of the projectile setup** (Resolved, High): it is the setup of Roberta's Rock (165) skipping shots, not an item or drop routine (Rock skipping shot).
+- **Owner of the three-spoke spawner** (Resolved, High): Roberta's Rock (165) full release spawns its three rocks through it (Three-spoke spawner).
+- **Projectile aim step: random or fixed** (Resolved, High): the turn fraction t is a uniform real from −0.1 to +0.1, drawn at each bounce (Rock skipping shot, Bounce).
+- **Projectile aim step: second vector step** (Resolved, High): the second step removes the height part of the blended direction and renormalises it, so the stored direction is a flat unit vector.
+- **Projectile start offset** (Resolved, High): the word at 0x2DCBC4 is converted to a whole number by truncation (0), so the random part is always 0 with no draw, and the stored value −0.1 is the rock's gravity per tick.
+- **Projectile spoke lifetime** (Resolved, High): the value passed by the spawner is the rock's speed in units per tick, used by every tick's move.
+- **Spoke lifetime second bound** (Resolved, High): the rock speed spread is −0.3 to +0.3 (the word at 0x2DCB8C and its negation). Resolved for the aimed object's countdown spread (High): its bounds are the word at 0x2DCB50 and its negation, so the range is −0.1 to +0.1 (Aimed timed object).
+- **Projectile lifetime table** (Resolved): the 6 to 10 draw is the rock's ground-contact limit K, not a tick lifetime; no lifetime table is used.
+- **Aimed object motion value** (resolved for Roberta Fog 166, High): the dispatcher starts this object with a direction and rate, but setup overwrites the normalized direction with zero before the first tick. The tick consumes the zero vector, so the Fog cloud has no horizontal drift on this path. The height-follow step can still change Y; no claim is made about other object types that might share the initializer or an unobserved external writer.
+- **Aimed object height** (resolved, High): on each active tick the target Y is the integer truncation toward zero of the new ground-probe result plus 3.5. The movement step interpolates toward that integer target. Spawn uses the full floating-point ground height plus 3.5, and the cached ground reference remains floating point.
+- **Aimed object cycle-end and re-arm routines** (resolved for operational behavior, High). Cycle end clears both timers and releases the four attached effect objects, clearing their handles; effect mode 4 then plays. Once the cycle has ended, re-arm scans all actors and submits a target-specific attack-effect request through the effect host for every actor passing its class-specific eligibility query and the strict 10-unit distance test. The request uses the first Attack spawn routine (type 23, sub-type 5) with Fog attack id 166. Any qualifying actor is sufficient to reset the countdown and play effect mode 1. The target-specific request creates a visual effect-pool object whose active update performs effect and attachment upkeep, without a target contact or damage step; it does not itself apply damage. The visible appearance remains open.
+- **Attack spawn: effect and sub-type choices** (open). Which effect resource is visually selected for each attack id is not established (Medium-Low). Resolved (High): the duration is the pooled object's lifetime in ticks; a nonnegative stored value D yields D + 1 active updates (Attack spawn). Resolved (Medium-High): the look-up arguments 0xA6 and 0xAD are the Mote ids 166 and 173, and the first routine is the hit of Roberta's Fog cloud (Attack spawn).
+- **Time base** (resolved, High). The time base word at 0x368FA0 is run-time and not in the disc image. It is written once at start-up from the boot rate table at data address 0x30C598 (SPEC-0007, Rate selection), and holds 60 ticks per second.
+- **Generator** (resolved, High). The generator is the shared Mersenne Twister (standard 624-entry generator and tempering). Its state object is at 0x39BE50 (624 entries in 8-byte slots; index word at 0x39D1D0, set to 625 = not seeded by a start-up initialiser). It is seeded on its first draw from the BCD date and time bytes of the console's real-time clock, so the sequence differs per boot and a clean build cannot (and need not) reproduce it. The words at 0x2EC9B8 are not state: they are the generator's two-entry twist constant pair in 8-byte slots (entry 0 = 0, entry 1 at 0x2EC9C0 = the standard twist constant 0x9908B0DF).
+- **Mode-code meanings** (Resolved, High): table A is Tor's step factor D and table B Roberta's (Mode-code and flag multipliers).
+- **Flag factor identity** (Resolved, High): the flags are curse and strength (statuses 1 and 4), and the hero damage path uses the 0.75 copy.
+- **Anchor sockets and follow** (open; Low). The owner records that hold the sockets, the follow's caller, and the aim command's caller are not identified. The follow's 0.5 blend is known; its use is not.
+- **Oscillator** (resolved in part, Medium). The phase gets one ±6.283186 correction per tick, and the callback is invoked on every update whose elapsed counter is at or above its limit; there is no one-shot guard in the oscillator routine. Two effect-object paths call it directly. Their object identities, callback effects, and the sine/cosine kernel's exact intended approximation remain open.
+- **Shot slot position** (resolved in part, High for the point/vector W lanes, the 3D update and collision-helper dataflow; final Boolean outcome versus an XYZ-only counterfactual remains open). Launch writes the shot body anchor with W=1; each active position update adds a displacement with W=0 and restores the point W to 1. Enemy bone-capsule tests and first-list kind-1/2/3 world shape tests use XYZ-only distance/projection reductions. First-list kind-4/7 box tests and the second-list surface-record test include four-lane dot products; their raw record vectors are not transformed to cancel W before these reductions. The shipped type-11 kind-4/7 and type-5 second-list records carry nonzero W values in the vectors those helpers consume, so W contributes to their projected geometry. Concrete synthetic-query example: using resource 678's kind-4 stored point as `P≈(-858.3405,48.9700,1051.1857,1)` and its +0x40 vector `A≈(0.3542007,0,0.9351695,-679.012)`, XYZW gives approximately `-0.000008`, while XYZ-only gives approximately `679.012`. This is a projected-value difference, not proof that a reachable shot changes the final contact Boolean (World contact).
+- **Shot slot scaled vector** (resolved, High). The vector and the scale that this item named are the launch direction (slot +0x20) and the speed (slot +0x44). The step helper returns direction times speed times the tick length, the per-tick displacement of the shot (Hero shot slots). Which callers use the helper is not identified (Low).
+- **Shot slot radius and armed word writers** (resolved in part, Medium-High). The launch writes the radius, the speed, the life and a nonzero handle to the armed word of the slot it fills (Roberta shot projectile). The per-tick updater clears that word when the life expires, and a hit also clears it. In the recovered direct-reference corpus, the launch path is the only identified nonzero writer; other indirect or unrecovered writers are not excluded.
+- **Landing choice thresholds** (resolved in part; Landings): 3.0 (0x2DD828) is the hard-landing fall height and 4.0 (0x2DD814) the soft-landing camera-shake height. The meaning of the flag at hero +0x1514 is open. The writers of air phase 5 are the let-go and stop-climbing exits and the state-47 flag branch (SPEC-0033 Behavior 50).
+- **Boosted-jump exit** (Resolved, High): the stick-forward state-4 branch is checked only while clip 0x85 is the current action and its progress is below 0.99; the near-completion branch requests clip 0x4E. Neither hero air routine checks clip 0x4E for the same exit. Ordinary landing transitions remain separate (SPEC-0033 Behavior 50).
+- **Roberta shot: slot offsets** (Resolved, Medium-High). Slot k starts at hero offset 0x10D0 plus 0xA0 times k. The earlier base of 0x1100 is the position field of slot 0 (slot +0x30), so both descriptions name the same fields: the radius at slot +0x48 (hero 0x1118 for slot 0), the armed word at slot +0x58 (hero 0x1128) and the speed at slot +0x44 (hero 0x1114). The field once called the slot scale is the speed. The word at 0x1128 is the armed word of slot 0, not a live count (Hero shot slots).
+- **Roberta shot: stored power reader** (Answered, High within the shot subsystem): the hero's held-power value is read at launch, clamped to 0.1–1.0 and copied to the shot's power field. The shot's motion, life, hit and damage rules do not read that field, so it has no effect on shot behavior (Roberta shot projectile; Charge completion). Test vector: 80 held ticks gives a stored power of about 0.667; 120 ticks gives 1.0 after clamping. Neither value changes the shot's motion, life, hit or damage rules.
+- **Roberta shot: reaction and homing rows** (Resolved, High): the quick rows and the default row carry no reaction (-1), and every row except the class-0 row of sub-state 10 has homing 0, so the default row flies straight (Roberta shot projectile, table A).
+- **Roberta shot: modes 1 to 5** (Resolved, High): all five modes steer with the same 0.25 blend; mode 1 uses the locked auto-target and modes 2 to 5 pick a random visible enemy within 60 units and fan the direction. The second per-shot value of the launch is the shot's target (Roberta shot projectile, Launch and Homing).
+- **Roberta shot: launch direction** (Resolved, High): d = unit(aim point - body anchor), with the aim point from the auto-target, the right-stick aim point, or hero position + 20 × facing + (0, 2, 0), and the fan for modes 2 to 5 (Roberta shot projectile, Launch).
+- **Roberta shot: ids 162, 169 and 171** (Resolved, High): their full release spawns the Mote object, sets the fired flag (no volley), enters sub-state 14 and pays MP and charge at once; their damage comes only from the object's hits (Power attack and full release).
+- **Roberta shot: once-per-attack flag** (Resolved, High): the launch fires on the frame with event bit 0x20, once per sub-state; Roberta's charge routine clears the fired flag at every sub-state change, so the launch does not repeat inside one sub-state. Sub-states 5, 6, 7, 8 and 12 never launch (Roberta shot projectile, Launch gate and Release frames).
+- **Roberta full-release gate** (Resolved, High): for the volley ids the first shot pays MP and charge at its launch, so a first shot that misses still costs both. The launcher first requires an unfired sub-state, at least 1 MP and the release-frame event; the shot builder then requires a free slot before payment. A failed gate or a full slot set means no shot initialization and no payment for that attempt (Roberta shot projectile, Launch gate).
+- **Full-release scale table** (Resolved, High): T for a full-release shot is the attack power table value for (Roberta row, the word-2 Mote) (Roberta shot projectile).
+- **Word-2 item hook** (Resolved, High): the hook is Mote charge use (SPEC-0021, Mote charge). It never deals damage; a quick shot's hit uses exactly Q of charge (Mote charge use by attacks).
+- **Tor power-attack gate** (Resolved, High): the release pays charge and MP with no hit test and deals no damage itself.
+- **Contact handler walks** (Resolved: High): the nine static walk-to-handler mappings and their Mote or attack-object callers are listed under Contact routines and cues. They resolve the dispatch chain, not encounter-specific activation.
+- **Enemy hit rule coverage** (Resolved, High): the shield, armour and petpet rule of Enemy attack damage to a hero is used by the common enemies (class 17, including the minions and spiders); enemy pool projectiles use the pool's own rule, which also applies shield and armour (SPEC-0029). No boss melee hit uses either: boss melee values reach the take-hit unchanged.
+- **Blocked flag per attacker** (Resolved in part, High): with the blocked flag set the take-hit plays the block reaction and still subtracts the full value. The Ixi Chieftain's forward swipe and the Werelupe King's shared hit pass 0 with the flag; the Gnarfas whip and rapid strike pass their full 15 with the flag; the Gelert Assassin, the Black Knight's two swings and the Plague Serpent's lunge skip the take-hit on a block; other boss melee is unblockable. The per-boss facing tests are in the boss specs.
+- **Guard timer** (Resolved, High): the threat sense of the idle hero sets +0x1574 to 40 ticks when a shield is equipped, weapons are drawn, and an attacking enemy within 10 units or a live enemy projectile is in front (dot above 0.5); the hero then raises the shield (request 63) and counts as guarding (Guard timer and per-attacker block).
+- **Shield types per hero** (Resolved, High). The equipment entry is chosen by type: types 4, 5 and 6 go to Tor's entry of their family and types 1, 2 and 3 to Roberta's. So Tor's shields are type 5 (ids 106 to 110) and Roberta's are type 2 (ids 176 to 180, the shield books). Roberta's shield-block charge stat is therefore always 0 and her shield Mote spends 1 per blocked hit (Enemy attack damage to a hero).
+- **Hit list clear** (Resolved, High): the list is cleared at every sub-state change of both heroes' charge routines, at entry to state 13, at the attack-start reset, on every tick of state 12, at character creation and at each enemy attack start (Hit detection, Hit-list clear).
+- **Pose timing** (Resolved, High). The hero swing, the attack window and the shot launch read the hero's pose of the previous pass, and test the enemies' bones of this pass; enemy hits on the hero read the hero's previous pose; the Mote objects use this pass's pose (Hit detection, Tick order of the tests).
+- **Swept test internals** (Resolved, High): the steps and the three points are in Combat reach test.
+- **Mote object pairing** (Resolved in part, High): the object per (hero, Mote) is in Charm attack hits, Object pairing; Fire 160 has no object for either hero and Lava 161 is family B for Tor and family A for Roberta. Family-A object counts are now established: Roberta Lava, Tor Water and Tor Nova each use one object; Tor Rock uses three stationary sub-shots. Their active state depends on an associated particle's age and its cutoff field; the Mote setup does not assign a numeric lifetime or hit radius. Shared emitter callbacks can overwrite the associated-particle pointer, so no exact emitter/particle, volume or numeric lifetime is established for each Mote. Resolved: family C uses a fixed collision-box half-width of 1.0 (total width 2.0), rather than a width read from effect definitions 0x222 and 0x224. **[High for object counts and shared cutoff rule; emitter identity and numeric volume/lifetime remain open]**
+- **Body cylinder origin** (Resolved, High): the position point is the feet, and the cylinder runs from the feet to the feet plus the height (Hit detection, hurt shapes). Test vectors: radius 1.0, height 3.5, feet at (0, 0, 0); a sphere of radius 2.5 at (3.0, 1.0, 0) hits with depth 0.5 (axial offset -0.75 from the centre (0, 1.75, 0), within 1.75; side distance 3.0 below 3.5); at (3.6, 1.0, 0) it misses. A sphere of radius 0.5 at (1.2, 3.0, 0) hits with depth 0.3 (axial offset 1.25, side distance 1.2 below 1.5); a cylinder centred on the feet would miss it.
+- **Swing constants** (Answered): the 65.0 gate, the 0.25 centre offset and the radius 1.0 are program constants with no data word (Hit detection, step 2).
+- **Attack windows at other play rates** (Resolved, High). No attack step changes the play rate. Only slow changes it during an attack, to 0.75, and only in Tor's attack sub-states 2 to 12, his air attacks and Roberta's swats (Hit detection, Windows at other play rates).
+
+- **Shot target gates and arming state** (Resolved, High): projectile collision requires either the actor eligibility method to pass, or a guarding target while the arming counter is 0; it then requires the target's animation/skeleton data and at least one bone whose hurt-capsule length is positive, and rejects targets marked hidden by the invisible-kind predicate. The positive-length check is an early prerequisite over the same bone records that the later capsule loop tests individually; +0x40 is the capsule length, not a timer. This is separate from status-effect duration timers (Status timing). The random finder scans in global-list order and stores only its first ten passing the actor eligibility method (+0xCC), horizontal range and three-ray visibility; it chooses uniformly from those stored entries and does not replace them with later candidates. It does not require a positive-length capsule, so selection does not guarantee projectile collision. The arming counter is slot +0x7C (Roberta shot projectile).
+- **Enemy-kind hittable tests** (Resolved, High; Medium for the meaning of the second actor): the six tests are listed under Hit detection, Hittable predicate. None is a status test: they are the script hold, the two dodges, the invisible-kind hide, the petpet kinds and the hit-reaction slide animations.
+
+- **Melee contact mismatch.** Resolved: there is no action state 4 on this route. The value 4 is the recoil material word, and the reaction is Tor's attack sub-state 13 (SPEC-0048, Element recoil).
+- **Mote charge display word** (Resolved in part, Medium-High; SPEC-0021): the 240 value is a HUD display timer of 4 s (SPEC-0023). A failed power-ready check sets four such timers (0x2DCD60, 0x2DCD64, 0x2DCD6C and 0x2DCD78) to 240 (Power-ready check).
+- **Family A users** (Resolved in part, High for the emitted-particle association, object counts and within-rebuild ordering; candidate identity remains open): Roberta Lava (161), Tor Water (163) and Tor Nova (172) each use one family-A object; Tor Rock (165) uses three stationary sub-shots. Each associated record is an emitted particle from a paired effect emitter; the particle supplies the collision radius and the age value used by the Family-A cutoff comparison against +0x14C. The generic particle updater also uses +0x14C as its curve-progression denominator, so this is not a universal lifespan label. Within one complete candidate rebuild, the first accepted candidate receives the last callback among the rebuilt pairs if each pair emits, because candidates are scanned in active-object-array order and allocated pair records are stepped newest-first. This does not identify the final particle stored for any Mote because live candidate membership, rebuild timing and emission outcomes vary. Setup candidates are Roberta Lava 161 (415), Tor Water 163 (416 and 564), Tor Nova 172 (560), and Tor Rock 165 (553 and 562). Conditional disc-definition candidates are summarized below. Open: identify each Mote's selected emitter and associated particle and therefore its exact hit radius and cutoff. Tor Rock motion is answered in the next item.
+These are conditional particle-definition values, not proof that Family A stores a particle from that definition. The initializer sets particle +0x14C from emitter A+0x78 with a random offset bounded by A+0x7C; the table reports the resulting candidate range for the Family-A cutoff-comparison field. The raw size-x curve is the channel-2 value read at particle +0xB0. Curve endpoints are calculated continuously over normalized progress from 0 to 1; frame stepping can alter the last sample slightly.
+
+| Candidate owner and effect | Definition node | Emission count / period | Candidate +0x14C range (s) | Raw size-x curve over progress |
+| --- | ---: | --- | ---: | --- |
+| Roberta Lava 161 (415) | 776 | 4 / one burst | [0.78, 0.82) | 0.50 rises to 25.0 |
+| Tor Water 163 (416) | 1567 | 3 / one burst | 0.70 | 0.50 rises to 15.0 |
+| Tor Water 163 (564) | 1568 | 10 / 0.10 s period | [0.70, 0.90) | 0.30 holds to progress 0.635, then falls to approximately 0 |
+| Tor Nova 172 (560) | 1600 | 5 / one burst | 1.20 | 0 rises to 18.0 |
+| Tor Nova 172 (560) | 1601 | 1 / one burst | 0.20 | 13.70 falls to 0 |
+| Tor Nova 172 (560) | 1602 | 25 / one burst | [0.50, 1.50) | 0.40 rises to 1.50 at progress 0.20, then falls to approximately 0 |
+| Tor Rock 165 (553) | 1582 | 1 / one burst | 0.60 | 0 rises to 20.0 |
+| Tor Rock 165 (562) | 1583 | 20 / one burst | [2.80, 3.20) | 1.60 rises to 3.60 |
+| Tor Rock 165 (562) | 1584 | 1 / one burst | [1.48, 1.52) | 4.0 throughout |
+- **Tor Rock 165 sub-shots** (Resolved in part, High): three family A objects (filter 2) started at the release point on the Rock object's ticks 1, 17 and 33, each dealing trunc(F × P(Tor, 165)) per hit with take-hit flags (−1, 0, 2, 0) (Charm attack hits). They remain stationary at their launch point while active. Open: which candidate emitter supplies the stored particle and its exact cutoff-field value and hit radius; the shared particle association and forced-expiry boundary are described above.
+- **Right-stick aim mode** (Resolved, High): entry on right stick Y off centre in state 1, or in attack sub-states 1, 9 or 14 when the stored hero flag is 1; exit outside states 1 and 13; the reticle appears from the 61st tick (Right-stick aim mode). The flag is set from held R2/Circle during state 13, R2 wins when both are held, and neither held retains its prior value. The semantic limit is its last button choice; another consumer is not fully characterized (Medium-High).
+- **Done tick at the 0.99 gate** (Medium-High): the done ticks in Attack router are within one tick of the exact progress rule (SPEC-0005: the fractional cursor); confirm the exact tick with a real playback run.
+- **Tor arm-table point** (resolved in part): the point computed at 0.6 x reach ahead of the weapon anchor is passed to the hero's locomotion sub-object setter, which stores the vector at sub-object +0x50. A candidate-selection path reads the active hero's shared +0x50 vector as its search anchor and chooses the nearest eligible candidate by squared 3D distance. Because other setters can overwrite this shared field and the candidate path does not identify the writer, this does not prove that it reads the Tor arm-table value; that end-to-end dataflow remains open. No attack-motion or combat-targeting role is established. [High for the field consumer; open for the Tor-write-to-reader link]
+- **Stale gesture mode** (High for busy-to-nonbusy ordering; Medium-High for caller scope): a busy pass resets the gesture machine's state and counters but preserves its mode word. The hero input update calls the gesture machine before the common action selector. On the first pass whose busy input is clear, the machine begins in Idle and writes mode 0 before the action selector runs. The selector's attack-start branches are downstream of this write, so they cannot consume the preserved value on that busy-to-nonbusy pass, regardless of which eligible input branch reaches them. In the action selector, its direct attack-start branches lie within the input/control path, after the applicable global-control and current-state checks. Depending on the branch, an accepted attack-input edge/result or an alternate accepted input condition sets state 13 and invokes the attack-start router; the input conditions are described under Attack input. The other recovered direct attack-start call is behind state 23, which shipped disc data never enters (SPEC-0033 Behavior 51). Thus stale-mode consumption is not supported for either recovered ordinary route on the first nonbusy pass. Mode 1–3 still selects variants when a live gesture has set it (Attack router; SPEC-0033 Behavior 52).
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

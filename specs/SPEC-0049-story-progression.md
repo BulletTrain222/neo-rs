@@ -1,0 +1,468 @@
+# SPEC-0049: Story progression and game-state flags
+
+- Answers: proactive, none requested (story progression, game-state flags, new-game start and stage changes)
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
+- Confidence: per section. Bitmap rules, save copy and test vectors: High. New-game start rules and the stage-table contents: High for the rules, Medium for the table contents. Act-start flag writes: High for the three flags, for their not notifying watchers and for the act-start callers. Ending: High for the calls, the finale trigger's volume and the timeout ending's reachability; High that the finale is reachable in play (no play check). Movie gate flags: Medium (the combining rule and the on/off polarity are given only where stated). Writers of the bitmap: High (the list is closed). Script setters of the main-story flags: High for the setter sites, Medium for what each puzzle is. Flag 337 is set in pack 1382: High; that it also gates the final fight: High; the route through packs 1391, 1381 and 1382: Medium. Act structure by quest rows: Medium-High. Act 3 boss list: High for four areas, Medium for the Bogshot swamp and for the order. Boss gates: Medium-Low, incomplete. Flags 592 and 593 chain: High for the code; Medium-High that they are a side quest and that archive resource 777 is on the main path; High for the script load from pack 758 into 777. Quest rows: row fields and the done-flag test: High; the start-flag test and the completion meaning: Medium-High; the stage meaning as a map marker kind: High; the stage is fixed disc data with no writer: High.
+
+## Summary
+
+The game keeps one story-progress bitmap of 743 flags, numbered 0 to 742. Level scripts read and set it through two script calls. The save slot copies it as a 93-byte block. New game sets flags from a stage table on disc: it applies the stage rows for the chosen start index. The act-start setup (script call TriggerActStart, SPEC-0053 3.7) sets one flag for each of acts 2, 3 and 4. A movie plays only when its level script condition on these flags holds. Flags 592 and 593 belong to a side quest (quest rows 228 and 229, the traitor knight) whose last step runs in archive resource 777 (see Behavior, flags 592 and 593). With this spec the clean side can build the flag store, the save copy, the new-game start, the act-start flag writes and the movie-gate checks. The order of the main story, step by step, is in SPEC-0058. Quest steps use the same bitmap: each step has a start flag and a done flag, the journal lists a step when its start flag is set and its done flag is clear, and a level script completes the step by setting the done flag.
+
+Note on SPEC-0035: its start-index table labels the per-index numbers as stage ids, the same as this spec. Those numbers are stage ids, not flag ids. The flags they set come from the stage table described here.
+
+## Where it lives on the disc
+
+- Live bitmap: runtime memory only, not on disc. The clean side keeps its own copy.
+- Default table: 743 32-bit entries at virtual address 0x0032C2A0 in the boot program's data. The table lies after the file-backed part of that data, so it is zero in memory. There are no default flag values on disc (SPEC-0022, Progress flags).
+- Stage table ("table 11"): in archive resource 533, read through the archive reader (SPEC-0001). 674 rows, of which 2 have flag -1 and are skipped.
+- Save slot: the bitmap is 93 bytes at offset 0x030 of each save slot (SPEC-0025, Progress-flag bitmap).
+- Script calls: QueryGameState (call 147) and SetGameState (call 148) (SPEC-0030).
+- Movie play conditions: written in the level scripts; they are data the clean side reads from the level scripts, not from this spec.
+- Flags 592 and 593: bits in the same bitmap. Their setters are in the level modules of archive resources 772 and 777 (see Behavior, flags 592 and 593).
+- Quest table ("table 1"): 238 rows of 36 bytes each, in archive resource 533. Read it through the archive reader (SPEC-0001). Rows 0 to 157 are the main story and rows 158 to 237 side quests (SPEC-0058).
+
+## Layout
+
+### Flag bitmap
+
+| Field | Size | Meaning |
+| --- | --- | --- |
+| Flag n | 1 bit | Bit (n AND 7) of byte (n shifted right by 3). Least significant bit first. |
+| Valid ids | 0 to 742 | 743 flags. |
+| Padding | bit 743 (byte 92, bit 7) | Not a flag. Not used by any read or write found. |
+
+Examples: flag 707 is byte 88, bit 3 (707 = 88 x 8 + 3). Flag 332 is byte 41, bit 4 (332 = 41 x 8 + 4).
+
+### Stage table rows (table 11, resource 533)
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| Stage id | u16 | Stage id, 0 to 7 in the rows. |
+| Flag | s16 | Flag id to set. A value of -1 means no flag; the row is skipped. |
+
+A row is the two fields in that order (4 bytes; Medium). Rows are applied in table order.
+
+Row counts by stage id: the 674 rows cover stage ids 0 to 7. Stage 0 has the most rows (184), then stage 2 (147). Stage 6 has the fewest (35).
+
+A second table (table 12) holds three fields per row: stage id, item id a and count b. It is the start-point inventory grant (SPEC-0024, Tables 11 and 12). It sets no flag.
+
+### Quest rows (table 1, resource 533)
+
+Confidence: High for the field offsets that carry the flag ids and the stage, for the row kind and for the two text offsets (all 238 texts decode). Medium for the widths of the integer fields, which are inferred from the offsets.
+
+The table holds 238 rows of 36 bytes, read in table order.
+
+| Offset | Size | Type | Meaning |
+| --- | --- | --- | --- |
+| +0x00 | 4 | 32-bit integer | Row kind: 0 = main story (rows 0 to 157), 1 = side quest (rows 158 to 237) (SPEC-0058). |
+| +0x04 | 4 | 32-bit integer | Start flag id. The value -1 means none. |
+| +0x08 | 4 | 32-bit integer | Done flag id. The value -1 means none. |
+| +0x0C | 4 | text offset | Title text, an offset from the start of the table block to a NUL-terminated string (SPEC-0024, SPEC-0058). |
+| +0x10 | 4 | text offset | Objective text, same rule as +0x0C. |
+| +0x14 | 4 | 32-bit integer | Stage: 0 = no map marker, otherwise 1 + row kind (1 on main-story rows, 2 on side-quest rows). Fixed disc data; nothing writes it at run time. On disc: 0 on 48 rows (43 main, 5 side), 1 on 115 main rows, 2 on 75 side rows. |
+| +0x18 | 4 | float32 | Map x position of the step's marker. |
+| +0x1C | 4 | float32 | Map y position of the step's marker. |
+| +0x20 | 4 | 32-bit integer | Scene id: the area where the marker shows; a row index into table 5 (area names), or -1 (SPEC-0058). |
+
+Ids in the start and done fields are flag ids in the bitmap (0 to 742). A row is ignored when either id is -1.
+
+Titles and flag glosses (High). A quest row's title is the text that +0x0C points to. The 238 rows carry 117 distinct titles, because a multi-step quest repeats its title on each of its rows (for example rows 0 to 2 are all "Herding Whinnies"). A progress flag that is some row's start flag or done flag can be named by that row's title: "start T" when it is the start flag of a row titled T, "done T" when it is the done flag. 308 of the 743 flags are such flags. Because steps chain (Quest steps and the journal, rule 5), one flag is often the done flag of one row and the start flag of the next, so its gloss has two parts ("done T1, start T2"), or reads "done/start T" when both rows have the same title. Other flags have no name on disc. Read the titles at run time; do not copy them. The Meridell Arena rank flags 381 to 385 do not occur in any quest row start- or done-flag field; they are challenge progression markers set after arena wins (SPEC-0041, pack 1176 result flow; SPEC-0059, section 8), so they have no quest-title gloss.
+
+## Behavior
+
+### Bitmap operations
+
+1. Test(n): if n is outside 0 to 742, the answer is off. Otherwise it is the bit's value.
+2. Set(n): if n is outside 0 to 742, nothing happens. Otherwise the bit is set to on. If a watcher list exists, a notification with n and "on" is posted (SPEC-0022, Progress flags).
+3. Clear(n): the same rules as Set, setting the bit to off and posting "off".
+4. SetGameState(n, true) uses Set. SetGameState(n, false) uses Clear. QueryGameState(n) returns the bit's value (SPEC-0030 calls 147 and 148).
+5. Watchers: the boot program can add a watcher, but no level script found adds one. A level script's set or clear therefore does not call back into level code.
+
+Confidence: High.
+
+### Who writes the flags
+
+Confidence: High for the writer list (it is closed: no other routine writes the bitmap) and for the per-flag setter sites. Medium for what each puzzle is (from the calls around each setter). Medium for the final-fight route (it rests on cell exits and on trigger firing, Open question 25).
+
+1. The complete list of writers of the progress-flag bitmap:
+   - script SetGameState (on: set with notification; off: clear with notification);
+   - the stage table (New game, and dialogue command kind 0x19);
+   - the act-start setup (TriggerActStart);
+   - the start-up default table;
+   - the dialogue commands of kinds 0x11 and 0x12 (plain set and plain clear; see below);
+   - four fixed engine setter paths: flag 707 at New game, flag 273 by the Werelupe King's death state (SPEC-0019), flags 107 to 110 by the Whinny group routine (item 6 below), and a separate indirect method-table hook that sets the caller-supplied flag (its caller and flag remain open in question 29);
+   - save load, which copies the whole bitmap.
+   No item pickup, item use, NPC action record, switch-keyed entry, placed object or quest-table row writes a flag. The quest table is read-only: the journal and the map only read each row's start and done flags, and completing a journal step sets nothing by itself. A six-entry table of setter routines in the boot program's data (its first entry sets the flag given as its argument) has no user on the disc, so it is unused (Medium-Low); it is not needed for any main-story flag.
+2. Dialogue command codes (SPEC-0022, the command kinds): a dialogue line can carry a control code of kind 0x11, which sets one flag or an inclusive range of flags, or of kind 0x12, which clears one flag or a range; both are the plain write with no watcher notification. On the disc exactly one kind-0x11 code exists, in a line of pack 772, and it sets flag 416 alone (the start of a side quest). No kind-0x12 code exists. No dialogue code sets or clears a main-story flag. High.
+3. Main-story setters. Every main-story flag the story tests has an ordinary SetGameState call in a level script. Many of these calls run only after a module variable (a puzzle counter, a phase number, a "done" or "door open" word) changes at run time, or are reached through a jump-table branch; a reading that treats module data as constant misses them (SPEC-0030). The setters:
+   - 337 (Awaken Jerdana done) and 98: pack 1382, once all six elemental pedestals are lit. A pedestal lights when the hero strikes it with a weapon while a Mote of its element (lesser or greater) is equipped; a wrong or missing Mote drops that pedestal's lesser Mote instead. Lit pedestals stay lit for the rest of the load, and the order is free. On the first update with six lit: fade out, hide the puzzle entities, set 98 and 337, play movie 70, then arm a trigger that returns the hero to Altador (pack 1411). A "done" word stops a second run.
+   - 106 (the Petpet-Handler legend), 356 and 724: pack 1398, when all Whinnies are on their plates; movie 67 plays.
+   - 342, 343 and 344 (Coliseum waves): the wave controller of pack 1371, when every enemy of the current wave group is dead: wave 6 sets 342, wave 7 sets 343, wave 8 sets 344. Flags 345 and 100 follow in the same pack when 342 to 344 are on. Pack 1371 is the Coliseum, a five-round arena entered from the Arena district, pack 1350 (SPEC-0041, SPEC-0042).
+   - 127: pack 1023, when the Meerca chase starts: the package (item 32) is taken from the hero and flag 7 is also set. 128 to 135: one flag per chase waypoint reached, in order. 136: when the hero catches the Meerca at the last waypoint; the package is given back and movie 4 plays.
+   - 158 and 23: pack 1163 Update, on the first tick with level state 5 on while its game word is set; level state 5 comes from the fifth Miamouse delivery (SPEC-0029 Behavior 28).
+   - 197: pack 842, on entry (its init) while 197 is off.
+   - 200 and 55: pack 800, when the Ixi Raider Chieftain is defeated (the boss-defeated cutscene).
+   - 233: pack 1327, when the magic-training target is destroyed.
+   - 366: pack 1300, when it is entered with entry message 80, the return from the final fight after movie 85 (Ending, item 1). This lets the epilogue movies 79 and 83 play.
+   - 708 to 719: pack 1381, read only by 1381 itself. 708 + k (k = 0 to 5) is set when the target of outer station k is struck or shot; 714 + k is set when movable block k is pushed onto its own pad spot (SPEC-0042).
+   - 305: pack 1129's activate-world step, when it reads entry message 10 for world 109 (the drop after movie 49).
+   - 35: pack 1129's Init, on every load.
+   - 13: pack 1023, when the hero, wearing the tattered cloak, pays 1,000 Neopoints to entity 72 or 75 while flag 304 is off; also pack 1139's Init.
+   - 678: pack 1139, on the first talk with its entity 0 (the thief).
+   - 74, 57, 49, 93, 85, 31, 19, 11, 83 and 4: the Act 3 start in pack 1327, after the act-start call (SPEC-0058 step 27).
+   - 326 to 331: pack 1428, in order, during the trap scene (SPEC-0058 step 44).
+   - 692: pack 1363, when four Mortogs are on their targets. This also opens the door into the Petpet shrine (pack 1398) for the rest of the visit; on later visits the pack opens it at entry from 692.
+   - 694: pack 1353, when all statues are aligned. This opens the load into pack 1392, the cell cluster that holds the Rogue shrine (pack 1394).
+   - 340, 347, 351 and 354 (the four "find the shrine entrance" rows): pack 1411, from one trigger, chosen by which shrine door is used.
+   - 163 to 167: the clog counter of pack 1171 computes the flag as 162 + n, where n (1 to 5) is the number of drains cleared.
+   - 252 and 69: pack 777, trigger index 0, on a later entry while 252 is off: movie 35 plays, the hero moves to locator 3, and 252 and 69 are set (SPEC-0045, 777).
+   - 252 to 256 (the library): pack 777's shared routine for script trigger indices 4 to 8 looks up a five-record table in the module's own data, keyed by the trigger index. Trigger index 4 + k (k = 0 to 4) sets flag 252 + k. The same record names the line shown: none for index 4, and lines 237, 238, 239 and 240 for indices 5, 6, 7 and 8. Read the table from the module at run time. Gates (High): nothing runs once 256 is set; index 4 fires on contact, once per load, while 253 is clear; indices 5 to 8 each need Square and their own flag clear, with no order among them. Index 4 can fire before movie 35, and then 252 silences trigger index 0, so movie 35 and flag 69 are skipped (SPEC-0045, 777; Open question 28).
+   - 273: the Werelupe King's death state sets it, through the same set as SetGameState (SPEC-0019, the death event 0x111 = 273). Pack 1246 reads it: with 273 on, its trigger 0 plays movie 42 and gives item 14 (SPEC-0039). High for the setter.
+4. Flags with no setter anywhere (journal-only or cut content; none blocks the main path):
+   - 341 (done flag of row 145, start flag of row 146): never set and never read. Row 145 stays listed once started and row 146 is never listed.
+   - 352: the same for rows 152 and 153.
+   - 268: row 129 is never listed.
+   - 323 and 324: rows 117 and 118 are never listed.
+   - 182 (the lunge lesson, row 48): its only setter is in a routine that nothing calls. The lesson phase in pack 1098 (flag 25) needs 182, so the lunge lesson and the chef step that needs 635 do not run. The squire chain appears to continue through flag 180 (the crokabek nests reported), which moves the courtyard to its next phase. Medium-High that 182 is never set; Medium for the bypass.
+5. The final-fight chain: 1411 (cell exit) -> 1391 -> 1381 (the two puzzle groups, flags 708 to 719) -> 1391 (trigger 1 sets the next load to 1382; it needs only the hero's contact and does not test 708 to 719) -> 1382 (the pedestals; sets 337, plays movie 70) -> 1411. In 1411 the movie 71 call (337 on, 338 off) sets 338, and the movie 72 call (338 on) returns the hero to the final-fight pack 1432 (Movie gates). Medium (cell exits and trigger firing).
+6. Flags 107 to 110 (the Whinny round-up, quest rows 0 to 2): the Whinny group routine runs on each Whinny's update. On each world pass it counts the Whinnies of the group and how many of them are penned. When the group count is 3, it sets flag 107 + p, where p (0 to 3) is the number penned, through the same set as SetGameState (with watcher notification); a flag that is already on is not set again. So 107 is set as soon as the three Whinnies are counted with none penned, and 110 when all three are penned. Pack 909 clears 107 to 110 on activation unless all four are on (SPEC-0058, Edge cases). High. The group counts the same per-member marker that selects the Penned mode (SPEC-0029, Behavior 5). Each Whinny updates its mode before its group count, so multiple pen transitions in one world frame are observed one member at a time; the flags advance successively and do not skip.
+
+Test vectors (synthetic):
+
+1. Pack 1382 with five pedestals lit (in any order; they stay lit for the load): nothing happens. Strike the sixth with a matching Mote equipped: 98 and 337 turn on and movie 70 plays once.
+2. Pack 1300 entered with entry message 80: 366 turns on and the hero is placed at landing 2.
+3. Pack 1371 at wave 7 with every enemy of the wave dead: 343 turns on.
+4. Pack 1171 with the third drain cleared: flag 165 (162 + 3) turns on.
+5. Dialogue kind 0x11 with first argument 100 and second argument 103 sets 100, 101, 102 and 103; with 103 and 100 only 103 is set (SPEC-0022).
+6. Pack 777 with trigger index 6 fired: flag 254 turns on and line 238 is shown. With trigger index 4: flag 252 turns on and no line is shown.
+7. Pack 1300 with 367 on and 368 off, trigger 3 fired: movie 83 plays and 368 turns on; on the next play pass the credits screen opens from play.
+8. Whinny roundup in pack 909: with three group members and none penned, the group writes 107. If two Whinnies become penned in the same world frame, each member update is followed by a group count, which writes 108 then 109. When the third becomes penned, the next count writes 110.
+11. Thunderhammer, pack 855: with flags 59, 462 and item 22 held, speaking to Ingmar sets 463, consumes one item 22 and gives one item 122. With 59 on, 462 off and item 22 absent, the interaction sets 462 without completing row 189. The item-source census places one direct flag-0 item-22 placement in Abandoned Mines pack 861; it spawns on region load. A scripted route to pack 861 is not established.
+12. Growth Pod, pack 858: with 56 on, 512 off, the first talk sets 512. On a later talk, if item 73 is held and 514 is clear, it is consumed and flags 513 and 514 are both set; rows 199 and 200 then both fail the journal's start-on/done-off listing rule.
+13. Mayor's Broken Watch: flag 59 on and 516 off lets pack 842 set 516. In pack 816, breakable entry 12 drops item 76 (White Crystal) through embedded-region item placement 12; the Init disables entry 12 unless 516 is on and 517 is clear, and disables entry 11 in that active acquisition window. The pickup callback sets 517 when item 76 is collected. At the Farm, with 516 on, 518 off and item 76 held, pack 909 removes items 74 and 76 and sets 518. In pack 842, with 516 and 518 on, a talk sets 519 and removes all item 75; items 74 and 75 are not gates. The code resolves the source and gate, but not the full route/revisit order or live reach of breakable 12.
+14. Lodestone: with flag 58 on, a talk in pack 842 sets 524. Pack 893's region run includes resources 899 and 905; each contains a direct item-77 placement with flag 0, so region loading spawns the Lodestone. The registered item-pickup callback in pack 893 sets 525 when item 77 is picked up. A talk to entity 41 sets 526 when it is clear, without checking 524 or 525. In pack 842, with 524, 525 and 526 all on, the talk sets 527 and requests removal of one item 77. This establishes the local placement-to-callback source; the area-to-area visit order and physical reach of the placements remain open.
+
+### New game and start indices
+
+Confidence: High for the rules. Medium for the content of the stage table, which is taken from the table itself.
+
+When the player confirms a start index k from 0 to 8 on the start-point chooser (SPEC-0035, section 5):
+
+0. Confirm tick (High). The chooser's confirm step acts only on a tick on which Cross is newly pressed: bit 0x40 of the menu rising-edge word, which is the OR of the newly-pressed words of the controlling pads (SPEC-0033, Controller map). On any other tick it runs only the controller check (which shows the controller message when pad slot 0 is not usable) and returns 0, so the chooser stays open and no flag, item or area load happens. On the Cross tick it plays cue 0x9A (154) and then runs steps 1 to 5. There is no path that starts a game and skips flag 707.
+1. Indices 1 to 8 apply the stage ids in the table below, in list order. For each stage id, every stage-table row with that id is applied in table order: set the row's flag with the plain set (no table 2 cue, no notification), unless the flag is -1. Then every table 12 row with that stage id, an item id of 0 or more and a count above 0 adds that many of the item through the normal add-item action (item 135 adds Neopoints; SPEC-0021, SPEC-0024). Index 0 applies no stage ids, so it sets no stage flag and grants no item.
+2. After the stage rows, flag 707 is set. It is the last flag written by a new game. It is set on every confirmed start index, 0 to 8 (step 0).
+3. Flag 707 is also a row of stage 0. So indices 1 to 3 and 6 to 8 set 707 twice. Setting a flag that is already on changes nothing.
+4. Because every step here only sets bits, the final bitmap is the same whichever order the 707 set and the stage rows are applied in.
+5. The area load and the cue that follow are not part of this spec (SPEC-0026 and SPEC-0035).
+
+Start index to stage ids (stage ids only; these are not flag ids):
+
+| Start index | Stage ids applied |
+| --- | --- |
+| 0 | none |
+| 1 | 0 |
+| 2 | 0, 1 |
+| 3 | 0, 1, 2 |
+| 4 | 4 |
+| 5 | 4, 5 |
+| 6 | 0, 1, 3 |
+| 7 | 0, 1, 3, 6 |
+| 8 | 0, 1, 2, 7 |
+
+Stage ids in the table, with the number of rows for each: stage 0 (184 rows), stage 1 (39), stage 2 (147), stage 3 (70), stage 4 (56), stage 5 (105), stage 6 (35), stage 7 (38). These counts include the rows with flag -1.
+
+Examples of flags set by each stage (not the whole table): stage 0 sets 1, 2, 3, 220 and 707. Stage 1 sets 248. Stage 2 sets 332 and the flags 330 and 331. Stage 4 sets 1, 2 and 706. Stage 5 sets 1, 2, 21 to 26. Stage 7 sets 333 to 336, 95 to 97, 99 to 106, and 340 to 356 except 346, 350 and 354.
+
+### Act-start setup (TriggerActStart)
+
+Confidence: High for the three flag writes and for the callers.
+
+The act-start setup is the routine behind the script call TriggerActStart (SPEC-0053 3.7). Its number is the act: level scripts call it with 1 in pack 909 (Act 1), 2 in pack 1174 (Act 2), 3 in pack 1327 (Act 3) and 4 in pack 1428 (Act 4) (SPEC-0058, Acts and heroes). This number is a separate namespace from the stage ids of the table above. It shares no meaning with them, even though the numbers overlap.
+
+| Act-start number | Flag set | Note |
+| --- | --- | --- |
+| 1 | none | Runs its own area setup (SPEC-0026). |
+| 2 | 220 (0xDC) | |
+| 3 | 248 (0xF8) | |
+| 4 | 332 (0x14C) | |
+| other | none | Sets swap mode 2 and heals both heroes (SPEC-0053 3.7); no script passes another number. |
+
+After the flag set (if any), the routine runs its shared scene setup (swap mode, selected hero and heal: SPEC-0053 3.7). The three flag writes do not notify a watcher. Only the bitmap set is made, with no notification.
+
+### Movie gates
+
+Confidence: High for the combining rule, the polarities in the table and the movie table positions; Medium for the conditions that test module words or puzzle state (described in words only).
+
+Rules:
+
+1. A story movie is played by a call in a level script. Each call has a condition over flags. Flags are read as on or off.
+2. Combining rule (High). Along one route from the script entry to the play call, every test must pass: the condition is the AND of the tests on that route, each with its own polarity. When the script has several routes to the same call, any one route is enough (an OR of ANDs). In the 76 live play calls of the distinct modules the routes almost always reduce to one AND. For example, movie 6's condition reduces to 147 on, 148 off and 220 off: the flag 2 test on one branch does not change the result.
+2a. Usual shape (High for the calls listed): a start flag must be on and a done flag must be off, and the call sets the done flag, so the movie plays once. Some calls test the played mark instead (movies 13, 14, 36, 41, 42 and 50 test that the movie has not played yet).
+2b. Queueing (High). The play call adds the movie to the movie queue even when its played mark is already set; the played mark matters only through the has-played test. An index of 92 or more is ignored. The index is the position in the boot program's 92-entry movie name table (data address 0x2EB458; each name is prefixed by the disc folder of the movies).
+3. Most gates name flags that a stage row or an earlier level script sets. A movie can therefore be unreachable when none of its gate flags can be set in play.
+4. An act intro movie uses the same gate flags as the first scene of its act.
+5. Movies 4, 67 and 70 are played by the chase catch in pack 1023, the Whinny plates in pack 1398 and the pedestal puzzle in pack 1382 (Who writes the flags). Movie 35 is played by pack 777's trigger index 0 on a later entry while flag 252 is off; the call also sets 252 and 69 (Who writes the flags). Movies 68 and 87 have no play call in the scripts. Movie 86 is the title sequence.
+6. Movie 72's extra test is the trigger's first-fire state: the callback record's state word (SPEC-0030, Layout section 3) must be 1 (High). The whole 92-entry table is confirmed against the boot program, including indices 72 to 91 (High).
+
+Examples (movie table index, name in the movie table, and gate flags as listed in the call):
+
+| Index | Movie | Gate flags |
+| --- | --- | --- |
+| 1 | 101A | 707 must be on and 1 off; the call sets 1 and clears 706 (with movie 88, in pack 909) |
+| 2 | 101F | 119 on and 120 off |
+| 3 | 102A | 124 on, with a hit-point test on three characters in the module (Medium for that test) |
+| 6 | 104E | 147 on, 148 off and 220 off |
+| 19 | 203A | 228 on, 233 on, 234 off, entity 0 dead, and no world or character load active |
+| 32 | 302A | 250 off, and entities 16, 17 and 18 dead |
+| 33 | 303A | 68 off, on the module's teleport callback 0 with trigger index 0 |
+| 49 | 312A | item 23 held, 678 on, 305 off and 319 off (pack 1139); the call removes item 23 and returns to world 109 (pack 1129), where 305 is set. Item 23 is the Golden Trove of Riches, granted by Guildmaster Marl in pack 1017 during the preceding main-story step (SPEC-0021 Dialogue grants; SPEC-0058 step 35) |
+| 52 | 320A1 | 320 on, plus the module's own puzzle tests (Medium); movies 53 and 54 follow the same pattern |
+| 59, 60 | 401A1, 401A2 | 59: 333 must be off (the call sets 333). 60: 334 must be off and the three mosaic pieces placed (the call sets 334). Pack 1428 sets 333 in its act-start sequence before the hero first reaches pack 1411, start index 8 sets it too, and nothing clears it, so movie 59 never plays in play (High; SPEC-0058, Open question 13) |
+| 61 | 403A1 | 100 off, 342, 343 and 344 on, 345 off, on a first fire with a non-null object |
+| 69 | 407A | 335 must be on and 336 must be off (336 is set when the movie plays) |
+| 71 | 410A1 | 337 must be on and 338 must be off |
+| 72 | 410A2 | 338 must be on, on a first fire of trigger index 1 (callback state word 1) |
+| 78, 80, 85 | 416A2, 417A2, 418A | Final-fight entry, timeout ending and finale, gated by the fight's own script flags, not by game states (SPEC-0054) |
+| 16, 89, 18 | 115A1, ACTINTRO ACT2, 200A | Pack 1174 trigger 1, in that order; 89 and 18 wait until the act start is done (SPEC-0054) |
+| 88 | ACTINTRO ACT1 | 707 must be on and 1 off; the call sets 1 and clears 706 (queued before movie 1, in pack 909) |
+
+Worked rule for movies 71 and 72: the play call for movie 71 runs only while flag 337 is on and flag 338 is off. When it runs, it sets flag 338 and plays movie 71. The play call for movie 72 needs flag 338 on and the trigger in its first-fire state (callback state word 1). Flag 338 is set only by the movie 71 call, so the chain starts at 337. Movie 72's call (pack 1411) also sets the return world to world 191, the final-fight pack 1432, and that return is the only route into the final fight: no cell exit and no other script call leads there (High). Flag 337 therefore gates the final fight itself, not only the two movies. Flag 337 is set by the pedestal puzzle in pack 1382, which also plays movie 70 and returns the hero to pack 1411; there movie 71 sets 338, movie 72 follows and the final fight is entered (Who writes the flags, item 5; SPEC-0058).
+
+Worked rule for movie 69: the trigger callback runs only while flag 335 is on and flag 336 is off. When it runs, it sets flag 336 and flag 97, then plays movie 69. Pack 1411's setup sets flag 335 only after flags 100, 102, 104 and 106 are all on; these are four required tests. Flag 95 does not gate this setter, because both values of flag 95 reach it when those four flags are on. The trigger must also have been registered during setup, which requires flag 95 clear, flag 334 on, and flags 336 and 338 clear. Stage id 7 sets flag 336, and start index 8 applies stage id 7. So a game started from index 8 cannot play movie 69 through this call (see Edge cases).
+
+### Act structure
+
+Confidence: Medium-High for the quest-row ranges; High for the movie table ranges.
+
+The acts are given by the main-story quest rows (row kind 0), whose start and done flags form the story chain (SPEC-0058):
+
+| Act | Main quest rows | Act start |
+| --- | --- | --- |
+| 1 | 0 to 69 | pack 909, no flag |
+| 2 | 70 to 89 | pack 1174, flag 220 |
+| 3 | 90 to 115 and 121 to 141 | pack 1327, flag 248 |
+| 4 | 116 to 120 and 142 to 157 | pack 1428, flag 332 |
+
+The flags of an act are the start and done flags of its rows, plus the flags its level scripts set along the way (SPEC-0058, Walkthrough). Rows 116 to 120 lie between Act 3 rows in table order but belong to Act 4. Quest row 119 ("It's a Trap!", flags 326 to 331) is the pack 1428 trap sequence. Row 116 (flags 322 to 332) is listed from the King Skarl rescue until the Act 4 start inside the same sequence (Medium).
+
+Movie table index ranges (SPEC-0026): act 1 is 0 to 17, act 2 is 18 to 29, act 3 is 30 to 56, act 4 is 57 to 85, and the four act intros are 88 to 91.
+
+Flag 248 is also an act-start flag (act 3) and a stage-1 row. Flag 220 is also an act-start flag (act 2) and a stage-0 row. Flags 332 and 333 to 336 are stage rows.
+
+### Act 3 bosses (main story path)
+
+Act 3 frees five areas from the Darkest Faerie's clouds, each through a boss fight. Each line gives the area, the boss, the archive resource of the level module that runs the fight, and the boss-fight instance number(s) that module passes to the level script API (SPEC-0030):
+
+- Market Town (the Knight's Keep): Black Knight; resource 989; instance 7.
+- Tor's Farm: Juppie Monster; resource 1217; instances 0 and 9.
+- Cogham Village (the Cogham mines): Ixi Chieftain; resource 864; instance 8.
+- Illusen's village (to win back Illusen's Charm): Werelupe King; resource 1246; instance 14.
+- Bogshot swamp: Plague Serpent; resource 735; instance 10.
+
+The cloud wall around Meridell is passed with Illusen's magic, not by a fight. There is no Cloud Beast fight on the story path and no story slot for it: the boss is not placed on the disc (SPEC-0010, Placement and reachability). Confidence: High for Market Town, Tor's Farm, Cogham Village and Illusen's village (each has its fight, a boss-defeated state name and level dialogue); Medium for Bogshot swamp to the Plague Serpent (the swamp's boss-defeated state name is in a neighbouring level module, resource 722, and the swamp's clouds clearing is told in townsfolk lines). Order (Medium): the Bogshot swamp comes first. Flag 76, set in the Bogshot apothecary only after flag 75 from the Plague Serpent fight, is the start flag of the quest rows of the other four areas, and those four have no fixed order among themselves (SPEC-0058, Walkthrough).
+
+### Ending
+
+Confidence: Medium. The finale and the earlier encounter are specified in SPEC-0054 (the fight). This section gives only the flags, movies and world returns they touch.
+
+1. The finale sequence in the Darkest Faerie level module (archive resource 1432) runs when level flag 4 is set, flag 5 is clear and flag 6 is clear. Flag 5 is never set by the module, so in practice flag 4 alone starts it. The sequence sets game-state flags 94 and 365, sets the hero swap mode to 2, deactivates object 1 and entities 0, 5, 6 and 7, sets boss instance 13 to stage 1, sets the return world to 151, adds blackboard message 2 with value 80 for world 151, and plays movie 85 (ACT4 418A). At its end it sets level flag 6, which stops the sequence from running again. Flag 4 is set only by trigger index 1 (the module's second script trigger), and only while countdown flag 8 is set (the landed window is open) and the trigger's object is non-null. The object is non-null only when the hero's own trigger-hit method fires the trigger (SPEC-0054). The final-fight world has one volume for trigger index 1, a cylinder of radius 6.0 at (28.70, 270.61, -326.01) on the arena floor. The hero's own trigger-hit method fires it with a non-null object, so the finale runs when the hero reaches the cylinder during the landed window. The boss director holds flag 8 during a landed-window countdown of 15 seconds (900 ticks at 60 frames per second). Both endings are reachable in play: the finale (movie 85) and the timeout ending (movie 80). Confidence: High for the calls and the volume; Medium for the countdown length; High (no play check) for play reachability.
+2. The movie 80 sequence (ACT4 417A2) is the timeout failure ending of the final fight, which runs on a 180 s fight clock (SPEC-0054, Fight flow). The level control thread starts it when level flag 2 is set and flags 3 and 6 are clear. Flag 2 is set by the boss director when the fight clock reads exactly 0.0, level state 16 is clear and no hero swap is pending. The sequence fades to black, plays movie 80 and waits for it to end, then sets the game-over flag to 1 (SetGameOver(1)), sets level flags 3 and 6, and then holds without returning. It is not a death and it is not a pre-fight movie. It is reachable in normal play. It is not dormant, and it does not depend on the fight entry trigger having not fired: the entry sequence sets level flag 1, and the director runs after entry. The finale and this ending cannot both run in one fight. See SPEC-0055 for the game-over behaviour. Confidence: High for the calls and the reachability; Medium for the clock step.
+3. The earlier encounter in archive resource 1174 sets game-state flags 219 and 220 when its trigger fires (the trigger's condition is not resolved), plays movie 16, then movie 89 (after its act start). It then sets game-state flag 221, returns to world 151, and plays movie 18 (ACT2 200A). See SPEC-0054 for the fight.
+4. Credits. The credits screen is reached two ways. From the front-end Options page, the Credits item opens it. From play, flag 368 opens it: on every play pass the in-play state tests flag 368 first, and when it is on it sets a credits-pending flag and goes to the credits screen (SPEC-0026, Credits; SPEC-0035, section 6). Flag 368 is set by pack 1300's script trigger 3 after movie 83 (item 5). The credits from play end with a world teardown, which clears every flag, so 368 does not fire again, and the front end returns to its boot loop. High for the setters and the gate; Medium that the hero reaches the epilogue trigger volumes (SPEC-0026).
+5. World 151 is pack 1300. The finale's return adds blackboard message 2 with value 80 for world 151. Pack 1300's activate-world callback reads it and sets flag 366. Script trigger 2 (366 on, 367 off) sets 367 and plays movie 79. Script trigger 3 (367 on, 368 off) fades out, plays movie 83 and sets 368, and the next play pass opens the credits (item 4). High for the setters (SPEC-0058, Endings).
+
+### Boss gates
+
+Confidence: Medium-Low. The boss-to-flag map is not complete.
+
+- Flag 83 (Juppie Monster Act 1/Act 3 branch): the stage table sets it in stages 0, 2 and 3. On pack 1217 Init, when Act 3 start flag 248 is set, the module sets flags 83 and 81 before selecting its branch; with flag 83 set it takes the Act 3 Juppie setup, while flag 83 clear takes the Act 1 setup and its separate trigger/cutscene route. The same flag selects the boss variant. This is an encounter/setup selector, not a boss-defeat marker. High for the stage and Init branch behavior; Medium-High for the route-level Act 1/Act 3 label.
+- Flag 273: set by the stage table (stages 2 and 3) and by the Werelupe King's death state (SPEC-0019). Read by pack 1246, the King's lair (Who writes the flags, item 3). High for the setters.
+- Flag 60: set by the stage table (stages 2 and 6) and by pack 864's Init when clear. The pack 822 exit loads world 60, which is pack 864, so this script write is on the Cogham Mines entry path. The Ixi Chieftain's fight-mode test reads the flag. The module write is an entry-time write; it does not establish a boss-defeat write. High for these setter/read sites; Medium for route reachability.
+- Flag 358: set unconditionally by pack 1432 when the Darkest Faerie final-fight world initializes (SPEC-0054, Game states). The Ixi Chieftain's controller reads it at fight start as its mode-2 selector; when it is set, the controller selects mode 2 before checking the mines-entry flag 60 (SPEC-0014, Fight mode). This is a boss-mode setup flag, not a boss-defeat marker. Pack 1432 is its only writer. High for the writer and mode read.
+- Flags 107 to 110: not a boss gate. The Whinny group routine sets flag 107 + p (p Whinnies penned) when the group count is 3 (Who writes the flags, item 6).
+- Flag 668 is not used as a boss gate. It is set twice by pack 864's fight-end sequence (SPEC-0044, 864):
+  - once in the end scene;
+  - again in the second thread that the end scene starts.
+- No level module reads it (High for the setter; High that no level-module read exists; whether boot code reads it is not established).
+
+### Flags 592 and 593 (the kill-five quest step)
+
+Confidence: High for the code (which callers set and test each flag, and what is set and given). Medium-High that these flags are side-quest flags and that archive resource 777 is on the main path; Medium-Low for the route into 777; High for the flag-593-selected line identities from the saved dialogue tables in resources 777, 1017 and 1300; Medium for broader narrative interpretation.
+
+These flags belong to side-quest rows 228 and 229 (row kind 1; the traitor knight), not to the main story: flag 592 is the done flag of row 228 and the start flag of row 229, and flag 593 is the done flag of row 229.
+
+Steps:
+
+1. Flag 592 is set by a proximity trigger in the level module of archive resource 772. The trigger is registered when that module's init runs. It has no condition of its own; when it fires it sets flag 592.
+2. The level module of archive resource 777 starts one control thread from its own init, unconditionally, when the module loads. The thread reads flags 592 and 593.
+3. While flag 592 is set and flag 593 is clear, the thread loads character regions 0 and 2 (and region 3), makes the characters of the first slot loop an idle animation, and starts the callback. Otherwise it loads regions 1 and 4, and region 3 only when flag 591 is clear. The thread runs once per module load, so it starts the callback at most once per load. This is the only established starter of the callback. The module's copied registration helper is not reached from live code; however, one address passed only as an integer and 32 host-call targets remain unresolved, so an additional indirect route cannot be excluded (SPEC-0045, resource 777).
+4. The callback waits until AI 6, 7, 8, 9 and 10 are all dead (five AIs). Then it sets flag 593 and gives the hero one copy of item 152.
+5. Flag 593 has no other setter, and no code clears flag 592 or flag 593. Archive resource 777 is on the main path: it holds the audience with King Hagan and the library search of main quest rows 91 to 96, and flags 252 to 256 are set only there. It is entered by a script load from pack 758 (Brightvale Castle; High for the call), and it is also one half of the area pair 758-777 (SPEC-0006, Area-pair rule). So the thread runs whenever 777 loads, and the callback can run once flag 592 is on (Medium-High).
+
+Reads of flag 593 (22 reads, all in live code; one of them is in archive resource 777's teleport callback):
+
+- Proximity talk callbacks: eight in archive resource 777, four in 1017 and one in 1300 choose their line set by flag 593. While 593 is clear, the first set of lines plays. The second set is used only for the 593-set case (Medium; the second set is identified by the call polarity only). Archive resources 1017 and 1300 are reached in play, so their 593-set lines are not shown while 593 stays clear.
+- Character slots in archive resource 777: at init the module allocates 1 slot, plus 2 when flag 592 is set and flag 593 is clear, plus 1 when flag 591 is clear. The first slot (regions 0 and 1) and the second slot (regions 2 and 4) are always created; the third slot (region 3) is created when flag 592 is set and flag 593 is clear, and again when flag 591 is clear. A create beyond the allocated count fails (SPEC-0030), so outside the quest state the second slot (flag 591 set) or the third slot (flag 591 clear) has no buffer and its loads do nothing (High for the tests; Medium for the failed-create effect). The thread's loads in step 3 use the same test on flags 592 and 593.
+- Object activation in archive resource 777's init runs only when flag 252 and flag 592 are set and flag 593 is clear (Medium-High; the play checks did not reach this call, so it is not stated as play behaviour).
+
+Test vectors (synthetic):
+
+1. Flag 592 set, flag 593 clear, AI 6, 7, 8, 9 and 10 dead. The callback sets flag 593 and gives one copy of item 152. Afterwards flag 593 is set, so the thread no longer starts the callback.
+2. Flag 592 set, flag 593 clear, AI 6, 7 and 8 dead, AI 9 alive. Flag 593 stays clear and no item is given.
+3. Flag 592 clear, flag 593 clear. The thread starts no callback.
+4. Flag 592 set, flag 593 clear, AI 6 to 9 dead, AI 10 alive. Flag 593 stays clear and no item is given.
+
+### Quest steps and the journal
+
+Confidence: High for the done-flag test and the row fields. Medium for the start-flag test. Medium-High for the chains and for what completion means. High that the stage is fixed disc data with no writer.
+
+Rules:
+
+1. A quest step is one quest row (Layout). Its start flag and its done flag are ordinary bits in the same bitmap.
+2. A row is ignored when its start flag id or its done flag id is -1.
+3. The journal lists a row when its start flag is set and its done flag is clear. A debug override can switch this test off; its word is zero on disc, so the test applies. The journal lists rows of every stage, including stage 0.
+4. A step is completed when a level script sets its done flag (SetGameState(done, true)). A listed row then disappears from the journal. Completing a step writes nothing else: the quest table is read-only and the journal only reads it. In the script code that runs with the module data at its load-time values, 183 of the 238 done flags and 188 of the 238 start flags are set by a script; setters that run only after a module variable changes (Who writes the flags) add to both counts. Five done-flag ids are also cleared by scripts: 108, 109, 110, 183 and 185 (Open question 23).
+5. Steps chain. For 138 of the 238 rows, the done flag equals the start flag of another row. Completing one step therefore usually makes the next step's start flag set, so the next step can be listed.
+6. The stage does not decide completion. Among rows of stage 0, 1 and 2 (48, 115 and 75 rows), a script sets the done flag for 32, 96 and 55 rows. On the map, a row is shown as a marker only when its start flag is set, its done flag is clear, its stage is not 0, and its scene id is the displayed area (rule details in SPEC-0051). Stage 1 gives marker kind 0 and stage 2 gives marker kind 1. Stage 0 shows no marker.
+7. A row's marker kind is stage - 1, which equals its row kind. The stage is never changed at run time (no code or script writes it), so a row with stage 0 never gets a marker.
+
+Test vectors (synthetic):
+
+- Row A with start flag 5 and done flag 6, and row B with start flag 6 and done flag 7. On an all-off bitmap, row A is listed when flag 5 is set and flag 6 is clear. Then SetGameState(6, true): row A is no longer listed, and row B is listed when flag 7 is clear.`r`n- Package Delivery (disc rows 230 to 237): the start flags are 605 to 612 and all eight rows share done flag 604. In pack 1358 the Postmaster sets 604 on the introductory talk; accepting task 1 sets 605 and gives item 33, and its resident later sets 679 on completion (tasks 2 to 8 use the corresponding flags 606 to 612 and 680 to 686). Since 604 is already on before a task can be accepted, none of these eight rows appears in the journal during this task flow, even while a task is active. The task prompts and deliveries continue normally (SPEC-0043 pack 1358; SPEC-0059 section 7).
+- A row with start flag -1 is never listed, whatever the bitmap holds.
+
+### Save and load
+
+Confidence: High (SPEC-0025).
+
+- Save: the bitmap is copied as a block of 93 bytes into the slot at offset 0x030.
+- Load: the 93-byte block is copied back into the live bitmap. Nothing else is written per bit.
+- Empty slot: its bitmap is zero.
+- A load restores flag 337 (and every other flag) exactly as saved; the only setter of 337 is the pedestal puzzle in pack 1382.
+
+## Census (facts about the data)
+
+Confidence: Medium. Counts come from a simulated run of the level scripts with stand-in values, in which module data words keep their load-time values. "Set in play" and "read in play" mean the site was reached in that run. A site labelled not reached was not reached in that run; it is not proven dormant. Setters that run only after a module variable changes are not reached in that run, so the "never set" and "dormant" classes below are too large (Who writes the flags).
+
+- 743 flags exist (ids 0 to 742). 606 of them have at least one source in the scripts or boot code checked.
+- 323 flags are set and read in play.
+- 116 flags are set only by dormant or debug code and read somewhere.
+- 94 flags are set in play and never read by any source.
+- 69 flags are read and never set in that run. Most of them have a script setter that the run does not reach, among them 337, 98, 106, 356, 342 to 344, 127, 136, 158, 233, 366 and 708 to 719 (Who writes the flags, item 3). The flags with no setter at all are listed in Who writes the flags, item 4.
+- A few flags are set only by dormant code and never read. Flag 668 is not one of them: live code in pack 864 sets it (see the flag 668 text above), though no level script reads it.
+- The stage table has 674 rows. 672 have a flag value of zero or more.
+- Flags 592 and 593: flag 592 has one setter (a proximity trigger in archive resource 772) and 14 reads (2 in 772, 12 in 777). Flag 593 has one setter (the callback in archive resource 777) and 22 reads (17 in 777, 4 in 1017, 1 in 1300). No code clears either flag, no boot code reads or writes them, no stage-table row sets them, and no computed-index setter reaches them. All of these sites are in live code: three reads that the census labels dormant sit in callbacks that each module's init registers unconditionally (a world-activation callback in 772 and a teleport callback in 777). Flag 592 is in the 323 "set and read in play" group. Flag 593 is counted in the 116 group only because the simulated run never has flag 592 on with flag 593 off, which its setter's thread needs; it is not dormant or debug code. The class totals above do not change (High for the site counts; Medium for the class labels, which come from the simulated run).
+
+## Edge cases and error handling
+
+- Out-of-range ids: Test returns off. Set and Clear do nothing. Negative ids from a script are assumed out of range (Medium; not established).
+- Stage rows with flag -1 are skipped.
+- Setting a flag that is already on changes nothing. Flag 707 is set twice on indices 1 to 3 and 6 to 8, which has no effect.
+- Movie 69 start behavior: start index 8 applies stage 7, which pre-sets both 335 and 336, so movie 69 is blocked from that start. Indices 0 to 7 do not apply stage 7; in the known normal route, pack 1411 later sets 335 after flags 100, 102, 104 and 106 are on, while the only earlier 336 writer is stage 7. Its trigger therefore sees 335 on and 336 off and can play movie 69, which then sets 336. A saved bitmap may begin with other flag values and is outside this clean-start conclusion (Open question 14).
+- Start indices outside 0 to 8 are not offered by the chooser. Their behavior was not established.
+- Act-start numbers other than 1 to 4 set no flag (SPEC-0053 3.7).
+- Save slot with a bitmap that has bit 743 set: that bit is not a flag. The rules here do not say whether a load keeps or clears it.
+- Reads of a flag with no writer return its current bit, which is off unless a stage row or a loaded save sets it. The pack 1394 Init consumer of flag 0 is resolved in SPEC-0041, section 1394: in its both-heroes-dead recovery setup, clean progression takes the clear branch, which leaves object 9 off, stops effect 3 and sets hero-swap mode 3. The separately noted boot-side read remains unresolved. Flags 341, 352, 268, 323, 324 and 182 have no setter (Who writes the flags, item 4); their rows behave as stated there.
+- Older saves: a load restores whatever was saved. No migration is applied.
+- Quest rows: a row whose start flag is clear is not listed, even when its done flag is clear. A row with a done flag already set is not listed, even when its start flag is set.
+- Quest rows with stage 0 are listed in the journal but show no map marker.
+
+## Test vectors
+
+Synthetic, hand-checkable.
+
+1. Start index 3, starting from an all-off bitmap. Stages applied: 0, 1, 2.
+   - On: 707, 1, 2, 3, 220, 248, 332.
+   - Off: 333, 337, 338.
+   - Why: stage rows are applied first, and 707 is set last, after them (index 3 is not index 0). Stage 0 sets 1, 2, 3, 220 and 707. Stage 1 sets 248. Stage 2 sets 332.
+
+2. Start index 8, starting from an all-off bitmap. Stages applied: 0, 1, 2, 7.
+   - On: 707, 1, 2, 3, 220, 248, 332, 333, 334, 335, 336.
+   - Off: 337, 338.
+   - Movie 71 (410A1) condition: 337 is off, so the movie is blocked. Movie 72 (410A2) is blocked because 338 is off.
+
+3. Save copy of flag 707 alone: bitmap byte 88 becomes 0x08 (bit 3). Flag 332 alone: byte 41 becomes 0x10 (bit 4).
+
+3a. Chooser tick with no newly pressed Cross (rising-edge word 0x0000, or 0x0100 for Select alone) on start index 5: no flag changes, no item is added, the chooser stays open. Same tick with the word 0x0040: cue 154 plays, stages 4 and 5 are applied, then 707 is set.
+
+3b. Movie 6 gate: 147 on, 148 off, 220 off, with flag 2 on or off: the call runs. With 220 on: it does not. Movie 61 gate on a first fire with an object, 342 to 344 on, 100 and 345 off: the call runs; with 345 on it does not.
+
+3c. Movie table positions: 16 is ACT1 115A1, 18 is ACT2 200A, 78 is ACT4 416A2, 80 is ACT4 417A2, 85 is ACT4 418A, 89 is ACTINTRO ACT2. Index 92: the play call queues nothing.
+
+4. Test(742) on an all-off bitmap: off. Set(743): no change. Test(743): off.
+
+5. Act start 3 on an all-off bitmap: flag 248 on, nothing else. Act start 1: no flag on.
+
+6. Quest rows A (start 5, done 6) and B (start 6, done 7), synthetic. Start from an all-off bitmap and set flag 5. Row A is listed (start set, done clear). Row B is not listed (start 6 is clear). Then set flag 6. Row A is no longer listed (done set). Row B is listed (start 6 set, done 7 clear).
+
+7. Quest row C with start -1 and done 9, on any bitmap: not listed.
+
+8. Whinny group with three Whinnies counted and two penned: flag 109 is set. With 109 already on, nothing changes. With only two Whinnies counted: no flag is set.
+
+9. Flag glosses (disc check values; read table 1 to check a reader). Flag 107: start "Herding Whinnies" (row 0). Flag 108: done/start "Herding Whinnies" (rows 0 and 1). Flag 110: done "Herding Whinnies" (row 2), start "Talk to Mum" (row 3). Flag 174: done "Chores" (row 40), start "Crokabek Nests" (rows 41 to 46). A flag that is no row's start or done flag gets no gloss.
+
+10. Quest row visibility after clearing a done flag: row 0 (start 107, done 108) is listed with 107 set and 108 clear; setting 108 hides it; clearing 108 while 107 remains set lists it again. Row 50 (start 183, done 185) is listed with 183 set and 185 clear; setting 185 hides it; clearing 185 while 183 remains set lists it again. Pack 909's incomplete-roundup activation clears 107 to 110 together, so rows 0 to 3 are hidden after that reset because their start flags are clear.
+
+
+11. Spyder Venom: begin with flags 301, 216, 492, 490, 491 and 64 clear. A Gamon interaction in pack 1136 sets 490. In pack 893, with 490 on, 491 and 64 clear, and five item 70 held, the active watcher sets 491. Back in pack 1136, with 301 and 216 still clear and 492 still clear, a Gamon interaction sets 492 and removes five item 70. Row 193 (490/491) and row 194 (491/492) are then hidden by the done-flag rule. The item-source census finds only direct flag-3 enemy-drop placements for item 70: six records in each of resources 697 and 698 (owned by pack 696), and five in resource 903 (owned by pack 893). Resource 903 lies within pack 893’s region run (894–905), so the watcher’s pack contains conditional enemy-drop sources; these are not ordinary region-start pickups. Which enemies award the vials, the drop conditions, and whether the player can obtain five on the clean route remain open.
+
+12. Bounty Hunt (conditional script path): start with flag 494 on, 495 and 496 off, and enter trigger 4 in pack 893 with AI 39 at 50 hit points, then let its hit points fall to 49 while the hero remains inside. The boss-check path sets 495, deactivates entities 36–38 and displays line 4. Under the journal start/done rule, row 195 (494/495) is hidden and row 196 (495/496) becomes visible. Flag 496 also selects set 0 in pack 1148, but this vector supplies its state and does not claim that any script sets it. The source of flag 494 and the travel path are not established.
+
+13. Mote Quest row 197: with flags 423, 48, 47, 506 and 507 clear and eleven distinct items from 160–171 held, Motara's talk in pack 859 sets 506 but leaves 507 clear; row 197 is visible. With the twelfth distinct item held, the next talk sets 507 and loads set 0; row 197 is then hidden by the done-flag rule. If all twelve are held on the first talk, 506 and 507 can both be set during that interaction. This does not establish the complete route to pack 859 or the order in which the items are obtained.
+
+14. Missing Explorer row 198: with flag 56 set, flags 527, 524 and 58 clear, entity 7's first proximity talk in pack 842 shows line 114 when flag 510 is set and line 115 when it is clear. The row uses start/done flags 509/510, so this confirms a consumer of its done flag but does not complete the row or identify the writer for either flag. The same line choice applies to entities 20, 23, 29, 37 and 47. No quest transition or full route is implied.
+
+15. Cynthia's Noil row 212: start with flags 539 and 540 clear. Cinthia's first interaction in pack 758 sets 539, so row 212 (539/540) becomes visible. On a later interaction with 539 set, 540 clear and an active petpet of kind 6, the handler sets 540 and the row is hidden. A wild type-1460 petpet can join as kind 6; this vector does not establish the route or visit order between its placement and pack 758.
+16. Poison Seeds rows 220/221 use flags 567/568 and 568/569. Pack 1238 starts a watcher only when flag 50 is set; while 567 is set and 568 clear, it sets 568 once the hero holds at least four item 82. Pack 745 also sets 568 during Init when 567 is set and the hero holds at least four item 82; no clear-568 gate is reported there. Its registered Apothecary Fautt interaction sets 569 and removes all item 82 when 568 is set and 569 is clear. The item-source census found five direct item-82 placements in resource 1240, owned by pack 1238, but all use placement flag 3; that flag does not spawn the item during region load. No script grant or add path for those placements is identified. Thus the row transitions are known, but an obtainable seed source, travel order and clean-route availability remain open.
+
+17. A Magic Skull rows 191/192: start with 481 clear, 482 clear and 483 clear. Mistress Morag's first eligible interaction in pack 1384 sets 481. With 481 set, 482 clear and item 69 held, the pack-1074 watcher sets 482, making row 191 done and row 192 visible. A later eligible interaction with Morag sets 483 and removes one item 69, hiding row 192. The item-source census found one direct item-69 placement candidate in resource 1076, with placement flag 3; flag-3 placements do not spawn during region load, and no add path for the item was identified. The region census does not tie this candidate to Haunted Tombs pack 1324, whose post-pack region run is unnamed. Because her 483 branch does not test 482, if the item is already held and Morag is interacted with before the watcher sets 482, 483 can be set first; that case does not establish the clean route or item acquisition order.
+
+18. The Lighthouse rows 213/214: start with flags 590, 591, 542, 543 and 544 clear. Entity 2's default conversation in module 772 sets 542, so row 213 (542/543) becomes visible. With 542 set and 543 clear, confirm pressed, an object present, and shot and attack words clear, trigger 1 in module 784 runs its scene and sets 543; row 213 is hidden and row 214 (543/544) becomes visible. A later entity-2 conversation in module 772 sets 544 and hides row 214. This vector describes script conditions; it does not establish travel/revisit order or a guaranteed route between the two modules.
+
+19. Pink Posies rows 222/223: start with flags 578, 579 and 580 clear. Picking up item 83 while module 1238's callback is active sets 579 even though 578 is clear; row 222 is not listed and row 223 (579/580) is listed. In pack 991, with 578 and 579 set and 580 clear, a talk to entity 0 or 2 sets 580 and removes all item 83; row 223 is then hidden. A direct flag-0 item-83 placement is present in resource 1243, within pack 1238’s recorded region run (1239–1243), so the pickup source and item-83 callback are co-located in the same pack. This does not establish physical pickup reach or a clean route to either handler, and the initial writer for 578 remains unknown.
+
+20. The Arbendus Flower row 161: start with flags 301, 216, 386 and 387 clear and item 2 absent. A talk to Angus in pack 1385 sets 386; row 161 (386/387) becomes visible. With 386 on, 387 off, and item 2 held, a later talk sets 387 and removes one item 2; row 161 is hidden. The obtainable item-2 source in pack 1184 does not establish when the hero reaches it or Angus.
+
+21. Missing Kid row 218: with flag 76 on and flags 561/562 clear, an R1 talk in module 722 sets 561 and lists row 218. With 561 on and 562 off, module 732's watcher sets 562 when AI entity 0 is dead; this completes the row. Separately, module 742's live watcher sets 562 when its entity 6 Giant Slorg is dead even if 561 is still clear. If that occurs first, the later R1 start branch in module 722 does not set 561. This describes the script gates and does not establish the encounter route or clean-play order.
+
+22. Angry Mozitos row 204 uses flags 521/522, stage 2, scene 66. The reviewed boot, new-game stage-table, and level-script flag-site censuses contain no setter for 521 or 522 and no reader for either flag. On a clean new-game state, row 204 therefore remains unlisted; its title and objective do not establish an active pond encounter or route. This census result is bounded to the recovered sources and does not describe externally modified saves.
+23. Motara the Mote-Keeper rows 176 and 177: with flags 423–425 clear, module 786's registered proximity callback sets 423 when flag 76 is set. That exposes row 176 (423/424). Motara's registered callback in pack 859 sets 424 when 423 is set and 424 is clear, completing row 176 and exposing row 177 (424/425). A later eligible module-786 callback sets 425 when 424 is set and 425 is clear, completing row 177. This maps the cross-pack flag chain; it does not establish encounter order or a guaranteed route between the callbacks.
+
+## Open questions
+
+1. Resolved: the 0x40 bit is Cross in the menu rising-edge word (SPEC-0033). Without it the confirm step only runs the controller check and returns 0, so no game starts that tick; with it the game starts and 707 is always set (High; New game, step 0).
+2. Resolved: flag 337 is set (with flag 98) by the six-pedestal puzzle in pack 1382, which plays movie 70 and returns the hero to pack 1411, where movies 71 and 72 lead into the final fight (Who writes the flags, items 3 and 5; SPEC-0058, Open question 1).
+3. Variable-argument setters: most computed flag ids now resolve to fixed flags. The clog counter of pack 1171 sets 162 + n for n = 1 to 5 (163 to 167). A loop of five sets 637 to 641. A table lookup in pack 777, keyed by trigger index 4 to 8, sets 252 to 256 (Who writes the flags, item 3); another table sets 208, 209, 210, 623 and 64, and another sets 669 to 674. Fixed ids are 703, 579, 402 and 403. A clear helper clears 470 or 474. None of these is 337. A level module (archive resource 970) sets flag 211 (a fixed id) when flags 208, 209, 210 and 623 are all on, and does nothing if 211 is already on (Medium-High). The four flag ids it tests come from the module's own data table, not from an engine object. Resolved: Pack 934 registers this callback for descriptor index 2. The proximity-entry thread passes the record starting at its stored descriptor-index word, so the callback sets flag 2 on. This call cannot set flag 337 (High for the field flow and value; Medium-High for the gated registration route). Synthetic check: index 2 yields flag 2; substituting index 9 in the same registration record yields flag 9.
+4. Resolved: the two range commands that set and clear a range of flags are the dialogue control kinds 0x11 and 0x12 (SPEC-0022). They run when a dialogue line carrying such a code is revealed. On the disc one kind-0x11 code exists (pack 772, sets side-quest flag 416) and no kind-0x12 code exists, so they touch no main-story flag (Who writes the flags, item 2).
+5. Resolved: table 12 is the start-point inventory grant, not a flag table. For each stage id that a start index applies, each row (stage, item a of 0 or more, count b above 0) adds b of item a through the normal add-item action; item 135 adds b Neopoints. Start index 0 applies no stages, so a plain new game grants nothing from it (SPEC-0024, Tables 11 and 12). The SPEC-0022 reading of its rows as flag sets does not hold.
+6. Resolved: the stage-change routine is the act-start setup behind the script call TriggerActStart, called with 1 to 4 from packs 909, 1174, 1327 and 1428. For other numbers it sets no flag, sets swap mode 2 and heals both heroes (SPEC-0053 3.7).
+7. Resolved: stage-table pair entries are set with the plain set, which plays no table 2 stinger, lights no journal icon and posts no flag notification (SPEC-0024, Tables 11 and 12).
+8. Resolved: a movie's condition is the AND of the tests on the route to its play call, and an OR across routes; the polarities in the Movie gates table are confirmed for every listed movie (High). Tests on module words and puzzle state are described in words (Medium).
+9. Resolved in part: of the 69 flags read with no writer in the simulated run, the main-story ones (including 98 and 337) are set by level scripts in code that runs only after a module variable changes (Who writes the flags, item 3), and 341, 352, 268, 323, 324 and 182 have no setter at all (item 4). Flag 0's pack 1394 consumer is described in SPEC-0041, section 1394; its separate boot-side reader remains open. Flags 596 to 600 are the cumulative won-round markers for the Meridell Arena challenge; pack 1350 advances them in order, and setting 600 ends the challenge offer (SPEC-0042, module 1350). One additional set is now resolved in part: quest rows 208 to 211 use consecutive start/done pairs 529/530, 530/531, 531/532 and 532/533; all four rows have stage 2 and scene 71. Module 1250 starts a watcher from Init; while flag 530 is set and 531 is clear, it sets 531 once the hero has at least four of item 79. Modules 735 and 822 also read these flags when choosing slot sets. This establishes the active setter for 531 and its row/consumer relationships; Resolved for the quest text: rows 208–211 are Hat Feathers. Their objectives ask for five black feathers for Celestia’s hat, four green feathers limited to Bogshot Green, three brown feathers specified as Cogham Brown, then returning the feathers to Celestia for a reward. These item names correspond to items 78, 79 and 80. This identifies the written objective, not its clean-play route, acceptance dialogue or a verified hand-in handler. Writers of 529, 530 and 532 remain open. Flag 594 is another census correction: in pack 1300, the petpet-type-3 ritual sets it when the triggered object's update-driven fade reaches full, and the next Init uses it to select the object's initial state (SPEC-0045, section 1300). No quest row uses 594 as a start or done flag. Its known use is local persistence for the pack-1300 ritual; broader narrative intent remains open. The Wild Whinnies side quest is another bounded case: flags 427 and 428 have no recovered boot, stage-table, live, dormant or debug setter. They are row 178's start/done pair and row 179's start flag; the rows share the title Wild Whinnies, with row 178 at scene 16 and stage 0, and row 179 at scene 15 and stage 2. Thus neither row becomes journal-visible from a clean shipped start. Module 753 loads slot set 2 only when 427 is on and 428 is off, so that conditional load is not reached from the recovered disc writers. Arbitrary externally modified flag states are outside this conclusion (SPEC-0039, module 753; SPEC-0058 area names). Another bounded side-quest chain is Lady Felina's Party (rows 181 to 188). Its first row starts on flag 447, which has no recovered setter; rows 181 to 188 therefore cannot become journal-visible from a clean shipped start. The row transitions also use flags 449, 451 and 453, which have no recovered setter, while 448, 450, 452 and 454 are set only by dormant/debug code. Pack 787 reads 447 and sets 448 only when that flag is on and the shared wallet has at least 500 Neopoints, then removes 500 (SPEC-0037, pack 787; SPEC-0050). Thus this handler cannot start the quest from the recovered disc writers. Intent and modified-save behavior remain open. The Worried Sister chain also has direct flag-to-dialogue transitions: module 783 entity 0 sets 419 on the initial interaction and sets 421 when 420 is on; module 750 entity 2 sets 420 when 419 is on. These calls correspond to rows 174 and 175 and their shared transition flag 420. Door data connects module 783 from pack 758 and module 750 from pack 722; their full visited order is not established (SPEC-0037, pack 783; SPEC-0043, pack 750; SPEC-0006, area exits). The Thunderhammer is another bounded case (row 189, flags 462/463, scene 67). In Cogham smithy pack 855, the first Ingmar interaction after flag 59 sets 462; a later interaction with 462 on and the Hammer of Thunder (item 22) held consumes one hammer, gives Defender's Armour (item 122), and sets 463. This matches row 189's start/done pair and is exposed through Cogham Village pack 842's interior slot 54. The item-source census finds one direct flag-0 item-22 placement in Abandoned Mines pack 861, which spawns on region load. T93 lists no scripted transition to pack 861, and the item placement and pack mapping do not establish that the player can reach it or complete the quest on a clean-play route. A Growth Pod is another bounded case (rows 199–200, flags 512–514). In Cogham food shop pack 858, once flag 56 is on, the first talk sets 512. A later talk with item 73 held and 514 clear consumes one Growth Pod and sets both 513 and 514. The row pairs are 512/513 and 513/514, so both journal rows are complete after this handoff; row 200 does not remain listed. Pack 858 is an interior of Cogham Village reached from pack 842, and item 73 has an unconditional placement source in pack 822, which lies on the recorded Cogham progression. The route evidence establishes both source and consumer locations, but does not establish a specific revisit sequence between them. Mayor's Broken Watch is another bounded crosswalk (rows 201–203; flags 516/517, 517/518 and 518/519). Cogham pack 842 starts 516 when flag 59 is on. Pack 816 breakable entry 12 references embedded-region item placement 12, a direct item-76 placement. Its Init leaves breakable 12 available only while 516 is on and 517 is clear; otherwise it disables that entry. The registered pickup callback sets 517 when item 76 is collected. At the Farm, pack 909 advances to 518 when 516 is on, 518 is off and item 76 is held; this handoff removes items 74 and 76 but does not test item 74 or flag 517. Back in pack 842, with 516 and 518 on, a talk sets 519 and removes all item 75 without testing for it. The item-source census finds no disc source for items 74 or 75. The item-76 source and local flag window are resolved; a complete travel/revisit route and live reach of breakable 12 are not established here. Lodestone rows 205–207 (flags 524/525, 525/526 and 526/527) have direct script crosswalks and a local item source. Cogham pack 842 sets 524 after flag 58 and sets 527 when 524, 525 and 526 are all on, requesting removal of one item 77. Drackon Ridge pack 893 loads regions 899 and 905, each of which has a direct flag-0 item-77 placement; the pack’s registered pickup callback sets 525 when item 77 is collected. Entity 41 sets 526 when clear. Neither the item pickup nor the entity handler requires the preceding quest flag, so row transitions can occur out of order. The placement-to-callback source is established, but physical placement reach and the travel/revisit order between Cogham and Drackon Ridge remain open. Spyder Venom rows 193–194 use flags 490/491 and 491/492. In interior pack 1136, Gamon sets 490 when flags 301, 216 and 492 are clear and 490 is clear; after 490 is set, that interaction selects the waiting dialogue while 491 is clear, and sets 492 while 491 is set, removing five item 70. In exterior pack 893, an Init-started watcher sets 491 when 490 is set, flags 491 and 64 are clear, and the hero holds at least five item 70. This matches the two row pairs. The item-source census finds direct item-70 placements only as flag-3 enemy drops: resources 697 and 698 (six each, owned by pack 696) and resource 903 (five, owned by pack 893). Resource 903 is in pack 893’s region run, linking conditional drop placements to the watcher’s pack; the placement flag identifies enemy-drop behavior, not the particular enemy or an awarded-drop guarantee. The five-item clean-route availability and travel order remain unresolved. Bounty Hunt rows 195–196 use flags 494/495 and 495/496. In exterior pack 893, with 494 set and 495 clear, the boss-check thread monitors AI 39 while the hero is in trigger 4; below 50 hit points it deactivates entities 36–38, sets 495 and shows line 4. Interior pack 1148 reads 496 to select a character set, but this does not establish a writer for 496. No source for starting flag 494 is established here, so this local handler evidence does not prove the bounty route is enabled from a clean start. Mote Quest row 197 uses flags 506/507. In interior pack 859, Motara sets 506 when flags 423/48/47/507/506 do not take an earlier branch; with 506 on and 507 off, her interaction counts which of items 160–171 are held, and sets 507 once all twelve types are represented. The item source census lists all twelve as obtainable in play, but pack 859 appears only through a default-door edge in the static reach graph, which does not establish a complete playable route or that all twelve are collected before the interaction. This is separate from Motara the Mote-Keeper rows 176–177 (flags 423–425). Missing Explorer row 198 maps flags 509/510. The pack-842 proximity tables read flag 510 to choose the first line (114 or 115) in the flag-56 dialogue branch for entities 7, 20, 23, 29, 37 and 47, including the Giovanni the Explorer records. This is a dialogue consumer; the described pack-842 handlers do not set 509 or 510, and the reviewed module descriptions do not establish either flag writer or a quest transition. The quest route therefore remains unresolved. Signet Ring rows 215–217 map flags 546/547, 547/548 and 548/549. The recovered flag-writer inventory has no writer for 546–548 and places the only known writer for 549 in an unreferenced pack-722 routine. Pack 722 also contains an unregistered, dormant proximity routine associated with flags 548/549 and item 81 (SPEC-0044); item 81 has no listed source (SPEC-0021). These records do not establish an active quest progression route or the intended status of the chain. Cynthia's Noil row 212 uses flags 539/540. In pack 758, Cinthia sets 539 on the first interaction when 539 and 540 are clear; on later interactions, an active petpet of kind 6 sets 540, completing the row (SPEC-0045; SPEC-0047). A kind-6 petpet can join from a wild type-1460 placement, including placements in regions loaded by pack 1350. This links the quest to a pet-type and a known placement context, but does not establish travel order or that the player brings that pet to Cinthia. Poison Seeds rows 220/221 use flags 567/568 and 568/569: pack 1238's watcher sets 568 while 567 is set, 568 is clear and the hero holds at least four item 82; pack 745's Init also sets 568 when 567 is set and the hero holds at least four item 82 (no clear-568 gate is reported there). Apothecary Fautt then sets 569 and removes all item 82 when 568 is set and 569 is clear (SPEC-0037 pack 1238; SPEC-0044 pack 745). The only recovered direct item source is five flag-3 placements in resource 1240 under pack 1238; flag 3 placements do not spawn during region load, and no script grant/add path is identified. The item's obtainable source, physical reach and travel order therefore remain open. A Magic Skull rows 191/192 use flags 481/482 and 482/483. Mistress Morag in pack 1384 (module 1140) sets 481 on interaction when it is clear; with 481 set, 483 clear and item 69 held, a later interaction sets 483 and consumes one item 69. In Haunted Tombs pack 1324 (module 1074), an active watcher sets 482 once 481 is set and item 69 is held; it stops when 481 is clear or 482 is set. Morag's 483 branch does not test 482, so the script does not enforce that row 192's start flag is set before its done flag. The item-source census finds one direct item-69 placement candidate in resource 1076, with placement flag 3; it does not spawn on region load, and no add path is identified. The T86 region census does not tie resource 1076 to pack 1324, whose post-pack region run is unnamed. The item's obtainable source, physical reach and travel order remain open (SPEC-0032 module 1074; SPEC-0039 module 1140). The Lighthouse rows 213/214 use flags 542/543 and 543/544. With flags 590, 591, 542, 543 and 544 clear, Lightkeeper Isaac (entity 2, module 772) sets 542 on the default conversation branch. In module 784, trigger 1 runs its walk/animation scene when 542 is set, 543 is clear, confirm is pressed, the object is present, and the shot and attack words are clear; the scene sets 543. A later eligible Isaac conversation with 543 set writes 544. This maps the two row transitions but does not prove the route or revisit order between the handlers (SPEC-0037 module 784; SPEC-0042 module 772). Pink Posies rows 222/223 use 578/579 then 579/580. Pack 1238's pickup callback sets 579 when item 83 is picked up and 579 is clear, without testing 578. In pack 991 (module 1014), the registered proximity handler for entities 0 and 2 sets 580 and removes all item 83 when 578 and 579 are set and 580 is clear. Its on-enter routine sets 578 only in a branch that already tests 578 set; reviewed scripts do not establish a start-flag writer. The resource census finds a direct flag-0 item-83 placement in resource 1243, inside pack 1238’s region run, connecting a shipped source candidate to the pack-1238 pickup callback. This establishes neither physical pickup reach nor clean route order. The initial writer of 578 remains unknown; thus the callback can set row 223’s start flag before row 222’s start flag. (SPEC-0037 module 1238; SPEC-0043 module 1014). The Arbendus Flower row 161 uses flags 386/387. In pack 1385 (module 1143), the registered Angus proximity handler sets 386 when 386 and 387 are clear, the main-story gates 301 and 216 are clear, and the hero lacks item 2; with 386 set, 387 clear and item 2 held, the handler sets 387 and removes one flower. The item-source census lists item 2 as obtainable in pack 1184, but does not establish the travel or acquisition order relative to Angus. This maps the row transition while leaving the clean route open (SPEC-0039 module 1143; item-source census). Missing Kid row 218 uses flags 561/562. In module 722, the active R1 proximity routine sets 561 when 76 is set and 561/562 are clear. Module 732 starts a watcher that polls AI entity 0 (the Giant Slorg) only while 561 is set and 562 clear, then sets 562 when the target is dead. Module 742 also starts a live watcher in Init; it polls entity 6, the Giant Slorg in character region resource 744, and sets 562 on death without testing 561. These handlers map the row start and completion, but module 742 can set the done flag before the start flag if its watcher runs first; the physical route and clean-play ordering are not established (SPEC-0039 module 732; SPEC-0041 module 742; SPEC-0044 module 722). Angry Mozitos is row 204 (flags 521/522, stage 2, scene 66). The recovered boot, stage-table and level-script flag-site censuses contain no setter or reader for either flag, so this row remains unlisted from a clean new-game state; its objective text does not establish a live encounter or route. This finding is bounded to those recovered sources and excludes externally modified saves. The other side-quest flags among the 69 are not listed one by one here.
+10. Resolved for flags 60 and 358's level-module sources: pack 864's Init sets flag 60 when clear, and pack 822's normal exit loads world 60 (pack 864). Pack 1432's Init unconditionally sets flag 358. The Ixi Chieftain reads 358 first as mode 2, then 60 as mode 1 (SPEC-0014); flag 358 is a fight-mode setup value, not a defeat marker. These are separate from the Werelupe King's death-state setter for flag 273. The broader boss-to-flag map remains incomplete, including the identity and flag of the separate fixed creature routine described under Who writes the flags (item 1).
+11. Resolved: acts are given by the main-story quest rows (Act 1 rows 0 to 69, Act 2 rows 70 to 89, Act 3 rows 90 to 115 and 121 to 141, Act 4 rows 116 to 120 and 142 to 157); see Act structure and SPEC-0058.
+12. Resolved: level-scoped state is separate from this global progress bitmap. Each world has its own 64 level-state flags; SetLevelState and QueryLevelState use indices 0 to 63 and world 0 for the current world (SPEC-0022, Progress flags; SPEC-0030, rows 152–153).
+13. Resolved for the shipped user route: an index outside 0 to 8 cannot be selected in normal play. The only page with those nine start-point items is the debug-only chooser, which the front-end never enters; the title's New Game path runs the index-0 setup directly (SPEC-0035, section 5). Behavior of an abnormal direct invocation with an out-of-range value remains unknown.
+14. Resolved: Motara the Mote-Keeper rows 176/177 use flags 423/424 and 424/425. The module-786 callback gates the initial 423 and final 425 writes; Motara's pack-859 callback performs the 424 transition. See test vector 23. The cross-pack visit order and route remain open (High for the callback conditions and row mapping; route not established).
+14. Resolved for clean new-game starts and the known normal route: indices 0 to 7 omit stage 7, and pack 1411 later sets 335 after flags 100, 102, 104 and 106 are all on; flag 95 does not gate that setter. Trigger 17 is registered only when flag 95 is clear, 334 is on, and 336 and 338 are clear; its callback needs 335 on and 336 clear. The known normal route reaches this registration and can play movie 69. Index 8 applies stage 7 and pre-sets 336, so movie 69 cannot play from that start. Arbitrary saved flag bitmaps are outside this conclusion (SPEC-0044, trigger 17; SPEC-0058, step 45; R2 stage-table census).
+15. Resolved: archive resource 777 loads in play. It is on the main path (quest rows 91 to 96; flags 252 to 256 are set only there) and is entered by a script load from pack 758, so flag 593 can be set once flag 592 is on (SPEC-0058, Open question 7).
+16. Resolved: Flags 592 and 593, the extra term near the callback start. It is the loop over the first slot's character range (each character loops an idle animation); it is not a gate on the callback start. The callback starts when flag 592 is set and flag 593 is clear.
+17. Partly resolved: Flags 592 and 593. Resource 777's only established callback starter is thread 12, which Init starts unconditionally; the copied registration helper is not reached from live code. One address passed only as an integer and 32 unidentified host-call targets remain, so a second indirect callback route cannot be excluded (SPEC-0045, resource 777).
+18. Resolved: Flags 592 and 593, once or again. The thread runs once per module load and starts the callback at most once per load.
+19. Resolved: Flags 592 and 593, clears. No code clears either flag (every write sets it), and no boot code or stage-table row writes them.
+20. Resolved: the flag-593-selected dialogue lines in resources 777, 1017 and 1300 match their saved disc text tables. In 777 they are aftermath reactions: guards praise the heroes (0–2, 14–16), the herald reports victory (29–31), Sir Drysdan reacts to Kaherdin's treachery (106–108), library characters react to the attack and cleanup (127–129, 145–147, 199–201), and Kaherdin admits his attempted takeover (232–234). In 1017 lines 8, 31, 54 and 77 have four Traders Guild speakers reacting to the kingdom's rescue and its trading prospects. In 1300, King Hagen's line 36 celebrates the affair's conclusion and the safety of Faerieland, Meridell and Brightvale. The texts establish aftermath content; they do not establish developer intent or that every line is encountered on every route.
+21. Resolved: the quest stage (+0x14) is fixed disc data with no writer by design. It is 0 (no map marker) or 1 + kind (1 for main-story rows, 2 for side-quest rows). On disc 48 rows have stage 0 (43 main, 5 side), 115 main rows have stage 1 and 75 side rows have stage 2. **[High]**
+22. Resolved: a quest row is nine 32-bit fields (36 bytes). The fields are row kind (+0x00), start and done flag ids (+0x04 and +0x08), title and objective text offsets (+0x0C and +0x10), stage (+0x14), map coordinates x and y as 32-bit floats (+0x18 and +0x1C), and scene id (+0x20), which indexes area names in table 5 (SPEC-0058). The journal and map readers access these fields at those offsets; see Quest rows.
+23. Resolved for journal mechanics; authoring intent remains open. The five cleared done-flag ids are 108, 109, 110, 183 and 185, corresponding to quest rows 0, 1, 2, 49 and 50. A row is listed when its start flag is set and its done flag is clear, so clearing a done flag re-lists its row only while the start flag stays set. Pack 909's incomplete-roundup activation clears 107 through 110 together; the related starts are also cleared, so rows 0 to 3 are hidden until their start flags are set again. In pack 1163's documented serving scene, flag 183 is set before the scene and flag 185 is clear when the scene clears it, so that 185 write is a no-op there. A separate 1163 sequence path conditionally clears flag 183, but its caller is not established; that clear removes the start flag of row 50, so it hides row 50 rather than listing it again. A path that clears 185 while leaving 183 set would list row 50 again. Static evidence establishes these effects, not the intended purpose or reachability of every sequence variant.
+24. Resolved (High, no play check): finale reachability. The final-fight world has a volume for trigger index 1 (a cylinder on the arena floor), which the hero's own trigger-hit method fires with a non-null object, so the finale (movie 85) runs when the hero reaches it during the landed window; the epilogue (flag 366, movies 79 and 83) can then follow the finale's return. See SPEC-0054. A play check is still useful.
+25. Resolved: trigger-state transitions and the actor pass that fires each main-story trigger are specified in SPEC-0058, Open question 12, with the shared trigger-pass rules in SPEC-0028 and SPEC-0030.
+26. Resolved (High for the calls, Medium for the meaning): pack 1381's two puzzle groups are the station targets (708 to 713) and the blocks pushed onto their pad spots (714 to 719), described in SPEC-0042. No module outside 1381 reads 708 to 719, and the load from 1391 into 1382 tests no flag, so in code the load does not wait on them. In 1391, trigger 1's large rectangle volume is anchored at (-40.77, -229.62, 180.55), with extent lengths 160, 80 and 80; trigger 2's lift volume is a vertical cylinder based at (-0.02, 0.08, 220.55), height 0.5 and radius 20. Both callbacks are registered without flag gates, and trigger 2 animates the module's sole placed object. These records establish no 708–719 code gate, but do not prove that the hero can travel between the streamed seam, lift and trigger 1 before the six blocks are placed; physical reachability remains open (SPEC-0058, Open question 1). Pack 1411 names pack 1391 as a streamed neighbor in cells with exit values 1–4. The world swap tests the hero at the same x/z position, with no per-pack coordinate transform, and pack 1391 has no fixed arrival locator or teleport plane. At the seam sample (x=0,z=190), pack 1411's height sample is about y=149.6. That x/z position lies within the long lift's rest height patch in pack 1391 (approximately x=[−39,49], z=[187,275]), which samples about y=0.07 there; trigger 2 lies over the same patch. The common frame locates the target surface, but the roughly 149.5-unit drop, collision opening/order and lift behavior during arrival are unresolved, so no safe landing or route is established. The path from the lift to trigger 1 and any blocker tied to the six block placements remain unproven. The pack has type-5 ground-height and type-11 collision data but no type-21 navmesh; the absence of a navmesh is not itself a reachability result (SPEC-0018).
+27. Resolved for the static main-path dependencies (High): pack 1098's entity-49 routine sets flag 180 after the Crokabek report; its Init promotes the courtyard directly to stage flag 26 when either 180 or 185 is set. Stage 26 is the fire-shield lesson, so the next training phase does not depend on flag 182. Flag 182 has no reachable setter; it is the only condition for flag 25, and flag 25 is needed for the lunge-only branch in pack 1056 that sets 635. Pack 1163's guest-serving branch reads 25 and 635 before setting flag 183; 183/185 are the side-quest start/done flags for row 50. Thus the serving branch is cut in the shipped static path and does not gate the main story. This establishes program dependencies, not intended design or behavior under a modified save/script state (SPEC-0044; SPEC-0045; SPEC-0058).
+28. Resolved for script order and static placement (Medium for layout, High for script gates; physical reach remains unverified): the library triggers (indices 4 to 8 of pack 777) are registered on every load with no flag gate. Index 4 (the entry plate, flag 252) fires on contact once per load while 253 is clear, and can fire before movie 35; it then makes trigger index 0 silent, so movie 35 and flag 69 are skipped. Indices 5 to 8 (flags 253 to 256, lines 237 to 240) each need Square and their own flag clear; the code imposes no order among them, but 256 stops the whole routine, and the exit stays shut while 252 is set and any of 253 to 256 is clear. The four trigger boxes sit on similar pedestals on the library floor; index 8's middle pedestal is a low dais, with no object from the library object table on or around it. The one object between the middle and west pedestals is removed by index 6, but the module and trigger data do not gate index 8 on flags 253 to 255. The static placements show no required order or identified barrier at index 8, but do not establish that the hero can physically reach or interact with it first. If index 8 is reached and used while flags 253 to 255 are clear, 256 disables the other book handlers and no other module routine in pack 777 sets 253 to 255; the exit remains shut. This is a conditional soft-lock inferred from script behavior, not a confirmed traversal route (SPEC-0045, 777).
+29. Partly resolved: the additional indirect method-table hook is a separate call path from the Werelupe King's death state, which directly sets flag 273. The hook invokes the notified progress-flag setter with a flag supplied by its caller. Its indirect caller and the argument value are not exposed by the static call/reference census, so the written flag and any reachable gameplay route remain unknown. It could still set 273; distinct code paths do not establish distinct flag ids.
+30. Resolved (High): the group counts the per-member mark used by the Whinny Penned mode (SPEC-0029, Behavior 5). The group-count routine follows each Whinny mode update, so two pen transitions in one world frame are counted separately; flags 107 to 110 advance in order without skipping.
+
+11. Worried Sister rows 174 and 175: with flags 419, 420 and 421 clear, module 783 entity 0 sets 419, so row 174 is listed. A later module 750 entity 2 interaction with 419 on sets 420, hiding row 174 and listing row 175. A further module 783 entity 0 interaction with 420 on sets 421 and hides row 175. The scripts establish these flag transitions; the exact town-to-town route order is not established.
+31. Resolved: Kreludan Sword rows 168 and 169: with 405 on and 406 off, row 168 is listed. Pack 906’s region run contains a direct flag-0 item-24 (Kreludan Metal) placement in resource 907, so loading that region spawns the item; pack 906’s pickup callback sets 406 when item 24 is picked up, hiding row 168 and listing row 169 while 407 is clear. In pack 748, its item-check routine consumes item 24 and sets 407 when 405 is on; this hides row 169. The placement-to-callback link is established within pack 906, but the physical reach and travel route to either handler remain open.
+

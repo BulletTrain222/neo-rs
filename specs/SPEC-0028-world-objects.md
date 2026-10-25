@@ -1,0 +1,1119 @@
+# SPEC-0028: World lights, effect spawns, object records and collision primitives
+
+- Answers: R-0006 (extension: world-pack light, effect-spawn and object records)
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
+- Confidence: per section. Object pools (section 15): High for sizes, counts and allocation sizes; Medium-High for the pool roles (script callback tables); Medium for initial words and the release rule; Low for the table and scene-list layouts. Record layouts and counts: High (measured on disc, all 192 world packs). Effect spawn fields: High. Placed-object record layout and counts: High; placed-object setup, draw gate and reset: Medium. Lighting (section 8): High that resource 527 is never read and that type 30 light sets reach characters only; Medium-High for the light-type roles (type 1 ambient, type 3 direction from the light to the object). Section 10.1 is a pointer only: the two rotation steps once listed there belong to the sky dome (SPEC-0046), High. Second transform block of a placed object (section 7): High; it is the rest block (section 7.1). World geometry is unlit, High (section 8). Placed objects in the object lists (section 10): Medium-Low for list membership; draw distance: Low (the draw path does not use the designer values). Type 28 records are the camera tracks of SPEC-0052: High. Meaning of the type 30 header flag: Low. Type 39 +0x44 zone number and the per-pass zone gate: High. Type 29 part records (copy of the bound frame record): High. Type 11 extra lists n1 to n4: High. Dialogue line table: Medium-High. Type 40: layout High (counted over the disc), load-time steps Medium, list-entry fields, kinds and keys High; the never-filled built-in pools (section 15.1): High. Type 41: layout and load-time steps High; per-frame zone selection Medium-High; field roles Medium-High except the render scalar (Low). Type 41 is a per-area atmosphere zone table selected from the camera eye; it is not a camera volume and not a light table. Type 11 collision primitives: header counts High (189 chunks); the 0x20-byte header at the start of every primitive record, and the volume kind byte of each list (spheres 1, cones 2, cylinders 3, kind-4 rectangles 4, kind-7 rectangles 7, fourth list 8), High (every record of all 189 chunks); sphere records (0x40 bytes, equal extents) High for the layout and count (189 of 189 chunks, 6,678 in total); cone records (0x40 bytes) High for the count (83 in 7 packs), Medium for the field meanings; rectangle records (0x70 bytes, kind-4 list at +0x40 and kind-7 list at +0x3C) High for the layout and counts, extent signs Medium; cylinder records (0x50 bytes) High for the layout and count (the count matches in all 189 chunks); other 0x50-byte records (the fourth header list): layout and count High, role Low; primitive-array pointer order High (all 189 chunks); order of auxiliary arrays varies. Doors (section 13): High for the records and the count, Medium-High for the rule and for the script/default split, High for the door prompt and confirm (SPEC-0006). Trigger volumes (section 13): kind 2 never fires in play, High; trigger pass actors, cell lists, fire paths and block words, High; the dispatch and the kind split, Medium; proximity and finite-cylinder geometry, Low-Medium; the rectangle test, Medium; the apply rules (script hook, element gate, break, cue and the hero melee mismatch reaction), High (SPEC-0036 and SPEC-0048); the blade recoil (the former press variant), High for the gates, writes and maps, Medium-High for the hit window; the disc sources of the volumes (every type 11 primitive record is a volume: its own header plus its body, section 6), High; the entry list at the type 11 pointer +0x4C (count at +0x24), High; the script trigger fire gates by flag bit, Medium-High; save points are not trigger volumes, placed objects or placed effects, High. Owner primitive list walk order (section 6.6): Medium-High (SPEC-0018 holds the dispatch behaviour). Loader handling of this spec's chunk types (Layout 0): High for dispatch and order; Medium for the type 40 load-time steps, High for type 41. Contact-time crossing solver (Behavior): Medium-Low. The blade recoil multiplier readers (section 13): High. Animated placed objects (section 7.1): High for the fields, the stream, the script states and the per-tick steps; Medium for the edge branches of the sampler. Pack 1299 looping-door puzzle (Behavior): High for the rules. Riding, carrying and collision with moving placed objects: owned by SPEC-0018 (Behavior, pointer only). Six-slot look-ahead (Behavior): it is the foliage bush shot test of SPEC-0060, High. Object record accessors (Layout 14): High for the offsets and widths, names open. Type 16 foliage patches (section 16): High; a summary only, SPEC-0060 owns them. Open items are listed under Open questions.
+- Related specs: SPEC-0025 (save game; owner of the save-point rule), SPEC-0027 (camera; its eye position selects the type 41 atmosphere zones), SPEC-0046 (rendering: draw records, far state, light slots, model-part visibility, the screen post pass and the sky dome that receive the type 41 output), SPEC-0006 (areas; world buffers, doors and transitions), SPEC-0026 (game flow; world buffers and travel), SPEC-0018 (object collision and the rectangle and box rules), SPEC-0040 (character side of collision), SPEC-0030 (script trigger callbacks), SPEC-0036 (Tor's blade recoil, attack sub-state 13; contact routines and cues on world breakables), SPEC-0048 (world breakables and their break routes), SPEC-0004 (vertex colour and lit-vertex arithmetic), SPEC-0060 (type 16 foliage patches), SPEC-0052 (camera tracks, type 28), SPEC-0031 (ambient sound loops, the type 11 fourth list).
+
+## Summary
+
+Area packs (SPEC-0006) hold several small record tables besides geometry: camera tracks (type 28), light sets (type 30), placed effect spawns (type 39), a dialogue line table (type 1000), object headers with collision primitives (type 11), placed objects (type 29) with their part records, and two tables whose fields are only partly established (types 40 and 41). The type 41 table holds per-area atmosphere zones (a colour for the screen post pass, a screen overlay colour, a render scalar and the blend factor of the sky dome's role-10 layer), chosen each frame from the camera eye position; it is not a camera volume and not a light table. A separate text resource (527) describes three directional lights, but the game never reads it; the same three directional lights, together with an ambient light that exists only in the program, make up the scene's default lights, built from fixed constants (SPEC-0046). This spec gives the layouts and counts of each, the roles of the light-set entries (which light characters only; world geometry is unlit), the rules for placed effect spawns, the draw gate of placed objects, which asks the level's binary grid (SPEC-0006) whether an object's zone is active, and the layouts of the collision primitives (spheres, cones, cylinders, boxes and planes) that the contact and move rules of SPEC-0018 and SPEC-0040 use. Effect definitions (what a spawn plays) are the shared effect table described in SPEC-0034; whether every spawn's id resolves to one is open (Open questions 4). The same pack-level data is also the source of trigger volumes: section 13 gives the volume records that the hero and other actors are tested against each tick, the kinds of test they use, and the rule for applying a hit (a script hook, an element gate, a break with a piece push and a hit cue), together with the press (use) variant. Every type 11 primitive record is such a volume, with its own 0x20-byte header. Doors are kind-7 rectangle volumes with flag bit 1 and a class other than 500 and 501; section 13 gives their records and the rule that takes the hero to another world. The game's moving platforms, lifts and bridges are animated placed objects: type 29 objects with a recorded single-transform motion that level scripts start and stop (section 7.1). Characters ride them through the ground attach of SPEC-0018, and moving objects push characters through their own inline primitives (SPEC-0018). The one six-state "platform" is the looping-door puzzle of pack 1299 (Behavior). The "six-slot look-ahead" once listed here is the foliage bush shot test of SPEC-0060 (Behavior, pointer). The type 16 foliage patches are summarised in section 16 and owned by SPEC-0060. Save points are not among the records of this spec: they are not placed objects, trigger volumes or placed effect spawns (section 13, Save points). Times are in seconds; the game runs at 60 ticks per second (SPEC-0007).
+
+## Where it lives on the disc
+
+- World packs are the resources whose first chunk is type 31. There are 192 of them: 191 area packs and the front-end pack (resource 532). Each chunk below is a top-level chunk of a world pack, except the inline type 5 chunk and the inline mesh and type-11 header that a type 29 object carries.
+- Counts over the 192 packs: type 28 in 191 packs (2,010 records); type 30 in 140 packs (2,449 records, 3,265 entries); type 39 in 158 packs (5,139 records); type 1000 in 131 packs; type 11 in 189 packs (of which 164 have kind-4 rectangles, 142 kind-7 rectangles, 175 cylinders, 131 spheres, 7 cones); type 29 in 121 packs (3,495 objects in all, of which 642 have part records, with 7,201 part records); type 40 in all 191 level packs; type 41 in 138 packs (185 records).
+- Trigger volume records (section 13): every type 11 primitive record is a volume. Each record starts with its own 0x20-byte header (kind, mode, flags, gate mask, number, class or book value) followed by its body. The kind byte is fixed per list: 1 for spheres, 2 for cones, 3 for cylinders, 4 for the rectangle list at +0x40, 7 for the rectangle list at +0x3C and 8 for the fourth list (High, every record of all 189 chunks). Doors are kind-7 records with flags 0x0002 and a class other than 500 and 501 (section 13, Doors). Types 40 and 41 were measured and carry no trigger kind byte.
+- Resource 527 of the archive is a 2,048-byte plain-text file (SPEC-0002 lists it as text). The game never reads it (High); its values are not copied here.
+- Offsets below are relative to a chunk's payload unless a table says "in object" or "in record". The payload starts 16 bytes plus the chunk's extra field after the chunk header. The one exception is the second list of type 29: its entries are measured from the start of their offset table (section 7).
+
+## Layout
+
+### 0. Loader steps for this spec's chunk types
+
+The loader's handler for each chunk type, and the walk order it needs, are in SPEC-0006 ("How the loader handles each chunk"). This section gives only the load-time facts that the layouts below depend on.
+
+- **Type 10 before type 29.** Type 29 reads the type-10 table at load, so type 10 must come earlier in the chain (SPEC-0006). Types 5 and 10 also come before type 29 there.
+- **Type 11.** After the header offsets are rewritten, the loader clears byte +0x4F of each 0x50-byte record in the table at payload +0x54 (the count is the u32 at payload +0x2C, section 6; the offset is from the record start, which is the start of its header, section 6). Only that byte is cleared; it is the start-delay counter of the ambient sound loops (section 6.5). High.
+- **Type 21.** The loader rebases the navigation mesh table and its meshes. The layout is in SPEC-0018 (this spec does not describe it). High.
+- **Type 28.** Each record's offsets are rewritten and the record is stored in its fixed slot (SPEC-0006). High.
+- **Type 30.** The loader walks N records, each record's size taken from its own header (section 2). High.
+- **Type 39.** At load each record is bound to its effect definition (the definition list is held in the shared effect manager; SPEC-0034). No object is created. A record with an unknown id is reset and logged. Records start inactive. High for the binding; Medium for the details of the bind.
+- **Type 40.** The 21 fixed records and the counted list are rebased at load (seven offset fields each). Record 3 then gets two runtime blocks (0x80 bytes and 4 bytes). Medium.
+- **Type 41.** Each 0x50-byte record is rebased at load: its point-list offset at +0x44 is rebased when its point count at +0x40 is nonzero, otherwise cleared. Then every record whose gate key (+0x24) is nonzero gets the value 28.0 written to the alpha lane of its vector B (+0x1C); other records keep their disc value (section 11). High.
+- **Type 1000.** Relocated and stored (section 5; SPEC-0006). Medium-High.
+
+### 1. Type 28: camera tracks (191 packs, 2,010 records)
+
+Type 28 records are the camera tracks of SPEC-0052 and SPEC-0027: the track id is the record index, and the value at +0x2C is the focal length. SPEC-0052 owns the record meaning and playback (High). A finder routine returns the last track within 500 units of a point (squared distance below 250,000), skipping tracks whose +0x28 byte is set unless asked to include them; nothing calls it (High).
+
+Payload:
+
+| Offset | Size | Field | Notes |
+| --- | --- | --- | --- |
+| +0x00 | s32 | N, record count | 4 to 43 per pack |
+| +0x04 | u32 | offset of the table | 0x10 in all 191 packs |
+| +0x10 | N × u32 | payload-relative offsets to records | all point inside the payload |
+
+Record (0x40 bytes):
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 4 × f32 | unit quaternion (x, y, z, w) | unit length within 1e-3 in 1,996 of 2,010 (14 are off) |
+| +0x10 | 4 × f32 | position, w = 1 | w = 1 in all 2,010 |
+| +0x20 | s32 | count | above 0 in 329 records |
+| +0x28 | u32 | flag | 0 in 1,246 records, 1 in 764 |
+| +0x2C | f32 | focal length (SPEC-0052) | about 791.4 in about 1,850 records, 0.0 in 72 |
+| +0x34 | u32 | pointer-like word | nonzero in exactly the 329 records where the count is above 0, and then inside the payload |
+
+### 2. Type 30: light sets (140 packs, 2,449 records, 3,265 entries)
+
+Payload:
+
+| Offset | Size | Field | Notes |
+| --- | --- | --- | --- |
+| +0x00 | s32 | N, record count | 1 to 106 per pack |
+| +0x04 | u32 | offset of the table | 0x10 in all 140 packs |
+| +0x10 | N × u32 | table | Values on disc are not record offsets. Do not use them. |
+
+Records follow the table in sequence, not through the table. The first record starts at the table end rounded up to 16 bytes. Each record is 16-byte aligned, and its size is 0x20 + 0x50 × (A + B + C), rounded up to 16. The chain ends exactly at the end of the payload in all 140 packs.
+
+Record header (0x20 bytes):
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | s16 | unknown flag | 0 in 488 records, 1 in 1,961. Character lighting does not use it. Meaning open. |
+| +0x02 | s16 | gate | 1 means character lighting skips the record in both passes. 0 in 2,298 records, 1 in 151. All 151 hold A and C entries. |
+| +0x04 | s16 | A, count of entries in array A | A sum 535 |
+| +0x06 | s16 | B, count of entries in array B | B sum 2,507 |
+| +0x08 | s16 | C, count of entries in array C | C sum 223 |
+| +0x0A | u16 | fill | 0xCDCD in all 2,449 records; not used |
+| +0x0C | u32 | fill | 0xCDCDCDCD in all 2,449 records; not used |
+| +0x10, +0x14, +0x18 | u32 each | pointers to arrays A, B and C | zero on disc; the loader writes run-time values here. Do not read them from the disc. |
+| +0x1C | u32 | unused | zero on disc |
+
+Arrays follow the header in the order A, B, C. Each entry is 0x50 bytes:
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 4 × f32 | position x, y, z, w | w = 1 in all 3,265 entries |
+| +0x10 | 3 × f32, then 0 | unit direction, w = 0 | length 1.0 in all 3,265 entries |
+| +0x20 | 4 × f32 | colour R, G, B (0 to 255) and alpha | alpha 255 and channels 0 to 255 in all 3,265 entries |
+| +0x30 | s32 | light type | 2 for array A, 3 for array B, 1 for array C, in all 3,265 entries. The array decides the type, so readers should use the array. Roles (Medium-High): type 1 is the ambient term (its direction is not used); type 2 is directional and uses the entry direction (+0x10); type 3 is a point light whose direction is normalize(object position − light position), with the falloff of SPEC-0046 (Character lights); its stored direction is not used. |
+| +0x34 | f32 | strength | A 0.0 to 1.0; B 0.2 to 12.232; C 0.0 to 1.1 |
+| +0x38 | s32 | flag | A: 0 in 354 entries, 1 in 181. B and C: 0 in all. The first A entry of every record that holds A and C entries is 1. |
+| +0x3C | f32 | radius | A: −1.0 (445 entries) or 0.0 (90). B: 0.625 to 117.803 (2,506 entries) and 0.0 (1 entry). C: −1.0 or 0.0 (181), or 15.025 to 34.617 (42). The values −1.0 and 0.0 mean no radius. |
+| +0x40 | f32 | radius squared | the square of the radius when the radius is above zero; 0.0 when the radius is 0.0; −1.0 when the radius is −1.0 |
+| +0x44 | s32 | zone key | only the low byte is used: 0 to 20 in arrays A and C, 0 to 44 in array B. Bytes +0x45 to +0x47 are zero in all entries. |
+| +0x48 | 8 bytes | fill | 0xCD in all 3,265 entries; not used |
+
+Which record kinds occur: records with only B entries (2,226), B and C (40), A and C (181), C only (2). No record has both A and B entries.
+
+The one array B (type 3) entry with radius 0.0 is in pack 1174, record 44: gate 0, zone key 3, colour (255, 119, 9), strength 0.65. It has no radius gate, and in the original it breaks the cross-fade of SPEC-0046 (a division by zero); the clean side treats it as absent (SPEC-0046, Character lights and Edge cases).
+
+Counts on disc: 140 packs, 2,449 records, 3,265 entries (A 535, B 2,507, C 223). Each record holds at most one array C entry on disc. Character lighting reads only the first array C entry of a record (SPEC-0046, Character lights). Light sets reach characters only: no world-geometry or placed-object reader exists, and world geometry is unlit (High).
+
+### 3. Resource 527: directional light text
+
+The resource is 2,048 bytes. It starts with seven ASCII text lines, followed by bytes left over from an earlier sector. The game never reads this resource (High), so a clean implementation does not need it. Its lines describe the three directional lights of the scene's default lights, which the program builds from fixed constants (SPEC-0046, Scene default lights; the lit-vertex arithmetic is in SPEC-0004). The default lights are four lights: one ambient light, which exists only in the program (colour (50, 50, 50)), and these three directional lights. The line forms are kept here only to identify the file.
+
+The seven lines are, in order: direction0, direction1, direction2, color0, color1, color2 and ambient. Each line is its key, then its values separated by single spaces; every value is written as a decimal number with six digits after the point. Lines 1 to 6 end in CR LF; the seventh (ambient) line has no line end.
+
+| Line key | Values | Meaning (High) |
+| --- | --- | --- |
+| direction0, direction1, direction2 | three decimal numbers each | travel direction of directional light i (pointing down); the lit path uses its negation. Length 1.0 within 6e-4 on disc. The same three directions are the built-in directional lights (SPEC-0046). |
+| color0, color1, color2 | four decimal numbers each: three whole numbers 0 to 255, then one fraction | RGB colour of directional light i (the same colours as the built-in lights), then its strength: 0.25, 0.25 and 0.20 in the text, while the built-in lights use 0.25 for all three. |
+| ambient | four decimal numbers | On disc all four are the same value, −107374176.000000. That is the float interpretation of four 0xCC fill bytes, not a colour. The file sets no ambient colour; the built-in ambient (50, 50, 50) exists only in the program (SPEC-0046). |
+
+The ambient line ends at byte 350 of the resource. Byte 351 is a stray byte and byte 352 is the first zero byte. Readers must stop at the end of the seventh line and must not parse the stray byte.
+
+### 4. Type 39: placed effect spawns (158 packs, 5,139 records)
+
+Payload: u32 count at +0x00 (1 to 274 per chunk). Records start at +0x10 and are 0x90 bytes each. Every chunk fits its payload.
+
+Record (0x90 bytes):
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 4 × f32 | column 0 of a 4 × 4 transform (column-major) | columns 0 to 2 form a rotation: unit length and mutually orthogonal in all 5,139 records (1e-3) |
+| +0x10 | 4 × f32 | column 1 of the transform | as above |
+| +0x20 | 4 × f32 | column 2 of the transform: unit direction (forward axis) | unit length in all 5,139; the 4th value is 0 |
+| +0x30 | 4 × f32 | column 3: position, w = 1 | w = 1 in all 5,139 |
+| +0x3C | f32 | 1.0 | all 5,139 |
+| +0x40 | s32 | effect id | 116 distinct ids, 101 to 4042 |
+| +0x44 | u32 | zone number: the type-35 column of the placed effect (SPEC-0006, Binary grids); only the low byte is used | 0 to 59 on disc: 0 in 1,926, 1 in 544, 3 in 481, 2 in 405, 4 to 59 in the rest; below block 0's width in 4,559 of 4,559 records in packs with a grid |
+| +0x48 | u32 | 0 | all 5,139 |
+| +0x50 | f32 | threshold for near or far, stored as a squared distance | 10000.0 in all 5,139 (100 squared) |
+| +0x54 | u32 | child count | 0 in all 5,139 |
+| +0x84 | f32 | squared cull distance | −2.0 (no cull) in 4,869 records. Others: 225 (15 squared), 2,500, 5,625, 22,500, 40,000, 90,000, 1,000,000. |
+| +0x88 | u8 | cone-test enable | 1 in all 5,139 |
+
+Bytes +0x89 to +0x8B are a fill pattern and carry no data. Bytes +0x58 to +0x7B are zero on disc and are filled by the game at run time.
+
+Records are placed effect instances. The loader binds them and does not start them. A record runs only while its active flag at +0x48 is nonzero. The flag is zero for every record on disc. Scripts can start, stop and move a record by its index in the chunk; a switch id in a type 40 list can also set the flag (section 9).
+
+### 5. Type 1000: dialogue line table (131 packs)
+
+Header:
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 4 bytes | tag "IDMX" | 131 of 131 |
+| +0x0C | u16 | entry count | 1 to 1,043. The value 24 occurs in five packs: 678, 686, 691, 855 and 984. |
+| +0x0E | u16 | entry stride | 12 in all 131 |
+
+Entries start at +0x10 and are 12 bytes each:
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | u32 | speaker-name pointer (payload-relative); 0 means none | non-zero for all but a few; 7,482 of 7,547 resolve to readable names |
+| +0x04 | u32 | dialogue-text pointer (payload-relative); 0 means none | points to text with embedded control bytes in most records |
+| +0x08 | 3 bytes | colour R, G, B | 11 distinct triples; (0, 0, 0) in 7,019 of 7,547 |
+| +0x0B | 1 byte | not read by the known line-display path; authoring role unknown | |
+
+The loader takes the entry count from +0x0C and the record array from +0x10; it does not use payload words +0x04 or +0x08. The known line-display path reads the three colour bytes at entry +0x08 through +0x0A; entry byte +0x0B does not affect that colour. The original authoring purpose of the unused header words and fourth entry byte is unknown, and no other consumer has been established. The text format and its control bytes belong to the dialogue spec (SPEC-0022, not yet in the outbox). An index outside 0 to count minus 1 yields no entry.
+
+### 6. Type 11: object header and collision primitives (189 chunks)
+
+Header (payload offsets). Counts are s32; offsets are u32 and payload-relative.
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | s32 | trigger count: the size of the script manager's trigger pool (pool A, section 15) | not counted |
+| +0x08 | s32 | count of sphere records (0x40 bytes each) | positive in 131 chunks. The count equals the number of 6.2 records in all 189 chunks (6,678 in total). |
+| +0x0C | s32 | count of cylinder records (0x50 bytes each) | positive in 175 chunks; the header counts sum to 10,038. Under the established on-disc layout, 10,028 complete cylinder shape records fit their chunks. Resource 721 declares 10, but only 9 complete records and 48 bytes of the tenth fit in its payload; the declared array extends 32 bytes past the chunk end. |
+| +0x10 | s32 | count of cone records (0x40 bytes each) | positive in 7 chunks. The count equals the 6.3 count in all 7 packs (83 cones in total). |
+| +0x14 | s32 | count of kind-7 rectangle records (0x70 bytes each; list pointer +0x3C) | positive in 142 chunks; 675 records in all |
+| +0x18 | s32 | count of kind-4 rectangle records (0x70 bytes each; list pointer +0x40) | positive in 164 chunks; 5,849 records in all; pack 678 = 12, pack 684 = 100 |
+| +0x1C | s32 | n1: count of 0x24-byte entries at the table at +0x44 (movable-block sources) | positive in 17 chunks |
+| +0x20 | s32 | n2: count of 0x0C-byte entries at the table at +0x48 (rope-gun aim targets) | positive in 19 chunks |
+| +0x24 | s32 | count of entry (locator) records (0x50 bytes each) at the table at +0x4C | positive in 179 chunks, exactly the chunks whose +0x4C pointer holds a kind-1 header; 4,964 records in all |
+| +0x28 | s32 | n3: count of 0x1C-byte records at the table at +0x50 (empty on disc) | 0 in all 189 |
+| +0x2C | s32 | n4: count of 0x50-byte records at the table at +0x54 (kind-8 ambient sound loops, section 6.5) | positive in 139 chunks |
+| +0x30, +0x38, +0x3C, +0x40, +0x44, +0x48, +0x4C, +0x50, +0x54 | u32 | payload-relative offsets to further tables; rewritten at load | all inside the chunk in 189 of 189 |
+
+Notes on the offsets:
+
+- The table at +0x44 holds the n1 entries, +0x48 the n2 entries and +0x50 the n3 records; +0x54 holds the n4 records. These four pairings match the counts above.
+- Record rule (High): each loaded primitive has a 0x20-byte runtime header followed by its shape data. In the type-11 payload, the primitive-list pointer is 0x20 bytes before the first shape record; on-disc record i's shape data starts at pointer + 0x20 + i times the record size. The record sizes are 0x40 (spheres and cones), 0x50 (cylinders and the fourth list) and 0x70 (rectangles). The kind byte is supplied in the loaded header from list membership; the all-ones body tag begins each on-disc shape record. Pack 678 has its sphere pointer at 0x100, so its two sphere shape records start at 0x120 and 0x160. Pack 684 has its cylinder pointer at 0x60, so its first cylinder shape record starts at 0x80.
+- The offsets at +0x30, +0x34, +0x38, +0x3C, +0x40 and +0x54 are the list pointers of sections 6.1 to 6.5. The kind-4 rectangles (pointer +0x40, count +0x18) and the kind-7 rectangles (pointer +0x3C, count +0x14) are two lists of the same 0x70-byte record. In 131 of the 142 chunks with kind-7 records the kind-7 list directly follows the kind-4 list (+0x3C = +0x40 plus 0x70 times the kind-4 count); in the other 11 the kind-4 count is 0. Packs 678 and 684: 678 has 12 kind-4 records from +0x1D0 and no kind-7 record; 684 has 100 kind-4 records from +0x380 and one kind-7 record at +0x2F40.
+- The offset at +0x4C is the entry (locator) list of SPEC-0006: its count is the s32 at +0x24, and its records are 0x50 bytes, each with a kind-1 header (kind 1 in all 4,964 records; flags 0x0020 in 4,924 and 0x0021 in 40). The 179 chunks with a positive count are exactly those whose pointer holds a kind-1 header; in the other 10 the count is 0 and the kind byte at the pointer is 0. Pack 1432 has 5 entry records with flags 0x0020; the first has a body with three equal extents of 0.625 (section 13), and its entry 2 lies on the trigger-1 cylinder (section 13). In pack 684 the list starts at +0x2FB0, directly after the kind-7 record. High.
+
+Extra lists (High):
+- **n1 entries (0x24 bytes): movable-block sources.** +0x10 step value, +0x18 registry model id (−1 on disc), +0x1C inline mesh, +0x20 the block's primitive (a kind-4 rectangle record). They are the disc source of the movable blocks of SPEC-0048. An entry becomes a block only when its primitive's flags have bit 1 (value 0x0002) set (SPEC-0006, Type 11 movable-block table).
+- **n2 entries (0x0C bytes): rope-gun aim targets.** +0x00 registry model id (used when +0x04 is 0), +0x04 inline marker mesh, +0x08 a locator-like record whose +0x30 is the target point. At load they become the world's aim-target list (world +0x5824, count +0x5820) of SPEC-0030 row 126, which the hero's rope-gun aim scan reads (SPEC-0033).
+- **n3 records (0x1C bytes):** none on disc (the count is 0 in all 189 chunks).
+- **n4 records (0x50 bytes, list pointer +0x54, count +0x2C):** the fourth list of section 6.5, the kind-8 ambient sound loops and adventure zones of SPEC-0031. The six-list walk of section 6.6 does not use it.
+
+Pointers at +0x30 to +0x54 are rewritten at load. The load-time clear of byte +0x4F in each 0x50-byte record of the table at +0x54 is in section 0 (High).
+
+**Record header (0x20 bytes, at the start of every primitive record; High for the positions, roles as noted).**
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 16 bytes | not established | zero in every sphere, cone, cylinder and fourth-list record |
+| +0x10 | u8 | volume kind (section 13): 1 sphere, 2 cone, 3 cylinder, 4 or 7 rectangle, 8 fourth list | fixed per list (record rule above) |
+| +0x11 | u8 | mode byte (blade recoil material input, section 13) | varies |
+| +0x12 | u16 | flags (section 13) | varies per record (not per list); on a kind-7 rectangle, 0x0002 with a class other than 500 and 501 marks a door |
+| +0x14 | u32 | serial number | cylinders of pack 683: 3 to 6 (Medium for the width and for other lists) |
+| +0x18 | u16 | index of the record within its list | cylinders of pack 683: 0 to 3 (Medium for the width and for other lists) |
+| +0x1A | u16 | gate mask (section 13) | nonzero in 44 records (8 spheres, 9 cylinders, 23 kind-4 and 4 kind-7 rectangles); 0 on every door |
+| +0x1C | u16 | number: the script trigger index; on a door, the door number (rewritten at load, section 13) | doors 0 to 10 |
+| +0x1E | u16 | class selector or book value | book values on the 134 book-station cylinders (section 13); otherwise nonzero only in 14 sphere and 12 rectangle records |
+
+Class selector: the values 500 and 501 form one class, the same-world pads. The class list is built at load from the kind-7 list (+0x3C) only: a kind-7 record with bit 1 set and selector 500 or 501 gets, as its trigger index (+0x1C), the running count of such class records so far. On the disc, selectors 500 and 501 occur on two kind-7 records of pack 1299 (records 2 and 3, flags 0x0002), which get indices 0 and 1, and 500 on one sphere record of pack 1246, which is never read (the class step reads only the kind-7 list). The two pack 1299 records are not doors: the static rectangle handler sends a bit-1 record of class 500 or 501, and only for the hero, to the same-world pad branch (SPEC-0006) before and instead of the door branch. The pad pair is built at load only when a world word is nonzero; the display-tree load stores the node with id 401 in that word, so the pair needs a display node 401 (Medium). Only pack 1299 qualifies, and there the pads drive the looping-door puzzle (Behavior). High for the branch order; Medium for the pad pair.
+
+### 6.1 Rectangle records (0x70 bytes): kind-4 list (+0x40) and kind-7 list (+0x3C), High
+
+Both rectangle lists use the same record. Record layout (offsets from the record start, which is the start of its header):
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 0x20 bytes | record header (section 6): kind 4 or 7 at +0x10 | every record of both lists |
+| +0x20 | u32 | tag, all bits set (0xFFFFFFFF) | all 6,524 rectangle records |
+| +0x24 | f32 | extent along the axis at +0x60 (vertical in the sampled boxes) | signed (see Extent signs below); one extent of 0.0 in the 300 extents of pack 684 |
+| +0x28 | f32 | extent along the axis at +0x50 | as above |
+| +0x2C | f32 | extent along the axis at +0x40 | as above |
+| +0x30 | 4 × f32 | reference point x, y, z; w = 1 | sampled, w = 1 |
+| +0x40 | 4 × f32 | unit axis (the B axis for the extent at +0x2C): x, y, z; w = −(axis · reference point) | unit length within 1e-7 over 112 sampled records; w agrees within 6e-5 |
+| +0x50 | 4 × f32 | unit axis (the A axis for the extent at +0x28); w as above | as above |
+| +0x60 | 4 × f32 | unit axis (the axis for the extent at +0x24); w as above | as above; (0, 1, 0) in the sampled boxes of pack 684 |
+
+The three axes are mutually perpendicular (dot products zero to float precision in all 112 sampled records). The w component of each axis is the offset of its plane through the reference point. These are the run-time rectangle fields of section 13 (extents at +0x24 and +0x28, the switch or third extent at +0x2C, normal at +0x40, in-plane axes at +0x50 and +0x60). The static kind-4/7 rectangle test uses the +0x40 vector as its plane normal and the +0x50 and +0x60 vectors as the in-plane axes; their tested bounds use the extents at +0x28 and +0x24, respectively. This is an operational field mapping, without an editor-axis interpretation.
+
+The reference point is the box's low corner in the sense of SPEC-0018 (Object collision). The containment bounds in SPEC-0018 use the extents as full lengths from the reference point, so this spec does not use the word "half-extent" for them. Medium-High.
+
+Extent signs. The 112 sampled boxes all have positive extents, but this is not general. Over all 5,849 kind-4 records the extent at +0x24 is negative in 3 records (minimum -27.35), the extent at +0x28 in 59 (minimum -10.07) and the extent at +0x2C in 70 (minimum -118.6). No kind-7 record has a negative extent; the extent at +0x2C is 0.0 or above in all 675 (the static switch value of section 13). Runtime box contact uses the stored signed extents directly: it does not replace them with their absolute values. For either in-plane axis, a radius-r query is accepted only when its coordinate is strictly between -r and extent + r. Thus a negative extent narrows that interval and can leave a small overlap when the query radius is large enough; with zero radius, a negative in-plane extent admits no coordinate. For example, extent -2 with radius 1.25 admits coordinate -1 on that axis, while extent -2 with radius 1.0 admits none. The vertical extent uses the same signed value with the separate 0.1 top offset and optional top growth described in SPEC-0018. This establishes runtime use, not why the authoring data contains negative values. Do not assume that an extent is positive.
+
+First kind-4 record of pack 684 (record start +0x380): extents 75.2, 190.2 and 11.0; reference (1440.8, 59.6, 726.4).
+
+The records of one rectangle list are stored one after another. Pack 684 holds 100 kind-4 records from +0x380, then its one kind-7 record at +0x2F40, then the entry list (+0x4C) from +0x2FB0. In all 101 rectangle records of pack 684 the shape tests pass. In pack 678 the 12 kind-4 records start at +0x1D0 and pass the same tests.
+
+Synthetic example (a layout example, not disc data): a box with reference point (10, 0, −5), extents 6 (along the axis at +0x60), 4 (along the axis at +0x50) and 2 (along the axis at +0x40), with axes (0, 1, 0) at +0x60, (1, 0, 0) at +0x50 and (0, 0, 1) at +0x40. Its w values are 0 at +0x60 (−(0 + 0 + 0) = 0), −10 at +0x50 and 5 at +0x40.
+
+### 6.2 Sphere records (0x40 bytes): High for the layout and count
+
+Sphere records are the records of the sphere list (list pointer +0x30, count +0x08): 0x40 bytes, a tag of all ones and three equal extents. The list is read by its count, not by shape. The number of records in the list equals the sphere count at +0x08 in all 189 chunks (6,678 in total). The size question (0x40 or 0x50) is resolved: the 0x40-byte records are the spheres.
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 0x20 bytes | record header (section 6): kind 1 | every counted record |
+| +0x20 | u32 | tag, all bits set | every counted record |
+| +0x24 | 3 × f32 | radius, repeated three times (equal values) | all counted records; the three values are equal |
+| +0x30 | 3 × f32 | centre x, y, z | varies per record |
+| +0x3C | f32 | radius (the w of the centre vector) | equal to the radius above in all counted records |
+
+Pack 678 holds two sphere records, starting at +0x100 and +0x140, with radii about 14.44 and 19.11. Its two 0x50-byte records with radii 65 and 75 are not spheres (see 6.5).
+
+### 6.3 Cone records (0x40 bytes): High for the count, Medium for the field meanings
+
+Cone records are the records of the cone list (list pointer +0x34, count +0x10): 0x40 bytes with a tag of all ones. They are classified by list membership, not by shape. The list count equals the cone count at +0x10 in all 7 chunks that contain cones (83 records in total).
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 0x20 bytes | record header (section 6): kind 2, flags 0 in all 83 | every counted record |
+| +0x20 | u32 | tag, all bits set | every counted record |
+| +0x24 | f32 | height H along the vertical axis | positive in all 83 (High for the value; Medium for the use) |
+| +0x28, +0x2C | 2 × f32 | equal pair: base radius R | every counted record |
+| +0x30 | 3 × f32 | base point x, y, z (the reference point; its y component is the base height) | varies |
+| +0x3C | f32 | radius copy, equal to the radius pair | every counted record |
+
+The body holds no axis: the cone axis is vertical. The 16 bytes after each cone body are zero in all 83; where another record follows, they are the first 16 bytes of its header.
+
+The cone formula in SPEC-0018 (object collision) uses this record: height H, base radius R, and the base point with its base height. The weapon-contact pass does not reach the cone routine; the cell list walks route kind 2 to the cone handler (open question 76, resolved). Use the count, not the chunk length, to find cones.
+
+### 6.4 Cylinder records (0x50 bytes): Medium-High
+
+Cylinder records are the records of the cylinder list (list pointer +0x38, count +0x0C): 0x50 bytes, a 0x20-byte header with kind 3, then a body with a tag of all ones and a radius copy at +0x3C. They are classified by list membership, not by shape: 96 cylinders have a length equal to their radius.
+
+Counts: the header count is positive in 175 chunks and sums to 10,038 declared entries. On-disc cylinder shape records begin 0x20 bytes after the list pointer and advance by 0x50 bytes. Of the declared entries, 10,028 complete shape records fit within their chunk payloads; resource 721 declares 10, but its payload holds 9 complete records plus 48 bytes of the tenth, leaving a 32-byte shortfall. Packs 1176 and 1245 are not short: all 11 and all 85 records fit. In each pack, one valid record has a length equal to its radius (0.625), which caused the earlier shape-based counter to miss it.
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 | 0x20 bytes | loaded record header (section 6): kind 3; flags, number and book value per record (section 13) | 10,038 declared entries, assigned from the cylinder list |
+| +0x20 | u32 | tag, all bits set | records counted in the packs above |
+| +0x24 | f32 | full length along the axis at +0x40 (one value is negative, see the edge cases) | 12.242 in all 10 records of pack 684 |
+| +0x28 | f32 | radius | 2.579 in all 10 records of pack 684 |
+| +0x2C | f32 | radius (same value) | 2.579 in all 10 records of pack 684 |
+| +0x30 | 3 × f32 | base point x, y, z: the base, not the centre (the centre is the base plus half the full length along the axis) | varies per record |
+| +0x3C | f32 | copy of the radius | 2.579 in all 10 records of pack 684 |
+| +0x40 | 4 × f32 | unit axis x, y, z; w = 0 | unit length and w = 0 in all 10,028 complete on-disc shape records (tolerance 1e-4); (0, 1, 0) in all 10 records of pack 684 |
+
+In pack 684 the cylinder-list pointer is +0x60; the 10 on-disc shape records start at +0x80 and advance by 0x50. The radius at +0x28 equals +0x2C and +0x3C in all 10,028 complete on-disc shape records. The axis is unit length, so the length at +0x24 is not a radius except where the two values happen to be equal. These are the run-time kind 3 fields of section 13.
+
+Run-time form (High): each cylinder is 0x50 bytes, its own 0x20-byte header (kind +0x10, flags +0x12, serial +0x14, index in the list +0x18, trigger index +0x1C, book value +0x1E) followed by the 0x30 shape bytes (length +0x24, radius pair +0x28 and +0x2C, base +0x30, radius +0x3C, axis +0x40). All 9,947 references to cylinders in the grid cell lists (cell list A, SPEC-0018) point at a header start. Flags vary per cylinder, not per list (census in section 13). When bit 3, 6 or 8 of the flags is set, a character overlap tests the cylinder against the character's body cylinder (radius 1.0, from the feet to 3.5 above, along the body's up vector); with only bit 0 set, the character's own radius and length are used instead (SPEC-0018). High.
+
+### 6.5 Other 0x50-byte records (the fourth header list): layout High, role High
+
+The fourth header list (list pointer +0x54, count +0x2C) declares 2,589 records; 2,588 complete records fit within their chunks. The final record in resource 720 extends 32 bytes beyond its payload, and its read bound is unknown. Pack 678 has 2 records, pack 1245 has 25, pack 1246 has 24 and pack 1176 has 4. Each record is 0x50 bytes: a 0x20-byte header (kind 8, flags 0x0004 in all 2,589) and a body with a tag of all ones at +0x20, three equal extents E at +0x24, a centre at +0x30, and a copy of E at +0x3C. E is 0 in 2 records and positive in the rest. Fields from +0x40 on are: a first value that is not a unit component, a value of 1.0 at +0x44 (2,545 records), a small integer at +0x48 and a u16 pair at +0x4C. The records are the ambient sound loops and adventure zones of SPEC-0031, which owns their field meanings; byte +0x4F is their start-delay counter, which the loader clears (section 0). The six-list walk of section 6.6 does not use this list, and no collision path in SPEC-0018 uses it.
+
+### 6.6 Record order
+
+Classify each record by the header list whose pointer and count place it, not by its position or shape. Across all 189 chunks, the nonempty primitive arrays are laid out in pointer order as spheres, cones, cylinders, kind-4 rectangles, then kind-7 rectangles, with absent arrays omitted (High; 183 chunks contain at least one primitive array). Every record header kind agrees with the list that points to it. The auxiliary type-11 arrays can interleave with this primitive sequence, so this is not a physical-order rule for every type-11 array.
+
+Pack 684 is one example: cylinders begin at +0x60, kind-4 rectangles at +0x380, the kind-7 rectangle at +0x2F40, and the entry list (+0x4C) at +0x2FB0. Pack 1176 shows auxiliary interleaving: its N4 list starts at +0x60, followed by cones at +0x1A0, cylinders at +0x320, kind-4 rectangles at +0x690, kind-7 at +0x1260, and then N1 and entry lists. [High for counted primitive arrays; auxiliary array order varies]
+
+**Walk order of an owner's primitives (Medium-High).** A loaded owner walks its primitives in six lists, in this order: a list of 0x70-byte records, a list of 0x40-byte records (spheres or cones), a list of 0x50-byte records (cylinders), a sub-list of 0x24-byte records, a second list of 0x70-byte records, and a list of 0x40-byte records (spheres or cones). Every record of each list is dispatched in that order. The dispatch behaviour is in SPEC-0018. The mapping from these runtime lists to the header counts in section 6 is not established (Open question 41). The disc has two lists of 0x70-byte records, the kind-7 list (+0x3C, count +0x14) and the kind-4 list (+0x40, count +0x18); which of them is walk list 0 and which is walk list 4 is part of that question. The fourth header list (section 6.5) is not one of the six lists.
+
+### 7. Type 29: placed objects and their part records (121 packs, 3,495 objects, 642 with parts)
+
+Object table: count N at +0x00 and table offset at +0x04 give the objects, which are payload-relative offsets. Second list: count at +0x08 and table offset at +0x0C (payload-relative). Each second-list table entry is a u32 offset measured from the start of the offset table, not from the payload start (High; the relocation at load uses this base). Both fit in every chunk. The loader reads the type-10 table when it sets these objects up, so type 10 comes earlier in the chain (section 0). The object fields are below, with offsets **in object**:
+
+| Offset in object | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| 0x100 | 4 × 4 floats | transform block used to draw the inline mesh | |
+| 0x1A0 | s32 | object state | 3 in 3,491 objects on disc, 7 in 4; written by the script calls of section 7.1; see the draw gate |
+| 0x1A4 | 4 bytes | colour: three channels, then a fourth byte | see the draw gate |
+| 0x1B4 | s16 | instance index | −1 in all 3,495 objects on disc: the index is not used and no object links to an instanced mesh (type 20) through it |
+| 0x1B6 | byte | draw-test result (written by the draw gate) | reset value 0 |
+| 0x1B7 | byte | draw-gate byte | reset value 1 |
+| 0x1B8 | byte | zone key for the binary-grid query (SPEC-0006) | reset value 0 |
+| 0x1D0 | u32 | inline mesh chunk (type 12 or 13), payload-relative offset | 3,305 objects; all type 12 |
+| 0x1D4 | u32 | inline model set (type 5), payload-relative offset | 650 objects have a non-zero pointer, and all 650 point at a type-5 chunk; 642 of them have parts and 8 have a model set but no parts. The object tables also hold 29 zero entries, which are not objects. |
+| 0x1D8 | u32 | inline type-11 header, payload-relative offset | 357 objects; all type 11 |
+| 0x1DC | s32 | part count | total 7,201 |
+| 0x1E0 | u32 | part array of 0x70-byte records, payload-relative offset | 642 objects; all fit |
+| 0xC0 to 0xFF | 4 × 4 floats | second transform block: columns at 0xC0, 0xD0, 0xE0 and 0xF0 (the last one a translation). Read by the ground probe to map a query point into the object's frame (SPEC-0018, Ground probe, step 4). It is the rest block: setup builds the current block from it (section 7.1), and the moving-object walks of SPEC-0018 map into its frame. | High for the layout and the rest role |
+
+The inline type 5 chunk's type field at +4 must be 5. Its payload starts 16 bytes into its chunk. Its count is at +0x04 and the offset of its entry table at +0x08 (both relative to its payload). Each table entry is a payload-relative offset to a type 5 entry, which holds: +0x20 count A, +0x24 count B, +0x50 count C, and +0x54 the offset of an array of C records of 0x70 bytes. The entry kinds, the full entry header and the 0x70 record layout are in SPEC-0018 (Model-set entries, chunk type 5).
+
+Part record (0x70 bytes, in the part array; High):
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x00 to +0x3F | 4 × 4 f32 | copy of the bound model-set frame record's start point and rows e0, e1 and e2 (SPEC-0018, Model-set entries, frame record) | equal to the bound record in 7,201 of 7,201 |
+| +0x40 | f32 | run length L, a copy of the bound frame record's +0x40 | 0 to about 1,451; equal to the bound record in 7,201 of 7,201 |
+| +0x60 | pointer | model-set record it is bound to, set at setup | |
+| +0x64 | s32 | index into the type 5 entry table | in range for all 7,201 |
+| +0x68 | s32 | index of the record inside that entry's record array | less than the entry's count for all 7,201 |
+
+Parts at run time (High; Medium-High for the hide path):
+- Setup binds each part to its frame record (part +0x60) and writes into **the bound record**, not the part: its run length (+0x40) becomes −200.0, and its self pointer (+0x48) and owner pointer (+0x64) are set. The −200.0 is not stored on disc.
+- Each object update maps the record's start from the object's rest frame (section 7.1) to its current frame, and sets record L = part L and record +0x68 = e1.z × L.
+- Hiding the object writes −200.0 back into the bound record's run length, so the object's walls are off while it is hidden.
+
+So a moving placed object's model-set walls follow the object, and the part keeps the rest-frame copy.
+
+Second-list entries are the breakables of SPEC-0048 (layout there). Their drop ids are plain fields of the disc entry, set by no record or script (High): the drop placement ordinal (+0x56) is 0 or more in 1,239 of the 2,073 entries on disc, and the character id (+0x54) is 0 or more in 20 (for example 1960 in pack 732). Also on disc: the break float (+0x5A) is above 0 in 99 entries, the piece count (+0x4C) is above 0 in 2,029, and the volume sub-record (+0x60) is present in 2,030. Type-40 script groups carry the same (placement, character) pair in their own drop list (section 11).
+
+### 7.1 Animated placed objects (recorded motion; High unless stated)
+
+The game's moving platforms, lifts, sliding and rotating bridges, moving doors and gates are type 29 placed objects with a recorded single-transform motion. Level scripts start and stop the motion. Characters ride them through the ground attach of SPEC-0018 (Ground attach of a character); objects with inline primitives push characters through the moving-object walk of SPEC-0018 (Who walks what, item 4); projectiles are tested against them in SPEC-0018 (Projectile versus placed objects).
+
+Fields (offsets in object):
+
+| Offset | Size | Field |
+| --- | --- | --- |
+| +0x80 | 4 × f32 | root offset (run time) |
+| +0x90 | 4 × f32 | script position offset |
+| +0xA0 | 4 × f32 | extra rotation quaternion (set by a script call, with the mode byte) |
+| +0xB0 | pointer | locator record (run time) |
+| +0xB4 | pointer | animated locator (run time) |
+| +0xB8 | f32 | play speed (signed) |
+| +0xBC | f32 | bounding radius (setup) |
+| +0x100 to +0x13F | 4 × 4 f32 | current block: columns X, Y, Z, then the translation at +0x130 |
+| +0x140 | 4 × f32 | scale; (1, 1, 1) in 289 of 343 sampled objects |
+| +0x150 | 4 × f32 | translation change of the last update (w = 0) |
+| +0x160 | 4 × f32 | current rotation quaternion |
+| +0x180 | 4 × f32 | reference centre |
+| +0x1A0 | s32 | state |
+| +0x1B0 | f32 | time in seconds |
+| +0x1B9 | u8 | offset and rotation mode byte: 1 adds the +0x90 offset, 2 adds the +0xA0 rotation, 3 both |
+| +0x1C4 | 4 bytes | advance of the last tick, in keys |
+| +0x1E4 | u16 | key count F |
+| +0x1E8 | u32 | motion stream, payload-relative offset on disc (relocated at load) |
+
+Disc: state 3 in 3,491 objects (7 in 4), speed 0 and time 0 in all. So no object moves or draws until a script calls InitObjOn. Census over all 192 world packs: 3,495 objects decode a stream; 2,798 move (translation span above 0.01, or rotating); 430 moving objects carry height patches (they carry riders); 252 moving objects carry inline primitives (they push: doors, gates, chests); 108 moving objects with height patches, in 32 packs, are named by a fixed index in a PlayAnim or LoopAnim call of their pack's script. 31 of the 32 packs (107 objects) are in the set of 174 packs the player can enter (SPEC-0006, Reach; the count ignores story-flag gates); the remaining pack is 1077, an unused copy of 1129 with one such object.
+
+**Stream.** Ten channels in order: rotation x, y, z, w; translation x, y, z; scale x, y, z. Each channel starts with an s16 flag. Flag 0: one s16 follows (a constant). Any other flag: F s16 samples follow, one per key. Value = s16 / 1024. Keys run at 15 per second. Rotation and scale samples are absolute per key. Translation samples are per-key changes: the offset at key k is the sum of samples 0 to k (sample 0 is 0 in every object checked).
+
+**Setup.** Current block = rest block (+0xC0 to +0xF0, section 7) with its columns scaled by +0x140. Reference centre +0x180 = rest translation + mesh corner (mesh child +0x10) + half the mesh size (mesh child +0x20). The corner is added without rotation, so the centre of a rotated object is off (reproduce it). Radius +0xBC = max(50.0, |size.x|, |size.y|, |size.z|); 276 of 302 sampled meshes give 50.
+
+**Script states.** Duration D = (F − 1) / 15 s.
+- InitObjOn(i, b): drawn, state 9, time 0; with b true, time = D and state 8.
+- PlayAnim(i, wait, v): state 2, speed v, root reset; a negative v first sets time = D.
+- LoopAnim(i, v): state 0, speed v.
+- StopAnim: state 10, unless the state is 8.
+- DeactivateObj: state 4, hidden.
+
+**Per tick.** The world tick runs before the hero update (SPEC-0018, Who walks what), and only objects in states 0, 2, 5 and 6 are updated. With dt = 1/60 s:
+1. Unless the state is 4 or 10: time += dt × speed, and the tick's advance a = 15 × dt × speed keys.
+2. If time < 0: time = 0, and the end is reached when speed < 0. If time ≥ D: time = D, and the end is reached when speed > 0.
+3. At the end: state 6 becomes 4; state 2 becomes 8 (finished); states 0 and 5 loop: n = trunc(time / D), minus 1 when speed < 0; time −= n × D; the root is reset to (0, 0, 0, 1).
+4. Sample: k = trunc(time × 14.999999), f = (time − k × 0.06666667) × 14.999999.
+   - Rotation and scale: lerp of keys k and min(k + 1, F − 1) by f. When the two rotations' dot product is negative the second is negated. The result is not normalised.
+   - Translation, forward play (speed > 0, not an absolute call): this tick's change = s[k+1] × a, except: when k = 0 and f < a (the first tick after a loop wrap) the root is set (not added) to s[0] × f; when f − a < 0 (the tick crossed into key k) the change is s[k] × (a − f) + s[k+1] × f, with the s[k] term only when k > 0. The root accumulates the change.
+   - Translation, absolute (InitObjOn, set-to-time, or speed ≤ 0): root = s[0] + … + s[k] + f × s[k+1] (the sum stops at F − 1).
+   - The delta gate is evaluated only for per-tick playback: the linked locator record's f32 at record +0x08 must be positive and the global override word at ELF data address 0x2EB1C4 must be zero. The global word is 0 on disc; no writer was found in the boot program. The per-instance pointer at +0xB0 is set by the link forms of MoveObjToLocator and MoveObjToAnimatedLocator. The semantic meaning and source of the linked record's +0x08 value are unknown. A failed gate, an absolute evaluation, or a seek uses the absolute translation sample. The root accumulator at instance +0x80 feeds this same object's transform output (+0x100 through +0x180); it is separate from the character playback-layer accumulator in SPEC-0005.
+5. Position P = root + base. The base is the animated locator's position, else the locator record's +0x30, else the rest translation (+0xF0). The +0x90 offset is added when the mode byte is 1 or 3; w = 1.
+6. Outputs: +0x180 = P + corner + size / 2. Rotation matrix R(q) (columns, local to world); when the mode byte is 2 or 3, R = R × R(+0xA0). Then +0x150 = P − the old +0x130 (w = 0); +0x160 = q; +0x100, +0x110 and +0x120 = the columns of R times the scale; +0x130 = P.
+
+Inside a key interval an object moves |s[k+1]| × |speed| / 4 units per tick.
+
+Examples on disc (speed from the script; Medium-High for the reading of each script call):
+
+| Kind | Pack / object | Path | Speed |
+| --- | --- | --- | --- |
+| Long lift (6 height patches) | 1391 / 0, PlayAnim(0, 1.0) | F 300, 19.93 s, y 0 to −218.41, no rotation | 0.7305 per key = 0.1826 per tick |
+| Short lift (4 patches) | 1411 / 0, PlayAnim with wait, 1.0 | F 30, 1.93 s, y +19.88 | at most 1.106 per key = 0.277 per tick |
+| Lift (4 patches) | 790 / 0, PlayAnim(1.0) | F 16, 1.0 s, y +9.0, yaw −90 degrees | peak 0.225 per tick |
+| Sliding bridge (4 patches) | 757 / 2 to 5, PlayAnim(+1 or −1) | F 15 or 16, about 1 s; object 2 from (0, 0, 0) to (1.226, 0, −3.521), yaw −19.2 degrees | peak 0.143 per tick |
+| Fast elevator | 864 / 15 and 16 | F 13, 0.8 s, y 74.24 | 1.55 per tick |
+| Rotating bridge (yaw only) | 1122 / 1, 2, 4 and 5 | quaternion (0, 1, 0, 0) to about (0, −0.68, 0, 0.73) | the rotation rule of the SPEC-0018 ground attach applies |
+| Door pusher (sphere primitive) | 699 / 0, 714 / 0, 732 / 0 | F 61, y +3.87 | pushes only |
+| Pushed blocks | 1394 (3 blocks) | movable blocks, not placed objects (SPEC-0048) | step 2.725 per push |
+
+### 8. Lighting: what the light-set records feed (High unless stated)
+
+- World geometry (the level display tree) is unlit: no light set and no light rig is applied to it, and its vertex colours are used as stored (SPEC-0004, vertex colour). High.
+- Type 30 light sets reach characters only. The character light walk of SPEC-0046 (Character lights) places light-set entries into the four light slots of the character's light context (SPEC-0046, Light slots); the lit-vertex arithmetic that consumes those slots is in SPEC-0004 and SPEC-0046. High.
+- Entry roles by light type (section 2, +0x30; Medium-High):
+  - type 1 (array C): the ambient term. It fills the ambient slot; its direction is never used.
+  - type 2 (array A): a directional light along the entry direction (+0x10, the travel direction).
+  - type 3 (array B): a point light. Its direction for a given object is normalize(object position − light position), computed per draw; the stored direction is not used. Its weight is the falloff of SPEC-0046 (Character lights). Between 0.9 r and r it does not take a slot: it cross-fades the directional light it would displace, from full strength at r down to 0 at 0.9 r (SPEC-0046, Character lights).
+- Dynamic point lights come from effect particles (the light-emitter emitters of SPEC-0034), not from world records; they join the same character walk after the light set (SPEC-0046, Character lights).
+- Lit objects that have no light context of their own (placed objects, items and other props with lit batches) use the scene's default lights, a fixed four-light rig built from program constants (SPEC-0046), never a light set. Resource 527 describes the rig's three directional lights but is never read (section 3). High.
+
+Synthetic examples:
+- Type 3 entry at (0, 10, 0), object at (0, 0, 0): direction = normalize((0, 0, 0) − (0, 10, 0)) = (0, −1, 0), the light travels straight down onto the object.
+- Type 3 entry at (3, 0, 0), object at (0, 0, 4): direction = (−3, 0, 4) / 5 = (−0.6, 0, 0.8).
+- A type 1 entry with any stored direction contributes only its colour, as ambient.
+
+### 9. Placed effect spawns (type 39)
+
+At load, each type 39 record is bound to the effect definition whose id matches its effect id (the first match in the shared definition list; SPEC-0034). No separate object is created at load: the record is the instance, and it keeps its position (column 3), its unit forward direction (column 2) and its effect id (+0x40).
+
+Per-pass zone gate (High). Each pass, for the current world and for the second world, every active record (+0x48 nonzero, id not −1) is zone-queried (SPEC-0006, Binary grids, Query) with column = the low byte of its zone number (+0x44) and key = that world's id. When the query passes, the record is updated with the camera as the listener; when it fails, the record is stopped (drained) for that pass. Inactive records are not touched.
+
+The active flag is set by a switch-by-id path (through the type 40 list) and cleared by the stop script call (Medium: the setter of the flag from a script is not established). The update applies the cull rule below. The spawn's cull, threshold and cone settings come from the record:
+
+- Each frame, let d2 be the squared distance from the spawn to the listener. If the cull value is above 0 and d2 is greater than it, the spawn stops.
+- The spawn is in its near state while d2 is at most 10,000 and in its far state above that. A change of state restarts its child set. (Medium: read from the instance update path.)
+- If the cone-test flag is 1, take the unit vector from the spawn to the listener and its dot product with the spawn's forward direction. If the dot is below 0.5 and d2 is greater than 225, the spawn stops.
+
+The glow at a save point is not a type 39 spawn. It is a pair of effect emitters owned by the world pack's own character region (definitions 400 and 404 of shared effect group 3, SPEC-0034), which the region moves to the save point nearest the hero (section 13, Save points). No type 39 record is tied to a save point. High.
+
+### 10. Placed object draw gate and setup (Medium)
+
+**Setup.** At setup, an object takes its inline mesh's child offsets, binds each part to its model-set record (part +0x60), writes −200.0 into the bound record's run length (+0x40) and sets that record's self and owner pointers (section 7, Parts at run time; SPEC-0018, Model-set entries), and sets a bounding radius. The radius starts at 50.0 (a code constant). If the mesh child's values at offsets 0x20 and 0x24 are larger in absolute value, the radius becomes the larger one.
+
+**Reset.** An object is reset when it is created: the gate byte (0x1B7) is 1, the zone key (0x1B8) 0, the drawn flag (0x1B6) 0, the child pointers 0, several counters 0, and three 16-byte blocks at 0x90, 0xA0 and 0x160 are cleared. The reset does not set the state at 0x1A0.
+
+**Draw gate.** Each frame, for each object in the list (skip zero entries):
+1. The draw test is true when the object's draw-gate byte (0x1B7) is zero, or when its state (s32 at 0x1A0) is not 3 and not 4. The test result is stored in the byte at 0x1B6. The gate byte is 1 after the reset, and every later write (InitObjOn and the type-40 group paths) also stores 1; nothing in the boot program or the level modules stores 0. So in play the test is simply: the object draws unless its state is 3 or 4 (High). A rewrite may drop the gate byte.
+2. If the test is true, query the binary grid (SPEC-0006, type 35) with the object's zone key (byte at 0x1B8). An object whose query fails is not drawn.
+3. The colour is the four bytes at 0x1A4 to 0x1A7. The first three are divided by 256; the fourth is the fourth byte plus 1, divided by 256 (a code constant, 2⁻⁸).
+4. Draw the inline mesh with the object's transform block at 0x100.
+
+The state is written by the script calls of section 7.1 (InitObjOn draws the object; DeactivateObj sets state 4 and hides it). On disc almost every object is in state 3, so it is not drawn until a script calls InitObjOn. No state other than 3 and 4 appears in the draw path.
+
+**List membership (Medium-Low).** A placed object that is in one of the object lists of SPEC-0046 is submitted through that path. It gets the far flag when its squared distance from the view point is above 2500 (50 units squared), and it is dropped when that squared distance is 122500 (350 units squared) or more (SPEC-0046, Object submission and culling). Which list holds placed objects is open, and it is not established whether the draw gate above and the list path are the same draw.
+
+**Designer draw distances (Low).** The object type data includes a draw-distance property and a low-resolution-distance property, each with default 2500. The draw path does not use them; the far threshold is a code constant (SPEC-0046, Designer properties). Whether any object uses its own value is open.
+
+**Second list.** The second list has M entries, the world breakables of SPEC-0048. Each entry's state word (s32 at +0x40, within the entry) is tested. An entry in state 1 (intact) or 3 (intact, not breakable) is drawn with scale 1.0. Entries in state 0 (disabled) or 2 (broken) are not drawn on this path.
+
+**Collision use.** Placed objects and the world's type-11 primitives are used by the contact and move rules of SPEC-0018 (Object collision). The draw gate above does not depend on them.
+
+### 10.1 Rotation steps 0.0006 and 0.0009 (pointer; High)
+
+The two rotation steps 0.0006 and 0.0009 radians (boot data words 0x2DB48C and 0x2DB488) are read only by the per-frame sky dome draw: they turn the dome's role-3 and role-2 layers about the world Y axis (SPEC-0046, Sky domes). No placed-object routine reads them. The dome keeps each angle unwrapped: each draw stores the angle minus its step, and the reduction by 1/(2π) happens only inside the sine and cosine evaluation, so the stored angle is never brought back into one turn. On disc no dome has a role-2 or role-3 layer, so nothing turns. The placed-object rotations of the pack 1299 puzzle (Behavior) and of recorded motion (section 7.1) are separate rules and do not use these steps.
+
+### 11. Types 40 and 41 (partial)
+
+**Type 40** (191 level packs, one chunk each). The payload begins with 21 fixed records of 0x44 bytes (0x000 to 0x533). Word 0 of fixed record k is k, and the word at +0x3C is 2 in every pack. Seven pointer fields per record are rebased at load when nonzero. Record 3 gets two runtime blocks at walk time (0x80 bytes at +0x20, 4 bytes at +0x30). Bytes 0x534 to 0x593 are nonzero in every pack and are not covered here. The u32 at 0x594 is the list count (nonzero in 81 packs, 458 entries in total). The u32 at 0x598 is the list offset; it is 0x59C in all 191 packs, so the list always starts at 0x59C. Each list entry is 0x44 bytes. Entries fit in every case. High.
+
+List entries are **script groups**: the kind word picks a built-in behaviour that the game installs at each world load, and the script calls ReActivateScriptGroup and GetScriptGroupInstance act on an entry by its position in the list (SPEC-0048 gives the lock chest, sealed chest and chain behaviours; SPEC-0051 the dig site). Each list field below is a count followed by a payload-relative pointer to that many s32 indices (rebased at load when nonzero). Fields (record-relative):
+
+| Offset | Size | Field | Range on disc | Confidence |
+| --- | --- | --- | --- | --- |
+| +0x00 | u32 | kind | see the kind table below | High |
+| +0x04 | u32 | world reference (written at run time) | | High |
+| +0x08 | u32 | key: a row of the shared collected table (SPEC-0051) | 0 in 227 entries; 1 to 199 on 145 lock chests, all 39 sealed chests and one dig site (165); 201 to 247 on 46 dig sites | High |
+| +0x0C, +0x10 | count, pointer | locator indices (type-11 entry list) | | High |
+| +0x14, +0x18 | count, pointer | script trigger indices | | High |
+| +0x1C, +0x20 | count, pointer | placed-object indices (type 29) | | High |
+| +0x24, +0x28 | count, pointer | camera indices | | High |
+| +0x2C, +0x30 | count, pointer | breakable indices (type-29 second list) | | High |
+| +0x34, +0x38 | count, pointer | placed effect indices (type 39; section 4) | count 0 (332 entries), 1 (94), 2 (9), 4 (12), 6 (5), 8 (3), 9 (2), 49 (1) | High |
+| +0x3C, +0x40 | count, pointer | drop pair: index 0 is a placement ordinal to drop, index 1 a character id to activate | non-empty on every chest, sealed chest and dig site | High |
+
+Kinds on disc (High):
+
+| Kind | Built-in behaviour | Entries | Packs |
+| --- | --- | --- | --- |
+| 0 | none built in (script data only) | 49 | 15 |
+| 1 | lock chest (Square press) | 146 | 40 |
+| 2 | element-sealed chest | 39 | 39 |
+| 3 | proximity fuse (live only with 32 objects and 1 breakable: 9 entries; the other 27 are empty) | 36 | 10 |
+| 4 | breakable chain (switch group) | 39 | 8 |
+| 5 | reaction object | 29 | 4 |
+| 6 | dig site (SPEC-0051) | 47 | 28 |
+| 7 | none built in | 12 | 5 |
+| 12 | none built in | 61 | 2 |
+
+Kind 3 counts down while the hero is near and not standing, slow-walking or sneaking, then breaks its breakable with sound cue 178 (Medium). Kind 5 hides its looping object, plays a second object once, and restores the loop each time its trigger fires (High). Whether level scripts read the entries of kinds 0, 7 and 12 is open.
+
+Keys (High). The key is the entry's persistent mark in the collected table: lock chests and sealed chests use rows 1 to 199 as their "opened" mark, and dig sites use rows 200 + k. The row is tested when the entry is set up (only when its drop list is non-empty) and set to 1 when the group completes. Keys repeat only between packs that share a module payload (1077 and 1129; 956 and 970) and once between packs 1096 and 1122 (key 185, two chests), which therefore share one opened mark.
+
+Switch path (High for the key arithmetic). A switch set with id k maps to a key: k + 200 when k is below 201, and k otherwise. The key is searched in the current world's list, then in the next world's list. When found, a nonzero value starts the entry's placed effects (their active flag is set to 1) and a zero value stops them (flag set to 0; runtime slots cleared). Switch ids 0 to 200 therefore reach keys 200 to 400, that is, only dig-site rows. Keys 1 to 199 are not reached by this path, and they need none: they are chest rows, read and set by the chest behaviours themselves. The same setter is described in SPEC-0030, section 2.1.
+
+**Type 41: atmosphere zones** (138 level packs, 185 records). The payload has a count N at +0x00 (1 to 6; 1 in 98 chunks) and 0x50-byte records from +0x10. Record fields are record-relative (the value at +0x44 is itself a payload-relative offset). The camera does not read these records; the selection below only uses the camera eye as its position.
+
+| Offset | Size | Field | Range on disc | Confidence |
+| --- | --- | --- | --- | --- |
+| +0x00 | 4 × f32 | vector A: an RGBA colour (each lane rounded to a byte) for the screen post pass; used only while that pass is in its mode 1 (SPEC-0046). The renderer sets the post-pass mode to 3 when it is built and nothing changes it, so vector A has no visible effect in any area | | High |
+| +0x10 | 4 × f32 | vector B: the screen overlay colour, RGB plus alpha; the overlay is drawn only when its alpha byte is nonzero. Gated records get alpha 28.0 at load | | Medium-High |
+| +0x20 | f32 | depth range maximum: written to the render record's +0x34 only when it is not above that record's limit at +0x5C, and then the view-screen matrices are rebuilt. +0x30 and +0x34 of the render record are the minimum and maximum depth-buffer values that the near and far clip distances map to (the standard PS2 view-screen mapping), so the value sets the depth-buffer scale, not a draw distance; it does not move the clip planes | 100000.0 in 92 records; 1048576.0 in 29 | High (path); Medium-High (meaning) |
+| +0x24 | u32 | gate key (0 = ungated) | 0 in 128 records; 1 to 13 otherwise | High (values); Medium-High (meaning) |
+| +0x30 | 3 × f32 | bounding circle centre x, y, z of a polygon zone (y unused) | | Medium-High |
+| +0x3C | f32 | bounding circle radius | 1.0 in 163 records | Medium-High |
+| +0x40 | u32 | point count M (0 = zone without points) | 0 in 163 records; 4, 5, 7 and 9 most often | High (count) |
+| +0x44 | u32 | payload-relative offset of the M points (rebased at load when M is nonzero, cleared otherwise) | | High |
+| +0x49 | u8 | closed flag: nonzero means the points form a closed polygon, zero an open polyline | | Medium-High |
+
+Chunks with points (11 chunks, 22 records) have M sixteen-byte points after the record array (four floats each; only x and z are used). A zone with points is a polygon zone; a zone without points is a base zone.
+
+Per-frame atmosphere zone selection (Medium-High). Each frame, after the world update, the game picks the zone output from the camera eye position Q (SPEC-0027 gives the order in the tick):
+
+1. World change crossfade. The world the output belongs to and the eye position at that time are kept. When the current world differs from the stored one, d = distance from the stored eye position to Q. If d > 50.0 the new world is stored and the crossfade ends; otherwise the crossfade weight is w = 1 − d / 50.0.
+2. Base zone. The base zones (no points) are walked in order. The first ungated one is the fallback; a gated one whose key test passes is taken at once. If none is found, an all-zero default record is the base. The blend factor b starts at 1 if the base is gated, else 0. The working record is a copy of the base.
+3. Polygon zones. For each zone with points whose key test passes, the distance g from Q to the polygon (horizontal, x and z):
+   - g = −1 (zone ignored) when the circle distance (horizontal distance from Q to the centre minus the radius) exceeds 50.0;
+   - inside (g = 0) when Q is within 0.5 of a vertex;
+   - otherwise g is the distance to the nearer of the two edges that meet at the nearest vertex (at the ends of an open polyline there is one edge), and Q is inside when the y component of the cross product of (edge direction, Q − edge start) is positive.
+   If Q is inside or g < 1, the zone replaces the working record. Else if g ≤ 50.0 the working record becomes lerp(working, zone, t) with t = 1 − (g − 1) / 49: vectors A and B and the render scalar are interpolated; the other fields stay those of the working record while t < 1.
+   Blend term of the zone: a gated zone that Q is inside gives 1 when g > 25.0 or the base key is 1, else g / 25.0; outside, a term g / 25.0 is given only by an ungated zone over a gated base, else 0. b is the largest of the start value and the terms.
+4. Output. Without a crossfade the output block becomes the working record; during a crossfade the output is lerp(working, previous output, w). The output goes to the colour blocks (vector A to the post-pass colour, vector B to the overlay colour), the render scalar to the renderer, and b is kept in the camera record at +0x500, where the sky dome's role-10 layer reads it as its master opacity; that layer is drawn only when b > 0 (SPEC-0046, Sky domes).
+
+Key test (Medium): key 0 never passes for a polygon zone; key 13 always passes; key 8 reads one game flag; keys 1 to 7 and 9 to 12 pass when a first game flag is set and a second game flag is clear. The flag ids are open. Constants (ELF data words; values High, use Medium-High): the zone range and world-change crossfade distance 50.0 at 0x2DB4CC, and the gated-zone blend distance 25.0 at 0x2DB4D0. The 0.5 vertex distance, the 1 and 49 of t and the alpha 28.0 are fixed constants.
+
+Test vectors (synthetic): t at g = 1, 25.5 and 50 is 1.0, 0.5 and 0.0. World-change crossfade at d = 10: w = 0.8; at d = 60 the crossfade ends and the new world is stored. A gated zone with Q inside at g = 10 gives the term 0.4; at g = 30 it gives 1.0. A zone whose bounding circle is 60 units from Q (circle distance above 50) is ignored.
+
+### 12. Type 10 and type 1000 cross references
+
+Type 10 is described in SPEC-0006 (partial). Type 1000 is in section 5 of this spec.
+
+### 13. Trigger volume records (runtime records; disc sources: the type 11 primitive records)
+
+Each actor that takes part in triggers keeps a pointer to the grid cell under it, refreshed every tick (SPEC-0018, Grid cell pointer; Trigger pass in Behavior). The cell holds two lists, each a count and a pointer array: cell list A holds type 11 volume records directly (the records of section 6), and cell list B holds trigger objects. Each list B entry is a **trigger object**: a world breakable, that is an entry of the type 29 second list (section 7; SPEC-0048), read in place from the world pack. Their volume records are the type 11 primitive records: each record is its own 0x20-byte header followed by its body (section 6), and the kind byte in the header follows the list (spheres 1, cones 2, cylinders 3, kind-4 rectangles 4, kind-7 rectangles 7, fourth list 8; High). The records of the entry list at the type 11 pointer +0x4C (count at +0x24) also have kind-1 headers (High). The two tables of types 40 and 41 carry no trigger kind byte.
+
+Trigger object (offsets in object):
+
+| Offset | Size | Field | Use |
+| --- | --- | --- | --- |
+| +0x30 | 3 × f32 | position | direction of the push; position of the effect |
+| +0x40 | s32 | state word | the breakable's state (SPEC-0048): 0 disabled, 1 intact, 2 broken, 3 intact but not breakable. An object is tested only when it is intact, state 1 or 3; a broken or disabled breakable is skipped. The same word gates the attack contact routines (SPEC-0036) and the draw of section 10 |
+| +0x58 | s16 | script index | key of the script breakable hook (Behavior, Apply on a hit, step 1; SPEC-0048) |
+| +0x5C | s16 | material word | chooses the hit cue (Behavior, Apply on a hit, step 3) |
+| +0x5E | u8 | element byte | element class tested by the element gate (Behavior, Apply on a hit, step 2) |
+| +0x60 | pointer | volume record | a null pointer is skipped |
+
+Volume record (offsets in record, from the start of its header; the same offsets as the type 11 records of section 6):
+
+| Offset | Size | Field | Use |
+| --- | --- | --- | --- |
+| +0x10 | u8 | volume kind | kinds 1, 2, 3, 4 and 7 are tested by every pass (Trigger pass in Behavior); the cell list A walk also tests kind 8, with the kind 1 rule, for the selected hero only; other values are not tested |
+| +0x11 | u8 | mode byte | the volume's material for Tor's blade recoil (Behavior, Blade recoil) |
+| +0x12 | u16 | flags | bit 0 (0x0001) marks a solid volume: it enables Tor's blade recoil and the contact push; bits 3, 5 and 8 enable the script trigger fire by kind (see Script trigger fire by flag bit below); on a kind-7 rectangle, flags 0x0002 mark a door (Doors below) |
+| +0x1A | u16 | gate mask | 0: always tested. Otherwise the volume is tested only when the mask shares a bit with a gate word of the current world record (+0x56B4). Medium |
+| +0x1C | u16 | script trigger index; door number on a door | the index the fire step uses when this volume fires |
+| +0x1E | u16 | class selector or book value | book value of a book station; class selectors 500 and 501 (section 6) |
+| +0x24 | f32 | kinds 4 and 7: extent along the in-plane axis at +0x60. Kind 3: full length of the finite cylinder | kinds 3, 4 and 7 |
+| +0x28 | f32 | extent along the in-plane axis at +0x50 | kinds 4 and 7 |
+| +0x2C | f32 | kinds 4 and 7: taken as a switch (zero or below: static test; above zero: moving test). On disc the same field is the third extent of the rectangle record (section 6.1): 0.0 or above in all 675 kind-7 records (0.0 on every door) and negative in 70 of the 5,849 kind-4 records, so for kind 4 this interpretation is open (open question 32) | kinds 4 and 7 |
+| +0x30 | 3 × f32 | kind 3: base point of the finite cylinder (its centre is the base plus half the length along the axis). Kind 1: centre of the sphere | kinds 1 and 3 |
+| +0x34 | f32 | y of the kind-1 sphere centre; the kind-1 test reads no radius here | kind 1 |
+| +0x3C | f32 | kind 3: radius of the finite cylinder. Kind 1: radius of the sphere (the w lane of the centre vector) | kinds 1 and 3 |
+| +0x40 | 4 × f32 | kinds 4 and 7: rectangle normal (the fourth value's role is open). Kind 3: axis of the finite cylinder | kinds 3, 4 and 7 |
+| +0x50 | 3 × f32 | in-plane axis 1 | kinds 4 and 7 |
+| +0x60 | 3 × f32 | in-plane axis 2 | kinds 4 and 7 |
+
+The kind 3 fields are the finite-cylinder fields listed above (radius, full length, base point and axis); kind 3 is a finite cylinder. For kinds 3, 4 and 7 the offsets above are the offsets of the type 11 cylinder and rectangle records (sections 6.1 and 6.4; High).
+
+**Kind 2 (reconciled).** The weapon-contact pass's test for kind 2 reports no hit (High). The cell list A walk, the hero shot pass and the world projectile step route kind 2 to handlers that can fire the script trigger with flag bit 3. All 83 cones on the disc have flags 0x0000, so no kind 2 volume fires in play (High).
+
+**Cylinder volumes (High for the structure and the measured values).** Every loaded cylinder record starts with its own 0x20-byte header (section 6). The list pointer (type 11 header +0x38) points at the first loaded header; the corresponding on-disc shape data starts 0x20 bytes later and advances by 0x50 per entry. The header counts sum to 10,038 declared entries, while 10,028 complete shape records fit in the on-disc payloads; resource 721's tenth entry is incomplete (section 6.4). Header fields for declared cylinder entries:
+
+| Offset | Size | Field | Measured on disc |
+| --- | --- | --- | --- |
+| +0x10 | u8 | volume kind | 3 in all 10,038 records |
+| +0x11 | u8 | mode byte (blade recoil material input) | 0 (6,627), 3 (1,470), 4 (1,106), 2 (464), 16 (211), 14 (68), 1 (45), 8 (23), 12 (15), 7 (6), 10 (3); 0 on every book station |
+| +0x12 | u16 | flags | 0x0001 (8,707), 0x0008 (441), 0x0011 (256), 0x0010 (224), 0x0021 (192), 0x0040 (134), 0x0002 (45), 0x0020 (33), 0x0003 (2), 0x0000 (2), 0x0080 (1), 0x0031 (1) |
+| +0x1A | u16 | gate mask | nonzero in 9 records; 0 on every book station; meaning Medium |
+| +0x1C | u16 | script trigger index: the index the trigger fire step uses when this volume is hit. This is the field earlier named type 40 entry index | 0 on every book station; Medium-High for the fire use |
+| +0x1E | u16 | book value, 1-based | nonzero only on the 134 records with flags 0x0040 (values 1 to 87) |
+
+The runtime volume of a cylinder is the record itself: length at +0x24, base point at +0x30, radius at +0x3C and axis at +0x40 (section 6.4). These are the kind 3 fields above (High).
+
+The volume's u16 at +0x1C is the script trigger index that the trigger fire step uses when the volume fires (Medium-High; the same field as the row above). Pack 1432 has 53 cylinders: 52 with flags 0x0001 and index 0, which never fire a script trigger (flag 0x0001 runs the press step and the contact push only; see Script trigger fire by flag bit), and one, record 8, with flags 0x0008 and index 1, which fires script trigger 1 when the test hits (High for the values). Record 8 has mode 0, gate mask 0, class word 0, base point (28.702, 270.608, −326.005), axis (0, 1, 0), length 3.0 and radius 6.0; it stands on the arena floor, the grid cells under it list it, and its centre is within 0.011 units of entry 2 of the pack's entry list. The selected hero's body cylinder touching it (cell list A walk) fires trigger 1 with object 1; a hero shot passing through it fires it with object 0 and shot word 1 (Script trigger fire by flag bit below; SPEC-0054). High.
+
+**Other volume lists (kinds 1, 2, 4, 7 and 8).** Every record of the other type 11 lists has the same header (kind +0x10, flags +0x12, gate mask +0x1A, number +0x1C, class or book value +0x1E). The kind byte follows the list: spheres (+0x30) 1, cones (+0x34) 2, the kind-4 rectangles (+0x40) 4, the kind-7 rectangles (+0x3C) 7, the fourth list (+0x54) 8 (High, all 189 chunks). Flags measured over the disc:
+
+| List (type 11 pointer) | Records | Kind | Flags (records) |
+| --- | --- | --- | --- |
+| spheres (+0x30) | 6,678 | 1 | 0x0001 (5,855), 0x0008 (587), 0x0010 (216), 0x0005 (7), 0x0002 (5), 0x0000 (4), 0x0200 (3), 0x0003 (1) |
+| cones (+0x34) | 83 | 2 | 0x0000 (83) |
+| kind-4 rectangles (+0x40) | 5,849 | 4 | 0x0001 (4,895), 0x0020 (659), 0x0080 (104), 0x0010 (85), 0x0008 (44), 0x0009 (31), 0x0120 (27), 0x0011 (3), 0x0050 (1) |
+| kind-7 rectangles (+0x3C) | 675 | 7 | 0x0001 (300), 0x0002 (171: 169 doors and the two pads of pack 1299), 0x0020 (130), 0x0100 (22), 0x0040 (19), 0x0021 (18), 0x0061 (8), 0x0000 (5), 0x0004 (1), 0x0041 (1) |
+| fourth list (+0x54) | 2,589 | 8 | 0x0004 (2,589) |
+| entry list (+0x4C, count +0x24) | 4,964 | 1 | 0x0020 (4,924), 0x0021 (40) |
+
+Values in pack 1432 (High): cylinders as above; 6 kind-4 rectangles with flags 0x0001 and index 0; one kind-7 rectangle with flags 0x0100 and index 0; two fourth-list records (kind 8, flags 0x0004, numbers 0 and 1); five entry-list records (kind 1, flags 0x0020).
+
+The kind-7 rectangle of pack 1432 has its reference corner at (36.40, 269.20, -343.99), normal (-1, 0, -0.0024), extent 20.85 along the in-plane axis (0, 1, 0) and 37.25 along the in-plane axis (-0.0024, 0, 1), and switch value 0.0 (static). Pack 1432 has two volumes whose flags reach a fire path: this rectangle (bit 8), which fires script trigger index 0 (SPEC-0054), and the cylinder with flags 0x0008, which fires index 1 (High for the values; Medium-High for the fire paths).
+
+**Script trigger fire by flag bit (High unless marked).** The fire step takes the trigger index from the volume (+0x1C) and the actor, object value and three block words from the path that calls it (SPEC-0030, Layout section 3). Which actors run each path, where, and in which order is in Behavior, Trigger pass. The paths and their gates:
+
+| Path | Kind | Fires when | Object | Shot word (+0x20) | Attack word (+0x24) | Last argument (+0x28) |
+| --- | --- | --- | --- | --- | --- | --- |
+| Cell list A walk (body contact) | 3 | bit 3 (0x0008) set, bits 1 and 2 clear, and the test hits | from the owner's trigger-hit method | 0 | from the method | -1 |
+| Cell list A walk | 1 and 2, and 8 for the selected hero | bit 0 clear, bit 3 set and the test hits | from the method | 0 | from the method | -1 |
+| Cell list A walk | static 4 or 7 (switch zero or below) | bit 8 (0x0100) set, bits 0, 1, 4 and 6 clear, and the test hits | from the method | 0 | from the method | -1 |
+| Cell list A walk | moving 4 or 7 (switch above zero) | bit 5 (0x0020) set, bits 1, 7 and 8 clear, and the test hits | from the method | 0 | from the method | -1 |
+| Cell list B walk (trigger objects) | 1, 2, 3, 4, 7 | the same bits as the cell list A walk, on the object's volume record | from the method | 0 | from the method | -1 |
+| Placed-object walk (inline volumes of animated placed objects) | as the cell list A walk | the same bits | from the method; the record is the object's own instance trigger | 0 | from the method | -1 |
+| Hero shot pass | 1, 2, 3 | bit 3 set and the shot's test hits | 0 | 1 | 0 | -1 |
+| Hero shot pass | static 4 or 7 | bit 8 set and the test hits | 0 | 1 | 0 | -1 |
+| Hero shot pass | moving 4 or 7 | bit 5 set and the test hits | 0 | 1 | 0 | -1 |
+| Movable block pass | 1, 3 | bit 3 set and the block's test hits | 0 (no actor) | 0 | 0 | the block's number |
+| Movable block pass | static 4 (not 7) | bit 8 set and the test hits | 0 (no actor) | 0 | 0 | the block's number |
+| Movable block pass | moving 4 (not 7) | bit 5 set and the test hits | 0 (no actor) | 0 | 0 | the block's number |
+| World projectile step | 1, 2, 3 | bit 3 set, the test hits and the act-1 trigger map holds the index | 0 (no actor) | 0 | 0 | -1 |
+| World projectile step | static 4 or 7 | bit 8 set, the test hits and the map holds the index | 0 (no actor) | 0 | 0 | -1 |
+| World projectile step | moving 4 or 7 | bits 5 and 8 set, the test hits and the map holds the index | 0 (no actor) | 0 | 0 | -1 |
+
+The trigger-hit method depends on the owner's class. The hero's method fires with object 1 and its attack-active word (1 while the current animation frame carries event bit 0x01, SPEC-0036) as the attack word. The world-character method (every non-hero character, the petpet included) fires with object 0 and, as the attack word, 1 when any of the five low bits of the character's motion state word is set. The base method does nothing. The hero's own body contact is therefore the only path that gives object 1. The method also writes the frame counter into the volume's +0x20 word. Its record-lookup argument is 0 on the cell list walks, so the trigger index is looked up plainly in the world's trigger table; on the placed-object walk it is the placed object, and the lookup goes to that object's own instance trigger list (Medium-High). A shot that hits an inline volume of an animated placed object fires the world trigger table entry of the volume's index instead, with no instance lookup (quirk; Medium).
+
+Which kinds reach which test (High): the kind numbers 3, 5 and 8 that the dispatch tables name are flag bit numbers, not table numbers: bit 3 for kinds 1, 2 and 3, bit 8 for a static rectangle, bit 5 for a moving rectangle. The cell list A walk applies them only when its caller asks for a fire-bit filter (CollideEntityWithTriggers does; the per-tick trigger step does not, so its handlers apply their own gates of the table above). A volume with flags 0x0001 (bit 0, with bits 3, 6 and 8 clear) never fires a script trigger; it is a solid volume that gives Tor's blade recoil (Behavior, Blade recoil), the contact push, and stops a hero shot. Kind 8: all 2,589 records have flags 0x0004 and no handler acts on bit 2, so kind 8 never fires. The 27 kind-4 boxes with flags 0x0120 never fire from body contact (bit 8 blocks the moving test); they fire from hero shots, movable blocks and, with the act-1 map, world projectiles. Kind 2: see Kind 2 (reconciled) above. The weapon-contact pass (Behavior, Trigger volumes) never calls the fire step.
+
+Side effects that are not script fires (High): on the cell list A walk, a kind-3 hit with bit 8 (any owner) and a kind-1 hit with bit 9 (0x0200, the selected hero only) set the boundary-contact word of the game-flow record (SPEC-0026), which the main loop clears each tick before the hero step; a kind-3 hit with bit 6 sets the pending book (Book station below).
+
+**Object field seen by the script (High).** The fire step writes the object value it receives into the trigger block that it passes to the script callback (block +0x1C; the block's +0x10 is the trigger state and +0x14 the trigger number, SPEC-0030). The field is 1 only when the selected hero's own body touched the volume, and 0 on every other path. Because an object-0 fire from a path with last argument -1 rewrites only an idle record (SPEC-0030, Layout section 3), a hero who keeps the record active keeps the object at 1 while other firers touch the same volume.
+
+**Load-time index writes (High).** Load steps write the trigger index (+0x1C) of bit-1 records. A kind-7 record (+0x3C list) with bit 1 set and class 500 or 501 gets the running count of such class records (section 6). A kind-7 record with bit 1 set and any other class, that is a door, gets the running count of doors so far in its list: its ordinal among the non-class bit-1 records. A cylinder with bit 1 set gets the running count of such cylinders. On the disc the written door ordinal equals the disc value of every one of the 169 doors, so the door number is unchanged. Pack 1432 has no door.
+
+**Doors (High for the records and the count; Medium-High for the rule; High for the prompt and confirm).** A door is a static rectangle volume (kind 7, list +0x3C) whose flags have bit 1 (0x0002) set and whose class (+0x1E) is not 500 or 501; on the disc every door's flags are exactly 0x0002. There are 169 doors in 102 packs: one door in 77 packs, two in 12, three in 6, four, five and six in one pack each, eight in 3 and eleven in 1. Every door has mode byte 0, gate mask 0 and switch value (+0x2C) 0.0, so it takes the static rectangle test; its door number (+0x1C) is 0 to 10. The only other kind-7 records with bit 1 set are the two same-world pads of pack 1299 (class 500 and 501, section 6), which the static rectangle handler sends to the pad branch before the door branch. Sphere and cylinder records with bit 1 set (6 and 47) are not doors: the door branch belongs to the static rectangle handler only.
+
+A door works only when all of these hold: the main hero touches it; the game-state code is 0; no screen fade is running; no enter-interior or leave-interior job is pending on the current world or on the exterior buffer; the hero is over a grid cell (SPEC-0006). Then:
+
+1. **Script door.** If the current world's script registered a teleport callback for that door number (RegisterTeleportCallback, SPEC-0030), the callback decides and the default rule below is skipped. With a registered context above 0 the door posts that context as its prompt, and the callback starts as a script thread only on a tick with a Square press edge and the hero's door-confirm flag at 1; with context 0 it starts on contact, with no prompt and no press. This path never clears the confirm flag (SPEC-0006, Doors, item 5, and the stale-confirm edge case). The callback receives the trigger block with +0x10 = 1, +0x14 = the door number and +0x1C = 1. 124 doors have at least one teleport-callback registration for their number in their pack's script (Medium-High: the count takes registration sites regardless of their script conditions).
+2. **Default door.** Otherwise (45 doors) the hero must confirm the door prompt: while the hero's door-confirm flag is 0, the door posts prompt 13 ("Enter") when the exterior is current, or 26 ("Exit") when the transition or the interior is current, and nothing else happens. The prompt ids are table-13 labels. The interaction chooser shows the posted prompt on the next tick and sets the flag on a Square press edge; the door, which is tested after the hero update in the same tick, then clears the flag and travels, so one press travels on the press tick (SPEC-0006, Door prompt and confirm). Once confirmed, let D be the pack that the exit value v of the grid cell under the hero names (entry v of the current pack's tag-0x0B list, then the world tables of SPEC-0006), and let e be entry (door number) of the current pack's tag-0x0E list, the arrival door:
+   - current world is the exterior, D is a transition: the hero is placed at door e of the transition buffer, which becomes current;
+   - current world is the exterior, D is not a transition and the two packs are not a listed area pair: D is entered as an interior (no door, locator 0);
+   - current world is the exterior, D forms a listed area pair with it: the exterior is reloaded with D (a replacement load with "unload all"), arriving at door e;
+   - current world is the transition: the hero is placed at door e of the exterior buffer, which becomes current;
+   - current world is the interior: the interior is left. The transition buffer is reloaded with the pack it held when the interior was entered, and the hero arrives at door e of the exterior it was entered from (when no interior is loaded, the hero is only placed at door e of the exterior).
+
+The buffers, kinds, area pairs, the tag-0x0B and tag-0x0E lists and the interior jobs are in SPEC-0006; the whole-game view is in SPEC-0026 (World buffers and travel). The two pack 1299 records with flags 0x0002 and class 500 and 501 are same-world pads, not doors (section 6).
+
+**Grab-door records (dormant; High).** A kind-7 record with bit 1 clear, bits 2 and 3 clear and bit 7 (0x0080) set would build a 0x200-byte grab-door record (world list at +0x5808, count at +0x5804) for the hero's door-hold state (SPEC-0033). No kind-7 record on disc has bit 7 (over the 675 records: bit 0 in 327, bit 1 in 171, bit 2 in 1, bit 5 in 156, bit 6 in 28, bit 8 in 22), so the list is always empty and the door hold never occurs. Quirk: the counting pass excludes bits 2 and 3, but the building pass does not.
+
+**Book station (High for the rule).** A kind 3 volume is a book station when its flags have bit 6 (0x0040) set and bits 1, 2, 3 and 8 (0x0002, 0x0004, 0x0008 and 0x0100) clear. The cylinder is tested against the character's body cylinder (radius 1.0, from the feet to 3.5 above; SPEC-0018), and the book event is raised on overlap, not on a miss (High); on each tick that the flags pass and the cylinders overlap, the pending book word receives the volume's book value (+0x1E), which is 1-based. On the disc every book station has flags exactly 0x0040, and no cylinder with other flags meets the rule. A book value of 0 means no book. The reader shows the book at index value minus 1 (SPEC-0035, section 6.1). The pending book word is one global word; its reader, the "Read Book" prompt and the book picker are in SPEC-0035.
+
+On disc there are 134 book stations in 27 world packs (from 1 to 17 per pack; pack 777 has 17, pack 1414 has 14 and pack 1327 has 13). Their book values cover 1 to 87 except 78: 86 distinct values, so several books have more than one station. The book indices the reader shows (value minus 1) are therefore 0 to 86 except 77. No cylinder with other flags holds a book value (High for all 10,038 records). No other writer of the pending book index is known, so of the 88 books only indices 77 and 87 have no station (Medium-High).
+
+Other cylinder flag values are not book stations:
+- 0x0001 (8,707 records): solid volumes (flag bit 0; see Blade recoil in Behavior). These never fire a script trigger.
+- 0x0008 (441 records): script trigger fire (bit 3; see Script trigger fire by flag bit).
+- 0x0002 (45 records) and 0x0003 (2 records): skipped, because bit 1 is set.
+- 0x0010 (224 records) and 0x0011 (256 records): book value 0; not save points. Bit 4 makes a cylinder solid for character collision (Cylinder flags in character collision, below). 0x0010 cylinders block characters but give no blade recoil; 0x0011 cylinders do both.
+- 0x0020 (33 records), 0x0021 (192 records) and 0x0031 (1 record): not book stations and not save points. Bit 5 takes a cylinder out of character collision. 0x0020 cylinders do nothing in the rules of this section; 0x0021 and 0x0031 cylinders give the blade recoil (bit 0) but characters pass through them.
+
+**Cylinder flags in character collision (High).** The three character collision passes (the per-record push, the per-tick contact pass and the blocking query; SPEC-0018) first apply the gate mask. A cylinder (kind 3) is then tested when bit 0 or bit 4 is set and bit 5 is clear. A static rectangle (kinds 4 and 7) in the same passes is tested when bit 0 or bit 5 is set. The blade recoil keys on bit 0 only. Test vectors: flags 0x0010, tested; 0x0011, tested; 0x0021, not tested; 0x0031, not tested; 0x0020, not tested; 0x0008, not tested (it only fires its script trigger).
+- 0x0000 (2 records) and 0x0080 (1 record): no rule of this section uses them.
+
+**Save points (High).** Save points are not trigger volumes, placed objects (type 29) or placed effect spawns (type 39). Each save point is a kind-4 checkpoint record of the world pack's own character region (SPEC-0006). A region keeps at most 8 of them; on the disc there are 88 save points in 60 world packs, and the flag word of every one is 0. They are handled by the region's per-tick update, not by the trigger volume pass of this section; SPEC-0025 gives the rule (nearest save point, sound, "Save Game" prompt, opening the save screen) and SPEC-0006 the record layout. The region also owns the save-point glow: a pair of effect emitters (definitions 400 and 404 of shared effect group 3, SPEC-0034) that the update moves to the save point nearest the hero. No cylinder flag value marks a save point; in particular the cylinders with flags 0x0010, 0x0011 and 0x0021 are not save points.
+
+### 14. Object record fields read by small accessors (names open)
+
+Plain reads of fields in an object record. The owning record type is not established, so the fields are named by offset only (offsets in object). The offsets and widths are High; the meanings are open (Open questions).
+
+| Offset | Size | Access |
+| --- | --- | --- |
+| +0x00, +0x04, +0x08, +0x0C | 4 × u32 | read |
+| +0x10, +0x20, +0x30 | 3 × u64 | read |
+| +0x40, +0x44, +0x48, +0x4C, +0x50, +0x54, +0x58 | 7 × u32 | read |
+| +0x5C, +0x64, +0x6C | 3 × 8 bytes | read together into one 24-byte output block |
+| +0x74, +0x78, +0x7C, +0x80, +0x84, +0x88, +0x8C, +0x90, +0x94 | 9 × u32 | read |
+| +0xC9C to +0xCAC | 4 stores | one word, one 64-bit value and two words written (exact split not established) |
+
+A list count is read by a count accessor, and an indexed accessor on the same kind of list returns zero when the index is outside the count. The list is not established.
+
+### 15. Object pools (built per world)
+
+When a world's object store is set up, one constructor builds seven pools, one table and one scene list: nine allocations in all. Each pool block starts with a 0x10-byte header whose first word is the entry count. Entries are linked through link words, and an empty link word is -1 in the layouts below (Medium).
+
+| Pool | Entries | Entry size (bytes) | Allocation (bytes) | Source of the count |
+| --- | --- | --- | --- | --- |
+| A | caller-sized | 0x48 | count x 0x48 + 0x10 | caller argument |
+| B | caller-sized | 0x48 | count x 0x48 + 0x10 | caller argument |
+| C | caller-sized | 0x44 | count x 0x44 + 0x10 | caller argument |
+| D | caller-sized | 0x18 | count x 0x18 + 0x10 | caller argument |
+| E | 743 (0x2E7) | 0x18 | 0x45B8 | fixed |
+| F | 64 (0x40) | 0x18 | 0x610 | fixed |
+| G | 10 | 0x18 | 0x100 | fixed |
+
+Initial entry words: most are 0, and several link words start at -1 (Medium). The constructor stores each pool's entry count in the owner's header, for use by the maintenance pass below.
+
+Two more blocks are built:
+- A table of 0x400 entries with a count of 0x32 (layout not established).
+- A scene list with one 4-byte pointer per scene. Its count is the first word of the scene list kept in the scene object (at +0x5834). Each entry is then set to point at that scene's sub-list, which is not established.
+
+Roles (Medium-High; owner SPEC-0030, which holds the sizes at High). The seven pools and the scene list are the script manager's callback tables:
+- A: trigger callbacks (count = the first u32 of the type-11 payload, section 6);
+- B: breakable callbacks;
+- C: teleport-plane callbacks (world +0x57E4);
+- D: entity proximity callbacks (count = the tag-0x12 entry count, world +0x3C; SPEC-0006);
+- E: 743 game-flag callbacks;
+- F: 64 level-flag callbacks;
+- G: 10 item ask-about callbacks;
+- the scene list: the per-placed-object instance triggers, each sized by the first word of that object's inline type-11 header;
+- the 0x400 table with count 50: owner open.
+
+The release rule below frees finished callback threads.
+
+Confidence: High for the entry sizes, counts and allocation sizes; Medium-High for the roles; Medium for the initial words; Low for the table and the scene list layouts.
+
+### 15.1 Built-in object pools that are never filled (High)
+
+The world object store also builds six built-in pools that the world tick updates every tick:
+
+| World offset | Records | Role |
+| --- | --- | --- |
+| +0xA0 | 30 records of 0x150 bytes from +0xB0 | puzzle objects; kind word at record +0x148: 1 statue, 2, 5 |
+| +0x29F0 | 0x160-byte records from +0x2A00 (list header count at +0x29F0) | drifting, leashed objects with radius separation (below) |
+| +0x2810 | 0xE0-byte records | not established |
+| +0x2D40 | eight 0x160-byte slots | the plate manager (SPEC-0048) |
+| +0x3850 | 0x140-byte records | tween nodes (the step tween of SPEC-0034 section 25; Medium-High) |
+| +0x4260 | 0x160-byte records | not established |
+
+Their add routines have no caller in the boot program, no host record names them, and no data pointer reaches them, so every slot keeps its free mark and every update, contact test and completion step of these pools is skipped in play. A clean implementation may omit them. In particular:
+- the plate manager of SPEC-0048 never runs; pressure plates, switches and levers in play are scripted trigger volumes (section 13; SPEC-0030);
+- the statue count (four aligned kind-1 puzzle objects) never runs, and its completion step has an empty body; the hero's statue-turn state is never offered (SPEC-0033). The statue puzzle of pack 1353 is scripted (SPEC-0041);
+- the +0x29F0 pool's update below never runs (High);
+- the +0x3850 tween-node step never runs (dormant). For completeness, +0x130 is an active flag, not an elapsed timer: zero skips movement; when the completed-step byte reaches the total-step byte at +0x139, the flag is cleared and that update has no movement. Otherwise, one update increments the completed-step byte and adds source × (+0x134 / total steps) to position +0xA0. The scalar +0x134 is initialized to 1.75; its unit is unknown. Modes 0 and 2 select the vector at +0x20; modes 1 and 3 select +0x40; modes 2 and 3 negate the selected vector. No rule is established for other mode values. High for these operations; Medium for interpreting the scalar as distance-like.
+
+**Synthetic check (dormant step).** With mode 0, source vector (8, 0, 0), scalar 1.75 and 7 total steps, each active update adds (2, 0, 0) to position. Seven active updates add (14, 0, 0); the following update clears the active flag without moving.
+
+The three-state fall once listed here as a routine of the +0xB0 pool is the cut-reed fall of the foliage patches, and it runs in play (Behavior, Cut-reed fall; SPEC-0060).
+
+**+0x29F0 pool update (dormant; High unless marked).** For completeness, each record update runs these steps in order. The pool's add routine has no call and no pointer, so none of this runs in play:
+1. **Drift.** p ← p + 0.99 (p − p_prev) + (0.0003 i, 0.005, 0.0003 j), where i is a random whole number from 4 to 8 and j one from 5 to 9 (closed draws, SPEC-0008). Then p_prev ← p and w = 1. The previous sample p_prev is the last tick's position at record +0x150; 0.99 is a fixed program constant.
+2. **Ground lift.** With g the ground height probed at the anchor (probe range 8.0) and r the radius at record +0x140: if y < g + r, set y = g + r + 0.25.
+3. **Separation from records 0 and 1** of the pool, skipping the record itself and disabled records. If the centre distance d is below r_s + r_o, with overlap o = r_s + r_o − d and u = unit(self − other): self moves by u × o × r_o / (r_s + r_o), and the other by −u × o × r_s / (r_s + r_o). The smaller object moves more (SPEC-0040, Behavior 11A).
+4. **Leash** (Medium-High). The point p − r × (the vector at record +0x80) must stay within the distance at record +0x144 of the anchor (record +0xB0, with y on the ground); the excess is pulled back.
+5. An attachment step (not described).
+6. The current position is copied to the previous sample.
+
+Walk quirk (dormant): the pool's list walk advances its record pointer only after a record it has processed, so a disabled record stalls the walk on itself for the rest of that pass. The pool update is the second sub-table of the world tick (SPEC-0026).
+
+Nothing in the game picks up, carries or throws a world object. The only caught-and-carried object is the Miamouse (SPEC-0040); characters ride moving placed objects only through the ground attach of SPEC-0018 (Behavior, Riding).
+
+### 16. Type 16 foliage patches (summary; owner SPEC-0060)
+
+Confidence: High. SPEC-0060 "Foliage patches (type 16)" owns the families, models, placement, fade bands, per-frame logic, bush cutting and drops; SPEC-0006 ("Box records") owns the chunk and record layout. This section is a summary only.
+
+- Counts: 75 chunks in 74 packs (one pack has two), 4,205 records, 18,287 rows and 29,853 plants. Up to ten chunks per world are kept.
+- Base: every offset in the chunk, stored ones included, is relative to the chunk header, 16 bytes before the payload (SPEC-0006).
+- Record (0x40 bytes), field names as in SPEC-0006: box (x0, x1, z0, z1) at +0x00; pool count (rows) at +0x10; first-row offset at +0x14; key at +0x18; height at +0x1C; zone at +0x20; jitter at +0x24; draw-distance overrides at +0x28 to +0x34.
+- Each record is one foliage patch: rows of plants (row at z = z0 + row offset, plant at x = x0 + plant offset, with an RGBA colour per plant). The key picks the family: grass (keys 0 and 12), flowers (1, 6 and 7), bushes (22 keys, among them the coin bush and the Negg bushes), trees (4, 13 and 25), reeds (8) and rustle and clover beds (10, 11, 14, 23, 24, 26, 27 and 35). Keys 15 and 40 and above build nothing; no record on disc has them.
+- The flower models are the registry ids 194 (keys 1 and 7) and 193 (key 6): common-object ids of range 2 (indices 3 and 2), registered by the world pack's own type-8 children (SPEC-0004).
+- Each frame a patch is considered only when its zone (+0x20) passes the zone query (SPEC-0006, Binary grids) and the camera eye is within its far distance; within 100 units, and while the game-state code is below 9, its family logic runs.
+- Behaviour that other sections refer to: the "six-slot look-ahead" is the bush shot test, and the three-state fall is the cut-reed fall (Behavior, pointers). Key-4 trees put a solid trunk cylinder at each nearby tree (SPEC-0060, Trees).
+- Type 16 patches are not trigger volumes of section 13 and share no field with them.
+
+## Behavior
+
+Sections 7.1 and 8 to 10 and the trigger volume tests below give the behavior. Sections 1 to 7, 11, 12 and 13 are layouts. The collision behavior that uses the type-11 primitives (contact pass, sweep, projectile step and move checks) is in SPEC-0018 (Object collision), and the character side is in SPEC-0040.
+
+### Trigger volumes (section 13)
+
+Confidence: Medium for the dispatch and the kind split; High for the fire gates by flag bit (section 13); High that kind 2 never fires in the weapon-contact pass; Low to Medium for the geometry of each kind (as marked).
+
+**Per tick.** The pass is the weapon-contact pass: it runs from the hero's attack routines (both heroes' attack-step and air routines) on ticks whose current clip frame carries event bit 0x01, the hit window (Medium-High). For each trigger object of the attacking actor, the object is skipped unless its state word is 1 or 3 (an intact breakable, section 13) and its volume record is present. Otherwise the volume's kind selects the test:
+
+- **Kind 1, sphere.** The volume is a sphere: centre at record +0x30, radius at +0x3C. Three points form the actor's contact triangle: P0 = the actor's contact point + 0.25 × the actor's up vector, P1 = P0 + r × the actor's contact direction, P2 = P0 + r × the up vector, with r the actor's contact radius (times 0.25 on the blade recoil hook). The volume is hit when any of the edges P0P1, P0P2 and P1P2 has its closest point (clamped to the edge) at a distance from the centre that is at most the radius; the boundary counts. High for the radius field and the inclusive test; Medium for the point sources.
+- **Kind 2.** Never hit on this path. The test is a placeholder that reports no hit. High. Other passes route kind 2 to handlers that can fire (section 13, Kind 2 (reconciled)); no cone on the disc has a fire bit.
+- **Kind 3, finite cylinder.** The volume is a finite cylinder: radius at +0x3C, full length at +0x24, axis at +0x40 and base point at +0x30 (table above). A stationary actor (zero motion) is tested by a point, and a moving actor is tested along its motion segment, against the finite-cylinder shape of SPEC-0018. The routines use two scalars, 0.5 and 0.25 (code constants), whose roles are open. Medium-Low for the test; the shape is High.
+- **Kinds 4 and 7, rectangle.** The switch in the volume record chooses the test:
+  - switch zero or below (static; the switch field is open, open question 32): the three triangle edges of the actor, built from the three points of kind 1 offset by a radius-scaled amount (Low), are each tested against the rectangle; a hit on any edge counts;
+  - switch above zero (moving): the rectangle is tested at five sub-volumes along the volume's own motion; a hit on any of the five counts. The fraction of the motion that each sub-volume covers is not established (Open questions).
+  The rectangle test takes a segment. It hits when the segment crosses the rectangle's plane at a parameter from 0 to 1 and the crossing point lies within the in-plane extents, measured from the rectangle's reference point along each in-plane axis (0 to the extent). No margins are applied. Medium for the test.
+  Two rectangle tests exist, each with its own callers (High for the split by caller): this no-margin test serves the weapon-contact pass's static rectangle and several world-geometry callers; the margin test of SPEC-0018 (parameter −0.02 to 1.02, in-plane bounds widened by 0.25) serves the projectile step, the per-cell character contact, the camera and the world-face recoil. Do not swap them.
+- Any other volume kind: no test.
+
+The test gives yes or no for the tick. There is no enter or leave edge on this path. This pass never calls the script trigger fire step: a strike reaches a level script only through the object's breakable hook (Apply on a hit, step 1). A strike reaches a script trigger only through the hero's body contact during the hit window, which gives the attack word +0x24 = 1 (Trigger pass below; SPEC-0030). High.
+
+**Apply on a hit.** The apply runs every tick on which the test is true. Its steps, in order:
+
+1. **Script hook.** If a level script registered a breakable callback for the object's script index (+0x58; RegisterScriptBreakable, SPEC-0030), that callback is started as a script thread unless it is already running, the hook's two argument words are stored ((1, 0) on the hero melee and attack-family routes, (0, 1) on Roberta's shot), and nothing else happens: no break and no cue. Without a registered callback the apply goes on to step 2. High (SPEC-0036, Contact routines and cues; SPEC-0048, Break routes).
+2. **Element gate.** Let E_t be the object's element byte (+0x5E) and E_a the attacker's Mote kind. The gate passes when E_t is 0 or E_t = E_a. Some handlers also pass on 7: the hero melee route (E_a = the Mote kind of the hero's slot-2 item) and Roberta's shot (E_a = the shot's element kind) pass when E_t is 7, and two of the attack-family handlers that take E_a from their owner pass when E_a is 7 (Nova). One attack-family handler and the boss route have no gate. No entry on disc has E_t = 7. High.
+3. **Pass.** The object is a world breakable (a type 29 second-list entry, SPEC-0048), and the pass breaks it: the break effect of SPEC-0048 runs with a piece push of 0.25 along the unit direction between the actor and the object, handed to each piece the break spawns (the actor itself does not move). Then one positioned sound cue plays on the main sound slot at the object's position (+0x30), chosen by the object's material word (+0x5C, table above): cue 143 (0x8F) when it is 2, 145 (0x91) when it is 3, 146 (0x92) when it is 4, and 144 (0x90) otherwise; Roberta's shot always plays cue 144. No effect id is started. The cue plays even when the object did not break (SPEC-0036, Contact routines and cues). High.
+4. **Mismatch.** When the element gate does not pass, the reaction depends on the route: on the hero melee route the hero's recoil material word becomes 4 and Tor's attack sub-state 13 is requested (the sword bounce of SPEC-0036, recoil cue 13; Blade recoil below), with no break and no breakable cue, and Roberta has no reaction; the attack-family handlers and Roberta's shot skip silently (no break, no cue, no state change). High.
+
+**Blade recoil (the former "press (use) variant").** This is not a use button: it is Tor's blade striking a solid volume. When the main hero's character contact walk visits a primitive, the hero's hook for that primitive kind also tests the blade against it. There are hooks for the static rectangle, the moving rectangle, the cylinder and the sphere (using the volume tests of this section); the kind-2 hook never hits. A hook acts only when all of these hold:
+- the hero is Tor (hero variant word 0); Roberta never recoils;
+- the current animation frame of any playing clip layer carries event bit 0x01 (the hit window);
+- the recoil busy gate is clear: it blocks while a hero counter is positive and a second hero word is nonzero;
+- bit 0 (0x0001, solid) of the volume's flags is set;
+- the blade test hits (the kind-specific geometry is described below).
+
+**Kind-3 blade test (static inputs and branch).** The hook passes a test body of radius 0.5 and full length equal to the hero's contact-radius getter multiplied by 0.25 (the multiplier is a boot data word). The world cylinder keeps its own radius and signed full length. Its test centre is the stored base plus (H/2) × axis. A zero derived motion offset selects the static cylinder-overlap helper; a non-zero offset selects the moving-cylinder helper. This describes the tested inputs and branch only; it does not establish how often either branch occurs during ordinary play. The fixed 0.5 body radius is distinct from the 0.5 used to place the world-cylinder centre. The static helper preserves signed half-lengths. The moving helper also retains signed H: its projected half-extent includes H × |axis alignment| × 0.5 without an absolute-value conversion or clamp. A negative H can therefore reduce or reverse that projected allowance; the final hit still depends on the helper's later edge checks. [High for inputs and this gate; exact final negative-H hit cases open]
+
+On a hit, the charge counter is cleared, Tor's attack sub-state becomes 13 (SPEC-0036: the sword bounce, hero animation 26, rumble preset 2 for 0.8 s at strength 0.6, and a recoil cue), and the hero's recoil material word becomes M(mode byte at +0x11). World face records take part too, with no bit-0 test: their material comes from the record's byte at +0x4D through a second map. High for the gates and the writes; Medium-High for the meaning of the hit window.
+
+The three maps are fixed program constants. In rule form:
+- Mode byte m to material M: 0 to 0, 1 to 1, 2 to 4, 3 to 6, 4 to 9, 5 to 2, 6 to 8, 7 to 3; m from 8 to 16 gives m + 10 (18 to 26); 17 gives 10; 18 gives 27; any other byte gives 0. That is 19 mapped values.
+- Face-record byte b to material: b + 1 for b from 0 to 3; b for b from 4 to 8; 9 for b = 9 or 10; 8 for b = 11; b − 1 for b from 12 to 18; 10 for b = 19; any other byte gives 0.
+- Material to recoil cue (SPEC-0036 plays it): cue 11 for materials 1, 6 and 20; 20 for 2, 23 and 26; 18 for 3; 13 for 4; 15 for 5, 22 and 27; 17 for 7; 19 for 8; 12 for 9, 21 and 24; 29 for 10; 25 for 11; 21 for 12; 22 for 13; 23 for 14, 18 and 25; 26 for 15; 24 for 16; 28 for 17 and 19; any other material, 0 included, gives cue 11.
+
+The hero's material word starts at 6. The element-mismatch recoil of Apply on a hit (step 4) and of SPEC-0048 sets material 4, so it plays cue 13.
+
+### Trigger pass: who is tested, where, and when (High unless marked)
+
+**Actors.** Each play tick the main loop runs these, in this order (SPEC-0026, main loop):
+1. The current world's step: its pools, its animated placed objects, then each movable block (the movable block pass), then the region characters of the current world, then those of the exterior buffer. Each region character runs only while its slot entry is active, it is visible and its word +0xE3C is 0 (meaning open); it runs its update and then its trigger step.
+2. The selected hero: its update (which holds the hero shot pass) and then its trigger step. Of the two hero objects only the selected one runs; the other hero has no trigger step and fires nothing.
+3. The live petpet: its update and its trigger step.
+4. The script step of the current world, then that of the exterior buffer when it has a script: for each trigger record, resume its callback thread (and free it when it has ended), then apply the decay (SPEC-0030, Layout section 3).
+5. The frame counter goes up by 1 at the end of the pass.
+
+World projectiles step with the effects, between step 1 and step 2 (Medium).
+
+**Trigger step of one actor.** The actor's motion record supplies the tested position p (its feet point, motion record +0x50), its body height and its body radius. In order:
+1. Cell refresh: the actor's cell pointer becomes the cell, under p, of the grid of the current world (a region character uses its own world when it has one); when p is off that grid, the exterior buffer's grid is tried; when both miss, the pointer is null and steps 3 and 4 do nothing.
+2. Placed-object walk: each animated placed object whose reach (its radius word) contains p is tested with p moved into the object's frame, against all six volume lists of the object's inline type 11 header, with the cell list A rules.
+3. By the owner's mode, a class method: the hero is mode 0, every world character is mode 1, and the petpet is mode 2.
+   - Mode 0 (selected hero): cell list A walk, then cell list B walk.
+   - Mode 1 (NPCs and enemies): cell list B walk only. These actors never test cell list A, so they never touch a type 11 volume, a book station or a trigger rectangle.
+   - Mode 2 (petpet): cell list A walk only.
+
+**Cell list A walk.** For each volume record in the cell's list A: skipped when its gate mask (+0x1A) is non-zero and shares no bit with the world's gate word (SetWorldCollisMask); otherwise the kind selects the handler and the handler applies its flag gate and test (section 13, Script trigger fire by flag bit). Kind 8 is tested only when the owner is the selected hero.
+
+**Cell list B walk.** For each trigger object in list B: skipped unless its state word is 1 or 3 and its volume pointer is set; skipped when the owner's class predicate says so (the selected hero's predicate is its landing break: when the hero is falling onto the object from above it breaks the object (SPEC-0048) and the object is skipped; every other class passes all objects); no gate-mask test; kind 8 not tested. Otherwise the same handlers as list A run on the object's volume.
+
+**Tested shape (Medium-High).** Kind 3: the body cylinder of radius 1.0 and height 3.5 from p (centre p + 1.75 up) against the finite cylinder. Kind 1: a vertical capsule from p up by the body height, with the body radius, against the sphere. Rectangles: section Trigger volumes and SPEC-0018. One test per volume per tick; there is no enter or leave edge in any pass.
+
+**Fire step gate on the actor.** The fire step refuses an actor that is neither hero when the actor is the petpet (or a character whose type id is one of the activatable petpet kinds) and its type id is not in the second petpet kind table (SPEC-0047). In play this refuses every petpet fire, so a petpet never starts a script trigger. Its book-station and boundary-contact side effects do not use the fire step and still happen. NPCs and enemies are not refused. Medium-High for the table reading.
+
+**Hero shot pass.** Inside the selected hero's update, each of the hero's six shot slots that is live, each tick, tests its point and its radius against: the volumes of cell list A at the shot point (all fire bits as in section 13, no bits-clear conditions; a solid volume, bit 0, ends the shot with an impact cue); the trigger objects of cell list B at the shot point (solid test and the breakable hook only); the movable blocks; the inline volumes of animated placed objects within 150 units. A shot can fire several triggers in one tick and the same trigger on several ticks.
+
+**Movable block pass.** Each movable block, each tick, tests its own shape against the volume records of the **selected hero's** cell list A, not its own cell: a block fires only while the hero stands over a cell that lists the volume. Kind 7 rectangles are not tested on this pass.
+
+**World projectile step.** A projectile tests the volumes of the cell under it; on a fire it ends. It fires only indices that the act-1 trigger map holds (DFS_Act1_SetTriggerData, SPEC-0030), and only pack 1174 writes that map.
+
+**Reach on the disc (High).** Over the 608 resolved (pack, index) registrations: 594 have a volume that passes the selected hero's body-contact gate and that at least one grid cell lists (list A, or list B for a trigger object), or a ForceTriggerScriptIfNotRunning call; 7 use a computed index; the other 7, pack 1174 triggers 5, 22, 23, 24, 36, 37 and 38, are boxes with flags 0x0120 and fire only from hero shots, movable blocks and world projectiles (SPEC-0044, the two-hit object and the floor tiles). No registered trigger lacks a volume.
+
+### Riding, carrying and collision with moving placed objects (pointer)
+
+Moving placed objects (section 7.1) have no proximity carry of their own. Three rules of SPEC-0018 cover them:
+
+- **Ground attach of a character** (SPEC-0018). The ground probe maps the character into the object's rest frame, the object becomes the character's ground object, and from the next tick on the character is moved by the object's per-update translation change (+0x150) plus a rotation term, with x and z clamped to 1.5 per tick. The vertical follow is done by the motion-record integrator (SPEC-0018, SPEC-0040). This is the platform and lift riding rule.
+- **Character versus moving placed objects** (SPEC-0018, Who walks what, item 4). For each object of the world's placed-object list whose active byte (+0x1B6) is nonzero, which has an inline type-11 header (primitive set, +0x1D8), and whose reference centre (+0x180) is closer to the character than the object's radius (+0xBC; squared values, strict), the character's position is taken into the object's rest frame, the object's six primitive lists are walked through the dispatcher, and the push is taken back to world space. Nothing is carried.
+- **Projectile versus placed objects** (SPEC-0018). The same mapping with a fixed gate of 150 units (squared 22,500, strict) from the projectile; the projectile's position is restored afterwards. Nothing is carried.
+
+Settled (High): a platform carries a character only through the ground attach of SPEC-0018 (Ground attach of a character), with the conditions stated there: the same ground object as on the previous tick, the rider at most 0.25 above the ground (or climbing), x and z clamped to 1.5 per tick each, and the vertical term only with the record flag that SPEC-0018 names. The 150-unit gate is the projectile test and the radius walk only pushes.
+
+### Pack 1299 looping-door puzzle (High for the rules)
+
+The only six-state "platform" is a puzzle that is built at load when the world has a kind-7 record of class 500 (pad A) and one of class 501 (pad B), both in the +0x3C list, and a display node with id 401. Only pack 1299 qualifies: its kind-7 records 2 (class 500, base height 15.15) and 3 (class 501, base height 33.16), the same-world pads of section 6.
+
+Puzzle record at build: active; state s = 0; pads A and B; mask target = display node 401; accumulator 0; object range 0 to the placed-object count minus 1; spin rates of placed objects 0 to 5: 15, −15, 22, −18, 10 and 18 degrees per second; midpoint height M = (15.15 + 33.16) / 2 = 24.155 (stored at +0x68 of the puzzle record).
+
+Pad crossing (the hero touches one pad; the destination X is the other pad). There is no teleport when s > 5, when s = 0 and X = A, or when s = 5 and X = B. Otherwise the hero is moved to X's side (the camera moves by the same offset), dy is the hero's vertical change, and then:
+
+1. **State move.** The type of state s is the 32-bit word at ELF data address 0x2EB410 + 4s. On disc the words for s = 0 to 5 are 1, 0, 1, 1, 0, 1, and word 6 is 0. Type 0 needs X = A and type 1 needs X = B. On a pass s += 1 (the completion flag is set when s > 5). On a fail s −= 1 when s > 0.
+2. **Display mask.** The mask word of display node 401 becomes 1 << (i − 1), with i = s + 2 when the type of the new s is 0 and i = s + 8 when it is 1; that is 1 << (s + 1) or 1 << (s + 7). An i below 1 gives 0. The mask at build is 0x80.
+3. **Offset.** accumulator += dy, and every placed object gets the position offset (0, accumulator, 0).
+4. **Characters.** On a pad crossing, the step walks every non-null entry of the current world's character list, without a hero, boss or class filter. It moves an entry by (0, dy, 0) only when dy > 0 and its height is strictly below M, or dy < 0 and its height is strictly above M. An entry exactly at M does not move. This is a crossing-time adjustment; the per-tick accumulator offsets placed objects only. The exact runtime membership of the list remains open.
+
+Per tick while the puzzle is active: after the selected hero's motion-record tick, accumulator += that tick's vertical displacement (current position minus the saved tick-start position); placed objects 0 to 5 spin about the vertical axis by rate × dt degrees, converted to radians with the factor 0.017453294 (ELF data address 0x2DB480); every placed object gets the offset (0, accumulator, 0). This ordering is established for the selected hero's main-loop path; ordering against other characters' motion-record ticks is not established.
+
+Solution: crossings to B, A, B, B, A take s through 1, 2, 3, 4 and 5; at s = 5 a crossing to B is not teleported, so the hero leaves through B. A crossing to A at s = 0 is also not teleported (the way back out). State 6 cannot be reached from play.
+
+### Cut-reed fall (pointer; High)
+
+The three-state routine earlier read as a mover, and later as a launched-object after-flight fall, is the fall of the cut piece of a reed (key 8) of the type 16 foliage patches. It is not a platform, and it runs in play, for the 24 reed records in packs 909, 934 and 1056. SPEC-0060 (Reeds, K, and the cut-piece fall) owns it. In brief: state 0 moves the piece by 0.05 × its velocity per tick until it is more than 0.5 from its anchor; state 1 sinks it 0.07 per tick until its height is below the ground probe result (ceiling = height + 8.0) minus 1.25 (SPEC-0018, Ceilings supplied by callers); state 2 turns its up axis toward its velocity, up = normalize(0.965 up + 0.035 velocity), until |up.y| ≤ 0.001.
+
+The keyed walk earlier listed in this section is the effect trail-strip renderer of SPEC-0034 (Ribbon and trail packets); it is not a mover track.
+
+### Six-slot look-ahead: the bush shot test (pointer; High)
+
+The "six-slot look-ahead" is the shot test of the foliage bushes (SPEC-0060, Bushes, B, Cut triggers). The six slots are Roberta's six shot slots (SPEC-0036, Hero shot slots); only armed slots are tested. The test point is the bush position + s × the bush's up axis, with s = the boot data word 0x2EB340 = 0.0, so the point is the bush base. A slot cuts the bush when the distance from the test point to the shot is strictly below the shot's radius + m, with m = the boot data word 0x2EB344 = 1.5. The hit handler is the bush cut and drop of SPEC-0060 (Bush drops). It is not the trigger-volume proximity kind of section 13.
+
+A separate character-construction path writes six per-slot values into nested auxiliary records at offsets 0x0, 0x2C0, 0x580, 0x840, 0xB00 and 0xDC0 (stride 0x2C0), and resets the last two to zero. These records are distinct from the shot slots used above: those are a separate per-hero array at +0x10D0 with stride 0xA0, and the bush test reads their armed flag, position and radius (SPEC-0036, Hero shot slots). The purpose of the 0x2C0-stride auxiliary records remains open.
+
+### Contact-time crossing solver (Medium-Low)
+
+A moving point is tested against a circle in a plane, to find when it crosses the circle during a segment of motion. The circle radius is the sum of the two radii involved, and the comparison is made on squared values. The crossing times are the roots of a quadratic in the segment parameter. The solver returns zero, one or two crossings, with the crossing points, and only crossings on the segment are kept.
+
+- If the motion is parallel to the plane (segment length below 1e-5), the roots are not used. The result is decided by whether the point is inside the circle.
+- A near-parallel case is tested separately against 0.99999. It can return two crossings.
+
+The in-plane axes used for the points are not established, and the caller is not established (Open questions 45 to 48). Whether a sweep rule in SPEC-0018 uses this solver is open (Open question 46). Medium-Low.
+
+### Pool maintenance (per tick, current world only)
+
+Confidence: Medium for the release rule and the order of the passes; Low for the per-record update and for the sub-list rules.
+
+Each tick the owner maintains its pools. Only the current world's pools are maintained. Other worlds keep their links.
+
+1. **UI gate.** When the UI flag at +0x44 of the UI block is set, no pass runs. The stored scene id at +0x6A (step 4) is written to the world's scene id field if it is 0 or more. Otherwise the pass continues with step 2.
+2. **Scene id before.** The current scene id is read.
+3. **Pool A.** Each link of pool A is handled by the release rule below, and then a per-record update runs over the pool (its behaviour is not established).
+4. **Scene id after.** The scene id is read again. If it changed during the passes so far, the new id is stored at +0x6A. If it did not change, -1 is stored there.
+5. **Other passes.** Pools B and C, the single link the owner holds, pool D, pool G, pool E, pool F, and the scene list with its sub-lists are handled by the release rule, in that order.
+6. **Scheduled job.** When the world's flag at +0x88 is nonzero and the owner's pending-job word is zero, one job is scheduled and its handle is stored in that word. The job's behaviour is not established.
+
+Release rule. A link that holds no object is skipped. Otherwise it is released (it is released back to its pool and the link is set to 0) when either of these holds:
+- the object is gone, meaning that the object lookup finds nothing;
+- the object's first word, its state word, is nonzero.
+
+Seven pools and the single link are handled each tick, so the release rule covers seven lists. Synthetic case: a pool A link whose object's state word is 0 and still exists is kept; the same link is released once its state word becomes 1.
+
+## Edge cases and error handling
+
+- Trigger objects whose state word is neither 1 nor 3 (a disabled or broken breakable) are never tested, even when they have a volume record.
+- Volume kind 2 never fires on the weapon-contact pass: its test is empty there. The cell list A walk, the shot pass and the projectile step can fire a kind 2 volume with bit 3 (section 13); no cone on the disc has a fire bit. The cone routine of SPEC-0018 is reached by the cell list walks, not by the weapon-contact pass (open question 76).
+- Volume kinds other than 1, 2, 3, 4 and 7 are never tested.
+- No enter or leave edge: an overlap applies on every tick it lasts. When a script hook is registered for the object, every such tick goes to the hook (the callback is not restarted while it is still running). Reproduce the repetition; do not add a one-shot latch that the disc does not show.
+- Element byte 7 is not a general wildcard: it passes on the hero melee route and on Roberta's shot; on an attack-family handler it passes only when the attacker's kind is 7. No disc entry holds 7.
+- Blade recoil needs Tor, the hit window and a solid volume (flag bit 0): a blade hit by Roberta, outside the hit window, or on a volume with bit 0 clear gives no recoil.
+- Mode bytes above 18 give material 0, which plays recoil cue 11.
+- A moving rectangle (switch above zero) is tested at five sub-volumes; a hit at any of them counts. Do not test it as a single rectangle.
+- The rectangle test for the static case applies no margins; do not apply the SPEC-0018 margins to it.
+- Door confirm left set (quirk): a script door never clears the hero's door-confirm flag, so after a confirmed script door the next default door travels on its first contact tick with no prompt (SPEC-0006, Edge cases). Medium-High.
+
+- Type 28: 14 quaternions are not unit length within 1e-3. Use them as stored; do not renormalise silently.
+- Type 30: do not use the table values to find records. Read records in sequence. A record count of 0 in A, B or C is valid. Negative counts were not found.
+- Type 39: a spawn whose effect id has no definition is reset and plays nothing. The original logs this case. Medium.
+- Type 1000: an index past the entry count gives no entry.
+- Type 11: the loader clears byte +0x4F of each 0x50-byte record of the fourth list when it loads the chunk. Reproduce it: the byte is the start-delay counter of the ambient sound loops (SPEC-0031).
+- Type 11 cylinders: resource 721's count of 10 extends 32 bytes beyond the chunk payload under the established pointer-plus-0x20 layout. The type-11 loader re-bases pointers but does not change this count; the available static evidence does not establish whether later readers bound the final partial entry or consume bytes past the chunk boundary.
+- Type 11 spheres and cones: the 0x40-byte records are read by their count. An equal-extent 0x50-byte record is not a sphere, even though its extents match.
+- Type 11 boxes: one extent of 0.0 on disc (pack 684). A zero extent gives an empty range along that axis.
+- Type 11 boxes: extents can be negative (section 6.1, extent signs). Do not assume a positive extent; the meaning of a negative one is open (open question 77).
+- Type 11 cylinders: one record (resource 1394) has a negative full length (−14.47). The kind-3 contact path preserves the sign: its centre is base + (H/2) × axis, and the overlap routine uses signed half-lengths without taking an absolute value or clamping. This is not a conventional positive-height cylinder interpretation. Whether resource 1394 reaches this contact path in play remains unestablished (open question 24); the blade-recoil branch is separate (open question 31).
+- Type 11 primitive lists: the loaded record header is at the list pointer; on-disc shape data begins 0x20 bytes after that pointer and proceeds at the list's record stride. For resource 721, the declared ten-cylinder array is 32 bytes longer than the payload; only nine complete shapes and 48 bytes of the tenth are present. Do not infer a reader clamp from the loader's pointer rebase alone.
+- Type 29: an object whose inline child does not have type 5 is skipped. Parts with an out-of-range entry index are skipped.
+- Type 29 draw gate: a gate byte of 0 and the reset value 1 do not mean "visible". Keep the two-sided rule of section 10.
+- Type 29 state: a state of 3 or 4 with a non-zero gate byte is never drawn. States other than 3 and 4 are never seen in the draw path.
+- Type 29 far state: a placed object in an object list uses the same fixed 50-unit far threshold and 350-unit cull as every other object (SPEC-0046). The designer draw-distance values are not applied by the draw path as far as found.
+- Rotation steps 0.0006 and 0.0009: do not apply them to placed objects; they are sky dome layer steps (section 10.1, SPEC-0046).
+- Lights: type 30 light sets feed only the light slots of character light contexts (SPEC-0046, Light slots and Character lights); never apply them to world geometry, which is unlit. Type 3 entries have a falloff, and between 0.9 r and r they cross-fade a displaced directional light instead of taking its slot (SPEC-0046, Character lights); type 1 entries are ambient and their direction must be ignored. Do not load resource 527; use the built-in default rig of SPEC-0046 instead.
+- Type 40: the entry fields of section 11 are known; kinds 0, 7 and 12 have no built-in behaviour and must not be given one. Two packs that share a key (1096 and 1122, key 185) share one opened mark: opening one chest marks the other as opened. Type 41: the zone output is used as stated in section 11; the render scalar's meaning is Low, so the clean side should pass it through to the renderer without depending on it.
+- Resource 527 is not read by the game. A tool that inspects it should stop at the end of the text lines; the stray byte after the ambient line is not data.
+- Moving placed objects: no proximity carry exists. Riding is the ground attach of SPEC-0018; the radius (+0xBC) walk only pushes characters and the 150-unit gate only tests projectiles (Behavior, pointer section).
+- Bush shot test (the former six-slot look-ahead): only armed shot slots are tested, the distance test is strict, and key-5 bushes have no shot test (SPEC-0060).
+- Object accessors: a list read beyond its count returns zero; do not read past the count.
+- Built-in pools (section 15.1): they stay empty on disc data; do not fill them from any disc record. The statue turn, the plate press, the tween nodes and the grab-door hold are never seen in play. The three-state fall is not one of them: it is the cut-reed fall, which runs (SPEC-0060).
+
+- Animated placed objects: an object in its disc state (3) does not move or draw until a script calls InitObjOn (section 7.1). Do not start any motion at load.
+- Animated placed objects: the reference centre adds the mesh corner without rotation, so it is off for rotated objects. Reproduce it; the radius walk of SPEC-0018 uses this centre.
+- Animated placed objects: the rotation lerp is not normalised. Reproduce it.
+- Animated placed objects: the first tick after a loop wrap sets the root to s[0] × f instead of adding to it (section 7.1, step 4).
+- Pack 1299 puzzle: the state can move back. A state above 0 whose crossing fails steps down by one.
+- Pack 1299 puzzle: state 6 cannot be reached, because at state 5 a crossing to pad B is not teleported; word 6 of the state table (0 on disc) is never used in play.
+
+## Test vectors
+
+- Type 39 record with count 2: the second record starts at 0x10 + 0x90 = 0xA0 from the payload start.
+- Type 39 zone gate: an active spawn with zone number 3, while the camera stands in zone R and cell (R, 3) of the queried block is 0, is stopped on that pass; with cell (R, 3) = 1 it is updated.
+- Type 30 record with A = 3, B = 0, C = 1: size = 0x20 + 0x50 × 4 = 0x120 bytes, already a multiple of 16. The next record starts 0x120 bytes later.
+- Type 30 record with A = 0, B = 2, C = 0: size = 0x20 + 0xA0 = 0xC0 bytes.
+- Type 28 record with count 0: its pointer-like word is 0 (true for all 1,681 such records on disc).
+- Draw gate: an object with state 3 is drawn only if its gate byte is zero. An object with state 0 and the reset gate byte 1 is drawn, if its zone query passes.
+- Placed object in an object list (SPEC-0046 far and cull values): at 49.9 units from the view point the far flag is clear; at 50.1 units it is set; at 350.0 units it is dropped.
+- Lighting examples: see section 8.
+- Rectangle record layout example: the synthetic box of section 6.1 has w = −10 at +0x50 and w = 5 at +0x40; a point (10, 0, −5) lies at the reference point (+0x30).
+- Sphere record layout example (synthetic): a sphere of radius 2.0 centred at (1, 2, 3) has kind 1 at +0x10, the all-ones tag at +0x20, +0x24, +0x28 and +0x2C equal to 2.0, centre values at +0x30, +0x34, +0x38, and +0x3C equal to 2.0. A chunk with sphere count 1 must contain exactly one such 0x40-byte record, starting at the sphere list pointer.
+- Cone record layout example (synthetic): kind 2 at +0x10, height 5.0 at +0x24, radius 2.0 at +0x28 and +0x2C, and a copy 2.0 at +0x3C. The record is a cone because its header pointer and count place it on the cone list; the extents alone do not decide it.
+
+- Record walk (synthetic): a cylinder list pointer of 0x200 with count 3 gives records at 0x200, 0x250 and 0x2A0; each record's kind byte is at +0x10 (0x210, 0x260, 0x2B0) and its body tag at +0x20 (0x220, 0x270, 0x2C0).
+- Door (synthetic): a kind-7 record with flags 0x0002, number 2, switch 0.0. The current world is the exterior, no callback is registered for door 2, and the current pack's tag-0x0E list has entry 2 = 5. The cell under the hero names a transition pack: prompt 13 ("Enter") shows from the tick after first contact, and on the tick of a Square press the hero is placed at door 5 of the transition buffer, which becomes current. With a callback registered for door 2, the callback runs instead and receives +0x14 = 2 and +0x1C = 1.
+- Door (synthetic): the same record with the switch at +0x2C set to 1.0 takes the moving rectangle test, not the static handler, so the door rule does not apply (no door on the disc has a switch above 0).
+- Rectangle branch threshold (synthetic): with all other fields unchanged, +0x2C = 0.0 and +0x2C = −0.01 select the static rectangle test; +0x2C = +0.01 selects the moving test. This is the runtime branch rule for both kinds 4 and 7, regardless of how the stored value is named in the layout.
+
+Trigger volumes (synthetic; the actor, object and volumes are invented for these examples):
+
+- Sphere, kind 1: centre (0, 0, 0), radius 1.0 at +0x3C (the value 5.0 at +0x34 is ignored). Triangle edge from (1, 0, −2) to (1, 0, 2): closest distance 1.0, a hit (the boundary counts). Edge from (1.01, 0, −2) to (1.01, 0, 2): a miss.
+- Kind 2, weapon-contact pass: a point lying on the segment of the volume gives no hit.
+- Static rectangle, kinds 4 and 7 with switch 0: normal (0, 1, 0); in-plane axis 1 (1, 0, 0) with extent 10; in-plane axis 2 (0, 0, 1) with extent 4; reference point at the origin. Segment from (5, 1, 2) to (5, −1, 2) crosses the plane at parameter 0.5, at (5, 0, 2), which lies inside: hit. Segment from (12, 1, 2) to (12, −1, 2) crosses at x = 12, outside the extent of 10: no hit. The second result holds with or without a margin of 0.25.
+- Finite cylinder, kind 3 (synthetic layout example): radius 1.0 at +0x3C, full length 3.5 at +0x24, base point (0, 0, 0) at +0x30, axis (0, 1, 0) at +0x40. The centre used by the overlap test is the base plus half the length along the axis: (0, 1.75, 0). A stationary actor at the centre is inside the volume.
+- Contact cue (synthetic): a breakable with material 2 gives cue 143 (0x8F), 3 gives 145 (0x91), 4 gives 146 (0x92), and 0, 1 or 5 give 144 (0x90).
+- Break push (synthetic): actor at (0, 0, 0), breakable at (3, 0, 4). The unit direction is (0.6, 0, 0.8); the break hands the push 0.25 along it to each piece. The actor stays at (0, 0, 0).
+- Element gate: element 0 passes for any attacker. Element 5 hit by Tor's melee with a slot-2 Mote of kind 4: no pass, Tor recoils with material 4 (attack sub-state 13, recoil cue 13), no break and no breakable cue. The same element 5 hit by the fixed kind-4 family handler: nothing happens. Element 7 hit by the hero melee: pass (break when in state 1, cue by material).
+- Blade recoil radius: an actor contact radius of 4.0 gives a blade test radius of 1.0 (4.0 × 0.25).
+- Recoil material and cue: mode byte 4 gives material 9 and cue 12; mode 17 gives material 10 and cue 29; mode 0 gives material 0 and cue 11; mode 19 gives material 0 and cue 11. Face byte 11 gives material 8 and cue 19.
+- Recoil gate: Tor in the hit window against a volume with flags 0x0008 (bit 0 clear): no recoil. Flags 0x0001: recoil (attack sub-state 13). Roberta against flags 0x0001: no recoil.
+- Repetition: the same overlap on ticks 100, 101 and 102 runs the apply three times. With a registered script hook, all three ticks go to the hook; the callback starts on tick 100 and is not restarted while it is still running.
+
+Projectile versus placed objects, 150-unit gate (synthetic; object reference centre at the origin, projectile position given; SPEC-0018):
+
+- Projectile at (149.0, 0, 0): squared distance 22201, less than 22500, so the object is tested.
+- Projectile at (150.0, 0, 0): squared distance 22500, not less than 22500, so it is not tested.
+
+Animated placed objects and the pack 1299 puzzle (synthetic unless stated):
+
+- Playback: F = 5, translation y samples (0, 1, 1, 1, 1), speed 1. The advance is a = 0.25 keys per tick and D = 4 / 15 = 0.2667 s = 16 ticks. The translation change +0x150 y is 0.25 on every tick, the total is 4.0, and state 2 becomes 8 on tick 16.
+- Duration: F = 300 gives D = 19.933 s, 1,196 ticks at speed 1. At speed −1 the object starts at time D and ends at time 0, with the absolute translation rule on every tick.
+- Puzzle crossings (destination pads): B, A, B, B, A give s = 1, 2, 3, 4, 5 and display masks 0x4, 0x200, 0x400, 0x20 and 0x1000. At s = 5, a crossing to A gives s = 4 (with a teleport); a crossing to B gives no teleport. At s = 0, a crossing to A gives no teleport; a crossing to B gives s = 1.
+- Puzzle spin: placed object 2 at 22 degrees per second turns 0.3667 degrees per tick.
+- Puzzle character shift (M = 24.155): with dy = +1, an entry at y = 24.0 moves to 25.0, while y = 24.2 and y = M do not move; with dy = −1, y = 24.2 moves to 23.2, while y = 24.0 and y = M do not move. The per-tick accumulator does not shift characters.
+
+Dormant +0x29F0 pool (section 15.1, synthetic):
+
+- Separation: r_s = 1 at (0, 0, 0) and r_o = 3 at (2, 0, 0): self moves to (−1.5, 0, 0) and the other to (2.5, 0, 0).
+- Drift: p = (0, 5, 0), p_prev = (0, 5, −0.1), draws i = 6 and j = 7: p becomes (0.0018, 5.005, 0.1011).
+
+Trigger pass (Behavior, Trigger pass; values from the disc where a pack is named):
+
+- Pack 1432, rectangle of index 0 (kind 7, flags 0x0100, static): the selected hero stands in it on ticks 100 to 104 and is outside from tick 105. Fires on ticks 100 to 104 with object 1, shot word 0, last argument -1, attack word = the hero's hit-window word on that tick. State after each tick's script step: 1, 2, 2, 2, 2, then 2 (tick 105), 3 (106), 0 (107).
+- The same rectangle, the hero not touching it, a hero shot inside it on ticks 200 and 201, record idle before: tick 200 writes object 0, shot word 1, state 1, stamp 200; tick 201 writes nothing (state not 0, object 0, last argument -1); state 1 after tick 201, 3 after tick 202, 0 after tick 203.
+- Pack 1174 floor tile, index 36 (kind 4 box, flags 0x0120, moving test): the hero walking through it fires nothing; a hero shot fires it (object 0, shot word 1); a world projectile fires it only while the act-1 trigger map holds 36.
+- Petpet inside a cylinder with flags 0x0008: the handler runs and the fire step refuses it; no record change and no callback. The same petpet inside a book station (flags 0x0040, book value 12) sets the pending book word to 12.
+- Region character (mode 1) inside a sphere with flags 0x0008 that a cell lists in list A: nothing; that character never walks list A.
+- Movable block 3 inside a static kind-4 rectangle with flags 0x0100: fires with no actor, object 0, last argument 3 only while the selected hero's cell lists the rectangle; with the hero standing over a cell that does not list it, no fire.
+- The selected hero over a kind-8 record (flags 0x0004): kind-1 handler, no fire, no push.
+- A volume with gate mask 0x0002 while the world's gate word is 0x0004: skipped on the cell list A walk; the same volume is still fired by a hero shot (the shot pass has no gate-mask test).
+- Hero holding a record (object 1, state 2), an NPC firing through CollideEntityWithTriggers on the same tick: the record keeps object 1 and the hero's stamp; the callback, if its thread is free, sees object 1.
+- Tor in his hit window (event bit 0x01 on the current frame) with his body inside a sphere of flags 0x0008: attack word 1 on those ticks and 0 on the others; his blade inside a volume that his body does not touch fires nothing.
+- Door callback lookup: pack 706 in T is current and the hero confirms door 0. The callback registered by 706 for door number 0 starts; its enter call into 984 is refused and nothing loads. If E were current at that moment, the door step would look in E's table at number 0 instead, not in 706's.
+
+## Open questions
+
+Numbers of removed questions are not reused.
+
+1. Resource 527. Resolved: it is never read, so there is no parser; its directions are travel directions and the fourth value of each colour line is the strength (section 3; SPEC-0046). [High for "never read"; Medium-High for the field roles]
+2. Reach of type 30 light sets. Resolved: they reach characters only, through the character light walk into the four light slots of the character's light context; world geometry is unlit (section 8; SPEC-0046). [High for the reach; Medium-High for the type roles]
+3. Falloff: only type 3 entries of a light set have a falloff (character walk, SPEC-0046); resource 527 is not read. Resolved for type 28: its +0x2C value is a camera focal length, not a light radius (section 1).
+4. **Resolved: type-39 and character-region effect IDs.** The 116 distinct IDs stored in type-39 placed-effect records all resolve to definitions in resource 9; none is missing. The 76 distinct IDs in character-region effect lists also all resolve there; none is missing (SPEC-0034 sections 2.7, 2.9 and 6; High). Two values, 1416 and 1431, occur in both disc ID sets; the other 74 region-list IDs do not appear in the placed-record set. Both fields contain effect-definition IDs. Script `StartEffect` and `StopEffect` arguments are a separate domain: they select a placed-effect slot in the active world, whose record supplies the definition ID (SPEC-0034 section 6; SPEC-0030 rows 5 and 6). Thus a script argument must not be counted as a definition ID without resolving its slot to a record.
+5. Resolved: type 39 +0x44 is the placed effect's zone number, 0 to 59 on disc (not a group); each pass an active record whose zone is not visible is stopped, otherwise it is updated (sections 4 and 9). [High]
+6. Answered: see SPEC-0052 and SPEC-0027 (type 28 records are the camera tracks; section 1).
+7. Type 30 entries of arrays B and C: their colour and strength are stored, but no consumer of the colour was found. Only the character walk reads these entries (SPEC-0046).
+8. Type 29 part bytes from +0x44 to +0x5F (section 7).
+9. Resolved: 650 objects have a model-set pointer, all of type 5; 642 have parts and 8 have a set but no parts. The object tables also hold 29 zero entries (section 7). [High]
+10. Type 29 draw gate. Resolved: the gate byte is never 0 in play (every write stores 1), so an object draws unless its state is 3 or 4. Placed objects of the first list have no broken state and are not breakable; the breakables are the second-list entries (SPEC-0048) (section 10). High.
+11. The 0x70-byte records' class selector beyond 500 and 501 (section 6).
+12. Type 40: the 0x60 bytes between the 21 fixed records and the 0x594 end of the fixed block.
+13. Type 41 render scalar and post-pass mode. Resolved: the scalar is the maximum depth-buffer value of the view-screen mapping, not a draw distance; the post pass is in mode 3 in every area, so vector A is never shown (section 11). High for the mode, Medium-High for the scalar.
+14. **Answered in part: Type 1000 runtime reads.** The loader uses the count at +0x0C and records from +0x10; the known line-display path reads colour bytes +0x08 to +0x0A and ignores +0x0B. Header words +0x04/+0x08 and the fourth entry byte have no established authoring meaning, and no other runtime consumer is known. High for the observed loader/display reads; Medium for the bounded no-consumer conclusion.
+16. Whether the code constants used in section 10 (50.0 radius, −200.0 cull, 2⁻⁸ colour scale) are located in the boot program's data; they have only been taken from the code path.
+17. Resolved for counted primitive arrays: nonempty lists follow spheres, cones, cylinders, kind-4 rectangles, kind-7 rectangles in pointer order in all 189 chunks, omitting empty lists. Auxiliary arrays interleave variably; no general total order is established (6.6).
+18. Answered: see SPEC-0018 (sphere records, section 6.2, are not tested as primitives by the contact pass).
+19. Cone records: count matches (83 in 7 packs). The first extent is the height H (positive in all 83). The cone routine of SPEC-0018 uses the record; the weapon-contact pass does not reach it, the cell list walks do (open question 76).
+20. **Resolved in part.** The rectangle's +0x30 point is the runtime low-corner origin: the collision test projects points relative to it and compares against 0 through the stored in-plane extents, while the inspected type-11 pointer-relocation routine does not transform or recenter the geometry. This resolves runtime use, not editor or authored intent. The meanings of the first 16 bytes of the runtime primitive header remain open; the inspected pointer-relocation routine and rectangle containment test establish no use for them. (section 6). [High for runtime origin; open for header bytes and authoring meaning]
+21. Resolved: the static kind-4/7 rectangle test treats the vector at +0x40 as the plane normal; +0x50 and +0x60 are the in-plane axes, paired with extents +0x28 and +0x24. This records runtime field use only; it does not assign an editor or authored axis name. (section 6.1 and section 13). [High]
+22. Resolved: the fourth-list 0x50-byte records are the kind-8 ambient sound loops and adventure zones of SPEC-0031 (section 6.5). [High]
+24. Resolved for the kind-3 contact routine: the signed full length is used directly. It shifts the tested cylinder centre from the stored base by (H/2) × axis, and the overlap test retains signed half-lengths; it does not convert negative H to |H| or clamp it. Resource 1394 has H = −14.47, so its computed centre lies 7.235 units opposite its stored axis from the base. Whether that record reaches this contact path during play remains open. The distinct blade-recoil branch is tracked in open question 31. [High for routine and record arithmetic; reach open]
+25. Which object list holds placed objects (SPEC-0046 open question 1), and whether the draw gate of section 10 and the list submit path of SPEC-0046 are the same draw. **[Low]**
+26. Whether any placed object uses its own draw distance from the designer properties (SPEC-0046 open question 12). **[Low]**
+30. Kind 1 test. Resolved: kind 1 is a sphere (centre +0x30, radius +0x3C) tested against the three edges of the actor's contact triangle, boundary included (Behavior, Trigger volumes; High for the radius field and the test, Medium for the point sources).
+31. **Resolved in part — Kind-3 blade-recoil test.** The hook uses a fixed-radius 0.5 test body whose full length is the hero contact-radius getter × 0.25. It passes the world cylinder's own radius and signed full length; its test centre is base + (H/2) × axis. A zero derived motion offset selects static cylinder overlap; a non-zero offset selects the moving-cylinder helper. No route-frequency claim follows from this branch test. The static helper retains signed half-lengths. The moving helper also uses signed H in its projected half-extent: H × |axis alignment| × 0.5 is not made absolute or clamped, so negative H reduces or reverses that projection allowance. Later edge checks still determine the final hit. [High for inputs and projected gate; Medium for the derived motion test; final negative-H hit cases open]
+32. Kinds 4 and 7 (rectangle). **Resolved in part:** runtime selects the static test when the float at +0x2C is zero or negative, and the moving test only when it is strictly positive. The stored layout also places this value among the three extent words, so its design-time meaning is not universal; negative kind-4 values on disc select the static branch. The exact three static-test points and their radius-scaled offset, and the five moving sub-volume fractions, remain open. Margins are documented in Behavior, Trigger volumes. [High for branch threshold; Low for designer intent.]
+33. Resolved: the first gate is the script breakable hook keyed by the script index +0x58 (Behavior, Apply on a hit, step 1). It is not a latch: a registered callback takes every hit, and it is started only when it is not already running. [High]
+34. Resolved: the byte at +0x5E is the element class of the breakable, compared directly with the attacker's Mote kind (Behavior, Apply on a hit, step 2); there is no side-code map. Its disc values are counted in SPEC-0048. [High]
+35. Press variant. Resolved: it is Tor's blade recoil; the mode byte maps to a recoil material and the material to the recoil cue (Behavior, Blade recoil; High).
+36. Volume flag bits other than bit 0 that section 13 does not cover.
+37. The names of the two hero words of the recoil busy gate (Medium; Behavior, Blade recoil).
+38. Answered: see Behavior, Script trigger fire by flag bit and Trigger pass. A firing volume supplies its +0x1C trigger index; grid-cell volumes look up the world's trigger table, while an inline placed-object volume uses that object's trigger list (with the documented shot-path exception).
+39. Resolved: the 0.25 is the piece push that the break effect hands to each piece of the broken object (SPEC-0048); the actor does not move. Whether the push is a speed or a distance for the pieces is open in SPEC-0048.
+41. **Owner primitive lists at run time** (section 6.6): which runtime list holds each record kind (kind-4 rectangle, kind-7 rectangle, sphere, cone, cylinder and the 0x24-byte sub-list), and so how the six-list walk maps to the header counts in section 6. The order of the walk is as stated; the mapping is Medium-Low.
+42. **Type 39 owner.** Partly resolved. The walk-time binding and the per-frame update are in SPEC-0034 (effects). SPEC-0028 owns the record layout. Owner of the run-time behaviour: SPEC-0034.
+43. Answered: see SPEC-0018 (type 21 is the navigation mesh chunk).
+45. **Crossing solver caller.** No direct caller was found for the solver in section "Contact-time crossing solver". Its caller and the meaning of its output points (and whether its in-plane axes are the plane's own) are open. [Medium-Low]
+46. **Crossing solver and SPEC-0018 sweep.** Whether a sweep rule of SPEC-0018 uses the solver, and whether the two agree on the segment rule. Not established.
+47. **Crossing solver segment scaling.** A factor of 0.5 on the segment parameter was seen in one reading of the solver and is not established. The behavior above does not apply it. Establish this before the solver is implemented.
+48. **Crossing solver in-plane axes.** Which axes the solver's plane uses, and whether the circle test uses the plane's own in-plane extents. Open.
+49. **Confidence of types 40 and 41.** The loader dispatch is High. Type 40: load-time steps Medium; list-entry fields and kinds High (section 11); the fixed-record block Low. Type 41: load-time steps High, field roles Medium-High, the render scalar's meaning Medium-High (section 11).
+53. Answered: see SPEC-0018 (no proximity carry list; the walk is the placed-object list).
+54. Resolved: nothing is carried by that walk. The character or projectile is mapped into the object's rest frame, tested against the object's inline primitives, and mapped back (character push) or restored (projectile) (SPEC-0018).
+55. Answered: see SPEC-0018 (riding is the ground attach carry; the radius walk only pushes).
+57. Resolved: the two data words of the six-slot look-ahead are 0x2EB340 = 0.0 (the scale along the bush's up axis) and 0x2EB344 = 1.5 (the margin) (Behavior, bush shot test; SPEC-0060). [High]
+58. Resolved: the hit handler is the bush cut and drop of the foliage patches (SPEC-0060, Bushes and Bush drops). [High]
+59. **Resolved: no.** The six 0x2C0-stride auxiliary records are separate from Roberta's six shot slots, which the bush test reads from the per-hero array at +0x10D0 with stride 0xA0 (Behavior, Six-slot look-ahead; SPEC-0036, Hero shot slots). The auxiliary records' purpose remains unknown. [High for separation; Low for their role]
+60. **Object accessor fields.** The object type that holds the fields of Layout 14 (offsets 0x00 to 0x94, 0x5C to 0x6C, and 0xC9C to 0xCAC), and their meanings. [Open]
+61. **Type-code dispatch in the object record.** A routine stores a value and dispatches on type codes 1 to 5 to five handlers. The handlers and the owner of the dispatch are not established. [Low]
+62. **Vector test on an object.** A routine forms a vector from a constant and object fields and calls a test; it returns a nonzero result. Its inputs and the test are not established. [Low]
+63. Answered: see SPEC-0018 (the character versus moving placed objects rule; not a riding rule).
+64. Resolved: the radius at +0xBC is the setup radius max(50.0, |size.x|, |size.y|, |size.z|) of section 7.1.
+65. Resolved: +0x68 of the pack 1299 puzzle record is the midpoint height M = 24.155 of the two pads; characters above or below it are moved with the accumulator (Behavior, Pack 1299 looping-door puzzle).
+66. Resolved: state 6 cannot be reached from play; at state 5 a crossing to pad B is not teleported (Behavior).
+67. Answered: see Behavior, Cut-reed fall, and SPEC-0060 (the fall of a cut reed piece, not a mover).
+68. Resolved: the first state ends when the record is more than 0.5 from its anchor, so the record leaves its anchor (Behavior, Cut-reed fall).
+69. Answered: see SPEC-0034 (the keyed walk is the effect trail-strip renderer).
+70. The six-state, three-state and keyed routines. Resolved: they are the pack 1299 looping-door puzzle, the cut-reed fall (owner SPEC-0060, High) and the trail-strip renderer (SPEC-0034); moving platforms and lifts are the animated placed objects of section 7.1.
+71. **Pool table.** The 0x400-entry table (count 0x32) and its entries are not established; its owner in the script manager is open. The seven pools and the scene list are the script callback tables (section 15).
+72. **Scene sub-lists.** The entry rule used when a sub-list is released (section 15).
+73. **Per-record update.** The update that runs over pool A after its release pass is not established. Whether it changes the state words that the release rule tests is open.
+74. Resolved: the pools are the script manager's callback tables: A triggers, B breakables, C teleport planes, D entity proximity, E 743 game flags, F 64 level flags, G 10 item ask-about callbacks (section 15; owner SPEC-0030). [Medium-High]
+75. **Stored scene id.** Whether the value at +0x6A, written when the UI flag is set, is ever read for any purpose other than the write back to the scene id field, is not established.
+76. **Volume kind 2 and the cone routine.** Resolved: the weapon-contact pass never fires kind 2; its test reports no hit. The cell list walks, the shot pass and the projectile step route kind 2 to handlers that fire with bit 3; all 83 cones have flags 0x0000, so none fires (High).
+77. Resolved for runtime behavior (section 6.1): negative rectangle extents remain signed in box contact and narrow the strict containment interval; they are not converted to positive sizes. The vertical field also retains its 0.1 top offset and optional top growth. The authoring intent of negative values remains unknown. Only kind-4 records have negative extents (3, 59 and 70 records); no kind-7 record does. [High for runtime use; open for design intent]
+78. **Kind 1 shape (section 13).** Resolved for the weapon-contact pass and the blade recoil: kind 1 is a sphere (centre +0x30, radius +0x3C) tested against the actor's contact-triangle edges (Behavior, Trigger volumes; High). The plane test of SPEC-0018 belongs to a different consumer (character contact), so each reading stands for its own callers.
+80. Answered: see SPEC-0060 and section 16 (type 16 records are foliage patches, not trigger volumes).
+82. **Class predicate.** Resolved: on the cell list B walk the owner's class predicate is the hero's landing break (it breaks the object and skips it) and passes every object for other classes; the fire step refuses petpets (Behavior, Trigger pass). High.
+83. **Trigger pass for non-hero actors.** Resolved: region characters run the trigger step in mode 1 (cell list B only), so they never reach a type 11 volume or a book station; the petpet walks cell list A, so it can set the pending book word, but its script fires are refused (Behavior, Trigger pass). High.
+84. **Cylinder flags 0x0010 (224 records), 0x0011 (256), 0x0020 (33), 0x0021 (192) and 0x0031 (1).** These cylinders are not save points (save points are region checkpoint records, section 13). Bit 1 is clear in all of them, so they do not fall under the bit-1 stop. Resolved: in character collision bit 4 makes a cylinder solid and bit 5 removes it (Cylinder flags in character collision, section 13). High.
+86. **Rectangle lists at load.** Resolved: the type-11 lists are already part of the loaded type-11 payload; the level loader stores the payload pointer and relocates its list pointers, without allocating replacement primitive arrays. The kind-7 rectangle list remains at +0x3C with count +0x14, and kind-4 remains at +0x40 with count +0x18. The later world-activation builder is conditional on a non-null grid and makes separate pad, door and grab-door products from qualifying kind-7 records; those products are not the collision-volume lists. [High for load-time pointer relocation, list/count mapping and distinction from activation products; downstream consumers may build their own derived lists]
+87. **Kind 1 entry records at +0x4C.** The kind 1 test reads a radius from volume +0x34 (open question 30); in pack 1432 the first entry-list record (a kind-1 header and a sphere-like body) has three equal extents of 0.625 and centre (0.052, 273.838, -265.063). Which value the kind 1 test takes from it is not established. Entry records have flags 0x0020 or 0x0021, so none fires a script trigger (kind 1 needs bit 3).
+89. **Hero per-tick pass input.** Resolved: the selected hero's trigger step tests cell list A (type 11 volumes) and cell list B (trigger objects) of the grid cell under its feet point, plus the inline volumes of animated placed objects in reach; a volume no cell lists can fire only through a shot or a movable block (Behavior, Trigger pass). High.
+92. Resolved: **Door refusal in pack 706.** The door step finds a door's callback in the current world's teleport table by the touched door's number, so the callback of a T door runs only while T is current. 706's door 0 callback therefore always makes its enter call into 984 while T is current, and the call is refused: the door never works, and 984 is entered from exterior 956 (SPEC-0006, Kind refusals). (High)
+93. **Object value on the hero per-tick pass.** Resolved: every hero body contact, of every kind, fires through the hero's trigger-hit method with object 1; the pass earlier called the hero per-tick volume pass is the hero shot pass, which fires with object 0 and shot word +0x20 = 1 (section 13). High.
+94. **World character list at +0x58E8.** Resolved in part: on a pad crossing, the puzzle walks every non-null entry of the current world's character list, with no hero, boss or class filter. It moves entries below M when dy > 0, or above M when dy < 0; the comparison is strict. The crossing-time adjustment uses dy, while the per-tick accumulator offsets placed objects only. Exact runtime membership/count for pack 1299 remains open. [High for the walk and movement rule; Medium-Low for exact membership]
+95. Resolved: the pack 1299 puzzle step runs after the selected hero's motion-record tick. It adds the selected hero's current vertical position minus the position saved at the start of that motion-record tick to the accumulator. Ordering relative to other characters' motion-record ticks is not established. [High for the selected hero order and displacement source]
+96. **Reach of scripted moving objects.** 108 moving placed objects with height patches, in 32 packs, are named by a fixed PlayAnim or LoopAnim index in their pack's script. Resolved: 31 of the 32 packs (107 objects) can be entered; only 1077 cannot (section 7.1). [Medium-High; story-flag gates and dormant script routines are not counted]
+
+

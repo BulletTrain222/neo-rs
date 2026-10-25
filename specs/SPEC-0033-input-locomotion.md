@@ -1,0 +1,2111 @@
+# SPEC-0033: Controller input, hero locomotion and hero height follow
+
+- Answers: proactive (none requested); also R-0007 (input sampling detail)
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). The clean side should check the fingerprint before interpreting the tuning words in the Where section.
+- Confidence: per section. Stick gesture machine (Behavior 52): High. Jump and air states (Behavior 50): High for the chooser, the launch values, the gravity gains and thresholds and the three landings; Medium for some phase gates; High for the flight curve, the air steering and the walk-off and long-fall curves. Traversal states (Behavior 51): per state, Medium to High as marked. Behaviors 37 to 48: edge acceptance gates (High for all gates, Medium for their meaning); Behavior 38 is a pointer to the edge guard of SPEC-0040 (High); stop test at 0.1 (Low-Medium); probe radius 0.75 and slide (Medium-Low); Behavior 41 is a pointer to SPEC-0029 (High); animation chooser for codes 0xA3 to 0xA6 (Medium-High for the ranges, High for the effect-index and clip mapping; Low for the weighted-call rationale); push of actors in a radius (Low); exit pattern of states 21, 23 and 30 (High for the writes and the check; Medium for meanings); stick blend scalar (Medium for the structure, Low for the byte conversion); random timer offset (High for the arithmetic); motion segment clamps (High for the clamps; Medium for the time constant); hash-based draw (Medium-High for the formula, with a test vector). Rumble (Behavior 1C): High for the presets, the request and per-pass arithmetic and the sources; Medium for the motor meaning. Behavior 49, ledge-drop edge test: High for the gates, their values and the drop rule; Medium for the edge offer; High for the order of the wall-contact hand-offs and the states they request, Medium for their meanings. Motion-record step offsets and order (Behavior 5.2): High. Pad snapshot, raw packet byte order, the logical button map and the physical names: High. Controller map (Layout), button-chain busy argument, latch and pass order: High unless a row says otherwise. Stick dead zone and scale 1/87.5: High. Hero state routes (which state number has a routine, and the busy list): High for the mapping, Medium for the names. Walk, turn and reverse animation choices: Medium for the branch shape, Low-Medium for the codes; High that path A never runs. Stance and grounded idle (Behavior 4A.1): Medium for the per-state requests, High for the landing gate. Block push and pull (state 18, Behavior 4A.2): High. State-29 door hold (Behavior 4B; never entered in play): Medium for the body, High for the reachability. Shield guard (state 20, Behavior 4A.3): Medium. Scripted walks (states 50 and 52, Behaviors 4A.4 and 4A.5): High. Death (state 16, Behavior 4A.6): High for the clips; the rule is in SPEC-0055. Walk-off fall (Behavior 9A): High. Long fall (state 48, Behavior 9B): High. Hero idle picker (Behavior 4A.1): High. States 26 and 29 being unreachable in play (Behavior 51): High. Speed tiers (Behavior 5.1): High. Speed value (stick length over 87.5, capped at 1.0): High. Ground speed from clip root motion (Behavior 5.2 and 5.3): High for the chain and the data, Medium-High for the one-tick lag. Status speed factors (Behavior 5.4): High for the values and the moving and attacking gates. Turn while moving (floor 0.95, at most 18.19 degrees per tick): High. Eased turn at a speed value of 0.01 or less (0.995 floor, about 5.7 degrees per tick): High for the rule, Medium for the turn-step interpretation. Facing rules by state (Behavior 2): Medium-High. Hang from a grab line, slide and leap (state 28): High for the grab lines on disc, the slide, the line end, the let-go, the candidate gates, the launch, the flight and the landing; Medium-High for the entry reach along the line (High for its two causes); two exits (to state 48 and to state 7) and a fixed test order (High). A found target never exits to state 7 (High). Writers of states 7, 19, 33, 59 and 60 (Behavior 3A): High. Cooldown after the line attach, the let-go and the states 59 and 60 actions (60 ticks): High. Respawn reset of the cooldown and the leap fields (Behavior 3A): High. Ladder grab test (Behavior 22) and climb-panel grabs (Behavior 22A): High. Bounce pad (state 56): High for the numbers and for the single writer (the air landing phase on a ground record of kind 17 or 18); Medium-High for the meaning. Grab-point hang entry (Behavior 9): High for the state set, the order of checks and the line gate; Medium-High for the reach window. State-13 summary (Behavior 3C): High for the dispatch by hero variant and for the exit to state 20; Medium-High for the sub-state tables; Low for meanings. State-21 sub-mode dispatch map (Behavior 3B): High for the map; Medium-High for sub-modes 2, 5 and 13 to 16, High for sub-modes 3 and 17 (Behavior 51, state 21); Low for the meanings of the other sub-routines. Strafe jumps (states 43 to 46, Behaviors 11 and 50): Medium-High; High for their flight. Camera-relative direction: High for the structure. Displacement from root motion: High. Hero height follow (Behavior 7): High for the flag branch and tick order; Medium-High for the structure; Medium for the constants; High for the accepted predicate states and Medium-High for their interpretation as jump exceptions. Hero motion-record travel (Behavior 8): High for root-step application, basis, projection and timing; shared order in SPEC-0040 Behavior 14A. Ladder (state 41, Behavior 13): High. Landing test (Behavior 14): Medium. Climb-onto-block fit test (Behavior 15): High; block face finder (Behavior 15A): Medium-High. Scripted jump onto a box (Behavior 16; never run): High. Action start gate and jump-action helpers (Behavior 17): Medium. Miamouse carry sub-states (state 57, Behavior 18): High. Target pick (Behavior 19, the state-21 actor pick): High for the structure, the writes and the false return; Medium for the candidate test (a helper is not described). Air and landing states (Behavior 20; not a hero routine): Medium-High for the states, partly described. Grab cooldown (Behavior 20): High. Sidle (state 23) never entered in play: High. Homing approach (Behavior 21): Medium for the routine; its owner is open. Data words in the Where section: High for the values. Run-time words are not on disc and are stated as such. Controls (Behavior 1A): High for the bit values, the enable and run bits and the gate order; Medium for what each action means; High for the quick-item panel step and its rows (rule 7); Medium-Low or Low where the row says so. Smaller rules (Behaviors 23 to 36): Medium for the glide, clamp, hold, gate, target-search and queue rules (Behaviors 23, 24, 30, 34); Low for the integer step (Behavior 25) and the meanings in Behavior 35; Medium-Low for Behaviors 26 to 29 and 31 to 33; the button-sequence check (Behavior 36): High for the order and the edge interpretation, Medium-High for the second-pad detail and the watch-screen entry, Medium for the interpretation that the watch check uses the first pad as an original quirk.
+
+## Summary
+
+Once per game tick the hero reads the controller snapshot that the tick started with. The left stick is dead-zoned, scaled to the unit square and turned into a forward component and a side component. The length of that pair, capped at 1.0, is the hero's speed value. The pair normalised to unit length, turned into the camera's frame, is the stick direction.
+
+The hero's action state is one number. Each tick the hero runs the routine for that number, and states without a routine run a default. Locomotion uses two paths. When the control word's enable bit is set, the left-stick path picks turn-in-place, walk, run or reverse animation codes from the forward and side components. When the enable bit is clear, a speed tier is chosen from the speed value: stop, slow walk, walk or run (hero states 1 to 4), each with a play-rate factor (Behavior 5.1). The hero moves by the root motion of the clip it plays: each clip has a root step per key, and the play rate scales it (Behavior 5.2). At full tilt both heroes walk at 13.51 units per second and run (R1 held) at 19.28; the slow walk is about 5.0, and reverse and sidestep about 13.3 to 13.5 (Behavior 5.3). Partial tilt lowers the play rate and so the speed. A few states move the hero or its locomotion sub-object directly: the jump states (7 to 11 and 43 to 46) and the grab-point leap (state 28) carry their own velocities, and the bounce pad (state 56) moves its sub-object's height and adds a pending lift of 5.0.
+
+Cross is the jump button. A Cross press on walkable ground (ground normal with a vertical part of at least 0.82) starts a jump: state 7, 8, 9 or 10 by the stick magnitude (standing, slow, walk, run), and in strafe mode with the stick pushed a strafe jump (states 43 to 46). State 11 is the backward jump. The jump launches with a vertical velocity of 8.75 and a horizontal speed set per state, then runs rising, falling and descent phases with gravity gains of 0.3 and 0.35 (at gain 0.3 the vertical velocity falls by 0.32 per tick), peaks 3.20 units above take-off 24 ticks after the launch tick, and ends in a soft, moving or hard landing (Behavior 50). In the air the stick steers the horizontal velocity (Behavior 50, Air steering). Walking off a ledge enters the same air routine in a falling phase (Behavior 9A). Climbing, hanging from ledges and block edges, climbing onto blocks, the rope gun, pushing blocks and the other traversal states are in Behavior 51 (the sidle, state 23, is never entered in play); the ladder is Behavior 13. Grab points are slide lines: a jump into one hangs the hero 3.25 + r below it and slides it along the line at 0.5 units per tick until the line ends (state 28). From a line the hero can leap sideways to a parallel line (Cross held with the side stick) at a vertical velocity of 0.4 units per tick with a loss of 0.02 per tick, closing the side gap in 40 ticks; the leap peaks 4.2 units above launch at tick 20 (Behavior 9). The disc has 47 such lines in 18 packs, 13 of them on the main-story route. A bounce pad (state 56) dips and rises about 0.4 and 0.26 units and then adds a 5.0 lift (Behavior 10). No swim rule is known in the locomotion logic. Gravity g = 32.0 is in the physics block (Where it lives). The motion record applies it every tick with the gain G set by the air states: vy = vy - 32 G / 30, then y = y + vy / 30 (SPEC-0040, Behavior 14A), equal to 128 G units per second squared. The leap's loss of 0.02 per tick (Behavior 9) is the leap's own constant. A scripted jump onto a box (Behavior 16) uses the physics gravity but is never run. Falls by script (state 48) change no health (Behavior 9B).
+
+Turning toward the stick direction is limited per tick. The facing is rotated toward the stick direction by an angle whose cosine is a value c. When the locomotion moving flag is set and the speed value is above 0.01, c is at least 0.95, so the turn is at most 18.19 degrees per tick. At a speed value of 0.01 or less an eased rule with a floor of 0.995 applies (at most about 5.7 degrees per tick at 60 ticks per second); it uses a run-time tick-length word (1/60 s, written at start-up, not stored in the boot image). While the stick points more than 90 degrees away from the facing, the hero turns in place and does not move (Behavior 2, Behavior 5.5).
+
+In the hero action path, the Square press edge is interaction and the traversal prompts (and sneak when there is no target), R2 or Circle is attack, Cross is jump, L1 is the shield guard, L2 holds strafe (walk and turn), and Triangle is used only by the quick-item panel (Behavior 1A). The bounce pad has no button: landing on a ground record of kind 17 or 18 enters it (Behavior 10). The grab-point leap is Cross held with the side stick while the hero hangs from a grab point (Behavior 9). A left-stick gesture machine (a back-then-forward flick, a clockwise turn or a counter-clockwise turn) sets a short-lived mode that makes the next attack press start a gesture variant (Behavior 52).
+
+The hero's world height is the motion record's position: it is integrated from the record velocity (SPEC-0040, Behavior 14A, items 5 to 7). The ground probe measures the gap to the ground, and the ground constraint puts the hero on the ground when the next step would take it more than 0.1 below it. The displayed height follows the world height with the lagged catch-up of Behavior 7: a rise waits 120 ticks before the catch-up starts, and a drop of more than 0.5 units starts it at once.
+
+The shared motion-record update builds and applies a travel displacement before integrating velocity and forces (SPEC-0040, Behavior 14A). The hero's clip-root travel is specified in Behavior 5.2 and SPEC-0040, Behavior 14C. The detailed formula for the separate shared travel step remains open.
+
+Smaller rules in the same area (Behaviors 23 to 36): a block of five smoothed look channels that glide to targets over timers; a 15-tick hold counter; an integer step with a frame dither; two petpet regeneration gates (SPEC-0047); proximity and interaction candidate tests (3.0 units and 25.0); an animation-code choice by control kind (codes 170, 171 and 186 to 189); an input-code remap; a D-pad pressure virtual stick; target search parameters (20.0, 100.0, 0.5 and 90); a spawn 2.8 units ahead of the hero; a deferred command queue of 10 records; and a debug button-sequence check on the second pad that sets a session flag and, while the flag is set, opens the debug watch screen. Owners and meanings of several of these are open (Open questions).
+
+## Where it lives on the disc
+
+The tuning words sit in the boot program's data. The clean side reads them at runtime by virtual address (SPEC-0001 gives the fingerprint). "float" is an IEEE single and "int" a 32-bit integer. The values below are the boot data values.
+
+Stick, locomotion and action words:
+
+| Parameter | Address | Type | Value | Use |
+| --- | --- | --- | --- | --- |
+| Stick scale | 0x319524 | float | 87.5 | Divisor for each stick axis after the dead zone (Behavior 2) |
+| Block latch distance | 0x2DD56C | float | 0.25 | Distance to the grab spot within which the block grab latches (state 18, Behavior 4A.2) |
+| Block face gap | 0x2DD568 | float units | 2.0 | The gap from the hero to the block side must be below this for a block face to be found (Behavior 15A) |
+| Block face ratio | 0x2DD570 | float | 0.5 | The dominant share of the hero's offset from the block centre must be above this (Behavior 15A) |
+| Stick displacement scale | 0x2DD6C8 | float | 0.25 | Scale of the stick displacement in the state-13 stick steps (Behavior 3C) |
+| Block approach turn rate | 0x2DD58C | float | 0.25 | Turn rate while the hero walks to the grab spot of a block with its facing off by more than the 0.99 dot (state 18, Behavior 4A.2; Medium for the word) |
+| Head-look blend decrement | 0x2DD698 | float | 0.25 | Lowers the head-look blend when forward and look direction are less than 0.99 aligned (SPEC-0040, Behavior 20, item 7) |
+| Head-look vertical offsets | 0x2DD69C, 0x2DD6A0 | float | 4.0, -4.0 | Place the look point 4.0 units above or below the point 5.0 units ahead of the hero (SPEC-0040, Behavior 20, item 7) |
+| Walk, turn and action rate request | 0x2DD7D4 | float | 0.25 | Rate value sent with the strafe (walk and turn) and strafe-jump requests (Behavior 4, 11) |
+| Run re-entry hold | 0x2DD7D8 | float seconds | 0.5 | Times the 60 ticks of the frame-rate word: running may restart only 30 ticks after it ended (Behavior 5.1) |
+| Stop threshold | 0x2DD7DC | float | 0.1 | Speed value at or below which the tiers request a stop (Behavior 5.1) |
+| Smallest moving speed value | 0x2DD7E0 | float | 0.3 | A speed value above the stop threshold is raised to at least this (Behavior 5.1) |
+| Target search radius | 0x2DD7BC | float units | 20.0 | A leap target's side distance (along the hero's side axis) must be below this (Behavior 9) |
+| Line hang offset | 0x2DD7B8 | float units | -3.25 | The hanging hero is placed 3.25 plus the line radius below the line (Behavior 9) |
+| Hang reach cylinder | 0x2DD428, 0x2DD42C | float units | 1.5, 5.5 | Radius and height of the hero's upright cylinder in the hang entry probe (Behavior 9) |
+| Leap launch term | 0x2DD7C0 | float | 40.0 | Used in the launch velocity (Behavior 9) |
+| Leap gravity per tick | 0x2DD7C4 | float | 0.02 | Subtracted from the vertical velocity each airborne tick (Behavior 9) |
+| Leap falling threshold | 0x2DD7C8 | float | -0.25 | Falling request when the vertical velocity is below this (Behavior 9) |
+| Landing gap | 0x2DD80C | float units | 1.0 | Ground gap at or below which a falling jump enters its descent phase and lands, and at which Tor's plunge ends (Behavior 50). Also the grounded test of the long-fall landing (state 48, Behavior 9B) |
+| Plunge effect gap | 0x2DD810 | float units | 12.0 | Ground gap within which Tor's descending plunge plays its effect (Behavior 50) |
+| Rising gain switch | 0x2DD804 | float | 12.0 | While the vertical velocity of a jump is at least this, the rising gravity gain 0.35 applies (Behavior 50). The long fall uses the same switch for its rising gain (Behavior 9B) |
+| Final-descent velocity | 0x2DD808 | float | -7.0 | A falling jump whose vertical velocity is below this enters the descent phase (Behavior 50). In the long fall, the gain is 0.3 above this velocity and 0.35 below it (Behavior 9B) |
+| Gravity gains 0.35 | 0x2DD7F4, 0x2DD7FC | float | 0.35, 0.35 | Gravity gain of the descent phase (0x2DD7F4) and of the fast-rising phase (0x2DD7FC) of a jump (Behavior 50). 0x2DD7F4 is also the descent gain of the long fall (Behavior 9B) |
+| Long-fall mash speed | 0x2DD82C | float | 1.5 | Clip speed scale of the long-fall landing clip 137 while the player mashes buttons (Behavior 9B) |
+| Idle picker times | 0x2DD57C, 0x2DD580, 0x2DD584, 0x2DD588 | float seconds | 10.0, 12.0, 6.0, 10.0 | Bounds of the two idle timers: long-idle wait 10.0 to 12.0 s, fidget wait 6.0 to 10.0 s, each times the frame-rate word (60) to give ticks (Behavior 4A.1) |
+| Rising climb-up target offset | 0x2DD8B8 | float units | 1.1 | Subtracted from the selected edge height at the hero position when state 47 builds its approach target (Behavior 51) |`r`n| Climb-onto-block target offset | 0x2DD8C4 | float units | 1.2 | Subtracted from the selected block rectangle's vertical extent adjusted by the W lane of its second axis to build the state-58 approach target (Behavior 51) |`r`n| Climb-up approach distance | 0x2DD8BC | float units | 0.2 | Distance at which the rising climb-up of state 47 starts its climb clip (Behavior 51) |
+| Bounce lift | 0x2DD830 | float units | 5.0 | Pending lift added at the end of the bounce (Behavior 10) |
+| Bounce phase count | 0x2DD834 | int ticks | 5 | Counter value that ends the dip phase (Behavior 10) |
+| Bounce amount | 0x2DD838 | float units | 0.2 | Numerator of each dip and rise step (Behavior 10) |
+| Bounce steer scale | 0x2DD83C | float units | 5.0 | Scale of the stick steer added in bounce phase 3 (Behavior 10) |
+| Missing-target sentinel | 0x31E890 | float | 1.0e9 | Starting distance of the nearest-candidate search |
+| Game tick rate | 0x30C598 | float | 60.0 | Ticks per second, stored in the boot image (SPEC-0007). The run-time frame-rate word is a separate word (run-time table below) |
+| Second frame-rate row | 0x30C5A0 | float | 50.0 | Second row of the frame-rate table. The start-up writer selects one row; this spec uses 60 (Behavior 2) |
+
+Jump and air words (Behavior 50; boot data, High for the values):
+
+| Parameter | Address | Type | Value | Use |
+| --- | --- | --- | --- | --- |
+| Launch vertical velocity | 0x2DD7F0 | float | 8.75 | Vertical velocity added on the launch tick of a jump; also the cap of a boosted launch |
+| Jump horizontal speed, state 7 | 0x2DD818 | float | 0.0 | Standing jump |
+| Jump horizontal speed, state 8 | 0x2DD81C | float | 2.0 | Slow jump |
+| Jump horizontal speed, state 9 | 0x2DD820 | float | 5.0 | Walking jump |
+| Jump horizontal speed, state 10 | 0x2DD7F8 | float | 9.0 | Running jump. Also the air-steering cap: the stick adds speed only while the horizontal speed is below 9.0 (Behavior 50) |
+| Jump horizontal speed, state 11 | 0x2DD824 | float | -10.0 | Backward jump (along the facing, so backward) |
+| Falling gravity gain | 0x2DD800 | float | 0.3 | Gravity gain of the slow-rising and falling phases |
+| Hard-landing fall height | 0x2DD828 | float units | 3.0 | A landing after a fall of more than this is a hard landing. The fall height is the take-off height minus the hero's height at the landing decision, which is up to 1.0 above the ground (not the apex). No damage |
+| Soft-landing shake height | 0x2DD814 | float units | 4.0 | A soft landing after a fall of more than this would shake the camera. It never runs: any fall above 4.0 is already a hard landing |
+
+The other jump words (0.35 at 0x2DD7F4 and 0x2DD7FC, 12.0 at 0x2DD804, -7.0 at 0x2DD808, 1.0 at 0x2DD80C and 12.0 at 0x2DD810) are in the table above. The thresholds 0.3 and 0.6 of the jump chooser are fixed constants set in a run-time constant block, not on disc.
+
+Height and motion constants:
+
+| Parameter | Address | Type | Value | Use |
+| --- | --- | --- | --- | --- |
+| Height catch-up gain | 0x2DA4BC | float | 0.04 | Gain in the catch-up (Behavior 7) |
+
+Ladder words (used by Behavior 13, the ladder; boot data):
+
+| Address | Type | Value | Use |
+| --- | --- | --- | --- |
+| 0x2DD840 | float | 0.9 | Mount target distance out from the ladder face (Behavior 13) |
+| 0x2DD848 | float | 0.8 | Mount target position along the ladder's side axis (Behavior 13) |
+| 0x2DD850 | float | 0.5 | Climb-down floor: at this height or below, or with a ground gap below 0.5, the hero steps off (Behavior 13). Also the side threshold of the sidle (state 23, Behavior 51) |
+| 0x2DD854 | float | 0.99 | Clip progress gate of the rung steps (Behavior 13). The jump-action helpers use the same value as a fixed constant (Behavior 17). Also the action progress gate of the stance and stick routines (Behavior 4A) |
+| 0x2DD858 | float | -0.5 | Horizontal push, times the facing, of the jump off a ladder (Behavior 13) |
+| 0x2DD85C | float | 2.0 | Vertical lift of the jump off a ladder (Behavior 13) |
+| 0x2DD860 | float | 0.05 | Forward step of Roberta at the end of the climb off the top (Behavior 13) |
+
+Words read by the state-13 routine (Behavior 3C):
+
+| Address | Type | Value | Use |
+| --- | --- | --- | --- |
+| 0x2DD7AC | int | 2 | Integer argument of a helper call on the state-13 sub-state 13 path (SPEC-0036) |
+| 0x2DD7B0 | float | 0.8 | Rumble duration for Tor's attack sub-state 13 (SPEC-0036); not used by the rope-gun reel push |
+| 0x2DD7B4 | float | 0.6 | Argument of the same helper call (SPEC-0036) |
+
+Words that the locomotion logic reads but whose role is not established. Their values are boot data values; their use is not stated as a rule in this spec.
+
+| Address | Type | Value | Remark |
+| --- | --- | --- | --- |
+| 0x2DD7CC | float | 8.0 | Height-difference gate of the leap's candidate test (Behavior 9) |
+
+Words read by the stick gesture machine (Behavior 52):
+
+| Address | Type | Value | Use |
+| --- | --- | --- | --- |
+| 0x2DD7E4 | int | 15 | Flick hold, ticks (both heroes) |
+| 0x2DD7E8 | int | 25 | Tor's spin hold W, ticks |
+| 0x2DD7EC | int | 1 | Tor's counter-clockwise step count N |
+
+Words read by the smaller rules of Behaviors 23 to 36 (boot data words):
+
+| Address | Type | Value | Use |
+| --- | --- | --- | --- |
+| 0x2DD258 | float | 2.0 | Constant of the channel-block mode 3 and mode 4 writes (Behavior 23) |
+| 0x2DD25C | float | 0.2 | Same (Behavior 23) |
+| 0x2DD260 | float | 0.1 | Same (Behavior 23) |
+| 0x2DD264 | float | 1.0 | Same (Behavior 23) |
+| 0x2DD268 | float | 0.08 | Same (Behavior 23) |
+| 0x2DD574 | int | 15 | Limit of the push-into-face counter: once it reaches 15 the climb-onto-block fit test runs every tick, so the request for state 58 comes on the 16th consecutive tick at a face at the earliest (Behavior 15; state 58, Behavior 51) |
+| 0x2DD464 | float | 1.0 | Integer-step rate per second when the flag is clear (Behavior 25) |
+| 0x2DD478 | float | 2.0 | Integer-step rate per second when the flag is set (Behavior 25) |
+| 0x2DD8E4 | float | 1.0 | Factor of the petpet hit-point gate (Behavior 24; SPEC-0047) |
+| 0x2DD8E8 | float | 1.0 | Factor of the petpet magic gate (Behavior 24; SPEC-0047) |
+| 0x2DD6A8 | float units | 20.0 | Range of the target search (Behavior 30) |
+| 0x2DD6AC | float units | 100.0 | Range of the target search when the hero is in state 1 (Behavior 30) |
+| 0x2DD6B0, 0x2DD6B4 | float | 0.5, 0.5 | Angle parameter of the target search (Behavior 30); two words with the same value |
+| 0x2DD6B8 | int | 90 | Limit of the target search (Behavior 30) |
+| 0x2DD43C | float | 2.3 | Height threshold of a ground-record test in the motion-record pre-step of generic characters (SPEC-0040, Behavior 14E) |
+| 0x2DD430 | float | 0.2 | Lower bound of the vertical window of the ledge-drop test: the character is less than 0.2 below the edge (Behavior 49) |
+| 0x2DD434 | float | 3.0 | Upper bound of the same window: less than 3.0 above the edge (Behavior 49) |
+| 0x2EC9B8 | 2 × u64 | 0 and 0x9908B0DF | Constant matrix table of the game's random generator (MT19937, SPEC-0008 Random numbers); never written. It is not the generator's state, which is the run-time object at 0x39BE50 (SPEC-0008) |
+
+The word 0x2DD7BC (20.0, Behavior 9) bounds the side distance to a candidate grab line; the word 0x2DD6A8 (20.0, Behavior 30) is passed as the range limit for the hero target scan. They have the same value but feed different candidate filters. The following are fixed constants, not data words: 2 pi as 6.283186, the 0.4 clamp, 2.8, 0.82, 0.85, 0.75, 0.99, 3.0, 25.0, the 0.1 and 40.0 clamp limits of Behavior 23 (no data address), the 0.1 factor of Behavior 25, and the animation codes of Behavior 27.
+
+Physics block (High for the values). Six fields at data address 0x3A1A70, written once at start-up from fixed constants. The block is not stored in the file image, so the clean side takes these values from this spec, not from the disc:
+
+| Field | Value | Use |
+| --- | --- | --- |
+| +0x00 | 30.0 | Inverse of the time scale; not read |
+| +0x04 | 1/30 | Time scale k of the motion-record integrator: v += (F / W) k, p += v k (SPEC-0040, Behavior 14A) |
+| +0x08 | 0.0 | Not read |
+| +0x0C | 32.0 | Gravity g. In the air the hero's vertical velocity changes by 32 G / 30 per tick (G the gain), equal to 128 G units per second squared (SPEC-0040, Behavior 14A). Also read by the scripted box jump (Behavior 16) |
+| +0x10 | 80.0 | Not read (unused) |
+| +0x14 | 0.03 | Friction coefficient of the base motion-record class, not the hero (character records use 0.6; SPEC-0040, Behavior 14A) |
+
+Run-time words (not on disc). These addresses lie in the zero-filled part of the boot program's memory, outside the stored image. The game writes them at start-up or while it runs. The clean side takes their values from this spec, not from the disc.
+
+| Address | Written | Value | Use |
+| --- | --- | --- | --- |
+| 0x368FA0 | Start-up | 60 (frame-rate word; ticks per second, also an integer tick count) | Tick count for the cooldowns in this spec: after a grab-point search (Behavior 9), after the hang-to-state-7 exit (Behavior 9), and after the states 59 and 60 actions (Behavior 3A). Half of it (30 ticks) is the ladder re-grab cooldown after a jump off a ladder (Behavior 13). 60 ticks is one second. Also multiplies the run re-entry hold 0x2DD7D8 (Behavior 5.1). |
+| 0x368FA8 | Start-up | 1/60 s (tick-length word) | Time step of the per-second rates in the locomotion logic. Also the X of the turn limit (Behavior 2). |
+| 0x368FA4 | Run time | 30 / active frame rate (0.5 at 60 Hz) | The recovered direct reader uses it to divide the remaining-key count for the push clip in state 18; pull and side moves do not use it (Behavior 4A.2; SPEC-0007, Per-tick words). |
+| 0x368F98 | While the game runs (writer not identified) | Frame counter, counts ticks | Read by the integer-step dither (Behavior 25). The two gates of Behavior 24 do not read it |
+| 0x368F94 | While the game runs (writer not identified) | Not described | Scales a timed call in the motion-record pre-step of generic characters (SPEC-0040, Behavior 14E) |
+| 0x3932E0 | Start-up table walk (written once at boot; SPEC-0007) | Constant up vector (0, 1, 0, 0) | Used by the stop test and the blend routine (Behaviors 39 and 45) and by the Draik breath beam (SPEC-0029) |
+| 0x35C7B4 | Start-up (writer not identified) | A pair of basis vectors | Stick blend (Behavior 45) |
+
+The clean side takes the values 60 ticks per second and 1/60 s from SPEC-0007. The run-time words are a cross-check only.
+
+Fixed constants (not data words) are stated in Behavior: stick centre 127.5, dead zone 40, side threshold 30 (raw units), the walk and slow-walk split at 0.5, run bands at 0.66 and 0.33, speed clamp 1.0, the clip play-rate factor 0.5 (Behavior 5.2), the hero status speed factors 0.75 (slow) and 1.85 (speed) (Behavior 5.4), the turn floor 0.95 while moving (a constant of the hero class, the same for both heroes; Behavior 2), the hero run factor 1.0 (set in the hero record when the hero is created; no other writer is known; Behavior 5.1), and the leap and bounce step values written out in the Behavior sections. The height follow uses the constants 0.05, 0.1, 0.5, 3.5 and 120 (Behavior 7). The stance and stick routines use the constants 3.0 and -3.0 (walk-off ground gap and vertical velocity, Behavior 9A), 0.01 (walk-off motion length), 0.25 (stick threshold), 0.95 and 0.99 (progress and alignment gates), 0.5 and 0.1 (steering rates) and 1.5 (height test); these are fixed constants, not data words, and the Behavior sections say which is which. The door hold of Behavior 4B uses the constants 0.075, 0.5 and 1.5. The bounds 0.2 and 3.5 of the climb-onto-block fit test (Behavior 15) are fixed constants.
+
+The tick is 1/60 s (SPEC-0007). All counts below are ticks.
+
+## Layout
+
+### Controller snapshot (one per tick, per pad slot)
+
+These are logical fields the clean side must provide. They are not a file layout.
+
+| Field | Type | Meaning |
+| --- | --- | --- |
+| Button word (now) | u16 | One bit per button, 1 = pressed. This is the "held" word for hold queries (group 1, raw buttons). |
+| Pressed edges | u16 | Now AND NOT previous tick's word |
+| Released edges | u16 | Previous AND NOT now |
+| Group 2 words | 4 × u16 | Held2, previous held2, newly pressed2, newly released2: the same four words with the left-stick direction bits added (Controller map below) |
+| Stick X and Y, left and right | 4 × u8 | Raw stick bytes; dead-zone centre 127.5, neutral fill 127. Refreshed from the packet only in analog mode (Edge cases). |
+| Idle counter | i16 | Consecutive ticks with held2 = 0 and the right stick within 50 of 127 on both axes. Any held button, a left-stick byte below 32 or above 224 (it sets a direction bit in held2), or a right-stick axis outside that band, sets it to 0. A left stick inside 32 to 224 does not affect it. No reader of the counter is known (Medium). |
+| Control word | u16 | Per-pad control flags. Bit 0 is the locomotion enable bit (Behavior 4). Bit 3 is the run flag, the same bit as the R1 button in the logical word (Behavior 4). Bit 10 and combinations of logical button bits are read by the strafe jumps (Behavior 11). |
+
+Raw controller packet (High; the standard controller packet):
+
+- Byte 1, high nibble: pad type code (used by the pad mode logic).
+- Bytes 2 and 3: digital buttons. In the raw packet a cleared bit means pressed.
+- Bytes 4, 5, 6, 7: right stick X, right stick Y, left stick X, left stick Y.
+- Byte 2 bits 0 to 7 = Select, L3, R3, Start, Up, Right, Down, Left. Byte 3 bits 0 to 7 = L2, R2, L1, R1, Triangle, Circle, Cross, Square.
+- The logical button word is the bitwise NOT of (byte 2 × 256 + byte 3), so 1 = pressed. The table below gives each bit. The logical action masks below use the same bits.
+
+Logical button word bits (High):
+
+| Logical bit | Button | Raw source |
+| --- | --- | --- |
+| 0x0001 | L2 | byte 3, bit 0 |
+| 0x0002 | R2 | byte 3, bit 1 |
+| 0x0004 | L1 | byte 3, bit 2 |
+| 0x0008 | R1 | byte 3, bit 3 |
+| 0x0010 | Triangle | byte 3, bit 4 |
+| 0x0020 | Circle | byte 3, bit 5 |
+| 0x0040 | Cross | byte 3, bit 6 |
+| 0x0080 | Square | byte 3, bit 7 |
+| 0x0100 | Select | byte 2, bit 0 |
+| 0x0200 | L3 | byte 2, bit 1 |
+| 0x0400 | R3 | byte 2, bit 2 |
+| 0x0800 | Start | byte 2, bit 3 |
+| 0x1000 | Up | byte 2, bit 4 |
+| 0x2000 | Right | byte 2, bit 5 |
+| 0x4000 | Down | byte 2, bit 6 |
+| 0x8000 | Left | byte 2, bit 7 |
+
+From the held word the clean side derives: pressed edges (held now and not on the previous tick) and released edges (held on the previous tick and not now).
+
+- Stick bytes are refreshed from the packet only when the pad reports the analog 12-byte packet type. In other modes they are not refreshed, and no stick direction bits are added to group 2 (group 2 equals group 1; Edge cases).
+- Invert Left-Right complements the right stick X byte (the stored value becomes 255 minus the value). Invert Up-Down complements the right stick Y byte. The two options are independent. The left stick is never changed by either option (Behavior 2). Because the right stick drives the camera's yaw (X) and elevation (Y) (SPEC-0027), these two toggles are the game's only camera inversion settings.
+- Stick bytes inside the first pad's record (High for the byte mapping): right stick X at +0x12B, right stick Y at +0x127, left stick X at +0x123, left stick Y at +0x11F. Inversion applies to +0x12B (through the Left-Right flag) and +0x127 (through the Up-Down flag). The bytes at +0x123 and +0x11F are never complemented.
+- The two option flags sit in the first pad's record: +0x184 for Invert Left-Right and +0x180 for Invert Up-Down. The flags are written only for the first pad, so inversion applies to the first pad only.
+- Menu words: the menu layer reads the combined snapshot (Controller map below). Its held2 word (+0x898) is the OR of the controlling pads' held2 words (+0x158), and its newly-pressed2 word (+0x89C, the "rising-edge word") the OR of their newly-pressed2 words (+0x15C). Sliders act on held2. Toggles and the cycler act on newly pressed2, so one press is one step.
+- Slider direction: while Right is held the slider rises; while Left is held it falls. Right wins over Left: when both are held, only the rise applies (SPEC-0035).
+
+### Controller map (one table for every consumer)
+
+Confidence: High unless a row says otherwise. This section is the single source for button bits, words and readers; the other specs refer to it.
+
+Pad slots and decode:
+
+- The game opens two pad slots: controller port 1 (slot 0) and controller port 2 (slot 1). It asks the pad library for eight and supports two.
+- Each pass (once per game tick, before any update) each slot is read. Held word = NOT (packet byte 2 × 256 + packet byte 3), so a set bit means pressed. Byte 2 bits 0 to 7 are Select, L3, R3, Start, Up, Right, Down, Left; byte 3 bits 0 to 7 are L2, R2, L1, R1, Triangle, Circle, Cross, Square. So 0x0080 is Square. (The pad library's own little-endian word, in which 0x0080 would be Left, is not used.)
+- Per slot, two groups of four words. Group 1 (raw buttons): held, previous held, newly pressed = held AND NOT previous held, newly released = previous held AND NOT held. Group 2 (buttons plus stick directions): held2 = held OR the stick bits below, previous held2, newly pressed2 = held2 AND NOT previous held2, newly released2 = previous held2 AND NOT held2. "Previous" means the previous read of the same slot.
+- Stick bits (group 2 only, analog mode only): a left-stick Y byte below 32 adds Up (0x1000) and above 224 adds Down (0x4000); a left-stick X byte below 32 adds Left (0x8000) and above 224 adds Right (0x2000). Both thresholds are strict. The right stick adds nothing. Because held2 is level-based, a stick push gives one newly-pressed2 event when it crosses the threshold and no auto-repeat.
+- In any mode other than analog, group 2 equals group 1 (no stick bits) and the stick bytes are not refreshed.
+
+Logical bits (fixed; no remap option exists). The code column is the button code of the IsButtonPressed host call (SPEC-0030) and the index of the logical action table below:
+
+| Bit | Button | IsButtonPressed code |
+| --- | --- | --- |
+| 0x0001 | L2 | (part of 15) |
+| 0x0002 | R2 | 10 |
+| 0x0004 | L1 | 8 |
+| 0x0008 | R1 | 11 |
+| 0x0010 | Triangle | 1 |
+| 0x0020 | Circle | 2 |
+| 0x0040 | Cross | 3 |
+| 0x0080 | Square | 0 |
+| 0x0100 | Select | 5 |
+| 0x0200 | L3 | 6 |
+| 0x0400 | R3 | 9 |
+| 0x0800 | Start | 4 |
+| 0x1000 | D-pad Up (and left stick up in group 2) | (part of 13) |
+| 0x2000 | D-pad Right (and left stick right in group 2) | (part of 13) |
+| 0x4000 | D-pad Down (and left stick down in group 2) | (part of 13) |
+| 0x8000 | D-pad Left (and left stick left in group 2) | (part of 13) |
+| 0xFFFF, 0xF000, 0x00F0, 0x000F | any button, any D-pad direction, any face button, any shoulder button | 12, 13, 14, 15 |
+| none | code 7 | always false |
+
+IsButtonPressed (code, second, third): second = false tests the held word, second = true the newly-pressed word (the button went down this pass), both of pad slot 0's group 1 (not the combined snapshot). third = true always gives false, so a call with second = false and third = true is constant false. Code 7 always gives false. The call also gives false while either of the run-time game words 0x35C9C4 or 0x35C9A0 is nonzero.
+
+Combined snapshot (menu words). A fifth record, starting at input-object offset +0x740, holds the combination of the slots in the controlling set: each of its eight words is the OR of those slots' words, and each stick byte is the integer mean (truncated) of their bytes. The controlling set starts as {slot 0}, and every screen that sets it sets {slot 0}; if it were ever empty, the game would copy slot 0 and reset the set to {slot 0}. So in the shipped game the snapshot equals slot 0 (Medium-High for there being no other writer of the set). Front-end names, as input-object offsets: +0x890 held, +0x892 previous held, +0x894 newly pressed (the "second input word": raw buttons, no stick bits), +0x896 newly released, +0x898 held2, +0x89A previous held2, +0x89C newly pressed2 (the "rising-edge word", stick directions included), +0x89E newly released2. The pointer to the input object is the run-time word 0x368F50; slot records are 0x1C0 bytes each, slot 0's record at +0x40.
+
+Consumer map:
+
+| Consumer | Word | Buttons and meaning |
+| --- | --- | --- |
+| Hero button chain (Behavior 1A) | slot 0 group 1 held and newly pressed | as Behavior 1A |
+| Hero sticks, camera | slot 0 stick bytes | left stick = locomotion; right stick = camera (SPEC-0027) |
+| Quick-item panel and panel B | slot 0 group 1 newly pressed | D-pad selects or opens, Cross selects and uses, Circle selects without use, Triangle closes an open panel or uses the marker when both are closed (Behavior 1A, rule 7; SPEC-0021, SPEC-0023) |
+| Save point | slot 0 group 1 newly pressed | Square (0x0080), hero not busy (SPEC-0025) |
+| World "press Square" trigger | slot 0 newly pressed (IsButtonPressed code 0, second = true) | Square, with the Square prompt shown each tick (SPEC-0048) |
+| IsButtonPressed host call | slot 0: held (second = false) or newly pressed (second = true) | code table above (SPEC-0030) |
+| Dialogue box and reveal | snapshot +0x894 newly pressed, +0x890 held | Square = advance or finish the page; Circle = choice 1; Triangle = choice 0; Cross held = reveal five times faster (SPEC-0022) |
+| In-play openers | snapshot +0x89C | Start = item screen; Select = pause page (SPEC-0035) |
+| In-play shortcuts | snapshot +0x894 | D-pad Left = map, D-pad Right = journal (the stick does not open them) |
+| Hero switch chord | snapshot +0x894 and +0x890 | L1 + R1 (SPEC-0053 section 3.8 c) |
+| Map, journal, item-screen paging | snapshot +0x894 (map, journal) or +0x89C (item screen) | L2 and R2 page ring; Select closes the map; Start or Triangle close the item screen |
+| Menus, pickers, cursors, title | snapshot +0x89C | directions (stick or D-pad), Cross confirm, Triangle back |
+| Option sliders | snapshot +0x898 held2 | Right raises, Left lowers, every pass while held |
+| Pause page resume, start-point steps, credits, legal pages | snapshot +0x894 | Select resumes; any press steps; Cross |
+| Movie skip | snapshot +0x890 and +0x894 | Cross or Start (SPEC-0026) |
+| Continue page | snapshot +0x894 | Cross, after 120 passes |
+| Debug sequence | slot 1 newly pressed | Behavior 36 |
+| Debug watch screen | slot 0 group 2 | L3 and R3 (Behavior 36) |
+
+Pad slot 1 (controller port 2) is read only by debug paths: the button sequence of Behavior 36 and two debug hooks with no gameplay effect. It never controls a hero and never takes part in the menu snapshot.
+
+Sticks and centre:
+
+- Dead zone (hero locomotion and camera): v = r − 127.5. If |v| ≤ 40 the axis is 0; otherwise v − 40 (if positive) or v + 40 (if negative), a range of ±87.5. So bytes 88 to 167 are dead (Behavior 2).
+- Hero speed value = min(1, length of the two dead-zoned left-stick axes ÷ 87.5). Direction = the unit vector of the stick, applied in the camera basis (Behavior 2).
+- Neutral fill: 127 for every stick byte at power-on, while a pad is being set up, and after a disconnect. 127 is inside the dead zone. 127 is also the centre of the idle band and of the D-pad pressure mapping (Behavior 29); 127.5 is the dead-zone centre. Both values are right for their own paths.
+- Idle counter: see the snapshot table above (held2 includes the stick bits, so a left stick past 32 or 224 resets it).
+
+Pad modes:
+
+- When a pad reports an analog-capable (extended) controller, the game sets it to analog mode with the mode locked (the Analog button cannot switch it back), aligns the motors and, when the pad offers it, enters pressure mode. Only after this set-up completes are buttons and sticks read. (High for the decision structure; Medium for which controller identities count as extended.)
+- A pad that reports no extended controller is marked unsupported (internal mode 3): its button words are 0, and slot 0 counts as "not usable". In play, slot 0 not usable has the same effect as a Select press (the pause page opens) unless the game state forbids it, in which case the controller message box is shown (SPEC-0035). Internal mode 1 is a transient set-up mode.
+- Disconnect: the words are cleared, the sticks return to 127, and set-up runs again on reconnection.
+- If slot 0's four stick bytes all read 0, the hero's input step forces the set-up to run again on the next pass (Medium-High).
+- D-pad pressure is turned into a second, virtual left-stick pair (Behavior 29); no gameplay reader uses it (Medium). No gameplay path reads button pressures.
+
+### Logical action table (16 actions)
+
+Each action index maps to a 16-bit mask tested against the button word. The indices are the IsButtonPressed codes of the Controller map.
+
+| Index | Mask | Button | Known game role |
+| --- | --- | --- | --- |
+| 0 | 0x0080 | Square | Interaction, talk and the traversal prompts on its press edge (grab a block, sidle, statue and door (both never offered in play), feed a petpet, let go, stop climbing; Behavior 51); sneak when there is no target. The action is chosen from the hero's stance and whether a target is near (Medium) |
+| 1 | 0x0010 | Triangle | Quick-item panel: uses the current selection, or closes the panel when it is open (Behavior 1A) |
+| 2 | 0x0020 | Circle | Attack, held and on its press edge (same as R2; SPEC-0036) |
+| 3 | 0x0040 | Cross | Jump (press edge; Behavior 50), strafe jump in strafe mode (states 43 to 46), jump off a ladder (state 41), chained jump in a soft landing, quick-item use (Behavior 1A). Also the leap trigger while hanging from a grab point (state 28, Cross held with the side stick) |
+| 4 | 0x0800 | Start | No hero-side read; the menu layer uses it (SPEC-0035) |
+| 5 | 0x0100 | Select | No hero-side read; the menu layer uses it (SPEC-0035) |
+| 6 | 0x0200 | L3 | After the button chain: three menu or HUD helpers (Low; Behavior 1A) |
+| 7 | (special) | none | Not a button: its condition always returns 0, so code 7 is always false (Controller map) |
+| 8 | 0x0004 | L1 | Shield guard entry (state 20) and release (Behavior 1A) |
+| 9 | 0x0400 | R3 | No known hero-side read (Behavior 1A) |
+| 10 | 0x0002 | R2 | Attack, held and on its press edge (SPEC-0036) |
+| 11 | 0x0008 | R1 | Run flag for the locomotion path (Behavior 4, 5) |
+| 12 | 0xFFFF | Any button | Any-button test |
+| 13 | 0xF000 | Any D-pad direction | Not identified in this path |
+| 14 | 0x00F0 | Any face button | Not identified in this path |
+| 15 | 0x000F | Any shoulder button | Not identified in this path |
+
+Jump: Cross is the jump button (Behavior 50). The leap of state 28 is a hang-and-leap between grab points (Behavior 9), started by Cross held with the side stick while hanging, and the timed hop of state 56 is a bounce pad (Behavior 10), entered by landing on it. The attack is read from R2 or Circle (held level and press edge), and interaction from the Square press edge. Melee tap counting is a tap counter over four button slots whose masks are not identified (Behavior 6).
+
+### Hero action state field
+
+The hero has one action state, a number (decimal in this spec). The per-tick update switches on it. The same field is written by the state setter, which first copies the old state to the previous-state word (+0x7FC) when the state changes (SPEC-0040). Stance and state are one field. A second hero word, the air phase of the jump states (Behavior 50), is read by the busy predicate; the sub-state of state 13 is read by the same predicate (Behavior 3).
+
+## Behavior
+
+### 1. Order within a tick
+
+1. The pad snapshot is taken once at the top of the tick, before any update (SPEC-0007). Every update in the tick sees the same snapshot. Hold and combo detectors count ticks. Order of the input readers in one pass (High): pad read; camera (slot 0 right stick); hero tick (button chain, quick-item panel); level-script threads (IsButtonPressed), which step after the hero's update in the same pass; front-end handler (Start, Select, map and journal shortcuts, the L1 + R1 chord, dialogue); movie skip. So the hero switch chord is tested after the hero's button chain in the same pass.
+2. The hero's per-tick input step (the button chain of Behavior 1A) and ground step run first. The hero then runs the routine for its current action state (Behavior 3).
+3. Within a locomotion routine, the stick is processed (Behavior 2), then one of the two locomotion paths runs: the enable-bit path (Behavior 4) or the speed-tier path (Behavior 5).
+3a. Order of one hero pass for ground movement (High): (1) the hero's own update: the per-pass speed scale is reset to 1.0, the status factors apply, the stick and tier step runs, the state routine requests its animation, and at the end the playing clip's rate is set from the speed scale (Behavior 5.2); (2) the motion-record step: facing update (Behavior 2), rebuild of the hero's basis from the facing, then the root-step displacement (Behavior 5.2), then the record's own velocity and driver steps (SPEC-0040); (3) the hero's animation object: it starts the requested clip if it changed, evaluates the clips and writes the root step that the next pass will use.
+4. Height: the ground probe sets the world height (Behavior 6, SPEC-0018). The hero's displayed height then follows it (Behavior 7). Nothing integrates height from a velocity in the height follow.
+
+### 1A. Controls (button routes)
+
+Confidence: High for the bit values, the enable and run bits and the gate order (rules 1 to 5). Medium for what each action means. Medium-Low or Low where a row says so. The routes follow the hero's button chain; the probes they call are not described here.
+
+Plain rules:
+
+1. The hero reads the buttons once per tick, from the same snapshot as every other update (Behavior 1). A press edge is a button that is down this tick and was up the tick before. A hold is a button that is down now.
+2. The hero reads buttons only when the global input-enable setting is on (bit 0 of the run-time word 0x35C984) and the game status (the SPEC-0026 status code, run-time word 0x35C9DC) is 0, 3 or 4 (or below 0). Otherwise the hero ignores the pad for that tick and the chain does not run.
+3. Latch: the face buttons and the D-pad (0xF0F0) are hidden from the hero while quick-item panel A (open flag 0x2DCCC4) or panel B (open flag 0x2DCCF0) is open, and for one more pass after both have closed (a third word, 0x2DD038, follows the two flags one pass late). The mask is removed from both the held word and the press-edge word that the hero's own control step sees; the hero's button words are restored after its button logic runs. After the latch clears, a face or D-pad button that is still held stays hidden from the hero until it is released, so the Cross that closes a panel does not also act on the hero; a new press after the release is seen. L1, L2, R1, R2, the sticks, Start and Select are not masked by the latch, so the hero can still walk with the left stick while a panel is open (High).
+4. L2 is the enable bit. Holding L2 while idle enters the walk-and-turn state (state 32); releasing it returns to idle (state 1). R1 is the run flag used by locomotion.
+5. The button logic is a chain. The first routine in the chain that acts ends the chain for that tick. The order is: (a) the interaction and attack selector (Square edge; R2 or Circle edge and hold); (b) L2 hold; (c) L1; (d) Cross edge; (e) Square edge with no target; (f) the L3 edge after the chain. So a Circle or R2 press during an interaction is a selector event, not an attack. The quick-item panel is not a step of the chain (rule 7).
+5a. Busy argument (High). Every routine of the chain receives a second argument, busy = 1 when the hero's busy-state predicate is true or the game status is above 0, else 0. Not busy: every route may act. Busy: the L2, L1, Cross (approach and action) and Square (stance) routes take no action, and the selector runs its busy branch (not described here). Chain end: L2 never ends the chain. L1 ends it when L1 is pressed or held and its route ran. Cross ends it on any Cross press and Square on any Square press, even when busy blocked the action. The L3 after-step always runs.
+6. The option block has two toggles that invert the right stick (Invert Left-Right for X and Invert Up-Down for Y; Behavior 2) and a Vibration toggle (Behavior 1B). No control-scheme or remap setting is known, so the button map is fixed (Medium).
+7. Quick-item panel step (High). Once per hero update, after the routine of the current action state, the hero runs the quick-item panel step, but only while flag D of the game globals (a box or list picker ran this pass) and the game-state code are both zero (SPEC-0053 section 3.13). When either is nonzero the step does not run and quick-item panel A is closed (panel B is left as it is). The step reads the pad's press-edge word directly; the panel rules (entries, candidate rows, cycling, marker, use and heal) are in SPEC-0021 (Quick-item panel; Second quick panel and Mote equipping). The button rows below give what each button does in this step.
+
+Button table (logical bits; edge or hold):
+
+| Button | Edge or hold | Context | Result | Confidence |
+| --- | --- | --- | --- | --- |
+| Left stick | hold | every tick, input step | direction and speed (Behavior 2); dead zone of 40 units about the centre 127.5; scale 1/87.5 | High (bytes); Medium-High (role) |
+| Right stick | hold | every tick, input step | camera input; sets an active flag when either axis is off centre; the two invert options change this stick only | Medium |
+| L2 (0x0001) | hold | idle (state 1), no target, in the chain | enters state 32 (walk and turn). This is the enable bit of rule 4 | High (write); Medium (meaning) |
+| L2 | release | state 32 | returns to state 1 and clears the step counter | High |
+| L2 | hold | a request for state 1 from states 17 or 20 while the stance flag is set | the request becomes state 32, not state 1 | High (rule); Medium (meaning) |
+| L1 (0x0004) | hold or edge | chain step (c); not busy; no quick-item panel test in this step | enters state 20 (shield guard) when a usable shield is equipped (equipment slot 2) | High |
+| L1 | hold or edge | state 13 (Tor's arm table), exit armed by sub-state 3, or by sub-state 4 on a frame with event bit 0x40; shield-family entry equipped | enters state 20 | High |
+| L1 | release | state 20 | returns to state 1 (state 32 when the previous state was 32 and L2 is held) | High |
+| R1 (0x0008) | hold | locomotion and state 32 | run flag; in state 32 it picks the faster walk animation; one path also needs a 30-tick hold count | Medium |
+| L1 and R1 chord | one of them newly pressed while the other is held, or both newly pressed on one tick | in-play front-end handler, tested after the hero's button chain in the same pass (Behavior 1) | switches to the other hero (SPEC-0053 section 3.8 c) | Medium-High |
+| Square (0x0080) | edge | selector; a target inside 5.8 units | runs the nearest target's action (talk, open, buy, use). Without the press a hint is shown (SPEC-0022) | Medium-High |
+| Square | edge | weapon out (equipped state on), no attack in progress, not busy | puts the weapon away: the equipped state goes off, with its sound. The press then continues down the interaction chooser, so a prompt or talk can still act on it in the same tick; only the no-target sneak entry (next row) is skipped in that tick | High (code); Medium (meaning) |
+| Square | edge | no target, not busy, not in states 20, 32, 43 to 46, 22, 39 or 40 | enters sneak (state 22). This is the last fallback of the interaction chooser, which ends the chain on the press; the chain's own step (e) routine never acts on a Square edge (High). A Square prompt shown by a level script in this tick (DisplaySquareButtonContext; the flag is cleared at the end of every input step) blocks the entry for that tick. Busy (rule 5a): no state change, the press still ends the chain | Medium-High (states); High (busy rule) |
+| Square | release | states 22, 39 and 40 | while Square is held nothing changes; once it is up the hero returns to state 1 (hold to stay). The traversal prompts and their let-go exits are in Behavior 51 | Medium-High |
+| Square | hold | stance states 22, 39 and 40 | the only read of the held Square bit in the chooser: held keeps the hero in the stance state, released returns it to state 1 (row above). It has no other effect on the chooser | High |
+| Cross (0x0040) | edge | chain step (d), not busy, ground normal vertical part at least 0.82, not in strafe mode | jump: state 7, 8, 9 or 10 by stick magnitude (Behavior 50); then, when a block-edge grab is possible, state 19 instead | High |
+| Cross | edge | same, strafe mode (state 32 family), stick pushed | strafe jump, states 43 to 46, by the current walk action (Behavior 50) | High |
+| Cross | edge | same, strafe mode, stick centred | standing jump, state 7 | High |
+| Cross | edge | state 41 (ladder), sub-mode not 8 | jump off the ladder (states 7 to 10) with a backward push of 0.5 and a lift of 2.0 (Behavior 13) | High |
+| Cross | edge | soft landing (air phase 6), event bit 0x40 | code would chain a jump; action 68 has no such frame for either hero, so the route is unreachable with disc animation data (Behavior 50; SPEC-0005) | High |
+| Cross | edge | quick-item panel A open with a selection (entry 0 to 3) | sets the marker to the selected entry's item (cue 0xA3 when it changes and the item is owned), closes the panel and runs the use step on the marker (SPEC-0021) | High |
+| Cross | hold | state 28 (hanging from a grab point), with the side stick | searches the next grab point on that side and leaps to it (Behavior 9) | Medium-High |
+| Circle (0x0020) | hold (or R2 edge) | jump states 7 to 11, air-attack flag clear | air attack: Tor's plunge (rising or at least 1.5 up), or Roberta's air shot (state 13, sub-state 11 or 12; Behavior 50) | High |
+| Circle | hold (or R2 edge) | strafe jumps 43 to 46, air phases 2 to 5 | Tor's plunge (hold 12 ticks) or Tor's air slash (release earlier, or R2); Roberta has none (Behavior 50) | High |
+| Circle | edge | quick-item panel A open with a selection | sets the marker as Cross does and closes the panel, but uses nothing | High |
+| R2 (0x0002) | edge | selector; attack kind 0 or 1; no action track; no stance target | enters state 13 (attack step) | Medium-High |
+| R2 or Circle | edge or hold | rope gun held and a valid anchor | state-27 entry is not established as a direct button-selector result; the verified state-13 handoff is described in Behavior 51 (Open questions) | Low |
+| R2 or Circle | hold | selector; no edge; Square not pressed; probe passes | enters state 13 | Medium-Low |
+| Triangle (0x0010) | edge | panel A closed (or opened on this tick) and panel B not open | runs the use step on the current marker (SPEC-0021). The in-play gate is not read. An empty marker, an item with a count of 0, or a dead hero uses nothing | High |
+| Triangle | edge | panel A open | closes panel A, after the select part of the same tick (a Cross or Circle on that tick still acts first); no other effect. With no selection it also closes | High |
+| Triangle | edge | panel B open (not opened this tick) | handled by the panel B step, which closes it (SPEC-0021) | High |
+| D-pad Right (0x2000) | edge | panel A open | selects entry 0 | High |
+| D-pad Up (0x1000) | edge | panel A open; or both panels closed | panel A open: selects entry 1. Both panels closed and the in-play gate passing (SPEC-0053 section 3.13): opens panel A (cue 0x9A, entries refilled in the order 2, 1, 3, 0, entry 1 selected) and the rest of that tick's panel work is the Triangle check | High |
+| D-pad Left (0x8000) | edge | panel A open | selects entry 2 | High |
+| D-pad Down (0x4000) | edge | panel A open; or both panels closed | panel A open: selects entry 3. Both panels closed and the in-play gate passing: opens panel B (cue 0x9A; SPEC-0021, Second quick panel). There is no Down-only cue | High |
+| D-pad, any direction | edge | panel A open | cue 0x9A. Several directions on one tick: Left beats Up, Up beats Down, Down beats Right. A press of the direction already selected cycles that entry to its next owned candidate (SPEC-0021). No direction keeps the selection | High |
+| L3 (0x0200) | edge | chain step (f) | calls three menu or HUD helpers | Low |
+| R3 (0x0400) | none | hero paths | no known hero-side read | Medium (absence) |
+| Start (0x0800), Select (0x0100) | none | hero paths | no known hero-side read; they open the menus (SPEC-0035) | Medium |
+
+Remarks on the table:
+
+- The quick-item panel has four entries, and a fifth value (4) means no selection. With no selection, Circle or Cross does nothing and the panel stays open (High). One quirk (High): an Up or Down press that opens a panel and a Triangle press on the same tick also run the use step on the current marker on that tick.
+- A Cross press on the ladder (state 41) jumps off it, and the jump is read on the press edge, not the held word (High for the write).
+- The bounce pad (state 56) has no button: landing on it enters it (Behavior 10). The grab-point hang (state 28) is entered from the jump states, and its leap is Cross held with the side stick (Behavior 9).
+- The hard landing (air phase 10) and the soft landing (air phase 6) are landings of the jump states, not combat actions (Behavior 50). The soft-landing code has a Cross-press branch gated by event bit 0x40, but neither hero's action 68 animation carries that bit in any family, so it cannot chain a jump with the disc data (SPEC-0005). Lock-on: no hero-side use of L3 or R3 is known; the right stick drives the camera. Hero swap (Tor and Roberta): an L1 and R1 chord in the in-play state switches to the other hero. See SPEC-0053 section 3.8 (c).
+- The invert options touch the right stick only: Invert Left-Right flips the right stick X byte and Invert Up-Down flips the right stick Y byte (Layout).
+
+### 1B. Vibration gate (per-pad motor output)
+
+Confidence: High for the gate values and their timing; Medium for the meaning of the per-pad enable bytes.
+
+- The vibration sync reads the Vibration option (SPEC-0035). It runs once at boot, before the first pass of the main loop, and again on every pass of the main loop.
+- On each run the sync sets the gate word at input-block offset +0x08:
+  - to 1 when the Vibration option is nonzero and the game status is not 9;
+  - to 0 otherwise.
+- When the gate is set to 1, the sync also writes the four bytes at input-block offsets +0x900 to +0x903 as 1, 0, 0, 0. When the gate is set to 0, those bytes are not changed.
+- Order within a pass: the pad read comes first and uses the gate set by the previous run of the sync. The boot run sets the gate before the first pass, so the first pad read already sees it.
+- Gate, applied for each pad on each packet: if the gate word is zero, or that pad's enable byte (+0x900 plus the pad index) is zero, the pad's motor bytes are cleared. Otherwise the pad's motor output is sent as normal.
+- Result: with the default Vibration option (1), rumble works from the first boot. Only pad 0 can rumble, because only pad 0's enable byte is set to 1. With the option at 0, no pad can rumble, because the gate word is 0.
+- A Vibration toggle in the options menu, and a load from a save slot, change the option. The gate follows the new value within one pass.
+- Test vectors (synthetic; each line is one run of the sync, starting from an input block whose enable bytes are 0):
+  - Vibration 1, status not 9: gate 1, enable bytes 1, 0, 0, 0.
+  - Vibration 1, status 9: gate 0, enable bytes 0, 0, 0, 0 (unchanged). If they already held 1, 0, 0, 0 from an earlier run, they stay 1, 0, 0, 0.
+  - Vibration 0, any status: gate 0, enable bytes unchanged.
+
+### 1C. Rumble (requests, envelopes and the motor level)
+
+Confidence: High for the arithmetic, the presets, the per-pass rule and the sources; Medium for the physical meaning of "large motor"; Medium-High for the gate-return quirk.
+
+**Manager.** The game has one global rumble manager with 6 envelope entries. It drives one output only: pad 0's large motor, with a level from 0 to 255. The small motor (on/off, driven by a 0-to-100 accumulator in the pad record) is never requested by any reachable code, and no other pad is driven. A request names a preset p, a duration T in seconds and a magnitude M.
+
+**Presets** (data at 0x2DD270: five records of 8 floats each, four breakpoint times t0 to t3 then four levels L0 to L3; the clean side should read them from there). On disc the times are 0, 1/3, 2/3, 1 for presets 0, 1, 2 and 4 and 0, 0.5, 0.5, 1 for preset 3 (1/3 and 2/3 are stored as 0.3333 and 0.6666). The level shapes are:
+- preset 0: constant (levels 1, 1, 1, 1);
+- preset 1: ramp up, then stop at once (0, 1/3, 2/3, 1);
+- preset 2: start at once, then ramp down (1, 2/3, 1/3, 0);
+- preset 3: ramp up to the midpoint, then ramp down (0, 1, 1, 0);
+- preset 4: ramp up, hold, ramp down (0, 1, 1, 0 at thirds).
+A request with p of 5 or more does nothing.
+
+**Building a request.** For segments i = 1, 2, 3:
+- Length n_i = trunc(60 x (t_i - t_(i-1)) x T) ticks, computed as the running difference of t_i x T in 32-bit floats. A segment with n_i of 0 or less is skipped.
+- Otherwise the segment takes a free entry. When none of the 6 is free, the segment is dropped. A kept segment has start s = L_(i-1) x M, step = (L_i - L_(i-1)) x M / n_i and count n_i, and only the first kept segment is active. It is linked after the previous kept segment.
+- Merge: if the previous kept segment ends within 0.001 of this start (s_prev + step_prev x n_prev) and the two steps differ by less than 0.001, the two become one entry with the previous start, the summed count, this segment's step, and active if either was. So preset 0 becomes one entry.
+- Quirk (reproduce): for the shipped preset-2 request (0.8 s, 0.6; source 4 below) the three segments are 15, 15 and 16 ticks and their steps differ by less than 0.001, so they merge into one ramp that uses the last segment's step. The ramp therefore does not reach 0 at the end. Very short preset-2 requests (for example T 0.2, M 1.0) give segments of 3, 3 and 4 ticks: the first two merge, and the last one, whose step differs by more than 0.001, stays a separate linked entry.
+- A 3-segment preset that does not merge needs free entries for all its segments to be kept whole.
+
+**Per pass** (in the main loop, after the vibration sync of Behavior 1B):
+1. On a pass where the game status is 9, nothing advances (the gate is also off).
+2. Otherwise, for each in-use active entry in slot order: count = count - 1. If the count is now below 2, the entry's next segment (if any) becomes active and becomes the current choice, and the entry is released. Otherwise the intensity rises by the step, and the entry becomes the current choice if there is none yet or if its intensity is strictly greater than the current choice's.
+3. Entries advance whether or not the Vibration option is on. A rumble requested while Vibration is off is used up silently and is not felt later when the option is turned back on (quirk; reproduce).
+4. If a choice exists: level = trunc(clamp(intensity, 0, 1) x 255), sent to pad 0's large motor with a countdown equal to the entry's count. The send is skipped when the level equals the last level sent and the count equals the last count minus 1. With no choice, the remembered level and count are set to 0 and nothing is sent.
+5. Pad side, on each packet: the countdown falls by 1; at 0 the large motor is turned off.
+- Quirk (Medium-High): while the gate is off, the pad read clears the motor bytes but not the countdown. If the gate comes back on during a constant-level rumble, the skip rule of step 4 means the level is not re-sent, so the motor stays off until the level changes or a new request wins.
+
+**Sources in the shipped game.**
+1. Monster footsteps: a monster whose table row has a nonzero footstep rumble class requests preset 0 for 1.0 s, with a magnitude by class and distance from the camera (SPEC-0029, monster rows +0xB8 and +0xBA; audible to about 30 units).
+2. Animation-event effects with positional mode 0 (SPEC-0034; 164 entries on disc). When the effect starts, with d2 the squared distance from the camera position to the character, rin = entry +0x40 and rout = entry +0x44: intensity = entry +0x38 when d2 <= rin^2; entry +0x38 x (1 - (d2 - rin^2) / (rin^2 + rout^2)) when rin^2 < d2 <= rout^2; 0 beyond. A positive intensity starts the camera shake of that mode and requests preset 0 with duration entry +0x34 seconds and magnitude = intensity. On disc the durations are 0.3 to 2.0 s (0.4 s in 81 entries, 0.5 s in 61, 0.8 s in 17, 0.3 s in 4, 2.0 s in 1), the intensities 0.2 to 15.0, and the radii (10, 50) in 130 entries.
+3. The grab of the grab-and-throw strike: preset 0, 1.0 s, magnitude 0.7, repeated every 61 ticks while the hero is held (SPEC-0029 Behavior 23).
+4. Tor's attack sub-state 13 (SPEC-0036): preset 2 (data word 0x2DD7AC), duration 0.8 s (0x2DD7B0), magnitude 0.6 (0x2DD7B4). Roberta's update has no rumble.
+5. The level-script host call VibrateController(preset, duration, magnitude) makes a request by the same rule, but no level module calls it (SPEC-0030).
+6. A debug vibration tester exists but is not reached in the shipped game.
+Hits on the hero, deaths and pickups do not rumble, except through an animation-event effect of source 2.
+
+**Test vectors.**
+- Preset 0, T 1.0, M 0.7: segments 19 + 19 + 20 merge into one entry of 58 ticks; level 178 is sent once, with countdown 57; nothing more is sent; the motor stops after 57 packets.
+- Preset 2, T 0.8, M 0.6: segments 15 + 15 + 16 merge into one entry of 46 ticks, start 0.6, step -0.0125; levels 149, 146, 143, ... down to 12 over 44 passes, each one sent.
+- Preset 0, T 0.5, M 0.6923: one entry of 28 ticks, level 176.
+- Two overlapping preset-0 requests with M 0.5 and 0.7: the 0.7 entry is sent (178); when it ends, the 0.5 entry wins on the next pass and 127 is sent.
+- Vibration off, preset 0, T 1.0, M 0.7 requested: the entry still runs down over its 58 ticks and nothing is felt; turning Vibration on after it has ended gives no rumble.
+- Request with p = 5: nothing happens.
+
+### 2. Stick scaling, speed value and direction
+
+For each left-stick axis byte r:
+
+- Above the dead zone (r greater than 167.5): the value is (r − 167.5) ÷ 87.5.
+- Below the dead zone (r less than 87.5): the value is (r − 87.5) ÷ 87.5.
+- Otherwise the value is 0. The dead zone is therefore the bytes 88 to 167 inclusive.
+
+The dead zone is subtracted, not rescaled. The divisor 87.5 is the stick scale (data word 0x319524), so a full push gives exactly ±1.0 and every value lies in [−1, 1]. Test values (scaled value before the sign flip): raw 255 gives 1.0; raw 200 gives 0.3714; raw 168 gives 0.0057; raw 167 gives 0; raw 88 gives 0; raw 87 gives -0.0057; raw 40 gives -0.5429; raw 0 gives -1.0. Confidence: High.
+
+Signs: after the dead zone, the pair is negated. So
+
+- forward = −(scaled Y): positive when the stick is pushed up
+- side = −(scaled X): positive when the stick is pushed left
+
+Speed value v (High): the length of the stick pair (side, forward) after the dead zone and the scale 1/87.5, capped at 1.0. It does not depend on the direction. A zero pair gives 0. Tests: forward 1.0 with side 0 gives 1.0; forward 0.6 with side 0.8 gives 1.0; forward 0.25 with side 0.5 gives 0.559; a full diagonal gives 1.0 (capped from 1.414); stick Y byte 60 with X centred gives 0.314; byte 70 gives 0.2; byte 80 gives 0.0857. The tier step (Behavior 5.1) sets the moving flag of the locomotion block on a pass where v is not zero.
+
+Stick inversion (first pad only): when the packet is read, the right-stick X byte is replaced by its complement (255 minus the value) if Invert Left-Right is set, and the right-stick Y byte is replaced by its complement if Invert Up-Down is set. The left-stick bytes are never changed, so locomotion is never inverted by these options (Layout).
+
+Menu averaging: the combined snapshot takes each stick byte as the integer average of the controlling pads' bytes (Controller map). The controlling set is always pad slot 0, so the average is slot 0's byte. Locomotion uses slot 0's own bytes and does not average.
+
+Stick direction u (High for the structure): each pass u = z′ C + x′ Rt, where (x′, z′) is the stick pair (side, forward) normalised to length 1, C is the camera forward vector (SPEC-0027) and Rt the normalised camera-right vector (the cross product of camera forward and the constant up vector (0, 1, 0, 0) at 0x3932E0, written once at boot; SPEC-0007, SPEC-0027). u is a unit vector and carries no stick length. When the stick is centred, u is set to the hero's facing. u is not written in the busy and special states (hero states 13, 41, 37, 20, 25, the strafe-family states, and while a special-move check holds); there the previous direction is kept.
+
+The direction is recomputed from the stick every tick. It is not blended with the previous tick's direction.
+
+Facing turn (the hero's facing follows the stick direction). It runs in the motion-record step of each pass (Behavior 1, item 3a). Which rule applies depends on the hero state and the moving flag (Medium-High for the state lists):
+- In hero states 25, 37, 28, 38, 41, 19, 13, 30, 18, 50, 52 and 27, and when the hero has no pad slot, the facing is set to the stick direction at once.
+- In states 16, 33, 55 and 51 the facing is kept.
+- In state 21 the facing is set to the stick direction when a class query returns 4 or 5 and the moving flag is set; otherwise it is kept.
+- In the strafe-family states (state 32 and the others where the class test holds, except state 20) the facing is set at once to the state-32 heading (Behavior 4, item 9).
+- Otherwise, when the moving flag is clear, the facing is kept. When it is set, the facing turns toward u by the blend below.
+
+Blend. Let d be the dot product of the current facing f and the unit stick direction u, clamped to at most 1.
+- If the speed value is above 0.01 (High): c = max(d, 0.95). The floor 0.95 is a constant of the hero class, the same for both heroes. The new facing is c f + √|1 − c²| u, flattened and normalised to unit length (the normalisation happens when the hero's basis is rebuilt each pass). The largest turn is arccos(0.95) = 18.19 degrees per pass (1091 degrees per second). Inside 18.19 degrees c = d, so the remaining angle shrinks slowly (roughly by its square each pass). Remaining angle after each pass: from 90 degrees: 71.81, 55.99, 43.03, 32.78, 24.84, 18.77, 14.16, 11.32; from 135: 118.15, 99.22, 80.32, 63.25, 48.91; from 30: 22.71, 17.15, 13.13, 10.66. A stick exactly opposite the facing (d = −1, 180 degrees) never turns, because the blend has no sideways part (Edge cases); from 179 degrees the angle runs 178.51, 177.78, 176.70, 175.08, 172.68, 169.13, 163.89, 156.30, 145.60, 131.31, 113.81, 94.69, 76.08.
+- Otherwise (speed value at most 0.01): let d′ = d when d is below about zero. For d at or above about zero, d′ = 1 − (1 − d)². The correction therefore applies to every d from about zero upward, not only near 1. Let X be the run-time tick-length word (1/60 s), t = 1 − 0.003 X and floor = 1 − 0.3 X (0.995 at 60 ticks per second; 0.003 and 0.3 are fixed constants).
+  - If d′ is below t: e = t − 3.3333 (t − d′)², raised to the floor if it is below the floor. Otherwise e = d′.
+  - c = e.
+  - The new facing is c times the current facing plus √(1 − c²) times the unit stick direction, normalised as above. The facing therefore turns toward the stick by the angle whose cosine is c.
+
+Per-tick cap of the eased rule (speed value at most 0.01). At 60 ticks per second the floor 0.995 caps the turn step at arccos(0.995), about 5.73 degrees (0.100 rad) per tick, about 344 degrees per second. The cap binds whenever d is below about 0.80 (misalignment above about 37 degrees). Between about 37 and about 7 degrees of misalignment the step is eased (a 25.8 degree misalignment gives c = 0.99962 and a turn of 1.58 degrees per tick). Within about 2.6 degrees the turn is very slow (a 2.56 degree misalignment turns 0.081 degrees per tick), as the formula computes.
+
+Worked example (60 ticks per second; X = 1/60; t = 0.99995; floor = 0.995): a stick 90 degrees from the facing (d = 0) gives c = 0.995 and a turn of 5.73 degrees on the first tick, which leaves the facing 84.3 degrees from the stick. Confidence: Medium-High for the rule; Medium for the turn-step interpretation per tick; Medium-Low for the very slow approach near alignment.
+
+### 3. Hero action states and routes
+
+Each state number below is the hero's action state. "Own routine" means a routine exists that this spec does not describe. "Default" means the routine for any state without a route.
+
+Routes (High for the mapping; Medium for the names):
+
+| State | Routine |
+| --- | --- |
+| 1 to 6, 22, 39, 40 | Stance, walk, run, reverse walk and sneak (22 sneak idle, 39 sneak helper, 40 sneak walk), with the walk-off check first (Behavior 4A.1 and 9A) |
+| 7 to 11 | Jump and air states (Behavior 50): 7 standing, 8 slow, 9 walking, 10 running, 11 backward. Air phases 8 and 9 are Tor's plunge attack |
+| 12, 15, 24, 25, 33, 34, 36, 51, 53, 54, 55, 57 | Own routine each (SPEC-0040, Behavior 15.3) |
+| 13 | Attack (SPEC-0036). The dispatch by hero variant, Tor's arm table and the exit to state 20 are summarised in Behavior 3C |
+| 14 | No routine; the tick ends (the hero's update does nothing further) |
+| 16 | Death (SPEC-0055; Behavior 4A.6) |
+| 17 | Hurt (SPEC-0036, Taking a hit): request 32 with a usable weapon, else 192; at progress 0.99 state 1 with request 0 (state 32 when L2 is held and the previous state was 32) |
+| 18 | Push and pull a block (Behavior 4A.2) |
+| 19, 21, 23, 26, 27, 29, 30, 35, 37, 38, 47, 58 | Traversal states (Behavior 51): hang from a block edge, climb, sidle, statue, rope gun, door, hang from a ledge, climb up a ledge, drop into a hang, climb onto a block. States 23, 26 and 29 are never entered in play |
+| 20 | Shield guard (Behavior 4A.3). Also entered from the state-13 routine when its armed exit fires with a shield-family entry and L1 (Behavior 3C), and from the soft landing (Behavior 50) |
+| 28 | Hang from a grab line, slide along it and leap between lines (Behavior 9). Exits: state 7 in air phase 5 at the line end, on ground contact, on let go, or when the line or its record is missing; state 48 (long-fall landing) when the motion record's touched flag is set in the slide mode with the cooldown expired |
+| 32 | Strafe: walk and turn while L2 is held (Behavior 4) |
+| 41 | Ladder (Behavior 13) |
+| 43 to 46 | Strafe jumps (Behaviors 11 and 50) |
+| 48 | Long fall, the area-entry arrival animation (Behavior 9B) |
+| 49 | Feed a petpet (SPEC-0047) |
+| 50 | Scripted walk or run to a point (Behavior 4A.4) |
+| 52 | Scripted walk and orient (Behavior 4A.5) |
+| 56 | Bounce pad (Behavior 10). Written only by air phase 5 of the jump states, on any phase-5 tick, when the ground record under the hero has kind 17 or 18 (Behavior 50) |
+| 59, 60 | Death ends: game over or continue (59, death end mode 1) and respawn (60, death end mode 2) (SPEC-0055). Each requests its clip (175 or 137) and sets state 1 on progress (SPEC-0040, Behavior 15.3) |
+| 0, 31, 42, and any other value | No route; never written by hero code. Default: requests animation 0 and calls a reset (SPEC-0040 open question 68) |
+
+Test vector: state 32 with forward 0.6 and side 0: the strafe routine runs (Behavior 4). State 56 runs the bounce pad. State 0 is not in the route list and runs the default.
+
+The stance walk-off check (Behavior 9A) enters the jump state 7 in a falling phase. The leap of state 28, the landing of state 48 and the bounce of state 56 are separate routines; each hands the hero to state 7 or 1. Behavior 13 is the ladder state 41, not a jump machine.
+
+Busy predicate (High for the list; Medium for meaning). The hero counts as busy in states 7 to 19, 21, 23 to 30, 35, 37, 38, 41, 43 to 49, 53, 54, and 56 to 60. It is also busy when one of two sub-predicates holds (not described here) or the global input lock is on. Other states (1 to 6, 20, 22, 31 to 34, 36, 39, 40, 42, 50 to 52, 55) are not busy by this list.
+
+Sub-state detail: the sub-state word is read only in state 13, where the predicate returns true for sub-states 2 to 12. For states 7 to 11 the predicate reads the air phase and returns true in phases 8 and 9 (Tor's plunge attack, Behavior 50) (High).
+
+### 3A. Writers of routed states
+
+Confidence: Medium for each writer's branch; High for the write itself unless marked. These routines write the action state of Behavior 3 with a new number. Each entry says what is written and the test that chooses it.
+
+- **State 7 (standing jump and fall).** Written by the Cross jump chooser (states 7 to 10), the stance walk-off (Behavior 9A), the jump off a ladder (Behavior 13), the chained jump of a soft landing, let go and stop climbing (state 7 in air phase 5, request 67), the grab-point hang's lost-target exit (Behavior 9), the bounce launch (Behavior 10) and the flag branch of state 47 (Behavior 51). All of them enter the air routine of Behavior 50.
+- **State 19 (hang from a block's top edge).** Two writers (High for the write): the Cross route, when the block-edge grab test passes after the jump chooser (Behavior 50), and the descent and landing chooser of the air states (air phase 5, Behavior 50), when the hero comes down at a block. The landing chooser tests the ground gap against 1.0 (word 0x2DD80C) and the vertical velocity against -7.0 (word 0x2DD808) (Medium).
+- **State 33 (wrapper for the end of an action).** Two writers. (a) The action-end resolver: when the hero flag word at +0x3D0 is zero, the hero enters state 33; when it is nonzero, the hero enters state 1 (Medium-High). (b) The grab start: after attaching its hold record, the hero enters state 33 and requests animation 12 (Low-Medium).
+- **States 59 and 60 (death ends).** The hero's death end mode word at +0x1564, set by the death handler (SPEC-0055, section 8A), equal to 1 writes state 59 (game over or continue); equal to 2 writes state 60 (respawn) (High for the writes). For any other mode value the routine uses the default form of the state setter and requests animation 0, unless the hero is already in state 59. It sets the cooldown to 60 ticks. Its input helpers set aim values from the stick (not described).
+- **Cooldown rule (Medium).** The cooldown counter (hero field +0xA04) is set to the frame-rate word, which is 60 ticks (one second), by the routines that write state 7 from state 28 (the let-go), by the line attach of state 28 (Behavior 9), and by the routines that write states 59 and 60. Each hero update counts it down by 1 while it is above 0.
+- **Respawn reset (High).** Every respawn at a start pose (world load, teleport, deadly-ground respawn, new game; SPEC-0040, SPEC-0055) sets the cooldown (+0xA04) to the frame-rate word, 60 ticks, and resets the three leap fields of state 28: current grab target -1, pending grab target -1 and hang mode 0. So for 60 ticks (1 s) after any respawn no grab-point hang can start (the entry of Behavior 9 needs the cooldown below 1), and in state 28 the exit to state 48 waits for the cooldown. The respawn does not touch the guard timer of Behavior 4A.1.
+
+### 3B. Climb dispatch (state 21, sub-mode map)
+
+Confidence: High for the map; Medium-High for sub-modes 2, 5 and 13 to 16; Low for the meanings of most other sub-routines. State 21 is the climb on a climbable panel. Its entries, the sub-mode dispatch on the shared word +0x9BC (sub-modes 0 to 18; 13 and 14 share one body and 15 and 16 another; 19 and above do nothing), the sub-mode table and the exits are in Behavior 51, state 21.
+
+### 3C. State 13 (attack step; locomotion summary)
+
+Confidence: High for the dispatch by hero variant and for the state-20 exit; Medium-High for the sub-state tables and requests; Low for the meanings. The full tables are in SPEC-0036 (Hero action states, state 13: Tor's arm table and Roberta's arm table). This part gives what matters to locomotion.
+- Dispatch: the state-13 routine dispatches on the hero variant word (0 Tor, 1 Roberta). Each tick it runs that hero's charge routine (SPEC-0036, Charge completion), which makes the sub-state transitions, and then that hero's arm table, both on the same sub-state word. Other variant values do nothing. The routine returns at once in state 27 (High).
+- Tor's arm table, as it affects locomotion: sub-state 0 goes to state 1 and requests animation 0. Sub-states 2 to 6 request animations 14, 15, 16, 12 and 17. Sub-state 1 tests the current action and its progress (gate 0.99, word 0x2DD854). Sub-states 3 and 4 arm the state-20 exit (below).
+- Tor, sub-states 7 and 8 request animations 19 and 18 and move the hero along the stick direction. The raw inputs are the left stick X byte (+0x123) and Y byte (+0x11F). With conv(b) defined by the 127.5 centre and 40-unit dead zone (Behavior 2), the movement components are forward F = -conv(Y) and side S = -conv(X); the normalized (F, S) direction is combined with the camera basis. Thus Y below 87.5 points forward, Y above 167.5 points backward; X below 87.5 points left, X above 167.5 points right. Bytes 88–167 are dead on each axis. The displacement is that direction scaled by 0.25 (word 0x2DD6C8, 0.25) and divided by the time factor. Sub-state 10 runs the same step only when its second attack-id query returns the attack id 0xA2 (SPEC-0036).
+- Tor, sub-state 13 requests animation 26 and calls helpers with the words 0.8, 0.6 and the integer 2 (0x2DD7B0, 0x2DD7B4, 0x2DD7AC). Other sub-states do nothing.
+- Tor's common tail: the cleanup flag is consumed, the attack hit scan runs (SPEC-0036, Hit detection), then the state-20 exit check runs.
+- Roberta's arm table (SPEC-0036) has stick-steered steps at sub-states 6, 7 and 14 (sub-state 14 at a rate of 0.35), and its sub-state 0 sends the hero to state 1 unless the state is 7 or 27; the rest of its table is in SPEC-0036. Sub-states 11 and 12 are the air attacks entered from the jump states (Behavior 50). The state-20 exit below is part of Tor's arm table.
+- Exit to state 20 (High): sub-state 3 always arms the exit. Sub-state 4 arms it only when the current animation frame carries event bit 0x40 (the table-B frame bits of SPEC-0005). When the exit is armed, the common tail sends the hero to state 20 (stance steering, Behavior 4A.3) when the hero's shield-family entry exists and is not empty (SPEC-0021) and the pad bit 0x0004 (L1) is set in the held word or the press-edge word (field +0x150 or +0x154). There is no stick test. Without a shield, or without L1, the hero stays in state 13.
+- Resolved: the stick in sub-states 7, 8 and 10 is the left stick (Y at +0x11F, X at +0x123), with low Y meaning forward and low X meaning left after the code applies its dead zone and negates each axis (Behavior 3C; High). SPEC-0036 conflicts C1 and C3 are resolved: the exit has no stick test, and the mode map of state 13 is Roberta's arm table, chosen by the hero variant.
+
+### 4. Walk and turn animation choices
+
+Two paths choose animation codes from the stick. Animation codes index the character's animation mapping (SPEC-0005 animation table). The codes below are as given.
+
+Path A, enable bit set (left-stick path; High that it never runs). Path A and its own tier table (codes 7, 8 and 9 by tilt, reverse codes 10 and 11) sit in one stick routine that nothing in the executable calls, points to or builds the address of, so no hero state runs it. In play the only stick turn table is the one of the walk-and-turn state 32 below, and the speed tiers are those of Behavior 5.1. Path A is kept for reference:
+
+Predicates. P1 is a non-zero flag on the object the hero refers to: the weapon-out flag (the requests with P1 on are the weapon-out clips 7, 8, 9, 10 and 11; Medium-High). P2 is the hero's run gate word; it is written only with 0 (when the hero is set up and on the climb-entry reset) and has no other writer, so P2 is always off (High). The run flag is the R1 button (control word bit 3), so running means R1 is held.
+
+1. Turn in place: when |forward| × 0.25 is less than |side|:
+   - side negative, P1 off: code 37 (forward positive) or 98 (otherwise); P1 on: code 39 or 99.
+   - side non-negative, P1 off: code 100 (forward positive) or 36 (otherwise); P1 on: code 101 (forward positive) or 38 (otherwise).
+2. Walk, when forward is positive: code 8 when P1 is on, code 3 when P1 is off.
+3. Reverse, when forward is zero or negative: code 11 when P1 is on, code 6 when P1 is off.
+4. Facing: the normalised (forward, side, 0) vector is the facing target.
+
+A pure sideways push is a turn (step 1), never a walk.
+
+Strafe, walk and turn (state 32, L2 held; Medium for the branch shape, Low for the codes; the codes differ from path A):
+
+1. Enable gate: if bit 0 of the control word is clear, request idle (code 1), set the step counter to −1, and stop.
+2. Set the locomotion moving flag.
+3. If both forward and side are zero, request the idle class (code 1) and stop.
+4. Turn in place when |forward| × 0.25 is less than |side|:
+   - side negative: code 151 (forward positive) or 98 (otherwise) with P1 off; 153 or 99 with P1 on.
+   - side positive: code 154 or 152 with P1 off; 101 or 38 with P1 on.
+5. Walk or run, when forward is positive: run family if the run flag is set or P2 is on (codes 4 with P1 off, 9 with P1 on); otherwise walk family (codes 3 with P1 off, 8 with P1 on).
+6. Reverse, when forward is zero or negative: code 11 with P1 on, code 6 with P1 off.
+7. Forward zero and side not dominant: a turn request by the right stick X byte (+0x12B, after the Invert Left-Right flag), with the dead zone and scale of Behavior 2 and the sign flipped: with v = byte - 127.5, a byte above 167.5 gives code 149 and a byte below 87.5 gives code 150; inside the dead zone nothing is requested (High).
+8. Rate request 0.25 (word 0x2DD7D4).
+9. Stick re-aim of the root step (High). On each pass with a stick that is not centred (after the requests of items 5 to 7), the handler re-aims the hero's current root step T (the step the animation object wrote for this pass, Behavior 5.2). It sets no speed:
+   - T = unit(side, 0, forward) × |(Tx, Ty, Tz)|, in the hero's local frame (x side, y up, z facing).
+   - unit() and the length use the x, y and z values only. The step keeps its length and only changes direction.
+   - Then the handler calls a hero class method with rate 0.25 (word 0x2DD7D4).
+   - Centred stick (side and forward both zero): T is not re-aimed.
+   - Reset: entry to hero states 33 (0x21) and 51 (0x33) writes T = (0, 0, 0, 1); its x, y, z part is then zero until the animation object writes the next root step.
+   - Consequences: the speed in state 32 comes from the playing clip (Behavior 5.3) and does not depend on tilt (no tier factor applies in this state). With the walk clip (0.2251 per pass) a sideways push moves the hero 0.2251 per pass sideways in its own frame; a diagonal push moves 0.2251 per pass along the diagonal.
+   - Heading in state 32: the heading h follows the camera forward vector C: h = normalise(0.75 h + 0.25 C) each pass, with a tie-break of 0.1 × the hero's right vector added when h and C are more than about 172 degrees apart (dot product below −0.99). The facing is set to h each pass (Behavior 2, strafe-family states).
+   - The turn codes of item 4 (151 to 154, 98, 99, 101, 38) carry a sideways root step (Behavior 5.3), so they move the hero sideways rather than turning it on the spot.
+
+The two turn tables differ (path A and step 4 above); only step 4 runs in play, since path A is never called (High). Test vector: forward 0.25 and side 0.5 with P1 off gives turn in place (0.25 × 0.25 = 0.0625 < 0.5), side positive, forward positive: code 154 in the walk-and-turn state, and code 100 in path A (side non-negative, P1 off, forward positive).
+
+See also Test vectors.
+
+### 4A. Stance, sneak, block, shield, death and scripted-walk routines (states 1 to 6, 16, 18, 20, 22, 39, 40, 50, 52)
+
+Confidence: Medium for the branch shapes and animation codes unless a part says otherwise; High for the walk-off check, which is Behavior 9A.
+
+Terms used in this behavior:
+- Stick values are the left-stick forward and side values of Behavior 2, unless a step says otherwise. Stick magnitude is the length of the (forward, side) pair.
+- Alignment is the dot value of the stick direction with the camera-relative direction (Behavior 2).
+- Current action: the hero's current action id is the id of the animation action being played. "Action N is current" means the current action id equals N.
+- Progress: the fraction of the current action that has played, read from the action track. The gate 0.99 uses the data word 0x2DD854. The gate 0.95 is a fixed constant.
+- P1: the weapon-out flag (Behavior 4; Medium-High).
+
+4A.1 Stance, walk, run, reverse walk and sneak (states 1 to 6, 22, 39, 40). Confidence Medium; High for the idle picker.
+- Each tick the walk-off check of Behavior 9A runs first. When it fires, the hero moves to state 7 and the grounded request below is not made in that tick (High).
+- A grounded record is a ground region record of kind 1 or kind 6; in it the hero uses the carry-walk clip 106. Requests by state when the walk-off check does not fire:
+  - State 1 (idle): while the hero's guard timer is positive the request is 63 (when action 64 is current, only after its 0.99 gate). Otherwise the hero idle picker below gives the request each tick (High). The guard timer is a separate 40-tick word at hero +0x1574. It is not the grab cooldown at +0xA04 (Behavior 3A), and a respawn does not reset it.
+  - States 2, 3 and 4: request 106 when grounded on a kind-1 or kind-6 record. Otherwise state 2 requests 7 (P1 on) or 2 (P1 off), state 3 requests 8 or 3, and state 4 requests 9 or 4. States 3, 4 and 6 add 1 per tick to a stance counter, up to 100. States 1, 2, 5, 22, 39 and 40 set it to 0 each tick, and the speed tiers set it to 0 when they request run (state 4) or reverse (state 6) from another state. Nothing reads the counter, so it has no effect on play (High).
+  - State 5: requests 10 (P1 on) or 5 (P1 off).
+  - State 6: requests 11 (P1 on) or 6 (P1 off). It uses the same stance counter as states 3 and 4.
+  - State 22 (sneak idle): requests 87 when the hero has no ground record or the record is not kind 1 or 6. Otherwise no request. In states 22, 39 and 40 the hero stays while Square is held and returns to state 1 once it is up (Behavior 1A).
+  - State 39 (sneak helper): requests 82 and calls a helper (not described).
+  - State 40 (sneak walk): requests 85 when there is no ground record. When grounded on a kind-1 or kind-6 record, requests 106. Otherwise requests 85. The speed tiers request state 40 while sneaking (Behavior 5.1).
+- Hero idle picker (High). Used by state 1, by the strafe state 32 when the stick is centred, and by three other hero routines. Ticks are seconds times the frame-rate word (60); random draws use the shared generator over closed ranges (SPEC-0008).
+  - Base id B: 1 with the weapon out (P1), else 35 while L2 is held, else 0.
+  - Idle-cycle ids: 0, 158 to 161, 107 to 111 and 146 without the weapon; 1, 157, 155 and 156 with the weapon out. When the current id is not an idle-cycle id, the picker draws the long-idle timer as a whole number in [600, 720] ticks (10.0 to 12.0 s) and requests B.
+  - In a cycle, the long-idle timer counts down by one per tick. At 0 the long idle is requested: 157 with the weapon out, 35 while L2 is held, otherwise one of 158, 159, 160 and 161 (uniform draw 0 to 3). The fidget timer is drawn in [360, 600] ticks (6.0 to 10.0 s).
+  - The fidget timer counts down. At 0 the fidget is requested: 146 while L2 is held, otherwise one of 107 to 111 (uniform draw 0 to 4).
+  - When the fidget timer is spent and the current clip reaches progress 0.99, a new long-idle timer is drawn and B is requested again.
+  - Quirk (reproduce): with the weapon out, ids 107 to 111 are not idle-cycle ids, so the fidget is requested for one tick only and B returns on the next tick.
+  - Ids 155 and 156 are tested as idle-cycle ids but never requested.
+- Test vector (synthetic): state 2, grounded on a kind-1 record: request 106. State 5 with P1 off: request 5.
+- Test vector, idle picker (synthetic): no weapon, no L2, long-idle timer drawn as 650: request 0 for 650 ticks; then the long idle (draw 2 gives 160) with the fidget timer drawn as 400; 400 ticks later one of 107 to 111; when that clip reaches progress 0.99, request 0 again with a new long-idle timer. With the weapon out: request 1, long idle 157, and the fidget lasts one tick.
+
+4A.2 Push and pull a block (state 18). Confidence High.
+- Entry: Square at a block face when the Square prompt shows the grab-block label (label 10 of the UI label table, design table 13; SPEC-0022). Let go: Square with the let-go label (label 20), or a set landing flag; the hero goes to state 1, or 22 after sneaking (Behavior 44).
+- Block record: the hero takes the block from a list of 0xB0-byte movable-block records, indexed by the motion record's current-block index (SPEC-0018). The list is built at world load from the world's type-11 block table (SPEC-0006, SPEC-0048): 90 blocks in 17 packs on the disc. With no record, the direction mode is set to none, the hero goes to state 1, and the routine returns (High).
+- Face: the direction mode (0 to 3) is the index m of the block face the hero holds. Face 0 uses the record's first vector, face 1 its second vector, face 2 the first vector negated and face 3 the second vector negated (High). The chosen vector is the face normal. States 19 and 58 (Behavior 51) read the same mode.
+- Approach phase (latch clear): the target point is the block centre plus the face normal times (minus half the block size minus 1.5). While the hero is farther than 0.25 (word 0x2DD56C) it walks there: when its facing is more than about 8 degrees off (dot below 0.99) it turns at rate 0.25 with the walk-turn request; otherwise it steps at rate 1.0 with request 2 (7 with the weapon out). Within 0.25 the latch is set.
+- Grab phase (latch set): the hero faces the block at rate 1.0 and its motion is cleared. The camera-relative stick is projected on the face normal (the push-pull value) and on the face's side axis (the side value).
+  - Push-pull dominant: a negative value, or action 41 already playing, requests 41 and moves the block toward direction (m + 2) mod 4; a positive value requests 42 and moves it toward direction m.
+  - Side dominant: positive requests 144 and moves the block toward (m + 1) mod 4; negative requests 145 and moves it toward (m + 3) mod 4.
+  - The block moves once per clip cycle, while the clip phase is between 0.05 and 0.15 (both strict). The clip phase is the cursor of main layer 0 divided by its clip's key count ((whole key + fraction) / key count); it reads 1.0 when that layer has no clip or has finished (Medium-High). Starting a push or pull plays sound cue 11 and a hero strain voice (Tor 33, Roberta 57).
+  - With no stick the hero requests 40, and 41 or 42 return to 40 at progress 0.95.
+- Climb onto the block: the push-into-face counter and the climb-onto-block fit test (Behavior 15) request state 58 (Behavior 51), on the 16th consecutive tick at a face at the earliest.
+- Push length in ticks (High): when the block move starts (clip phase between 0.05 and 0.15), n = (key count of the current clip - whole part of the clip cursor - 2), as a signed byte. For the push clip (action 42) n is divided by the half-rate word 0x368FA4 (0.5), so it is doubled. Pull and side moves (41, 144, 145) are not doubled, so they finish in about half the clip's remaining time (quirk to keep). The block's step length is half its size (SPEC-0048).
+
+4A.3 Shield guard (state 20). Confidence: High for the L1 gate, the state-1 exit and the shared facing method; Medium for the alignment test and the animation 119 request; Medium-High for interpreting the vector as the desired facing direction in this call.
+- Entry: L1 held or pressed with a usable shield (equipment slot 2), when the hero is not busy: from the button chain (step c), from attack sub-states 3 and 4 (Behavior 3C), or from the soft-landing event branch (Behavior 50). The last route is not reachable with the disc data because neither hero's action 68 has a 0x40 frame (SPEC-0005).
+- Stick-hold bit: bit 2 (value 0x0004) of the pad's control word. This is the L1 button (see the button table above). When it is clear, the hero goes to state 1 and requests animation 0 (idle). The routine ends for that tick (High).
+- When it is set: request animation 63 (0x3F), unless action 64 is current and its progress is below 0.99. In that case no request is made this tick.
+- The stick values are read (dead zone 40 about the centre 127.5, scale 87.5; Behavior 2). Each of the forward and side values is negated as in Behavior 2.
+- If both values are zero: call the shared character facing method with rate 1.0 and the locomotion sub-object's stored facing vector. The hero stays in state 20.
+- If either value is non-zero: set the locomotion moving flag. Divide each value by 87.5 and normalise the pair. Take the dot value of this unit direction with the camera-facing direction (Behavior 2). When the dot value is below 0.95 (fixed constant, about 18 degrees from the facing direction) and action 64 is not current, request animation 119 (0x77). Then call the shared character facing method with rate 1.0 and the normalized stick direction. The shared per-pass facing update reads the flag and uses the moving-facing branch when speed is above 0.01; this flag is therefore a steering/facing-mode gate, not a displacement value or animation-state value. State 20 itself does not write a travel step. Other action routines also set this field, but the wider indirect consumer set and its intended design label are unknown.
+- The shared method blends the requested direction with the current locomotion facing by the supplied weight, adds a small motion-record side-axis offset when the directions are almost opposite (dot below −0.99), normalises the result and stores it as the new locomotion facing. At rate 1.0 the requested direction becomes the facing, subject to that near-opposite offset. This is a facing update, not a movement step.
+- The rate 1.0 is requested on each path that calls the steer method.
+- Exits: state 1 only, or state 32 when the previous state was 32 and L2 is held (High). This routine never writes state 4.
+
+4A.4 Scripted walk or run to a point (state 50). Confidence High.
+- Entry: the level-script host calls RunHero and WalkHero (SPEC-0030). The script stores a target point, a run flag and a control option.
+- Each tick: let d be the distance from the hero to the point. When d is below 0.25 the hero has arrived. Otherwise the hero turns toward the point at rate 0.1. With the facing more than about 8 degrees off (dot below 0.99) it requests 0 (turn in place); otherwise it requests 2 (walk), or 4 when the run flag is set; with the weapon out these are 7 and 9.
+- Arrival: the camera is placed 10 units behind and 7.5 units above the hero, looking along its facing. Then the hero goes to state 33 when the control option keeps control with the script, otherwise to state 1.
+- Animation codes: 0, 2, 4, 7 and 9. The four-way pairing is: 2 (weapon in, walk), 4 (weapon in, run), 7 (weapon out, walk), 9 (weapon out, run). The flag that picks run is the script's run flag.
+
+4A.5 Scripted walk and orient (state 52). Confidence High.
+- Entry: the host call WalkHeroAndOrient (SPEC-0030), which also stores a face direction.
+- The same walk as state 50 with no run: request 2 (7 with the weapon out). Within 0.25 of the point the hero requests 0 and turns toward the stored face direction at rate 0.1. When its facing is within the 0.99 dot of that direction, it runs the arrival step of state 50 without the camera move (state 33 or 1).
+
+4A.6 Death (state 16). Confidence: High for the clips; the full rule is SPEC-0055, section 8A.
+- State 16 is the death state. Entered by damage that takes the hero to 0 health, by a script kill, or by deadly ground (SPEC-0055).
+- Ordinary ground: request 34. Deadly ground (ground record of kind 2): request 173 with effect 0x81 for surface word 2, 174 with effect 0xBC for surface word 8, and 136 with no effect for any other surface.
+- The death end mode is set by the handler (on ordinary ground when the death clip passes 0.95): 1 for game over or continue, 2 for a respawn at the entry record's point. The same step starts the death camera; a camera and effect call with the fixed constants 15.0, 1.5 and 0.01 runs there (meaning Medium-Low). The end mode drives states 59 and 60 (Behavior 3A; SPEC-0055).
+- Exits: none written by the routine (High).
+
+The stick magnitude in these states is the left stick (Y at +0x11F, X at +0x123; Layout) with the dead zone and scale of Behavior 2.
+
+### 4B. State 29 door hold (stick stepping)
+
+Confidence: Medium for the body; High that it is never run in play. This routine is the body of state 29 (hold a door), which is never entered in play (Behavior 51). A clean implementation may omit it.
+
+- Door: the door index comes from the motion record's door word on the first tick.
+- Band: the routine keeps the hero between 0.5 r and 1.5 r from the door's plane (r = the hero radius, 1.175). When the distance is outside that band it steps 0.075 along the facing: forward when the distance is above r, back otherwise. It keeps the hero's position along the door at its grab-time value.
+- Requests: 40 (still), and 41 or 42 by the forward stick. Codes 40, 41 and 42 are also the block clips of state 18 (Behavior 4A.2).
+- The constants 0.075, 0.5 and 1.5 are fixed constants (Medium).
+
+### 5. Speed tiers and ground speed (enable bit clear)
+
+Confidence: High for the tiers, the chain and the root data; Medium-High for the one-pass lag; Medium-Low for the list of special-move checks that skip the tiers.
+
+#### 5.1 Speed tiers
+
+When bit 0 of the control word is clear, the left-stick path does not use path A. It uses speed tiers. The tiers run on every hero pass, after the status factors (5.4), unless the hero is in a busy state or a special-move check fires. They request a hero state and multiply the per-pass speed scale P (5.2) by a tier factor.
+
+- If v ≤ 0.1 (word 0x2DD7DC): request state 1 (stop) when the hero is in states 2 to 6, 39 or 40 (state 22 instead while in states 22, 39 or 40). No factor is applied. Nothing else happens.
+- Otherwise v′ = max(v, 0.3) (word 0x2DD7E0).
+- Run mode: R1 (control word bit 3) is held and run is allowed. Run is allowed when the hero is already in state 4, or when a counter has reached 30. The counter is set to 0 on every pass in state 4 and otherwise rises by 1 per pass up to 30 (0.5 s, word 0x2DD7D8, times the 60 ticks of the frame-rate word). So running cannot restart until 30 passes after it ended; until then R1 gives walk mode.
+- Walk mode (otherwise):
+  - v′ ≥ 0.5: state 3 (walk), factor v′.
+  - v′ < 0.5: state 2 (slow walk), factor min(1, v′ / 0.5) = min(1, 2v′).
+- Run mode:
+  - v′ ≥ 0.66: state 4 (run), factor v′ × K, where K is the hero run factor (1.0 for both heroes, set when the hero is created).
+  - 0.33 ≤ v′ < 0.66: state 3 (walk), factor v′.
+  - v′ < 0.33: state 2 (slow walk), factor min(1, v′ / 0.33).
+- While the hero is in states 22, 39 or 40, the tiers request state 40 instead and apply no factor.
+- States 2, 3 and 4 play animation ids 2, 3 and 4 (ids 7, 8 and 9 when the hero variant flag P1 is set; id 106 under the condition of Behavior 4A.1). The variant clips have the same root data.
+
+#### 5.2 Ground speed: root motion of the playing clip
+
+- The hero moves by the root motion of the clip it plays. Each clip has one root record per key (the per-key root table of SPEC-0005): x, y, z as signed 16-bit values divided by 1024, a displacement per key in the hero's local frame (x side, y up, z facing).
+- Each pass the clip cursor advances by the clip speed c = R × 0.5 / S keys per pass, where S is the clip's speed byte (clip header byte 0x2A; 0.5 is used when S is 0). The root step of the pass is the root record of the current key k (the whole part of the cursor) times c.
+- R = (character base speed scale, 1.0 for the heroes) × P. The hero's per-pass factor P is stored at +0x8B8 and reset to 1.0 at the start of every hero pass; status rules (5.4) and the tier rule (5.1) then modify it. The shared character-scale accessor returns the product of the base scale at +0x3D4 and P. Hero setup and reset set the base scale to 1.0. The playing clip's speed is recomputed from R on every pass, so a change of tilt changes the speed on the next pass.
+- The step is turned into world space with the hero's basis and added to the hero's position: D = x B1 + y B2 + z B3, where B3 = f (the flattened unit facing), B1 = normalise((0, 1, 0) × f) (or (1, 0, 0) when that cross product is shorter than 0.01), and B2 = B3 × B1. The basis is rebuilt each pass from the facing, except in hero state 53. The three basis vectors are rows of the hero's motion record: B1 (side) at +0x290, B2 (up) at +0x2A0 and B3 (forward) at +0x2B0. D is stored as the record's last displacement (+0x120) and added to the record position (+0x50), with w set to 1 (SPEC-0040, Behavior 14C). Order within one pass of the step: the zeroing rules (the last item of this list and 5.5), then the partner touch rule, then the basis product, then the ground projection, then the store (High).
+- Timing (one-pass lag): the stick read in pass n sets the step that moves the hero in pass n + 1. From rest, the first pass of a push moves 0; every later pass moves one full step. Releasing the stick moves one more step, then 0. There is no other acceleration or deceleration.
+- Ground: while the hero's height above ground is below 1.0, D is projected onto the ground plane, D − (n · D) n with the ground normal n, except in hero states 21, 30 and 41. On a slope of angle a in the direction of travel the step length becomes |D| cos a.
+- The step is set to zero when the stick direction is behind the facing (5.5), in hero state 53, and, for the partner hero, while it is within the sum of the two heroes' radii of the active hero (SPEC-0040).
+
+#### 5.3 Ground speeds
+
+Both heroes, R = 1 (High):
+
+| Animation | Root per key | S | Units per pass | Units per second |
+| --- | --- | --- | --- | --- |
+| Walk (ids 3, 8) | z 0.4502 | 1 | 0.2251 | 13.51 |
+| Run (ids 4, 9) | z 0.6426 | 1 | 0.3213 | 19.28 |
+| Slow walk (ids 2, 7) | z 0.1670 (Tor also an x sway of ±0.031) | 1 | 0.0835 (Tor mean 0.0842) | 5.01 (Tor 5.05) |
+| Reverse (ids 5, 6, 10, 11) | z −0.9004 | 2 | 0.2251 | 13.51 |
+| Sidestep and turn-step (ids 38, 98, 99, 101, 151 to 154) | x ±0.883 to ±0.900 (mostly 0.9004) | 2 | 0.2208 to 0.2251 | 13.25 to 13.51 |
+| Carry walk (id 106) | z 0.2295 (Tor, S 2); mean 0.1153 (Roberta, S 1) | | 0.0574 / 0.0576 | 3.44 / 3.46 |
+| Idle (ids 0, 1) | 0 | | 0 | 0 |
+
+Speed = (units per pass at R = 1) × P × 60. The root record is constant over each of these clips, so the speed does not vary within a cycle. Scale check: the highest bind-pose joint is 3.30 units (Tor) and 3.03 (Roberta); a walk cycle (20 keys, 40 passes) and a run cycle (14 keys, 28 passes) each cover 9.0 units.
+
+Speed is not monotonic in tilt at the tier edges (an original quirk to reproduce): walk mode gives 4.91 units per second at v 0.49 and 6.75 at v 0.5; run mode gives 4.86 at v 0.32, 4.46 at 0.33, 8.78 at 0.65 and 12.72 at 0.66.
+
+#### 5.4 Status speed factors (heroes)
+
+High for the values and the gates. The moving test is: states 2 to 6 or 32, or states 22, 39 and 40 while the hero's last animation request is 85 (the clip state 40 requests off kind-1 and kind-6 ground). The attacking test is per hero: Tor is attacking in state 13 with attack sub-state 2 to 12, and in states 7 to 11 in air phase 8 or 9 (the plunge); Roberta is attacking in state 13 with attack sub-state 5 or 12.
+- slow (status 3) multiplies P by 0.75 while the hero is moving or attacking, so slow also slows the attack clips;
+- speed (status 5) multiplies P by 1.85 only while the hero is moving;
+- stun (status 0) sets P to 0 and requests state 1 in any state. Other characters use 0.5 and 2.0 instead (SPEC-0036). Tests: walk under slow 10.13 units per second; walk under speed 24.99; run under speed 35.66; run under slow 14.46.
+
+#### 5.5 Turning and moving together
+
+On each pass, after the facing update (Behavior 2), if the stick direction u points more than 90 degrees away from the facing (dot product below 0), the root step is discarded for that pass, except in hero states 21, 23 and 41 (High). Here u is the steering target held by the locomotion sub-object: the stick writes it on each pass with a stick that is not centred, so a centred stick keeps the last direction, and the climb panel hold writes minus the panel normal. The exemptions 21, 23 and 41, and the zeroing in state 53, are tests of the hero's action state. The hero therefore turns in place until the facing is within 90 degrees, then walks along its facing while it keeps turning. Test: misalignment 135 degrees at walk: passes 1 and 2 move 0 (the facing reaches 118.15 and then 99.22 degrees from the stick), pass 3 moves 0.2251 along the new facing. At the exact boundary, the root step is retained: with the moving-turn floor c = 0.95 and initial target dot d = −√(1−0.95²)/0.95 (misalignment about 109.1889°), the updated facing is perpendicular to the target, so the post-turn dot is 0 and does not satisfy the strict negative-dot suppression.
+
+### 6. Displacement, turning, probes and other features
+
+- Displacement: the hero's travel in the walk, run, slow-walk, reverse and sidestep states is the clip root motion of Behavior 5.2. State 32 re-aims the same root step toward the stick (Behavior 4, item 9). The other displacement rules are: the jump states (Behavior 50), the grab-point leap (Behavior 9) and the bounce's pending lift (Behavior 10) move the hero by their velocities, and the per-element movement step used for objects with sub-parts moves an owner by its velocity, divided by the element's divisor and scaled by the physics time scale 1/30 (SPEC-0040, Behavior 19).
+- Turning: see Behavior 2 (facing turn). While moving the turn is at most 18.19 degrees per pass (floor 0.95); at a speed value of 0.01 or less the eased rule uses the run-time tick-length word.
+- Height (High): the hero's world height is the motion record's position: it is integrated from the record velocity (SPEC-0040, Behavior 14A, items 5 to 7). The ground probe measures the gap to the ground (SPEC-0018), and the ground constraint puts the hero on the ground when the next step would take it more than 0.1 below it. The displayed height follows the world height with the lagged catch-up of Behavior 7.
+- Jump and falling movement: the jump states (Cross; Behavior 50), the walk-off fall (Behavior 9A), the grab-point leap (Behavior 9) and the bounce pad (Behavior 10). Climbing and other traversal are in Behaviors 13 and 51. No swim or step-height rule is known in the locomotion path. Gravity g = 32.0 is in the physics block (Where it lives). The motion record adds it every tick with the gain G of the current state, so in the air the vertical velocity changes by 32 G / 30 per tick and the height by the vertical velocity / 30 (SPEC-0040, Behavior 14A, item 7; the curves are in Behaviors 9A, 9B and 50). The motion driver runs on every pass (60 per second). The leap's loss of 0.02 per tick is a separate constant.
+- Button mash detector: four button slots, one each for Triangle, Circle, Cross and Square, count toggles of the pressed-edge bit within 15 ticks, up to three; a count of 3 is a mash (Behavior 9B, where the long fall uses it). The attack path itself reads R2 or Circle directly (SPEC-0036), not these slots.
+- Square (interaction): on its press edge the hero action path chooses an interaction from the hero's stance and whether a target is near, and may show a text message or play a stance animation. The target range is 5.8 units, and the target rule is the one in SPEC-0022 (Interaction range and target choice). Which handler runs for each stance is not fully described (Open questions).
+- Attack (R2 or Circle): a press starts a charge; releasing it decides between a normal swing or power attack (Tor) and a quick or full shot (Roberta). A press inside a timed window chains the next attack. The timings are in SPEC-0036.
+- Stick mode at attack start: the stick mode (0 to 3) chooses one of four attack entry variants (SPEC-0036). Medium.
+- Right stick: it nudges the camera (SPEC-0027) and runs a hold counter with a 60-tick threshold. The effect beyond the hold is not described.
+
+Ground probe start heights (High for the counts; Medium for the roles). The vertical probe takes a start offset above a point, or an absolute start height.
+
+- Offset 8.0: the shared ground-height wrapper raises the query ceiling by 8.0 and has 44 direct call sites (SPEC-0018). These calls span several systems; the count does not establish that every query point is a character's feet.
+- Offset 10.0: two movement routines (the motion step's blocked branch uses a start 10.0 above the candidate height).
+- Offset 6.0 at one site; offset 5.0 at two sites; offset 2.0 at one site.
+- Absolute start at the record height plus 2.5: the motion-record ground follow is the hero ground-attach routine. Two camera routines also use +2.5 for eye collision/ground-clearance queries (SPEC-0018, "Ceilings supplied by callers"); these are separate from hero placement. The motion-record follow's class-2 ground-entry branch raises the result according to the Y component of the record velocity (+0x64): no lift at or below 5, 0.3 × (vy − 5) from above 5 to below 25, and +6 at or above 25. Velocity is measured in the record's per-step units (SPEC-0040, Behavior 14A). The arithmetic and field identity are High; the branch's intended role is open.
+- No probe starts 4.0 above a point in the routines described. The 4.0 scripted-path value is not used (Open questions).
+
+Slopes and steps (Medium). Each hero motion-record tick refreshes its ground cell and runs the shared character ground-attach step before facing and root motion (SPEC-0018, Ground attach of a character; SPEC-0040, Behavior 14A). The probe uses the hero's current x/z and a ceiling 2.5 units above its current world height; its chosen ground height and normal update the record. Thus this path can select ground up to 2.5 units above the pre-step height, but this is a probe ceiling, not a 2.5-unit movement increment. When the subsequent root displacement is projected, it uses the normal sampled by that tick's attach; the projection can add a vertical displacement component. A separate 0.75 height-step rule checks a proposed movable-block move in the hero's state-18 block interaction (SPEC-0040, Behavior 11). It does not constrain the hero's ordinary state-32 stick locomotion: that displacement comes from animation root motion (Behavior 5.2), and no direct call from that route to the block check was found. Unseen indirect dispatch remains unexcluded.
+
+### 7. Hero height follow (lagged catch-up)
+
+Applies only to the hero's motion record, where the owner is the hero. Other owners skip it. Confidence: Medium-High for the structure, Medium for the constants.
+
+Inputs each tick:
+- World height: the vertical component of the record's world position, integrated from the record velocity (SPEC-0040, Behavior 14A); the ground probe measures the gap and the ground constraint snaps the record to the ground (SPEC-0018).
+- Displayed height: the vertical component of the separate drawn-copy position kept on the record. Record construction initializes all four drawn-copy position components from the world position; position setters also refresh the copy. Height follow then changes its vertical component (Open questions; SPEC-0040, Behavior 13).
+- A catch-up flag, a tick counter, and a speed value v.
+- The owner's state and a movement predicate on the owner. For the height-follow call, the predicate passes in hero states 7 to 11 and 43 to 46, and fails in all other states. These are the jump and strafe-jump states; interpreting them as a deliberate jump exception is Medium-High.
+
+Gap g = world height − displayed height.
+
+Idle (catch-up flag off):
+1. If |g| > 3.5, or the movement predicate fails, set the catch-up flag. Because the predicate passes only in states 7 to 11 and 43 to 46, the hero stays on the idle height-follow path in those states unless |g| > 3.5.
+2. Otherwise, if |g| > 0.1, add one to the counter. Set the catch-up flag when the counter exceeds 120 ticks (2.0 s), or at once when g < −0.5.
+3. Otherwise set the counter to 0. A gap of 0.1 or less is never followed.
+4. In idle, the speed value v is set to 0.
+
+Catch-up (catch-up flag on):
+1. If |g| < 0.05, clear the catch-up flag and the counter. No move this tick.
+2. Otherwise let q = 0.05 × g². If q < v, set v = q. Otherwise set v = v + 0.04 × q. The gain 0.04 is the data word at 0x2DA4BC.
+3. Move the displayed height by sign(g) × v.
+
+Output: unless the owner's state is 53, the drawn copy of the hero's position takes the displayed height as its vertical component. In state 53 this path writes nothing. The camera refresh path receives a pointer to this drawn-copy position, and a transform path reads the four-component copy; the exact subsystem for the latter is not established.
+
+Consequences:
+- The catch-up is quadratic in the gap, so a large gap closes slowly at first and is never fully closed by a single step.
+- A drop of more than 0.5 units starts the catch-up at once. A rise waits 120 ticks in idle. A gap above 3.5 starts the catch-up at once in either direction.
+- The displayed height can stay up to about 0.1 (idle) or 0.05 (after the catch-up stops) away from the world height.
+- The follow itself integrates no velocity and uses no gravity constant; it is not a fall. The world height that it follows is integrated (SPEC-0040, Behavior 14A).
+
+### 8. Hero motion-record travel (High; see Behavior 5.2 and SPEC-0040 Behavior 14C)
+
+The hero's motion record applies the animation player's root step through its stored facing basis, projects it onto the ground when the state and height gates allow, stores the resulting displacement and adds it to world position. Its read, zeroing conditions, basis, projection and one-tick timing are specified in Behavior 5.2 and SPEC-0040 Behavior 14C; the motion-record tick order is in SPEC-0040 Behavior 14A. The hero motion-record update has no separate first-order spring or camera contact-normal gate. Those rules belong to the mode-0 camera eye (SPEC-0027).
+
+### 9. Hang from a grab point and leap between grab points (state 28)
+
+Confidence: High for the grab lines, the entry order, the slide, the line end, the let-go, the candidate gates, the launch, the flight and the landing; Medium-High for the entry reach along the line (item 4 below; High for its two causes); High for the Cross-held hang offset lane; Low for the broader semantic role of its vector. The order of the exits and tests: High.
+
+What a grab point is (High). A grab point is a grab line: a cylinder of the area's type-11 chunk (its cylinder list; SPEC-0028, SPEC-0018) whose class word (the u16 at loaded offset +0x12, the word the contact pass reads for class bits) has bit 1 (value 0x0002) set. On disc the cylinder records begin 0x20 bytes after the list pointer with a stride of 0x50, and the class word of record k is the u16 at list pointer + 0x50 k + 0x12, that is 0x0E bytes before the record. At area load every such cylinder, in list order, gets one 0x40-byte grab record in a per-world table (run-time count at world +0x57FC, table at world +0x5800), and its table index is written into the cylinder's index word (loaded +0x1C). A grab record holds the cylinder pointer, the start point A (the cylinder base), the end point B = A + L u (L the cylinder length, u its unit axis) and the slide step 0.5. The disc has 47 grab lines in 18 packs: 758 (1), 796 (8), 809 (1), 822 (2), 956 (1), 970 (1), 986 (1), 991 (2), 1023 (1), 1066 (1), 1090 (5), 1176 (1), 1184 (4), 1230 (2), 1238 (2), 1298 (2), 1381 (5) and 1394 (7). They are long and thin (length 36 to 361 units, radius 0.09 to 0.65) and slope gently down from A to B (axis y between -0.37 and 0.0): they behave as slide lines. Thirteen of the 18 packs lie on the main-story route of SPEC-0058 (758, 822, 956, 986, 991, 1023, 1066, 1090, 1184, 1230, 1238, 1381, 1394); 970 is a duplicate pack, 1298 a cut variant, and 796, 809 and 1176 are not named on the route. No script or flag test reads the hang, so whether a route step can only be passed on a line is not established; a jump into any line on the route starts the hang.
+
+Entry (High for the state set and the order of checks). The hang is written only while the hero is in one of the jump states 7, 8, 9, 10, 43, 44, 45 or 46 (Behavior 50), with the cooldown expired (it is 60 ticks after any respawn; Behavior 3A) and a grab line in reach. It is never written from a stance state or from state 11. On each tick in those states, in this order:
+1. The wall-panel grab (state 21 with sub-mode 1, Behavior 22A) runs first. If it finds a panel, the hero goes to state 21 and the hang is not tried.
+2. The ladder grab test (state 41, Behavior 22) runs next. If it passes, the hero goes to state 41.
+3. If the hero is already in state 28, the hang's own handler runs and the entry is not tried.
+4. The grab-line predicate runs. It needs the hero in the jump-state set, the cooldown (+0xA04) at or below zero and the hero not in state 28. It walks cell list A of the grid cell under the hero (hero +0x174; SPEC-0018). An entry is tested when its flag word (+0x1A) is zero, or when that word ANDed with the world mask (world +0x56B4) is non-zero. The entry's kind byte (+0x10) must be 3 (a cylinder), its class word must have bit 1 set, and the reach probe must pass. The reach probe is a cylinder-against-cylinder overlap test between the line, taken as a cylinder of radius 1.5 (a fixed constant) and length L, and the hero, taken as an upright cylinder of radius 1.5 (word 0x2DD428) and height 5.5 (word 0x2DD42C) centred 2.75 above the hero's position; then the direction from A to the hero cylinder's centre must have a positive dot product with the line's flattened axis. Two properties of the overlap test decide where a line can be caught (High; reproduce): (a) the overlap test takes the point it is given as the cylinder's centre, and the probe gives it A, so the tested line cylinder runs from A - (L/2) u to A + (L/2) u; with the forward test, only the first half of the real line (from A to its midpoint, plus up to 1.5 past it) can catch the hero, and the half from the midpoint to B never does; (b) the overlap test does not test containment: it casts three probe segments from the hero cylinder and counts a hit only where a segment crosses the surface of the line cylinder (first or second crossing strictly between 0 and the segment length). Two segments are horizontal, of length 3.0 (twice the hero radius), across the top and across the bottom of the hero cylinder, along the horizontal direction from the hero cylinder's centre toward A, starting on the side away from A; the third is vertical, of length 5.5, up the side of the hero cylinder nearest A. The way the three results combine (and the cases where none crosses) is Medium. Measured on a level line (u along +x, A at x = 0, L = 100; the line's own radius does not matter): a hero with a side offset of 0.01 to 1.5 is caught anywhere with 0 < x < 50.5 or so (51.0 is not caught), when the line is inside its height band: line 1.5 to 4.0 above the hero's position for side offsets up to 1.0, 1.0 to 4.5 at 1.25, -0.5 to 6.0 at 1.45 (steps of 0.5); a side offset of 2.0 is not caught. A hero exactly in the line's vertical plane (side offset below about 0.001) is caught only within 1.5 of the midpoint (48.5 < x < 51.5, both strict), with the line from 1.0 below to 6.5 above its position. So a jump into a line on its first half catches it, and a hero under its far half falls through (Medium-High for the measured bands). The first passing entry's index word becomes the current target (+0x9E4) and the pending target (+0x9E8) is set to -1.
+5. If the predicate holds, the hero goes to state 28.
+The selector that holds this entry runs only when the global input-mode test passes (a global input word and a mode word; Medium). A second copy of the predicate, run by the selector's tail with an extra argument, writes a state that is not established; it is open (Low).
+
+Each tick the route sets the locomotion sub-object's state to 1, turns the hero toward the line's flattened axis (turn rate 1.0, so the hero faces along the line, from A toward B) and runs a four-value mode word (+0x9EC).
+
+- Mode 0, attach: the motion record's velocity is cleared and the hero is put on the line: P = A + ((P - A) . u) u, then its height is set 3.25 + r below that point (word 0x2DD7B8 = -3.25; r the line radius). The cooldown is set to 60 ticks (the frame-rate word; Behavior 3A) and the mode becomes 1. Request 112 unless 115 or 117 is playing.
+- Mode 1, slide and search. Each tick the velocity is cleared and the hero moves 0.5 units along u (the grab record's step; 30 units per second at 60 ticks per second). Request 112, or 113 while Cross (pad bit 0x40) is held. While animation 113 plays, 3.0 is added to the Y lane of the locomotion sub-object's +0x270 vector each tick; the other lanes are unchanged. The vector's broader semantic role is not established. Line end: when the ground gap is above 0 (the floor flag clear) and the distance |P - A| from the start point to the hanging hero is at most L, the hero keeps sliding; otherwise it lets go (below). Because the hero hangs 3.25 + r below the line, it lets go once s^2 + (3.25 + r)^2 > L^2, s being its distance along the line. The Square prompt shows the let-go label (label 20 of the UI label table); Square lets go. While Square is not pressed, cue 141 is kept playing at the hero (started when it is not already playing).
+- Search (in mode 1, Cross held, the left-stick X byte outside 127.5 ± 40; the stick value is the byte minus 127.5, less 40 toward zero). With B1 = up × f the hero's side axis (+0x290; f the facing; SPEC-0040 Behavior 14C), a stick pushed right (byte above 167.5) looks for a line on the -B1 side: side word 0, requests 114 and 115. A stick pushed left (byte below 87.5) looks on the +B1 side: side word 1, requests 116 and 117. These sides are hero-relative. Screen side varies with the camera: if C is its forward row and R = up × C its right row (SPEC-0027, Polar convention), then B1 · R = f · C. Thus +B1 projects toward screen-right when f · C is positive and toward screen-left when it is negative; the mapping is edge-on when the dot product is zero. In the usual trailing-camera alignment, +B1 is screen-right. Example: facing (0, 0, 1) gives B1 = (1, 0, 0), and the stick pushed right seeks lines at smaller x. A candidate is any other grab record of the world table that passes, in this order: its axis has a dot product above 0.75 with the current line's axis; it lies on the chosen side; its end B' is ahead of the hero (positive dot product of the direction to B' with the facing); the hero lies within its span (the projection of P - A' on its axis is above 0 and below its length L'); its side distance (the flattened offset from the hero to A', along B1) is below 20.0 (word 0x2DD7BC); and |A'.y - P.y| is below 8.0 (word 0x2DD7CC). The distance to A' itself is not tested. The nearest candidate by side distance wins (the search starts at 1.0e9, word 0x31E890). A found candidate becomes the pending target, the mode becomes 2, the side word is stored and the launch request (114 or 116) is sent. With no candidate nothing happens and the slide goes on.
+- Mode 2, launch (in the same tick as the search, since the mode switch runs after it): the hero takes one slide step along the current line and the mode becomes 3; the flight starts on the next tick. Leap velocities, in units per tick: side = (the flattened offset from P to A', projected on B1, times B1) / 40 (word 0x2DD7C0 = 40.0), so the side gap closes in 40 ticks; vertical = 40 x 40 x 0.5 x 0.02 / 40 = 0.4 (word 0x2DD7C4 = 0.02; the 0.5 is a fixed constant). There is no forward leap term: the hero keeps sliding along the current line.
+- Mode 3, flight, each tick: one slide step of 0.5 along the current line, then the three leap velocities are added to the position, then 0.02 is taken from the vertical velocity. When the vertical velocity is below -0.25 (word 0x2DD7C8) the falling request is sent (115 for side word 0, 117 for side word 1). Landing: when the flattened offset from P to the target's A', along B1, is at most 0.1 in size, the target becomes the current line, the pending target becomes -1, the mode becomes 0 and the falling request is sent again. The next tick's attach puts the hero on the new line, 3.25 + r below it, whatever height the arc reached. For a side gap D the landing comes on tick ceil(40 (1 - 0.1 / D)) after the launch tick: tick 40 for any gap of 4.0 or more.
+- Let go (Square, the line end, ground contact, or a missing record): request 0, then the motion record's velocity is set to u times 15.0 (the 0.5 step over the 1/30 time scale, so the hero leaves at the slide speed along the line, downward part included), the current and pending targets become -1, the mode 0, the cooldown 60 ticks, then state 7 in air phase 5 (the descent phase of Behavior 50) with request 67.
+- The hang's tests run in this order each tick:
+  1. If the current target index is -1, the hero lets go. The routine continues for the rest of the tick.
+  2. If the current target's record is missing, the same exit runs.
+  3. If the hero is in mode 1, Cross is held and the side stick is outside the dead band, the search runs. A found candidate sets the pending target and mode 2. Finding a target does not exit the hang.
+  4. If the motion record's touched flag (+0x238, set by any contact that writes a contact normal; SPEC-0018) is set, the hero is in mode 1 and the cooldown is below 1, the hero lets go and then enters state 48 (the long-fall landing, Behavior 9B). The final state is 48. The attach sets the cooldown to 60, so this exit needs at least 60 ticks on the line.
+  5. Otherwise the mode switch runs (modes 0 to 3 above); mode 1 ends with the line-end test.
+- A found target never exits to state 7; it goes to the launch mode (High).
+
+Flight numbers. With this order (move, then subtract 0.02), the height of the arc above the launch point, not counting the slope of the line:
+
+| Ticks after launch | Height (units) | Vertical velocity (units per tick) |
+| --- | --- | --- |
+| 0 | 0.00 | 0.40 |
+| 10 | 3.10 | 0.20 |
+| 20 | 4.20 | 0.00 |
+| 21 | 4.20 | −0.02 |
+| 33 | 2.64 | −0.26 (first below −0.25: falling request) |
+| 40 | 0.40 | −0.40 (the landing test passes here for a side gap of 4.0 or more) |
+| 41 | 0.00 | −0.42 (back at launch height when no landing came first) |
+
+The peak is 4.2 units above launch, reached at tick 20 (and again at tick 21), which is 0.333 s after launch. A leap between two lines 15 units apart lands on tick 40 (0.667 s), and the hero is put on the target line on the next tick (High).
+
+### 9A. Walk-off fall (High)
+
+Confidence: High.
+
+Each tick in the stance and sneak states (Behavior 4A.1), the walk-off check runs first. When the ground gap is above 3.0 and the vertical velocity (the Y component of the motion record's +0x60 vector) is below -3.0, the hero walks off the ledge into the air routine (Behavior 50). A third test in the same check, a test that the state is 30, is always false in these states, so it never blocks the fall.
+1. The hero's action state becomes 7 (High).
+2. The start point and the direction are saved on the locomotion sub-object (as the jump chooser does).
+3. Air phase and clip: when the record's motion vector (+0x160) has a negative dot product with the facing, or is shorter than 0.01 (fixed constant), the air phase is 2 and animation 70 (0x46) is requested; otherwise the air phase is 4 and animation 76 (0x4C) is requested. No launch is applied; the hero simply falls.
+
+The ground gap is the locomotion sub-object's ground distance. It reads as zero while the sub-object's floor flag is set (High). Every ground-gap test of this spec reads that one flag: the line end of state 28, this walk-off check, the climb descent and the long-fall landing, whose extra test of the same flag adds nothing. 3.0 and -3.0 are fixed constants.
+
+This is not the leap of state 28 and not a landing into an attack: state 7 is the standing jump state, and the walk-off enters it already falling.
+
+Walk-off curve (High). The walk-off uses the gap measured one tick earlier. When the ground drops away under a standing hero (gain 1.0), the hero falls 0.0356, 0.1067 and 0.2133 units after 1, 2 and 3 ticks. The gate first passes on the third tick (vertical velocity -3.2) when the drop is above about 3.11. Smaller drops never enter the air states: the hero falls in its stance state at gain 1.0 (a drop of 2.5 is reached in 11 ticks). After the gate: gain 0.3 from the next tick, then phase 5 with gain 0.35 once the vertical velocity is below -7.0 (10 ticks later), and the landing decision within 1.0 of the ground (Behavior 50). From 10 units: gate on tick 3, phase 5 on tick 13, hard-landing decision on tick 33 (height 0.0409), on the ground on tick 34. From 3.2: soft landing, on the ground on tick 17.
+
+### 9B. Long fall (state 48). Confidence High
+
+Entered by the level-script host call StartHeroLongFall (SPEC-0030), by level code, and from the grab-point hang of state 28 (Behavior 9).
+
+Use in play: the long fall is the area-entry arrival animation. The area-entry scripts move the hero to a locator high up (MoveHero), call StartHeroLongFall, run a tracking camera and a fade in, and wait (SPEC-0055, section 9). None of them damages or kills.
+
+Each tick:
+
+1. In the air (not yet landed): request animation 136 (0x88) and pass stinger index 25 for Tor or 49 for Roberta to the stinger routine on each such tick. The stinger routine accepts only indices below 19, so these requests start no audio; no long-fall scream is heard through this path (SPEC-0009, Stinger and emote-clip playback). Gravity gain: 0.35 while the vertical velocity is above 12.0 (word 0x2DD804, rising fast; this branch also clears the record word +0x284); otherwise 0.3 (word 0x2DD800) while it is above -7.0 (word 0x2DD808), and 0.35 (word 0x2DD7F4) below it.
+2. Landing (High): when the hero rides a moving object, the vertical velocity must first be at most that object's vertical step divided by the 1/30 time scale. Then (or with no object) the hero has landed when the ground gap is at most 1.0 (word 0x2DD80C) or the locomotion sub-object's contact flag is set. The landing starts when clip 137 is already playing, or when the hero has landed with a vertical velocity of at most 0, or when the motion record's wall-touch flag is set with a vertical velocity of at most 0 (a wall touch while descending lands the hero). Then the gravity gain is set to 1.0 and animation 137 is requested.
+3. While 137 plays, button mashing sets the clip speed scale to 1.5 (word 0x2DD82C), so the get-up plays at 1.5 times speed. Mash detector (High): four slots, one per face button: Triangle 0x0010, Circle 0x0020, Cross 0x0040, Square 0x0080, read on the pressed-edge word. A toggle is the edge bit going from clear to set or from set to clear; each toggle resets the slot's tick count and adds 1 to its toggle count (at most 3). Each tick the tick count rises by 1; at 15 without a toggle the toggle count returns to 0. Mash is on in a tick when any slot has a toggle count of 3 and a tick count below 15. One press makes two toggles (on, then off the next tick), so two presses of one button with the second at most 15 ticks after the first are a mash.
+4. When 137 reaches progress 0.99: state 1.
+
+Exit: state 1 (High).
+
+Fall curve (High). From rest: gain 0.3 from the first tick (the vertical velocity falls by 0.32 per tick), 0.35 once it is below -7.0 (from tick 22). Drop after K ticks: K = 10: 0.587; 20: 2.24; 30: 5.02; 60: 20.84; 90: 47.85. From 10 units: landing decision on tick 41, on the ground on tick 42. From 40 units the hero reaches the ground (tick 82) before a gap of 1.0 or less is seen, so the landing starts the tick after (clip 137 from tick 83; Medium-High that this skip happens in play).
+
+Falls (High). A long fall, entered by script as state 48, changes no health. The landing and falling routines covered by this spec (the jump states and their landings, the walk-off, the grab-point leap and the long-fall landing) do not call the hero's damage path. The only damage call in them hits the locked target, not the hero. So a fall does no damage to the hero, and the clean side must not add fall damage. Falls by script are also described in SPEC-0055.
+
+### 10. Bounce pad (state 56)
+
+Confidence: High for the numbers and for the writer; Medium-High for the meaning.
+
+Writer (High). The bounce pad has no button. The only writer of state 56 is the descent and landing phase of the air states (air phase 5, Behavior 50): when the hero lands on a ground record of kind 17 or 18, it goes to state 56. The climb states do not write state 56: climb sub-mode 2 and sub-modes 13 to 16 request animation 56 as a plain request (Behavior 51, state 21).
+
+The bounce uses a phase word and a counter on the locomotion sub-object.
+
+1. Phase 0: if the ground gap under the sub-object is 0.1 or less, move the sub-object down by the gap, set the counter to 1, and enter phase 1. While the gap is larger, the phase does not advance. While a flag on the sub-object is set, the ground gap reads as zero, so phase 0 advances at once (High).
+2. Phase 1, dip (4 ticks): each tick request animation 68 and move the sub-object by −0.2 divided by the counter. The counter runs 1, 2, 3, 4. Steps: −0.2, −0.1, −0.0667, −0.05. Total dip 0.4167. After the fourth tick, the phase becomes 2 and the counter 5.
+3. Phase 2, rise (4 ticks): each tick request animation 68 and move the sub-object by +0.2 divided by the counter. The counter runs 5, 4, 3, 2. Steps: +0.04, +0.05, +0.0667, +0.1. Total rise 0.2567. When the counter reaches 1, the phase becomes 3.
+4. Phase 3, launch: first a pending lift is added. It is 5.0 (word 0x2DD830) when the target record is absent or its kind is not 18. When the kind is 18, the lift is one component of a value computed from the hero's position block and a run-time vector constant (not on disc; Low). Then the stick part: both stick axes are read after the dead zone (40 units around 127.5). If both are inside the dead zone, nothing more happens. Otherwise both are divided by the stick scale 87.5, turned into a unit direction in the camera basis, and multiplied by 5.0 (word 0x2DD83C). The result is added to the sub-object's pending step as one scalar. The lift and the steer add to the pending-step accumulator, and the lift is then swept against the world, so a wall or ceiling can stop it. Then the hero goes to the jump state 7 (Behavior 50) in both variants. Phase 3 requests no animation (Medium-High).
+
+Net vertical change before the lift: −0.4167 + 0.2567 = −0.16. The sub-object ends 0.16 below its start, plus the ground gap. Test vector: from a start of 0, after each step the height is −0.2, −0.3, −0.3667, −0.4167 (end of dip), −0.3767, −0.3267, −0.26, −0.16 (end of rise).
+
+### 11. Strafe jumps (states 43 to 46)
+
+Confidence: Medium-High.
+
+States 43 to 46 are the strafe jumps of Behavior 50: Cross in strafe mode with the stick pushed. They run the same air routine as states 7 to 11, and their phase word is the air phase. The mode word (0 or 1) is the hero variant (0 Tor, 1 Roberta). Each tick the routine sets the locomotion moving flag, sends rate request 0.25 (word 0x2DD7D4) and checks the run and stick bits of the control word, then switches on the air phase.
+- Sides (Medium-High): state 43 is the jump to the hero's right (chosen from the actions with a negative side value, that is the stick pushed right: 37, 39, 98, 99, 151, 153), launch clip 102. State 44 is the jump to the left (36, 38, 100, 101, 152, 154), clip 104.
+- Launch: a phase outside 0 to 10, which includes the launch-pending value -1, requests 102 (state 43), 104 (state 44), 65 (state 45) or 70 (state 46) and sets phase 1 (Medium for the phase value).
+- Phase 7 (moving landing) returns to state 32 (strafe) instead of state 4.
+- Phases 8 and 9 are Tor's plunge attack: phase 8 requests 23 and runs the state-13 sub-state-12 hit scan; within 12.0 of the ground (word 0x2DD810) an effect plays; within 1.0 (word 0x2DD80C) phase 9 starts; the falling gain 0.3 (word 0x2DD800) applies. Phase 9 requests 24; the stick test can end it (state 1).
+- Tor's air attack in these states (High): in air phases 2 to 5 the attack input arms it; a 12-tick Circle hold gives the plunge, and an earlier release or an R2 press gives the air slash, which stays in the strafe-jump state with sub-state 11 and second main id 25 until landing (Behavior 50, Air attacks). Roberta's strafe jumps have no air attack.
+- Flight (High): the launch has vertical velocity 8.75 and horizontal speed 9.0 along the stored jump direction chosen by the strafe jump (the camera-relative stick direction, which can differ from the facing). The vertical curve is that of the running jump: peak 3.2028 at tick 24 in phase 4, phase 5 from tick 46, landing decision at tick 47. Unlike states 7 to 11 the strafe jumps run no air steering: the horizontal velocity stays 9.0 in phases 1 to 5 whatever the stick, so a centred stick does not slow them. The soft landing (stick centred) then lowers it (8.5, 8.04) until it is cleared; the moving landing (stick pushed) clears it and writes state 32.
+- The other phases are those of Behavior 50.
+
+### 12. Hero action states that are not described here
+
+Routines for states not named in Behavior 3 are not described in this spec. The clean side must not assume a meaning for them. Any state without a described routine must be treated as an open gap. States 1 to 6 are in Behavior 4A.1, states 7 to 11 and 43 to 46 in Behavior 50, and the traversal states in Behavior 51.
+
+### 13. Ladder (state 41)
+
+Confidence: High for the sub-modes, the rungs, the clips, the jump-off and the grab tests.
+
+State 41 is the ladder. Its sub-mode word is the hero word at +0x9BC, shared with the climb state 21 (Behavior 51). Ladder records have the type byte -3. Animation codes are the character's animation indices (SPEC-0005).
+
+Entry: the ladder grab test (Behavior 22; sets sub-mode 1), run from the ground, while jumping (states 7 to 10 and 43 to 46) and from the ledge hang (state 30, Behavior 51).
+
+Each tick with a ladder record:
+- The hero faces the ladder (minus its normal) at rate 1.0, its motion is cleared and the locomotion sub-state is set to 1. With no ladder record the sub-mode is set to 0.
+- Jump off: a Cross press edge (logical bit 0x0040, read on the edge word) when the sub-mode is not 8 sets the sub-mode to 0 and starts a jump by the jump chooser (states 7 to 10, Behavior 50): the locomotion block and displacement are cleared, the horizontal velocity is -0.5 (word 0x2DD858) times the facing, the vertical velocity +2.0 (word 0x2DD85C), and the ladder can be grabbed again after 30 ticks (half the frame-rate word; the grab cooldown of Behavior 20). A held Cross without an edge does nothing.
+- Let go: the Square prompt shows the stop-climbing label (label 18 of the UI label table); Square returns the hero to state 1, or 22 after sneaking (Behavior 44). On a high ladder the walk-off check (Behavior 9A) then makes the hero fall.
+
+Sub-modes 0 to 8 (stick forward is the left-stick Y axis pushed up, the forward value of Behavior 2):
+- 0: state 1 (High).
+- 1 (mount): each of three axes moves at most 0.1 per tick toward its target: 0.9 (word 0x2DD840) out from the ladder face, 0.8 (word 0x2DD848) along its side axis, and up to the nearest rung, 0.45 + 1.25 k for the first k with the height below that rung plus 0.6. When all three are aligned: with a ground gap of at most 1.5 the sub-mode becomes 2 with request 93; otherwise (mounting from above) request 120 plays with cue 140 until it ends, and then the sub-mode becomes 2.
+- 2 (rung A, request 93) and 3 (rung B, request 92): stick pushed forward climbs. When the height is at least the ladder top minus the hero height minus 1.3 (sub-mode 2) or 1.27 (sub-mode 3), the hero climbs off the top: sub-mode 8, request 59. Otherwise sub-mode 4 (request 91) from 2, or 5 (request 90) from 3. Stick pulled back climbs down: when the height is at most 0.5 (word 0x2DD850) or the ground gap is below 0.5, sub-mode 0 (step off); otherwise sub-mode 6 (request 95) from 2, or 7 (request 94) from 3.
+- 4, 5, 6 and 7 (rung steps): each waits for its clip to reach 0.99 (word 0x2DD854), then goes to 3 (request 92), 2 (request 93), 3 (request 92) and 2 (request 93) in that order, each with cue 140 (one cue per rung).
+- 8 (climb off the top): request 135 until progress 0.99 (after the 59 of the step into it); meanwhile the motion is cleared and the record flag is set; then sub-mode 0. Roberta (hero variant 1) also steps 0.05 (word 0x2DD860) forward along the stored vector.
+
+Rungs are 1.25 units apart, the first at 0.45 above the ladder base. Animation codes: 93 (0x5D) idle on a rung, 91 (0x5B) and 92 (0x5C) up, 90 (0x5A) and 94 (0x5E) down, 95 (0x5F), 120 (0x78) mount from above, 59 (0x3B) then 135 (0x87) climb off the top. Cue 140 is in the cue table of SPEC-0031. Exits: states 7 to 10 (jump off), state 1 (sub-mode 0, no ladder record, or Square).
+
+### 14. Landing test (used by the hero and other characters)
+
+Confidence: Medium. Used by about 25 generic routines, not only by the hero.
+
+A character is considered landed on the positive-radius kind-4/7 branch when its movement-state predicate passes, its vertical velocity is below zero, and a point-plus-radius query hits the candidate oriented box. The query point is Q = V30 + s V60, using the input record's vectors at +0x30 and +0x60 and scalar at +0x24; the character motion record supplies the radius. After a hit, the branch passes when Q.y − 1.5 is below the character's reference height. The 1.5 is a fixed constant.
+
+This positive-radius branch is a point-versus-oriented-box contact query; it has no far endpoint or segment direction. The kind-4/7 branch for a zero or negative extent uses a separate static/footprint primitive test, so its geometry is not described by this rule. Its recovered call path is separate from the hero air-landing sequence (Behaviors 9A and 50), which uses ground-gap and floor-contact checks; no direct call from that sequence to this helper or its dispatcher is present. Unrecovered indirect reuse is not excluded. The semantic roles of V30, V60 and s, and the zero-or-negative-extent branch remain open.
+
+Test vector (query-point construction only): V30 = (0, 10, 0), V60 = (0, 1, 0), s = 2 gives Q = (0, 12, 0). The character radius is supplied separately; this vector alone does not determine whether the box query hits.
+
+### 15. Climb-onto-block fit test
+
+Confidence: High.
+
+The test reads the hero's current movable block (SPEC-0048; the nearest active block, SPEC-0018) and the block face index m (0 to 3) set by the face finder (Behavior 15A). It returns pass or fail. Gates in order; the first failure fails:
+1. A block list exists and the hero has a current block whose entry is set.
+2. The hero is moving: state 2, 3, 4, 5, 6 or 32, or sneaking (22, 39, 40) while action 85 is current. When this gate passes the locomotion sub-state is set to 1, even if a later gate fails.
+3. Height: h = block top - hero feet height, with the block top = the box's reference height plus its vertical extent (taken from the box as loaded; it is not updated when a push changes the block's height). Pass when 0.2 < h < 3.5 (both strict; fixed constants).
+4. Facing: the facing's dot product with the face direction (face 0: axis A, 1: axis B, 2: minus A, 3: minus B) must be above 0.5. A face index outside 0 to 3 fails.
+5. Stick: a = the camera-relative stick projected on the facing, b = projected on the hero's side vector (the stick pushed forward gives a > 0). Pass only when |a| > |b| and a > 0. A centred stick fails.
+
+Uses:
+- Push-into-face counter (hero word +0x9B0). Each tick the face finder (selector 0) runs. When it finds no face, the counter is set to 0. While it finds one and the counter is below 15 (word 0x2DD574), the counter rises by 1. Once it is 15, the fit test runs every tick, and a pass requests state 58 (climb onto the block, Behavior 51). The request therefore comes on the 16th consecutive tick at a face at the earliest. A failing fit test does not reset the counter.
+- The Square selector runs the fit test once more when the counter routine found no face. That path always fails (the failed face finder has cleared the face index to none), so it never requests anything (quirk; no effect).
+
+### 15A. Block face finder
+
+Confidence: Medium-High.
+
+Inputs: the current block (index and distance kept by the hero's motion record, SPEC-0018) and a selector s (0 or 1). The finder fails, and sets the face index to none, unless all of these hold:
+1. gap = (distance from the hero to the block's centre) - 0.5 times the block size is above 0 and below 2.0 (word 0x2DD568).
+2. The block centre is at most 10.0 above the hero.
+3. With the horizontal offset o = block centre - hero: dA = o . A and dB = o . B. When |dB| < |dA| the face is 0 (dA > 0) or 2; otherwise 1 (dB > 0) or 3. The dominant |d| / |o| must be above 0.5 (word 0x2DD570).
+4. facing . (face direction) > 0.
+5. Pull-back clearance: the point P = block centre + (size + 1.5) times (minus the face direction), on the hero's side, must pass the block's area test when the block has one; otherwise the ground heights under the block and under P (probe ceiling 8.0) must differ by at most 0.75 (word 0x2EB2C0).
+Selector 0 (the push-into-face counter) also requires a clear segment between the block side and the pull-back point (both raised 1.5) and that no other active block's box overlaps the pull-back point. Selector 1 (the Cross block-edge grab, state 19) skips those two checks.
+
+Side-touch latch (High). The hero word +0x9B4 is set to 1 by the character-versus-block contact (SPEC-0018) when the hero touches a block side whose contact normal is near horizontal (vertical part below 0.1 in magnitude) and the block top is more than 1.0 and less than 5.0 above the hero's reference height. The contact is skipped in hero states 58, 41 and 30. When the hero's branch-0 motion-record driver runs, its owner pre-step clears +0x9B4 after that tick's hero update and before later movable-block contacts (SPEC-0040, Behaviors 3 and 14A, item 1). A contact therefore carries the latch into the next hero update, where the state-19 grab test may read it before the driver clears it again; another eligible contact can refresh it. If no hero branch-0 driver tick runs, this pre-step does not clear it. It does not persist indefinitely until area entry. The block-edge grab test (state 19, Behavior 51) passes when the face finder with selector 1 passes and the latch is 1.
+
+### 16. Scripted jump onto a box (never run)
+
+Confidence: High.
+
+Present but never run: its only entry has no caller and no data reference. A clean implementation may omit it.
+
+Rule, if run: for each box in the hero's cell trigger list (kinds 4 or 7 with a switch extent above 0; boxes with flag bit 0x0004 or 0x0002 set are skipped) that a segment query from the hero hits: h = box top - hero feet + 2.0. When h > 0.1 and v0 = sqrt(2 g h) > 0.25 (g = the physics gravity, 32.0), set the vertical velocity to v0; then wait one tick at a time while the vertical velocity (the motion record's velocity, +0x60) is above 0.01, that is to the apex; then set the horizontal velocity to 6.0 times the flattened facing. The fall law is that of SPEC-0040 Behavior 14A item 7: at gain 1.0 a launch of sqrt(2 g h) rises by about h, so the hero would reach its apex about 2.0 above the box top.
+
+Test vector (g = 32): box top 1.0 above the feet gives h = 3.0 and v0 = sqrt(192) = 13.86. With h = 0.05 the first gate fails.
+
+### 17. Action start gate and jump-action helpers
+
+Confidence: Medium.
+
+(a) Start gate. The hero has four action entries. A start is refused when the busy flag is set or the selected entry is empty. For entry indices 0 to 3, the ground probe direction is, respectively, the first frame axis, the second frame axis, the negation of the first axis, or the negation of the second axis; the selected axis is normalised before the probe. If the probe succeeds, a separate spatial exclusion check walks the other entries in the current world's fixed-stride record list and must also pass. This is a one-sided rectangular window test in the two horizontal position lanes, not a radial-distance test: it requires a nonnegative forward separation, a lateral interval based on the nested extent R, and a forward limit based on R. The selected helper orientation and interval are determined by the chosen entry index and the hero's current 0-to-3 mode. The two symmetric helper forms use |lateral separation| < R - 0.05 and a forward limit of either R + 0.5 or 1.5 x (R + 0.5); the two asymmetric forms use lateral interval (-2R + 0.05, R - 0.05) or (-R + 0.05, 2R - 0.05), with forward limit R + 0.5. Bounds are strict for the lateral interval and inclusive for the forward limit. On success the gate records the selected index, stores the argument as the action record's duration byte (+0x91), sets its active word (+0x88), and resets its elapsed-step byte (+0x90) to zero. Each later active record update adds one duration-scaled step along the selected axis and increments the elapsed-step byte. When elapsed steps reach the duration, the next update clears the active word without adding another step. Thus +0x90 is a per-action elapsed-step counter, not an unspecified flag. A failed start returns before changing these fields.
+
+(b) Jump-action helpers. No path from the hero's state dispatch to these helpers is known; their owner (likely a non-hero character) is open. Two helpers with the same shape. Each plays animation 51 (0x33) or 50 (0x32) when its flag test passes, and otherwise plays animation 49 (0x31) through the state table. An alignment test uses 0.99 as a fixed constant (the same value as the Where table word 0x2DD854). After the action the hero's state is set to 13 or to 2. Which helper runs for which action is not confirmed.
+
+### 18. Carry a Miamouse (state 57)
+
+Confidence: High for the sub-states, their clips and transitions; Medium for the hold timing in sub-state 0.
+
+The sub-state word (0 to 3) belongs to hero state 57, the carry of a caught Miamouse (SPEC-0029, Behavior 28, gives the catch, hold and release rules). Entry: the Square interaction selector offers the catch when the run-time carry gate (word 0x36EC14) is set and a character of class 21 that can be caught is within 4.0 with a facing dot product above 0.5 (the first in the character list); a Square press edge enters state 57 with sub-state 0 and stores that character as the carried one. Each tick of state 57:
+1. Sub-state 0 (pick up): request clip 178; when it reaches progress 0.99, sub-state 1. The hold step runs on every tick after the first one.
+2. Sub-state 1 (stand holding it): when the left stick is off centre the hero turns (as in item 3) and the sub-state becomes 2. Then the hold step runs and clip 179 is requested.
+3. Sub-state 2 (walk holding it): the hold step runs and clip 180 is requested; the hero turns toward the camera-relative stick direction at rate 0.25 and sets the locomotion moving flag, and the clip's root motion moves it. With the stick centred the sub-state becomes 1 (clip 180 is still requested on that tick).
+4. Sub-state 3 (put down): set by a Square press edge while the drop prompt shows (sub-states 1 and 2). Request clip 181; on the next tick the carried character is released and the carried index is set to -1; when 181 reaches progress 0.99 the hero goes to state 1 (through the state setter) and the sub-state is set to 1.
+5. Any other value acts as sub-state 1.
+6. Hold step: while a character is carried, put it in its base state 33, request its clip 12, and place it at the hero's attach point (SPEC-0005).
+7. Leaving state 57 by any other path while carrying releases the character at once.
+
+Nothing is thrown and nothing is spawned; Behavior 31 is unrelated.
+
+### 19. Target pick (state-21 actor pick)
+
+Confidence: High for the structure, writes, false return, Miamouse catchability gate and candidate class restriction; Medium for the separate distance test.
+
+The hero scans the active actor list for an actor whose state is 21 (0x15), then checks its character class. Only class 21, the Miamouse, is eligible for this picker. This is one of three separate target finders (see the cascade paragraph below). It is not the SPEC-0036 target pick and not the Behavior 22 predicate. A Miamouse candidate must have a nonzero value in its record field at +0xC84, the Miamouse catchable word (SPEC-0029, Behavior 28). The picker checks this after the class test and before its range test. The word is 1 while the Miamouse is idle or wandering; it is cleared during fleeing, release/landing and delivery/caging. The picker use of this word therefore admits a Miamouse only while catchable; this interpretation is scoped to class-21 candidates and does not establish the field meaning for other classes. A surviving candidate must have a Euclidean 3-D distance from the hero strictly below 4.0 units (4.0 is a fixed constant) and pass an alignment test: it forms candidate position minus hero position, normalizes that vector, dots it with the hero motion record's forward row B3 (+0x2B0), and requires a result above 0.5 (a fixed constant). This accepts candidates in a strict forward cone narrower than 120 degrees. The first candidate that qualifies has its id stored in a dedicated hero word (+0x15E4), not in the target field, and the routine returns true. When no candidate qualifies, it returns false. It does not write the target field or the stance sub-mode.
+
+Cascade (Square selector, ground path): this actor pick runs first. If it returns true, the selector takes its interaction branch and skips the panel and ladder finders. If it returns false, the selector tests the wall-panel grab (Behavior 22A); a successful wall test stores its panel target and climb sub-mode 1, then the selector requests hero state 21. Only a failed wall test reaches the ladder grab (Behavior 22). A successful ladder test stores its ladder target and sub-mode 1, then the selector takes its ladder transition branch. If that also fails, the selector continues to its other Square-action checks. High for call order and branch gates; Medium for naming the selector outcomes. The wall-panel and ladder checks are separate locomotion finders, not the SPEC-0036 combat target picker.
+
+### 20. Air and landing states
+
+Confidence: Medium-High for the states; partly described.
+
+An air routine with three states. It is not a hero routine: no hero path reaches it (High); the hero's own air states are Behavior 50. State 0 is the start of a fall. State 1 is falling and tests for ground with the landing test (Behavior 14). State 2 is landed. A second state word of the hero, when it has the value 5, selects a landing variant that plays animation 7. On landing with no stop test, animation 134 (0x86) is played. No cue is played in this routine. It is not related to the walk-off of Behavior 9A or to the ladder of Behavior 13.
+
+**Grab cooldown (High).** There is no landing recovery. The hero word +0x9CC is the grab cooldown, in ticks. Each hero update counts it down by 1 while it is positive, before the state route runs. The ladder grab (Behavior 22), the wall-panel grab and the ceiling-panel grab (Behavior 22A) are refused while it is positive. Writers: the ladder jump-off sets 30 (half the frame rate); climb sub-modes 3, 4, 5, 6, 7 and 18 set 120 (2.0 s) together with request 49 (climb idle) and a sub-mode change (the "4" is climb sub-mode 4, not action state 4); sub-mode 10 sets 100; sub-mode 2 sets 20 for its edge hand-off; sub-modes 1, 8 and 9 and every successful grab set 0. Climb sub-modes 2, 4, 15, 16 and 17 make their panel-to-panel hand-offs only while it is 0, so after a write of 120 the next hand-off waits 2.0 s. It ends only by counting down or by a write of 0. A second routine with a 120-tick timer (a waypoint timer at +0xBD0) is a method of the generic character class, not hero code.
+
+### 21. Homing approach
+
+Confidence: Medium.
+
+Three states. State 1 turns the hero toward a target point at a speed of 0.5 (unit not confirmed) and moves to state 2 when the target is in front of the hero. State 2 holds while a range test passes. The range tests use 0.95 and 0.75; whether these are data words or fixed constants is not established. State 2 plays animation 1 and animation 4 (taken as the upward jump and the approach; Low). No path from the hero's state dispatch to this routine is known; its owner (likely a non-hero character) is open. The write of air phase 4 with animation 76 is the walk-off fall of Behavior 9A, not an entry to this routine.
+
+### 22. Ladder grab test (used from the ground, while jumping and from state 30)
+
+Confidence: High.
+
+The test walks the world's type-10 groups (SPEC-0006) and their records of type -3 (ladders). It runs only while the grab cooldown (Behavior 20) is 0, and first clears the hero's target. For each ladder record (normal n, side axis U and up axis V, each with its plane offset, lengths LU and LV), in order:
+1. facing . n < -0.8, and u . n < -0.8, where u is the camera-relative stick direction (Behavior 2), or the facing when the stick is centred.
+2. -r < d < 1.25 r, where d is the hero position's signed distance from the ladder plane and r is the hero radius 1.175.
+3. 0 <= x <= LU, where x is the position along U.
+4. -1.0 <= y <= LV - (H + 1.25), where y is the position along V (the height above the ladder base) and H is the hero height 3.5; in state 30 the upper limit is LV.
+5. Stick magnitude above 0.1, except in state 30.
+
+On the first record that passes, the ladder is stored in the hero's target field (+0x9D0), the shared climb and ladder sub-mode word (+0x9BC) is set to 1 (the mount sub-mode of Behavior 13), and the test returns 1. When no record passes, it returns 0 and the target stays cleared.
+
+Callers: the Square selector in the ground path and, while jumping (states 7 to 10 and 43 to 46), in the air path after the wall-panel grab (Behavior 22A); and the ledge hang (state 30, Behavior 51). It is the third of the three hero target finders of Behavior 19.
+
+### 22A. Climb-panel grabs
+
+Confidence: High; Medium for the prompt reset of the ceiling grab.
+
+Both grabs need the grab cooldown (Behavior 20) at 0 and clear the target first; they walk the type-10 records (SPEC-0006). Lower margin a = 1.0, or -1.0 when the record's first neighbour link is set; upper margin b = 1.0, or -1.0 when its last neighbour link is set. d, x, y, r and H are as in Behavior 22.
+- Wall panel (type -2; run by the Square selector in the ground path and in the jumping path): facing . n < -0.8 and stick direction . n < -0.8; -r < d < 1.25 r; a <= x <= LU - b; -1.0 <= y <= LV - 1.0; stick magnitude above 0.5. Pass: target = the panel, state 21 with sub-mode 1 (the selector writes the state).
+- Ceiling panel (any record whose normal's vertical part is below -0.99; on the disc only type -2): 0 < d < H + 1.0 (the panel is above the hero's feet by less than his height plus 1.0); a <= x <= LU - b; -1.0 <= y <= LV - 1.0. No facing or stick test. Pass: the prompt label 21 is shown, target = the panel, sub-mode 18, the cooldown is set to 0 and the hero enters state 21; the shared prompt object is reset (Medium). Run by the air routine every air tick (Behavior 50).
+
+### 23. Smoothed look channels (Medium for the glide and clamp rules; Low for their meaning)
+
+One object record holds five smoothed channels: two angles, two values clamped to plus or minus 0.4, and one value clamped to the range 0.1 to 40. Four of them (the two angles, the two values and the single value) glide toward a target over a remaining time in seconds. Their meaning (for example a look direction or a lean) is open.
+
+- Angle wrap (each tick, for the two angles): if the absolute value of an angle exceeds 2 pi, the angle is reduced by the whole number of turns times 2 pi, using the turn factor 1 / (2 pi). Rounding of the turn count is not confirmed.
+- Glide (for each glide channel). Let r be the remaining time and dt the tick length (1/60 s). In order: the rate is set to (target minus current) divided by r, taken before the count-down; r is reduced by dt; the current value moves by rate times dt. When r falls to zero or below, the current value is set exactly to the target and the rate and r are cleared.
+- Clamps: the two value channels are clamped to plus or minus 0.4. The single value channel is clamped to [0.1, 40]: a value above 40 becomes 40; otherwise a value below 0.1 becomes 0.1.
+- Mode: the record stores a mode number from 0 to 4, dispatched each tick. Modes 3 and 4 write the constants 2.0, 0.2, 0.1, 1.0 and 0.08 (Where section) and the 0.4 clamp. The other mode routines are not described.
+- Tick order: the step receives dt and stores it; adds dt to an accumulated time; sets an active flag when the mode is not 0; runs the mode dispatch; then runs the three glide updaters (angle pair, value pair, single value).
+- Where it runs: once per tick from the hero's per-tick routine that also runs the idle-look timer. Owner: see Open questions.
+
+### 24. Hold counter (High) and the petpet regeneration gates (High)
+
+Hold counter. This is the push-into-face counter of Behavior 15 (limit 15, word 0x2DD574): the face finder resets it, it stops at 15, and from then on each passing fit test requests state 58 (High).
+
+Petpet regeneration gates. The two predicates are the hit-point and magic gates of the petpet passive bonuses (SPEC-0047, Passive bonuses to the hero). Each is true when the live petpet's kind passes its kind test (6 or 7 for hit points, 3 or 7 for magic) and the petpet's score field is an exact multiple of trunc(60 x 1.0) = 60 (words 0x2DD8E4 and 0x2DD8E8). They do not read the frame counter. Because the score field is constant between strikes, a gate is true on every tick or on none, not once per second (SPEC-0047).
+
+### 25. Integer step with dither (Low)
+
+A routine returns how many whole units to add this tick toward a total N.
+
+- Target T = floor(0.1 x N) + 1.
+- Rate per second: 1.0, or 2.0 when the flag argument is nonzero (words 0x2DD464 and 0x2DD478). Per tick the rate is divided by 60.
+- The step is capped at the remaining distance to T.
+- Dither: when the frame counter is a multiple of one divided by the fraction, one extra unit is added (rounding detail not confirmed).
+- The routine's other constants are the same numbers in both flag cases, so the flag changes only the rate.
+
+### 26. Proximity and interaction candidate tests (Medium-Low)
+
+- Proximity scan. Walk the global actor list for an entry of type 1 whose flag is clear. The test is true when such an entry lies within 3.0 units (straight distance) of the hero's reference point.
+- Interaction candidate. A nearby entry qualifies only when, in this order: (1) it is not busy and passes a kind check; (2) the hero height is below 25.0; (3) hero states 25, 33, 51 and 55 are all inactive; (4) a height-plus-radius comparison passes, or its fallback passes. The fallback requires the candidate type to resolve in a shared type table and the strict comparison 0.4 × candidate field +0x94 < candidate field +0x98. If the type lookup fails or the comparison is equal, the fallback fails. The meanings of the height threshold and fallback fields are not established.
+- This is separate from the 5.8-unit selector radius of Behavior 1A and the 4.0-unit pick of Behavior 19.
+
+### 27. Animation codes by control kind (Medium-Low for the codes)
+
+A selector maps a control kind (0 to 3) to an animation code, using the hero state and a count from a helper (not described).
+
+- Kind 0: 170 when the state is 1 or the count is 0; 187 when the count is 1; 186 when the count is 2 or more.
+- Kind 1: 170 when the state is 1 or the count is 0; 189 when the count is 1; 188 when the count is 2 or more.
+- Kinds 2 and 3: 171.
+- Any other kind: no code (-1).
+
+The codes index the character's animations (SPEC-0005). The meaning of the codes and of the count is open.
+
+### 28. Input-code remap (Medium)
+
+A switch maps input codes 1 to 27 to output codes. Any other input code gives 11. Input to output: 1, 6 and 20 to 11; 2, 23 and 26 to 20; 3 to 18; 4 to 13; 5, 22 and 27 to 15; 7 to 17; 8 to 19; 9, 21 and 24 to 12; 10 to 29; 11 to 25; 12 to 21; 13 to 22; 14, 18 and 25 to 23; 15 to 26; 16 to 24; 17 and 19 to 28. The meaning of the output codes and the caller that reads the result are open.
+
+### 29. D-pad pressure virtual stick (High for the arithmetic; Medium for the absence of a reader)
+
+A second stick path, separate from the dead zone of Behavior 2: the pad read turns the D-pad pressure bytes into a virtual left-stick pair, every pass. For each left-stick axis with raw byte r, let m be the absolute value of (r minus 127). The centre used here is 127, the neutral fill value; Behavior 2 uses the dead-zone centre 127.5. Both are right for their own paths. Two axes:
+
+- First axis (raw byte at record offset +0x11F). T1 = the smaller of 127 and 1.1 times the byte at +0x13B; T2 = the smaller of 127 and 1.1 times the byte at +0x137. If m is below T1, the output is 127 plus T1. Otherwise, if m is below T2, the output is 127 minus T2. Otherwise the output is r. The output is written to the derived byte at +0x161.
+- Second axis (raw byte at +0x123). Ta = half of the byte at +0x133; Tb = half of the byte at +0x12F (no 1.1 factor). If m is below Ta, the output is 127 minus Ta. Otherwise, if m is below Tb, the output is 127 plus Tb. Otherwise the output is r. The output is written to the derived byte at +0x160.
+
+The inputs at +0x12F to +0x13B are the D-pad pressure bytes. No gameplay path reads the derived bytes +0x160 and +0x161 (Medium).
+
+### 30. Target search, nearest target and commit (Medium)
+
+- Target search parameters. Two callers run the target search (its body is not described here) with an angle parameter of 0.5 and a limit of 90. The range is 20.0 (0x2DD6A8), except when the hero's state is 1, where it is 100.0 (0x2DD6AC). The relation to the 20.0 search of Behavior 9 is open.
+- Nearest target. The routine asks the global list for the entry nearest to a point or range set by two positions. The entry must have a nonzero flag and pass a record test. It becomes the hero's target, its flag is set, and the routine returns 1. It differs from the kind-21 pick of Behavior 19.
+- Commit to a target. When a target id is stored on the hero: fetch the global hero object, send action id 33 and message 12 to it, link the hero to the target through two helpers, and clear the stored target id. (Action id 33 is an action id used by the current-action test, not a button index.)
+
+### 31. Spawn ahead of the hero and record blend (Medium-Low)
+
+- Spawn. The routine creates a sub-object at the hero's position plus 2.8 times the hero's forward vector (2.8 is a fixed constant), with a flag of -1.0. It stores the sub-object's kind; if its flag is zero it runs a setup; it returns 1 on success. Whether this is the held-item throw of Behavior 18 is open.
+- Record blend. If the global current tag equals the record's tag, the record's message is sent, and when a flag on the record is set the sub-object is blended with a factor of 0.99 (a fixed constant with the same value as the gate in Behavior 4A). Otherwise a default message is sent.
+
+### 32. Range and separation tests (Medium-Low)
+
+- Range predicate: true when the motion record ground normal Y at +0x14 is at least 0.82. The Cross jump chooser uses this as its walkable-ground gate.
+- Separation test: the flags and the counter must allow, and the motion record ground normal Y at +0x14 must be at least 0.85. A helper distance is then compared with a helper value plus 0.75 times the hero height (+0x0C); that added term is zero when the shared jumping-state predicate is true. The test returns true when the distance exceeds that sum. The helper is called by the air ledge chooser before its ledge-class test.
+- These values are fixed constants. Here, 0.82 is the Cross chooser ground-normal cutoff; the 0.85 gate in the separation test is a ground-normal cutoff, while the ledge classifier separately uses 0.85 times hero height for the climb-up class. The 0.75 in the separation test scales hero height conditionally; the hang-class test uses a separate additive 0.75 clearance. The design rationale for these thresholds remains open.
+
+### 33. Directional move start (Medium-Low)
+
+When the record is not busy and a direction slot is set, the routine builds one of four unit directions: two base vectors, normalised, and their negatives. It then tests two helpers. On success it marks the record busy and stores the chosen direction index. The caller is a locomotion routine, not identified by name.
+
+### 34. Deferred command queue (Medium)
+
+A queue holds up to 10 command records of 112 bytes (0x70 each). The record count's width is not stated.
+
+- Append: when the queue has fewer than 10 entries, one record of kind 2 is added, with two ids and two vectors. When the queue is full, nothing is added.
+- Flush: the records run in order, each calling the handler for its kind (kinds 0 to 3 each have a handler; other kinds are not described). Then the count is reset to zero.
+
+### 35. Two-hold and state tables (Low)
+
+- A four-stage sequence (stages 0 to 3). Stage 0 sends a rate request of 1.0. Stages 1 and 2 wait on two helper tests. Stage 3 sends code 21, sets a mode and copies a target.
+- A four-state transition: the record's state (0 to 3) is combined with a second state from a helper; the result is a code from 0 to 3, and the record is updated.
+- A counter is limited to 128 and passed to a setter whose flag is zero only when the count is exactly 128.
+
+### 36. Debug button-sequence check (High for the order, state changes and main-loop mode gate; Medium-High for the second-pad detail)
+
+- Source: the second pad slot (controller position 1), newly pressed buttons only. A held button does not repeat a step.
+- Expected order: Up, Up, Down, Down, Left, Right, Triangle, Cross, Square, Circle. Ten steps. The counter starts at 0 and advances to 10. The expected logical masks are 0x1000, 0x1000, 0x4000, 0x4000, 0x8000, 0x2000, 0x0010, 0x0040, 0x0080 and 0x0020.
+- On each game tick: if the expected mask intersects the newly-pressed word, the counter advances by one. If it does not intersect and the newly-pressed word is nonzero, the counter resets to 0. If the newly-pressed word is zero, the counter is unchanged. A matching press advances once even when other buttons are pressed in the same tick.
+- Matching the tenth step sets a session latch. The latch is never cleared in the boot program. The main loop calls this check once per pass without a game-state or in-play gate. Thus ordinary title, front-end/menu and in-play states serviced by that loop all check the sequence. A nested blocking routine suspends the main loop and this check until it returns; the debug watch screen is one such routine. Behavior with an unavailable second pad remains open.
+- The post-completion table has one additional L2 entry: a newly pressed L2 advances the counter from 10 to 11. At 11 the next expected mask is zero, so any nonzero newly-pressed word resets the counter; an empty word leaves it unchanged. The latch remains set.
+- The latch effect (High): while it is set, each main-loop pass checks pad slot 0. If L3 and R3 are both held, the debug watch screen (SPEC-0008) opens and the main loop blocks until it exits. Since a newly pressed button is also held, simultaneous L3/R3 presses pass the same test.
+- The sequence reads controller port 2 (pad slot 1); its completion/watch chord reads controller port 1 (pad slot 0). Both pad slots are sampled once per game tick before actor updates (Controller map; High). Resolved in part: the sequence-check call has no game-state gate in the main loop, so it runs in ordinary states serviced by that loop; a blocking nested screen suspends it. Which other modal flows block the loop and how an unavailable second pad is represented remain open.
+- A separate ten-step routine requests the text “Positions unlocked” and has a Cross-count branch, but no static caller, data pointer or address-building pair was found for it. Treat it as an unreachable leftover, not as the live sequence's result (Medium-High).
+
+Test vectors: From counter 0, newly pressing the ten buttons in order reaches 10 and sets the latch; the tenth step does not request “Positions unlocked.” At counter 6, Triangle advances to 7; holding Triangle on the next tick leaves the counter at 7 because there is no new press; a new Cross press at 7 advances to 8. At counter 6, Square alone resets to 0. At counter 4, an empty newly-pressed word leaves the counter at 4. At counter 10, a new L2 press advances to 11; at 11, any nonzero new press resets the counter to 0 while the latch remains set. Mode independence (synthetic): with the same pad-slot-1 newly-pressed word, the counter makes the same transition in a title, front-end/menu or in-play state serviced by the main loop; no transition is processed while a nested blocking routine suspends that loop.
+
+### 37. Edge acceptance test (probe result at a surface edge)
+
+Confidence: High for the gates, their order and values; Medium for their meaning as edge tests.
+
+Edge record fields used (frame records, SPEC-0018): the start point (+0x00); the face plane (+0x10: unit normal n, with the plane offset in the fourth lane); the run plane (+0x20: the unit direction along the edge, with its offset); the top plane (+0x30: normal m with offset); the length L (+0x40); the height value H (+0x44); the type byte (+0x4C). The value of a plane at a point p is the four-lane dot product with p's fourth lane set to 1 (for a unit normal, the signed distance).
+
+Edge height at a point p: h(p) = (H - m_x p_x - m_z p_z - m_w) / m_y - 0.25, the height at p's horizontal position where the top plane's value equals H, lowered by 0.25. It does not depend on p's height.
+
+Inputs: the character's motion record (position, velocity v, force F, weight W, radius r, forward row), the edge record and a bypass flag. The first failing gate rejects:
+1. Type: an edge of type 3 or 6 is rejected.
+2. Reference point: p = the character's position. For an edge of negative type, p = position + 0.5 times the forward row when the character's action state is 1 to 4, otherwise position - 0.5 times the forward row.
+3. Face tilt: reject when |n_y| > 0.2. So 0.2 exactly passes.
+4. Face distance: a = the face-plane value at p. Unless the bypass flag is set, reject when a <= -0.15 or |a| >= 1.25 r.
+5. Height: d = h(position) - the position's height, stored for the caller (also when a later gate rejects). Pass only when 0 < d < 4.0.
+6. Along the edge: s = the run-plane value at p. Pass only when 0 < s < L.
+7. Facing: the forward row and the character's locomotion direction (the vector at +0x40 of its locomotion sub-object) must each have a three-lane dot product with n below -0.5 (strict).
+8. Look-ahead: q = p + the record's carried-motion vector (+0x120) + 5.0 times the one-tick displacement (v + (F / W) k) k, with k = 1/30. c = the face-plane value at q. When |c| >= 0.5 r: reject when c <= 0, or when c >= a. When |c| < 0.5 r the gate passes.
+9. Accept when the type is 0 or more. An edge of negative type is always rejected here; it can be accepted only by the ledge-drop test (Behavior 49), which runs first.
+
+Callers: the hero's wall contact runs this test for each frame record on which the ledge-drop test of Behavior 49 refuses (Behavior 49, Callers; High).
+
+### 38. Edge guard of generic characters (pointer)
+
+Confidence: High.
+
+This routine is a motion-record pre-step of generic characters, not a jump or fall gate: the edge guard of SPEC-0040 Behavior 14E: it reverses the tick's root step (P' = 2 P0 - P) for an NPC or enemy more than 2.0 above the ground. It never fires for Tor or Roberta, whose class query returns 0. Its ground-record tests (the 2.3 threshold at 0x2DD43C and the timed call scaled by 0x368F94) are described there as well.
+
+### 39. Stop test and velocity clamp
+
+Confidence: Medium for the stop-branch field behavior; Low-Medium for the full stop test and Low for the clamp.
+
+- The stop test projects the motion along the actor's direction: the vertical speed plus a term from a per-actor factor (the factor and the terms are taken as a sum). When the sum is at or below 0.1, the stop branch runs and hands the remaining displacement to the actor's move callbacks. In that branch, a nonzero flag at +0x14C clears the record's velocity and force vectors before the hand-off; zero does not. The stored direction at +0x10 is used in either branch, so +0x14C is not a direction-vector selector. In the +0x144-clear path, +0x188 equal to 1.0 uses vertical velocity directly; another value scales the up/time-step vector before projection. The semantic meaning of these fields and the effects of the class-specific move callbacks remain open. When the stop sum is above 0.1, the stop branch does not run.
+- The velocity clamp limits one component of the velocity. The limit is the actor's rate limit (the vector at +0x60) scaled by the time step and by the per-actor factor. The component is limited to the magnitude of that limit, with the sign of the component kept. The scale is not fully established.
+
+### 40. Probes with radius 0.75 and the slide
+
+Confidence: Medium-Low.
+
+1. Probe the actor's current reference point against the supplied oriented box, expanding the box's projected face intervals by a fixed 0.75 clearance. On a hit, run the contact response and return its result.
+2. If the current point misses, form a point advanced by the actor's motion for one tick. When the projected difference from the actor's carried-motion anchor is longer than 0.1, offset the probe by half that carried-motion vector. Test the advanced point against the same box with the same clearance.
+3. A hit on the second point is sent to the same contact response; otherwise return no contact. This is a point-versus-box pair, not a sphere sweep or a slide operation (Medium-High).
+
+### 41. Beam length follower (pointer)
+
+Confidence: High.
+
+This rate-limited follower is the Draik breath beam length (SPEC-0029, Draik breath): the length rises toward the beam's 3-D length by at most 1.0 per tick and drops to it at once. It is not hero locomotion.
+
+### 42. Animation chooser for codes 0xA3 to 0xA6
+
+Confidence: Medium-High for the ranges and the codes (complete); Medium for the hero index; High for the stinger mapping; Low for the weighted-call purpose.
+
+Inputs: the action state of the record passed in (its state word at +0x08), and the hero index in the hero object at +0x14C (0 is Tor, 1 is Roberta; the same field picks the Tor or Roberta name, Medium-High). The default code is 0xA3.
+
+| Hero | Action state (decimal) | Code | Effect index |
+| --- | --- | --- | --- |
+| Tor (0) | 98 to 105 | 0xA4 | 8 |
+| Tor (0) | 106 to 110 | 0xA6 | none |
+| Tor (0) | 119 to 125 | 0xA5 | 6 |
+| Roberta (1) | 111 to 118 | 0xA4 | 8 |
+| Roberta (1) | 127 to 134 | 0xA5 | 6 |
+| any | any other state | 0xA3 | 7 when the flag at +0x0C is nonzero, otherwise none |
+
+- The codes are animation indices (SPEC-0005). Their play calls take a weight of 1.0. Codes 0xA4 and 0xA5 play with the plain call; code 0xA3 with the flag set plays with the weighted call. The last column is a stinger effect index, not a sound-block cue id or animation blend priority (SPEC-0009, Effect and stinger index; SPEC-0024, Table 14). Index 8 selects VAG resource 264, index 6 selects resource 262, and index 7 selects resource 263, each with certainty. Code 0xA6 requests no stinger.
+- A Tor state of 126 and a Roberta state of 119 to 125 fall to the default code.
+- The table above gives the state ranges in full. The flag at +0x0C is a gate for the weighted animation call and, on the default branch, stinger index 7; why the weighted call is selected remains open. The selected clip resources are identified above; their audible contents are not described here.
+
+### 43. Push of actors in a radius
+
+Confidence: Medium-High for the per-call movement ownership; Low for the exact share formula and wider caller set.
+
+- The routine walks the run-time list of actors. An actor is considered when its push flag (+0x1B6) is nonzero and its active word (+0x1D8) is nonzero.
+- When the squared distance from the current actor's point (+0x50) to another active actor is below the other actor's squared radius (+0xBC), the contact calculation updates the current actor's position only. It does not write the other actor's position in that call, so there is no pairwise share between the two records. A later pass may move the other actor through its own call. The recovered call chain reaches this routine from the character ground-contact step (SPEC-0040, Behavior 14A). The exact displacement calculation and the full set of indirect callers remain open.
+
+### 44. Exit pattern of states 21, 23 and 30
+
+Confidence: High for the writes and the check; High for the meaning: it is the let-go exit of the climb (21), the sidle (23) and the ledge hang (30), also used by the other let-go prompts of Behavior 51.
+
+Each of the three states runs the same exit: when the hero's state is the state number, clear one per-hero field, then run the yes-or-no check below. Yes sends the hero to state 22; no sends it to state 1.
+
+- The check is true when the hero's state word at +0x7FC equals 22, 39 or 40.
+- State 21 (state number 21): clears the climb and ladder sub-mode word at +0x9BC.
+- State 23 (state number 23): clears the word at +0x9D8.
+- State 30 (state number 30): clears the word at +0x9AC. After the transition to state 1 or 22, it dispatches the hero's class-specific routine with mode 0 and two sentinel arguments (-1, -1). The routine's behavior is not identified.
+
+### 45. Stick blend scalar and the small blend
+
+Confidence: High for the structure of the stick blend and the branch sense; Medium-High for the byte mapping; Medium for the byte conversion; Low for the 0.075 and 0.925 blend.
+
+- Two helpers (a forward helper and a side helper) read the two left-stick bytes from a pad record reached through a per-actor pointer: Y at offset 0x11F and X at offset 0x123. Each byte goes through the stick conversion and is divided by the stick scale 87.5 (word 0x319524); there is no sign flip. Both helpers form the vector w = (Y / 87.5) times the camera basis row 2 plus (X / 87.5) times the camera basis row 0 (the run-time basis pair at 0x35C7B4).
+- If the shared climb and ladder sub-mode word (+0x9BC) is not 4, the forward helper returns the dot product of w with the caller record's +0x10 vector and the side helper the dot product of w with its +0x20 vector.
+- If the sub-mode is 4, the helpers return the scaled raw byte itself: Y for the forward helper and X for the side helper.
+- Readers: states 21, 23 and 30 (Behavior 51).
+- Small blend: a routine mixes two vectors with weights 0.075 and 0.925 (the two weights add to 1.0). Its callers are not identified here.
+
+### 46. Random timer offset
+
+Confidence: High for the arithmetic; Medium for the time base being 60 ticks per second.
+
+- Draw u as a uniform real from −0.2 to +0.2 (SPEC-0036 Random draws).
+- The value stored at +0xB0 is the whole part of (0.5 + u) times the time base (word 0x368FA0, 60 ticks per second; SPEC-0007). The sum and product are single-precision and the product is truncated (SPEC-0008), giving values 18 to 41 (0.3 to 0.7 s), each with chance about 1/24 and mean 29.5. The top value 42 is not reached because 0.5 + 0.2 in single precision lies just below 0.7.
+- The writer is the bush-instance reset path; the value is written on bush initialization/reset and the per-instance bush update reads it only as a zero/nonzero branch gate. No countdown or use of its magnitude is established in that direct reader.
+
+### 47. Animated-object sound window setup (clamps and time constant)
+
+Confidence: High for the clamps, slot fields and time constant (complete).
+
+Inputs: a start fraction a, an end fraction b, and a sound slot selected for an animated placed object by AddAnimObjSound (SPEC-0030 row 224; SPEC-0031, Animated-object sounds).
+1. Start fraction: when a is below 1e-5, the value 1e-5 is used, and a is not stored in the slot (the old stored value stays). Otherwise a is stored in field 4.
+2. End fraction: when b is above 0.99999, the value 0.99999 is used, and b is not stored (the old value stays). Otherwise b is stored in field 5.
+3. Time constant T = (F − 1) ÷ 15 seconds, where F is the frame count of the animated-object record selected by AddAnimObjSound's object index (a 16-bit field at +0x1E4; SPEC-0028, Animated-object record). The 15 is the animation sampling rate of SPEC-0005.
+4. Slot fields 0 and 1 store the selected animated-object record and the cue id, respectively. The start time in field 2 is the clamped a times T; the end time in field 3 is the clamped b times T. During an object tick, crossing the start time plays the cue on the area sound slot at the object's reference centre, and crossing the end time stops it (SPEC-0031, Animated-object sounds).
+
+Test vector: for object 3 with F = 31 frames, D = T = 2 seconds, cue 40 and fractions (0.25, 0.75), the slot references object 3 and cue 40, and stores start and end times 0.5 and 1.5 seconds.
+
+### 48. Hash-based draw (seeded, pure function)
+
+Confidence: Medium-High for the formula (complete, with a test vector below); Medium-High that it is not reached in play: its one caller, a periodic effect counter, has no caller or table entry itself (SPEC-0008). This is a separate function from the game's random generator (SPEC-0008 Random numbers), which every draw of play uses.
+
+Inputs: a 32-bit seed s and two whole numbers a and b (small signed values).
+1. x = s XOR (s shifted left by 13), in 32 bits.
+2. h = ((x × (x × x × 15731 + 789221) + 1376312589) mod 2^32) AND 0x7FFFFFFF, in 32 bits. (The constants are decimal: 15731, 789221 and 1376312589.)
+3. Result = a + (1 − h ÷ 2^31) × (b − a).
+
+The result lies in (a, b] when b is above a. It is never exactly a.
+
+### 49. Ledge-drop edge test and edge offer
+
+Confidence: High for the gates, their order and values; Medium for the edge offer; High for the order of the hand-offs from the wall contact and the states they request, Medium for their meanings and for the branch details.
+
+The test decides whether a moving character may drop off one collision edge record (fields and the edge height h(p) as in Behavior 37). It returns accept or reject. Gates, in order; the first failing gate rejects:
+1. Busy: a character in action state 1 with a positive counter at character +0x23C is rejected.
+2. Reference point: p = the character's position. For an edge of negative type: position + 0.5 times the velocity in action state 1; position + 0.5 times the forward row in states 2 to 4; otherwise position - 0.5 times the forward row.
+3. Normal: |n_y| <= 0.2 (the edge face is near vertical).
+4. Face side: a = the face-plane value at p and b = the face-plane value at the position. At least one of a and b must be negative, and at least one must be below 0.3 in magnitude.
+5. Vertical window: with h = h(p) and y the position's height, the test continues only when h - 0.2 < y < h + 3.0, so the character is less than 0.2 below and less than 3.0 above the edge (0.2 at 0x2DD430, 3.0 at 0x2DD434; both bounds strict).
+6. Along the edge: the run-plane value at p must be above 0 and below the length L.
+7. Look-ahead: c as in Behavior 37, gate 8; when |c| >= 0.5 r, c <= 0 rejects (there is no c >= a test here).
+8. Negative type: an edge record whose type byte is negative is accepted here.
+9. Drop rule: let g0 be the character's ground height (ground probe, ceiling 8.0; SPEC-0018) and g1 the ground height probed at the edge's start point + 0.1 n + (L / 2) times the run direction (just past the middle of the edge), with the ceiling at the character's height plus 6.0. Accept when that probe hits a surface of type 2. Reject when g1 is at or below -1,000,000 (no ground). Reject when g1 >= g0 (no drop). Accept when g0 - g1 > 1.75. Otherwise reject.
+
+Edge offer. An accepted edge is offered to the character. Nothing changes while action 0x25 or 0x26 is active, or while the character's busy word at +0x9D8 is set. When the character already holds an edge, the new edge replaces it only when it faces the character more: its normal has a larger dot product with the reversed facing than the held edge's normal. On a replace (or when no edge is held), the character's edge method takes the new edge and the character stores the edge's type byte.
+
+Callers: the hero's wall contact (High for the order and the requested states; Medium for the meanings). The hero's per-record wall contact (SPEC-0018) visits each frame record of its grid cell. It does nothing in states 21, 23, 30, 35, 37, 38, 41 and 47. For every other visited record, after the wall tests, it runs this ledge-drop test and, if the test refuses, the edge acceptance test of Behavior 37. The hero's object-wall contact (SPEC-0018) also runs these two tests (Medium). The hand-offs request hero states 37, 11 or 10:
+- Ledge-drop test accepted, hero in states 1 to 6. With the dot product of the facing and the edge normal above 0: states 5 and 6 do nothing; in states 3 and 4, when the hero does not stand on a ground object of kind 1 or 6, state 10 is requested (the hero's position and facing are stored with the request) unless the record's type is 1 or 6; the other cases take the general case. With that dot product at or below 0: states 1 and 5 take the general case; in state 6, when the hero does not stand on a ground object of kind 1 or 6 and the type is not 1 or 6, state 11 is requested with the reversed facing; standing on such an object gives the general case (Medium for the branches not listed).
+- General case: when the record's type is not 3 or 6, the record becomes the held edge, state 37 (drop off a ledge into a hang, Behavior 51) is requested and the camera gets a side-offset event (SPEC-0027). This counts as a wall hit.
+- Ledge-drop test refused, edge acceptance test accepted, hero in state 2, 3 or 4, and the hero stands on a ground object whose kind word is not 2: the edge offer runs, a latch is set with a stored boost height of the larger of its previous value and d + 0.75 (d + 0.75 the first time), and state 10 is requested with the hero's position and facing. Here d is the vertical clearance from the hero to the edge top at the hero's horizontal position, computed by Behavior 37; it is not distance along the edge (High; SPEC-0018, edge acceptance value).
+- Then, when a wall test of this record hit, the edge offer above runs, unless the record's type is 3 or 6 or the record's owner object is in state 0 or 2. It runs when the hero's position along the wall lies more than one radius inside both ends, or near an end when the next linked record continues the wall (its normal has a dot product above 0.4 with this one; Low for the link).
+
+### 50. Jump and air states (states 7 to 11 and 43 to 46)
+
+Confidence: High for the jump chooser, the launch values, the gravity gains and thresholds, the three landings, the plunge, the flight curve and the air steering; Medium where a step says so.
+
+Cross is the jump button. States 7 to 11 are the jump and fall states: 7 standing, 8 slow, 9 walking, 10 running and 11 backward. States 43 to 46 are the strafe jumps (Behavior 11). One air routine per hero runs all of them, chosen by the hero variant word (0 Tor, 1 Roberta). A per-hero air-phase word drives the routine. The air phase is not an attack sub-kind or a landing class.
+
+**Jump chooser (Cross route, chain step d).**
+1. Gate: not busy (Behavior 1A, rule 5a), a Cross press edge, and a walkable ground normal whose vertical part is at least 0.82 (fixed constant). Below 0.82 Cross does nothing.
+2. Strafe mode is: state 32 or 43 to 46; or state 17 or 20 with the previous state (+0x7FC) 32; or Roberta in state 13 with L2 held.
+3. Not strafe mode: let m = sqrt(x^2 + y^2) of the two dead-zoned left-stick axes divided by 87.5 (not capped). m = 0 gives state 7; 0 < m < 0.3 state 8; 0.3 <= m < 0.6 state 9; m >= 0.6 state 10. The thresholds 0.3 and 0.6 are fixed constants. The chooser stores the start point and the direction (the facing; minus the facing for state 11). Then, when a block-edge grab is possible, state 19 (Behavior 51) replaces the jump.
+4. Strafe mode with the stick centred: the jump chooser runs (state 7). Strafe mode with the stick pushed: the strafe jump is chosen by the current action id: 3, 4, 8, 9 or 35 give 46 (forward); 6 or 11 give 45 (back); 36, 38, 100, 101, 152 or 154 give 44; 37, 39, 98, 99, 151 or 153 give 43 (43 is the jump to the hero's right, 44 to the left; Behavior 11; Medium-High). The jump direction is the camera-relative stick, normalised; the speed term of this stick step is clamped at 0.5, and a centred stick falls back to the camera-basis forward direction (Medium-Low for the clamp).
+5. Other writers of the jump states: the walk-off fall (state 7, Behavior 9A), the jump off a ladder (Behavior 13), the chained jump of a soft landing (below), let go and stop climbing (state 7 in air phase 5 with request 67; Behaviors 9 and 51), the hang's lost-target exit (Behavior 9), the bounce-pad launch (Behavior 10), the flag branch of state 47 (Behavior 51) and the hang exits. State 11 (High for the gate): both edge-contact routines (frame-record walls and type-10 records) write state 11 when the hero is in state 6 (reverse walk) at an edge that the ledge-drop test accepts, the facing's dot product with the edge normal is at most 0, the hero is not on a ground record of kind 1 or 6, and (frame records) the edge type is not 1 or 6. They store the hero position as the start point and minus the facing as the direction. In the general case the type-10 contact requests state 38 and the frame-record contact state 37 (Behavior 49).
+
+**Entry side effects** (the state setter, on entry to 7 to 11): the air phase is set to -1 (launch pending), the air-attack-used flag to 0, three air words to 0, and the landing flag word (+0x1514) to 0.
+
+**Launch** (first tick, phase -1): the gravity gain is set to 1.0 and the holster and ground-record bookkeeping is cleared. The vertical velocity gains 8.75 (word 0x2DD7F0); with a pending boost h it gains 32 x sqrt((h + 0.25) / 32) instead, capped at 8.75. The velocity is cleared first. For states 7 to 11, the horizontal velocity is the facing (the motion record's forward row with its vertical part set to 0, not renormalised) times the state's speed S times (vertical / 8.75), plus the platform velocity. This launch path does not read the stored jump direction; state 11 moves backward only because its S is -10. Strafe jumps 43 to 46 instead use the stored jump direction (Behavior 11). Both heroes' air routines do the same (High). Sound cue 10 and a hero voice play (Tor 32, Roberta 56). Request 133 when boosted; otherwise request 76 with phase 1 when S is above 0.01, else request 70 with phase 0 (0.01 is a fixed constant). The strafe jumps request 102 (43), 104 (44), 65 (45) and 70 (46).
+
+| State | Speed word | S |
+| --- | --- | --- |
+| 7 | 0x2DD818 | 0.0 |
+| 8 | 0x2DD81C | 2.0 |
+| 9 | 0x2DD820 | 5.0 |
+| 10 | 0x2DD7F8 | 9.0 |
+| 11 | 0x2DD824 | -10.0 (backward along the facing) |
+
+Units (High): the per-tick displacement is the velocity divided by 30 (the 1/30 time scale of the physics block), so the launch speeds are 0, 4, 10, 18 and 20 units per second, close to the slow walk (5), walk (13.5) and run (19.3) of Behavior 5.3. The air steering below changes them from the next tick.
+
+**Air phases.**
+- 0 and 1 (rising): while the vertical velocity is at least 12.0 (word 0x2DD804) the gravity gain is 0.35 (word 0x2DD7FC). Below it the gain is 0.3 (word 0x2DD800) and the phase becomes 3 (state 11), 2 (the horizontal motion is behind the facing or shorter than 0.01) or 4 (otherwise).
+- 2, 3 and 4 (falling): gain 0.3 (word 0x2DD800). The phase becomes 5, with gain 0.35 (word 0x2DD7F4), when the vertical velocity is below -7.0 (word 0x2DD808), or the hero is descending within a ground gap of 1.0 (word 0x2DD80C), or the floor-contact flag (below) is set.
+- 5 (descent and landing chooser): the hero has landed when the ground gap is at most 1.0 or the floor-contact flag is set. Then a fall height above 3.0 (word 0x2DD828), or a set landing flag (+0x1514), gives phase 10 (hard landing); a centred stick gives phase 6 (soft landing); otherwise phase 7 (moving landing). The fall height is the take-off height (the start point stored by the jump chooser or the walk-off) minus the hero's height at the landing decision, which is taken up to 1.0 above the ground, not the height of the apex (High). So the real drop is up to 1.0 more than the measured fall: a walk-off from 3.75 is soft and from 4.0 hard; a jump from the ground into a pit 3.5 deep is soft (measured fall 3.30). The soft landing has a camera shake for a fall above 4.0 (word 0x2DD814), but it can never run: any fall above 4.0 is above 3.0 and takes the hard landing first (reproduce: a landing never shakes the camera). No landing deals damage (Behavior 9B, Falls). The landing choice sets the gain to 1.0, stores the position on the motion record (+0x210) and clears the word +0x1518; while not landed the gain is 0.35. Order within a phase-5 tick (High): the landing test and the landing choice come first. Then, on every phase-5 tick whether or not the hero has landed, a ground record of kind 17 or 18 under the hero requests state 56 (bounce pad, Behavior 10), and after that a possible block-edge grab requests state 19 (Behavior 51), so state 19 wins when both apply.
+- 6 (soft landing): request 68 once; the motion is cleared while the ground gap is at most 0.1. The code has Cross and L1 branches gated by event bit 0x40: Cross would chain a jump through the jump chooser, and L1 would give state 20 (shield guard). In the shipped hero animation data, action 68 has no 0x40 frame in any family for either hero (SPEC-0005, Table B frame bits), so neither window opens in this build. At progress 0.99 the state field is set to 1 directly (not through the state setter) with request 0.
+- 7 (moving landing): the horizontal velocity is cleared at once; the state field is set to 4 directly with request 4 (state 32 for the strafe jumps), and state 4 then moves by root motion.
+- 10 (hard landing, fall height above 3.0; no damage; High): request 118 once. While 118 plays: when the ground gap is at most 0.1 the horizontal velocity is cleared, and the vertical velocity too when it is rising; the gain is 1.0 and the floor-contact flag (record +0x150) is cleared. Inside the event-bit 0x40 window with the stick off centre, the state field is set to 4 directly with request 4. At progress 0.99 the state field is set to 1 directly with request 0, the gain is 1.0 and the no-gravity flag is cleared. The phase word is not written, so it stays 10 until the next entry to the jump states.
+- 8 and 9: Tor's plunge attack (below).
+
+**Floor-contact flag** (record +0x150; High for the rule, Medium for its reach). The record's driver clears it at the start of each record tick and sets it when a contact resolves against a surface whose normal has a vertical part above 0.9 in magnitude (a floor or a ceiling) while the record moves or pushes into it or is more than 0.05 inside it. The air routine runs before the record tick, so it sees the previous tick's contacts; the hard landing also clears it. On a level floor that the ground probe reports, the gap reaches 1.0 before the record touches the floor, so the flag does not shorten landings there and the flight curves below hold. It changes the flight in two cases: over a surface the driver collides with but the probe does not report, the flag counts as landed; and after a ceiling hit in phases 2 to 4 the hero enters phase 5 (gain 0.35) on the next tick.
+
+Event bit 0x40 in these rules is an event-window bit of the current clip (SPEC-0005), not a test that action 0x40 is current.
+
+**Air attacks** (High). The attack input in the air is one test: R2 pressed this tick or Circle held. Air attacks need the air-attack flag clear and the hero not wearing the Tattered Cloak (item 126 in the hero's body entry; SPEC-0021, Tattered Cloak); while it is worn the air attack is simply refused and the cloak stays on. Ground attacks are not refused: entering the attack step (state 13) while the cloak is worn starts the cloak removal (SPEC-0021).
+- **Tor, jump states 7 to 11.** In any air phase other than 7, 8 and 9, the input gives the plunge when the hero is rising (vertical velocity above 0) or is 1.5 or more above the ground (1.5 is a fixed constant, not a data word). Otherwise the input does nothing. Tor has no air slash in these states.
+- **The plunge** (phases 8 and 9; High for the rules, Medium for the tick timing). Phase 8, first tick: request 23 (Tor clip 39 on disc: 17 keys, speed byte 2, so 0.25 key per tick at play rate 1) and set the attack sub-state 12. Later ticks run the state-13 sub-state-12 hit scan (attack sub-state 13 sends the hero to state 13). While the current root step of clip 23 rises (vertical part above 0), the motion record's no-gravity flag is set for the tick and the velocity is cleared (on a moving ground object it is set to straight up at 1.05 times that object's vertical speed), so the hero moves by the clip's root motion only. Clip 23's root record is vertical only: keys 0 to 6 are +1.6218, +0.8295, +0.4162, +0.1133, -0.2677, -0.9995 and -1.7137, keys 7 to 16 are 0, and each root step is the key value times 0.25. There is no horizontal root travel and the horizontal velocity stays 0, so the plunge goes straight up and then straight down. Once the root step no longer rises: the gain is 0.3 (word 0x2DD800); the vertical velocity is set to -8.0 on any tick where it is above -8.0; descending within 12.0 of the ground (word 0x2DD810) an effect plays (once); within 1.0 (word 0x2DD80C) the position is stored and the phase becomes 9. Phase 9: request 24 (clip 40: 8 keys, speed byte 2, no root motion) and clear the velocity on that tick; the hit scan runs while 24 plays; at progress 0.99 the state field is set to 1.
+- **Tor, strafe jumps 43 to 46.** In air phases 2 to 5, the first tick of the input arms the air attack and zeroes a hold counter. Each further tick of the input raises the counter by 1. When the counter exceeds the hero parameter +0x1500 (10 for both heroes), the plunge starts (phase 8); with the input held from the arming tick this is the 12th consecutive tick. On the first tick without the input while armed, if the phase is not 6 to 9, the air slash starts. An R2 press alone lasts one tick, so it always gives the slash. The slash start does four things:
+  - the air-attack flag is set and the hit list is cleared;
+  - the weapon-drawn flag is set;
+  - the request becomes (current main id, second main id 25, face -1);
+  - the sub-state word becomes 11.
+  The hero stays in its strafe-jump state; the state is not changed to 13.
+- **Roberta, states 7 to 11:** state 13 in sub-state 11 with second id 19, or sub-state 12 with second id 20 (the air shot), chosen by the attack id. Roberta's strafe jumps have no air attack.
+- While the air-attack flag is set, every air tick runs the hero hit scan and keeps the second id on the tail requests. The flag is cleared when the second id's clip reaches progress 0.99, by the moving landing, by the soft-landing end or chain, by the hard-landing routine, at the plunge end, and on entry to states 7 to 11. The strafe-jump chooser also clears the armed and air-attack flags.
+- Quirk (reproduce): Tor's table has no id 25, so the second id plays Tor main clip 0 (SPEC-0005, Clip start, second main id). The main clip and clip 0 restart each other every tick, the shown pose drifts toward clip 0's first key, and the jump clip stops advancing until landing. The playing records carry no event bit 0x1, so the hit scan finds no attack window and the slash never deals damage. The slash ends at landing.
+- Air phases 8 and 9 make states 7 to 11 busy (Behavior 3).
+
+**Every air tick**, before the phase step: the in-air ledge chooser (states 30, 35 and 47; Behavior 51), the ceiling-panel grab (state 21 in sub-mode 18; Behavior 22A), and in phases 0 to 5 the block-edge grab test (state 19; Behavior 15A). While jumping, the selector also runs the wall-panel grab (state 21 in sub-mode 1; Behavior 22A), the ladder grab test (state 41; Behavior 22) and the grab-point hang entry (state 28; Behavior 9), in that order. Clip tails: 76 goes to 78 when it ends, 70 to 67, and 133 to 78. While 133 plays and has not ended, event bit 0x40 with the stick pushed forward sends the hero to state 4.
+
+**Direct state writes** (High): the soft landing (to 1), the moving landing (to 4 or 32), the hard landing (to 4 in its event window with the stick pushed, to 1 at its end) and the end of the plunge (to 1) write the state field directly. The state setter is bypassed, so the previous-state word (+0x7FC) and the entry side effects are not updated (a quirk to keep; Edge cases).
+
+**Flight curve** (High). Order within a tick: the air routine (it sets the phase and the gain G, adds the launch and steers) runs before the hero's motion-record tick, which applies vy = vy - 32 G / 30 and then y = y + vy / 30 (SPEC-0040, Behavior 14A). The air routine sees the gap measured at the start of the previous record tick. The launch happens on the tick of the Cross press (the button chain runs before the state routine; Medium-High).
+- Launch tick (tick 0): vy = 8.75, then the gain-1.0 step, so vy = 7.6833 and y = 0.2561 above take-off.
+- From tick 1: gain 0.3 (phase 2 or 4; phase 0 or 1 lasts one tick because 8.75 is below 12.0). vy(n) = 7.6833 - 0.32 n; y(n) = 0.2561 + (7.6833 n - 0.16 n (n + 1)) / 30.
+- Peak 3.2028 at tick 24 (vy 0.0033).
+- On flat ground: phase 5 (gain 0.35) at tick 46 (gap 0.965, descending); landing decision at tick 47 (y 0.2329, vy -7.09 before the gain-1.0 step); first grounded tick 48 (friction; vy -7.5167, y -0.0177); snap to the ground on tick 49 (vy 0). Launch to landing decision 47 ticks; launch to ground contact 49 ticks (0.82 s).
+- The curve is the same for states 7 to 11 and for both heroes; S only sets the horizontal part.
+- Boosted launch with boost height h: vy0 = min(8.75, sqrt(32 (h + 0.25))), horizontal S times vy0 / 8.75. h = 0.75: vy0 5.657, peak 1.175 at tick 14, landing decision at tick 23. h = 1.75: vy0 8.0, peak 2.620 at tick 21, landing decision at tick 42.
+
+Heights (standing jump, flat ground, tick 0 = launch tick): ticks 0, 5, 10, 15, 20, 24, 30, 35, 40, 45, 46, 47 give 0.2561, 1.3767, 2.2306, 2.8178, 3.1383, 3.2028, 2.9794, 2.5000, 1.7539, 0.7411, 0.5048, 0.2329; tick 48 gives -0.0177; tick 49 gives 0.0 with vy 0.
+
+**Air steering** (High). In air phases 0 to 5 (not on the launch tick, not in phases 6 to 10), each tick: the horizontal velocity loses min(its length, 0.5) along its own direction. Then, when the stick is outside the dead zone and the horizontal speed before this drag was below 9.0 (word 0x2DD7F8), 0.6 times the unit camera-relative stick direction is added (the stick magnitude does not matter). Horizontal travel per tick is the horizontal velocity / 30. With the stick held the speed rises by 0.1 per tick to 9.0 and then saws between 8.5 and 9.0 (state 10, full stick: 9.0, 8.5, 8.6, 8.7, 8.8, 8.9, 9.0, 8.5, ...); released, it falls by 0.5 per tick to 0. The soft landing clears the horizontal velocity once the gap is 0.1 or less; the moving landing clears it at once.
+
+Horizontal distance at the landing decision (tick 47), by state:
+
+| State | Stick held | Stick centred |
+| --- | --- | --- |
+| 10 | 14.0 (full) | 2.85 |
+| 9 | 11.6 (magnitude 0.45) | 0.9167 |
+| 8 | 6.96 (magnitude 0.2) | 0.1667 |
+| 7 | 4.5433 (pushed) | 0 |
+| 11 | not measured | -3.5 |
+
+### 51. Traversal states
+
+Confidence: per state, as marked. Animation codes are the character's animation indices (SPEC-0005). Square prompts are labels of the UI label table (design table 13; SPEC-0022), named here by their meaning and index. "1/22" means state 22 when the previous state (+0x7FC) was 22, 39 or 40 (sneaking), else state 1 (Behavior 44). In the bodies below, "stick pushed forward" is the left-stick Y axis pushed up (the forward value of Behavior 2 positive; Medium-High); side values are the scaled X axis, positive to the right (Medium).
+
+| State | Name | Entry | Body |
+| --- | --- | --- | --- |
+| 18 | Push and pull a block | Square, grab-block label (10), at a block face | Behavior 4A.2 |
+| 19 | Hang from a block's top edge | Cross at a block face when the block-edge grab test passes; in the air at a block (landing chooser) | below |
+| 21 | Climb a climbable panel | wall-panel grab from the ground or while jumping (sub-mode 1, Behavior 22A); ceiling-panel grab from the air (sub-mode 18, Behavior 22A); from state 38 (sub-mode 17) | below |
+| 23 | Sidle (present but unreachable) | Square, sidle label (11); never offered in play | below |
+| 26 | Turn a statue (present but unreachable) | Square, grab-statue label (23); never offered in play | below |
+| 27 | Rope gun | State-13 handoff when the aiming flag and a selected-anchor pointer are set; initiating button is open | below |
+| 28 | Hang from a grab point and leap between grab points | in the air near a grab point | Behavior 9 |
+| 29 | Hold a door (present but unreachable) | Square, grab-door label (22); never offered in play | below |
+| 30 | Hang from a ledge | in-air ledge chooser, result 0; from state 37 | below |
+| 35 | Climb up onto a ledge from a fall | in-air ledge chooser, result 1, falling | below |
+| 37 | Drop off a ledge into a hang | edge contact while walking | below |
+| 38 | Drop off an edge onto a climb panel | edge contact (second contact routine) | below |
+| 41 | Ladder | ladder grab test (Behavior 22) from the ground, while jumping and from state 30 | Behavior 13 |
+| 43 to 46 | Strafe jumps | Cross in strafe mode with the stick pushed | Behaviors 11 and 50 |
+| 47 | Climb up onto a ledge while rising | in-air ledge chooser, result 1, rising | below |
+| 48 | Long fall (area-entry arrival) | StartHeroLongFall, level code, state 28 | Behavior 9B |
+| 50, 52 | Scripted walk | RunHero and WalkHero; WalkHeroAndOrient | Behaviors 4A.4 and 4A.5 |
+| 56 | Bounce pad | landing on a ground record of kind 17 or 18 | Behavior 10 |
+| 58 | Climb onto a block | push-into-face counter and the climb-onto-block fit test (Behavior 15) | below |
+
+Shared fields (Medium). The sub-mode field is shared by states 19, 30, 35, 47 and 58; the direction mode (the block face) by states 18, 19 and 58; the climb and ladder sub-mode word (+0x9BC) by states 21 and 41. The target record is shared across most of the states. Two routines that share a field are not proved never to run together.
+
+**In-air ledge chooser and the ledge class (Medium-High).** Each air tick (Behavior 50) the chooser runs. A ledge is an edge record whose type byte is not 3 or 6. It is offered while the hero falls when the ground normal is walkable (0.85) and the ledge top is above the hero's height plus a fixed 0.75 clearance. Class: the hero faces into the edge (dot above 0.5) and is within 0.25 of it. When the drop below the ledge top exceeds the hero height plus 0.75 and the top is within the hero's reach (at most the hero height plus his height), the class is hang (result 0): state 30. When the drop is above 1.75 and the top minus 0.5 (word 0x2DD8C8) is at most the hero height plus 0.85 times his height, the class is climb-up (result 1): state 47 when rising, 35 when falling. Otherwise no ledge. 0.85, 0.75, 0.5 (as a dot), 0.25 and 1.75 are fixed constants. The 0.85 height multiplier is separate from the 0.85 ground-normal cutoff in the reach predicate; the hang-class 0.75 is an additive clearance.
+
+**State 19 (hang from a block's top edge).** Confidence: High for the writes and the entry; Medium for the sub-mode graph. Entry: the block-edge grab test passes when the face finder with selector 1 passes and the hero's side-touch latch is 1 (Behavior 15A). The test is run by the Cross route after the jump chooser and by the air phases 0 to 5 (Behavior 50). Uses the block record list and the face (direction mode) of state 18 (Behavior 4A.2). With no record, the hero goes to state 1 (High). Each tick the locomotion sub-state is set to 1 (High). Sub-modes 0 to 4:
+- 0 (grab): the locomotion speed factor is set to 0.5, displacement is cleared, sub-mode 1, request 72.
+- 1 (move to the edge; current-action test 72): while action 72 is not current, request 72 and end. Otherwise the approach target is built from the selected block face: its horizontal point is Pblock − D × (s/2 + 0.35), where D is the selected face-direction vector and s is the block-entry size; its vertical coordinate is the bound rectangle record's second-axis extent (+0x24) minus 3.7 (fixed constant). The code establishes this constructed coordinate; the intended geometric reference for the offset is not named. When the along-component is above 0.25 (fixed constant), the rate is set to 0.5 and the step goes on. Otherwise sub-mode 2 and request 71. When the along-component is negative and the ground gap is at most 0.01 (fixed constant), the hero goes to state 1 with request 0.
+- 2 (request 71 until progress reaches 0.95): the current-action test is 71. Stick pushed forward gives sub-mode 4. At the gate, sub-mode 3 with request 73 (hang idle).
+- 3 (hang idle 73; shimmy 61 or 60): current-action tests are 61 then 60; 73 is the hang-idle request, not a test id. Stick pushed forward gives sub-mode 4. With side-positive input, the request-61 along gate is strictly above 1.0; equality fails. With side-negative input, the request-60 along gate is strictly below q − 1.0; equality fails, where q is the linked bound record's +0x10 scalar. Its geometric meaning is not established. These limits specify only the along gate; other action and target predicates still apply. Sub-mode 4 at the gate.
+- 4 (pull up, current-action test 59): while action 59 is not current, request 59. At the gate, when the event-bit 0x40 test passes and the stick is pushed forward, the hero goes to state 4 (High). Otherwise the hero goes to state 1 with a displacement of 0.1 (fixed constant) (High for the write).
+- Let go: Square with the let-go label (20): 1/22.
+Exits: 1/22, state 4, state 1.
+
+**State 21 (climb a climbable panel).** Confidence: High for the entries, the map and the exits; Medium-High for sub-modes 2, 5 and 13 to 16 (Climb terms, below); Medium for the other sub-mode graphs; Low for the meanings of most other sub-modes. Climb panels are records of kind -2. Entries: the wall-panel grab from the ground or while jumping (Behavior 22A) sets sub-mode 1; the ceiling-panel grab from the air (Behavior 22A) sets sub-mode 18; state 38 hands over with sub-mode 17. On the first tick the queued panel (word +0x9C0) is moved into the current target slot (+0x9D0) and the queue is cleared. Each tick a shared helper runs with the rate 1.0 first. The sub-mode is the hero word at +0x9BC (shared with the ladder). Timers are in ticks.
+
+| Sub-mode | Behaviour (plain words) | Requests | Exits and timers | Confidence |
+| --- | --- | --- | --- | --- |
+| 0 | Reset: call the global object with argument 0, then hero to state 1 | none | none | High |
+| 1 | Ground entry: approach the panel. Arrival or a lost panel sends the hero to other sub-modes | 2, 121, 49 | to 2 on arrival; to 10 or 0 by the panel's height and side | Medium |
+| 2 | Free climb on the target panel T. Each tick: locomotion sub-state 1, a steering rate of 0.5, the motion stopped, and the panel hold (below). With f = s = 0: request 49. Otherwise the larger of |f| and |s| picks the move (the forward value f wins only when |s| < |f|; on a tie the side value s wins): up, down or sideways with the clip rate max(|value|, 0.3) while the hero is inside the panel, else a hand-off to the neighbour on that side (Panel hand-offs, below) | 56 (up), 45 (down), 52 (s > 0), 53 (s < 0), 49 | to 13, 14, 15, 16, 17 (cooldown 20), 3, 6, 0, 8, 9, 11 or 12 | Medium-High |
+| 3 | Back off from an overhang (from the up hand-off of sub-mode 2 when the panel above is neither in the same plane nor a top face). Locomotion sub-state 1, the motion and the step are zeroed. With d = nT . (p, 1): when d is below 1.25 the hero moves along nT by 1.25 - d; then it always moves a further 0.05 along nT. Request 49; the queued panel Q becomes the target (the queue word is kept) | 49 | to 4, cooldown 120 | High |
+| 4 | Stick-steered move. A dead-zone stick with no direction requests 48 and zeroes the step. With a direction, the heading decides the rate and the exit | 46 (rate at least 0.3), 48 | to 5 when ahead above 0.75; to 2 when behind below -0.75 with timer 120 | Medium |
+| 5 | Climb down over a top edge onto the wall Q found by sub-mode 4 (the queued panel). Locomotion sub-state 1. While the current clip is not 57, request 57. While 57 plays: when the hero's height on Q (hQ = VQ . (p, 1)) is below 0, the hero is raised by 0.05 per tick; otherwise, once 57 reaches progress 0.99, Q becomes the target, the panel hold runs, the sub-mode becomes 2 with request 49 and the cooldown 120 | 57, then 49 | to 2, cooldown 120 | Medium-High |
+| 6 | Wait for progress to pass 0.95 | 54, then 48 | to 4, timer 120 | High |
+| 7 | When progress passes 0.95, zero the step and set a half-scale value. A side test sends the hero to state 4; otherwise it returns to 0 with timer 120. The stop-climbing prompt is not offered in this sub-mode | 59 | to state 4 or to 0 | Medium |
+| 8 | Wait for progress, then to 2, or to 13 when the return word is 13 (Straddles, below) | 44, then 49 | to 2 or 13, timer 0 | High |
+| 9 | Same as 8 with a different first request | 43, then 49 | to 2 or 13 | High |
+| 10 | Step along the panel record, clamped to half of the record's second height value. Ends at progress 0.95 with timer 100 | 58, then 49 | to 2 | Medium |
+| 11 | Progress 0.99, then a fixed step of 0.75 and -1.0 along the panel | 51, then 49 | to 13 or 2 | Medium |
+| 12 | Same shape as 11 | 50, then 49 | to 13 or 2 | Medium |
+| 13 and 14 | Straddle two panels stacked one above the other: the target T and the partner P (13 is entered going up, 14 going down; one body). See Straddles, below | 56 and 45 (clip rate 1.0), 52, 53, 49 | to 2; to 8, 9, 11 or 12 at a corner (return word 13); state 1 with no panel | Medium-High |
+| 15 and 16 | Straddle two panels side by side, T and P (15 entered moving with s > 0, 16 with s < 0; one body). See Straddles, below | 52, 53, 56, 45, 49, or a request of -1 | to 2, 17, 3, 6 or 0 | Medium-High |
+| 17 | Hang from the top edge of the wall T (from the up hand-off of sub-mode 2 onto a top face, from the straddles and from state 38). See Top-edge hang, below | 73, 60, 61 | to 7 (climb over) or 2 | High |
+| 18 | Entry from the air: move the sub-object height toward the panel's height, then 48 with timer 120 and to 4 | 48 | to 4 | High |
+
+Sub-modes 13 and 14 share one body; 15 and 16 share one body. Sub-modes 19 and above do nothing (High).
+
+Climb terms (sub-modes 2, 5 and 13 to 16; High for the tests and values, Medium for the side names). Panel records are the type-10 records of SPEC-0006: normal n, side axis U and up axis V (each with its offset), lengths LU and LV, and four neighbour links. p is the hero's position, r his radius and H his height (the character's Radius and Height). u = U . (p, 1) is the position along the panel and h = V . (p, 1) the height on it; an index names the panel (uT, hP). f and s are the forward and side values of the stick blend (Behavior 45). The hero keeps four words: the target T (+0x9D0), a queued panel Q (+0x9C0), a partner P (+0x9C4) and a return word (+0x9C8), with the grab cooldown (+0x9CC, Behavior 20). Link k (0 to 3) is the neighbour record in slot k; any other k gives none. The tests use link 0 for the panel below, link 1 for the side at u = LU, link 2 for the panel above and link 3 for the side at u = 0 (an s above 0 moves toward u = 0). A dot of two normals uses x, y and z only. A request of -1 is a request with no animation code. The panel hold moves the hero along n until n . (p, 1) = r, turns the steering target to -n and applies the facing.
+
+Panel hand-offs (sub-mode 2). In each case Q is set to the link on that side; with no link the request is 49. c = nQ . nT.
+- Up (f above 0): climb while hT < LVT - H. At the top, with the cooldown not 0, request 49. Otherwise: c above 0.99 (the same plane): sub-mode 13 with P = T and the return word 2. Else the vertical part of nQ above 0.95 (a top face): cooldown 20 and sub-mode 17. Exactly 0.95: nothing. Below 0.95: sub-mode 3.
+- Down (f below 0): climb while hT is above 0.5 and the ground gap is above 0. Otherwise, with the cooldown not 0, request 49. c above 0.99: sub-mode 14 with P = T and the return word 2. Else the vertical part of nQ above 0.95: sub-mode 0 (step off to state 1). Exactly 0.95: nothing. Below: sub-mode 6.
+- s above 0: move while uT > r. At the edge (the cooldown is not tested): c above 0.25: sub-mode 15 with P = T and the return word 2. Otherwise a corner: the vertical part of nT x nQ at or above 0 gives sub-mode 12, below 0 gives 9.
+- s below 0: move while uT < LUT - r. At the edge: c above 0.25: sub-mode 16 with P = T and the return word 16. Otherwise the vertical part of nT x nQ at or below 0 gives 11, above 0 gives 8.
+
+Top-edge hang (sub-mode 17; High). Each tick: locomotion sub-state 1; the hero moves along nT until nT . (p, 1) = r - 0.7; its height is set to E - 0.25 - H + 0.1, where E = y + (LVT - hT) / VT.y is the world height of T's top edge above the hero (y the hero's height, VT.y the up component of T's up axis); request 73. Then, only when f and s are both non-zero: when |s| < |f|: f above 0.2 with the cooldown 0 zeroes the motion and gives sub-mode 7 (climb over the top); f below -0.2 gives sub-mode 2; otherwise nothing more. Else, s above 0: while uT > r request 60 (shuffle toward u = 0). At the edge Q = link 3; with no Q, or with nQ . nT at most 0.25 (no corners here), request 73. Otherwise, while uT > 0 request 60; once uT <= 0, Q is cleared, Q becomes the target with the panel hold, request 61 and a step of 0.05 along minus the new target's U. s below 0 is the mirror with link 1, the tests uT < LUT - r and uT >= LUT, request 61 throughout and a step of 0.05 along plus U.
+
+Straddles (sub-modes 13 to 16). On the first tick the queued panel becomes the target and the queue is cleared (the hero now holds the new panel T and the old panel P), and nothing else runs. Every tick both set locomotion sub-state 1; 13 and 14 also run the panel hold first.
+- 13 and 14 (stacked panels). With no P: state 1 when there is no target, else sub-mode 2. With P: when 1.0 < hP < LVP - H, P becomes the target and the sub-mode is 2 (P cleared); else when 1.0 < hT < LVT - H, sub-mode 2 on T (P cleared). Otherwise, when |s| < |f|: f above 0 climbs (request 56), f below 0 descends (45), both at clip rate 1.0 with no height limit. Sideways (s above 0; s below 0 is the mirror with link 1, request 53, the test uT < LUT - r and the edge test uT <= LUT): while uT > r, move (request 52, rate max(s, 0.3)). At the edge Q = link 3 of T and Q2 = link 3 of P; with either missing, Q is cleared and the request is 49; with |nQ2 . nQ| below 0.95, the same. When nQ . nT is above 0.25: while uT >= 0 the move goes on (request 52, Q cleared); past it, T = Q and P = Q2 with the panel hold (Q cleared). Otherwise a corner: P = Q2, the return word 13, and sub-mode 12 (vertical part of nT x nQ at or above 0) or 9 (below 0); the mirror gives 11 (at or below 0) or 8.
+- 15 and 16 (panels side by side). When -r < uT < LUT + r: sub-mode 2 on T (P cleared, panel hold). Else when r < uP < LUP - r: P becomes the target, sub-mode 2 (panel hold). Otherwise, when |f| < |s|: request 52 (s above 0) or 53 (s below 0) at rate max(|s|, 0.3), with no edge test. Up (f above 0): while hT < LVT - H climb (56, rate max(f, 0.3)). At the top Q = link 2 of T; with no Q or the cooldown not 0, request 49. Q2 = link 2 of P; with none, Q is cleared and the request is -1. With nQ2 . nQ below 0.95 (signed here), Q is cleared and the request is 49. With nQ . nT at most 0.99: the vertical part of nQ above 0.95 gives sub-mode 17 (no cooldown write), exactly 0.95 nothing, below it sub-mode 3. Same plane: while hT < LVT, T = Q and P = Q2; Q is cleared and the climb goes on (56). Down (f below 0): while hT is above 0.5 and the ground gap is above 0, descend (45, rate max(-f, 0.3)). Otherwise the same with link 0, giving sub-mode 0 for a top face below or 6 otherwise, and in the same plane T = Q and P = Q2 only when hT is below 0; the descent request 45 still plays.
+- Corners (sub-modes 8, 9, 11 and 12) end by making the queued panel the target with the panel hold, the cooldown 0 and request 49, and go to sub-mode 13 when the return word is 13, else to 2. The return word is reset only when the climb starts; a corner taken from sub-mode 2 after a corner from a straddle can therefore return to 13 with no partner, and that sub-mode then hands to 2 on its next tick (High; no visible effect). The timers of the table are the grab cooldown (hero word +0x9CC, Behavior 20). Animation 56 in this table is a request, not a state write: no climb sub-mode writes state 56 (High).
+Exits: Square with the stop-climbing label (18), in any sub-mode except 7: state 7 in air phase 5 with request 67 (the hero drops off; Behavior 50). Sub-mode 0: state 1. The let-go exit pattern of Behavior 44: 1/22.
+
+**State 23 (sidle).** Present but unreachable (High). The Square selector offers the sidle label (11) only when a sidle availability test passes, and that test always returns false; the sidle start, the only writer of state 23, is reached only behind it. No level script writes hero states. A clean implementation may omit state 23. Body, if entered (Medium): the target is a wall record; the hero is held 0.5 from its plane (abort beyond 3.0); sub-mode 1 shuffles along it with requests 79 and 81 (80 idle) by the side stick; 1.5 from each end it hands to sub-mode 4 or 5 to round the corner onto the linked record when a corner test passes; a probe 0.25 to the moving side stops the shuffle. Exits, if entered: an attack press with a usable weapon enters state 13; Square with the stop-sidling label (19): 1/22 (Behavior 44).
+
+**State 26 (turn a statue).** Present but unreachable (High); the body is Medium. Entry: Square with the grab-statue label (23). The Square selector offers that label only for a kind-1 object of the built-in puzzle-object pool that is within 3.0 units and not yet aligned. That pool is never filled in this build (its add routine has no caller; SPEC-0028), so the label is never offered and state 26 is never entered in play. Body, if entered: request 0; the routine finds a kind-1 pool object within 3.0 units; pushing the stick forward or back turns the object's forward vector f by f' = 0.99 f + 0.01 s per tick, with s the object's side vector taken with the sign of the stick (about 0.58 degrees per tick). Let go: 1/22. A clean implementation may omit the state.
+
+**State 27 (rope gun).** Confidence High for the body and Medium for the entry handoff. State-13 processing sets state 27 when the hero's aiming flag (+0x1490) is set and the rope manager has a selected-anchor pointer; one of the recovered setter branches also requires hero word +0x14B0 to be nonzero. The candidate scan and the button route that lead to this combination are not fully established (Open questions). The separate Square route with the rope-gun label (24) has a test that always returns false, so Square never enters this state. Each tick, if a hit test or a busy test fires, the hero lets go. Phases 0 to 4:
+- 0: holster the weapon; when an object is found at the global index, clear its object flags. Then phase 1.
+- 1: face the anchor at rate 0.25; request 167 (0xA7). Fire the rope on the clip's event bit 0x20 if it has not been fired. When the rope is attached, phase 2.
+- 2: request 168 (0xA8) until progress reaches 0.99; then start reeling, phase 3.
+- 3: face the anchor at rate 1.0; request 172 (0xAC); locomotion sub-state 1. Each tick the hero is pushed by 0.8 times the rope direction until the rope reports arrival (phase 4). A set landing flag lets go.
+- 4: request 171 (0xAB). Aim at the anchor point lowered by 2.5. When the vertical part of the normalised aim is above 0.35, the hero is pushed by 0.15 times the normalised aim.
+- Let go: state 1 and the rope is released. 0.25, 1.0, 0.8, 2.5, 0.35 and 0.15 are fixed constants. The reel push of 0.8 is a program constant; it is separate from 0x2DD7B0, which is the duration of Tor's attack rumble (SPEC-0036).
+
+**State 29 (hold a door).** Present but unreachable (High); the body is Medium. Entry: Square with the grab-door label (22). The selector offers that label only when the motion record's door index (+0x18C) is not -1, and its only writers store -1. No grab-door record is built either: the world loader would build one only from a door volume record with flag bit 7 set, and no such record exists on the disc (SPEC-0028). So state 29 is never entered in play. Body, if entered: Behavior 4B. Let go: 1/22 with request 0. A clean implementation may omit the state.
+
+**State 30 (hang from a ledge).** Confidence: Medium for the structure, the gates and the transitions; High for the exits. Entry: the in-air ledge chooser (result 0) and the drop into a hang of state 37.
+Gate, each tick: when the locomotion ground gap is zero or below and the sub-mode is not 4, the routine reads the stick and returns with no request. Sub-mode 4 always runs (High).
+Ladder check: when the ladder grab test (Behavior 22, with the state-30 limits) holds, the hero goes to state 41 (Behavior 13). When the predicate that clears the global index flag holds, that flag is cleared (Medium).
+- Sub-mode 0 (grab): the steering block takes the negated first vector of the target record at rate 0.5; displacement is cleared; sub-mode 1; request 72.
+- Sub-mode 1 (move to the edge): while current action 72 is not playing, request 72 and end. Otherwise measure the planar distance to the target point (the target record's offset with a 0.1 height offset). When the distance is above 0.25 (fixed constant) and the current animation has not reached 0.99 (word 0x2DD854), steer at rate 0.25 and end. Otherwise sub-mode 2 and request 71.
+- Sub-mode 2 (request 73, hang idle): steer as in sub-mode 0; sub-mode 3.
+- Sub-mode 3 (hang): steer as in sub-mode 0. Current-action tests compare against 61 and then 60. While either shimmy action is current, its corresponding along-boundary check can move the hero to sub-mode 5 or 6 after the relevant predicate. When neither shimmy action is current, read the stick. Forward dominant (forward above the side magnitude): when the stick is pushed forward and the target record kind is not 5, sub-mode 4 (pull up). Side dominant requests 61 or 60 unless the corresponding along limit is reached, in which case the predicate controls entry to sub-mode 6 or 5. Action 73 is the hang-idle request made on entering this sub-mode; it is not the current-action id used by these tests.
+- Sub-mode 4 (pull up): when action 59 is not current, request 59 and spawn effect index 9. When it is current and below 0.95, zero the velocity, set the locomotion sub-state to 1, and go to state 4 when the event-bit 0x40 test passes and the stick is pushed forward (Medium-High for the stick sense). At 0.95: clear the direction mode to none, run a cleanup, go to state 1 and save the hero position.
+- Sub-modes 5 and 6 (shimmy ends; Medium-High): steer as in sub-mode 0 and read the stick. Their current-action tests use ids 61 and 60. Side negative: sub-mode 5 requests 61 and returns to sub-mode 3 when the along value is above 0.25; sub-mode 6 requests 61 and returns to sub-mode 3 when the along value is above zero. Side positive: sub-mode 5 requests 60 and returns to sub-mode 3 when the along value is below -0.25 (word 0x2DD7C8); sub-mode 6 requests 60 and returns to sub-mode 3 when the along value is below the bound at +0x40 of the target record (the target height). Forward dominant: exit to sub-mode 4 unless the target kind is 5.
+- Let go: Square with the let-go label (20): 1/22 (Behavior 44, which also clears the word +0x9AC).
+- Exits: state 41 (ladder check), state 4 (sub-mode 4, stick pushed forward), state 1 (sub-mode 4 at 0.95) and 1/22 (let go). No other exits (High). Animation codes: 72 (grab), 71, 73 (hang idle), 61 and 60 (shimmy), 59 (pull up). The value 64 in an action test of this routine is an action argument, not a distance.
+
+**State 35 (climb up onto a ledge from a fall).** Confidence Medium for the structure; High for the active-action gate. Entry: the in-air ledge chooser, result 1, while falling. Sub-modes 0 to 2. Animation 75 (0x4B) only.
+- 0 (entry): rate 0.5; displacement cleared; sub-mode 1; request 75.
+- 1 (move to the ledge): the action test is true only while action 75 is current; otherwise the routine requests 75 and ends that pass. While action 75 is current, it steers toward the ledge. An along-distance test against 0.75 (fixed constant) and the along-component above 0.25 (fixed constant) with progress not yet at 0.99 give a velocity step and a return. Otherwise sub-mode 2 and request 75.
+- 2 (request 75): when a state helper result is not 1, the hero goes to state 1 (High). The same action-75 test gates progress handling: while action 75 is current and progress reaches 0.95, the direction mode is set to -1, a cleanup helper runs, the hero goes to state 1, and the position is saved (High). Before the gate: rate 0.5 steering. At the 0.75 distance gate a push by the stick vector. Then, when the event-bit 0x40 test passes and the stick is pushed forward, the hero goes to state 4 (High).
+The 0.95 is a progress gate and the 0.75 a distance gate, not timers in seconds. Exits: state 1, state 4.
+
+**States 37 and 38 (drop off an edge into a hang).** Confidence: High for the phases and the exits; Medium for the step, turn and depth-check details. Entry: edge contact while walking (the ledge-drop edge test and edge offer of Behavior 49; the edge type is not 3 or 6). State 37 hangs from a ledge; state 38 drops onto a climb panel (second contact routine). On entry a timer is set to twice the run-time time factor (not on disc; no use is known). The phase word is the hero word at +0xA18:
+- Phase 0: if the landing flag is set, state 1 and a ledge cooldown of 120 ticks. Otherwise, when the current walk action is 2 to 6, a depth check runs: when the ground below the edge is not more than 4.5 below (probes 2.0 and 2.5 units ahead), the hero returns to its walk state (a shallow edge). Otherwise the hero faces along the edge at rate 0.1 and goes to phase 1. State 38 starts with rate 1.0 along the target direction and sub-kind 3.
+- Phase 1 (step past the edge): walk request 2 until the hero is 0.15 beyond the edge, following the neighbour edge at the ends; a set landing flag gives state 1.
+- Phase 2 (turn around): request 73 (0x49) until the facing dot with the edge direction exceeds 0.99. Both states use this phase.
+- Phase 3: state 37 goes to state 30 (hang from the ledge). State 38 calls a method of the state table with the panel record, keeps the panel as the target, clears the object flags at the global index and goes to state 21 with sub-mode 17 (High for the writes).
+Exits: state 30 (37), state 21 sub-mode 17 (38), back to the walk state (shallow edge), state 1.
+
+**State 47 (climb up onto a ledge while rising).** Confidence: Medium; High for the writes. Entry: the in-air ledge chooser, result 1, while rising. Sub-modes -1 to 2. Each tick the locomotion sub-state is set to 1 (High). Animation 134 (0x86) only. The routine branches on a flag of the locomotion sub-object:
+- Flag clear:
+  - 0 (entry): steers toward the ledge direction at rate 0.5 and clears displacement. The target vertical coordinate is the selected edge-plane height at the hero's current horizontal position, as returned by the shared edge-height helper, minus 1.1 (boot data; the helper returns plane height minus 0.25). The along-distance test runs before the ground-gap test. When the along-distance to the ledge (minus this target height) is above 0.2 (word 0x2DD8BC), the hero steps; at or below 0.2, sub-mode 2 is set and animation 134 is requested. The routine then checks the ground gap: a positive gap returns without undoing the earlier movement or transition, while a non-positive gap sets sub-mode 2 and requests animation 134.
+  - 1 and 2: calls two helpers. When the second helper's result is not 1: state 1 and a stick-derived vector is stored (High for the write). When it is 1: if current action 134 is not playing, request 134. Otherwise: before the 0.95 gate, rate 0.5 steering; after it, when the event-bit 0x40 test passes and the stick is pushed forward, the hero goes to state 4 (High).
+  - Sub-modes above 2 return with no change.
+- Flag set: the sub-mode is set to -1 and two helpers run. If the target record's kind is special, the hero goes to state 1 and the air phase is set to 0 (High). Otherwise, if the ground gap is above zero, the hero goes to state 7 with air phase 5 (the descent of Behavior 50; High). Otherwise the hero goes to state 1 and the position is saved.
+Exits: state 1, state 4, state 7.
+
+**State 58 (climb onto a block).** Confidence: High for the entry and the writes; Medium for the sub-mode graph. Entry: the push-into-face counter and the climb-onto-block fit test (Behavior 15); the request comes on the 16th consecutive tick at a face at the earliest. The state setter requests 70 on entry. Uses the same block list, index and face as states 18 and 19 (Behavior 4A.2). With no record: state 1 (High). The state setter initializes sub-mode 0; the recovered state-58 handler moves from 0 to 2 and has no sub-mode-1 arm or assignment. No normal state-58 route to sub-mode 1 is established; direct writes from untraced external paths remain outside this conclusion.
+- 0 (entry): rate 0.5; steers toward the record. Its approach target starts at the block current position offset outward along the selected face by half the bound rectangle's +0x10 size plus 0.75; its vertical coordinate is the bound rectangle's second-axis extent (+0x24) minus the W lane of that axis (+0x6C) and minus 1.2 (boot data). On reaching the target: sub-mode 2 and request 134.
+- 2 (request 134 until progress reaches 0.95): before the gate, rate 0.5 steering and locomotion sub-state 1. After it, when the event-bit 0x40 test passes and the stick is pushed forward: state 4 (High). At the gate: the direction mode is set to -1, the step is reset, the hero goes to state 1, the position is saved, and a flag on the locomotion sub-object is set to 1 (High for the writes).
+Exits: state 1, state 4. Animation codes 70 (entry) and 134.
+
+### 52. Stick gesture machine (High)
+
+Confidence: High for the inputs, the quadrant classifier, the states, the counts and the durations.
+
+The gesture machine turns left-stick motions into a gesture mode word M (hero field +0x9A4). The attack start reads M: a nonzero M makes an attack press start a gesture variant instead of the normal charge (SPEC-0036, attack router: Tor M 1, 2, 3 start sub-states 9, 7, 8; Roberta 8, 6, 7).
+
+When it runs. Once per tick in the hero pre-step, before the action-state switch (Behavior 1), as part of the stick processing.
+
+Inputs.
+- F = -conv(Y byte +0x11F) and S = -conv(X byte +0x123), where conv is the dead zone of Behavior 2 and the Controller map: with v = b - 127.5, conv(b) = v - 40 when v > 40, v + 40 when v < -40, and 0 otherwise.
+- F > 0 means the stick is pushed up; S > 0 means it is pushed left.
+
+Reset. While the hero is busy (Behavior 3) or the game-state word +0x5C is above 0, the machine is put back to Idle with its counters zeroed. The mode word is not written by the reset, so M keeps its last value.
+
+Quadrant and step classifier.
+- Quadrant q: 0 = up-right (F > 0, S < 0); 1 = up-left (F > 0, S > 0); 2 = down-left (F < 0, S > 0); 3 = any other.
+- A step is classified only when F and S are both non-zero; otherwise there is no step. The new quadrant q is compared with the stored quadrant Q:
+  - same quadrant: no step;
+  - the next quadrant counter-clockwise (0 to 1, 1 to 2, 2 to 3, 3 to 0): a CCW step, and Q := q;
+  - the next quadrant clockwise (1 to 0, 2 to 1, 3 to 2, 0 to 3): a CW step, and Q := q, except that the step 0 to 3 stores Q := 2 (quirk; reproduce it);
+  - the opposite quadrant (0 and 2, 1 and 3): a reset step.
+
+States. One state step runs per tick. "Turns" counts gesture steps; N and W are per hero (below).
+- Idle: M = 0. If |S| > 30: Q := q and go to Track. Else if F < 0: go to Back.
+- Back: M = 0. If |S| > 30: Q := q and go to Track. Else if F > 0: zero the hold counter and go to Flick.
+- Flick: M = 1 for 15 ticks (the word at 0x2DD7E4), then Idle (M = 0).
+- Track: turns = 0. Centred (F = S = 0): Idle. CCW step: go to CCW. CW step: go to CW. Reset step: Idle.
+- CCW: centred: Idle. CCW step: zero the hold counter and add 1 to turns; when turns >= N, go to SpinB. CW step: turns = 0 and go to CW. Reset step: Idle.
+- CW: centred: Idle. CCW step: turns = 0 and go to CCW. CW step: zero the hold counter, add 1 to turns and go straight to SpinA; N is not tested here (quirk; reproduce it).
+- SpinA: M = 2 for W ticks, then Idle. SpinB: M = 3 for W ticks, then Idle.
+
+Per-hero values.
+- Tor: N = 1 (word 0x2DD7EC) and W = 25 ticks (word 0x2DD7E8).
+- Roberta: N = 3 and W = 10 ticks (fixed constants).
+- So a clockwise gesture (M = 2) needs two CW steps, three quadrants, for both heroes. A counter-clockwise gesture (M = 3) needs 1 + N steps: 2 for Tor and 4 for Roberta.
+
+## Edge cases and error handling
+
+- Stick at the dead zone edge: |d| = 40 exactly gives 0.
+- Stick at the top edge: a full push gives 1.0 after the dead zone and scale.
+- Diagonal push: the speed value is the stick length capped at 1.0, so a full diagonal push gives 1.0 (from 1.414) and a half push in any direction gives about 0.5 (Behavior 2).
+- Speed at the tier edges is not monotonic in tilt (original quirk): 4.91 units per second at v 0.49 and 6.75 at v 0.5 in walk mode (Behavior 5.3).
+- One-pass lag: the first pass of a push from rest moves 0, and one more step is taken after the stick is released (Behavior 5.2).
+- Run re-entry: for 30 passes after leaving the run state, R1 gives walk mode (Behavior 5.1).
+- Stick exactly opposite the facing (180 degrees): the moving blend cannot turn, and the root step is discarded because the stick is behind the facing, so the hero stands still facing away until the stick moves (Behavior 2, 5.5).
+- Stick more than 90 degrees from the facing: the hero turns in place and does not move that pass (Behavior 5.5).
+- Pure sideways push: turn in place (Behavior 4), never a walk.
+- Reverse with the enable bit set: codes 6 and 11 by P1 (Behavior 4); the reverse speed threshold is not used by the speed tiers.
+- Pad outside analog mode: the stick bytes are not refreshed from the packet, and no stick direction bits are added to group 2 (group 2 equals group 1), so a stick never moves a menu cursor outside analog mode. The bytes are set to 127 only by the reset, set-up and disconnect paths, so the tick does not clear them. A pad with an extended (analog-capable) ID is switched to analog mode and locked there, so this case arises only during set-up or for a pad without an extended ID, whose button words are also 0 (Controller map). A clean implementation must not reset the sticks to centre each tick.
+- Idle counter: any held button, a left-stick byte below 32 or above 224, or a right-stick axis outside 50 of 127, resets it. Left-stick movement inside 32 to 224 does not.
+- Turn limit: while moving (speed value above 0.01) the turn is at most 18.19 degrees per pass. At a speed value of 0.01 or less the eased rule depends on the run-time tick-length word X (1/60 s); at 60 ticks per second its step is capped at about 5.7 degrees, and a stick about 2.6 degrees from the facing turns only about 0.08 degrees per tick (Behavior 2).
+- Two leap exits: the order of the leap's tests is fixed (Behavior 9). A found target does not exit to state 7. The state-7 exit (the let-go) runs when the target is lost, its record is missing, the launch record is missing, at the line end, or on ground contact; the state-48 exit runs when the touched flag is set in the slide mode with no candidate found and the cooldown expired.
+- Leap with no candidate whose side distance is below 20.0: the search finds nothing, no launch happens and the slide goes on (Behavior 9).
+- Leap landing: the landing test reads only the side offset, so a target above or below the launch height does not change the landing tick; the attach on the next tick moves the hero to the target line's height.
+- Line end: the hero lets go when its distance from the line start A exceeds the line length, measured from the hanging position 3.25 + r below the line, so it lets go slightly before the end B; a line shorter than 3.25 + r lets the hero go on its first slide tick.
+- Bounce with a ground gap above 0.1: phase 0 waits. No timeout is known.
+- Bounce phase 3 with a missing or non-18 ground record: the fixed 5.0 pending lift applies (Behavior 10).
+- Button chain, input disabled: with the input-enable setting off, or the game mode outside 0, 3 and 4, no chain step runs for that tick, including the L2 enable (Behavior 1A, rule 2).
+- Latch set (a quick-item panel open, or the pass after it closed): Cross, Circle, Triangle, Square and the D-pad are hidden from the hero. L1, L2, R1 and R2 still act, so an L2 hold still enters state 32. A face or D-pad button held across the latch stays hidden until released (Behavior 1A, rule 3).
+- Gesture classifier quirk (Behavior 52): a clockwise step from quadrant 0 to quadrant 3 stores quadrant 2, not 3, so the next step is classified from quadrant 2.
+- Gesture CW quirk (Behavior 52): in the CW state a second clockwise step goes straight to the clockwise spin without testing the step count N, so a clockwise gesture needs only two CW steps for both heroes.
+- Gesture reset while busy (Behavior 52): the reset does not write the mode word, so M keeps the value it had when the hero became busy.
+- Busy pass: Cross or Square pressed while busy changes no state but still ends the chain, so the routes after it do not run (Behavior 1A, rule 5a).
+- Pad slot 0 not usable in play (no extended ID, or disconnected): the pause page opens as for a Select press, or the controller message box is shown when the game state forbids the pause (Controller map; SPEC-0035).
+- Circle or R2 during an interaction: the selector takes the press first, so it is a selector event and not an attack (Behavior 1A, rule 5).
+- Cross in strafe mode with the left stick at zero: a standing jump (state 7), not a strafe jump (Behavior 50).
+- Quick-item panel with no selection: Circle or Cross does not use an item and the panel stays open (High; Behavior 1A).
+- Bounce phase 3 with both stick axes inside the dead zone: no steer is added (Behavior 10).
+- Air landing on a ground record of a kind other than 17 or 18: no bounce (Behavior 10).
+- State-20 exit from state 13: when the exit is armed but L1 is neither held nor pressed, or the shield-family entry is missing or empty, the hero stays in state 13. There is no stick test (Behavior 3C).
+- Strafe jumps: an air phase outside 0 to 10, which includes the launch-pending value -1, takes the launch branch: the launch request and phase 1 (Behavior 11; Medium).
+- Height gap of 0.1 or less in idle: not followed; the displayed height stays where it was, so a small step in the ground is not visible until the gap grows.
+- Height gap between 0.1 and 0.5 downward: a drop of this size waits the full 120 ticks in idle before the catch-up starts. The drawn height stays above the world height for that time.
+- Height catch-up with the gap below 0.05: the catch-up stops and the remaining gap (up to 0.05) stays.
+- Height output in state 53: the drawn copy is not written by this path.
+- Step gate with no blocking normals: every step is accepted.
+- Landing test with a vertical velocity of zero or above: not falling, so not landed (Behavior 14).
+- Landing test with no surface above the reference height minus 1.5: not landed.
+- Climb-onto-block fit test with the block top exactly 0.2 or 3.5 above the feet: fails (both bounds strict; Behavior 15).
+- Ledge test with a mode value outside 0 to 3: not described.
+- Scripted jump onto a box (Behavior 16): never runs in the shipped game.
+- Small drops (Behavior 9A): a drop of about 3.11 or less never enters the air states; the hero falls in its stance state at gain 1.0 and lands without a landing clip.
+- Pull and side block moves (Behavior 4A.2): only the push clip's move length is doubled, so pull and side moves finish early (quirk to keep).
+- Target pick with a state-21 candidate whose +0xC84 field is zero (Behavior 19): reject it before the range and alignment tests; if no later candidate qualifies, return false and leave the target field unchanged.
+- Ladder sub-mode outside 0 to 8: not described; treat as open.
+- Walk-off gap exactly 3.0: not above 3.0, so no fall (the comparison is taken as strict; Medium). A zero ground gap, from the sub-object flag, never starts the walk-off.
+- Walk-off third test: the state-30 test is always false in the stance states, so it never blocks the fall (Behavior 9A).
+- Block grab with no block record: the hero goes to state 1 and the direction mode is set to none (Behavior 4A.2).
+- Block approach at exactly 0.25 from the grab spot with the latch clear: the boundary is taken as "within 0.25" latching; the exact-value behaviour is not established.
+- Scripted walk (states 50 and 52) at exactly 0.25 from the point: the arrival test is "below 0.25", so the walk goes on that tick (Medium). A facing exactly at the 0.99 dot: Medium.
+- Stance counter at 100 (states 3, 4 and 6): the counter is kept at 100; it has no reader (Behavior 4A.1).
+- Shield guard with L1 held and action 64 current below 0.99: no request 63 is made, but the rate is still requested each tick (Behavior 4A.3).
+- Long-fall landing with the hero not grounded and action 137 at progress 0.99 or more: the height branch (animation 136) runs, because the state-1 exit needs the grounded test.
+- Death on deadly ground with a surface word other than 2 or 8: request 136 (Behavior 4A.6; SPEC-0055).
+- Leap exit with the touched flag set but the cooldown at 1 or more: the exit to state 48 does not run; the hero stays on the line. The attach sets 60, so a contact in the first 60 ticks on a line does not end the slide.
+- Respawn next to a grab point: for 60 ticks after any respawn the cooldown blocks the hang entry, so a jump at a grab point in that second does not hang (Behavior 3A).
+- Push-into-face counter: a failing fit test does not reset the counter; while the hero stays at the face the fit test runs every tick, so state 58 is requested on the first tick it passes (Behavior 15).
+- Glide with a remaining time at or below zero: the value is set to the target at once.
+- Angle wrap: an angle of exactly 2 pi is not wrapped; only absolute values above 2 pi are.
+- Integer step with N = 0: target 1.
+- Input code outside 1 to 27: output 11 (Behavior 28).
+- Left-stick secondary mapping: a distance exactly equal to a threshold is not below it, so the next test applies (strict comparison).
+- Deferred queue full: an append adds nothing (Behavior 34).
+- Proximity scan: an entry at exactly 3.0 units; the boundary is not established.
+- Button sequence: at counter 10, new L2 advances to 11; at counter 11, a nonzero new press resets to 0, while no new press leaves the counter unchanged (Behavior 36).
+- **Side-touch latch timing** (Behavior 15A; SPEC-0040, Behaviors 3 and 14A): on an active hero tick, an eligible block contact may set +0x9B4 after the driver pre-step. The next hero update can read it, then that tick's driver pre-step clears it before new contacts. Without another eligible contact, it is 0 before the following hero update. No clear is established when the hero driver is not run.
+- **Segment inputs out of range are not stored** (reproducible; Behavior 47): a duration below 1e-5 or a fraction above 0.99999 is used clamped for the outputs, but the stored input fields keep their old values.
+- **Animation chooser gaps** (Behavior 42): Tor's state 126 and Roberta's states 119 to 125 are not in any named range, so they use the default code 0xA3. Roberta states 98 to 105 and Tor states 111 to 118 also use the default code.
+- **Random timer truncation** (Behavior 46): the timer is a whole number of ticks, cut toward zero.
+- **Hash draw bound** (Behavior 48): the draw never returns exactly the lower bound a.
+- **Edge gate with a bypass** (Behavior 37): a nonzero bypass flag skips the vertical gate only; the slope gate and the distance gate still apply.
+- **Root step reset** (reproducible; Behavior 4, item 9): entry to state 33 or 51 writes (0, 0, 0, 1) to the root step, so a re-aim before the animation object writes the next step gives a zero step.
+
+- Ground normal with a vertical part below 0.82: Cross does nothing, and the press still ends the chain (Behavior 50; Behavior 1A, rule 5a).
+- Jump stick magnitude exactly 0.3: state 9; exactly 0.6: state 10 (the lower bounds are inclusive; Behavior 50).
+- Jump speed gate: a speed exactly 0.01 is not above 0.01 and gives request 70 with phase 0. The standing jump (0.0) and the backward jump (-10.0) both take this branch; the backward jump's horizontal velocity is still the facing times -10, so it moves backward (Medium).
+- Landing flag (+0x1514) set: the landing is hard (phase 10) whatever the fall height (Behavior 50).
+- **Tor's air slash shows no slash and deals no damage** (reproducible; Behavior 50): it runs only in the strafe jumps, plays Tor main clip 0 against the jump clip every tick (the pose drifts 5 % per tick toward clip 0's first key), and never opens an event-bit 0x1 window, so it deals no damage. In the normal jump states the attack input gives only the plunge, and below 1.5 while descending it does nothing.
+- **Direct state writes** (reproducible; Behavior 50): the soft landing (to 1), the moving landing (to 4, or 32 for strafe jumps), the hard landing (to 4 or 1) and the end of Tor's plunge (to 1) bypass the state setter, so the previous-state word (+0x7FC) keeps its old value and no entry side effects run. A later 1/22 check (Behavior 44) or strafe-mode test reads that old value.
+- Ladder: a Cross held but not newly pressed does not jump off; in sub-mode 8 (climbing off the top) a Cross press is ignored (Behavior 13).
+- Ladder with no ladder record: the sub-mode is set to 0 and the hero goes to state 1 (Behavior 13).
+- Ledge hang (state 30) with the ground gap at zero or less: every sub-mode except 4 reads the stick and returns with no request (Behavior 51).
+- Block-edge hang (state 19) with the along-component negative and the ground gap above 0.01: the state-1 exit does not run; the sub-mode stays as it is (Behavior 51).
+- Sidle (state 23; never entered in play) with the target kind value 2: the locomotion sub-state is set to 1 on each tick. The abort on an along-component above 3.0 leaves the state at 23, so the hero stays in the sidle until a later exit (Behavior 51).
+- Climb-up while rising (state 47) with the flag set and a special target kind: the hero goes to state 1 and the air phase is set to 0, not 5 (Behavior 51).
+- Climb (state 21) with sub-mode 0: the hero goes to state 1 after the table call. The stop-climbing prompt is not offered in sub-mode 7 (Behavior 51).
+- Ledge hang (state 30) at exactly 0.25 planar distance in sub-mode 1: the test is taken as "below 0.25", so a distance of exactly 0.25 does not move to sub-mode 2 (Medium).
+- Ledge hang (state 30) with the stick forward at zero in sub-mode 3: nothing happens on that tick.
+- Block-edge hang or climb onto a block with no block record (states 19 and 58): the hero goes to state 1 and the direction mode is set to none.
+
+## Test vectors
+
+Synthetic values, hand-checkable.
+
+1. Dead zone, raw byte to scaled value:
+   - 127 → 0 (|d| = 0.5)
+   - 167 → 0 (|d| = 39.5)
+   - 168 → 0.5 / 87.5 ≈ 0.0057 (d = 40.5)
+   - 207 → 39.5 / 87.5 ≈ 0.4514 (d = 79.5)
+   - 255 → 1.0 (d = 127.5, minus 40 gives 87.5)
+   - 0 → −1.0
+2. Speed value from the stick (stick length, capped at 1.0):
+   - Left Y raw 55 (forward 0.3714), left X raw 127 (side 0): speed value 0.3714.
+   - Left Y raw 55 and left X raw 55 (forward 0.3714, side 0.3714): speed value 0.5253.
+   - Left Y raw 0 and left X raw 127: forward 1.0; speed value 1.0.
+   - Left Y raw 0 and left X raw 0: length 1.414, speed value 1.0.
+3. Edges: prev 0x0000, now 0x0080 → pressed 0x0080, released 0x0000. Next tick now 0x0000 → released 0x0080.
+4. Idle counter: 300 ticks of no input → 300. A press on tick 301 → 0.
+5. Speed tiers, walk mode (R1 not held), both heroes, no status (slow-walk values use 5.01 units per second; Tor's slow walk is 5.05, about 0.8 percent higher):
+   - v = 1.0 → state 3, factor 1.0, 13.51 units per second.
+   - v = 0.8 → state 3, 10.80. v = 0.6 → state 3, 8.10. v = 0.5 → state 3, 6.75.
+   - v = 0.49 → state 2, factor 0.98, 4.91. v = 0.4 → state 2, factor 0.8, 4.01.
+   - v = 0.2 → v′ 0.3, state 2, factor 0.6, 3.01. v = 0.1 → stop (state 1).
+6. Speed tiers, run mode (R1 held, run allowed):
+   - v = 1.0 → state 4, factor 1.0, 19.28 units per second. v = 0.8 → state 4, 15.42. v = 0.66 → state 4, 12.72.
+   - v = 0.65 → state 3, 8.78. v = 0.5 → state 3, 6.75. v = 0.33 → state 3, 4.46.
+   - v = 0.32 → state 2, factor 0.970, 4.86. v = 0.2 → v′ 0.3, state 2, factor 0.909, 4.55.
+   - R1 held 10 passes after leaving state 4 (counter 10, below 30): walk mode, v = 1.0 gives state 3.
+6A. Distance from rest, walk mode, v = 1.0, held: after N passes the hero has moved 0.2251 × (N − 1) units: N = 1: 0; N = 2: 0.2251; N = 10: 2.026; N = 30: 6.528; N = 60: 13.281. Run mode, v = 1.0: 0.3213 × (N − 1), so 18.956 after 60 passes. Walk mode, v = 0.5 (6.75 units per second): 6.640 after 60 passes.
+6B. Status: walk under slow 10.13 units per second; walk under speed 24.99; run under speed 35.66; run under slow 14.46; a moving hero under stun moves 0 and state 1 is requested.
+7. Walk-and-turn state 32, forward 0.6, side 0, P1 off, run flag clear: walk family, code 3. Forward 0.25 and side 0.5 (turn test: 0.0625 < 0.5), side positive, P1 off: turn code 154 (forward positive).
+8. Leap: launch at vertical velocity 0.4; height after 10 ticks is 3.10; after 20 ticks 4.20; the falling request is sent at tick 33 (velocity −0.26); height after 41 ticks is 0.00 if no landing came first.
+8A. Grab line, pack 1381 cylinder 15 (A = (52.26, 75.28, 78.49), u = (0.8616, -0.0296, -0.5067), L = 72.86, r = 0.65): a hero put at 30 % of the line is attached at (71.144, 70.732, 67.384), 3.90 below the line; each slide tick moves it by (0.4308, -0.0148, -0.2534); after 101 slide ticks it is at (114.654, 69.238, 41.794), and on the next tick it lets go into state 7, air phase 5, request 67, cooldown 60, velocity (12.924, -0.444, -7.601).
+8B. Leap, pack 1381 cylinders 15 and 16 (parallel, side gap about 6.7): hero at 60 % of cylinder 15, Cross held, stick pushed right with the hero's side axis B1 = (-0.507, 0, -0.862): the search finds cylinder 16 and launches on slide tick 15 (the first tick the hero lies within its span), request 114; leap velocities (0.085, 0.4, 0.1445) per tick; falling request 115 at launch + 34 (vertical velocity -0.28); landing at launch + 40, then attached to cylinder 16. With B1 = (0.507, 0, 0.862) the stick must be pushed left (request 116, then 117).
+8C. Leap gates, level lines along +x at height 10, hero facing +x (B1 = (0, 0, -1)) 50 units along line 0, stick pushed left: a parallel line at z = -15 is found (side velocity 0.375 per tick), at z = -19.9 found, at z = -20.1 not; at z = +15 only with the stick pushed right; a line at z = -15 whose start lies 95 units behind is found, one that starts 10 units ahead of the hero or ends 45 units behind it is not; at height 17.9 not found (11.65 above the hanging hero), at height 1.9 found; a line turned 40 degrees is found (dot 0.766), an opposite line is not.
+8D. Hang entry reach, level line from (0, 10, 0) along +x: a hero in state 7 with the cooldown 0 at (50, 6, 0) catches it; at (50, 6, 1.75) or (50, 2, 0) or (50, 12, 0) not; exactly under the line (side offset 0) only 48.5 < x < 51.5 catches it, around the midpoint for every length (L = 10: 3.5 < x < 6.5); with a side offset of 0.5 the first half of the line catches it (test vector 132).
+9. Hop: from a start of 0, the height after 4 dip ticks is −0.4167; after 8 ticks (end of rise) is −0.16. Phase 3 adds 5.0 to the sub-object's pending displacement.
+10. Height follow, fall switch (synthetic): world height 9.3, displayed height 10.0, catch-up flag off, counter 0, speed 0. On the switch invocation, g = −0.7 triggers catch-up; the counter becomes 1, the flag becomes 1, speed stays 0, and displayed height stays 10.0. On the next invocation, catch-up is active: q = 0.0245, speed = 0.00098, displayed height = 9.99902. Next: g = −0.69902, q = 0.024431, speed = 0.001957, displayed = 9.99706; then g = −0.69706, q = 0.024295, speed = 0.002929, displayed = 9.99413; then g = −0.69413, q = 0.024091, speed = 0.003893, displayed = 9.99024.
+11. Height follow, cap branch: v = 0.1 carried in, world 9.5, displayed 10.0. q = 0.0125 is below v, so v = 0.0125 and displayed = 9.9875.
+12. Height follow, rise: displayed 10.0, world 10.3, idle, counter 0. Ticks 1 to 120 raise the counter to 120 with no move. On tick 121 the counter is 121, which exceeds 120, and the flag is set with no movement. Tick 122 is the first catch-up step: q = 0.0045, v = 0.00018, displayed 10.00018.
+13. Height follow, snap: idle, world 10.04 against displayed 10.0 (g = 0.04). Counter reset to 0, nothing moves.
+14. Height follow, movement predicate: idle, gap g = 1.0, hero state 7: predicate passes, counter advances to 1, no catch-up step. Same gap, hero state 1: predicate fails, catch-up flag sets immediately, but the current tick still does not move the displayed height.
+15. Height follow, large gap override: idle, gap g = 3.6, hero state 7: the strict 3.5 gap test sets catch-up despite the passing movement predicate.
+14. Step gate, speed exception: a record whose motion vector has speed component 0.02, one blocking normal (0, 0, 1), step (0, 0, −1) → accepted (speed above 0.01).
+15. Step gate, normal test: one normal (0, 0, 1), no speed exception. Step (0, 0, −1): dot = −1, refused. Step (1, 0, 0): dot = 0, refused. Step (0.5, 0, 0.5): dot = 0.5, accepted.
+16. Logical word from raw bytes: byte 2 = 0xFF and byte 3 = 0xBF give raw 0xFFBF, and the logical word is NOT(0xFFBF) = 0x0040. Only Cross is pressed.
+17. Logical word from raw bytes: byte 2 = 0xEF and byte 3 = 0xBF give raw 0xEFBF, and the logical word is 0x1040. Up (0x1000) and Cross (0x0040) are pressed.
+18. Stick inversion (right stick only, first pad): with Invert Left-Right set, right-stick X byte 0x10 becomes 0xEF. With Invert Up-Down set instead, right-stick Y byte 0x80 becomes 0x7F. The left-stick X byte 0x10 stays 0x10 under either option.
+18A. Vibration gate (synthetic): with the option on (word +0x08 = 1) and bytes +0x900 to +0x903 = 1, 0, 0, 0, pad 0's motor output is sent and pads 1 to 3 have their motor bytes cleared. With the option off (word +0x08 = 0), all four pads have their motor bytes cleared, whatever the bytes at +0x900 hold.
+19. Idle counter with the left stick (analog mode): no button held, right stick (127, 127), left stick (100, 200) (inside 32 to 224) for 300 ticks gives counter 300. On tick 301 a right-stick X byte of 180 (outside 127 plus or minus 50) resets it to 0. Left stick X byte 0 and Y byte 255 instead: held2 carries Left and Down, so the counter stays 0.
+24. Idle counter overflow: starting at 0, 32,767 eligible no-input ticks produce 32,767; one more eligible tick wraps the signed 16-bit field to −32,768. A held button or an out-of-band stick axis resets it to 0.
+20. Outside analog mode: a pad whose left-stick X byte was 255 on the last analog packet keeps 255 on later ticks, because the byte is not refreshed; held2 has no Right bit (group 2 equals group 1).
+21. Routes: state 14 ends the tick; state 0 runs the default; state 28 runs the grab-point hang; states 43 to 46 run the strafe jumps.
+22. Landing test (Behavior 14): reference height 10.0, vertical velocity −0.5. A surface at 8.6 is above 8.5 (10.0 minus 1.5), so the character is landed. A surface at 8.4 is not, so it is not landed. The same surface with a vertical velocity of +0.2 is not landed (not falling).
+23. Climb-onto-block fit test (Behavior 15): pack 909 block (size 2.759, height 2.741), hero walking (state 3) on the floor at its base, face 0, facing . A = 0.9, stick forward part 0.8 and side part 0.1: h = 2.741 passes; on the 16th consecutive tick at the face state 58 is requested. The same with the forward part -0.8: fails. Side part 0.9 with forward 0.8: fails. Pack 1394 cube (5.452): h = 5.452 is not below 3.5, so the fit fails; its top is not below 5.0 above the floor, so a side touch sets no latch and Cross near it gives a plain jump.
+24. Ladder (Behavior 13): height 2.0 above the ladder base: the mount aligns to the rung at 1.7 (0.45 + 1.25; 2.0 is not below 0.45 + 0.6 but is below 1.7 + 0.6). Height 0.5 with the stick pulled back: sub-mode 0, then state 1.
+25. Walk-off (Behavior 9A), stance state, moving forward: ground gap 3.5 and vertical velocity -4.0 give state 7, phase 4 and request 76. The same with a vertical velocity of -2.0: no change. Ground gap 3.0: no change.
+26. Block grab (state 18) with no block record: state 1.
+27. Block approach (state 18), latch clear: a distance of 0.3 walks toward the grab spot without setting the latch; a distance of 0.2 sets the latch. Latched on face m = 1 with the push-pull value positive: request 42 and the block moves toward direction 1; negative: request 41 and the block moves toward direction 3.
+28. Shield guard (state 20), L1 (bit 2) clear: state 1 and request 0.
+29. Scripted walk (state 50): WalkHero or RunHero to a point 5 units ahead, facing it, run flag 1, weapon in: request 4. Facing 90 degrees off: request 0 and a turn at rate 0.1. At 0.2 units with control option 0: arrival, the camera move, then state 33.
+30. Scripted walk and orient (state 52): 3 units from the point, facing it, weapon out: request 7. At 0.2 units with the face direction 90 degrees off: request 0 and a turn at rate 0.1; once the facing is within the 0.99 dot, the arrival step runs with no camera move.
+31. Long fall (state 48): ground gap 0.8 with a vertical velocity of -3.0: gain 1.0 and request 137. Ground gap 2.0 with no contact flag: in the air, animation 136 and stinger request 25 for Tor or 49 for Roberta; both are out of range and play no sound. With a vertical velocity of -8.0 the gain is 0.35, with -2.0 it is 0.3. While 137 plays, three toggles of one button within 15 ticks set the clip speed to 1.5; at progress 0.99 state 1. Health is unchanged throughout.
+32. Leap exit (Behavior 9): touched flag set, slide mode 1, cooldown 0: state 48. The same with cooldown 1: no exit.
+33. Death (state 16) on deadly ground with surface word 8: request 174. On ordinary ground: request 34.
+34. Stance state 40 with no ground record: request 85. State 22 on a kind-6 ground record: no request.
+
+35. Grab cooldown (Behavior 20): a ladder jump-off on tick n sets 30; the grab tests refuse on ticks n + 1 to n + 29 and may pass on tick n + 30.
+36. Turn step, eased rule (speed value at most 0.01; X = 1/60): a stick 90 degrees from the facing (d = 0) gives c = 0.995 and a turn of 5.73 degrees on the first tick. A stick with d = 0.999 gives d′ = 0.999999 and a turn of 0.081 degrees.
+36A. Turn step while moving (speed value above 0.01): a stick 90 degrees from the facing gives c = 0.95 and remaining angles 71.81, 55.99, 43.03, 32.78 after passes 1 to 4. A stick 30 degrees away gives c = d = 0.866 and remaining 22.71, 17.15, 13.13. A stick exactly 180 degrees away never turns.
+36B. Turn and move (walk, stick 135 degrees from the facing): passes 1 and 2 move 0; pass 3 moves 0.2251 along the facing.
+37. Leap in state 28 with a current target, slide mode, cooldown 0 and the touched flag set: state 48, with the let-go side effects applied first. Ground gap 0 in the slide mode with the touched flag clear: state 7 (let-go). In launch mode with the launch record missing: state 7.
+38. Ladder grab (Behavior 22): pack 909 face record (LU 1.63, LV 9.176, base height 50.383): hero at y = 50.383, d = 1.0, x = 0.8, facing dot -0.95, stick dot -0.9, stick 0.6, cooldown 0: grab, sub-mode 1. At y = 55.0 (position along V 4.617, above 9.176 - 4.75 = 4.426): no grab, except in state 30 (limit 9.176). Stick 0.05: no grab outside state 30.
+39. Action start gate (Behavior 17): with a valid nonempty entry, clear active word and no spatial conflict, a three-step duration stores 3 at +0x91, sets active and resets elapsed +0x90 to 0. The next three active updates apply one third of the selected-axis displacement each and leave elapsed values 1, 2 and 3; the following update clears active without moving. Indices 0, 1, 2, 3 select the first axis, second axis, negative first axis and negative second axis for the ground probe, respectively. A failed ground probe or spatial exclusion check leaves the action fields unchanged.
+
+39. Bounce entry and steer (synthetic): an air landing (phase 5) on a ground record of kind 18 enters state 56; on a kind other than 17 or 18 it does not. In phase 3, a stick with forward 0.4 and side 0.1 (not inside the dead zone) adds a steer of 5.0 times the unit direction, and the hero then enters state 7.
+40. State-13 exit to state 20 (synthetic, Tor): sub-state 4 on a frame without event bit 0x40, shield equipped, L1 held: the exit is not armed and the hero stays in state 13. Sub-state 4 on a frame with bit 0x40, shield equipped, L1 held: state 20. Sub-state 3, shield equipped, L1 clear: stays in state 13. Sub-state 3, no shield-family entry, L1 held: stays in state 13. The stick position never matters.
+41. Idle, L2 pressed this tick (edge and hold both set), no target, input enabled, mode 0 (Medium): next state is 32.
+42. State 32, L2 released this tick (Medium): next state is 1 and the step counter is cleared.
+43. Jump state 9 (Tor), falling 1.0 above the ground, R2 pressed: nothing happens. The same at 2.0 above the ground, or while rising: the plunge (air phase 8, request 23).
+44. Square edge, a target 4 units away, no busy state (Medium): the target's action runs.
+45. Latch set, Cross edge (Medium): no state change from the Cross rule.
+46. Input enable off, idle, L2 edge and hold both set (Medium): no state change; the chain does not run.
+47. Cross edge in strafe mode with the left stick at zero: standing jump, state 7 (High).
+48. State 41 (ladder), Cross held but no edge this tick: no jump. The same state with a Cross edge in a sub-mode other than 8: a jump by the chooser (states 7 to 10), horizontal velocity -0.5 times the facing, vertical +2.0, and no re-grab for 30 ticks.
+49. Door hold (synthetic, Behavior 4B; r = 1.175): distance to the door plane 2.0 (above 1.5 r = 1.7625): one step of 0.075 forward along the facing. Distance 0.4 (below 0.5 r = 0.5875): one step of 0.075 back. Distance 1.0: no step.
+50. Glide (synthetic, dt = 1/60 s): current 0, target 1.0, remaining 0.5 s. Tick 1: rate = 1.0 / 0.5 = 2.0; current = 2.0 / 60 = 0.0333; remaining = 0.4833. After 30 ticks the remaining time reaches zero and the value is exactly 1.0 with the rate cleared.
+51. Angle wrap: 7.0 becomes 7.0 minus 2 pi = 0.7168 (one turn). 6.0 stays 6.0 (below 2 pi).
+52. Clamps: value channel 0.9 gives 0.4; -0.9 gives -0.4. Single channel 45 gives 40; 0.05 gives 0.1; 12 stays 12.
+53. Hold counter: the first condition holds on ticks 1 to 15 and the second test passes; message 58 is sent on tick 15 and the routine returns 1. On tick 16 with the condition false, the count is 0.
+54. Petpet regeneration gate: kind 6, score 27000 gives true on every tick (27000 mod 60 = 0); score 27030 gives false on every tick; no petpet gives false (SPEC-0047).
+55. Integer step: N = 0 gives target 1; N = 10 gives 2; N = 25 gives 3.
+56. Animation code: kind 0, state 2, count 1 gives 187; kind 1, state 1 gives 170; kind 3 gives 171; kind 4 gives -1.
+57. Input remap: input 2 gives 20; input 30 gives 11; input 16 gives 24.
+58. Left-stick secondary (synthetic): first axis raw 127 with the byte at +0x13B = 50 gives T1 = 55 and output 182. Second axis raw 127 with half the byte at +0x133 = 10 gives output 117.
+59. Proximity: a type-1 entry with its flag clear at 2.9 units gives true; at 3.1 units gives false.
+60. Deferred queue: ten records queued; an eleventh append adds nothing; the flush runs ten handlers and the count becomes 0.
+61. Spawn: hero at the origin with forward (0, 0, 1) gives a sub-object at (0, 0, 2.8).
+62. Button sequence (synthetic): on pad slot 1, newly pressing Up, Up, Down, Down, Left, Right, Triangle, Cross, Square, Circle, one per tick advances the counter to 10 and sets the latch without requesting a message. A later new L2 press advances the counter to 11; a following new Start press resets the counter to 0, while the latch stays set.
+
+63. Edge gates (synthetic, radius 0.5 so 1.25 times the radius is 0.625): slope 0.20 passes and 0.21 fails; vertical −0.14 passes and −0.15 fails; vertical 0.62 passes and 0.63 fails; distance 0.0 fails, 3.99 passes, 4.0 fails (Behavior 37).
+64. Edge guard (Behavior 38): a hero with ground gap 2.5 and a root step of 0.3 keeps the step; the guard applies only to generic characters (SPEC-0040, Behavior 14E).
+65. Long-fall mash (Behavior 9B): Cross pressed on ticks 0 and 15: toggles on ticks 0, 1 and 15, count 3 on tick 15: mash, clip 137 at 1.5 speed. Presses on ticks 0 and 16: the count returned to 0 on tick 15: no mash.
+66. Segment clamps (synthetic): duration 0 is used as 1e-5 and the stored duration field is unchanged; fraction 1.0 is used as 0.99999 and the stored fraction field is unchanged (Behavior 47).
+67. Animation chooser (synthetic, hero index 0): state 98 gives code 164 (0xA4); state 106 gives 166 (0xA6); state 119 gives 165 (0xA5); state 126 gives 163 (0xA3). Hero index 1: state 111 gives 164; state 127 gives 165; state 119 gives 163 (Behavior 42).
+68. Random timer (synthetic): a draw of 0 gives 30 ticks; a draw of +0.2 gives 41 ticks, not 42 (0.5 + 0.2 in single precision times 60 is 41.999996, truncated to 41; draws stay below +0.2 anyway); a draw of −0.2 gives 18 ticks (Behavior 46).
+69. Hash draw (synthetic): seed 1, range 0 to 10 gives about 3.87; seed 2, range 0 to 10 gives about 6.47 (Behavior 48).
+70. Walk clip root data (disc check, both heroes, id 3): every key's root record is z 461/1024 = 0.4502 with S = 1; at R = 1 the clip speed is 0.5 keys per pass and the step 0.2251 units per pass (13.51 units per second). The 20-key cycle lasts 40 passes and covers 9.0 units. The root bone channels themselves move only about 0.035 units per cycle; the travel comes from the per-key root table, not from the bone channels (Behavior 5.2).
+71. Run clip root data (both heroes, id 4): z 658/1024 = 0.6426 per key, S = 1, 0.3213 units per pass (19.28 units per second); the 14-key cycle lasts 28 passes and covers 9.0 units. Reverse (id 6): z −922/1024 with S = 2, 0.2251 units per pass backward.
+72. Shield guard (state 20), L1 held, stick at zero, stored locomotion facing (0,0,1): request 63, then the shared facing method receives (0,0,1) at rate 1.0. No movement request; facing stays (0,0,1) and the hero stays in state 20.
+73. Shield guard, L1 held, stick forward (unit direction (1, 0)) with the facing aligned (dot 1.0), and speed above 0.01: the moving flag is set, no request 119, the shared facing method receives the normalized stick direction at rate 1.0 and stores it as locomotion facing; the shared per-pass facing update consequently takes its moving-facing branch. The flag does not itself carry or apply displacement.
+74. Shield guard, L1 held, stick sideways (unit direction (0, 1)) with the facing forward (dot 0.0, below 0.95): request 119 unless action 64 is current with progress below 0.99.
+75. Shield guard, L1 released: state 1 and request animation 0.
+76. Scripted box jump (Behavior 16; never run): box top 1.0 above the feet, g = 32: h = 3.0, v0 = sqrt(192) = 13.86.
+77. Fall (script-entered state 48): health is unchanged; no damage is applied (Behavior 9B).
+83. Locomotion speed value (Behavior 2): forward 0.6 with side 0.8 gives 1.0; forward 0.25 with side 0.5 gives 0.559; side 1.0 with forward 0 gives 1.0; stick Y byte 60 with X centred gives 0.314; byte 80 gives 0.0857 (stop).
+84. State 32 re-aim (Behavior 4, item 9): root step (0, 0, 0.2251) and stick (side 1.0, forward 0) gives (0.2251, 0, 0); stick (side 0.6, forward 0.8) gives (0.1351, 0, 0.1801). A centred stick leaves the step unchanged.
+70. Stick small blend (synthetic): weights 0.075 and 0.925 applied to a = 0 and b = 1 give 0.925 (Behavior 45).
+85. Motion-record step (Behavior 5.2): facing (1, 0, 0) gives B1 = (0, 0, −1), B2 = (0, 1, 0), B3 = (1, 0, 0). Root step (0.1, 0, 0.5) gives D = 0.1 B1 + 0.5 B3 = (0.5, 0, −0.1); on flat ground the record position at +0x50 gains (0.5, 0, −0.1), +0x120 holds (0.5, 0, −0.1) and the position's w is 1.
+86. Ledge-drop window (Behavior 49, exact arithmetic): edge height h = 10.0. Character height 9.85 (0.15 below): inside. 9.8 (exactly 0.2 below): outside. 12.9: inside. 13.0 (exactly 3.0 above): outside.
+87. Ledge-drop rule (Behavior 49), all earlier gates passing: g0 = 10.0, g1 = 8.0 (drop 2.0 > 1.75): accept. g1 = 8.5 (drop 1.5): reject. g1 = 10.0: reject (no drop). g1 = −1,000,000: reject (no ground). Probe hits a type-2 surface with g1 = 9.9: accept.
+90. Controller decode (Controller map): packet byte 2 = 0xFF and byte 3 = 0x7F give held = 0x0080 (Square). Byte 2 = 0xEF and byte 3 = 0xFF give held = 0x1000 (Up).
+91. Stick bits (analog mode, no buttons): left-stick Y byte 20 and X byte 128 give held = 0 and held2 = 0x1000. Y byte 224 gives held2 = 0; Y byte 225 gives held2 = 0x4000. X byte 31 gives held2 = 0x8000; X byte 32 gives 0. The same bytes outside analog mode give held2 = 0.
+92. IsButtonPressed: Square down on pass n (up on pass n − 1) and still down on pass n + 1. IsButtonPressed(0, true) is true on n and false on n + 1; IsButtonPressed(0, false) is true on both. IsButtonPressed(5, false, true) is always false; IsButtonPressed(7, ...) is always false.
+93. Button chain, busy argument: hero idle, game status 0, Cross pressed with no stance target: the chain ends at the Cross route. The same with the hero in a busy state (or the game status above 0): no state change, and the chain still ends at the Cross route.
+94. Latch: panel A open on pass n and closed on pass n + 1. The hero sees no D-pad or face press on passes n and n + 1. On pass n + 2 a Cross held since pass n is still hidden. After Cross is released and pressed again, the new press is seen.
+95. Chord order: L1 newly pressed while R1 is held, hero idle, chord guards passing. The button chain may move the hero to state 20 on the L1 press in the same pass; the chord, tested later in the pass, accepts state 20, so the switch request is made (SPEC-0053).
+96. Snapshot: pad slot 1 holds L1 and R1, pad slot 0 holds nothing. The snapshot words are 0 (the controlling set is slot 0), so no chord, menu move or dialogue advance happens.
+
+97. Jump (Behavior 50): Cross edge, standing, stick centred, ground normal vertical part 0.9: state 7, launch vertical +8.75, horizontal 0, request 70, phase 0.
+98. Jump chooser: stick Y byte 255 and X byte 127 (m = 1.0): state 10, horizontal 9.0 along the facing, request 76, phase 1. m = 0.2: state 8 (2.0). m = 0.45: state 9 (5.0).
+99. Jump gate: ground normal vertical part 0.8: Cross does nothing (no jump).
+100. Strafe jump: strafe mode, current action 6, stick pushed: state 45, request 65.
+100A. Strafe jump flight (Behavior 11): from flat ground, state 43 with the stick centred: tick 0 height 0.2561, vertical velocity 7.6833, horizontal 9.0; peak 3.2028 at tick 24; phase 5 at tick 46, phase 6 (request 68) at tick 47; on the ground at tick 48 after 14.65 units of travel. States 44, 45 and 46 give the same curve. With the stick pushed: state 32 after landing, 14.38 units. State 10 with the stick centred: the same height curve, 2.85 units of travel.
+100B. Strafe-jump launch direction (Behavior 11): with facing along +x and the saved jump direction along +z, a state-43 launch has horizontal velocity along +z at speed 9.0; it does not launch along the facing.
+101. Landings: after a fall from 3.5 above: phase 10, request 118. From 2.0 with the stick centred: phase 6, request 68; with the stick pushed: state 4, request 4 (state 32 after a strafe jump). Fall 1.0 with the landing flag +0x1514 set: phase 10.
+102. Soft landing (phase 6; counterfactual code-path vector): if event bit 0x40 were active and a Cross edge arrived, the chooser starts a new jump; the same held Cross without an edge does nothing; L1 in that window requests state 20. Retail disc action 68 has no 0x40 frame for either hero, so neither event-gated branch is reachable. At progress 0.99: state 1 (written directly) and request 0.
+103. Hard landing (phase 10): request 118 once. Event bit 0x40 active, stick off centre, progress below 0.99: request 4 and sub-state 4; the state is unchanged. At progress 0.99: request 0 and the phase is reset.
+104. Boosted jump: clip 133 playing and not ended, event bit 0x40 active, stick pushed forward: state 4. With the event bit clear: no exit.
+105. Jump speeds (Medium for the units): with the per-tick displacement equal to the velocity divided by 30, the walking jump (S 5.0) moves 0.1667 units per tick (10 units per second) and the running jump (S 9.0) 0.3 per tick (18 units per second).
+106. Ladder rung A (Behavior 13): ladder top 5.0, hero height 2.0, stick pushed forward. Current height 1.0: the top test value is 5.0 - 2.0 - 1.3 = 1.7, and 1.0 is below it, so sub-mode 4 and request 91. Current height 1.8: sub-mode 8 and request 59 (climb off the top).
+107. Ladder rung A, stick pulled back: height 0.4: sub-mode 0 (step off). Height 0.8 with ground gap 0.7: sub-mode 6 and request 95.
+108. Ledge hang (state 30, Behavior 51): ground gap 0 in sub-mode 2: no request. Sub-mode 1 with a planar distance of 0.2: sub-mode 2 and request 71. Sub-mode 4 with action 59 not current: request 59 and effect index 9.
+109. Sidle (state 23): an along-component of 3.5 stops the object and leaves the state at 23.
+110. Climb-up while rising (state 47), flag clear: an along-distance of 0.15 (at or below 0.2) gives sub-mode 2 and request 134. With a positive ground gap and distance at or below 0.2, that transition/request occurs before returning; with a positive gap and distance above 0.2, the movement step is submitted before returning. Flag set with a special target kind: state 1 and air phase 0. Flag set with no special kind and ground gap 1.0: state 7 in air phase 5.
+111. Climb onto a block (state 58): request 70 on entry; the block is reached in sub-mode 0: sub-mode 2 and request 134.
+160. Rising climb-up target height (state 47, sub-mode 0): for a horizontal edge plane at height 10 and a hero horizontal position on that plane, the edge-height helper returns 9.75; subtracting the boot value 1.1 gives target vertical coordinate 8.65. This vector describes the constructed target coordinate, not the animation end position.
+161. Block-edge hang approach target height (state 19, sub-mode 1): bound rectangle second-axis extent 4.7 gives target Y = 4.7 − 3.7 = 1.0. This is the constructed target lane; it does not identify the designer's reference surface.
+162. Block climb approach target height (state 58, sub-mode 0): bound rectangle second-axis extent 4.0 and second-axis W lane 0.5 give target Y = 4.0 − 0.5 − 1.2 = 2.3.
+112. Drop onto a climb panel (state 38), phase 3: state 21 with sub-mode 17, and the panel record is kept as the target.
+113. Drop into a hang (state 37), phase 0, walking (action 3): ground 3.0 below the edge (not more than 4.5): back to the walk state. Ground 6.0 below: face along the edge at rate 0.1 and phase 1.
+114. Landing fall height (Behavior 50): a jump from y = 5.0 whose landing decision is taken at y = 1.5 (fall height 3.5): phase 10, animation 118, health unchanged. Landing at y = 2.5 (fall height 2.5) with the stick centred: soft landing 68, no camera shake. Fall height 4.5: hard landing, no camera shake. A jump that rises 4 units above its take-off point and lands 2.0 below it has a fall height of 2.0, not 6.0: no hard landing.
+115. Idle picker with the weapon out (Behavior 4A.1): request 1; when the long-idle timer ends, the long idle 157; when the fidget timer ends, one of 107 to 111 for one tick, then 1 again.
+116. States 26 and 29 (Behavior 51): with disc data the grab-statue label (23) and the grab-door label (22) never appear, so Square never enters either state.
+117. Standing jump (Behavior 50; any of states 7 to 11, either hero; flat ground, tick 0 = launch tick): y at ticks 0, 24, 47 = 0.2561, 3.2028, 0.2329; tick 48 = -0.0177; tick 49 = 0.0 with vy 0. Airtime: 47 ticks to the landing decision, 49 to ground contact.
+118. Air steering (Behavior 50): state 10 with the stick held fully: horizontal distance 14.0 at the landing decision; stick centred: 2.85 (9.0 / 30 on the launch tick, then speeds 8.5, 8.0, ..., 0.5, 0).
+119. Walk-off (Behavior 9A) from 10 units: gate on tick 3 (y 9.7867 before the step), phase 5 on tick 13, hard-landing decision on tick 33 (y 0.0409), on the ground on tick 34. Walk-off from 3.75: soft landing; from 4.0: hard landing. A drop of 2.5: no air state; the hero reaches the lower ground in about 11 ticks.
+120. Long fall (Behavior 9B) from 10 units: landing decision on tick 41, on the ground on tick 42. From 40 units: on the ground on tick 82, clip 137 from tick 83.
+121. Jump into a pit (Behavior 50): pit 5 deep: phase 5 on tick 47 (vy -7.41), hard-landing decision on tick 62 (y -4.905), on the ground on tick 63. Pit 2 deep: soft, decision on tick 54, ground on tick 55. Pit 3.5 deep: soft (measured fall 3.30).
+122. Block face finder (Behavior 15A): block size 2.0, hero 2.9 from its centre with the offset along A only: gap 1.9 < 2.0, face 0. At 3.1: gap 2.1, fail. Offset (1.0, 0, 1.1) from the centre: B dominant, ratio 1.1 / 1.487 = 0.74 > 0.5.
+123. Push length (Behavior 4A.2): clip key count 22, cursor 1.5 at the move: push n = (22 - 1 - 2) / 0.5 = 38 ticks; the pack 1394 block (step length 2.726) moves 0.0717 per tick. Pull, key count 26, cursor 1.5: n = 23. The cursor 1.5 is inside the move window (phase 1.5 / 22 = 0.068); with 22 keys the window is 1.1 < cursor < 3.3, so cursor 1.0 (0.045) and 3.3 (0.15) do not move the block and 3.25 (0.148) does.
+124. Ceiling panel (Behavior 22A): pack 1056 record (LU 12.99, LV 10.88, last link set): hero feet 3.0 below it, x = 13.5, y = 5.0: grab (upper bound 13.99). x = 0.5: no (lower bound 1.0). y = 10.0: no (bound 9.88). Feet 4.6 below: no (bound 4.5).
+125. Wall panel (Behavior 22A): x = 0.5 with the first link set passes the x window (lower bound -1.0); with it clear it fails. Stick magnitude 0.4: fails.
+126. State 11 (Behavior 50): hero in state 6 backing into an accepted edge, facing . normal = -0.7, on plain ground: state 11, start = position, direction = minus the facing. In state 5: the general case (state 37 or 38).
+127. Stick gesture machine (Behavior 52), one sample (F, S) per tick, C = centred, tick 1 first:
+   - Flick (Tor or Roberta): C, (-60, 0), (-60, 0), (60, 0), then C: M = 1 on ticks 5 to 19 (15 ticks), then 0.
+   - Forward only: C, (60, 0), (60, 0), C: M stays 0.
+   - Clockwise: C, (50, 50), (50, -50), (-50, -50), then anything: M = 2 from tick 5, for 25 ticks (Tor) or 10 (Roberta).
+   - Counter-clockwise: C, (50, 50), (-50, 50), (-50, -50), (50, -50), (50, 50): Tor M = 3 from tick 5 (25 ticks); Roberta M = 3 from tick 7 (10 ticks).
+   - Classifier: stored 0, new 1: CCW step; stored 0, new 3: CW step, and the stored quadrant becomes 2; stored 1, new 3: reset step.
+128. Respawn cooldown (Behavior 3A): a teleport lands the hero on tick 100 next to a grab point (cooldown 60, grab targets -1, hang mode 0); a jump at the grab point on tick 120: no hang (cooldown 40 left). The same jump on tick 161: the hang is allowed. The guard timer is unchanged by the teleport.
+129. Tor's air slash (synthetic, Behavior 50): state 44, air phase 4, R2 pressed on tick 10 and not on tick 11: armed on tick 10; the slash on tick 11 (second id 25, sub-state 11, state still 44).
+130. Tor's strafe-jump hold (synthetic, Behavior 50): state 43, Circle held on ticks 3 to 14: armed on tick 3; the counter is 1 to 11 on ticks 4 to 14; the plunge on tick 14. With Circle released on tick 9 instead: the slash on tick 9.
+131. Tor's plunge gate (synthetic, Behavior 50): state 9, descending at height 1.2, Circle held: no air attack on any tick until landing.
+132. Grab-line reach (Behavior 9): line A = (0, 10, 0), u = +x, L = 100; jumping hero facing +x. Positions (x, y, side z): (25, 6, 0.5) caught; (25, 8, 0.5) (line 2.0 above) caught; (25, 9, 0.5) (1.0 above) not caught; (25, 6, 2.0) not caught; (25, 6, 0) not caught; (50, 6, 0) caught; (48.5, 6, 0) and (51.5, 6, 0) not caught; (48.51, 6, 0) caught; (51, 6, 0.5) not caught (beyond the first half plus margin); (0.01, 6, 0.5) caught; (-0.5, 6, 0.5) not caught (behind A).
+133. Edge acceptance (Behavior 37): character at the origin, radius 1.175, forward row (0, 0, 1), locomotion direction (0, 0, 1); edge type 0 with face plane (0, 0, -1, 0.5) (a = 0.5), run plane (1, 0, 0, 5) (s = 5), L = 10, top plane (0, 1, 0, 0) and H = 2.25 (h = 2.0, d = 2.0). Velocity 0: c = 0.5 < 0.5875, accepted. Velocity (0, 0, 3): c = 0, accepted. Velocity (0, 0, 9): c = -1.0, rejected. Velocity (0, 0, -6): c = 1.5 >= a, rejected. H = 4.25 (d = 4.0): rejected. The same edge with type -1: rejected in every case.
+134. Plunge flight (Behavior 50), play rate 1, flat ground, started at rest: 16 rising ticks with gravity off and zero velocity, the root steps 0.4054 (4 ticks), 0.2074 (4), 0.1040 (4), 0.0283 (4), total rise 2.9808. Then the vertical velocity is set to -8.0 and gains -0.32 per tick (gain 0.3), and the root steps are -0.0669 (4), -0.2499 (4), -0.4284 (4), total -2.9809. From 10.0 above the ground the gap reaches 1.0 on about the 23rd falling tick (Medium for the exact tick). No horizontal motion.
+135. Launch direction (Behavior 50): forward row (0.48, 0.6, 0.64), state 10: horizontal velocity 9.0 times (0.48, 0, 0.64) = (4.32, 0, 5.76), speed 7.2 (not renormalised). State 11 with forward row (0, 0, 1): horizontal (0, 0, -10) whatever the stored direction.
+136. Hard landing end (Behavior 50): state 9, phase 10, clip 118 reaches progress 0.99: the state field becomes 1 with request 0, the phase word stays 10 and the previous-state word keeps its old value.
+137. Miamouse carry (Behavior 18): sub-state 1, stick pushed on tick 1: sub-state 2 on tick 1 with clip 179 requested; tick 2 requests 180; stick centred on tick 5: sub-state 1 with 180 still requested; tick 6 requests 179. Square on tick 8: sub-state 3 and request 181 on tick 8; release on tick 9.
+138. Quick-item panel (Behavior 1A, rule 7): both panels closed, the in-play gate passing. Tick 1, Up edge: panel A opens, cue 0x9A, entry 1 selected. Tick 2, Left edge: entry 2 selected, cue 0x9A. Tick 3, Circle edge: the marker becomes entry 2's item (cue 0xA3 when it changed and the item is owned), panel A closes, nothing is used. Tick 4, Triangle edge with both panels closed: the use step runs on the marker. Replace tick 3 by Cross: the same, and the item is used on tick 3.
+139. Direction priority (rule 7): panel A open. Left and Right on one tick: entry 2. Up and Down: entry 1. Down and Right: entry 3. Up again while entry 1 is selected: entry 1 cycles to its next owned candidate, cue 0x9A. Panel A open with selection 4 and Cross: nothing, the panel stays open.
+140. Panel step gate (rule 7): panel A open, a box picker runs on this pass (flag D set): the step does not run, panel A is closed and no panel button acts; an open panel B stays open.
+141. Climb sub-mode 5 (Behavior 51, state 21): Q with V = (0, 1, 0), hQ = -0.12, clip 57 playing at progress 0.5: hQ is -0.07, -0.02 and 0.03 after three ticks. At progress 0.99 with hQ = 0.03: T = Q, sub-mode 2, request 49, cooldown 120. With progress 0.99 and hQ = -0.02: raised to 0.03, no hand-off on that tick. Current clip not 57: request 57 only.
+142. Climb sub-mode 2, up (Behavior 51): LVT = 6.0, H = 2.0, f = 0.2: climbs with request 56 at clip rate 0.3 while hT < 4.0. At hT = 4.0, cooldown 0: link 2 in the same plane (c = 1.0): sub-mode 13 with P = T; link 2 a top face (normal (0, 1, 0), c = 0): cooldown 20, sub-mode 17; link 2 at 45 degrees (vertical part 0.707, c = 0.707): sub-mode 3; no link 2: request 49. Cooldown 5 with a link: request 49.
+143. Climb sub-mode 13 (Behavior 51): P below T in one plane, LVP = LVT = 6.0, T's base 6.0 above P's, H = 2.0. hP = 3.5: sub-mode 2 on P (P becomes the target). hP = 4.5 (hT = -1.5), f = 0.2: request 56 at clip rate 1.0, still sub-mode 13. hP = 7.2 (hT = 1.2): sub-mode 2 on T, P cleared.
+144. Climb sub-mode 15 (Behavior 51): LUT = LUP = 4.0, r = 0.5. uT = -0.3: sub-mode 2 on T. uT = -0.7 and uP = 3.3: sub-mode 2 on P. uT = -0.7 and uP = 3.6, s = 0.1 and f = 0: request 52 at clip rate 0.3, still sub-mode 15.
+145. Square hold (Behavior 1A): state 22 with Square held on ticks 1 to 5 and up on tick 6: state 22 on ticks 1 to 5, state 1 on tick 6.
+
+146. Climb sub-mode 3 (Behavior 51): hero at d = nT . (p, 1) = 0.8: it moves 0.45 and then 0.05 along nT, ending at d = 1.3; at d = 2.0 it moves only 0.05 (d = 2.05). Both: request 49, sub-mode 4, cooldown 120, target = the queued panel.
+147. Climb sub-mode 17 hold (Behavior 51): wall T with up axis V = (0, 1, 0, 0) (so hT = y), LVT = 6.0, H = 2.0, r = 1.0: the hero is moved to nT . (p, 1) = 0.3 and its height becomes 6.0 - 0.25 - 2.0 + 0.1 = 3.85; request 73.
+148. Climb sub-mode 17 stick (Behavior 51): f = 0.5, s = 0.1, cooldown 0: sub-mode 7. f = 0.5, s = 0.1, cooldown 5: stays in 17. f = 0.5, s = 0: stays in 17 (both values must be non-zero). f = -0.5, s = 0.1: sub-mode 2. f = 0.1, s = 0.05: stays. f = 0.1, s = 0.5, uT = 2.0, r = 1.0: request 60.
+
+
+149. State 32 turn request (Behavior 4, step 7): forward 0, side not dominant: right stick X byte 200 gives 149; byte 50 gives 150; byte 150 (inside the dead zone) requests nothing.
+150. Status factors (Behavior 5.4): Tor in state 13 at attack sub-state 2 under slow: P = 0.75; under speed: P = 1.0. Roberta in state 13 at sub-state 2 under slow: P = 1.0; at sub-state 5 under slow: P = 0.75. State 40 under speed with last request 85: P = 1.85; with last request 106: P = 1.0.
+151. Stance counter (Behavior 4A.1): 150 ticks in state 3 leave it at 100; one tick in state 2 sets it to 0. No movement value changes in either case.
+152. Path A, reference only (Behavior 4): forward -0.2, side 0.5, P1 on: code 38. The routine is never called in play.
+153. Air attack with the cloak (Behavior 50): hero in state 7, in a phase that allows air attacks, wearing the Tattered Cloak, R2 pressed: no air attack starts and the cloak stays on. Same press without the cloak, with the air-attack flag clear and the other gates of Behavior 50 met: the air attack starts.
+154. Edge offer boost height (Behaviors 37, 49): with the accepted-edge vector of 133, d = 2.0 while the along-edge coordinate s = 5.0; on the first edge offer the latch receives 2.75 (= d + 0.75). Changing s while keeping the top plane and hero height fixed does not change this stored boost height.
+155. Hero ground-probe ceiling (Behavior 6; SPEC-0018): for pre-step world height 10.0, the character ground attach probes with ceiling 12.5. A candidate ground height 12.4 is within that ceiling; a candidate at 12.6 is above it. This tests probe selection, not a commanded vertical displacement or the separate 0.75 move-check rule.
+156. Same-tick slope projection (Behaviors 6 and 8; SPEC-0040, Behaviors 14A and 14C): after the ground attach samples normal N = (0, 0.5, 0.8660254), a unit horizontal root displacement D = (0, 0, 1) projects to D − (N·D)N = (0, −0.4330127, 0.75). Its length is 0.8660254. The projection uses this tick's sampled normal and contributes the downward component shown.
+157. Move-check scope (Behaviors 4A.2 and 5.2; SPEC-0040, Behavior 11): when state 18 proposes a movable-block move, the type-11 size/clearance feeds the block's ahead-point test; if the footprint test reaches the height comparison and the two sampled heights differ by more than 0.75, that block move is refused. In ordinary state-32 stick locomotion, displacement comes from the animation root step and the block move check is not directly called, so the 0.75 comparison is not a walking gate. This vector tests call scope, not the later ground/contact response.
+158. Hard-landing boundary (Behavior 50): landing decision at take-off height minus 3.0, with the forced-landing flag clear. Exact equality does not take the hard-landing branch; with the stick centred it selects the soft landing (phase 6, request 68). A fall height infinitesimally above 3.0 takes the hard landing (phase 10, request 118).
+159. Turn/move gate equality (Behaviors 2 and 5.5; SPEC-0040 Behavior 14C): moving flag set, speed above 0.01, initial facing f = (0, 0, 1), and stick direction u = (sqrt(1−d²), 0, d) with d = −sqrt(1−0.95²)/0.95. The turn floor gives c = 0.95 and produces an updated facing perpendicular to u (dot 0). Because only a negative post-turn dot zeros the root step, a walk step of 0.2251 is retained. A slightly greater initial misalignment makes the post-turn dot negative and suppresses that tick's step.
+
+160. Interaction candidate fallback (Behavior 26): if the height-plus-radius comparison passes, the candidate passes this stage without the fallback. If it fails, an unresolved type-table lookup rejects the candidate; with a matching type entry, candidate fields a = 10 and b = 4 pass because 0.4a = 4 < b, while b = 4 is rejected at equality. This tests only the fallback gate; earlier busy, kind, height and state gates still apply.
+163. Block-edge hang shimmy limits (state 19, sub-mode 3): with linked scalar q = 4.0, side-positive input reaches the request-61 along gate only above 1.0 (1.0 equality fails; 1.01 passes). Side-negative input reaches the request-60 along gate only below q − 1.0 = 3.0 (3.0 equality fails; 2.99 passes). These values test only the strict along limits; current-action, target and shimmy predicates still apply.
+164. Behavior 32 ground-normal and ledge-reach gates: ground-normal Y = 0.82 passes the Cross chooser gate, while 0.81 fails. For the ledge-reach test, ground-normal Y = 0.85 meets its cutoff. With hero height 3.5, the conditional 0.75 height term is 2.625 when the jumping-state predicate is false and 0 when true. The climb-up class's separate 0.85 height multiplier gives 2.975.
+
+165. Stale Tor slash sub-state at ordinary attack entry (Behaviors 1A, 50; SPEC-0036, State 13): start in state 32 with sub-state 11 left by a strafe slash, gesture mode 0, and an accepted R2 selector press. The selector requests state 13 and the attack-start router writes sub-state 1 before the state-13 tick; the stale 11 is not dispatched. With Roberta's corresponding normal selector entry, the router also writes sub-state 1.
+166. Target-pick direction sign (Behavior 19): hero at the origin with forward row B3 = (0, 0, 1), catchable class-21 candidates 3 units away at (0, 0, 3) and (0, 0, -3). The first produces a normalized candidate-minus-hero vector (0, 0, 1), dot 1, and passes alignment; the second produces (0, 0, -1), dot -1, and fails. A candidate direction with forward dot exactly 0.5 fails the strict alignment test.
+167. Tor state-13 stick-step signs (synthetic, Behavior 3C): Y = 55 and X = 127 produce (F,S) = (1,0), hence forward; Y = 127 and X = 55 produce (0,1), hence left. Y = 200 and X = 127 produce backward; Y = 127 and X = 200 produce right. Inputs 88 through 167 on either axis convert to zero. The resulting pair is normalized before the camera-basis transform; the separate step scale is 0.25.
+
+## Open questions
+
+- Resolved: speed value. It is the stick length divided by 87.5 and capped at 1.0, not the forward share; partial pushes give a lower speed value (Behavior 2).
+- Resolved: speed scalar. The per-pass scale P is reset to 1.0 at the start of every hero pass, multiplied by the status factors and the tier factor, and sets the clip play rate (Behavior 5.2). No floor or ramp applies.
+- Gait words: resolved for 0x2DD7D8 (run re-entry hold 0.5 s), 0x2DD7DC (stop threshold 0.1) and 0x2DD7E0 (smallest moving speed value 0.3), all read by the speed tiers (Behavior 5.1). Resolved: 0x2DD7E4 (15, flick hold), 0x2DD7E8 (25, Tor spin hold) and 0x2DD7EC (1, Tor counter-clockwise step count) are read by the stick gesture machine (Behavior 52).
+- Resolved: walk and run speed. The hero moves by the per-key root table of the playing clip, scaled by the play rate: walk 13.51, run 19.28, slow walk about 5.0, reverse 13.51 and sidestep about 13.3 to 13.5 units per second at full tilt, the same for both heroes (Behavior 5.2, 5.3). The state-32 handler re-aims that root step (Behavior 4, item 9).
+- Resolved: the earlier candidate of 30 units per second is wrong; it came from a wrong model of the state-32 write. The walk speed is 13.51 units per second (Behavior 5.3).
+- Resolved: lanes of the root step. All three lanes are read: x feeds the side basis vector, y the up vector and z the facing (Behavior 5.2).
+- Turn limit: the facing turn uses the run-time tick-length word (1/60 s) as X; the retail build uses the 60 Hz row (SPEC-0007). The floor used when the speed value is above 0.01 is 0.95 for both heroes, and the result is normalised when the basis is rebuilt (Behavior 2).
+- Exact-opposite stick: the moving blend cannot turn from 180 degrees. Whether the real camera ever gives an exactly opposite stick direction has not been tested in play.
+- Resolved: second tier routine. Nothing in the executable calls it, stores a pointer to it or builds its address, so no hero state uses it; it holds path A and a second tier table (Behavior 4) (High).
+- Resolved: special-move checks and the stick gesture machine. A back-then-forward flick, a clockwise turn or a counter-clockwise turn of the left stick sets the gesture mode word to 1, 2 or 3 for 15 ticks or for W ticks (Tor 25, Roberta 10); an attack press then starts a gesture variant instead of the charge (Behavior 52; SPEC-0036). High.
+- Resolved: slow status. Slow (0.75) applies while the hero is moving or attacking (Tor: state 13 at attack sub-states 2 to 12, or air phase 8 or 9 of states 7 to 11; Roberta: state 13 at sub-state 5 or 12); speed (1.85) only while moving; stun in any state. Action 0x55 is the last animation request 85 (Behavior 5.4) (High).
+- One-pass lag: the per-pass distances (0, 0.2251, 0.4502, ...) follow from the pass order of Behavior 1, item 3a; they have not been measured in a running game.
+- Slope interplay: resolved for the root-travel stage. The ground attach refreshes the ground normal before same-tick root travel; projection uses that sampled normal and may add a vertical component (Behavior 6 and 8; vector 156). The later ground constraint is specified in SPEC-0040, Behavior 14A. The separate 0.75 height-step check applies to a proposed movable-block move during the state-18 interaction; its input size comes from the block's type-11 source entry (SPEC-0040, Behavior 11). No direct call from ordinary stick locomotion was found: state 32 uses animation root motion (Behavior 5.2). Caller scope is High for the static graph; unseen indirect dispatch remains unexcluded.
+- Answered: cooldown length. 60 ticks after the line attach, the leap exit, the states 59 and 60 actions and every respawn (Behavior 3A, Behavior 9).
+- Resolved: grab-point hang modes (Behavior 9). Mode 0 is the attach (it skips request 112 while 115 or 117 plays), mode 1 the slide and search, mode 2 the launch and mode 3 the flight. The search-mode distance limit is the line length, measured from the line start to the hanging hero. The hang state is written by the grab-line predicate of the jump states.
+- Answered: the grab start writes state 33 after attaching its hold record and requests animation 12; the action-end resolver also writes state 33 based on CTL (Behavior 3A). The death end mode word (+0x1564) of SPEC-0055 selects state 59 (1) or 60 (2).
+- Resolved: ladder grab test (Behavior 22). Both dots must be below -0.8 (the hero faces into the ladder, against its normal), a centred stick uses the facing, and the test clears the hero's target before it walks the records, so the target stays cleared on a 0 result.
+- Resolved: run-time word 0x368FA4 is 30 / active frame rate (0.5 at 60 Hz). In the recovered direct-reader inventory, it is used only by state 18 to divide the push clip's remaining-key count; pull and side moves do not use it. At 60 Hz this doubles the push duration (Behavior 4A.2; SPEC-0007, Per-tick words).
+- Answered: time scale. 1/30 per element step at 60 passes per second, no every-other-pass gate (SPEC-0040, Behavior 14A).
+- Resolved: edge acceptance, negative type (Behavior 37, gate 9). The test has no accepting branch for negative types; such edges can be accepted only by the ledge-drop test, which runs before it (High).
+- Resolved: the offset query of Behaviors 37 and 49 is the character's action state; 1 to 4 are the idle and moving states (High).
+- Resolved: leap landing, side speed and stick sides (Behavior 9). The landing is a side offset of at most 0.1 to the target line's start; the side speed is the side offset over 40 per tick; the stick pushed right seeks the -B1 side (requests 114, 115), pushed left the +B1 side (116, 117).
+- Resolved: grab-line reach along the line (Behavior 9). The overlap test treats A as the line cylinder's centre and counts only surface crossings of three probe segments; with a side offset the hero is caught along the first half of the line, and only exactly under the line is the catch limited to 1.5 around the midpoint (High for the causes, Medium-High for the bands).
+- Resolved: leap peak. The order is move, then velocity loss, so the peak is 4.2 at ticks 20 and 21 (Behavior 9; High).
+- Resolved: leap and bounce triggers. The grab-point hang (state 28) is entered from the jump states with a grab point of kind 3 in reach, and its leap is Cross held with the side stick (Behavior 9). The bounce pad (state 56) is entered from air phase 5 over a ground record of kind 17 or 18 (Behaviors 10 and 50). The jump states 7 to 10 and 43 to 46 are entered by Cross (Behavior 50).
+- Resolved: bounce meaning. State 56 is a bounce pad: the hero lands on a ground record of kind 17 or 18, dips and rises, and is launched into state 7 (Behavior 10). The lift for kind 18 (from the hero position block and a run-time vector) is Low.
+- Answered: bounce second value. 5.0 is the phase-3 steer scale (Behavior 10).
+- Resolved: Screen side of the grab-line basis. The hero-relative side axis B1 is not universally screen-left or screen-right: its screen-horizontal sign is the dot product of hero facing with camera forward. +B1 points screen-right when those directions align and screen-left when they oppose (Behavior 9; SPEC-0027, Polar convention).
+- Resolved: the stick direction u is normalised to unit length (Behavior 2).
+- Resolved in part: run tier factor. The run tier factor is v′ × K with hero run factor K = 1.0 in both hero construction paths; the tier accessor reads K (Behavior 5.1). Character speed scale is initialized to 1.0 during hero setup and reset to 1.0 by the hero reset path. The generic control/wait operation belongs to the archive-read manager: every recovered direct wrapper call supplies that manager object, and the operation sets its +0x3D4 field to 1 while the read is pending, yields while polling, then sets it to 0 at completion. No recovered direct call passes a hero to this operation. An apparent generic store at the same numeric offset targets the nested render-data object supplied through an actor's +0x170 link; its sole caller is a render/update path, not the outer hero locomotion field. No post-setup outer-hero scale or K writer was identified. These bounded negative findings do not rule out indirect use, script writes, or unrecovered paths. Whether a hero's K or character speed scale can change after setup remains open.
+- Resolved: reverse threshold. In play reverse is the sign test of the state-32 table (forward zero or negative: code 6, or 11 with P1 on); the only threshold sits in the uncalled path A routine (Behavior 4) (High).
+- Resolved: two turn tables. Path A never runs; the state-32 table is the only one in play. The missing path A case is code 38 (Behavior 4) (High).
+- Resolved in part: which path runs when the enable bit is clear (Medium). The per-pass hero input step runs the speed-tier routine when the hero is not busy and no special-move check fires; that tier step does not test L2. It is a general per-pass input step, not a separate L2-clear branch (Behavior 1, item 3a; Behavior 5.1). The state-32 walk-and-turn handler separately requests state 1 when L2 is released, so it does not run its walk-and-turn logic with L2 clear (Behavior 4). On a release pass, an eligible tier-state request occurs first and the state-32 request for state 1 follows it; the committed state/visible animation still depends on request-priority behavior not established here. High for request order, unresolved for the final result.
+- Direction suppression: the state numbers and the locked-state predicate are not fully listed.
+- Resolved: global enable and mode word. The hero reads buttons only when bit 0 of the run-time word 0x35C984 is set and the game status (SPEC-0026 status code, run-time word 0x35C9DC) is 0, 3 or 4 (or below 0) (Behavior 1A, rule 2). High.
+- Resolved: P2. It is the run gate word, written only with 0, so it is always off; P1 is the weapon-out flag (Medium-High) (Behavior 4).
+- Resolved: extra pad byte. It is the right stick X byte (+0x12B): above 167.5 gives 149, below 87.5 gives 150 (Behavior 4, step 7) (High).
+- Partly answered: during hero initialization, the Tor-specific branch stores variant 0 and the Roberta-specific branch stores variant 1. The caller's argument source, which selects the branch, and when this initialization runs remain open.
+- Answered: invert options. They flip only the first pad's right stick bytes (Layout, stick bytes).
+- Pads 1 to 3 rumble: the vibration sync never sets their enable bytes to 1. Whether that is intended is unknown. The rumble manager sends only to pad 0 in any case (Behavior 1C).
+- Resolved: game status 9 is the shared frozen status selected when no focus character exists, the play-active word is zero (including the in-game pause path), or boundary contact and load-busy are both set. In all these cases the world update is skipped; the vibration gate is forced off and rumble entries do not advance. Other main-loop work may continue (SPEC-0026, Game-state code and Pause and freezing screens; Behavior 1B and 1C). **[High]**
+- Resolved: packet order and physical button map. Held = NOT (byte 2 × 256 + byte 3); 0x0080 is Square, 0x1000 Up, 0x4000 Down, 0x8000 Left, 0x2000 Right (Controller map). The stick-to-D-pad mapping (stick up = small Y gives 0x1000) and the menu focus search geometry agree with these names. High.
+- Resolved: pad modes. Mode 1 is a transient set-up mode; mode 3 is an unsupported pad (no extended ID): button words 0 and slot not usable. An analog-capable pad is put into analog mode and locked. Stick refresh and stick bits happen only in analog mode (Controller map). High for the structure.
+- Resolved: idle counter saturation. The signed 16-bit counter has no saturation check; eligible increments wrap from 32,767 to −32,768. Its reader and gameplay use remain unknown.
+- Unsupported pads: which physical controllers report no extended ID and so become unsupported (mode 3). Expected: original digital-only pads; a DualShock in digital mode is switched to analog. Needs a hardware test (Medium).
+- Idle counter reader: no direct per-pad idle-counter read is specified among the analyzed operations; an indirect pointer read remains possible. The adjacent disconnect counter is copied to input-object word +0x8A6 during an enabled-slot snapshot. No direct consumer of that destination word is specified among the analyzed operations; its downstream gameplay effect remains open (Medium).
+- Resolved: jump button. Cross is the jump button (Behavior 50). Cross also gives the strafe jumps, the jump off a ladder, the chained jump of a soft landing, the grab-point leap (held) and quick-item use. Circle and R2 start the attack step, and in the jump states the air attack. Triangle is used only by the quick-item panel (High).
+- Resolved: jump, climb and landing exist (Behaviors 13, 50 and 51). No swim rule is known in the locomotion logic. Gravity (32.0) is applied by the motion-record gravity step with the gain of the current air phase (SPEC-0040, Behavior 14A); the flight curve is in Behavior 50, the walk-off curve in Behavior 9A and the long-fall curve in Behavior 9B.
+- Resolved: airborne routine versus leap. The jump states (Behavior 50) and the grab-point leap (Behavior 9) are different routines with different units. The walk-off of Behavior 9A enters the jump state 7 in a falling phase; the leap numbers do not apply to it.
+- Resolved: landing into state 7. State 7 is the standing jump and fall state, not an attack router. The walk-off and the state-47 flag branch enter it in a falling phase (air phases 2, 4 and 5; Behaviors 9A and 51).
+- Resolved: landing class 5 is air phase 5, the descent and landing chooser (Behavior 50).
+- Resolved: the test with argument 30 in Behavior 9A is a test that the state is 30; it is always false in the stance states (Behavior 9A).
+- Resolved: the walk-off phase test uses the motion record's +0x160 vector: a negative dot product with the facing, or a length below 0.01, gives phase 2 and request 70; otherwise phase 4 and request 76 (Behavior 9A).
+- Resolved: ground gap flags. One floor flag on the locomotion sub-object zeroes every ground-gap read; the hang exit's touched flag is the motion record's contact flag, a different word (Behavior 9A) (High).
+- Resolved: leap exit to state 48. It needs the slide mode 1, the cooldown below 1 and the motion record's touched flag (+0x238), not a landing flag; the attach's 60-tick cooldown keeps it off for the first second on a line (Behavior 9).
+- Resolved: long fall (Behavior 9B). The listed jump words are the long fall's gravity gains and switches (0.35 above 12.0, else 0.3 above -7.0 and 0.35 below), 1.5 is the clip speed of the landing clip 137 under button mashing, and the per-tick stinger requests (25 for Tor, 49 for Roberta) are out of range and play no sound. Resolved: the mash detector watches Triangle, Circle, Cross and Square (Behavior 9B).
+- Resolved: state 18 conflict. It is one routine: walk to the grab spot (latch at 0.25), then push, pull or move the block sideways by the stick (Behavior 4A.2). The turn-toward-the-stick interpretation is withdrawn; the 0.25 is a distance.
+- Resolved: the 0.25 of 0x2DD56C is the latch distance of the block approach; the approach turns at rate 0.25 (0x2DD58C; Medium for the word) and steps at rate 1.0 (Behavior 4A.2).
+- Resolved: face pairing (state 18, Behavior 4A.2). Face 0 is the record's first axis, 1 the second, 2 and 3 their negations (Behavior 15A).
+- Resolved: stance counter. Reset rule in Behavior 4A.1; the counter has no reader and no effect (High).
+- Resolved: stance state 1. While the guard timer is positive state 1 requests 63 (after the 0.99 gate when action 64 is current); otherwise the hero idle picker gives the request (Behavior 4A.1).
+- Resolved: stance codes and speed tiers. The tiers request hero states 2, 3 and 4, not animation codes; those states then request animation codes 2, 3 and 4 (or 7, 8 and 9 with the variant flag) as in Behavior 4A.1.
+- Shield guard moving flag (state 20): resolved operationally. The state sets the locomotion flag when either dead-zoned stick component is nonzero. The recovered direct consumer is the shared per-pass facing update, which uses the moving-facing branch when this flag is set and speed exceeds 0.01; this is a steering/facing gate rather than a stored displacement or animation-state value. The state routine does not itself write a travel step. The intended design label and any indirect consumers remain open.
+- Resolved: state 50 pairing. The four-way pairing is right: 2, 4, 7 and 9 by the weapon-out flag and the script's run flag (Behavior 4A.4).
+- Resolved: state 52 is the scripted walk and orient, not a stick routine (Behavior 4A.5).
+- Resolved: state 16 is the death state (SPEC-0055); the interaction reading is withdrawn (Behavior 4A.6).
+- Resolved in part: the clips 136, 173 and 174 of state 16 are the deadly-ground death clips, chosen by the surface word (2 or 8; SPEC-0055, Open question 30). The constants 15.0, 1.5 and 0.01 of its camera and effect call have no established meaning (Medium-Low).
+- Answered: **the two strafe tables are not alternate live choices.** The table in path A belongs to a routine with no recovered caller or address reference; its only recovered user is a second tier routine that is itself unreferenced. The state dispatcher calls the state-32 walk-and-turn routine, whose own table is the live one when strafe mode is enabled. No run-time selector between the two tables is established (Behavior 4; High for the recovered static call graph).
+- Resolved: states 18, 20, 50 and 52 are the block, the shield guard and the scripted walks of Behavior 4A; states 28, 56 and 43 to 46 are Behaviors 9, 10 and 50.
+- Resolved: 0x2DD56C is the block latch distance and 0x2DD58C the block approach turn rate (Medium for the second). The stick in these states is the left stick.
+- Resolved: the values 4.0, −4.0 and 0.25 in this range belong to the hero head-look point, not the pre-pass turn. The look point is 5.0 units ahead and 4.0 above or below the hero; when forward and look direction are less than 0.99 aligned, the look blend is lowered by 0.25 (SPEC-0040, Behavior 20, item 7). The separate facing weight uses a fixed 4.0-unit boundary and is not this data pair. **[High for readers and values; Medium-High for look-point interpretation]**
+- Resolved: the walk-off tests the ground gap (above 3.0) and the vertical velocity (below -3.0) (Behavior 9A).
+- Resolved: root motion consumer and gate lifecycle. The hero's motion-record step adds the layer-0 root step of its animation player to the position each pass (Behavior 5.2). Binding the active hero's main animation set writes the player gate to 1, and the hero-slot setup/rebind path uses that binding step for Tor and Roberta. No explicit clear appears in the hero setup/rebind path, so the gate is nonzero after active-hero binding; the transient pre-bind value and unrelated indirect writes are not established (SPEC-0040, OQ 185). The gate enables both clip playback and travel.
+- The separate tween object with a speed value default of 0.3 and ramps for two modes: its relation to the speed value is unresolved and it is not part of this spec.
+- Answered: hero placement ground probe (Behavior 6). The hero uses the shared character ground-attach step each motion-record tick, before facing and root motion; its probe ceiling is current world height +2.5 (SPEC-0018, Ground attach of a character). This is a candidate-height ceiling, not a 2.5-unit move. The shared +8.0 wrapper is used elsewhere and is not the hero motion-record placement probe; its 44 direct calls span multiple systems and do not all establish a feet query. The 0.75 height-step check gates proposed movable-block movement during the state-18 interaction; the size input is the block's type-11 source-entry size (SPEC-0040, Behavior 11). It is not directly called by ordinary stick locomotion. Other indirect call paths and slope/step interactions remain open.
+- Resolved in part: **Ground follow of motion records** (Behavior 6). The lift runs only when the selected ground entry has class value 2. Its input is the Y component of the record velocity at +0x64, not a velocity magnitude: it adds 0 through vy = 5, then 0.3 × (vy − 5) for 5 < vy < 25, capped at 6 for vy ≥ 25. For example, vy = 15 adds 3.0; vy = 5 adds 0 and vy = 25 adds 6.0. The same entry class is read by the hero death handler, hop/ledge permission test and a separate motion response (SPEC-0018, Open questions). This identifies a special ground-entry class, but not its authoring name, the reason vertical velocity adjusts the probe, or whether every entry of this class is lethal. [High for field and arithmetic; open for design meaning.]
+- Resolved: the four button slots are the mash detector: Triangle 0x0010, Circle 0x0020, Cross 0x0040 and Square 0x0080 on the pressed-edge word (Behaviors 6 and 9B). The attack path uses R2 or Circle directly.
+- Resolved: **Square handlers.** One chooser handles every Square press, with a fixed order and a branch per special state; it is described in SPEC-0022 (Interaction prompts: chooser order and precedence). Talk starts the talker's callback thread, a script door starts its callback (SPEC-0006), the item ask-about starts a callback (SPEC-0030), Buy runs the purchase (SPEC-0050), Read Book takes the pending book (SPEC-0028), and the chest press is a script thread outside the chooser (SPEC-0048). The chooser never uses an item: item use comes only from the quick-item panel (Behavior 1A, rule 7; SPEC-0021) and the item screen (SPEC-0035). High.
+- Answered: button roles. Behavior 1A (Cross jump, L1 shield guard, L2 strafe, Triangle quick-item panel, R1 run).
+- Stick mode at attack start: which characters set the variant flag, and the four attack entry variants (SPEC-0036) are Medium.
+- Resolved: state 53 is the carried-hero state; it suppresses rebuilding the drawn copy's travel step and basis during the carry (SPEC-0005 Attach points and carrying; SPEC-0040 Behaviors 3 and 14C). The height-follow movement predicate passes only for hero states 7 to 11 and 43 to 46 (High for the accepted states; Medium-High for their interpretation as the jump exception).
+- Resolved: the catch-up branch is selected using the flag value at function entry. When the flag is off, any threshold that sets it (including g < −0.5 or counter > 120) finishes through the idle path that invocation: speed is set to 0 and displayed height does not move. The first catch-up step runs on the next motion-record update for both falls and rises (High for branch and tick order). Vectors 10 and 12 cover the switch. The drawn-copy position starts equal to world position at record construction, and position setters also refresh it. The camera refresh path receives the drawn-copy position; a transform path reads it as well, though that path's subsystem is not identified. Still open: whether all character rendering uses the copy or separately reads world position.
+- Height follow constants: 0.05, 0.1, 0.5, 3.5 and 120 are fixed constants. Matching data words exist elsewhere in the boot data but none is tied to this routine.
+- Height follow consumers: the camera refresh path receives the hero motion record's drawn-copy position. In the recovered direct-reference inventory, that camera refresh is the only identified caller of the position accessor. A separate transform routine reads a four-component value at the same offset through a nested object, but the evidence does not tie that nested field to the hero motion record or to the ordinary character-model draw path. Thus the camera handoff is established; whether the character model or every render path consumes the drawn copy remains open. The ground probe and ground constraint update world position; the height-follow routine separately writes displayed height to the drawn copy. The movement predicate's accepted hero states are 7 to 11 and 43 to 46; its design intent and use by other callers remain unknown.
+- Answered: states 31 and 42. They have no route and are never written by hero code (Behavior 3, route table).
+- Hero walk and run speed and acceleration: resolved (Behavior 5; no acceleration beyond the one-pass lag). Resolved: jump and fall are Behaviors 9A, 9B and 50, climb Behaviors 13 and 51; no swim rule is known.
+- Resolved: **Behavior 13 versus Behavior 3.** Behavior 13 is the sub-mode machine of the ladder state 41; its sub-mode word (+0x9BC) is shared with the climb state 21. It is not the action state of Behavior 3, and its animations 90 to 95 are ladder clips.
+- Resolved: **ladder sub-modes 1 and 6 and the 0.45 / 1.25 loop.** Sub-mode 1 is the mount and sub-mode 6 a rung step down (request 95); the loop finds the nearest rung, the rungs being 1.25 apart from 0.45 (Behavior 13).
+- Resolved: **ladder thresholds.** 0.9 and 0.8 are the mount targets, 0.5 the climb-down floor, 0.99 the rung-step progress gate, -0.5 and 2.0 the jump-off push and lift; 1.3 and 1.27 are the top tests of rung A and rung B, in units (Behavior 13).
+- Resolved: **cue 140** plays once per rung step and with the mount-from-above clip 120 (Behavior 13).
+- Resolved in part: **Landing test (Behavior 14), positive-radius arm.** Kind 4/7 with positive extent uses a point-plus-radius versus oriented-box contact query, not a segment query; therefore no far endpoint or segment direction is defined for this arm. The query point is V30 + s V60 from the input record (scalar s at +0x24); the character motion record supplies the radius. After a hit, Q.y − 1.5 is compared with the character reference height; 1.5 is fixed. This is separate from the recovered hero air-landing sequence (Behaviors 9A and 50), which uses ground-gap and floor-contact checks; no direct call from that sequence to this helper or its dispatcher is present. Unrecovered indirect reuse is not excluded. Open: the semantic roles of those input fields and the distinct zero-or-negative-extent static/footprint arm.
+- Resolved: **Behavior 16 gravity input.** Behavior 16 is a scripted jump onto a box that is never run. Its start test uses g = 32 as stated; the speed it waits on is the record velocity (+0x60); the fall law is in SPEC-0040 Behavior 14A item 7.
+- Resolved: **Behavior 16 units.** v0 = sqrt(2 g h) is in record velocity units; at gain 1.0 it rises by about h. The routine is never run.
+- Resolved: **Behavior 16 terms.** h is the box top minus the hero's feet plus 2.0; the candidates are the hero's cell trigger boxes of kind 4 or 7 hit by a segment query (flag bits 0x0004 and 0x0002 skip a box); the 6.0 vector is 6.0 times the flattened facing.
+- Resolved: **block list (Behavior 15).** The 0xB0-byte records are the movable blocks built from the world's type-11 table (SPEC-0006, SPEC-0048); the mode value 0 to 3 is the block face index; 0.5 is the facing dot bound; the 0.2 and 3.5 bounds are strict.
+- **Action start gate (Behavior 17).** The spatial exclusion formulas and their mode/index selectors are resolved in Behavior 17. The field cleared on success is the action record's elapsed-step counter (+0x90); it advances once per active update against the stored duration byte (+0x91), then the active word is cleared at completion.
+- **Jump-action helpers (Behavior 17).** No hero path to them is known; their owner is open. Which action uses animation 51 and which uses animation 50 is open. Whether the state 13 they set is the same as state 13 of Behavior 3 is open.
+- Resolved: **Behavior 18** is the Miamouse carry of state 57; sub-states 0 to 3 are pick up, stand, walk and put down (High). In this routine the hold begins on the second tick of sub-state 0; this matches SPEC-0029 Behavior 28 (High).
+- **Target pick (Behavior 19).** Resolved in part: the picker accepts only class-21 Miamice, then requires their +0xC84 catchable word to be nonzero. SPEC-0029 Behavior 28 establishes that this word is set while idle/wandering and cleared while fleeing, released/landing or delivered/caged. The gate meaning is established for this class-21 picker only. The range is a strict Euclidean 3-D distance under 4.0 units. The alignment vector is candidate position minus hero position; after normalization it is dotted with the hero motion record's forward row B3 (+0x2B0), requiring a result strictly above 0.5. Thus qualifying candidates lie within a strict forward cone narrower than 120 degrees. **[High]**
+- Resolved: **Square-selector target cascade (Behavior 19, 22A and 22).** The ground Square selector tries the state-21 actor pick first; success takes its interaction branch and skips the other finders. On failure it tests the wall-panel grab (Behavior 22A); success stores the panel and sub-mode 1 and requests state 21. Only wall-panel failure reaches the ladder test (Behavior 22); success stores the ladder and sub-mode 1 and takes the ladder transition. If all three fail, other Square-action tests continue. The wall-panel and ladder finders are not the SPEC-0036 combat target picker. High for order and branch conditions; Medium for outcome naming.
+- **Hero reference vectors (Behavior 19).** The helpers that give the hero vectors used by the alignment test of Behavior 19 are not described (Low-Medium). Resolved for Behavior 22: the fallback direction for a centred stick is the facing.
+- Resolved: **Behavior 22 third window.** It is the height window -1.0 <= y <= LV - (H + 1.25) along the ladder's up axis, with the upper limit LV in state 30.
+- **Air and landing states (Behavior 20).** Resolved in part: the routine is not hero code. Still open: the meaning of the second state word's value 5, the source of its animation 7 and the owner class.
+
+- Resolved: **Landing recovery (Behavior 20).** There is no landing recovery: the 120 is a grab cooldown write of the climb sub-modes (hero word +0x9CC), counted down once per hero update (Behavior 20).
+- **Homing approach (Behavior 21).** The unit of its speed 0.5 and the source of the range tests 0.95 and 0.75 (data word or fixed constant) are open. No hero path to it is known; its owner is open. The write of air phase 4 with request 76 is the walk-off fall (Behavior 9A), not an entry to this routine. Whether it is related to any routine of SPEC-0036 is open.
+- **Stance routines (Behavior 4A): codes and helpers.** The helpers for state 1 and state 39 are not described. Their animation codes are not described.
+- **Stance and stick gates.** The 0.95 gate and the 0.25, 0.1 and 0.01 values are fixed constants. No matching data word is shown for them, and the shield guard test 0.95 (state 20) is not tied to any word.
+- **Target record and action ids.** The action-test ids for states 19, 30, 35 and 47 are resolved. The ids tested in states 18, 49 and 58 remain open. The writer of the current action id is not established (SPEC-0036 open question list).
+
+- Resolved: **State-13 exit and stick sign.** The exit to state 20 (Behavior 3C) has no stick test: sub-state 3 always arms it, sub-state 4 arms it on a frame with event bit 0x40, and it fires with a shield-family entry and L1 held or pressed (SPEC-0036 conflict C1, resolved). For Tor sub-states 7, 8 and 10, the left-stick sign and byte mapping are resolved in Behavior 3C: low Y is forward and low X is left after conversion and negation (High).
+- Resolved: **Pad byte mapping.** Left stick Y = +0x11F, left X = +0x123, right Y = +0x127, right X = +0x12B in the pad record. +0x11F is the Y (forward) byte read by Behaviors 2 and 3C (High for the byte layout; Medium-High for the Y and X roles in gameplay, which the ladder climb and the stick-forward exits of Behavior 51 agree with).
+- Answered: grab-point hang entry (Behavior 9). Only the second copy of the predicate in the selector's tail stays open (Low).
+- **Cross-held hang offset** (Behavior 9): Resolved: while animation 113 plays, the 3.0-unit adjustment changes the Y lane of the locomotion sub-object's +0x270 vector each tick; the other lanes are unchanged. The vector's broader semantic role remains unknown. **[High for lane; Low for vector role]**
+- Answered: bounce writer. The air landing phase on a ground record of kind 17 or 18 (Behavior 10).
+- Answered: climb sub-modes 19 and above do nothing (Behavior 51, state 21).
+- Resolved: climb sub-modes 3 and 17 after a panel hand-off. Sub-mode 3 backs the hero off an overhang to at least 1.3 from the wall and makes the panel above the target; sub-mode 17 hangs the hero from the top edge, shuffles along it, climbs over (sub-mode 7) or returns to the free climb (Behavior 51, Top-edge hang) (High).
+- Resolved: **State-13 lookups.** The two lookups of the state-20 exit are the hero's shield-family entry and its empty test: the exit fires when the entry exists and is not empty (SPEC-0021; SPEC-0036, state 13).
+- Resolved: **Button chain, second argument.** It is the busy flag: 1 when the hero's busy-state predicate is true or the game status is above 0. When busy, the L2, L1, Cross and Square routes take no action; Cross and Square still end the chain on a press; L2 never ends the chain (Behavior 1A, rule 5a). High.
+- Resolved: **hard and soft landings.** Air phase 10 (request 118) and air phase 6 (request 68) are the hard and soft landings of the jump states (Behavior 50), not a guard or an evade. No button starts them. The soft-landing code contains a Cross chain branch, but its 0x40 event window never opens for either hero with the disc animation data (SPEC-0005).
+- Answered: lock-on. No hero-side lock-on; L3 calls only menu helpers (Behavior 1A).
+- Resolved: **Hero swap.** An L1 and R1 chord switches to the other hero (SPEC-0053 section 3.8 c). It is tested in the front-end in-play handler after the hero's button chain in the same pass (Behavior 1). The chain may move the hero to state 20 on the L1 press; the switch-ready gate accepts state 20, so the chord still passes (High for the order; Medium for the consequence).
+- Answered: **Start and Select.** The hero button handler has no direct Start or Select action. The front-end handler opens the item screen on Start and the pause page on Select, subject to the busy gate; loss of usable pad slot 0 also opens the pause page (SPEC-0021, Panel visibility and clears, item 6). This is the menu path, not a hero action-state transition.
+- Resolved: **Latch words.** The 0xF0F0 mask is set while quick-item panel A (0x2DCCC4) or panel B (0x2DCCF0) is open and for one pass after (0x2DD038 follows them one pass late) (Behavior 1A, rule 3). High.
+- Resolved: **Quick-item panel helpers.** The panel step runs after the state routine, outside the button chain, while flag D and the game-state code are zero (rule 7). Up or Down with both panels closed opens panel A or panel B behind the in-play gate; Triangle closes an open panel A and, with both closed, runs the use step; Circle selects and closes; Cross selects, closes and uses. There is no Down-only cue: every direction press plays cue 0x9A. The use step is the item-use dispatch of SPEC-0021 (force 1, notify 1, gate 1), refused for an empty marker or a dead hero (Behavior 1A). High.
+- Resolved in part: **gates of the L1 and Cross branches.** L1 needs a usable shield in equipment slot 2; Cross needs a ground normal with a vertical part of at least 0.82, and the block-edge grab test decides state 19 (Behavior 50). The reported direct R2/Circle selector route to state 27 is not supported: its only recovered state-27 setter is behind a helper whose recovered body always returns false. A separate state-13 handoff sets state 27 when the aiming-mode words are nonzero and the rope manager has a selected-anchor pointer. The button sequence that creates those conditions and the candidate scan's full acceptance test remain open.
+- Resolved: **states 22 and 19.** State 22 is the sneak idle (Square held with no target); state 19 is the hang from a block's top edge (Behavior 51).
+- Resolved: **Behavior 4B caller.** It is the body of state 29 (hold a door), which is never entered in play.
+- Resolved: **Behavior 4B scale and step.** The scale is the hero radius r (1.175), and 0.075 is a positional step along the facing, not a speed.
+- Answered: Behavior 4B codes are moot, since state 29 is never entered (Behavior 51).
+- Resolved: **Behavior 4B dead-zone byte.** Moot: state 29 is never entered in play.
+- Resolved: **Behavior 4B record.** The record claimed on the first tick is the door, taken from the motion record's door word.
+- **Displacement scale word 0x2DD6C8.** Its reader is established for the state-13 stick steps only. Whether the stick stepping routine of Behavior 4B also reads it is not established.
+- Answered: **Behavior 23 owner.** The right-stick state and reticle fields are the hero aim mode in SPEC-0036, not generic character look channels; its 0–4 mode is passed to the separate aim-view object while camera mode is 0 (SPEC-0027, Right-stick aim mode and the camera).
+- Answered: **Behavior 23 tick length.** Start-up writes the runtime tick length as 1/60 second and the frame counter advances once per main-loop pass (SPEC-0007, Per-tick words and One pass of the main loop). The aim update counts ticks; see SPEC-0036, Right-stick aim mode. The precise writers of each aim target field are covered there.
+- Behavior 23: the meaning of the mode routines 0 to 4, and what the constants of modes 3 and 4 tune.
+- Behavior 23: the meaning of the two angle and two value channels (look yaw and pitch, a lean, or other).
+- Behavior 23: the clamp limits 0.1 and 40.0 have no known data address; they are treated as fixed constants.
+- Resolved: Behavior 30 uses 0x2DD6A8 as a candidate-distance range in its hero target scan; Behavior 9 uses 0x2DD7BC as the maximum side offset from the hero to another grab line. The equal 20.0 values do not implement the same filter. Still open: the meaning of the 100.0 range (state 1), limit 90 and 0.5 angle parameter.
+- Answered: Behavior 24 is the push-into-face counter of the block fit test (Behavior 15).
+- Behavior 25: which caller uses the integer step and what the total counts. On disc the flag changes only the rate; whether that is intended is open.
+- Behavior 27: the meaning of codes 170, 171 and 186 to 189, and of the count helper.
+- Behavior 28: the meaning of the remap outputs and the caller that reads the result.
+- Answered: Behavior 29 is the D-pad pressure virtual stick; its derived output has no gameplay reader. The 127 centre belongs to this path and the 127.5 centre to Behavior 2.
+- Resolved in part: Behavior 26 state exclusions are current hero states 25, 33, 51 and 55; after the height-plus-radius comparison fails, the fallback requires a successful candidate-type table lookup and the strict relation 0.4 × candidate field +0x94 < candidate field +0x98. The intended meaning of the 25.0 height limit and fallback fields remains open.
+- Resolved in part: Behavior 32 uses the motion record ground-normal Y at +0x14. The 0.82 cutoff gates Cross jumping; the 0.85 cutoff is used by the air ledge reach predicate, and 0.85 also appears separately as a hero-height multiplier in the climb-up class. The reach predicate adds 0.75 times hero height unless the jumping-state predicate is true; the hang-class test has its own additive 0.75 clearance. The design rationale for these values remains open.
+- Answered: **Behavior 31's 2.8-unit spawn is not the state-57 carry.** State 57 only attaches, carries and releases its target; no spawn or throw occurs in that routine (Behavior 18; G4L movement follow-up). The spawn routine's caller/owner remains unidentified.
+- Behavior 34 and 35: the meaning of the states and codes; the handling of queue kinds other than 0 to 3; the width of the queue's count.
+- Frame counter writer (0x368F98) and tick-length writers are not established for the gates of Behaviors 24 and 25.
+- Owner of the three 15-slot target lists (search, insert, remove and swap by index, and a predicate on one list). Not described in this spec. Candidate owners: this spec (its callers are here) or the pet-list spec SPEC-0021.
+- Answered: **Visual sub-object binders.** Their fixed-resource bindings and hero-relative placement are specified in SPEC-0040, Behavior 28 (Hero visual sub-object binders); this is character display setup, not locomotion.
+- Owner of the hint icon choice for the current interaction target (two prompt icons chosen from the target kind and drawn with fixed arguments). Candidates: SPEC-0022 or SPEC-0023.
+- Answered: **Area change queue.** Pending world slots and their transition processing belong to SPEC-0006 (Areas, World buffers and transitions).
+- Answered: **Event queue insert.** The referenced routine is the item ask-about hook and its once-only interaction task, covered by SPEC-0030; it is not a generic clock/event-queue operation.
+- Behavior 36: the live sequence latch is never cleared in the boot program. The main loop checks the sequence in ordinary title, front-end/menu and in-play states serviced by that loop; nested blocking routines suspend the check. Other blocking flows, disconnected second-pad behavior and the design intent remain open. The separate “Positions unlocked” routine has no static caller and is treated as unreachable. The watch screen is specified in SPEC-0008.
+- Resolved: **edge test, later gates** (Behavior 37). The facing gate uses the forward row and the locomotion direction; the 5.0 is a five-tick look-ahead of the motion, not a start height, and the 0.5 offsets move the reference point along the forward row for negative types. Behavior 15 is the climb-onto-block fit test over movable blocks, not an edge test, so the two are unrelated.
+- Resolved: **Behavior 38 second store.** The second store only sets w = 1; the result is P' = 2 P0 - P, the tick's root step reversed. The routine is the edge guard of generic characters (SPEC-0040, Behavior 14E) and never fires for the heroes.
+- **Ground-record test of the pre-step** (Behavior 38). Resolved in part: it belongs to generic characters (SPEC-0040, Behavior 14E). The runtime word used by its timed call is game time in seconds, initialized to zero and advanced by dt once at the end of each pass (SPEC-0007, One pass of the main loop). Still open there: the meaning of the 2.3 threshold, the helper value it adds, and the timed call's exact role.
+- **Stop test flag and move routine** (open; Behavior 39). The meaning of the per-actor flag at +0x14C in the stop branch, the move routine it calls, and the per-actor factor in the projection are not identified. The clamp's scale is not fully established.
+- **Probe selection** (resolved for the recovered routine; Behavior 40): after a miss at the current point, the second probe uses the one-tick advanced position, with the half carried-motion offset when that advanced point is more than 0.1 from its anchor. Both probes use the same point-versus-oriented-box helper and 0.75 clearance; a hit is passed to the contact-response routine. The fixed-0.75 routine's owner and broader caller set remain open.
+- Resolved: **Behavior 41 target.** The target is the Draik breath beam's 3-D length, not a heading (SPEC-0029).
+- **Animation chooser: weighted-call purpose** (resolved in part; Behavior 42). Values 6, 7 and 8 are stinger effect indices, not sound-block cue ids or animation blend priorities. They deterministically select VAG resources 262, 263 and 264, respectively (SPEC-0009, Effect and stinger index; SPEC-0024, Table 14). The +0x0C flag gates the weighted animation call and stinger index 7 on the default-code branch; why the weighted call is selected remains open. When the flag is nonzero, the routine also passes a label naming the hero (Tor or Roberta, chosen by the same index) to a display helper; the helper and its purpose are not identified. The audible contents of the three VAG resources are not established here.
+- **Push share** (open; Low; Behavior 43). The share each actor takes of an overlap, and the callers of the push routine, are not established.
+- Resolved in part: **stick axis order** (Behavior 45). +0x11F is the left-stick Y and +0x123 the X (Medium-High; the ladder climbs up on a pushed-up stick). The conversion applied to each byte is Medium.
+- Resolved: **stick blend branches** (Behavior 45). The stated reading is right: in sub-mode 4 the helpers return the scaled raw byte, and in other sub-modes the dot product with the caller's vector.
+- **Random timer caller** (resolved in part; Behavior 46). The writer is the bush-instance reset path, and its per-instance update reads the stored value only as a zero/nonzero branch gate; the direct reader does not decrement it or inspect its magnitude. Why the bush retains this positive randomized value and whether indirect writers affect the gate remain open. The time base 60 is taken from word 0x368FA0 (see Where it lives).
+- Resolved: **Animated-object sound slot inputs and duration** (Behavior 47). The +0x1E4 frame-count record is the animated placed object selected by AddAnimObjSound's object index. Slot field 0 references that object record, field 1 stores the cue id, and fields 2 and 3 store the cue's start and end times after fraction scaling by (F − 1)/15 seconds (SPEC-0030 row 224; SPEC-0031, Animated-object sounds; SPEC-0028, Animated-object record).
+- **Hash draw callers** (Behavior 48). Resolved (partly): the hash draw has one caller, a periodic effect counter that passes its own step count as the seed; that counter has no caller or table entry, so the hash draw is not part of play, and every draw of play uses the game's generator (SPEC-0008). Still open: whether some unlisted indirect path reaches the counter.
+- **State 30 extra routine** (resolved in part; Behavior 44). After clearing +0x9AC and requesting state 1 or 22, the exit dispatches the class-specific routine with mode 0 and arguments -1, -1. Its behavior and purpose remain open.
+- **Hero travel writer.** Resolved: the motion-record step moves the hero by the clip root step (Behavior 5.2).
+- Resolved: **Gravity.** The value 32.0 is in the physics block, written at start-up. In the air the hero's vertical velocity changes by 32 G / 30 per tick and the height by the vertical velocity / 30, equal to 128 G units per second squared (SPEC-0040, Behavior 14A, item 7).
+- Resolved: **Fall law to implement.** The clean side implements the record law of SPEC-0040 Behavior 14A item 7: v += (F / W) k, F = 0, p += v k with k = 1/30, gravity adding minus W times 32 times G to the force; from rest the drop after K ticks is 0.0177778 G K (K + 1). After 10 ticks at gain 1.0 the drop is 1.9556. The leap of state 28 keeps its own 0.02 per tick.
+- Resolved: **run gate writer** (Behavior 4). Only zero is ever written, on hero set-up and on the climb-entry reset; nothing else touches the word, so running means R1 is held (High).
+- Resolved: **Event flag 0x40 inventory** (Behavior 1A, 4A.3). It is an event-window bit of the current action, not an action identifier; the shield-guard steering rules test action 64 and progress separately. Action ids with at least one 0x40 frame in their mapped clip are Tor main: 13, 14, 15, 16, 21, 22, 27, 31, 59, 71, 75, 118, 134; Tor sub: 14, 15, 16, 27; Tor face: 14, 15, 16, 27; Roberta main: 16, 75; Roberta sub: 16, 118; Roberta face: 16, 118. The event query spans the four playback records (main layers 0 and 1, sub-part and face), so a listed family can satisfy a queried window (SPEC-0005, Table B frame bits). Neither hero has a 0x40 frame on action 68 in any family, so its chained-jump and L1 windows never open in this build. The clean side must not read the event bit as "action 0x40 is current".
+- Resolved: the shield-guard steer call is the shared character facing-blend method; its vector argument is a desired facing direction, not a movement vector. The centered-stick path supplies the locomotion facing, and the non-centered path supplies the normalized stick direction. At weight 1.0 it stores the requested facing, with a small side-axis offset when directions are almost opposite (High for the shared method, Medium-High for this call mapping). The moving flag is read by the shared per-pass facing update as a gate for its moving-facing branch above speed 0.01. The recovered direct writer census shows multiple action routines setting it to one; no zero store was found in those recovered routines. This does not establish the complete indirect consumer set or intended design label (Medium-High).
+- **Slope and step for the hero** (resolved in part; Behavior 6). Hero placement uses the shared ground-attach routine with a height-plus-2.5 probe ceiling. The attach refreshes the ground normal before that tick's root travel, and travel projects against that sampled normal; on a slope, the projected step can therefore include vertical displacement (Behavior 8; vector 156). The separate 0.75 height-step comparison gates the state-18 movable-block check; it is not called by ordinary state-32 stick locomotion, which applies animation root motion. This does not rule out other dynamically dispatched uses of the shared check or settle terrain/contact behavior after the root step (vector 157).
+- Resolved: **block list and edge guard** (Behaviors 15 and 38). The 0xB0-byte records are the movable blocks (Behavior 15); the second store gives P' = 2 P0 - P (SPEC-0040, Behavior 14E).
+- Resolved: **motion-record step, zeroing test naming** (Behavior 5.2 and 5.5). The character's vector is the steering target of the locomotion sub-object (the stick direction while the stick is not centred), and the exemptions 21, 23 and 41 and the case 53 are action-state tests (High). Still open (Low): whether characters other than the heroes reach this step with an enabled locomotion sub-object.
+- Resolved: **ledge-drop test** (Behavior 49). The edge height h(p) comes from the edge's top plane and height value; the side gate uses face-plane values of the reference point and the position; the 5.0 check is the look-ahead of Behavior 37 without its c >= a part. The callers are the hero's wall contacts (Behavior 49, Callers). Behavior 15 is the climb-onto-block fit test and is unrelated. It shares the record fields, the reference point offsets and the look-ahead with Behavior 37 and runs before it.
+- Resolved: **Strafe jump sides** (Behavior 50). State 43 is the jump to the hero's right, 44 to the left (Behavior 11; Medium-High).
+- Resolved: **State 11 writer** (Behavior 50). Both edge-contact routines write it in state 6 at an accepted ledge-drop edge with facing . normal at most 0, off ground records of kind 1 or 6 (High for the gate). Resolved: the launch uses the facing (forward row) times -10; the stored direction is not read (High).
+- **Air phase details** (Behavior 50). Resolved: phase 5 runs the landing choice, then the bounce test, then the block-edge test, on every phase-5 tick; the hard landing leaves the phase at 10 and writes the state field directly (High). Resolved in part: an additional event-window handler checks a Cross press edge, requests a state-7 jump and calls the normal chooser using the locomotion sub-object, as do the soft-landing chain and ladder jump. The handler has no direct code-call caller or confirmed registration in the local static references, so its reachability remains open. The alternate strafe chooser is called by the Cross route and soft-landing chain. Resolved: Tor's 1.5 plunge height gate is a fixed constant, not a data word (High).
+- Resolved: **Tor's air slash** (Behavior 50). It never happens in states 7 to 11 and never enters state 13. It exists only in the strafe jumps 43 to 46: armed by the attack input in air phases 2 to 5, started by a release before 12 held ticks or by an R2 press, and kept in the strafe-jump state with sub-state 11 and second main id 25 until landing. It deals no damage (High).
+- Resolved: **Sub-state 11 left over after a slash** (Behavior 50; High for the recovered routes). The moving landing of a strafe jump writes state 32 directly and leaves sub-state 11 in place, and the state setter by itself does not reset that word. On an accepted ordinary attack-selector route, however, the same update requests state 13 and then the attack-start router writes the initial sub-state from the gesture mode before the state-13 routine can run: Tor's values 0–3 select sub-states 1, 9, 7 or 8; Roberta's select 1 or 5, 8, 6 or 7. Therefore this normal entry does not consume the stale Tor slash value. Other recovered entries also supply their own value: Roberta's air shots enter with 11 or 12, and the world-press trigger sets Tor's sub-state to 13. Tor's slash itself keeps the strafe-jump state; state 23 has no ordinary route in shipped data. This closes the stale-value question for recovered entry paths, not unlisted external state writes.
+- **Second-id progress with no second id** (Behavior 50). During a soft landing the second id is -1, and the progress test on it would end the air-attack flag early if a record held clip index -1. No visible effect is known (Low).
+- Resolved: **Climb and ladder grabs from the air.** The ceiling-panel grab (state 21, sub-mode 18), the wall-panel grab (sub-mode 1) and the ladder grab (state 41, with the height window) are Behaviors 22 and 22A.
+- **Traversal bodies** (Behavior 51). States 26 (statue) and 29 (door) are unreachable in play (resolved); their bodies stay partly described. The sidle (state 23) is never entered in play (resolved); its body stays Medium. State 30's action-test ids are resolved: 72 in sub-mode 1, 61 then 60 in sub-modes 3, 5 and 6. No 0.75 threshold is known for sub-mode 3; its tests are the 1.5 distance checks, while the 0.25 along-component checks are in sub-modes 5 and 6. Sub-mode 1 of state 58 remains without an ordinary entry route. The target vertical-coordinate formulas for state 19 sub-mode 1 and state 58 sub-mode 0 are now specified in Behavior 51; their intended geometric alignment remains unnamed. State 47's sub-mode-0 target height is edge-plane height at the hero's current horizontal position minus 1.35 total (the helper's 0.25 offset plus the 1.1 boot word). The state-19 shimmy boundary is now specified as strictly below q − 1.0; the linked scalar's geometric meaning remains open.
+- Resolved: **Block mover** (Behavior 4A.2). n = (clip key count - whole part of the cursor - 2), doubled only for the push clip 42. Behavior 4B is the door hold, not the block mover. Resolved: the move window uses the layer-0 cursor over its key count (Medium-High; test vector 123).
+- **Owners of Behaviors 17, 20 and 21.** The jump-action helpers, the three-state air routine and the three-state homing are not reached from the hero's state dispatch; Behavior 20's air routine and its 120-tick landing routine are not hero code (High). Their owners (likely non-hero characters) are open.
+- Resolved: **Flight curve** (Behavior 50). +0x60 is the velocity and +0x70 the force (SPEC-0040, Open question 176). A standing jump peaks 3.2028 above take-off at tick 24, decides its landing at tick 47 and touches the ground at tick 49.
+- Resolved: **floor-contact flag on landings** (Behavior 50). It is set by near-horizontal contacts (|n_y| > 0.9) and does not shorten landings on probe-visible floors; it matters over surfaces the probe misses and after ceiling hits (Medium).
+- Resolved: **strafe and plunge curves** (Behaviors 11 and 50). The strafe flight is in Behavior 11; the plunge flight (root motion of clip 23 with gravity off, then a forced -8.0 descent) is in Behavior 50 and test vector 134.
+- Answered: **Edge-offer boost height** (Behavior 49). The stored value is the vertical clearance d computed by the edge acceptance test of Behavior 37, plus 0.75; it is not the along-edge distance. SPEC-0018, edge acceptance value, confirms this use.
+- Answered: Behavior 15 uses the box top as loaded for its fit test. A push changes only the block's horizontal position; its displacement is along one of four horizontal directions, and no ground-height resample occurs during the push. The 0.75 limit gates the move by comparing two ground samples at the front/hero target. Ground height is sampled again during placement or re-placement (SPEC-0048, Movable blocks; High). Whether any reached on-disc push crosses uneven terrain while passing the gate remains open.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

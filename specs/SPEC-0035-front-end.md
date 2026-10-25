@@ -1,0 +1,1725 @@
+# SPEC-0035: Front-end menus and UI database
+
+- Answers: proactive (none requested)
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). The clean side should check the front-end resource (number 532) by its chunk chain and the type-38 header name before use.
+- Confidence: High for the header, section counts, record sizes, tree links, the screen-stack rules, the save slot count (four; see Open question 9), the picker rows and the picker cursor rule (High), the load starting cursor (Medium-High), the save and load prompt records 18 and 17 (High; the save prompt is opened by a direct screen set at a save point, not by a return code), the section I item targets (High), the save screen flow and the pending-flag rule (High; High that a zero card state word means "saved or cancel confirmed"), the cue index rule (Medium-High; High on five checked cues), the option block arithmetic, the toggle rule, the item screen's tab wrap and the grid size (4 rows of 5). Medium-High for the item screen's cell and use rules, Medium for the charm and quest-item lists and the table B identities below. High for the second input word (section 4), the L2/R2 page ring, the pause item routing, the in-play map and journal shortcuts, the hero index that picks the item-screen pages, and the journal page (section 14.3, including the row-part positions and fonts). High for the UI canvas size (always 512 x 448; section 10). Medium-High for the draw-before-handler order and its one-pass lag (Behavior 1b). High for one front-end pass, the generic menu step, the handler return codes, the front-end sound slots, the back rule, the default focus, the list-page moves, the state return census and the page graph (Behavior 1b, 2, 9, 9d and 13.2). The map page is specified in SPEC-0051. Medium for screen names, dispatch meaning and the start-point cues. Menu bit values and physical names: High (SPEC-0033 Controller map). Medium for the roles of Start and Select as menu openers. High for the option row mapping (the focus index picks the invert word; Open question 6, resolved). Node-kind draw dispatch: High for the dispatch by kind and for the draw condition modes (all confirmed); text node draw (kind 2) and the Section G binding fields: High (Medium-High for the double scaling of letter spacing, Medium for colour-track sampling); Medium for the condition of kind 1 and for kind 7 (partly described); High for the kind 4 focused flag. The condition mode byte is at +0x2C, not +0x0C (see Open question 43). Mode 1 of the draw rule draws only under the focused item (High; Open question 75, resolved). Node search and key mask rules (section 9b): High for the child-first order and the mode tests, Medium for kind 2 and the kind 1 data check. Low for the fields marked unknown below. The shop screen body and a separate equipment screen body are not known (Open question 1). Menu overlay cell rule: Medium-High. Price caption (layout, colours, writers, callers and clears): High. Map projection table (section 14.5): High for its record count, record size, zero-filled start and write-at-start-up; Medium for the marker transform and the yaw offset; Low for the index range; the address, layout and read rule are in SPEC-0051, and the values are not in this spec (Open question 49). Marker pulse constants: High (values), Medium-Low (their roles). Menu cursor step (section 4.1; Down moves to the next kind-4 item, Up to the previous, with wrap): High for the directions, Medium-High for the kind-4 rule. Menu driver, focus search, item position and page open (section 17): labelled there; their conflicts with Behavior 1, Behavior 4 and Behavior 12 are Open questions 60 to 72. The driver caps and the rectangle and quad sizes are not yet confirmed against the disc bytes. Byte tween, cursor rectangle (debug colour editor) and nine-slice panel (dialogue box frame), and sections M and N: High (section 17, Layout). Book reader (section 6.1): High for the cursor and index rules, the Cross exit, the play gate, the Square take (a rising edge), the book-station flag rule, the page timer endpoints and step, and the page layout values; High for the writers of the pending index and the cursor, the prompt, its timing and the page driver's call rate; Medium for which actors besides the hero set the pending index. Full-screen pictures (Behavior 1a): High for the picture records, the resource rule, the picture of each screen record and the buffer sizes; Medium for the map picture rule; High for the lead-in page mechanism of records 24 to 28 (Medium that they were cut); High that the credits picture is shown (Options, Credits; the finale gate) and that the lead-in, coming-soon and controls pictures are never shown (static census); High that the logo and legal pictures are shown at boot and after every card-state visit. Controller check, logo page, attract and title input: High. Option set, apply timing, gains at start-up, the override-clear list and front-end sound volume: High; widescreen unreachable: Medium-High.
+
+## Summary
+
+The front end (title, options, save and load, start-point choice, in-game pause menu) is described by one archive resource that holds a self-contained UI database. The database has a header with a name and version, a string table, a tree of about 1,366 UI nodes (containers, text, sprites, clip groups and seven page roots), sprite records with frame counts, label bindings that give a text node a neutral or highlighted colour, and a list of source asset paths. Screens are pages of this tree. Navigation keeps a stack of up to 31 pushed screens above the root. All drawing is on a 512 x 448 UI canvas. Most screens also show one full-screen background picture, loaded from its own archive resource (577 to 677) when the screen is entered (Behavior 1a).
+
+The screen logic is a set of front-end states (table B below) that read a 16-bit logical button word, change a 32-byte option block, drive the save and load pickers, and start a new game or a start point. The same states also run the in-game item screen (three tabs: items, charms and quest items), the quest journal, the map (section 14) and the book reader (section 6.1). The map draws the hero marker through a per-area projection table (section 14.5) that is written in memory at start-up and is not stored on the disc. The clean side can build the menus from this layout by reading the resource at runtime, and it can implement the states from the rules in Behavior. It needs no code from the original.
+
+## Where it lives on the disc
+
+- The front end is archive resource 532 of GAMEFILE.DAT. Resource 532 is 696,320 bytes (340 sectors of 2,048 bytes).
+- Resource lookup: the boot program's data holds the archive's resource table at virtual address 0x2D7618. It has 1,434 entries of 8 bytes each: u32 first sector (relative to GAMEFILE.DAT), u32 sector count. Resource 532 is entry 532 (first sector 206,495, count 340).
+- Resource 532 is a chunk chain (IDM-style chunks: 16-byte chunk header, payload after it). Its top-level chunks, in order:
+
+| Chunk | Start in resource | Size (bytes) | Extra | Content |
+| --- | --- | --- | --- | --- |
+| type 31 | 0x000000 | 48 | 0 | Header: name "FrontendData" |
+| type 38 | 0x000030 | 156,300 | 0 | Front-end UI database (payload 156,284 bytes, starting at +16) |
+| type 4 | 0x0262BC | 539,140 | 52 | Texture sheet for the front end (layout not described here) |
+
+- The loader walks the chain: the type 31 chunk is skipped, the type 38 payload is passed to the front-end setup, and the type 4 chunk goes to the normal texture upload path. Setup and the per-frame flow are in the Behavior section.
+- All offsets in the next sections are relative to the start of the type-38 payload unless marked.
+- Full-screen pictures are separate archive resources 577 to 677 (101 resources), not part of resource 532. Each holds one texture chunk with one 512 x 512 8-bit indexed texture and one 16 x 16 32-bit CLUT. Resource 594 (game over) is 512 x 128. Resources 586 to 588 are stored as 512 x 512, but their image fills 512 x 440. Resources 590 and 592 are byte-identical. Which screen shows which picture is in Behavior 1a. Confidence: High.
+- The map projection table (section 14.5) is not stored as data on the disc. It is empty memory until a start-up hook writes it. Its run-time address, record layout and read rule are given in SPEC-0051 (Where it lives and Layout), which owns it (Open question 49).
+- The front end's dispatch tables are boot-program data, not disc data. Table A has 74 node predicates (slots 0 to 73, indexed by a node's handler index) and starts at virtual address 0x2DD058. Table B has 31 screen states (slots 0 to 30; slot 31 is zero) and starts at 0x2DD180, directly after table A. Table A and table B together are 105 consecutive code pointers (74 + 31) from 0x2DD058. Table C starts at 0x2DD200 and is data, not code pointers: it is the variable table of the value-text nodes (Section K). Each slot is a 32-bit code address in the boot program, which the clean side does not use; the handler behaviour is given in words in the table of Behavior 2 and in section 9c.
+- Cue ids: a sound cue id is the index of the cue's name in the boot program's cue-name table, which starts at data address 0x2DD8F0 and has 223 entries. Five checks agree with how the front end uses the cues: 0x94 is pause, 0x95 is unpause, 0x97 is text box close, 0xA2 is item use fail and 0xA9 is save complete. Cue 0xA8 is named for save-point activation. By the same rule 0x98 is the confirm (advance) button sound, 0x99 the back button sound, 0x9A the direction-pad press, 0xA1 the cloak use and 0xA3 the Mote activation, which agrees with every front-end use of them. Confidence: High for the index rule and for these names. Other specs may cite cue names by this rule. Read the names at runtime if they are needed; do not copy the table.
+
+## Layout
+
+### Header (payload +0x00 to +0x9F)
+
+| Offset | Size | Type | Meaning | Value on disc |
+| --- | --- | --- | --- | --- |
+| +0x00 | 16 | bytes | Name, NUL padded | "Idol Minds FEF" |
+| +0x10 | u16 | u16 | Version major | 1 |
+| +0x12 | u16 | u16 | Version minor | 5 (version 1.05) |
+| +0x14 | u32 | count | Records in section D | 108 |
+| +0x18 | u32 | count | Records in section E (sprites) | 798 |
+| +0x1C | u32 | count | Records in section F | 0 |
+| +0x20 | u32 | count | Records in section G (label bindings) | 165 |
+| +0x24 | u32 | count | Records in section H (pages) | 7 |
+| +0x28 | u32 | count | Records in section I | 30 |
+| +0x2C | u32 | count | Records in section J (UI nodes) | 1,366 |
+| +0x30 | u32 | count | Records in section K | 52 |
+| +0x34 | u32 | count | Records in section L | 0 |
+| +0x38 | u32 | count | Strings in section A (string index) | 55 |
+| +0x3C | u32 | count | Unknown; not the count of section N (Open question 13) | 585 |
+| +0x40 | u32 | count | Records in section O (asset paths) | 345 |
+| +0x44 | u32 | count | Fonts in the tail (font table) | 3 |
+| +0x48 | u32 | count | Records in section M (112-byte records) | 14 |
+| +0x4C | u32 | count | Records in section N (animation slots) | 20 |
+| +0x50 | u32 | count | Records in section C (key pairs) | 94 |
+| +0x54 to +0x90 | 16 x u32 | offset | Start offset of each section, in file order A, T, C, D, E, F, G, H, I, J, K, L, M, N, O, tail | see the section table |
+| +0x94, +0x98, +0x9C | 3 x u32 | pointer | Filled in at load time with the addresses of tables A, B and C (A and B are handler tables; C is data). Zero on disc. | 0 |
+
+The version check requires major 1 and minor 5. Any other version is refused, and the front end does not start.
+
+Each section's record count is the header word for that section; the start words give the layout. Section size = next start minus this start.
+
+### Section table
+
+| Section | Start | Size | Record size | Records | Confirmed |
+| --- | --- | --- | --- | --- | --- |
+| A string index | 0x0A0 | 220 | 4 | 55 | size and count match |
+| T text | 0x17C | 588 | - | 55 strings | all 55 resolve |
+| C key pairs | 0x3C8 | 752 | 8 | 94 | size and count match |
+| D entries | 0x6B8 | 2,160 | 20 | 108 | size and count match |
+| E sprites | 0xF28 | 22,344 | 28 | 798 | size and count match |
+| F (empty) | 0x6670 | 0 | - | 0 | - |
+| G label bindings | 0x6670 | 2,640 | 16 | 165 | size and count match |
+| H pages | 0x70C0 | 84 | 12 | 7 | size and count match |
+| I pairs | 0x7114 | 240 | 8 | 30 | size and count match |
+| J UI nodes | 0x7204 | 71,032 | 52 | 1,366 | size and count match |
+| K records | 0x1877C | 1,040 | 20 | 52 | size and count match |
+| L (no-op) | 0x18B8C | 4 | - | 0 | - |
+| M animation tracks | 0x18B90 | 1,568 | 112 | 14 | size and count match |
+| N animation slots | 0x191B0 | 640 | 32 | 20 | size and count (+0x4C) match |
+| O asset paths | 0x19430 | 46,920 | 136 | 345 | size and count match |
+| tail (fonts) | 0x24B78 | 5,892 | 272 per font descriptor, then 18 per glyph record | 3 fonts, 282 glyph records | size matches (3 x 272 + 282 x 18) |
+
+Section start offsets are payload-relative.
+
+### Load-time relocation
+
+When the block is loaded at a base address, the loader adds that base to some stored offsets, and only those:
+- The 16 section start fields at +0x54 to +0x90 always get the base added, with no test.
+- In each section J node record (52 bytes), the five words at record offsets +0x00, +0x04, +0x08, +0x0C and +0x10 get the base added only when they are not zero.
+- In each section M record (112 bytes), the four words at record offsets +0x58, +0x5C, +0x60 and +0x64 get the base added only when they are not zero.
+- In each section K record (20 bytes), the word at record offset +0x00 gets the base added. No other word of the record is relocated. All 52 of these words are nonzero on disc.
+- The handler pointer fields at +0x94, +0x98 and +0x9C are not in this list; they are filled at load time by the front end (Layout, header).
+
+Confidence: High for the rule and the 16 fields; Medium for which record loops cover sections J, K and M.
+
+### Section A: string index and T: text
+
+- A holds 55 u32 offsets. Each is an offset from the start of T. Every entry resolves to a NUL-terminated string.
+- T holds those 55 strings. They are the UI labels (menu items, option names, prompts). The full list is not copied into this spec. Section 6 names the screens that use them.
+
+### Section C: key-to-node map (94 x 8)
+
+- Each record is two u32 values: a key and a J-node index. Keys lie in 1 to 223 (92 distinct keys). J-node indices lie in 42 to 1197, and each one is a node of section J (High for layout).
+- At start-up the records are copied, in order, into a 512-entry table of 32-bit values. The table starts filled with -1, so a key that no record lists gives -1 (Medium-High). When a key occurs more than once, the last record wins. Key 0xD1 occurs three times, with J-node indices 1194, 970 and 186, so its effective value is 186 (High).
+- Front-end routines look up a node by a constant key, with dozens of call sites. The node's record in section J is then used for drawing or for a sub-object. A key that is not in the table gives -1, and the caller treats the node as absent (Medium; the caller paths were checked on samples).
+- The targets are 52 sprite nodes (type 1), 35 group nodes (type 5), 3 text nodes (type 2) and 4 nodes of type 6. Only 3 targets carry a label binding (Section G).
+- The symbolic names behind the keys are not in the data, and the front-end code uses the keys only as numbers (Open questions).
+
+### Section D: screen records (108 x 20)
+
+Each record describes one front-end screen. Record N is at section D offset N x 20. A state code (below) is such an offset, so code N selects record N / 20.
+
+| Offset | Size | Meaning | Value on disc |
+| --- | --- | --- | --- |
+| +0x00 | u32 | Payload offset of the screen's UI node (a J node). The node's first word points back to this record (108 of 108 on disc). | Differs for each record |
+| +0x04 | s16 | Back and stack rule (High). -3, -2 and -1 are the stack codes of section 9; 0 or more names a record (section 9, parent-index rule). The Triangle back rule reads it (section 9, Back rule). Per record on disc: -2 (stack reset when entered; Triangle off) on records 0, 1, 9, 10, 19, 23, 24 to 28 and 30; -3 (no stack change; Triangle off) on records 3 to 8 and 18; -1 (pushed; Triangle on) on records 2, 11 to 17, 20, 21 and 29; 9 (play) on record 22 and the 77 map records 31 to 107. | -3, -2, -1 or 9 |
+| +0x06 | s16 | Left neighbour record: used when a Left focus move finds no item on the page. The walk follows the neighbour's own +0x06 until it reaches a record whose node predicate passes (High). All values on disc are -1 or -3, so the walk never runs in the shipped game. | -1 or -3 |
+| +0x08 | s16 | Right neighbour record: as +0x06, for a Right focus move (High). Unused on disc. | -1 or -3 |
+| +0x0A | u16 | Screen state: the table B index (0 to 30) of the state that runs this screen. 0xFFFF means no state. | 0 to 30 on 101 records; 0xFFFF on 7 records |
+| +0x0C | u16 | Run-time focus index: the index of the focused item among the page's kind-4 items (section 9d). Not stored on disc. | 0 |
+| +0x0E | u16 | Run-time pass counter: the number of passes the screen has run. Not stored on disc. It is set to 0 when the screen is entered and grows by 1 per staying pass, up to 9,999 (Behavior 1b). | 0 on disc |
+| +0x10 | 4 | Zero on disc. | 0 |
+
+**State codes.** A state code is a byte offset from the start of section D, so code N selects record N / 20. Every code the front end returns is a multiple of 20. The codes below are the ones the front end uses. The state column is the table B index that runs the record, which is the record's +0x0A value.
+
+| Code | Record | State | What the record is |
+| --- | --- | --- | --- |
+| 0x000 | 0 | 0 | Card state (the memory-card check). Set directly at start-up; reached on quit, on game over without a pending save, and at the end of the finale credits (Behavior 2, state 0). |
+| 0x014 | 1 | 1 | Attract (node 10). Shows the legal screen; queues the opening movie and the title movie; leads to the title (record 10). |
+| 0x028 | 2 | 7 | Pause page (node 12). |
+| 0x0B4 | 9 | 11 | In-game play (page node 322). Its node tree is the in-play HUD (SPEC-0023): the HUD's art, layout and colours are this record's subtree in resource 532. |
+| 0x0C8 | 10 | 12 | Title (node 757). |
+| 0x0DC, 0x0F0, 0x104 | 11, 12, 13 | none | Options, Controls and Audio pages (pages 774, 794, 824). Entered by the section I targets of the title, pause and Options items, not by a return code. |
+| 0x118 | 14 | 18 | Credits (node 852). Entered from the Options page's Credits item, and by the in-play story-bit gate (section 6). |
+| 0x12C | 15 | none | Start-point chooser container (node 854; section 5). No state. Never entered (state return census, Behavior 2). |
+| 0x154 | 17 | 21 | Load prompt (node 911; section 7.2). |
+| 0x168 | 18 | 22 | Save prompt (node 915; section 7.3). Not entered by a return code: the world's save-point step sets the current screen to this record directly when the player presses Square at a save point (section 7.3). No handler returns 0x168. |
+| 0x190 | 20 | 24 | Book reader (node 930; section 6.1). |
+| 0x1B8 | 22 | 25 | Quest journal (node 939). |
+| 0x1CC | 23 | 26 | Game-over page (node 973). Caption "Continue" only. The return code is 460 (0x1CC), a byte offset into section D; table-B state 26 runs the page (Behavior 2). |
+| 0x1E0, 0x208, 0x230 | 24, 26, 28 | 27 (all three) | Lead-in pages 2 to 4 (Attack Maneuvers, Quick Inventory, Mote screen), each with a Cross icon and "Next"; state 27 steps through them (section 5). Never entered: only state 27 returns these codes, and no route enters a record that runs state 27 (Behavior 2, census). |
+| 0x1F4 | 25 | 28 | Page with the "Coming Soon" 16:9 picture; it runs the fade step and has no exit. Never entered. |
+| 0x21C | 27 | 27 | Lead-in page 1 (Controls), with a Cross icon and "Next"; it runs state 27. Never entered. |
+| 0x258 | 30 | 29 | Neopets logo countdown (node 1199), 301 passes. |
+| 0x03C, 0x050, 0x064 | 3, 4, 5 | 8, 9, 10 | Item screen pages Items, Charms and Quest items for Roberta (hero index 1; section 14.4). |
+| 0x078, 0x08C, 0x0A0 | 6, 7, 8 | 8, 9, 10 | The same three pages for Tor (hero index not 1). |
+| 0x26C | 31 | 30 | First map record (area 0). The map page of area k is record 31 + k, code 0x26C + 20 x k, for k = 0 to 76 (SPEC-0051). |
+
+A pass is one front-end call, which runs once per game tick (60 per second; Behavior 1). The node numbers are section J node indices.
+
+### Section E: sprite records (798 x 28)
+
+| Offset | Size | Meaning | Verified on disc |
+| --- | --- | --- | --- |
+| +0x00 | u32 | Payload offset of the owning J node (back link) | 797 of 797 sprite J nodes point here. Record 797 is all zero and unlinked. |
+| +0x04 | 4 bytes | Colour, bytes R, G, B, A. It modulates the sprite's texture, 128 = 1.0 per channel (Section 12). 0x80808080 (neutral) for 769 records | counted; meaning High |
+| +0x08 | u32 | Asset index: the number of a section O record (0 to 344). At load it is replaced by a reference to that record (section O base + index x 136). | all 798 values lie in 0 to 344 (High) |
+| +0x0C | u8 | Frame grid columns: 1 (778 records), 2 (18), 5 (1), 0 (unlinked record) | counted |
+| +0x0D | u8 | Frame grid rows: 1 (778), 4 (18), 2 (1), 0 (unlinked record) | counted |
+| +0x0E | u8 | Frame group A count | counted (see below) |
+| +0x0F | u8 | Frame group B count | counted |
+| +0x10 | u8 | Frame group C count | counted |
+| +0x14 | u8 | Current frame index (0 for all 798 records on disc) | counted |
+| +0x18 | u32 | 0x7FFFFFFF (528 records), 0 (258), 2 (12), 0 (unlinked) | counted; meaning Low |
+
+Frame group counts on disc, for the 797 linked sprites:
+- (0, 0, 0): 778 sprites. These have no frames.
+- (1, 4, 8): 18 sprites, 13 frames each.
+- (0, 10, 0): 1 sprite, 10 frames.
+- The unlinked record has zero counts. So 779 records have no frames in total.
+
+### Section G: label bindings (165 x 16)
+
+| Offset | Size | Meaning |
+| --- | --- | --- |
+Confidence: High unless marked.
+
+| Offset | Size | Meaning |
+| --- | --- | --- |
+| +0x00 | u32 | Payload offset of the owning J node (a text node, kind 2). At load it becomes the node's address |
+| +0x04 | u32 | Index into the string index (A). At load it becomes the string's address (string index entry + text section start) |
+| +0x08 | 4 bytes | Colour R, G, B, A (unsigned bytes, 128 = neutral). It is the start colour of the label text |
+| +0x0C | s16 | Letter spacing in pixels, added to each glyph's advance (SPEC-0022, Text layout and glyph drawing, rule 7). On disc: 0 (124 records), -2 (30), -1 (8), -3 (2) and 9990 (1, node 954) |
+| +0x0E | s16 | Font id (0, 1 or 2; SPEC-0022 Fonts). A negative id means the label draws nothing. On disc: 0 (99 records), 1 (63) and 2 (3) |
+
+Disc census: all 112 text nodes (kind 2) have a G record as their data, and each of those records' +0x00 points back to its node (112 of 112). The other 53 records are all zero and belong to no node.
+
+Colour counts on disc:
+- Neutral (128, 128, 128, 128): 82 bindings.
+- Highlight (200, 115, 50, 128): 30 bindings.
+- Zero: 53 bindings (the records that belong to no node).
+
+Node 954 (under the quest journal, node 939; search key 0x33; font 2; a 9-character string) has spacing 9990. It is the journal row's objective template and is never drawn with that spacing: its parent group is gated by predicate slot 12 (always 0), so the page draw skips it, and the journal row drawer uses only its position, alignment and font id (section 14.3) (High; Open question 136).
+
+The 52 strings with a neutral binding include all 28 strings that also have a highlight binding. So a label has a normal binding and, for 28 labels, a second binding with the highlight colour. The highlight colour is the selected or focused state (Medium).
+
+### Section H: pages (7 x 12)
+
+Confidence: High.
+
+| Offset | Size | Meaning | Value on disc |
+| --- | --- | --- | --- |
+| +0x00 | u32 | Payload offset of a J node (a page root, type 3) | pages 14, 759, 774, 794, 824, 858 and 896, in that order |
+| +0x04 | u16 | Zero on disc; no use known | 0 |
+| +0x06 | u16 | Default focus index of the page (section 9d) | 0 on all seven pages |
+| +0x08 | u16 | Zero on disc | 0 |
+| +0x0A | u8 | Page mode: 1 = list page (Down and Up step through the items with wrap; Left and Right do nothing), 0 = spatial page (nearest item in the pressed direction, section 17.2) | 1 on pages 14, 759, 774, 794 and 824; 0 on pages 858 and 896 |
+| +0x0B | u8 | Zero on disc | 0 |
+
+All seven page nodes are type 3. The two spatial pages (the start-point chooser and the slot chooser) are never entered, so in the shipped game every reachable page is a list page.
+
+### Section I: item targets (30 x 8)
+
+One record per selectable menu item. Each record belongs to one item node (a J node of kind 4), and that node's data word points at the record. Confidence: High for the fields below.
+
+| Offset | Size | Meaning |
+| --- | --- | --- |
+| +0x00 | u32 | Payload offset of the item node (relocated at load like the other node offsets) |
+| +0x04 | s16 | Target when Cross is pressed on the item: -1, -2 or -3 are the stack codes of section 9 (parent-index rule); 0 or more is a section D record index |
+| +0x06 | s16 | Table B state run while the item has focus; -1 = none |
+
+Values on disc, per item (target, focus state; "none" for -1 as a state):
+- Pause page: View Map (-3, state 2); View Quests (-3, state 3); Load Game (record 17, state 4); Resume Game (-3, state 5); Options (record 11, none); Quit (-3, state 6).
+- Title page: New Game (-3, none); Load Game (record 17, none); Options (record 11, none).
+- Options page: Controls (record 12), Audio (record 13), Credits (record 14); no focus state.
+- Controls rows: target -3, states 13, 14 and 14. Audio rows: target -3, states 15, 16 and 17.
+- Start-point items (nine): target -1, state 19. Save and load slot items (three): target -3, state 20.
+
+No item targets record 18 (the save prompt). What each pause focus state does on Cross is in Behavior 2 (states 2, 3, 5 and 6).
+
+### Section J: UI node tree (1,366 x 52)
+
+| Offset | Size | Meaning | Verified on disc |
+| --- | --- | --- | --- |
+| +0x00 | u32 | Payload offset of this node's data. For sprite nodes (type 1) it is the E record. | 797 sprite nodes point at E records (Medium-High) |
+| +0x04 | u32 | First child (payload offset; 0 if none) | 0 bad pointers |
+| +0x08 | u32 | Next sibling (0 if none) | 0 bad pointers |
+| +0x0C | u32 | Parent (0 for a top-level node) | 0 child-to-parent mismatches over all child lists |
+| +0x10 | u32 | Zero for 1,346 nodes; nonzero for 20. Rebased at load time when nonzero. It is the node's animation list: the kind-2 draw reads its colour animation from it (Text node draw, section 12). None of the 112 text nodes has one | counted; Medium-High for the animation-list use |
+| +0x14 | s16 | Position X, relative to the parent (pixels) | High; both position words are zero on 569 nodes |
+| +0x16 | s16 | Position Y, relative to the parent (pixels) | High |
+| +0x18 | s16 | Scale X, 4.12 fixed point (4096 = 1.0) | values confirmed |
+| +0x1A | s16 | Scale Y, 4.12 fixed point | values confirmed |
+| +0x1C | s16 | Authoring pivot X: half the node's size, or the centre of its children's box. Not used for placement. | High (not used) |
+| +0x1E | s16 | Authoring pivot Y (as +0x1C). Not used for placement. | High (not used) |
+| +0x20 | u16 | Height in pixels, before scale | sprite values confirmed (see below) |
+| +0x22 | u16 | Width in pixels, before scale | sprite values confirmed (see below) |
+| +0x24 | s16 | Handler index for the condition predicate (Section 9b); -1 for 893 nodes (no handler of its own); otherwise 0 to 73 | counted; High on the meaning of -1 |
+| +0x26 | u16 | 0 for all 1,366 nodes | counted |
+| +0x28 | u16 | 16-bit search key (Section 9b); 0xFFFF (-1 as signed) for 1,196 nodes, which have no key | counted; High on the search use |
+| +0x2A | u8 | Row spacing in pixels, applied to this node's children (see Node transform below); 0 to 44 across the nodes, nonzero on 12 nodes, 0 for all 797 sprites | High |
+| +0x2B | u8 | Node kind (see below) | counted |
+| +0x2C | u8 | Condition mode (Section 9b; drawing rules in Section 12) | not counted; meaning High |
+| +0x2D | u8 | Absolute flag: nonzero means the parent transform is discarded and the node is placed from the canvas origin (31 nodes) | High |
+| +0x2E | u8 | Horizontal alignment: 0 left edge, 1 centre, 2 right edge (1,119, 207 and 40 nodes) | High |
+| +0x2F | u8 | Argument passed to the node's predicate | High; values not counted |
+| +0x30 | u8 | Hide flag: nonzero hides the node (0 on every node on disc; set at run time) | High |
+| +0x31 | u8 | Animation active flag: set when a trigger starts the node's colour animations, cleared when the colour track ends (Text node draw, section 12) | Medium |
+| +0x32 to +0x33 | 2 | Not confirmed | - |
+
+Node types on disc:
+
+| Type | Count | Use |
+| --- | --- | --- |
+| 0 | 117 | Container (all 117 are top-level roots) |
+| 1 | 797 | Sprite (data is an E record) |
+| 2 | 112 | Text (label, bound by G) |
+| 3 | 7 | Page root (listed in H) |
+| 4 | 30 | Clip or group with an extent. Not decoded. |
+| 5 | 251 | Group |
+| 6 | 52 | Value text: shows a game variable (data is a K record; see Section K) |
+
+The tree: 117 top-level containers have no parent. Every one of the 1,366 nodes is reachable from them by following child and sibling links. Siblings form a chain under each parent.
+
+Sprite sizes on disc: the most common width is 32 (328 sprites) and the most common height is 32 (341). Some sprites are canvas-sized: 102 sprites have width 512 and 101 have height 448. A few values read as negative when treated as signed (for example 65526 is -10), so the size may be used as a signed value in some cases (Low).
+
+Position and scale of the page roots: pages 14, 759, 774, 794, 824, 858 and 896 are at (470, 80), (256, 310), (256, 178), (312, 188), (256, 203), (190, 93) and (0, 0), each with scale 4096 (1.0) and alignment 0. Their row-spacing bytes are 35, 31, 42, 44, 44, 24 and 0.
+
+**Node transform** (High). A node is placed as follows, starting from its parent's transform:
+1. Unless the node's absolute flag (+0x2D) is nonzero, start from the parent's transform; otherwise start from the canvas origin (the parent transform is discarded).
+2. Translate by (x, y) = (+0x14, +0x16).
+3. Row spacing: add s x n to y, where s is the parent's row-spacing byte (+0x2A) and n is 0 for the parent's first child, and otherwise the number of visible siblings from the second child up to and including this node.
+4. Alignment (+0x2E): 0, x is the left edge; 1, x is the centre (subtract width x scaleX / 4096 / 2 from x); 2, x is the right edge.
+5. After the translation, the node's scale (+0x18, +0x1A, 4.12) multiplies everything drawn under the node, about the node's own origin.
+A node whose hide byte (+0x30) is nonzero is not drawn. The pivot words +0x1C and +0x1E play no part.
+
+Scale values seen: 4096 (1.0) on 1,247 nodes, 16384 (4.0), 0, 2949, 4915, 5324, 5529, 3686, and others. Scale is always used as a 4.12 fixed-point value.
+
+### Section K: records (52 x 20)
+
+Each record is five u32 words. The records match the 52 type-6 nodes of section J, in order. A type-6 node is a value-text node: it draws the current value of a game variable as text (High).
+
+- Word 0 (+0x00): payload offset of a type-6 node. Each such node's first word points back to its record (52 of 52; High). This is the only word of the record that is relocated at load (the base is added when it is not zero; see Load-time relocation).
+- Word 1 (+0x04): an RGBA colour. The neutral value 0x80808080 is used in 49 records, 0x80669CA4 in 2 records and 0x80027070 in 1 (High for values). It is the text colour, bytes R, G, B and A at +0x04 to +0x07. Each byte is multiplied by the node's tint factor (1.0, or a colour-track byte / 128) and rounded half away from zero (High).
+- +0x08 (u16): variable index, 0 to 17 on disc (3 in 28 records). It indexes the boot program's table at data address 0x2DD200 (table C), whose entries point at the game words shown (High).
+- +0x0A (u16): font id: 0 (6 records), 1 (44) or 2 (2) (High).
+- +0x0C (s16): -3 (34 records), -2 (5 records) or 0 (13 records). It is the letter spacing, passed to the layout and the line draw as the Section G spacing word is (High).
+- +0x0E (u8): 2 to 10 on disc (3 in 34 records). It is a draw gate: 0 draws nothing; any other value draws. No other use of its size is known (High for the gate; Open question 133 resolved).
+- +0x0F (u8): format: 0 = the variable is a string (9 records), 1 = a decimal integer (42 records), 3 = a time shown as M:SS:CC (minutes, seconds, hundredths; 1 record), or as HH:MM when byte +0x10 is 2 (High).
+- +0x10: zero in all 52 records, so the HH:MM variant is not used on disc.
+
+The colour word (+0x04) and +0x0C are described above. The value text is drawn only when the font id (+0x0A) is 0 or more and the font is loaded, and byte +0x0E is not 0. Format 2 (a number with the digit setting of +0x10) exists in the draw but no record uses it. Test vector: colour 0x80669CA4 (bytes A4, 9C, 66, 80) with tint 1.0 draws R 164, G 156, B 102, A 128; under a tint of 0.5 it draws 82, 78, 51, 64.
+
+### Section M (14 x 112), N (20 x 32) and tail
+
+Confidence: High for the layouts and counts; Medium-High for the reach statements.
+
+Section M: 14 UI animation tracks of 112 bytes (1,568 bytes; count at header +0x48). Four of the words are relocated at load time (see Load-time relocation).
+
+| Offset | Meaning |
+| --- | --- |
+| +0x00 | Kind: 1, 2 (scale) or 3 (colour) |
+| +0x04 | Repeat count |
+| +0x08 | Remaining repeats (run time) |
+| +0x0C, +0x10 | t0 and t1, floats in seconds (the track's time window) |
+| +0x14 | Start value: a float for scale; four bytes (+0x14 to +0x17) for colour |
+| +0x18 | End value: a float for scale; four bytes (+0x18 to +0x1B) for colour |
+| +0x58 | Next sibling track |
+| +0x60 | Self |
+| +0x64 | First child track (a child runs after its parent's window) |
+
+- On disc: records 0 to 3 are one chain of scale steps, 1.0 -> 0.85 -> 0.95 -> 0.90 -> 1.0, 1 s per step. Records 4 to 7 are a chain of 0.25 s scale steps (1.0 -> 1.2, 1.1 -> 1.0, 1.0 -> 1.1, 1.1 -> 1.0). Records 8 to 11 are a chain of 1 s scale steps, 1.0 -> 1.15 -> 1.05 -> 1.10 -> 1.0. Records 12 and 13 are the only colour tracks (alpha 128 -> 0 over 10 s, and 0 -> 128 over 30 s). No kind-1 track is on disc.
+- Colour tracks are the byte tween of section 17.5. No animation slot reaches records 12 or 13, so colour tracks never run in the shipped game.
+
+Section N: 20 animation slots of 32 bytes (640 bytes). The count is the header word at +0x4C (20). The header word at +0x3C (585) is not N's count.
+
+| Offset | Meaning |
+| --- | --- |
+| +0x00 | Trigger bit (the key-mask bit number, section 9b) |
+| +0x04 | End handler: a table B index, -1 for none |
+| +0x08 | Track (section M) |
+| +0x0C | Repeat count (-1 = forever) |
+| +0x10 | Remaining repeats (run time) |
+| +0x14 | Next slot |
+| +0x18 | Start time, float seconds (run time) |
+| +0x1C | Active byte (run time) |
+
+- A node's +0x10 word points at its first slot. 20 nodes have one: 18 sprites with trigger bit 0 and repeat count -1 (track 0 for HUD nodes 342, 352, 361 and 373; track 8 for nodes 428 to 454), and nodes 560 and 566 (keys 0x3C and 0x3E) with bit 4, repeat count 0 and track 0.
+- When a slot's run ends: if remaining - 1 is below 1 and remaining is not -1, the slot stops; otherwise it restarts at the current clock (remaining is lowered by 1 when it is above 0). In both cases the end handler is called when it is 0 or more.
+
+Tail: the font table, 3 font descriptors of 272 bytes followed by 282 glyph records of 18 bytes (5,892 bytes; count at header +0x44 = 3). The font format is in SPEC-0022 (Fonts).
+
+### Section O: asset paths (345 x 136)
+
+Each record: an 8-byte texture word (+0x00 to +0x07, below), a u32 kind word at +0x08, a u32 word at +0x0C, then a 120-byte NUL-padded name starting at +0x10. The names are developer paths for art files. The clean side does not need them and this spec does not copy them.
+
+- Sheet assets (kind word 2), bytes +0x00 to +0x07 (High, all 244 records): a 64-bit GS texture register value (the standard TEX0 layout). Its texture base pointers lie in 0x2A00 to 0x31CA, its buffer width is 8 (in units of 64 pixels), its pixel format is 8-bit indexed on 207 records and 4-bit indexed on 37, and it holds the texture width and height (as powers of two) and the palette base pointer. The texture is the sub-entry of resource 532's texture chunk whose base pointer and pixel format equal the record's; the palette is the 32-bit sub-entry whose base pointer equals the record's palette pointer. All 244 sheet records resolve this way.
+- Kind word +0x08: 2 on 244 records (sheet assets). -1 (0xFFFFFFFF) on 101 records: a full-screen picture that is not loaded yet. At run time, when the picture is loaded, the word is overwritten with a reference to the buffer that holds it (Behavior 1a).
+- Word +0x0C on a picture record: the picture number v, 2 to 102. Each value occurs once, so the 101 picture records cover resources 577 to 677 one to one (picture resource = 575 + v). Its meaning on the other records is not decoded.
+- A picture record is used only as the asset of the first child sprite of a section D record's top node. Exactly one sprite uses each picture record, except the LoadGame picture (resource 590), which two sprites use (records 15 and 17).
+
+Confidence: High (all 345 records checked).
+
+### Texture chunk (type 4)
+
+The 539,140-byte texture chunk holds the front-end sprite sheet. Its layout is the generic texture layout used by the other packs and is not described here. Its pixel block is uploaded to GS block 0x2A00 as one 256 x 511 image of 32-bit pixels; the section O texture words address the sub-textures and palettes inside that upload (High).
+
+### Options menu and option block (32 bytes, part of each save)
+
+The Options menu has three pages:
+- Controls: Vibration, Invert Left-Right and Invert Up-Down. Each is a toggle shown as On or Off.
+- Audio: Music, Sound effects and Voice. Each is a slider from 0 to 100.
+- Credits.
+
+These seven entries are the whole shipped option set. There is no camera option beyond the two invert toggles (they flip the right-stick bytes, which drive the camera's yaw and elevation; SPEC-0027), no subtitle option, no text-speed option, no sound-mode option, no screen-position or screen-adjust option and no widescreen option. None of the camera, subtitle, sound-mode or screen-adjust words appears in the front-end text, and no page or handler uses them (High). The widescreen flag (SPEC-0027) has a setter, but nothing calls that setter and no code-pointer table holds it, so 16:9 cannot be reached in the shipped game (Medium-High).
+
+The options live in one 32-byte block. The block is copied into every save slot (Save and load), so its layout matters for save compatibility.
+
+| Offset | Type | Use | Default | Confidence |
+| --- | --- | --- | --- | --- |
+| +0x00 | u32, 0 or 1 | Invert Left-Right | 0 | High (store and effect) |
+| +0x04 | u32, 0 or 1 | Invert Up-Down | 0 | High (store and effect) |
+| +0x08 | u32, 0 or 1 | Vibration | 1 | High (store) |
+| +0x0C | u32, 0 to 2 | Unlabelled three-value cycler; no menu row | 1 | High (rule); Low (meaning) |
+| +0x10 | u32, 0 or 1 | Unlabelled toggle; no menu row | 0 | High (rule); Low (meaning) |
+| +0x14 | float, 0 to 100 | Music | 75.0 | High |
+| +0x18 | float, 0 to 100 | Sound effects | 75.0 | High |
+| +0x1C | float, 0 to 100 | Voice | 75.0 | High |
+
+Bytes +0x0C and +0x10 are kept and saved with the block, but no menu shows them (Open question 91).
+
+Defaults: the live option block is set to the values above once at boot, by the start-up table walk (entry 2, see SPEC-0026), before the first vibration sync and before the front end runs. The save slots' option blocks do not keep these defaults. Each slot's block is zero after start-up: the defaults are written into it first, and the empty-slot fill then zeroes the whole slot (Open question 87, resolved). Only the live block keeps the defaults.
+
+Gains at start-up (High): writing the defaults does not run the apply rule (Behavior 3), and neither does a new game. The three gains (Music, Sound effects, Voice) are created at 1.0 when the audio settings are first set up, and they stay at 1.0 until the first apply. So from a fresh boot the game plays music, sound effects and voice at full gain, even though the sliders show 75. The first apply happens the first time the Audio page's Music row runs, the first time an invert row on the Controls page runs (while it has focus), or at a slot load, whichever comes first. With the default values it sets all three gains to 0.75. Opening the Audio page and leaving it without touching anything therefore lowers all three gains from 1.0 to 0.75. Reproduce this.
+
+Vibration and the pad: the pad's rumble gate is written only by the display sync. The sync runs once at boot and again on every pass of the frame loop (SPEC-0033). A Vibration change in the menu, or a load from a save slot, is therefore seen by the gate within one pass (High; Open question 88, resolved). A load copies the slot's option block into the live block, so the loaded Vibration value reaches the gate on the next pass. Rumble works from the first boot with the default option. Only pad 0 can rumble (Medium-High). On a pass where the game status is 9, the gate is forced to 0 (SPEC-0033). The defaults are written before the first sync (Open question 92, resolved).
+
+## Behavior
+
+### 1. Per-frame flow (one call per game tick, 60 Hz)
+
+1. Increment a frame counter. If no root screen is set, stop.
+2. If a hold counter is above 0, decrement it and stop. The counter counts ticks. Nothing sets it in the shipped game, so this step never stops a pass (High).
+3. If the texture upload for the front end is not ready, stop until it is.
+4. Run one front-end pass (Behavior 1b): first draw the current page tree on the 512 x 448 canvas (section 10), and only then run the screen state, run the focused item's focus state, run the generic menu step, and resolve the result. Two handler tables are used: table A holds 74 node predicates (the count is Medium, inferred from the spacing to table B), indexed by a node's handler index (the signed 16-bit field at +0x24 of the J node; see section 9c), and table B holds 31 screen states, indexed by the +0x0A field of the screen's record (section D) or by the +0x06 field of the focused item's section I record. Table A sits directly before table B (see Where it lives on the disc).
+5. Return values (High; one convention for every table B state, screen state or focus state): 0 means no decision, so the generic menu step of Behavior 1b runs; -4 means no decision, and the generic Cross and Triangle are not applied this pass (the generic focus moves still run); -1 means back (section 9, Back rule); a section D record (section D start plus a state code) means go to that record. The front end also understands -3 (stay, skip the generic step) and -2 (clear the current screen, so the front end stops running and drawing until a screen is set), but no state returns them; they come only out of the generic step. The list of section 17.1 (-3 no change, -2 close, -1 pop, other = go) is the same scheme after the generic step has run.
+6. When the screen changes, run the enter and leave callbacks of the old and new screens. Entering a screen also starts the load of its full-screen picture, if it has one (Behavior 1a).
+
+### 1b. One front-end pass and the generic menu step
+
+Confidence: High.
+
+Each pass runs these steps in order:
+1. Input block. While the block flag is set (the pause page sets it while its quit box is open), the menu words given to focus states and to the generic step are zero for this pass. The screen state still gets the real words.
+2. Draw the current record's page tree, with the focused flag of section 9d. The draw comes before the screen state of step 3 in the same pass (Medium-High).
+3. Run the screen state (record +0x0A, table B) with the focus index (record +0x0C), the screen's pass count (record +0x0E), the record and the input.
+4. Find the focused item: the focus index counts the page's kind-4 items in sibling order from 0. If that item's predicate fails, refocus to the first passing item.
+5. If the screen state returned 0 or -4, run the focused item's focus state (section I +0x06, table B) with the same arguments. Its return value replaces the result.
+6. If the focused item changed, run the leave key mask (bit 3) of the old item and the enter key mask (bit 3) of the new one (section 9b, Key masks).
+7. Generic step. It runs only when the result is still 0 (or -4, which allows the focus moves only) and the screen's pass count is 2 or more, so it is off for the first two passes of every screen (about 33 ms). It reads the menu rising-edge word (section 4) and takes the first rule that applies:
+   - Cross (0x0040): take the focused item's target (section I +0x04), if the item's own predicate passes. -3: nothing happens. -1: back. 0 or more: section D record N, if its node's predicate passes; if it fails, take the first item of that record's page and its target, and repeat. Any result other than -3 plays front-end sound slot 5.
+   - Triangle (0x0010), or a Cross target of -1: the back rule (section 9). It plays sound slot 6 for Triangle; for the Cross case slot 5 has already played.
+   - Otherwise one focus move (section 9d), tested in the order Down (0x4000), Up (0x1000), Right (0x2000), Left (0x8000). A move that succeeds plays sound slot 0, 1, 2 or 3 in that order.
+   With a -4 result only the focus moves run.
+8. Resolve the result. Stay (-3, or 0 after a generic step that did nothing): the pass count grows by 1, up to 9,999. -2: the current screen is cleared. -1: the stack is popped and the new top becomes current. A record: apply its stack rule (section 9), make it current, set its pass count to 0, start its picture load (Behavior 1a) and set its default focus (section 9d).
+
+One-pass lag (Medium-High). Because the tree is drawn before the screen state, the focus state and the generic step run, every change a state makes to node fields (widths, positions, colours, alpha, or the words a node predicate reads) reaches the screen on the next pass. So the in-play HUD (state 11, SPEC-0023) shows its bar widths, fades and placements one pass after it computes them. Text that a state draws itself during its own run (the HUD prompt captions and the price caption of section 15) appears in the same pass. A new screen resolved in step 8 is first drawn on the next pass.
+
+Front-end sound slots (High). Seven slots are filled once at start-up, on the menu sound bank: slots 0 to 4 play cue 0x9A (focus moves: Down, Up, Right, Left; slot 4 unused), slot 5 plays cue 0x98 (select) and slot 6 plays cue 0x99 (back). "Front-end menu sound N" in this spec means slot N. They play at the fixed volume of Behavior 3c.
+
+### 1a. Full-screen pictures (resources 577 to 677)
+
+Loading (High):
+1. At front-end set-up, two picture buffers of 267,776 bytes each are reserved. The base number 577 is stored with them.
+2. When a screen is entered, its node tree is searched children first. The search looks for the first sprite node (kind 1) whose asset record (section E +0x08, section O) has kind word -1, meaning a picture that is not loaded.
+3. The picture resource is 575 + v, where v is the record's +0x0C word (2 to 102). Its first 267,264 bytes are read into the free buffer. The two buffers alternate: each new picture load goes into the buffer the previous load did not use.
+4. The record's kind word is set to a reference to that buffer, so the picture counts as loaded and the sprite draws it. At the same moment, the asset record that last used that buffer (the picture from two loads ago) has its kind word set back to -1, so it counts as not loaded again and is read afresh the next time its screen is entered. A picture leaving the screen changes nothing. (High)
+5. Only one picture load runs at a time. A load starts only when no load is pending and the found record's kind word is still -1; otherwise the screen entry starts nothing.
+6. While a load is pending, each front-end pass ends before step 1 of Behavior 1b: nothing is drawn, and no screen state, focus state or generic step runs. When the read finishes, the next pass turns the buffer into a texture (when the read data is a texture block, header word +0x04 = 4), clears the pending state and runs normally. When no archive was given at front-end set-up, the read is skipped and the load counts as finished at once. (High)
+7. The read is an ordinary archive read of the picture resource. It plays no sound. Its completion only marks the read as finished.
+
+Picture of each screen record (section D record, resource, picture name in plain words). Confidence: High for the record-to-picture link (disc); the reach column is per row.
+
+| Record | Resource | Picture | Reach |
+| --- | --- | --- | --- |
+| 1 | 577 | Legal screen, 4:3 | Attract (state 1); after the logo page: 301 passes on the first visit since boot, 2 passes on later visits (High). |
+| 2 | 578 | Options background | Pause page; Select in play. |
+| 3, 4, 5 | 579, 580, 581 | Item screen pages Items, Charms (motes) and Quest items, named for Roberta | Item screen entry codes of group B (hero index 1, Roberta; section 14.4). High. |
+| 6, 7, 8 | 582, 583, 584 | The same three pages, named for Tormund | Item screen entry codes of group A (hero index not 1, Tor). High. |
+| 10 | 585 | Title (start screen) | Title; reached. |
+| 11, 12, 13 | 586, 587, 588 | Options, Vibration and Audio backgrounds | The Options, Controls and Audio pages themselves (records with no state); reached from the title and the pause page (High). |
+| 14 | 589 | Credits background | Credits; reached from the Options page's Credits item and by the in-play story-bit gate after the finale (High). |
+| 15 | 590 | Load game | Start-point chooser container; never entered (High, static census). |
+| 16 | 591 | Load or new game | Record with no state; never entered (High, static census). |
+| 17 | 590 | Load game (the same picture record as record 15) | Load prompt; reached. |
+| 18 | 592 | Save game (a byte copy of the load-game picture) | Save prompt; reached by Square at a save point (section 7.3). |
+| 22 | 593 | Quest states | Quest journal; View Quests, D-pad Right in play, and the L2/R2 page ring (section 14). |
+| 23 | 594 | Game over, 512 x 128 | Game-over page; reached on game over. It is the picture of the page's sprite record 526. |
+| 24, 26, 28 | 595, 597, 599 | Lead-in pages: Attack Maneuvers, Quick Inventory, Mote screen | Pages 2 to 4 of the lead-in sequence 27, 24, 26, 28 (state 27); never entered (High, static census). |
+| 25 | 596 | Coming Soon, 16:9 | Never entered (High, static census). |
+| 27 | 598 | Controls lead-in page | Page 1 of the lead-in sequence; never entered (High, static census). |
+| 30 | 600 | Neopets logo, 16:9 | Logo countdown, after every card-state visit and after the title's idle timeout. The logo is what the player sees there (High). |
+| 31 to 107 | 601 to 677 | 77 area maps | Map page of area k = record 31 + k; picture = 601 + k (SPEC-0051 section 1). |
+
+Records 0, 9 (in-game play), 19, 20 (book reader), 21 and 29 have no picture. Records 21 and 29 are never entered.
+
+Handler return values follow Behavior 1, step 5: a state returns 0 when it makes no decision (the generic step of Behavior 1b then runs), -4 to block the generic Cross and Triangle, -1 for back, or the section D start plus a state code N to go to record N / 20. Each N is written as a code in the entries below.
+
+### 2. Front-end state table (table B, 31 states)
+
+Each state is a handler called once per tick while its screen is active. The index is the +0x0A field of the screen's record (Behavior 1, step 4; section D). Confidence is given per entry. Entries marked "partly described" were not confirmed in full.
+
+| Index | Behaviour in words | Confidence |
+| --- | --- | --- |
+| 0 | Card state (record 0). Each pass it first runs the controller check (section 2b); while pad 0 is not usable it does nothing else, so the card job does not start. On the first visit in a session it sets text variable 0 to "1" (the MEMORY CARD slot) and text variable 1 to the free space the save needs, and starts the boot card check (SPEC-0025, Card jobs; no card: Retry / Continue; short of space: Retry / Continue). On every later pass it runs the message box and, when the card job is no longer busy, goes to code 0x258 (record 30, the logo countdown). There is no tick wait. The first-visit flag is written once and is never cleared, so a later visit lasts one pass. | High |
+| 1 | Attract (record 1, legal screen picture). First pass: selects controller port 1 as the menu input. The wait is 300 passes on the first attract entry since boot, and 1 pass on every other entry, including the entry after a game over; it counts only on passes where the controller check reports ready. When it ends: queue movie 0, then movie 86 (the title movie), reset the lead-in page counter to 0, and go to code 0x0C8 (record 10, the title). The page reads no input and Triangle is off, so it cannot be skipped. The game-flow spec gives the timings (SPEC-0026, Attract mode and title). | High |
+| 2 | View Map (focus state of the pause item View Map; section I). Runs the common overlay tick. On a Cross press (second input word, 0x0040) it sets the selected map area to the hero map area (SPEC-0051 section 1) and returns the code of that area's map page (base + 0x26C + 20 x area). If the hero map area is negative it stays. | High |
+| 3 | View Quests (focus state of the pause item View Quests). On a Cross press (second input word) it sets the selected map area to the hero map area and returns the journal code (base + 0x1B8, record 22). | High |
+| 4 | Load Game focus state (pause item Load Game). Each pass it resets the load picker stage, the slot cursor and the message box, and returns 0, so the generic Cross opens the item's target, record 17 (the load prompt), with cue 0x98. It does not end the screen. | High |
+| 5 | Resume Game (focus state of the pause item Resume Game). Each pass it sets the pause music level and closes the stream gate (Behavior 3b). On a Cross press it plays cue 0x95 and returns code 0x0B4 (play). | High |
+| 6 | Quit (focus state of the pause item Quit). On a Cross press it plays cue 0x9A and sets the pause-box flag to 1, which opens the quit box; the box is then run by state 7. It returns 0. Load Game, Resume Game and Options open no box. | High |
+| 7 | Pause page (record 2, node 12, root 14). Each pass it sets the pause music level and closes the stream gate (Behavior 3b). Select, while its box is closed, plays cue 0x95 and returns code 0x0B4. The quit box is record 26 of the system message table (design table 9 of resource 533; SPEC-0022), a quit confirmation whose first label is "Quit" (the Circle answer) and whose second is "Resume" (the Triangle answer). Circle: cue 0x98, the world is torn down and the page returns code 0x000. Triangle: cue 0x99, the box closes and the pause page stays. While the box is open the page sets the input block (Behavior 1b, step 1), so Triangle answers the box and does not leave the page, and the focus states and the generic step see no input. Section 6 and section 13.1. | High |
+| 8 | Item screen, Items tab (records 3 and 6; 20 cells in four rows of five). Draws the cells, handles cursor movement, Cross (use), Circle (quick-item marker), Square (Tattered Cloak on or off), L1/R1 (tab), L2/R2 (page ring) and Triangle or Start (close). Section 14. | High |
+| 9 | Item screen, Charms tab (records 4 and 7). It runs the Mote picker of the in-play second quick panel (SPEC-0021, Second quick panel and Mote equipping): directions from the menu rising-edge word, buttons from the second input word. Cross equips the selection into equipment word 0, Square into word 1 (when the shield family is present) and Circle into word 2 (when the weapon family is present). It also runs the item-screen step (section 14.2). It stays only while the tab is 1; otherwise it returns the tab dispatch code (section 14.1). | High |
+| 10 | Item screen, Quest-items tab (records 5 and 8): the owned category-7 records, scanning up to 60 entries from a scroll offset and showing at most 20 cells. Cross and Circle run the usability test (the entry exists, has an item-state record, and its category is not 7). Every entry of this tab is category 7, so both always play cue 0xA2 (section 14). | High |
+| 11 | In-game play: draws the HUD (record 9's tree, SPEC-0023), runs the play gates, opens the menu, and shows the quick-slot item counts. It does not re-arm the HUD timers on each call (Behavior 6). | High |
+| 12 | Title. Every pass it sets the game-state word +0x68 to 1 if it is 0. Pass 0: idle counter 0, stream gate closed. Pass 1 on: a pass whose rising-edge word (+0x89C) is 0 adds 1 to the idle counter, any other pass sets it to 0; when it exceeds 30 x 60 = 1,800 (data word 0x2DCE38 times the tick rate) it returns code 0x258 (the logo countdown), so with no input it leaves on pass 1,801. A held button does not reset the count; only new presses do. New game: focus 0 (New Game), page pass 5 or more and Cross (0x0040) newly pressed: reset the world (all flags cleared), cue 0x9A, clear both start-point overrides, select the start hero, set flag 707, load packs 691 and 909, clear the four music overrides and return code 0x0B4 (play). Every other pass: set the music bank override to 25 (bank resource 35), run the controller check and return 0, so the generic Cross runs Load Game and Options (records 17 and 11, cue 0x98) from pass 2. There is no "press start": Start does nothing and Triangle is off (back rule -2). | High |
+| 13 | Vibration toggle: changes the Vibration word (+0x08) once per press and does not run the apply rule (Behavior 3). | High |
+| 14 | Invert toggle: it receives the focus index. On a press it toggles +0x00 when the focus index is 1 (Invert Left-Right) and +0x04 for any other index (Invert Up-Down, index 2). It runs the apply rule on every pass, pressed or not (Behavior 3). | High |
+| 15 | Music volume slider (Behavior 3). | High |
+| 16 | Sound effects volume slider (Behavior 3). | High |
+| 17 | Voice volume slider (Behavior 3). | High |
+| 18 | Credits roll (record 14). On its first pass it turns the stream updates off (Behavior 3b). On every pass it sets the music bank override to 8, which is bank resource 18 (SPEC-0009, Overrides), then runs the controller check; while that reports not ready the roll is not drawn and does not move. The rows of design table 15 scroll up from y = 449 at a speed that eases between 1.0 and 1.5 pixels per pass; the full roll lasts 14,123 passes (235.4 s). The roll rule, its data words and its timing are in SPEC-0026 (Credits). From the Options page the credits are left by Triangle (generic back, cue 0x99) or, when the scroll ends, by -1 (back to Options, no cue). When entered by the in-play story-bit gate, any button press returns -4 (Cross and Triangle ignored), and the end of the scroll tears the world down (code 0x000). | High |
+| 19 | New game and start-point confirm: sets stage ids, plays cue 0x9A, loads the world (Behavior 5). | High |
+| 20 | Focus state of the three slot items of page 896 (never entered): Cross plays cue 0x9A and returns 0x154 (record 17, the load prompt). | High |
+| 21 | Load game (record 17, code 0x154): stage 0 starts the card read and stage 1 runs the card box; both return -4, so Triangle does nothing. When the card job ends with a cancel answer in the box, or with no save data, it returns -1 (back to the screen below, no cue). Stage 2 shows the picker and returns 0, so Triangle leaves by the back rule to the pause page or the title (cue 0x99). Cross loads the chosen slot and returns 0x0B4 (Behavior 7.2). | High |
+| 22 | Save game (record 18, entered by a direct screen set from a save point, not by a code): holds the hero idle, card scan, slot picker, Cross writes, Triangle in the picker plays sound slot 6 (cue 0x99), cancels and returns code 0x0B4; a nonzero card state word after the write goes back to the card scan and the picker (Behavior 7.3). | High |
+| 23 | Box host (record 19, node 924). Entered with code 0x17C while the overlay box is busy. It fades out on entry and runs the box each pass, and it draws the price caption every pass (section 15.2). When the box is idle it plays cue 0x97, fades back in, and returns code 0x0B4. | Medium-High (High for the caption draw) |
+| 24 | Book reader (record 20, node 930; section 6.1). Entered with code 0x190 while the book cursor or the saved book word is 0 or more. It shows the book at the cursor index minus 1. Cross plays cue 0x9A, sets the cursor to -1, unloads the book, and returns code 0x0B4. With no valid index it sets the cursor to -1, clears the four music overrides and returns code 0x0B4 with no cue. | High (flow and exit); Medium-High (node identity) |
+| 25 | Quest journal (record 22): builds the journal rows (accepted quest rows, then held treasures), moves the cursor and the scroll, opens a row's map on Cross, and runs the L2/R2 page ring. Section 14.3. | High |
+| 26 | Game-over page (record 23, node 973). It shows only the caption "Continue" and two sprites with no animation frames, and offers no choice. On its first pass it runs the same HUD and menu reset as the pause and item-screen openers (SPEC-0023 section 4.1): every HUD visibility timer, the quick-panel flags, the Square prompt count, the countdown counter and the monster bar timer go to 0, so the HUD is not drawn when play resumes after Continue until a re-arm. One sprite (record 526) shows the 512 x 128 game-over picture, resource 594 (Behavior 1a). The other (record 527) is the small Cross button icon (asset "x_sm") beside the "Continue" caption, shown once predicate slot 72 passes (page pass count above twice the tick rate, about 2 s). Only Cross is read. The page counts its passes whether or not a button is down, and the count does not restart when Cross is released. The count is set to 0 on the pass that hands over to the page, one pass before page pass 1. The page exits on the first page pass numbered 122 or later on which Cross is newly pressed (up on the pass before, down on the current pass). A press made earlier and still held does not exit. Page pass 122 is about 2.03 s at 60 passes per second. On exit, the game-over flag is cleared. If the pending flag is set (a slot was confirmed in the save or load picker earlier in the session, section 7.3), the game re-applies the session snapshot from memory with no card access, resets the heroes, clears the music overrides and goes to code 0x0B4 with no teardown, so Continue resumes from the last save or load. Otherwise the world is torn down and the front end goes to code 0x000. See SPEC-0055 for the timing and test vectors. | Medium-High (exit rule); High (sprite content) |
+| 27 | Lead-in page stepper (records 27, 24, 26 and 28: Controls, Attack Maneuvers, Quick Inventory, Mote screen). Any newly pressed button from page pass 11 turns the page; the fourth press clears the music overrides and enters play (code 0x0B4). Section 5 gives the full rule. No route enters these records, so the pages are never shown (Behavior 2, census). | High (mechanism and reach); Medium (that the pages were cut) |
+| 28 | Fade step: each tick lowers the Music and Sound effects gains by 0.05, clamped to 0 to 1. It does not change the option block, so the next apply rule or a load restores the gains. | High |
+| 29 | Logo countdown (record 30, node 1199). It shows the record's full-screen picture, the Neopets logo (resource 600). On its first pass (pass 0) it selects controller port 1 as the only menu input source (input mask = pad 0, then the merged menu words are rebuilt; this draws nothing) and loads the countdown with 300. Each later pass k sets the countdown to 300 - k, and the screen leaves to code 0x014 (attract) on pass 300, so the page lasts 301 passes (5.02 s at 60 passes per second). No input is read, the page has no items and Triangle is off, so the logo cannot be skipped. It writes no music override (Behavior 3a). | High |
+| 30 | Map page (records 31 to 107): one area's picture (resource 570 + record, which is 601 + area), its quest and treasure icons, the cursor, the hero marker, and the exits (Select to play, Cross or R2 to the journal, L2 to the item screen). Specified in SPEC-0051; summary in section 14.4. | High |
+
+State return census (High). Every value each state can return; "0" means the generic step runs. Cues are in brackets.
+
+| State | Returns |
+| --- | --- |
+| 0 card | 0; 0x258 when the card box is idle |
+| 1 attract | 0; 0x0C8 after the wait |
+| 2 View Map (focus) | 0; the map page code on Cross when the hero map area is 0 or more (no cue) |
+| 3 View Quests (focus) | 0; 0x1B8 on Cross (no cue) |
+| 4 Load Game (focus) | 0 |
+| 5 Resume Game (focus) | 0; 0x0B4 on Cross (0x95) |
+| 6 Quit (focus) | 0 (opens the box, 0x9A) |
+| 7 pause page | 0; 0x0B4 on Select (0x95); 0x000 after Quit in the box |
+| 8, 9, 10 item tabs | 0; 0x0B4 (Triangle or Start, 0x95); the tab codes; 0x1B8; a map code |
+| 11 play | 0; 0x118, 0x190, 0x1CC (the gates); 0x028; a tab code; 0x1B8; a map code; 0x17C |
+| 12 title | 0; 0x258 after 30 s with no press; 0x0B4 (new game) |
+| 13 to 17 option rows (focus) | 0 |
+| 18 credits | 0; -4; 0x000; -1 |
+| 19 start point (focus) | 0; 0x0B4 |
+| 20 slot item (focus) | 0; 0x154 |
+| 21 load | -4; -1; 0; 0x0B4 |
+| 22 save | 0; 0x0B4 |
+| 23 box host | 0; 0x0B4 (0x97) |
+| 24 book | 0; 0x0B4 (0x9A) |
+| 25 journal | 0; a map code; a tab code |
+| 26 game over | 0; 0x0B4; 0x000 |
+| 27 stepper | 0; 0x1E0, 0x208, 0x230, 0x0B4 |
+| 28 fade | 0 |
+| 29 countdown | 0; 0x014 |
+| 30 map | 0; 0x0B4; 0x1B8; a tab code |
+
+Reach (High, static). Following these returns, the section I targets, the back rule and the two direct screen sets (record 0 at start-up and record 18 at a save point), records 15, 16, 21 and 24 to 29 are never entered. So states 27 and 28 never run, the start-point chooser (page 858) and the slot chooser (page 896) are never shown, and focus states 19 and 20 never run.
+
+### 2a. Which screens freeze the world (Confidence: High unless marked)
+
+The world update is gated by the play-active word, game-state word +0x04 (game globals at data address 0x35C980; SPEC-0026, Pause and freezing screens). The main loop clears it on every pass just before the front end runs. Only three table-B states set it back to 1 while they run:
+
+- state 11 (in-game play), on every pass it gets past its credits, book-reader and game-over gates (section 6);
+- state 23 (box host), which also sets the word +0x20, so the game-state code is 4 and the world, the AI and the level scripts keep running while a dialogue box is up; the level script's button query returns false meanwhile;
+- state 27 (lead-in page stepper), on page passes 3 to 7 of each page (its record's pass counter +0x0E is 3 to 7); the stepper never runs in the shipped game (section 5).
+
+Every other state leaves the word at 0, so the next pass's game-state code is 9 and the world is frozen from the pass after the screen first runs. These screens therefore freeze the world: the pause page and its focus states, the item screens (states 8 to 10), the map (state 30), the quest journal (state 25), the options rows and sliders, the load and save pickers (states 21 and 22), the quit box, the book reader (state 24, which sets only the word +0x20), the credits (state 18) and the game-over page (state 26). While frozen, the front end itself, the screen fade, the sound cues and the music (with the pause music level of Behavior 3b), the card step and the memory-card tasks keep running.
+
+Timing (Medium-High; it rests on the page switch taking effect one pass after the return code). A screen opened by a return code on pass N runs from pass N+1, and the world is frozen from pass N+2. On the way back, the pass on which the screen returns the play code is followed by one more frozen pass while state 11 runs again. A screen set directly from the world update (the save screen of section 7.3) runs in the same pass as the Square press, so the world is frozen from the next pass.
+
+Table A (74 predicate slots, indexed by a node's handler index) is described in section 9c. All 74 slots are described there; the few with Low confidence are listed in Open question 85.
+
+### 2b. Controller check (Confidence: High)
+
+One check is run each pass by the card state (0), the attract (1), the pause page (7), the title (12), the three Audio rows (15, 16 and 17), the credits (18), the start-point state (19), the quest journal (25) and the lead-in page stepper (27). The check plays no cue. If pad slot 0 is usable (the pad-usable test of SPEC-0033) it reports ready. Otherwise it opens a message box with design table 9 record 25 (the message that the analog controller is not detected; no answers; SPEC-0022), updates that box, and reports not ready. Effects of "not ready": the card state does nothing (the card job does not start); the attract wait does not count; the credits roll is not drawn and does not move. The title does not stop its idle count for it. In play the same test opens the pause page (the pad-not-usable auto-pause of section 6).
+
+The logo countdown (29), the attract (1) and the page stepper (27) also select controller port 1 (pad 0) as the only menu input source on their first pass, and the merged menu words are rebuilt from it (SPEC-0033 Controller map).
+
+### 3. Options: toggles, volume sliders and the apply rule
+
+Confidence for the whole section: High on the block layout, on the toggle, cycler, slider and apply rules, and on which Controls row toggles which invert word.
+
+Toggles (options 0 to 2, and the unlabelled toggle at +0x10):
+- Each press of Left or Right on a toggle changes it once: new = (old != 1). So 1 becomes 0, and any other stored value becomes 1.
+- On the Controls page, a toggle shows its first value node when the stored value is nonzero (mode 2), and its second when it is zero (mode 3) (predicate slots 66 to 68, section 9c; High). The Vibration row's value texts are On and Off; the two invert rows' value texts are Yes and No (High). Test vector: Invert Up-Down word 1 shows Yes; 0 shows No; Vibration word 0 shows Off.
+- Vibration: the Vibration row reads the vibration word (option +0x08), and its toggle is table B state 13. The Vibration toggle does not run the apply rule. Its effect on the pad is given in SPEC-0033, and it reaches the pad on the next pass of the frame loop (see Options, Defaults).
+- Invert: the invert toggle (table B state 14) receives the page's focus index, not the node argument. Controls row 1 (Invert Left-Right) toggles +0x00 and row 2 (Invert Up-Down) toggles +0x04. The Yes and No displays read +0x00 through predicate slot 67 and +0x04 through slot 68, which matches.
+
+Cycler (option +0x0C, no menu row):
+- A press of Left sets the value to 2 if it is below 1, and to value minus 1 otherwise.
+- A press of Right sets the value to (value + 1) mod 3.
+- The two steps run in that order when both are pressed on the same tick.
+
+Volume sliders (Music, Sound effects, Voice):
+- While the slider is focused, a held Right adds 1.0 per tick, and a held Left subtracts 1.0 per tick. If both are held, only the Right step applies. The value is clamped to 0 to 100. Sliders act on held input; toggles and the cycler act once per press.
+- One-time knob set-up: a page flag (data word 0x2DCF80, 1 on disc) makes the first pass of the Music row also run the Sound-effects and Voice rows once with no input, so all three knobs are placed. The flag is then cleared and is not set again in the session. Until the first apply the knobs stay at the x positions stored in the page data (those positions are not given here; Open question 5a).
+- Each slider row runs the apply rule below on every pass that it runs, whether or not a button is held.
+
+When the apply rule runs (High): on every pass that the Music, Sound-effects or Voice slider row runs (held input or not), on every pass that an invert row runs (pressed or not), and after a slot load (SPEC-0025). Nothing else runs it: not start-up, not a new game, not the Vibration toggle, not the fade step (state 28). Until the first apply the three gains are 1.0 (see Options, Gains at start-up).
+
+Timing of the effect (High): the gains change on the pass the slider changes; the sound output follows on the next music-controller tick (SPEC-0009). Sounds already playing keep the volume they started with; only sounds started afterwards use a new Sound-effects or Voice gain. The bank music moves toward its new target by at most 15 per tick. The stream ceiling drops at once when it is lowered and rises by 1 per tick when it is raised. The invert flags written by the apply rule are used by the next pad read. Vibration is not part of the apply rule (SPEC-0033: the gate follows the option within one pass).
+
+Apply rule:
+1. Gains: each of the three volume values is multiplied by 0.01 and clamped to 0.0 to 1.0. The results are the Music, Sound effects and Voice gains. The Music gain multiplies the music row's Level, so it scales the bank music's target volume; the pause page also reads it (Behavior 3b). The Sound-effects gain sets the default cue volume, trunc(row Scale x gain), which every world sound played at "default volume" uses; it also scales the stereo streams' fade-in ceiling and the stingers (SPEC-0009, Volume and ramps, Streams and Effect and stinger index; SPEC-0031). The Voice gain has one reader only: the emote-clip player, which plays a clip at trunc(1024 x Voice gain) (SPEC-0009, Emote clip lookup). Hero and enemy vocal cues played through the normal cue call follow the Sound-effects gain, not Voice. Confidence High.
+2. Knobs: each slider's knob x-position = trunc(value x 1.29 + 2.0), written to the slider's knob element: 0xCE for Music, 0xCF for Sound effects and 0xD0 for Voice. Confidence High.
+3. Pad inversion: Invert Left-Right sets a flag that complements the first pad's right-stick X byte (255 minus the value). Invert Up-Down sets a flag that complements the right-stick Y byte. The left-stick bytes are never changed, so inversion does not affect locomotion. The flags are written to the first pad only; no other writer is known. Confidence High for the bytes and axes; Medium-High for the first-pad-only rule.
+
+Row draw order (High): the rows of each options page are drawn top to bottom in index order. Row n is at the page's y plus the row spacing times n:
+- Options page (y 178, spacing 42): Controls 178, Audio 220, Credits 262.
+- Controls page (y 188, spacing 44): Vibration 188, Invert Left-Right 232, Invert Up-Down 276.
+- Audio page (y 203, spacing 44): Music 203, Sound effects 247, Voice 291.
+
+Change feedback (High): option changes are silent. The helper that runs after a slider change is the controller check of section 2b, which plays no cue. Toggles and sliders play no cue, and Left or Right on a list page is not a focus move (section 4.1), so no front-end move sound plays either.
+
+### 3a. Music overrides cleared on return to play
+
+Confidence: High for the clears; Medium for the screen names.
+
+The four music overrides set by level scripts (bank, level, reverb type and reverb volume; SPEC-0009, Overrides) are all set to -1 at these exits:
+- the title start (state 12);
+- the page stepper's fourth press (state 27, the lead-in pages; never reached);
+- new game (state 19);
+- the save screen, both when it completes and when it is cancelled (state 22);
+- the book reader exit (state 24);
+- the game-over page, on the branch that re-applies the pending snapshot (state 26);
+- the map page exit to play (state 30);
+- the item screens' shared close (Start or Triangle; it plays cue 0x95), used by states 8, 9, 10 and 21;
+- the world (re)entry routine, the exit that restores the world at the last save area or at area 68;
+- every world activation (SPEC-0006).
+
+The pause page (state 7) and the Resume Game focus state (state 5) also clear a level-script bank override: on every pass they write all four overrides, bank -1, level trunc(400 x Music gain), reverb type -1 and reverb volume -1 (Behavior 3b). So a bank override set by a level script ends as soon as the pause page runs; after the pause the bank music follows the area's music row again.
+
+They are not cleared by: the logo countdown (state 29; it writes no override and leaves to the attract, not to play) or the box host (state 23), which returns to play with the overrides kept. Quit does not clear them itself; they are cleared only by the world activation that follows. Two screens set the bank override on every pass instead of clearing it: the title (state 12) sets 25 (bank resource 35) on every pass that does not start a game, and the credits (state 18) set 8 (bank resource 18). The value 8 left by the credits stays in force on the Options page until the title or another writer replaces it. Because the music controller ticks on these front-end passes once the title has been shown (SPEC-0009, Per-tick controller, Pass gate), the title's bank 35 and the credits' bank 18 are heard (High).
+
+A clean side should keep this list: a bank or level override set by a level script survives a dialogue box, and ends at a pause and at the exits listed above.
+
+### 3b. Pause music level and the stream gate
+
+Confidence: High for the values, the states and the writers; Medium-High for what the stream gate skips.
+
+While the pause page is up, the bank music plays at a fixed lower level. On every pass of table B state 5 (Resume Game focus) and state 7 (the pause page), the front end writes all four music overrides (SPEC-0009, Overrides): the one-tick level override = trunc(400 x Music gain), and -1 for the bank and both reverb overrides. Writing -1 to the bank override clears any bank override a level script set (Behavior 3a). Because the level override lasts one tick, it holds only while one of these two states runs; the next tick of play goes back to the row Level. With it the bank's target volume is V = trunc(400 x Music gain) in place of row Level x Music gain (SPEC-0009, Volume and ramps). No other front-end state sets a level override; the only other setter is the level-script call OverRideMidiSettings.
+
+The same two states also close the music controller's stream gate (the music object's stream-update flag) on every pass. While the gate is closed, the per-tick music controller skips its whole stereo-stream step (SPEC-0009, Streams): no stream fades in or out, and no stream is started or stopped. The bank music, the default cue volume and the reverb sends are still updated. The gate is opened on the first pass of in-game play (state 11), and closed at start-up (the flag starts at 0), on the first pass of the title (state 12), on the first pass of the credits scroll (state 18) and on every pass of states 5 and 7.
+
+The credits scroll (state 18) and the title (state 12) also set the music bank override on every pass (Behavior 3a) (High).
+
+Test vectors: Music gain 1.0 gives V = 400, sent to the driver as trunc(400 x 127 / 1024) = 49; Music gain 0.5 gives V = 200, sent as 24; Music gain 0 gives 0 (silent). Compare row Level 700 at gain 1.0, sent as 86. Music 75 (gain 0.75): level override trunc(0.75 x 400) = 300; while a stinger or an emote clip plays, the duck gives trunc(0.7 x 300) = 210.
+
+### 3c. Front-end sound volume
+
+Confidence: High.
+
+Menu sounds played from the front-end menu sound table ("front-end menu sound N" in this spec) are always played at the fixed volume 1024 (full). They do not follow the Sound-effects slider and still play when it is 0. Front-end cues that a screen plays directly through the normal cue call (for example 0x95 on Resume and on the item screens' close, 0x9A, and 0xA9 on save complete) use the default cue volume, trunc(row Scale x Sound-effects gain), so they follow the Sound-effects slider (SPEC-0031); once that default is 0 they are not played at all. The music controller and the per-pass voice update run on title and menu passes once the title has been shown (no movie playing, the title-start word set and the game-state code 9; SPEC-0009, Per-tick controller, Pass gate), so on the title, the options, the credits and the pause page these cues get trunc(row Scale x Sound-effects gain). Before the first title pass (the card check, the logo, the legal screens and the attract movies) neither runs, and the default cue volume is 1,024 (Open question 5b, resolved).
+
+### 4. Menu input (logical word)
+
+Each tick the menus read the combined snapshot of the controlling set, which is always pad slot 0 (SPEC-0033 Controller map). Navigation, Cross, Triangle, Start, Select, L1, R1, Circle and Square on the item screen, and the pickers, use its newly-pressed2 word (+0x89C, the rising-edge word, stick directions included); sliders use its held2 word (+0x898). The screen states read the bits below. Direction names (High): 0x1000 Up, 0x4000 Down, 0x8000 Left, 0x2000 Right, from the stick mapping (stick up adds 0x1000) and from the focus search (0x1000 prefers items above, 0x4000 items below, on the y-down canvas).
+
+| Bit | Role | Notes |
+| --- | --- | --- |
+| 0x1000 | Up | Save and load picker: previous slot. List menus: previous selectable item (section 4.1). Vertical analog bit (below threshold). |
+| 0x4000 | Down | Save and load picker: next slot. List menus: next selectable item (section 4.1). Vertical analog bit (above threshold). |
+| 0x8000 | Left | Slider decrease; toggles. Horizontal analog bit (below threshold). In play, D-pad Left (read from the second input word) opens the map of the hero's area (section 6). |
+| 0x2000 | Right | Slider increase; toggles. Horizontal analog bit (above threshold). In play, D-pad Right (read from the second input word) opens the journal (section 6). |
+| 0x0040 | Confirm (Cross) | Generic menus: opens the focused item's target (Behavior 1b, cue 0x98). Title start; confirm in save, load and new game; leaves the book reader (section 6.1). |
+| 0x0010 | Back (Triangle) | Generic menus: the back rule (section 9, cue 0x99). Save picker: returns to play without writing (section 7.3). Item screen: closes it (section 14.2). |
+| 0x0800 | Open in-game menu (Start) | In play. Plays cue 0x94 when the busy check is zero. |
+| 0x0100 | Open in-game menu (Select) | In play. Plays cue 0x94 when the busy check is zero. |
+| 0x0004 | Previous tab (L1) | Item screen only: moves to the previous tab, with wrap (Section 14). Plays cue 0x98. |
+| 0x0008 | Next tab (R1) | Item screen only: moves to the next tab, with wrap. Plays cue 0x99. |
+| 0x0020 | Quick-item marker (Circle) | Item screen, Items tab: sets or clears the active hero's quick-item selection marker (Section 14.2). Plays cue 0x9A. Charms tab: equips the selected Mote into equipment word 2. |
+| 0x0080 | Cloak swap (Square); book take on a rising edge | Item screen, Items tab only (Section 14). Plays cue 0xA1 when it runs. In play, with a pending book index, it takes the book (section 6.1; cue 0xAF). |
+| 0x0001 | L2 | Page ring: previous page (item screen -> journal -> map -> item screen; section 14). |
+| 0x0002 | R2 | Page ring: next page (item screen -> map -> journal -> item screen; section 14). |
+
+Second input word (High). Besides the main word above, the front end keeps a second input word (front-end input block +0x894). It is the snapshot's raw newly-pressed word (group 1): buttons only, without the stick-derived direction bits, and in the shipped game it is pad slot 0's word. Its bits are the same as the main word's (SPEC-0033): 0x0001 L2, 0x0002 R2, 0x0040 Cross, 0x0100 Select, 0x2000 D-pad Right, 0x8000 D-pad Left (and the other buttons at their main-word bits). So a stick push never sets a direction in the second word. Readers: the pause item states (Cross), the journal and the map (L2, R2), the in-play map and journal shortcuts (D-pad Left and Right), the page stepper (any bit) and Select on the pause page. The item screen reads L2 and R2 from the main word instead; because both words carry the same button bits, the result is the same.
+
+- Analog-to-digital: a left-stick vertical byte below 0x20 sets the Up bit, and above 0xE0 sets the Down bit. A left-stick horizontal byte below 0x20 sets the Left bit, and above 0xE0 sets the Right bit. The thresholds are strict (below 32, above 224), and the bits go into the group-2 words only (held2 and newly pressed2), never into the second input word. Outside analog mode no stick bits are added. High (SPEC-0033 Controller map).
+- Physical names: taken from the per-pad read of the raw packet (SPEC-0033, Layout). The bit positions are High; the names follow the standard controller layout (Medium-High). The roles of Start and Select as menu openers are Medium.
+- The two menu openers take different paths. Select opens the pause page (state 7, record 2). Start opens the item screen on its current tab, and the state returns one of six item-screen codes (0x3C, 0x50, 0x64, 0x78, 0x8C, 0xA0), chosen by the tab and by the active hero's index (Section 14.4). These codes are entry and tab-change codes, not exit codes. High on the codes and on the screens (records 3 to 8).
+
+#### 4.1 Menu cursor step (generic menus)
+
+Confidence: High.
+
+- The step takes a mode code and the menu's list of items. The mode codes are 0x4000 (Down) and 0x1000 (Up), the vertical direction bits of the rising-edge word (section 4). Down moves to the next selectable item and Up to the previous one. On a list page (section H byte +0x0A = 1) Left and Right give no move.
+- The generic menu step (Behavior 1b) tests Down, then Up, then Right, then Left; only the first set bit moves. A move that succeeds plays front-end sound slot 0 (Down) or 1 (Up), both cue 0x9A.
+- The selectable items are the kind-4 nodes (selectable page items, section 13.1) whose condition chain passes (section 9b). Items of other kinds, and items whose chain fails, are passed over.
+- The move wraps. From the last selectable item, the next move goes to the first; from the first, the previous move goes to the last.
+- The full focus rules (default focus, list and spatial pages, the focused draw flag) are in section 9d.
+
+Mode meaning: the menu driver uses 0x4000 (Down) and 0x1000 (Up) as the vertical direction bits. The Cross bit is 0x0040 (section 4), so 0x4000 is not a Cross code.
+
+### 5. New game and start points
+
+Confidence: High for the reset and load steps; Medium on the flag and cue table. The label of each index is not confirmed.
+
+When Cross is pressed on the new-game or start-point screen, with a start index from 0 to 8:
+1. Play cue 0x9A.
+2. Reset the world.
+3. Set the start marker to 0x2C3.
+4. Load the world from the chosen save slot (or, for index 0, with no slot).
+5. Reset the screen.
+
+Index 0 is the plain new game. It clears both chosen-slot values to none (-1) and sets no stage id.
+
+Indices 1 to 8 set stage ids and play one cue:
+
+| Index | Stage ids | Cue | Note |
+| --- | --- | --- | --- |
+| 1 | 0 | 0x97 | Also runs the one-time start routine with argument 1 |
+| 2 | 0, 1 | 0x40 | |
+| 3 | 0, 1, 2 | 0xB2 | |
+| 4 | 4 | 0x5A | |
+| 5 | 4, 5 | 0x5A | |
+| 6 | 0, 1, 3 | 0x85 | |
+| 7 | 0, 1, 3, 6 | 0x5A | |
+| 8 | 0, 1, 2, 7 | 0xB2 | |
+
+Start-point labels (Medium-High; the chooser page has these nine items, in the item order of its page):
+
+| Index (argument of the item) | Label on the chooser |
+| --- | --- |
+| 0 | Act 1 Start |
+| 1 | Act 2 Start |
+| 2 | Act 3 Start |
+| 3 | Act 4 Start |
+| 4 | Act 1 Squire Done |
+| 5 | Act 1 Chores Done |
+| 6 | Act 3 Middle |
+| 7 | Act 3 Entering Dungeons |
+| 8 | Act 4 Districts Done |
+
+The chooser is marked debug-only in the front-end text. Its container (page 858, under node 854) is not opened by any known screen push or root setting, and the handler of table B index 27 is attached only to four screens that nothing pushes (records 24, 26, 27 and 28). The container is the top node of section D record 15, which has no state and whose picture is the load-game picture (Behavior 1a). The chooser is never entered: the state return census (Behavior 2) shows that no state returns record 15, and no section I target, back rule or direct screen set reaches it (High, static; Open question 86, resolved).
+
+The title's New Game item does not use this chooser or the start-point state: the title itself runs the index-0 steps (reset the world, cue 0x9A, both chosen-slot values -1, start hero, flag 707, packs 691 and 909, music overrides cleared) and goes straight to play (Behavior 2, state 12).
+
+Lead-in page stepper (table B state 27; High for the mechanism). Records 27, 24, 26 and 28 are four lead-in pages with the Controls, Attack Maneuvers, Quick Inventory and Mote screen pictures; each shows a Cross icon and the caption "Next". The stepper keeps a counter c, 0 at boot and reset to 0 by the attract when it leaves to the title. On a page's pass 0 it clears the movie cancel flag and selects controller port 1; on page passes 3 to 7 it sets the play-active word to 1 (section 2a); from page pass 11 on, any nonzero bit of the second input word (section 4) turns the page: c 0 -> 1 returns base plus 0x1E0 (record 24), 1 -> 2 returns 0x208 (record 26), 2 -> 3 returns 0x230 (record 28), and 3 -> 0 clears the four music overrides and returns 0xB4 (in-game play). On other passes it runs the controller check (section 2b). Entered at record 27 with c = 0, the player would see Controls, Attack Maneuvers, Quick Inventory, Mote screen, then play. No screen, item or code enters record 27 (or 24 to 28), so the pages are never shown; the counter reset in the attract and the exit to play fit a removed "New Game -> lead-in pages -> play" step (Medium). These pages are not start-point steps (Open question 126, resolved). Record 25 (Coming Soon, 16:9) runs the fade step (state 28), has no items and Triangle off, so it would be a dead end; it is not entered either.
+
+### 6. In-game play (state 11)
+
+Confidence: High on the path and the gate order; Medium-High on the identities of the screens.
+
+- Record 9 (code 0xB4, state 11, page node 322) is the in-play HUD screen: its node tree is the HUD of SPEC-0023, drawn once per pass like any front-end page.
+- On entry, it runs the element setup and the front-end HUD setup.
+- State 11 does not re-arm the HUD timers on each call; the HUD elements fade out after their timers run down until an event re-arms them (SPEC-0023). Only the item-screen tab states 8, 9 and 10 re-arm them every tick (section 14.1).
+- Play gates. On each pass in play, before any input is read, the state tests these in order (Open question 94, resolved):
+  1. Story bit 368 (the progress-bit table, value 0x170). If it is set, the state sets a credits-pending flag and returns state code 0x118 (record 14, the credits screen). Bit 368 is set by pack 1300's epilogue (movie 83) after the finale: the finale's return sets 366, the first epilogue trigger plays movie 79 and sets 367, the second plays movie 83 and sets 368 (SPEC-0026, Credits; High for the setters, Medium for the player reaching the triggers). The credits end with a world teardown, which clears the bit.
+  2. Busy latch. If the game-state word at +0x68 and the word at +0x60 are both nonzero, and the word at +0x6C is zero, set +0x6C to 1. This test does not return.
+  3. Book reader gate. If the book cursor (the game-state word at +0x54) is 0 or more, or the saved book word (+0xA8 of the global settings block) is 0 or more, clear the first byte of the shared text buffer and return state code 0x190 (record 20, the book reader, section 6.1). The reader shows the book at index (+0x54 minus 1). This gate does not read the pending book index. In the shipped game the saved word is always -1, so only the cursor opens the reader.
+  4. Game over. If flag E (game-state word +0x0C) is nonzero, return state code 0x1CC (record 23, the game-over page). On that pass the state does not draw its menus. It also clears the counter that the game-over page uses (Behavior 2, state 26).
+  Step 1 is the credits gate and step 3 is the book reader gate; neither is a pause test or a busy test.
+- Play-active word. After the four gates and before the openers, the state sets game-state word +0x04 to 1 on every pass. This keeps the world running on the next pass (section 2a). A pass that leaves through gate 1, 3 or 4 does not set it, so the world is frozen from the next pass.
+- Pause and item-screen openers (after the gates; they read the rising-edge word +0x89C). Each opener first tests the busy check: when it is nonzero, the opener does nothing and the state continues. The busy check is true when any of ten world-slot fields is set (the game-state words +0x20 and +0x44, the word at +0x14 when it is above 0, and seven helper tests). Its shape is High; which slots are included is Medium.
+  - Select: play cue 0x94, reset the menu and HUD flags, and return state code 0x028 (record 2, the pause page: node 12 with root 14, state 7). The same branch also runs, even without Select, when pad slot 0 is not usable: this is the pad-not-usable auto-pause of SPEC-0033 (Controller map).
+  - Start: play cue 0x94, reset the menu and HUD flags, and return the item-screen entry code for the current tab (14.4).
+- Map and journal shortcuts (High). They run only when all of these hold: the overlay box is idle; both quick-panel flags are clear (neither the quick-item panel nor the second quick panel of SPEC-0021 is open); and the in-play controls gate of SPEC-0053 section 3.13 passes (the selected hero's state is not 25, its second hero test is false, and the game-state words +0x20 and +0x5C are both zero). Both read the second input word (section 4). D-pad Left is tested first, so it wins when both are pressed.
+  - The quick panels open on D-pad Up and Down (SPEC-0021). While a panel is open the shortcuts are off, so Left and Right go to the panel. The hero update runs before the front end in a tick, so a press that opens a panel turns the shortcuts off in the same tick: Up and Left pressed together open the quick-item panel and do not open the map.
+  - D-pad Left (0x8000): play cue 0x9A, set the selected map area to the hero map area (the current world pack's map area id, else the last transition map; SPEC-0051 section 1, SPEC-0006), and return the code of that area's map page, 0x26C + 20 x area (record 31 + area, state 30, picture resource 601 + area). If the hero map area is negative, the cue still plays and the state stays in play.
+  - D-pad Right (0x2000): play cue 0x9A and return state code 0x1B8 (record 22, the quest journal).
+- Overlay box busy (High): the overlay box (the shared dialogue and message box of SPEC-0022) counts as busy when its current-page text word (+0x258) is set, or else when its next-page word (+0x25C) is set. It is idle only when both are zero. The interaction chooser of SPEC-0022 uses the same test. Test vector: +0x258 = 0 and +0x25C set gives busy; both 0 gives idle.
+- Quick slots: the item counts of quick-item slots 0 to 2 are read each pass for the HUD (SPEC-0023 section 5).
+- The HUD meter update (SPEC-0023 section 7) runs only while the HUD countdown is nonzero. A block of HUD elements fades with the countdown only while the HUD visibility flag is set. The menu reset clears that flag. The setter is not known.
+
+#### 6.1 Book reader (table B state 24)
+
+Confidence: High for the cursor and index rules, the Cross exit, the no-index exit, the play gate, the Square take (a rising edge), the flag rule of book stations, the writers and initial values of the pending index, the cursor and the saved word, the prompt draw and timing, the request cache, the page driver's call rate, the page timer endpoints and step, and the page layout values (except the pairing of block Y positions with line limits). Medium for which actors besides the hero set the pending index.
+
+Terms used here:
+- Pending book index: the game-state word at +0x50. -1 means none.
+- Book cursor: the game-state word at +0x54. It is 1-based; -1 means none.
+- Saved book word: the word at +0xA8 of the global settings block. The block is created on first use with this word set to -1.
+
+Initial values and writers (High):
+- The pending index and the cursor are set to -1 once, when the game-state object is created at start-up. Nothing else resets them: world teardown, new game and load leave them as they are.
+- The pending index is set only by the book-station handler (Offering a book) and cleared only by the chooser's book step (Taking the book).
+- The cursor is written only by the book step (a copy of the pending index on a Square edge, or -1 when there is none) and by the reader (-1). No other front-end handler reads or writes the pending index or the cursor.
+- The saved word starts at -1, and its only other writer is the reader exit, which also writes -1. In the shipped game it is therefore always -1.
+
+The book reader is table B state 24 (record 20, node 930). The 88 book entries (titles and pages) are described in SPEC-0024.
+
+Offering a book:
+- A book trigger is a kind-3 volume (a finite cylinder in a world pack; SPEC-0028, section 13) whose flag word has bit 6 (0x0040) set and bits 1, 2, 3 and 8 (0x0002, 0x0004, 0x0008 and 0x0100) clear. The flag test is made after the actor's cylinder test passes; on each tick that both pass, the pending book index is set to the volume's book value (a u16 in its volume header). Volumes that fail the flag test do not set it. On the disc every book station has flag word exactly 0x0040 (High).
+- No script call and no host call writes the pending index (High).
+- Actors (High): each tick, the selected hero runs its update (which includes the interaction chooser) and then its trigger step; then the live petpet runs its update and its trigger step; region characters run their update and their trigger step in the region pass. NPCs and enemies never reach a type-11 volume or a book station. The petpet's fire is refused by the fire step. So only the selected hero sets the pending book index (SPEC-0028, "Trigger pass").
+- The disc has 134 book stations in 27 world packs (1 to 17 per pack; pack 777 has 17, pack 1414 has 14 and pack 1327 has 13). All have flag word 0x0040, mode 0, gate mask 0 and trigger index 0. Their values cover 1 to 77 and 79 to 87, giving 86 distinct station values; the reader selects record index value minus 1. All 27 station packs occur in SPEC-0006’s 174-pack static new-game reach closure. That closure is only an upper bound: it does not evaluate story gates or prove the hero can walk to each station on the ground, so call these 86 books station-available in the modeled area set, not confirmed readable in ordinary play. Index 77 has no station (value 78 is absent); index 87 has no station (record 87 exists and duplicates record 86). The values are read from each station’s own volume record on disc; they are not copied here. [High for station census and graph intersection; Medium-High for actual play reach] Synthetic check: pack 786’s station value 87 opens record index 86; value 78 would select index 77, but is not present.
+- A book value is the cursor value. The book index is the value minus 1, so the indices in play lie in 0 to 86.
+
+Prompt (world action step, on each tick that its prompt branch runs):
+- While the pending book index is 0 or more and the book cursor is negative, the label "Read Book" (label 31 of text table 13, a player-visible label) is shown on each tick. The label is not on any interaction-list entry; the step shows it directly (High).
+- Draw (High): "Read Book" is the Square caption of SPEC-0022 (Interaction prompts): slot 4 at (327, 395), the default caption colour, with the Square icon drawn in the same pass. It is not drawn while a quick panel is open.
+- The prompt makes no camera change (Medium).
+
+Taking the book:
+- The book step is the "Read Book" entry of the interaction chooser order (SPEC-0022). It runs only when all of these hold: hero input is enabled; the hero is not occupied; game-state word +0x5C is not above 0; no buyable item or talk target applies; no earlier chooser entry matches; and no caption other than "Feed petpet" was set earlier in the pass. So it does not run on every tick in play.
+- Tick order (High): the book step runs inside the active hero's update, before that hero's trigger step in the same tick, so it reads the pending value set on the previous tick. The prompt first shows one tick after the hero enters a station, and shows one last time on the tick after the hero leaves.
+- On every tick that the prompt branch runs, the pending book index is set to -1, whether or not Square is pressed. While the hero stays inside the station, the hero's trigger step sets it again later in the same tick, so the prompt keeps showing.
+- Only on a rising edge of the Square bit (0x0080) in the pressed (rising-edge) word of the hero's input block (+0x154; the held word is at +0x158): the pending index is copied to the book cursor and cue 0xAF plays, before the clear above (High).
+- The reader opens on the next play pass. The play gate (Behavior 6, step 3) returns code 0x190 while the book cursor is 0 or more, or the saved book word is 0 or more.
+
+Reader rules:
+1. Index. Index = book cursor minus 1. If the index is negative, index = (saved book word) minus 1. If that is still negative, leave the reader: set the book cursor to -1, clear the four music overrides and return code 0x0B4, with no cue. No book is unloaded and the saved word is not written.
+2. Title. The book's title is copied, up to 255 bytes, into the shared front-end text buffer.
+3. Request and waiting. The reader requests the book at the index. The book load keeps one slot (SPEC-0024, Book index): a request for the index that is already loaded and finished does nothing, so there is no reload and the page timer is not reset. The timer is set to its start value only when a new load starts. While the book is not loaded, the reader waits. The exit in rule 6 still applies.
+4. Page driver. The page driver is called once per frame-loop pass while a book is loaded, whichever screen is current (also on the Triangle bounce pass of rule 7). Each call draws the two pages first and then lowers the page timer by a step. The timer is the page angle in radians: its sine and cosine build the two page transforms. The timer starts at 1.2 (the float at ELF data address 0x2DB2E0) and falls by the step on each call, clamped at a minimum of 0.12 (the float at 0x2DB2E4). The step is computed at book setup from these two words: step = (1.2 - 0.12) x 1/75 = 0.0144 per call (as a single-precision float, about 0.0144000014). The timer therefore reaches 0.12 after 75 passes (1.25 s at 60 passes per second). High.
+5. Page text template. Each page has two blocks (A and B) of 23 text slots (0 to 22). Text width is 192 px (the integer at ELF data address 0x2DB2D4). The line pitch is 18 px (the layout metrics pitch field, 18 in all 88 books) at scale 1.0 (the float at 0x2DB2D8). Justification adds at most 2.0 px per gap between words. Block A is at x 20, except slots 6 and 16, which are at x 234. Block B is at x 234. The block Y positions are 54, 256 or 300 (the words at 0x2DB2BC, 0x2DB2C0 and 0x2DB2C4), with at most 19, 7 or 5 lines (the words at 0x2DB2C8, 0x2DB2CC and 0x2DB2D0). High for these values; the pairing of the Y values with the line limits is not established (Medium).
+6. Exit (Cross, bit 0x0040 in the front-end rising-edge word at +0x89C of the front-end object; SPEC-0033 calls it the menu rising-edge word). Plays cue 0x9A, sets the book cursor to -1, unloads the book, sets the saved book word to -1, and returns code 0x0B4 (in play, record 9).
+7. Triangle (quirk, reproduce; Medium-High). The reader does not handle Triangle, so the generic back rule applies (record 20's back rule is -1): cue 0x99 plays and the stack pops to play. The book cursor is still 0 or more, so play's book gate opens the reader again on the next pass. The book stays loaded. The player sees one play pass and then the book again; only Cross leaves the reader. On the bounce pass play runs its pass-0 entry (HUD setup, stream gate opened), then its book gate returns 0x190 before it sets the play-active word, so the world stays frozen. The reader then requests the same index, which the one-slot cache ignores (rule 3): the book is not reloaded, the page angle carries on from its current value, and the title is copied again. Cross is read by the reader itself, so it works from the reader's first loaded pass; Triangle works only from the reader's pass 2, through the generic step (High).
+
+Edge cases:
+- Book cursor 0 gives index -1. With the saved word at -1 or 0, the fallback is still negative, so the reader leaves at once. Only a saved word of 1 or more lets the fallback open a book (next item).
+- The saved word starts at -1 and is written only by the exit, and only to -1. So in the shipped game it is always -1: neither the fallback nor the saved-word branch of the play gate ever fires.
+- Clean-side initialisation (quirk to avoid): the saved word must start at -1. With 0, play's gate would open the reader, the reader would find no index and return to play, and this would repeat every pass, forever, with the world frozen.
+- The reader has no upper bound check on the index. Station values on disc give indices 0 to 86 only (High).
+- Stale pending (quirk, reproduce). If the hero leaves a station on a tick when the book step does not run (for example while occupied by a jump), the pending index keeps the station's value. On the next tick the step runs (possibly in another area, since the pending index survives area changes), "Read Book" shows for that one tick, the pending index is cleared, and a Square edge on that tick opens the book.
+- A volume whose flag word fails the rule (bit 6 set; bits 1, 2, 3 and 8 clear) does not set the pending index, even when the hero is inside it. A flag word of 0x0041 would pass and 0x0048 would not; on the disc the book stations all have exactly 0x0040.
+- The pending index is cleared on each tick that the prompt branch runs. When the hero leaves the station, the trigger no longer sets it again, so the prompt stops one tick later.
+
+Test vectors (synthetic, not disc values):
+- A volume with flag word 0x0040 and book value 82, with the hero inside it: pending index = 82, and "Read Book" is shown on each tick; the prompt branch sets pending to -1 and the trigger step sets it to 82 again later in the same tick. A rising Square edge sets the cursor to 82 and plays cue 0xAF, and pending is set to -1. The next play pass returns 0x190, and the reader shows index 81.
+- The same volume without a Square press: the cursor stays at -1 and the reader does not open.
+- A volume with flag word 0x0140 (bit 8 set) and book value 82, with the hero inside it: the pending index is not set.
+- Page timer: 1.2 at setup; 1.1856 after 1 driver call; 0.12 after 75 calls; still 0.12 after 76 or more calls.
+- Cursor 0 with the saved word at -1: index -1, fallback index -2, so the cursor is set to -1 and the reader leaves at once.
+- In the reader, a Cross press: cue 0x9A, cursor -1, saved word -1, return code 0x0B4.
+- Prompt timing: the hero enters a value-82 station on tick N: pending is 82 after tick N's trigger step, and "Read Book" first shows on tick N+1. The hero is last inside on tick M-1 and outside on tick M: the prompt still shows on tick M, and not on tick M+1.
+- Petpet in a station: the live petpet stands inside a value-82 station with the hero 10 units away and free: "Read Book" shows, and a Square edge opens book index 81.
+- Saved word 0 and cursor -1: play returns 0x190, the reader returns 0x0B4 with no cue, and this repeats every pass.
+- Triangle re-entry: the reader is open on book index 81 for 100 passes (angle 0.12); Triangle on reader pass 2 or later: cue 0x99, one play pass, then the reader again with the angle still 0.12 (no reset, no reload).
+
+### 7. Save and load pickers
+
+#### 7.1 Picker rows and cursor
+
+- Slots. The save buffer holds four records of 0x3100 bytes each, one per slot, in order 0 to 3. A record is empty when its u32 key at +0x24 is exactly -1; the load starting-cursor search uses the same test (High).
+- Rows. The picker draws four rows, one per slot. All four rows use the same drawing rule, so no label is needed for any row (High).
+  - Empty slot: line 1 is the word "Empty" and line 2 is blank. The word is a fixed string in the program data, with a zero terminator. It is held at data addresses 0x315B00 and 0x3163B0; these are the only two copies of that string in the boot program (verified on disc). The length value used for the row is 5 + 2 = 7.
+  - Filled slot: line 1 is the location name at +0x2F6F (59 bytes). Line 2 is the date text at +0x2FAB (16 bytes). The length value used for the row is the byte at +0x2FBA plus 2.
+- Stacking. Rows stack vertically. Each row starts where the previous row ended, using the height the row returns. The row whose index equals the cursor is drawn highlighted. The rows are drawn by the journal's row drawer (section 14.3): row type = act + 2 (types 3 to 6 for Act 1 to Act 4; the act byte is read as a signed byte) for a filled slot and 7 for an empty slot, with bar colour (78, 119, 174) (High for the type rule; Medium-High for the colour).
+- Labels. The front-end text has "Game 1", "Game 2" and "Game 3" on page 896. No code opens page 896, and the picker never draws these labels; they are a leftover, not slot names (High). The fourth row is slot index 3, the fourth 0x3100-byte record (High).
+- Cursor. The cursor is an index from 0 to 3. The one exception is the load screen's starting value 4 when no slot is filled (section 7.2). Up (0x1000) moves to the previous slot and Down (0x4000) to the next; Down is tested first. Every Up press plays front-end menu sound 1 and every Down press sound 0 (both cue 0x9A), even when the cursor cannot move (High).
+  - Load mode (the load screen): the cursor skips empty slots. A move that lands on an empty slot continues in the same direction to the next filled slot. If no filled slot lies in that direction, the cursor stays where it is. A move that would leave the range 0 to 3 does nothing (Medium).
+  - Save mode (the save screen): a move changes the cursor by one, bounded to 0 to 3, with no skipping.
+  - Cursor test vectors are in the Test vectors section.
+- Confidence: High for the row text rules, the stacking, the cursor rule and the move sounds. Medium for the bound rule in load mode.
+- Count: four slots (High). The fourth slot needs no label; see Open question 9.
+
+#### 7.2 Load
+
+- Load starting cursor (Medium-High): slot 0 if it is filled; otherwise the first filled slot among 1 to 3; if no slot is filled, the cursor is 4, which is outside the slot range. Cross with cursor 4 copies nothing (the save-game spec's rule for a slot index of 4 or more).
+- If no saved game exists, the load screen returns without loading (High).
+- States (High): 0 = start the load scan (SPEC-0025, Card jobs); 1 = wait for the scan, which shows its own card messages as needed (busy, no card, no save data, load failed, cancel confirm); when it ends cancelled, or without a loaded file, the screen is left with return code -1 and no load. 2 = show the picker with the load prompt; the card is checked every pass, and a removed or swapped card starts the load card-gone job (state 3): Retry, or No in the cancel confirm, scans again (state 0); Yes in the cancel confirm leaves with -1. In state 2, Cross loads the chosen slot (it starts the copy-out), copies the slot into the session snapshot and sets the pending flag (the same snapshot and flag as the save, section 7.3); the load then returns to play through the world load. The wait in state 1 has no fixed pass count; it lasts until the card job reports done (Medium).
+- Leaving without a load (High). Stages 0 and 1 (card read and card box) return -4, so Triangle does nothing there. When the card job ends with a cancel answer in the card box, or with no save data, the state returns -1: back to the screen below (the pause page or the title), with no driver cue. In stage 2 (the picker) the state itself reads no Triangle and returns 0, so Triangle leaves by the generic back rule (record 17's back rule is -1) to the screen below, with cue 0x99, and the focus there is its default (section 9d). The card messages (Cancel load, then Yes) are the other way out.
+
+#### 7.3 Save
+
+- Opening (High). The save screen is opened only at a save point (SPEC-0006 kind 4; the per-tick rule is in SPEC-0025). When the player presses Square within 5 units of a save point in normal play with the hero not busy, the world's character-region update records the hero's restart point and then calls the front end's set-screen routine with record 18. No return code is involved, so no handler returns 0x168, and no menu item (section I), handler or level host call opens record 18. The opening also:
+  - resets the save stage and the slot cursor to 0, so the picker starts on slot 0 (shown as the first row);
+  - sets front-end text variable 0 to the text "1" (the card slot named in the card messages) and text variable 1 to the decimal text of the card layer's needed space, 106 (KB) (High). The card layer computes it once from the file sizes: 3, plus each data file rounded up to whole KB (the 50,176-byte save file gives 49 and the 100-byte support file gives 1), plus the icon file rounded up (49,858 bytes gives 49; the three icon entries name the same file, so it counts once), plus (data files + distinct icon files + 2) / 2 rounded down (here (2 + 1 + 2) / 2 = 2), plus 2: 3 + 49 + 1 + 49 + 2 + 2 = 106. Test vector: with three different icon files of 49,858 bytes each the same rule would give 3 + 49 + 1 + 49 + 49 + 49 + 3 + 2 = 205;
+  - sets the screen's pass counter to 0 and runs the enter callbacks (Behavior 1).
+  Because the front end runs after the world update in the frame loop, the screen's first pass runs in the same tick as the Square press (High).
+- Each pass (High): the selected hero is set to state 1 (idle), so the hero is held idle while the screen is open.
+- States: 0 = start the save scan (SPEC-0025, Card jobs; it may offer to format an unformatted card); 1 = run the card message box until it is idle (a cancel confirmed in the scan returns to play with no cue and nothing written); 2 = show the picker with the save prompt. While the picker is up the save screen checks the card every pass; a removed or swapped card starts the save card-gone job (SPEC-0025). In state 2, Cross rebuilds the chosen slot, copies it into the session snapshot, sets the pending flag and starts the write job, and the screen moves to state 3. The write job asks before writing: the overwrite question when the chosen slot held a game, the "save to MEMORY CARD slot 1?" question when it was empty, and none on a card formatted in this scan (SPEC-0025). Triangle (the back bit) in state 2 plays front-end menu sound 6 (cue 0x99), clears the music overrides and returns to play with code 0x0B4 without writing (High). The save cursor moves one slot at a time, bounded to 0 to 3 (section 7.1, High).
+- In state 3 (or the error state 4) the screen runs the message box until it is idle, then reads the card state word:
+  - 0 ("saved", or "cancel confirmed" inside the write job): in state 3, cue 0xA9 (save complete) plays; the music overrides are cleared; the screen returns code 0x0B4 (back to play).
+  - nonzero ("not saved": No to the question, or Retry after a failure): the stage is set to 0 and the screen stays, so the next pass starts a new card scan and the picker shows again. Retry never rewrites at once; the player picks the slot again.
+  - Quirk (reproduce or document): "Cancel save?" answered Yes inside the write job ends it with the "saved" word, so cue 0xA9 plays and the screen returns to play although nothing was written. No "Save Successful" message is ever shown.
+  Confidence: High (Open question 122, resolved).
+- Pending flag and snapshot (High). Confirming a slot in the save picker or in the load picker copies that slot (0x3100 bytes) into a session snapshot buffer and sets the pending flag. The save sets it when the write starts, before the card result is known, so a failed write still leaves the snapshot and the flag (Medium). Only the world teardown (quit, or game over without the flag) clears the flag. The game-over page uses it (Behavior 2, state 26; SPEC-0055).
+- Each card operation waits for the card job to finish in its own state before showing the result (Medium). The save and load states have no frame counter: the length of each wait is the card driver's latency, not a fixed number of passes (Medium).
+- Entry: the save prompt is record 18 (state 22), entered by the direct screen set above; its code value 0x168 (record 18 x 20) is not returned by any handler. The load prompt is record 17 (code 0x154, state 21).
+
+### 8. Menu button blocking
+
+A helper sets a block flag only when the current node's word at +0x0E is 0. Otherwise it does nothing (Medium). The block is meant for the first cycle of a menu.
+
+The input block of Behavior 1b (step 1): the pause page sets it while its quit box is open; while it is set, focus states and the generic step see zero menu words (High). Independently of any flag, the generic step ignores input on the first two passes of every screen (Behavior 1b, step 7).
+
+### 9. Screen stack (31 deep)
+
+- Reset: the stack is set to hold only the root screen, and the depth is 0.
+- Push: if the depth is below 31, the depth goes up by 1 and the new screen is stored above the previous top. A push at depth 31 is refused and the stack is unchanged.
+- Pop: if the depth is 0, nothing is popped and the call returns no screen. Otherwise the depth goes down by 1 and the stored screen is returned.
+- The stack therefore holds the base entry plus up to 31 entries above it (32 slots). The top entry is the current screen.
+- Refused push: the refused push also writes a debug report that says the menu structure is too deep and gives the number 32 (the slot count, not the 31 pushes allowed). The stack is unchanged. The report's text is data in the boot program; only its meaning is described here (Medium).
+
+Parent-index rule (High). When a page is opened, the page record's parent index (signed 16-bit at record offset +0x04, the back and stack rule of section D) decides how the stack changes. This is a stack update. It frees nothing.
+- -1: the page is pushed, unless it is already the top entry. In that case nothing changes.
+- -2: the stack is reset so that it holds only this page (depth 0). The page is not pushed on top of anything.
+- -3: nothing changes.
+- Any other negative value: a message is written to the log, and the current page block (the page the front end holds as current) is pushed. The page itself is not pushed.
+- 0 or more: the page record for that index is looked up on the stack from the top. If it is found, the stack is cut back to that entry. If it is not found, the stack is reset to hold that entry alone. Either way the page is then pushed.
+- Order: when a child page is opened, this update runs first, and then the page-open step of section 17.4 runs.
+- A direct screen set (record 0 at front-end start-up, record 18 at a save point) resets the stack to that record and sets its default focus.
+
+Back rule (High). Triangle in the generic step (Behavior 1b), or a Cross target of -1, backs out as follows (a handler's own -1 return pops the stack and takes the new top, Behavior 1b step 8):
+1. Triangle backs out only when the current record's +0x04 is not -3 and not -2. On records with -3 or -2 the generic Triangle does nothing (a state may still handle Triangle itself, as the item screen and the save picker do).
+2. The stack is popped and the new top becomes the target. If the stack held only its base entry, the target is the record named by +0x04, when that is 0 or more.
+3. The target is entered by the normal rule, so its own +0x04 decides the stack change; a -1 record that is already the top is not pushed again.
+4. Entering a record whose +0x04 is 0 or more first cuts the stack back to that record, or resets the stack to it when it is not on the stack, and then pushes the new record. So every record with +0x04 = 9 (the quest journal, record 22, and the 77 map pages) has play (record 9) directly below it. Triangle on the journal or a map page therefore always returns to play, also when the page was opened from the pause page (the pause page is cut off the stack when the journal or map opens).
+5. Triangle on the pause page (record 2, +0x04 = -1, pushed over play) pops back to play with cue 0x99.
+6. A generic Triangle plays sound slot 6 (cue 0x99). A handler's own -1 return plays no driver cue.
+
+### 9a. Record stack with an overflow report
+
+A second fixed stack, separate from the screen stack of section 9, holds state records. Its slots are 16 words (0x40 bytes) each, and each record starts four words into its slot. The stack object keeps a depth count and a pointer to the top record. The drawing path (Section 12) uses one such stack object: each drawn node pushes a frame onto it before its sprite is laid out, and the frame is popped after the node is drawn.
+
+- Push: while the depth is below 32, the depth goes up by 1 and the new top record is a copy of the previous top record (its 16 words). So 32 pushes succeed from an empty stack.
+- Push at depth 32: nothing changes, and an overflow report is written through the debug report routine (its fixed text is not copied here).
+- The pop used by the drawing path is a separate call made after the node is drawn. Its body, and the pops of the menu code, are not described here (Open question 73).
+
+Confidence: High for the limit of 32; Medium for the copy rule and the record offset; Medium for the report text, which is a boot-program string.
+
+### 9b. Node conditions, search and key masks
+
+Confidence: High for the mode table, the child-first order and the key masks. Medium for the kind rules of the search, which are partly described (Open questions 77 and 78).
+
+Condition modes. Each node has a condition mode byte (+0x2C). Given the node's predicate value P and the caller's flag F, the node passes as follows:
+- 0: passes.
+- 1: passes with the value F (the caller's flag). The chain tests used by the front end pass F through unchanged.
+- 2: passes when P is nonzero.
+- 3: passes when P is zero.
+- Any value above 3: passes.
+
+Predicates. A node's predicate is a handler selected by the node's handler index (signed 16-bit at +0x24). The handler is called with the node's +0x2F byte. The two callers use the predicate in two ways:
+- Condition chain (below): P is the value of the node's own handler. A node with no handler (index -1) gives P = 1.
+- Drawing and the kind 1 scan (below): P comes from the nearest node, starting with the node itself and walking up its parents, that has a handler index of 0 or more. If no node on the way up has one, P = 1.
+
+Condition chain. A node's condition is the AND of the mode tests along its parent chain, starting at the node and going up, and stopping at the first test that fails. The chain for a gate (kind 3) includes the gate itself. The chain for a selectable page item (kind 4) starts at the item's parent, so the item's own mode is not tested.
+
+Search order. A search over the node tree visits a node, then its children (depth first), then its siblings. Node kinds in a search:
+- Kind 1 (runnable entry): returned when its own mode test passes, using the predicate of the nearest handler as above. Mode 0, 1 and values above 3 pass; mode 2 and mode 3 test the predicate.
+- Kind 3 (gate): ends the search of the sibling list that holds it. The gate's own children and the later siblings of the gate are not searched. The search then continues with the next sibling of the gate's parent.
+- Kind 4 (selectable page item): returned when its chain (from its parent) passes. Its children are not searched.
+- Kind 2: needs its condition to be true before it counts as runnable. The search routines do not test kind 2 by name, so this rule is only partly confirmed (Open question 77).
+- Other kinds: searched through their children.
+A kind 1 node also has a data check in the scan that skips the node when a value in its data record is negative. Its meaning is not known (Open question 78).
+
+Key search. A search for a 16-bit key compares it with the node's key at +0x28. The node is checked first. If it does not match, its children are searched, and then its siblings. The first match is returned, or none. A key of 0xFFFF matches every node whose key field is -1, which is the unkeyed nodes (Medium; Edge cases).
+
+Key masks. A node may hold a list of keyed entries: its animation slots (section N, starting at the node's +0x10 word). Each entry has a 5-bit key (its trigger bit number). Given a 32-bit mask, each entry whose bit is set in the mask is changed as follows:
+- The entry is marked active.
+- Its remaining repeats are set to its repeat count.
+- Its start time is set to the clock: the front-end pass counter (the word at 0x2EC8C4, plus 1 per front-end pass) divided by the tick rate (the word at 0x2EC8D4). The tick rate is 60 on disc and is overwritten with the run-time tick rate (60) at front-end start. The value is in seconds (High).
+- The repeat counters of its track and of the track's child chain (section M) are reset.
+Entries whose bits are clear are not changed. The node itself is marked active when the list is not empty.
+
+Test vectors (synthetic):
+- A chain with a child whose mode is 2 and whose handler gives P = 0, under a parent whose mode is 0: the child's test fails, so the chain fails.
+- A node with no handler and mode 3: P = 1, so the mode 3 test fails. The chain fails.
+- A key search for 7 over a parent with key 3 and a child with key 7: the parent does not match, its child is searched and matches, so the child is returned.
+- A key mask with bits 1 and 3 set, and entries keyed 1, 2 and 3: entries 1 and 3 change, and entry 2 does not.
+
+### 9c. Predicate table (table A, 74 slots)
+
+The count of 74 is Medium: it is inferred from the spacing to table B, and the data does not contradict it. A predicate slot is chosen by a node's handler index (section 9b). Each slot returns a value that the node's condition mode tests (section 9b). Every slot is described below; confidence is High unless marked. Slots 13 to 20 serve the item screen; slots 21 to 65 serve the in-play HUD (SPEC-0023). "Marker" is the active hero's quick-item selection marker (SPEC-0021); "quick-panel entry" is an entry of the in-play quick-item panel (SPEC-0021).
+
+| Slot | Result | Meaning | Confidence |
+| --- | --- | --- | --- |
+| 0 | always 1 | Load Game on the pause and title pages (never hidden). | High |
+| 2, 56 | always 1 | No use identified. | High |
+| 12 | always 0 | Library gate: keeps groups out of the automatic page draw (below). | High |
+| 27, 39, 40 | always 0 | No use identified. | High |
+| 1 | 1 or 0 | Items tab only: the marker equals the grid id of the argument cell (the "equipped" frame). | High |
+| 3 | 1 or 0 | The argument equals the grid cursor cell (cursor frame). | High |
+| 4 | id or 0 | Items tab: the grid item id of the argument cell (0 on the other tabs). Count and icon sprites use it. | High |
+| 5, 7 | 1 or 0 | The selected entry is usable: it exists, has an item-state record, and its category is not 7. | High |
+| 6 | 1 or 0 | The marker equals the selected entry's id: picks Activate or Deactivate in the item-action box. | High |
+| 8 | 1 or 0 | The hero's category-9 entry exists and is not empty (Items tab). | High |
+| 9 | 1 or 0 | Argument 1: 1 when no category-9 entry exists. Other arguments: 1. | High |
+| 10 | 1 or 0 | The argument is below the hero's count word +0x15EC (glyph sprites). | High |
+| 11 | 1 or 0 | The count of the selected quick-panel entry is above 0 (in-play quick-item box, root 322). | High |
+| 13 | 1 or 0 | Equipment icons of the item screen: the hero's category-1, 5 or 2 entry (argument 0, 1 or 2) is present and not empty, and, with focus index 0, the matching equipment word is set, or, with a focus index above 0, a charm is selected. | High |
+| 14, 52 | 1 or 0 | The active hero index is 0 (Tor; slot 14) or 1 (Roberta; slot 52). | High |
+| 15 | 1 or 0 | The Mote selection equals the argument (255 = none). An argument of 100 or more compares modulo 100, and only while the selection timer is above 0. | High |
+| 16 | count | The owned count of Mote 160 + argument. | High |
+| 17, 19, 20 | 1 or 0 | The count of the item in equipment word 2 (slot 17), word 0 (slot 19) or word 1 (slot 20) is above 0. | High |
+| 18 | no useful value | Sets a Mote text as a side effect. | Low |
+| 21 to 25 | 1 or 0 | Button-prompt slots 1 to 5 are shown: their text is set and no quick panel is open. Only prompt slot 5 has a setter that is called. | High |
+| 26 | 1 or 0 | Cross hint on the journal and the map: the selected journal row has an area (or the current map icon has items) and no quick panel is open. | High |
+| 28 | 1 or 0 | The quick-panel selection equals the argument. | High |
+| 29 | 1 or 0 | The count of quick-panel entry 1, 0, 3 or 2 (for argument 0, 1, 2 or any other) is above 0. | High |
+| 30, 33, 34, 36 | 1 or 0 | The count of quick-panel entry 0, 1, 2 or 3 is above 0. | High |
+| 35 | 1 or 0 | Entry 2's count is above 0 and its item passes the item flag test with mode 5. | High |
+| 31 | 1 or 0 | A quick-panel item passes the item flag test, with the argument as the mode. | High |
+| 32, 37 | 1 or 0 | The first (32) or second (37) quick panel is open, and camera word +0x50 is zero. | High |
+| 38 | 1 or 0 | A music query equals the argument (255 matches any). | Low-Medium |
+| 41 | 1 or 0 | The first panel is closed, a run-time busy test is false, and the journal-notice word is set. | High |
+| 42, 43, 45, 46 | 1 or 0 | HUD bar segments. The hero is Tor (42, 45) or Roberta (43, 46), and the argument is below (W - a) / b, where W is hero word +0x158 (42, 43) or +0x160 (45, 46). The offsets a for slots 42, 43, 45 and 46 are the words at 0x319BC0, 0x319BC4, 0x319BC8 and 0x319BCC (150, 120, 90, 150 on disc) and the divisors b are the words at 0x319BD0 to 0x319BDC (25, 20, 15, 25). | High (rule and values); Medium (names of the hero words) |
+| 44, 47, 48, 51, 54, 60 | 1 or 0 | HUD words and flags (SPEC-0023): 44, a HUD word is set; 47, that word is set and hero word +0x160 is above 0; 48, 51 and 54, HUD flags; 60, a HUD word is set and game-state word +0x08 is 2. | High (tests); Medium (names of the HUD words) |
+| 49 | 1 or 0 | The marker is 0 or more. | High |
+| 50 | 1 or 0 | The marker's item passes the item flag test, with the argument as the mode. | High |
+| 53, 55 | 1 or 0 | The hero's category-1 (53) or category-2 (55) entry is present, and a HUD flag is set. | High |
+| 57, 59 | run-time word | Words with no writer found. | Low |
+| 58 | method result | A hero method for slot k. | Low |
+| 61 | 1 or 0 | Busy-style OR of world, camera and timer tests. | Low |
+| 62 | 1 or 0 | No quick panel is open, slot 41 is false and the busy test is false. | High |
+| 63 | 1 or 0 | The script timer display is active. | High |
+| 64 | 1 or 0 | The script counter display is active. | Medium |
+| 65 | 1 or 0 | Slot 62 passes and a HUD word is set. | High |
+| 66 | option word | Vibration option (word +0x08). | High |
+| 67 | option word | Invert left-right option (word +0x00). | High |
+| 68 | option word | Invert up-down option (word +0x04). | High |
+| 69 | 1 or 0 | Journal up arrow: 1 when the top row index is not 0. | High |
+| 70 | 1 or 0 | Journal down arrow: the more-below flag. | High |
+| 71 | count | Journal row count (the list group shows when it is above 0). | High |
+| 72 | 1 or 0 | The game-over page's pass count is above twice the run-time tick rate, so the Continue caption and its small Cross icon (sprite record 527) appear after about 2 s. | High |
+| 73 | count | Area total of the selected map area (gates the map's Treasures line; zero on disc for every area, SPEC-0051 section 3). | High |
+
+Use of the option slots: a node with mode 2 under slot 66 to 68 shows its On node when the stored value is nonzero, and its Off node (mode 3) when it is zero (High).
+
+Slot 12 and the item screen (High). Slot 12 is a constant false gate used to keep groups out of the automatic page draw. Records 3 and 4 hold, under a mode-2 group gated by slot 12, the item-screen groups. The item-screen states draw those groups themselves on every pass, by section C key: 0xC2 (the cell grid, the cursor and equipped frames, the action box and the category-9 panel), 0xBF (the money and equipment panel), 0xC0 (the Mote panel, Charms tab only) and 0x31 (the HUD bars, at draw offset (60, 23)). A keyed group drawn this way starts at the keyed node, so its gated parent is not tested. Records 5 to 8 hold only the full-screen picture. The in-play HUD tree hides groups the same way.
+
+### 9d. Focus
+
+Confidence: High.
+
+- Focus index. Each record's run-time word +0x0C is its focus index: the position of the focused item among the page's kind-4 items in sibling order, from 0.
+- Default focus. Every time a record becomes current (push, pop or direct set), its focus index is set to the page's default (section H +0x06, which is 0 on every page), and, if that item's predicate fails, to the first child item whose predicate passes. No page remembers its focus between visits.
+- Re-check. On every pass, if the focused item's predicate fails, the focus moves to the first passing item (Behavior 1b, step 4).
+- List page (section H byte +0x0A = 1; pages 14, 759, 774, 794 and 824): Down moves to the next kind-4 item whose condition chain passes, wrapping from the last to the first; Up moves to the previous one, wrapping from the first to the last. Left and Right give no move.
+- Spatial page (byte +0x0A = 0; pages 858 and 896): the nearest passing item in the pressed direction (section 17.2). When a Left or Right search finds nothing, the record's Left or Right neighbour (section D +0x06, +0x08) is used; on disc those are all -1 or -3. Only the start-point and slot pages are spatial, and neither is ever entered.
+- Drawing. The tree draw passes a focused flag down: a kind-4 item whose running index equals the focus index sets the flag for its children. Mode 1 nodes are drawn only under that flag, or when a caller draws a group with the flag set (the load and save prompts do this for their hint group). Every list item has a mode-1 highlight sprite and a mode-1 highlight label; that is the selection highlight.
+- Focus states. The focused item's section I +0x06 names its focus state (table B), which runs each pass with the focus index as an argument (Behavior 1b, step 5).
+
+### 10. Canvas and drawing position
+
+- The front-end canvas is 512 pixels wide and 448 pixels high. Its width and height are stored in the boot program's data as u32 values at 0x2EC908 (512) and 0x2EC904 (448). A global Y scale is stored as a float at 0x2EC900 (1.0), and a further 1.0 at 0x2EC8FC. These words have exactly one writer, a four-word setter that is never called (no call reaches it and no pointer to it exists in the program), so the canvas is always 512 x 448 with Y scale 1.0 (High; SPEC-0008, Display mode). The values 512 and 448 that appear together with 32, 32 or 256, 256 elsewhere are the screen-effect object's set-up (letterbox bar heights, SPEC-0052), not canvas set-ups.
+- Screen coordinates have their origin at the top-left of the canvas. X runs 0 to 511 and Y runs 0 to 447.
+- Drawing to the 12.4 fixed-point screen space:
+  - X_screen = (x + 2048 - 256) x 16
+  - Y_screen = ((y - 224) x S + 2048) x 16, where S is the global Y scale (1.0)
+  - So the canvas centre (256, 224) maps to the screen centre (2048, 2048).
+- The 640 x 480 values seen elsewhere in the code belong to the 3D view, not to the UI. The UI uses 512 x 448.
+- Overlay cells are drawn only inside a 10-pixel margin around the canvas (section 15.1).
+
+### 11. Sprite frames
+
+- A sprite's frame count is the sum of its three group counts (+0x0E + +0x0F + +0x10).
+- Setting a frame on a sprite (node type 1): the frame index is stored in +0x14 only if it is less than the frame count. Otherwise the request is ignored. The index is an unsigned byte. No wrap and no clamp.
+- Setting a frame on a non-sprite node is refused and the node is unchanged.
+- The three groups are contiguous (group A first, then B, then C). How the groups are used is not known (Open questions).
+- Sprites with a count of 0 (779 records) ignore all frame requests.
+
+### 12. Sprite drawing
+
+- A sprite's on-screen size is its width and height multiplied by its scale, divided by 4096: displayed width = width x scaleX / 4096, displayed height = height x scaleY / 4096.
+- Alignment is the node's byte +0x2E, applied in the node transform (Section J): 0 = x is the left edge; 1 = x is the centre (shift x by half the displayed width); 2 = x is the right edge (shift x by the full displayed width); any other value gives no shift (High). The focus-search position helper has a different rule (section 17.3). Alignment shifts x only; y is always the top edge (High).
+- Integer coordinates are rounded away from zero (add or subtract 0.5 before truncating; Medium).
+- The frame cell is chosen from the frame grid (columns and rows at +0x0C and +0x0D). Frame index f gives column f mod columns and row f div columns, each clamped to its maximum (Medium).
+- Quad (High): after the node transform, the sprite is one quad from the node's local (0, 0) to (width, height), with width the signed 16-bit value at J +0x22 and height the one at J +0x20.
+- Texture (High): the texture is sampled one texel per screen pixel (before the node scale), starting at the frame cell's top-left texel. The cell's top-left is (column x width, row x height) texels: u from the column index times J +0x22, v from the row index times J +0x20. The quad is not stretched to the texture: a wider sprite shows more texels.
+- Colour (High): the E record colour (bytes R, G, B, A at E +0x04) modulates the texture, with 128 meaning 1.0 per channel.
+
+Node-kind draw dispatch (the same path is used by the front end and the HUD; see SPEC-0023):
+- Each UI node has a kind byte at +0x2B and a condition mode byte at +0x2C (Section 9b). The node's position is offset by two draw-offset values set by the caller, and by the object's transform.
+- Draw condition (the mode byte at +0x2C, with the predicate of Section 9b): mode 0 draws; mode 2 draws when the predicate is nonzero; mode 3 draws when it is zero; mode 1 draws only when the focused flag passed down the tree is set (section 9d). Modes above 3 are not drawn by the draw routine.
+- Focused flag (High; Open question 75, resolved): the draw passes a flag down to the children of the kind-4 item whose running index equals the record's focus index. So mode 1 nodes (the highlight sprite and highlight label of each list item) show only on the focused item.
+- The kind selects the shape rule. Kind 1 draws a sprite quad with the object's scale and colour, but only when a stored value of the node's object is negative; otherwise it skips the quad. Kind 7 draws a strip of cells across the node width. Kind 8 draws a fixed panel of two quads on a 64-unit cell with neutral alpha. Kind 2 draws its label text (Text node draw, below). Kind 6 draws a value text (Section K). Kind 4 adds one to a counter that the caller passes in (the running item index), and sets the focused flag for its children when the counter equals the focus index.
+- A node whose condition holds draws its own shape, then draws its first child subtree. Siblings are drawn only when the caller passes the sibling flag.
+- Confidence: High for the dispatch by kind, the subtree order, the draw modes and the kind 4 focused flag. Medium for the exact condition of kind 1, and for kind 7 (partly described).
+
+Text node draw (node kind 2; High unless marked). The node's data is its Section G binding.
+1. If the binding's font id (+0x0E) is negative, nothing is drawn.
+2. Tint T = (1, 1, 1, 1), unless the node's colour animation is running. It runs when the node has an animation list (J +0x10), its active flag (J +0x31) is set and the list's first entry is active. Then T is the four colour bytes of the animation's colour track at time t, each divided by 128. The time t is the front-end frame counter (data word 0x2EC8C4) divided by 60 (data word 0x2EC8D4), minus the entry's start time. When the track has ended, T returns to 1 and the active flags are cleared (Medium for the track sampling).
+3. Drawn colour, per channel: c' = trunc(c × T + 0.5), where c is the binding colour byte (+0x08 to +0x0B). The result is stored as one unsigned byte (its low 8 bits) and drawn unsigned, so a value above 255 wraps.
+4. The text is drawn by the shared line-run routine of SPEC-0022 with the binding's string, font and letter spacing, scale (1, 1) and the drawn colour as the start colour, at the node's transformed position. Horizontal alignment comes from the node transform (alignment byte +0x2E, using the node's width), not from a text measure.
+5. Letter spacing is scaled twice (Medium-High): each glyph moves the pen by (advance + spacing × s) × s, where s is the current x scale of the node transform. With s = 1 this is advance + spacing.
+
+Disc facts (High):
+- None of the 112 text nodes has an animation list, so T is always 1 and the drawn colour equals the binding colour.
+- Two text nodes carry a scale other than 1 together with a nonzero spacing: scale 0.6 with spacing -1, and scale 1.3 with spacing -3. These are the only labels where the double scaling of rule 5 changes the result.
+
+### 13. Menu stack and screen flow (what a player sees)
+
+- The front end starts with the card state (record 0), then the Neopets logo page (record 30), the legal page (record 1, the attract), the opening and title movies, and the title (record 10); the game-flow spec gives the timings (SPEC-0026, Attract mode and title). The title screen shows its items through a page root.
+- Navigation is by the stack above. Each page root is one screen. A page's child labels are drawn in its subtree.
+
+#### 13.1 Page tree
+
+Each screen is one page of the front-end UI tree. The table gives the container node that holds the page and the page root that the screen draws. Node numbers are record indices in the front-end database (section J). Item index is the position of the item among the page's selectable children. Confidence: High for the roots and the item order; Medium-High for the gates.
+
+| Screen | Container / page root | Items in order (index) | Gate |
+| --- | --- | --- | --- |
+| Title | 757 / 759 | New Game (0), Load Game (1), Options (2) | none |
+| Pause | 12 / 14 | View Map (0), View Quests (1), Load Game (2), Resume Game (3), Options (4), Quit (5) | Load Game: predicate slot 0, always 1 |
+| Options | 772 / 774 | Controls (0), Audio (1), Credits (2) | none |
+| Controls | 792 / 794 | Vibration (0), Invert Left-Right (1), Invert Up-Down (2) | On/Off on Vibration, Yes/No on the two invert rows (section 3) |
+| Audio | 822 / 824 | Music (0), Sound effects (1), Voice (2) | none |
+| Start-point chooser | 854 / 858 | nine items, index 0 to 8 (section 5) | marked debug-only; never entered (Behavior 2, census) |
+| Save and load slot chooser | 892 / 896 | three labelled items, index 0 to 2; no code opens this page, and the picker draws its own four rows (section 7.1) | none |
+| Load prompt | 911 / 911 | Load Game (title only); record 17, code 0x154 | none |
+| Save prompt | 915 / 915 | Save Game, with Select and Back hints; record 18, opened directly at a save point (section 7.3) | none |
+| Item screen | 39 / 39 | grid group, action box, money panel | the groups sit under predicate slot 12 (always 0), so the page draw skips them; the tab states draw them by section C key (section 9c) |
+| Journal | 939 (record 22) | row list, up and down arrows, empty-list text, "Triangle Exit", "Cross View Map", L2 and R2 hints (section 14.3) | list group: row count above 0; "Cross View Map": selected row has an area and no overlay is busy |
+| Map overlay | 999 / 999 (likely) | "Triangle Exit", "Cross View Quest", area name, L2 and R2 hints, "Treasures: n of m" (SPEC-0051 section 8) | "Cross View Quest": current icon has items; Treasures line: area total nonzero (never on disc data) |
+
+- A selectable page item is a kind-4 node. It has a neutral label child and a mode-1 highlight label and highlight sprite, drawn only while the item has focus (section 9d). Its argument byte is 0 for the pause, title, option and controls items, and 0 to 8 for the start-point items.
+- Select in play opens the pause page; Start opens the item screen on the current tab (Medium).
+- Pause targets (High; section I and Behavior 2): View Map (state 2) opens the map page of the hero's area on Cross, or does nothing when that area is negative. View Quests (state 3) opens the journal (table B 25) on Cross, with the selected map area set to the hero's area. Load Game, on the pause page and on the title page, opens the load prompt (record 17, table B 21); on the pause page its focus state is 4. Resume Game (state 5) plays cue 0x95 and returns to play on Cross. Options opens record 11 (page 774). Quit (state 6) plays cue 0x9A and opens the quit box on Cross; the box's Circle answer (Quit) ends the game and its Triangle answer (Resume) closes the box (Behavior 2, state 7).
+- The pause page has no Save Game item. Save is reached only through the save prompt (root 915, table B 22), which a save point in a level opens directly (section 7.3).
+
+#### 13.2 Page graph
+
+Confidence: High. Every reachable page with its input edges. Records are section D records (record = code / 20); the state is the table B state that runs the record. "Back" is Triangle by the back rule of section 9 (cue 0x99). Focus moves on list pages play cue 0x9A. Stack: "push", "pop" and "reset" follow section 9; "cut to 9, push" means the stack is cut back to play and the page is pushed over it; "none" means no stack change (+0x04 = -3).
+
+| From (record, state) | Input or condition | To | Cue | Stack |
+| --- | --- | --- | --- | --- |
+| Start-up | front end set up | card state (record 0) | - | reset |
+| Card (0, 0) | controller usable and card job not busy (first visit since boot); next pass on later visits | logo countdown (30) | - | reset |
+| Logo countdown (30, 29) | pass 300 (301 passes); no input is read | attract (1) | - | reset |
+| Attract (1, 1) | wait done (300 passes the first time since boot, else 1), counted only while the controller check is ready | movies 0 and 86 (each skippable on its own), then title (10) | - | reset |
+| Title (10, 12) | Cross on New Game, page pass 5 or later | play (9) | 0x9A | reset |
+| Title | Cross on Load Game / Options | load (17) / options (11) | 0x98 | push |
+| Title | 30 s with no new press (pass 1,801) | logo countdown (30) | - | reset |
+| Options (11, none) | Cross on Controls / Audio / Credits | 12 / 13 / 14 | 0x98 | push |
+| Options, Controls, Audio, Credits | Triangle | the screen below | 0x99 | pop |
+| Controls (12, none) | Left or Right on a row | the row toggles (states 13, 14); page stays | - | - |
+| Audio (13, none) | Left or Right held on a row | the slider moves (states 15 to 17); page stays | - | - |
+| Credits (14, 18), from Options | scroll ends | options (11) | - | pop |
+| Credits, by the story bit | scroll ends (Cross and Triangle ignored) | card state (0), after world teardown; then logo, attract, movies and title | - | reset |
+| Load (17, 21) | Cross in the picker | play (9) | load cues | reset |
+| Load | Triangle in the picker | pause (2) or title (10) | 0x99 | pop |
+| Load | cancel answer in the card box, or no save data; or card removed in the picker, then Cancel load and Yes | pause (2) or title (10) | - | pop |
+| Play (9, 11) | story bit 368 set | credits (14) | - | push |
+| Play | book cursor 0 or more | book (20) | - | push |
+| Play | flag E set | game over (23) | - | reset |
+| Play | Select, not busy | pause (2) | 0x94 | push |
+| Play | Start, not busy | item tab record (3 to 8) | 0x94 | none |
+| Play | D-pad Left, shortcut gate passes, hero map area 0 or more | map (31 + area) | 0x9A | cut to 9, push |
+| Play | D-pad Right, shortcut gate passes | journal (22) | 0x9A | cut to 9, push |
+| Play | overlay box busy | box host (19) | - | reset |
+| Play | Square at a save point | save (18), by direct set | - | reset |
+| Pause (2, 7) | Cross on View Map, hero map area 0 or more | map (31 + area) | - | cut to 9, push |
+| Pause | Cross on View Quests | journal (22) | - | cut to 9, push |
+| Pause | Cross on Load Game / Options | load (17) / options (11) | 0x98 | push |
+| Pause | Cross on Resume Game | play (9) | 0x95 | reset |
+| Pause | Cross on Quit | the quit box opens | 0x9A | - |
+| Pause, quit box open | Circle (Quit) / Triangle (Resume) | card state (0) / the box closes, pause stays | 0x98 / 0x99 | reset / - |
+| Pause, box closed | Select | play (9) | 0x95 | reset |
+| Pause, box closed | Triangle | play (9) | 0x99 | pop |
+| Item tab (3 to 8, states 8 to 10) | Triangle or Start | play (9) | 0x95 | reset |
+| Item tab | L1 / R1 | previous / next tab record | 0x98 / 0x99 | none |
+| Item tab | L2 | journal (22) | 0x98 | cut to 9, push |
+| Item tab | R2 | map of the hero map area, else journal | 0x99 | cut to 9, push |
+| Journal (22, 25) | Cross on a row with an area | map (31 + area) | 0x98 | cut to 9, push |
+| Journal | L2 | map of the hero map area, else item tab | 0x99 | cut to 9, push / none |
+| Journal | R2 | item tab | 0x98 | none |
+| Journal, map | Triangle | play (9) | 0x99 | pop |
+| Map (31 to 107, 30) | Select | play (9) | - | reset |
+| Map | Cross on an icon with items, or R2 | journal (22) | 0x98 | cut to 9, push |
+| Map | L2 | item tab | - | none |
+| Box host (19, 23) | box idle | play (9) | 0x97 | reset |
+| Book (20, 24) | Cross | play (9) | 0x9A | reset |
+| Book | Triangle | play (9) for one pass, then the book again by play's book gate (section 6.1) | 0x99 | pop, then push |
+| Save (18, 22) | Triangle in the picker | play (9) | 0x99 | reset |
+| Save | Cross, write done with card state word 0 (also "Cancel save?" Yes inside the write job, nothing written) | play (9) | 0xA9 | reset |
+| Save | "Cancel save?" Yes in the scan or in the card-gone job | play (9) | - | reset |
+| Game over (23, 26) | Cross, page pass 122 or later | play (9) when the pending flag is set, else card state (0) | - | reset |
+
+Default focus on entry (section 9d): list pages start on item 0 (pause: View Map; title: New Game; options: Controls; controls: Vibration; audio: Music). The item screen's Items tab keeps its last cell, or cell 0 if that cell is empty; the Quest-items tab starts at 0; the Charms tab shows the shared Mote selection (section 14.1). Journal: row 0, or the pending row (section 14.3). Map: icon 0, or the pending icon (SPEC-0051 section 6). Load picker: the first filled slot (section 7.2). Save picker: slot 0 (section 7.3).
+
+### 14. Item screen, journal and map
+
+Confidence: High on the tab and grid structure, the entry-code groups, the hero index, the table references, the L2/R2 page ring and the journal rules (including the row-part positions and fonts); Medium-High on the item cell and use rules; High on the Circle marker rule, the Charms-tab Mote picker and the start tab. The map page rules are in SPEC-0051. The shop screen body and a separate equipment screen body are not known.
+
+#### 14.1 Item screen and its three tabs
+
+- Cursor rule on the Items tab (Medium-High): the cursor is an index from 0 to 19, with row = index divided by 5 and column = index modulo 5. Up subtracts one row (row wraps 0 to 3), Down adds one row, Left subtracts one column (column wraps 0 to 4), and Right adds one column. Examples: from cell 19, Right gives 15 and Down gives 4; from cell 0, Up gives 15 and Left gives 4.
+- Equipped frame (High): a 42 by 42 frame is drawn behind a cell whose id equals the active hero's quick-item selection marker (predicate slot 1). It is in the group with key 0xC2, which the tab states draw themselves every pass (section 9c).
+
+- The item screen has three tabs: Items (tab 0), Charms (tab 1) and Quest items (tab 2). L1 moves to the previous tab and R1 to the next; the index wraps (0 to 2 and 2 to 0). Changing tab plays cue 0x98 (previous) or 0x99 (next).
+- Start tab (High). The tab word is 0 (Items) at boot. Only L1 and R1 change it, so the item screen opens on the last tab viewed, for the rest of the session. It is not saved, and it is not reset by a new game or a load.
+- Cursor on entry (High). Items tab: the cursor is kept between visits; on entry it is set to 0 only when its cell is empty. Quest-items tab: the cursor and the scroll are set to 0 on entry. Charms tab: the Mote selection is the one shared with the in-play second quick panel (boot value 255, none).
+- Items tab: the grid always has 20 cells in four rows of five. Cell k (k from 0 to 19) holds the k-th item id of a list of 20 consecutive unsigned 32-bit words in the boot program's data, at virtual address 0x2DCF28. The list is read at run time from the disc; it is not copied here. Medium-High (the words are read; whether the list is the same in every save is open).
+- Charms tab: the cells are the owned records of item category 8 (charms, which are the config type-17 items of SPEC-0021), in list order. Its selection and buttons are those of the Mote picker of the in-play second quick panel (SPEC-0021, Second quick panel and Mote equipping): directions from the menu rising-edge word, buttons from the second input word; Cross equips the selection into equipment word 0, Square into word 1 (when the shield family is present) and Circle into word 2 (when the weapon family is present). The Mote panel (key 0xC0) is drawn on this tab only. Quest-items tab: the owned records of category 7, in list order. An owned record has a count above zero and a present item. Up to 20 cells show at a time; the list scrolls by rows when it is longer (Quest-items tab, below).
+- Cursor: up and down move the cursor one row, and left and right one column. The cursor wraps within the grid. On the Items tab the grid always has 20 cells. On the other tabs movement applies only when there are at least two entries. Medium-High.
+- Cell drawing (Items tab): a cell with an owned count of 0 is hidden. A count of 1 shows the item's icon with no number. A count above 1 shows the number in decimal, drawn in the neutral grey (the colour word 0x80808080 at data address 0x315AD8, the same neutral value as the menu labels). Medium-High.
+- HUD lines (High): on every tick, each of the tab states 8, 9 and 10 sets the HUD timers G0 (bars group), G1 (item panel) and C (change detector) to 240 (SPEC-0023), so these stay fully visible. It draws the HUD bar group (element key 0x31) with a draw offset of (60, 23) on its top node, and clears that offset after the draw; the offset is used only here, not in play. It also draws element 0xBF (the "NeoPoints" label and the balance value text) and element 0xBE, whose children are the equipped-item icons of categories 1, 5 and 2, the category-2 icon for hero 0 (Tor) only; an empty icon is drawn with alpha 0.
+- Quest-items tab (High): the screen scans up to 60 entries from the scroll offset and shows at most 20 cells. Cross and Circle run the usability test: the entry exists, has an item-state record, and its category is not 7 (quest items). Every entry of this tab is category 7, so Cross and Circle always fail and play cue 0xA2.
+- Item name and description lines (High). On every pass that stays on the screen (no close or page-ring key this pass), the shared step of the three tab states writes the two item text lines for the selected entry. With no entry, or an entry whose held count is 0 or less, both lines become a single space. Otherwise line 1 is the item's name from its text row (copied up to 31 bytes) and line 2 its description (up to 255 bytes). Then, when the text row's carry limit (+0x08) is 2 or more and the item's times-obtained count (the per-item count table, SPEC-0025) is above 0, line 1 becomes the name, a space, and the two numbers in parentheses separated by a slash: obtained, then limit. When the carry limit is below 2 and the entry's held count is above 1, line 1 becomes the name, a space, and the held count in parentheses. Otherwise line 1 is the plain name. Test vectors (synthetic name Apple): limit 10, obtained 3 gives "Apple (3/10)"; limit 10, obtained 0 gives "Apple"; limit 1, held 4 gives "Apple (4)"; limit 1, held 1 gives "Apple"; no entry gives a single space on both lines.
+
+#### 14.2 Buttons on the item screen
+
+| Input | Role | Cue | Result |
+| --- | --- | --- | --- |
+| L1 (0x0004) | Previous tab | 0x98 | Index wraps. |
+| R1 (0x0008) | Next tab | 0x99 | Index wraps. |
+| L2 (0x0001) | Page ring: journal | 0x98 | Returns the journal code 0x1B8 (record 22). High. |
+| R2 (0x0002) | Page ring: map | 0x99 | Sets the selected map area to the hero map area and returns that area's map page code (0x26C + 20 x area). If the area is negative, returns the journal code 0x1B8 instead. High. |
+| Cross (0x0040) | Use the selected item | 0xA2 on denial | Denied with 0xA2 when the cell is empty, or when the active hero's check for the id fails. Otherwise the item's use action runs; that action plays its own effects (not established). Medium-High. |
+| Circle (0x0020) | Items tab: set or clear the quick-item selection marker | 0x9A (and 0xA3 on a set) | When the active hero's quick-item selection marker (SPEC-0021) equals the cell's id, the marker is cleared to none (-1). Otherwise the marker is set to the cell's id; the marker set plays cue 0xA3 when it succeeds. Cue 0x9A plays in both cases. No equipment word is written. High (Medium-High that the id set is the cell's id). Charms tab: equips the selected Mote into word 2 (section 14.1). Quest-items tab: always refused with 0xA2. |
+| Square (0x0080) | Put the Tattered Cloak on or take it off | 0xA1 | Items tab only. When the active hero's category-9 entry (its cloak entry; the hero index word of 14.4 picks the slot) exists and is not empty, the cloak swap of SPEC-0021 (Tattered Cloak) runs for the active hero: its body entry and cloak entry are exchanged, so the cloak goes on, or comes off when it was worn. Otherwise nothing happens. High. |
+| Triangle (0x0010) or Start (0x0800) | Close the screen | 0x95 | Returns code 0x0B4 (record 9, in play). High, Medium (identity). |
+
+- The "equipped" test (predicate slots 1 and 6) is the marker test: it compares the cell's id with the active hero's quick-item selection marker. It is applied on the Items tab only (High).
+- Circle detail (High): Circle on the Items tab writes only the marker. Circle on a cell with no record or no item object does nothing. On the Charms tab the buttons are the Mote picker's (Cross word 0, Square word 1, Circle word 2; section 14.1). On the Quest-items tab Cross and Circle always fail the usability test and play 0xA2.
+- Action box (High): when a cell is shown, the box lists the actions for its id. Cross-usable cells show "Use". Circle-usable cells show "Activate" when the cell's id is not the marker and "Deactivate" when it is. "Exit" closes the box. The box is in the key 0xC2 group, which the tab states draw themselves (section 9c). The same words also appear in the in-play quick-item box (SPEC-0023).
+
+#### 14.3 Quest journal (record 22, table B 25)
+
+Confidence: High unless marked. The journal and the map are the same for both heroes.
+
+- Data: the journal reads two tables of the item-table file (resource 533, IDMX tables; SPEC-0022 Quests and SPEC-0021 for the file). Quest rows are table index 1 (238 rows of 36 bytes; layout in SPEC-0051 Layout). Treasure rows are table index 3 (48 rows of 20 bytes). Treasure row i is paired with table index 6 entry i + 200 (table 6 has 248 rows of 8 bytes; its first field is an area id, and its collected flag is a runtime field that is zero on disc).
+- Entry: on the first pass the cursor, the top row index and the more-below flag are set to 0. If a pending target (a quest row or a treasure record, held as a reference; set by the map, SPEC-0051 section 6) matches a listed row, the cursor starts on that row instead. The pending target is cleared after the list is built.
+- Rows, in order: every accepted quest row in table order, then every held, uncollected treasure that has an area, in treasure table order. An accepted quest row has neither flag id -1, its start flag set and its done flag clear (SPEC-0049). A listed treasure has its held-map flag (+0x10) nonzero, its area (+0x0C) not -1, and its collected flag (table 6 entry 200 + i) zero (SPEC-0051 section 2). The journal applies no area, stage or scene filter. A debug-only switch word, zero on disc, makes these flag tests pass for every row (SPEC-0051 Edge cases); it is not set in play. There is no list of completed quests.
+- Row content: a quest row shows its title (+0x0C) and its objective (+0x10). A treasure row shows its name (+0x00) and no objective.
+- Row type, icon and bar colour (RGB, alpha 128):
+
+| Row | Type | Icon | Bar colour |
+| --- | --- | --- | --- |
+| Quest row, kind 0 (main story) | 0 | Primary | (222, 160, 1) |
+| Quest row, kind 1 (side quest) | 1 | Secondary | (155, 155, 129) |
+| Treasure | 2 | Treasure | (155, 155, 129) |
+
+  The save and load picker (section 7.1) uses the same row drawer with types 3 to 6 (Act 1 to Act 4, row type = act + 2) and 7 (Empty), all with bar colour (78, 119, 174) (Medium-High).
+- Selected row: its bar RGB is the base colour times the pulse, clamped to 0 to 255 and rounded half away from zero. The pulse moves by 0.02 per tick (data word 0x2DCDBC) between 1.2 (0x2DCDB4) and 1.8 (0x2DCDB8): each tick add the step; if the value is above 1.8, set it to 1.8 and negate the step; else if it is below 1.2, set it to 1.2 and negate the step. One full cycle takes about 60 ticks. The step keeps its sign between visits (it is one stored word). Every cursor move sets the pulse to 1.8. The other rows use their base colour.
+- Fonts: the title is font 0 (line height 21) and the objective is font 2 (line height 14). The font ids come from the label bindings of the title and objective nodes.
+- Text: the title colour is the word at 0x2DCDC8 (bytes 127, 125, 81, 128); the objective colour is the word at 0x2DCDD0 (neutral 128, 128, 128, 128). The title is one line. The objective wraps at 316 pixels (0x2DCDA8). Its line limit is floor((360 - (128 + p)) / 14) + 2, with the division truncated toward zero, where p is the row's offset (below). The objective is drawn only when the limit is not 0.
+- Row parts. Every part is a canvas-absolute node of the journal tree, named by its node key and drawn at its node position plus (0, p), where p is the row's offset (0 for the first drawn row):
+
+| Part | Node key | Position (x, y + p) | Notes |
+| --- | --- | --- | --- |
+| Left cap | 0xD3 | (95, 77) | 18 x 38; its y is the row-top reference |
+| Right cap | 0x37 | (429, 77) | 18 x 38 |
+| Bar | 0x36 | (104, 83) | Height 26; width set to 334; colour = the row colour (pulsed when selected) |
+| Icon | child number "type" of the group with key 0xDD | (49, 84) for type 0; (51, 84) for types 1 to 7 | Types 0 to 2 journal, 3 to 7 save picker |
+| Title | 0x34 | (118, 104) | Font 0, title colour, one line |
+| Objective | 0x33 | (118, 128) | Font 2, wrap 316, neutral colour; treasure rows pass an empty text |
+
+- Sizes: bar width 334 (0x2DCDC0), icon height 48 (0x2DCDD4), row padding 24 (0x2DCDAC), list height 360 (0x2DCDB0). Row height: the next row's offset is p + max(79, 75 + 14 L), where L is the number of objective lines drawn. A treasure row (L = 0) is 79 high; a quest row with 1, 2 or 3 lines is 89, 103 or 117 high.
+- Visible rows: every row from the top index on is laid out down the list, each starting where the previous one ended. A row whose bottom offset (the next p) is 360 or more is not drawn. A row whose bottom offset is 360 or less counts as fully shown for scrolling. Quirk (reproduce): a row ending exactly at 360 is hidden but still counts as shown, so a cursor on it does not scroll it into view. On the journal's first pass no row is drawn. The more-below flag is set when a further row exists and the list ran past 360 or a text was cut.
+- Selected bar alpha: the pulse changes only the bar's RGB; its alpha byte is not written and stays 128.
+- Keys (main press-edge word): Down (0x4000) moves the cursor + 1, clamped to the last row; Up (0x1000) moves it - 1, clamped to 0. Each move sets the pulse to 1.8 and plays a front-end move sound. Down is tested first. With an empty list, Down sets the cursor to -1 (the row count minus 1) and Up clamps it back to 0; this has no visible effect. Scrolling: when the cursor is below the last fully shown row, the top index grows by 1 per tick; when it is above the top index, the top index shrinks by 1 per tick.
+- The journal state also runs the controller check (section 2b) every pass.
+- Cross (0x0040) on a row with an area (quest scene +0x20 is 0 or more, or treasure area +0x0C is 0 or more): the pending target becomes that row; the selected map area becomes the row's area; the front-end select sound plays; the map page of that area opens (code 0x26C + 20 x area). Cross on a row without an area does nothing.
+- L2 and R2 (second input word), as in the page ring (14.4): L2 plays cue 0x99 and opens the map of the hero map area, or the item screen when that area is negative; R2 plays cue 0x98 and returns the item-screen code for the current tab and hero.
+- Triangle backs out through the shared back rule (section 9). Record 22's back rule is 9, so entering the journal cuts the stack back to play, and Triangle always returns to play (cue 0x99), also when the journal was opened from the pause page (High).
+- Indicators: the list group is shown when the row count is above 0; otherwise a two-line message says that no quests are currently available. The up arrow shows when the top index is not 0; the down arrow (the same art, flipped) shows when the more-below flag is set. "Triangle Exit" is always shown; "Cross View Map" only when the selected row has an area and no overlay is busy. L2 and R2 tab hints are drawn.
+- Background: picture resource 593 (Behavior 1a).
+- Opening the quest journal clears the HUD's journal-notification flag, so the in-play journal icon stops showing (SPEC-0023).
+
+#### 14.4 Map (table B 30), the page ring and the hero index
+
+The map page (records 31 to 107, one per area) is specified in SPEC-0051: pictures, the selected map area, icons, cursor, pulses, projection, hero marker, overlay and exits. Summary of the parts that touch the other front-end screens (High):
+
+- Selected map area: one word. View Map, D-pad Left in play, R2 on the item screen and L2 on the journal set it to the hero map area (the world pack's map area id, SPEC-0006, else the last transition map, SPEC-0051 section 1). Cross on a journal row sets it to that row's area. When it is negative the map does not open.
+- Exits from the map: Select (main word, 0x0100) returns to play (code 0x0B4), no cue. Cross on an icon that has items, or R2, sets the pending target to the icon's quest row or treasure reference (none if the icon has no items, or with an empty list), plays the select sound and opens the journal (code 0x1B8). L2 returns the item-screen code for the current tab and hero, no cue. Cross on an icon without items, or with an empty icon list, does nothing; the area name is drawn every tick.
+- Pending target: a reference to a quest row or a treasure record, compared by identity, not an id. The journal starts its cursor on the matching row; the map starts its cursor on the first icon with the same reference (SPEC-0051 section 6).
+
+Page ring. Item screen, map and journal form a ring; R2 moves forward (item screen, map, journal), L2 moves back:
+
+| From | L2 | R2 |
+| --- | --- | --- |
+| Item screen | journal (cue 0x98) | map of the hero map area (cue 0x99); journal if the area is negative |
+| Map | item screen (no cue) | journal, current icon pending (select sound) |
+| Journal | map of the hero map area (cue 0x99); item screen if the area is negative | item screen (cue 0x98) |
+
+Both the map and the journal draw L2 and R2 tab hints.
+
+Hero index. The value that picks the item-screen pages is the active hero's index (the global game object word +0x14C, SPEC-0053: 0 Tor, 1 Roberta). The journal and the map are the same for both heroes; only the map's hero marker follows the active hero.
+
+- Entry and tab-change codes: the item-screen code for the current tab is returned when the item screen is entered (from Start), when its tab changes (L1 or R1), and when the map or journal hands back to it. A code N selects record N / 20 (section D).
+  - Hero index not 1 (Tor; group A): Items tab 0x78 (record 6), Charms tab 0x8C (record 7), Quest items tab 0xA0 (record 8).
+  - Hero index 1 (Roberta; group B): Items tab 0x3C (record 3), Charms tab 0x50 (record 4), Quest items tab 0x64 (record 5).
+  - Each record shows its own picture (Behavior 1a): Roberta's pages for records 3 to 5, Tormund's for records 6 to 8.
+  - Closing the item screen (Triangle or Start, Section 14.2) returns code 0x0B4 and is not one of these codes.
+
+#### 14.5 Map projection table
+
+Confidence: High for the record count, the record size, the zero start and the start-up write (the table is written only by the start-up init call; no other writer is known), and for the transform shape and its use (SPEC-0051 section 7). Medium for the yaw offset. The values are not in this spec; SPEC-0051 gives the address and the read rule (Open question 49).
+
+What it is. The map needs one projection record per map area, so that the hero marker can be placed and oriented on the map for the area the hero is in. The table has 77 records, one for each area index from 0 to 76.
+
+Storage and size:
+- Each record is 0x50 bytes (80 bytes). The 77 records are contiguous, record k at byte offset 80 times k from the table start. The whole table is 6,160 bytes.
+- The table is not in the disc image. It starts at the run-time address given in SPEC-0051 (Where it lives), beyond the file-backed part of the boot program, and its memory is zero until the start-up init call runs.
+
+Record layout (per record):
+
+| Offset | Size | Type | Meaning | Confidence |
+| --- | --- | --- | --- | --- |
+| +0x00 | 64 | 16 f32 | Four groups of four 32-bit floats G0 to G3, used as the columns of a 4 by 4 transform. The records written at start-up have the shape G0 = (a, 0, b, 0), G1 = (0, 1, 0, 0), G2 = (c, 0, d, 0), G3 = (tx, 0, tz, 1): a 2D affine map from world (x, z) to canvas pixels (SPEC-0051 section 7). | High |
+| +0x40 | f32 | float | Yaw offset, read in radians (Open question 52). | Medium |
+| +0x44 | 12 | zero | Unused padding that completes the 16-byte slot. | High |
+
+The transform values differ from record to record. The float at +0x40 takes only a few small positive values, shared across records. Neither is copied here.
+
+Start-up write. The table is filled by one of the game's subsystem init hooks. That hook does nothing unless it is called with a non-zero first argument and the init mode value; any other call leaves the table alone. When it runs, it writes all 77 records, each with its four groups of floats and its yaw value. Until it has run, every record reads as zero. Whether the game ever draws the map before start-up is not known.
+
+Required values (plain statement). The clean side needs the values of all 77 records to draw the hero marker correctly on the map. By the user's decision they are read from the user's own boot executable, not copied into a spec; SPEC-0051 (Where it lives, Layout and Open question 1) gives the table address, the record layout and the read rule. The start-up code builds the records from values held in its own code, with no source table in the file image; how the clean side obtains them is SPEC-0051 Open question 1.
+
+How the map marker uses a record (behaviour, in words):
+1. Choose the record: the record of the displayed area (the selected map area, 14.4). A map page opens only for an area of 0 or more, so a negative index is not reached through the page routes (Open question 51).
+2. Transform the marker point: (x, y, z, 1) from the hero's world position, times the transform with the groups as columns; screen x = a x + c z + tx and screen y = b x + d z + tz (result components 0 and 2). The height does not affect the point. Icons use the same record with their world x and z (SPEC-0051 section 7). The marker is drawn only when the hero map area equals the displayed area.
+3. Orient the marker. Subtract the record's yaw offset from the hero's facing angle and add pi: marker angle = facing - yaw offset + pi, in radians (High; SPEC-0051 section 7).
+4. Animate: the float pulse (step 0.03, bounds 0.8 and 1.5) scales the marker's colour (brightness 102 to 192); the integer pulse (step 50, bounds 3900 and 4300, 4.12 fixed point) is the cursor icon's scale, not an angle. Both reverse at their bounds (SPEC-0051 section 5).
+
+The drawer reads a record only in the marker and icon drawing of the map (14.4). No other code reads the table.
+
+Edge cases:
+- A record read before start-up has run is all zero. A zero transform and a zero yaw would place the marker at the origin of map space; whether that can happen in play is not known.
+- A current area index of 77 or more has no record in the table. The reader does not check for it (Open question 51).
+- A negative index: the reader refuses it, and the marker result for that case is not established.
+- The start-up call can be made with other mode values; those calls do nothing to this table.
+
+Test vectors (synthetic, not disc values):
+- Identity transform (a = d = 1, b = c = 0, tx = tz = 0): a hero at (x, y, z) gives the marker point (x, z); the height y is ignored.
+- A synthetic record with a = d = 1, b = c = 0 and G3 = (10, 0, 5, 1): a hero at (0, 0, 0) gives a marker at (10, 5); a hero at (3, 40, 2) gives (13, 7).
+- The marker angle with a yaw offset follows step 3 (facing - yaw offset + pi), matching SPEC-0051 section 7. Disc-value test vectors for areas 0 and 1 are in SPEC-0051 section 7.
+
+Open questions for this section are 49 to 53.
+
+### 15. Menu overlay cell and price caption
+
+Confidence: overlay cell rule Medium-High; price caption High (Medium for the coin model placement). No shop screen that draws the caption is known (Open question 1).
+
+15.1 Overlay cell
+
+- An overlay cell is a cell of a menu overlay. Its projected position is converted to canvas pixels by subtracting the canvas origin values 1792 (horizontal) and 1824 (vertical). These are the same origin as Section 10 in the screen's pixel space (2048 minus 256, and 2048 minus 224), used here as code constants.
+- The cell is drawn only if its canvas x satisfies -10 < x < 522 and its canvas y satisfies -10 < y < 458. A cell outside that range is not drawn.
+- The margin is 10 pixels beyond each edge of the 512 by 448 canvas.
+- Caller: the common overlay tick, which the pause item states 2 (View Map), 5 (Resume Game) and 6 (Quit) and the in-play state run (Medium).
+
+15.2 Price caption
+
+- Two lines, each with a value and a shown counter. Values and counters are run-time words (zero in the file image).
+- Drawing: the caption is drawn by the in-play state (table B state 11; only while both quick panels are closed, in the same block as the prompt slots) and by the box host (state 23, every pass). A line is drawn while its counter is above 0, and each draw lowers its counter by 1. A pass that does not draw the line does not lower its counter.
+- Both lines are font 0, right-aligned with the right edge at canvas x 410 (the text's width is subtracted from 410; the same boot-program word is the dialogue box's wrap width, SPEC-0022 Layout), at canvas y 115 (line 1) and y 140 (line 2).
+- Line 1: if the value is exactly 32767 (0x7FFF), the text "Exorbitant!" (boot data, 0x315A48) is shown in colour (128, 60, 90, 127) (0x315A40). Otherwise the value is written into a nine-cell field (SPEC-0023 section 15: right-aligned, thousands separators, blank padding). If the value is no more than the balance (the party record's word at +0x14, read at draw time), it is drawn in the default caption colour (160, 160, 90, 127) (0x315A38). If it is above the balance, it is drawn in (128, 60, 90, 127). There is no separate cannot-pay label: the price is still shown, only in another colour.
+- Line 2: its value in a nine-cell field, colour (128, 128, 128, 127) (0x315A58). There is no balance test.
+- Writers:
+  1. Buy prompt (SPEC-0050 section 9; SPEC-0022 chooser step 1): on each tick the prompt applies with no press, line 2 = the balance with counter 1, then line 1 = the item's price with counter 1 (replacing the old value). So the caption shows on exactly the ticks the prompt is up.
+  2. Coin gain: every add of a coin item (ids 135 to 139; SPEC-0021, Coin pickups) with gain g: if line 1's counter is above 0, line 1 = old value + g; otherwise line 1 = g. In both cases the counter becomes 180. The wallet then grows by g and cue 0xA5 plays. So coins picked up in quick succession show one running total, which disappears 180 drawn passes (3 s of play with both panels closed) after the last coin.
+- Clears: world teardown sets both values and both counters to 0. The menu and HUD reset (Select or Start opening a menu from play, and the game-over page) sets only line 1's counter to 0.
+- Coin model (Medium): while line 1's counter is nonzero and both quick panels are closed, the HUD's 3D pass draws the one-Neopoint coin model (item 135) spinning near the caption. Its placement and scale are not given here.
+- Edge cases: a coin total is drawn in (128, 60, 90, 127) when the balance is below the shown total within the 3 s. A buy prompt replaces a running coin total (and its counter becomes 1). A coin total of exactly 32767 would read "Exorbitant!" (not reached in practice).
+- The caption is the buy-price and coin-gain display; no separate shop screen uses it.
+
+### 16. Flag pairs, pools and layout walk (Confidence per item)
+
+- **Complementary flags (Medium).** There are two front-end flags, A and B. Setting A stores whether B is zero, and setting B stores whether A is zero. So after either set, at most one of the two is 1. A query returns 1 when either flag is set. A third query returns B, unless a field of the global object is set, in which case it returns 0. Synthetic check: with A = 0 and B = 0, setting A makes A = 1, after which setting B makes B = 0.
+- **Pool selection by mode (Medium).** A mode number selects one of several slot pools. Modes 1, 2, 5, 7, 8 and 9 each select a pool, and any other mode uses a default pool. A count query returns how many slots of the selected pool are free. A query for the nth free slot returns the nth free slot of the same selection.
+- **Free list of 16 nodes (Medium).** A helper builds a list of 16 nodes. Each node stores its own index and a link to the next node. The helper sets the list's head and tail.
+- **Layout walk (Medium).** A menu item's position is found by walking up its parent chain. At each node the walk adds the node's two signed 16-bit offsets (the position fields of section J). The walk ends when it reaches a node that has a flag byte set. Whether that flagged node's own offsets are added is not confirmed.
+
+Which menu settings the flag pair represents, what the pools hold, and what the free list is for are open (Open questions 57 to 59).
+
+### 17. Menu driver, focus search and menu helpers
+
+Confidence: Medium for the handler codes. High for the focus search, the item position helper and the page open (the picture load). High for the identity of the driver's three values (a debug colour editor that never runs), the byte tween math, the cursor rectangle's identity and the nine-slice panel's identity and border words; Medium-High for the byte tween's reach. Where this section disagrees with Behavior 1, Behavior 4 or Behavior 12, the disagreement is listed in Open questions 60 to 72. The driver caps and the rectangle and quad sizes are not yet confirmed against the disc bytes.
+
+#### 17.1 Menu driver (one call per menu tick)
+
+- Each call adds 1 to a front-end frame counter, held in front-end data at 0x2EC8C4 (Medium).
+- The driver keeps three adjustable values. While a raise bit is set in the held2 word (raw held for R1 and R2), its value goes up by 1 per call, and while a lower bit is set it goes down by 1 per call. So A rises on Down and falls on Up, B rises on Right and falls on Left, and C rises on R1 and falls on R2. Each value stops at 0 at the bottom and at its cap at the top (Medium):
+
+| Value | Raise bit | Lower bit | Cap |
+| --- | --- | --- | --- |
+| A | 0x4000 | 0x1000 | 63 |
+| B | 0x2000 | 0x8000 | 180 |
+| C | 0x0008 | 0x0002 | 63 |
+
+- The horizontal bits (0x2000, 0x8000) and the vertical bits (0x4000, 0x1000) also send a move to the focus search (17.2).
+- **Pad masks and directions.** The bit values in this table are the same bits as the Behavior 4 table, with the Behavior 4 names (High): 0x4000 Down, 0x1000 Up, 0x8000 Left, 0x2000 Right. Value C's bits 0x0008 and 0x0002 act as R1 and R2 held.
+- **Debug colour editor (High for reach).** Values A, B and C are the three channels of a debug colour editor. The editor runs only on a page that holds a kind-8 node, and no page on disc has one, so it never runs in the shipped game. When the editor opens, the values are loaded from the node's colour record with channels h, s and v: A = round((s - 1) / 4) - 1, B = round(h / 2), C = round(v / 4). When they are written back: h = 2B, s = 4A + 3, v = 4C.
+- The current menu node's handler runs once per tick and returns a code:
+  - -3: no change.
+  - -2: close the menu.
+  - -1: pop to the top of the stack.
+  - any other value: push a child page (17.4).
+  This is the same scheme as Behavior 1, step 5, seen after the generic step: a handler's 0 becomes -3 when the generic step does nothing, and the handler level's -4 only blocks the generic Cross and Triangle (Open question 61, resolved).
+
+#### 17.2 Directional focus search
+
+- Use: only spatial pages (section H byte +0x0A = 0; pages 858 and 896) use this search, and neither page is ever entered, so the shipped game never runs it (High; section 9d).
+- Input: the focused item and a pressed direction: 0x8000 Left or 0x2000 Right (horizontal), 0x1000 Up or 0x4000 Down (vertical).
+- Candidates (High): every kind-4 item among the page's items, in sibling order, except the focused item, whose node predicate passes. All items of the page take part; spatial pages have no scrolling.
+- Reference point (High): the item position of 17.3 plus the item's pivot words (+0x1C, +0x1E). The candidate's y also gets (candidate index − focus index) × the parent's row-spacing byte (+0x2A). dx and dy are the candidate's point minus the focused item's point.
+- Zero offset (High): a candidate whose offset along the search axis is exactly 0 is skipped.
+- Wrap (High): a candidate behind the pressed direction uses the wrapped distance. For Left, dx > 0 becomes 512 − |dx|; for Right, dx < 0 becomes 512 − |dx|; for Up, dy > 0 becomes 448 − |dy|; for Down, dy < 0 becomes 448 − |dy|. A candidate ahead keeps its direct offset.
+- Cross-axis weight (High): the offset across the search axis is multiplied by 4 before squaring when a nearness test passes. For a horizontal search the test uses each item's height (J +0x20, ha for the focused item and hb for the candidate): it passes when (ya ≤ yb or yb − hb ≤ ya + ha) and (yb ≤ ya or ya − ha ≤ yb + hb). A vertical search uses the widths (J +0x22) on x. With sizes of 0 or more the test always passes, so the cross term always weighs 16 times.
+- Cost: horizontal = dx² + (4 dy)²; vertical = (4 dx)² + dy², with dx or dy along the axis already wrapped; the result is cut to a whole number toward zero.
+- Result: the candidate with the lowest cost. A later candidate replaces the best only with a strictly lower cost, so ties keep the earlier item. The starting best is 1,234,567, so a cost of that or more is never chosen. The search returns the chosen item's index, or -1 when no candidate qualifies; then the caller uses the record's neighbour (section 9d).
+- Test vectors (synthetic; focused item point (100, 100), sizes 16, row spacing 0):
+  - Right, candidate at (140, 120): cost = 1,600 + 80² = 8,000.
+  - Right, candidate at (60, 100): dx = −40 wraps to 472; cost = 222,784.
+  - Right, candidate at (100, 150): dx = 0, skipped.
+  - Up, candidates at (100, 60) and (130, 70): costs 1,600 and 120² + 900 = 15,300; the first is chosen.
+
+#### 17.3 Item screen position
+
+- The menu item record is the section J node. Its position for the focus search comes from a position helper: start from the item's own position (+0x14, +0x16), then add each ancestor's, walking up the parent chain, until a node with the absolute flag (+0x2D) is reached or the chain ends.
+- Row spacing in this helper (High): at each ancestor with a non-zero row-spacing byte (+0x2A), the helper adds that byte times a sibling count. The count is the number of siblings before the child on the path, visible or not, and it is not reset between levels: the counts of lower levels carry into the higher ones. The draw's node transform (Section J) counts visible siblings instead, so the two can differ. This never matters on disc, because the search never runs.
+- Horizontal alignment in this helper comes from the node byte +0x2E. Kinds 0, 3, 4 and 5 are never shifted. For the other kinds:
+  - 1 (centre): left edge = x − trunc(width / 2), with width J +0x22 and no scale.
+  - 2 (right): left edge = x − width − 1.
+  - any other value: no shift.
+- The sprite draw uses its own rule (Behavior 12): centre x − width × scaleX / 4096 / 2, right x − width × scaleX / 4096, other values no shift. The draw rule is the one that places every visible node; the helper's rule is reached only by the focus search, whose candidates are kind 4 and are never shifted (High).
+- Test vectors: width 32, x = 100, scale 4096. Alignment 1: 84 in both rules. Alignment 2: 67 in the helper, 68 in the draw. Alignment 5: 100 in both.
+
+#### 17.4 Menu page open
+
+- This step is the full-screen picture load of Behavior 1a, not a page or sound step. It runs when a screen is entered (Behavior 1b, step 8) and when the root screen is set directly.
+- It searches the new screen's tree for the first kind-1 sprite whose asset record is not loaded (kind word -1). It runs only when such a record is found, no load is pending, and that record is still not loaded. Otherwise it returns without change.
+- It toggles the two-slot buffer index between 0 and 1. The previous user of the new slot gets kind word -1; the found record takes the slot (its kind word becomes the slot index) and the slot remembers the record and its resource word. The pending flag is set and the done flag is cleared.
+- When an archive was given at front-end set-up, it reads 267,264 bytes of resource 575 + v into the slot's buffer. The read's completion callback only sets the done flag. No cue is played.
+- Each pass, the driver polls the load first (Behavior 1a, item 6).
+
+#### 17.5 Byte tween
+
+- The byte tween is the colour kind (3) of the UI animation tracks of section M. It has four byte channels: start bytes at track +0x14 to +0x17 and end bytes at +0x18 to +0x1B. t0 and t1 are the floats at +0x0C and +0x10, and the duration is t1 − t0.
+- t is the animation slot's local time in seconds, from a clock = front-end pass counter (section 17.1) / tick rate (60, written at front-end start; section 9b). t is not reduced by t0.
+- Each channel = start + round_half_away((end − start) ÷ (t1 − t0) × t), stored as a byte (mod 256) (High).
+- The four bytes are used as a tint multiplier (byte / 128) on the node's draw.
+- Reach: the only colour tracks on disc are records 12 (alpha 128 -> 0 over 10 s) and 13 (alpha 0 -> 128 over 30 s). No animation slot reaches them, so the byte tween never runs in the shipped game (Medium-High).
+- Test vectors: start 10, end 20, duration 4, t 1: 10 + round(2.5) = 13. Start 0, end 255, duration 10, t 5: round(127.5) = 128. Colour track 0 -> 128 with t0 = 0 and t1 = 30: t = 15 gives 64. Scale track (kind 2) 1.0 -> 0.85 over 1 s: t = 0.5 gives 0.925.
+
+#### 17.6 Cursor rectangle (debug colour editor marker)
+
+- It is not a list cursor. It is the value marker of the debug colour editor panel (section 17.1), drawn for kind-8 nodes only. No page on disc has a kind-8 node, so it is never drawn in the shipped game (High).
+- It builds a rectangle element of 0x40 bytes, 16 units wide; its left edge is the item's x, and its top is the caller's base y + 0x40 − the value at 0x2EC8C8. That word is the editor's value channel, not a list scroll.
+- Colour is white (0xFFFFFF). Alpha is 0x80, which on the PS2 scale is fully opaque (SPEC-0003, Decode one indexed texture to RGBA, step 3).
+- Test vector: base y 100, value 30 gives a top edge of 134.
+
+#### 17.7 Nine-slice panel (dialogue box frame)
+
+- It is the dialogue and message box frame of SPEC-0022 (Dialogue box layout), drawn only by the box update (High).
+- It builds nine quads in the standard nine-slice arrangement around the box. Each quad is one record of 0x70 bytes, and the call returns 0x3F0 bytes (nine records).
+- The border words at 0x2EC91C to 0x2EC930 hold 15, 28, 14 and 26 (the borders) and 64, 64 (the sprite size, 64 x 64), as on disc (High). The quad placement is the one given in SPEC-0022. Coordinates are scaled by 16 into screen units (Section 10).
+
+## Menu screens and items as observed
+
+Items are counted from the labels bound to each page's subtree (neutral-colour bindings only). "Nodes" counts all nodes in the page's subtree, including containers and sprites.
+
+| Page root | Screen (name used here) | Nodes | Labelled items | Notes |
+| --- | --- | --- | --- | --- |
+| 14 | In-game pause menu | 25 | 6 | View Map (0), View Quests (1), Load Game (2), Resume Game (3), Options (4), Quit (5). No Save Game item. |
+| 759 | Title menu | 13 | 3 | New Game, Load Game, Options |
+| 774 | Options menu | 13 | 3 | Controls (0), Audio (1), Credits (2) |
+| 794 | Controls menu | 25 | 7 distinct (9 bindings) | Vibration, Invert Left-Right and Invert Up-Down, Vibration with On and Off, and each invert row with Yes and No (section 3). Row order top to bottom: Vibration, Invert Left-Right, Invert Up-Down (High; Behavior 3, Row draw order). |
+| 824 | Audio menu | 25 | 3 | Music, Sound effects, Voice |
+| 858 | Start-point chooser | 28 | 9 | Four "Act N Start" items and five progress items (Act 1 Squire Done, Act 1 Chores Done, Act 3 Middle, Act 3 Entering Dungeons, Act 4 Districts Done). A string in the table marks this screen as debug-only. |
+| 896 | Save/load slot chooser | 10 | 3 | Game 1, Game 2, Game 3. No code opens this page and the picker does not draw these labels; they are a leftover (High; Open question 45) |
+
+Totals: 139 nodes across the seven page trees, and 32 distinct labels.
+
+Labels outside these seven trees: 52 strings have a neutral binding; 32 of them appear under the pages above. The other 20 sit in node trees that are not reached from the seven pages. Their screens are not identified. They include the inventory and item actions (use, activate, deactivate, exit, close, select, back), a sword and money label, save and continue, next, treasure and location text, and quest text. The three remaining table strings have no neutral-colour binding.
+
+Option values (music, sound effects, voice, vibration, inversion) exist as labels here. Their stored values are the option block in Layout and the rules in Behavior 3.
+
+## Edge cases and error handling
+
+- Version other than 1.05: refuse the table; the front end does not start.
+- Menu stack push at depth 31: refused (no change). Pop at the root: nothing popped.
+- Record stack overflow: a push at depth 32 leaves the stack unchanged and writes the overflow report; 32 pushes succeed from an empty stack (Medium).
+- Parent index of any other negative value (not -1, -2 or -3): a log message is written and the current page block is pushed, not the page itself (Medium-High).
+- Parent index 0 or more naming a page that is not on the screen stack: the stack is reset to that page record alone, and the page is pushed (Medium).
+- Condition chain with a node that has no handler and mode 2: P = 1, so the test passes. The same node with mode 3 fails. The drawing path and the kind 1 scan do not do this: they use the nearest handler instead (Section 9b).
+- Key 0xFFFF in a key search: matches the first unkeyed node (key field -1) it reaches, which may not be the node the caller wanted (Medium).
+- Sprite frame request at or above the sum of counts: ignored, the previous frame stays.
+- Sprite with all-zero counts (779 records): every frame request is ignored. Whether such sprites draw at all is open.
+- Section N: read its count from header +0x4C (20 slots of 32 bytes). The header word +0x3C (585) is not N's count and does not divide the section size.
+- Section M and N are not needed for drawing the menus shown above.
+- The start-point screen is described in the strings as debug-only. It is never entered (High, static census; Behavior 2).
+- Generic input is ignored on the first two passes of every screen (Behavior 1b, step 7), so a Cross, Triangle or direction pressed on the pass that opens a screen, or on the next one, does nothing on the new screen.
+- A Cross target of -1 (the start-point items) plays sound slot 5 twice in one pass: once for Cross and once in the back branch. Not reachable on disc.
+- Quirk (reproduce; Medium-High): Triangle in the book reader is not handled by the reader, so the back rule returns to play, and play's book gate reopens the reader on the next pass. Cue 0x99 plays, the book stays loaded and the page angle is not reset (section 6.1).
+- A handler's own -1 return (the credits at the end of their scroll from Options, the load screen after a card-box cancel) plays no driver cue; a generic Triangle plays cue 0x99.
+- While the pause page's quit box is open, Triangle answers the box (Resume) and the pause page stays; the generic step and the focus states see no input.
+- Toggle with a stored value other than 0 or 1: a change stores 1, because the rule is "1 if the old value was not 1" (Behavior 3).
+- Volume: adjustments are clamped to 0 to 100. The apply rule clamps the gain to 0.0 to 1.0.
+- Quirk (reproduce): from a fresh boot the gains are 1.0 while the sliders show 75; the first visit to the Audio page (or focus on an invert row, or a load) drops them to 0.75 with no input (Options, Gains at start-up).
+- Sound effects 0: once the default cue volume has been refreshed to 0, every default-volume cue is refused (not started); front-end menu sounds still play at 1024 (Behavior 3c).
+- Stick inversion: the complement maps 0 to 255 and 255 to 0, so a centred byte of 0x80 becomes 0x7F, not 0x80. It applies to the right-stick bytes only.
+- Load with no filled slot: the starting cursor is 4, outside the slot range (Behavior 7.2). A move finds no filled slot in its direction, so the cursor stays at 4 (Behavior 7.1), and Cross copies nothing. Apart from that starting value, the movement rule never leaves the range 0 to 3.
+- Picker row text follows the slot's key only: a slot with key -1 shows the empty text even if its name field holds other text. A filled slot whose name field is empty shows a blank first line (Medium).
+- Start index above 8: the handler's parameter range is 0 to 8. The behaviour for other values is not established.
+- Book reader with no valid index (book cursor 0 with a saved word of -1 or 0): the reader leaves at once (section 6.1).
+- Volume flag word without bit 6, or with any of bits 1, 2, 3 or 8: does not set the pending book index (section 6.1). On the disc every book station has flag word exactly 0x0040.
+- Table B has 31 valid states (indices 0 to 30). The field that selects a table B entry covers 32 values, of which the 32nd is not a valid state.
+- Item screen, empty cell: Cross plays cue 0xA2 and changes nothing. Circle on a cell whose count is 0 is not established (Open questions).
+- Item screen, Square with no category-9 item: nothing happens, with no cue.
+- Item screen, Circle on the cell whose id is the quick-item marker: the marker is cleared to -1 (cue 0x9A only), not replaced. This is the same id test as the "equipped" frame and the Activate/Deactivate label. No equipment word changes.
+- Item screen, Quest-items tab: Cross and Circle always play cue 0xA2, because every entry there is category 7.
+- Item screen, count of 1: the cell shows the icon and no number. Only counts above 1 show text.
+- Journal: a quest row whose start or done id is -1 is never listed. A row whose bottom offset is 360 or more is not drawn; a row ending exactly at 360 is hidden but still counts as fully shown, so the cursor on it does not scroll it into view (section 14.3). With an empty list, Down sets the cursor to -1 and Up sets it back to 0. Cross on a row without an area does nothing. With no rows the list group is hidden and the no-quests message is shown.
+- Entry code group: the hero index is compared with 1 only. Any other value uses group A (Tor's pages).
+- Map shortcut with a negative hero map area: D-pad Left in play still plays cue 0x9A and stays in play; R2 on the item screen opens the journal; L2 on the journal opens the item screen; View Map does nothing.
+- Overlay cell exactly on a margin edge (canvas x = -10 or 522, or y = -10 or 458): not drawn, because the bounds are strict (Section 15.1).
+- Price caption with its counter at 0: that line is not shown. A pass that does not draw a line (in play with a quick panel open) does not lower its counter.
+- Price caption with a price needing more than nine characters: not established (SPEC-0023 Open question 31).
+- Map projection table (14.5): a read before the start-up write sees all-zero records. A current area index of 77 or more is not confirmed by the reader; a negative index is checked, and its result is not established (Open question 51).
+- Menu cursor with no selectable item (no item of kind 4): what the step returns is not established (section 4.1).
+
+## Test vectors
+
+- Frame groups (1, 4, 8): total 13. Set frame 12: accepted (12 < 13). Set frame 13: ignored.
+- Audio slider node positions (disc data): Music, Sound Effects and Voice each have a stored knob-node x position of 2 before the first apply. The default value 75 applies x = trunc(75 x 1.29 + 2) = 98 to each knob. Parent transforms and the rendered position before that apply are not established.
+- Label colour (synthetic): binding colour (200, 115, 50, 128) with no animation draws (200, 115, 50, 128). With tint bytes (64, 128, 255, 128) the factors are 0.5, 1.0, 1.9921875 and 1.0, giving (100, 115, 100, 128): 50 × 1.9921875 = 99.6, which rounds to 100. Colour 255 with tint byte 255 gives 508.0, stored as byte 252.
+- Label font (synthetic): a binding with font id -1 draws nothing.
+- Label spacing (synthetic): letters of advance 8, spacing -2: at scale 1 each glyph moves the pen 6; at scale 0.5 it moves (8 - 1) × 0.5 = 3.5.
+- Section C lookup (disc data, values only): key 0x9F maps to J node 1000, key 0x31 maps to J node 615, and key 0x19 maps to J node 929. A key of 0x1FF, which no record lists, gives -1.
+- Section C duplicate: a table built from the records (0xD1, 1194), (0x31, 615), (0xD1, 970), (0xD1, 186) gives 186 for key 0xD1, and -1 for any other unlisted key.
+- Section K record 0 (disc data, values only): word 0 is 0x00008F44, word 1 is 0x80808080, word 2 is 0x00010000 (low 0, high 1), word 3 is 0x00080000 (low 0, high 8) and word 4 is 0. Record 3: word 0 is 0x0000A910, word 2 is 0x00010003 (low 3, high 1), word 3 is 0x0103FFFD (low -3, high 259).
+- Section K relocation (synthetic): with a load base of 0x1000, a record whose word 0 is 0x20 becomes 0x1020; words 1 to 4 are left as they are.
+- Frame groups (0, 0, 0): any frame is ignored.
+- Frame groups (0, 10, 0): total 10. Set frame 9: accepted. Set frame 10: ignored.
+- Position at scale 1.0: node at x = 0, y = 0. X_screen = (0 + 2048 - 256) x 16 = 28672. Y_screen = ((0 - 224) x 1.0 + 2048) x 16 = 29184.
+- Centre alignment, width 32, scale 4096, x = 100: left edge = 100 - 16 = 84.
+- Right alignment, width 32, scale 4096, x = 100: left edge = 100 - 32 = 68.
+- Width 32 at scale 8192 (2.0): displayed width = 32 x 8192 / 4096 = 64.
+- Stack: 31 pushes succeed; the 32nd push is refused. Pops then return screens in reverse order, and a pop after the root returns nothing.
+
+Record stack (Medium): from an empty record stack, 32 pushes succeed, the 33rd push leaves the depth at 32 and writes the overflow report, and each new top record is a copy of the one before it.
+- Layout check: for each section, start of the next section minus start of this section equals the section size, and the size divided by the record size equals the header count. For N the count is header +0x4C (640 / 32 = 20); the tail is 3 x 272 + 282 x 18 = 5,892 bytes.
+- Toggle: stored 0 becomes 1; stored 1 becomes 0; stored 2 becomes 1.
+- Defaults after start-up: Music, Sound effects and Voice 75.0 each; gains 1.0 each until the first apply; after the Audio page's Music row first runs, gains 0.75 each and knob x 98 each; Invert Left-Right 0; Invert Up-Down 0; Vibration 1; cycler 1; unlabelled toggle 0.
+- Fresh boot, row Level 700, Audio page never opened: bank target volume 700. After visiting the Audio page (no changes): 525.
+- Fresh boot, row Scale 1024: default cue volume 1024 (also on every pass before the first title pass). After visiting the Audio page: 768.
+- Volume: value 40.0 with Right held for one tick becomes 41.0. Value 100 with Right held stays 100. Value 0 with Left held stays 0. Value 0 with Right and Left both held becomes 1.
+- Knob x for values 0, 1, 10, 25, 50, 75, 99.5 and 100: 2, 3, 14, 34, 66, 98, 130 and 131.
+- Gain for values 0, 25, 75 and 100: 0.0, 0.25, 0.75 and 1.0.
+- Gain use (SPEC-0009): Music 75 with a music row Level of 700 gives a bank target volume of 525 (1/1024 units). Sound effects 75 with a row Cap of 700 gives a stream fade-in ceiling of 525.
+- Apply rule: volume 50 gives gain 0.5 and knob x = int(50 x 1.29 + 2) = int(66.5) = 66. Volume 100 gives gain 1.0 and knob x = int(131) = 131. Volume 0 gives gain 0.0 and knob x = 2.
+- Toggle, one press: Vibration 1 with Right pressed gives 0; a following Left press gives 1. Invert toggle, one press with its argument 1: +0x00 changes from 0 to 1.
+- Cycler, one press each: value 1 with Right gives 2; value 2 with Right gives 0; value 0 with Left gives 2; value 1 with Left gives 0; value 1 with Left and Right pressed together gives 1.
+- Fade (state 28): Music gain 0.75 after one fade tick gives 0.70, and after another gives 0.65. Gain 0.02 after one fade tick gives 0.0.
+- Load: live Music 75 and Vibration 1; the slot holds Music 20 and Vibration 0. After the load, live Music is 20, its knob x is 27 (int(20 x 1.29 + 2) = int(27.8)), its gain is 0.20, and the live Vibration word is 0. The load itself does not write the rumble gate; the display sync copies the live Vibration word 0 into the gate on the next pass, so rumble is off from then on (see Vibration and the pad).
+- Vibration gate: with Vibration 0, the gate is 0 on every pass, so the motor bytes of every pad are cleared on each packet. A Vibration change during play reaches the gate on the next pass (Behavior 1 and Options).
+- Black-box test BV-1 (Vibration toggle in play; to be run on the original disc on hardware with a rumble pad): start a fresh boot with Vibration On and trigger a rumble cue in play; the pad rumbles. Open the Controls menu and set Vibration to Off; return to play and trigger the same cue. Expected from this section: the pad stops rumbling on the next pass after the toggle (Medium-High). The gate is written after the pad read within each pass, so if the pad still rumbles on that pass, record it as a finding; a stop one pass later is also consistent with the rule. Record the pass-by-pass result, not only the final state.
+- Stick inversion (right-stick bytes only): with Invert Left-Right on, right-stick X byte 0x10 becomes 0xEF (239). With Invert Up-Down on, right-stick Y byte 0x80 becomes 0x7F. With both on, right X 0x00 becomes 0xFF and right Y 0xFF becomes 0x00. A left-stick byte of 0x10 stays 0x10 under either option.
+- Analog bits: vertical stick byte 0x1F sets Up; 0x20 sets nothing; 0xE0 sets nothing; 0xE1 sets Down.
+- Load default: slot 0 empty, slot 2 non-empty: cursor starts at 2.
+- Load starting cursor by key A of slots 0 to 3: keys [-1, 5, -1, -1] give cursor 1; keys [5, -1, -1, -1] give cursor 0; keys [-1, -1, -1, -1] give cursor 4, and Cross then copies nothing.
+- Save success: after the write job reports done, cue 0xA9 (name index 169, save complete) plays and the save screen returns.
+- Save cancel: Triangle in save state 2 writes nothing, plays front-end menu sound 6, clears the music overrides and returns code 0x0B4.
+- Save open: the hero within 5 units of a save point presses Square while idle, cursor previously 2. The save screen (record 18) runs in the same tick with save stage 0 and cursor 0; the hero is set to state 1 on every pass while the screen is open.
+- Save result: after the write, card state word 0 in state 3 gives cue 0xA9 and code 0x0B4; card state word 1 gives stage 0, no return, and a new card scan on the next pass followed by the picker.
+- Pending flag: no save or load yet in the session, game-over Continue goes to code 0x000 (teardown). After one save (successful or not), game-over Continue re-applies the snapshot from memory and goes to code 0x0B4.
+- Prompt codes: record 17 x 20 = 340 = 0x154 (load prompt, state 21); record 18 x 20 = 360 = 0x168 (save prompt, state 22).
+- Cue index rule: cue 0x94 is name index 148 (pause), 0x95 is 149 (unpause), 0xA8 is 168 (save-point activation), 0xA9 is 169 (save complete).
+- Load cursor, filled slots {0, 2}: from cursor 0, Down gives 2 (slot 1 is empty and is skipped). From cursor 2, Up gives 0.
+- Load cursor, filled {2}: from cursor 0, Down gives 2. From cursor 2, Down stays at 2 (slot 3 is empty and no filled slot lies below it).
+- Load cursor, filled {0}: from cursor 0, Down stays at 0 (slots 1, 2 and 3 are empty).
+- Load cursor, filled {1}: from cursor 3, Up gives 1 (slot 2 is empty and skipped).
+- Load cursor, filled {0, 3}: from cursor 0, Down gives 3 (slots 1 and 2 skipped). From cursor 3, Up gives 0.
+- Load cursor, filled {0, 1, 2, 3}: from cursor 1, Down gives 2 (no skipping).
+- Load cursor, filled {1, 2}: from cursor 0, Up stays at 0 (the move would leave the range).
+- Load cursor, no filled slot: from cursor 2, Down stays at 2.
+- Save cursor (no skipping, bounded): from cursor 0, Down gives 1 whatever is filled. From cursor 3, Down stays at 3. From cursor 1, Up gives 0. From cursor 2, Down gives 3 even when slot 3 is empty.
+- Menu cursor (section 4.1), items of kinds 4, 1 and 4 in that order, cursor on the first: Down (0x4000) moves to the next selectable item, the third, and the middle item is skipped. From the third, Down wraps to the first. From the first, Up (0x1000) wraps to the third.
+- Picker row, empty slot (key -1): line 1 reads Empty, line 2 is blank, and the length value is 7.
+- Picker row, filled slot whose byte at +0x2FBA is 10: the length value is 12; line 1 is the location name and line 2 is the date text.
+- Start index 2: stage ids 0 and 1 set, cue 0x40 played.
+- Item tabs: on the Items tab, L1 gives tab 2 with cue 0x98; on the Quest items tab, R1 gives tab 0 with cue 0x99. On the Charms tab, R1 gives tab 2 with cue 0x99.
+- Item grid: the Items tab has 20 cells, cells 0 to 19, in four rows of five. From cell 19 (row 3, column 4), Right wraps to cell 15 (row 3, column 0), and Down wraps to cell 4 (row 0, column 4). The wrap is within the grid. From cell 0, Up gives 15 and Left gives 4.
+- Pause page: with the item index 0 to 5 in order, the page's item 2 is Load Game. A page item of index 1 is View Quests (focus state 3), which opens the journal on Cross. Item 0, View Map (state 2), with the hero map area 8: Cross returns 0x26C + 20 x 8 = 0x30C (record 39). Item 3, Resume Game (state 5): Cross plays cue 0x95 and returns 0x0B4. Item 5, Quit (state 6): Cross plays cue 0x9A and opens the quit box.
+- Count text: a count of 0 hides the cell; a count of 1 shows no number; a count of 2 shows "2" in the neutral grey.
+- Cross on an empty cell: cue 0xA2, no other change.
+- Items tab, cell id 150 owned, marker -1, Circle: the marker becomes 150, cues 0xA3 and 0x9A play. Circle again: the marker becomes -1 and only cue 0x9A plays. No equipment word changes.
+- Square with the category-9 index empty or out of range: nothing happens.
+- Square on the Items tab, Tor active, Tor's body entry 121 and both cloak entries 126: cue 0xA1; Tor's body entry becomes 126 and his cloak entry 121 (the cloak is worn). A second Square restores 121 to the body entry.
+- Entry codes: the Items tab with hero index 1 (Roberta) returns 0x3C (record 3); the Charms tab with hero index 0 (Tor) returns 0x8C (record 7).
+- Journal rows: a quest row with start flag set and done flag clear is listed; with its done flag set, or with a flag id of -1, it is not. A held, uncollected treasure with area -1 is not listed.
+- Journal bar colour: selected main-quest row at pulse 1.8 gives (255, 255, 2) (222 x 1.8 and 160 x 1.8 clamp to 255; 1 x 1.8 = 1.8 rounds to 2). Selected side-quest row at pulse 1.2 gives (186, 186, 155). Unselected rows keep their base colours.
+- Journal pulse: value 1.79 with step +0.02: 1.81 is above 1.8, so the value becomes 1.8 and the step becomes -0.02. Value 1.21 with step -0.02: 1.19 is below 1.2, so the value becomes 1.2 and the step becomes +0.02. A cursor move at any value sets 1.8 and leaves the step as it is.
+- Journal cursor: 3 rows, cursor 2, Down: the cursor stays 2. Cursor 0, Up: stays 0.
+- Journal layout: rows with objectives of 1, 1 and 2 lines, then a treasure row, from top index 0: bottom offsets 89, 178, 281 and 360. The treasure row is not drawn, but with the cursor on it the top index stays 0. The first row's line limit is floor((360 - 128) / 14) + 2 = 18.
+- Journal Cross: quest row 13 (scene 47) selected: the map page of area 47 opens (code 0x26C + 20 x 47 = 0x600, record 78), and the map cursor starts on that row's icon if it is listed. Quest row 27 (scene -1): Cross does nothing and the "Cross View Map" hint is hidden.
+- Map (SPEC-0051): icons A (quest, has items) and B (treasure, has items), cursor on B, Cross: the journal opens with B's treasure pending. Empty icon list: Cross does nothing, R2 opens the journal with nothing pending, L2 goes to the item screen.
+- Overlay cell: canvas x = -9 is drawn; x = -10 is not; x = 521 is drawn; x = 522 is not. Canvas y = 457 is drawn; y = 458 is not.
+- Price caption: with line 1's counter above 0 and a value of 200000, the first line reads "  200,000" (two spaces, nine characters), right edge at x 410, y 115.
+- Price caption colours: price 150, balance 200: line 1 "      150" in (160, 160, 90, 127), right edge x 410, y 115; line 2 "      200" in (128, 128, 128, 127), y 140. Price 300, balance 200: "      300" in (128, 60, 90, 127). Price 32767: "Exorbitant!" in (128, 60, 90, 127).
+- Coin total: coins of 25 and then 10, picked up 60 passes apart: line 1 shows 25, then 35 with the counter at 180; the line is gone 180 drawn passes after the second coin.
+
+- Play gates (synthetic): with story bit 368 and flag E both set, the pass returns 0x118. The gate order puts bit 368 first.
+- Play gates (synthetic): flag E set, no story bit, book cursor -1, with Select or Start pressed, returns 0x1CC.
+- Play gates (synthetic): book cursor 0 (the word at +0x54), no story bit, flag E clear: returns 0x190 before any input is read. The reader then computes index -1; with the saved word at -1 or 0 the fallback is still negative, so the reader leaves at once and returns 0x0B4 (section 6.1).
+- Play gates (synthetic): no story bit, book cursor -1, flag E clear, Select pressed, busy check zero: returns 0x028 and plays cue 0x94.
+- Item screen entry (synthetic): Start pressed, busy check zero. Tab 0 with hero index 1 returns 0x3C; tab 1 with hero index 0 returns 0x8C; tab 2 with hero index 0 returns 0xA0.
+- Page ring (synthetic): item screen, hero map area 5, R2: cue 0x99, returns 0x26C + 100 = 0x2D0 (record 36). The same with hero map area -1: returns 0x1B8 (journal). Journal, L2, hero map area -1: cue 0x99, returns the item-screen code for the current tab and hero.
+- Map entry (synthetic): D-pad Left pressed in play (second word 0x8000), no overlay busy, shortcut gate passing, no menu sub-state, hero map area 3: cue 0x9A, returns 0x26C + 60 = 0x2A8 (record 34), and entering that record loads picture resource 601 + 3 = 604. With hero map area -1: cue 0x9A and the state stays in play. A left push of the stick alone (main word only) does nothing.
+- Journal entry (synthetic): D-pad Right pressed in play under the same gates: cue 0x9A, returns 0x1B8.
+- Picture rule (synthetic): a section O record with kind word -1 and +0x0C = 10 names resource 585. A first picture load goes into one buffer, the next into the other, the third into the first again, and at that moment the first picture's record goes back to kind word -1, so re-entering its screen reads it again; each read is 267,264 bytes into a 267,776-byte buffer.
+- Picture rule (synthetic): a section O record with kind word 2 is a sheet asset; entering its screen starts no picture load.
+- Overlay box busy (synthetic): the box word at +0x258 is 1, no gate fires, no input. The pass returns 0x17C. On the next pass, with the box idle, the state plays cue 0x97 and returns 0x0B4.
+
+Navigation (each press made at least two passes after its screen opened; stacks listed from the base):
+- Play, Select: cue 0x94, pause page, stack (9, 2). Cross on Options: cue 0x98, stack (9, 2, 11). Cross on Controls: cue 0x98, stack (9, 2, 11, 12). Triangle: cue 0x99, the Options page with focus on Controls. Triangle: the pause page with focus on View Map. Triangle: play, stack (9).
+- Pause page, focus 5 (Quit), Down: focus 0, cue 0x9A. Focus 0, Up: focus 5, cue 0x9A.
+- Pause page, Cross on View Map with hero map area 8: map record 39, stack (9, 39), no cue. Triangle: play, cue 0x99.
+- Title, Down: focus 1 (Load Game). Cross: the load screen, record 17, stack (10, 17), cue 0x98. After the card read, in the picker, Triangle: the title with focus 0 (New Game), cue 0x99.
+- Tor, first Start since boot: record 6 (Items tab). R1: record 7 (Charms), cue 0x99. Triangle: play, cue 0x95. Start: record 7 again (the tab is kept).
+- Controls page, focus 1 (Invert Left-Right), Right press: option word +0x00 toggles; focus 2, Right press: +0x04 toggles.
+- Load screen during the card read (stage 0 or 1), Triangle: nothing happens (the state returns -4).
+- Pause page with the quit box open, Triangle: cue 0x99, the box closes, the pause page stays, focus unchanged. Circle instead: cue 0x98, world teardown, record 0.
+- A press of Cross on the first or second pass of a screen: ignored by the generic step.
+- Logo countdown (state 29): pass 0 loads 300; pass 299 leaves the countdown at 1 and stays; pass 300 gives 0 and returns 0x014. Cross, Start or Triangle on any pass: nothing.
+- Game-over reset: play with the bars group shown (timer G0 = 200) when flag E is set. On the game-over page's first pass G0 and every other HUD visibility timer become 0. After Continue with a pending snapshot, the first play pass draws no bars, panels or timer texts; a health change re-arms C, and a change seen by the bar update re-arms G0 and G1, after which the bars show again for 240 ticks.
+- Game-over reach: with flag E clear, no menu choice, Triangle press or focus move in any screen reaches record 23.
+- Controller check (section 2b): pad 0 unplugged on the attract's first visit: the controller box shows and the wait stops; plugged back after 120 passes: the wait resumes, so the movies are queued 120 passes later than the 301-pass case.
+- Title (state 12): Cross on pass 4 with focus 0: nothing; on pass 5: new game, cue 0x9A, code 0x0B4. Start on any pass: nothing. No input: code 0x258 on pass 1,801.
+- Music overrides: a level script sets the bank override to 64 (bank 74); the player opens the pause page: on its first pass the bank override is -1 again, and it stays -1 after Resume. The same override with a dialogue box open (state 23): kept.
+- Lead-in stepper (synthetic, record 27 entered with c = 0): a press on page pass 10: nothing; on page pass 11: code 0x1E0 (record 24). Three more presses, each on pass 11 of its page: 0x208, 0x230, then 0x0B4 with the four music overrides cleared.
+
+## Open questions
+
+1. Resolved: there is no shop screen and no equipment screen.
+   - Shop: the "Buy %s" text is the world interaction prompt, chosen by the interaction chooser (SPEC-0022, Interaction prompts), not a front-end screen. The purchase runs from that world prompt: its price check, the wallet change, the item add and the buy hook are in SPEC-0050 section 3 (High). The price caption of section 15 is drawn by the in-play state and the box host (state 23); its writers are the buy prompt and coin gains.
+   - Equipment: no separate equipment screen is known. The equipment paths are the Mote picker of the second quick panel, which also runs on the item screen's Charms tab (Cross word 0, Square word 1, Circle word 2; SPEC-0021). Circle on the Items tab sets the quick-item marker, not an equipment word (section 14.2).
+   - Confidence: High.
+1a. Resolved: **Pause targets.** Section I binds each pause item to a focus state and a Cross target: View Map (state 2) opens the map page of the hero's area, View Quests (state 3) opens the journal (code 0x1B8), Load Game opens record 17 (state 4 while focused), Resume Game (state 5) returns to play, Options opens record 11 and Quit (state 6) opens the quit box (Behavior 2, section 13.1). **[High]**
+2. Answered: the physical button map is in SPEC-0033 (Layout); no open item remains for the logical word.
+3. Answered: the Vibration option gates pad rumble through the display sync, every pass (Options, Vibration and the pad; SPEC-0033).
+4. Answered: the live option block gets the defaults once at boot and each save slot's block is zero after start-up (Options, Defaults).
+5. Resolved: the Music gain multiplies the music row's Level (the bank music volume) and sets the pause level override; the Sound-effects gain sets the default cue volume (row Scale x gain) and scales the stream fade-in ceiling and the stingers; the Voice gain drives only the emote clips, at trunc(1024 x Voice gain) (Behavior 3; SPEC-0009) (High).
+5a. Resolved: the Music, Sound Effects and Voice knob nodes each store x = 2 in the page data. Their key-to-node mapping is Music to node 832, Sound Effects to 840 and Voice to 848. At the default value 75, the first apply changes each x to 98 using the slider rule in Behavior 3. This is the stored node coordinate; parent transforms and the rendered position before apply are not established. **[High for stored values and mapping.]**
+5b. Resolved: the music controller and the per-pass voice update run on title and menu passes once the title has been shown: no movie playing, the title-start word set and the game-state code 9. So the title's bank 35 and the credits' bank 18 are heard, and front-end cues played through the normal cue call get trunc(row Scale x Sound-effects gain). Before the first title pass (the card check, the logo, the legal screens and the attract movies) neither runs, and the default cue volume is 1,024 (Behavior 3a and 3c; SPEC-0009, Per-tick controller, Pass gate). **[High]**
+6. Resolved: the invert toggle receives the page's focus index. Controls row 1 (Invert Left-Right) toggles +0x00 and row 2 (Invert Up-Down) toggles +0x04, which matches the display slots 67 and 68 (Behavior 3). The axis effect: +0x00 flips the right-stick X byte and +0x04 flips the right-stick Y byte. **[High]**
+7. Resolved: table B states 2, 3, 5 and 6 are the focus states of the pause items View Map, View Quests, Resume Game and Quit (section I; Behavior 2). Table A (74 slots) is described in section 9c (Open question 85 for the Low slots). **[High]**
+8. Partly resolved: every table B state, its record and its return values are in Behavior 2 (state table and state return census), and the dispatch from a record's +0x0A and an item's section I +0x06 to table B is in Behavior 1b. **[High]** The colour-editor branch of the driver is a debug colour editor that never runs (section 17.1); its panel layout is not described.
+9. Resolved: there are four save slots, and no fourth label ("Game 4") is needed. Each picker row is built from its slot's own text (the empty word, or the location name and date), not from a label (Behavior 7.1). The fourth row is slot index 3. The front-end labels "Game 1" to "Game 3" are not used by the row code; they sit on page 896, which no code opens (Open question 45). Confidence: High.
+10. Start and Select opening the in-game menu: partly known. Select opens the pause page; Start opens the item screen, whose entry code is one of the six codes (14.4). Why the two openers use different screens is not established.
+11. Answered: the start-point item indices are in section 5, and the chooser is never entered (Open question 86).
+12. Section I is resolved (item targets, see Section I). Section K is resolved in part (value-text nodes: variable index, font id and format; see Section K). The tail is the font table (3 fonts) and the header word at +0x4C is section N's count (Section M, N and tail). Open: the meaning of the K colour word (+0x04) and of K +0x0C. The symbolic names behind the 92 keys of section C, and which screen each front-end key is used for, are open.
+13. Partly resolved: section M is 14 UI animation tracks of 112 bytes (kinds 1, 2 scale, 3 colour), and section N is 20 animation slots of 32 bytes with its count at header +0x4C (Section M, N and tail). **[High]** Still open: the meaning of header word +0x3C (585), which is not N's count, and the effect of kind-1 tracks (none is on disc, so the shipped game is not affected).
+14. Partly resolved: J +0x14 and +0x16 are the position, +0x1C and +0x1E an authoring pivot not used for placement, +0x2A the row-spacing byte, +0x2D the absolute flag, +0x2E the alignment byte and +0x30 the hide flag (Section J). Still open: J +0x10, the bytes +0x31 to +0x33, and sprite field E +0x18. (E +0x08 is the asset index; see Section E.) (The handler index at +0x24, the search key at +0x28 and the mode byte at +0x2C are described in section 9b.)
+15. What the frame groups A, B and C mean (idle, active, selected). How the 779 zero-count sprites are drawn, if at all.
+16. Which screens hold the 20 strings outside the seven page trees (inventory and item actions, save, quest and location text).
+17. Resolved: **Neutral and highlight labels.** The renderer does not select between two bindings on one text node. The page tree has separate text nodes for the neutral label and its orange highlight counterpart, each with its own section G binding. The neutral node draws normally; the highlight node is under the selectable item's focused flag and uses draw mode 1, so it appears only while that item is focused (sections 9d and 12; Open question 75). The binding colour is each label's full start colour, multiplied only by the node tint, which is 1 on every text node on disc. **[High for the draw rule and node/binding structure; Medium-High for the presentation interpretation.]**
+18. Resolved: the hold counter counts ticks, and nothing sets it in the shipped game, so it never holds a pass (Behavior 1, step 2). **[High]**
+19. Resolved: the O record kind word is 2 for a sheet asset, whose first 8 bytes are a texture register value addressing the front-end texture chunk, and -1 for a full-screen picture that is not loaded yet (overwritten with the buffer reference once loaded; Section O, Behavior 1a). **[High]**
+20. Partly resolved: the front-end texture chunk uses the generic texture layout and is uploaded at GS block 0x2A00 as 256 x 511 32-bit pixels; the section O texture words find each sub-texture and palette in it (Section O). The generic layout itself belongs to the texture spec.
+21. Resolved: the canvas is always 512 x 448 with Y scale 1.0. The canvas words have one writer, a setter that is never called (section 10). The 512-high video-mode record belongs to the platform display set-up (SPEC-0008), and its PAL branch is unreachable. **[High]**
+22. Resolved: normal play runs state 11 (record 9, the in-play HUD), which does not re-arm the HUD timers each call. States 8, 9 and 10 are the item-screen tabs, which re-arm them every tick (Behavior 6, section 14.1). **[High]**
+23. Resolved: **Cutscene and menu hide rules for the HUD.** Menus and other pages are separate front-end states, so the HUD page is not drawn under them; a dialogue box hides the whole HUD and a cutscene without a box hides only the monster bar, the D-pad hint and the journal icon (SPEC-0023 section 4.1). The main-loop flag tied to game-state code 9 selects global tasks and does not hide anything (SPEC-0023 Open question 7). **[High]**
+24. Resolved: the load cursor starts at 4, outside 0 to 3, when no slot is filled (Behavior 7.2); Cross then copies nothing. Apart from that starting value, the movement rule (Behavior 7.1) keeps the cursor at 0 to 3. **[Medium-High]**
+25. Resolved: the item-screen tab states 8, 9 and 10 each keep HUD calls: they re-arm HUD timers G0, G1 and C every tick, draw the bar group 0x31 at a (60, 23) draw offset, and draw elements 0xBF and 0xBE (section 14.1). **[High]**
+26. Resolved: the item screen's tab word is 0 (Items) at boot, and only L1 and R1 change it, so the screen opens on the last tab viewed for the whole session; it is not saved and not reset by a new game or a load (section 14.1). **[High]**
+27. Resolved: Circle on the Items tab writes no equipment word. It sets the active hero's quick-item selection marker (SPEC-0021) to the cell's id, or clears it when it already holds that id; the "equipped" frame (slot 1) and the Activate/Deactivate labels (slot 6) show the marker (section 14.2). **[High; Medium-High that the id set is the cell's id, inferred from the comparison beside it]**
+28. Resolved: on the Charms tab the buttons are those of the Mote picker of the second quick panel (Cross word 0, Square word 1, Circle word 2; SPEC-0021). On the Quest-items tab Cross and Circle always fail the usability test (every entry is category 7) and play 0xA2 (section 14.1). **[High]**
+29. Resolved: **Party setting.** The word at +0x14C of the global game object is the active hero's index (SPEC-0053: 0 Tor, 1 Roberta); it selects the entry-code group, so Roberta's item pages are records 3 to 5 and Tor's records 6 to 8 (14.4). Square reads the same word on purpose: the category-9 list keeps one cloak entry per hero, and Square swaps the active hero's cloak entry with its body entry (SPEC-0021, Tattered Cloak). **[High]**
+30. Resolved: **Entry destinations.** A code N selects section D record N / 20: 0x3C, 0x50 and 0x64 are Roberta's Items, Charms and Quest items pages (records 3 to 5), 0x78, 0x8C and 0xA0 are Tor's (records 6 to 8), 0xB4 is play (record 9) and 0x1B8 is the journal (record 22). **[High]**
+31. Resolved: **Journal row gate.** A quest row is listed when neither flag id is -1, its start flag is set and its done flag is clear (SPEC-0049). The show-all setting is a debug-only switch word, zero on disc, that makes the flag tests pass for every row; it is not set in play (section 14.3; SPEC-0051 Edge cases). **[High]**
+32. Resolved in part: **Journal rows and the map cursor.** The row types, bar colours, selected-row pulse, text colours, wrap width and row height rule are in section 14.3; the map cursor is in SPEC-0051 section 4. A slide-in animation of the rows is not described. **[High (rules); Medium (no slide-in)]**
+33. Resolved: **Second input word.** It is the raw newly-pressed word of the menu snapshot (+0x894): buttons only, without the stick-derived direction bits. The snapshot is the OR over the controlling set, which is always pad slot 0 (SPEC-0033 Controller map). Its bits are the main word's (0x0001 L2, 0x0002 R2, 0x0040 Cross, 0x0100 Select, 0x2000 D-pad Right, 0x8000 D-pad Left). The "select" and "back" bits of the journal and the map are L2 and R2, which move around the page ring (14.4). The item screen reads L2 and R2 from the rising-edge word (+0x89C) and the journal and map from the second word; both carry the same button bits, so there is no conflict. Select (rising-edge word) closes the map (section 4). **[High]**
+34. Resolved: **Cue names.** By the index rule, 0x98 is the confirm (advance) button sound, 0x99 the back button sound, 0x9A the direction-pad press and 0xA1 the cloak use; 0xA3 is the Mote activation. These agree with every front-end use: Cross and tab or page moves play 0x98 or 0x99, focus and cursor moves play 0x9A, and the cloak swap plays 0xA1 (Where it lives on the disc, Cue ids). **[High]**
+35. Quest-row linked ids: the progress flags they name (their range, 0 to 675, fits the 743-bit flag bitmap; Low) and what the item screen's use call does with a quest item (category 7) on the Quest items tab.
+36. Whether the item grid list (14.1) is the same on every boot and in every save: the list is read at run time from boot data; a writer was not identified.
+37. Category check: whether all 20 grid kinds have the item category expected by their cells (not confirmed against the item table).
+38. Overlay cell: the full caller set of the overlay tick, and whether any overlay cell outside the margin is still tracked after it is skipped.
+39. Resolved: **Price caption colour test.** There is no cannot-pay label. Line 1 shows "Exorbitant!" in (128, 60, 90, 127) when its value is 32767; otherwise the number, in (160, 160, 90, 127) when it is no more than the balance (party +0x14) and in (128, 60, 90, 127) when it is above. Line 2 has no test (section 15.2). **[High]**
+40. Resolved: **Price caption line 2.** It is the balance, set by the buy prompt, drawn as a number in (128, 128, 128, 127) (section 15.2). **[High]**
+41. Resolved: **Second caller.** The other function that draws the caption is the box host (state 23), every pass. In play the caption is drawn only while both quick panels are closed (section 15.2). **[High]**
+42. Resolved: **Caption writers and clears.** The buy prompt sets line 1 = price and line 2 = balance, each with counter 1, on every tick it applies; every coin add (items 135 to 139, cue 0xA5) sets line 1 to the gain, or adds the gain while the line is still shown, with counter 180 (a running total over 3 s). World teardown clears both lines; the menu and HUD reset clears line 1 (section 15.2). **[High]**
+43. The condition mode byte of a node is at +0x2C, as the draw routine and the condition chain both read it (Section 9b). It is not at +0x0C, which is the parent link in section J. The kind byte at +0x2B agrees with section J. The remaining question is the handler index (+0x24) and the argument byte (+0x2F), which are read as stated in section J and section 9b, and are not confirmed against the disc bytes.
+44. Resolved: the column offset uses the width at J +0x22 and the row offset the height at J +0x20; the texture is sampled one texel per pixel from the frame cell's top-left, with no stretch (Section 12). **[High]**
+45. Resolved: the page 896 labels "Game 1" to "Game 3" are not drawn. No code opens page 896, and the picker row drawing does not use them; they are a leftover, not a name for any slot. **[High]**
+46. Partly resolved: kind 6 is the value-text node (Section K). Kind 2 is resolved: it is the text node draw (Section G; Text node draw, section 12): tint factors 1.0 or colour-track bytes / 128, the binding's unsigned RGBA colour, its letter spacing (+0x0C) and its font id (+0x0E; negative draws nothing). Still open: the stored value that kind 1 tests on the node's object, and the rest of the kind 1 and kind 7 draw helpers (only partly described).
+47. Resolved: **Text pattern with one string and two numbers.** It is not a picker line. It is the item screen's item-name line: the shared tab step writes the selected item's name, then appends the times-obtained count and the carry limit in parentheses, or the held count alone (section 14.1, Item name and description lines). The picker's line 2 is the 16-byte date text (section 7.1). **[High]**
+48. Resolved: load starting cursor (Behavior 7.2). Slot 0 if it is filled; otherwise the first filled slot among 1 to 3; if no slot is filled, the cursor is 4. **[Medium-High]**
+49. Resolved: map projection table values (section 14.5). By the user's decision the clean side reads them from the user's own boot executable; SPEC-0051 owns the table and gives its address, count, stride, layout and read rule. The remaining question (the records have no source table in the file image) is SPEC-0051 Open question 1.
+50. Resolved: **Projection record matrix.** The four groups are columns; the input is (x, y, z, 1); screen x and y are result components 0 and 2, so the height is ignored (section 14.5; SPEC-0051 section 7). **[High]**
+51. Partly resolved: **Map area index.** The record used is the displayed (selected) map area, 0 to 76 on disc data; a negative area never opens a map page (14.4; SPEC-0051 section 1). Still open: what the reader does with an index of 77 or more, which disc data never produces. **[High (range on disc data); Low (out-of-range behaviour)]**
+52. Answered: the marker angle is facing - yaw offset + pi, in radians (section 14.5, step 3; SPEC-0051 section 7).
+53. Resolved: **Marker pulses.** The float pulse (step 0.03, bounds 0.8 and 1.5) scales the hero marker's colour; the integer pulse (step 50, bounds 3900 and 4300) is the cursor icon's scale in 4.12 fixed point, not an angle. Both reverse at their bounds (SPEC-0051 section 5). **[High]**
+54. Resolved: **Menu cursor mode codes (section 4.1).** The codes are 0x4000 (Down) and 0x1000 (Up). Down moves to the next selectable item and Up to the previous, with wrap; Left and Right give no list move. **[High]**
+55. Resolved: **Direction per mode code (section 4.1).** Down (0x4000) selects the next move and Up (0x1000) the previous move. **[High]**
+56. Menu item record (section 4.1): the layout of a menu item is not described here. Resolved in part: the selectable items are the kind-4 nodes; items of other kinds are passed over (Medium-High).
+57. **Flag pair** (section 16): which option or menu setting the complementary flags A and B represent, and which code reads the third query.
+58. **Pools by mode** (section 16): what the 0x70-byte slots of each pool hold, and whether the default pool is the same as one of the named modes.
+59. **Free list and layout walk** (section 16): the purpose of the 16-node free list, and whether the flagged node's offsets are included in the layout walk.
+60. Resolved: **Pad-mask directions in the menu driver and focus search (section 17.1).** The Behavior 4 names are right: 0x1000 Up, 0x4000 Down, 0x8000 Left, 0x2000 Right. The stick mapping (stick up adds 0x1000) and the focus search geometry (0x1000 prefers items above, 0x4000 below, on the y-down canvas) both confirm them. Value C's bits act as R1 and R2 held. **[High]** The three driver values A, B and C are the channels of a debug colour editor that runs only on a page with a kind-8 node; no such node is on disc, so it never runs (section 17.1). **[High]**
+61. Resolved: **Handler return codes.** There is one convention. A state returns 0 (no decision; the generic step runs), -4 (no decision; generic Cross and Triangle blocked), -1 (back) or a section D record (go there). The front end also resolves -3 (stay) and -2 (clear the screen), which come only out of the generic step. The list of section 17.1 is the same scheme after the generic step (Behavior 1, step 5; Behavior 1b). The earlier reading of -4 as "pop and stop" was wrong. **[High]**
+62. Resolved: **Focus search candidates and wrap (section 17.2).** Every kind-4 item of the page whose predicate passes, other than the focused one, is a candidate. Its point is the helper position plus its pivot, with a row-spacing term. Candidates behind the pressed direction use the wrapped distance. The cross-axis term is weighted 4 before squaring by a nearness test that always passes for sizes of 0 or more. The search never runs in the shipped game. **[High]**
+63. Resolved: **Focus search result (section 17.2).** A zero offset along the search axis only skips that candidate. The search returns the lowest-cost item index, or -1 when no candidate qualifies; on -1 the caller uses the record's neighbour. **[High]**
+64. Resolved: **Item record fields (section 17.3).** The menu item record is the section J node. +0x14 and +0x16 are the node's position relative to its parent, +0x1C and +0x1E an authoring pivot not used for placement, +0x2A the parent's row-spacing byte, +0x2D the absolute flag (it stops the parent walk) and +0x2E the alignment byte. Row spacing uses n = 0 for the first child and otherwise the count of visible siblings from the second child up to and including the node (Section J, Node transform). **[High]**
+65. Resolved: **Right alignment (section 17.3).** Two rules exist. The draw (Behavior 12) shifts by the full scaled width for alignment 2 and half of it for 1. The position helper used only by the focus search gives x − width − 1 and x − trunc(width / 2), and never shifts kinds 0, 3, 4 and 5. Other alignment values give no shift in both. Visible nodes follow the draw rule. **[High]**
+66. Resolved: **Row spacing (section 17.3).** The spacing is added to the vertical position only, with the count n of Section J (Node transform); no other condition on the parent is known. **[High]**
+67. Resolved: **Byte tween (section 17.5).** It is the colour kind (3) of the section M animation tracks; t is in seconds (front-end pass counter / 60); start and end bytes are at track +0x14 and +0x18. No animation slot reaches a colour track, so it never runs in the shipped game. **[High (math); Medium-High (reach)]**
+68. Resolved: **Nine-slice panel (section 17.7).** It is the dialogue and message box frame of SPEC-0022 (Dialogue box layout), drawn only by the box update; border words 15, 28, 14 and 26 and sprite size 64 x 64. **[High]**
+69. Resolved: **Cursor rectangle (section 17.6).** It is the value marker of the debug colour editor panel, drawn for kind-8 nodes only, and never drawn in the shipped game; the word at 0x2EC8C8 is the editor's value channel, not a list scroll. **[High]**
+70. Resolved: **Menu page open (section 17.4).** The step is the full-screen picture load. It plays no cue, and its completion callback only marks the read as finished. The two-slot index picks the picture buffer, and the record that last used it is marked not loaded (Behavior 1a). **[High]**
+71. Resolved: **Menu driver values (section 17.1).** Values A, B and C belong only to the debug colour editor (loaded from and written back to a kind-8 node's colour record), which never runs in the shipped game; each steps by 1 per pass on its held bits. **[High]**
+72. **Disc check of section 17 values.** The caps (63, 180, 63), the frame counter and scroll addresses, the nine-slice border addresses, and the rectangle and quad sizes come from the code. They have not been confirmed against the disc bytes, and the menu driver's callers are not established beyond the menu tick.
+73. **Record stack owner and pops (section 9a).** The drawing path pushes a frame per drawn node and calls a separate pop after the draw; the body of that pop is not confirmed. Which menu code owns the record stack (its base is a run-time block), what the menu callers push, whether the menu code pops, and how it restores records. The relation between the 32-slot record stack and the 31-entry screen stack of section 9. **[Low]**
+74. **Overflow report.** The overflow reports (the record stack's and the screen stack's) are debug-report calls. Whether the shipped build writes them, and what the clean side should do when a push is refused. **[Medium-Low]**
+75. Resolved: **Draw condition mode 1.** The tree draw passes a focused flag to the children of the kind-4 item whose running index equals the focus index; mode 1 nodes draw only under that flag. Each list item's mode-1 highlight sprite and label are its selection highlight (section 9d, section 12). **[High]**
+76. Resolved: **Key mask "rate" (section 9b).** It is the animation slot's start time: the clock = front-end pass counter (0x2EC8C4) / tick rate (0x2EC8D4, set to the run-time rate 60 at front-end start), in seconds. **[High]**
+77. **Kind 2 in the search (section 9b).** The search routines test kinds 1, 3 and 4 by name. Kind 2 is described as needing its condition true, but no test on kind 2 is known in them. Whether kind 2 is tested in another search, or treated like the other kinds, is not settled. **[Medium-Low]**
+78. **Kind 1 data check (section 9b).** The runnable scan skips a kind 1 node when a value in the node's data record is negative. The meaning of that value and which record it belongs to are not settled. **[Low]**
+79. **Relocation loops (Load-time relocation).** The loops that rebase the 0x34-byte and 0x70-byte records are taken as covering section J and section M. Their count sources are not confirmed. **[Medium]**
+80. Resolved: **Item screen grid gate.** Slot 12 is a constant false library gate: the item-screen groups sit under it so the automatic page draw skips them, and the tab states draw them every pass by section C key (0xC2, 0xBF, 0xC0, 0x31; section 9c). **[High]**
+81. Resolved: **Save prompt opener (section 7.3).** The save prompt (record 18, table B state 22) is opened by the world's character-region update when the player presses Square within 5 units of a save point (a kind-4 record of the world pack's character region, SPEC-0006) in normal play with the hero not busy. The update calls the front end's set-screen routine with record 18 directly; no return code is involved, so no handler returns 0x168. No menu item (section I), handler or level host call opens record 18. **[High]**
+81a. Resolved: **Save screen and the world update.** The world is frozen: the save screen does not set the play-active word, so the game-state code is 9 from the pass after the Square press (section 2a). The save-point step is part of the frozen world update, so a second Square press cannot reopen the screen or reset the save stage. The card jobs run as global tasks that run in every game-state code. **[High]**
+81b. Resolved: **Text variable 1 (section 7.3).** The value is the needed space computed by the card layer from the file sizes: 106 KB on every boot (section 7.3). **[High]**
+82. Resolved: **Pause Resume Game and Quit targets.** Resume Game (state 5) plays cue 0x95 and returns code 0x0B4 on Cross. Quit (state 6) plays cue 0x9A and opens the quit box run by the pause state (state 7); its Circle answer tears the world down (code 0x000) and its Triangle answer closes the box (Behavior 2). **[High]**
+83. Resolved: **Options page order.** Rows are drawn top to bottom in index order: Options at y 178, 220, 262; Controls at 188, 232, 276; Audio at 203, 247, 291 (Behavior 3, Row draw order). **[High]**
+84. **Pure predicate and mode 1 reads (section 9c).** Slot 9 and slot 11 results depend on which quick-item slot and category the caller passes; their callers were not all identified. **[Medium]**
+85. Partly resolved: **Predicate slots.** All 74 slots are described in section 9c. Still open: the terms of slot 61, slots 57 and 59 (run-time words with no writer found), slot 58, slot 18 and slot 38, and the names of the HUD words behind slots 44, 47, 48, 51, 53 to 55, 60, 63 and 64 (SPEC-0023). **[High for most slots; Low for those listed]**
+86. Resolved: **Start-point chooser and records 24 to 28.** The state return census (Behavior 2) lists every value each state returns. Together with the section I targets, the back rule and the two direct screen sets, it shows that records 15, 16, 21 and 24 to 29 are never entered, so the start-point chooser and the page stepper never run in the shipped game. **[High, static]**
+87. Answered: each save slot's option block is zero after start-up; only the live block keeps the defaults (Options, Defaults).
+88. Answered: the Vibration display sync runs at boot and every pass, and status 9 forces the gate to 0 (Options, Vibration and the pad).
+89. Resolved: **Change feedback sound.** The helper that runs after a slider change is the controller check (section 2b), which plays no cue. Option changes are silent (Behavior 3, Change feedback). **[High]**
+90. Resolved: **Yes and No labels (Controls page).** They are the value texts of the two invert rows: each invert row shows Yes when its option word is nonzero (predicate slot 67 or 68, mode 2) and No when it is zero (mode 3). Only the Vibration row shows On and Off (section 3, Toggles). **[High]**
+91. **Unlabelled option fields (+0x0C and +0x10).** Neither field is reached from any menu, and no reader is known. Their meaning is not established. The clean side keeps and saves both words with their defaults, and nothing in the known front end changes them. **[Medium]**
+92. Answered: the defaults are written before the first sync, so rumble works from the first boot (Options, Vibration and the pad).
+93. Resolved: **Card state (table B state 0).** The job started on the first visit is the boot card check (SPEC-0025, Card jobs): no card shows the no-card message (Retry / Continue), a formatted card short of space with no save folder shows the free-space message (Retry / Continue), and an unformatted or good card shows nothing. The state waits for the job and then goes to code 0x258. The first-visit flag is never cleared, so later visits last one pass (Behavior 2, state 0). **[High]**
+94. **In-play gate codes (Behavior 6).** The play gates in section 6 run in this order before any input: story bit 368 (code 0x118, record 14, credits; set by pack 1300's epilogue after the finale, SPEC-0026 Credits), the busy latch (no return), the book cursor (code 0x190, record 20, book reader), and flag E (code 0x1CC, record 23, game-over page). The Select opener returns code 0x028 (record 2, state 7), which is the pause page. **[High (order and setter chain); Medium-High (screen identities); Medium (that the player reaches the epilogue triggers)]**
+95. Resolved: **World updates while the game-over page is shown.** The world is frozen while the page is up. The page does not set the play-active word, so the game-state code is 9 from the pass after the in-play state hands over to it, although flag E stays set (section 2a; SPEC-0026). **[High]**
+96. Resolved: **Game-over page sprites.** The page's two sprites (sprite section records 526 and 527) have no animation frames. Record 526 shows the game-over picture, resource 594 (512 x 128; Behavior 1a). Record 527 is the small Cross button icon (sheet asset "x_sm"), drawn beside the "Continue" caption once predicate slot 72 passes, after about 2 s (Behavior 2, state 26). **[High (asset); Medium-High (that it shows the Cross button)]**
+97. Resolved: **Section D fields +0x04, +0x06 and +0x08.** +0x04 is the back and stack rule (-3, -2, -1 or record 9; per-record values in section D). +0x06 and +0x08 are the Left and Right neighbour records used when a Left or Right focus search finds nothing; all are -1 or -3 on disc, so they are unused (section 9d). **[High]**
+98. Partly resolved: **Records with no state.** Records 11, 12 and 13 (Options, Controls, Audio) have no state and are entered by section I targets; records 15 and 16 have no state and are never entered (Behavior 2, census). Which other records carry 0xFFFF is not listed here. **[High (records 11 to 16)]**
+99. Resolved: **Pending save or load at game over.** The pending flag is set by confirming a slot in the save picker or the load picker, which also copies the slot into a session snapshot (section 7.3). When the game-over page exits with the flag set, the job is a re-apply of that snapshot from memory (no card access), followed by a hero reset and code 0x0B4 with no teardown; so Continue resumes from the last save or load. A load picked earlier takes the same branch. Only the world teardown clears the flag. The quit path does not lead to the save prompt and never writes a save. **[High for the code; Medium-High for the player view]**
+100. Resolved: **Countdown display (record 30).** The call made on the countdown's first pass selects controller port 1 as the only menu input source (the input mask is set to pad 0 and the merged menu words are rebuilt); it draws nothing. What the player sees for those 301 passes is record 30's own full-screen picture, the Neopets logo (resource 600). The attract and the page stepper make the same call on their first pass (Behavior 2, states 1, 27 and 29). **[High]**
+101. Resolved: **Other routes to the game-over page.** None. The game-over branch of the in-play state is the only code that forms code 0x1CC, and the game-over handler is named only by its table-B entry. On disc no item target (section I) and no back, left or right field of a section D record names record 23 (item targets are -3, -1, 11, 12, 13, 14 and 17; the only non-negative back value is 9; left and right are -1 or -3). The page is reached only through flag E during play. **[High]**
+102. Resolved: **In-game menu counters on game over.** The first-pass reset is the HUD and menu reset of the pause and item-screen openers (SPEC-0023 section 4.1). It sets every HUD visibility timer, the quick-panel flags, the Square prompt count, the countdown counter, the monster bar timer and the fade-enable flag to 0. What it changes on screen: after Continue on the snapshot branch (code 0x0B4, no teardown) the HUD starts hidden and returns on the next re-arm, as after closing the pause page. On the teardown branch the next screens (card check, logo, attract, title) draw no HUD, and play starts again with these values at 0. **[High for the writes; Medium-High for the on-screen result]**
+103. Resolved: **Caller of the Cross latch (state 6).** State 6 is the focus state of the pause item Quit (section I); it is run while that item is focused, not through a record's +0x0A field. **[High]**
+104. Resolved: **Pause box.** Only Quit opens a box: record 26 of the system message table, a quit confirmation with labels Quit (Circle) and Resume (Triangle). Circle: cue 0x98, world teardown, code 0x000. Triangle: cue 0x99, the box closes and the pause page stays. While it is open the input block hides the menu words from the focus states and the generic step. Load Game, Resume Game and Options open no box (Behavior 2, state 7). **[High]**
+105. Resolved: **Writers of the pending book index (section 6.1).** The pending index (game-state word +0x50) and the cursor (+0x54) are set to -1 once, when the game-state object is created, and are never reset. The pending index is set only by the book-station handler (SPEC-0028) and cleared only by the chooser's book step; the cursor is written only by the book step and the reader. **[High]**
+106. Resolved: **Saved book word (+0xA8).** It belongs to a global settings block, which is created on first use with the word at -1. Its only other writer is the reader exit (-1), so it is always -1 in the shipped game. The play gate also opens the reader when this word is 0 or more; a clean side that starts it at 0 would bounce between play and the reader every pass (section 6.1). **[High]**
+107. Answered: SetGameOver is host call 154 of the level-script table (SPEC-0030; SPEC-0026, Game over).
+108. Resolved: **Sub-menu flags.** The two exclusive flags are the open flags of the in-play quick-item panel and second quick panel (SPEC-0021), which open on D-pad Up and Down. The map and journal shortcuts need both clear (section 6). **[High]**
+109. Resolved: **Journal Up and Down.** Down (0x4000) adds 1 to the cursor, clamped to the last row; Up (0x1000) subtracts 1, clamped to 0; each move sets the pulse to 1.8 and plays a front-end move sound; the top index then follows the cursor by 1 row per tick (section 14.3). **[High]**
+110. Resolved: **Extra branch of the pause opener.** It is the pad-not-usable auto-pause: when pad slot 0 is not usable in play, the pause page opens as for Select (SPEC-0033 Controller map). **[High]**
+111. Resolved: **Item-screen pass on the quest-items tab.** State 10 returns 0, 0x0B4 (Triangle or Start), the tab codes, 0x1B8 and a map code; Cross and Circle always play 0xA2 (Behavior 2, section 14.1). **[High]**
+112. Resolved: **Overlay box busy test.** The box is busy when its current-page text word (+0x258) is set, or else when its next-page word (+0x25C) is set. The helper returns that test (Behavior 6, Overlay box busy). **[High]**
+113. Resolved: **Input word for the openers and the pages.** The second word (+0x894) is the raw newly-pressed word, with no stick directions; the main rising-edge word is newly pressed2 (+0x89C), with stick directions, and SPEC-0033 calls it the rising-edge word (Controller map). Select and Start in play read +0x89C; Select on the pause page, the pause item states, D-pad Left and Right in play, and L2 and R2 on the journal and the map read +0x894. **[High]**
+114. Resolved: **Credits item.** The Options page's Credits item targets record 14 (code 0x118, the credits; pushed, back rule -1), opened by the generic Cross with cue 0x98; the credits return to Options by Triangle (from page pass 2, cue 0x99) or at the end of the scroll (no cue, focus on Controls) (Behavior 2, state 18; section 13.2). **[High]**
+115. Resolved: **Overlay box users.** The shared dialogue/message overlay is driven by the box host (state 23); neither the book reader (state 24) nor the journal (state 25) uses that overlay object as its page surface. The book reader draws the loaded book pages through the book page driver, and the journal draws its own page tree and row list. They may use shared text/font drawing helpers, which does not make them overlay-box users. (Behavior 2, sections 6.1 and 14.3; SPEC-0022; High.)
+116. Resolved: **Book reader exit with no valid index (section 6.1).** The cursor is set to -1, the four music overrides are cleared and the reader returns 0x0B4 with no cue; nothing is unloaded and the saved word is not written. **[High]**
+117. Resolved: **Book page timer (section 6.1).** The page driver runs once per frame-loop pass while a book is loaded, whichever screen is current. The timer is the page angle in radians, 1.2 down to 0.12 in steps of (1.2 - 0.12) / 75, so the fall takes 75 passes (1.25 s); each pass draws first and then applies the step. **[High]**
+118. Resolved: **Book prompt draw (section 6.1).** "Read Book" is the Square caption of SPEC-0022 (slot 4 at (327, 395), default caption colour, Square icon in the same pass). **[High]**
+119. Resolved: **Book cursor sharing (section 6.1).** No other handler reads or writes the cursor (+0x54). **[High]**
+120. Resolved: **Actors that offer books (section 6.1).** NPCs and enemies never reach a type-11 volume or a book station, and the petpet's fire is refused, so only the selected hero sets the pending book index (SPEC-0028, "Trigger pass"). **[High]**
+121. Resolved: **Book index bound (section 6.1).** The reader does not check the index against the size of the book directory; station values on disc give indices 0 to 86 only. **[High]**
+122. Resolved: **Save success polarity (section 7.3).** The card state word is the write job's result: zero means "saved", or "Cancel save?" answered Yes inside the write job (a quirk: cue 0xA9 plays although nothing was written); nonzero means "not saved" (No to the question, or Retry after a failure), which goes back to a new card scan and the picker (SPEC-0025, Card jobs). **[High]**
+123. Answered: Triangle in the load picker leaves by the generic back rule with cue 0x99; the card stages return -4 and a cancel returns -1 (section 7.2, Leaving without a load).
+124. Resolved: **Book prompt gates and order (section 6.1).** The book step runs only when the chooser's generic chain runs (hero input enabled, hero not occupied, game-state word +0x5C not above 0, no buy or talk, no earlier entry). It runs in the hero's update, before the hero's trigger step, so "Read Book" shows one tick after entering a station and one tick after leaving; a pending value left while the hero is occupied stays stale until the step next runs. **[High]**
+125. Resolved in most part: **Screen reach of the pictures (Behavior 1a).** The credits background (589, record 14) is shown, from the Options page's Credits item and after the finale. The Neopets logo (600, record 30) and the legal screen (577, record 1) are shown at boot and after every card-state visit (the logo also after the title's idle timeout). The lead-in pages (595, 597, 599; records 24, 26, 28), Coming Soon (596, record 25), Controls (598, record 27) and the chooser's copy of the load-game picture (record 15) are never shown, because their records are never entered (Behavior 2, census). Still open: whether the player reaches the epilogue triggers that lead to the finale credits (SPEC-0026, Credits). **[High (reach); Medium (finale credits)]**
+126. Resolved: **Records 24 to 28.** Reading (a): they are tutorial lead-in pages, not start-point steps. Records 27, 24, 26 and 28 carry the Controls, Attack Maneuvers, Quick Inventory and Mote screen pictures, each with a Cross icon and "Next"; state 27 turns the page on any new press from page pass 11 and enters play after the fourth (section 5). No screen, item or code enters record 27 (or 24 to 28), and the title's New Game goes straight to play, so the pages are not reached. **[High (mechanism and reach); Medium (that a New Game step to them was removed)]**
+127. Resolved: **Map id per level.** The map id is the hero map area: word +4 of the current world pack's type-1001 record (SPEC-0006), or, when that is -1, the last value given to the script call RegisterTransitionMap in the session (SPEC-0051 section 1, with the census of which packs carry which id). **[High]**
+128. Resolved: **Picture buffer reuse.** When a third picture is loaded into the first buffer, the first picture's asset record is set back to "not loaded" (kind word -1) at that moment, not when its screen is left (Behavior 1a, item 4). **[High]**
+129. Resolved: **Journal objective line height (section 14.3).** The objective is font 2 (line height 14) and the title font 0; row height = max(79, 75 + 14 L). **[High]**
+130. Resolved: **Journal row-part pixel offsets (section 14.3).** The row parts are canvas-absolute nodes of the journal tree, drawn at their node position plus the row offset; their node keys and positions are in the row-part table of section 14.3. **[High]**
+131. Resolved: **Triangle on the journal and the map.** Entering a record whose +0x04 is 9 cuts the stack back to play (record 9) and pushes the page, so Triangle pops straight to play (cue 0x99), whether the page was opened from play or from the pause page (section 9, Back rule). **[High]**
+132. Resolved: **In-play shortcuts and the quick panels.** The shortcuts need the overlay box idle, both quick-panel flags clear and the in-play controls gate of SPEC-0053 section 3.13 (hero state not 25, the second hero test false, game-state words +0x20 and +0x5C zero). The panels open on D-pad Up and Down and own Left and Right while open; the hero update runs before the front end, so a same-tick Up and Left opens the panel and the map does not open (section 6). The meaning of the second hero test is left to SPEC-0053. **[High]**
+133. Resolved: **Value-text byte K +0x0E.** It is a draw gate: the value text is drawn only when the byte is not 0 (and the font id is 0 or more). Its size has no other effect. All 52 records are non-zero, so every value text draws (Section K). **[High for the gate; Medium that nothing else reads it]**
+134. Resolved: **Book reader Triangle re-entry (section 6.1).** The book request is a one-slot cache, so asking again for the loaded index does nothing: no reload and no page timer reset. On the bounce pass play runs its pass-0 entry while the world stays frozen. **[High]**
+135. Answered: the Charms-tab equip plays cue 0xA3 and no slot has its own cue (SPEC-0021, Open question 98).
+136. Resolved: **Node 954 (spacing 9990).** It is the journal row's objective template. The page draw skips it, because its parent group is gated by predicate slot 12 (always 0). The row drawer reads only its position, alignment and font id and draws the objective with the wrapped text routine, which never reads the node's letter spacing, so 9990 never shows (section 14.3). **[High]**

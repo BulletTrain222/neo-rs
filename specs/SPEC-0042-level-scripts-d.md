@@ -1,0 +1,828 @@
+# SPEC-0042: Level scripts D
+
+- Answers: proactive (level script behavior; set D of 20 modules, follows SPEC-0030, SPEC-0032, SPEC-0037 and SPEC-0039)
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
+- Confidence: per module (High, Medium or Low) and per section. Host call names, argument values and call order: High unless marked. Branch conditions in words: Medium where flags nest deeply. Modules marked Low overall are loop-heavy or contain values that are not determined; their open items are listed in each section. Routines that a table selects are Medium: which of them run in play is stated in each section.
+
+## Summary
+
+This spec describes 20 more level script modules. The resource numbers are 678, 696, 714, 772, 859, 986, 990, 1005, 1077, 1079, 1081, 1083, 1089, 1150, 1171, 1184, 1250, 1350, 1381 and 1397. Resources 678 and 1077 each stand for a repeated payload (678 = 686 = 691; 1077 = 1129); one definition covers each group.
+
+Selection: distinct payloads not covered by SPEC-0032, SPEC-0037, SPEC-0039 or SPEC-0041 (SPEC-0041 covers the 25 modules ranked 31 to 55 by code size). From the remaining distinct payloads the 20 smallest by code size were taken. Code size for each is from the module's own code section; ties are broken by resource number.
+
+Family split: 5 Transition (678, 696, 714, 1079, 1089), 3 Interior (859, 1005, 1150) and 12 Exterior (772, 990, 1077, 1081, 1083, 1171, 1184, 1250, 1350, 1381, 1397, 986). Every module in this spec exports Init, Update and Exit (Exit and Update may be empty).
+
+Times are seconds unless marked as ticks. Sleep(n) yields n ticks; Wait(s) yields about s x 60 ticks (SPEC-0030, open question 1). Flag numbers are game-state ids as the module passes them; their meaning is not established. The host API is the one catalogued in SPEC-0030.
+
+Several modules contain a debug-mode branch (the debug query returns false in play, SPEC-0030). Those branches are dead in play and are stated as such in each section. The 1397 sub-puzzles (buttons, statues, item placements), the 1397 Update and the 1381 timed objects, hazards and puzzle calls are High; the remaining loop-heavy parts of those modules are summarized at Low confidence.
+
+Reachability in this spec is static: it follows the calls and registrations in the code. Flag gates decide whether a reached routine runs in play.
+
+## Where it lives on the disc
+
+- Each module is the level-script chunk (type 37, "SNR2") of the world-pack resource with the same number, as in SPEC-0030 and SPEC-0032.
+- Repeated payloads in this spec: 678 (also 686, 691), 1077 (also 1129). Other resources in this spec are distinct.
+- Slot-set tables and similar small integer data are stored in each module's own data. They are named in the sections but their values are not copied here.
+
+## Load and unload plumbing
+
+- As in SPEC-0032: the module's load and unload hook routines run start and stop lists that are empty at load. Hook routines in 678, 986, 1150, 1081, 1083, 990, 772 and 1171 contain no host call that is reached from init, callbacks, update or exit. They are not described as behavior.
+- Missing Exit: none in this spec. An empty Exit has no effect.
+
+## Host API used by this spec
+
+Names and argument conventions as in SPEC-0030 section 2 and SPEC-0032. WAIT 0 returns at once; WAIT 1 yields until the action finishes. CONTROL and CAMERA_WAIT values are passed through as the integers the module uses. Booleans are 0 or 1. Trigger record fields: state word 1 = entered, object pointer must be non-null (SPEC-0030 section 3). Argument meanings now determined (SPEC-0030 rows 1, 34, 95, 205 and section 5): InitObjOn(object, false) places the object at its start pose in the stopped state, and InitObjOn(object, true) places it at the end of its animation in the finished state. In SlotLoad the fifth argument is called "activate": when true, every character of the slot that has a record is spawned after a successful load (nonzero result); when false, none is spawned. Every SlotLoad in this spec whose slot is determined passes keep and activate true. The fourth argument of SlotLoad is a keep flag. Nonzero (keep) sets the slot's keep flag, which stops the per-tick release of the slot's characters, and leaves the character cap unchanged. Zero clears the keep flag, sets the character cap to 15, and lets the per-tick release run. Keep does not decide whether the slot's previous content is released: that happens on every load. IsButtonPressed's second argument reads the held word when false and the newly-pressed word when true (Open question 5). The second argument of PlayCamera is not a confirmed wait switch (SPEC-0030 open question 17), so the wait labels on PlayCamera calls here are as the module passes them. The id passed to RegisterTransitionMap is a map area id (SPEC-0030 row 263); its name is row m of the map area name table (SPEC-0051, Map area names; SPEC-0006, Area names).
+
+Slot numbers. A SlotLoad, SlotReset or related slot call reads its slot from a data word of the module. The file value of that word is -1. Reached code stores the number that the module's SlotCreate call returned into the word, and the load or reset then uses that stored number (called "the stored slot" below). No level module passes a fixed -1 to these calls. No call maps -1 to another slot: a number outside the world's range does nothing (SPEC-0030 section 5). SlotCreate returns the new slot number (0 for the first slot created in a world) or -1 on failure, and loads nothing. A load through a word that no reached code stores into does nothing. In this spec the stored-slot word of module 986 is stored by reached code (see 986).
+
+Proximity talk and line rotation (High; used by the proximity handlers of 859, 1005 and 1350). The talk frame (at most one line, bracketed by SetConversationTarget and EndConversation, nothing at all when no line is chosen, prompt lines with no conversation target), the four rotation step patterns (cycle, first-once, two-line, stop), the shared counter and the ownership and lifetime of the rotation words are specified in SPEC-0022 (Proximity talk frame and line rotation); the registration of the handlers is in SPEC-0030 (Proximity callbacks). The handler sections below give each branch, its lines and its step pattern. Lifetime in this spec: an exterior module (1350) keeps its rotations while its pack stays in its world buffer and restarts them on any driver load of the exterior, on streaming to a different exterior and on a new game; the interior modules 859 and 1005 restart them on every entry.
+
+## Modules
+
+
+### 678: Transition, the road-fight scene chain, flag-gated slot setup and a button prompt
+
+- Family: Transition.
+- Init (High): reads flag 149; while the earlier flags are clear it then reads flags 148, 146, 143 and 126 in that order. Flags 146 and 143 are game gates, not debug lines.
+  - Flag 149 clear, flag 148 set: SetGameState(149, true).
+  - Flags 149, 148, 146 and 143 clear, flag 126 set: SlotAllocate(W, 1); ControlThreadsAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data); ControlThreadStart(W, thread A, W); RegisterEntityProximityCallback(W, entity 9, proximity handler P, true).
+  - Flags 149, 148, 146, 143 and 126 all clear (the first visit): SlotAllocate(W, 1); SlotCreate(W, 1 entry, a second slot table in module data); ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread B, W); RegisterScriptTrigger(W, S1, index 1); RegisterScriptTrigger(W, T0, index 0).
+  - Flag 149 set, or flag 146 set, or flag 143 set: no host call on these paths before the common tail.
+  - Common tail, on every path, flag 149 set included: RegisterScriptTrigger(W, line handler N, index 2), (N, index 3), (N, index 5), (N, index 6), and (W, trigger 7 handler T7, index 7). No flag gates these five registrations.
+- Trigger index 0 (T0): once per module load (a module word records the state on the first run): if the object pointer is non-null and the state is 1: LevelMsg(line 23, W, true, WAIT 1).
+- Trigger index 1 (S1, the road-fight intro; High for the calls, Medium for the exact step order): runs when the state is 1, the object pointer is non-null and flag 124 is clear. S1 also tests a module word that is 0 in the file and that no routine of the module stores into directly, so that test passes; flag 124 is the one-shot guard (Medium). Steps, in order:
+  1. PlayStingStream(stream 4); FadeScreenOut(1.0 s, WAIT 1). It then sleeps one tick at a time until thread B has finished its slot load (thread B sets a module word after the load).
+  2. Letterbox on; MoveHero(locator 19); a wait; camera 17; entity 0 animation 1; fade in; SetMidiExciteLevel(80); a wait; fade out, camera 4, fade in; entity 3 loops animation 75; a wait; fade out, camera 11, fade in.
+  3. Entities 2, 1 and 0 walk and orient to points 23, 22 and 21 (Sleep(15) before the third); entity 3 loops animation 42; then S1 sleeps one tick at a time while any of the three walkers' distances to their goals is above 0.4.
+  4. Camera 12; entity 2 moved to locator 27, animation 14; camera 16; entity 3 animation 75; camera 5; entity 1 walks to point 26 (S1 waits for arrival) and plays animation 3 twice; a wait; camera 8; entity 0 walks to point 25 and plays animation 14; a wait.
+  5. Conversation. After each line S1 polls the dialog-active query once per tick until the dialog has closed. AI conversation target entity 0; line 3; end conversation; camera 13; Sleep(60); entity 0 animation 119; line 4; camera 14; entity 1 animation 112; line 5; camera 15; camera 16; entity 3 loops animation 111; line 6; entity 3 back to idle; camera 6; AI conversation target entity 0; line 7; Sleep(80); camera 19; entities 2, 1 and 0 play animation 115; AI conversation target entity 0; line 8; entity 1 animation 113; camera 14; camera 18; entities 2, 1 and 0 play animation 115. Lines 3, 4, 5 and 8 pass false and WAIT 0, line 6 false and WAIT 1, line 7 true and WAIT 0.
+  6. Releases control of entities 3, 2, 1 and 0; fade out; letterbox off; MoveHero(locator 3); SetHeroEquippedState(true); ReturnToNormalCamera; fade in; LevelMsg(line 22, W, true, WAIT 1); AI behaviour 7 and aggression on for entities 1 and 2 (the fight starts); SetGameState(124, true); PlayStingStream(4); then the sum routine.
+- Sum routine (end of S1): stores the sum of the AI hit points of entities 0, 2 and 1 in a module word (the start sum) and starts the fight-watch thread.
+- Fight-watch thread (started by the sum routine; runs in play; High): if flag 124 is set (S1 has just set it), it marks the fight as started in a module word (this arms handler N below), then ActivateObj(0, false) and ActivateObj(1, false). Each tick it sums the current hit points of entities 0, 2 and 1 and sleeps one tick while start sum minus current sum is less than 31. Once the three raiders have lost 31 or more hit points in total: a wait; DeactivateObj(0); DeactivateObj(1); the end scene below; then SetGameState(125, true).
+  - Test vector for the opening encounter (pack 691, set 0): the selected raiders start at 80, 60 and 50 HP, so the stored sum is 190. Current points 55, 55 and 50 (sum 160) mean 30 damage, so the thread keeps waiting. One more point lost, to 54, 55 and 50 (sum 159), means 31 damage, so the end scene runs and flag 125 is set after it.
+- End scene (run by the fight-watch thread; runs in play; High for the calls and their order):
+  1. BlockPlayerControl; SetHeroEquippedState(false); fade out (waited); MoveEntity: entity 0 to locator 6, entity 1 to 11, entity 2 to 13; Sleep(30); MoveHero(locator 7); letterbox on; camera 20; AI behaviour 0 and movement type 2 for entities 1 and 2; Sleep(1); entities 1 and 2 walk to points 12 and 14 and the hero walks to point 9; fade in; Sleep(30); entity 0 animation 3; Sleep(30); camera 21; entity 0 animation 17.
+  2. SetConversationTarget(entity 0, true); LevelMsg(line 10, W, true, WAIT 1); entity 0 animation 117; camera 22; EndConversation(0); Sleep(20); entity 0 walks to point 4; fade out; DeactivateEntity(0).
+  3. SetGameState(124, true); SetGameState(126, true); PlayFMV(movie 3, true); SlotReset(W, the stored slot); SlotLoad(W, the stored slot, set 3, keep, activate true); DeactivateEntity(10).
+  4. Fade in; MoveHero(locator 45); camera 38; WalkHero(point 46, waited); Sleep(60); SetConversationTarget(entity 9, true); LevelMsg(line 1, W, true, WAIT 1); GiveItemToHero(item 170, count 100); EndConversation(9); a fade-out and fade-in pair; DeactivateEntity(9); ReturnToNormalCamera; Sleep(45); letterbox off; a wait; LevelMsg(line 2, W, false, WAIT 1); ActivateEntity(10); PlayStingStream(4); SetAI_HitPointsPercentage(entity 10, 25.0), so entity 10 starts at 25 percent of its hit points (High); PlayEntityAnim(entity 10, animation 10, WAIT 1, CONTROL 1); SetAI_Agro(10).
+- Line handler N (triggers 2, 3, 5, 6): does nothing until the fight-watch thread has marked the fight as started. After that, when the object pointer is non-null and the state is 1, each index shows one line once per module load: indices 2 and 3 show line 9, indices 5 and 6 show line 20 (LevelMsg(line, W, true, WAIT 1)). Each index stores its state in its own module word, so it does not repeat. High.
+- Trigger index 7 (T7): if the object pointer is non-null and state is non-zero: DisplaySquareButtonContext(context 3). If the confirm button (host button 0) is pressed: LevelMsg(line 21, W, true, WAIT 1).
+- Proximity handler P (entity 9): LevelMsg(line 0, W, true, WAIT 1). Nothing else.
+- Thread A (started only when flag 126 is set): debug line; SlotLoad(W, the stored slot, set 3, keep, activate true); debug line. Ends.
+- Thread B (started only on the first-visit path): SlotLoad(W, the stored slot, set 0, keep, activate true), then it sets the module word that S1 waits on; debug line; Sleep(1); LoopEntityAnim(entity 1, animation 1, speed 0, CONTROL 0); LoopEntityAnim(entity 2, animation 1, speed 0, CONTROL 0); LoopEntityAnim(entity 0, animation 1, speed 0, CONTROL 0). Ends after starting the loops.
+- Update: the whole body is gated on the debug-mode query, which is false in play. In play Update does nothing. Under that query a debug button combination can replay the end scene (button 0) or a second scene helper (button 0 with button 1). The second helper (entities 4 to 6 moved and walked off, two character deactivations, a slot reset, flag 146 set) is otherwise reached only through routine 1 (below), so it does not run in play.
+- Exit: empty.
+- Routines 1 and 2 are trigger-shaped, but nothing in this module calls either one or registers either one as a trigger, callback or thread. They cannot run in play, and the clean side must not assume a trigger or any other start for either (High for the absence of references). Their actions are Medium. Each has its own internal gates:
+  - Routine 1: gate is flag 143 set, flag 146 clear, object present and state 1. It runs camera and entity animations and ends with a second sum routine (hit points of entities 4, 5 and 6) whose watch thread, of the same shape as the fight-watch thread, runs the second scene helper named under Update.
+  - Routine 2: gate is flag 148 set, flag 149 clear, a trigger record field at offset 32 zero and state 1. It moves the camera, waits on the progress of entity 8, runs animations and ends with a third sum routine (entities 7 and 8) whose watch thread runs a further scene (lines 18 and 19, a slot reset, flag 149 set) that is reached from nothing else.
+  - Init sets flag 149 when flag 148 is set, so routine 2's gate cannot hold after that Init path (Low).
+- Reach (static): live in play are Init, T0, S1 with the sum routine, the fight-watch thread and the end scene, handler N, T7, P, and threads A and B. Dormant (no call, no registration and no stored routine address): routines 1 and 2, the second and third sum routines and watch threads they call (entities 4 to 6, and 7 and 8), the scene that only the third watch thread runs, and the j 1 load routine below. The debug-gated Update also reaches the end scene and the second scene helper. The hook roots (load and unload) contain no host calls.
+- Unreferenced loads of j 1 and j 2 (High): the only region-slot loads of j 1 and j 2 in this script sit in two routines that nothing references (no call, no registration and no stored routine address). One is a short thread-shaped body: a debug line, SlotLoad(the stored slot, j 1, keep, activate true) and two entity animation loops. The other is routine 2's long scripted scene: a sting, player control blocked, a fade and letterbox, a hero move, SlotLoad(j 2), navmesh assignments, entity walks, two conversations, cameras and AI aggression on two entities. Neither can run, so regions pack + 2 and pack + 3 (680 and 681 for pack 678, 688 and 689 for 686, 693 and 694 for 691: Darrick the Blade and Thud) are never loaded by this script. Region = pack + 1 + j (SPEC-0006).
+- Edge cases:
+  - Flag 149 set: Init registers only the common tail. Handler N stays silent in that load because the fight-watch thread is not started; T7 still prompts.
+  - On the first visit flag 124 is set twice, at the end of S1 and again in the end scene. Flag 126, set by the end scene, selects the thread A and proximity P setup on the next entry (with flags 143, 146, 148 and 149 clear).
+  - The fight ends on total damage dealt (31 hit points over the three raiders), not on their deaths. Flag 125 is set only after the end scene has finished.
+  - After the end scene the stored slot holds set 3, the same set that thread A loads on later entries.
+- Confidence: High for the call names, arguments and per-trigger actions, for the fight-watch rule and for the end scene. Medium for the S1 step order (camera and line order High; the waits between them Medium) and for the module word that S1 waits on. Medium for routines 1 and 2 (dormant).
+- Open: meaning of flags 148, 149, 124, 125, 126, 146 and 143; contents of both slot tables in module data.
+  - Resolved (High): thread A and thread B are never both started in one load. Thread A's path needs flag 126 set and thread B's path needs flag 126 clear (with 143, 146, 148 and 149 clear on both), and each path starts only its own thread. On the first visit B runs; after the end scene sets 126, later visits run A.
+  - Resolved: the three values S1 waits on are the walkers' distances to their goals; the sum routine fills the fight's start hit-point sum, and its thread is the fight-watch thread above.
+  - Resolved: the index 2, 3, 5, 6 and 7 registrations are not gated by flags 146 and 143; they run on every Init path.
+  - Resolved (High for the values; Medium-High for which step each belongs to): the timed waits (Wait, seconds). S1 step 2: 0.5 after MoveHero(locator 19); 2.3 after SetMidiExciteLevel(80); 0.6 after the first fade out; 2.3 after entity 3 starts looping animation 75. S1 step 4: 1.0 after entity 1's second animation 3; 1.0 after entity 0's animation 14. End scene step 4: 1.0 after letterbox off, before line 2. The S1 fades are: step 1 out 1.0 s; step 2 in 1.8 s (no wait), out 1.0 s (wait), in 0.5 s, out 0.8 s (wait), in 0.8 s; step 6 out and in 0.7 s. The three walks of step 3 use 0.35 and the step 4 walks 0.4.
+  - Test vector: S1 from its first call to the end of step 2 waits at least 0.5 + 2.3 + 0.6 + 2.3 = 5.7 s (342 ticks at 60 per second) in Wait calls alone, plus the waited fades and the wait for thread B.
+
+
+### 696: Transition, map triggers, button prompt and intro movie
+
+- Family: Transition.
+- Init: all of the following are gated by flag 137 being clear, except where stated:
+  1. RegisterScriptTrigger(W, handler T0, index 0).
+  2. InitObjOn(object 0, false).
+  3. RegisterScriptTrigger(W, handler P9, index 9). This is registered on every path, after the flag 137 branch joins (Medium).
+  4. If flag 220 is set and flag 301 is clear: RegisterScriptTrigger(W, handler F, index 1), then index 2, then index 3.
+  5. If flag 301 is clear and flag 284 is clear: StopEffect(W) for effects 0 to 16, in order.
+  6. RegisterScriptTrigger for index 4 (transition map handler M64), index 5 (handler M73), index 8 (handler M73), index 6 (handler M21) and index 7 (handler M37), in that order.
+- Triggers, all on the object pointer test unless stated:
+  - Index 0, handler T0: if the state word is 1: LevelMsg(line 4, W, true, WAIT 1).
+  - Index 4: RegisterTransitionMap(64), Shadowglen Woods.
+  - Index 5 and index 8: RegisterTransitionMap(73), Meridell Outskirts.
+  - Index 6: RegisterTransitionMap(21), Drackon Ridge.
+  - Index 7: RegisterTransitionMap(37), Meridell Plains. The transition map calls run on any engine call for the trigger; no state test (Medium). The ids are map area ids, named by the map area name table (SPEC-0051, Map area names; SPEC-0006, Area names; High for the names).
+  - Index 9, handler P9: DisplaySquareButtonContext(context message 3). If the confirm button (host button 0) is pressed: LevelMsg(line 3, W, true, WAIT 1).
+  - Indexes 1, 2 and 3, handler F: if the state word is 1 and flag 301 is clear:
+    1. Set flag 301.
+    2. Debug line.
+    3. PlayFMV(movie 48, bool true).
+    4. Sleep(30).
+    5. LevelMsg(line 5, W, true, WAIT 1).
+    6. If flag 5 is clear: Sleep(30), then LevelMsg(line 6, W, true, WAIT 1).
+- Proximity, teleport, activate-world, item and buy callbacks: none.
+- Threads: none started.
+- Per-tick entity loop: the module carries the debug-gated per-tick routine described under 986. No thread start for it is found (Medium), so it does not run. Its debug-mode gate returns false in play in any case.
+- Update: each tick, if flag 220 is set and flag 284 is clear: SetWorldCollisMask(W, 4) and SetWorldDisplayMask(W, 15).
+- Exit: empty.
+- Dormant and unreached roots: the two hook roots are not reached from Init, Update or any callback. A debug-only button-check routine is present; it is reached only from a debug-gated path and is dead in play. Helpers with debug queries only are not reached in play.
+- Edge cases:
+  - Flag 137 set skips trigger 0, object 0 setup and the map triggers. Trigger 9 is still registered.
+  - Movie 48 plays once: flag 301 gates the second run.
+  - The Init effect stops and the per-tick masks use the same flag 284 gate, with the masks also needing flag 220.
+- Confidence: High for the call names, arguments and order in the trigger handlers and Update. Medium for the flag 137 and flag 284 gates (joins in the Init branches). High for the map area names. Low for the flag meanings.
+- Open:
+  - Meaning of flags 5, 137, 220, 284 and 301.
+  - Resolved: the transition map ids are map areas: 64 Shadowglen Woods, 73 Meridell Outskirts, 21 Drackon Ridge, 37 Meridell Plains (SPEC-0051, Map area names).
+  - Bool arguments of PlayFMV and LevelMsg (SPEC-0030 open question 7).
+  - Meaning of the collision and display mask values.
+
+
+### 714: Transition, intro movie trigger and button prompt
+
+- Family: Transition.
+- Init: SlotAllocate(W, 1). SlotCreate(W, 3 entries, slot table in module data). ControlThreadsAllocate(W, 1). ControlThreadStart(W, thread A, W). Then, in this order:
+  - Trigger index 0 is registered with prompt handler P. It is registered on every path (Medium).
+  - If flag 220 is set and flag 301 is clear: RegisterScriptTrigger(W, handler F, index 2).
+  - If flag 301 is clear and flag 284 is clear: StopEffect(W) for effects 9, 10, 11, 12, 13, 14 and 15, in that order (Medium for the gate).
+- Thread A (runs once): with flags 394 and 395 both clear it loads the stored slot with j 0 (region 715); with flag 394 set and 395 clear it loads j 1 (region 716); otherwise it loads nothing (region = 714 + 1 + j, SPEC-0006). Both loads pass keep true and activate true. The debug-mode query in this thread only guards debug prints, so the loads run in play (High).
+- Trigger index 2, handler F: if the object pointer is non-null, the state word is 1 and flag 301 is clear:
+  1. Set flag 301.
+  2. Debug line (text not copied).
+  3. PlayFMV(movie 48, bool true).
+  4. Sleep(30).
+  5. LevelMsg(line 1, W, true, WAIT 1).
+  6. If flag 5 is clear: Sleep(30), then LevelMsg(line 2, W, true, WAIT 1).
+- Trigger index 0, handler P: if the object pointer is non-null and the state word is non-zero:
+  1. DisplaySquareButtonContext(context message 3).
+  2. If the confirm button (host button 0) is pressed: LevelMsg(line 0, W, true, WAIT 1).
+- Proximity, teleport, activate-world, item and buy callbacks: none.
+- Update: each tick, if flag 220 is set and flag 284 is clear: SetWorldCollisMask(W, 4) and SetWorldDisplayMask(W, 15). Otherwise nothing.
+- Exit: empty.
+- Dormant and unreached roots: the two hook roots (load hook A, unload hook B) are not reached from Init, Update or any callback. They are not active. Further roots (a float formatter, debug-only button checks and debug queries, and helpers reached only from those) are not reached in play and are not described.
+- Edge cases:
+  - Movie 48 plays once: flag 301 is set before the movie call and gates a second run.
+  - Flag 284 set disables the Init effect stops and the per-tick mask setting; flag 220 set is required for the masks.
+  - Trigger index 2 is not registered when flag 220 is clear or flag 301 is set.
+- Confidence: High for call names, arguments and order in F, P and Update. Medium for the flag gates (joins in the flag branches of Init). Low for the meaning of the flags.
+- Open:
+  - Meaning of flags 5, 220, 284, 301 and of the slot table contents.
+  - Bool arguments of PlayFMV and LevelMsg (SPEC-0030 open question 7).
+  - Meaning of the state word value 1 (SPEC-0030 open question 2).
+  - Meaning of the collision and display mask values 4 and 15 (SPEC-0030 rows 209 and 212 are Low).
+
+
+### 772: Exterior, entity conversation chain, a walk-off scene and item prompts
+
+- Family: Exterior.
+- Init:
+  - Triggers 3 to 28 are registered to item-pad handler E. Trigger 0 is registered to handler X.
+  - Entity proximity for entity 2 is registered to conversation handler C; entity proximity for entity 14 is registered to scene handler D.
+  - Slots: allocate 2 sets and create two one-entry sets (tables in module data). Threads: allocate 3.
+  - Trigger ladder, in the order the init reads it (Medium): slot sets are allocated and created; then about 27 trigger registrations (trigger 0 and triggers 3 to 28) are taken from one table in module data, one registration per table entry; then the two proximity registrations; then the object setup chosen by flag 543; then one control thread is started, not behind any gate. That thread runs the per-tick entity loop described under 986; in play its debug-mode query returns false and it exits at once (High: the routine is the argument of the start). The activate-world callback registered next is the flag 591 and 592 routine described below (High: the routine is the argument of the registration).
+  - If flag 543 is set: object 0 is initialised off and looped at speed 1.0. Otherwise object 1 is initialised off (Medium-Low: reached on one analysis path only).
+  - Seven calls to a registrar helper follow. The registrar's record-writing body sits behind the debug-mode query, which is false in play, so in play each of the seven calls runs and writes no record. The activate-world registration follows the control-thread start and runs in play.
+- Update: if flag 543 is set, every tick object 0 is initialised off and looped at speed 1.0 again. Medium.
+- Conversation handler C (entity 2; High): each run picks one line by the first rule that applies, then sets the conversation target to the entity, shows LevelMsg(line, W, true, WAIT 1) and ends the conversation:
+  1. Flag 590 set and flag 591 clear: line 9.
+  2. Flag 591 set and flag 592 clear: line 10.
+  3. Flag 544 set: lines 11, 12 and 13 in turn on successive runs, then 11 again (a module counter word; it restarts at 11 when the handler last used the rule-5 cycle).
+  4. Flag 543 set: SetGameState(544, true) and line 14.
+  5. Flag 542 set: lines 15 and 16 alternately (the same counter word).
+  6. Otherwise: SetGameState(542, true) and line 17.
+  - Flag 590 is not required: with flags 590 and 591 clear, the handler goes straight to rules 3 to 6.
+  - Test vector: flags 590, 591, 592, 542 and 544 clear, 543 set: the run sets 544 and shows line 14; the next three runs show 11, 12 and 13.
+- Scene handler D (entity 14): sets flag 592; targets the entity and shows line 18; loads slot set 1 (the stored slot, activate true); grabs control of entities 9 to 13; starts walk thread B; shows line 19; ends the conversation; fades out (0.7 s, waited); resets slot 1; releases entities 9 to 13; sets the aggression of 9 to 13; fades in (0.7 s).
+- Walk thread B (started by D): walks entity 9 to point 2, entity 10 to point 3, entity 13 to point 8, entity 12 to point 6 and entity 11 to point 4 (all speed 1.1, control on); entity 11 is waited for. Medium.
+- Item-pad handler E (triggers 3 to 28): when the trigger's two extra fields are zero and the state word is non-zero, it checks the collision occupant. If the occupant is trigger 3's object, it shows a prompt (message 3), waits for button 0, then shows line 20. Otherwise, if trigger 4's occupant is this trigger, it shows the same prompt and line 21; if trigger 5's occupant is this trigger, line 22. Triggers 6 to 28 have no message branch in this module and only sleep one tick at a time. The two extra fields are not defined in the module record (Open).
+- Handler X (trigger 0): when the object is present and the state word is non-zero, show the prompt (message 3, with the trigger's text) and wait for button 0; on the press show line 46.
+- Activate-world callback (registered by Init with no gate; runs when the world activates): it writes a debug line, reads flag 591, and if flag 591 is set reads flag 592. It loads slot set 2 (the stored slot, keep) only when flag 591 is set and flag 592 is clear. Debug lines in it are not game behavior.
+- Debug-only routines: a block of debug button checks and three helper routines are called only from the per-tick entity loop, after its debug-mode query. They are reached in the static sense (the loop is a thread that Init starts) and are dead in play. Not described.
+- Dormant: four further routines are referenced only by dormant code or by the debug-only routines above. Not described.
+- Per-tick entity loop: the debug-gated routine described under 986 is the control thread that Init starts (see the Init trigger ladder). Its first call is the debug-mode query, which returns false in play, so it exits at once.
+- Threads: the per-tick entity loop (started by Init; exits at once in play) and walk thread B (started by D). Update: see above. Exit: empty.
+- Confidence: High for the direct calls in D and X, in the walk thread and in conversation handler C. Medium for handler E's branches and init. Low for the debug-mode block.
+- Open:
+  - Meaning of the two extra trigger record fields tested by E.
+  - Resolved: the order and conditions of conversation lines 9 to 17 in C (see handler C).
+  - Meaning of the aggression value set in D.
+  - Whether the table entries that feed the trigger ladder are all used on every path.
+
+
+### 859: Interior, proximity dialogue tree with an item-count check and a buy-item line
+
+- Family: Interior.
+- Init: SlotAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data); ControlThreadsAllocate(W, 2); ControlThreadStart(W, thread A, W); RegisterEntityProximityCallback(W, entity 0, proximity handler P, true); RegisterOnEnterCallback(on-enter handler O, W, index 0); RegisterHeroBuyItemCallback(W, buy handler B, false).
+  - Init also makes four unconditional calls to one registrar helper (the calls run in play). Its record-writing body sits behind the debug-mode query, so in play the four calls write no record (see Debug-only routines below).
+  - Init also starts a second control thread. That start is not behind any gate and runs in play, after the registrar calls. It runs the per-tick entity loop described under 986 (High: the routine is the argument of the start); in play its debug-mode query returns false and it exits at once. The first start runs thread A below (High: the routine is the argument of the start).
+- Buy handler B (buy-item callback): if the first field of the buy record is item 130 (taken as the item id; Medium) and flag 220 is clear: LevelMsg(line 34, W, true, WAIT 1). Otherwise nothing.
+- On-enter handler O: debug lines, then one line is chosen by the first set flag in this order, and each branch runs SetConversationTarget(ent, true); LevelMsg(line, W, true, WAIT 1); EndConversation(ent):
+  - flag 48 set: line 0.
+  - else flag 47 set: line 2.
+  - else flag 507 set: line 4.
+  - else flag 506 set: line 6.
+  - else: line 8.
+- Proximity handler P (entity 0, the main dialogue tree; High). Every talk shows exactly one line, with the talk frame of "Proximity talk and line rotation" above. Two steps:
+  - Step 1, the line (first match): flag 423 set and flag 424 clear: SetGameState(424, true), line 14 (no rotation). Else flag 48 set: lines 17, 18, 19 in turn. Else flag 47 set: lines 10, 11, 12 in turn. Else flag 507 set: lines 27, 28, 29 in turn. Else flag 506 set: lines 30, 31, 32 in turn. Else: SetGameState(506, true), line 33.
+  - Step 2, the item count: when flag 506 is set and flag 507 is clear at this point (this includes the talk on which step 1 has just set 506), N = the number of items 160 to 171 of which the hero holds at least one (twelve has-item tests, one per item). When N = 12: SetGameState(507, true); SlotReset(W, the stored slot); SlotLoad(W, the stored slot, set 0, keep, activate true); and line 13 replaces the line chosen in step 1. Any other N keeps the step-1 line.
+  - The rotations use one branch marker and one counter (cycle pattern). 859 is an interior, so they restart on every entry.
+  - Test vector: flags 423, 48, 47, 507 and 506 clear, eleven of the twelve items held: line 33, flag 506 set. Next talk (506 set): line 30, then 31, 32, 30. Collect the twelfth item and talk: line 13, flag 507 set and the set-0 load; later talks show 27, 28, 29 in turn (flag 507 set).
+- Thread A (the first control thread that Init starts): if flag 507 is set: SlotLoad(W, the stored slot, set 0, keep, activate true). Then SetToNormalCamera(5.0, 0.0, true). Ends.
+- Update: empty. Exit: empty.
+- Debug-only routines: the per-tick entity loop (the second control thread) calls three routines once per record, inside its debug-mode branch (three forward tests in the loop lead to the calls). They are reached in the static sense and are dead in play, because the loop exits at its debug-mode query. Their bodies are not described.
+- Dormant: four routines are referenced only by dormant code. One is a large routine with a longer dialogue and slot sequence. It is not described as behavior. Helper routines reached only from it are dormant too.
+  - The debug-mode query returns false in play. The registrar helper that Init calls four times skips its record writes in play; the calls still run. Debug lines are not game behavior.
+- Edge cases: the item count runs after the line choice, so on the talk that completes the set the line of the flag-48, flag-47 or flag-506 branch (or line 14 or 33) is replaced by line 13. The twelve-item scan runs again on every talk while flag 506 is set and flag 507 is clear.
+- Confidence: High for the Init calls, thread A, the on-enter handler and proximity handler P. Medium for the buy handler (record field meaning).
+- Open: meaning of flags 423, 424, 48, 47, 506, 507 and 220; contents of the slot table; the buy record field used for item 130; the bodies of the three debug-only routines that the per-tick entity loop calls; whether the rotation of the replaced branch steps on the talk where line 13 replaces it. Resolved: every flag combination of handler P shows one line (step 1 and step 2 above), and the N = 12 test is a count of held items.
+
+
+### 986: Exterior, navmesh table with per-tick character assignment, trigger handlers and a debug-gated per-tick loop
+
+- Family: Exterior.
+- Init (once, when the exterior loads), in order:
+  1. Sets the 28-entry navmesh table to -1 (not determined). The table is 28 words in module data (zeros on disc). No host call. The table is zero in the file, so this step is what makes its entries not determined.
+  2. Eight calls to a registrar for character or record entries (ids 85, 86, 87, 88, 89, 90, 298 and 299). Each registrar checks the debug-mode query first. In play the query is false, so the registrar returns and stores no record, and the eight ids have no effect in play.
+  3. Stores the world pointer W in module data.
+  4. SlotAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data). Init then stores the number that SlotCreate returned into the stored-slot word, with no test between the call and the store. This is the stored slot used by the slot-load thread below. High.
+  5. ControlThreadsAllocate(W, 2) allocates two control threads, and Init starts both unconditionally: the one-shot slot-load thread and the per-tick entity loop (both below).
+  6. Reads game-state flags 87, 88, 89 and 90 into module data (four module data words). The use of flag 90 is not established.
+  7. Registers seven script triggers: index 0 (handler 0), index 1 (handler 1), indexes 2 and 3 (one shared handler), index 4 (handler 4), index 6 (handler 6) and index 7 (handler 7).
+  8. Registers the activate-world callback. The callback reads the blackboard value of type 2 for world 78 and later resets that value for world 78.
+  9. Object setup by flag:
+     - Flag 89 set: object 1 initialised on; then the world-mask set helper (sets bit 0 of the world mask word and applies the collision and display masks).
+     - Flag 89 clear: object 2 initialised off; animation 2 looped at speed 1.0 (LoopAnim); then the world-mask clear helper (clears bit 0 and applies the masks).
+     - Flag 88 set: breakable 0 set inactive (SetBreakableActive(0, false, W)). Flag 88 clear: object 7 initialised off.
+     - Flag 87 set: objects 8, 3 and 4 initialised on; object 6 initialised off.
+     - Flag 87 clear: objects 8, 3, 4 and 5 initialised off; then object 5 activated with value false.
+- Triggers registered by Init (High for the calls and gates; Low for what the scenes mean):
+  - Index 0 (T0): when the trigger object is present: if button 0 is not pressed, shows the square-button prompt (context 13). If it is pressed: with flag 298 clear, StartExteriorReplacementLoad(world 79, -1, no colour); with flag 298 set, LevelMsg(line 1, W, true, WAIT 1). High for the calls and gates (see Transitions).
+  - Init keeps the values of flags 87, 88 and 89 read at load in three module words; the handlers below test those words, so a flag set during the visit does not change their gates until the next load.
+  - Index 1 (T1): runs only when the hero strikes inside the trigger volume and flag 89 was clear at load. The strike test is the callback record's attack word (offset 36) equal to 1: that word is the hero's attack-active word when the hero's own trigger-hit path fires the trigger, and 0 on every other fire path (SPEC-0030 section 3, callback information record). So walking into the volume, the hero's contact scan or a non-hero firer does nothing. Sequence: PlayCamera(track 5, no wait, camera wait 1); hero animation 12; DeactivateObj(2); ActivateObj(1, false); PlayAnim(object 1); the world-mask set helper; ReturnToNormalCamera(-1, true); SetGameState(89, true).
+  - Indexes 2 and 3 (one shared handler), with no state, record or object test. A busy word in module data guards the handler: a fire while a run is in progress does nothing; otherwise the handler sets the busy word, runs the sequence and clears the busy word at the end, so the sequence runs again on every later fire (it is not once per load). Sequence: PlayCamera(track 7, no wait, camera wait 1); Sleep(10); only while the flag-88 word is clear (flag 88 clear at load and the floor not yet broken this visit): Break(0) and DeactivateObj(7); then on every run: hero animation 136 (wait); a 2 s wait; MoveHero(locator 11, true, CONTROL 1); Sleep(1); StartHeroLongFall(); ReturnToNormalCamera(-1, true). At the end, when the flag-88 word was clear: SetGameState(88, true) and the word is set, so only the first run of a load with flag 88 clear breaks the floor and sets flag 88; later runs repeat the camera, the hero animation, the move and the long fall without the break.
+  - Index 4 (T4): when the trigger object is present: if button 0 is not pressed, shows the square-button prompt (context 6). If it is pressed: with flag 298 set, StartExteriorReplacementLoad(world 80, -1, no colour); with flag 298 clear, LevelMsg(line 0, W, true, WAIT 1). High for the calls and gates (see Transitions).
+  - Index 6 (T6): once per module load (its own module word records the state), when the state is 1: WalkHero(point 13, wait, control); PlayCamera(track 9, wait, camera wait 0); ReturnToNormalCamera(14, true); Sleep(1); ReturnToNormalCamera(14, true).
+  - Index 7 (T7): when the state is non-zero and flag 87 was clear at load: DisplaySquareButtonContext(context 4); on confirm (button 0): WalkHeroAndOrient(point 96); hero animation 140; PlayAnim(object 8); ActivateObj(3), ActivateObj(4), DeactivateObj(5), ActivateObj(6); PlayAnim(3) and PlayAnim(4); PlayCamera(track 6, wait, camera wait 0); ReturnToNormalCamera(-1, true); SetGameState(87, true). The handler then sleeps one tick. Because the gate is the load-time value, the sequence can run again on a later press during the same visit (Medium).
+- Test vector: with flag 89 clear at load, a trigger-1 fire with attack word 1 runs the object-1 sequence and sets flag 89; a body-contact fire with attack word 0 does nothing. With flag 88 clear at load, the first trigger-2 or trigger-3 run breaks breakable 0 and deactivates object 7, then performs the long-fall sequence and sets flag 88; a later run of either index repeats the long fall but skips the break calls. With flag 88 set at load, both indices still perform the long-fall sequence but never break the floor. A trigger-2/3 fire while the shared handler is busy is ignored.
+- Activate-world callback A (world 78): reads the type-2 blackboard value for world 78. When the value is 2: MoveHero(locator 10). Then the value is reset. Then, when the value read was not -1: SetToNormalCamera(5.0, 0.0, true). High.
+- Threads:
+  - Slot-load thread (one-shot, started by Init unconditionally, so it runs in play): if flag 86 is set, it shows two debug lines and ends. If flag 86 is clear, it shows a debug line (flag 85 selects which of two debug lines, with no effect on the load), then SlotLoad(W, the stored slot, set 0, keep, activate true), then a debug line, and ends. High for the set number and the arguments; Medium-High for the flag gates (open question 14).
+  - Per-tick entity loop (started by Init): described below. It exits at once in play.
+- Update (every tick, unconditional):
+  1. Navmesh query: for each of the 28 slots whose table value is still -1, asks the host for the closest navmesh id for that slot (GetClosestNavMeshId) and stores the answer. A slot that already holds an id is not asked again.
+  2. Assignment: for each of the 28 slots in order, if the slot's table value is not -1, calls CharacterNavmeshAssign for the slot's character with that navmesh id. Then, for every slot, with or without an id, calls DisableVillagerSocialize for the slot's character.
+  Both steps run in play. Neither depends on the debug-mode query.
+- Reach (static): besides the named exports, 14 routines of this module are live. Init registers or starts nine of them: the slot-load thread and the per-tick entity loop (control threads), the activate-world callback and the six trigger handlers (indices 0, 1, 2 and 3, 4, 6, 7), all with no gate in Init. Init also calls the eight-times registrar (no gate) and a world-mask helper (behind the flag-89 test). The per-tick entity loop calls three further routines inside its debug-mode branch (three forward tests in the loop), so those are dead in play. Four routines are dormant (referenced only by dormant code) and are not described.
+- Per-tick entity loop (a routine of the same shape in 696, 772, 859 and 986; Medium, compared in structure and not word by word): in this module it is started by Init, so it is reached in the static sense. Its first call is the debug-mode query. In play it returns false and the routine exits at once. Only with the query true, and with a module data word nonzero, would it run. That word is zero in the file, so the routine is skipped on disc even in debug mode: a debug combo handler, then a loop over 30 records of 100 bytes in the debug record table (in module data), with gated checks on game state, item holdings and neopoints, screen messages and local routine calls, and a one-tick sleep after each record. Dead in play; not described as behavior.
+- Exit: empty.
+- Transitions (two, both exterior loads, both behind a button-prompt branch of a trigger handler that Init registers with no gate): world 79 (pack 989) is loaded by the index 0 handler when button 0 is pressed and flag 298 is clear; world 80 (pack 990) is loaded by the index 4 handler when button 0 is pressed and flag 298 is set (High for the handler and the gates; whether play fires those triggers with the button pressed is not evaluated).
+- Load hook: reads a table in module data (in module data) for a -1 sentinel. The sentinel is absent at load, so the hook does nothing.
+- Unload hook: reads a pointer stored in module data. At load it points to an empty entry, so the hook calls nothing.
+- Other routines: the rest of the module is not described here (open question 16).
+- Edge cases:
+  - Init writes -1 into every navmesh entry on each exterior load, so all 28 slots are queried again on the first tick (Medium).
+  - A slot whose query answer is -1 stays not determined and is queried on every tick (Medium; the meaning of -1 as an answer is open).
+- Confidence: High for the Init call order, the stored-slot word being stored from the SlotCreate result in Init (reached code), the eight debug-only registrations, the 28-slot navmesh fill and loops in Update, the trigger handlers' calls and gates, the per-tick entity loop exiting at its gate in play, and Exit and the hooks doing nothing at load. Medium for the flag-gated object setup, the mask bit meaning, and the slot-load thread's flag gate. Low for the meaning of the trigger scenes and for the rest of the load hook.
+- Open: see spec-wide open questions 13 to 16. Also the mask values used by the world-mask helpers. The store and the two loads are taken to address the same module data word (Medium-High; open question 17).
+
+
+### 990: Exterior, object setup, trigger registrations and one control thread (Low)
+
+- Family: Exterior.
+- Init (all of it is unconditional; Init has no debug-mode query):
+  - Sets the script debug log mode to 3 (logging only; no gameplay effect recorded). Adds blackboard value 2 for world 78 (type 2).
+  - Allocates one control-thread slot and starts one control thread: the record thread described below.
+  - Moves objects 39 to 50 to animated locators 0 to 11, in that order, each with the locator flag true.
+  - Makes 27 object setups in total. Fifteen are fixed: objects 15, 13, 17, 19, 21 and 23 are initialised on; objects 0, 1, 2, 7, 3, 4, 5, 11 and 9 are initialised off. The other twelve are the record setups below.
+  - Registers 79 script triggers in total: triggers 3 to 8 to prompt handler P; trigger 2 to fall handler F; and twelve blocks of six triggers each, covering trigger indices 16 to 87 in one unbroken run, to the shared trigger handler S.
+  - Registers five animation-linked sounds.
+- Record setups (records 1 to 12): Init makes one record setup call per record. Each call initialises its object (objects 39 to 50, one per record) off, stores the record in the record table that the record thread walks, and registers its block of six triggers to handler S.
+- Trigger 2 handler F (fall): on entry, play camera track 7 (no wait), start the hero's long fall, wait 1 s, then return to the normal camera with blend 15 s and a value of about pi (3.14159). Medium.
+- Prompt handler P (triggers 3 to 8): runs while the trigger's object is present. A prompt condition is computed by trigger index, the matching square-button context is shown when it holds, and button 0 is then read (newly-pressed word). The press path runs only when the button is pressed and the prompt condition holds (High):
+  - Triggers 6, 7 and 8: the condition always holds; context 4 is shown.
+  - Trigger 3: the condition holds only when object 12 is inactive; context 1 is shown.
+  - Trigger 4: only when object 14 is inactive; context 1.
+  - Trigger 5: only when object 16 is inactive; context 1.
+  - So triggers 3 to 5 show no prompt and ignore the button once their object is active.
+  - Press, triggers 3 to 5 (High): the pair 12/13, 14/15 or 16/17 is swapped (decided by whether the odd object is active; Init turns 13, 15 and 17 on, so the first press activates 12, 14 or 16), and camera track 5, 4 or 6 plays. Press, triggers 6 to 8: a lever; a module word that starts at -1 is negated, sounds 6 and 7 play and object 0 plays its animation at speed +1 or -1; no camera track. The letterbox tint around the camera track follows that lever word (SPEC-0052).
+  - Test vector: object 12 inactive, hero in trigger 3: context 1 is shown and a press swaps 12/13 and plays track 5. Object 12 active: nothing is shown and a press does nothing. Trigger 7: context 4 is shown on every tick the object is present.
+  - On a button press the handler's path reaches state-changing calls (a hero walk and orient, hero animation 139 or 140, sounds 4, 6 and 7, object animations, object activation and deactivation, letterbox open and close, and a camera track whose number the handler picks per trigger, followed by ReturnToNormalCamera); their order is Low.
+- Switch-selected sequence (Medium, a table-selected routine): the route first checks whether objects 13, 15, 17, 19, 21 and 23 are active. It then walks the hero to locator 12 (wait mode 1, control kept), deactivates object 23 and activates object 22, plays animation 22 (wait mode 0), plays hero animations 139 and 140 (control kept), plays sounds 4, 6 and 7, plays animations 11 and 2 with value 1, deactivates object 9, activates object 10, opens and closes the letterbox (wait mode 0), and plays camera 6 (wait mode 1, camera wait mode 0, value 1) before returning to the normal camera. Arguments that the module reads from module data or that are unknown are not given as values.
+- Shared trigger handler S (triggers 16 to 87): its body is not described here (Open).
+- Record thread (the one control thread started by Init): prints a debug line, then walks the twelve records in order. For each record whose active flag is set, it moves the record's position, calls SetObjToTime, and yields with a sleep call. Every record's active flag is clear after Init. A helper that the prompt handler uses sets a record's flag (Medium). The tick timing of the walk is not established (Open). The thread also calls the switch-selected sequence above, at two call sites, with no gate of its own (Medium).
+- Threads: the record thread above. Update: empty. Exit: empty.
+- Reach (static): three routines that no registration names are live: the switch-selected sequence (called by the record thread; Medium), one routine that the switch-selected sequence calls without a gate, and one routine called by a script-trigger handler that Init registers, behind three branches of that handler (flags not decoded here). Four routines are dormant (referenced only by dormant code) and are not described.
+- Hook routines: the load and unload hook routines are engine entry points, not called from init. They are not described (Open).
+- Edge cases: the switch-selected sequence depends on the route taken, and the confidence for it is given below.
+- Confidence: High for the Init call list and its counts (compared with the module's import records) and for handler F. High for prompt handler P's prompt conditions, contexts, press gate and per-index press outcome. Medium for the switch-selected sequence. Low for the record thread's behavior and the outcome of the prompt press.
+- Open:
+  - The body of the shared trigger handler S (triggers 16 to 87).
+  - Which record a prompt activates, and the tick timing of the record thread.
+  - The order and conditions of the state-changing calls on the prompt press path of handler P.
+  - Meaning of the locator ids and the log mode value.
+
+
+### 1005: Interior, proximity, on-enter and item conversations
+
+- Family: Interior.
+- Init: RegisterEntityProximityCallback(W, entity 1, handler P, true). RegisterEntityProximityCallback(W, entity 0, handler P, true). RegisterOnEnterCallback(handler O, W, index 1). RegisterItemAskAboutCallback(W, item 123, handler I1, true). RegisterItemAskAboutCallback(W, item 131, handler I2, true). SlotAllocate(W, 1). SlotCreate(W, 2 entries, slot table in module data). AddBlackboardMessage(type 2, value 10, world 81). ControlThreadsAllocate(W, 1). ControlThreadStart(W, thread A, W). RegisterTeleportCallback(handler T0, index 0, context kind 13, W). RegisterActivateWorldCallback(handler A, W).
+- Proximity handler P (entities 0 and 1, one shared handler; High), with the talk frame of "Proximity talk and line rotation" above: flag 86 set: lines 10, 11, 12 in turn; flag 86 clear: lines 13, 14, 15 in turn (cycle pattern, one branch marker and one counter). The two entities continue one sequence; a change of flag 86 restarts it. 1005 is an interior, so the sequence restarts on every entry. Test vector: flag 86 clear, talks to entity 0, entity 1, entity 0, entity 1: lines 13, 14, 15, 13.
+- On-enter handler O (index 1): the same pattern as P with lines 0 (flag 86 set) and 3 (flag 86 clear). On other paths, lines 1, 2, 4 and 5 are chosen by module-data conditions (Medium).
+- Item-ask handler I1 (item 123): LevelMsg(line 7, W, true, WAIT 1); on one path the line is 6 (a module-data condition). Flag 86 is tested but does not change the call.
+- Item-ask handler I2 (item 131): LevelMsg(line 9, W, true, WAIT 1); on one path the line is 8. Flag 86 is tested but does not change the call.
+- Teleport handler T0 (index 0): if the trigger index field is 0:
+  1. AddBlackboardMessage(type 2, value 10, world 81).
+  2. StartLeaveInterior(eW 7, -1, -1, no colour).
+  3. Wait(3.0 s).
+- Activate-world handler A: reads the blackboard value (type 2, world 81). Two debug lines are not played. If the value is 10:
+  1. MoveHero(locator 0, true, CONTROL 1).
+  2. SetToNormalCamera(5.0, 0.0, true), only when a second value that is not determined is not -1.
+  3. AddBlackboardMessage(type 2, value -1, world 81).
+- Threads: thread A (runs once). It loads the stored slot with j 1 when flag 86 is set, else j 0 (region 1007 or 1006; region = 1005 + 1 + j, SPEC-0006), activate true; then, when flag 298 is clear, ItemSetPriceMultiplier(4.0). The debug-mode query in this thread only guards debug prints, so these calls run in play (High).
+- Update: empty. Exit: empty.
+- Dormant and unreached roots: the two hook roots are not reached from Init or any callback. Other roots (a float formatter, debug-only button checks, debug-only helpers) are not reached in play.
+- Edge cases:
+  - Init writes value 10 and the teleport handler writes it again. Activate-world then consumes it and writes -1.
+  - Both proximity entities use the same handler P; the entity id differs only in the conversation target.
+  - The teleport trigger is registered for index 0 only, so its index test always passes.
+- Confidence: High for call names, arguments and order in Init, T0 and the thread. High for the line choice of P. Medium for the activate-world branch (one value is not determined) and for the line choices in O, I1 and I2 (module-data conditions on some paths). Low for flag 86 meaning and the bool arguments of MoveHero and EndConversation.
+- Open:
+  - Meaning of flag 86 (the line pair choice).
+  - Meaning of the second value in activate-world A and the normal camera call it gates.
+  - Meaning of the blackboard value 10 and of the world 81 key.
+  - Bool arguments of SetConversationTarget, MoveHero and SetToNormalCamera (SPEC-0030 open question 7).
+
+
+### 1077 (= 1129): Exterior, a flag-38 switch set with three threads and lever triggers
+
+- Runs in play as pack 1129 (slot 109); pack 1077 has the same payload and is never loaded (SPEC-0006). So flag 35 is set by 1129's Init on every load (SPEC-0058, step 42).
+- Family: Exterior.
+- Init: SetGameState(flag 35, true) always. Then queries flag 38 and branches:
+  - Flag 38 clear: InitObjOn(object 24, true), InitObjOn(object 46, false), InitObjOn(object 12, false).
+  - Flag 38 set: InitObjOn(object 24, false), InitObjOn(object 46, true). Then a query on flag 36:
+    - Flag 36 clear: InitObjOn(object 27, false), (object 28, false), (object 44, false).
+    - Flag 36 set: InitObjOn(object 28, true), (object 44, true). Then a query on flag 306 (both branches below allocate and start the threads listed in the Threads section):
+      - Flag 306 set: InitObjOn(object 34, true), (object 25, true); the module also stores 1 in one module data word. Then, on both 306 branches (see the common steps below).
+      - Flag 306 clear: InitObjOn(object 34, false), (object 25, false), (object 26, false).
+      - Common steps after the 306 branches join (both branches; Medium): MoveObjToAnimatedLocator(object 32, locator 24, mode 1, true); MoveObjToAnimatedLocator(object 33, locator 24, mode 2, true); ControlThreadsAllocate(W, 4); start threads A, B and C. Init then calls the helper described below twice; the object and trigger calls that the helper makes are described there.
+  - Trigger registrations after the flag-36-set branch (both 306 branches, with host tests that are not determined between them): index 15 (no-op routine, one branch), index 21 (routine L21), index 22 (routine L22), index 2 (routine L2), index 0 (routine Z0), and RegisterActivateWorldCallback(A, W) with blackboard message type 2 value 10 for world 114 on one sub-branch. Index 10, 11 and 16 use the no-op routine under further tests that are not determined. Object calls on these branches are not determined (Low).
+- Helper: Init calls one helper twice (after the thread starts). It initializes a range of objects and registers the no-op routine for a count of trigger indices that is not determined (Low).
+- Trigger index 0 (Z0): if the index is 0, StartExteriorReplacementLoad(world 90, -1, no colour), which loads pack 1023; Wait(3.0 s). No state test.
+- Trigger index 2 (L2): when the object is non-null and flag 306 is clear: when confirm is pressed (otherwise the prompt context 4 shows): set flag 306 true; WalkHeroAndOrient(locator 22, wait, control 1); PlayHeroAnim(140); PlayAnim(object 34, wait, 1.0 s); fade out 0.5 s and in 0.5 s; PlayAnim(object 25, no wait, 1.0 s); PlayCamera(track 5, wait, camera wait 1, 1.0 s); DeactivateObj(object 26); ReturnToNormalCamera(-1, true).
+- Trigger index 21 (L21): when flag 307 is clear and confirm is pressed: set flags 36 and 307 true; WalkHeroAndOrient(locator 27); PlayHeroAnim(140); PlayAnim(object 44); sound 7; fades; DeactivateObj(object 27); PlayAnim(object 28); sound 11; PlayCamera(track 6); KillSound(11); Wait(1.0 s); ReturnToNormalCamera.
+- Trigger index 22 (L22): when confirm is pressed: set flags 38 and 308 true; StopAnim(object 24); WalkHeroAndOrient(locator 28, wait, control 1); PlayHeroAnim(140); PlayAnim(object 46); sound 7; fades; GetObjMaxTime(24) and SetObjToTime(24) then PlayAnim(24); sound 13; PlayCamera(track 7); KillSound(13); ReturnToNormalCamera.
+- Activate-world A (world 109 blackboard; High): debug line; reads blackboard message type 2 for world 109. For every value other than -1, including 10 and 20, it makes SetToNormalCamera(10.0 s, 180 deg, true). The message is always reset to -1. If the value is 20: MoveHero(locator 0, true, control 1). If the value is 10: MoveHero(locator 1, false, control 1); StartHeroLongFall(); PlayTrackHeroCamera(track 4, wait, 1.0 s); SetGameState(flag 305, true).
+- Threads (started by Init on both 306 branches):
+  - Thread A: PlayAnim(object 24, wait, 0.1 s); starts thread D with argument 0; PlayAnim(24, wait); starts thread D with argument 1; Wait(5.0 s). (Medium)
+  - Thread D (started by A): loops over animated objects in script groups 5 and 6, activating and deactivating objects and playing animations, polling IsObjAnimating and sleeping one tick between polls. The loop body is long and its conditions are not determined (Low). The object numbers of its activate, deactivate, animation and poll calls come from a record on each pass, so no fixed object id applies to them. Thread A calls this routine at its two call sites, ungated. Thread D calls one further routine, ungated, which is not described here.
+  - Thread B: when the hero height patch type is 7, reads the position of locator 24 and overrides the secondary height, sleeping one tick per loop (Low).
+  - Thread C: a debug line, then sleeps one tick while a test that is not determined holds (Low).
+- Update: empty. Exit: empty.
+- Reach (static): two routines with no host calls of their own are live: thread C calls one of them with no gate inside the thread, and that routine calls the other. Four routines are dormant (referenced only by dormant code; a large helper tree). They are not described. The two hook routines (load and unload) are engine entry points that Init does not register. Not active in play.
+- Edge cases: the same trigger index is registered under several branches that are not determined, so which handler is live depends on the flags and results at init.
+- Open: meaning of flags 35, 36, 38, 305, 306, 307, 308; blackboard values 10 and 20; world ids 90, 109 and 114; object ids 24 to 46 as a group; the thread D loop conditions; the branch tests in Init that are not determined.
+- Confidence: High for the flag-38 and flag-36 split and the activate-world values. Medium for the lever sequences (indices 2, 21, 22). Low for threads B, C and D and for the trigger registrations that are not determined.
+
+
+### 1079: Transition, two-trigger object sequence with item gate
+
+- Family: Transition.
+- Init: RegisterScriptTrigger(W, handler T, index 0). RegisterScriptTrigger(W, handler T, index 1). Both use the same trigger handler T. Then Init makes four object setups and calls a helper once (below). It then calls the effect helper for script groups 0 and 1 (below), allocates one control-thread slot and starts thread D.
+- Debug-mode gate (Init-level calls are not gated): the debug-mode query sits only inside the helper that Init calls once. That helper's record writes are skipped in play (IsDebugMode returns false), but the call itself runs and makes no host call. The four object setups, the two effect-helper calls, the control-thread allocation and the thread start all run in play. The effect helper loops over a group's members, and its loop bound comes from a record returned by the host, so whether the loop ends in play, and whether the thread start after it is reached, depends on game data (open).
+- Thread D (started by Init after the effect helpers; whether that start is reached in play is open, see Init): a long per-tick polling loop. On each loop iteration the thread reads the confirm, square and other button states, with a Sleep(1) yield at the end of each iteration. Every call sits behind the debug-mode query, so the thread makes no host call in play. It is described only structurally.
+- Trigger handler T (index 0 and index 1), with the object pointer non-null:
+  1. If the confirm button (host button 0) is not pressed: DisplaySquareButtonContext(context message 6).
+  2. If the confirm button is pressed and the hero holds item 18: the object sequence below.
+  3. If the confirm button is pressed and the hero does not hold item 18: LevelMsg(line 0, W, true, WAIT 1) and SetGameState(flag 311, true).
+  - Object sequence, index 0 path: poll (Sleep(1) per tick) while object 2 is animating; DeactivateObj(2); ActivateObj(1, false); PlayAnim(1, no wait, 1.0 s); Wait(1.5 s); DeactivateObj(0); poll while object 1 is animating; WaitTillLeaveTrigger; Wait(1.5 s); poll per tick while the state word is non-zero; then ActivateObj(0, false), DeactivateObj(1), ActivateObj(2, false), PlayAnim(2, no wait, 1.0 s), Wait(0.5 s), StartCameraShakeMode(type 0, 0.5, 1.0).
+  - Object sequence, index 1 path: the same shape with objects 7, 5 and 4: poll while object 7 is animating; DeactivateObj(7); ActivateObj(5, false); PlayAnim(5, 1.0 s); Wait(1.5 s); DeactivateObj(4); poll while object 5 is animating; WaitTillLeaveTrigger; Wait(1.5 s); poll while the state word is non-zero; ActivateObj(4, false), DeactivateObj(5), ActivateObj(7, false), PlayAnim(7, 1.0 s), Wait(0.5 s), StartCameraShakeMode(type 0, 0.5, 1.0).
+  - After either path: the effect helper for script group 0 (index 0 path) or group 1 (index 1 path) is called. It looks up the group instance and starts an effect when the group has a member, or stops an effect otherwise. The effect id comes from the group member's record (not a constant); a start passes true. The effect ids themselves are Open.
+- Proximity, teleport, activate-world, item and buy callbacks: none.
+- Update: empty. Exit: empty.
+- Reach (static): thread D calls three routines, each behind one of three branches of its loop. They are reached in the static sense, but the calls sit inside the thread's debug-mode branch, so they do not run in play; their bodies are not described here. Seven routines are dormant (referenced only by dormant code) and are not described. The two hook routines (load and unload) are engine entry points, not registered by Init.
+- Edge cases:
+  - The hero must hold item 18 for the object sequence. Without it, the handler shows line 0 and sets flag 311 once per entry.
+  - Index 0 and index 1 run different object sets, chosen by the trigger index field.
+- Confidence: High for the call names and the order in each sequence. Medium for the conditions in words. Low for the per-tick poll loops (the state-word poll in particular) and for the effect helper's values. Thread D is Low (structural only).
+- Open:
+  - Meaning of item 18 and flag 311.
+  - Whether the effect helper's loop ends in play, and so whether the Init thread start (thread D) is reached; the loop bound comes from a host-returned record.
+  - Meaning of the state-word poll (whether it is the hero leaving the volume).
+  - Effect ids read from the group record, and the meaning of script groups 0 and 1.
+  - Meaning of the bool arguments of ActivateObj and the camera shake type 0 (SPEC-0030 rows 3 and 41 are M and L).
+
+
+### 1081: Exterior, effect groups and a flag 41 scripted sequence
+
+- Family: Exterior.
+- Init:
+  - Registers trigger index 2 to handler T2 (unconditional).
+  - Groups 0, 1, 2: for each group in turn, query its instance; a live group's effect is stopped (one debug line on the path). The exact exclusivity of this chain is Open.
+  - If flag 41 is clear: objects 6, 8, 7 and 3 are initialised off; breakable group 0 is registered with handler B (argument -1).
+  - If flag 41 is set: objects 5 and 8 are initialised on; breakable 0 is set inactive.
+  - On both flag-41 paths, after they join: trigger index 0 is registered to handler T0, and two anim-sound pairings are set up (objects 6 with 5, and 5 with 6). These calls are not gated and run in play.
+  - The debug-mode query is not an Init-level gate here. It sits at the top of a helper that Init calls twice on each flag-41 path, and that helper only prints debug lines. The flag-41 debug lines are not game behavior.
+- Trigger 0 handler T0: when the trigger's object is present, fade the screen out (1.0 s, not waited), set flags 314 and 315 true, and start an exterior replacement load of world 105 (fade -1, no colour).
+- Breakable handler B: no calls.
+- Trigger 2 handler T2 (scripted sequence): runs only when the object is present, the state word is 1, and flag 41 is clear. In words:
+  1. Move hero to locator 2 (control on); play object 6 (speed 1.0, no wait); camera track 5 (no wait, camera wait on); wait 0.5 s; camera shake type 0 (0.5 s, 0.3).
+  2. Query group 1; the group effect helper H runs (see below).
+  3. Wait 1 s; camera track 4; wait 2 s; fade out 0.5 s (waited); normal camera blend 5 s; activate object 4; fade in 0.5 s.
+  4. Check AI characters 14, then 13, then 12 for being active.
+  5. If none of them is active: fade out, move hero to locator 3, fade in, camera track 8, group 0 effect helper, shake (2 s, 1 s), a break call with argument 0, object 3 anim, hero walk to locator 4, hero anims 178 and 164, camera track 9, object 3 deactivated, item 103 given (count 1), flag 313 set, hero equipped state set, camera track 7, objects 6, 4 and 7 deactivated, object 5 activated and animated, object 8 animated, normal camera blend 10 s, fade in, flag 41 set.
+  6. Aggression checks for characters 14, 13, 12: where aggression is off it is set on (the branch these sit in is Low).
+- Helper H (group, start flag): query the group instance, sleep one tick, and if the start flag is set and an instance exists, start its effect (with a debug line); if it is clear, stop the effect. The effect id comes from the group instance record, not a constant; a start passes true. Medium.
+- Threads: none. Update: empty. Exit: empty.
+- Dormant or unreached: load and unload hook routines are present but are not reached from init, callbacks, update or exit. They are not described (Open). Other roots with no reach are dormant.
+- Edge cases: T2 is gated entirely on flag 41; once it is set, T2 does nothing. The group effect checks use group instance values that are not determined.
+- Confidence: High for call names and order in init and T0. Medium for the flag 41 and group branch conditions. Low for T2's branch order inside step 5 and for helper H's stop path.
+- Open:
+  - The meaning of the Break call with argument 0.
+  - Whether the group chain in init is exclusive.
+  - Meaning of hero animation ids 178 and 164 and of the object ids used here.
+
+
+### 1083: Exterior, object cascade on flag 620 and a slot-load thread
+
+- Family: Exterior.
+- Init:
+  - Slots: allocate 2 slot sets; create one set of 4 entries and one set of 1 entry (their tables are in module data, not determined here).
+  - Threads: allocate 1; start thread A with the world argument.
+  - If flag 620 is clear: 16 object setups are made in this branch, all initialised off; their object ids are open (see Open). Trigger index 0 is registered to handler T0 in this branch.
+  - If flag 620 is set: 16 object setups are made in this branch: objects 5 to 19 are initialised on and object 1 is initialised off.
+  - On both flag-620 paths, after the branch: three more object setups are made (shared calls; object ids open), then trigger indexes 1, 2 and 3 are registered to handler T1. So T1 is registered whichever way flag 620 is set.
+- Trigger 0 handler T0: when the trigger's object is present and flag 620 is clear: set flag 620 true; activate object 1; wait 0.3 s; play objects 5 to 19 (each speed 1.0, no wait, so they start together); wait 0.2 s; deactivate object 0.
+- Triggers 1, 2, 3 handler T1: every call in this handler sits behind the debug-mode query. The query returns false in play, so the handler makes no calls in play. (Dead in play.)
+- Thread A (started by init; runs once):
+  - If flag 52 is set: load slot set 2 (the load flag set), then load slot set 0 with the flag clear.
+  - Else if flag 20 is set: load slot set 3.
+  - Else if flag 19 is set: load slot set 4; otherwise load slot set 1.
+  - Every load uses the stored slot (the number that the module's SlotCreate call returned into a module data word; see Host API), with activate true. Debug lines sit next to each load.
+- Update: empty. Exit: empty.
+- Dormant: helper roots with no reach from init or callbacks are not described. Load and unload hook routines are present but not reached from init, callbacks, update or exit (Open).
+- Edge cases: T0 is gated on the object pointer only, with no state test in the module. T0 does nothing if flag 620 is already set at the time it fires.
+- Confidence: High for the calls, arguments and order in init, T0 and thread A. Medium for the branch conditions. T1 is Low overall, but it is dead in play.
+- Open:
+  - Meaning of the stored slot numbers (the SlotCreate results) for each load.
+  - Contents of the slot-set tables.
+  - Object ids of the 16 setups in the flag-620-clear branch, of the 16 in the flag-620-set branch, and of the three shared setups.
+
+
+### 1089: Transition, a timed crusher sequence with button stops, a hazard thread and a kill on timeout
+
+- Family: Transition.
+- Init: ControlThreadsAllocate(W, 1). ControlThreadStart(W, thread A, W). RegisterScriptTrigger(W, handler T0, index 0). Init then registers four animated triggers to one routine K (RegisterScriptAnimatedTrigger with indices 0, 1, 3 and 2), makes one object setup (object 0, initialised off), and makes four rounds of three calls: a no-op routine; an effect-group helper (it reads a script group instance, sleeps, and starts or stops an effect for the group's members, with debug lines); and a helper with six move calls (MoveObjToAnimatedLocator). Init also sets a first-tick module word. Whether the effect-group helper's loop ends in play, and so whether the move calls run, depends on host-returned values (open; Low).
+- The module keeps four group records in module data, one per animated trigger index (0 to 3). Each names five animation objects and a script group.
+- Trigger index 0, handler T0: no state test and no object pointer test. It runs once per module load: a module latch word, 0 at load, is set at its end and cleared only by the timeout reset below (High).
+  1. Four rounds. Each round plays the five objects of one group record through a shared helper: the first object with PlayAnim at speed -1 and the other four at speed -2, no wait. The rounds use the records of animated triggers 0, 3, 2 and 1, in that order, and sleep 30, 10, 40 and 10 ticks after them.
+  2. PlayAnim(object, no wait, value 0.6) for objects 0, 8, 11, 10, 9 and 7; Sleep(30).
+  3. Sets the latch and the hazard word (both module words).
+- Negative speed: the PlayAnim float is a speed factor, not a time (SPEC-0030 row 2). A negative value first moves the object to the end of its animation and then plays it backwards, so -1 plays the first object backwards at normal speed and -2 plays the other four backwards at double speed (High).
+- Animated-trigger routine K (indices 0 to 3; Medium): does nothing unless the hazard word is set. Index i selects group record i. When the record's first field is 0 it shows the square-button prompt (context 4). On a press (button 0, second state word), it sets the group's five objects to time 0 and starts them again (PlayAnim, no wait; values 1.0 and 2.0 as passed), adds 1 to a press counter (a module word), and starts the group's effect through the effect-group helper. Each press counts, whichever index it comes from.
+- Thread A (hazard thread; started by Init; runs in play; High for the calls and constants): forever: while the hazard word is set, for each of the 12 animated locators 0 to 11 of locator set 7, it reads the hero's distance to the locator, the locator position and the hero's height. When the distance is less than 6.0 and the hero's height minus the locator's height is less than 2.0: DamageHero(1) and Wait(0.5 s). After the 12 checks, and whenever the hazard word is clear, Sleep(1).
+- Update (every tick; High for the calls and constants, Medium for the order of the float tests):
+  1. For each of the four group records: the effect move helper (GetScriptGroupInstance; when the group has a member, MoveEffectToAnimatedLocator with values from the member record and bool false).
+  2. On the first tick (the word Init set): activates the five objects of every group record and clears the word. On later ticks: a time-sync helper per group record (SetObjToTime, IsObjAnimating and GetObjCurrentTime on the group's objects).
+  3. t = GetObjCurrentTime(object 0). The first time t is greater than 18.4: the hazard word is cleared, and if the press counter is 4 or more the slow-down starts.
+  4. Slow-down (while it is on): a speed value that starts at 0.6 drops by 0.005 per tick. While it is above 0, SetSpeedFactor(value) for objects 0, 8, 11, 10 and 9. When it reaches 0 or less: StopAnim for objects 0, 8, 11, 10 and 9, the effect-group helper stops the four groups' effects, and the slow-down ends.
+  5. Timeout: when t is greater than 19.9 and the slow-down is not on: KillCurrentHero(); the reset helper (clears the press counter, the T0 latch, the hazard word, the 18.4 mark and the slow-down; re-activates the five objects of each group record and stops the four groups' effects; ActivateObj(false) for objects 0, 8, 11, 10, 9 and 7); MoveHero(locator 0, true, CONTROL 1); SetToNormalCamera(10.0, 0.0, true).
+  - Test vector: the player presses the prompts four times before object 0's animation time passes 18.4: at 18.4 the hazard stops, the five objects slow down over 120 ticks (0.6 / 0.005) and stop, and no kill happens. With three presses: at 18.4 the hazard stops, and at 19.9 the current hero is killed, moved to locator 0, and the sequence can be started again from T0.
+- Proximity, teleport, activate-world, item and buy callbacks: none.
+- Exit: empty.
+- Reach (static): the animated-trigger routine K, its press helper, the effect-group, six-move, time-sync, activation and reset helpers, and thread A are live. Dormant routines (no reference) are not described; among them is a short hazard-shaped body (DamageHero(1) and a wait under the hazard word) that nothing calls or registers. The two hook routines (load and unload) are engine entry points, not registered by Init.
+- Edge cases:
+  - The slow-down needs 4 presses in total, not one press per group.
+  - Thread A keeps damaging the hero (1 point per locator in range per pass, with a 0.5 s wait after each hit) until object 0's time passes 18.4.
+  - After a timeout kill T0 can run again, because the reset clears its latch.
+- Confidence: High for the call names and the order of the PlayAnim and Sleep rows in T0 (four rounds of one -1 start and four -2 starts, Sleep 30, 10, 40 and 10), for the thread A test and for the Update constants (18.4, 19.9, 0.6, 0.005, press count 4). Medium for routine K's press rule and the order of Update's float tests. Low for the group record object ids (module data, not copied) and the Init move calls.
+- Open:
+  - Object ids in the four group records (module data; not copied).
+  - Resolved: PlayAnim with a negative value plays the object backwards from the end of its animation, and the 1.0 and 2.0 values in routine K are normal and double speed (SPEC-0030 row 2).
+  - Whether the effect-group loop ends in play (Init calls its helper four times), and the routine arguments of the six move calls.
+  - The meaning of the record's first field tested by routine K (no store into it is made by this module).
+
+
+### 1150: Interior, per-tick wandering for a table of entities, with idle loops, a slot thread and five proximity callbacks set at init
+
+- Family: Interior.
+- Init, in order (High for the calls and their order; Medium for the record helpers):
+  1. Stores W, then fills the module's wander table (High). For each entity the add helper H1 makes one wander record, and a second helper (no host call) appends idle animations to that record's idle list: entity 1 (base animation 65; idle 68, 67), entity 2 (base 65; idle 68, 67), entity 3 (base 0; idle 64, 13, 12, 81). H1 sets the record's idle-delay draw to Random(trunc(60 a), trunc(60 b)) ticks from the record's four factors a, b, c and d (GetNumberOfFramesPerSecond is 60), its walk interval to 10 ticks, and then calls LoopEntityAnim(entity, base animation, 30.0 s, CONTROL 1) (30.0 s for every entity).
+  2. If flag 9 is clear: entity 4 (base 65; idle 68, 70) and waypoint locator 1 appended to entity 3's waypoint list by a third helper (no host call). With flag 9 set these are skipped.
+  3. Waypoints locator 2 and locator 3 appended for entity 3, then entity 0 (base 0; idle 40, 41, 51, 95, 96).
+  Record values (factors a, b, c, d; idle-animation time): entity 1 and entity 2: 3.0, 10.0, 3.0, 4.0; 2.5 s. Entity 3: 2.0, 3.5, 5.0, 6.0; 1.5 s. Entity 4: 4.0, 6.0, 3.0, 4.0; 2.5 s. Entity 0: 5.0, 9.0, 3.0, 4.0; 2.5 s. Each of entity 3's waypoints is a walk-and-orient to that locator with stop distance 1.1 (the helper turns a passed -1.0 into 1.1), a redrawn walk interval, no arrival animation and an animation time of 1.5 s. Appending stops at 9 entries per list, and H1 at 9 records; this module adds 4 or 5 records.
+  4. SlotAllocate(W, 1); SlotCreate(W, 1 entry, slot table in module data), its result stored in the slot word; ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread T, W).
+  5. Five RegisterEntityProximityCallback calls (bool 1), in this order: entity 1 to P1, entity 0 to P0, entity 2 to P2, entity 3 to P3, entity 4 to P4.
+  Only step 2 depends on a flag.
+- Thread T (started by Init, no gate): if flag 142 is clear, SlotLoad(W, the stored slot, set 0, keep true, activate true). Then SetToNormalCamera(5.0, ..., true) in both cases. Ends (High).
+- Proximity callback P4 (entity 4, Master Torak, the item exchange; High): every case shows one line inside the conversation bracket (conversation target, LevelMsg(line, W, true, WAIT 1), end conversation). Where a case lists three lines, they are shown in turn on successive talks; the position restarts at the first line when the case changes. If flag 142 is set: lines 5, 6, 7. Else if flag 139 is set: if the hero holds item 60, remove all copies of item 60 and of item 39, set flag 142 and show line 4; otherwise lines 1, 2, 3. Else if flag 138 is set: set flag 139 and show line 0. Else line 8.
+  - Item 38 (the Signed Sponsorship Paper): line 4 carries the dialogue give-item command for item 38, count 1 (SPEC-0022, kind 0x13). It is the only source of item 38 on the disc: no other line and no script call gives it. The removals and flag 142 come before the line, so the hero holds item 38 when the line ends. Line 4 can show only once, because flag 142 then selects lines 5 to 7 (High).
+- Proximity callbacks P1, P0, P2 and P3 (entities 1, 0, 2 and 3; one shared structure with a base line B per callback; High): B is 9 for P0, 38 for P1, 67 for P2 and 96 for P3. Each talk shows one line inside the conversation bracket (SetConversationTarget(entity, true); LevelMsg(line, W, true, WAIT 1); EndConversation(entity)), like P4.
+  1. Draws: s = the number of set flags among 381 to 385; r = Random(1, 6) (both ends included); if flag 480 is set, a second draw q = Random(1, 3) is made (no second draw when it is clear).
+  2. Story branch, when r < s (chance (s - 1) / 6; never when s is 0 or 1): the highest set flag h among 381 to 385 picks the line. h = 381: B. h = 382: B + 1. h = 383: B + 2. h = 384: B + 3 and B + 4 in turn. h = 385: B + 5, B + 6, B + 7 in turn. (The module tests each flag with the next one clear, in order 381 to 385, and a later match replaces an earlier one; the result is the rule above.)
+  3. Otherwise, when flag 480 is set and q = 1: B + 8, B + 9, B + 10 in turn.
+  4. Otherwise the first set flag of 202, 193, 150, 142 and 138 picks a three-line turn: 202: B + 26 to B + 28; 193: B + 23 to B + 25; 150: B + 20 to B + 22; 142: B + 17 to B + 19; 138: B + 14 to B + 16; none of them: B + 11 to B + 13.
+  - "In turn": each callback keeps its own branch word and position word (both 0 at load). Entering a turn branch that differs from the stored one restarts at its first line; each talk in the same branch steps to the next line and wraps after the last. Steps 2 (h = 381 to 383) give single lines and leave both words unchanged. Every path shows a line: P0 to P3 always talk.
+  - Line ranges: P0 lines 9 to 37, P1 38 to 66, P2 67 to 95, P3 96 to 124 (29 lines each).
+  - Test vectors: (1) P1, flags 381 and 382 set, 383 to 385 clear, flag 480 clear, flag 150 set: r = 1 gives the story branch, h = 382, line 39; r = 4 gives line 58, then 59 and 60 on the next two talks with the same draws, then 58 again. (2) P0, flags 381 to 385 clear, flag 480 set, q = 1: lines 17, 18, 19 in turn. (3) P3, flags 381 to 385 all set, r = 2: line 101, then 102, 103.
+- Update (runs every tick; High): one call to the wander step W1, which runs the steps below for each record in table order. Record words: an enable word (1 for every added record), an animation countdown and a hold countdown (both 0 at the start; the hold is never set above 0), an idle counter and a walk counter (0), the idle delay (drawn by H1), the walk interval (10), the waypoint index (0) and the waypoint mode (0).
+  1. Skip the record when it is disabled or IsEntityTalking(entity) is true. Otherwise count the animation countdown and the hold countdown down by 1 each when above 0.
+  2. When IsEntityWalkToPointActive(entity) is false (nothing more happens in a tick while the entity walks):
+     - Waypoints (only entity 3 has any): when the walk counter has reached the walk interval: walk counter 0; the index steps to the next waypoint, and from the last waypoint back to the first (mode 0, the only mode this module uses); the walk interval is redrawn as Random(trunc(60 c), trunc(60 d)) because the waypoint asks for it (entity 3: 300 to 360 ticks); the animation countdown is raised by 1; then GrabEntityControl(entity); WalkEntityAndOrient(entity, waypoint locator, WAIT 0, stop 1.1, CONTROL 1); ReleaseEntityControl(entity). (The waypoint kinds for WalkEntity and WalkEntityAlongPath exist in the step but are never used: every waypoint of this module is a walk-and-orient.)
+     - When the animation countdown is 0, the idle counter and the walk counter go up by 1.
+     - When the hold countdown is 0, the idle counter has reached the idle delay, and the record has idle animations: a new idle delay Random(trunc(60 a), trunc(60 b)) is drawn, the idle counter is set to 0, one idle animation is picked with Random(0, n - 1) over the n listed, and LoopEntityAnim(entity, that animation, its time, CONTROL 1) is called; the animation countdown becomes trunc(60 x time) (150 ticks for 2.5 s, 90 for 1.5 s). An idle time of -1.0 would play it once with PlayEntityAnim and a 1.5 s countdown instead; no entry of this module has it.
+     - When the animation countdown is 0: LoopEntityAnim(entity, base animation, 0.01 s, CONTROL 1), again on every such tick. The duration is a time, not a speed: 0.01 s x 60 truncates to 0 ticks, which is stored as -1, so the loop runs until something replaces it and CONTROL 1 is never applied (SPEC-0030, row 104).
+- Timing in words: an entity stands in its base loop; every idle delay (counted only on ticks with no idle animation running) it plays a random idle animation for its idle time and returns to the base loop. Entity 3 also walks its waypoint ring, first after 10 counted ticks and then every 300 to 360 counted ticks: locators 2, 3, 1, 2, 3, ... with flag 9 clear, and 3, 2, 3, 2, ... with flag 9 set. A talking entity freezes all its counters.
+- Test vector (entity 1, no talk): idle delay drawn as 300 (inside 180 to 600). Ticks 1 to 299 each count the idle counter up and call the base loop; on tick 300 the counter reaches 300, a new delay is drawn and an idle animation (68 or 67) starts for 150 ticks, with no base-loop call; ticks 301 to 449 make no call; on tick 450 the countdown reaches 0 and the base loop is called again.
+- Exit: empty (no host call).
+- Reach (static): the five proximity callbacks and thread T are registered or started by Init, and the three record helpers are called by Init; all are live. One routine is dormant: a routine that would set a record's waypoint mode, interval factors and waypoint use (it calls ReturnEntityAnimToIdle); it has no reference. The routine that only the load-time constructor list reaches is live: the load hook runs it at every load, and it resets the entity-control table (SPEC-0043). Hook roots (load and unload): no host calls.
+- Edge cases: every idle entity calls LoopEntityAnim with its base animation on every tick that no idle animation is running, so up to five such calls are made per tick. Waypoint modes 1 (back and forth) and 2 (random) are in the step but no record of this module selects them.
+- Confidence: High for the init calls, the record values and the Update step.
+- Open: the meaning of flag 9 for the entity 4 setup. Resolved: the full line map of P0 to P3 (above).
+
+
+### 1171: Exterior, lever cutscenes, breakable flags and script group type 12
+
+- Family: Exterior.
+- Init:
+  - Objects 0, 1, 2, 11, 13, 15, 17, 20, 23 and 26 are initialised off.
+  - Triggers: index 5 to lever handler L5, index 6 to lever handler L6, index 7 to lever handler L7, indexes 29, 30, 31 and 32 to switch handler S, index 0 to handler T0, index 1 to handler T1. The four switch-handler registrations are overwritten later in the same Init (see Script group type 12), so in play triggers 29 to 32 run the group routine R, not S (High).
+  - A loop visits flags 637 to 641 in order. For each flag that is set, it calls SetBreakableActive(breakable, false) for breakable 23, 26, 29, 32 or 35 respectively. All five flags are visited; there is no early stop (High).
+  - Drain stages (High): breakables 23 to 37 form five three-stage switch groups (type-40 kind 4 entries, SPEC-0048, Switch groups): drain 0 = 23, 24, 25; drain 1 = 26, 27, 28; drain 2 = 29, 30, 31; drain 3 = 32, 33, 34; drain 4 = 35, 36, 37. The loop disables the first stage of each drain whose flag is set; the group set-up already disables the second and third stages at every load, so a cleared drain stays gone after a reload.
+  - After that loop, in every case and with no flag test: script group type 12 is registered (run routine R, init routine G), and AddAnimObjSound(W, object, sound 7, 0.5, 1.0) is called for objects 11, 13 and 15, the first lever object of L5, L6 and L7. These calls are not flag-gated (High, object numbers included).
+  - The type-12 registration places routine R on the first trigger of each of the 34 type-12 entries, triggers 29 to 62 (SPEC-0048, Script groups, kind 12). A trigger holds one handler, so this replaces the switch-handler registrations on triggers 29 to 32 made above (High).
+- Update (every tick), in this order (High for the structure and the calls):
+  1. Arm pass: the module watches five breakables, 25, 28, 31, 34 and 37 (a five-entry table in module data), each with a watch word that is 0 in the file. For each breakable whose watch word is 0, if the breakable is intact, its watch word is set to 1.
+  2. Break pass: for each breakable i (0 to 4, in table order) whose watch word is 1 and which is no longer intact, the break routine runs with index i: it sets the watch word back to 0, sets flag 637 + i, then runs the counting helper described under Handler T0 (it visits flags 637 to 641 and, for each set flag, sets flag 162 plus the running count). If the count is 5, it sets flag 33. It then shows LevelMsg(line count + 4, W, true, WAIT 1). The break routine is live: Update calls it with no gate other than the watch word and the intact test.
+  3. Object pass: for objects 17, 20, 23 and 26, each with its own one-shot word (0 in the file): if the word is 0 and the object is active, LoopAnim(object, speed 1.0) and the word is set to 1. Nothing in play clears these words (only the dead switch handler S would), so each of the four objects gets this call at most once per load.
+  - The watched breakables are the last stages of the five drains (Drain stages). A last stage starts disabled (not intact), so its watch word stays 0 until the chain arms it; it then reads intact, is armed, and breaking it runs the break routine. A drain whose flag was already set keeps its last stage disabled, so it is never armed or counted again.
+  - Test vector: breakable 28 seen intact on one tick and broken on a later tick, with flags 637 to 641 all clear before: flag 638 is set, the helper sets flag 163 (count 1), flag 33 is not set, and line 5 is shown.
+  - Test vector (fresh load, drain 1): breakable 26 is hit and breaks, 27 is armed; 27 is hit and breaks, 28 is armed; on the next tick 28 reads intact and its watch word becomes 1; 28 is hit and breaks; on the next tick the break routine runs for index 1 as in the vector above.
+- Lever handlers L5, L6 and L7 (indexes 5, 6, 7; High): all three share one shape, each with its own lever objects, hero walk point, camera track, looping sound and gate object:
+  - L5 uses lever objects 11 and 12, walk point 56, camera track 4, sound 56, gate object 2.
+  - L6 uses lever objects 13 and 14, walk point 57, camera track 7, sound 57, gate object 0.
+  - L7 uses lever objects 15 and 16, walk point 58, camera track 6, sound 58, gate object 1.
+  - Each lever works once per module load: it has a module word (0 in the file) that is set at the end of its sequence. While the trigger state is non-zero and the word is clear: the Square prompt (message 6). On Square: WalkHeroAndOrient(walk point, wait, control); the first lever object off and the second shown with its animation, with hero animation 140; fade out 0.5 s (wait) and fade in 0.5 s; PlayCamera(camera track); LoopSound(handle 11, the lever's sound); the gate object plays its animation (speed 1.0); Wait 1.0; KillSound; fade out 0.5 s; camera back to normal; fade in 0.5 s; the lever's word is set.
+  - No flag is set, so on a later load of 1171 the gates are closed again (Init resets objects 0 to 2).
+- Switch handler S (registered for indexes 29 to 32, never run in play; High): the type-12 registration later in Init replaces it on all four triggers, and nothing else starts it. Its body, for reference only: each index has three objects (A, B, C): 29: (17, 18, 19); 30: (20, 21, 22); 31: (23, 24, 25); 32: (26, 27, 28). On a fire: A off; B shown and played (speed 1.0, wait); wait until the firer leaves the trigger; B off; C shown and played (wait); C off; A shown; and the one-shot word of that group in Update (object pass) is cleared. A clean implementation must not run S from triggers 29 to 32. The same objects are the objects of type-12 entries 3 to 6, so in play these triggers behave like every other floating object (routine R).
+  - Test vector: hero enters trigger 30: routine R runs for type-12 entry 4 (objects 20, 21, 22); S does not run, and the Update one-shot word for object 20 stays 1.
+- Handler T0 (index 0): runs when the object is present, the state word is 1 and flag 33 is clear. It does not test flags 637, 638 or 639. It calls a local helper that visits flags 637, 638, 639, 640 and 641 in order, without stopping early. For each flag that is set, the helper adds 1 to a counter and sets flag 162 plus the counter, so the first set flag sets 163, the second sets 164, and so on. The helper returns the counter. If the counter is 5 or more, T0 exits. Otherwise T0 shows the message for line = counter (line 0 when the counter is 0). Lines 0 to 4 are spoken by the hero's conscience: line n says that 5 - n clogs are still to be cleared and that the hero should not leave yet (line 4: one clog left, the hero cannot leave now). The break routine's lines 5 to 8 count the clogs still to clear (4, 3, 2, 1), and line 9 says the last clog is cleared and the hero can leave the sewer (High, from the world's dialogue table).
+- Handler T1 (index 1): when the object is present and the state word is 1, start an exterior replacement load of world 126 (fade mode 0, no colour) and add blackboard value 120 for world 126.
+- Script group type 12 (floating objects; High): the 34 type-12 entries are group indices 3 to 36; entry 3 + k (k = 0 to 33) has trigger 29 + k and objects A = 17 + 3k, B = 18 + 3k, C = 19 + 3k. The full rules, the entry data and their vectors are in SPEC-0048, Script groups, kind 12; this section states only how they meet the rest of the module. Each instance's three objects are A, B and C (its object list in order). They do not gate progress.
+  - Init routine G (once per instance): A is initialised off, its animation time is set to r / 100 with r = Random(0, 100), and A is looped at speed 1.0, so the instances start their idle loops out of phase.
+  - Run routine R (the instance's trigger): when the trigger state is non-zero and the instance's trigger index equals the fired index: A off; B shown and played (speed 1.0, wait); then one tick at a time while the state stays non-zero (the firer is still inside); then B off; C shown, set to time 0 and played (speed 1.0, wait); C off; A shown and looped at speed 1.0. This runs for triggers 29 to 32 as well (entries 3 to 6), in place of switch handler S.
+  - Test vector: an instance whose A loop sits at time 0.37; the hero steps on and stays 30 ticks: B plays, R waits until the hero leaves, C plays once, A loops again.
+- Dormant: five routines are referenced only by dormant code, one of them with a set argument that is not determined. One routine has no reference. None is described. The routine that sets flag 33 when all five flags 637 to 641 are set is not dormant: it is the break routine of Update step 2.
+- Threads: none. Exit: empty.
+- Confidence: High for the init registrations and the overwrite of triggers 29 to 32, the flag loop, the drain stages, the unconditional group and sound calls, T0, T1, the lever handlers, the update passes and the group routines R and G.
+- Open:
+  - Resolved: the anim-sound pairings are objects 11, 13 and 15 (the first lever object of each lever) with sound 7 and the values 0.5 and 1.0.
+  - Resolved: the update watches breakables 25, 28, 31, 34 and 37 in that order (Update steps 1 and 2), and Init's flag loop visits all five flags 637 to 641. Resolved: the two id sets name different stages of the same drain. Init disables each cleared drain's first stage (23, 26, 29, 32, 35) and Update watches its last stage (25, 28, 31, 34, 37) (Drain stages).
+  - Resolved: switch handler S never runs in play; triggers 29 to 32 run the type-12 routine R (SPEC-0048, Script groups, kind 12).
+  - Whether the three gates block progress or only open shortcuts (geometry).
+  - Resolved: the lever words (each lever works once per module load) and the switch-handler objects (dead in play, see above).
+  - Resolved: the random value in G sets the start phase of A's idle loop (time r / 100, r from Random(0, 100)); the group state word is the trigger state (non-zero while the firer is inside).
+  - Resolved within this module (High): flag 637 + i records that drain i (Drain stages) has been cleared; it survives reloads and keeps that drain's stages disabled. Flags 163 to 167 count the cleared drains (162 + n for n cleared; SPEC-0058, step 12). Flag 33 records that all five drains are cleared; it is set by the break routine and silences T0. Resolved: lines 1 to 4 shown by T0 are the conscience lines for four to one clogs left (Handler T0). Resolved (Medium-High): T0 is the only reader of flag 33. No other level module queries or registers it, no boot routine tests it by a fixed index, and it is not a bit of the quest table or of the keyed variant check; the Clog Duty quest rows use flags from 162 to 167 instead. A clean implementation can treat flag 33 as local to this module.
+  - Test vector: flags 637 and 639 set at load: Init disables breakables 23 and 29; drains 0 and 2 show no stage; T0 (flag 33 clear) counts 2, sets flags 163 and 164 and shows line 2.
+
+
+### 1184: Exterior, world-entry triggers with thread-driven slot loads and an activate-world camera
+
+- Family: Exterior.
+- Init: SlotAllocate(W, 2); SlotCreate(W, 26 entries, slot table A in module data); SlotCreate(W, 5 entries, slot table B in module data); ControlThreadsAllocate(W, 3); ControlThreadStart(W, thread A, W); ControlThreadStart(W, thread B, W); then the triggers below; RegisterActivateWorldCallback(A, W) (always).
+  - Always: RegisterScriptTrigger(W, trigger handler H2..H6 with index 2, 3, 4, 5, 6). Each starts thread C with an argument of 1, 2, 3, 4 or 5 respectively (the argument is the index minus one).
+  - Always (High): RegisterScriptTrigger for index 0 (E0); and, if flag 661 is clear, SetGameState(661, true).
+  - If flag 220 is set: RegisterScriptTrigger for index 7 (handler E7), index 8 (E8) and index 9 (E9).
+  - If flag 220 is clear: RegisterScriptTrigger for index 11 (E11) instead. Only triggers 7, 8, 9 and 11 depend on flag 220.
+- Trigger index 0 (E0): if the object pointer is non-null and state is 1 and flag 145 is set: if flag 645 is clear: SetGameState(645, true); LevelMsg(line 14, W, true, WAIT 1).
+- Trigger index 7 (E7): if the object pointer is non-null, state is 1, and flag 277 is clear: SetGameState(277, true); FadeScreenOut(0.25 s, WAIT 1); SetReturnTransitionForFMV(world 131); PlayFMV(movie 40, WAIT 1); AddBlackboardMessage(type 3, value 1, eW 131); MoveHero(locator 44, WAIT 1, CONTROL 1).
+- Trigger index 8 (E8): if the object pointer is non-null, state is 1, and flag 277 is set: AddBlackboardMessage(type 3, value 1, eW 131); FadeScreenOut(0.25 s, WAIT 1); MoveHero(locator 44, WAIT 1, CONTROL 1); SetWorldLoadOverRide(131). Then two waits, each pass of which is SetWorldLoadOverRide(131) followed by Sleep(1): first while IsTransitionLoading() is false, then while it is true. Then MoveHero(locator 44, WAIT 1, CONTROL 1) again (High for the order).
+  - What it waits on (High): IsTransitionLoading returns the read-in-progress word (+0x10) of the transition buffer T (SPEC-0006, Buffer records; SPEC-0026). The word becomes 1 when a pack read into T starts and 0 when that disc read completes, before the pack is parsed. Slot 131 is pack 1220 (Shadowglen Burrows), a transition. With E current, the pending step (SPEC-0006) loads a transition target into T and then sets the pending slot back to -1, so the handler sets it again on every pass. The first wait lasts until the read of pack 1220 into T has started; the second lasts until that read has completed. The second MoveHero then runs with the transition resident.
+  - Edge case: if T already holds pack 1220, the pending step starts no load and the first wait never ends (Medium; whether play can reach E8 with 1220 resident is not evaluated).
+  - Test vector: the T read starts on the tick after the first SetWorldLoadOverRide and completes 3 ticks later: one pass of the first wait, three passes of the second, then MoveHero(44).
+- Trigger index 9 (E9): if the object pointer is non-null and state is 1: AddBlackboardMessage(type 3, value 1, eW 130); StartExteriorReplacementLoadWithoutFade(eW 130, -1).
+- Trigger index 11 (E11, flag 220 clear only): if the object pointer is non-null and state is 1: AddBlackboardMessage(type 3, value 0, eW 130); StartExteriorReplacementLoad(eW 130, -1, colour zero).
+- Triggers index 2 to 6 (H2..H6): if the object pointer is non-null and state is 1: wait, one tick at a time, while a previous thread C is still running (thread C marks itself busy from its start to its end), then ControlThreadStart(thread C, argument 1 to 5). So the thread C loads never overlap (High).
+- Activate-world A: debug line; v = GetBlackboardMessageValue(type 3, eW 129).
+  - v is 1: MoveHero(locator 45, WAIT 1, CONTROL 1); FadeScreenIn(0.5 s, WAIT 0); PlayCamera(track 10, WAIT 0, CAMERA_WAIT 1, 0.65 s); WalkHero(locator 46, WAIT 1, CONTROL 0); ReturnToNormalCamera(-1, true); AddBlackboardMessage(type 3, value -1, eW 129).
+  - v is 2: Sleep(1); MoveHero(locator 50, WAIT 1, CONTROL 1); SetToNormalCamera(6.0 s, 0.0, true); AddBlackboardMessage(type 2, value -1, eW 129); AddBlackboardMessage(type 3, value -1, eW 129).
+- Slots (regions follow region = 1184 + 1 + j, SPEC-0006 "Which region a slot load names"). Slot table A reserves a buffer for j 0 to 6, 9 to 14 and 17 to 29; slot table B for j 7, 8, 15, 16 and 30. SlotCreate only reserves the buffers; the loads below fill them.
+- Thread A (started by Init, runs once): sets the story set s and makes one load into slot B. The debug-mode query in this thread only guards debug prints; the loads run in play.
+  - Flag 84 set: s = 3; SlotLoad(W, slot B, j 30, keep, activate true): region 1215.
+  - Else flag 83 set: s = 2; no load.
+  - Else flag 82 set: s = 1; SlotLoad(slot B, j 16) when flag 512 is set and flag 513 is clear, else j 15: region 1201 or 1200.
+  - Else: s = 0; SlotLoad(slot B, j 8) when flag 512 is set and flag 513 is clear, else j 7: region 1193 or 1192.
+  - Confidence: High.
+- Thread B (started by Init; High): loops only while flag 512 is set and flag 513 is clear. Each tick, if the hero holds item 73, it sets flag 513. The thread ends when flag 512 is clear (at once on a load with 512 clear) or flag 513 is set.
+- Thread C (started by the triggers 2 to 6 with argument a = 1 to 5, one instance per trigger): SlotReset(W, slot A); then SlotLoad(W, slot A, j v, keep, activate true), which loads region 1185 + v. v is entry a + 5s of a fixed 21-entry list in the script's data (entry 0 is not used; s is the story set from thread A). The list holds values 0 to 28 (the script reads it at run time; set 0 gives the lowest values, set 3 the highest). While flag 512 is set and flag 513 is clear, the values 1, 5, 13, 21, 24 and 28 are each replaced by the next value (2, 6, 14, 22, 25 and 29). Possible regions: 1185-1191, 1194-1199 and 1202-1214. The load runs whatever flags 512 and 513 hold; they only choose the replacement. A debug line sits in this thread (no effect). Confidence: High.
+- Regions this module can load: 1185-1215 (thread C and thread A together). Region 1216 is named by neither (never loaded by this module).
+- Update: runs each tick. If flag 277 is set: DisplayMask(W, 2) and CollisionMask(W, 2). If flag 277 is clear: DisplayMask(W, 1) and CollisionMask(W, 1).
+- Exit: empty.
+- Dormant and dead: routines that are not reached from Init, the callbacks or Update, and helpers reached only from them. Two small helpers that thread A calls only print debug lines under the debug-mode query; they do not gate thread A's loads, which run in play.
+- Edge cases: flag 220 decides which of triggers 7, 8, 9 and 11 are live. Triggers 0 and 2 to 6 are always live. Flag 277 switches the mask update and the trigger 7 and 8 pair. Each trigger 2 to 6 entry resets slot A and loads it again, so only the last trigger's region is shown (Medium). The story set s is fixed when the world starts (thread A), so a flag 82 to 84 change during the visit does not change the regions until the next visit.
+- Test vector: flag 83 set (84 clear), flag 512 clear, trigger 3 fires (a = 2): the index is 2 + 5 x 2 = 12, the list entry there is 18, and the load names region 1203; thread A made no load at start.
+- Confidence: High for the call names, arguments and per-trigger order, for the Init gates, and for threads A, B and C. Medium for branch conditions in words (flags 277 and 645).
+- Open: meaning of flags 220, 277, 145, 645, 661, 512, 513 and 82 to 84. Resolved: IsTransitionLoading waits on the read of pack 1220 into the transition buffer T (E8 above). Resolved: thread C's j comes from the 21-entry list by trigger and story set (above), and slot tables A and B are listed above; thread B's exit (above).
+
+
+### 1250: Exterior, a flag-77 pickup ritual and a world-143 entrance
+
+- Family: Exterior.
+- Init: SetGameState(flag 267, true) always. Then it queries flags 77 and 275 and branches:
+  - Flag 77 clear, or flag 77 set with flag 275 set: InitObjOn(object 0, false) and InitObjOn(object 7, false).
+  - Flag 77 set and flag 275 clear: InitObjOn(object 8, false). This is the only part of Init that depends on flags 77 and 275.
+  - Every path then runs the rest of Init, after the join: RegisterScriptTrigger(W, S1, index 17), (S1, index 18), (S1, index 19), one shared routine; RegisterScriptTrigger(W, E0, index 0); RegisterActivateWorldCallback(A, W); StopEffect for effects 0 to 9; one call into a helper; and the thread starts (see Threads). Flags 77 and 275 do not gate any of these.
+- Debug helper: the helper's only call is the debug-mode query (returns false in play), so it has no play effect. The debug roots (button checks and sleeps) are reached only from debug branches and are dead in play; they are not described as behavior.
+- Threads: Init makes three control thread start calls on every path (High for the count and the routines, which are the arguments of the starts). The first runs the per-tick entity loop described under 986: its first call is the debug-mode query, which returns false in play, so it exits at once; the three routines it calls sit inside its debug-mode branch and do not run in play (not described). The second start runs a routine that returns at once (no effect). The third start runs the item-79 watch: it first checks flags 530 and 531 and ends unless flag 530 is set and flag 531 is clear; while that holds, on each pass, if the hero holds 4 or more of item 79 it sets flag 531, then it sleeps 1 tick and checks again (High). Update: empty. Exit: empty.
+- Test vector: flag 530 set, flag 531 clear, the hero picks up a fourth copy of item 79: on the next pass of the item-79 watch flag 531 is set and the watch ends.
+- Trigger index 0 (E0): runs when the object pointer is non-null. Flag 77 set does not exit it.
+  1. Flag 77 clear, state 1 and object 7 active: go to step 2. Flag 77 set, state not 1, or object 7 inactive: skip to step 3.
+  2. If the hero holds item 29, run the pickup: letterbox on; deactivate object 8 and activate object 7; move the hero to locator 4; a camera and effect sequence; remove item 29 (one copy, then all copies); show line 6; set flag 77 true; letterbox off; return the camera. If the hero does not hold item 29, run the talk branch: with flag 459 set, line 4; otherwise with flag 469 set, line 3; otherwise with flag 468 set, set flag 469 and show line 2; otherwise set flag 468 and show line 1. Then return the camera and wait 2.0 s (High). Either branch then goes to step 3.
+  3. Flag-275 block, on every path that reaches it: if flag 273 is clear, or flag 275 is set, the handler exits. Otherwise it sets flag 275, runs a camera and hero walk sequence, waits while object 7 is animating, and returns the camera (Medium for the sequence).
+  - Pickup sequence of step 2, in order (High): letterbox on; object 8 off and object 7 on; MoveHero(locator 4); camera shake (mode 1, strength 5.0, 1.0 s); object 7 plays (speed 1.0, no wait); PlayCamera(6, wait); effects 0 and 1 start, Sleep(1), effect 2, Sleep(2), effect 3; PlayCamera(7, wait); effects 0 to 3 stop; effect 4, Sleep(1), effects 5 and 6, Sleep(2), effect 7; PlayCamera(8, wait); effects 4 to 7 stop; effects 8 and 9 start and stop at once; object 7 off and object 8 on; item 29 removed (one copy, then all); line 6 (wait); flag 77 set; object 0 off; Sleep(1); letterbox off (1 s); camera returned.
+  - Flag-275 sequence of step 3, in order (High): flag 275 set; object 8 off and object 7 on; MoveHero(locator 4); object 0 on; camera shake (mode 1, strength 5.0, 1.0 s); object 7 plays backward (speed -1.0, no wait); PlayCamera(6, wait); one tick at a time while object 7 animates; Wait(1.0 s); SetToNormalCamera(15.0, pi, true).
+- Trigger indices 17, 18 and 19 (S1, one shared routine): when the object is non-null and the state is 1.
+  - Posts blackboard message type 2 for world 143 with value 10 (index 17), 20 (index 18) or 30 (index 19); any other index would post -1.
+  - Reads the confirm button but does not use the result: on every entry it then fades out (0.5 s, no wait), plays hero animation 174 (wait) and calls StartExteriorReplacementLoad(world 143, -1, no colour), which loads pack 1253. So the entrance acts on contact, with no button needed (High).
+  - Test vector: the hero walks into trigger 18: value 20 is posted for world 143 and pack 1253 loads with no button press.
+- Activate-world A (world 141 blackboard): debug line; reads blackboard message type 2 for world 141.
+  - If the value is 40: MoveHero(locator 26, true, control 1); SetToNormalCamera(10.0 s, 0.0, true); the blackboard value for world 141 is cleared to -1.
+  - No other value does anything recorded.
+- Reach (static): six routines that no export names are live: the routines of the first and second thread starts (the per-tick entity loop and the routine that returns at once), the debug helper that Init calls, and the three routines that the per-tick entity loop calls inside its debug-mode branch (dead in play). Five routines are dormant (referenced only by dormant code) and are not described. The two hook routines (load and unload) are engine entry points that Init does not register.
+- Edge cases: with flag 77 set, E0 runs only the flag-275 block (step 3). Objects 0 and 7 are initialised at start except when flag 77 is set and flag 275 is clear, in which case only object 8 is. The pickup in E0 consumes item 29 on success.
+- Open: meaning of flags 77, 267, 273, 275, 459, 468, 469, 530 and 531, and of item 79; blackboard values 10, 20, 30 and 40; world ids 141 and 143; the meaning of camera tracks 6, 7 and 8; the local helper calls in Init with flag arguments in the 77 to 676 range (not described here).
+- Confidence: High for the Init branches (flags 77 and 275), the trigger indices, the entrance (contact, no button) and the pickup and flag-275 sequences with their effect order.
+
+
+### 1350: Exterior, entity conversations and three doors gated on flag 100
+
+- Family: Exterior.
+- Init (High): always registers the activate-world hook A for world W. Then:
+  - Only with flag 100 set: script trigger T0 (index 0) and trigger S1 (index 1, no-op routine).
+  - Ungated: teleport callbacks X0, X1, X2 (context 13, indices 0 to 2), script trigger S2 (index 2), script trigger S3 for indices 3, 4 and 5 (one shared routine), and the eight entity proximity callbacks for entities 24 to 31 (flag argument true); then SlotAllocate(W, 1); SlotCreate(W, 2 entries, slot table in module data); ControlThreadsAllocate(W, 1); ControlThreadStart(W, thread A, W).
+  - So the arena master (entity 24) and the doors are offered before flag 100 is set (pack 1371 sets it); only T0 and S1 wait for it.
+- Entity proximity handlers (one per entity, each keyed on the entity id from init; talk frame and rotation patterns as in "Proximity talk and line rotation" above; High):
+  - Entity 24 (P24, the arena master; no rotation). S = the round-result word (0 in the file; the activate-world callback stores the type-1 blackboard value r there on each return from the arena, see A; 1 = round won).
+    - S = 0: flag 600 set: line 13 only (conversation frame). Flag 600 clear: a prompt whose line is chosen by the first set flag of 599 (line 14), 598 (15), 597 (16), 596 (17), 595 (18), else 19.
+    - S = 1: flag 600 set: line 4 only (conversation frame). Flag 600 clear: prompt line 20.
+    - Any other S (a lost round): prompt line 21 (this case has no flag-600 test).
+    - Answer no: one line by the first set flag of 599 (28), 598 (29), 597 (30), 596 (31), 595 (32), else 33. Answer yes: one line by the first set flag of 599 (22), 598 (23), 597 (24), 596 (25), 595 (26), else 27; then AddBlackboardMessage(type 2, value 20, world 157) and StartExteriorReplacementLoad(world 163, 0, no colour), which loads the arena pack 1371 (SPEC-0041, module 1371).
+    - The prompts have no conversation target. The challenge is offered only while flag 600 is clear (a round can start only then, and a lost round does not set 600).
+  - Entity 25 (P25; branch marker and counter): flag 600 set: lines 70, 71, 72 in turn. Else 599 set: 67, 68, 69 in turn. Else 598 set: 65, 66 (two-line). Else 597 set: 63, 64 (two-line). Else: 61, 62 (two-line). There is no single-line case.
+  - Entities 26, 27, 30, 28, 29 and 31 (P26 to P31, one shape X with a line base b of 73, 90, 107, 124, 141 and 158 in that order; each handler has its own counter and no branch marker, so it is a shared counter across its branches). Let N be the number of flags 596 to 600 that are set and R = Random(1, 6), drawn on each talk.
+    - R is not below N (always when N is 0 or 1): lines b+14, b+15, b+16 in turn.
+    - R below N (probability (N - 1)/6 when N is 1 to 5), first match: 596 set and 597 clear: line b; 597 set and 598 clear: b+1; 598 set and 599 clear: b+2; 599 set and 600 clear: b+3, b+4 (two-line); 600 set: b+5, b+6, b+7 in turn.
+    - Lines b+8 to b+13 (81 to 86, 98 to 103, 115 to 120, 132 to 137, 149 to 154 and 166 to 171) are never chosen: the two Random(1, 3) draws and the flag 349 and 353 tests that would pick them are made only on the "R not below N" side, which always shows b+14 to b+16.
+  - Test vectors: (1) P25 with flag 599 set and 600 clear: 67, 68, 69, 67; then flag 600 becomes set: the next talk shows 70 (restart). (2) P26 (b = 73) with only flag 596 set (N = 1): 87, 88, 89, 87 whatever R is. (3) P26 with flags 596 to 600 set (N = 5) and draws R = 6, 2, 3: lines 87 (counter 0 to 1), 79 (counter 1 to 2), 80 (counter 2 to 0): the count continues across the branch change.
+  - Lifetime: 1350 is an exterior, so its counters keep their values across visits to its interiors (X0 and X1) and return to 0 when 1350 is next driver-loaded. Every arena round replaces 1350 in the exterior buffer (the yes answer's exterior replacement load), so on the return 1350 is loaded again and its counters and the round-result word start from their file values before the activate-world callback stores r. The other exterior loads of X2 and S2 reset them the same way.
+- Teleport handlers (context 13 prompt is shown each engine call when the object pointer is non-null):
+  - X0 (index 0): when the object pointer is non-null and confirm (button 0) is pressed: flag 100 clear: line 0 (wait). Flag 100 set: blackboard message type 2 value 30 for world 157; debug line; StartEnterInterior(eW 176, -1, -1, no colour); Wait(3.0 s).
+  - X1 (index 1): confirm pressed (no object test): flag 100 clear: line 0. Flag 100 set: blackboard message value 50 for world 157; debug line; StartEnterInterior(eW 182); Wait(3.0 s).
+  - X2 (index 2): when the object pointer is non-null and confirm is pressed: blackboard message value 60 for world 157; debug line; StartExteriorReplacementLoad(eW 163, -1, no colour); Wait(3.0 s). No flag test.
+- Script triggers:
+  - T0 (index 0): when the state is 1 and the object is non-null, it runs the conversation helper (called from this routine). Flag 600 set: SetConversationTarget(24, true); line 4; EndConversation(24). Flag 600 clear: a chain over flags 599 to 595 picks lines 5, 6, 7, 8, 9 or 11. (Medium.)
+  - S2 (index 2): object non-null: blackboard message value 10 for world 157; debug line; StartExteriorReplacementLoad(eW 161, -1, no colour); Wait(3.0 s). No state test.
+  - S3 (indices 3, 4, 5, one shared routine): when the object is non-null and the state is 1, prompt context 3 is shown. While confirm is not pressed the routine sleeps one tick per tick. When confirm is pressed it plays line 1 for index 3, line 2 for index 4 and line 3 for index 5 (one branch is not determined). (Low.)
+  - S1 (index 1) has no actions.
+- Activate-world A: debug line; reads blackboard message type 2 for world 157 into v, then acts on v:
+  - v is 10, 30, 40, 50 or 60: MoveHero(locator 4, 1, 2, 3 or 5 respectively, with control). This module posts 10 (S2), 30 (X0), 50 (X1) and 60 (X2) before leaving; the poster of 40 is not in this module.
+  - v is 20 (return from an arena round in pack 1371): for each hero (0 and 1) whose hit points are below 50 percent, sets them to 50 percent; MoveHero(locator 6, with control); reads the round result r = blackboard (type 1, world 157); SetHeroEquippedState(false); waits one tick at a time while a world or character load is active; then runs the round-result step below for entity 24.
+  - Any other value: no hero move.
+  - Then in every case: AddBlackboardMessage(type 2, value -1, world 157) and AddBlackboardMessage(type 1, value 0, world 157); and when v is neither -1 nor 20, SetToNormalCamera(10.0 s, 0.0, true).
+  - Confidence: High for the value cases and their order; the meaning of the doors behind values 10 to 60 is Medium.
+- Round-result step (called by A for v = 20):
+  - Round won (r is 1): the first of these that applies sets the next round flag: flag 599 set -> set 600; else 598 -> set 599; else 597 -> set 598; else 596 -> set 597; else none of them. Then, on every win, GiveItemToHero(item 147, count 2) and SetGameState(596, true). The line shown is 34, 35, 36, 37 or 38 for those five cases.
+  - Round not won (any other r): SetGameState(595, true); the line shown is 39, 40, 41, 42 or 43 by the same flag order (599, 598, 597, 596, none).
+  - It then sets the conversation target to entity 24, shows the line (wait 1) and ends the conversation.
+  - Effect: five wins set flags 596, 597, 598, 599 and 600 in turn; once flag 600 is set the challenge is no longer offered. Confidence: High.
+- Thread A (started by Init on every load, runs once; High): debug lines. Flag 100 set: SlotLoad(W, the stored slot, set 1, keep, activate true). Flag 100 clear: SlotLoad(W, the stored slot, set 0, keep, activate true); flag 99 only chooses which debug line prints.
+- Update: empty. Exit: empty.
+- Reach (static): one routine that no registration names is live: activate-world A calls it for v = 20 (the round-result step above). One routine is dormant, referenced only by dormant code: a routine registered as a hero use-item callback by a dormant helper (not described). The two hook routines (load and unload) are engine entry points that Init does not register. The conversation helper used by T0 and the proximity talks is reached from Init.
+- Edge cases: the teleport context 13 prompt is shown on every engine call while the object is in range, not only when confirm is pressed. The round-result step runs after a lost round too (pack 1371 posts value 20 on both outcomes); a loss sets flag 595 and does not advance the round. Item 147 (two copies) is given on every won round, not only the last. In shape X the lines b+8 to b+13 are never shown (see the proximity handlers); reproduce the reachable choice, not the unreachable branches. In shape X with one win (N = 1) the arena-progress lines never show.
+- Test vector: flags 596 and 597 set, 598 to 600 clear, r = 1: flag 598 is set, two of item 147 are given, flag 596 stays set, line 36 is shown; the next challenge loads region 1375 in pack 1371 (round 4).
+- Test vector: a load of 1350 with flag 100 clear: X0 to X2, S2, S3 and the eight proximity callbacks are registered, set 0 is loaded by thread A, and T0 is not registered; talking to entity 24 (no round result) with flags 595 to 600 clear shows the prompt with line 19.
+- Open: meaning of flags 96 to 100 and 349 and 353 (in the proximity handlers they gate only never-chosen lines); in shape X, which line shows when the shared counter is 2 on entering the two-line branch (b+3, b+4); meaning of blackboard values 10, 30, 40, 50 and 60 beyond the hero placement; world ids 161, 176 and 182; whether the second conversation root that uses flags 596 to 599 is ever registered. Resolved: flags 596 to 600 count won arena rounds, flag 595 records a lost round, blackboard value 20 (type 2, world 157) marks an arena round, and world 163 is the arena pack 1371.
+- Confidence: High for init order, the Init gates (only T0 and S1 need flag 100) and call names, for thread A, for the activate-world cases and the round-result step, and for the proximity line choice of entities 24 to 31 (including the never-chosen lines); Medium for the teleport and trigger branches.
+
+
+### 1381: Exterior, a hub with six warp pads, six outer stations, a block-push group and a return-to-hub routine
+
+- Family: Exterior.
+- Reach (static): 22 routines that no export names are called or registered by live code (Init, Update, and the trigger and thread routines they register or start). Six of those 22 are the record arguments of the hazard thread, and they are data records, not code (see Threads). One routine is dormant (referenced only by dormant code). The timed-object and hazard loops are described below (High).
+- Init (unconditional): ControlThreadsAllocate(W, 7); StopEffect(effect 0); then four calls into one helper that does InitObjOn for three object ids per call and LoopAnim(object, 0.4 s) on the first. Object ids seen: 36, 72, 74, 37, 76, 78, 32, 56, 58; LoopAnim on objects 36, 37 and 32. The argument set of the fourth call was not separately recovered (Low). Init also calls ten further routines, ungated within Init (static); among them the registrars of the puzzle trigger routines below. It registers one activate-world callback, whose restore helper is described below.
+- Update (every tick; High): reads the system time, then calls a helper that switches timed objects on and off by timers. When it switches an object on, it activates it and registers the object's script trigger (index = object + 58; for example objects 84, 88 and 91 with indices 142, 146 and 149) with the return-to-hub routine; when it switches the object off, it deactivates it and registers the same index with the no-op routine. Touching an active timed object therefore returns the hero to the hub. Exit: empty.
+  - Timed objects (19): 84, 88, 91, 98, 101, 105, 108, 112, 113, 122, 126, 131, 140, 146, 153, 157, 158, 162 and 166. All share one phase: their clocks start at 0, the first update adds the whole game clock, so all switch on together on the first update. Each is then on for 2.0 s and off for 4.0 s (a 6 s period) by the game clock, all in phase.
+- What the player does (High for the calls and flags, Medium for the meaning). The pack is a hub with six warp pads, each leading to one of six outer stations k = 0 to 5. Group 1 (flags 708 to 713) is solved at the stations; group 2 (flags 714 to 719) is solved by pushing blocks in the hub. No module outside 1381 reads 708 to 719.
+  - Warp pads (Square prompt 13; trigger indices 65, 3, 20, 31, 37 and 52 for stations 0 to 5): each works only while its station is unsolved and the block group is not finished. A pad plays sound 169, grabs control and sends the hero to the station's locator (63, 7, 8, 9, 10 and 11) with a sparkle effect for 1 s. Pad 3 also turns on a damage hazard: while the hazard word is set, the damage routine that the hazard thread (see Threads) binds to its triggers runs DamageHero(5) and then Wait 2.0. Pad 31 also turns 90 objects (80 to 169) off and binds their triggers to the return-to-hub routine; the update then cycles objects of this kind as above. Pad 52 also resets 51 movable blocks (blocks 6 to 56 to locators 12 to 62).
+  - Station areas: at station k the target is a sphere of radius 3.5 inside an area sphere of radius 20 (target and area trigger indices 63/64, 5/4, 18/19, 33/32, 39/38 and 54/53 for k = 0 to 5). While the area's state is 1 or 2 and its object is present, a module word marks the hero as inside; the routine waits until the hero leaves the area and clears the word.
+  - Station target (group 1): a trigger routine that runs only while the area word is set. It fires when the target is hit by the hero's melee attack (the attack-active field of the trigger record, offset 36) or by a hero shot (the shot-hit field, offset 32). Target indices 63, 5, 18, 33, 39 and 54 stand for the station objects 50, 51, 52, 53, 54 and 55. When the station's object is active: the piece scene plays (object animations with a camera track named by the call, then the normal camera), the object is removed, movable block k is enabled with four effects attached, flag 708 + k is set (708 for object 50, up to 713 for object 55) and the station is marked solved. After every matched target hit (any station, solved or not) the hero is returned to the hub by the return-to-hub routine.
+  - Block group (group 2): a trigger routine that switches on the last fire argument of the trigger record (offset 40), which for a movable-block contact is the block's own number k (0 to 5). Flag 714 + k is set when movable block k touches its station's goal point while it also touches its arm point; the two points are thin cylinders beside pad k, and the arm point's routine sets the "armed" word while its state is 1 or 2. When piece k is not yet done and is armed: SetGameState(714 + k, true), then the piece scene: GrabHeroControl; a wait; PlayCamera(track 0, wait, camera wait 1); PlaySound(9); DeactivateObj(26 + k) and DeactivateObj(20 + k); a wait; RestorePlayerControl; ReturnToNormalCamera. When all six pieces are done, the scene also plays object 18's animation and deactivates object 19, once (a module word), and the pads close. The scene does nothing once that word is set.
+  - A large flat zone (trigger index 34) also returns the hero to the hub.
+  - Test vector: block group, block 2 armed and not done touching its goal point: flag 716 is set and objects 28 and 22 are deactivated.
+  - Test vector: station 1, hero inside area 4, target 5 hit by a hero shot while object 51 is active: flag 709 set, block 1 enabled, object 51 removed, then the hero is returned to the hub at locator 0.
+  - Test vector: timed objects at game clock 0.0 to 2.0 s are all on (touching one returns the hero to the hub); from 2.0 to 6.0 s all are off; at 6.0 s all switch on again.
+- Activate-world restore (High for the calls): on each activation the callback's helper reads flags 708 to 713 and 714 to 719 and puts each solved piece in its solved state: for flag 708 + k (k = 0 to 5) objects 170 + 3k and 171 + 3k are activated and 172 + 3k deactivated, movable block k is activated (k = 1 to 5), object 44 + k activated and objects 38 + k and 50 + k deactivated (object 50 is not deactivated for k = 0); for flag 714 + k movable block k moves to locator k + 1 and objects 26 + k and 20 + k are deactivated. It marks those pieces done in the module words. When flags 714 to 719 are all set and flag 337 is clear, it activates object 18 and deactivates object 19.
+- Activation helper (called from the update helper): ActivateObj(object) and RegisterScriptTrigger(W, return-to-hub routine, index). Deactivation helper: DeactivateObj(object) and RegisterScriptTrigger(W, no-op routine, index).
+- Return-to-hub routine (the timed-object triggers, the flat zone, any index registered with it, and the end of every matched station-target hit): when the object is non-null: Wait(0.5 s); reads locator 1 and locator 3 and locator 5 positions; PlaySound(sound 5) three times; PlayMainSound(sound 169); MoveHero(locator 0, true, control 1); SetToNormalCamera(10.0 s, pi, true); GrabHeroControl(); Sleep(1 tick); StartEffect(effect 0, true); Wait(1.5 s); RestorePlayerControl(). It also clears the hazard word, which turns the pad-3 hazard off. The sequence runs through a helper that holds the position reads and the sounds.
+- No-op routine (used with deactivation): empty. A timed object's trigger index holds the return-to-hub routine or the no-op routine depending on the last switch the update made.
+- Threads (High): a starter thread starts the hazard thread six times, 0.4 s apart, once for each falling hazard k = 0 to 5 (the six record arguments are data records, not code). Each hazard loops forever: object k is shown and played (speed 1.0) with effect 2 + 2k following it; when its animation ends, trigger 12 + k is bound to the damage routine, object k is hidden, effect 2 + 2k is stopped, effect 3 + 2k is shown for one tick, Wait 1.5, and then trigger 12 + k is bound to the no-op routine again. The damage routine runs DamageHero(5) then Wait 2.0, only while the pad-3 hazard word is set.
+- Dormant: one routine is referenced only by dormant code (a large loop; it may be one of the two loops described in the scale note, which is not established). It is not described. The two hook routines (load and unload) are engine entry points. The play reach of each reached routine is decided by the flags and latches it tests.
+- Edge cases: the update re-arms triggers on every tick, so a trigger can be re-registered many times while its object is active. The exact ordering of re-arm and deactivation within a tick is not stated (Low). A station-target hit returns the hero to the hub even when the station is already solved.
+- Open: the meaning of objects 32 to 79 not named above; the four init helper calls' third argument set; whether 1391's geometry requires the 1381 groups before the lift and the 1382 load (in code nothing waits on 708 to 719). Resolved: the timer values and the timed objects (Update), and the six hazard records (Threads).
+- Confidence: High for the Init call names, the update helper names (ActivateObj, DeactivateObj, RegisterScriptTrigger), the timed objects and their timings, the hazard thread, the pad, station and block-group calls and the flag numbers. Medium for the meaning of each station. Low for the dormant loop (not expanded).
+
+
+### 1397: Exterior, block-pushing puzzle room with button callbacks and ambient effects
+
+- Family: Exterior.
+- Scope: this module sets up a room of movable blocks and animated objects. Most of its size is in Init and in the block handlers.
+- Init (always): RegisterActivateWorldCallback(A, W); RegisterTeleportCallback(index 0, X0, context 13); RegisterTeleportCallback(index 1, X1, context 13).
+- Init (flag 687 set, solved room): InitObjOn for objects 7 (false), 3 (true), 0 (true), 2 (true). Trigger 0 is still registered on this path. Its handler (in the trigger 0 description below) tests flag 687 clear, so it does nothing in the solved room. The room is left in its solved pose.
+- Init (flag 687 clear, unsolved room; High): the branches are flag tests. Each sub-puzzle group is set up and registered only while its flag is clear: flag 698 (triggers 7 and 8), flag 699 (the buttons, triggers 1 to 6), flag 700 (the statues, triggers 17 to 21) and flag 102 (trigger 12 and triggers 9 to 11). The branches call InitObjOn for groups of objects (for example 8 to 11, 13 to 23, 25 to 69), StopEffect for effects 0 to 12, RegisterScriptTrigger for the triggers below, ActivateMovableBlock for blocks 1 to 3, DeactivateEntity for entities 0 to 4, MoveEntity for entities 5 to 7 (to locators 77, 78, 79), RegisterMovableBlockSoundIndex(10), and ControlThreadsAllocate(W, 5) with four ControlThreadStart calls.
+- Trigger index to handler map (Init, unsolved branch):
+  - 0: handler T0. 1 to 6: handler B (the buttons, see below). 7: handler B7. 8: handler B8.
+  - 9, 10, 11: handler G (block grab and release, see below). 12: handler E12. 13: exit handler X13 (below), registered on both flag-102 paths.
+  - 17, 18, 19, 20: handlers K17, K18, K19, K20 (the statue turns, see below). 21: handler K21 (the statue check; sets flag 700).
+- Teleport handlers:
+  - X0 (index 0): blackboard message type 2 value 40 for world 159; StartExteriorReplacementLoad(eW 159, -1, no colour).
+  - X1 (index 1): SetGameState(flag 695, true); blackboard message value 60 for world 159; StartExteriorReplacementLoad(eW 159, -1, no colour).
+- Activate-world A: debug line; reads blackboard message type 2 for world 173; clears it. If the value is 60: MoveHero(locator 1, true, control 1). If the value is 40: MoveHero(locator 0, true, control 1). If it is neither: SetToNormalCamera(15.0 s, 0.0, true).
+- Trigger T0 (index 0): when the state is 1 and the object is non-null and flag 687 is clear: BlockPlayerControl; FadeScreenOut(0.5 s, wait); ActivateMovableBlock(the block named by the trigger's object index, false); PlayCamera(track 0, no wait, camera wait 1, 1.0 s); DeactivateObj(1); ActivateObj(2); FadeScreenIn(0.5 s); Wait(1.0 s); LoopSound(4, sound 72); PlayAnim(3, no wait, 0.5 s); PlayAnim(0, no wait, 0.5 s); PlayAnim(2, wait, 0.5 s); KillSound(4, 72); ActivateObj(7); DeactivateObj(6); SetGameState(687, true); ReturnToNormalCamera(-1, true); RestorePlayerControl. This is the solve sequence.
+- Buttons (handler B, triggers 1 to 6, button i = trigger index; flag 699; High): each button works once per module load. While confirm is not pressed the context prompt (context 4) is shown. On Square: MoveHero(locator 8 + i, true, control 0); button object 11 + 2i plays its animation; hero animation 140; Wait 0.6; sound 12; camera 1.
+  - Right buttons 1, 3 and 6 raise objects 9, 10 and 11 respectively (sound 13, Wait 1.0). When all three are up, flag 699 is set and object 8 plays its animation (sound 14) and is removed.
+  - Wrong buttons 2, 4 and 5: sound 7, and a guard is spawned and made aggressive. The first wrong press brings AI 0 at locator 19, the second AI 1 at locator 18, and every later one AI 2 at locator 17.
+  - Solution: press buttons 1, 3 and 6, in any order.
+- Statues (handlers K17 to K21; flag 700; High): statues 59, 58, 57 and 56 start at 0, 90, -180 and 270 degrees. Triggers 17 to 20 (registered while flag 700 is clear; prompt context 4) each add 90 degrees to their statue, turned at 1 degree per tick. Trigger 21 checks the statues in order: each correct one (its angle a multiple of 360 degrees) lowers the lift to its depth (-16, -21, -26.2 and -31.6 for the first to fourth) with a 120-tick camera shake; the first wrong one ends the check and the lift returns to 0. All four correct: flag 700 is set and object 41 rises to 25.1. Presses needed on triggers 17 to 20: 0, 3, 2 and 1 (counted mod 4).
+- Handler G (triggers 9 to 11): when the object is non-null and the trigger record's index is not 9 or 10: GrabEntityControl(entity 5); ReacquireMovableBlockHeightPatch(block 2, height 3); ReleaseEntityControl(entity 5). (Medium.)
+- Handler E12 (trigger 12): when the object is non-null and the state is 1, in order: FadeScreenOut(0.4 s, wait); GrabHeroControl(); MoveHero(locator 22, true, control 1); PlayFMV(63, true); Sleep(1); DeactivateObj(35); StartEffect(12, true); SetGameState(102, true); SetGameState(349, true); then twelve AddItemToWorld calls, one per locator index from 24 to 35 in order, each placing item 139 (the host call's first argument is the locator index and the second the item id, SPEC-0030 row 364; the further arguments are true, true and -1.0 as passed); FadeScreenIn(1.0 s, wait); RestorePlayerControl(hero 0); RestorePlayerControl(hero 1). High for the calls and arguments.
+- Handler B7 (trigger 7; flag 698; High): runs once. Objects 49 to 54 spin; item 139 is added to the world at 21 locator indexes: 36, 38, 40, 42, 43, 45, 47, 49, 51, 53, 55, 57, 59, 60, 62, 63, 64, 66, 68, 69 and 71 (the same further arguments as E12); then SetGameState(698, true). Handler B8 (trigger 8; Medium): the same spin, with lever object 27 swapped for 28, and no flag.
+- Exit handler X13 (trigger 13; High for the calls): Init stores flag 102 (read at load) in a module word, and handler E12 stores its state word (1) there when it runs. When that word is 1, the object is non-null and the trigger state equals the word: FadeScreenOut (no wait); GrabHeroControl(); a wait; AddBlackboardMessage(type 2, value 60, world 159); StartExteriorReplacementLoad(eW 159, -1, colour from module data). So the room is left to world 159 by trigger 13 once the movie-63 scene has run (or on a later visit with flag 102 set).
+- Flag 699 (handler B; High): the three module words that must all be non-zero are the "raised" marks of objects 9, 10 and 11, set by right buttons 1, 3 and 6. Init does not register handler B for triggers 1 to 6 once flag 699 is set.
+- Threads started by Init (unsolved branch; High): four threads, in this order.
+  - Statue and lift thread: while the statue puzzle is open (a module word, 1 at load, cleared by trigger 21 when all four statues are right), once per tick it turns each statue that still has turn left by 1 degree (wrapping at 360), moves the lift height 0.25 per tick toward its target (snapping when within 0.25), raises object 41 by 0.25 per tick up to 25.1 once the solve has armed it, applies the angles and heights to the objects, and sets a module word once AI 3 and AI 4 are both dead. It ends when the puzzle word is cleared.
+  - Ambient effect thread A: Wait(1.0 s) per pass, counting a module countdown (1 at load) down by 1, until the statue puzzle is solved (a module word set by trigger 21's solve) and the countdown is 0 or less. Then, forever: k = Random(0, 12); d = Random(5, 30); StartEffect(table[k], true), where the 13-entry table in module data holds effects 0 to 11 and then 0 again (so effect 0 has chance 2/13 and each other 1/13); one tick at a time for d ticks; StopEffect(table[k]); the countdown becomes Random(1, 3), so the next burst starts after that many 1.0 s waits. With the puzzle unsolved in this load, the thread only waits.
+  - Ambient effect thread B: reads script groups 3, 2, 1, 4 and 5 (GetScriptGroupInstance) and keeps one channel per group, each with a current effect (-1 at the start) and a countdown (0). Every tick, for each channel whose countdown is 0 or less: StopEffect(current); when current equals the previous pick, draw again from the group's placed-effect list with Random(0, n), n being the group's placed-effect count, until the pick differs from the previous one; StartEffect(current, true); previous = current; countdown = Random(10, 30). Every channel's countdown then drops by 1, and the thread sleeps one tick. The previous-pick words are not set before the first pass, so a channel's first real effect starts at once or after its first 10 to 30 ticks. Random(0, n) includes n, one past the last list entry, so a draw can name the word after the group's list.
+  - AI respawn thread (High for the calls): it loops forever with Sleep(10) per pass. For each of AI 5, 6 and 7 in turn, once handler G has set that AI's module word (one word per AI, written by triggers 9 to 11), and when the AI is dead or not active: DeactivateEntity(ai); a wait; MoveEntity(ai, locator 77, 78 or 79); ActivateEntity(ai); PlayEntityAnim(ai, animation 82, WAIT 0, CONTROL 1); a wait; SetAI_Agro(5).
+  - Quirk (reproduce): the aggression call passes AI 5 for all three, so a respawned AI 6 or 7 does not get its own aggression call; AI 5 gets it again.
+- Switch-selected routine (Medium, a table-selected routine): the all-raised step of the buttons: plays animations 8 and 11, plays sounds 13 and 14 (each killed after a 1.0-second wait), deactivates object 8, and sets flag 699.
+- Update (every tick; High), in order:
+  1. First call of each load only (a module word, 0 at load, set to 1 here): if flag 687 is clear, ReacquireMovableBlockHeightPatch(block 0, 500.0, W) (the float is unused, SPEC-0030 row 63). Then, whatever flag 687 holds, DeactivateEntity for entities 0, 1, 2, 3 and 4.
+  2. Every tick, if flag 700 is set: SetAnimObjPositionOffset(48, 0.0, 10.0, 0.0) and SetAnimObjPositionOffset(41, 0.0, 25.1, 0.0).
+  3. Effect loop, every tick: GetScriptGroupInstance for groups 3, 2 and 1 (stored W). For group 3, for each i from 0 to n - 1 (n = the group's placed-effect count, SPEC-0028 type 40 list entry +0x34 and +0x38): MoveEffectToAnimatedLocator(object 29, effect list[i], locator i, face false). Then the same for group 2 with object 30, and for group 1 with object 31. A group with n = 0 makes no call. So effect i of each group follows locator i of its animated object, in point form (SPEC-0030 row 12).
+  - The Update runs in the solved room too (flag 687 set): step 1 still deactivates entities 0 to 4, and steps 2 and 3 run as above.
+  - Edge case: the module does not test the group pointers; groups 1 to 3 must exist in the pack.
+  - Test vector: first tick with flag 687 set and flag 700 clear: no reacquire call, five DeactivateEntity calls, no offset calls, then the effect loop. A group 3 with effects (7, 9): MoveEffectToAnimatedLocator(29, 7, 0, false) and (29, 9, 1, false) on every tick. On the second tick step 1 makes no call.
+- Exit: empty.
+- Dormant or not established: one routine in this module has no reference in the code, so it is dormant. Two other addresses each match a constant in live code that is passed as an integer argument; whether either is a routine is not established. The two hook routines (load and unload) are engine entry points. Whether any of these runs in play is not established.
+- Edge cases: ambient thread A stays silent for the whole load when the statues were solved in an earlier visit (flag 700 set at load), since only trigger 21's solve releases it. Trigger 13 does nothing until the movie-63 scene has run in this visit or flag 102 was set at load. A wrong button press always spawns a guard (AI 2 again from the third wrong press on). The statue lift returns to 0 at the first wrong statue, so the statues must be set before trigger 21 is used.
+- Test vectors: (1) buttons pressed in the order 2, 1, 4, 3, 6: the press of 2 spawns AI 0 at locator 19, the press of 4 spawns AI 1 at locator 18, and the press of 6 raises the third object, so flag 699 is set. (2) Statues: one press on trigger 18, two on trigger 19 and three on trigger 20 (none on 17) give angles 0, 180, 0 and 540 for statues 59, 58, 57 and 56; trigger 21 lowers the lift to -16 for statue 59, then stops at statue 58 (180 is not a multiple of 360) and the lift returns to 0.
+- Open: meaning of flags 687, 695, 698, 699 and 700; world ids 159 and 173; the locator ids 0, 1; the sound ids; what lets the block reach trigger 0 (flag 687) and the hero reach trigger 12 (flag 102): probably doors moved by the sub-puzzles of flags 698 to 700 (geometry, Medium). Resolved: the Init branch tests (flags 698, 699, 700 and 102), the button latch (once per load) and the three raised marks behind flag 699.
+- Confidence: High for Init's always-run calls, the flag 687 split and the sub-puzzle flag gates, the buttons, the statues, trigger 7 and E12. Medium for the trigger index map, the solve sequence (trigger 0), trigger 8 and the switch-selected routine. High for the four threads and for the Update, including its effect loop.
+
+
+## Edge cases and error handling
+
+- Debug-mode branches: any branch gated on the debug query is dead in play (SPEC-0030). It appears in 678, 696, 714, 772, 859, 986, 1005, 1079, 1083, 1184 and 1250 and is stated in each section. A small debug-print helper that makes the query and prints only when it holds does not gate the calls around it: the slot loads in thread A of 714, 1005 and 1184 sit next to such helpers and run in play (High).
+- Dormant routines: routines in these modules that no live code calls or registers (static reach; see each section). They are not behavior, and per-level notes must not describe them as behavior.
+- Slot numbers. Each SlotCreate call in this spec is followed, in the same code block, by a store of its result into a module data word. Per module (High unless marked):
+  - 678: a module data word. Stored in play on each flag-126 branch (both branches store the same word).
+  - 714: a module data word. Stored in play.
+  - 772: two module data words, one per table. Both stored in play. The scene reset reads the first; the set-1 load of the scene handler reads the second.
+  - 859: a module data word. Stored in play. The two loads that read it are in the 859 sections above.
+  - 986: the stored-slot word. Stored in play; the slot-load thread reads it.
+  - 1005: a module data word. Stored in play. The two loads that read it (j 0 and 1) are in thread A and run in play.
+  - 1083: two module data words (four-entry table and one-entry table). Both stored in play by a helper that Init calls unconditionally. The thread A loads read the four-entry word (sets 2, 3, 4 and 1) and the one-entry word (the set-0 load on the flag-52 path).
+  - 1184: two module data words (table A, 26 entries; table B, 5 entries). Both stored in play by Init. Thread C reads the first word; the thread A loads, which run in play, read the second.
+  - 1150: a module data word. Stored in play by Init; thread T's load (flag 142 clear) reads it.
+  - 1350: a module data word. Stored in play by Init on every load (the SlotCreate is ungated). Its loads read that word on the paths described in the 1350 section.
+  No load in this spec passes a fixed -1. Where a word that a load reads is not stored by reached code, the load does nothing; no such word is loaded in this spec. The slot loads in thread A of 714 run in play (see its section).
+- Debug lines carry no game-state effect and may be skipped.
+
+## Open questions (spec-wide)
+
+1. Answered: each stored number is the slot number of the buffer that SlotCreate reserved, in creation order, or -1 when none is left; see SPEC-0032, Slot rules, and SPEC-0030 row 207.
+2. Answered: see SPEC-0030 row 1 (InitObjOn start and end pose).
+3. The SetWorldCollisMask and SetWorldDisplayMask values are open (SPEC-0030 rows 209 and 212 are Low).
+4. Answered in part: each eW id is an area slot, named by SPEC-0006 (Area names), and each transition map id is a map area, named by SPEC-0051 (Map area names); the map ids of 696 are named in its section. Still open: the meaning of the flags and blackboard values named in each section.
+5. IsButtonPressed second argument. Resolved: true reads pad slot 0's newly-pressed word and false reads the held word (SPEC-0030 row 95).
+6. Answered: see SPEC-0030 row 2 (PlayAnim's float is a speed factor; a negative value plays the animation backwards from its end).
+7. Object, effect and entity numbers read from module data or from records (1005, 1077, 1079, 1081, 1089, 1150, 1171, 1397): on each path the value comes from the record or module data. The fixed numbers named in the sections are the reading of the paths shown (Low).
+8. Table-selected routines in 990, 1350, 1381 and 1397 (Medium): which of them run in play is stated in each section. Arguments that come from module data or are unknown are not values.
+9. Shared tagged-arithmetic routines (Low): modules 696, 714, 772, 859, 986 and 990 each carry the same family of routines that combine tagged multi-word numbers (a type word at the start of each operand, with a 32-bit multiply routine underneath). Their purpose is not established, and their callers are not identified. The clean side must not assume a number type (for example money or a score) from them.
+10. Thread starts in 772 and 859. Resolved: in 772 the control thread that Init starts runs the per-tick entity loop and the flag 591 and 592 routine is the activate-world callback; in 859 the first Init start runs thread A and the second runs the per-tick entity loop (High).
+11. Start of the 772 per-tick entity loop. Resolved: Init starts it (question 10) and it exits at its debug-mode query in play; the other control-thread start is walk thread B, started by handler D.
+12. 859 thread A. Resolved: it is the routine of the first Init start (question 10); its content is High.
+13. Module 986 trigger handlers. Resolved: trigger 2 and 3 share a handler with a busy-word guard and no callback-record test; if flag 88 was clear at load, its first run breaks breakable 0, deactivates object 7, performs the long-fall sequence and sets flag 88, while later runs repeat the long fall without breaking the floor. If flag 88 was set at load, every run skips the break. Trigger 1 runs its object sequence only on a hero strike inside the volume (attack word at offset 36 equal to 1) and only when flag 89 was clear at load. The disc volume records that make indices 1 to 3 fire in this world remain unverified.
+14. Module 986: Init reads game-state flags 87 to 90, and the slot-load thread reads flags 85 and 86. The same numbers (85 to 90) are also the ids of the eight registrations in Init, which have no effect in play. Which use is meant for each number is open. The slot-load thread's load depends on flag 86 only; flag 85 chooses between two debug lines.
+15. Module 986: the meaning of the navmesh query's -1 answer, and the mapping of the 28 slots to characters, are not established.
+16. Module 986: routines other than those named in its section are not described. The trigger handlers call one module routine besides host calls: the world-mask set helper (trigger 1). The load hook beyond its sentinel check is not established.
+17. Spec-wide: the slot word stores of every SlotCreate call in Init-level code were compared with the module code, one store per call, and the result for each word is in Edge cases and error handling. The comparison covers the store instruction that follows each call; a store made through another route into the same word is not excluded in general.
+
+## Confidence
+
+| Module | Overall | Note |
+| --- | --- | --- |
+| 678, 859 | Medium; High for the 859 proximity tree | Shared-tail branches; 859 proximity line choice fully mapped |
+| 696, 714, 1005, 1079, 1089, 1081, 1083, 1250, 1077, 1381 | Medium or High | Calls High; flag gates Medium |
+| 1150 | High | Init, the wander table, the Update step and the line map of P0 to P4 |
+| 990, 772 | Low | Loop-heavy routines, or routines with values not determined; see sections |
+| 1171, 1397 and the loops of 1381 | High for the 1171 levers, drain stages, the overwrite of the switch handler and group routines R and G, the 1397 sub-puzzles, the 1397 Update (including its effect loop) and the 1381 timed objects and hazards | Other loops Low; see sections |
+| 986 | Medium | Init and Update calls High; trigger handler branches Low; other routines not described |
+| 1184, 1350 | Medium; High for the 1184 Init gates, region loads and threads A to C, and for the 1350 Init gates, round-result step and proximity line choice | Other branches Medium or Low; see sections |
+| Proximity talk frame and line rotation (859, 1005, 1350) | High | Frame, four step patterns, shared counter and word lifetime |

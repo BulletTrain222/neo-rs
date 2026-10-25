@@ -1,0 +1,645 @@
+# SPEC-0018: Ground height, navigation meshes and object collision queries
+
+- Answers: proactive toward R-0000 (collision and navigation); extends R-0006
+- Status: Draft
+- Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
+- Confidence: navmesh layout and adjacency: High (verified on disc). Height-patch layout: High. Grid cell and cell-record layout (counts checked over all cells): High. Cell-table order (x-major): High (disc test, Layout). Mapping of cell entries to model sets: Medium. Ground probe, candidate choice and tie rule: High (read in code). Probe fallback result when no candidate is accepted: High (read in code). Probe result with no grid cell: High (read in code); what callers do with it: Medium. Ceiling values passed by callers: High for the three callers that pass 2.5, Medium for the 8.0 and 6.0 callers (read in one pass each). Placed-object mapping of the probe point: Medium (decode of vector operations; field roles partly open). Character ground attach carry gate and displacement: High; semantic provenance of every ground owner: Medium. Candidate gates (owner flag, mask, count): High; owner-word rule: Medium-Low (dormant for the callers read). Candidate list test: High for the signed z-span gate, the first-row dot/sign predicate and odd-parity result; Medium-Low for the records' design-facing meaning. Height sampler blend: High. Sampler handling of the -1.0e9 value: High for numeric treatment and the final static probe result at the shipped example point; ordinary-play reachability remains open. Ground-height cutoff: High for the separate strict −9.0e8 helper gate and −1.0e9 ground-attach gate; Medium for helper caller context. Landing test: Medium-Low overall; High for the state gate, falling gate and strict 1.5-unit position comparison; Low-Medium for the shifted-field query inputs and their endpoint meaning. Actor-to-actor clear-path test: Medium-Low overall; Medium for the ten samples at fractions 0 to 0.9; Low for the object pre-filter. Navmesh queries: High for the inside test, the mode-to-kind selection and the locate order (read in code); Medium for the middle-index quirk; Low for the 2.0 cursor reset. Incremental locate: High for the batch of 50 triangles, Medium for the one-call-per-tick cadence. Grid diagonal steps: High for the steps, Medium for the distance. Pathfinding: High for the precomputed route-table read and its use by the shared NPC navigation step (SPEC-0056); Medium-High for interpreting each entry as the next edge of a shortest route. No run-time graph search was found. Primitive class bits and mask gate: High. Kind dispatch of the contact pass: High for kinds 1, 2, 3, 4 and 7; Medium for the other kinds. Contact pass driver order and restore: High for the order and the restore; Medium-High for the effect (pushes discarded on any hit). Camera actor-box list: High for the 0xB0 record stride and nonzero +0x74 test. The separate 0x160-stride plate-manager pool read by the clear-path helper is tested only when its second word is zero; a nonzero word prevents cursor advancement. The pool has no shipped additions. Type-6 skip in the per-tick frame-record walk: High; type-11 list A is separate and dispatched by kind. Object collision (remaining per section below): primitive record counts High; box containment, six face depths and normals, and push distances High; the top gate and bottom bias Medium; the corner rule and the preferred-face rule Medium-Low; the contact pass steps as listed (Medium); the broad sphere test and the face sweep Medium; the ray-versus-ball roots High; the class-five contact test Low-Medium; the projectile step Medium-Low. Slide response: thresholds High (read in code); its exact effect on the body Medium-Low. Segment-versus-rectangle: Medium. Segment query over the two endpoint cells: Medium-High for the cell rule, Medium for the endpoint widening. Restriction flag of the segment query (type-6 frame records): High for the skip rule; caller roles remain Medium-Low. Character sweep with push: the arithmetic and the 0.45 factor High; the face identities Medium; the final stored value and the sign convention of the hit normal Medium-Low. Type-5 frame-record classification and type-6 authored census: High (record byte and full data census); design role and caller intent remain open. Move check with the step limit: High for the constants, Medium-High for the rule. Candidate list test: Medium-Low.
+
+## Summary
+
+A level answers "how high is the ground here?" from **height patches**: regular grids of height samples attached to the level's model sets (chunk type 5). A query takes a horizontal position and a **ceiling** height chosen by its caller; it returns the highest patch height that is at or below the ceiling and above the best height found so far. It answers "where may characters walk?" from **navigation meshes** (chunk type 21): triangle lists in the horizontal plane with neighbour links. Characters are kept on the ground by that probe. AI characters locate themselves on the navmesh and move toward a chosen point. Their navigation step uses the mesh's precomputed next-edge route table to cross between the current and target triangles; it does not search the graph at run time (SPEC-0056).
+
+World-object collision and camera collision use different paths. The follow-camera eye pass checks its nearby box list and the level cell; on a hit, it restores the eye position saved at the start of that pass. Characters instead run per-record collision against nearby records, cell frame records and collision primitives; their movement sweep is documented separately under Character sweep with push. A move check combines ground heights with a height-step limit and blocks moves; it does not push. The level's spatial grid (type 19, SPEC-0006) has cells, and each cell's record lists which model-set entries and primitives cover that cell. With this spec the clean side can place characters on the ground, give AI a walkable area, keep characters out of solid objects, and block moves into them. Two further tests answer "has this character landed?" (a landing test, with a falling check and a segment hit) and "is there a clear path between two actors?" (a clear-path test that samples the horizontal displacement at ten points and tests the objects and height patches found there).
+
+## Where it lives on the disc
+
+- World packs (SPEC-0006).
+- Spatial grid cells: the cell table and cell records of chunk type 19 (SPEC-0006 gives the grid header).
+- Navigation meshes: chunk type 21, in 135 packs (998 meshes, 52,225 triangles).
+- Height patches: entries of chunk type 5, in 12,075 grids holding 125,036 cells.
+- Model-set entries that a placed object owns: an inline type-5 chunk inside a type-29 object (SPEC-0028).
+- Object primitives: the object chunk (type 11) of each world pack, with spheres, cones, cylinders, planes and boxes (SPEC-0028, section 6).
+- Boot-program data words read by the move check, the ground probe, the camera position adjustment and the object paths (all checked on the disc; see Constants): the step limit at ELF data address 0x2EB2C0, the character radius at 0x2EB2C4, the ground miss word at 0x31E890, the ground clearance at 0x2DB3C4, a unit scale at 0x2DB3C8, the contact push radius at 0x2DB400, the contact-state limit at 0x2DB3E8, the blocked-query limit at 0x2DB3EC, the projectile timer at 0x2DD440 and the sweep length of one variant at 0x2DCB40.
+
+## Layout
+
+All values little-endian; offsets in a chunk are payload-relative unless stated.
+
+### Navigation meshes (chunk type 21)
+
+| Offset | Size | Meaning |
+| --- | --- | --- |
+| 0x00 | 4 | s32 mesh count *N* |
+| 0x04 | 4 | u32 offset of the mesh offset table |
+| table + 4i | 4 | u32 offset of mesh *i* |
+
+Mesh record (offsets from the record start):
+
+| Offset | Size | Meaning |
+| --- | --- | --- |
+| 0x00 | 12 | Fill; ignore |
+| 0x0C | 4 | u32 kind: 1 (848 meshes) or 2 (150) |
+| 0x10 | 4 | u32 triangle count *T* |
+| 0x14 | 4 | u32 offset of the triangle array, relative to the **record** |
+| 0x18 | 4 | u32 offset of a bit block, relative to the record (0x1C) |
+| 0x1C | | Bit block (meaning open), up to the triangle array |
+
+Meshes are stored back to back, and the last one ends at the chunk end.
+
+Triangle (0x30 bytes): three vertices of 16 bytes each, as x, y, z (f32 world coordinates), then a fourth f32 *n*. For vertex *v*, *n* is the index of the triangle across the edge from vertex *v* to vertex *v* + 1 (mod 3), or −1 for a boundary edge. Convert *n* to an integer.
+
+Checks on this disc:
+
+- All 156,675 vertices lie within the level's type-19 bounds.
+- Every non-degenerate triangle has the same winding in the (x, z) plane: (x1 − x0)(z2 − z0) − (z1 − z0)(x2 − x0) > 0. 60 triangles are degenerate.
+- 111,310 of 111,378 interior edges link back. The few that don't are mostly zero-length edges. Treat one-way links as boundaries.
+- y is constant across the whole mesh in 885 of 998 meshes. The other 113 slope or have several levels.
+
+### Height patches (type-5 entries)
+
+The type-5 payload has a u32 entry count at 0x04 and a u32 offset to an entry-offset table at 0x08.
+
+Entry (offsets from the entry start):
+
+| Offset | Size | Meaning |
+| --- | --- | --- |
+| 0x00 | 4 | Owner word (runtime). When nonzero, the first word of a placed object's entry names that object's record (the object is the owner; see Ground probe). Set when the pack is loaded; not used on disc. |
+| 0x10 | 4 | f32 cell size (world units) |
+| 0x14 | 4 | f32 sample spacing = cell size / per |
+| 0x18 | 4 | s32 *per*: intervals per cell along each axis (1, 2, 5 or 10) |
+| 0x1C | 4 | s32 stride = per + 1, the samples per row |
+| 0x20 | 4 | s32 *A*: cells along x |
+| 0x24 | 4 | s32 *B*: cells along z |
+| 0x28 | 8 | 2 × f32: x0, z0, the patch's minimum corner |
+| 0x30 | 8 | 2 × f32: x1, z1, the maximum corner (not needed for sampling) |
+| 0x3C | 4 | Owner word used by the probe's candidate rule (runtime; see Ground probe) |
+| 0x42 | 2 | u16 mask of the patch (runtime; zero passes every query) |
+| 0x44 | 4 | s32 count word (runtime); a candidate needs a value of at least 1 |
+| 0x4C | 4 | u32 offset of the cell table, relative to the entry: A × B u32 cell offsets (relative to the entry; 0 = no cell) |
+| 0x50 | 4 | s32 count C of 0x70-byte outline records (the candidate list test) |
+| 0x54 | 4 | u32 offset of the C outline records, relative to the entry |
+
+The runtime offsets 0x00, 0x3C, 0x42 and 0x44 are the record layout the probe reads after load; their disc values are not given here.
+
+An entry with A or B ≤ 0, or a cell-table offset of 0, has no height patch (10,949 entries on disc). They are ordinary model-set entries.
+
+Cell-table order. The cell table is stored with x changing fastest: the cell at (cx, cz) is entry cx + cz × A. Disc test: for each pair of neighbouring cells in a patch, the shared edge samples were compared for exact equality, skipping cells that hold −1.0e9. Over the 18 packs in the sweep (26,057 neighbour pairs), the x-major order matched 24,321 pairs (93.3%) and the z-major order matched 2,224 (8.5%). Pack 678, checked separately, matches 1,326 of 1,460 pairs in x-major and 1 in z-major. Over all 19 packs with patches: 25,647 of 27,517 pairs (93.2%) in x-major and 2,225 (8.1%) in z-major. Per pack, the x-major agreement ranges from 75% (pack 685, 218 of 289) to 95% (pack 713, 1,673 of 1,764). [High]
+
+Cell: its first u32 is the offset of its height array, relative to the cell. The array holds stride × stride f32 heights, row-major: index = ix + iz × stride. A stored value of −1.0e9 is blended as an ordinary sample by the sampler; 201 cells contain at least one such value. It does not by itself make a query return "no sample."
+
+### Grid cells and cell records (type 19 cell table)
+
+Each non-zero entry of the level grid's cell table (SPEC-0006) is an offset from the grid payload to a **cell record**. Zero means an empty cell. On disc there are 1,562,362 cells over the 191 grids, and 108,573 are non-empty.
+
+Cell record (offsets from the cell record):
+
+| Offset | Size | Field | Checked on disc |
+| --- | --- | --- | --- |
+| 0x00 | s32 | count of items in list A | positive in 87,114 cells |
+| 0x04 | u32 | offset of list A, relative to the cell | |
+| 0x08 | s32 | count of entries in the entry array | zero in 28,822 non-empty cells |
+| 0x0C | u32 | offset of the entry array, relative to the cell | |
+| 0x10 | s32 | count of items in list B | nonzero in 8,164 cells |
+| 0x14 | u32 | offset of list B, relative to the cell | |
+
+The "count" fields of a cell record are not the type-5 entry counts A and B (+0x20 and +0x24 of an entry). Keep the names apart: list A count and list B count belong to the cell; A and B belong to a height patch.
+
+Cell-record entry (0x14 bytes, starting at the entry-array offset):
+
+| Offset | Size | Field | Checked on disc |
+| --- | --- | --- | --- |
+| 0x00 | s32 | patch id | 0 names the pack's own model set. Other values name a placed object's inline model set. All 298,734 entries name a model set in the same pack. 287,867 are 0. |
+| 0x04 | s32 | entry index in that model set | below the entry count in all cases |
+| 0x08 | pointer | resolved entry | zero on disc; set when the pack is loaded |
+| 0x0C | s32 | count of items | |
+| 0x10 | u32 | offset of the item list, relative to the entry array | |
+
+Items of an entry: the items of an entry's list are offsets relative to the named model-set entry. Each one lands on a part record (0x70 bytes) of that entry's part array. For all 794,683 items on disc, the offset minus the start of that array is a multiple of 0x70 and lies inside the array. No item is zero. So the items name the part records of one model-set entry that the cell covers.
+
+Patch-id table: at load, a table is set up indexed by patch id, so that a cell entry can find the model set for its id. The pack's own model set has id 0. An inline model set of a placed object is registered under the first word of its own chunk. That word is nonzero for the objects that have one.
+
+List A and list B: list A holds 617,187 items over 87,114 cells. Every item is below the size of the pack's type-11 chunk. List B holds 19,365 items over the cells with a positive list B count. Items of list B are below the type-29 payload size and are not 4-byte indices into the type-29 second table. Their meaning is open. List A items are primitives (see Primitive class bits and kind dispatch).
+
+## Behavior
+
+### Height at a point (x, z) within one patch
+
+1. cx = floor((x − x0) / cell size), cz = floor((z − z0) / cell size). If x < x0 or z < z0, or cx ≥ A or cz ≥ B, or the cell's table entry is zero, the patch gives no sample at this point.
+2. Within the cell, the sample index is the truncated local coordinate: ix = trunc((x − x0 − cx × cell size) / spacing) and iz likewise for z. No clamp is applied. Because the row stride is per + 1, the index can reach per and still lies inside the cell's samples.
+3. Height = bilinear blend of the four samples (ix, iz), (ix + 1, iz), (ix, iz + 1) and (ix + 1, iz + 1), with fractions fx and fz taken from the position inside the sample square. The blend is linear in x on each of the two rows, then linear in z between them. The sampler does not test the −1.0e9 value. A shipped example below shows how the blend interacts with the candidate list and the probe ceiling.
+
+The cell-table index for (cx, cz) is cx + cz × A (x-major; disc test in Layout).
+
+Surface normal of a sample (High). For corner heights h00, h10, h01, h11 in row-major order, first form the raw vector
+
+`r = (trunc0(-((h10 - h00) + (h11 - h01)) / 2), trunc0(spacing), trunc0(-((h01 - h00) + (h11 - h10)) / 2))`.
+
+`trunc0` means conversion to a signed integer by truncation toward zero. The x and z components are half-sums of opposite edge height differences; they are not divided by spacing. Normalize r to obtain the sampled patch normal. If r is zero, the VU reciprocal-length sequence produces the zero vector: the reciprocal of zero is the largest finite positive VU value, and each zero component remains zero when multiplied by it. The probe normalizes a sampled candidate normal again before exposing it; for a nonzero vector the result is unit length. No shipped ground sample reaches the zero case: all 12,620 top-level and inline grid entries have spacing at least 1.0, so the integer y component is at least 1 for every sampled quad. The probe initializes the optional normal to up. If grid lookup fails or the containing cell has no entries, it returns early and leaves that up vector. If a nonempty cell is searched but no candidate is sampled, it copies the fixed world-up vector (0, 1, 0) to the optional output. This fallback is already unit length; this branch copies it without normalizing it.
+
+### Ground probe (keeping characters on the ground)
+
+The probe takes a horizontal position (x, z), a **ceiling** height c supplied by the caller, an optional output for the surface normal, and an optional slot that receives the chosen candidate. It searches the level-grid cell that contains (x, z) (SPEC-0006), and the cell's entries (type-5 patches, reached through the cell records of Layout).
+
+Before it searches, the output normal, when requested, is set to straight up (0, 1, 0). [High]
+
+1. **No result from the grid.** If the pack has no grid, or no cell contains (x, z), or the cell has no entries, the probe returns **0.0**, not the miss value. The slot is not written in these cases. [High for the return; Medium for the callers' use, see Camera position queries]
+2. **Candidate gates.** Each entry in the cell is tried in order. An entry is skipped when any of these holds:
+   - its owner word (the first word of the entry, when nonzero) names a placed object whose draw-test byte (+0x1B6 in the object, SPEC-0028 section 7) is zero;
+   - its mask (+0x42) is nonzero and shares no set bit with the world mask word (+0x56B4 of the world record). A zero mask passes every world;
+   - its count word is below 1;
+   - the caller supplied a slot that holds a previously chosen patch, and the entry's owner word differs from the slot patch's. (Medium-Low: the wrapper routines read in this pass store zero into the slot before the probe, so the callers read here never reach this rule.)
+   [High for the first three; Medium-Low for the last]
+3. **Candidate list test.** When the cell has two or more entries, the candidate must also pass its own list test. The list test takes the position and counts how many of the candidate's C outline records (0x70 bytes each, named by the entry's outline count and pointer in Layout) cross it in a horizontal sense. Before the side-of-line test, each record applies a z-span gate using its origin z and the scalar at record offset +0x68: when origin z < query z, the record qualifies for the span only if query z − origin z is less than the scalar; otherwise it qualifies only if query z − origin z is at least the scalar. After the span gate, let Q = (x, 0, z, 1) and R be the record's first row (the 16-byte row at +0x10). The record contributes when exactly one of these is true: Q · R > 0, or R.x > 0. Both comparisons are strict; a zero result is not positive. The candidate passes when the number of records passing both gates is odd, or when the list is empty. The rule is exact, but the design-facing meaning of the records remains unknown (High for the predicate and parity; Medium-Low for interpretation). With one entry in the cell the test is not run.
+4. **Owner placement.** When the entry's owner word is nonzero, the sampling point is first mapped into the patch frame of the placed object (Medium; the mapping is a decode of vector operations on the object's transform blocks):
+   - Let O be the object's translation (its current transform block at object offset 0x100, the fourth column, horizontal components), and let X and Z be the object's current X and Z axes (the first and third columns of that block; horizontal components).
+   - Let d1 = X · (p − O) and d2 = Z · (p − O), using the horizontal components of the axes and of p − O.
+   - Let T be the object's second transform translation (the last column of the second block in SPEC-0028, section 7), and A and B its second-block X and Z axes (the first and third columns of that block; horizontal components). The sampling point is p' = T + d1 × A + d2 × B (horizontal components).
+   - The sampled height is raised by (O.y − T.y).
+   The roles of the two transform blocks are not named here (Open questions).
+5. **Sampling.** The patch sampler (Height at a point) is run at p' (or at p when there is no owner). A candidate for which the sampler gives no sample is skipped.
+6. **Accept or reject.** Let h be the sampled height (after step 4's raise). The candidate is accepted when **h is greater than the best height so far and not greater than c**. The best height starts at the miss value −1.0e9. Equal heights do not replace an earlier candidate, so ties keep the earlier candidate in cell order. An accepted candidate becomes the best; its normal (when requested) is written to the output.
+7. **Rejected candidates.** A candidate that is not accepted (h at or below the best, or h above c) is remembered as the last rejected candidate, with its height, normal and entry.
+8. **Result.** If any candidate was accepted, the result is the best accepted height, and the slot receives that entry. If none was accepted, the result is the height of the **last rejected candidate** (which may be above the ceiling c), with its normal and entry; if no candidate was sampled at all, the result is the miss value −1.0e9 and the slot receives zero. The normal in the no-candidate case is (0, 1, 0); it is already unit length and this fallback does not normalize it. [High for the rules; Medium for the effect on callers]
+
+Test vectors for the tie rule and the fallback are in Test vectors.
+
+Note on the rule in earlier drafts: the earlier text said "the highest patch height that is ≤ the probe height, otherwise the miss value". Steps 6 to 8 replace it: the fallback is the last rejected height, which may be above the ceiling, and the miss value is returned only when nothing was sampled.
+
+### Ceilings supplied by callers
+
+The ceiling is not added to inside the probe; each caller passes its own value. Offsets or absolute start heights seen in the direct callers read in this pass:
+
+- **2.5**: three routines: character ground attach (one) and camera position queries (two). The camera queries include the eye collision probe and a ground-clearance step toward focus; they are not character-foot placement. [High for caller mapping and values]
+- **6.0**: two routines: a character ledge-drop check and a camera stick-orbit 5-by-5 sample grid. [High for the mapping; Medium for caller role]
+- **8.0**: a shared wrapper applies this offset at 44 direct call sites. Its callers cover several systems, so the offset alone does not show that every input point is a character's feet. One caller runs a first probe and a follow-up probe with the first result plus 8.0 as the second ceiling. The value is also a boot data word at ELF data address 0x2DD7CC. [High for values and counts; Medium for full caller-role census]
+
+SPEC-0033 (Behavior 6) describes the shared +8.0 wrapper as a common feet-probe helper and identifies +2.5 for hero motion-record ground follow. The 44 wrapper call sites support the shared-helper count, but do not establish that every query is a feet query. The +2.5 value occurs in the one hero ground-attach routine plus two camera routines; the camera uses do not contradict the hero-specific statement.
+
+### Camera position queries (Medium; see SPEC-0027)
+
+The camera eye collision query uses the eye position, with an absolute probe ceiling equal to the desired eye distance +2.5. It tries the current world, then a second world when available and the first query selects no entry. The selected collision entry, world and returned height are retained in camera state. A separate camera position-adjustment routine probes at its current position Y +2.5 while checking ground clearance and sliding toward focus (SPEC-0027). These camera uses share the ground-height query but do not place a character on its feet. A camera shrink check also uses the probe result as a blocked test: it compares the returned height with the probe point's Y +5. When the result exceeds that ceiling, the condition is possible only through the probe's last-rejected-candidate fallback; an accepted candidate cannot exceed the ceiling. This establishes a caller that relies on the fallback for its above-ceiling result. [Medium-High; static call path]
+
+The camera clearance comparison uses the 2.0 ground-clearance value and 1.0 unit scale listed in Constants. The detailed adjustment behavior is in SPEC-0027.
+
+### Ground attach of a character (High for carry arithmetic and gates; Medium for owner provenance)
+
+The character ground-attach step probes at the feet with ceiling = its height + 2.5, using the character's selected world slot. The selected height patch can identify a moving placed object as the ground owner. The character record keeps the prior tick's ground-object pointer and prior object rotation.
+
+Carry is applied only when the current ground object is the same object as on the preceding tick and either the character's stored height above ground is at most 0.25 or a climb/hang record is present. Landing on a moving object therefore establishes the owner and saves its rotation on that tick; translation carry starts on the next tick. A climb/hang record can also supply the ground object through its linked object.
+
+For the carry displacement, let P be the character position, T the object's current translation, C0..C2 its current transform columns, q the object's current rotation, qprev the character's saved rotation, and deltaT the object's per-update translation change. Compute d = P - T and L = C0*d.x + C1*d.y + C2*d.z. The rotation contribution is rotate(qprev, L) - rotate(q, L); add deltaT to get D. Clamp D.x and D.z independently to [-1.5, 1.5], then add those components to P. Add D.y only when the character motion record's vertical-carry flag is nonzero. Save the current object rotation whenever a ground object is selected. The per-tick moving-object collision pass follows this carry step. It scans active placed objects that have inline primitives and whose configured radius contains the character, maps the character position into each object's local frame, and dispatches the object's six primitive arrays through the second primitive dispatcher without its extra class filter. The resulting position change is transformed back into the character's position. This collision pass is separate from translation carry.
+
+Under the same repeated-owner and height/climb gate as the positional carry, the character's facing direction is transformed by the relative platform orientation: f' = rotate(qprev, rotate(conjugate(q), f)), where f is the current facing direction. The resulting direction is normalized when the facing basis is rebuilt. This facing update does not depend on the vertical-carry flag. The facing-basis setter skips its write for owner class token 0x35.
+
+For a translating object with unchanged rotation, the rotation terms cancel and D equals its translation change. Thus an x translation of +0.5 carries a rider by +0.5 on the first eligible tick after landing; a +2.0 x change is limited to +1.5. A vertical translation of +0.5 contributes +0.5 to the rider only when the vertical-carry flag is nonzero. Rotation carry uses the stored point offset and the two endpoint rotations; it is not established as a rigid-body rotation about the platform origin.
+
+Facing test: if q = qprev, f' = f; if qprev is identity and q is a +90-degree yaw, a +X facing direction becomes +Z under the column-vector convention used here.
+
+### Landing test (Confidence: Medium-Low)
+
+A character has landed when all of these hold:
+1. It is falling: its vertical velocity is below zero. A character that is rising never passes this test.
+2. The hero action state is 7–10, 11, or 43–46. State 11 passes because this caller supplies zero for its optional state argument.
+3. The shifted-field footprint query accepts a type-4 or type-7 volume whose +0x2C value is zero or negative. The landing route refuses a result that would require flipping the volume normal.
+4. After a query hit, the hero's current position Y must be strictly greater than the Y component of `volume point + volume scalar × volume vector` minus 1.5 units. Equality fails.
+
+This is one branch of the shared type-11 contact router, selected for type-4 or type-7 records with nonpositive +0x2C. The branch answers whether the hero has landed; it does not move the hero. The exact endpoint represented by the shifted-field query's motion inputs remains open.
+
+### Navmesh queries
+
+- **Inside test**: point P is inside triangle (a, b, c) when, in the (x, z) plane, P lies on the inner side of all three edges (using the winding above; points on an edge count as inside). [High]
+- **Mesh kind by query mode**: a query names a mode. Mode 0 searches only meshes of kind 1; mode 1 searches only meshes of kind 2. The query returns the index of the first mesh of that kind that contains the point, or −1 (not found). The Draik Skeleton main loop calls mode 0 the ground mesh and mode 1 the flying mesh in its result messages. Common-enemy navigation and two other enemy routines select the mode from the actor's Can Fly flag, corroborating those labels. No direct call from a hero route to this kind-selecting query was found; hero route assignment uses a script-provided mesh index. [High for query selection and Draik labels; Medium-High for broader enemy correspondence]
+- **Locate with a last triangle (hint)**: the character keeps the index of its last triangle on the mesh. Steps:
+  1. Test the hint triangle. If it contains the point, that is the result.
+  2. Test the triangles across its edges in edge order 0, 1, 2. A boundary edge is skipped. The first neighbour that contains the point is the result.
+  3. Otherwise search outward from the hint: test hint − 1, then hint + 1, then hint − 2, then hint + 2, and so on. Each side stops at the end of the mesh. The search fails when both sides are exhausted.
+  [High]
+- **Locate with no hint**: steps 1 and 2 are skipped. The outward search starts from the middle index, floor(N / 2), where N is the triangle count. It tests the index one below the middle, then one above, then two below, and so on, but the middle triangle itself is never tested. The consequences are in Edge cases. [High for the order; Medium for whether any caller reaches this path with the point on the middle triangle]
+- **Incremental locate (AI)**: a locate may be spread over several ticks, with a fixed budget of 50 triangles per call. The character keeps a cached triangle and a cursor. Each call:
+  1. If the cached triangle contains the point, return it. A cached index beyond the mesh's triangle count is cleared first.
+  2. If no cursor is set, set it to 0. A cursor at or past the end of the mesh is cleared, and this call reports not found.
+  3. Otherwise test up to 50 triangles from the cursor, in increasing index order, up to the end of the mesh. A hit returns that triangle and clears the cursor. A miss stores the cursor + 50 as the new cursor and reports not found for this call.
+  A full-scan mode (a caller flag) starts at 0 and tests every triangle in one call. A search that misses over N triangles therefore takes ceil(N / 50) testing calls, then one call that reports not found, and the next call starts again at 0. Outside full-scan mode, a set cursor is reset when the stored point's fourth component minus the query point's fourth component is strictly greater than 2.0; equality does not reset it. The comparison's lane is established, but the field's broader role and whether ordinary region-character play reaches this condition remain uncertain. [High for the comparison; Medium-Low for ordinary-play reachability]
+- **Locate result use**: a character not on any triangle is off the navmesh. The effect on AI behavior is not fully confirmed (SPEC-0029, sense).
+- **Height on the navmesh**: the original uses the y of the containing triangle's first vertex. That is exact for flat meshes but wrong on slopes. For original-like behavior, use it only for flat meshes (885 of 998); otherwise interpolate.
+- Which mesh a character uses is set by the level script or the character's setup (a mesh index within the type-21 chunk).
+
+### Grid diagonal steps
+
+A walk over the level grid can step diagonally. Four steps exist, each changing both cell indices by one: (+1, +1), (−1, −1), (−1, +1) and (+1, −1). A step fails when the new cell lies outside the grid. A successful step also returns the distance from the query point to the shared corner on the far side of the move. Their caller is unknown. The segment sweep described above is not a caller, and the saved direct-call references identify no external direct caller; indirect, data-driven or unindexed use is not excluded. [High for the step rules and excluding the segment sweep; Medium for the distance; caller unknown]
+
+### Object collision
+
+#### Primitive records and their use
+
+Each world pack's object chunk (SPEC-0028, section 6) lists collision primitives. The record shapes and counts are in SPEC-0028. Their use in the paths below:
+
+| Record shape (disc) | Size | Used by | Confidence |
+| --- | --- | --- | --- |
+| Equal-extent records with an all-ones tag (spheres) | 0x40 | Only as the ball of the ray-versus-ball test (below). Not tested as primitives by the contact pass. | Medium |
+| Cone records (one extent differs; the other two equal) | 0x40 | No test found. Not used by the paths below. | Medium (no test found) |
+| Cylinder records | 0x50 | Kind 3 of the contact pass (the kind-3 test is read in Primitive class bits and kind dispatch). | Medium |
+| Plane and box records | 0x70 | Contact pass (planes, boxes), the face tests of the sweep and the class-five test. | High for boxes |
+| Other 0x50 records with equal extents | 0x50 | Not used by any path below; role unknown. | Open |
+
+The kind of a loaded primitive is a byte at +0x10 of its loaded form. The disc record's byte at the loaded type offset (+0x4C) is not a type field (all 256 values occur over the plane and box records on disc). How the loaded kind is derived from the disc record shape is open (Open questions). The kinds below refer to those loaded bytes.
+
+#### Primitive class bits and mask gate (High)
+
+A loaded primitive has a 16-bit id word at +0x12 and a 16-bit mask word at +0x1A.
+
+- **Class bits.** Class k holds when bit k of the id word is set. The bit is tested for classes 0 to 8 across the routines read (see the table below).
+- **Mask gate.** A primitive is used only when its mask is zero, or when its mask shares a set bit with the world mask word (+0x56B4 of the world record). The same gate is applied in every primitive routine read in this pass, and it is the candidate mask rule of the probe (Ground probe, step 2) applied to primitives.
+
+Class tests seen in the primitive routines (Medium for the exact combinations):
+
+| Routine | Mask gate | Class tests |
+| --- | --- | --- |
+| Plane test (kind 1 of the contact pass) | yes | after a hit, class 0 or 3 selects the contact event; otherwise class 4 selects the hit callback; otherwise class 9 selects a positioned sound only for the selected player object |
+| Cylinder-shaped test (kind 3 of the follow-camera eye pass, and the plate-pool record test in its clear-path helper) | yes | passes when class 0 or class 4 holds; fails when class 5 holds |
+| Box push (kinds 4 and 7 with a positive radius value at +0x2C) | yes | class 3; if not set, class 0 |
+| Zero-radius contact (kinds 4 and 7 with a radius value of zero or less) | yes | class 1 plus identifier 500 or 501 selects the special trigger path. Otherwise the motion path runs. On a first-segment hit, classes 0, 6 or 4 select the contact event; otherwise class 8 selects the hit callback. On a second-segment hit, classes 0 or 6 select the contact event first; otherwise class 1 selects the plane-trigger path, class 4 selects the contact event, and class 8 selects the hit callback |
+| Second dispatcher (kinds 1, 2, 3, 4 and 7; see below) | yes | kind 2 routes to the cone-contact test; other routine details are listed in the contact sections |
+
+#### Contact pass: list A dispatch by kind (High; resolves the list A open question)
+
+The primitives of the character's cell (list A) are read as primitives and dispatched on their kind byte at +0x10:
+
+- kind 1: plane test;
+- kind 3: cylinder-shaped test;
+- kinds 4 and 7: box push with the radius 1.25 when the radius value at +0x2C is positive; zero-radius contact test when it is zero or less;
+- kind 2: skipped in this pass;
+- kinds 0, 5, 6 and 8 and above: ignored in this pass.
+
+A second dispatcher in the cell-list A path uses the same mask gate and kind routes, but routes kind 2 to the cone-contact test. The cell-list A walker invokes it; the shared motion-record contact driver calls that walker, and the `CollideEntityWithTriggers` host call also invokes the walker with its class filter enabled. List B is not read by the contact pass.
+
+#### Follow-camera eye contact pass (driver read in pass 9)
+
+The follow-camera mode-0 update runs the eye collision pass. Its blocked-query helper checks the nearby-object and plate-manager lists described in steps 1 and 2. The driver records a hit when an eye collision test reports one.
+
+1. **Nearby-object list in the blocked-query helper.** The level's list of nearby objects (a pointer held by the region to a list whose first word is the count; records of 0x20 bytes, each with a position vector and a sub-list of 0x60-byte items) is walked. A record is tested only when a squared-distance gate passes (exact form Low-Medium). Each item of the record's sub-list is tested with the part routine.
+2. **Plate-manager pool in the blocked-query helper.** The helper scans the world's 0x160-byte plate-manager pool. It tests a pool record only when its second word is zero. When that word is nonzero, the pool pointer is not advanced, so no later record is tested in that scan. This is not an active-actor list: the plate-manager pool has no shipped additions and remains empty on ordinary paths. The actual camera actor-box list is separate: it has 0xB0-byte records, and the eye pass tests a record only when its active word at +0x74 is nonzero. [High for both record tests and caller relationship; no ordinary-play pool collision inferred]
+3. **Grid cell.** The eye collision pass looks up the level-grid cell containing the camera eye point at +0xE0 (SPEC-0006). In this order:
+   - (a) each cell entry's type-5 frame-record items are tested with the part routine; type-6 frame records are skipped by this grid walk (High);
+   - (b) each list A primitive is dispatched by kind (see above);
+   - (c) the region's sub-object lists (count at +0x2CD0, pointers at +0x2CD4) are walked; each sub-object has a list of 0x70-byte records (count at +0x94, pointer at +0x98), and each record is tested with a routine whose body is not re-read (Low).
+4. **Restore the eye on hit.** The pass retains the previous eye position at +0xF0. When a collision is registered, it restores the current eye position at +0xE0 from that saved value; the eye therefore returns to its prior position for that pass. [High]
+
+Steps 4 and 5 of the earlier draft (the blocking query and the contact state) belong to other routines and were not re-read in this pass. Their text is kept below as written earlier, with its open items:
+
+- **Blocking query.** A segment query (the line-of-sight query of this spec, with restriction flag set) runs from the character's position to its target; if it hits, a second query runs. A blocked result sets the blocked flag and increments a blocked counter (reset when clear). When the counter exceeds 1.0 second (60 ticks), the recovery routine runs and the counter resets. [Medium]
+- **Contact state.** Contact normals are recorded in a list. When at least two normals are recorded, or the contact latch is set, the character's position is restored from the position saved at the start of the tick (saved word at +0xF0 in an earlier reading) and the latch is set. Each tick with contacts increments a counter; when it exceeds 0.05 seconds (3 ticks at 60 Hz), the recovery routine runs and the contact state resets. [Medium-Low; the saved word is not confirmed, see Open questions]
+
+The type-6 classification belongs to the model-set frame records used by the grid entry arrays and the segment query. The contact pass's list A is a separate list of type-11 collision primitives; it dispatches those by kind and does not use the frame-record classification. The earlier claim that the contact pass skips type-11 primitives by type 6 is unsupported.
+
+#### Sweep of a moving body against a box
+
+A body moving by a displacement is swept against each candidate box. Two variants exist; they differ only in where they read the start point, the direction and the length.
+
+1. **Broad test.** A ray from the body's start point along its direction is tested against a ball centred on the box's reference point. The ball's radius is 20 times the largest of the box's three extents. This 20 is a radius factor, not a length. The ray's length limit is the body's scalar (first variant) or 5.0 distance units (second variant; ELF data address 0x2DCB40).
+2. **Ray versus ball.** Let the near and far roots of the ray-ball quadratic be found (the ray direction is unit length). If the near root lies in (0, limit), the test is a hit at the near root. If the start point is inside the ball (near root not positive, far root positive), the hit is at the far root when it is below the limit. If the near root is at or beyond the limit, the result is a hit only when a further check at the limit passes (not re-read); otherwise no hit. [High for the roots; Medium for the last case]
+3. **Face sweep.** If the ball is reached, five faces of the box are tested as finite rectangles against the segment from the start point to start plus scalar times displacement (the segment-versus-rectangle rule below). Any hit blocks. The five variants read different extents, so which face each one tests is open; the sixth face appears to be untested (Low).
+
+The sweep blocks; it does not push. Cones and spheres do not take part in the face tests. The sweep that pushes a character off a hit face is the character sweep with push below.
+
+#### Box convention
+
+For a box or a plane, the reference point o is the **low corner**. The extents eV, eA and eB are the vertical extent, the A extent and the B extent. The three axes are the vertical axis V, the axis A and the axis B. The disc pairs them as follows: the first extent after the tag pairs with the vertical axis, the second with A and the third with B (SPEC-0028, section 6.1). The box covers the points o + a·A + b·B + v·V with 0 ≤ a ≤ eA, 0 ≤ b ≤ eB and 0 ≤ v ≤ eV. [High]
+
+Earlier drafts called o the centre and the extents half-extents. That naming conflicts with the containment bounds below and is not used here.
+
+**Point versus box with radius r (wall and object push-out).** For a query point p, let a = (p − o)·A, b = (p − o)·B, v = (p − o)·V. The point is inside the box grown by r when:
+
+- −r < a < eA + r,
+- −r < b < eB + r,
+- −r < v < eV − 0.1 (with the caller's top-growth flag set, the top bound becomes eV − 0.1 + r).
+
+The kind-4/7 positive-radius box-push route passes the top-growth flag clear, including from the character contact pass. It therefore uses the strict upper bound v < eV − 0.1, without adding r. The 0.1 is a margin at the top of the box. If the point is outside, the result is no hit. Containment is asymmetric (the low bound is −r, the high bound is eA + r). [High for this box-push route; other direct callers of the shared helper are separate]
+
+**Six faces.** Inside the grown box, the distance from p to each face is:
+
+| Face | Outward normal | Depth |
+| --- | --- | --- |
+| 1: top | +V | eV − 0.1 − v |
+| 2: bottom | −V | v + 0.75 |
+| 3: low B side | −B | b |
+| 4: high B side | +B | eB − b |
+| 5: high A side | +A | eA − a |
+| 6: low A side | −A | a |
+
+The bottom face carries a +0.75 bias: its depth is always at least 0.75 more than the depth v, so it is chosen less often. The face with the smallest depth wins; ties go to the lower face number. [High for the depths and normals; Medium for the bias's effect on ties]
+
+**Face rules after the nearest face.** These rules can change the result of the smallest-depth choice.
+
+- Top gate (Medium): when the top depth is below 0.25 and each of the four side depths is above −0.5 r, the top face is chosen, whatever the nearest face was.
+- Corner rule (Medium-Low): thresholds 0.8 r, −0.7 r and −2 r. When a side face is nearest and the point lies within 0.8 r of that face's centre line on the other horizontal axis, the choice may move to the neighbouring side face or to the top, depending on the signs of the depths in the range −0.7 r to −2 r. The exact cases are not fully established.
+- Preferred face (Medium-Low): the caller may pass a preferred face (0 = none). If the preferred face is a B side and the chosen face is an A side (or the reverse), the choice is kept when the depth sign on that axis allows it; otherwise the preferred face is taken.
+
+**Push distance.** The result gives the face number, its outward normal and a push distance:
+
+- top face: the depth eV − 0.1 − v when the top-growth flag is off; that depth plus r when it is on;
+- bottom face: the absolute value of (v + 0.75 + 0.5 r);
+- all other faces: depth + r.
+
+The push-out moves the point by the push distance along the outward normal. After a push out of the low A side, the point's a-coordinate equals −r, which is the boundary of the grown box. This box-push route uses the top-face depth eV − 0.1 − v, without adding r. [High]
+
+#### Slide response (Medium-Low)
+
+Read in this pass for a moving body that meets a face with its normal N (the vertical part of N is N.y):
+
+1. **Early exit.** When the scalar argument of the routine has an absolute value of 0.05 or less, and both signed projections of the body's motion on N are zero or positive, the routine changes nothing and returns.
+2. **Velocity clip.** When the projection of the body's velocity on N is negative, the velocity loses its component along N. A second correction moves the body's reference point by a step along N only when the caller's sixth argument is zero and the remaining length exceeds 0.1.
+3. **Floor gate.** When the caller's floor argument is set and |N.y| is above 0.9, the body's floor flag is set (the body's floor flag is written 1). Then a further check on the body's stored normal and direction: if both horizontal components pass 0.1 in size, the stored direction keeps its value; otherwise two stored vectors of the body are cleared.
+4. The routine marks the body as touched (the body's touched flag is set to 1) and returns 1.
+
+The thresholds 0.05, 0.1 and 0.9 are code constants (Medium-High; read in the routine). In the recovered character, navmesh, pending-contact, character-push and Petpet callers, the sixth argument is zero. In this routine, zero permits the step-undo correction described above when the motion points into the face and the displacement exceeds 0.1; a nonzero caller value would suppress that correction, but no recovered caller exercises it. The meanings of the scalar argument and of the two stored vectors remain open (Open questions). The routine is the closest thing to a wall response found; the wall branch of the one-face test (below) uses a 0.15 margin that is not reconciled with it.
+
+#### One-face test of a moving body (Medium-Low)
+
+A test of one face with a normal N. When the vertical part of N has an absolute value above 0.9, the face is treated as a floor (the floor branch). For other faces the wall branch runs, with a 0.15 margin and the body's radius value. The two branches are read in outline only. Which caller uses this test is not fully identified.
+
+#### Character sweep with push
+
+A character that moves can be swept against the object primitives of its grid cell, and a hit pushes it off the hit face. The routine runs in four steps. Its flag argument is zero at each place it is used (the two known callers).
+
+1. Gate. The gate runs when the routine's flag argument is zero. A primitive is used only when its mask is zero or matches the region's mask word, and its id belongs to class three or, failing that, class zero. Otherwise the primitive is ignored. [High: the same gate as the box push, see Primitive class bits and kind dispatch]
+2. Ball test. The ray from the character's start point along its displacement is tested against a ball around the primitive's reference point. The ball's radius is 20 times the largest of the primitive's three extents. If the ball is not hit, there is no hit. [High]
+3. Faces. The segment from the start point S to the character's current position P is tested against five faces of the primitive, as in the sweep above. The nearest hit gives a fraction t along the segment (0 at S, 1 at P) and the hit face's normal N. [Medium for the face identities]
+4. Push. On a hit, the contact point is X = S + t (P − S). The character's new position is X + 0.45 × (V · N) × N, where V is the character's motion vector and V · N is the dot product of V with the hit normal. The push factor is 0.45, a code constant. [High for the arithmetic and the factor; Medium-Low for the final stored value and the sign convention of N (Open questions)]
+
+The routine returns a hit when a face is hit and leaves the position unchanged when none is hit. When V · N is zero, the push is zero and the new position is the contact point X.
+
+#### Petpet frame-record wall pass (High for filtering; Medium-High for contact gates)
+
+Before the Petpet's ordinary cell-list collision pass, the update may walk frame records from its collision context. The walk requires the owner/context gate to pass and a nonempty record list. For each record, a zero 16-bit filter at +0x42 is eligible. A nonzero filter is eligible only when it shares at least one bit with the active world's mask at +0x56B4; a nonmatching record is skipped before geometry is tested.
+
+For an eligible record, the test uses a working copy whose top edge is raised by 10 units and performs a two-sided frame contact at the Petpet's position P. The query uses the Petpet's body radius to expand the frame plane: for an ordinary wall contact, the returned correction distance is radius minus the absolute point-to-plane distance, and the returned direction points toward the side selected for the contact. If applied, that correction moves the reference point toward the radius-offset plane. Near-horizontal frame planes and the query's span and height gates follow separate branches, so this is not a universal penetration-depth formula. After a hit, the step probes ground at P and at a point 2 units ahead along the Petpet's facing, with an 8-unit ceiling on each probe. The response is bypassed when both |g0 − g1| ≤ 0.5 and the raised top is no higher than P.y + 0.25, or when the forward ground height g1 is below g0 − 2.0. Otherwise the shared contact response receives the query's correction distance and direction; under its push gate it can apply that displacement before its motion projections. The supported operational role is wall-contact correction; a more specific design-facing name or intent remains open.
+
+#### Follow-camera contact-normal countdowns (High for ownership and expiry order)
+
+The follow camera's contact-normal list (see SPEC-0027) is also used as a countdown list. It has one count for 32-byte records, and each record's countdown is at byte offset 16. The camera processes countdown eligibility and removes expired entries immediately before its eye collision pass. An expired entry is removed by shifting later records down in order; the scan advances after removal, so a shifted record is not checked again during that update.
+
+Countdown processing is eligible when either a predicate on the camera's referenced object returns nonzero or a separate camera flag is nonzero. The predicate's meaning and the flag's purpose are unknown. The remaining record fields have no established contact role.
+
+Within the recovered contact-normal accumulator, both paths initialize the countdown from the same value: updating an existing near-duplicate normal and appending a new normal. All recovered camera contact-normal insertion call sites route through that accumulator. The camera flag is also read by the camera's primitive-contact response routines: it can permit processing when the referenced-object predicate is false, and it suppresses a shared camera-adjustment call in several response branches. Its design-facing name and the possible existence of an unrecovered insertion path remain unknown.
+
+Synthetic check: records A(countdown 1) and B(countdown 7), with both eligibility gates passing, leave B at index 0 with countdown 7 after A expires; B is not decremented on that same scan because the index advances.
+
+### Segment versus a rectangle (plane record)
+
+A plane record gives a reference point, a normal with its offset, and two in-plane axes with extents. For a segment from P0 to P1, let t be the parameter where the segment crosses the record's plane. If the segment is parallel to the plane (zero denominator), there is no hit. Require −0.02 ≤ t ≤ 1.02. Let Q = P0 + t (P1 − P0). With s = (Q − o)·X and u = (Q − o)·Y for the two in-plane axes X and Y with extents eX and eY, the hit needs:
+
+- −0.25 ≤ s ≤ eX + 0.25, and
+- −0.25 ≤ u ≤ eY − 0.25.
+
+The rectangle has no facing test, so both faces block. Medium: the margins are constants read from the code; which chunk axis serves as the normal is Medium-Low (Open questions). Another rectangle routine read in this pass applies a facing gate (the vertical part of the rectangle normal above 0.9 selects a one-sided range). Which routine the rule above describes is open.
+
+### Segment query (line of sight and move tests)
+
+A segment query takes two endpoints, P0 and P1, and a restriction flag.
+
+1. Each endpoint is moved by +1.5 in one horizontal coordinate (Medium; which coordinate is not settled). The moved points are the endpoints used below.
+2. If the two endpoints differ in height by more than 50 units, the query is blocked.
+3. Otherwise the query looks at the grid cell containing each endpoint (the cell lookup of SPEC-0006), not at every cell along the segment. In each of the two cells, every entry's list of frame-record items is visited. Each frame record is tested with the segment-versus-rectangle rule above, except that a frame record of type 6 is skipped when the query's restriction flag is set. When the flag is clear, type-6 frame records are tested like the others. (High for the skip rule; see Frame-record type and type-6 census.) A camera eye-placement/recentering path sets the restriction flag; a movable-block pull-back candidate-clearance path passes it clear, so type-6 records can block that candidate. These are observed caller behaviors; the reason for the caller-specific choice is unknown. Other flag call sites remain unclassified, including three where the value is not visible.
+4. Any hit blocks the query. No hit leaves the query clear.
+
+The code does the cell rule above (Medium-High). Whether a segment long enough to span several cells is fully covered by the two endpoint cells is open (Open questions).
+
+#### Frame-record type and type-6 census
+
+The grid entry arrays in this query contain references to 0x70-byte frame records from the model-set entries (type 5), not the separate collision primitives in a world's type-11 object chunk. The frame-record classification is the low byte at record offset +0x4C; it is present in the disc record and retained when the model-set loader relocates the record links. Type 6 is therefore directly countable in the authored model-set data. Across the 190 top-level type-5 chunks and 650 inline type-5 model sets in the 191 world packs, the disc has 6,145 type-6 frame records: 6,047 top-level and 98 inline. All 6,145 are referenced by grid-cell item lists, which contain 20,480 references to them. These are authored record and cell-reference counts, not a count of runtime copies of instanced objects. [High]
+
+This classification does not apply to the type-11 collision primitive records. In those separate records, the raw byte at +0x4C is geometric data, not the type-6 classification. The collision primitive kind remains its separate byte at loaded offset +0x10 (Primitive records and their use).
+
+Type-6 records use the same vertical frame-record rectangle layout as the other frame types: their wall normal is horizontal, their run axis is horizontal, and their vertical axis points up. The 6,145 authored type-6 records have unit horizontal normals and positive run-length and depth fields; observed run lengths span 0.0175–160.56 units and depths 0.854–120 units. Hero wall contact tests type 6 with the two-sided form of the frame contact test. The petpet frame pass also reaches its two-sided frame test without filtering type 6. This does not establish why the data uses type 6. [High for layout and dispatch; census ranges rounded]
+
+### Actor-to-actor clear path (Confidence: Medium-Low)
+
+This test answers whether a straight horizontal walk from one actor's reference point to another's is clear of solid geometry. The first actor is the tester; the displacement is the second actor's reference point minus the first's, taken horizontally.
+
+1. **Object pre-filter (Low).** The nearby-object list is the world's Type 10 group table for ladders and climb panels (SPEC-0006). Each group stores a centre, a squared-radius field and a list of primitive records. In the only direct caller, the pre-filter's actor endpoint is the selected hero's reference position offset by one half of the motion record's +0x0C value times its +0x2B0 forward vector. The gate derives a normalized displacement from that point to the group centre, then compares half the square of one displacement lane with the stored squared radius. The lane and geometric interpretation are unresolved; the evidence does not establish a conventional point-to-segment radius test.
+2. **Object test.** Each candidate's primitive records are tested with the segment-versus-rectangle rule (above). A hit blocks the test.
+3. **Sampling.** Ten sample points are taken at fractions 0, 0.1, 0.2, ..., 0.9 of the displacement from the first actor's reference point. The end point (fraction 1.0) is not sampled. At each sample point:
+   - the height-patch query at that point must succeed, and
+   - the grid-cell lookup at that point must return a cell.
+   Only when both succeed is the cell's entry list walked, and each entry's primitives are tested with the segment-versus-rectangle rule. A hit blocks the test. If either query fails at a sample, that sample contributes no primitives.
+4. Any hit blocks the path. No hit leaves the path clear.
+
+Medium for the ten samples and the fractions (the loop count and the 0.1 step are code constants). Medium for the pre-filter origin in its direct caller; Low for the compared lane and geometric interpretation. The primitive test's segment is specified above. No boot data word is involved; the 0.1 step and the ten-sample count are code constants.
+
+**Probe candidate list test (High for the static predicate and parity; Medium-Low for its design-facing meaning).** Described in Ground probe, step 3. The same list test is used by the move check's footprint test below.
+
+**Move check (ahead probe and height step).** A move check takes a distance d and a unit direction u, and returns allowed or blocked. Its only known caller is the state-18 movable-block controller. The mover has a footprint flag F (a byte at +0x9C) and a linked type-11 n1 source record at +0x68; the record's +0x10 authored step value is used as rb in the ahead-point distance.
+
+1. Ahead point: p = position + u × (d + 0.5 rb + 0.1).
+2. If F is zero, the move is allowed. No height step and no list test run in this path.
+3. If F is set, the ahead point must pass the footprint list test (the candidate list test above, applied to x and z only). Failing it blocks the move.
+4. Second point: q = R + u × (d + 0.75) × 1.1, where R is the selected hero's current motion-record position, returned through the active-player pointer (High). If the footprint list test passes at q, the move is allowed at once.
+5. Otherwise take the ground heights at q and at R, using each point's own Y +8.0 ceiling (SPEC-0040, Behavior 11). If their difference is larger than the step limit (0.75), the move is blocked. Otherwise the move is allowed. The ahead point p is used only by the footprint list test, not by the height step. The two probe positions are the moved object's position and the selected hero-relative point, so these are not necessarily feet probes.
+
+The step limit and the fixed box-test margin are boot data (Constants); rb is the movable-block source record's authored step value. The move check blocks; it never pushes or tests solid objects.
+
+### Constants
+
+- Step limit for a move: 0.75 world units, a boot data word at ELF address 0x2EB2C0 (checked: f32 0.75). [High]
+- Character radius for box tests in the move check: 0.25 world units, a boot data word at ELF address 0x2EB2C4 (checked: f32 0.25). [High]
+- Contact push radius: 1.25 world units, a boot data word at ELF address 0x2DB400 (checked: f32 1.25). Used by the box push-out in the contact pass, for the other characters' boxes and for the box primitives. [High for the value; Medium for the uses]
+- Ground clearance in the camera position adjustment: 2.0 world units, a boot data word at ELF address 0x2DB3C4 (checked: f32 2.0). [High]
+- Unit scale in the camera position adjustment: 1.0, a boot data word at ELF address 0x2DB3C8 (checked: f32 1.0). [High]
+- Contact-state limit: 0.05 seconds, a boot data word at ELF address 0x2DB3E8 (checked: f32 0.05). At 60 ticks per second this is 3 ticks. [High]
+- Blocked-query limit: 1.0 second, a boot data word at ELF address 0x2DB3EC (checked: f32 1.0). [High]
+- Projectile timer: 1.0 second, a boot data word at ELF address 0x2DD440 (checked: f32 1.0). [High]
+- Sweep length of the second variant: 5.0 distance units, a boot data word at ELF address 0x2DCB40 (checked: f32 5.0). [High]
+- Ground probe miss value: −1.0e9, a code constant in the probe (the same magnitude, 1.0e9, is a boot data word at ELF address 0x31E890; checked as f32 1.0e9, and read by the character attach routine). [High for the probe; Medium for the attach routine's use]
+- Character-position helper cutoff: a returned ground height must be strictly greater than −9.0e8 to pass this helper's acceptance gate. The shared ground probe has no −9.0e8 cutoff; ground attach uses a separate strict −1.0e9 one-shot-height check. [High for the comparisons; Medium for the helper's caller context]
+- Ground-probe starts: caller-specific +2.5, +6.0 and shared +8.0 cases. See Ceilings supplied by callers. [High for counts and mapped contexts]
+- Candidate sampling: the sample index is the truncated local coordinate; the sampler has no clamp. [High]
+- Slide thresholds: 0.05 (early exit on the scalar argument), 0.1 (the second correction and the floor-stored check), 0.9 (the floor gate on the vertical part of the normal). Code constants, read in the slide routine. [High for the values; Medium-Low for their roles]
+- Character sweep push factor: 0.45, a code constant (a fixed value in the routine, not a boot data word, so no disc address applies). Its stored value is 0.44999998807907104 as an f32. [High]
+- Tick rate: 60 ticks per second (SPEC-0007). The tick-rate global used by the timers is set at run time and is not in the file image (ELF address 0x368FA0 is outside it). Do not read that address from the disc. [High]
+- Navmesh locate batch: 50 triangles per call (a code constant). [High]
+- Segment endpoint height limit: 50 units. [Medium-High]
+- Endpoint widening: 1.5 units in one horizontal coordinate. [Medium]
+- Segment parameter margins: −0.02 and 1.02. Rectangle margins: 0.25 on the low side of each in-plane axis, 0.25 on the high side of the first and minus 0.25 on the high side of the second. [Medium]
+- Box top margin: 0.1. Bottom bias: 0.75. Face thresholds: 0.8 r, −0.7 r, −2 r; top gate depth 0.25 and side bound −0.5 r. [Medium-Low for the face rules]
+- Sweep ball radius factor: 20 times the largest box extent. [Medium]
+- Class-five ball factor: 0.6 times a body value. [Low-Medium]
+- Projectile: distance threshold 2.0 units; effects 190 (kind 1) and 191 (kinds 2 to 8) are code constants. [Medium-Low]
+- The move check's distances (0.5 radius, 0.1, 0.75 and 1.1 factors) are code constants, not boot data. [Medium]
+- Landing margin: 1.5 units below the comparison height, a code constant (no boot word). [Medium-Low]
+- Clear-path sampling: ten samples at fractions 0, 0.1, ..., 0.9 of the displacement (the end point is not sampled); the 0.1 step is a code constant. [Medium]
+
+## Edge cases and error handling
+
+- One-way neighbour links (68 edges): treat as boundaries.
+- Degenerate triangles (60): never contain a point.
+- Navmesh query with no meshes of the requested kind: not found.
+- Locate with no hint: the middle triangle, floor(N / 2), is never tested by the no-hint search. A two-triangle mesh with no hint never finds triangle 1, and a one-triangle mesh never finds its only triangle. Reproduce as found (Medium; see Open questions).
+- Incremental locate past the end: a cursor at or past the end of the mesh is cleared, and that call reports not found. The next call starts again at 0. A miss over N triangles takes ceil(N / 50) testing calls and then one idle call.
+- Probe with no grid, no cell, or an empty cell: returns 0.0 (not the miss value). A caller that tests the result against a height reads it as a height of zero. The camera position adjustment therefore receives zero as its ground height over such a spot; see SPEC-0027 for the resulting camera behavior. Reproduce as found.
+- Probe with candidates that are all rejected: the result is the last rejected candidate's height, which may be above the ceiling. Reproduce as found; do not replace it with the miss value. (High for the code read.)
+- Probe ties: equal heights keep the earlier candidate in cell order.
+- Probe with a candidate whose owner's draw-test byte (+0x1B6) is zero: skipped.
+- Probe with a slot holding a previous patch: the owner-word rule applies only when a caller supplies such a slot; the callers read in this pass clear it first (Medium-Low).
+- Height sampler with a −1.0e9 corner: the sampler blends all four values without a sentinel test. On disc, resource 1414 entry 68 has first-cell samples (row-major) −1.0e9, −1.0e9, 25.5847, 25.5847. At (−40.0, 83.88), the blend is approximately −10,018,379.82: above the probe miss value and below an 8.0 ceiling. The containing type-19 cell names this patch, and its owner, mask and nonempty-cell gates pass. At this point the containing cell lists entries 25, 26, 53, 68 and 67, in that order. Their list tests respectively count 1, 1, 0, 0 and 2 qualifying records, so entries 25 and 26 pass the odd-count rule while the other three do not. Entry 25 samples at approximately 0.0 and is accepted under the 8.0 ceiling. Entry 26 samples at 11.0 and is rejected as above the ceiling. The final probe result is therefore approximately 0.0 with entry 25 selected; the sentinel blend from entry 68 is not sampled because its list test rejects it. This point also lies inside a kind-1 navmesh triangle at approximately y=0, matching the selected ground height. That supports spatial consistency with a walkable surface but does not establish ordinary-play reachability.
+- Patch-id table: a patch id with no registered model set gives no candidates.
+- Cell lists: an item or entry index outside its table is skipped. A zero-count list has no items. A cell with a zero entry count has no entries to probe.
+- Box with a zero extent (one such extent on disc, in pack 684): the point test is empty along that axis.
+- Box containment is asymmetric: the lower bound is −r and the upper bound is eA + r (and similarly along B). A point just outside the low side of a box, by more than r, is outside. Do not change this to a symmetric test without a black-box check.
+- Segment queries with endpoints more than 50 units apart in height are blocked before any cell is read.
+- Segment query with the restriction flag set: a type-6 frame record in the endpoint cells is not tested, so a segment that crosses only type-6 frame records is clear. The same segment with the flag clear is blocked by them. Other frame records are tested in both cases.
+- Landing test, rising character: a character whose vertical velocity is zero or above is never landed by this test, even over a surface at its own height.
+- Landing test, exact threshold: a hit height equal to (comparison height - 1.5) is not a landing (the comparison is strict).
+- Clear path, end point: a primitive that only the second actor's end point touches does not block the test, because the end point is not sampled. Reproduce this as found.
+- Clear path, missing sample data: a sample whose height-patch or cell query fails contributes no primitives, even when a primitive would have blocked it at that point. Reproduce as found.
+- Move check with footprint flag zero: no height step is applied. Reproduce this as found.
+- Contact pass, pushes: any hit in the pass restores the start-of-pass position and discards the pushes written by the tests (see Contact pass, step 4). A character is therefore not moved out of an object by the pass itself when any test hits in that tick.
+- Follow-camera actor-box list: a record with +0x74 zero is skipped; a nonzero value permits its box test. The nested plate-pool query tests only records whose second word is zero; a nonzero word leaves the pool cursor unchanged, so later pool records are not reached. The +0x2D40 pool has no shipped additions.
+- Contact pass, kinds 0, 2, 5, 6 and 8 and above: not tested. A cone record that is loaded as kind 2 would not be pushed out of by this pass (Open questions).
+- Contact pass, zero radius-like value on a box-kind primitive: the zero-radius contact test runs instead of the radius-1.25 push.
+- Character sweep with push: a zero V · N gives no push, and the result is the contact point. A negative V · N gives a push along the opposite of N (the push follows the sign of V · N).
+- Cones (count total 83 on disc): the 0x40-byte layout is known (SPEC-0028), but no test is known; do not test them for collision.
+- Spheres: the 0x40-byte equal-extent records are not tested as primitives; they serve only as the ball of the broad sweep test and do not block or push by themselves.
+- Other 0x50-byte equal-extent records: not tested; they are not cylinders (Open questions).
+- A count that is positive while the chunk ends early must not read past the chunk end; skip the missing records.
+
+## Test vectors
+
+Synthetic:
+
+- Patch: x0 = 0, z0 = 0, cell size 10, per 1, stride 2, A = B = 1. Cell samples (0, 0) = 0, (1, 0) = 2, (0, 1) = 4, (1, 1) = 6. Height at (5, 5) = 3.0; at (10, 0) = 2.0; at (0, 10) = 4.0.
+- The same patch with per 10, stride 11: spacing 1.0. Point (2.5, 0) blends samples 2 and 3 of row 0 equally.
+- Sample normal: spacing 2 and heights h00=0, h10=3, h01=0, h11=0 give raw vector (-1, 2, 1), because -1.5 and +1.5 truncate toward zero to -1 and +1. The sampled unit normal is (-1, 2, 1) / sqrt(6).
+- Sample normal, synthetic zero raw vector: a hypothetical patch with spacing 0 and four equal heights gives raw (0,0,0); VU normalization returns (0,0,0). Shipped grid data avoids this case because its spacing is always at least 1.0.
+- Probe, one candidate: a cell with one entry whose height at the point is 0.5, ceiling 9.0 (feet 1.0 plus 8.0). Result 0.5, that entry chosen.
+- Probe, two candidates, one above the ceiling: heights 0.5 and 12.0, ceiling 9.0. Result 0.5; 12.0 is a rejected candidate and is not used.
+- Probe, tie: two entries in cell order with heights 3.0 and 3.0, ceiling 5.0. Result 3.0, the first entry chosen (the second is not greater than the best).
+- Candidate-list z-span gate: with record origin z = 10 and scalar +0x68 = 2, query z = 10 or 12 fails the span gate while z = 11 passes it. With scalar −2, z = 8 and 10 pass while z = 10.1 fails. The separate side-of-line test still decides whether a span-qualified record contributes to parity.
+- Candidate-list side predicate: let record origin z = 4, span = 2.5, R = (1, 0, 0, −1), and query z = 5.5 (so the span gate passes). At query x = 1, Q · R = 0 and R.x > 0, so exactly one condition is true and this record counts. At x = 1.001, both conditions are true, so it does not count.
+- Probe, higher candidate under the ceiling: entries in cell order with heights 6.0 and 4.0, ceiling 5.0. Result 4.0, the second entry chosen (6.0 is above the ceiling).
+- Probe, nothing under the ceiling: one entry with height 6.0, ceiling 5.0. Result 6.0 (the last rejected height), not −1.0e9. Its normal is the rejected entry's normal.
+- Probe, nothing sampled: a cell whose entries all fail the gates. Result −1.0e9 and the slot is zero.
+- Probe, no cell: result 0.0.
+- Shipped sentinel example: at (−40.0, 83.88) in resource 1414, the cell candidate list is entries 25, 26, 53, 68 and 67. Their parity tests accept 25 and 26 only; 25 gives approximately 0.0 under ceiling 8.0, while 26 gives 11.0 and is rejected. The probe returns approximately 0.0 and selects entry 25. The entry 68 blend is not queried because its parity test rejects it. The same point is inside a kind-1 navmesh triangle at y≈0, consistent with the selected height; this static overlap does not prove that normal play visits it.
+- Probe owner placement (synthetic): an owner whose current origin is (5, 0, 0), whose second translation is (0, 0, 0), and whose axes in both blocks are the identity (X = (1, 0, 0), Z = (0, 0, 1)), with owner y 2.0 and second translation y 0.0. The point (7, 0, 1) has d1 = 2 and d2 = 1, so it maps to (2, 0, 1); the sampled height is raised by 2.0.
+- Ground attach: stored height −8.9e8 passes its strict −1.0e9 test; −1.0e9 does not. Separate position-helper gate: −8.9e8 passes the strict −9.0e8 cutoff; −9.0e8 does not. This cutoff is caller-specific and is not part of the shared probe.
+- Navmesh, no hint, six triangles (middle index 3): a point inside triangle 4 is found at 4 (tests 2, then 4). A point inside triangle 3 is not found (tests 2, 4, 1, 5, 0, then the search ends).
+- Navmesh, no hint, two triangles (middle index 1): a point inside triangle 0 is found. A point inside triangle 1 is not found.
+- Navmesh, incremental, 120 triangles, cache empty, point inside triangle 75: call 1 tests triangles 0 to 49 and reports not found (cursor 50). Call 2 tests 50 to 75 and returns 75 (cursor cleared).
+- Navmesh, incremental, same mesh, point outside every triangle: call 1 tests 0 to 49, call 2 tests 50 to 99, call 3 tests 100 to 119 and stores cursor 150, call 4 clears the cursor and reports not found without testing, call 5 starts again at 0.
+- Navmesh cursor reset (synthetic, incremental mode): with a set cursor, stored fourth component 5.0 and query fourth component 3.0 give a difference of exactly 2.0, so the cursor is not reset; query 2.999 gives 2.001, so the cursor resets before the locate search. Full-scan mode bypasses this comparison.
+- Grid diagonal step: from cell (2, 1), (+1, +1) lands on (3, 2). The same step from (3, 3) fails.
+
+Contact pass restore (synthetic): a character at position block P0 at the start of the pass. Test 1 pushes its block to P1 and reports a hit. Test 2 reports no hit. The driver restores P0; the final position is P0, not P1.
+
+Segment query with the restriction flag (synthetic): a segment in the endpoint cells crosses one type-6 frame-record rectangle and one rectangle of another type. With the flag set, the type-6 rectangle is skipped and the other one blocks the query. With the flag set and only the type-6 rectangle on the segment, the query is clear. With the flag clear, the type-6 rectangle blocks it.
+
+Box push-out (computed for this spec and checked with a separate calculation):
+
+- Box: low corner o = (10, 0, −5); axes A = (1, 0, 0), B = (0, 0, 1), V = (0, 1, 0); extents eA = 4, eB = 2, eV = 6. Radius r = 0.25, caller flag off.
+- Query point p = (10.2, 2.0, −4.0). Then a = 0.2, b = 1.0, v = 2.0.
+- Containment: −0.25 < 0.2 < 4.25; −0.25 < 1.0 < 2.25; −0.25 < 2.0 < 5.9. Inside.
+- Face distances: top 3.9, bottom 2.75, low B 1.0, high B 1.0, high A 3.8, low A 0.2. The minimum is the low A side (face 6).
+- The top gate does not apply (top depth 3.9 is not below 0.25). The corner rule does not change the choice (|a| = 0.2 is not below 0.8 r = 0.2). Normal −A = (−1, 0, 0). Depth 0.2. Push distance 0.2 + 0.25 = 0.45.
+- Push-out result: p + 0.45 × (−1, 0, 0) = (9.75, 2.0, −4.0). Its a-coordinate is −0.25 = −r, on the grown boundary.
+- Outside case: p = (10.2, 2.0, −6.0) gives b = −1.0 < −0.25: no hit.
+
+Box top-growth flag (synthetic, kind-4/7 positive-radius box-push route): with eV = 2.0, r = 0.25, and v = 2.0, the strict top bound is 1.9, so the point is outside and the route reports no hit. A query with the top-growth flag set would instead use upper bound 2.15; that is not the flag value used by this box-push route.
+
+Character sweep push (computed for this spec; synthetic, using the formula in Behavior, with the factor 0.45):
+
+- Start point S = (0, 0, 0), current position P = (10, 0, 0), first hit at t = 0.5, hit normal N = (0, 1, 0). Contact point X = S + 0.5 (P − S) = (5, 0, 0).
+- Motion vector V = (2, 4, 0). V · N = 4. Push = 0.45 × 4 = 1.8 along N. New position = (5, 1.8, 0).
+- Same with V = (2, −4, 0): V · N = −4, push = −1.8 along N. New position = (5, −1.8, 0). This case shows that the push follows the sign of V · N.
+- Same with V = (2, 0, 0): V · N = 0, no push. New position = (5, 0, 0), the contact point.
+- The sign of N and whether the stored value is X plus the push or the push alone are open (Open questions); these vectors use the formula as written.
+
+Sphere push (computed for this spec; synthetic, using the ball rule only):
+
+- Ball: centre (0, 0, 0), radius 2.0 (equal extents, so w = 2.0). Contact radius 1.25. Point p = (1.0, 0.5, 0).
+- Distance from the centre d = sqrt(1.25) = 1.118034. The grown radius is 2.0 + 1.25 = 3.25, so the point is inside (d < 3.25).
+- Push distance = 3.25 − 1.118034 = 2.131966 along the unit direction (0.894427, 0.447214, 0).
+- Result: (2.906889, 1.453444, 0). Its distance from the centre is 3.25.
+- This checks the ball arithmetic only. The contact pass is not known to test sphere records as primitives (Medium), so this vector is not a claim about a game case.
+
+Ray versus ball (computed for this spec):
+
+- Ball: centre (0, 0, 0), radius 2.0. Ray origin (−5, 0, 0), unit direction (1, 0, 0), length limit 10.
+- Quadratic: t² − 10 t + 21 = 0, roots 3 and 7. The near root 3 is in (0, 10): hit at t = 3, point (−2, 0, 0).
+- Miss: origin (−5, 3, 0), same direction and limit. Quadratic t² − 10 t + 30 = 0, discriminant negative: no hit.
+- Broad radius for a box with extents (4, 2, 6): 20 × 6 = 120.
+
+Landing test (synthetic, using the rule above):
+- State 7, vertical velocity -2.0, volume point Y=5.0, scalar=2.0 and vector Y=1.0: threshold is (5.0 + 2.0×1.0) - 1.5 = 5.5. Hero Y=5.6 passes: landed.
+- Same volume and state, hero Y=5.5: equality fails the strict comparison, so not landed.
+- Same volume and hero Y=5.6, but vertical velocity +1.0: not falling, so not landed.
+- State 12 with vertical velocity -2.0 and hero Y=5.6: the state gate fails, so not landed.
+
+Clear path (synthetic, computed from the sampling rule):
+- First actor reference point (0, 0), second actor reference point (10, 5). The horizontal displacement is (10, 5). The ten samples are: (0, 0), (1, 0.5), (2, 1), (3, 1.5), (4, 2), (5, 2.5), (6, 3), (7, 3.5), (8, 4), (9, 4.5). The end point (10, 5) is not sampled.
+- A solid primitive that is hit only at the sample (6, 3) blocks the path (sample index 6 of 0 to 9).
+- A solid primitive that is hit only at (10, 5) does not block the path (the end point is not sampled).
+- The same primitive hit at (9, 4.5) (sample index 9) blocks the path.
+
+Move check (synthetic):
+
+- Footprint flag set, ahead point passes the list test, but the second point's list test fails; ground heights 2.0 at R and 2.8 at q: difference 0.8 > 0.75, blocked.
+- Same with heights 2.0 and 2.7: difference 0.7, allowed.
+- Footprint flag zero, same heights: allowed (no height step in this path).
+
+Segment query (synthetic): endpoints at heights 10.0 and 60.5: difference 50.5 > 50, blocked before any cell is read. Endpoints at 10.0 and 59.5: difference 49.5, the two endpoint cells are then tested.
+
+Slide response (synthetic): scalar argument 0.04, velocity projection on N zero or positive: no change. Floor gate with |N.y| = 0.95 and floor argument set: the floor flag is set.
+
+Petpet frame-record filter (synthetic): a record filter of 0 is eligible with world mask 0; filter 4 with world mask 2 is skipped; filter 4 with world mask 4 is eligible.
+
+Petpet wall correction (synthetic, ordinary vertical wall branch): a frame plane at x = 0 with normal +x, Petpet radius 1.0 and reference point x = 0.6 returns correction distance 0.4 along +x; if the response push gate passes, the point moves to x = 1.0. From x = −0.6, the two-sided query returns 0.4 along −x and the point moves to x = −1.0. This vector illustrates the radius-offset wall correction, not the separate near-horizontal branch or the response's motion gates.
+
+Primitive class routing (synthetic; assume the mask gate passes and the stated geometric test hits): for a kind-1 plane, class 3 selects the contact event even with classes 0, 4 and 9 clear; class 4 alone selects the hit callback; class 9 alone selects a positioned sound only for the selected player owner. For a zero-radius kind-4 record with identifier outside 500–501 and class 1, a first-segment hit does not take the special trigger branch; a second-segment hit selects the plane-trigger path. Class 6 selects the contact event on a first-segment hit, and class 8 alone selects the hit callback there. On the second segment hit, class 4 alone selects the contact event.
+
+## Open questions
+
+- Placed-object transform: the probe maps the query point through two transform blocks of the placed object (Ground probe, step 4). The role of the second block (object offsets 0xC0 to 0xFF) is not named; whether it is the rest pose, a previous pose or a bind pose is open. The mapping is a Medium decode of vector operations, and its numbers should be checked on a moving placed object before use.
+- Ceiling offsets and roles: the shared +8.0 wrapper has 44 direct call sites across multiple systems; only one caller's two-probe pattern and the two +6.0 caller contexts are mapped here. The +2.5 offset occurs in the hero ground-attach routine and two camera routines. This does not identify the semantic position for every +8.0 call or whether unindexed or indirect callers add other cases.
+- Separate position-helper cutoff: Resolved: the helper accepts a probe result only when it is strictly greater than −9.0e8; when its associated state gate is clear, it substitutes that accepted height into the supplied position. The shared probe does not apply this cutoff. Ground attach independently compares its stored one-shot height strictly against −1.0e9. The helper's design purpose and all indirect callers remain unknown.
+- Sampler and the −1.0e9 value: Resolved for a shipped static query: resource 1414 entry 68 blends its −1.0e9 corner to approximately −10,018,379.82 at (−40.0, 83.88), but its candidate-list parity test rejects it. The same cell accepts entry 25 at approximately 0.0 under the 8.0 ceiling, while entry 26 at 11.0 is rejected above the ceiling; entries 53 and 67 fail their parity tests. The final probe result is approximately 0.0 with entry 25 selected. The point also lies inside a kind-1 navmesh triangle at approximately y=0. The sentinel remains a numeric interpolation value, not a missing-corner marker; the surface overlap supports static consistency but ordinary-play reachability remains unconfirmed. [High for triangle containment and mesh height; no live traversal claim.]
+- Fallback result: Resolved in part. A camera shrink check uses a result above the ceiling as a blocked condition (Camera position queries). Other callers' dependence on this fallback is not exhaustively checked. [Medium-High for the camera path; caller census incomplete]
+- Normal of a sample: Resolved: form x and z from the negative half-sums of opposing height differences and y from spacing; convert each component to a signed integer by truncation toward zero, then normalize. A hypothetical zero vector remains zero through VU normalization; the reciprocal of zero is the largest finite positive VU value. The disc-wide census found spacing >= 1.0 for all top-level and inline grid entries, so every sampled raw vector has nonzero y and this edge is unreachable for shipped ground patches. The probe normalizes sampled candidate normals again before exposing them. The optional normal starts as up; an early return for missing grid/cell entries leaves it up. A searched nonempty cell with no sampled candidate directly copies (0, 1, 0); it is already unit length and this fallback does not normalize it (High).
+- Owner-word rule: the owner-word test in the probe applies only to a caller that supplies a previously chosen patch in its slot. The callers read in this pass clear the slot first. Whether any caller passes a non-zero slot is open.
+- Candidate list test: Resolved for the static predicate. After the z-span gate, the query Q = (x, 0, z, 1) is dotted with the record's first row R at +0x10; the record counts when exactly one of Q · R > 0 and R.x > 0 is true. Odd count accepts; zero-count lists accept immediately. The authoring/design meaning of these records remains open.
+- Camera world selection: the eye collision query retries against a second global world slot when the first returns no chosen patch; this is described in Camera position queries. The slot's identity (a second level grid or pack) remains open.
+- Answered: the 0x160-stride scan is the world plate-manager pool used by the follow-camera blocked-query helper, not an actor list. The helper checks records whose second word is zero and advances only after that check; the first nonzero second word prevents further records from being reached. The actual camera actor-box list is a separate 0xB0-stride list gated by a nonzero word at +0x74. The plate pool has no shipped additions, so populated-pool behavior is a static rule without an ordinary-play example.
+- Petpet frame-record response: for an ordinary wall-plane hit, the query's correction distance is the Petpet body radius minus the absolute distance from its reference point to the frame plane; the returned direction selects the side to correct toward. Near-horizontal plane cases and span/height rejection follow separate branches. The shared response can apply this displacement after the terrain gates. A more specific design-facing name or intent remains unknown.
+- Contact-pass pushes: whether any test writes its push somewhere other than the block at +0x30 is not checked for the sub-object routine (its body is not read). The restore discards pushes on any hit, which is the effect.
+- Contact-state rule: the saved word at +0xF0 (earlier draft) is not the saved block of the driver read here (+0x30). Whether the contact-state routine saves at +0xF0 is not re-read.
+- Follow-camera countdown eligibility: the dispatched predicate and separate flag have no established design-facing meanings. All recovered contact-normal insertions use the common accumulator, which initializes the countdown on both append and near-duplicate update; an unrecovered insertion path cannot be ruled out. See Follow-camera contact-normal countdowns.
+- Frame-record type 6: the source and authored count are resolved for the type-5 frame records used by the grid entry arrays (Frame-record type and type-6 census). The design reason for the segment-query restriction and why some callers set it remain open. Type-11 collision primitives are a separate family and use the kind byte at loaded +0x10; their raw byte +0x4C is geometric data and does not determine frame-record type.
+- Cell-entry frame-record items: the recovered readers use them for collision or segment tests: the hero's per-tick wall-contact walk, the camera eye's grid contact pass, and the shared segment query (including the aim-target visibility test). The character motion-record driver's list-B contact walk is a separate list of placed trigger objects (SPEC-0040, Behavior 14A item 2). No recovered draw or culling path consumes the cell-entry item lists; the renderer's object-distance, model-part and display-tree culls are described separately in SPEC-0046, which explicitly has no grid-cell culling. Whether an additional unrecovered reader exists remains open; the authoring reason for frame-record inclusion in cells is unknown.
+- Class bits: Resolved for the kind-1 plane response and zero-radius kinds 4/7. The ordered outcomes and the distinction between first- and second-segment hits are specified in Primitive class bits and mask gate. This does not assign design-facing names to the class bits or establish ordinary-play frequencies. [High]
+- Navmesh bit block and scope of mesh-kind labels: the Draik main loop directly names kind 1 (mode 0) ground and kind 2 (mode 1) flying, and Can Fly-driven enemy callers corroborate the mapping. No hero caller to the kind-selecting query is present in the indexed call sites reviewed, so the labels are confirmed for those enemy paths; universal semantics for every mesh consumer remain open.
+- Pathfinding: Resolved in part. The shared navigation step reads the precomputed next-edge table stored with each navmesh and passes the selected edge to the route step (SPEC-0056). This is a planner, but not a run-time graph search; the exact route-step motion through the edge remains Low in SPEC-0056. Common-enemy code chooses and refreshes targets (including hero/AI targets and state-17 scene-object points), while level-script walk calls provide points or route waypoints; these are target producers and callers of the shared step, not evidence of a second planner. [High for the table read and call; Medium-High for shortest-route meaning; no additional planner located.]
+- Middle-index quirk: confirmed by a second reading of the no-hint outward search, which starts one below and one above the middle index. Whether a real game path reaches it with the point on the middle triangle is not checked (Medium).
+- Resolved: the cursor reset compares the fourth components of its stored point and the query point and resets only when stored minus query is strictly greater than 2.0; it runs only with a set cursor outside full-scan mode (Navmesh locate). Whether ordinary region-character play reaches this condition remains uncertain (Medium-Low).
+- Caller of the four diagonal grid steps: unknown. The segment sweep is not a caller, and the saved direct-call references identify no external direct caller. Indirect, data-driven or unindexed use remains possible (Medium-High for excluding the segment sweep and direct-call census).
+- Vector constant at ELF data address 0x3932E0, used by the collision, sense and probe code: outside the file image; its source and value are unknown.
+- Face identities: which face each of the five box face tests uses, and why the sixth face appears untested (Low). The frames of the four variants other than the first are not fully read.
+- Face rules: the exact corner-rule cases (thresholds 0.8 r, −0.7 r, −2 r), the preferred-face input, and the tie cases (Medium-Low). The top gate's side bound (−0.5 r) is Medium.
+- Top-growth flag: Resolved for the kind-4/7 positive-radius box-push route. The flag is clear, so its vertical containment bound and top-face depth do not add r; this includes the character contact pass. Independent callers of the shared helper are not covered by this result. [High]
+- Segment query restriction flag: camera eye placement/recentering and movable-block pull-back clearance are identified callers; remaining caller roles and the reason for caller-specific filtering remain open. Its effect on type-6 frame records is specified in Segment query.
+- Slide routine: the meaning of its scalar argument, of its two stored vectors, and of the design roles of the body fields it writes (Medium-Low). The sixth argument's operational effect is narrowed above; all recovered callers pass zero.
+- One-face test: which caller uses it, and the wall branch's use of the 0.15 margin relative to the slide routine (Medium-Low).
+- Projectile: Resolved in part. A collision response resets the projectile slot; kind 8 additionally dispatches an event carrying its configured key/value fields and position vectors. When the airborne backward-segment check finds no hit, the tail checks active movable-block collision records, then eligible placed objects within a strict 150-unit distance gate. The latter path maps the projectile position into each object's frame, checks the object's six type-11 primitive lists, and restores the original position. Still open: the gameplay meanings of projectile kinds, the two integer fields used in the backward-segment length, and the design-facing purpose of these collision passes. [High for the observed reset, event gate, pass order and checks; Medium for interpreting the placed-object transform; Low for semantic names.]
+- Other 0x50-byte equal-extent records in object chunks (SPEC-0028, section 6.5): not counted by any header field; role unknown.
+- Cylinder counts off by one in two packs (SPEC-0028, section 6.2): the reason is not settled.
+- Tick-rate global used by the timers: set at run time (outside the file image). The value 60 is taken from SPEC-0007 and is inferred from use.
+- Chunk type 35 (binary grids): Resolved in part. Character ground placement queries the active grid after selecting a ground candidate, using the candidate's byte at +0x0C and the character's zone key at +0x7B4; it stores the query result at character +0x18C. An object draw gate also queries the grid (SPEC-0006; High for the call sites and data flow). The full effect on collision or navigation remains open. Chunk type 15 (tagged tables): the reviewed readers serve actor setup and actor/event/item lookups; no collision or navigation consumer is confirmed. Tags 0x0D, 0x12 and 0x13 remain unresolved (Medium for the consumer boundary).
+- Move-check reference position: Resolved. The second point uses the selected hero's current motion-record position (+0x50), through its motion-record pointer (+0x16C), obtained from the active-player pointer. The geometry is direction × (d + 0.75) × 1.1 from that base (High).
+- Move-check distance field: Resolved. The move check's only known caller is the state-18 movable-block controller. Its mover +0x68 links to the type-11 n1 source record, and that record's +0x10 is the authored step value used in the ahead-point formula. The type-11 loader rebases the n1 array and adjusts n1 pointers at +0x1C and +0x20; these loader routines do not write +0x10. No runtime constructor write to the source +0x10 was found in the known setup path. This field is not the motion-record radius (+0x08) or the fixed 0.25 box-test margin. [High for the source field and value; Medium-High for constructor-writer absence]
+- Landing test: Resolved in part: the accepted hero states, the nonpositive type-4/type-7 selector, the normal-flip refusal, and the strict 1.5-unit comparison are specified above. The motion inputs to the shifted-field query and the endpoint they represent remain uncertain. [Medium-Low]
+- Clear-path pre-filter (resolved in part): the nearby-object source is the Type 10 group table; each tested group has a centre, squared-radius field and primitive list. In the only direct caller, the pre-filter displacement is based at the selected hero's reference position offset by one half of the motion record's +0x0C value times its +0x2B0 forward vector. The gate compares half the square of one normalized-displacement lane with the squared-radius value. Both the nearby-group and sampled-cell primitive tests use the full actor-to-actor segment endpoints; the ten sampled positions choose cells and do not shorten the tested segment. The lane identity and geometric interpretation of the group pre-filter remain open. [High for source/layout and segment endpoints; Medium for the direct-caller origin; Low for the exact predicate]
+- Clear-path caller: Resolved. The direct caller is the selected hero's target-list scan (SPEC-0053). After its existence/state, range, and facing/distance gates, a blocked result marks that actor non-candidate; a clear result marks it candidate. Candidates are sorted ahead of non-candidates. The observed direct effect is target-list eligibility and ordering; no direct change to hero approach movement or attack execution is established. [High for the call/result path; downstream effect on player target choice is indirect]
+- Contact probe pair: both point-contact routines use the same point-versus-face query helper for their initial probe and retry, with query mode 0. The fixed 0.75 is applied after face selection to the returned contact-depth scalar: one result class leaves the depth unchanged, another uses the absolute value of depth plus 0.375, and the remaining hit classes add 0.75. It is a response-depth adjustment, not a primitive radius. The 12-slot sub-object path invokes its routine when the owner distance is at most 50; the other routine is reached from the active-nearby-object pass, with actor-kind and contact-data gates. These outer caller gates differ. [High for helper and scalar arithmetic; Medium for caller-path conditions]
+- Camera adjustment: the complete collision response of the eye probe is documented with the camera behavior in SPEC-0027. The carry rule is specified above; the semantic provenance of every possible ground-owner source remains open.
+
+
+
