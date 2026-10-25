@@ -539,6 +539,8 @@ pub struct PointStep {
     pub chosen: [Option<usize>; 2],
     /// The glow moved to a newly chosen point this tick.
     pub glow_moved: bool,
+    /// The point the glow moved to (the later branch when both moved).
+    pub glow_at: Option<usize>,
     /// Cue 0xA8 is kept playing (within 15 units).
     pub cue: bool,
     /// The "Save Game" prompt shows (within 5 units, gate open).
@@ -574,6 +576,7 @@ impl SavePoints {
             if self.remembered[branch] != Some(k) {
                 self.remembered[branch] = Some(k);
                 out.glow_moved = true;
+                out.glow_at = Some(k);
             }
             if d2 < 225.0 {
                 out.cue = true;

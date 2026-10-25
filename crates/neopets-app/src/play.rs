@@ -559,6 +559,9 @@ pub struct Play {
     /// Each character's running clip effects: its list index and an effect object per entry.
     clip_fx: HashMap<u64, (Option<usize>, Vec<Option<usize>>)>,
     pub last_fx: String,
+    /// The save-point glow (SPEC-0034 section 36): the effect objects of 400 and 404 and the
+    /// world they belong to.
+    save_glow: Option<(u32, [usize; 2])>,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
@@ -873,6 +876,7 @@ impl Play {
             shot_fx: vec![None; neopets_sim::projectile::SLOTS],
             clip_fx: HashMap::new(),
             last_fx: String::new(),
+            save_glow: None,
             attack: None,
             attack_latch: false,
             weapon: None,
@@ -4534,13 +4538,13 @@ impl Play {
     /// SPEC-0025 Save points, per tick for the current world's own region: the nearest point,
     /// the prompt within 5 units, and on a Square press edge with the hero not busy the restart
     /// point (zero-flag branch) and the save screen's opening. The gate is game-state code 0:
-    /// no door job and no death or game-over state. The glow (effects 400 and 404) and cue 0xA8
-    /// are not played (no effects or sound yet).
+    /// no door job and no death or game-over state, then the glow (SPEC-0034 section 36).
     fn save_point_step(&mut self, square: bool) {
         let gate = self.job.is_none() && self.death.page.is_none() && !self.death.flag_e;
         let busy = hero_states::busy_state(self.loco.state);
         let r = self.save_points.step(&self.world.save_points, self.loco.position(), gate, square, busy);
         self.save_prompt = r.prompt;
+        self.save_glow_step(r.glow_at);
         // Cue 0xA8 is kept alive within 15 units, with no emitter (the zero-flag branch's quirk).
         if r.cue {
             self.sound.keep_alive(neopets_sim::sound::MAIN, 0xA8, None);
@@ -4550,6 +4554,44 @@ impl Play {
                 self.restart = Some((self.loco.position(), self.loco.facing));
             }
             self.save_open = true;
+        }
+    }
+
+    /// SPEC-0034 section 36 and SPEC-0025 Save points step 2: the glow (definitions 400 and
+    /// 404) is stopped, moved to a newly chosen save point and started again, updated every tick
+    /// with the camera as the listener, and stopped when its world is left (region reset).
+    fn save_glow_step(&mut self, moved_to: Option<usize>) {
+        let table = self.effect_table.clone();
+        let pack = self.world.pack;
+        if let Some((p, objects)) = self.save_glow {
+            if p != pack {
+                for h in objects {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
+                self.save_glow = None;
+            }
+        }
+        if let Some(sp) = moved_to.and_then(|k| self.world.save_points.get(k)).copied() {
+            let objects = match self.save_glow {
+                Some((_, o)) => o,
+                None => {
+                    let o = [400, 404].map(|id| self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, sp.position, neopets_sim::effect::IDENTITY)));
+                    self.save_glow = Some((pack, o));
+                    o
+                }
+            };
+            for h in objects {
+                self.effects.stop(&table, h);
+                self.effects.set_position(h, sp.position);
+            }
+        }
+        if let Some((_, objects)) = self.save_glow {
+            let (eye, focus) = (self.camera.eye, self.camera.focus);
+            let forward = unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]);
+            for h in objects {
+                self.effects.update(&table, h, Some((eye, forward)), &mut self.rng);
+            }
         }
     }
 
