@@ -394,6 +394,10 @@ pub struct Character {
     pub pending_hit: Option<i32>,
     /// The Werelupe King controller (behaviour class 32; SPEC-0019).
     pub king: Option<neopets_sim::werelupe::King>,
+    /// A Faerie Sister's controller (behaviour classes 13, 15 and 16; SPEC-0011) and the hero's
+    /// hit on her this tick (damage, and whether it was a shot).
+    pub sister: Option<neopets_sim::sisters::Sister>,
+    pub sister_hit: Option<(i32, bool)>,
 }
 
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
@@ -584,6 +588,9 @@ pub struct Play {
     juppie_words: neopets_sim::juppie::Words,
     gnarfas_words: neopets_sim::gnarfas::Words,
     king_words: neopets_sim::werelupe::Words,
+    /// The Faerie Sisters' tuning words (overwritten by alternate loop A) and their shared group.
+    sister_words: neopets_sim::sisters::Words,
+    sister_group: neopets_sim::sisters::Group,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
@@ -973,6 +980,7 @@ impl Play {
                 far_weight: sh[4],
             }
         };
+        let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let (effect_table, effect_images) = {
             let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
             let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
@@ -1161,6 +1169,8 @@ impl Play {
             juppie_words,
             gnarfas_words,
             king_words,
+            sister_words,
+            sister_group: Default::default(),
             boss_hits: Vec::new(),
             last_boss: String::new(),
             petpet: None,
@@ -3281,6 +3291,12 @@ impl Play {
             c.pending_hit = Some(damage);
             return;
         }
+        // SPEC-0011: a Faerie Sister's own controller applies the hit (the shield, the flinch and
+        // death); a hero shot is told apart from the swing and the Mote objects.
+        if let Some(c) = self.characters.get_mut(i).filter(|c| c.sister.is_some()) {
+            c.sister_hit = Some((damage, by.contains("shot")));
+            return;
+        }
         // SPEC-0020: Gnarfas takes a hit through its own flinch (the damage lands when it ends).
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.gnarfas.is_some()) {
             c.pending_hit = Some(damage);
@@ -3518,7 +3534,7 @@ impl Play {
             .iter()
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -3640,6 +3656,8 @@ impl Play {
                 gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
                 pending_hit: None,
                 king: row.filter(|r| r.class == Some(32)).map(|_| neopets_sim::werelupe::King::new(position)),
+                sister: row.and_then(|r| r.class).filter(|c| matches!(c, 13 | 15 | 16)).map(|c| neopets_sim::sisters::Sister::new(c as u8)),
+                sister_hit: None,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3692,6 +3710,8 @@ impl Play {
             gnarfas: None,
             pending_hit: None,
             king: None,
+            sister: None,
+            sister_hit: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4744,6 +4764,7 @@ impl Play {
         self.boss_step();
         self.gnarfas_step();
         self.king_step();
+        self.sisters_step();
         self.mice_step();
         self.enemies_step();
         self.items_step();
@@ -5021,6 +5042,14 @@ impl Play {
                     }
                 }
                 neopets_sim::projectile::Event::Summon { .. } => {}
+                neopets_sim::projectile::Event::Leach => {
+                    // SPEC-0011 Leach: effect 4039 at the hero's model point, then 50 MP drained
+                    // (not below 0; the MP-empty rule is not built).
+                    let table = self.effect_table.clone();
+                    let p = add(self.loco.position(), [0.0, 1.5, 0.0]);
+                    self.effects.one_shot(&table, 4039, p, neopets_sim::effect::IDENTITY, &mut self.rng);
+                    self.hero_mp = (self.hero_mp - self.sister_words.leach_drain).max(0);
+                }
                 neopets_sim::projectile::Event::Effect { id, at } => {
                     let table = self.effect_table.clone();
                     self.effects.one_shot(&table, id, at, neopets_sim::effect::IDENTITY, &mut self.rng);
@@ -5799,6 +5828,90 @@ impl Play {
             }
             for &damage in &act.raw_damage {
                 self.hero_hit(damage as f32, 0.0, false, d, "the Werelupe King's flame or boomerang".into());
+            }
+        }
+    }
+
+    /// SPEC-0011 per tick for the Faerie Sisters in the current world: the group's recount (level
+    /// event 2 once at 0), then each sister's measurements (the hit, the hero shots whose next
+    /// 10 ticks pass within her body, the clip and its event bits), her controller tick and its
+    /// requests (the clip and its rate 2 - f, the turn toward the hero, the travel, the pool
+    /// launch, the effect and the level events). The travel moves her straight at the path
+    /// step's speed with her height kept (the route step, collision and the navmesh blocked flag
+    /// are not built, so she never flips on a block).
+    fn sisters_step(&mut self) {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.sister.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        if ids.is_empty() {
+            self.sister_group = Default::default();
+            return;
+        }
+        let alive = self.characters.iter().filter(|c| ids.contains(&c.id) && c.sister.as_ref().is_some_and(|s| !s.dead())).count() as i32;
+        if self.sister_group.recount(alive) {
+            self.state.set_level(2, true);
+        }
+        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let c = &mut self.characters[i];
+            let body = c.row.map_or(1.0, |r| r.radius);
+            let height = c.row.map_or(3.0, |r| r.height);
+            let (a, b) = (c.position, add(c.position, [0.0, height, 0.0]));
+            let near = shots.iter().take(6).filter(|&&(p, v, r)| neopets_sim::gnarfas::segment_distance(p, add(p, scale(v, 10.0)), a, b) <= body + r).count();
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::sisters::View {
+                position: c.position,
+                hero,
+                hp: c.hp,
+                max_hp: c.row.map_or(1, |r| r.hit_points as i32),
+                hit: c.sister_hit.take(),
+                missiles_near: near,
+                clip: (clip.action, clip.progress >= 0.99),
+                frame_bits: c.anim.frame_bits(),
+                blocked: false,
+                level: &level,
+            };
+            let Some(s) = c.sister.as_mut() else { continue };
+            let before = s.state;
+            let act = s.tick(&v, &mut self.sister_group, &mut self.sister_words, id, &mut self.rng);
+            let after = s.state;
+            if let Some(n) = act.anim {
+                if clip.action != n || (clip.progress >= 0.99 && before != after) {
+                    c.anim.play(n);
+                }
+            }
+            c.anim.set_rate(act.rate);
+            if let Some(w) = act.face {
+                let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
+                c.facing = neopets_sim::hero::steer(c.facing, to, w);
+            }
+            if let Some((p, speed)) = act.travel {
+                let m = [p[0] - c.position[0], 0.0, p[2] - c.position[2]];
+                let l = m[0].hypot(m[2]);
+                if l > 1e-6 {
+                    c.position = add(c.position, scale(m, speed / l));
+                }
+            }
+            c.hp -= act.hp_loss;
+            if act.remove {
+                c.dying = Some(1);
+            }
+            if std::mem::discriminant(&before) != std::mem::discriminant(&after) {
+                self.last_boss = format!("{} {:?} -> {:?} (hp {}, alive {}, shield {}) on tick {}", c.name, before, after, c.hp, self.sister_group.alive, self.sister_group.shielded, self.ticks);
+            }
+            let at = c.position;
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            if let Some((fx, up)) = act.effect {
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, fx, add(at, [0.0, up, 0.0]), neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            if let Some(setup) = act.launch {
+                self.shots.submit(setup);
             }
         }
     }

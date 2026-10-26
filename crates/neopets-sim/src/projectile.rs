@@ -4,7 +4,7 @@
 //! hero hit test, the ground test), and the straight, homing, ballistic and lobbed launches.
 //!
 //! Not covered: the effects and trails (SPEC-0034), the hold word, spells (kinds 2 to 7 never
-//! touch a character here), the poison cloud (kind 9), the mote eater and leach extras, the
+//! touch a character here), the poison cloud (kind 9), the mote eater's drain, the
 //! status roll (no statuses yet), the summon of a lobbed shot (Behavior 31), the attack
 //! manager's +3.0 scatter, the owner's own block query after a reflection (enemies do not guard
 //! here), the shield Mote's charge, and the world
@@ -72,6 +72,8 @@ pub enum Event {
     Summon { key: i32, at: Vec3 },
     /// One of the shot's effect ids plays at a point (ids 2 to 5; -1 is not sent).
     Effect { id: i32, at: Vec3 },
+    /// After a leach hit on the hero (kind 15, blocked or not): the leach extra (SPEC-0011).
+    Leach,
 }
 
 /// The damage a hero takes from a shot hit of reduced damage D: max(1, 0.25 D) when blocked
@@ -257,6 +259,9 @@ impl Pool {
                             if p.s.status.0 != -1 {
                                 out.push(Event::Status { code: p.s.status.0, chance: p.s.status.1, seconds: p.s.status.2 });
                             }
+                        }
+                        if p.s.kind == 15 {
+                            out.push(Event::Leach);
                         }
                         *slot = None;
                         continue;

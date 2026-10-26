@@ -1,0 +1,718 @@
+//! The Faerie Sisters (SPEC-0011; behaviour classes 13, 15 and 16): the shared bookkeeping (the
+//! alive count, the shield, level event 2 once), each sister's state machine (idle, the orbit,
+//! the two dodges, the energy ball, the status and special missiles, the flinch and death),
+//! taking damage through the shield, the chooser bands, the speed scale P = 2 - f, and the
+//! alternate loops of level flag 0 (idle, move and the alternate energy ball; loop A's word
+//! overrides). The group (dome) attack never starts in the shipped game and is not built.
+//!
+//! The host measures what needs the world (the hero's hits, the hero projectiles near a sister,
+//! the clip and its event bits, the blocked flag) and applies the requests: the clip, the travel,
+//! the launches into the enemy projectile pool, the effects and the level events. Every tuning
+//! value is read from the boot data block at 0x2DAAC0 (SPEC-0011 Layout).
+
+use crate::projectile::Setup;
+use crate::rng::Rng;
+
+type Vec3 = [f32; 3];
+
+/// The leach drain word (50 MP on disc; SPEC-0011 Leach), outside the tuning block.
+pub const LEACH_DRAIN: u32 = 0x002D_D458;
+
+/// The tuning block: 56 words from 0x2DAAC0 to 0x2DAB9F.
+pub const BASE: u32 = 0x002D_AAC0;
+pub const WORDS: usize = 56;
+
+/// The tuning words (SPEC-0011 Layout). The arrays indexed by alive count hold the values for 1,
+/// 2 and 3 alive; the "label" arrays hold labels 1, 2 and 3 (label 1 is used with 3 alive).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Words {
+    pub dodge_missile: [i32; 3],
+    pub dodge_melee: [i32; 3],
+    pub energy: [(f32, f32); 3],
+    pub status: [(f32, f32); 3],
+    pub special: [(f32, f32); 3],
+    pub projectile_speed: [f32; 3],
+    pub min_distance: f32,
+    pub max_distance: f32,
+    pub movement_speed: f32,
+    pub ball_damage: i32,
+    /// Damage and chance by status kind: 0 poison, 1 curse, 2 slow.
+    pub status_damage: [i32; 3],
+    pub status_chance: [i32; 3],
+    /// Damage by special kind: 0 thorn, 1 leach, 2 Mote eater.
+    pub special_damage: [i32; 3],
+    /// The leach's MP drain (word 0x2DD458).
+    pub leach_drain: i32,
+}
+
+impl Words {
+    /// The words from the block read at `BASE`, and the leach drain word.
+    pub fn read(b: &[u32], leach_drain: u32) -> Option<Self> {
+        if b.len() < WORDS {
+            return None;
+        }
+        let w = |at: u32| b[((at - BASE) / 4) as usize];
+        let i = |at: u32| w(at) as i32;
+        let f = |at: u32| f32::from_bits(w(at));
+        let pairs = |at: u32| [0, 1, 2].map(|k| (f(at + 8 * k), f(at + 8 * k + 4)));
+        Some(Self {
+            dodge_missile: [0, 1, 2].map(|k| i(0x002D_AAC8 + 4 * k)),
+            dodge_melee: [0, 1, 2].map(|k| i(0x002D_AAD4 + 4 * k)),
+            energy: pairs(0x002D_AAE0),
+            status: pairs(0x002D_AAF8),
+            special: pairs(0x002D_AB10),
+            projectile_speed: [0, 1, 2].map(|k| f(0x002D_AB94 + 4 * k)),
+            min_distance: f(0x002D_AB48),
+            max_distance: f(0x002D_AB4C),
+            movement_speed: f(0x002D_AB50),
+            ball_damage: i(0x002D_AB58),
+            // Slow 0x2DAB5C, poison 0x2DAB64, curse 0x2DAB6C (damage, then chance).
+            status_damage: [i(0x002D_AB64), i(0x002D_AB6C), i(0x002D_AB5C)],
+            status_chance: [i(0x002D_AB68), i(0x002D_AB70), i(0x002D_AB60)],
+            special_damage: [i(0x002D_AB80), i(0x002D_AB7C), i(0x002D_AB74)],
+            leach_drain: leach_drain as i32,
+        })
+    }
+
+    /// Alternate loop A's start (Vanity, class 16): movement speed 10, projectileSpeed1 0.5 and
+    /// energyBallTime label 1 1.5 to 3 s, never restored.
+    pub fn alternate_a(&mut self) {
+        self.movement_speed = 10.0;
+        self.projectile_speed[0] = 0.5;
+        self.energy[0] = (1.5, 3.0);
+    }
+}
+
+/// The alive count clamped to 1..=3, as an index into the by-alive arrays (alive - 1) and the
+/// reversed label arrays (3 - alive).
+fn by_alive(alive: i32) -> usize {
+    (alive.clamp(1, 3) - 1) as usize
+}
+
+fn label(alive: i32) -> usize {
+    (3 - alive.clamp(1, 3)) as usize
+}
+
+/// The path step's speed in units per tick: 12.5 with 1 alive, 10.0 with 2, else the word.
+pub fn move_speed(w: &Words, alive: i32) -> f32 {
+    (match alive {
+        1 => 12.5,
+        2 => 10.0,
+        _ => w.movement_speed,
+    }) / 60.0
+}
+
+/// The state shared by the three sisters.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Group {
+    /// The alive count (-1 until the first recount).
+    pub alive: i32,
+    pub shielded: bool,
+    ended: bool,
+}
+
+impl Default for Group {
+    fn default() -> Self {
+        Self { alive: -1, shielded: true, ended: false }
+    }
+}
+
+impl Group {
+    /// The once-per-pass recount; returns true on the pass that should post level event 2 (all
+    /// sisters dead), once.
+    pub fn recount(&mut self, alive: i32) -> bool {
+        self.alive = alive;
+        if alive == 0 && !self.ended {
+            self.ended = true;
+            return true;
+        }
+        false
+    }
+}
+
+/// The controller states (SPEC-0011 Controller state numbers 0 to 6, 8 and 9).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum State {
+    Idle,
+    Move,
+    DodgeMissile(u32),
+    DodgeMelee(u32),
+    Ball { fired: bool },
+    Status { fired: bool },
+    Special { fired: bool },
+    Flinch(u32),
+    Dead,
+}
+
+/// What a sister sees this tick.
+pub struct View<'a> {
+    pub position: Vec3,
+    pub hero: Vec3,
+    pub hp: i32,
+    pub max_hp: i32,
+    /// The hero's hit on her this tick: damage, and whether it was a shot (else the swing).
+    pub hit: Option<(i32, bool)>,
+    /// The hero projectiles (up to 6) passing the proximity test.
+    pub missiles_near: usize,
+    /// The playing clip: action and whether it has ended; the frame's event bits.
+    pub clip: (u32, bool),
+    pub frame_bits: u32,
+    /// The body contact or navmesh blocked flag.
+    pub blocked: bool,
+    pub level: &'a dyn Fn(u16) -> bool,
+}
+
+/// What a sister asks for this tick.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Act {
+    pub anim: Option<u32>,
+    /// The speed scale P = 2 - f for this tick's clip rate.
+    pub rate: f32,
+    /// Turn toward the hero at this weight.
+    pub face: Option<f32>,
+    /// Move toward this point at this speed (units per tick).
+    pub travel: Option<(Vec3, f32)>,
+    pub launch: Option<Setup>,
+    pub set_level: Vec<u16>,
+    /// A one-shot effect at the sister, raised by this height.
+    pub effect: Option<(i32, f32)>,
+    pub hp_loss: i32,
+    /// The death animation has ended: the sister is removed.
+    pub remove: bool,
+    /// Alternate loop A has started: the words are overwritten (`Words::alternate_a`).
+    pub override_words: bool,
+    /// A shielded melee hit (the hero's hit reaction 13).
+    pub shield_melee: bool,
+}
+
+impl Default for Act {
+    fn default() -> Self {
+        Self { anim: None, rate: 1.0, face: None, travel: None, launch: None, set_level: Vec::new(), effect: None, hp_loss: 0, remove: false, override_words: false, shield_melee: false }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Sister {
+    pub class: u8,
+    /// The kind selector: 0, 1 or 2 for classes 13, 15 and 16.
+    pub kind: u8,
+    pub state: State,
+    pub energy: i32,
+    pub status: i32,
+    pub special: i32,
+    pub dodge: i32,
+    /// The orbit's target radius while moving radially, and the sideways direction.
+    pub radius: Option<f32>,
+    pub dir: f32,
+    /// The damage-taken sum (read only by the unreachable dome start).
+    pub taken: i32,
+    pub alternate: bool,
+}
+
+fn ticks(s: f32) -> i32 {
+    (s * 60.0) as i32
+}
+
+fn draw(rng: &mut Rng, (lo, hi): (f32, f32)) -> i32 {
+    rng.range(ticks(lo), ticks(hi))
+}
+
+fn hdist(a: Vec3, b: Vec3) -> f32 {
+    (a[0] - b[0]).hypot(a[2] - b[2])
+}
+
+/// A roll of 0 to 100 inclusive below the chance (SPEC-0019 Roll and coin rules).
+fn roll(rng: &mut Rng, chance: i32) -> bool {
+    rng.range(0, 100) < chance
+}
+
+/// The launch from the sister's point raised 2.5 toward the hero raised 2.0 (the alternate
+/// loop's points, used for the main loop too).
+fn aim(position: Vec3, hero: Vec3) -> (Vec3, Vec3) {
+    let start = [position[0], position[1] + 2.5, position[2]];
+    let to = [hero[0] - start[0], hero[1] + 2.0 - start[1], hero[2] - start[2]];
+    let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-6);
+    (start, to.map(|c| c / l))
+}
+
+/// One projectile of the shared pool: behaviour kind, visual kind, element, damage, status (id
+/// and chance; the hero's default duration), lifetime, flight effect, speed and owner.
+#[allow(clippy::too_many_arguments)]
+fn shot(kind: i32, visual: i32, element: i32, damage: i32, status: (i32, i32), lifetime: i32, flight: i32, speed: f32, owner: u64, v: &View) -> Setup {
+    let (start, d) = aim(v.position, v.hero);
+    Setup {
+        kind,
+        visual,
+        element,
+        owner: Some(owner),
+        start,
+        velocity: d.map(|c| c * speed),
+        lifetime,
+        damage: damage as f32,
+        radius: 1.0,
+        spin: 0.0,
+        area_radius: 0.0,
+        area_duration: 0,
+        key: 0,
+        ignore_world: false,
+        status: (status.0, status.1, -1),
+        effects: [flight, -1, -1, -1, -1, -1],
+    }
+}
+
+impl Sister {
+    /// A sister of class 13, 15 or 16 at its start: idle, the cooldowns at 0.
+    pub fn new(class: u8) -> Self {
+        let kind = match class {
+            15 => 1,
+            16 => 2,
+            _ => 0,
+        };
+        Self { class, kind, state: State::Idle, energy: 0, status: 0, special: 0, dodge: 0, radius: None, dir: 1.0, taken: 0, alternate: false }
+    }
+
+    pub fn dead(&self) -> bool {
+        self.state == State::Dead
+    }
+
+    /// One tick of the sister's class routine. `owner` is the sister's id for her projectiles.
+    pub fn tick(&mut self, v: &View, g: &mut Group, w: &mut Words, owner: u64, rng: &mut Rng) -> Act {
+        let mut a = Act::default();
+        let f = if v.max_hp > 0 { v.hp as f32 / v.max_hp as f32 } else { 0.0 };
+        a.rate = 2.0 - f;
+        if (v.level)(0) {
+            return self.alternate_tick(v, g, w, owner, rng, a);
+        }
+        let alive = g.alive;
+        // Taking damage (not in the dodges, the flinch or death).
+        let immune = matches!(self.state, State::DodgeMissile(_) | State::DodgeMelee(_) | State::Flinch(_) | State::Dead);
+        if let (Some((d, is_shot)), false) = (v.hit, immune) {
+            if g.shielded {
+                if is_shot {
+                    g.shielded = false;
+                    a.set_level.push(1);
+                } else {
+                    a.effect = Some((4008, 0.0));
+                    a.shield_melee = true;
+                }
+            } else {
+                self.taken += d;
+                if d > v.hp {
+                    self.state = State::Dead;
+                } else {
+                    a.effect = Some((222, 1.5));
+                    a.hp_loss = d;
+                    self.state = if v.hp - d < 1 { State::Dead } else { State::Flinch(rng.range(23, 24) as u32) };
+                }
+            }
+        }
+        // The cooldowns, unless level state 4 is set.
+        if !(v.level)(4) {
+            for t in [&mut self.energy, &mut self.status, &mut self.special] {
+                *t -= 1;
+            }
+        }
+        self.dodge = (self.dodge - 1).max(0);
+        // The dodges.
+        if !self.dead() && self.dodge == 0 {
+            let near = ((v.hero[0] - v.position[0]).powi(2) + (v.hero[1] - v.position[1]).powi(2) + (v.hero[2] - v.position[2]).powi(2)).sqrt() < 7.0;
+            let dodged = if near && roll(rng, w.dodge_melee[by_alive(alive)]) {
+                Some(State::DodgeMelee(rng.range(15, 16) as u32))
+            } else if (0..v.missiles_near.min(6)).any(|_| roll(rng, w.dodge_missile[by_alive(alive)])) {
+                Some(State::DodgeMissile(rng.range(13, 14) as u32))
+            } else {
+                None
+            };
+            if let Some(s) = dodged {
+                self.state = s;
+                self.dodge = 60 * rng.range(1, 3);
+            }
+        }
+        // The chooser (idle or move).
+        if matches!(self.state, State::Idle | State::Move) {
+            let next = if f < 0.33 && self.special <= 0 {
+                State::Special { fired: false }
+            } else if f < 0.66 && self.status < 1 {
+                State::Status { fired: false }
+            } else if self.energy < 1 {
+                State::Ball { fired: false }
+            } else {
+                State::Move
+            };
+            if next == State::Move && self.state != State::Move {
+                self.radius = None;
+                self.dir = if rng.range(0, 1) == 0 { 1.0 } else { -1.0 };
+            }
+            self.state = next;
+        }
+        let ended = |anim: u32| v.clip.0 == anim && v.clip.1;
+        let release = |anim: u32| v.clip.0 == anim && v.frame_bits & 0x20 != 0;
+        a.face = Some(0.25);
+        match self.state {
+            State::Idle => a.anim = Some(1),
+            State::Move => {
+                a.anim = Some(1);
+                a.travel = self.orbit(v, w, alive, rng);
+            }
+            State::DodgeMissile(n) | State::DodgeMelee(n) | State::Flinch(n) => {
+                a.anim = Some(n);
+                a.face = None;
+                if ended(n) {
+                    self.state = State::Idle;
+                }
+            }
+            State::Ball { fired } => {
+                a.anim = Some(17);
+                if release(17) && !fired {
+                    a.launch = Some(shot(10, 16, 0, w.ball_damage, (-1, 0), 1000, 460, w.projectile_speed[label(alive)], owner, v));
+                    self.state = State::Ball { fired: true };
+                }
+                if ended(17) {
+                    self.state = State::Idle;
+                    self.energy = draw(rng, w.energy[label(alive)]);
+                }
+            }
+            State::Status { fired } => {
+                a.anim = Some(18);
+                if release(18) && !fired {
+                    let k = self.kind as usize;
+                    let (kind, visual, status) = [(12, 18, 2), (13, 19, 1), (11, 17, 3)][k];
+                    a.launch = Some(shot(kind, visual, 0, w.status_damage[k], (status, w.status_chance[k]), 1000, -1, w.projectile_speed[label(alive)], owner, v));
+                    self.state = State::Status { fired: true };
+                }
+                if ended(18) {
+                    self.state = State::Idle;
+                    self.status = draw(rng, w.status[label(alive)]);
+                }
+            }
+            State::Special { fired } => {
+                a.anim = Some(19);
+                if release(19) && !fired {
+                    let k = self.kind as usize;
+                    let (kind, visual) = [(16, 22), (15, 21), (14, 20)][k];
+                    a.launch = Some(shot(kind, visual, 0, w.special_damage[k], (-1, 0), 1000, -1, w.projectile_speed[label(alive)], owner, v));
+                    self.state = State::Special { fired: true };
+                }
+                if ended(19) {
+                    self.state = State::Idle;
+                    self.special = draw(rng, w.special[label(alive)]);
+                }
+            }
+            State::Dead => {
+                a.anim = Some(26);
+                a.face = None;
+                a.remove = ended(26);
+            }
+        }
+        a
+    }
+
+    /// The move state: the radial approach to a radius in the band, then the sideways circle
+    /// with the direction flipped on every blocked tick. Returns the waypoint and speed.
+    fn orbit(&mut self, v: &View, w: &Words, alive: i32, rng: &mut Rng) -> Option<(Vec3, f32)> {
+        let d = hdist(v.position, v.hero);
+        let speed = move_speed(w, alive);
+        if self.radius.is_none() && (d < w.min_distance || d > w.max_distance) {
+            self.radius = Some(rng.frange(w.min_distance, w.max_distance));
+        }
+        let u = if d > 1e-6 { [(v.position[0] - v.hero[0]) / d, 0.0, (v.position[2] - v.hero[2]) / d] } else { [1.0, 0.0, 0.0] };
+        if let Some(r) = self.radius {
+            if (d - r).abs() < 0.5 {
+                self.radius = None;
+            } else {
+                return Some(([v.hero[0] + u[0] * r, v.position[1], v.hero[2] + u[2] * r], speed));
+            }
+        }
+        if v.blocked {
+            self.dir = -self.dir;
+        }
+        let t = [-u[2] * self.dir, 0.0, u[0] * self.dir];
+        Some(([v.position[0] + 0.1 * t[0], v.position[1], v.position[2] + 0.1 * t[2]], speed))
+    }
+
+    /// The alternate loops (level flag 0): idle, move and the alternate energy ball. Loop A
+    /// (class 16) writes 3 to the alive word and overrides the words at its start.
+    fn alternate_tick(&mut self, v: &View, g: &mut Group, w: &mut Words, owner: u64, rng: &mut Rng, mut a: Act) -> Act {
+        if !self.alternate {
+            self.alternate = true;
+            self.state = State::Idle;
+            if self.class == 16 {
+                g.alive = 3;
+                w.alternate_a();
+                a.override_words = true;
+            }
+        }
+        if !(v.level)(4) {
+            self.energy -= 1;
+        }
+        let alive = g.alive;
+        if matches!(self.state, State::Idle | State::Move) {
+            if self.energy < 1 {
+                // The target roll (a target entity is not built, so the flag has no use here).
+                let _ = rng.range(0, 100);
+                self.state = State::Ball { fired: false };
+            } else {
+                if self.state != State::Move {
+                    self.radius = None;
+                    self.dir = if rng.range(0, 1) == 0 { 1.0 } else { -1.0 };
+                }
+                self.state = State::Move;
+            }
+        }
+        match self.state {
+            State::Move => {
+                a.anim = Some(1);
+                a.travel = self.orbit(v, w, alive, rng);
+            }
+            State::Ball { fired } => {
+                a.anim = Some(17);
+                a.face = Some(0.25);
+                if v.clip.0 == 17 && v.frame_bits & 0x20 != 0 && !fired {
+                    a.launch = Some(shot(10, 16, 6, w.ball_damage, (-1, 0), 240, 460, w.projectile_speed[0], owner, v));
+                    self.state = State::Ball { fired: true };
+                }
+                if v.clip.0 == 17 && v.clip.1 {
+                    self.state = State::Idle;
+                    self.energy = 2 * draw(rng, w.energy[label(alive)]);
+                }
+            }
+            _ => {
+                a.anim = Some(1);
+                self.state = State::Idle;
+            }
+        }
+        a
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The disc values of SPEC-0011 Layout as a synthetic block.
+    fn block() -> Vec<u32> {
+        let mut b = vec![0u32; WORDS];
+        let mut put = |at: u32, v: u32| b[((at - BASE) / 4) as usize] = v;
+        let fl = |x: f32| x.to_bits();
+        for (k, (m, e)) in [(50, 40), (60, 50), (75, 60)].into_iter().enumerate() {
+            put(0x002D_AAC8 + 4 * k as u32, m);
+            put(0x002D_AAD4 + 4 * k as u32, e);
+        }
+        for k in 0..3u32 {
+            put(0x002D_AAE0 + 8 * k, fl(2.5));
+            put(0x002D_AAE4 + 8 * k, fl(5.0));
+            put(0x002D_AAF8 + 8 * k, fl(1.75));
+            put(0x002D_AAFC + 8 * k, fl(4.0));
+            put(0x002D_AB10 + 8 * k, fl(1.25));
+            put(0x002D_AB14 + 8 * k, fl(3.0));
+        }
+        for (k, s) in [0.5f32, 0.75, 0.9].into_iter().enumerate() {
+            put(0x002D_AB94 + 4 * k as u32, fl(s));
+        }
+        put(0x002D_AB48, fl(15.0));
+        put(0x002D_AB4C, fl(30.0));
+        put(0x002D_AB50, fl(7.5));
+        put(0x002D_AB58, 25);
+        for at in [0x002D_AB5C, 0x002D_AB64, 0x002D_AB6C] {
+            put(at, 10);
+            put(at + 4, 100);
+        }
+        put(0x002D_AB74, 20);
+        put(0x002D_AB7C, 50);
+        put(0x002D_AB80, 10);
+        b
+    }
+
+    fn view(level: &dyn Fn(u16) -> bool, hp: i32) -> View<'_> {
+        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), frame_bits: 0, blocked: false, level }
+    }
+
+    #[test]
+    fn words_and_alive_tables() {
+        let w = Words::read(&block(), 50).unwrap();
+        // 3 alive: missile dodge 75, energy 150 to 300 ticks, speed 0.5, movement 7.5.
+        assert_eq!(w.dodge_missile[by_alive(3)], 75);
+        assert_eq!((ticks(w.energy[label(3)].0), ticks(w.energy[label(3)].1)), (150, 300));
+        assert_eq!(w.projectile_speed[label(3)], 0.5);
+        assert!((move_speed(&w, 3) - 0.125).abs() < 1e-6);
+        // 1 alive: missile dodge 50, speed 0.9, 12.5 / 60; 2 alive: 0.75, 10 / 60.
+        assert_eq!(w.dodge_missile[by_alive(1)], 50);
+        assert_eq!(w.projectile_speed[label(1)], 0.9);
+        assert!((move_speed(&w, 1) - 12.5 / 60.0).abs() < 1e-6);
+        assert_eq!(w.projectile_speed[label(2)], 0.75);
+        assert!((move_speed(&w, 2) - 10.0 / 60.0).abs() < 1e-6);
+        // Alternate loop A: 3 alive moves at 10.
+        let mut a = w;
+        a.alternate_a();
+        assert!((move_speed(&a, 3) - 10.0 / 60.0).abs() < 1e-6);
+        assert_eq!((a.energy[0], a.projectile_speed[0]), ((1.5, 3.0), 0.5));
+        // The kind selector by class.
+        assert_eq!([13, 15, 16].map(|c| Sister::new(c).kind), [0, 1, 2]);
+    }
+
+    #[test]
+    fn chooser_bands() {
+        let mut w = Words::read(&block(), 50).unwrap();
+        let mut rng = Rng::seeded(1);
+        let no = |_: u16| false;
+        let mut g = Group::default();
+        g.recount(3);
+        let pick = |s: &mut Sister, hp: i32, w: &mut Words, g: &mut Group, rng: &mut Rng| {
+            s.tick(&view(&no, hp), g, w, 1, rng);
+            s.state
+        };
+        // f 0.5 with the status cooldown at 0 (it reaches -1 this tick): status missile.
+        let mut s = Sister::new(13);
+        (s.energy, s.special) = (100, 100);
+        assert_eq!(pick(&mut s, 50, &mut w, &mut g, &mut rng), State::Status { fired: false });
+        // f 0.8 with the energy cooldown at 30: move.
+        let mut s = Sister::new(13);
+        s.energy = 30;
+        assert_eq!(pick(&mut s, 80, &mut w, &mut g, &mut rng), State::Move);
+        // f 0.30: special at 0; special 5 and status 0: status; all above 0: move.
+        let mut s = Sister::new(13);
+        s.energy = 100;
+        assert_eq!(pick(&mut s, 30, &mut w, &mut g, &mut rng), State::Special { fired: false });
+        let mut s = Sister::new(13);
+        (s.special, s.energy) = (6, 100);
+        assert_eq!(pick(&mut s, 30, &mut w, &mut g, &mut rng), State::Status { fired: false });
+        let mut s = Sister::new(13);
+        (s.special, s.status, s.energy) = (6, 6, 6);
+        assert_eq!(pick(&mut s, 30, &mut w, &mut g, &mut rng), State::Move);
+        // Level state 4 holds the cooldowns.
+        let four = |f: u16| f == 4;
+        let mut s = Sister::new(13);
+        s.energy = 1;
+        s.tick(&view(&four, 100), &mut g, &mut w, 1, &mut rng);
+        assert_eq!((s.energy, s.state), (1, State::Move));
+    }
+
+    #[test]
+    fn shield_and_damage() {
+        let mut w = Words::read(&block(), 50).unwrap();
+        let mut rng = Rng::seeded(2);
+        let no = |_: u16| false;
+        let mut g = Group::default();
+        g.recount(3);
+        let hit = |s: &mut Sister, g: &mut Group, w: &mut Words, rng: &mut Rng, hp: i32, d: i32, is_shot: bool| {
+            let mut v = view(&no, hp);
+            v.hit = Some((d, is_shot));
+            s.energy = 100;
+            s.tick(&v, g, w, 1, rng)
+        };
+        // Shielded melee 20: no damage, effect 4008, reaction 13.
+        let mut s = Sister::new(15);
+        let a = hit(&mut s, &mut g, &mut w, &mut rng, 30, 20, false);
+        assert_eq!((a.hp_loss, a.effect, a.shield_melee, g.shielded), (0, Some((4008, 0.0)), true, true));
+        // Shielded shot 10: no damage, level event 1, the shield off for all.
+        let a = hit(&mut s, &mut g, &mut w, &mut rng, 30, 10, true);
+        assert_eq!((a.hp_loss, a.set_level.clone(), g.shielded), (0, vec![1], false));
+        // Unshielded: 10 on 30: flinch, 20 left, sum +10, effect 222 at 1.5.
+        let mut s = Sister::new(15);
+        let a = hit(&mut s, &mut g, &mut w, &mut rng, 30, 10, true);
+        assert!(matches!(s.state, State::Flinch(23 | 24)));
+        assert_eq!((a.hp_loss, s.taken, a.effect), (10, 10, Some((222, 1.5))));
+        // 31 on 30: dead at once, no flinch or effect; 30 on 30: health 0, then dead.
+        let mut s = Sister::new(15);
+        let a = hit(&mut s, &mut g, &mut w, &mut rng, 30, 31, true);
+        assert_eq!((s.state, a.hp_loss, a.effect), (State::Dead, 0, None));
+        let mut s = Sister::new(15);
+        let a = hit(&mut s, &mut g, &mut w, &mut rng, 30, 30, true);
+        assert_eq!((s.state, a.hp_loss), (State::Dead, 30));
+        // A flinching sister takes no hit.
+        let mut s = Sister::new(15);
+        s.state = State::Flinch(23);
+        let a = hit(&mut s, &mut g, &mut w, &mut rng, 30, 10, true);
+        assert_eq!(a.hp_loss, 0);
+        // The group posts event 2 once.
+        assert!(!g.recount(1));
+        assert!(g.recount(0));
+        assert!(!g.recount(0));
+    }
+
+    #[test]
+    fn orbit_and_launches() {
+        let mut w = Words::read(&block(), 50).unwrap();
+        let mut rng = Rng::seeded(3);
+        let no = |_: u16| false;
+        let mut g = Group::default();
+        g.recount(2);
+        // At 20 within the band: no new radius; the waypoint is 0.1 along the side at 10 / 60.
+        let mut s = Sister::new(16);
+        s.energy = 100;
+        let a = s.tick(&view(&no, 100), &mut g, &mut w, 1, &mut rng);
+        assert_eq!(s.radius, None);
+        let (p, speed) = a.travel.unwrap();
+        assert!((speed - 10.0 / 60.0).abs() < 1e-6);
+        assert!((p[0] - 20.0).abs() < 1e-6 && (p[2].abs() - 0.1).abs() < 1e-6);
+        // Blocked: the side flips.
+        let dir = s.dir;
+        let mut v = view(&no, 100);
+        v.blocked = true;
+        s.tick(&v, &mut g, &mut w, 1, &mut rng);
+        assert_eq!(s.dir, -dir);
+        // At 14: outside the band, a radius in [15, 30].
+        let mut s = Sister::new(16);
+        s.energy = 100;
+        let mut v = view(&no, 100);
+        v.position = [14.0, 0.0, 0.0];
+        s.tick(&v, &mut g, &mut w, 1, &mut rng);
+        assert!(s.radius.is_some_and(|r| (15.0..=30.0).contains(&r)));
+        // The energy ball releases once on event 0x20, at 0.75 with 2 alive, 25 damage.
+        let mut s = Sister::new(13);
+        s.state = State::Ball { fired: false };
+        let mut v = view(&no, 100);
+        v.clip = (17, false);
+        v.frame_bits = 0x21;
+        let a = s.tick(&v, &mut g, &mut w, 7, &mut rng);
+        let shot = a.launch.unwrap();
+        assert_eq!((shot.kind, shot.visual, shot.damage, shot.lifetime, shot.owner, shot.effects[0]), (10, 16, 25.0, 1000, Some(7), 460));
+        let sp = (shot.velocity[0].powi(2) + shot.velocity[1].powi(2) + shot.velocity[2].powi(2)).sqrt();
+        assert!((sp - 0.75).abs() < 1e-5);
+        assert!(s.tick(&v, &mut g, &mut w, 7, &mut rng).launch.is_none());
+        // Its end sets the energy cooldown from the 2-alive label.
+        v.clip = (17, true);
+        v.frame_bits = 0;
+        s.tick(&v, &mut g, &mut w, 7, &mut rng);
+        assert_eq!(s.state, State::Idle);
+        assert!((150..=300).contains(&s.energy));
+        // Vanity's status missile is slow (kind 11, visual 17, status 3 at 100).
+        let mut s = Sister::new(16);
+        s.state = State::Status { fired: false };
+        v.clip = (18, false);
+        v.frame_bits = 0x20;
+        let m = s.tick(&v, &mut g, &mut w, 7, &mut rng).launch.unwrap();
+        assert_eq!((m.kind, m.visual, m.damage, m.status.0, m.status.1), (11, 17, 10.0, 3, 100));
+    }
+
+    #[test]
+    fn alternate_loop() {
+        let mut w = Words::read(&block(), 50).unwrap();
+        let mut rng = Rng::seeded(4);
+        let zero = |f: u16| f == 0;
+        let mut g = Group::default();
+        g.recount(1);
+        // Loop A: alive 3 and the overrides at its start; an energy ball at once.
+        let mut s = Sister::new(16);
+        let mut v = view(&zero, 100);
+        let a = s.tick(&v, &mut g, &mut w, 1, &mut rng);
+        assert!(a.override_words);
+        assert_eq!((g.alive, w.movement_speed, s.state), (3, 10.0, State::Ball { fired: false }));
+        // One release per animation: element 6, life 240, speed 0.5.
+        v.clip = (17, false);
+        v.frame_bits = 0x20;
+        let b = s.tick(&v, &mut g, &mut w, 1, &mut rng).launch.unwrap();
+        assert_eq!((b.element, b.lifetime, b.damage), (6, 240, 25.0));
+        assert!(s.tick(&v, &mut g, &mut w, 1, &mut rng).launch.is_none());
+        // The end: twice a draw of the label-1 cooldown (now 1.5 to 3 s: 90 to 180 ticks).
+        v.clip = (17, true);
+        s.tick(&v, &mut g, &mut w, 1, &mut rng);
+        assert!(s.energy % 2 == 0 && (180..=360).contains(&s.energy));
+        // Loop B (class 15) leaves the alive word.
+        let mut g = Group::default();
+        g.recount(2);
+        let mut s = Sister::new(15);
+        assert!(!s.tick(&view(&zero, 100), &mut g, &mut w, 1, &mut rng).override_words);
+        assert_eq!(g.alive, 2);
+    }
+}
