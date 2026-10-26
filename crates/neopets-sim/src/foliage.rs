@@ -1,12 +1,11 @@
 //! Foliage patches (SPEC-0060 Behavior 1 to 3): the family and models a key selects, and the
 //! placement of each plant (jitter, ground snap, yaw, scale) with the patch distances.
 //!
-//! The bush state machine (Behavior 6: cut, shrink, regrow, sparkle wait) and the drop rules
-//! (Behavior 7).
+//! The bush state machine (Behavior 6: cut, shrink, regrow, sparkle wait, the up axis's
+//! spring-back and hero bend) and the drop rules (Behavior 7).
 //!
 //! Not covered: the zone gate, the near/far fade weights and the far batches (the LOD-node
-//! distances are not identified), grass sway and fade, the bush bend and spring-back and key 5's
-//! contact helper, the debris pieces, tree trunks, reed bending, cutting and the cut-piece fall,
+//! distances are not identified), grass sway and fade, the debris pieces, tree trunks, reed bending, cutting and the cut-piece fall,
 //! and the once-per-area build gates.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -111,7 +110,26 @@ pub struct Bush {
     pub wait: u32,
     /// The base scale K.
     pub k: f32,
+    /// The up axis the bush is drawn along (tilted by the hero bend, Behavior 6).
+    pub up: [f32; 3],
 }
+
+/// The hero as a bush bend sees it: horizontal distance to the bush, whether the body test
+/// hits, the hero's speed (units per second) and facing.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BendHero {
+    pub distance: f32,
+    pub contact: bool,
+    pub speed: f32,
+    pub facing: [f32; 3],
+}
+
+fn normalize(v: [f32; 3]) -> [f32; 3] {
+    let n = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+    if n > 0.0 { [v[0] / n, v[1] / n, v[2] / n] } else { [0.0, 1.0, 0.0] }
+}
+
+const UP: [f32; 3] = [0.0, 1.0, 0.0];
 
 /// The sparkle wait trunc((u + 0.5) x 60) with u in [-0.2, 0.2]: 18 to 42 ticks.
 pub fn sparkle_wait(r: &mut crate::rng::Rng) -> u32 {
@@ -129,13 +147,56 @@ pub struct BushStep {
 
 impl Bush {
     pub fn new(k: f32, r: &mut crate::rng::Rng) -> Self {
-        Self { state: 2, counter: 0, countdown: 0, cut: false, wait: sparkle_wait(r), k }
+        Self { state: 2, counter: 0, countdown: 0, cut: false, wait: sparkle_wait(r), k, up: UP }
     }
 
     /// Whether the helpers (and so the hit tests) run this step: not while regrowing with the
     /// counter at most 450, and not while cut.
     pub fn hittable(&self) -> bool {
         !self.cut && !(self.state == 1 && self.counter <= 450)
+    }
+
+    /// Spring-back: up = normalize(0.925 up + 0.075 (0, 1, 0)).
+    fn spring_back(&mut self) {
+        let u = self.up;
+        self.up = normalize(std::array::from_fn(|i| 0.925 * u[i] + 0.075 * UP[i]));
+    }
+
+    /// The hero bend within 5 units: with body contact and speed above 0.1 the target axis is
+    /// 0.76 U + 0.24 facing, else the current up; when its y is below 0.994 the up axis becomes
+    /// normalize(0.02 U + 0.98 T).
+    fn bend(&mut self, h: &BendHero) {
+        let t = if h.contact && h.speed > 0.1 { std::array::from_fn(|i| 0.76 * UP[i] + 0.24 * h.facing[i]) } else { self.up };
+        if t[1] < 0.994 {
+            self.up = normalize(std::array::from_fn(|i| 0.02 * UP[i] + 0.98 * t[i]));
+        }
+    }
+
+    /// The up axis step of the helpers (Behavior 6 step 1). Key 5 (`contact_only`): nothing
+    /// beyond 5 units (the tilt is kept), the bend within. Other keys: the bend while the hero
+    /// holds the bush (body contact, speed above 0.1), else spring-back (Medium: the bend latch
+    /// reading of "not held by the hero bend"). A cut bush only springs back.
+    pub fn bend_step(&mut self, contact_only: bool, hero: &BendHero) {
+        if self.state == 1 && self.counter <= 450 {
+            return;
+        }
+        if self.cut {
+            self.spring_back();
+            return;
+        }
+        let near = hero.distance < 5.0;
+        if contact_only {
+            if near {
+                self.bend(hero);
+            }
+            return;
+        }
+        // The bend latch: a bush the hero is bending is held, and springs back only once free.
+        if near && hero.contact && hero.speed > 0.1 {
+            self.bend(hero);
+        } else {
+            self.spring_back();
+        }
     }
 
     /// One logic step: `hits` triggers fired this step (weapon first, then each shot in range;
@@ -297,6 +358,30 @@ pub fn place(kind: &Kind, area: [f32; 4], height: f32, row: f32, offset: f32, j:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hero_bend_and_spring_back() {
+        let mut r = crate::rng::Rng::seeded(1);
+        let mut b = Bush::new(1.0, &mut r);
+        // SPEC-0060 vector: speed 0.05 does not lean; speed 2.0 facing +X gives about
+        // (0.2940, 0.9558, 0) from upright.
+        let slow = BendHero { distance: 3.0, contact: true, speed: 0.05, facing: [1.0, 0.0, 0.0] };
+        b.bend_step(true, &slow);
+        assert_eq!(b.up, [0.0, 1.0, 0.0]);
+        let walk = BendHero { speed: 2.0, ..slow };
+        b.bend_step(true, &walk);
+        assert!((b.up[0] - 0.2940).abs() < 1e-3 && (b.up[1] - 0.9558).abs() < 1e-3, "{:?}", b.up);
+        // Key 5 beyond 5 units keeps its tilt.
+        let far = BendHero { distance: 6.0, ..walk };
+        let tilted = b.up;
+        b.bend_step(true, &far);
+        assert_eq!(b.up, tilted);
+        // Other keys spring back once the hero has gone.
+        for _ in 0..200 {
+            b.bend_step(false, &far);
+        }
+        assert!(b.up[1] > 0.9999, "{:?}", b.up);
+    }
 
     #[test]
     fn families_and_rules() {

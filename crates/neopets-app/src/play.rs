@@ -761,6 +761,8 @@ pub struct Play {
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
     /// The drop direction of a dig reward while it pays out (SPEC-0051 section 10 step 11).
     dig_drop: Option<[f32; 3]>,
+    /// The hero's position on the last bush logic step (for the bend's speed).
+    bend_last: Option<[f32; 3]>,
     /// Added object yaw (SetAnimObjAdditionRotY), degrees, by (pack, object).
     obj_yaw: HashMap<(u32, usize), f32>,
     /// Added vertical offset (SetAnimObjPositionOffset), by (pack, object).
@@ -1222,6 +1224,7 @@ impl Play {
             r_fx: [None; 2],
             char_lights: HashMap::new(),
             dig_drop: None,
+            bend_last: None,
             obj_yaw: HashMap::new(),
             obj_offset: HashMap::new(),
             shake: Default::default(),
@@ -6906,6 +6909,11 @@ impl Play {
         // The bush logic.
         let eye = self.camera.eye;
         let hero = self.loco.position();
+        // The hero's speed for the bush bend: this build takes its movement this tick (units
+        // per second), as root motion moves the hero rather than the body velocity.
+        let moved = self.bend_last.map_or(0.0, |l: [f32; 3]| ((hero[0] - l[0]).powi(2) + (hero[2] - l[2]).powi(2)).sqrt() * 60.0);
+        self.bend_last = Some(hero);
+        let facing = self.loco.facing;
         let weapon = self.weapon_segment();
         let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
         let table = self.effect_table.clone();
@@ -6922,6 +6930,12 @@ impl Play {
                 let negg_open = negg.is_none_or(|n| !self.once.contains(&(n, current)));
                 let may_sparkle = p.model == 262 || (negg.is_some() && negg_open);
                 for (q, b) in p.plants.iter().zip(p.bushes.iter_mut()) {
+                    // The body test (a segment with radius 0.75): read here as the hero's feet
+                    // within 0.75 plus the hero radius of the bush base, horizontally, at a
+                    // similar height.
+                    let distance = (q.position[0] - hero[0]).hypot(q.position[2] - hero[2]);
+                    let contact = distance < 0.75 + neopets_sim::contact::HERO_RADIUS && (q.position[1] - hero[1]).abs() < 3.0;
+                    b.bend_step(p.kind.near == Some(198), &neopets_sim::foliage::BendHero { distance, contact, speed: moved, facing });
                     let mut hits = 0;
                     if b.hittable() {
                         let near = (q.position[0] - hero[0]).powi(2) + (q.position[1] - hero[1]).powi(2) + (q.position[2] - hero[2]).powi(2) < 25.0;

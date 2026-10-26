@@ -120,8 +120,11 @@ pub fn sync_bushes(state: Option<Res<crate::PlayState>>, mut parts: Query<(&Patc
         let shown = match b {
             None => on,
             Some(b) => {
-                let Some(bush) = state.play.foliage.get(&b.pack).and_then(|p| p.get(b.patch)).and_then(|p| p.bushes.get(b.plant)) else { continue };
+                let Some(patch) = state.play.foliage.get(&b.pack).and_then(|p| p.get(b.patch)) else { continue };
+                let (Some(bush), Some(q)) = (patch.bushes.get(b.plant), patch.plants.get(b.plant)) else { continue };
                 t.scale = Vec3::splat(bush.scale().max(0.0));
+                // The bush is drawn along its up axis (the hero bend and spring-back).
+                t.rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::from(bush.up)) * Quat::from_rotation_y(q.yaw);
                 on && (bush.state == 0) == b.cut
             }
         };

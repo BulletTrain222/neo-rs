@@ -2500,6 +2500,23 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_BEND: every 20 ticks, the current world's most tilted bush (its up y and
+        // position) and how many are tilted; on tick 1 the first bush positions.
+        if std::env::var_os("NEOPETS_TRACE_BEND").is_some() {
+            let bushes: Vec<([f32; 3], [f32; 3])> = play.foliage.get(&play.world.pack).into_iter().flatten().flat_map(|p| p.plants.iter().zip(&p.bushes).map(|(q, b)| (q.position, b.up))).collect();
+            if play.ticks == 1 {
+                let hero = play.loco.position();
+                let mut near: Vec<_> = bushes.iter().map(|(q, _)| (((q[0] - hero[0]).hypot(q[2] - hero[2])), *q)).collect();
+                near.sort_by(|a, b| a.0.total_cmp(&b.0));
+                println!("      bushes {} nearest {:?}", bushes.len(), &near[..near.len().min(3)]);
+            }
+            if play.ticks % 20 == 0 {
+                let tilted = bushes.iter().filter(|(_, u)| u[1] < 0.999).count();
+                if let Some((q, u)) = bushes.iter().min_by(|a, b| a.1[1].total_cmp(&b.1[1])) {
+                    println!("      bend tick {}: {tilted} tilted, most {:.3} at {:.0},{:.0}", play.ticks, u[1], q[0], q[2]);
+                }
+            }
+        }
         // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
         if std::env::var("NEOPETS_TRACE_DROP").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
             let n = play.dev_drop(160);
