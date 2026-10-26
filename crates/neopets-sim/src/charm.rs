@@ -2,11 +2,14 @@
 //! lists, Hurt shapes): the object a power attack spawns for the Mote in word 2, its volume
 //! against each target's body cylinder, its ten-slot hit list and the charm damage rule.
 //!
-//! Covered: Lava 161 (family B, a sphere orbiting the hero), Wind 167 (a vertical cylinder) and
-//! Supernova 173 (the Nova cylinder). The centre of the Wind and Nova cylinders (object +0x80)
-//! is not specified; it is held at the spawn point here (unverified, R-0033). Not covered: the
-//! family A objects (163, 165, 172), Shadow 169 and Sun 171 (their sizes are open), the effect
-//! objects, the status requests and the breakable walks.
+//! Covered: Lava 161 (family B, a sphere orbiting the hero raised by 2.0 on world axes, its
+//! angle continuing from the previous orbit), Wind 167 (a vertical cylinder on the ground under
+//! the hero), Supernova 173 (the Nova cylinder at the hero raised by 1.5), and family A: Water
+//! 163 and Nova 172 (vertical cylinders of height 4.0 whose radius follows their particle's
+//! size line, ending with the particle's life) and Rock 165 (three stationary sub-shots started
+//! 16 ticks apart). Not covered: Shadow 169 and Sun 171 (their radius is a live effect field),
+//! the effect objects, the status requests other than Lava's fire, and the breakable walks.
+//! The family A centres are the spawn point (Water and Nova's attach points are taken there).
 
 use ps2_float::fpu::{add, mul, sub};
 
@@ -42,9 +45,24 @@ const LISTED: u32 = 60;
 pub enum Shape {
     /// A sphere of `sphere` radius circling the hero at `radius`, one turn per second.
     Orbit { radius: f32, sphere: f32 },
-    /// A vertical cylinder centred on the object point.
-    Cylinder { radius: f32, height: f32 },
+    /// A vertical cylinder centred on the object point; `follow` the hero: 0 none, 1 the hero
+    /// raised by 1.5 (Nova 173), 2 the ground under the hero (Wind 167).
+    Cylinder { radius: f32, height: f32, follow: u8 },
+    /// Family A: a vertical cylinder of height 4.0 whose radius is start + rate x age / life
+    /// (age and life in seconds; SPEC-0036 Family A users).
+    Grow { start: f32, rate: f32, life: f32 },
 }
+
+/// The family A height and the particle lines (start, rate, life in seconds).
+const GROW_HEIGHT: f32 = 4.0;
+const WATER: (f32, f32, f32) = (0.5, 14.5, 0.7);
+const NOVA: (f32, f32, f32) = (0.0, 18.0, 1.2);
+const ROCK: (f32, f32, f32) = (0.0, 20.0, 0.6);
+/// The Rock sub-shots' spacing (0x2DCB94, 0.25 s: 15 ticks of countdown, so 16 apart).
+const ROCK_GAP: u32 = 16;
+/// The anchor offsets of the orbit (2.0) and the Nova cylinder (1.5).
+const ORBIT_LIFT: f32 = 2.0;
+const NOVA_LIFT: f32 = 1.5;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Object {
@@ -52,42 +70,82 @@ pub struct Object {
     pub id: u16,
     pub shape: Shape,
     pub centre: Vec3,
-    /// The orbit angle (radians, about the up axis, 0 along +z).
-    angle: f32,
+    /// The orbit angle (radians; the offset is radius x (cos, 0, -sin) on the world axes).
+    pub angle: f32,
     /// Ticks left.
     pub life: u32,
     /// The stored outgoing scale A x D x B x G x E.
     pub scale: f32,
     list: [Option<(u64, u32)>; 10],
+    /// Ticks before a Rock sub-shot starts (no volume meanwhile).
+    delay: u32,
+    /// Family A: ticks since the start.
+    age: u32,
 }
 
-/// Tor's power attack object for a word-2 Mote, or None for the effect-only Motes (160, 162,
-/// 164, 166, 168, 170) and the ones not covered here. `at` is the spawn point (the hero
-/// position plus facing x reach) and `facing` the hero's facing.
-pub fn spawn_tor(id: u16, w: &Words, at: Vec3, hero: Vec3, facing: Vec3, scale: f32) -> Option<Object> {
+/// Tor's power attack objects for a word-2 Mote: none for the effect-only Motes (160, 162,
+/// 164, 166, 168, 170) and the ones not covered here, three for Rock. `at` is the spawn point
+/// (the hero position plus facing x reach), `angle` the orbit's continuing angle.
+pub fn spawn_tor(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale: f32) -> Vec<Object> {
     let ticks = |s: f32| (mul(s, 60.0) as i64).max(0) as u32;
-    let (shape, centre, life) = match id {
-        161 => (Shape::Orbit { radius: w.orbit_radius, sphere: ORBIT_SPHERE }, hero, ticks(w.orbit_seconds)),
-        167 => (Shape::Cylinder { radius: w.wind_radius, height: w.wind_height }, at, ticks(CYLINDER_SECONDS)),
-        173 => (Shape::Cylinder { radius: w.nova_radius, height: NOVA_HEIGHT }, at, ticks(CYLINDER_SECONDS)),
-        _ => return None,
+    let particle = |s: f32| (s * 60.0).round() as u32;
+    let grow = |(start, rate, life): (f32, f32, f32)| Shape::Grow { start, rate, life };
+    let one = |shape: Shape, centre: Vec3, life: u32, delay: u32| Object { id, shape, centre, angle, life, scale, list: [None; 10], delay, age: 0 };
+    let mut v = match id {
+        161 => vec![one(Shape::Orbit { radius: w.orbit_radius, sphere: ORBIT_SPHERE }, hero, ticks(w.orbit_seconds), 0)],
+        167 => vec![one(Shape::Cylinder { radius: w.wind_radius, height: w.wind_height, follow: 2 }, at, ticks(CYLINDER_SECONDS), 0)],
+        173 => vec![one(Shape::Cylinder { radius: w.nova_radius, height: NOVA_HEIGHT, follow: 1 }, at, ticks(CYLINDER_SECONDS), 0)],
+        // The particle's life ends the object: age + 1/60 reaching the life, so 42 and 72 ticks
+        // (rounded: 0.7 x 60 is just under 42 in single precision).
+        163 => vec![one(grow(WATER), at, particle(WATER.2), 0)],
+        172 => vec![one(grow(NOVA), at, particle(NOVA.2), 0)],
+        // Three stationary sub-shots at the release point, started on the Rock object's ticks
+        // 1, 17 and 33, each living 36 ticks with its own hit list.
+        165 => (0..3).map(|k| one(grow(ROCK), at, particle(ROCK.2), k * ROCK_GAP)).collect(),
+        _ => Vec::new(),
     };
-    let mut o = Object { id, shape, centre, angle: facing[0].atan2(facing[2]), life, scale, list: [None; 10] };
-    o.place(hero);
-    Some(o)
+    for o in &mut v {
+        o.place(hero, None);
+    }
+    v
 }
 
 impl Object {
-    fn place(&mut self, hero: Vec3) {
-        if let Shape::Orbit { radius, .. } = self.shape {
-            let (s, c) = self.angle.sin_cos();
-            self.centre = [add(hero[0], mul(radius, s)), hero[1], add(hero[2], mul(radius, c))];
+    /// The centre from the hero: the orbit at the hero raised by 2.0 plus radius x (cos, 0,
+    /// -sin); Nova at the hero raised by 1.5; Wind on the ground under the hero (`ground`, the
+    /// previous height kept on a miss).
+    fn place(&mut self, hero: Vec3, ground: Option<f32>) {
+        match self.shape {
+            Shape::Orbit { radius, .. } => {
+                let (s, c) = self.angle.sin_cos();
+                self.centre = [add(hero[0], mul(radius, c)), add(hero[1], ORBIT_LIFT), sub(hero[2], mul(radius, s))];
+            }
+            Shape::Cylinder { follow: 1, .. } => self.centre = [hero[0], add(hero[1], NOVA_LIFT), hero[2]],
+            Shape::Cylinder { follow: 2, .. } => self.centre = [hero[0], ground.unwrap_or(self.centre[1]), hero[2]],
+            _ => {}
         }
     }
 
-    /// One tick: the life and the hit-list counters count down (an expired entry frees its
-    /// slot), and the orbit advances by 2 pi / 60 about the hero. Returns whether it is live.
-    pub fn tick(&mut self, hero: Vec3) -> bool {
+    /// The family A radius now.
+    pub fn radius(&self) -> f32 {
+        match self.shape {
+            Shape::Grow { start, rate, life } => add(start, mul(rate, self.age as f32 / 60.0 / life)),
+            Shape::Orbit { sphere, .. } => sphere,
+            Shape::Cylinder { radius, .. } => radius,
+        }
+    }
+
+    /// One tick: a waiting sub-shot counts its delay; the life and the hit-list counters count
+    /// down (an expired entry frees its slot), and the orbit advances by 2 pi / 60 about the
+    /// hero. Returns whether it is live.
+    pub fn tick(&mut self, hero: Vec3, ground: Option<f32>) -> bool {
+        if self.delay > 0 {
+            self.delay -= 1;
+            return true;
+        }
+        if matches!(self.shape, Shape::Grow { .. }) && self.life > 0 {
+            self.age += 1;
+        }
         self.life = self.life.saturating_sub(1);
         for e in self.list.iter_mut() {
             if let Some((_, n)) = e {
@@ -99,16 +157,21 @@ impl Object {
         }
         if matches!(self.shape, Shape::Orbit { .. }) {
             self.angle = add(self.angle, mul(std::f32::consts::TAU, 1.0 / 60.0));
-            self.place(hero);
         }
+        self.place(hero, ground);
         self.life > 0
     }
 
-    /// The volume against a target's body cylinder (feet point, radius, height).
+    /// The volume against a target's body cylinder (feet point, radius, height); a waiting
+    /// sub-shot has none.
     pub fn touches(&self, feet: Vec3, radius: f32, height: f32) -> bool {
+        if self.delay > 0 {
+            return false;
+        }
         match self.shape {
             Shape::Orbit { sphere, .. } => sphere_meets_body(self.centre, sphere, feet, radius, height),
-            Shape::Cylinder { radius: r, height: h } => cylinder_meets_body(self.centre, r, h, feet, radius, height),
+            Shape::Cylinder { radius: r, height: h, .. } => cylinder_meets_body(self.centre, r, h, feet, radius, height),
+            Shape::Grow { .. } => cylinder_meets_body(self.centre, self.radius(), GROW_HEIGHT, feet, radius, height),
         }
     }
 
@@ -182,27 +245,75 @@ mod tests {
     fn orbit_turns_and_lists() {
         // Tor's Lava orbit: 600 ticks of life, one turn per second at radius 2.5, a target
         // listed for 60 ticks so a target in contact is hit once per second.
-        let mut o = spawn_tor(161, &W, [0.0; 3], [0.0; 3], [0.0, 0.0, 1.0], 4.0).unwrap();
+        // The offset is radius x (cos, 0, -sin) at the hero raised by 2.0: (2.5, 2, 0) at 0 and
+        // (0, 2, -2.5) a quarter turn on.
+        let mut o = spawn_tor(161, &W, [0.0; 3], [0.0; 3], 0.0, 4.0).remove(0);
         assert_eq!(o.life, 600);
-        assert!((o.centre[2] - 2.5).abs() < 1e-4);
+        assert!((o.centre[0] - 2.5).abs() < 1e-4 && (o.centre[1] - 2.0).abs() < 1e-4 && o.centre[2].abs() < 1e-4, "{:?}", o.centre);
         for _ in 0..15 {
-            o.tick([0.0; 3]);
+            o.tick([0.0; 3], None);
         }
-        assert!((o.centre[0] - 2.5).abs() < 1e-3 && o.centre[2].abs() < 1e-3, "{:?}", o.centre);
+        assert!(o.centre[0].abs() < 1e-3 && (o.centre[2] + 2.5).abs() < 1e-3, "{:?}", o.centre);
         assert!(o.list(7) && !o.list(7));
         let mut hits = 1;
         for _ in 0..120 {
-            o.tick([0.0; 3]);
+            o.tick([0.0; 3], None);
             if o.list(7) {
                 hits += 1;
             }
         }
         assert_eq!(hits, 3);
         // Ten slots: an eleventh target is refused.
-        let mut o = spawn_tor(173, &W, [1.0, 0.0, 0.0], [0.0; 3], [0.0, 0.0, 1.0], 4.0).unwrap();
-        assert_eq!((o.centre, o.life), ([1.0, 0.0, 0.0], 600));
+        // Nova 173 sits at the hero raised by 1.5.
+        let mut o = spawn_tor(173, &W, [1.0, 0.0, 0.0], [0.0; 3], 0.0, 4.0).remove(0);
+        assert_eq!((o.centre, o.life), ([0.0, 1.5, 0.0], 600));
         assert!((0..10).all(|t| o.list(t)) && !o.list(10));
-        assert!(spawn_tor(160, &W, [0.0; 3], [0.0; 3], [0.0, 0.0, 1.0], 4.0).is_none());
+        assert!(spawn_tor(160, &W, [0.0; 3], [0.0; 3], 0.0, 4.0).is_empty());
+        // Wind follows the ground under the hero and keeps the last height on a miss.
+        let mut o = spawn_tor(167, &W, [1.0, 0.0, 0.0], [0.0; 3], 0.0, 4.0).remove(0);
+        o.tick([3.0, 5.0, 1.0], Some(2.0));
+        assert_eq!(o.centre, [3.0, 2.0, 1.0]);
+        o.tick([4.0, 5.0, 1.0], None);
+        assert_eq!(o.centre, [4.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn family_a_growth() {
+        // SPEC-0036 Family A: Water at 0.35 s is 0.5 + 14.5 x 0.5 = 7.75 and lives 42 ticks;
+        // Nova at 36 ticks is 9.0 and lives 72; Rock's sub-shots start 16 ticks apart and are
+        // 10.0 after 18 ticks of their own.
+        let mut o = spawn_tor(163, &W, [0.0; 3], [0.0; 3], 0.0, 1.0).remove(0);
+        assert_eq!(o.life, 42);
+        for _ in 0..21 {
+            o.tick([9.0; 3], None);
+        }
+        assert!((o.radius() - 7.75).abs() < 1e-4 && o.centre == [0.0; 3], "{}", o.radius());
+        let mut ticks = 21;
+        while o.tick([9.0; 3], None) {
+            ticks += 1;
+        }
+        assert_eq!(ticks + 1, 42);
+        let mut o = spawn_tor(172, &W, [0.0; 3], [0.0; 3], 0.0, 1.0).remove(0);
+        assert_eq!(o.life, 72);
+        for _ in 0..36 {
+            o.tick([0.0; 3], None);
+        }
+        assert!((o.radius() - 9.0).abs() < 1e-4);
+        // The height interval is the centre +- 2.0.
+        assert!(o.touches([8.0, 2.0, 0.0], 1.0, 2.0) && !o.touches([8.0, 2.01, 0.0], 1.0, 2.0));
+        let mut v = spawn_tor(165, &W, [0.0; 3], [0.0; 3], 0.0, 1.0);
+        assert_eq!(v.len(), 3);
+        for _ in 0..34 {
+            for o in v.iter_mut() {
+                o.tick([0.0; 3], None);
+            }
+        }
+        // After 34 ticks: the first sub-shot is 34 ticks old, the second 18, the third 2.
+        assert!((v[1].radius() - 10.0).abs() < 1e-4, "{}", v[1].radius());
+        assert!(v[0].radius() > v[1].radius() && v[2].radius() < 2.0);
+        // A waiting sub-shot has no volume.
+        let w = spawn_tor(165, &W, [0.0; 3], [0.0; 3], 0.0, 1.0);
+        assert!(w[0].touches([0.0; 3], 1.0, 2.0) && !w[1].touches([0.0; 3], 1.0, 2.0));
     }
 
     #[test]

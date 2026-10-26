@@ -739,6 +739,8 @@ pub struct Play {
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     mote_objects: Vec<neopets_sim::charm::Object>,
     charm_words: neopets_sim::charm::Words,
+    /// The Lava orbit's angle, 0 at the first activation and continuing across spawns.
+    orbit_angle: f32,
     hit_list: Vec<u64>,
     last_axis: Option<[f32; 3]>,
     /// The last hit, for the status line.
@@ -1320,6 +1322,7 @@ impl Play {
             magic,
             last_mote: String::new(),
             mote_objects: Vec::new(),
+            orbit_angle: 0.0,
             charm_words,
             last_status: String::new(),
             rebind: Vec::new(),
@@ -4128,7 +4131,15 @@ impl Play {
         let hero = self.loco.position();
         let pack = self.world.pack;
         let mut objects = std::mem::take(&mut self.mote_objects);
-        objects.retain_mut(|o| o.tick(hero));
+        // Wind's centre: the ground probed from 8 above the hero.
+        let ground = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0);
+        objects.retain_mut(|o| {
+            let live = o.tick(hero, ground);
+            if o.id == 161 {
+                self.orbit_angle = o.angle;
+            }
+            live
+        });
         for o in objects.iter_mut() {
             let p = neopets_sim::mote::power_index(0, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
             let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
@@ -4225,10 +4236,11 @@ impl Play {
             let b = neopets_sim::mote::one_plus_percent(self.items.get(id).map_or(0.0, |i| i.stats[5] as f32));
             let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
             let scale = neopets_sim::charm::scale(a, 1.0, b, self.statuses.damage_scale(), e);
-            if let Some(o) = neopets_sim::charm::spawn_tor(id, &self.charm_words, at, hero, f, scale) {
-                self.last_mote = format!("Mote {id} power-attack object (scale {scale}, {} ticks) on tick {}", o.life, self.ticks);
-                self.mote_objects.push(o);
+            let spawned = neopets_sim::charm::spawn_tor(id, &self.charm_words, at, hero, self.orbit_angle, scale);
+            if let Some(o) = spawned.first() {
+                self.last_mote = format!("Mote {id} power-attack object x{} (scale {scale}, {} ticks) on tick {}", spawned.len(), o.life, self.ticks);
             }
+            self.mote_objects.extend(spawned);
         }
         self.pay_mp(cost);
     }
