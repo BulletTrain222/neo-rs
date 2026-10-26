@@ -593,7 +593,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -701,6 +701,17 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             vec![Action::EnterInterior { slot }]
         }
         (1363, 0..=2) => vec![Action::Message { line: 0 }],
+        // SPEC-0042 1350 X0 to X2 (context 13): X0 and X1 with flag 100 value 30 or 50 for eW 157
+        // and the entry into eW 176 or 182, else line 0; X2 value 60 and the load of eW 163.
+        (1350, 0 | 1) if !state.flag(100) => vec![Action::Message { line: 0 }],
+        (1350, 0 | 1) => {
+            state.blackboard.insert((2, 157), if door == 0 { 30 } else { 50 });
+            vec![Action::EnterInterior { slot: if door == 0 { 176 } else { 182 } }, wait(3.0)]
+        }
+        (1350, 2) => {
+            state.blackboard.insert((2, 157), 60);
+            vec![Action::ReplaceExterior { slot: 163, plane: -1 }, wait(3.0)]
+        }
         // SPEC-0041 1371 TP0 (context 13): with flag 100 value 60 for eW 157 and the replacement
         // to it (pack 1350), 3 s; else line 2.
         (1371, 0) if state.flag(100) => {
@@ -1039,9 +1050,51 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0041 1371 Init, branch B (a normal visit): effect 0 stopped, Z0 to Z2 on triggers
         // 0 to 4, object 1 at its start, the wave word (1) at -1. Branch A (an arena round from
         // pack 1350, value 20 for eW 157) is not built: pack 1350 is not.
+        // Branch A (value 20 for eW 157, posted by pack 1350's arena master): objects 10, 9 and 4
+        // at their start, a 0.1 s fade out, the arena-round word (4); thread T loads Sevaric (set
+        // 5, region 1377) into slot 1 and the round's set t (4 to 0 by flags 599 to 596, region
+        // 1372 + t) into slot 0, then the round intro (here the fade in after the loads and line
+        // H1; the scene's moves and cameras are Medium in the spec and not reproduced) and entity
+        // 30's walk to locator 15 and loop 55. The hero-death callback is not built.
+        1371 if state.blackboard.get(&(2, 157)) == Some(&20) => {
+            state.set_word(pack, 4, 1);
+            let t = [(599, 4), (598, 3), (597, 2), (596, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, t)| t);
+            let mut v = vec![
+                Action::StopEffect { slot: 0 },
+                Action::InitObjOn { obj: 10, end: false },
+                Action::InitObjOn { obj: 9, end: false },
+                Action::InitObjOn { obj: 4, end: false },
+                Action::FadeOut { seconds: 0.1, wait: false },
+                Action::LoadRegion { slot: 1, region: Some(1377) },
+                Action::LoadRegion { slot: 0, region: Some(1372 + t) },
+                Action::WaitLoads,
+                Action::FadeIn { seconds: 1.0, wait: true },
+            ];
+            if let Some(line) = [(599, 47), (598, 45), (597, 44), (596, 43)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, l)| l) {
+                v.push(Action::Message { line });
+            }
+            v.extend([
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::WalkEntity { entity: 30, locator: 15, wait: true, orient: true, stop: 1.1 },
+                Action::EntityAnim { entity: 30, anim: 55, looped: true, wait: false },
+            ]);
+            v
+        }
         1371 => {
             state.set_word(pack, 1, -1);
             vec![Action::StopEffect { slot: 0 }, reg(2, 2), reg(3, 2), reg(4, 2), reg(1, 1), reg(0, 0), Action::InitObjOn { obj: 1, end: false }]
+        }
+        // SPEC-0042 1350 Init: with flag 100 T0 (0) and S1 (1); S2 (2), S3 (3 to 5); thread A
+        // loads set 1 (100) or 0 (region 1351 + set). The teleports (context 13) and the
+        // proximity routines of entities 24 to 31 are fixed rules.
+        1350 => {
+            let mut v = Vec::new();
+            if state.flag(100) {
+                v.extend([reg(0, 0), reg(1, 1)]);
+            }
+            v.extend([reg(2, 2), reg(3, 3), reg(4, 3), reg(5, 3)]);
+            v.push(Action::LoadRegion { slot: 0, region: Some(1351 + state.flag(100) as u32) });
+            v
         }
         // SPEC-0041 1392 Init: triggers 0 to 23 and 25 to 36 on their own routines, the objects,
         // and flag 696: the gate levers at their end (20, 22, 24) with the gates 11, 13 and 15
@@ -2178,6 +2231,95 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// SPEC-0042 1350's round-result step for r (1 won): a win sets the next round flag (600 to 597
+/// by the first of 599 to 596), gives two of item 147 and sets 596 (lines 34 to 38); a loss sets
+/// 595 (lines 39 to 43); entity 24 shows the line.
+fn round_result_1350(s: &mut GameState, r: i32) -> Vec<Action> {
+    let k = [599, 598, 597, 596].iter().position(|&f| s.flag(f)).unwrap_or(4);
+    let mut out = Vec::new();
+    let line = if r == 1 {
+        if k < 4 {
+            s.set([600, 599, 598, 597][k], true);
+        }
+        s.set(596, true);
+        out.push(Action::GiveItem { item: 147, count: 2 });
+        34 + k as u16
+    } else {
+        s.set(595, true);
+        39 + k as u16
+    };
+    out.push(Action::Converse { entity: 24, line });
+    out
+}
+
+/// SPEC-0042 1350's proximity routines: P24 the arena master, P25 (a branch marker and a counter,
+/// words 2 and 3) and shape X for 26 to 31 (one counter each, words 10 + entity - 26).
+fn talk_1350(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let first = |s: &GameState, fl: &[(u16, u16)], d: u16| fl.iter().find(|&&(f, _)| s.flag(f)).map_or(d, |&(_, l)| l);
+    match routine {
+        24 => {
+            let r = s.word(1350, 1);
+            match (r, s.flag(600)) {
+                (0, true) => vec![Action::Talk { line: 13 }],
+                (0, false) => vec![Action::Prompt { line: first(s, &[(599, 14), (598, 15), (597, 16), (596, 17), (595, 18)], 19), routine: 24 }],
+                (1, true) => vec![Action::Talk { line: 4 }],
+                (1, false) => vec![Action::Prompt { line: 20, routine: 24 }],
+                _ => vec![Action::Prompt { line: 21, routine: 24 }],
+            }
+        }
+        25 => {
+            let (case, lines): (i32, &[u16]) = if s.flag(600) {
+                (5, &[70, 71, 72])
+            } else if s.flag(599) {
+                (4, &[67, 68, 69])
+            } else if s.flag(598) {
+                (3, &[65, 66])
+            } else if s.flag(597) {
+                (2, &[63, 64])
+            } else {
+                (1, &[61, 62])
+            };
+            let mut c = s.word(1350, 3);
+            if s.word(1350, 2) != case {
+                s.set_word(1350, 2, case);
+                c = 0;
+            }
+            s.set_word(1350, 3, (c + 1) % lines.len() as i32);
+            vec![Action::Talk { line: lines[c as usize % lines.len()] }]
+        }
+        26..=31 => {
+            let b: u16 = match routine {
+                26 => 73,
+                27 => 90,
+                30 => 107,
+                28 => 124,
+                29 => 141,
+                _ => 158,
+            };
+            let n = (596..=600).filter(|&f| s.flag(f)).count() as i32;
+            let lines: Vec<u16> = if s.talk_d >= n {
+                vec![b + 14, b + 15, b + 16]
+            } else if s.flag(596) && !s.flag(597) {
+                vec![b]
+            } else if s.flag(597) && !s.flag(598) {
+                vec![b + 1]
+            } else if s.flag(598) && !s.flag(599) {
+                vec![b + 2]
+            } else if s.flag(599) && !s.flag(600) {
+                vec![b + 3, b + 4]
+            } else {
+                vec![b + 5, b + 6, b + 7]
+            };
+            let w = 10 + routine - 26;
+            let c = s.word(1350, w) as usize;
+            let i = if c < lines.len() { c } else { 0 };
+            s.set_word(1350, w, ((i + 1) % lines.len()) as i32);
+            vec![Action::Talk { line: lines[i] }]
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC-0043 1066's line cycling: the routine's case and position (words 10 + 2r and 11 + 2r);
@@ -3991,6 +4133,25 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             state.set_word(pack, 6, 1);
             out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::ReplaceExterior { slot: 178, plane: 0 }]);
         }
+        // SPEC-0042 1350 T0 (trigger 0, entering): entity 24's line: 4 with 600, else 5 to 9 by
+        // the first of 599 to 595, else 11.
+        (1350, 0) if call.object && call.state == 1 => {
+            let line = if state.flag(600) { 4 } else { [(599, 5), (598, 6), (597, 7), (596, 8), (595, 9)].into_iter().find(|&(f, _)| state.flag(f)).map_or(11, |(_, l)| l) };
+            out.actions.push(Action::Converse { entity: 24, line });
+        }
+        // S2 (trigger 2): value 10 for eW 157 and the load of eW 161, 3 s (here on entry).
+        (1350, 2) if call.object && call.state == 1 => {
+            state.blackboard.insert((2, 157), 10);
+            out.actions.extend([Action::ReplaceExterior { slot: 161, plane: -1 }, wait(3.0)]);
+        }
+        // S3 (triggers 3 to 5): context 3; with the button line 1, 2 or 3.
+        (1350, 3) if call.object && call.state != 0 => {
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: call.index - 2 });
+            } else {
+                out.prompt = Some(3);
+            }
+        }
         // SPEC-0041 1371 Z0: with the exit word (3) the won result for eW 157 (pack 1350) and its
         // replacement load.
         (1371, 0) if call.state == 1 && call.object && state.word(pack, 3) != 0 => {
@@ -5355,6 +5516,29 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // character of the wave's slot dead, the wave's flag (342 + j - 6), object 10, sound 9,
         // object 10 played, object 4 off; with all three won the camera 9 scene with object 9;
         // the word back to -1.
+        // Watcher V (arena rounds): every character of the round slot dead: 1 s, the win scene
+        // H5, swap mode 2, the won result for eW 157 and its load (pack 1350). The loss (both
+        // heroes dead) needs the hero-death callback, which is not built.
+        1371 if state.word(pack, 4) == 1 => {
+            if state.word(pack, 5) == 0 && state.slot_alive.get(&0) == Some(&0) {
+                state.set_word(pack, 5, 1);
+                state.blackboard.insert((2, 157), 20);
+                state.blackboard.insert((1, 157), 1);
+                out.extend([
+                    wait(1.0),
+                    Action::HoldHero,
+                    Action::Equip { on: false },
+                    Action::FadeOut { seconds: 0.7, wait: true },
+                    Action::MoveHero { locator: 14 },
+                    Action::FadeIn { seconds: 0.7, wait: false },
+                    Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 },
+                    Action::HeroAnim { anim: 182, wait: false },
+                    Action::Message { line: 48 },
+                    Action::SwapMode { mode: 2 },
+                    Action::ReplaceExterior { slot: 157, plane: 0 },
+                ]);
+            }
+        }
         1371 => {
             let j = state.word(pack, 1);
             if j >= 0 && state.slot_alive.get(&0) == Some(&0) {
@@ -5833,6 +6017,30 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             .into_iter()
             .collect();
             if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
+        // SPEC-0042 1350 A: value 10, 30, 40, 50 or 60 for eW 157 moves the hero to locator 4, 1,
+        // 2, 3 or 5; 20 (back from an arena round) moves it to locator 6, stores the round result
+        // (type 1) in word 1, waits for the loads and runs the round-result step; the values are
+        // then reset, and any value but -1 and 20 returns the camera. The heroes' hit points are
+        // not raised to 50 percent (no host call for a hero's hit points here).
+        1350 => {
+            let v = state.take_message(2, 157);
+            let mut out = Vec::new();
+            match v {
+                10 | 30 | 40 | 50 | 60 => out.push(Action::MoveHero { locator: match v { 10 => 4, 30 => 1, 40 => 2, 50 => 3, _ => 5 } }),
+                20 => {
+                    let r = state.take_message(1, 157);
+                    state.set_word(1350, 1, r);
+                    out.extend([Action::MoveHero { locator: 6 }, Action::Equip { on: false }, Action::WaitLoads]);
+                    out.extend(round_result_1350(state, r));
+                }
+                _ => {}
+            }
+            state.blackboard.insert((1, 157), 0);
+            if v != -1 && v != 20 {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
@@ -7430,6 +7638,16 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             ]
         }
         (934, 90, false) => vec![Action::Message { line: 212 }],
+        // SPEC-0042 1350 P24's answer: no, line 28 to 33; yes, line 22 to 27 (by the first of
+        // 599 to 595), value 20 for eW 157 and the load of eW 163 (the arena, pack 1371).
+        (1350, 24, yes) => {
+            let k = [599, 598, 597, 596, 595].iter().position(|&f| s.flag(f)).unwrap_or(5) as u16;
+            if !yes {
+                return vec![Action::Message { line: 28 + k }];
+            }
+            s.blackboard.insert((2, 157), 20);
+            vec![Action::Message { line: 22 + k }, Action::ReplaceExterior { slot: 163, plane: 0 }]
+        }
         (880, 7, false) | (1230, 4, false) => vec![Action::Talk { line: 16 }],
         (880, 7, true) | (1230, 4, true) => {
             let shop = map_shop(pack);
@@ -7700,6 +7918,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0042 1350: P24 to P31 on entities 24 to 31.
+        (1350, 24..=31) => Some(entity as u8),
         // SPEC-0043 1066: C1 on entities 17 and 18, C2 on 16, C3 on 19.
         (1066, 17 | 18) => Some(1),
         (1066, 16) => Some(2),
@@ -7778,6 +7998,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1066 {
         return talk_1066(routine, state);
+    }
+    if pack == 1350 {
+        return talk_1350(routine, state);
     }
     // SPEC-0043 749 proximity: with 76 line 4 in the frame; else line 6 in the frame and line 9.
     if pack == 749 {
@@ -8134,6 +8357,57 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1350_arena_hub() {
+        // Test vector: flag 100 clear: no T0, set 0 (region 1351); entity 24 with no flags shows
+        // prompt 19; yes posts 20 for eW 157 and loads eW 163.
+        let mut s = GameState::default();
+        let init = on_init(1350, &mut s);
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1351) }) && !init.contains(&Action::RegisterTrigger { index: 0, routine: 0 }));
+        assert_eq!(on_talk(1350, 24, &mut s), vec![Action::Prompt { line: 19, routine: 24 }]);
+        assert!(on_answer(1350, 24, true, &mut s).contains(&Action::ReplaceExterior { slot: 163, plane: 0 }));
+        // The arena round: branch A loads round 1 (region 1372) and Sevaric (1377).
+        let a = on_init(1371, &mut s);
+        assert!(a.contains(&Action::LoadRegion { slot: 0, region: Some(1372) }) && a.contains(&Action::LoadRegion { slot: 1, region: Some(1377) }));
+        s.slot_alive.insert(0, 0);
+        assert!(on_update(1371, &mut s, false).contains(&Action::ReplaceExterior { slot: 157, plane: 0 }));
+        // Back in 1350 (reloaded): the win sets 596, gives item 147 and shows line 38.
+        s.reload_module(1350);
+        let back = on_activate(1350, &mut s);
+        assert!(back.contains(&Action::GiveItem { item: 147, count: 2 }) && back.contains(&Action::Converse { entity: 24, line: 38 }));
+        assert!(s.flag(596) && s.word(1350, 1) == 1);
+        assert_eq!(on_talk(1350, 24, &mut s), vec![Action::Prompt { line: 20, routine: 24 }]);
+        // Test vector: 596 and 597 set, r = 1: 598 set, line 36.
+        let mut s = GameState::default();
+        s.set(596, true);
+        s.set(597, true);
+        assert!(round_result_1350(&mut s, 1).contains(&Action::Converse { entity: 24, line: 36 }) && s.flag(598));
+        // P25 vector: 599 set: 67, 68, 69, 67; then 600: 70.
+        s.set(599, true);
+        let got: Vec<_> = (0..4).map(|_| on_talk(1350, 25, &mut s)).collect();
+        assert_eq!(got, [67, 68, 69, 67].map(|line| vec![Action::Talk { line }]).to_vec());
+        s.set(600, true);
+        assert_eq!(on_talk(1350, 25, &mut s), vec![Action::Talk { line: 70 }]);
+        // Shape X vectors for P26 (b = 73): N = 1: 87, 88, 89, 87; N = 5 with R = 6, 2, 3: 87,
+        // 79, 80.
+        let mut s = GameState::default();
+        s.set(596, true);
+        let got: Vec<_> = [1, 6, 3, 2].map(|d| {
+            s.talk_d = d;
+            on_talk(1350, 26, &mut s)
+        }).to_vec();
+        assert_eq!(got, [87, 88, 89, 87].map(|line| vec![Action::Talk { line }]).to_vec());
+        let mut s = GameState::default();
+        for f in 596..=600 {
+            s.set(f, true);
+        }
+        let got: Vec<_> = [6, 2, 3].map(|d| {
+            s.talk_d = d;
+            on_talk(1350, 26, &mut s)
+        }).to_vec();
+        assert_eq!(got, [87, 79, 80].map(|line| vec![Action::Talk { line }]).to_vec());
     }
 
     #[test]
