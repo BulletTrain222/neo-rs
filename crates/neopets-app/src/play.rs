@@ -739,6 +739,8 @@ pub struct Play {
     pet_low: i32,
     pub last_pet: String,
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
+    /// The Undead Draik's spit flight effects (fire, ice).
+    spit_fx: [Option<usize>; 2],
     mote_objects: Vec<neopets_sim::charm::Object>,
     charm_words: neopets_sim::charm::Words,
     /// The Lava orbit's angle, 0 at the first activation and continuing across spawns.
@@ -1323,6 +1325,7 @@ impl Play {
             reach_tor,
             magic,
             last_mote: String::new(),
+            spit_fx: [None; 2],
             mote_objects: Vec::new(),
             orbit_angle: 0.0,
             charm_words,
@@ -7317,11 +7320,38 @@ impl Play {
             }
             // The spit records: a 0.5 sphere against the hero's body capsules, the ground from 8
             // above.
-            let spit_hits = {
+            let released = c.draik.as_ref().map_or([None; 2], |k| k.spits.map(|s| s.map(|s| s.position)));
+            let spit_ends = {
                 let ground = |p: [f32; 3]| world.ground_at(p[0], p[2], p[1] + 8.0);
                 let hits = |p: [f32; 3], r: f32| caps.iter().any(|cap| neopets_sim::combat::overlap(&Cylinder { center: p, axis: UP, radius: r, length: 0.0 }, cap));
                 c.draik.as_mut().map_or(Vec::new(), |k| k.spit_step(&self.draik_words, &hits, &ground))
             };
+            let flying = c.draik.as_ref().map_or([None; 2], |k| k.spits.map(|s| s.map(|s| s.position)));
+            // SPEC-0029 Spit appearance: the flight effect starts at the mouth on the release
+            // tick and follows the spit; at the end it stops and the impact bursts there.
+            for k in 0..2 {
+                let flight = neopets_sim::draik::SPIT_FX[k].0;
+                if self.spit_fx[k].is_none() {
+                    if let Some(at) = released[k] {
+                        let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, flight, at, neopets_sim::effect::IDENTITY));
+                        self.effects.update(&table, h, None, &mut self.rng);
+                        self.spit_fx[k] = Some(h);
+                    }
+                }
+                if let (Some(h), Some(at)) = (self.spit_fx[k], flying[k]) {
+                    self.effects.set_position(h, at);
+                    self.effects.update(&table, h, None, &mut self.rng);
+                }
+            }
+            for e in &spit_ends {
+                if let Some(h) = self.spit_fx[e.record].take() {
+                    self.effects.set_position(h, e.position);
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
+                self.effects.one_shot(&table, neopets_sim::draik::SPIT_FX[e.record].1, e.position, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            let spit_hits: Vec<i32> = spit_ends.iter().filter_map(|e| e.damage).collect();
             let d = {
                 let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
                 let l = dx.hypot(dz).max(1e-6);

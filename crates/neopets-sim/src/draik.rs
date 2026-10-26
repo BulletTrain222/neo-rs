@@ -173,6 +173,18 @@ pub struct Hazard {
 
 pub const HAZARDS: usize = 4;
 
+/// The spit records' effects (SPEC-0029 Spit appearance): (flight, impact) for fire and ice.
+pub const SPIT_FX: [(i32, i32); 2] = [(528, 991), (527, 992)];
+
+/// A spit that ended this tick: its record (0 fire, 1 ice), its last position and the damage
+/// it dealt to the hero (None when it reached the ground).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SpitEnd {
+    pub record: usize,
+    pub position: Vec3,
+    pub damage: Option<i32>,
+}
+
 /// A spit record (R-0066): the Draik keeps one for fire and one for ice, outside the enemy
 /// pool. It moves at its speed each tick, hurts the hero on a sphere contact and ends there or
 /// at the ground; it has no lifetime.
@@ -299,16 +311,17 @@ fn open(band: (f32, f32), d: f32) -> bool {
 impl Draik {
     /// The spit records' tick: each moves by its velocity, then hurts the hero and ends when its
     /// sphere touches the hero (`hits`), or ends when its height reaches the ground under it
-    /// (`ground`, the probe from 8 above). Returns the damage dealt.
-    pub fn spit_step(&mut self, w: &Words, hits: &dyn Fn(Vec3, f32) -> bool, ground: &dyn Fn(Vec3) -> Option<f32>) -> Vec<i32> {
+    /// (`ground`, the probe from 8 above). Returns the spits that ended.
+    pub fn spit_step(&mut self, w: &Words, hits: &dyn Fn(Vec3, f32) -> bool, ground: &dyn Fn(Vec3) -> Option<f32>) -> Vec<SpitEnd> {
         let mut out = Vec::new();
-        for slot in &mut self.spits {
+        for (record, slot) in self.spits.iter_mut().enumerate() {
             let Some(mut sp) = *slot else { continue };
             sp.position = [sp.position[0] + sp.velocity[0], sp.position[1] + sp.velocity[1], sp.position[2] + sp.velocity[2]];
             *slot = if hits(sp.position, w.spit_radius) {
-                out.push(sp.damage);
+                out.push(SpitEnd { record, position: sp.position, damage: Some(sp.damage) });
                 None
             } else if ground(sp.position).is_some_and(|g| sp.position[1] <= g) {
+                out.push(SpitEnd { record, position: sp.position, damage: None });
                 None
             } else {
                 Some(sp)
@@ -804,11 +817,11 @@ mod tests {
         let ground = |_: Vec3| Some(3.0);
         assert!(k.spit_step(&w, &never, &ground).is_empty());
         assert_eq!(k.spits[0].map(|s| s.position[1]), Some(4.0));
-        k.spit_step(&w, &never, &ground);
+        assert_eq!(k.spit_step(&w, &never, &ground), vec![SpitEnd { record: 0, position: [0.0, 3.0, 0.0], damage: None }]);
         assert!(k.spits[0].is_none(), "at the ground height it ends");
         k.spits[1] = Some(Spit { position: [0.0, 9.0, 0.0], velocity: [1.0, 0.0, 0.0], damage: 10 });
         let always = |_: Vec3, _: f32| true;
-        assert_eq!(k.spit_step(&w, &always, &ground), vec![10]);
+        assert_eq!(k.spit_step(&w, &always, &ground), vec![SpitEnd { record: 1, position: [1.0, 9.0, 0.0], damage: Some(10) }]);
         assert!(k.spits[1].is_none());
     }
 
