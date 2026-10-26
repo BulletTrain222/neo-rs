@@ -1575,6 +1575,16 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 1096 Init: 315 and 44; the twelve objects; CB1 on 13 to 15, CB2 on 0 to 4, CB3
+        // on 5, CB4 on 6, CB5 on 7. The breakable indices and Init's zero-length fade out (no
+        // fade in follows on the flag-45-set side) are not reproduced.
+        1096 => {
+            state.set(315, true);
+            state.set(44, true);
+            let mut v: Vec<Action> = [31, 33, 35, 16, 17, 19, 22, 6, 8, 10, 12, 13].map(|obj| Action::InitObjOn { obj, end: false }).to_vec();
+            v.extend([reg(13, 1), reg(14, 1), reg(15, 1), reg(0, 2), reg(1, 2), reg(2, 2), reg(4, 2), reg(3, 2), reg(5, 3), reg(6, 4), reg(7, 5)]);
+            v
+        }
         // SPEC-0044 1174 Init: level states 18 and 0, flag 218, trigger 1 (the Act 2 start), the
         // section triggers 2 to 4, effects 9 to 14 stopped, and thread W4's character set 0
         // (region 1175). The floor tiles, checkpoints, breakables and two-hit object (fired by
@@ -5413,6 +5423,56 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1096 CB1 (13 to 15; context 4): the lever walks (points 15 to 17, hero
+        // animation 140, objects 31, 33 or 35 and the rest) and the word that arms CB2's index 0
+        // (word 1; the spec leaves which branch sets it Medium).
+        (1096, 1) if call.object && call.state != 0 && state.word(pack, 10 + call.index as u8) == 0 => {
+            if call.square && !state.talking {
+                state.set_word(pack, 10 + call.index as u8, 1);
+                state.set_word(pack, 1, 1);
+                let (point, anims): (usize, &[usize]) = match call.index {
+                    13 => (15, &[31, 6, 16, 15, 17]),
+                    14 => (16, &[33, 17]),
+                    _ => (17, &[35, 19]),
+                };
+                out.actions.extend([Action::HoldHero, Action::WalkHero { locator: point, wait: true, orient: true }, Action::HeroAnim { anim: 140, wait: false }]);
+                if call.index == 13 {
+                    out.actions.push(Action::DeactivateObj { obj: 16 });
+                }
+                out.actions.extend(anims.iter().map(|&obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
+                out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+            } else {
+                out.prompt = Some(4);
+            }
+        }
+        // CB2 (0 to 4, entering; by index): the normal camera, the hero held 0.3 s, the case's
+        // animations at speed 0.7, control back. 0 needs CB1's word; 2 needs index 3's word (2).
+        (1096, 2) if call.object && call.state == 1 => {
+            let play = |obj, wait| Action::PlayAnim { obj, speed: 0.7, wait };
+            let case: Vec<Action> = match call.index {
+                0 if state.word(pack, 1) != 0 => vec![Action::DeactivateObj { obj: 6 }, play(7, true)],
+                1 => vec![play(10, false), play(8, true)],
+                2 if state.word(pack, 2) != 0 => vec![Action::DeactivateObj { obj: 8 }, Action::DeactivateObj { obj: 10 }, play(11, false), play(9, true)],
+                3 => {
+                    state.set_word(pack, 2, 1);
+                    Vec::new()
+                }
+                4 => vec![play(13, false), play(12, true)],
+                _ => Vec::new(),
+            };
+            if !case.is_empty() {
+                out.actions.extend([Action::ReturnCamera { preset: -1, release: false }, Action::HoldHero, wait(0.3)]);
+                out.actions.extend(case);
+                out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+        }
+        (1096, 3) if call.object => out.actions.push(Action::PlayAnim { obj: 22, speed: 1.0, wait: false }),
+        // CB4 (trigger 6, entering): value 130 for eW 126 and its load.
+        (1096, 4) if call.object && call.state == 1 => {
+            state.blackboard.insert((2, 126), 130);
+            out.actions.push(Action::ReplaceExterior { slot: 126, plane: -1 });
+        }
+        (1096, 5) if call.object => state.set(318, true),
         // SPEC-0044 1174 trigger 1, the Act 2 start (any fire; bit 15 is never set): bit 14, the
         // fade, 219 and 220, movie 16, act start 2, movie 89, 221, and the load of eW 151 (pack
         // 1300) in place of movie 18 and its return world. The boss-fight tweak is not built.
@@ -8051,6 +8111,52 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0041 1096 Update: with 45 clear CB7 (the level-state pairs 1 and 2, 4 and 5, 7 and
+        // 8, 10 and 11, and the finale on 12: camera 5, the shake, entity 0 and object 0 off,
+        // sound 7, objects 2 to 5, 45 and 316, level state 14); with 45 set, 15 set and 16 clear
+        // the camera step (cameras 4, 6 and 7, object 1, level state 16 and flag 317). The item
+        // dispensers (ItemActivate in the boss slot's region) and SetTargetActive are not built.
+        1096 => {
+            let l = |n| state.level(n);
+            if !state.flag(45) && state.word(pack, 3) == 0 {
+                if l(0) && !l(2) {
+                    state.set_level(1, true);
+                    state.set_level(2, true);
+                } else if l(3) && !l(5) {
+                    state.set_level(4, true);
+                    state.set_level(5, true);
+                } else if l(6) && !l(8) {
+                    state.set_level(7, true);
+                    state.set_level(8, true);
+                } else if l(9) && !l(11) {
+                    state.set_level(10, true);
+                    state.set_level(11, true);
+                } else if l(12) && !l(14) {
+                    state.set_word(pack, 3, 1);
+                    state.set_level(13, true);
+                    out.extend([
+                        Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                        Action::CameraShakeMode { kind: 0, duration: 3.0, strength: 1.0 },
+                        Action::DeactivateEntity { entity: 0 },
+                        Action::DeactivateObj { obj: 0 },
+                        wait(1.0),
+                        Action::PlaySound { cue: 7, locator: None },
+                    ]);
+                    out.extend((2..=5).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
+                    out.extend([wait(4.0), Action::SetFlag { flag: 45, on: true }, Action::SetFlag { flag: 316, on: true }, Action::ReturnCamera { preset: -1, release: true }, Action::LevelState { flag: 14, on: true }]);
+                }
+            } else if state.flag(45) && l(15) && !l(16) && !dialog {
+                state.set_level(16, true);
+                state.set(317, true);
+                out.extend([
+                    Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
+                    Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
+                    Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
+                    Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+        }
         // SPEC-0044 1174 Update: thread W1 (the stage thread).
         1174 => out.extend(stage_1174(state)),
         // SPEC-0041 1428 Update (322 set): the update helper and THREAD-A.
@@ -9154,6 +9260,10 @@ pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
     if (pack, item) == (1238, 83) && !state.flag(579) {
         state.set(579, true);
     }
+    // SPEC-0041 1096 CB10: item 117 sets level state 15.
+    if (pack, item) == (1096, 117) {
+        state.set_level(15, true);
+    }
     // SPEC-0044 893: item 77 sets 525 and loads set 6 (region 900) into slot 1.
     if (pack, item) == (893, 77) {
         state.set(525, true);
@@ -9285,6 +9395,18 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
+        }
+        // SPEC-0041 1096 arrival: with 45 clear CB8 (the boss slot, objects 0 to 5, movie 51
+        // counted, the hero at locator 10, object 14 off, entity 0, the fade in); with 45 set CB11
+        // (object 1). The boss slot's set (region 1097 taken) and the boss-fight tweak are open or
+        // not built.
+        1096 if state.flag(45) => vec![Action::InitObjOn { obj: 1, end: false }],
+        1096 => {
+            state.movies.insert(51);
+            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1097) }];
+            v.extend((0..=5).map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::FadeIn { seconds: FADE, wait: false }]);
+            v
         }
         // SPEC-0044 1174 arrival: effects 15 to 21 stopped, the normal camera, the hero at locator
         // 0, stage bit 0 (the record set-ups are not built).
@@ -12430,6 +12552,32 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1096_draik_room() {
+        let mut s = GameState::default();
+        on_init(1096, &mut s);
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        // CB2: index 2 waits for index 3; index 0 for CB1.
+        assert!(on_trigger(1096, 2, enter(2), &mut s).actions.is_empty());
+        on_trigger(1096, 2, enter(3), &mut s);
+        assert!(on_trigger(1096, 2, enter(2), &mut s).actions.contains(&Action::PlayAnim { obj: 9, speed: 0.7, wait: true }));
+        assert!(on_trigger(1096, 2, enter(0), &mut s).actions.is_empty());
+        assert!(on_trigger(1096, 1, enter(13), &mut s).actions.contains(&Action::WalkHero { locator: 15, wait: true, orient: true }));
+        assert!(on_trigger(1096, 2, enter(0), &mut s).actions.contains(&Action::PlayAnim { obj: 7, speed: 0.7, wait: true }));
+        // CB7: the Draik's level state 0 gives 1 and 2; 12 the finale (45, 316).
+        s.set_level(0, true);
+        on_update(1096, &mut s, false);
+        assert!(s.level(1) && s.level(2));
+        s.set_level(12, true);
+        assert!(on_update(1096, &mut s, false).contains(&Action::SetFlag { flag: 45, on: true }));
+        // After the fight: the item 117 pickup and the camera step (317).
+        s.set(45, true);
+        on_pickup(1096, 117, &mut s);
+        assert!(on_update(1096, &mut s, false).contains(&Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }) && s.flag(317));
+        // CB4: the exit to eW 126.
+        assert_eq!(on_trigger(1096, 4, enter(6), &mut s).actions, vec![Action::ReplaceExterior { slot: 126, plane: -1 }]);
     }
 
     #[test]
