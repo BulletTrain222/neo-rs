@@ -1388,6 +1388,24 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0037 908 Init: objects 4, 0, 1 and 2 at their start. Its world-swap callback is
+        // run only by StartTransitionScene, which has no live call (SPEC-0030 rows 268 and 283).
+        908 => [4, 0, 1, 2].map(|obj| Action::InitObjOn { obj, end: false }).to_vec(),
+        // SPEC-0037 906 Init: the button routine on trigger 2, L0 and L1 on 0 and 1, and thread
+        // T's load of set 0 (region 907). The per-tick navmesh pass (GetClosestNavMeshId,
+        // CharacterNavmeshAssign, DisableVillagerSocialize) is not built.
+        906 => vec![reg(2, 2), reg(0, 0), reg(1, 1), Action::LoadRegion { slot: 0, region: Some(907) }],
+        // SPEC-0037 837 Init: with 636 clear object 0 at its start and masks 1, else masks 2
+        // (breakable 3's SetBreakableActive is not built: R-0040).
+        837 => {
+            let m = if state.flag(636) { 2 } else { 1 };
+            let mut v = Vec::new();
+            if m == 1 {
+                v.push(Action::InitObjOn { obj: 0, end: false });
+            }
+            v.extend([Action::CollisMask { mask: m }, Action::DisplayMask { mask: m }]);
+            v
+        }
         // SPEC-0037 1427 Init: triggers 0 to 7 on routines E0 to E4 (0; 1 and 2; 3 and 4; 5 and
         // 6; 7).
         1427 => (0..=7).map(|i| reg(i, ((i + 1) / 2) as u8)).collect(),
@@ -3585,6 +3603,20 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0037 906 trigger 2: context 6; with the button the load of eW 65.
+        (906, 2) => {
+            if call.square && !state.talking {
+                out.actions.push(Action::ReplaceExterior { slot: 65, plane: -1 });
+            } else {
+                out.prompt = Some(6);
+            }
+        }
+        // L0 and L1 (triggers 0 and 1): camera 0 or 1 to its end and the normal camera. The spec
+        // gives no record test; they run here on entry only. StartHeroLongFall is not built.
+        (906, 0 | 1) if call.state == 1 => out.actions.extend([
+            Action::PlayCamera { track: routine as usize, wait: true, end: 0, speed: 1.0 },
+            Action::ReturnCamera { preset: -1, release: true },
+        ]),
         // SPEC-0037 1427 E0 to E4: helper H sets the pending slot 187 + routine once per tick
         // (any state, no object test).
         (1427, 0..=4) => {
@@ -5678,6 +5710,10 @@ pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
     if (pack, item) == (1238, 83) && !state.flag(579) {
         state.set(579, true);
     }
+    // SPEC-0037 906 pickup P: item 24 sets flag 406.
+    if (pack, item) == (906, 24) {
+        state.set(406, true);
+    }
     Vec::new()
 }
 
@@ -5764,6 +5800,9 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0037 906 A (every activation): a black cut, the hero to locator 0, the normal
+        // camera, a 1 s fade in.
+        906 => vec![Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 1.0, wait: false }],
         // SPEC-0042 1250 A: value 40 for eW 141 moves the hero to locator 26 with the normal
         // camera.
         1250 if state.take_message(2, 141) == 40 => vec![Action::MoveHero { locator: 26 }, Action::ReturnCamera { preset: -1, release: true }],
@@ -8062,6 +8101,21 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_908_906_837() {
+        let mut s = GameState::default();
+        assert_eq!(on_init(908, &mut s).len(), 4);
+        on_init(906, &mut s);
+        let press = TriggerCall { index: 2, state: 2, object: false, square: true };
+        assert_eq!(on_trigger(906, 2, press, &mut s).actions, vec![Action::ReplaceExterior { slot: 65, plane: -1 }]);
+        on_pickup(906, 24, &mut s);
+        assert!(s.flag(406));
+        assert_eq!(on_activate(906, &mut s)[1], Action::MoveHero { locator: 0 });
+        assert!(on_init(837, &mut s).contains(&Action::CollisMask { mask: 1 }));
+        s.set(636, true);
+        assert_eq!(on_init(837, &mut s), vec![Action::CollisMask { mask: 2 }, Action::DisplayMask { mask: 2 }]);
     }
 
     #[test]
