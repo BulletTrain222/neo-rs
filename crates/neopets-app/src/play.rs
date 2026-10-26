@@ -351,8 +351,10 @@ pub struct Character {
     /// Under script control (PlayEntityAnim, LoopEntityAnim, script walks): its AI does not
     /// run until a release (SPEC-0030 section 4).
     pub held: bool,
-    /// Deactivated (DeactivateEntity): not drawn, not run, not hit, until ActivateEntity.
+    /// Not drawn, not run, not hit: deactivated (DeactivateEntity, until ActivateEntity) or
+    /// with its cell flag 0 this tick (SPEC-0006 Cell flag).
     pub inactive: bool,
+    pub deactivated: bool,
     /// The Juppie boss controller (class 18, SPEC-0015).
     pub boss: Option<neopets_sim::juppie::Juppie>,
     /// The Miamouse routine (class 21, SPEC-0029 Behavior 28).
@@ -1733,11 +1735,13 @@ impl Play {
                         return None;
                     };
                     c.inactive = true;
+                    c.deactivated = true;
                     c.script_walk = None;
                 }
                 Action::ActivateEntity { entity } => {
                     self.pending_off.remove(&(pack, entity));
                     if let Some(c) = self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(entity) && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+                        c.deactivated = false;
                         c.inactive = false;
                         return None;
                     }
@@ -3180,6 +3184,7 @@ impl Play {
                 script_walk: None,
                 held: false,
                 inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
+                deactivated: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 boss: row.filter(|r| r.class == Some(18)).map(|_| neopets_sim::juppie::Juppie::default()),
                 miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
                 hp: row.map_or(1, |r| r.hit_points as i32),
@@ -3228,6 +3233,7 @@ impl Play {
             script_walk: None,
             held: false,
             inactive: false,
+            deactivated: false,
             boss: None,
             miamouse: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
@@ -5198,6 +5204,16 @@ impl Play {
         let hit = self.world.probe(p[0], p[2], p[1] + 2.5);
         self.zones.active = Some(0);
         self.zones.update(self.world.zones.as_ref(), self.world.world_id, hit.zone.filter(|_| hit.found));
+        // The cell flag of each region character: 1 without a ground entry, else the zone query
+        // with the entry's zone and the character's world id. The live petpet is not a region
+        // slot and is not gated.
+        let (grid, zones, pet) = (self.world.zones.as_ref(), self.zones, self.pet_char);
+        for c in &mut self.characters {
+            let Some(w) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == c.pack) else { continue };
+            let hit = w.probe(c.position[0], c.position[2], c.position[1] + 2.5);
+            let cell = Some(c.id) == pet || hit.zone.filter(|_| hit.found).is_none_or(|z| zones.query(grid, z as i32, w.world_id));
+            c.inactive = c.deactivated || !cell;
+        }
     }
 
     /// Whether patch `i` of world `pack` passed its zone gate this pass.
