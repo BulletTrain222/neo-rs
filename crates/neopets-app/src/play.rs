@@ -1994,6 +1994,7 @@ impl Play {
                 // SetConversationTarget clears both characters' emote queues.
                 self.hero_emotes.clear();
                 self.characters[i].emotes.clear();
+                self.state.talk_d = self.rng.range(1, 6);
                 self.state.talk_roll = self.rng.range(1, 3);
                 let actions = level::on_talk(pack, routine, &mut self.state);
                 self.apply(&actions);

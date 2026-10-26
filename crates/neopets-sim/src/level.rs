@@ -312,6 +312,8 @@ pub struct GameState {
     /// A Random(1, 3) draw the host makes before each proximity routine (the routines that
     /// draw read it; the shared generator is the host's).
     pub talk_roll: i32,
+    /// A Random(1, 6) draw the host makes before each proximity routine (the fame rule's d).
+    pub talk_d: i32,
     /// The hero is in a conversation (a box is up), for the routines that wait on it.
     pub talking: bool,
     /// What the host reports of the hero before each Update (the lesson rules of SPEC-0044
@@ -702,7 +704,7 @@ fn village_init(state: &mut GameState) -> Vec<Action> {
     // The prize wheel (routine 56) when flags 64 and 11 are clear (the walk-up greetings 37 to
     // 40 are not built).
     if !state.flag(64) && !state.flag(11) {
-        out.push(reg(36, 56));
+        out.extend([reg(37, 54), reg(39, 54), reg(38, 55), reg(40, 55), reg(36, 56)]);
     }
     // Objects: 0 always; 5 on (end pose) or off by flags 150, 10 and 15; with 64 set and 248
     // clear, 1, 2 and 3 off. Then the wheel's new pattern (the three shuffle entries).
@@ -978,6 +980,44 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::Sleep { ticks: 30 },
                 Action::FadeIn { seconds: FADE, wait: false },
             ]);
+        }
+        // SPEC-0059 section 3, the 1023 walk-up greetings: trigger 37 (the arena master, entity
+        // 66) and 39 (the wheel host, entity 65) run their greeting when their latch (words 24
+        // and 25) is 0 and set it; 38 and 40 clear it. The arena master speaks while the arena
+        // result word (26) is 0: the line of the highest arena flag (385 to 381: 28 to 32),
+        // else 33 and 34 in turn with 380, else 35 and 36 in turn (word 27). The wheel host
+        // greets twice per module life (word 28): 1016 (480), 1017 (384), 1018 (479), 1019
+        // (478) or 1020, then 1021.
+        (1023, 54) if first => {
+            let latch = if call.index == 37 { 24 } else { 25 };
+            if state.word(pack, latch) == 0 {
+                state.set_word(pack, latch, 1);
+                if call.index == 37 {
+                    if state.word(pack, 26) == 0 {
+                        let line = [(385u16, 28u16), (384, 29), (383, 30), (382, 31), (381, 32)].iter().find(|(f, _)| state.flag(*f)).map(|&(_, l)| l).unwrap_or_else(|| {
+                            let k = state.word(pack, 27);
+                            state.set_word(pack, 27, 1 - k);
+                            if state.flag(380) { 33 + k as u16 } else { 35 + k as u16 }
+                        });
+                        out.actions.push(Action::Converse { entity: 66, line });
+                    }
+                } else {
+                    let n = state.word(pack, 28);
+                    if n < 2 {
+                        state.set_word(pack, 28, n + 1);
+                        let line = if n == 1 {
+                            1021
+                        } else {
+                            [(480u16, 1016u16), (384, 1017), (479, 1018), (478, 1019)].iter().find(|(f, _)| state.flag(*f)).map_or(1020, |&(_, l)| l)
+                        };
+                        out.actions.push(Action::Converse { entity: 65, line });
+                    }
+                }
+            }
+        }
+        (1023, 55) if first => {
+            let latch = if call.index == 38 { 24 } else { 25 };
+            state.set_word(pack, latch, 0);
         }
         // SPEC-0059 section 2, the 1023 prize wheel (trigger 36, routine 56): context 5 while
         // inside; on Square, the too-poor line below the fee, else hero control and the round
@@ -1467,11 +1507,15 @@ fn villager(e: usize) -> Option<usize> {
     VILLAGERS.iter().position(|(es, _, _)| es.contains(&e))
 }
 
-/// The story chains of the templates (the arena talk needs two or more arena wins and the
-/// wheel talk flag 480; neither can hold yet, so their draws are not taken: R-0029).
+/// The templates: template C's flag-138 line first, then the fame rule, then the story chain.
 fn village_talk(k: u8, s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
     let (_, template, b) = *VILLAGERS.get(k as usize)?;
     let three = |o: u16| cycle(&[b + o, b + o + 1, b + o + 2]);
+    if template <= 2 && !(template == 2 && s.flag(138) && !s.flag(141)) {
+        if let Some(l) = fame(s, rot, b) {
+            return l;
+        }
+    }
     match template {
         3 => rot.pick(0, &Lines::FirstOnce(0, vec![1, 2])),
         4 => rot.pick(0, &cycle(&[1023, 1024, 1025])),
@@ -2631,11 +2675,31 @@ fn barracks_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
         }
         return Some(8);
     }
-    // P0 to P3: step 4 of the shared structure (the arena and wheel branches need flags 381 to
-    // 385 and 480; their draws are not taken: R-0029).
+    // P0 to P3: the fame rule, then the story chain.
     let b = [9u16, 38, 67, 96][r as usize];
+    if let Some(l) = fame(s, rot, b) {
+        return l;
+    }
     let three = |o: u16| cycle(&[b + o, b + o + 1, b + o + 2]);
     cascade(s, rot, &[(202, three(26)), (193, three(23)), (150, three(20)), (142, three(17)), (138, three(14))]).flatten().or_else(|| rot.pick(9, &three(11)))
+}
+
+/// The fame rule (SPEC-0059 section 3; SPEC-0045 1023 arena-talk test): with A the count of
+/// arena flags 381 to 385 set and d the talk's Random(1, 6), d < A gives the arena line by the
+/// highest arena flag (381 b, 382 b + 1, 383 b + 2, 384 b + 3 and b + 4 in turn, 385 b + 5 to
+/// b + 7 in turn); else flag 480 with the talk's Random(1, 3) at 1 gives the wheel cycle b + 8
+/// to b + 10. None when neither applies.
+fn fame(s: &GameState, rot: &mut Rotation, b: u16) -> Option<Option<u16>> {
+    let a = (381..=385).filter(|&f| s.flag(f)).count() as i32;
+    if s.talk_d < a {
+        return Some(match (381u16..=385).rev().find(|&f| s.flag(f)) {
+            Some(385) => rot.pick(21, &cycle(&[b + 5, b + 6, b + 7])),
+            Some(384) => rot.pick(20, &cycle(&[b + 3, b + 4])),
+            Some(f) => Some(b + (f - 381)),
+            None => None,
+        });
+    }
+    (s.flag(480) && s.talk_roll == 1).then(|| rot.pick(22, &cycle(&[b + 8, b + 9, b + 10])))
 }
 
 /// SPEC-0039 1133 handler 3, with the trade of items 40 to 43 for item 60.
@@ -3221,6 +3285,52 @@ mod tests {
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
+    }
+
+    /// SPEC-0059 section 3: the wheel host greets twice per module life, the arena master
+    /// alternates 35 and 36, and a latch holds until the partner trigger.
+    /// SPEC-0059 section 3: entity 69 (b 84) gives arena line 85 with 381 and 382 set and d 1,
+    /// the 384 pair with 384 highest, the wheel cycle with 480 and e 1, else its story chain.
+    #[test]
+    fn fame_lines() {
+        let mut s = GameState::default();
+        let mut rot = Rotation::default();
+        let k = villager(69).unwrap() as u8;
+        s.set(381, true);
+        s.set(382, true);
+        s.talk_d = 1;
+        assert_eq!(village_talk(k, &mut s, &mut rot), Some(85));
+        s.talk_d = 2;
+        s.set(7, true);
+        assert_eq!(village_talk(k, &mut s, &mut rot), Some(95), "story chain 7: b + 11");
+        s.set(480, true);
+        s.talk_roll = 1;
+        assert_eq!(village_talk(k, &mut s, &mut rot), Some(92));
+        assert_eq!(village_talk(k, &mut s, &mut rot), Some(93));
+        s.set(383, true);
+        s.set(384, true);
+        s.talk_d = 1;
+        assert_eq!(village_talk(k, &mut s, &mut rot), Some(87));
+        assert_eq!(village_talk(k, &mut s, &mut rot), Some(88));
+    }
+
+    #[test]
+    fn village_greetings() {
+        let mut s = GameState::default();
+        let call = |index| TriggerCall { index, state: 1, object: true, square: false };
+        let say = |s: &mut GameState, index| on_trigger(1023, if index % 2 == 1 { 54 } else { 55 }, call(index), s).actions;
+        assert_eq!(say(&mut s, 39), vec![Action::Converse { entity: 65, line: 1020 }]);
+        assert!(say(&mut s, 39).is_empty(), "latched");
+        say(&mut s, 40);
+        assert_eq!(say(&mut s, 39), vec![Action::Converse { entity: 65, line: 1021 }]);
+        say(&mut s, 40);
+        assert!(say(&mut s, 39).is_empty(), "two per module life");
+        assert_eq!(say(&mut s, 37), vec![Action::Converse { entity: 66, line: 35 }]);
+        say(&mut s, 38);
+        assert_eq!(say(&mut s, 37), vec![Action::Converse { entity: 66, line: 36 }]);
+        say(&mut s, 38);
+        s.set(383, true);
+        assert_eq!(say(&mut s, 37), vec![Action::Converse { entity: 66, line: 30 }]);
     }
 
     #[test]
