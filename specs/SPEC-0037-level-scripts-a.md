@@ -81,12 +81,12 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 
 - Family: Exterior.
 - Init: InitObjOn(W, object 0, false); InitObjOn(W, object 1, false); AddBlackboardMessage(type 2, value 10, eW 157); RegisterScriptTrigger(W, T1, index 1); RegisterScriptTrigger(W, T0, index 0).
-- Trigger index 1 (T1): if the trigger record's object pointer is non-null, StartExteriorReplacementLoad(eW 157, fade -1, no colour). No state test is established for this trigger.
-- Trigger index 0 (T0): if the object pointer is non-null:
+- Trigger index 1 (T1): if the trigger record's object pointer is non-null, StartExteriorReplacementLoad(eW 157, fade -1, no colour). This trigger has no state test and no once-word: the only test is the object pointer (High).
+- Trigger index 0 (T0): if the object pointer is non-null and the module's once-word (file value 0) is still 0:
   - If the confirm button (host button 0) is not pressed: DisplaySquareButtonContext(context 4).
-  - If pressed: WalkHeroAndOrient(locator 1, WAIT 1, CONTROL 1); PlayHeroAnim(animation 140, WAIT 0, CONTROL 1); PlayAnim(object 1, WAIT 1, 1.0 s); PlayCamera(track 4, WAIT 0, CAMERA_WAIT 1, 1.0 s); PlayAnim(object 0, WAIT 1, 1.0 s); Wait(1.0 s); ReturnToNormalCamera(-1, true).
+  - If pressed: the once-word is set to 1 first, so the sequence plays once per module load and the prompt is not shown again; then WalkHeroAndOrient(locator 1, WAIT 1, CONTROL 1); PlayHeroAnim(animation 140, WAIT 0, CONTROL 1); PlayAnim(object 1, WAIT 1, 1.0 s); PlayCamera(track 4, WAIT 0, CAMERA_WAIT 1, 1.0 s); PlayAnim(object 0, WAIT 1, 1.0 s); Wait(1.0 s); ReturnToNormalCamera(-1, true).
 - Threads: none. Update: empty. Exit: empty.
-- Edge cases: trigger index 1 fires on any engine call that has an object pointer, so the load can start without the hero entering (Medium, no state test established).
+- Edge cases: trigger index 1 acts on any engine call that has an object pointer. The engine gives a non-null object pointer only on the selected hero's own trigger-hit path (SPEC-0028, section 13; SPEC-0051), so the load starts only when the hero's body touches the volume, and it can be requested again on every tick the hero stays inside (High).
 - Confidence: High for the calls; Medium for the trigger state conditions.
 
 ### 1427: Transition, eight triggers that set the world load override once per tick
@@ -142,7 +142,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 
 - Family: Transition.
 - Init: InitObjOn(W, object 0, false); RegisterScriptTrigger(W, S2, index 2); RegisterScriptTrigger(W, S0, index 0); RegisterScriptTrigger(W, S1, index 1); AddAnimObjSound(W, object 0, sound 6, 0.0 s, 1.0 s); diagnostic line.
-- Trigger index 2 (S2): if object non-null and state is 1:
+- Trigger index 2 (S2): if object non-null, the module's once-word (file value 0) is 0, and state is 1; the once-word is set to 1 before step 1, so the sequence plays once per module load:
   1. PlayLookAtPlayerCamera(track 4, WAIT 0, CAMERA_WAIT 0, 1.0 s).
   2. StartCameraShake with seven values: 5.5, 0.3, 25, 0.5, 0.8, 1.5708, 0.2.
   3. Wait(1.5 s).
@@ -561,7 +561,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 
 1. Slot id and SlotCreate's return value (determined in part). SlotCreate returns the slot number of the buffer it reserves, in creation order, or -1 when no buffer is left (SPEC-0032 Slot rules; SPEC-0030 row 207). The loads in 1225, 809, 1259, 947, 1220, 784, 1238, 1251 and 1152 use the slot number that the module stored from its SlotCreate call. The call path does not remap -1 (High). Loads through a slot word that no code stores (file value -1): 837 (4 loads, not reached on any path found, High). They do nothing in the original. The 906 slot word is stored by Init (SlotCreate, count 1), and its load in the thread T routine uses that slot.
 2. Resolved: +0x20 is the shot word (1 when a hero shot fired the trigger) and +0x24 the attack word (1 when the selected hero's body fired it during a hit-window frame), SPEC-0030 section 3. 784 S1 does nothing on a shot and runs its line and walk only for a non-attacking body; 799 S0 does nothing on a shot (High).
-3. Trigger state test for 1369 trigger index 1, 1391 index 2 (object-only conditions recorded): confirm whether a state test exists.
+3. Resolved: 1369 trigger index 1 has no state test (only the object pointer); 1391 trigger index 2 tests the object pointer, a once-word and state 1, in that order, and sets the once-word before its first action; 1369 trigger index 0 tests the object pointer and a once-word that its confirmed press sets (High). Test vector: 1391 trigger 2 fired with state 2 does nothing; fired with state 1 it plays the camera, shake and animation once, and a second state 1 fire in the same module load does nothing.
 4. Resolved: each world id is an area slot; the slot names its pack and the pack's map area gives its name (SPEC-0006 "Area names", SPEC-0051 "Map area names"). E exterior, I interior, T transition: 22 = 735 E, Bogshot Swamp; 31 = 758 E, Brightvale Village; 44 = 797 T, Brightvale Outskirts; 65 = 893 E, Drackon Ridge; 69 = 934 E, Farm Road; 106 = 1098 E, no map area of its own (its script registers 48 and 49, Meridell Castle 1st and 2nd Floor); 119 = 1152 E, Meridell Castle 1st Floor; 126 = 1173 E, no map area, adjoins Meridell Treasure Vault, Meridell Castle 1st Floor and Meridell Sewers; 129 = 1184 E, Shadowglen Woods; 131 = 1220 T, Shadowglen Burrows; 132 = 1225 T, Shadowglen Woods; 141 = 1250 E, Werelupe Woods; 143 = 1253 E, Werelupe Sinkholes; 150 = 1299 E, Fyora's Library; 151 = 1300 E, Fyora's Palace Gardens; 154 = 1327 E, Fyora's Library; 155 = 1335 E, Fyora's Palace; 156 = 1344 T, Fyora's Palace; 157 = 1350 E, Arena District; 165 = 1382 E, Heroes Rest. The override ids are slots too: 187 = 1428 E, Fyora's Tower; 188, 189 and 190 = 1429, 1430 and 1431, interior-kind packs streamed into the exterior buffer (SPEC-0006), no map area, adjoin Fyora's Palace; 191 = 1432 E, no map area, adjoins Fyora's Palace Gardens and Hall of Heroes (High).
 5. Event codes 906 (908) and the world-swap events of the other modules.
 6. Resolved: 1238's pickup callback sets flag 579 (when the item id is 83 and flag 579 is clear), and thread T1's set choice depends on flags 50, 567, 568, 578 and 579 as given in its section.

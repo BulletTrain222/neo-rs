@@ -225,6 +225,18 @@ Disc scan (test facts for the compressed-block check, LZO1X only; High):
 - Compressed clip blocks found: 51,048 in total. The breakdown is open. The seven headerless banks hold 148 compressed entries (SPEC-0005). The top-level and nested clip chunks counted directly total 1,786 and 289, so the breakdown of 47,048 top-level and 3,847 nested compressed clip chunks does not reproduce.
 - Scan of every 4-byte-aligned position in every non-empty resource (1,902,385,152 bytes), accepting a position only if the decoder gives exactly the decoded size and consumes exactly the compressed size: 51,048 hits. Limits: decoded size at least 64 bytes and compressed size at most decoded size.
 
+### Test vectors: a real chunk chain (disc)
+
+- Resource 504 (a hero outfit; the file is 329,728 bytes = 161 sectors) holds this chain. Each row is chunk type, extra-header length E, size, start offset, payload start, payload length:
+  - type 2 (shader list), E 0, size 9,412 at 0; payload at 16, length 9,396.
+  - type 4 (texture), E 44, size 33,788 at 9,412; payload at 9,472, length 33,728.
+  - type 18 (flat bone table), E 0, size 5,152 at 43,200; payload at 43,216, length 5,136.
+  - type 8 (mesh container), E 0, size 267,552 at 48,352; payload at 48,368, length 267,536.
+  - type 33, E 0, size 13,616 at 315,904; payload at 315,920, length 13,600.
+  - A 16-byte header of type 0 follows at 329,520, which ends the chain. 208 bytes remain in the last sector after it.
+- The chunk start offsets follow from the sizes alone: 0 + 9,412 = 9,412; + 33,788 = 43,200; + 5,152 = 48,352; + 267,552 = 315,904; + 13,616 = 329,520.
+- The fourth tag byte is 1 in four of these chunks and 4 in the texture chunk, and the u16 at header byte 14 is 0 in all five; the walk uses neither.
+
 ## Open questions
 
 - Resolved: the chunk types once listed as unidentified are identified in the chunk-type table, each with its owning spec. Resource 491 stays unidentified (no loader, contents not a save image).
@@ -233,7 +245,7 @@ Disc scan (test facts for the compressed-block check, LZO1X only; High):
 - Resolved: **Stereo-stream (` KPV`) data start and size relation.** The stream header and interleave layout are in SPEC-0009, “Stereo stream”; playable block boundaries and the observed audible tail beyond the nominal per-channel size are further bounded in SPEC-0031, “KPV silence.” The samples begin at byte 0x800. The header's size is bytes per channel; do not infer a resource length from `2 × S` because some streams contain additional audible blocks and all resources are sector-padded.
 - Resolved: **Sound-bank (`SBv2`) format.** The complete bank header, section pointers, directory, voice records, sample extents and embedded music container are specified in SPEC-0031, sections 1–6 and 8. This identification section retains the short tag signature for classification.
 - Resolved: resources 529–531 are headerless structured data, not IDM chunks: resource 529 is the item/drop configuration blob (SPEC-0021, “Item config table”); resource 530 is the species/monster table and resource 531 is its villager/companion table (SPEC-0024, “Species and villager tables”; row use is further specified in SPEC-0029 and SPEC-0038). Answered: 520–525 and 491 are identified in the format table; 729, 1119, 1165 and 1166 are chunk files, not headerless.
-- Whether the pet packages 534 to 543 load in a normal game (that depends on whether play can create a first pet), and whether 528 was meant as a fourth dome or as front-end scenery. Answered: 1 to 3, 544 to 575 and 577 to 677 have loaders (Behavior); 0 and 528 have none.
+- Resolved for the pet packages: play can create a first pet. A wild petpet that the hero feeds joins the party, and a saved pet is restored at the next scene (SPEC-0047, Acquisition). So the packages of kinds 0, 1, 3, 6, 7 and 8 (resources 534, 535, 537, 540, 541 and 542) load in a normal game; resources 536, 538, 539 and 543 have no kind that activation can request and never load (High). Open: whether 528 was meant as a fourth dome or as front-end scenery. Answered: 1 to 3, 544 to 575 and 577 to 677 have loaders (Behavior); 0 and 528 have none.
 - Resolved: **Boot-time data.** The executable's two compressed blocks are the publisher page and the developer page, each a 64-byte upload header and a 512 by 448 picture uploaded to video memory at start-up (Boot pictures in the executable; High).
 - Resolved: **Whole-resource expansion step.** No place sets the load job's expand flag; every queued read passes 0 for it, so the step never runs (Whole-resource expansion; High).
 - **Other whole-resource compressors.** The scan covered LZO1X only. The whole-resource entropy survey does not rule out every codec (for example RLE); identified ADPCM families are audio encodings, not whole-resource wrappers. No unsupported claim that all possible compressors are absent is made.

@@ -141,11 +141,11 @@ MoveObjToAnimatedLocator(target, source object, locator id, flag, W):
    - sample.xyz = P.xyz + d.x row0.xyz + d.y row1.xyz + d.z row2.xyz + V.xyz;
    - sample.w = L.w + V.w.
    The target's position (+0xF0) is set to the sample, and the target's second vector (+0x150) is set to (0, 0, 0, 1). The fourth basis row and P.w are not used.
-3. If the flag is 1, store a tether on the target that points to the locator record. Each tick the target then follows that record (the per-tick use is open).
+3. If the flag is 1, store a tether on the target that points to the locator record. Each object update then recomputes the target's base from that locator, with the host's pose applied, so the target follows the source (SPEC-0028, section 7.1, step 5).
 
 "Animated" means the transform is the source object's current pose at call time. It does not mean a keyframed route through the locator table. The source's animation time maps to a frame index at 15 frames per second with a fractional part (SPEC-0005). A script that wants a locator to keep following a moving object must repeat the call or use the tether.
 
-The static form (MoveObjToLocator) exists but its body is not described.
+The static form MoveObjToLocator(target, locator id, link) takes no source object. With link 0 it sets the target's position to the locator record's position point (four floats) and the target's second vector to (0, 0, 0, 1); with link nonzero it stores a locator link and the target follows the record on every object update. It does nothing when the locator id is outside the world's locator table.
 
 ### Camera track playback
 
@@ -268,7 +268,7 @@ The chain never calls RestorePlayerControl for the hero blocked in step 7; the e
 
 ### Worked example: resource 1217 (scripted scene with a fade)
 
-The scene is a chain of: fade out to the colour over 0.7 second with wait (41 frames; the wait ends on update 42), play camera track 14 at speed 1.0, then fade in over 0.4 second (24 ticks). The chain is gated by a game-state check. A second branch is guarded by an L2 test (button code 5) whose third argument is true; IsButtonPressed always returns false when its third argument is true, so that branch (a character activation with no target) never runs.
+The scene is a chain of: fade out to the colour over 0.7 second with wait (41 frames; the wait ends on update 42), play camera track 14 at speed 1.0, then fade in over 0.4 second (24 ticks). The chain is gated by a game-state check. A second branch is guarded by a Select-button test (button code 5) whose third argument is true; IsButtonPressed always returns false when its third argument is true, so that branch (a character activation with no target) never runs.
 
 ### Movies in scenes
 
@@ -309,7 +309,7 @@ Confidence High.
 
 - No in-engine scene can be skipped. The cutscene route has no button check that ends a scene early.
 - The button tests in the cutscene modules that look like skip checks sit inside a debug-mode gate. That flag is constant false in this build (SPEC-0030, debug rule), so these tests never run.
-- Module 1217's one non-debug button test (L2, button code 5) passes a true third argument, which makes IsButtonPressed constant false. Its branch never runs (Worked example: resource 1217).
+- Module 1217's one non-debug button test (Select, button code 5) passes a true third argument, which makes IsButtonPressed constant false. Its branch never runs (Worked example: resource 1217).
 - Movies: every queued movie has its skip check enabled, because the queue add always clears the no-skip word and nothing sets it. The button rule (Cross or Start, five counted frames) is in SPEC-0026 (Movie skip); playback is SPEC-0008.
 
 Rule for the clean side: do not add a cutscene skip based on this spec. If one is wanted, it is a design decision for the owner.
@@ -324,7 +324,7 @@ Resolved: there is no discrepancy. SPEC-0033, SPEC-0040 and SPEC-0022 number her
 - Source object with no world: the locator move changes nothing.
 - Sleep with n of 0 or less: no yield.
 - Wait with a very small value (below 1/60 second): 0 ticks.
-- LoopEntityAnim with 0 seconds: no tick limit (loops until released). With a negative value: a budget of 1 tick. Medium.
+- LoopEntityAnim with 0 seconds: no tick limit (loops until released). With a negative value: a budget of 1 tick; a positive time below 1/60 s also gives no limit (High).
 - A fade with 0 seconds: 1 frame, so alpha reaches its target after one update. An engine request of 0 frames (the save load's instant white) is also opaque after the first update.
 - PlayCamera on a track with 0 keys: no wait, even with the wait flag set, and the static shot never ends by itself.
 - PlayCamera on a track with 1 key: the play ends on its first update without posing the camera.
@@ -378,16 +378,16 @@ Numbers of removed questions are not reused.
 2. Answered: PlayCamera takes (track, WAIT, end mode, speed); see SPEC-0030 (row 34) and Camera track playback.
 3. Resolved: the screen effect draws the bars itself as two full-width rectangles, progress x 32 pixels high in mode 0, progress x 224 in mode 1, and swept from 32 to 225 in mode 2 (Screen effect: per-pass update and draw).
 4. Resolved: the update runs once per main-loop pass, after the HUD (Screen effect: per-pass update and draw).
-5. The per-tick use of the locator tether on the target.
+5. Resolved: the tether is the target object's locator link (a locator record, plus a host object for the animated form). On every object update the base of the target's position is recomputed from that link: the locator's current position, with the host's pose applied when a host is named, and for the static form the record's position point; the object's root animation is added to the base, and the +0x90 offset as well when the mode byte is 1 or 3 (SPEC-0028, section 7.1, step 5; SPEC-0030 rows 124 and 130). The target therefore follows the locator for as long as the link stays (High).
 7. Meaning of the locator record bytes other than the position, the meaning of the w component, and the array B flag.
 8. Resolved: 0x19 is the talking state, 0x33 the scripted one-shot animation and 0x37 the scripted looped animation (Control states, above). The state-code discrepancy with SPEC-0033 does not exist; SPEC-0033 uses decimal numbers (High). Test vector: PlayHeroAnim sets state 51 (0x33); at progress 0.995 with the flag word +0x3D0 equal to 0 the state becomes 33 (0x21); with the flag word 2 it becomes 1. LoopHeroAnim with a counter of 3 sets state 55 (0x37); after three ticks the state becomes 33 (flag zero) or 1.
 9. Resolved (Medium-High): module 985 does not use RestorePlayerControl; the end of track 29 sets the hero to state 1 (Worked example: resource 985).
-10. PlayEntityAnim after its wait: whether the second animation set means an end pose or a restart.
-11. LoopEntityAnim with 0 and with negative seconds: the exact tick budget rule.
-12. Resolved: module 1217's L2 branch never runs, because its button test is constant false (Skipping).
+10. PlayEntityAnim after its wait. Resolved (High): the second animation request is a restart into the entity's idle, not a hold of the end pose. When the played clip reaches 0.99 progress, the caller asks the shared idle picker for the entity's idle animation id and requests it with the default blend (no clip is held). The picker returns 0 for a ground entity (97 for a flyer) whose requests are not held; 1 (141 for a flyer) when the entity is in agro mode (class state 19); and, outside agro mode, 0 whatever the flyer state when the entity's request-hold word is set. Because the finished clip is not the idle, the picker also redraws the fidget countdown as a whole number from 120 to 600 ticks, and the idle variants (115 to 119, or 142 for a flyer) can only start after the plain idle has been the current clip for that long. With WAIT other than 1 the call returns at once and makes no second request; what follows the clip is then the rule of state 0x21 (SPEC-0030, row 105). Test vector: PlayEntityAnim(e, a, WAIT 1, CTL 0) on a ground entity in a normal state: when clip a reaches 0.99, animation 0 is requested and the state is 0x21; with CTL 1 the state is 1; a flyer gets animation 97; the same call on an entity in agro mode gets animation 1.
+11. Resolved: LoopEntityAnim stores a tick budget n on the entity: n = trunc(seconds x 60) (one single-precision multiply, truncated) for seconds of 0 or more, and n = 1 for any negative seconds; a result of n = 0 becomes -1, which means no limit. So 0 seconds, and any positive time below 1/60 s, loops until released. The entity is put in the scripted looped state (55) (High). Test vectors: 0.5 s gives 30; 0.7 s gives 41; 0 s gives -1 (no limit); 0.005 s gives -1; -1.0 s gives 1.
+12. Resolved: module 1217's Select branch never runs, because its button test is constant false (Skipping).
 13. Resolved: LevelMsg with wait value 1 yields while the dialogue box is active (Threads and waiting).
 14. Resolved: CloseLetterBox's target 2 is the mode 2 letterbox-to-full-close sweep (Screen effect: requests).
-15. Whether the static MoveObjToLocator form uses the same sampling as the flagged form.
+15. Resolved: no. The static form MoveObjToLocator(object, locator, link) has no source object and does no sampling: with link 0 it sets the target's position to the locator record's four position floats (w included) and its second vector to (0, 0, 0, 1); with link nonzero it stores the locator link instead (Open question 5). Nothing from a source object's basis rows, vector or locator w is used (High). Test vector: locator (10, 2, -3, 1) with link 0 puts the target at (10, 2, -3, 1).
 16. Resolved: the object field comes from the selected hero's trigger-hit path, which fires with a nonzero object value, so movie 85 plays after the boss is defeated (Movies in scenes). **[High]**
 17. Resolved: flag 337 has an ordinary setter with a fixed flag number. Pack 1382 sets it with a fixed argument, together with flag 98, once all six elemental pedestals are lit. The setter sits behind a module counter that is 0 when the module loads. Movies 71 and 72 then play in pack 1411 as described in Movies in scenes (High).
 18. Resolved: the block ends an eight-leg escort thread, started by trigger 17 or by the area thread under flags 10, 11, 127 and 136. Flag 136 has no other setter, so it plays at most once per game (Movies in scenes). **[Medium-High]**

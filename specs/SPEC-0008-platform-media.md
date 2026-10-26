@@ -91,7 +91,7 @@ The game's own generator state (run-time object at 0x39BE50, not on disc):
 | In-place sort with a comparison callback | Orders records by a key; no player-visible behavior of its own. Its result is visible only through the caller that uses it | Any sort over the same records with the same key order (see Edge cases on ties) |
 | Texture upload packet builder | Places texture data into graphics memory before drawing. Specified in SPEC-0003 (Runtime upload packet builder); no separate item here | GPU renderer (SPEC-0046) |
 | Movie decoder helpers (chroma and luma conversion, 8x8 inverse transform, block add, transform pass, stream step, sample accumulator) | Colour and sample scaling for movies and sound (see Movie decoder helpers) | Open Bink-compatible decoder; the sound path (SPEC-0009, SPEC-0031) |
-| Debug overlays (variable tuner, watch screen, debug text routines) | Debug aid, not part of play. The watch screen can open after the SPEC-0033 sequence, but shows no variables in this build and certain buttons hang the game. Do not implement the screen or tuner as a feature (see Debug overlays) | None. An optional read-only debug view only |
+| Debug overlays (variable tuner, watch screen, debug text routines) | Debug aid, not part of play. The watch screen opens only after the ten-step sequence on controller port 2 (SPEC-0033), then L3 and R3 held on port 1; it unlocks nothing playable, shows no variables in this build and certain buttons hang the game. Do not implement the screen or tuner as a feature (see Debug overlays) | None. An optional read-only debug view only |
 | Developer and test leftovers (screenshot writer, PC-link command dispatcher, random-number statistics dump, vector-unit self-test) | Not part of play. Each routine is replaced and no play path is known that calls it (see Developer and test leftovers) | None needed for play. A clean-side screenshot may be added as a normal feature |
 
 ## Platform services the game relies on
@@ -517,7 +517,7 @@ These routines were once listed in SPEC-0031 as game sound code. They all lie in
 
 ## Debug overlays (do not implement as a feature)
 
-Current state: the boot program contains a debug watch screen with a variable tuner, and text routines that draw hero and character state as debug text. The watch screen can be reached in play after the SPEC-0033 button sequence (Medium-High), but it shows no variables in this build because no code registers any. Some of its controls then hang the game. **Do not implement the watch screen or the tuner as a feature.** The rewrite may offer its own read-only debug view, which must not change game state. The text routines at the end of this section are separate. A separate debug command list (see Developer and test leftovers) is installed at every start-up; no player-reachable call into it is known. Confidence: High for the empty variable list; Medium for the freeze and the write to address zero (inferred, not run).
+Current state: the boot program contains a debug watch screen with a variable tuner, and text routines that draw hero and character state as debug text. The watch screen can be reached in play after the ten-step button sequence on controller port 2 (SPEC-0033), then L3 and R3 held together on port 1 (Medium-High); it unlocks nothing playable, but it shows no variables in this build because no code registers any. Some of its controls then hang the game. **Do not implement the watch screen or the tuner as a feature.** The rewrite may offer its own read-only debug view, which must not change game state. The text routines at the end of this section are separate. A separate debug command list (see Developer and test leftovers) is installed at every start-up; no player-reachable call into it is known. Confidence: High for the empty variable list; Medium for the freeze and the write to address zero (inferred, not run).
 
 ### Variable list (data layout, Medium-High)
 
@@ -613,7 +613,7 @@ Clean side: none of these needs an equivalent. The screenshot can be a normal fe
 - **Failed allocation (Medium).** The original returns null. The clean side gets an error or an abort. This is visible only if the game checks the null return, which is open.
 - **Debug tuner wrap (High).** A 16-bit value at or above its limit becomes 0, not its limit, and below 0 it becomes the limit minus 1. An 8-bit value wraps naturally. A 32-bit value adds plainly (see Tuner rules).
 - **Tuner on an empty list (Medium).** Up or Down held freezes the game; Triangle, Cross or Start write through an empty value reference (address zero). See Debug overlays, Current state.
-- **Watch screen blocks the game (Medium-High).** While it is open the game loop does not advance, and it closes only on a fresh R3 press. It is debug-only, and reachable in play only after the SPEC-0033 sequence.
+- **Watch screen blocks the game (Medium-High).** While it is open the game loop does not advance, and it closes only on a fresh R3 press. It is debug-only, and reachable in play only after the ten-step sequence on port 2 (SPEC-0033) and then L3 plus R3 on port 1; it unlocks nothing playable, and some of its buttons hang the game.
 - **Special values in number text (Medium).** Infinity and not-a-number print as special words, not digits. The spelling is not recorded.
 - **Sample accumulator overflow (unknown).** Whether the 32-bit accumulator clamps is not recorded.
 
@@ -676,6 +676,12 @@ Clean side: none of these needs an equivalent. The screenshot can be a normal fe
 - Tuner (synthetic): a 16-bit value with limit 100 goes to 0 when incremented from 100, and to 99 when decremented from 0. A float value of 1.0 with float step 0.5 and multiplier 1 becomes 1.5 after one change.
 - Movie timing ring (disc header values): `(10,000,000 + floor(333,333 / 2)) / 333,333 = 30`; `(10,000,000 + floor(333,667 / 2)) / 333,667 = 30`. With 30 slots, writing from index 0 decrements to −1 and wraps to index 29. In the identified playback path, the three ring lanes sourced from movie-state offsets +0x140, +0x144 and +0x148 each contain zero.
 - Movie timing ring accumulator: state +0x2b4 = 100, marker +0x27c = 1,000, and current clock = 1,030 gives accumulator 130 and clears the marker. The next ring write copies 130 into its corresponding lane unless another timing update intervenes.
+
+### Test vectors: real movie headers (disc)
+
+- TITLE.BIK (FRONTEND folder), file size 9,048,264 bytes: magic BIKi; the u32 at 0x04 is 9,048,256 (size minus 8); frame count 452 at 0x08 and again at 0x10; largest frame 50,460 bytes; width 512 and height 448; frame-time numerator 10,000,000 and denominator 333,333; flags 0; one audio track; largest audio size 69,120; the audio word at 0x30 is 44,100 in its low 16 bits and 0x1000 in its high 16 bits. Duration = 452 x 333,333 / 10,000,000 = 15.067 s.
+- ATTRACT.BIK (FRONTEND folder), file size 36,388,828 bytes: size field 36,388,820; 2,727 frames; largest frame 41,984; largest audio size 145,920; audio word low 16 bits 48,000, high 16 bits 0x7000. Duration = 2,727 x 333,333 / 10,000,000 = 90.90 s.
+- 101A.BIK (ACT1 folder), file size 51,715,388 bytes: size field 51,715,380; 2,585 frames; largest frame 66,208; audio 69,120 with 44,100 Hz and flag word 0x1000; duration 86.17 s.
 
 ## Open questions
 

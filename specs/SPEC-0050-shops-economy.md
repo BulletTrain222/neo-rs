@@ -184,7 +184,7 @@ Level scripts remove fixed amounts with the RemoveNeopoints host call (section 1
 - Pack 787: 500, when flag 447 is set.
 - Pack 1148: 100, when flag 140 is clear and flag 139 is set.
 
-Removal floors at 0. A removal larger than the balance leaves 0, not a debt. One prompt boundary is established: pack 722's 50-NP betting-race prompt sends a balance below 50 to line 75; exactly 50 reaches the paid branch and removes 50 (SPEC-0059, section 3.4; High). Other script spending prompts still compare the balance with their price, but their full comparison rules have not been established (Open questions).
+Removal floors at 0. A removal larger than the balance leaves 0, not a debt. One prompt boundary is established: pack 722's 50-NP betting-race prompt sends a balance below 50 to line 75; exactly 50 reaches the paid branch and removes 50 (SPEC-0059, section 3.4; High). Every other script spending site that tests the balance uses the same strict rule: the purchase is refused when the balance is below the price, and a balance exactly equal to the price goes through and leaves 0 (High). The sites are packs 758 (25), 787 (500), 880, 991 (300, 350 and 400), 1023 (15, 1000 and the branch prices), 1139, 1148 (100), 1230, 1353 (200, 200 and 300) and 1358 (100); in packs 880, 1139 and 1230 the price is the branch's own amount. The wheel fee in packs 758, 1023 and 1358 is tested once, before the start prompt, and the removal after the yes answer repeats no test (SPEC-0059). Test vectors: pack 1148 with 99 Neopoints refuses, with 100 sells and leaves 0; pack 787 with flag 447 set refuses at 499 and sells at 500, setting flag 448.
 
 ### 7. Boot grant codes (caller not found)
 
@@ -306,6 +306,7 @@ Every flag-4 Neopoint placement of 1,000 NP or more (key -1) has a named trigger
 - A coin row with a blank name: show the item id when a name is needed. Do not invent a name. Its value still comes from the denomination word.
 - A multiplier on a negative price: the value is multiplied and is not clamped at the bottom. The clamp applies only at the top (Medium).
 - A multiplier call with no spawned-item list: nothing happens.
+- Disc price range: the 152 shop placements hold prices 20 to 8,000 NP (48 distinct values); the largest after the x4 multiplier is 32,000, so no disc price is negative or capped at 32,767 by one call (a second x4 call on 8,000 would cap at 32,767).
 - A buy-hook callback whose item id is not one of its four items: nothing happens.
 - The nearest ready world item has a flag byte other than 1: there is no buyable object, even when a flag-1 item is also in range (section 3).
 - Two flag-1 records of the same equipment id in one pack (for example two prices for one wand): buying either one reaches Q = 1 and removes both.
@@ -377,19 +378,36 @@ Spending and boot codes:
 - Balance 60, removal of 100 (yes answer): balance 0.
 - Balance 500, boot code 9: balance 1500. Balance 500, boot code 12: balance 10500. The caller is unknown, so these show only the arithmetic.
 
+### Test vectors: real shop items from placement data (disc)
+
+Pack 1005 (one of the five x4 interiors) holds three item points in its embedded region's record table, each of kind 8 with flag byte 1. Their data blocks share these values: facing (0.99994, 0, 0.01100), flag byte 1, snap-to-ground byte 0, drop group -1 (bytes 255 and 255), luck gate 0, treasure-map byte 255 (unused, the items are not maps), fill bytes 205.
+
+| Record | Position (x, y, z) | Key (+0x24) | Second key (+0x26) | Fixed count (+0x2A) |
+| --- | --- | --- | --- | --- |
+| 1 | (5.862, 2.380, 5.869) | 131 (Noble Dress) | 1485 | bytes 100 and 25: 100 + 25 x 256 = 6500 |
+| 2 | (5.917, 2.380, 0.896) | 123 (Royal Armour) | 185 | bytes 148 and 17: 148 + 17 x 256 = 4500 |
+| 3 | (5.862, 2.380, 11.041) | 109 (Golden Shield) | 1811 | bytes 208 and 7: 208 + 7 x 256 = 2000 |
+
+- Spawn, record 3: the 48 data bytes are copied into the world-item record. Its flag byte (+0x80) is 1, its key (+0x84) is 109 and its buy price (+0x8A) is 2000. Item 109's text-table row has carry limit Q = 1 and catalogue price 3000; the catalogue price plays no part (the shop price is 2000, and for record 2 the catalogue price 7500 differs from the placement's 4500).
+- Multiplier with story flag 298 clear: the multiplier call (section 5) scales every flag-1 record: Golden Shield min(32767, trunc(2000 x 4.0)) = 8000; Royal Armour 4500 x 4.0 = 18000; Noble Dress 6500 x 4.0 = 26000. All three are below the cap, so none is clamped, and they match the before-the-Black-Knight prices of the table in section 5. With flag 298 set the call is not made and the prices are 2000, 4500 and 6500.
+- Shown: standing at the Golden Shield with balance 9000 and flag 298 clear, caption line 1 is 8000 in the default colour (160, 160, 90, 127), because 8000 is no more than 9000, and line 2 is 9000 in (128, 128, 128, 127).
+- Charged: confirming reads the price as a signed 16-bit value (8000, not 0x7FFF), which is no more than the balance. The item is equipment, so the add takes the world item; the add succeeds, the balance falls by 8000 to 1000 and no message is shown. The party now holds Q = 1 of item 109, so every world item of id 109 in the level is removed; records 1 and 2 stay.
+- Balance 7999: line 1 shows 8000 in (128, 60, 90, 127) and confirming gives the need-more message for 8000 - 7999 = 1; the balance stays 7999.
+- Flag 298 set, balance 9000: the prompt shows 2000 and the purchase leaves 7000.
+
 ## Open questions
 
 Numbers of removed questions are not reused.
 
 1. Section 3: The balance test runs before the add. An item whose price is above the balance is never added, so it is not kept. High.
-2. Section 3, edge cases: A stored price of 0x8000 or more is negative. It passes the balance test, and a successful add raises the balance by the size of the price. Medium-High.
+2. Resolved for the disc: A stored price of 0x8000 or more is negative. It passes the balance test, and a successful add raises the balance by the size of the price (Medium-High). No disc data reaches it: all 152 shop placements (the buyable kind, in 34 packs) carry fixed prices from 20 to 8,000 NP, and with the price multiplier of 4.0 the largest is 32,000, below both the 32,767 cap and the sign bit. The only script call that rewrites prices is the price multiplier (SPEC-0030 row 197), which caps at 32,767 and so cannot make a positive price negative; a negative price needs a negative multiplier, and no known call passes one (High for the disc prices).
 3. Resolved: step 2 is the buy hook; with a hook registered the purchase runs again after the hook unless the hook marks it handled, and no message is shown. The add's own check is the pickup hook, which no shop pack registers, so the free-item path does not occur with the disc's data (section 3; High).
 6. Resolved (High for the thread shape; Medium-High that a finished thread is never run again): in each of the five modules the thread that makes the multiplier call runs straight through with no loop. It queries the shopkeeper flag, loads the character set, queries flag 298 and, when that flag is clear, makes the call once, then returns. The module's Init starts that thread once and nothing else starts it, so the call is made once for each build of the interior, and records added to the list later are not reached by it. A shop re-entered later is built again and is scaled again from the placement price (section 5, Effect), so the factor never compounds.
 7. (Partly) Buy-hook callbacks: the line repeats on each buy of the hook's item while its test flag is clear (section 4; Medium-High). Flag 220 is set by act-start stage 0 and flag 248 by act-start stage 1 (SPEC-0049, act-start setup), so an act start sets 220 at start indices 1, 2, 3, 6, 7 and 8 and 248 at start indices 2, 3, 6, 7 and 8 (Medium-High); whether level scripts also set them is open. Flag 248 also picks the find-game target set of pack 934 (SPEC-0059, section 6).
 10. Resolved (High): no grant code is reachable in play. The event handler of section 7 has no direct call, no jump and no pointer to it anywhere in the boot program's code or data, and none of the 173 distinct level modules forms a boot-program data address, so no script reaches it by pointer either. Its Neopoint additions and item grants never run.
 11. Resolved (High for the data): the item text resource holds name strings for the coin rows 135, 136, 138 and 139 (1, 5, 25 and 100 Neopoints) and for the Tal rows 140, 141, 143 and 144 (1, 5, 25 and 100). It holds no string for a ten-Neopoint or a ten-Tal coin, so the name pointers of rows 137 and 142 are null and nothing sets them elsewhere. Show the item id when a name is needed (Edge cases).
 12. Resolved (High for the data, Medium-High for the code): no placement, drop table, script grant or boot grant names item ids 140 to 144, and no code path adds them. They are a second coin set with the values 1, 5, 25 and 100, with a config type of 0 and all stats 0, and are unused data. The coin id words (section 2) list only ids 135 to 139.
-15. Resolved in part: pack 722's 50-NP race prompt uses a strict below-50 insufficient-funds check; exactly 50 reaches the paid branch (SPEC-0059, section 3.4; High). Still open: the comparison operators and equality boundaries at the other script spending prompts.
+15. Resolved in part: pack 722's 50-NP race prompt uses a strict below-50 insufficient-funds check; exactly 50 reaches the paid branch (SPEC-0059, section 3.4; High). Resolved (High): every other script spending prompt refuses only when the balance is below the price, so an exact balance buys (section 6).
 16. Resolved (High): the steal minimum and maximum fields are live. An attack slot with the steal bit and selector 0 rolls its steal chance, draws a whole amount between the two fields (swapped when reversed), removes it from the wallet and spawns it as coins at the hero (SPEC-0029, Behavior 11a). On disc the Thief takes 10 to 100 and the Thug 20 to 200 at chance 50; the Mountain Crokabek's 0 to 0 takes nothing. Selectors 1 to 3 take an item instead and raise the enemy's carried Neopoints by the item's catalogue price.
 18. Resolved (High for the module sites; Medium-High for the boot program): 28 module call sites of the give host function exist, in 27 level modules. 27 of them sit in each module's shared debug cheat routine, which starts with the debug-mode query that is false in play. The 28th (module 842, an amount of 2000 behind a button-combination test) sits in a routine that no call and no pointer reaches. In the boot program the give wrapper is entered only through its host row. So no play path gives Neopoints by script, and income stays coins only (section 11).
 19. Section 5: SPEC-0030 row 197 is correct. The multiplier scales the buy price of flag-1 items, capped at 32767.

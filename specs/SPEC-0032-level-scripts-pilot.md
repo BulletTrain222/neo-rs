@@ -169,7 +169,7 @@ Each module section lists: family; init steps in order; each registered callback
     1. Sleep(15 frames).
     2. PlayLookAtPlayerCamera(mode 4, wait 0, camera wait 1, 1.0 s).
     3. PlayHeroAnim(animation 137, wait 0, control 1).
-    4. StartCameraShakeMode(shake type 0, strength 0.3, strength 0.3).
+    4. StartCameraShakeMode(shake type 0, duration 0.3 s, strength 0.3).
     5. ReturnToNormalCamera(2, flag 1).
   - If the object is null: ReturnToNormalCamera(2, flag 1) only.
   - If the object is non-null but state is not 1: ReturnToNormalCamera(2, flag 1) as well.
@@ -364,8 +364,8 @@ Each module section lists: family; init steps in order; each registered callback
 2. Resolved: Wait(s) yields trunc(s × 60) ticks, one single-precision multiply by the rate word 60 written at start-up (SPEC-0030 Open question 1; SPEC-0007, Rate selection).
 3. Resolved: an eWorlds id is an area slot; the slot names its world pack and the pack's map area gives its name (SPEC-0006 "Area names", SPEC-0051 "Map area names"). 5 = pack 691 (transition), Farm Road; 68 = pack 909 (exterior), Ellis Family Farm; 72 = pack 951 and 73 = pack 955, both interiors inside Ellis Family Farm (SPEC-0045, pack 909 doors; High); 106 = pack 1098 (exterior), no map area of its own, and its script registers map areas 48 and 49 (Meridell Castle 1st Floor and Meridell Castle 2nd Floor); 107 = pack 1121 (transition), Meridell Castle 2nd Floor (High).
 4. Resolved: a later registration on the same index replaces the earlier one, because registering writes the callback into that index's trigger record (SPEC-0030 row 250). In 1255 index 4 runs TM5b; both routines set map 5 (High).
-5. The meaning of the COLLIS state values other than 0, 1 and 3; the pilot uses only "1" and "non-zero".
-6. Event codes 1253, 753 and 1098 (world-swap events) and what they mean in the game.
+5. Resolved: the trigger state values are 0 idle, 1 first fire, 2 repeated fire and 3 decaying toward 0 (SPEC-0030 Layout 3). The pilot uses only "1" (first tick of contact) and "non-zero", which is true for the ticks of contact and the short decay after the last fire (High).
+6. Resolved: the three codes are compared inside world-swap scene callbacks (registered by the transition packs 797, 908, 1055 and 1254), and those callbacks run only when a script starts a transition scene. No live script call does that, so the callbacks never run and the codes 1253, 753 and 1098 are never delivered in play (High; SPEC-0030 rows 268, 273 and 283). The numbers look like world-pack numbers (1098 is an exterior pack, 1253 sits next to the transition pack 1254), and the 1253 branch of pack 1254 reads as a sinkhole fall (hero to locator 0, camera 6, hero animation 136), but this is moot while the callbacks are unreachable (Medium).
 7. Module 851: whether any host path starts its chooser, and what the intended slot id is. Whether the first routine that holds its three loads is ever called is not established; the no-op verdict holds either way.
 8. Resolved for quest flags: a flag that is a quest row's start or done flag takes that row's title (SPEC-0049 "Titles and flag glosses"). 259 = start Repair Brightvale Bridge; 265 = done Repair Brightvale Bridge; 273 = done Get Illusen's Charm; 481 = start A Magic Skull; 482 = done/start A Magic Skull; 516 = start Mayor's Broken Watch; 517 = done/start Mayor's Broken Watch (High). The other flags used here (e.g. 39, 53, 57, 58, 220, 258, 266, 274, 659) are not quest start or done flags and have no name source on disc.
 9. Module 1080: ReturnToNormalCamera gets 2 on every path.

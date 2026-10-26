@@ -369,7 +369,7 @@ Test vector (resource 504, the top-level chunk with n = 19, payload 13,600 bytes
 - Triangles (point indices), numbered 0 to 11: (0,1,2), (3,0,2), (1,4,5), (2,1,5), (5,4,6), (7,6,4), (7,0,3), (6,7,3), (7,4,1), (0,7,1), (6,2,5), (3,2,6). Triangle 0 has the normal (0.0000, 0.1732, 0.9849), the same as triangle 1; the coplanar pairs make six quad faces, each split in two.
 - First two edge records: (triangle 0, triangle 9, point 0, point 1) and (triangle 0, triangle 3, point 1, point 2). Triangle 0 and triangle 9 both contain points 0 and 1; triangle 0 and triangle 3 both contain points 1 and 2.
 
-Bank index (High for the rule; Medium for the roles of the three arrays): the byte b is one bone-matrix index counted across the render object's three bone-matrix arrays, taken in order. Let n0 be the first 32-bit word of the render object's first skeleton record and n1 that of its second skeleton record (the bone counts, Medium). If b < n0 the matrix is entry b of the first array; else if b < n0 + n1 it is entry b − n0 of the second array; otherwise it is entry b − n0 − n1 of the third. Each entry is a 4 × 4 matrix (64 bytes). The two thresholds are therefore the two counts, read from the render object each frame, not from the type-33 block. Test vectors with n0 = 30 and n1 = 10: b = 2 gives first array entry 2 (unit 0 of resource 504); b = 35 gives second array entry 5; b = 40 gives third array entry 0; b = 45 gives third array entry 5.
+Bank index (High; the three arrays are the main, sub-part and face outputs of the shared pose pass, SPEC-0046): the byte b is one bone-matrix index counted across the render object's three bone-matrix arrays, taken in order. Let n0 be the first 32-bit word of the render object's first skeleton record and n1 that of its second skeleton record (the bone counts, Medium). If b < n0 the matrix is entry b of the first array; else if b < n0 + n1 it is entry b − n0 of the second array; otherwise it is entry b − n0 − n1 of the third. Each entry is a 4 × 4 matrix (64 bytes). The two thresholds are therefore the two counts, read from the render object each frame, not from the type-33 block. Test vectors with n0 = 30 and n1 = 10: b = 2 gives first array entry 2 (unit 0 of resource 504); b = 35 gives second array entry 5; b = 40 gives third array entry 0; b = 45 gives third array entry 5.
 
 ### Attach-point table (in the flat type-18 skeleton table)
 
@@ -516,6 +516,18 @@ Attach points (disc; angles not listed are 0):
 
 Item model registry key: resource 549 has header u16 5 and loads into the weapon slot (base 98), so it registers as item 103 (Sword of the Ancients). Resource 561 has header u16 9 and loads into the shield slot, giving item 107 (Iron Shield). Resource 575 has header u16 36 and loads into the fixed slot (base 0), giving item 36.
 
+### Test vectors: one real mesh leaf, decoded (disc)
+
+- Resource 544 (Wooden Sword), the type-13 chunk at resource offset 0 (payload at 16). The mesh leaf at payload offset 0x180 has material group 119, packet kind 0, 106 vertices in 2 batches (52 and 54). Its packet is at payload offset 528 with quadword count 252.
+- First batch (N = 52), UNPACK sequence after STMASK 0x3F3F3F3F: V3-32 positions to address 1; masked S-8 flags to address 1; V4-8 colours (unsigned) to address 53; V3-32 normals to address 105; V2-32 UVs to address 157; then MSCNT. This is layout A (colours at 1 + N, normals at 1 + 2N, UVs at 1 + 3N). The next batch (N = 54) uses addresses 1, 1, 55, 109 and 163.
+- Vertices 0 to 5 of batch 0 (positions, flag, colour bytes, normal, UV, rounded to four places):
+  - 0: (0.2816, -0.0717, 1.1821), flag 0x80, colour (12, 12, 12, 16), normal (0.3941, 0.9087, -0.1374), UV (0.0172, -0.0394).
+  - 1: (0.2257, -0.0717, 1.0785), flag 0x80, same colour, normal (0.3869, 0.9210, -0.0460), UV (0.0243, 0.0330).
+  - 2: (0.2125, -0.0563, 1.1424), flag 0x00, normal (0.2971, 0.9531, -0.0584), UV (0.1074, -0.0029).
+  - 3: (-0.1834, -0.0710, 1.5369), flag 0x80. Vertex 4: (-0.0994, -0.0434, 1.4994), flag 0x80. Vertex 5: (-0.2953, -0.0717, 1.3850), flag 0x00.
+- Triangles of this batch: (0, 1, 2), (3, 4, 5), (6, 7, 8) and so on, because every third vertex is unflagged. The batch has 22 flagged vertices and so 30 triangles; batch 1 has 20 flagged and 34 triangles. The leaf draws 64 triangles from its 106 vertices.
+- Bounds against vertices. Leaf box minimum (-0.2953, -0.1084, 0.2885) and size (0.5911, 0.0734, 1.4829); the vertices of both batches span exactly that box. Sphere centre (0.0955, -0.0713, 1.0075), R = 0.7724 (the farthest vertex lies at that distance), R squared = 0.5965.
+
 ## Open questions
 
 Numbers of removed questions are not reused.
@@ -543,5 +555,5 @@ Numbers of removed questions are not reused.
 - **Packet pointer relocation** (Medium): which record type and loader call use this fixup, and which word is the flag. Answered: the packet-kind-1 relocation is in "Packet pointer relocation" and Edge cases, Multi-packet leaves.
 - **Standalone type-13 chunks**: seventeen LOD child links point to a node that is not a group node; their target type is not examined. Answered: where they are drawn is in SPEC-0046 (Held items and character attachments) and SPEC-0021, with resource 7's shader list. **[High]**
 - Resolved: **Attach point 7**. It is the status display anchor: every status effect start, the per-tick follow of the shown status effect and the immunity-block effects read its origin T_7. **[High]**
-- Resolved: **Type-33 bank index**. The byte is one bone index across the render object's three bone-matrix arrays; the two thresholds are the counts held at the start of its first and second skeleton records (see Bank index). Its use in the shadow behaviour is in SPEC-0046. **[High for the rule; Medium for the roles of the arrays]**
+- Resolved: **Type-33 bank index**. The byte is one bone index across the render object's three bone-matrix arrays; the two thresholds are the counts held at the start of its first and second skeleton records (see Bank index). The arrays are the main, sub-part and face outputs of the shared pose pass of the drawn character (SPEC-0046, Character part draw and the skin palette). Its use in the shadow behaviour is in SPEC-0046. **[High]**
 - **Type-33 edge lists**: whether each unit's edge list is complete (unit 0 of resource 504 has 14 edges; see SPEC-0046 open questions).

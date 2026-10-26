@@ -425,14 +425,14 @@ Counts by UV mode, over all 32,809 group records:
 
 ### UV modes
 
-Confidence: High for the arithmetic; environment-map space High for level geometry, Medium-Low for placed objects.
+Confidence: High for the arithmetic; environment-map inputs High for level geometry and for placed objects; Medium for the visible effect on placed objects.
 
 Let N be the render frame counter (see "Sub-texture frame addressing", variant 1) as a float, 0 to 65535.
 
 - **Mode 2, scroll (in the vector unit).** For every vertex of the batch: u' = u + (su × N − trunc(su × N)) and v' = v + (sv × N − trunc(sv × N)), with su and sv the pass's speeds. trunc rounds toward zero, so a negative speed gives an offset in (−1, 0]. UVs are in units of the texture's sampling size (1.0 = one texture width), and repeat wrapping does the rest. Speeds are per main-loop pass. Original quirk: the counter wraps at 65536, so the offset jumps once every 65536 passes (18.2 minutes at 60 passes per second) unless s × 65536 is a whole number. Users: 917 pass-0 passes (482 in top-level lists in 118 resources, and 435 program-2 groups with mask 0x3F in nested lists) and 139 pass-1 passes (70 resources). They include every sky dome (resources 0 to 3): group 1 scrolls one layer at (0.0000625, 0); group 2 is two-pass with two counter-scrolling cloud layers, pass 0 at (0.000125, 0.0000625) and pass 1 at (−0.0000625, −0.000125).
 - **Mode 1, environment map.** The camera block holds the eye point E (the view point given to the tree draw) and a 4 × 4 matrix M (the matrix given to the tree draw; only its first three vectors are used, as columns, with no translation). For each vertex with position P and normal Nv: D = P − E; R = D − 2 (D · Nv) Nv; R' = M3 R; R^ = R' / |R'|; u = 0.5 (1 − R^z); v = 0.5 (1 + R^y). The UVs stored in the mesh are replaced.
   - Level geometry (High): M is the identity and E is the camera position in world space (the translation of the camera matrix). So the reflection is taken in **world space**, and the map does not turn with the camera.
-  - Placed objects (Medium-Low): M is the object's model-to-world matrix and E is the view point passed to the object's draw; the frame of that point is not confirmed.
+  - Placed objects (High for the inputs; Medium for the visible effect): M is the object's current block, its model-to-world matrix (three scaled rotation rows). E is the object's own view-point vector, recomputed by each animation update as the object's position plus its mesh corner minus the camera's world position, so it has the opposite sign to the true offset from the object to the camera; it is the origin for an object that was never updated. The full rule, the quirk and a test vector are in SPEC-0046 (Placed-object draw frames).
   - Users: 202 pass-0 and 438 pass-1 passes; the top-level ones all have attribute mask 0x27 and program 1 or 4. Most are the second pass of a two-pass world material; the top-level pass-1 environment passes blend additively or by destination alpha (ALPHA 0x48: 292, 0x68 with FIX: 54, 0x58: 6).
 - **Mode 3, flipbook region.** The pass's UV-mode data (the CLAMP value and register number written by the texture animator) is sent to the GS before the batch, overriding the state block's CLAMP for that batch. The mesh UVs are not changed. Users: the 7 groups of "Sub-texture frame addressing" (2 variant 1, 5 variant 2).
 
@@ -555,12 +555,24 @@ Start with free area f = 0 and no chunk uploaded. Select a group of chunk X: X u
 - Draw selection with N = 4 groups: index 7 is reported and selects B (group 0).
 - After the billboard binding of index 2, the 16-bit field at +68 and the 16-bit field at +148 of that group read 3 (pass-0 program 3 in both parity copies).
 
+### Test vectors: sub-texture entries and a mip chain (disc)
+
+- Entry size packing. Resource 504, the type-4 chunk at resource offset 9,412 (E 44, payload at 9,472): the table is at payload offset 512, the pixel block at 960 and the segment is 128 x 64 PSMCT32 with TBP 0 and buffer width 2 (32,768 bytes of pixels; 960 + 32,768 = 33,728 = the payload length). It has 8 sub-entries:
+  - Entries 0, 1 and 2: the u16 at +4 is 0x0020 and the byte at +6 is 2, so width 32 and height 16 x 2 + 0 = 32; PSM 0x13. TBP 60, 44 and 36; TBW 4.
+  - Entry 3: u16 0x0020, byte 4, so 32 x 64 (height 16 x 4); TBP 32, TW 5, TH 6.
+  - Entries 4 and 5: u16 0x0040, byte 4: 64 x 64; TBP 16 and 0.
+  - Entry 6: u16 0x0040, byte 2: 64 x 32; TBP 48, TW 6, TH 5.
+  - Entry 7 (the palette): u16 0x0010, byte 1: 16 x 16, PSM 0, TBP 56, TBW 1.
+- Height in the high nibble. Resource 678, the type-4 chunk at resource offset 1,978,432: entry 3 has u16 0x8008 and byte 0, so width 8 (low 12 bits) and height 16 x 0 + 8 = 8 (the nibble 8 is the height; it is not part of the width). PSM 0x13, TBP 135, TBW 8; its TEX0 value gives TW 3 and TH 3. Entries 40 to 46 of the same table have u16 0x2008 and byte 0: 8 x 2 palettes with PSM 0, TBW 2 and TH 1 (TW 3); entry 40 has TBP 613.
+- Mip chain. Resource 1327, first shader list (127 groups, B = 3), group 4: mode 1, texture chunk index 0. TEX0: TBP 0, TBW 8, PSM 0x13, TW 7, TH 8, CBP 784. TEX1: LCM 0, MXL 3, MMAG 1, MMIN 4, K raw 4,016 = -80 / 16 = -5.0. MIPTBP1: TBP1 96, TBW1 8, TBP2 704, TBW2 8, TBP3 880, TBW3 8. The first texture chunk holds sub-entries at exactly those addresses: TBP 0 is 128 x 256, TBP 96 is 64 x 128, TBP 704 is 32 x 64 and TBP 880 is 16 x 32 (each half the previous size, all PSMT8). The palette at TBP 784 is 16 x 16 PSMCT32.
+- Group 1 of the same list (the one in the PSMT8 texel vector above): MXL 1, so one mip level only. TEX1 K raw 4,032 = -64 / 16 = -4.0; MIPTBP1 holds TBP1 716 and TBW1 8, with TBP2 and TBP3 zero (unused). Sub-entry TBP 592 is 64 x 64 and TBP 716 is 32 x 32.
+
 ## Open questions
 
 - Answered: material group choice by group index is specified in SPEC-0004.
 - Resolved: group bytes 0x00 to 0xCF. They are the two grid records, the animator bytes and the two parity copies of the material record; 0x44 and 0x48 are the pass-0 vertex program and attribute mask, not culling or blend flags (see "Material record").
 - Resolved boundary: the five mode-2 second-context groups listed in Edge cases match texture and palette entries in other chunks of their shader list, but the group selects one chunk slot for both GS contexts. No separate context-1 selection rule is established; the original runtime resolution remains open.
-- The texture-table word at offset 4 (always 1).
+- The texture-table word at offset 4 (always 1). Default if unresolved (a rewrite choice, not a fact from the code): read it and ignore it; no value other than 1 occurs on the disc, so no behaviour depends on it.
 - How often the front end uploads the front-end pack (532) again over a picture (SPEC-0035). Answered: pack 532 uploads at 0x2A00 with absolute addresses and overlaps the picture area; the picture packs (577 to 677) are in "Texture contents of fixed resources".
 - Resource 576 is 88 consecutive 76-sector book records, each with its own six-chunk chain and type-0 terminator. The earlier apparent extra TEX0 copies came from scanning past record 0 into the later records; no exact texture-entry TEX0 copies were found in the bytes after any record terminator. Those 432-to-944 trailing bytes remain unexplained.
 - Resolved: **draw-order alpha**. The value compared with 128 is the character's fade level, not material alpha; no material sorts as translucent ("Translucency in the draw order"; SPEC-0046).
@@ -575,14 +587,14 @@ Start with free area f = 0 and no chunk uploaded. Select a group of chunk X: X u
 - Resolved: **material slot check, record base**. The record is the group's material record at 0x30 (parity 0) and 0x80 (parity 1); record offsets 0x1C and 0x2C are the UV modes of passes 0 and 1.
 - Resolved: **material slot check, match rule**. It compares the eye point and the four matrix rows with the last camera block of that parity (see "Material slot check").
 - Resolved: **frame source (variant 2)**. The frame table at 0x36D020 is zero at boot and only an uncalled routine and the Draik Skeleton set-up (to 0) write it, so the 5 variant-2 groups of resource 1260 show cell 0; keys of 6 or more read the limit table (quirk).
-- **Resource 1260 variant-2 parts**: whether any routine reached in play writes frame-table keys 0 to 4. If none does, the parts always show cell 0. **[Medium]**
+- Resolved: **Resource 1260 variant-2 parts**. No routine reached in play writes frame-table keys 0 to 4. The only code that forms the frame table's address is the texture-animation reader, the five-band damage-stage writer (no jump, call or data word refers to it) and the Draik Skeleton set-up, which zeroes keys 0 to 4. So the five variant-2 groups of resource 1260 show cell 0 on every tick (High). Test vector: any tick of the Black Knight fight region: the frame read for key 0, 1, 2, 3 or 4 is 0.
 - **Transfer-word helper**: whether it builds a draw tag (as the bit operations suggest) or a transfer (as another reading said), and which code calls it. Settle by reading its callers before any use.
 
 - Answered: the draw context that gives the billboard group index belongs to the model spec; see SPEC-0004 (mesh leaf field 0x5C, material group index).
 - Resolved: **written fields 0x44 and 0x94**. They are the pass-0 vertex program words of the two parity copies; 3 selects the billboard program.
 - Resolved: **material record word at group offset 0x50** (0, 3 or 7). It has no reader; the clean side ignores it (see "Material record"). **[Medium-High]**
 - **Billboard program**: which effect and world-node meshes reach the three loaders that force program 3. Answered: the element layout, corner arithmetic and reject rules are in "Billboard program 3". **[High for the arithmetic; Low for the users]**
-- **Environment-map space**: the frame of the eye point that placed-object draws pass with M = model-to-world (see "UV modes"). Answered: level geometry reflects in world space (M the identity, E the camera position). **[High for level geometry; Medium-Low for placed objects]**
+- Resolved: **Environment-map space**: level geometry reflects in world space (M the identity, E the camera position). For placed objects M is the object's current block and E is the object's view-point vector (SPEC-0046, Placed-object draw frames). **[High for both inputs; Medium for the visible effect on placed objects]**
 - Resolved: **culling**. No material field or vertex-program path culls back faces; the only rejection is the clip test of SPEC-0046 ("Per-triangle clipping in the vertex program"), and there is no far clip. **[High]**
 - Answered: the world-state gate is the game-state code; see SPEC-0026, Game-state code (effect under code 9 in "When it runs"). **[High]**
 - Resolved: **CPU vertex-animator enable**. Node byte +0x5E = 1 is the multi-packet leaf kind of SPEC-0004 (the 13 leaves of resource 9 that use animator 3). **[High]**

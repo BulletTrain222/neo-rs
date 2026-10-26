@@ -168,7 +168,7 @@ Confidence: High (laid out from the disc tree with the node rules above). The cl
 - Hero-switch portraits around pivot 0x29 at (437, 17), 56 by 64. D-pad hint 0xBB, 128 by 128 at (16, 304). Journal icon 0xDF, 36 by 36 at (99, 349). Timer text 0xD8 right-aligned at x 436, y 77; counter text 0xD9 right-aligned at x 437, y 77. Save spinner 25 by 30 at (256, 371).
 - Quick-item cross (only while the quick panel is open): rings about 57.6 px at right (135, 174), up (85, 114), left (35, 174) and down (89, 234); count texts centred at (178, 226), (129, 169), (80, 226) and (134, 286).
 
-### HUD record defaults (record of at least 0x298 bytes)
+### HUD record defaults (record of 0x2A0 bytes; Open question 62)
 
 Confidence: High for the stores; Medium for the meaning of the fields. Offsets are from the start of the record. The base defaults are applied first; the record init then overwrites some of them.
 
@@ -874,7 +874,7 @@ Numbers of removed questions are not reused.
 58. Partly answered (section 28): the updater runs once in the selected hero's active main-loop branch per eligible pass and uses the 1/60-second game tick. It is not established to run on frozen screens or outside that branch. Source lookup and scalar meaning remain unidentified. **[Medium-High for call site/rate; Low for meaning]**
 59. Resolved in part: the position transform is centered on normalized (0.5, 0.5); other normalized values shift along the existing transform basis, scaled by the owning element dimensions and display terms (section 29). The separate zero vector written afterward remains unexplained. **[High for centered placement; Low for the remaining field]**
 61. **Record base init.** The two boot-data vectors copied into the record (values not given), and the owner of the byte at +0x274. **[Low-Medium]**
-62. **Record size.** The full size of the record; only the last written offset (+0x294) is confirmed. **[Medium]**
+62. Resolved: **Record size.** The record is 0x2A0 (672) bytes, a 16-byte multiple. It is the dialogue box record: the program has two instances, at data addresses 0x37B910 (main box) and 0x37BBE0 (second box), 0x2D0 apart. Fields of the second instance are used up to +0x294, and the next object starts exactly 0x2A0 after it (0x37BE80). The first instance is followed by unrelated variables from +0x2B4. A clean build needs only the fields in the table; the size matters only if the two instances are laid out in one block. **[Medium-High]**
 67. Resolved: **Wrap mode of wide sprites.** The sprite draw sets no wrap mode and uses the context-1 wrap register as it stands. Start-up sets it to clamp on both axes and no front-end or HUD draw changes it; only two-context world materials (mostly repeat) and the pass-1 texture animator write it later. Before any world is drawn a wide sprite clamps; in play the mode is the one left by the last such material in the frame. The clean side should clamp (HUD screen and art). **[High for the draw and start-up value; Medium for the in-play state]**
 68. Answered: the portraits are drawn only in swap mode 2 (section 12). The main-frame flag is Open question 7. **[High]**
 69. Resolved: **Value-text byte K +0x0E.** It is a draw gate: the value text draws only when the byte is not 0 (SPEC-0035, Section K). All HUD value texts have non-zero values, so all draw. **[High]**

@@ -34,6 +34,8 @@ Resource 576 is not a sound bank. It holds 88 book records, which are not clips 
 
 Decode with the standard filter pairs (0, 0), (60/64, 0), (115/64, −52/64), (98/64, −55/64), (122/64, −60/64), carrying two history samples per channel.
 
+**Who decodes, and the predictor rounding (High that the game program holds no decoder; Medium-High for the hardware rule).** The game's own program has no routine that unpacks these frames: it holds no filter-coefficient table and no nibble-unpacking loop, and none of the sound modules shipped on the disc holds the coefficient pairs either. One-shots, bank samples, music blocks and streams are all passed to the sound modules and the sound chip as raw 16-byte frames, and the chip decodes them while it plays. The movie audio is a different codec (SPEC-0008). So the game has no software rule to follow, and the rule is the sound chip's. That rule is public: for each sample, take the signed 4-bit value, move it up by 12 bits, move the result down by the frame's shift with a sign-keeping shift, and add a prediction from the two previous output samples h1 (newest) and h2. The prediction is (c1 x h1 + c2 x h2 + 32) moved down by 6 with a sign-keeping shift, where (c1, c2) is the filter's pair in 64ths: (0, 0), (60, 0), (115, -52), (98, -55) and (122, -60). The sum is limited to -32768 to 32767 and becomes the new h1. This is the rounding form (the +32 before the shift), not plain truncation. A decoder in the rewrite should use it. Dropping the +32 changes a sample by a few units at first, growing to about 25 within one frame (see the real clip vector); the hardware figures cannot be measured from the disc, so this rests on the public documentation of the chip.
+
 ### VAG (resources 256–274)
 
 Header fields are **big-endian**:
@@ -67,7 +69,7 @@ Header fields are **little-endian** u32:
 
 ADPCM data starts at byte 0x800. It is interleaved in 2,048-byte blocks: left, right, left, right… Each block holds 128 frames (3,584 samples) of one channel. A stream lasts about S / 16 × 28 / rate seconds.
 
-Near the end, every stream contains silent padding: frames whose header byte is 0xC0 and whose other 15 bytes are zero (1,228 whole silent blocks and 164 partly silent ones over the 110 streams; no other invalid frames exist). Audible blocks can follow silent ones: in 106 of 110 streams, up to 6 audible blocks lie past 0x800 + 2S. So decode **every** block up to the end of the resource, outputting silence for any frame with header byte 0xC0. Every stream ends in a silent block, so trailing silence can be trimmed.
+Near the end, every stream contains silent padding: frames whose header byte is 0xC0 and whose other 15 bytes are zero (1,228 whole silent blocks and 164 partly silent ones over the 110 streams; no other invalid frames exist). Audible blocks can follow silent ones: in 106 of 110 streams, up to 6 audible blocks lie past 0x800 + 2S. The player stops after S bytes per channel (2S bytes of the interleaved data), so decode only that much (S / 16 frames per channel) and output silence for any frame with header byte 0xC0; the audible blocks that follow on disc are never played (SPEC-0031, KPV silence). Set the prediction history to zero after a silent frame. Trailing silence can be trimmed.
 
 ### Emote voice banks (resources 144 and 145)
 
@@ -281,7 +283,7 @@ Confidence: High for the configuration, the per-tick rule, the setters, the adve
 
 The game drives exactly two music inputs: **register 2** of the playing instance (combat intensity: 0 none, 1 low, 2 high) and the driver's **global excite G**, 0 to 100 (the adventure level). Both are read by the music data's commands (see Interactive segments).
 
-Configuration, set once at start-up: excite maximum M = 100; adventure base B = 49; combat hold value H = 100; adventure range A = H - B = 51; intensity register 2; no second intensity register. A further start-up value of 70 is stored with them; its use is not described. The global excite sent to the driver is clamped to 0 to M.
+Configuration, set once at start-up: excite maximum M = 100; adventure base B = 49; combat hold value H = 100; adventure range A = H - B = 51; intensity register 2; no second intensity register. A further start-up value of 70 is stored with them; nothing reads it (see Open questions). The global excite sent to the driver is clamped to 0 to M.
 
 - **Excite level E** (integer 0 to 99). SetMidiExciteLevel(n) stores n only when 0 <= n < 100; other values are ignored. The hero sets it every tick to trunc(X), where X is a float the hero keeps (start 0):
   - k = the number of entries of the active character list (the per-pass list of at most 45 characters, rebuilt every pass from the active character regions; SPEC-0029, Behavior 17) whose AI state word (+0xA34) is exactly 19 (agro) and whose base action state (+0x144) is neither 16 (dead) nor 42 (parked) (High). These two values are base action states, not flags.
@@ -377,9 +379,9 @@ Twenty-one banks are not reached by any known code: 21, 29, 32, 34, 43, 50, 52, 
 
 By template (see Interactive segments), these 21 banks are mostly non-interactive: 9 plain loops (21, 32, 54, 85, 88, 99, 102, 121, 141), 6 two-layer banks (29, 43, 50, 96, 110, 117), 4 that depend on never-set registers (34, 101, 52, 119) and 2 interactive banks (64, 131) (High for the templates). Banks 18 and 35 are plain loops.
 
-Confidence is Medium-High. No known code selects them. Two of the three routes once left open are closed: SetMusic and the track selector for tracks 163 to 166 are never called (High; see SetMusic host call and Track selector). Only the second-hero path, whose inputs are not known, remains a possible route.
+Confidence is Medium-High. No known code selects them. Two of the three routes once left open are closed: SetMusic and the track selector for tracks 163 to 166 are never called (High; see SetMusic host call and Track selector). The remaining possible route, the area-key step run for the second world slot at a save load, is closed too: the pack's own row replaces its result (see Area to music row).
 
-The music sequences themselves do not provide another bank-selection route: none of the 529 playable children contains a MIDI bank-select controller, and their embedded commands operate on children, channel groups and per-instance registers. This rules out a selected bank's sequence switching playback to one of these banks; whether the second-hero row path can select one remains open.
+The music sequences themselves do not provide another bank-selection route: none of the 529 playable children contains a MIDI bank-select controller, and their embedded commands operate on children, channel groups and per-instance registers. This rules out a selected bank's sequence switching playback to one of these banks; the area-key row path cannot select one either.
 
 ### Track selector for music requests (never runs)
 
@@ -470,11 +472,13 @@ A separate queue holds entries of seven 32-bit words each (28 bytes). Its header
 - **Append** at index e: the fields are stored and the valid flag is set to 1. The serial number is the counter, which then increases by 1. The count increases by 1. If e is above 0, the duration of entry e − 1 is reduced by the new entry's duration. No bound check is made on e.
 - **Remove** entry k when k is below the count: if k is above 0, the duration of entry k − 1 is increased by the duration of entry k. Entries after k move down one place. The count drops by one, and the slot just past the new last entry is cleared (valid flag 0, parameter at +12 set to -1). Removing the last entry follows the same rule with no move. An index at or above the count does nothing.
 
-The meaning of a duration (for example, time until the next entry) is not established. The owner of this queue is not identified (see Open questions).
+The queue is the enemy group alert board of SPEC-0029 (High). It holds at most 40 entries. A duration is a delta in ticks: the last entry of the array is the soonest to expire and counts down; each earlier entry's duration is its life minus the lives of all later entries. Posting an entry with life p walks from the end of the array toward the front: while p is not below the duration of the entry just before the slot, p is reduced by that duration and that entry moves one place toward the end; the new entry is stored where the walk stops, and its predecessor's duration is reduced by p by the append rule above. The post refuses (returns 0) when 40 entries are already held. Each post also steps the board's change counter (header word at offset 4) by 1 modulo 100. Each tick the last entry's duration drops by 1; an entry whose duration is below 2 is removed instead, and its duration (1) is added to the entry before it, so the entry before it lives one tick longer than a plain countdown.
+
+Test vectors: a board holding A (life 100) receives B with life 30: B is stored after A, B has duration 30 and A has duration 70. After 29 ticks B has duration 1; on the next tick B is removed and A has duration 71. Posting C with life 130 to a board holding only A (100): C is not below A's duration, so p becomes 30, A moves to the end of the array and C is stored first with duration 30; A (100) expires first, then C 30 ticks later.
 
 ### Owner of the timed queue
 
-The timed queue above is not part of the world-item pool and plays no known sound. Its owner is still open (Open questions).
+The timed queue is the group alert board (SPEC-0029, Behavior on the shared alert board); it is not part of the world-item pool and plays no sound. Its entries are posted when an enemy enters the alert mode and its spawn record has a group byte.
 
 ## Behavior
 
@@ -618,14 +622,31 @@ Synthetic:
 - The same request with an enemy as the partner (c = -1): position -38, rejected by the bound, silent; the gesture (main animation id 51) still plays.
 - Emote id 98 (clip index 74) with c = -1: position 0, plays. The same id with c = 15: position 1,184, length 0, silent.
 
+### Test vectors: a real clip decoded, and real clip extents (disc)
+
+- Resource 258 (the "Buy Item" stinger): the header is the text VAGp, version 32, ADPCM data size 43,552 (big-endian at 0x0C), sample rate 22,050. That is 43,552 / 16 = 2,722 frames, 76,216 samples and 3.4565 s.
+- Frame 0 (filter 0, shift 0, flags 0): all 28 nibbles are 0, so 28 zero samples.
+- Frame 1 (filter 1, shift 11, flags 0). Nibbles in order: 0, 0, 0, 0, 0, 15, 13, 14, 0, 1, 3, 1, 0, 4, 4, 5, 6, 5, 4, 0, 2, 1, 3, 1, 0, 3, 11, 14. With the sample = ((signed nibble x 4096) >> 11) + ((60 x previous + 32) >> 6), the 28 output samples are 0, 0, 0, 0, 0, -2, -8, -11, -10, -7, -1, 1, 1, 9, 16, 25, 35, 43, 48, 45, 46, 45, 48, 47, 44, 47, 34, 28. (Sample 5: nibble 15 = -1, (-4096 >> 11) = -2. Sample 6: nibble 13 = -3 gives -6, plus (60 x -2 + 32) >> 6 = -2, so -8.)
+- Frame 2 (filter 2, shift 9) carries the last two samples of frame 1 (28 and then 34 before it) into its predictor. Its first eight samples are 23, 11, 9, 15, 4, 19, 23, 50 (sample 0: nibble 0, (115 x 28 - 52 x 34 + 32) >> 6 = 1484 >> 6 = 23).
+- The same frames decoded with no +32 rounding term differ: frame 1 ends 31, 25 instead of 34, 28, and frame 2 starts 19, 5, 1, 5. The sound chip uses the rounded form (see the hardware rule under the PS-ADPCM frame), so the rounded figures above are the reference values.
+- Emote bank, resource 144 (clip headers as in the VAG table; every clip's own data size is at 0x0C, big-endian): clip 0 starts at 0 with data size 7,232, so it ends at 48 + 7,232 = 7,280 and clip 1 starts at 8,192 (sector 4). Clip 1 has size 21,984, ends at 30,224 and clip 2 starts at 30,720 (sector 15). Clip 2 has size 11,728, ends at 42,496 and clip 3 starts at 43,008 (sector 21). Clip 3 has size 13,168, ends at 56,224 and clip 4 starts at 57,344 (sector 28). The first four clips have empty names.
+
+- Rounding form, in one line: the hardware rule above is the +32 form. The rounded figures in the lines above are the reference values for resource 258; the unrounded figures are given only to show the size of the difference.
+- A second real clip with a heavy filter: resource 256 (the first stinger). Its header has the text VAGp, ADPCM data size 79,264 (big-endian at 0x0C) and sample rate 22,050: 4,954 frames, 138,712 samples, 6.29 s.
+- Frame 22 of resource 256 (counting from 0; it starts 48 + 16 x 22 = 400 bytes into the resource): filter 4 (pair 122, -60), shift 5, flags 0. Decoding from frame 0 with zero history and the +32 form, the two samples that enter the frame are h1 = -621 and h2 = -526. The 28 nibbles in order are 1, 4, 13, 12, 15, 15, 1, 5, 0, 3, 12, 2, 12, 12, 13, 0, 4, 15, 4, 7, 14, 12, 14, 14, 12, 2, 4, 4.
+- Sample 0: nibble 1, (1 x 4096) >> 5 = 128. Prediction (122 x -621 - 60 x -526 + 32) >> 6 = (-75,762 + 31,560 + 32) >> 6 = -44,170 >> 6 = -691 (the shift rounds toward minus infinity: -690.16 becomes -691). Output 128 - 691 = -563.
+- Sample 1: nibble 4, (4 x 4096) >> 5 = 512. Prediction (122 x -563 - 60 x -621 + 32) >> 6 = (-68,686 + 37,260 + 32) >> 6 = -31,394 >> 6 = -491 (-490.5 becomes -491). Output 512 - 491 = 21.
+- All 28 outputs with the +32 form: -563, 21, 184, -181, -646, -1190, -1535, -1170, -791, -27, 178, 621, 505, -132, -1109, -1990, -2242, -2536, -2220, -958, -1, 384, 477, 293, -401, -783, -605, 93. The next frame starts from h1 = 93 and h2 = -605.
+- The same frame and the same entering history with no rounding term: -563, 20, 181, -186, -653, -1199, -1546, -1183, -806, -44, 159, 600, 482, -156, -1134, -2016, -2268, -2562, -2246, -984, -27, 359, 453, 270, -422, -802, -622, 78. Sample 0 agrees; sample 1 is 20 instead of 21. The gap grows by about two units per sample to 26 at samples 15 to 20 and falls to 15 at the last sample (78 instead of 93).
+
 ## Open questions
 
 - Answered: sound banks and sound blocks are specified in SPEC-0031.
-- Whether ADPCM prediction history resets across a silent block, and the meaning of header 0x0C.
+- Resolved: the sound chip decodes the frames, so no game routine resets history; a silent frame outputs zeros and the rewrite sets the history to zero (SPEC-0031, KPV silence; rewrite choice). Header word 0x0C (0xA000) is compared by the sound library with its own stream buffer size, and a stream whose word differs is refused; it is not otherwise used (Medium).
 - Sound instance list, classification. Resolved: the 0x170-byte records are the world-item pool of SPEC-0021, not sounds; the sub-record id is an item id and the "stop" call is the important-item give to the party inventory (World-item records) (High).
 - Sound instance list, timer. Resolved: the word at 0x94 is the world item's lifetime. The only writers are the construction (positive infinity) and the spawn, which stores the caller's lifetime or the default (infinite when placed, 15.2 s for a charm, 11.2 s otherwise). A reset never stops a sound (World-item records) (High).
 - Sound instance list, fields. Resolved: 0x50 is the item's life (draw alpha), 0x8A its buyable price, 0x98 its age; the block from 0xC0 is an embedded object set up with the item id, not a sound start (World-item records) (High; Medium for the embedded object). The word at 0x04 is not used by any audio rule.
-- Timed queue: which object owns the queue, and what its durations measure.
+- Timed queue: Resolved. It is the enemy group alert board of SPEC-0029; a duration is a delta in ticks against the entries after it (Timed queue of 7-word entries; High).
 - Resolved: Music, children 1 and up. Child 0 is a setup segment that starts companion children and jumps to child 1; the command messages in the music data switch the others (Interactive segments; SPEC-0031, section 8) (High).
 - Resolved: Music, channel numbers. The row "layer pairs" are reverb settings for the two SPU cores, not MIDI channels (Reverb; Intensity inputs) (High).
 - Resolved: Music, stream gate. The further controller input is the stream gate (controller +0x68); while closed the stereo-stream step is skipped (Overrides; SPEC-0035, Behavior 3b) (High).
@@ -642,13 +663,13 @@ Synthetic:
 - Resolved: Music, listener of the adventure-zone walk. The gate uses the sound listener and the cell at the camera; the factor uses the controlled hero's position (Intensity inputs) (High).
 - Music, reset flag on world load. Resolved: the flag is the sound system's on flag, so every synchronous world load restarts the whole audio system. Streamed overworld travel and the interior jobs are not synchronous loads and keep the music; exterior replacement loads (script or door), movie ends, save loads and front-end entry restart it (Transitions) (High).
 - Resolved: Music, boss combat. No boss class enters AI mode 19, so bosses alone never drive the excite level (Intensity inputs) (Medium-High).
-- Music, start-up value 70: the third start-up configuration value (70) is stored with the excite configuration; its use is not described.
+- Resolved: Music, start-up value 70. The value is kept in the configuration object's word after the adventure base, and nothing reads it: the hero's excite step reads only the maximum and the hold value, the adventure-level setter reads only the base and the range, and the configuration getter has no caller. No code reaches the object by a fixed address either (Medium-High that no indirect read exists). Test vector: replacing 70 with any other value changes no excite or adventure value on any tick.
 - Resolved: Music, selector location. The selector at record +8 is the word at type-1001 payload +0x18; both descriptions name the same word (see Area to music row).
-- Music, flag for packs without a selector: pack 532 has no record and selector 0, so the flag is never set for it. Whether any other known route sets the flag on the default row (bank 78) is not known.
-- Music, record count: table 4 has 194 records but ids 0 to 192 are looked up. Whether record 193 is ever used is not known.
+- Music, flag for packs without a selector. Resolved: selector 0 never passes the selector test, whatever the progress bits are, and the flag is computed only from progress bit 216 and the selector of the active pack record. That record is either the default record (selector 0) or the pack's own record, and nothing stores into it while the world runs. So no route sets the flag on the default row: a pack that uses the default record always plays the flag-off bank of that row (High). The same holds for the 57 other packs whose record has selector 0.
+- Resolved: music, record count: table 4 has 194 records but ids 0 to 192 are looked up. The controller reads a row only for ids 0 to 192; id 193 and above take the built-in default values, and the area lookup gives 193 as its "no match" row, so record 193 of the table is never read (High). Test vector: a pack whose key matches no slot gets row 193 and plays with bank offset 1, stream kept and block offset 1, whatever record 193 holds.
 - Resolved: Music, table addresses. Value table 0x31F2B0, area key table 0x31EFA8 (193 slots each), default record 0x2DA3D0 (see Area to music row).
 - Resolved (Medium): music, story meaning of the selector bits. Each selector names a story span, from the event that sets its first bit to the event that sets its second (Run-time flag, Story span of each selector).
-- Music, second-hero path: it re-keys other hero objects through the area-key step. Its inputs are not known, so whether it changes the row that the controller reads is not known.
+- Music, second-hero path. Resolved: there is no hero-specific route. The area-key step is run by every world start (with the pack's area id) and twice by the save-load restore for the two world slots, and each run is followed by that world's pack load, which resets the record and then applies the pack's own row from its type-1001 chunk. The area-key row is therefore replaced for every pack that has a chunk (all but pack 532), so the step cannot select one of the 21 unreached banks (Medium-High).
 - Resolved: Music, excite counter. It is the adventure counter C, reloaded to 100 on every tick with E >= 1 and counting down by 1 otherwise (Intensity inputs) (High).
 - Resolved: Music, adventure level 0. The level is not a divisor; SetMidiAdventureLevel(0) gives C = 49 (Intensity inputs) (High).
 - Music, track selector and SetMusic. Resolved: neither is ever called (SetMusic host call; Track selector). No level module imports SetMusic, and the boot code has no call to either routine and no pointer to the selector. The 21 banks in Banks not selected by known code are therefore never played by these paths (High).

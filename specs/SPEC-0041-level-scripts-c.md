@@ -1,6 +1,6 @@
 # SPEC-0041: Level scripts (25 modules)
 
-- Answers: proactive (level script behavior; 25 modules); R-0057 (gate helpers A to C, 1392); R-0058 (branch B object poses, 1371); R-0059 (strike callback attack word and strike boxes, 1382); R-0064 (985 activation filter)
+- Answers: proactive (level script behavior; 25 modules); R-0057 (gate helpers A to C, 1392); R-0058 (branch B object poses, 1371); R-0059 (strike callback attack word and strike boxes, 1382); R-0064 (985 activation filter); R-0078 (1324: plate geometry, the bells' floor and push counts)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Host call names and argument order: High. Trigger record state values (1 = entered): Medium-High. Argument values per module: High unless marked. Slot loads: the slot is the value stored by the module's slot-create call (Medium-High for the store; the meaning of the slot number is open), except the direct-return loads in 1176 and 1371 (Medium); the activate argument is true in every known load except one false load in 1096 (High). Some modules use switch dispatch (a computed index selects one of several branches), so their switch-selected branches are Medium at most. Sections marked Low or "partly described" have unknown branches or arguments and are listed under Open questions.
@@ -200,16 +200,17 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - CB8 (trigger 1): if button 0 is not pressed: shows prompt context 3. If pressed: shows message 9.
   - CB9 (triggers 5, 6 and 7): when the record's object word and state word are non-zero, sets the zone word by the trigger index (index 5: 2, index 6: 1, index 7: 0). If the zone word now differs from the last value the loader used, it stores the new value as the last value, resets the stored slot and restarts the slot loader CB1 (High).
 - Helpers:
-  - Navmesh and villager helper (called from init and update): assigns navmesh 0, 1 and 2 to characters 0, 1 and 2 and disables villager socialize on each. The init and update calls to this helper are unconditional; tests inside the helper decide the second and third assignments and are not known here.
+- Navmesh and villager step (Update, every tick; High): the module keeps a table of 68 navmesh ids, one for each entity number 0 to 67, which Init resets to -1. Each tick, for every entity whose table value is -1, the step asks for the closest navmesh id of that entity in the module's own world and stores the answer (an answer of -1 stays -1 and is asked again on the next tick, and a debug line prints when an id is first found). Then, for every entity whose value is not -1, it assigns that navmesh to the entity. Then, for all 68 entities, it sets the villager-socialize block. So every character of this area is held to its nearest navmesh once one is found, and none takes part in villager pairing.
   - Camera and sound helper: plays camera 6 and 7, waits, plays sounds 14 and kills sound 14, returns the camera.
   - Animation and effect helpers: loop and play animations on objects 4, 5, 10 to 13, 15 and 17 to 21, start effects 55 to 60, and stop them.
-- Dormant routine: a conversation chooser (flag 59). If flag 59 is set, sets the conversation target on two entities, shows message 0, and ends the conversation. If clear, shows message 3. No caller found.
-- Update (one per tick): calls the navmesh and villager helper for characters 0, 1 and 2 unconditionally at this level.
-- The update also makes a nearest-navmesh query every tick (it runs in play under every host value tested), followed by a debug line whose gate is not established.
+- Dormant routine: a conversation chooser (flag 59). If flag 59 is set, sets the conversation target on two entities, shows message 0, and ends the conversation. If clear, shows message 3. Nothing refers to it: no call, no address constant and no data word, so it never runs (High). A second unreferenced routine waits while flag 531 is set and flag 532 is clear, and sets flag 532 as soon as the hero holds three or more of item 80; nothing starts it, so this module never sets flag 532 (High that nothing refers to it).
+- Update (one per tick): runs the navmesh and villager step above for entities 0 to 67.
+- The nearest-navmesh query is the one in the step above: it runs only for entities whose table value is still -1, and the debug line after it only prints (High).
 - Edge cases:
   - The trigger registrations in init are unconditional, so all of them exist from the start. The trigger bodies are the gated part.
   - CB4 is present but does nothing.
   - Init-step-8 vectors: (flag 621 clear, flag 57 clear) selects the speed-0 loop and effect-stop helper; (flag 621 clear, flag 57 set) selects effect-stop only; (flag 621 set, flag 57 clear) selects the object 4/5 setup helper; (flag 621 set, flag 57 set) selects effect-stop only. Flag 55 does not change these outcomes.
+  - Update vector: entity 5 has table value -1 and the closest-navmesh query answers 3. The table value becomes 3, a debug line prints, and CharacterNavmeshAssign(5, 3) runs in the same tick. On the next tick no query is made for entity 5, the assign repeats with no change, and the villager-socialize block is set for all 68 entities every tick.
 - Confidence: Medium. Init, update, CB1, CB2, CB3, CB6, CB8, CB9 and the thread are described in full. CB5, CB7 and the navmesh conditions are only partly known.
 - Open questions:
   - Meaning of flags 55, 57, 58, 59, 621 and 531 to 532: meaning unknown.
@@ -217,8 +218,8 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - Trigger volumes for indices 0 to 8: from level data, ids not yet mapped.
   - Entities 24 and 25, characters 0 to 2, locators 2, 6, 8, 11 and 12, and point 242: from level data, ids not yet mapped.
   - Slot set numbers 0 to 13 (the numbers in the slot loader) and the slot-create table id 14: meaning unknown. The slot loaded is the value stored by the module's slot-create call.
-  - Whether the conversation chooser in the dormant routine is reached by an indirect call.
-  - Whether the debug line after the update's nearest-navmesh query is gated: not established.
+  - Resolved: the conversation chooser has no reference of any kind (no call, address constant or data word), so no indirect call reaches it.
+  - Resolved: the debug line is not gated by the debug query; it is a print with no game effect.
 
 
 ### 951: Interior, proximity conversations, a story thread and a per-tick entity wander
@@ -429,40 +430,39 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - Resolved: the thirteen registrations and their callbacks are listed in init step 4.
 
 
-### 1090: Exterior, per-tick animation tree and gated trigger polls
+### 1090: Exterior, hazard timer step, firing loops and hurt zones
 
 - Family: Exterior.
 - Exit: present, no host calls.
-- Update: present and large. It makes many PlayAnim calls, all with the same arguments (animation 0 as written, wait 0, speed 1.0), each behind a long comparison tree.
+- Update: present, one short routine (High). It runs the hazard timer step twice, once per bank (see Update, per tick below).
 - Init (High):
   - SetGameState(314, true) and SetGameState(42, true), unconditional.
   - Two hazard banks: bank A is objects 3 to 9 with hurt triggers 1 to 7 (routine T1), bank B is objects 10 to 16 with hurt triggers 8 to 14 (routine T2). Hazard i of a bank (i = 0 to 6) is the bank's first object + i with the bank's first trigger + i. For each hazard: AddAnimObjSound(its object, mode 0, 1.0, 1.0) and the registration of its trigger.
   - ControlThreadsAllocate(3), ControlThreadStart(thread C), ControlThreadStart(thread D), one frame-rate query and a debug print.
 - Trigger callbacks:
   - T1 (triggers 1 to 7) and T2 (triggers 8 to 14): hurt zones. When the trigger record's object word (+0x1c) is non-zero, the routine finds the bank entry whose trigger equals the record's trigger index (+0x14). While the record's state word (+0x10) stays non-zero (the hero is inside): if that hazard is firing (its active word set), DamageHero(20) and Wait(1.0 s); then Sleep(1 tick) and test again. So a hero standing in a firing zone loses 20 hit points about once a second (High).
-- Threads C and D (started in Init; High): the two fixed firing loops, C for bank A and D for bank B. A hazard fires for 0.7 s (42 ticks) in bank A and 0.5 s (30 ticks) in bank B: it is marked active, its object plays (animation, wait 0, speed 1.0), and it is marked inactive again at the end. Each loop runs four steps forever; in each step four hazards of the bank fire together, then the loop waits for the same length before the next step. Bank A steps (hazard indices): {0, 2, 4, 1}, {1, 3, 0, 5}, {2, 1, 6, 3}, {4, 5, 6, 2}. Bank B steps: {0, 6, 4, 1}, {2, 3, 5, 1}, {0, 1, 2, 3}, {4, 5, 6, 2}.
-  - Test vector: bank A, step 1 starts at tick 0: objects 3, 5, 7 and 4 (hazards 0, 2, 4, 1) fire for ticks 0 to 41; nothing in bank A fires for ticks 42 to 83; step 2 (objects 4, 6, 3, 8) starts at tick 84.
-- Update, per tick: the update calls one helper twice, unconditionally at this level. The PlayAnim calls form a comparison tree on unknown values inside that helper. The tests compare against 0, 64, negative numbers, 2047 and two unknown booleans. The per-branch effect is only partly described. Each branch plays animation 0 at wait 0 and speed 1.0. The tree as a whole is not fully followed.
-- Helpers (callers not established from the host-call code):
-  - H1: AddAnimObjSound on object 0 with the object id taken from its argument, mode 0.
-  - H2: a frame-rate query, then Wait(argument-based seconds) if its argument is not 0. A timing helper.
-  - H3 (largest helper): called per record with a counter argument. When the counter is above 0, the record's +0x08 word is zero and the gates hold, it plays animation from the record's +0x00 word (wait 0, speed 1.0), then deactivates the object named by the record's +0x10 word and the object named by the record's +0x20 word. The deactivate sites are gated on the same record fields.
-  - Other helper routines contain no host calls.
-- One routine with no host calls is called from a helper in the per-tick update's tree: the helper that the update calls twice reaches it through one further helper, with no gate inside that further helper. The gate on the call into that further helper is not established.
+- Threads C and D (started in Init; High): the two fixed firing loops, C for bank A and D for bank B. Each loop runs four steps forever. A step arms four hazards of its bank one after another: arming sets the hazard's timer to the bank's duration times 60 as a float (0.7 s gives 41.999996 in bank A, 0.5 s gives 30.0 in bank B), and the last arm of the step waits the duration (41 ticks in bank A, 30 in bank B) before the next step starts. There is no rest between steps. The Update timer step turns an armed timer into a firing: the hazard is active for 42 ticks in bank A and 30 in bank B, counted from the first Update after the arm. Bank A steps (hazard indices): {0, 2, 4, 1}, {1, 3, 0, 5}, {2, 1, 6, 3}, {4, 5, 6, 2}. Bank B steps: {0, 6, 4, 1}, {2, 3, 5, 1}, {0, 1, 2, 3}, {4, 5, 6, 2}. A hazard that the next step arms again before its timer ends stays active without a break, and its object is not restarted.
+  - Test vector (tick offsets are good to one tick): bank A, thread C arms hazards 0, 2, 4 and 1 (objects 3, 5, 7 and 4) on tick 0. They become active and play on tick 1 and would stay active for 42 ticks. Step 2 arms hazards 1, 3, 0 and 5 on tick 41, so hazards 1 and 0 stay active without a break, hazards 3 and 5 become active on tick 42, and hazards 2 and 4 become inactive on tick 43 and their objects are deactivated. Hazard 1 is armed by steps 1 to 3 and stays active from tick 1 to tick 124. In bank B, which arms every 30 ticks for 30 ticks, hazard 1 (steps 1 to 3) likewise never turns off between steps.
+- Update, per tick (High): the update calls the hazard timer step twice, once for each bank's table of seven records (object id, timer as a float, active word, trigger index; 16 bytes each). For each record in order: when the timer is above 0, the timer drops by 1.0 (computed in double precision and stored back as a float) and, if the active word is clear, the active word is set and the hazard's object plays animation 0 (wait 0, speed 1.0); when the timer is 0 or below and the active word is set, the active word is cleared and the hazard's object is deactivated. There are no other tests: the values 0, 64, negative numbers and 2047 that a listing of the update shows belong to the compiler's double-precision routines (SPEC-0042, open question 9). The hurt zones read the active word.
+- Helpers (every caller is known; High):
+  - Hazard set-up helper, called by Init for each hazard: AddAnimObjSound on the hazard's object with mode 0.
+  - Arm routine, called by threads C and D: the record's timer becomes seconds x 60 (one single-precision multiply), then Wait(seconds) when its wait argument is nonzero.
+  - Timer step, called twice by Update, once per bank: as described under Update, per tick.
+  - The other routines with no host calls are the double-precision conversion, subtraction and packing routines that the timer step uses.
 - Dormant routines with no host calls: three. None is referenced by a callback or thread argument.
 - Threads: C and D, both started in init (the two firing loops above).
 - Edge cases:
   - All Init calls run on every load; all fourteen hurt triggers and sounds exist in play.
   - The four hazards of a step fire in the same phase; the two banks run independently.
   - The update runs every tick, so its calls run far more often than the init calls.
-- Confidence: High for Init, the hurt zones and the firing loops of threads C and D. Low for the update tree (structure is clear; per-branch meaning is partly described). Medium for H3 (record fields read, callers not shown).
+- Confidence: High for Init, the hurt zones, the firing loops of threads C and D and the Update timer step; Medium for the exact tick offsets of the test vector.
 - Open questions:
-  - Meaning of the compared values in the update (unknown).
+  - Resolved: the update is the hazard timer step (see Update, per tick); it compares only the timer with 0.
   - Resolved: a hurt zone is active while its hazard fires in thread C's or D's loop (0.7 s in bank A, 0.5 s in bank B).
-  - Which game state the update reflects (meaning unknown).
-  - What sets the record that H3 processes, and who calls H1, H2 and H3.
+  - Resolved: the update reads no game state; it reads only the two hazard tables.
+  - Resolved: Init fills the records, threads C and D arm the timers, and Update runs the timer step; the set-up and arm routines are called only from Init and the two threads.
   - Resolved: threads C and D are the two firing loops.
-  - Play values of the update's gates are not established; the reach of its gated calls is open.
+  - Resolved: the update has no gates.
 
 
 ### 1096: Exterior, level state machine with hero pickup, timed boss sequence and debug shortcuts
@@ -473,7 +473,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
   1. Sets game flags 315 and 44.
   2. Sets object states for 12 objects (ids 31, 33, 35, 16, 17, 19, 22, 6, 8, 10, 12 and 13), all (bool 0).
   3. Registers script triggers: indices 13, 14 and 15 to CB1; indices 0, 1, 2, 4 and 3 to CB2; index 5 to CB3; index 6 to CB4; index 7 to CB5.
-  4. Registers the AI-player activate callback CB6 (empty).
+  4. Registers the AI-player activate callback CB6 (the activation filter: it admits every record ordinal except 0, which it refuses; High).
   5. Unconditional at this level: registers the hero pickup callback CB10 (twice), fades the screen out (duration 0), and sets breakable indices (17, 20, 22, 15).
   6. Reads flag 45.
      - Flag 45 clear: allocates one control thread and starts the main state thread CB7. Allocates and creates one slot. Registers the activate-world callback CB8, and registers trigger index 8 to CB9.
@@ -490,11 +490,11 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - CB3 (trigger 5): plays animation 22 (no wait) if the object is valid.
   - CB4 (trigger 6): adds blackboard message (type 2, value 130, world 126) and starts an exterior replacement load to world 126 (mode -1, no palette), if the object is valid and its state is 1.
   - CB5 (trigger 7): sets flag 318 if the object is valid.
-  - CB6 (AI-player activate): empty.
+  - CB6 (AI-player activate): returns nonzero for every record ordinal except 0, so the streaming test never binds the world's record 0 by itself and binds every other record by the normal rules (High).
   - CB8 (activate-world, registered in the flag 45 clear branch): loads the stored slot with activate false, initialises objects 0 to 5 (bool 0), turns target active off, fades the screen out, prints a debug line, plays movie 51 (bool 1), moves the hero to locator 10 (control 1), returns the normal camera, sets object 14 to off, activates entity 0, sets the boss fight tweak for instance 6 at stage 0, enables the two item dispensers of CB7, and fades back in. The slot word this load reads starts at 0 in the module file (not -1), and a SlotCreate result is also stored into it, so the load uses that stored slot.
   - CB9 (trigger 8): queries whether movie 51 has played. No other effect.
   - CB10 (pickup callback): if the picked item id is 117, sets level state 15.
-  - CB11 (activate-world, flag 45 set branch): initialises object 1 (bool 0).
+  - CB11 (activate-world, flag 45 set branch): initialises object 1 with the flag true (High).
   - CB7 (main state thread, started from init when flag 45 is clear; High): the core of the module. While flag 45 is clear, each tick (one-tick sleep per pass):
     1. The two item dispensers run (below).
     2. Then the first rule that holds runs: level state 0 set and 2 clear: the pair helper sets level states 1 and 2. Level state 3 set and 5 clear: 4 and 5. Level state 6 set and 8 clear: 7 and 8. Level state 9 set and 11 clear: 10 and 11. Level state 12 set and 14 clear: the finale.
@@ -680,7 +680,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - If flag 78 is clear:
     - Inits 17 objects (2, 3, 7, 8, 10, 12, 15, 16, 18, 23, 24, 26, 29, 31, 32, 34 and 5; forced for 7, 12, 15, 23 and 5, not forced for the rest).
     - Registers the triggers: CB1 on trigger 0, CB2 on 1, CB5 on 2, CB6 on 3, CB7 on 4, CB3 on 5, CB4 on 6.
-- Trigger callbacks. The common gate is: trigger word +0x1c and the trigger's kind word at +0x10. Words +0x20 and +0x24 are used by CB2 to CB6 (zero means "not held").
+- Trigger callbacks. The common gate is: trigger word +0x1c and the trigger's state word at +0x10 (1 on the first tick of contact, 2 while the hero stays inside, 3 and then 0 after it leaves; SPEC-0030, Layout section 3). Words +0x20 and +0x24 are used by CB2 to CB6 (zero means "not held").
   - CB1 (trigger 0): if level state 0 is clear and +0x1c is non-zero and kind is 1: sets level state 0 to true, deactivates objects 0 and 1, activates objects 3 and 2, starts effects 20 to 23 (forced), plays animation 2 (wait), stops effects 20 to 23, plays a look-at camera (camera 4, not waiting), plays animation 3 (wait), returns to normal camera.
   - CB2 (trigger 1): gate: +0x1c, +0x20 and +0x24 all zero, and kind 1. Deactivates objects 9, 11 and 7; activates 8, 10 and 6; starts effects 13 to 15 (forced); plays animation 6 (wait); stops effects 12 to 15. If kind is not 3: deactivates 6, activates 7, plays animation 7, returns the hero to idle, plays look-at cameras on objects 8 and 10 (camera 5) with their animations, returns to normal camera, deactivates 8 and 10, activates 9 and 11, plays animations 9 and 11, sleeps 1 frame.
   - CB5 (trigger 2): same gate. Deactivates objects 25, 27, 28 and 23; activates 24, 26, 29 and 22; starts effects 16 to 19 (forced); plays animation 22 (wait); stops effects 16 to 19. If kind is not 3: deactivates 22, activates 23, plays animation 23, returns the hero to idle, then three camera-and-animation pairs (camera 25 at 0.8 s, camera 24 at 0.6 s, camera 23 at 0.5 s, each followed by an object animation), returns to normal camera, deactivates 24, 26 and 29, activates 25, 27 and 28, plays animations 25, 27 and 28, sleeps 1 frame.
@@ -726,24 +726,24 @@ Each module section lists: family; Init steps in order; each callback or trigger
     - Calls StopEffect for effects 0 through 15 in order. The index starts at 0 and increments after each call; the loop exits after effect 15. The StopEffect return value does not control the loop.
     - Registers 31 animation-linked sounds (each ties an animation object to a sound id; object and sound numbers are level data, "id not yet mapped"). These run whether flag 80 is set or clear.
     - Registers the teleport callback CB11 (context 13) and the activate-world callback CB12.
-- CB1 (trigger 2; fires when the trigger object's word at +0x1c is non-zero, its kind word at +0x10 is 1, and a door word (file value 0) is 0; CB1 stores the kind value into the door word at its start, and CB9 clears it, so CB1 runs once until trigger 1 re-arms it):
+- CB1 (trigger 2; fires when the trigger object's word at +0x1c is non-zero, its state word at +0x10 is 1 (the first tick of entry), and a door word (file value 0) is 0; CB1 stores the kind value into the door word at its start, and CB9 clears it, so CB1 runs once until trigger 1 re-arms it):
   - Deactivates object 12, plays a look-at camera on object 12 (camera 5, 1.0 s), moves the hero (locator 2, control mode 1), sets object 10 to time 0, plays animation 10 (wait), waits 1 s, returns to normal camera.
 - CB9 (trigger 1; same object and kind gate as CB1, no door-word test; it clears the door word):
   - Look-at-player camera 7 (1.0 s), deactivates object 12, activates object 10, sets object 10 to time 0, returns to normal camera.
 - CB2, CB3, CB4, CB5 (triggers 3, 5, 4, 6): one template, with different objects and effects per callback:
-  - Gate: kind +0x10 is 1, and either +0x1c is non-zero or +0x1c, +0x20 and +0x24 are all zero.
+  - Gate: state +0x10 is 1, and either +0x1c is non-zero or +0x1c, +0x20 and +0x24 are all zero.
   - First part: deactivates two objects and activates two others (not forced; one object is a fixed pair per callback), starts four effects in a row (forced), plays one object animation (wait), then stops the same four effects.
-  - Second part (only when kind +0x10 is not 3 and not 0): deactivates one object, activates another, plays its animation, plays a look-at camera on one object and another object's animation, returns to normal camera, waits until the hero leaves the trigger, then deactivates and activates the next pair and plays their animations. The look-at cameras are: CB2 camera 5 on object 12, then camera 4 on object 0; CB4 camera 4 on object 15; CB3 camera 4 on object 19; CB5 camera 4 on object 23 (each not waiting, camera wait 1).
+  - Second part (only when state +0x10 is not 3 and not 0, that is, the hero is still inside the volume): deactivates one object, activates another, plays its animation, plays a look-at camera on one object and another object's animation, returns to normal camera, waits until the hero leaves the trigger, then deactivates and activates the next pair and plays their animations. The look-at cameras are: CB2 camera 5 on object 12, then camera 4 on object 0; CB4 camera 4 on object 15; CB3 camera 4 on object 19; CB5 camera 4 on object 23 (each not waiting, camera wait 1).
   - Object numbers per callback (level data): CB2 uses objects 10, 13, 1, 0, 12, 11 and effects 12 to 15; CB3 uses objects 21, 20, 19, 18 and effects 4 to 7; CB4 uses objects 17, 16, 15, 14 and effects 8 to 11; CB5 uses objects 25, 24, 23, 22 and effects 0 to 3.
   - Meaning of the effects and the kind word: unknown.
 - CB6 (trigger 18), CB7 (trigger 16), CB8 (trigger 17): the three levers that set flag 80, one template (High). Per lever (up object, down object, hero point): CB6 (47, 48, 22), CB7 (43, 44, 20), CB8 (45, 46, 21). Init with flag 80 clear shows the down objects 48, 44 and 46, so all three levers start down.
-  - Gate: trigger word +0x1c non-zero and kind +0x10 non-zero. A square button prompt is shown: context 2 while the lever's up object is shown, else context 1.
+  - Gate: trigger word +0x1c non-zero and state +0x10 non-zero. A square button prompt is shown: context 2 while the lever's up object is shown, else context 1.
   - On button 0: the hero walks to the lever's point and is oriented. Then:
     - Lever down (down object shown): hero animation 139; the lever goes up (down object swapped for the up object, its animation played; look-at camera 4 on object 8). If the other two levers are up as well: camera 6 and SetGameState(80). Return to normal camera; sleep 1 frame.
     - Lever up (up object shown): hero animation 140; the lever goes down (the reverse swap and animations, look-at camera 4 on object 8); return to normal camera. No flag write.
   - So pulling each lever once sets flag 80 on the third pull, in any order.
   - If button 0 is not pressed, the callback does nothing else.
-- CB10 (trigger 0): when the trigger word +0x1c is non-zero and kind +0x10 is 1, flag 269 is clear, object 36's animation has finished and a shown-once word (file value 0) is 0: shows dialogue line 0 (wait), once per module load.
+- CB10 (trigger 0): when the trigger word +0x1c is non-zero and state +0x10 is 1, flag 269 is clear, object 36's animation has finished and a shown-once word (file value 0) is 0: shows dialogue line 0 (wait), once per module load.
 - CB11 (teleport callback, context 13): shows the square button prompt (context 13). When button 0 is held, starts an exterior replacement load for world 147 (no locator, no color), waits 3 s. The arguments of the prompt are passed in from the caller.
 - CB12 (activate-world callback, world 147): reads the blackboard message of type 2 for world 147. If the value is 30: moves the hero to locator 0 (control mode 1) and sets the camera to normal with a zoom of 15 (second value 0). Other values: nothing.
 - Threads: none. No control thread is started in this module.
@@ -754,9 +754,9 @@ Each module section lists: family; Init steps in order; each callback or trigger
 - Confidence: Medium.
   - High for init, exit, update and hook having no host calls, and for the lever rule of CB6 to CB8.
   - Medium for the callback templates CB1 to CB5 (the call sequence is flat, many conditions truncated) and for the call order inside one lever move.
-  - Low for the meaning of kind values 1 and 3 and the trigger words.
+  - High for the meaning of the word at +0x10 (the trigger state of SPEC-0030) and of the words at +0x1c, +0x20 and +0x24 (object, shot and attack words).
 - Open questions:
-  - Meaning of game-state flags 80, 147 (world id), 269 and the trigger kind word values 1 and 3: meaning unknown.
+  - Meaning of game-state flags 80, 147 (world id) and 269: story meaning not established. The word at +0x10 is the trigger state (1 first tick of contact, 2 inside, 3 and 0 after leaving; SPEC-0030).
   - Which object and effect ids map to which in-game objects: "from level data, id not yet mapped".
   - Resolved: the init stop-effect loop calls effects 0 through 15 in order and exits after effect 15, independent of StopEffect's return value.
   - Resolved: the lever order of CB6 to CB8 does not matter (flag 80 on the third lever up).
@@ -776,6 +776,11 @@ Each module section lists: family; Init steps in order; each callback or trigger
 - Update (every tick): calls one helper. That helper checks game state 239 and a shown-once word (file value 0). While state 239 is clear and the word is 0, it sets the word and calls LevelMsg(message 0, no world, bool 1, WAIT_OPTION 1). So message 0 is shown once per module load, on the first tick, until the puzzle is solved (High). State 239 is set only by the solved scene below. Then, while the beam word is set, the update runs the beam rhythm (below; High).
 - Trigger record fields used by both callbacks: the state word at +0x10 (1 entered, 3 just left; SPEC-0030 section 3), the trigger index at +0x14, and the block number at +0x28: the number of the movable block that fired the trigger, or -1 when the hero fired it. Only blocks press the plates (High).
 - The puzzle: stage 1 is three block plates (triggers 2, 3 and 4); stage 2 is two plates (triggers 0 and 1) that each hold a mark (A for plate 1, B for plate 0). A "beam" object shows the stage-1 progress. The puzzle is solved when stage 1 is finished and both stage-2 marks are set (High).
+- Plate geometry, blocks, locators and the bells' floor (High; the figures are measured on the disc).
+  - The five plates are kind-4 box volumes of the pack's collision chunk with flags 0x0020 and a third extent above zero (0.340 for the stage-1 plates, 1.0 for the stage-2 plates), so a block fires them with the moving-rectangle test (SPEC-0048, The block's moving-rectangle test). Stage-1 plates (triggers 2, 3 and 4): corners (-20.221, 31.162, 1.266), (-8.449, 31.162, 1.266) and (2.918, 31.162, 1.266); each is 5.553 long along X, 0.340 along Z and 10 tall (y 31.162 to 41.162). Stage-2 plates: trigger 0 at corner (54.14, -5.0, 30.18) and trigger 1 at (54.14, -5.0, -31.046); 1.0 by 1.0 and 10 tall (y -5 to 5).
+  - Blocks 0 to 2 are the bells (size 3.305, height 9.2, step 1.652). Blocks 3 and 4 are the stage-2 blocks (size 9.22, height 20.076, step 4.61). Locators: 1 (51.01, 0, 30.49) and 2 (51.01, 0, -30.46) beside the stage-2 plates; 3, 4 and 5 (y 32.40, z 12.76) the hero's places after plates 2, 3 and 4; 6, 7 and 8 the bells' centres (x -17.429, -5.666 and 5.711; z 13.349, 10.198 and 15.091; y 33.076); 9 and 10 (x 45.15, y 0.26, z 36.29 and -36.98) the hero's places after the stage-2 plates.
+  - The thread's three moves centre each bell's footprint on its locator and then probe the ground at the footprint's corner (x -19.082, -7.319 and 4.059; z 11.697, 8.546 and 13.439) with a ceiling of 33.076 + 3.0 = 36.076. The probe finds 31.191 at all three corners, on the inline height patch of placed object 21 (SPEC-0018, Ground probe, step 4): a flat one-cell patch with 2 by 2 samples, all 31.1915, listed by the grid cells under the corner with a non-zero patch id. The pack's own patches there give only 0.0 and 0.25, which are lower. Init switches object 21 on before the thread runs, and each of the objects 22 to 28 carries an identical flat patch at the same height, so the floor stays under the bells whichever scene object is shown. A bell therefore stands on y 31.191 (top 40.391), inside the plates' height range, not on y 0.
+  - The pushes: a bell moves along -Z in steps of 1.652, and its plate fires when the bell's position is within 0.6 x 3.305 = 1.983 of the plate's footprint, that is z at or below 3.590. Bell 0 (z 13.349) fires on its sixth push (z reaches 3.565 on step 35 of 38), bell 1 (z 10.198) on its fourth, on the last step (z 3.588), and bell 2 (z 15.091) on its seventh (3.567 on step 37). The test runs only while the hero's grid cell lists the plate (SPEC-0048); the cells within two cells (17 units) of a stage-1 plate list it. The hero is carried with the block, 3.152 behind its position (half the size plus 1.5; SPEC-0033, Behavior 4A.2), so when a bell fires its plate he stands at z 6.72 to 6.74, inside those cells (grid rows 4 to 8 of the plate's block, he is in row 7).
 - Trigger callback 2 (plates 2, 3 and 4; High). State 1, fired by a block: the block is marked placed and the plate marked pressed; the plate object is swapped (15 -> 16 for plate 2, 17 -> 18 for plate 3, 19 -> 20 for plate 4), sound 9 and the plate animation play; MoveHero(locator 3, 4 or 5, control). Then the plate scene:
   - Object 21 shown and objects 22 to 28 hidden; hero animation 0; the block frozen. PlayCamera(2, 1.0); Wait(3.6 s); KillSound(9); Wait(1.0 s); camera returned.
   - Shown by the set of plates pressed: one plate: object 26 (plate 2), 27 (plate 3) or 28 (plate 4); two plates: 23 (plates 2 and 3), 24 (2 and 4) or 25 (3 and 4); all three: 22. Object 21 hidden. Placed blocks stay frozen; every other block gets ReacquireMovableBlockHeightPatch with height 3.0.
@@ -797,16 +802,17 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - Plate 0 (trigger 0) entered by a block (state 1, block number 2): MoveMovableBlockToLocator(4, 1), PlayCamera(0, wait, 1.0), hero to locator 9, mark B set.
   - Plate 2 entered by a block with plates 3 and 4 free: object 16 shown, hero to locator 3, then object 26 shown and the beam object 13 (4.0 s rhythm).
   - A plate entered by the hero (block number -1): nothing.
+  - Bell floor (disc): after the thread's move to locator 6, bell 0's footprint corner is (-19.082, 33.076, 11.697) and the ground probe with ceiling 36.076 returns 31.191 (placed object 21's patch), so the bell stands at y 31.191 and plate 2 fires on its sixth push. With only the pack's own patches the answer would be 0.25 or 0.0 and no stage-1 plate could ever fire.
   - Teleport index 0: AddBlackboardMessage(2, 70, 155), then the exterior replacement load.
 - Edge cases: the update message shows once per module load while state 239 is clear (shown-once word). The solved scene's closing chime repeats ten times.
 - Confidence: Medium. Init order, the thread, the teleport, both trigger callbacks and the solved scene are High. The beam rhythm is High.
 - Open questions:
   - Resolved: trigger fields A, B and C are the state word, the trigger index and the block number (-1 for the hero).
-  - Which trigger each registered index corresponds to in level data (ids not mapped).
+  - Resolved: the trigger indices map to the collision chunk's kind-4 box volumes in record order: 0 and 1 are the stage-2 plates (corners (54.14, -5.0, 30.18) and (54.14, -5.0, -31.046)), 2, 3 and 4 the stage-1 plates (Plate geometry, blocks, locators and the bells' floor, above; High).
   - Resolved: the update message has a shown-once word, so it does not repeat each tick.
   - Resolved: the word that splits init is the scene-done word. Init runs only at the start of a lifetime of the module (Shared rules, Lifetime), right after the load-time constructor has set the word to the value of flag 239. The non-zero side therefore runs in play on every load while flag 239 is set (High).
-  - Object ids (9 to 28) and movable-block ids (0 to 3) are from level data, not yet mapped. The deactivate calls in the helpers also take objects 12, 13 and 14 on some paths.
-  - Locator ids 6, 7, 8 and 1 to 4 are from level data, not yet mapped.
+  - Resolved in part: movable blocks 0 to 4 and locators 1 to 10 are mapped (Plate geometry, blocks, locators and the bells' floor, above). Objects 15 to 20 are the plates (rest positions (-17.44, 30.79, 3.10), (-5.65, 30.79, 3.10) and (5.66, 30.79, 3.10), the unpressed object first), objects 21 to 28 are the floor objects (each with the flat patch at y 31.19) and objects 9 to 14 the beam objects (rest position (51.3, 0, 84.0)). The deactivate calls in the helpers also take objects 12, 13 and 14 on some paths.
+  - Resolved: locator ids 1 to 10 (Plate geometry, blocks, locators and the bells' floor, above).
   - Resolved: unregistered callbacks. The only routine address held in the module's data is the load-time constructor list entry, which the load hook runs. Every other routine is reached by a call or a registration (High).
 
 
@@ -1110,7 +1116,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
 - Exit: present, no host calls.
 - Module words (all file value 0, so all clear at the start of each module lifetime): the exit-open word, the room word, the short-intro word, the final word, the busy word, one once-word per checkpoint lever, and the checkpoint (respawn locator and camera; locator 0 and camera 2 until the first lever is used, Medium for these start values).
 - Init (High):
-  - A dead hero is revived first: for each hero that IsHeroDead reports dead, NeedHeroAlive(hero).
+  - A dead hero is revived first: for each hero that IsHeroDead reports dead, NeedHeroAlive(hero), which revives the partner only when the swap mode is exactly 2 and does nothing in any other mode (SPEC-0030, row 178).
   - InitObjOn on objects 3, 4, 5, 6, 10, 12, 14, 16, 1, 7 and 8 (false for 3 to 6, 10 to 16 and 1; true for 7 and 8), AddAnimObjSound(object 3, sound 13, 0.0, 1.0) and AddAnimObjSound(object 4, sound 13, 0.0, 1.0), RegisterMovableBlockSoundIndex(11), RegisterHeroDeathCallback(hero-death H, false) (false: the default death handling runs as well, SPEC-0055), and the trigger registrations below.
   - Trigger registrations: indices 0 to 10 (kill zones, S0), index 11 (S11), index 12 (S12), index 13 (S13), index 14 (S14), index 15 (S1), index 16 (S3), index 17 (S4), and index 18 (S2).
   - QueryGameState(flag 0). No module sets flag 0, so in play it is clear and Init takes the clear side: the room word, the short-intro word and the final word stay clear, InitObjOn(object 9, false), StopEffect(3) and SetHeroSwapMode(3). (The set side, never taken, sets the exit-open, room and short-intro words and uses swap mode 2.) Nothing in the module depends on flag 0 in play; in particular the exit back to pack 1353 does not.
@@ -1124,6 +1130,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
 - Kill zones S0 (indices 0 to 10) and hero-death callback H (High): when record +0x10 is 1 and the hero is inside (S0), or on a hero death (H, once per death):
   - Final word set: a fade, MoveHero(8), a fade; no timer.
   - Final word clear: PlaySound(5), SetTimerColor, DeactivateTimer, (S0: Sleep), FadeScreenOut(0.8, wait 1), ResetAnimObjOffsets(2), MoveHero(checkpoint locator, control 1), ReturnToNormalCamera(checkpoint camera), Wait(1.0), FadeScreenIn(1.0, wait 1), and the countdown re-armed at 50 s, except after S14 has stopped it for good.
+  - The death callback H takes the same two branches (final word set: fade out 1.0 s with wait 1, MoveHero(8, control 1), Wait(1.0), FadeScreenIn(1.0, wait 1); no timer and no camera return). Control option 1 of MoveHero writes hero state 1 to the selected hero, so the move takes the dying hero out of the death state about 48 ticks after the callback starts (60 ticks in the final-word branch), before the death clip reaches the 0.95 point at about tick 63 where the game-over choice would be made. No game-over page follows a death in this area, and the hero stands at the checkpoint in state 1 with the health the killing hit left (0 after a lethal hit). Timing and the test vector are in SPEC-0055 (module 1394 callback, open question 41). High for the state write; Medium-High for the margin of about 3 ticks in the final-word branch.
 - Trigger S14 (index 14): when record +0x1c is non-zero and the exit-open word is 0: the exit-open word and the final word are set, DeactivateTimer (the countdown is stopped for good), SetHeroSwapMode(2), and Sleep(10) in two places.
 - Trigger S11 (index 11, the shrine room; High): when the room word is 0, record +0x1c is non-zero and record +0x10 is 1: SetHeroSwapMode(2), DeactivateTimer, SetGameState(104, true), SetGameState(353, true), GrabHeroControl, FadeScreenOut(0.5), MoveHero(9, control 1), PlayFMV(65, wait 1), Sleep, DeactivateObj(9), StartEffect(3), FadeScreenIn(1.0), RestorePlayerControl(-1); then the room word is set.
 - Trigger S12 (index 12, the exit; High): when the room word is set, record +0x1c is non-zero and record +0x10 equals the room word (1): StartExteriorReplacementLoad(world 158, -1, no colour), which loads pack 1353. So the exit opens by reaching the shrine room (S11) in the same visit.
@@ -1135,6 +1142,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
 - Test vectors:
   - Countdown at t = 25 s left: object 2's offset is -11.5. At t = 0 with no death in progress: the run-out scene, then the hero at the checkpoint and the countdown back at 50 s.
   - Lever S3 (index 16) pressed: hero switched to hero 0, checkpoint (15, 4); a later kill-zone touch moves the hero to locator 15 with camera 4. Pressing S3 again in the same load does nothing.
+  - Death callback H before the final lever, hero Tor dies with the checkpoint (15, 4): about 48 ticks after the callback starts the hero is at locator 15 in state 1 with 0 HP, and the death clip never reaches the 0.95 point in state 16, so no game-over page follows; the fade-in ends about tick 168 and the countdown restarts at 50 s. After the final lever (locator 8) the move happens about tick 60 and the whole sequence ends about tick 180, with no countdown.
   - S11 then S12: flags 104 and 353 set, movie 65, then the load of world 158.
 - Edge cases:
   - Quirk: the room word is clear at the start of every module lifetime, so on a return visit S11 plays movie 65 again and sets flags 104 and 353 again before S12 works. Reproduce it.
@@ -1186,10 +1194,10 @@ Each module section lists: family; Init steps in order; each callback or trigger
 - Edge cases: the proximity callbacks do nothing when state 102 is clear, even though they are always registered.
 - Confidence: High. Callbacks and init are High (full call list); the per-tick helper is the shared entity-control routine of SPEC-0043 (High).
 - Open questions:
-  - Meaning of game state ids 102, 104 and 106 (unmapped; flags, not yet named).
+  - Resolved: states 102, 104 and 106 are the Altador legend flags (see the gate note below).
   - Resolved: the per-slot values are the record fields of the shared entity-control routine (SPEC-0043), and the records are entities 0 and 1 (see Update).
   - Whether the thread body ends after one run (not confirmed).
-  - Play values of the gates in this module are not established; the reach of its gated calls is open.
+  - Resolved (High for the setters; Medium-High for the gate map): the gates are the Altador legend flags, which turn on in play as each shrine is finished: 100 (Gladiator legend, Coliseum, movie 61), 102 (Treasurer legend, Treasury, movie 63), 104 (Rogue legend, Rogue shrine, movie 65) and 106 (Petpet-Handler legend, Petpet shrine, movie 67). Start stage 7 sets all four (SPEC-0049). Flag 106 gates the two proximity registrations and the idle records of this module, so before the Petpet-Handler legend it registers nothing and its Update has no records to run; flags 102 and 104 then choose the messages (the callbacks test 102 first, then 104).
   - The activate argument of that SlotLoad is true on every known path.
 
 
@@ -1253,7 +1261,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - Conversation message ids 0, 6, 9 and 12 are not yet mapped to level data or text. The load for eWorld 159 goes to pack 1358; this module does not load eWorld 180.
   - Locators 12 and 13 are from level data, not yet mapped.
   - Whether the thread body ever loops (not confirmed).
-  - Play values of the gates in this module are not established; the reach of its gated calls is open.
+  - Resolved (High for the setters; Medium-High for the gate map): the gates are the Altador legend flags, which turn on in play as each shrine is finished: 100 (Gladiator legend, Coliseum, movie 61), 102 (Treasurer legend, Treasury, movie 63), 104 (Rogue legend, Rogue shrine, movie 65) and 106 (Petpet-Handler legend, Petpet shrine, movie 67). Start stage 7 sets all four (SPEC-0049). Flag 102 gates the four proximity registrations and the three idle records, so before the Treasurer legend only the two teleports and the activation callback exist; no callback tests a flag.
 
 
 ### 1421: Interior, entity proximity conversation room
@@ -1291,11 +1299,11 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - The draw of 1 is the only draw result that uses the message 10 branch; draws 2 and 3 share the flag 100 and 106 branches.
 - Confidence: Medium. Init and all three callbacks are described in full. The large NPC helper's branches are only partly described.
 - Open questions:
-  - Meaning of flags 100, 102, 105 (not used here), 106, 605 and 679: meaning unknown.
+  - Resolved: flags 100, 102 and 106 are Altador legend flags and 605 and 679 are Package Delivery task 1 flags (see the gate note below); flag 105 is not used here.
   - Item 33 and world 159: from level data or game ids; not yet mapped.
   - Resolved: Update calls the large NPC helper every tick, and its one record is added in play when flag 102 is set (see Helpers).
   - Resolved (Medium-High): the extra gate on the idle loop in init step 3 is the add step's nine-record limit.
-  - Play values of the gates in this module are not established; the reach of its gated calls is open.
+  - Resolved (High for the setters; Medium-High for the gate map): the gates are the Altador legend flags, which turn on in play as each shrine is finished: 100 (Gladiator legend, Coliseum, movie 61), 102 (Treasurer legend, Treasury, movie 63), 104 (Rogue legend, Rogue shrine, movie 65) and 106 (Petpet-Handler legend, Petpet shrine, movie 67). Start stage 7 sets all four (SPEC-0049). Flag 102 gates the registrations, the idle record and the thread's slot load; the on-enter callback then reads flags 100 and 106, and the proximity callback reads 605 and 679, which are Package Delivery task 1 accepted and delivered (SPEC-0049).
 
 
 ### 1423: Interior, entity proximity room with item ask-about
@@ -1334,10 +1342,10 @@ Each module section lists: family; Init steps in order; each callback or trigger
   - Messages 8 and 11 need flag 609 and flag 683 both set. The first of them, message 8, also needs flag 104 set.
 - Confidence: Medium. Init, CB1, CB2, CB3 and CB4 are described in full. The large NPC helper is only partly described. The exact gate for the conversation target calls in CB2 is partly unknown.
 - Open questions:
-  - Meaning of flags 102, 104, 106, 609 and 683: meaning unknown.
+  - Resolved: flags 102, 104 and 106 are Altador legend flags and 609 and 683 are Package Delivery task 5 flags (see the gate note below).
   - Item 151 and item 33: not yet mapped.
   - World 160: from level data or game ids; not yet mapped.
-  - Play values of the gates in this module are not established; the reach of its gated calls is open.
+  - Resolved (High for the setters; Medium-High for the gate map): the gates are the Altador legend flags, which turn on in play as each shrine is finished: 100 (Gladiator legend, Coliseum, movie 61), 102 (Treasurer legend, Treasury, movie 63), 104 (Rogue legend, Rogue shrine, movie 65) and 106 (Petpet-Handler legend, Petpet shrine, movie 67). Start stage 7 sets all four (SPEC-0049). Flag 106 gates the three registrations, the idle record and the thread's slot load; the on-enter callback then reads flags 104 and 102, and the proximity callback reads 609 and 683, which are Package Delivery task 5 accepted and delivered (SPEC-0049).
   - Resolved: Update calls the large NPC helper every tick, and its one record is added in play when flag 106 is set.
 
 
@@ -1408,7 +1416,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
 
 ## Edge cases and error handling
 
-- Large per-tick routines. Modules 1353, 1363, 1090, 1421, 1423, 1409, 951, 1324 and 1371 repeat long decision trees each tick. Their sections describe the rules in words and mark the parts not followed as partly described. The clean side must not infer the unlisted branches.
+- Large per-tick routines. Modules 1353, 1363, 1421, 1423, 1409, 951, 1324 and 1371 repeat long decision trees each tick. Their sections describe the rules in words and mark the parts not followed as partly described. The clean side must not infer the unlisted branches.
 - Duplicate registrations: none. In 1353 and 1371 each trigger is registered once (1371 through its helper H4, called by init in branch B).
 - One-shot dialogue in per-tick code: modules 1130 and 1324 guard their per-tick and trigger messages with shown-once words, so each line shows once per module load (High).
 - Constant flag 0. Module 1394 reads game-state flag 0 (a fixed flag number). No module sets it, so its clear side always runs; the load back to pack 1353 does not depend on it (it opens through the shrine room trigger; see the 1394 section).
@@ -1427,19 +1435,19 @@ Each module section lists: family; Init steps in order; each callback or trigger
 1. Resolved: in modules 1421 and 1423 the large helper for non-player characters is the shared entity-control routine of SPEC-0043; its record is added in play when flag 102 (1421) or 106 (1423) is set, and the extra idle-loop gate is the add step's nine-record limit (Medium-High).
 2. Resolved: module 1176's slots, scene variants, locators, arrival point and arena bounds are given in its section (High).
 3. Resolved: module 1078's four registered trigger callbacks, including the button gates and action branches, are described in section 1078. Its interactive button callbacks require a newly pressed Square; button code 0 and the newly-pressed query are documented in SPEC-0030, section 3. Record and object identity meanings that remain unknown are listed in section 1078.
-4. Module 822: resolved for the two Init step-8 alternative helpers (section 822). Some navmesh gate tests and two trigger scenes are only partly known. One dormant conversation chooser is not described.
+4. Module 822: resolved for the two Init step-8 alternative helpers (section 822) and for the Update navmesh step (68 entities, nearest navmesh cached once found), the dormant chooser and a second unreferenced routine. Two trigger scenes (CB5 and CB7) are only partly known.
 5. Module 1096: resolved for the state thread (CB7 rules, finale and dispensers; High). Still open: the debug update (Low).
 6. Resolved for the per-tick helper: in 1409 and 951 it is the shared entity-control routine of SPEC-0043, identical in both, with no unknown predicate. Still open: one slot-load argument.
 7. Resolved for 1324 (the plate puzzle; record fields are state, index and block number), 1392 (gates, levers and helper levers) and 1130 (the junction rules of the lever puzzle). Resolved as well: the three partial-flow outcomes of the 1130 test button follow junctions 2 and 3 (see its section; High).
 8. Resolved: the 1392 fall-in runs once per module load while flag 696 is clear.
 9. Resolved: module 1414 branches directly on the type-2 blackboard value for world 180; module 1358 writes the values 10 or 50 immediately before requesting the world, which maps to pack 1414 (section 1414; High).
 10. Resolved: in 1428, H13 is the 10-stamp shot meter (10 s drop-out), the object-scene helper sets the taunt delay, and the prompt triggers are the three switches of the 3-state switch puzzle (solution: switch 0 twice, switch 2 once). Also resolved: level state 2, pulsed by trigger 1, stops the Darkest Faerie's summons.
-11. Module 1249: resolved for the three levers (flag 80 on the third lever up, any order). Trigger kind values 1 and 3 unknown.
+11. Module 1249: resolved. The three levers set flag 80 on the third lever up, in any order. The word the section calls the kind word at +0x10 is the trigger state (1 first tick of contact, 2 while inside, 3 and then 0 after leaving; SPEC-0030, Layout section 3), so state 1 means the hero has just entered, the second parts of CB2 to CB5 run only while the hero is still inside after the first part, and the words at +0x1c, +0x20 and +0x24 are the object, shot and attack words (High).
 12. Module 1247: resolved. Test T is the other plate's state word (Medium for CB4), and trigger 4 sets flags 78, 269 and 270 once item 29 is held (no AI-dead requirement).
 13. Module 1382: resolved: init has no game-state test, and every trigger callback is registered and live. Resolved: the pedestal element test in CB1 (the weapon Mote word against the two Motes of the record), CB2 (it sets the armed word), and the CB5 and CB6 index pairings (section 1382).
 14. Resolved: thread B checks entity 6, the Giant Slorg in region resource 744 ordinal 0; entity 7 (Haplo) shares the range but is not checked (section 742).
-15. Module 1090: resolved for Init, the hurt zones and the firing loops (threads C and D). Still open: the compared values in Update and the callers of three helpers.
-16. Module 989: Thread A reads only state 10; set state 10 gates looping and stopping animation on object 2, but its intended event and writer are unknown. Thread B uses states 1 to 7 as staged gates: state 2 gates the pre-fight movie and tweak before setting 3 and 4; helper H1 then sets 5 and 1; state 6 is set after 1 and boss-defeated state 0 when 6 is clear; the post-fight block requires 5 and 6 set and 7 clear. State 0 means boss defeated (SPEC-0012). Names or design intent for states 1 to 7 are not supported by the pack scene/trigger data. Resolved: the post-fight block runs once.
+15. Module 1090: resolved: Init, the hurt zones, the firing loops (threads C and D) and the Update, which is the hazard timer step, with every helper caller known (High).
+16. Module 989: Thread A reads only state 10; set state 10 gates looping and stopping animation on object 2. Resolved for the writer: no level module sets level state 10 of this world (the only SetLevelState(10) calls in any module are in packs 1096, 1217 and 1432, and each passes world 0, the current world, so they act on their own worlds), and the Black Knight boss code sets only level state 0 (SPEC-0012). State 10 therefore stays clear and thread A's object-2 loop never starts; object 2 is never animating, so its stop branch has nothing to stop (Medium-High; the boot program was searched only through the boss code). Thread B uses states 1 to 7 as staged gates: state 2 gates the pre-fight movie and tweak before setting 3 and 4; helper H1 then sets 5 and 1; state 6 is set after 1 and boss-defeated state 0 when 6 is clear; the post-fight block requires 5 and 6 set and 7 clear. State 0 means boss defeated (SPEC-0012). Names or design intent for states 1 to 7 are not supported by the pack scene/trigger data. Resolved: the post-fight block runs once.
 17. Module 1353: resolved: the trigger 0 to 3 registrations are made unless flags 353 and 104 are both set, and the proximity registrations have no gate. The Init slot setup depends on flag 104.
 18. Resolved: module 1363's Init gates, the Mortog thread (shakes, odd-numbered-rise hold times, ease steps, done at four Mortogs, flag 692) and InitMortogBehavior's floats (25.0 and 30.0) are given in its section; the shrine door also opens on the done word in the same visit.
 19. Module 1371: resolved. The Z2 walk cases are three gates with no unknown test: trigger 2 opens wave 1 (flags 342 to 344 clear, object 1 not animating), trigger 4 wave 2 (342 set, 343 and 344 clear, object 1 not animating) and trigger 3 wave 3 (342 and 343 set, 344 clear, objects 3 and 2 not animating); see the 1371 section and SPEC-0059, section 8 (High). No duplicate registration (H4 is the only one), and Z0, Z1 and the wave controller are fully described.
@@ -1448,7 +1456,7 @@ Each module section lists: family; Init steps in order; each callback or trigger
 
 23. Unregistered callbacks: resolved for 985 (stage 0's level state 0 write), 1130 (two unreferenced older lever bodies) and 1428 (the flag 330 check, reached through THREAD-A). Resolved for 1324: the only routine address in its data is the load-time constructor, which the load hook runs (section 1324).
 24. Module-data gates are resolved (file values and writers) in the sections of modules 742, 800, 822, 951, 985, 1078, 1090, 1096, 1130, 1176, 1247, 1249, 1324, 1353, 1363, 1371, 1382, 1392, 1394 and 1428. Elsewhere, calls under unresolved gates are written as "reached when" statements with Medium or lower confidence.
-25. Modules 1409, 1414, 1421 and 1423 have no gate-value check, and neither has the 1090 update tree (951 and 1363 are resolved in their sections). Their gated calls are open.
+25. Resolved (High for the setters; Medium-High for the gate map): the gates of modules 1409, 1414, 1421 and 1423 are the Altador legend flags 100, 102, 104 and 106 and, in 1421 and 1423, the Package Delivery flags 605 and 679 (task 1) and 609 and 683 (task 5). The legend flags turn on in play when each shrine is finished (movies 61, 63, 65 and 67) and are all set by start stage 7. Each section gives the gate of its module. Test vector: with flags 102 and 106 clear, module 1414 and module 1421 register no proximity callback and add no idle record; with flag 102 set and 106 clear they register theirs, and modules 1409 and 1423 still register nothing.
 26. Resolved: module 1394's exit back to pack 1353 opens through trigger S11 (room word), not flag 0, which nothing sets. The four checkpoint levers work once per load.
 
 ## Confidence

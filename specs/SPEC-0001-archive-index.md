@@ -72,6 +72,13 @@ Synthetic, not taken from the disc:
 - GAMEFILE.DAT at LBA 1000 plus an entry with start 25 and count 4 gives a disc read of LBAs 1025–1028 (8192 bytes).
 - Real-disc sanity check (hand-checkable): resource 0 begins at sector 0 of GAMEFILE.DAT. Its first 4 bytes are ASCII `IDM` followed by byte value 1.
 
+### Test vectors: real index entries (disc)
+
+- Entries are (start sector, sector count) pairs: resource 0 = (0, 58), resource 1 = (58, 58), resource 2 = (116, 58), resource 3 = (174, 74). Resource 3 therefore begins at byte 356,352 and has a readable length of 151,552 bytes.
+- Resource 526 = (205,891, 347). Its entry bytes are the decimal values 67, 36, 3, 0, then 91, 1, 0, 0. Byte offset in GAMEFILE.DAT = 205,891 x 2048 = 421,664,768; readable length = 347 x 2048 = 710,656 bytes. With the data file starting at LBA 885,373, the disc read starts at LBA 1,091,264.
+- Empty run: resource 274 = (195,985, 17) and resource 275 = (196,002, 0). Every entry from 275 to 346 has start 196,002 and count 0; resource 347 = (196,002, 113). Reading "resource 275" must return nothing, not the first sector of 347.
+- Last entry: resource 1433 = (927,938, 961), and 927,938 + 961 = 928,899, the sector count of the data file. 76 entries in all have count 0.
+
 ## Open questions
 
 - Answered: resource numbers map to world-pack slots and character-region runs in SPEC-0006, model and character asset resources in SPEC-0004, and music banks and streams in SPEC-0009 (bank and sound-block formats in SPEC-0031). This spec covers the archive index itself.
