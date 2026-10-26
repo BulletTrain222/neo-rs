@@ -1818,6 +1818,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             v
         }
+        // SPEC-0054 1432 Init: game states 364 and 358; triggers 0 (the entry rectangle) and 1
+        // (the finale cylinder). Words: 1 the script-local flags, 2 busy, 3 the landed window's
+        // counter.
+        1432 => {
+            state.set(364, true);
+            state.set(358, true);
+            vec![reg(0, 0), reg(1, 1)]
+        }
         // SPEC-0043 1122 Init: trigger 5 (the waves); objects by 31 and 320; the slot thread (31:
         // set 0, 30: 1, else 2; region 1123 + set) into slot 0; with 31 trigger 6 (the arena
         // entry). Triggers 0 to 3 (ActivateTransitionAssets, RegisterTransitionMap) and the
@@ -3390,6 +3398,142 @@ fn barrier_1174(s: &mut GameState, g: usize, up: bool) -> Vec<Action> {
         v.push(reg_at(30 + g as u16, if up { 30 } else { 31 }));
     }
     v
+}
+
+/// SPEC-0054 1432's fight control thread, one tick: rule 1 (flag 6: idle), rule 2 (flag 4: the
+/// finale), rule 3 (flag 2 with 3 clear: the timeout ending), rule 4 (flag 0 with 1 clear: the
+/// entry sequence), rule 5 (level state 11: the director) and rule 6 (11 clear, 9 set, 10 clear:
+/// the fight start step). The sequences hold the thread (word 2) until their last step. Movies 78,
+/// 85 and 80 are counted as played; the finale loads eW 151 in place of movie 85; SetGameOver, the
+/// boss-fight tweaks, the hero move of the fight start step (no locator is given) and control
+/// thread B (the Minion Grunts) are not built.
+fn fight_1432(state: &mut GameState) -> Vec<Action> {
+    const P: u32 = 1432;
+    let b = state.word(P, 1);
+    let f = |n: u32| b & 1 << n != 0;
+    let set = |s: &mut GameState, n: u32| s.set_word(P, 1, s.word(P, 1) | 1 << n);
+    let clear = |s: &mut GameState, n: u32| s.set_word(P, 1, s.word(P, 1) & !(1 << n));
+    if state.word(P, 2) != 0 || f(6) {
+        return Vec::new();
+    }
+    let done = |n: u32| Action::Bits { word: 1, set: 1 << n, clear: 0 };
+    let release = Action::Bits { word: 2, set: 0, clear: 1 };
+    if f(4) && !f(5) {
+        state.set_word(P, 2, 1);
+        state.timer.deactivate();
+        state.set(94, true);
+        state.set(365, true);
+        state.movies.insert(85);
+        state.blackboard.insert((2, 151), 80);
+        let mut v = vec![Action::DeactivateObj { obj: 1 }];
+        v.extend([0, 5, 6, 7].map(|entity| Action::DeactivateEntity { entity }));
+        v.extend([Action::SwapMode { mode: 2 }, done(6), release, Action::ReplaceExterior { slot: 151, plane: -1 }]);
+        return v;
+    }
+    if f(2) && !f(3) {
+        state.set_word(P, 2, 1);
+        state.timer.deactivate();
+        state.movies.insert(80);
+        let mut v = vec![Action::FadeOut { seconds: FADE, wait: true }];
+        v.extend([0, 5, 6, 7].map(|entity| Action::DeactivateEntity { entity }));
+        v.extend((0..=2).map(|obj| Action::DeactivateObj { obj }));
+        v.extend([Action::SwapMode { mode: 2 }, done(3), done(6), release]);
+        return v;
+    }
+    if f(0) && !f(1) {
+        state.set_word(P, 2, 1);
+        state.movies.insert(78);
+        let mut v = vec![
+            Action::FadeOut { seconds: FADE, wait: true },
+            Action::FadeOut { seconds: 0.0, wait: true },
+            Action::MoveHero { locator: 3 },
+            Action::ReturnCamera { preset: -1, release: false },
+            Action::MoveEntity { entity: 0, locator: 2, face: false },
+            // The move's control option is taken as 1 (free control after the move; not given).
+            Action::ReleaseEntity { entity: 0 },
+        ];
+        v.extend((0..=2).map(|obj| Action::InitObjOn { obj, end: false }));
+        v.push(Action::SwitchHero { hero: 0, effects: true, flash: true });
+        v.extend((18..=25).map(|slot| Action::StartEffect { slot, camera: false }));
+        v.extend([
+            Action::FadeIn { seconds: FADE, wait: true },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::Equip { on: true },
+            Action::ActivateTimer { start: 180.0, limit: 0.0, up: false },
+            Action::SwapMode { mode: 3 },
+            Action::SetFlag { flag: 364, on: true },
+            Action::LevelState { flag: 11, on: true },
+            Action::LevelState { flag: 10, on: false },
+            done(1),
+            release,
+        ]);
+        return v;
+    }
+    if state.level(11) {
+        let mut v = Vec::new();
+        if state.level(16) {
+            if !f(8) {
+                state.set_word(P, 3, 900);
+                set(state, 8);
+            } else {
+                let n = state.word(P, 3) - 1;
+                state.set_word(P, 3, n);
+                if n < 1 {
+                    clear(state, 8);
+                    state.set_level(16, false);
+                    state.set_level(13, true);
+                }
+            }
+            return v;
+        }
+        if !f(7) && state.timer.value == 0.0 {
+            set(state, 2);
+        }
+        let swapping = state.hero.swapping;
+        if f(7) && !swapping {
+            if state.level(12) {
+                v.extend([7, 6, 5].map(|entity| Action::ActivateEntity { entity }));
+                state.set_level(12, false);
+                state.set_level(14, true);
+            } else if state.level(13) {
+                state.set_level(13, false);
+                state.set_level(15, true);
+            }
+            clear(state, 7);
+            state.timer.running = true;
+        }
+        if !f(7) {
+            if state.level(12) {
+                if state.hero.selected == 0 && !swapping {
+                    state.timer.running = false;
+                    set(state, 7);
+                    v.extend([Action::SwapMode { mode: 2 }, Action::SwitchHero { hero: 1, effects: true, flash: true }, Action::SwapMode { mode: 3 }]);
+                }
+            } else if state.level(13) && state.hero.selected == 1 && !swapping {
+                state.timer.running = false;
+                set(state, 7);
+                v.push(Action::SwitchHero { hero: 0, effects: true, flash: true });
+            }
+        }
+        return v;
+    }
+    if f(9) && !f(10) {
+        state.set_word(P, 2, 1);
+        return vec![
+            Action::LetterBox { on: true, seconds: 0.0, wait: false },
+            Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
+            Action::FadeIn { seconds: 0.5, wait: true },
+            Action::StartEffect { slot: 3, camera: false },
+            Action::StartEffect { slot: 4, camera: false },
+            wait(0.5),
+            Action::LetterBox { on: false, seconds: 0.7, wait: false },
+            wait(1.0),
+            Action::ReturnCamera { preset: -1, release: true },
+            done(10),
+            release,
+        ];
+    }
+    Vec::new()
 }
 
 /// SPEC-0044 1174 thread W1, one helper a tick in the spec's order.
@@ -6173,6 +6317,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.push(Action::Message { line: 58 });
             }
         }
+        // SPEC-0054 1432 trigger 0 (the entry rectangle): flag 0. Trigger 1 (the finale
+        // cylinder): flag 4 when the object is the hero's own and the landed window is open (flag
+        // 8); a shot's fire (object 0) cannot pass.
+        (1432, 0) if call.state != 0 => state.set_word(pack, 1, state.word(pack, 1) | 1),
+        (1432, 1) if call.object && state.word(pack, 1) & 1 << 8 != 0 => state.set_word(pack, 1, state.word(pack, 1) | 1 << 4),
         // SPEC-0043 1122 trigger 5 (entering, 320 clear, once per load): the opening (cameras 4
         // and 5, objects 1, 2, 0, 4 and 5), then wave 1 (set 3 into slot 1, AIs 11 to 13
         // aggressive); Update runs the next waves and the end. DisableInvisibility is not built.
@@ -8904,6 +9053,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend([Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }, Action::Message { line: 4 }, Action::LoadRegion { slot: 0, region: None }, Action::ReturnCamera { preset: -1, release: true }]);
             }
         }
+        // SPEC-0054 1432 the fight control thread (the first rule that applies takes the tick).
+        1432 => out.extend(fight_1432(state)),
         // SPEC-0043 1122 Update: the waves (word 2: 1 to 3) advance once every character of slot
         // 1 is dead (3 s, the next set: 4 then 5, their AIs aggressive), and after the third the
         // end (320, the hero to locator 24, the objects back). With 31 and 320 the arena thread:
@@ -10155,6 +10306,12 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         893 => {
             state.take_message(2, 65);
             Vec::new()
+        }
+        // SPEC-0054 1432 activation: level state 10, objects 0, 1 and 2, flag 9.
+        1432 => {
+            state.set_level(10, true);
+            state.set_word(pack, 1, state.word(pack, 1) | 1 << 9);
+            (0..=2).map(|obj| Action::InitObjOn { obj, end: false }).collect()
         }
         // SPEC-0043 1122 activate-world (registered with 31): level state 4.
         1122 if state.flag(31) => {
@@ -13680,6 +13837,71 @@ mod tests {
         on_update(1122, &mut s, false);
         assert!(on_update(1122, &mut s, false).contains(&Action::ReplaceExterior { slot: 151, plane: -1 }));
         assert!(s.flag(321) && s.flag(322));
+    }
+
+    #[test]
+    fn module_1432_final_fight() {
+        // The thread's own writes (Bits, LevelState, SetFlag, the timer) as the host applies them.
+        fn run(v: Vec<Action>, s: &mut GameState) -> Vec<Action> {
+            for a in &v {
+                match *a {
+                    Action::Bits { word, set, clear } => s.set_word(1432, word, (s.word(1432, word) | set) & !clear),
+                    Action::LevelState { flag, on } => s.set_level(flag, on),
+                    Action::SetFlag { flag, on } => s.set(flag, on),
+                    Action::ActivateTimer { start, limit, up } => s.timer.activate(start, limit, up),
+                    _ => {}
+                }
+            }
+            v
+        }
+        let mut s = GameState::default();
+        let v = on_init(1432, &mut s);
+        assert!(s.flag(364) && s.flag(358) && v.contains(&Action::RegisterTrigger { index: 1, routine: 1 }));
+        on_activate(1432, &mut s);
+        assert!(s.level(10));
+        // Rule 6, the fight start step, once.
+        assert!(run(on_update(1432, &mut s, false), &mut s).contains(&Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }));
+        assert!(on_update(1432, &mut s, false).is_empty());
+        // Trigger 1 before the window: nothing. Trigger 0, then the entry: the clock at 180,
+        // level 11 on and 10 off, movie 78.
+        let fire = |o| TriggerCall { index: 0, state: 1, object: o, square: false };
+        on_trigger(1432, 1, fire(true), &mut s);
+        assert_eq!(s.word(1432, 1) & 1 << 4, 0);
+        on_trigger(1432, 0, fire(true), &mut s);
+        let v = run(on_update(1432, &mut s, false), &mut s);
+        assert!(v.contains(&Action::MoveEntity { entity: 0, locator: 2, face: false }) && s.movies.contains(&78));
+        assert!(s.level(11) && !s.level(10) && s.timer.value == 180.0);
+        // The landed window: armed on level 16 (900 ticks), then level 13 at its end.
+        s.set_level(16, true);
+        on_update(1432, &mut s, false);
+        assert_eq!(s.word(1432, 3), 900);
+        // Trigger 1 inside the window: a shot's fire (object 0) does not pass; the hero's does.
+        on_trigger(1432, 1, fire(false), &mut s);
+        assert_eq!(s.word(1432, 1) & 1 << 4, 0);
+        let mut t = s.clone();
+        on_trigger(1432, 1, fire(true), &mut t);
+        let v = run(on_update(1432, &mut t, false), &mut t);
+        assert!(v.contains(&Action::ReplaceExterior { slot: 151, plane: -1 }) && t.flag(94) && t.flag(365));
+        assert_eq!(t.blackboard.get(&(2, 151)), Some(&80));
+        for _ in 0..900 {
+            on_update(1432, &mut s, false);
+        }
+        assert!(!s.level(16) && s.level(13));
+        // The landed-miss swap with Roberta active: the clock stops; its completion sets 15.
+        s.hero.selected = 1;
+        let v = on_update(1432, &mut s, false);
+        assert!(v.contains(&Action::SwitchHero { hero: 0, effects: true, flash: true }) && !s.timer.running);
+        s.hero.swapping = true;
+        on_update(1432, &mut s, false);
+        s.hero.swapping = false;
+        s.hero.selected = 0;
+        on_update(1432, &mut s, false);
+        assert!(s.level(15) && !s.level(13) && s.timer.running);
+        // The timeout: the clock at 0.0 sets flag 2, and the ending runs (movie 80).
+        s.timer.value = 0.0;
+        on_update(1432, &mut s, false);
+        let v = run(on_update(1432, &mut s, false), &mut s);
+        assert!(s.movies.contains(&80) && v.contains(&Action::DeactivateEntity { entity: 0 }));
     }
 
     #[test]

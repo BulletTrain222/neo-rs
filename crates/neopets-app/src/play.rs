@@ -400,6 +400,8 @@ pub struct Character {
     pub sister_hit: Option<(i32, bool)>,
     /// The Undead Draik controller (behaviour class 12; SPEC-0029 Behavior 6).
     pub draik: Option<neopets_sim::draik::Draik>,
+    /// The Darkest Faerie controller (behaviour class 37; SPEC-0054).
+    pub faerie: Option<neopets_sim::darkest::Faerie>,
 }
 
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
@@ -594,6 +596,7 @@ pub struct Play {
     sister_words: neopets_sim::sisters::Words,
     sister_group: neopets_sim::sisters::Group,
     draik_words: neopets_sim::draik::Words,
+    faerie_words: neopets_sim::darkest::Words,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
@@ -985,6 +988,10 @@ impl Play {
         };
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
+        let faerie_words = {
+            use neopets_sim::darkest::*;
+            Words::read(&words(BASE, WORDS)?, &words(BASE_B, WORDS_B)?).ok_or("The Darkest Faerie's tuning words are short")?
+        };
         let (effect_table, effect_images) = {
             let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
             let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
@@ -1176,6 +1183,7 @@ impl Play {
             sister_words,
             sister_group: Default::default(),
             draik_words,
+            faerie_words,
             boss_hits: Vec::new(),
             last_boss: String::new(),
             petpet: None,
@@ -3302,8 +3310,9 @@ impl Play {
             c.sister_hit = Some((damage, by.contains("shot")));
             return;
         }
-        // SPEC-0029 Behavior 6.4: the Undead Draik registers hits on its own bone groups.
-        if self.characters.get(i).is_some_and(|c| c.draik.is_some()) {
+        // SPEC-0029 Behavior 6.4: the Undead Draik registers hits on its own bone groups; the
+        // Darkest Faerie is invulnerable for her whole life (SPEC-0054 Hit points).
+        if self.characters.get(i).is_some_and(|c| c.draik.is_some() || c.faerie.is_some()) {
             return;
         }
         // SPEC-0020: Gnarfas takes a hit through its own flinch (the damage lands when it ends).
@@ -3543,7 +3552,7 @@ impl Play {
             .iter()
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -3670,6 +3679,7 @@ impl Play {
                 sister: row.and_then(|r| r.class).filter(|c| matches!(c, 13 | 15 | 16)).map(|c| neopets_sim::sisters::Sister::new(c as u8)),
                 sister_hit: None,
                 draik: row.filter(|r| r.class == Some(12)).map(|_| neopets_sim::draik::Draik::new(&self.draik_words, &mut self.rng)),
+                faerie: row.filter(|r| r.class == Some(37)).map(|_| neopets_sim::darkest::Faerie::default()),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3725,6 +3735,7 @@ impl Play {
             sister: None,
             sister_hit: None,
             draik: None,
+            faerie: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4779,6 +4790,7 @@ impl Play {
         self.king_step();
         self.sisters_step();
         self.draik_step();
+        self.faerie_step();
         self.mice_step();
         self.enemies_step();
         self.items_step();
@@ -6088,6 +6100,109 @@ impl Play {
                     self.attack = None;
                     self.loco.knock(scale(unit([u[0], 12.0, u[2]]), speed));
                 }
+            }
+        }
+    }
+
+    /// SPEC-0054 per tick for the Darkest Faerie (class 37) in the current world: the host's
+    /// measurements (the ground 8.0 above her, the hero's guard, slot-1 kind, in-attack test,
+    /// attack form 2 and weapon reach within 65.0 against her body cylinder, the armed hero shots)
+    /// and her requests (the clip, the turn, her height, the shove, the orb hits, the level
+    /// states, the absorbed shots and the impact effects). The launch point is taken 0.85 of her
+    /// height up (her mouth bone is not given); the summons by key, the slots' flight effects and
+    /// the cast glow are not built.
+    fn faerie_step(&mut self) {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.faerie.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        let swing = self.weapon_segment();
+        let guarding = self.loco.state == hero_states::GUARD;
+        let kind = neopets_sim::darkest::attack_kind(self.equipment.motes[self.hero_index.min(1)][1]);
+        let attacking = if self.hero_index == 0 { self.attack.is_some() } else { self.r_attack.is_some() };
+        let form2 = if self.hero_index == 0 { self.attack.as_ref().is_some_and(|a| matches!(a.sub, 4 | 7 | 8 | 12)) } else { self.r_attack.as_ref().is_some_and(|a| a.sub == 4) };
+        let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let progress = self.state.flag(364);
+            let c = &mut self.characters[i];
+            let (radius, height) = c.row.map_or((1.0, 3.0), |r| (r.radius, r.height));
+            let near = (hero[0] - c.position[0]).hypot(hero[2] - c.position[2]) < 65.0;
+            let body = neopets_sim::combat::Cylinder::from_base(c.position, UP, radius, height);
+            let reaches = near && swing.as_ref().is_some_and(|s| neopets_sim::combat::overlap(s, &body));
+            let clip = c.anim.clip_state();
+            let ground = self.world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0);
+            let v = neopets_sim::darkest::View {
+                position: c.position,
+                hero,
+                hero_facing: hf,
+                hero_guard: guarding,
+                hero_kind: kind,
+                hero_attacking: attacking,
+                form2,
+                weapon_reaches: reaches,
+                radius,
+                height,
+                hero_radius: contact::HERO_RADIUS,
+                ground,
+                shots: &shots,
+                mouth: add(c.position, [0.0, 0.85 * height, 0.0]),
+                clip: (clip.action, clip.progress >= 0.99),
+                frame_bits: c.anim.frame_bits(),
+                progress,
+                level: &level,
+            };
+            let Some(f) = c.faerie.as_mut() else { continue };
+            let before = f.code;
+            let act = f.tick(&v, &self.faerie_words, &mut self.rng);
+            let after = f.code;
+            if let Some(n) = act.anim {
+                if clip.action != n || (clip.progress >= 0.99 && before != after) {
+                    c.anim.play(n);
+                }
+            }
+            if let Some(w) = act.face {
+                c.facing = neopets_sim::hero::steer(c.facing, [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]], w);
+            }
+            if let Some(y) = act.height {
+                c.position[1] = y;
+            }
+            if before != after {
+                self.last_boss = format!("Darkest Faerie code {before} -> {after} (absorbs {}, stuns {}) on tick {}", f.absorbs, f.stuns, self.ticks);
+            }
+            let from = c.position;
+            for &(flag, on) in &act.levels {
+                self.state.set_level(flag, on);
+            }
+            let mut gone: Vec<usize> = act.absorbed.clone();
+            gone.sort_unstable();
+            for k in gone.into_iter().rev() {
+                if k < self.hero_shots.len() {
+                    self.hero_shots.remove(k);
+                }
+            }
+            let table = self.effect_table.clone();
+            for &(fx, at) in &act.impacts {
+                self.effects.one_shot(&table, fx, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            if !act.summons.is_empty() {
+                self.last_boss = format!("Darkest Faerie summons {} (by key; not built) on tick {}", act.summons.len(), self.ticks);
+            }
+            let d = {
+                let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                [dx / l, 0.0, dz / l]
+            };
+            for &damage in &act.hero_damage {
+                self.hero_hit(damage as f32, 0.0, false, d, "the Darkest Faerie's orb".into());
+            }
+            if let Some(p) = act.push {
+                self.attack = None;
+                let at = add(self.loco.position(), p.offset);
+                self.loco.body.position = at;
+                self.loco.knock(p.velocity);
             }
         }
     }
