@@ -13,6 +13,41 @@ use std::collections::HashMap;
 #[derive(Resource)]
 pub struct Menu {
     pub flow: Flow,
+    /// Rising edges seen on frames that ran no tick, kept for the next tick (edge word,
+    /// button word), and last frame's stick direction bits.
+    pub latched: (u16, u16),
+    pub stick: u16,
+}
+
+impl Menu {
+    pub fn new(flow: Flow) -> Self {
+        Self { flow, latched: (0, 0), stick: 0 }
+    }
+}
+
+/// The left stick's direction bits (SPEC-0035 section 4, analog-to-digital): a byte below 0x20
+/// sets Up (vertical) or Left (horizontal), above 0xE0 Down or Right. Bytes as the pad gives
+/// them: X right 255, Y up 0.
+pub fn stick_bits(gamepads: &Query<&Gamepad>) -> u16 {
+    let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as i32;
+    let mut w = 0;
+    for g in gamepads.iter() {
+        let s = g.left_stick();
+        let (x, y) = (byte(s.x), byte(-s.y));
+        if y < 0x20 {
+            w |= menus::UP;
+        }
+        if y > 0xE0 {
+            w |= menus::DOWN;
+        }
+        if x < 0x20 {
+            w |= menus::LEFT;
+        }
+        if x > 0xE0 {
+            w |= menus::RIGHT;
+        }
+    }
+    w
 }
 
 #[derive(Component)]
@@ -23,7 +58,8 @@ pub struct MenuItem(usize);
 #[derive(Component)]
 pub struct MenuBackdrop;
 
-/// The held menu word: Left and Right (arrows or A/D, the D-pad) for the sliders.
+/// The held menu word: Left and Right (arrows or A/D, the D-pad) for the sliders; the stick's
+/// bits are added by the caller.
 pub fn menu_held(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> u16 {
     let pad = |b: GamepadButton| gamepads.iter().any(|g| g.pressed(b));
     let mut w = 0;

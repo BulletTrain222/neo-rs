@@ -1175,7 +1175,19 @@ fn step_sim(
         // SPEC-0035: the front end runs once per tick; outside play and the game-over page the
         // world is frozen and the hero's buttons are dropped.
         let (mut edge, mut buttons) = menu_view::menu_words(&keys, &gamepads);
-        let held = menu_view::menu_held(&keys, &gamepads);
+        let mut held = menu_view::menu_held(&keys, &gamepads);
+        // The left stick's direction bits join the rising-edge and held words (never the
+        // button-only word). Edges seen on a frame that runs no tick are kept for the next
+        // tick, so no press is lost when the frame rate is above the 60 Hz tick rate.
+        if let Some(m) = menu.as_deref_mut() {
+            let stick = menu_view::stick_bits(&gamepads);
+            edge |= stick & !m.stick;
+            held |= stick;
+            m.stick = stick;
+            edge |= m.latched.0;
+            buttons |= m.latched.1;
+            m.latched = (0, 0);
+        }
         // A slot to apply after this frame's ticks (a load, or Continue with the snapshot).
         // The developer menu or free camera holds the hero's and the game menus' input.
         if dev.blocks_input() {
@@ -1188,6 +1200,12 @@ fn step_sim(
             p.panel_latch = Default::default();
         }
         let r3_held = r3_held && !dev.blocks_input();
+        // With no tick this frame the menu edges wait for the next one.
+        if ticks == 0 {
+            if let Some(m) = menu.as_deref_mut() {
+                m.latched = (std::mem::take(&mut edge), std::mem::take(&mut buttons));
+            }
+        }
         let mut pending: Option<neopets_sim::save::Slot> = None;
         // Quit's world teardown, run after this frame's ticks.
         let mut quit = false;
@@ -3001,7 +3019,7 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                             flow.book_words = (f32::from_bits(w[0]), f32::from_bits(w[1]));
                         }
                     }
-                    commands.insert_resource(menu_view::Menu { flow });
+                    commands.insert_resource(menu_view::Menu::new(flow));
                     if let Some(art) = hud_view::HudArt::new(f) {
                         commands.insert_resource(art);
                     }
