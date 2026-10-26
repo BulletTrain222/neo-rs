@@ -2080,6 +2080,12 @@ impl Play {
         let pack = self.world.pack;
         let hook = level::on_buy(pack, it.id, &self.state);
         self.apply(&hook);
+        // A buy callback that writes the record's flag word cancels the buy (SPEC-0030 row
+        // 260); the hooks here return their line only then.
+        if !hook.is_empty() {
+            self.last_pickup = format!("buy of item {} cancelled by the level script on tick {}", it.id, self.ticks);
+            return;
+        }
         let limit = self.design.carry_limit(it.id).unwrap_or(0);
         let held = self.state.items.get(&it.id).copied().unwrap_or(0);
         let add_ok = limit == 0 || held < limit;

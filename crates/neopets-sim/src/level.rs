@@ -528,7 +528,7 @@ impl GameState {
 /// The registered teleport callback of a pack's door: its prompt context (13 "Enter", 26
 /// "Exit"; 0 starts on contact), or None when no handler is described.
 pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
-    if (pack, door) == (880, 0) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
+    if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
         return Some(13);
     }
     match (pack, door) {
@@ -557,6 +557,11 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0037 1429 teleport 0 (kind 13): value 60 for eW 151 and the leave to eW 156.
+        (1429, 0) => {
+            state.blackboard.insert((2, 151), 60);
+            vec![Action::LeaveInterior { slot: 156 }]
+        }
         // SPEC-0037 783 to 789 teleport 0 (kind 13): the value for eW 31, the leave to eW 44,
         // then 3 s.
         (783 | 786 | 787 | 788 | 789, 0) => {
@@ -731,6 +736,28 @@ pub fn objects_scripted(pack: u32) -> bool {
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0037 855, 856, 857, 858 and 1429 Init: the entry thread's line (argument 0: in
+        // entity 0's conversation frame; 857's argument -1: none) and the normal camera. 856's
+        // item-ask callbacks never fire (SPEC-0030 row 257); the buy callbacks are on_buy.
+        855 | 856 | 857 | 858 | 1429 => {
+            let f = |n| state.flag(n);
+            let line = match pack {
+                855 if f(463) => 0,
+                855 if f(462) && state.has_item(22) => 2,
+                855 if f(462) => 3,
+                855 if f(59) => 5,
+                855 if f(56) => 6,
+                855 => 8,
+                1429 if f(93) => 0,
+                1429 if f(92) => 3,
+                1429 => 6,
+                _ if f(59) => 0,
+                _ if f(56) => 2,
+                _ => 4,
+            };
+            let say = if pack == 857 { Action::Message { line } } else { Action::Converse { entity: 0, line } };
+            vec![say, Action::ReturnCamera { preset: -1, release: true }]
+        }
         // SPEC-0039 984 Init: the proximity and on-enter callbacks are fixed rules; the four
         // item-ask callbacks never fire (SPEC-0030 row 257); thread 7 returns the normal camera.
         984 => vec![Action::ReturnCamera { preset: -1, release: true }],
@@ -1342,6 +1369,66 @@ fn eastside_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
             talk(17)
         }
         786 => talk(18),
+        _ => Vec::new(),
+    }
+}
+
+/// SPEC-0037 855 to 858 and 1429 proximity routines on entity 0.
+fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
+    let talk = |line| vec![Action::Talk { line }];
+    let f = |s: &GameState, n| s.flag(n);
+    match pack {
+        855 if f(s, 463) => talk(10),
+        855 if f(s, 462) && s.has_item(22) => {
+            s.set(463, true);
+            s.take(22, 1);
+            s.give(122, 1);
+            talk(13)
+        }
+        855 if f(s, 462) => talk(14),
+        855 if f(s, 59) => {
+            s.set(462, true);
+            talk(17)
+        }
+        855 => talk(if f(s, 56) { 18 } else { 21 }),
+        856 => talk(if f(s, 59) { 10 } else if f(s, 56) { 13 } else { 16 }),
+        857 => talk(if f(s, 59) { 6 } else if f(s, 56) { 9 } else { 12 }),
+        858 if f(s, 56) && !f(s, 512) => {
+            s.set(512, true);
+            talk(6)
+        }
+        858 if f(s, 56) && !f(s, 514) && s.has_item(73) => {
+            s.take(73, 1);
+            s.set(513, true);
+            s.set(514, true);
+            talk(7)
+        }
+        // The rotating sets (words 0 and 1: the last set and its counter, restarted when the set
+        // changes): 8 to 10 (59), 11 to 13 (56), 14 to 16.
+        858 => {
+            let set = if f(s, 59) { 1 } else if f(s, 56) { 2 } else { 3 };
+            if s.word(pack, 0) != set {
+                s.set_word(pack, 0, set);
+                s.set_word(pack, 1, 0);
+            }
+            let c = s.word(pack, 1);
+            let first = 8 + 3 * (set as u16 - 1);
+            let (k, next) = match c {
+                0 => (0, 1),
+                1 => (1, 2),
+                _ => (2, 0),
+            };
+            s.set_word(pack, 1, next);
+            talk(first + k)
+        }
+        // 1429: one counter for the three sets, never reset on a change of set: 11 to 13 (322),
+        // 14 to 16 (236), 17 to 19.
+        1429 => {
+            let first = if f(s, 322) { 11 } else if f(s, 236) { 14 } else { 17 };
+            let c = s.word(pack, 0).rem_euclid(3);
+            s.set_word(pack, 0, (c + 1) % 3);
+            talk(first + c as u16)
+        }
         _ => Vec::new(),
     }
 }
@@ -3632,8 +3719,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (678 | 686 | 691, 9) => Some(0),
         // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
         (1148, 0..=3) => Some(entity as u8),
-        // SPEC-0037 783, 786, 787, 788 and 789: P on entity 0.
-        (783 | 786 | 787 | 788 | 789, 0) => Some(0),
+        // SPEC-0037 783, 786, 787, 788 and 789, and 855 to 858 and 1429: P on entity 0.
+        (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429, 0) => Some(0),
         // SPEC-0039 984: handler 1 on entity 0.
         (984, 0) => Some(1),
         // SPEC-0044 1017: set D on entities 0 and 4, C on 1 and 5, A on 2 and 6, B on 3 and 7.
@@ -3698,6 +3785,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if eastside_interior(pack).is_some() && routine == 0 {
         return eastside_talk(pack, state);
+    }
+    if matches!(pack, 855..=858 | 1429) && routine == 0 {
+        return outskirts_talk(pack, state);
     }
     // SPEC-0039 984 entity 0 (handler 1): with 67 line 12 in the conversation frame; else line
     // 15 (202), 18 (150) or 21 alone.
@@ -3961,6 +4051,33 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn outskirts_interiors() {
+        let mut s = GameState::default();
+        // SPEC-0037 vector: 858 with 56 and 512 set, 514 clear, no item 73, 59 clear: four talks
+        // give 11, 12, 13, 11; then 59 set gives 8.
+        s.set(56, true);
+        s.set(512, true);
+        let lines: Vec<_> = (0..4).map(|_| on_talk(858, 0, &mut s)).collect();
+        assert_eq!(lines.concat(), [11, 12, 13, 11].map(|line| Action::Talk { line }).to_vec());
+        s.set(59, true);
+        assert_eq!(on_talk(858, 0, &mut s), vec![Action::Talk { line: 8 }]);
+        // 857 thread A with 59 clear and 56 set: line 2.
+        s.set(59, false);
+        assert_eq!(on_init(857, &mut s)[0], Action::Message { line: 2 });
+        // 855: 59 then 462, then the hammer (item 22) for the armour (122).
+        s.set(59, true);
+        assert_eq!(on_talk(855, 0, &mut s), vec![Action::Talk { line: 17 }]);
+        s.give(22, 1);
+        assert_eq!(on_talk(855, 0, &mut s), vec![Action::Talk { line: 13 }]);
+        assert!(s.has_item(122) && !s.has_item(22) && s.flag(463));
+        // 1429: one counter across the sets.
+        assert_eq!(on_talk(1429, 0, &mut s), vec![Action::Talk { line: 17 }]);
+        s.set(236, true);
+        assert_eq!(on_talk(1429, 0, &mut s), vec![Action::Talk { line: 15 }]);
+        assert_eq!(on_buy(1429, 109, &s), vec![Action::Message { line: 20 }]);
     }
 
     #[test]
