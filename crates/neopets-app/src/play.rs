@@ -642,6 +642,9 @@ pub struct Play {
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
     /// The drop direction of a dig reward while it pays out (SPEC-0051 section 10 step 11).
     dig_drop: Option<[f32; 3]>,
+    /// Entities that died in a resident world this load (pack, entity id): the kill memory the
+    /// IsAI_Dead test falls back on (cleared when the world is released).
+    killed: std::collections::HashSet<(u32, usize)>,
     /// Placed records with their active flag set (the switch path; SPEC-0028 section 9).
     placed_on: std::collections::HashSet<(u32, usize)>,
     /// The zone manager (SPEC-0006 Zone manager); its grid is the current world's.
@@ -979,6 +982,7 @@ impl Play {
             char_lights: HashMap::new(),
             dig_drop: None,
             placed_on: Default::default(),
+            killed: Default::default(),
             zones: Default::default(),
             wheel_spin: None,
             display_mask: HashMap::new(),
@@ -1874,6 +1878,17 @@ impl Play {
                     self.apply(&[Action::SetObjTime { obj, seconds: (r as f64 / 100.0) as f32 }]);
                 }
                 Action::WaitInside { index } => return Some(Wait::Inside(index)),
+                Action::RegisterInstance { routine, trigger, group } => {
+                    let triggers: Vec<u16> = match self.world.groups.get(group) {
+                        Some(g) if g.kind == 7 => g.triggers.iter().filter_map(|&t| u16::try_from(t).ok()).collect(),
+                        Some(_) => vec![trigger],
+                        None => Vec::new(),
+                    };
+                    for t in triggers.into_iter().filter(|&t| (t as usize) < self.world.capacity) {
+                        self.world.routines.insert(t, routine);
+                        self.world.group_routes.remove(&t);
+                    }
+                }
                 Action::LockChest { id, key, message } => {
                     if self.world.locks.len() < 2 {
                         self.world.locks.push((id, key, message));
@@ -4266,6 +4281,16 @@ impl Play {
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
         self.light_step();
+        // IsAI_Dead (SPEC-0030 row 45): a bound character's dead test, else the kill memory of
+        // this load for its entity id.
+        for c in self.characters.iter().filter(|c| c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.dead)) {
+            if let Some(e) = c.entity {
+                self.killed.insert((c.pack, e));
+            }
+        }
+        let pack = self.world.pack;
+        self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
+        self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0));
         // Dead characters disappear when their countdown ends.
         for c in &mut self.characters {
             if let Some(t) = c.dying.as_mut() {
@@ -5551,6 +5576,7 @@ impl Play {
         let table = self.effect_table.clone();
         let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
         self.placed_on.retain(|(p, _)| resident.contains(p));
+        self.killed.retain(|(p, _)| resident.contains(p));
         let gone: Vec<(u32, usize)> = self.placed_fx.keys().filter(|(p, _)| !resident.contains(p)).copied().collect();
         for k in gone {
             if let Some(h) = self.placed_fx.remove(&k) {
