@@ -9956,7 +9956,7 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 /// The setup helper of a module's shared entity-control table (SPEC-0043, Shared entity-control
 /// routine, Records per module), run at its Init: the table is reset and its records added
 /// under their gates. Returns the adds' idle-loop requests. Modules whose records follow story
-/// stages or are parked during their cutscenes (909, 951, 1098, 1150, 1163) are not set up here.
+/// stages or are parked during their cutscenes (909, 951, 1098, 1163) are not set up here.
 pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::Command> {
     use crate::entityctl::{Point, Table};
     let mut t = Table::default();
@@ -9985,6 +9985,24 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
             add(&mut t, 3, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[(4, true, true), (5, true, true)]);
         }
         1020 => add(&mut t, 1, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[(1, true, true), (2, true, true), (3, true, true)]),
+        // SPEC-0042 1150 Init step 1 to 3: entities 1 and 2 (base 65; 68 and 67 for 2.5 s), entity
+        // 3 (base 0; 64, 13, 12 and 81 for 1.5 s; its walk-and-orient waypoints 1 (flag 9 clear),
+        // 2 and 3, each redrawing the walk interval), entity 4 with flag 9 clear (base 65; 68 and
+        // 70) and entity 0 (base 0; 40, 41, 51, 95 and 96).
+        1150 => {
+            let (a, b) = ((3.0, 10.0), (3.0, 4.0));
+            add(&mut t, 1, 65, a, b, &[(68, 2.5), (67, 2.5)], &[]);
+            add(&mut t, 2, 65, a, b, &[(68, 2.5), (67, 2.5)], &[]);
+            add(&mut t, 3, 0, (2.0, 3.5), (5.0, 6.0), &[(64, 1.5), (13, 1.5), (12, 1.5), (81, 1.5)], &[]);
+            if !state.flag(9) {
+                add(&mut t, 4, 65, (4.0, 6.0), b, &[(68, 2.5), (70, 2.5)], &[]);
+                t.add_point(3, Point::new(1, true, true));
+            }
+            for l in [2, 3] {
+                t.add_point(3, Point::new(l, true, true));
+            }
+            add(&mut t, 0, 0, (5.0, 9.0), b, &[(40, 2.5), (41, 2.5), (51, 2.5), (95, 2.5), (96, 2.5)], &[]);
+        }
         1409 if state.flag(106) => {
             for e in [0, 1] {
                 add(&mut t, e, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]);
@@ -13885,6 +13903,24 @@ mod tests {
         on_update(1122, &mut s, false);
         assert!(on_update(1122, &mut s, false).contains(&Action::ReplaceExterior { slot: 151, plane: -1 }));
         assert!(s.flag(321) && s.flag(322));
+    }
+
+    #[test]
+    fn entity_table_1150() {
+        // Flag 9 clear: five records (1, 2, 3, 4, 0); entity 3 walks locators 1, 2 and 3.
+        let mut s = GameState::default();
+        let loops = entity_setup(1150, &mut s);
+        assert_eq!(loops.len(), 5);
+        let t = &s.entity_tables[&1150];
+        assert_eq!(t.records.iter().map(|r| r.entity).collect::<Vec<_>>(), vec![1, 2, 3, 4, 0]);
+        assert_eq!(t.records[2].points.iter().map(|p| p.locator).collect::<Vec<_>>(), vec![1, 2, 3]);
+        // Flag 9 set: no entity 4, entity 3 walks 2 and 3.
+        let mut s = GameState::default();
+        s.set(9, true);
+        entity_setup(1150, &mut s);
+        let t = &s.entity_tables[&1150];
+        assert_eq!(t.records.len(), 4);
+        assert_eq!(t.records[2].points.len(), 2);
     }
 
     #[test]
