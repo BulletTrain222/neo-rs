@@ -400,6 +400,9 @@ pub struct GameState {
     /// SetEntityUndamageable as an Update sets it this tick (beside the fixed lists of
     /// `undamageable`), kept by the host until the next Update.
     pub undamageable_now: BTreeSet<usize>,
+    /// HasMoviePlayed: the movies a module asked to play. No movie is shown in this build, but
+    /// a PlayFMV the script makes counts as played.
+    pub movies: BTreeSet<u16>,
     /// NumMiamiceInCage (SPEC-0029 Behavior 28), filled by the host.
     pub miamice_caged: u32,
     /// NumMortogsOnTarget (SPEC-0041 1363). The host has no Mortog behaviour yet, so it stays 0.
@@ -1536,6 +1539,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0039 1246 Init: objects 5 and 3 at their start; handler 1 on trigger 1, handler 2
+        // on trigger 0.
+        1246 => vec![Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 3, end: false }, reg(1, 1), reg(0, 2)],
         // SPEC-0044 1327 Init: the slot thread (94: none; 93: set 4; 92: swap mode 1 and set 2;
         // else swap mode 1, set 1, and set 5 into the second store with 222 set and 234 clear, or
         // 235; region 1328 + set); with 92 clear group 6's effects and objects 1 and 0, else
@@ -2687,6 +2693,107 @@ fn talk_1350(routine: u8, s: &mut GameState) -> Vec<Action> {
         }
         _ => Vec::new(),
     }
+}
+
+/// SPEC-0039 1246 handler 2, by level state 8, flag 273 and the fight cascade (level states 7 down
+/// to 2). Each run that does more than test keeps word 1 set until it ends.
+fn arena_1246(s: &mut GameState) -> Vec<Action> {
+    let p = 1246;
+    let mut v = Vec::new();
+    let off = |v: &mut Vec<Action>| v.extend((16..=24).map(|entity| Action::DeactivateEntity { entity }));
+    if s.level(8) {
+        off(&mut v);
+        s.set(273, true);
+        v.push(Action::Sleep { ticks: 60 });
+    } else if s.flag(273) {
+        // The reward: movie 42 (counted as played), swap mode 2, the hero outside the arena,
+        // item 14 and line 1.
+        s.movies.insert(42);
+        s.set_level(8, true);
+        v.extend([Action::EntityAnim { entity: 16, anim: 27, looped: true, wait: false }, wait(1.3), Action::FadeOut { seconds: 1.0, wait: true }]);
+        off(&mut v);
+        v.extend([
+            Action::SwapMode { mode: 2 },
+            Action::DeactivateObj { obj: 1 },
+            Action::DeactivateObj { obj: 3 },
+            Action::DeactivateObj { obj: 0 },
+            Action::InitObjOn { obj: 2, end: false },
+            Action::MoveHero { locator: 9 },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::FadeIn { seconds: 1.0, wait: false },
+            Action::Sleep { ticks: 30 },
+            Action::GiveItem { item: 14, count: 1 },
+            Action::Message { line: 1 },
+        ]);
+    } else if s.level(7) || (s.level(5) && !s.level(6)) || (s.level(3) && !s.level(4) && !s.level(5) && !s.level(6)) {
+        return Vec::new();
+    } else if s.level(6) {
+        s.set_level(7, true);
+        v.extend([
+            Action::FadeOut { seconds: FADE, wait: true },
+            Action::LetterBox { on: true, seconds: 1.0, wait: false },
+            Action::MoveHero { locator: 6 },
+            Action::MoveEntity { entity: 16, locator: 7, face: true },
+            Action::FadeIn { seconds: FADE, wait: true },
+            Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 },
+            wait(0.8),
+            Action::EntityAnim { entity: 16, anim: 17, looped: false, wait: true },
+            wait(0.8),
+            Action::ReleaseEntity { entity: 16 },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::LetterBox { on: false, seconds: 1.0, wait: false },
+        ]);
+    } else if s.level(4) {
+        s.set_level(5, true);
+        v.extend([
+            Action::FadeOut { seconds: FADE, wait: true },
+            Action::LetterBox { on: true, seconds: 1.0, wait: false },
+            Action::MoveHero { locator: 6 },
+            Action::MoveEntity { entity: 16, locator: 7, face: true },
+            Action::FadeIn { seconds: FADE, wait: true },
+            Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+            wait(0.8),
+            Action::EntityAnim { entity: 16, anim: 16, looped: false, wait: true },
+            wait(0.5),
+            Action::Message { line: 0 },
+            Action::LetterBox { on: false, seconds: 1.0, wait: false },
+            Action::ReleaseEntity { entity: 16 },
+            Action::ReturnCamera { preset: -1, release: true },
+        ]);
+    } else if s.level(2) {
+        // The intro: the gates (objects 1, 0 on, 5 off, 4 on), entity 21 off during it, camera
+        // 4, the King's animation 18, entity 21 back; SetMaxActiveAI(12) is not built.
+        s.set_level(3, true);
+        v.extend([
+            Action::InitObjOn { obj: 1, end: false },
+            Action::InitObjOn { obj: 0, end: false },
+            Action::DeactivateObj { obj: 5 },
+            Action::InitObjOn { obj: 4, end: false },
+            Action::DeactivateEntity { entity: 21 },
+            Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+            Action::LetterBox { on: true, seconds: 1.0, wait: false },
+            Action::MoveEntity { entity: 16, locator: 7, face: true },
+            Action::FadeIn { seconds: FADE, wait: true },
+            Action::Sleep { ticks: 30 },
+            Action::WalkHero { locator: 8, wait: true, orient: false },
+            Action::EntityAnim { entity: 16, anim: 18, looped: false, wait: true },
+            wait(0.5),
+            Action::FadeOut { seconds: FADE, wait: true },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::LetterBox { on: false, seconds: 1.0, wait: false },
+            Action::ActivateEntity { entity: 21 },
+            Action::FadeIn { seconds: FADE, wait: true },
+            Action::ReleaseEntity { entity: 16 },
+        ]);
+    } else {
+        if s.movies.contains(&41) {
+            s.set_level(2, true);
+        }
+        return Vec::new();
+    }
+    s.set_word(p, 1, 1);
+    v.push(Action::Bits { word: 1, set: 0, clear: 1 });
+    v
 }
 
 /// A rotation with a head line shown once and then the cycle ("a; then b, c"), with a branch
@@ -4482,6 +4589,23 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0039 1246 handler 1 (trigger 1, the entrance; entering, level state 0 clear):
+        // level state 0, the walk to locator 10, the fade, the hero at locator 11 and movie 41 the
+        // first time (counted as played; not shown). BossFightTweakHero and SetHeroStartPos are
+        // not built.
+        (1246, 1) if call.state == 1 && !state.level(0) => {
+            state.set_level(0, true);
+            state.movies.insert(41);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::WalkHero { locator: 10, wait: false, orient: false },
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::MoveHero { locator: 11 },
+                Action::Sleep { ticks: 1 },
+            ]);
+        }
+        // Handler 2 (trigger 0, the arena; any fire, not while it runs: word 1).
+        (1246, 2) if state.word(pack, 1) == 0 => out.actions.extend(arena_1246(state)),
         // SPEC-0045 1300 routine 3 (trigger 0, entering, 227 clear): with item 61 line 186, item
         // 61 taken, item 62 given, 227 and effect 8 off; else line 185.
         (1300, 3) if call.object && call.state == 1 && !state.flag(227) => {
@@ -9771,6 +9895,34 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1246_arena() {
+        let mut s = GameState::default();
+        on_init(1246, &mut s);
+        let fire = TriggerCall { index: 0, state: 2, object: true, square: false };
+        // Before movie 41 nothing happens; the entrance marks it played.
+        assert!(on_trigger(1246, 2, fire, &mut s).actions.is_empty() && !s.level(2));
+        on_trigger(1246, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s);
+        // Vector 1: one fire sets level state 2 and nothing else; the next runs the intro (3).
+        assert!(on_trigger(1246, 2, fire, &mut s).actions.is_empty() && s.level(2));
+        assert!(on_trigger(1246, 2, fire, &mut s).actions.contains(&Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }));
+        assert!(s.level(3) && on_trigger(1246, 2, fire, &mut s).actions.is_empty());
+        s.set_word(1246, 1, 0);
+        assert!(on_trigger(1246, 2, fire, &mut s).actions.is_empty());
+        // Vector 2: level states 3 and 4: the camera-5 cutscene and level state 5.
+        s.set_level(4, true);
+        assert!(on_trigger(1246, 2, fire, &mut s).actions.contains(&Action::Message { line: 0 }) && s.level(5));
+        // Vector 3: 273 set, 8 clear: item 14 once, swap mode 2, level state 8, locator 9.
+        s.set_word(1246, 1, 0);
+        s.set(273, true);
+        let r = on_trigger(1246, 2, fire, &mut s).actions;
+        assert!(r.contains(&Action::GiveItem { item: 14, count: 1 }) && r.contains(&Action::SwapMode { mode: 2 }) && r.contains(&Action::MoveHero { locator: 9 }) && s.level(8));
+        // Vector 4: 273 and 8 set: entities 16 to 24 off, no item.
+        s.set_word(1246, 1, 0);
+        let r = on_trigger(1246, 2, fire, &mut s).actions;
+        assert!(r.contains(&Action::DeactivateEntity { entity: 24 }) && !r.contains(&Action::GiveItem { item: 14, count: 1 }));
     }
 
     #[test]
