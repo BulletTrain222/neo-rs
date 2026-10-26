@@ -375,6 +375,12 @@ pub struct GameState {
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
     /// each tick: a bound character's dead test, else its kill memory of this load.
     pub ai_dead: BTreeSet<usize>,
+    /// The living characters of each of the current world's slots whose last load has arrived
+    /// (GetAssetGroupCharacterRange with IsAI_Dead over it), filled by the host each tick; a slot
+    /// that is empty or still loading has no entry.
+    pub slot_alive: std::collections::BTreeMap<u8, usize>,
+    /// The current world's objects that are animating (IsObjAnimating), filled by the host.
+    pub animating: BTreeSet<usize>,
     /// The current hit points of the current world's entities by entity id (filled by the host
     /// before each Update; GetAI_HitPoints).
     pub entity_hp: HashMap<usize, i32>,
@@ -568,7 +574,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -656,6 +662,13 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         }
         // SPEC-0041 1353 teleport 0: with flag 104 value 10 for eW 158 and the entry into eW 175
         // (pack 1405), 3 s; else line 0.
+        // SPEC-0041 1371 TP0 (context 13): with flag 100 value 60 for eW 157 and the replacement
+        // to it (pack 1350), 3 s; else line 2.
+        (1371, 0) if state.flag(100) => {
+            state.blackboard.insert((2, 157), 60);
+            vec![Action::ReplaceExterior { slot: 157, plane: -1 }, wait(3.0)]
+        }
+        (1371, 0) => vec![Action::Message { line: 2 }],
         (1353, 0) if state.flag(104) => {
             state.blackboard.insert((2, 158), 10);
             vec![Action::EnterInterior { slot: 175 }, wait(3.0)]
@@ -941,6 +954,13 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1371 Init, branch B (a normal visit): effect 0 stopped, Z0 to Z2 on triggers
+        // 0 to 4, object 1 at its start, the wave word (1) at -1. Branch A (an arena round from
+        // pack 1350, value 20 for eW 157) is not built: pack 1350 is not.
+        1371 => {
+            state.set_word(pack, 1, -1);
+            vec![Action::StopEffect { slot: 0 }, reg(2, 2), reg(3, 2), reg(4, 2), reg(1, 1), reg(0, 0), Action::InitObjOn { obj: 1, end: false }]
+        }
         // SPEC-0041 1392 Init: triggers 0 to 23 and 25 to 36 on their own routines, the objects,
         // and flag 696: the gate levers at their end (20, 22, 24) with the gates 11, 13 and 15
         // at their start, else the levers at their start and effects 13 to 18 stopped. The
@@ -3225,6 +3245,62 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1371 Z0: with the exit word (3) the won result for eW 157 (pack 1350) and its
+        // replacement load.
+        (1371, 0) if call.state == 1 && call.object && state.word(pack, 3) != 0 => {
+            state.blackboard.insert((2, 157), 20);
+            state.blackboard.insert((1, 157), 1);
+            out.actions.push(Action::ReplaceExterior { slot: 157, plane: 0 });
+        }
+        // Z1: the three waves won, 100 and 345 clear: 345 and 100 set, the fade, object 8 off,
+        // effect 0, the fade in, the exit word set (movie 61 is not played).
+        (1371, 1) if call.state == 1 && call.object && !state.flag(100) && [342, 343, 344].iter().all(|&f| state.flag(f)) && !state.flag(345) => {
+            state.set(345, true);
+            state.set(100, true);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::DeactivateObj { obj: 8 },
+                Action::StartEffect { slot: 0, camera: false },
+                Action::FadeIn { seconds: 1.0, wait: true },
+                Action::Bits { word: 3, set: 1, clear: 0 },
+            ]);
+        }
+        // Z2, the wave gates (SPEC-0059 section 8): 2 opens wave 6 (no wave won, object 1 still),
+        // 4 wave 7 (342 only, object 1 still), 3 wave 8 (342 and 343, objects 3 and 2 still); the
+        // walk to the gate's locator, the scene, the slot emptied, then thread S: region 1372 + j,
+        // a fade in, and the wave word set to j for the wave controller.
+        (1371, 2) if call.state == 1 && call.object && !state.flag(100) => {
+            let (f2, f3, f4) = (state.flag(342), state.flag(343), state.flag(344));
+            let still = |o: usize| !state.animating.contains(&o);
+            let gate = match call.index {
+                2 if !f2 && !f3 && !f4 && still(1) => Some((23, 1, 6)),
+                4 if f2 && !f3 && !f4 && still(1) => Some((25, 3, 7)),
+                3 if f2 && f3 && !f4 && still(3) && still(2) => Some((24, 2, 8)),
+                _ => None,
+            };
+            if let Some((locator, obj, j)) = gate {
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator, wait: true, orient: true },
+                    Action::FadeOut { seconds: 1.0, wait: true },
+                    Action::InitObjOn { obj: 10, end: false },
+                    Action::InitObjOn { obj: 9, end: false },
+                    Action::InitObjOn { obj: 4, end: false },
+                    Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 },
+                    Action::FadeIn { seconds: 1.0, wait: true },
+                    Action::PlaySound { cue: 10, locator: None },
+                    Action::PlayAnim { obj, speed: 1.0, wait: true },
+                    Action::KillSound { cue: 10, locator: None },
+                    Action::FadeOut { seconds: 1.0, wait: true },
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::LoadRegion { slot: 0, region: None },
+                    Action::LoadRegion { slot: 0, region: Some(1372 + j) },
+                    Action::FadeIn { seconds: 1.0, wait: true },
+                    Action::Bits { word: 1, set: j as i32, clear: !(j as i32) },
+                ]);
+            }
+        }
         // SPEC-0041 1392 triggers. Words: 1 the fall-in latch, 10 to 12 gate A to C open, 20 to 22
         // levers 25 to 27 pulled, 30 to 38 the helper levers 28 to 36 used.
         (1392, 0) if call.object && call.state == 1 => state.set(696, true),
@@ -4416,6 +4492,35 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0041 1371 Update, the wave controller: with a wave word j of 0 or more and every
+        // character of the wave's slot dead, the wave's flag (342 + j - 6), object 10, sound 9,
+        // object 10 played, object 4 off; with all three won the camera 9 scene with object 9;
+        // the word back to -1.
+        1371 => {
+            let j = state.word(pack, 1);
+            if j >= 0 && state.slot_alive.get(&0) == Some(&0) {
+                state.set((342 + j - 6) as u16, true);
+                out.extend([
+                    Action::InitObjOn { obj: 10, end: false },
+                    Action::PlaySound { cue: 9, locator: None },
+                    Action::PlayAnim { obj: 10, speed: 1.0, wait: false },
+                    Action::DeactivateObj { obj: 4 },
+                ]);
+                if [342, 343, 344].iter().all(|&f| state.flag(f)) {
+                    out.extend([
+                        Action::FadeOut { seconds: FADE, wait: true },
+                        Action::PlayCamera { track: 9, wait: false, end: 1, speed: 1.0 },
+                        Action::FadeIn { seconds: FADE, wait: true },
+                        Action::PlaySound { cue: 9, locator: None },
+                        Action::PlayAnim { obj: 9, speed: 1.0, wait: true },
+                        Action::FadeOut { seconds: FADE, wait: true },
+                        Action::ReturnCamera { preset: -1, release: true },
+                        Action::FadeIn { seconds: FADE, wait: true },
+                    ]);
+                }
+                state.set_word(pack, 1, -1);
+            }
+        }
         // SPEC-0041 1392 Update, the fall-in (once per load while 696 is clear): the hero to
         // locator 0, 3 s, the camera back. StartHeroLongFall and the hero-tracking camera 10 are
         // not built.
@@ -4826,6 +4931,9 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0041 1371 W: value 60 for eW 163 moves the hero to locator 16 and returns the
+        // camera; the value is reset.
+        1371 if state.take_message(2, 163) == 60 => vec![Action::MoveHero { locator: 16 }, Action::ReturnCamera { preset: -1, release: true }],
         // SPEC-0045 758 activate-world: the value for eW 31 moves the hero to its return locator
         // (10: 8, 20: 9, 30: 10, 40: 6, 50: 7, 60: 11, 70: 12, 80: 13); any value but -1 returns
         // the camera.
@@ -7060,6 +7168,39 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1371_wave_trial() {
+        let mut s = GameState::default();
+        on_init(1371, &mut s);
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        // Gates 4 and 3 are shut before wave 6; gate 2 opens it (region 1378).
+        assert!(on_trigger(1371, 2, enter(4), &mut s).actions.is_empty());
+        assert!(on_trigger(1371, 2, enter(3), &mut s).actions.is_empty());
+        let out = on_trigger(1371, 2, enter(2), &mut s).actions;
+        assert!(out.contains(&Action::LoadRegion { slot: 0, region: Some(1378) }) && out.contains(&Action::WalkHero { locator: 23, wait: true, orient: true }));
+        // The wave word set by the thread; scored only once the slot's characters are all dead.
+        s.set_word(1371, 1, 6);
+        s.slot_alive.insert(0, 2);
+        assert!(on_update(1371, &mut s, false).is_empty());
+        s.slot_alive.insert(0, 0);
+        assert!(!on_update(1371, &mut s, false).is_empty());
+        assert!(s.flag(342) && s.word(1371, 1) == -1);
+        assert!(on_update(1371, &mut s, false).is_empty());
+        // Gate 4 is next (region 1379); with object 1 animating it stays shut.
+        s.animating.insert(1);
+        assert!(on_trigger(1371, 2, enter(4), &mut s).actions.is_empty());
+        s.animating.clear();
+        assert!(on_trigger(1371, 2, enter(4), &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(1379) }));
+        // All three won: Z1 sets 345 and 100 and opens Z0, which posts the won result.
+        s.set(343, true);
+        s.set(344, true);
+        on_trigger(1371, 1, enter(1), &mut s);
+        assert!(s.flag(345) && s.flag(100));
+        s.set_word(1371, 3, 1);
+        assert_eq!(on_trigger(1371, 0, enter(0), &mut s).actions, vec![Action::ReplaceExterior { slot: 157, plane: 0 }]);
+        assert_eq!(s.blackboard.get(&(1, 157)), Some(&1));
     }
 
     #[test]

@@ -678,6 +678,8 @@ pub struct Play {
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
     slot_regions: HashMap<(u32, u8), u32>,
+    /// Script slots whose last load has arrived (for the slot's living count).
+    slot_arrived: std::collections::HashSet<(u32, u8)>,
     pub region_wanted: Vec<(u32, u8, u32)>,
     next_character: u64,
     /// Set once the hero's meshes exist.
@@ -1081,6 +1083,7 @@ impl Play {
             continued: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
+            slot_arrived: Default::default(),
             region_wanted: Vec::new(),
             next_character: 0,
             spawned: false,
@@ -2039,6 +2042,7 @@ impl Play {
                 Action::SetAdventure { level } => self.intensity.adventure(level),
                 Action::LoadRegion { slot, region } => {
                     let pack = self.world.pack;
+                    self.slot_arrived.remove(&(pack, slot));
                     self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
                     match region {
                         Some(r) => {
@@ -3343,6 +3347,9 @@ impl Play {
         if self.slot_regions.get(&(pack, slot)) != Some(&region) {
             return;
         }
+        if slot != REBIND_SLOT && slot != PET_SLOT && slot != EMBEDDED_SLOT {
+            self.slot_arrived.insert((pack, slot));
+        }
         if slot != REBIND_SLOT {
             self.region_items(pack, &items);
             self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
@@ -4437,6 +4444,14 @@ impl Play {
         let pack = self.world.pack;
         self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
         self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0));
+        self.slot_arrived.retain(|(p, _)| *p == pack || self.other.as_ref().is_some_and(|o| o.pack == *p));
+        self.state.slot_alive = self
+            .slot_arrived
+            .iter()
+            .filter(|(p, _)| *p == pack)
+            .map(|&(_, slot)| (slot, self.characters.iter().filter(|c| c.pack == pack && c.slot == slot && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0).count()))
+            .collect();
+        self.state.animating = self.world.object_anims.iter().enumerate().filter(|(_, a)| a.animating()).map(|(i, _)| i).collect();
         // Dead characters disappear when their countdown ends.
         for c in &mut self.characters {
             if let Some(t) = c.dying.as_mut() {
