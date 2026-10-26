@@ -1575,6 +1575,19 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0042 1081 Init: groups 0 to 2's effects stopped; with 41 clear objects 6, 8, 7 and 3
+        // at their start, else 5 and 8 at their end; T0 on trigger 0. T2 (its step order is Low in
+        // the spec) and the breakable are not built.
+        1081 => {
+            let mut v: Vec<Action> = (0..=2).map(|group| Action::GroupEffectsStop { group }).collect();
+            if state.flag(41) {
+                v.extend([5, 8].map(|obj| Action::InitObjOn { obj, end: true }));
+            } else {
+                v.extend([6, 8, 7, 3].map(|obj| Action::InitObjOn { obj, end: false }));
+            }
+            v.push(reg(0, 0));
+            v
+        }
         // SPEC-0042 1077 (run as pack 1129) Init: 35; by 38 objects 24 and 46 (and 12), by 36
         // objects 27, 28 and 44, by 306 objects 34, 25 and 26; Z0, L2, L21 and L22 on triggers 0,
         // 2, 21 and 22. The spec leaves the registrations' branch tests open (Low); they are made
@@ -5687,6 +5700,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
             }
+        }
+        // SPEC-0042 1081 T0 (trigger 0, the hero): the fade, 314 and 315, the load of eW 105.
+        (1081, 0) if call.object && state.word(pack, 1) == 0 => {
+            state.set_word(pack, 1, 1);
+            state.set(314, true);
+            state.set(315, true);
+            out.actions.extend([Action::FadeOut { seconds: 1.0, wait: false }, Action::ReplaceExterior { slot: 105, plane: -1 }]);
         }
         // SPEC-0042 1077 Z0 (trigger 0): the load of eW 90 (pack 1023), 3 s.
         (1077 | 1129, 0) if state.word(pack, 1) == 0 => {
@@ -13269,6 +13289,15 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1081_exit() {
+        let mut s = GameState::default();
+        assert!(on_init(1081, &mut s).contains(&Action::InitObjOn { obj: 3, end: false }));
+        let enter = TriggerCall { index: 0, state: 1, object: true, square: false };
+        assert!(on_trigger(1081, 0, enter, &mut s).actions.contains(&Action::ReplaceExterior { slot: 105, plane: -1 }));
+        assert!(s.flag(314) && s.flag(315));
     }
 
     #[test]
