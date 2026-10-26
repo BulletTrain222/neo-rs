@@ -190,7 +190,9 @@ pub fn region_character(
         .filter(|c| !(c.kind == 18 && bytes[c.payload.clone()].starts_with(b"IDM")) || c.payload == set.payload)
         .cloned()
         .collect();
-    let model = model::build(bytes, &chain, None)?;
+    // SPEC-0004 3a: a region character draws with the region's mask, bit 30 (the colour
+    // override that selects bit 31 needs the world's variant key, whose writer is open).
+    let model = model::build_masked(bytes, &chain, None, None, Some(model::REGION_MASK))?;
     let nested = resource::walk_chunks(&bytes[set.payload.clone()], None)?;
     let flat = nested
         .chunks

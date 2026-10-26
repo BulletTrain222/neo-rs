@@ -410,6 +410,23 @@ pub fn build_roles(
     shared: Option<(&[u8], &[Chunk])>,
     roles: Option<&[u16]>,
 ) -> Result<ModelData, String> {
+    build_masked(bytes, top, shared, roles, None)
+}
+
+/// A region character's draw mask (SPEC-0004 Drawing a node tree, item 3a): bit 30 normally,
+/// bit 31 while the region's colour override is on.
+pub const REGION_MASK: u32 = 0x4000_0000;
+pub const REGION_OVERRIDE_MASK: u32 = 0x8000_0000;
+
+/// As `build_roles`, with a character draw mask: a type-4 node with nonzero layer flags keeps
+/// its subtree only when the flags share a bit with the mask (None draws every part).
+pub fn build_masked(
+    bytes: &[u8],
+    top: &[Chunk],
+    shared: Option<(&[u8], &[Chunk])>,
+    roles: Option<&[u16]>,
+    layer_mask: Option<u32>,
+) -> Result<ModelData, String> {
     let (trees, chains) = find_trees(bytes, top);
     let materials = chains
         .iter()
@@ -421,7 +438,7 @@ pub fn build_roles(
     };
     let mut b = Builder::new(materials, shared);
     for t in trees.iter().filter(|t| roles.is_none_or(|r| r.contains(&t.role_id))) {
-        b.add_tree(bytes, t.payload.clone(), t.chain, None, None)?;
+        b.add_tree(bytes, t.payload.clone(), t.chain, None, layer_mask)?;
     }
     Ok(b.finish())
 }
