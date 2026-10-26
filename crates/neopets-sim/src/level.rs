@@ -555,7 +555,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
+    if (pack == 758 && door <= 7) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -587,6 +587,23 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0045 758 teleports 0 to 7 (kind 13): a type-2 value for eW 31 by the index and the
+        // transition (exterior loads to eW 29 and 34, interiors eW 39, 40, 33, 37, 38 and 35),
+        // then 3 s.
+        (758, 0..=7) => {
+            let (v, go) = match door {
+                0 => (80, Action::ReplaceExterior { slot: 29, plane: -1 }),
+                1 => (70, Action::ReplaceExterior { slot: 34, plane: -1 }),
+                2 => (50, Action::EnterInterior { slot: 39 }),
+                3 => (40, Action::EnterInterior { slot: 40 }),
+                4 => (10, Action::EnterInterior { slot: 33 }),
+                5 => (20, Action::EnterInterior { slot: 37 }),
+                6 => (30, Action::EnterInterior { slot: 38 }),
+                _ => (60, Action::EnterInterior { slot: 35 }),
+            };
+            state.blackboard.insert((2, 31), v);
+            vec![go, wait(3.0)]
+        }
         // SPEC-0039 1248 and SPEC-0041 1247 and 1249 teleport 0 (context 13): the replacement to
         // eW 147 (pack 1257) (1247 and 1249 then wait 3 s).
         (1247 | 1249, 0) => vec![Action::ReplaceExterior { slot: 147, plane: -1 }, wait(3.0)],
@@ -888,6 +905,20 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0045 758 Init: flags 68 and 251; the signs (34) on triggers 32 to 35, 6 to 10 and
+        // 0; objects 2, 6 and 3; the prize wheel (56) on trigger 3; slot 0 loads set 0 (region
+        // 759; the original keeps one random character of it active, here all are) and slot 1
+        // set 12 (771); the wheel's first pattern. The time trial (triggers 13 to 15 and the
+        // keeper), the breakable routine, the group threads and their zone loads (Low) and the
+        // prompt routines of triggers 1 and 2 (Low) are not reproduced.
+        758 => {
+            state.set(68, true);
+            state.set(251, true);
+            let mut v: Vec<Action> = [32, 33, 34, 35, 6, 7, 8, 9, 10, 0].map(|i| reg(i, 34)).to_vec();
+            v.extend([2, 6, 3].map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend([reg(3, 56), Action::LoadRegion { slot: 0, region: Some(759) }, Action::LoadRegion { slot: 1, region: Some(771) }, Action::WheelPattern]);
+            v
+        }
         // SPEC-0041 1249 Init: by flag 80 the levers' up objects (47, 43, 45) or down objects (48,
         // 44, 46) with the other object sets of each branch; effects 0 to 15 stopped; the levers
         // CB6 to CB8 on triggers 18, 16 and 17 and CB10 on 0. The object-swap callbacks CB1 to
@@ -1831,6 +1862,106 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
 }
 
+/// SPEC-0045 758 proximity routines. One counter per routine (word 40 + routine) steps every
+/// three-line group with no branch marker. Template T (from b): Roberta active with Random(1, 3)
+/// = 1: b + 9 to b + 11; else flag 86: b to b + 2; 76: b + 3 to b + 5; else b + 6 to b + 8.
+/// Template U (from b): Roberta active with 417, 414 or Random(1, 3) = 1: 417: b to b + 2; 414:
+/// b + 3 to b + 5; else b + 15 to b + 17; else 86: b + 6 to b + 8; 76: b + 9 to b + 11; else
+/// b + 12 to b + 14. The delivery quests (18, 23/25, 11/13) take one item with their second
+/// flag, then two lines in turn per hero, else template U.
+fn brightvale_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let p = 758;
+    let rob = s.hero.selected == 1;
+    let roll1 = s.talk_roll == 1;
+    let step = |s: &mut GameState, n: i32| {
+        let c = s.word(p, 40 + routine).rem_euclid(n);
+        s.set_word(p, 40 + routine, (c + 1) % n);
+        c as u16
+    };
+    let talk = |line| vec![Action::Talk { line }];
+    let t = |s: &mut GameState, b: u16| {
+        let base = if rob && roll1 {
+            b + 9
+        } else if s.flag(86) {
+            b
+        } else if s.flag(76) {
+            b + 3
+        } else {
+            b + 6
+        };
+        base + step(s, 3)
+    };
+    let u = |s: &mut GameState, b: u16| {
+        let base = if rob && (s.flag(417) || s.flag(414) || roll1) {
+            if s.flag(417) {
+                b
+            } else if s.flag(414) {
+                b + 3
+            } else {
+                b + 15
+            }
+        } else if s.flag(86) {
+            b + 6
+        } else if s.flag(76) {
+            b + 9
+        } else {
+            b + 12
+        };
+        base + step(s, 3)
+    };
+    match routine {
+        20 | 21 | 36 | 33 | 34 | 35 | 32 | 17 | 10 | 14 | 16 => {
+            let b = match routine {
+                20 => 21,
+                21 => 33,
+                36 => 45,
+                33 => 57,
+                34 => 69,
+                35 => 81,
+                32 => 93,
+                17 => 237,
+                10 => 249,
+                14 => 261,
+                _ => 298,
+            };
+            talk(t(s, b))
+        }
+        19 => talk(u(s, 105)),
+        31 => talk(u(s, 123)),
+        18 | 23 | 11 => {
+            let (f, g, item, q, tor, robl, ub) = match routine {
+                18 => (449, 450, 66, 182, 178, 175, 183),
+                23 => (451, 452, 66, 218, 215, 213, 219),
+                _ => (453, 454, 67, 279, 276, 273, 280),
+            };
+            if s.flag(f) && !s.flag(g) {
+                s.set(g, true);
+                s.take(item, 1);
+                talk(if rob { q - 1 } else { q })
+            } else if s.flag(f) {
+                let k = step(s, 2);
+                talk(if rob { robl } else { tor } + k)
+            } else {
+                talk(u(s, ub))
+            }
+        }
+        15 => talk(if rob && roll1 {
+            210
+        } else if s.flag(86) {
+            201
+        } else if s.flag(76) {
+            204
+        } else {
+            207
+        }),
+        22 => {
+            let k = step(s, 3);
+            talk(316 + k)
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// SPEC-0041 1353 proximity routines. P16: the package hand-in (612, 686, line 53), else the map
 /// shop by its counter S (word 1): held maps skipped, S 0 the greeting 54, S 1 to 3 prompts 55 to
 /// 57 for maps 36, 40 and 38 (200, 200, 300 NP), S 4 line 58 and back to 1. P17 and P20 to P24
@@ -2725,6 +2856,26 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0045 758 routine 34, the signs: the Square context 3 while inside; a press shows the
+        // index's line.
+        (758, 34) if call.state != 0 => {
+            out.prompt = Some(3);
+            let line = match call.index {
+                0 => 346,
+                6 => 345,
+                7 => 340,
+                8 => 342,
+                9 => 343,
+                10 => 341,
+                32 => 336,
+                33 => 337,
+                34 => 338,
+                _ => 339,
+            };
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line });
+            }
+        }
         // SPEC-0041 1249 levers CB6 to CB8 (triggers 18, 16, 17): the Square context 2 while the
         // lever is up, else 1; a press walks the hero to its point and moves it (down: hero
         // animation 139, the down object swapped for the up one and played, camera 4; with the
@@ -3329,7 +3480,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // SPEC-0059 section 2, the 1023 prize wheel (trigger 36, routine 56): context 5 while
         // inside; on Square, the too-poor line below the fee, else hero control and the round
         // step (the music override is not played).
-        (1023 | 1358, 56) if call.state != 0 => {
+        (1023 | 1358 | 758, 56) if call.state != 0 => {
             if !call.square {
                 out.prompt = Some(5);
             } else if !state.talking && !state.hero.occupied {
@@ -3980,6 +4131,28 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0045 758 activate-world: the value for eW 31 moves the hero to its return locator
+        // (10: 8, 20: 9, 30: 10, 40: 6, 50: 7, 60: 11, 70: 12, 80: 13); any value but -1 returns
+        // the camera.
+        758 => {
+            let v = state.take_message(2, 31);
+            let locator = match v {
+                10 => Some(8),
+                20 => Some(9),
+                30 => Some(10),
+                40 => Some(6),
+                50 => Some(7),
+                60 => Some(11),
+                70 => Some(12),
+                80 => Some(13),
+                _ => None,
+            };
+            let mut out: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0041 1247 and 1249 activate-world: value 10 (1247) or 30 (1249) for eW 147 places
         // the hero at locator 0 with the normal camera.
         1247 | 1249 => {
@@ -5523,7 +5696,7 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
         // SPEC-0059 section 2: the wheel's start prompt (pay the fee, the light show, a new
         // pattern, the spin) and go-on prompt r (the go-on line and the next spin, or the
         // cash-out line, pay-out r and the cash-out flag).
-        (1023 | 1358, 60, true) => {
+        (1023 | 1358 | 758, 60, true) => {
             let c = crate::wheel::copy_of(pack);
             s.neopoints -= c.fee;
             let mut v: Vec<Action> = (0..14).flat_map(|k| [Action::WheelLights { even: k % 2 == 0 }, Action::Sleep { ticks: 5 }]).collect();
@@ -5531,8 +5704,8 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             v.extend(wheel_spin());
             v
         }
-        (1023 | 1358, 60, false) => vec![release_camera()],
-        (1023 | 1358, 61, true) => {
+        (1023 | 1358 | 758, 60, false) => vec![release_camera()],
+        (1023 | 1358 | 758, 61, true) => {
             let mut w = wheel_of(pack, s);
             w.r += 1;
             set_wheel(pack, s, &w);
@@ -5540,7 +5713,7 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             v.extend(wheel_spin());
             v
         }
-        (1023 | 1358, 61, false) => {
+        (1023 | 1358 | 758, 61, false) => {
             let c = crate::wheel::copy_of(pack);
             let mut w = wheel_of(pack, s);
             let r = (w.r as usize).min(3);
@@ -5740,6 +5913,11 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0039 706: handler 5 on entity 0; 753: handlers 4 and 5 on entities 5 and 6.
         (706, 0) => Some(5),
         (753, 5 | 6) => Some(entity as u8),
+        // SPEC-0045 758: one routine per entity of the line tables (shared entities share one).
+        (758, 20 | 21 | 36 | 33 | 34 | 35 | 32 | 17 | 14 | 16 | 19 | 31 | 18 | 15 | 22) => Some(entity as u8),
+        (758, 10 | 12) => Some(10),
+        (758, 23 | 25) => Some(23),
+        (758, 11 | 13) => Some(11),
         // SPEC-0041 1353: P16 to P24 on entities 16 to 24.
         (1353, 16..=24) => Some(entity as u8),
         // SPEC-0043 1358: the delivery giver on entity 20 and line 90 on entity 21 (entities 16 to
@@ -5840,6 +6018,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1353 {
         return shrine_talk(routine, state);
+    }
+    if pack == 758 {
+        return brightvale_talk(routine, state);
     }
     if (pack, routine) == (1344, 1) {
         return vec![Action::Talk { line: 0 }];
@@ -6133,6 +6314,28 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_758_lines_wheel_and_doors() {
+        let mut s = GameState { neopoints: 24, talk_roll: 2, ..Default::default() };
+        // Template T, entity 20 (b = 21): no flags gives 27, 28, 29; 86 gives 21 + counter.
+        assert_eq!(on_talk(758, 20, &mut s), vec![Action::Talk { line: 27 }]);
+        assert_eq!(on_talk(758, 20, &mut s), vec![Action::Talk { line: 28 }]);
+        s.set(86, true);
+        assert_eq!(on_talk(758, 20, &mut s), vec![Action::Talk { line: 23 }]);
+        // The delivery quest of entity 18: 449 set takes item 66 with line 182, then 178, 179.
+        s.set(449, true);
+        s.give(66, 1);
+        assert_eq!(on_talk(758, 18, &mut s), vec![Action::Talk { line: 182 }]);
+        assert!(s.flag(450) && !s.has_item(66));
+        assert_eq!(on_talk(758, 18, &mut s), vec![Action::Talk { line: 178 }]);
+        // The 758 wheel: fee 25, too-poor line 335.
+        let call = TriggerCall { index: 3, state: 2, object: true, square: true };
+        assert_eq!(on_trigger(758, 56, call, &mut s).actions, vec![Action::Message { line: 335 }]);
+        // Door 2 to eW 39 (pack 788) with value 50; the arrival back puts the hero at locator 7.
+        assert_eq!(on_teleport(758, 2, &mut s)[0], Action::EnterInterior { slot: 39 });
+        assert_eq!(on_activate(758, &mut s)[0], Action::MoveHero { locator: 7 });
     }
 
     #[test]

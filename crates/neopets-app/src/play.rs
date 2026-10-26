@@ -5420,13 +5420,15 @@ impl Play {
         // built) is also drawn at rest until a script touches it.
         let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)));
         let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i));
-        if !a.scripted && (!gated || grouped) {
+        // The 758 wheel turns even while no script has touched it (its pack's objects are drawn
+        // at rest).
+        if !a.scripted && (!gated || grouped) && !(pack == 758 && i == 0) {
             return Some(obj.rest);
         }
-        // SPEC-0059 Layout: the 1358 wheel is object 0 turned to A about locator 1's forward
-        // axis (through the object's origin).
-        if pack == 1358 && i == 0 && a.visible() {
-            if let Some((_, f)) = w.entries.get(1).copied() {
+        // SPEC-0059 Layout: the 1358 and 758 wheels are object 0 turned to A about locator 1's
+        // (1358) or locator 4's (758) forward axis (through the object's origin).
+        if matches!(pack, 1358 | 758) && i == 0 && (a.visible() || (pack == 758 && !a.scripted)) {
+            if let Some((_, f)) = w.entries.get(if pack == 758 { 4 } else { 1 }).copied() {
                 let k = unit(f);
                 let angle = level::wheel_of(pack, &self.state).angle.to_radians();
                 let (sn, cs) = angle.sin_cos();
