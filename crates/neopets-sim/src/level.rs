@@ -581,7 +581,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -669,6 +669,11 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         }
         // SPEC-0041 1353 teleport 0: with flag 104 value 10 for eW 158 and the entry into eW 175
         // (pack 1405), 3 s; else line 0.
+        // SPEC-0037 776 teleport 0 (kind 13): value 10 for eW 31 and the leave to eW 44, 3 s.
+        (776, 0) => {
+            state.blackboard.insert((2, 31), 10);
+            vec![Action::LeaveInterior { slot: 44 }, wait(3.0)]
+        }
         // SPEC-0041 1363 teleports 0 to 2 (context 13): with flag 106 value 40, 50 or 30 for
         // eW 160 and the entry into eW 184, 185 or 177 (packs 1423, 1425, 1409); else line 0.
         (1363, 0..=2) if state.flag(106) => {
@@ -1364,6 +1369,17 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0043 749 Init: value 40 for eW 20 (type 2); thread B's normal camera. 748 and 752:
+        // thread B's normal camera (their blackboard message's value is not given). The
+        // on-enter, proximity and entity-control set-ups are fixed rules.
+        749 => {
+            state.blackboard.insert((2, 20), 40);
+            vec![Action::ReturnCamera { preset: -1, release: true }]
+        }
+        748 | 752 => vec![Action::ReturnCamera { preset: -1, release: true }],
+        // SPEC-0037 776 Init: the proximity, teleport 0 (kind 13) and activate-world callbacks
+        // are fixed rules (the proximity routine's two tests are not ordered in the spec: R-0061).
+        776 => Vec::new(),
         750 => {
             let mut v: Vec<Action> = (!state.flag(76)).then_some(Action::LoadRegion { slot: 0, region: Some(751) }).into_iter().collect();
             v.push(Action::ReturnCamera { preset: -1, release: true });
@@ -5178,6 +5194,9 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
     let dwell = (3.0, 4.0);
     match pack {
         750 => add(&mut t, 2, 0, (2.0, 5.0), (5.0, 7.0), &std3, &[]),
+        749 => add(&mut t, 0, 0, (2.0, 5.0), (5.0, 7.0), &std3, &[]),
+        748 => add(&mut t, 0, 0, (2.0, 5.0), (5.0, 7.0), &[(40, 2.5), (110, 2.5), (96, 2.5), (41, 1.3)], &[]),
+        752 => add(&mut t, 0, 0, (2.0, 5.0), (5.0, 7.0), &std3, &[(1, true, false), (2, true, false), (3, true, false), (4, true, false)]),
         1008 => add(&mut t, 1, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[]),
         1011 => add(&mut t, 1, 0, (5.0, 8.0), dwell, &[(41, 2.5), (95, 2.5), (96, 2.5)], &[]),
         1014 => {
@@ -5292,6 +5311,9 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         1423 if state.flag(106) && state.flag(104) => vec![Action::Message { line: if state.flag(102) { 0 } else { 3 } }],
         // SPEC-0043 750 on-enter (Medium): two lines in turn per case, 27/28 (421), 29/30 (420),
         // 31/32 (76) or 33/34, with the routine's shared counter.
+        // SPEC-0043 749 on-enter: with 76 line 0 in the conversation frame, else line 2.
+        749 if state.flag(76) => vec![Action::Talk { line: 0 }],
+        749 => vec![Action::Message { line: 2 }],
         750 => {
             let (f421, f420, f76) = (state.flag(421), state.flag(420), state.flag(76));
             let lines = if f421 { [27, 28] } else if f420 { [29, 30] } else if f76 { [31, 32] } else { [33, 34] };
@@ -5318,6 +5340,9 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0037 776 A: value 10 for eW 31 moves the hero to locator 1 with the normal camera;
+        // the value is reset.
+        776 if state.take_message(2, 31) == 10 => vec![Action::MoveHero { locator: 1 }, Action::ReturnCamera { preset: -1, release: true }],
         // SPEC-0041 1363 W14 (eW 160): value 10, 20, 30, 40 or 50 moves the hero to locator 1,
         // 3, 5, 2 or 4; any value but -1 returns the camera.
         1363 => {
@@ -7201,6 +7226,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0043 749 and 752: one proximity routine on entity 0.
+        (749 | 752, 0) => Some(1),
         // SPEC-0043 750: routines 1 to 4 on entities 3, 1, 0 and 2.
         (750, 3) => Some(1),
         (750, 1) => Some(2),
@@ -7270,6 +7297,24 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 750 {
         return talk_750(routine, state);
+    }
+    // SPEC-0043 749 proximity: with 76 line 4 in the frame; else line 6 in the frame and line 9.
+    if pack == 749 {
+        return if state.flag(76) { vec![Action::Talk { line: 4 }] } else { vec![Action::Talk { line: 6 }, Action::Message { line: 9 }] };
+    }
+    // SPEC-0043 752 proximity: 266: line 0 in the frame; 265: line 3; 76: 265 set and line 6;
+    // else line 7.
+    if pack == 752 {
+        return if state.flag(266) {
+            vec![Action::Talk { line: 0 }]
+        } else if state.flag(265) {
+            vec![Action::Message { line: 3 }]
+        } else if state.flag(76) {
+            state.set(265, true);
+            vec![Action::Message { line: 6 }]
+        } else {
+            vec![Action::Message { line: 7 }]
+        };
     }
     if pack == 745 {
         return apothecary_talk(routine, state);
@@ -7575,6 +7620,25 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_748_749_752_776() {
+        let mut s = GameState::default();
+        on_init(749, &mut s);
+        assert_eq!(s.blackboard.get(&(2, 20)), Some(&40));
+        assert_eq!(on_enter(749, &mut s), vec![Action::Message { line: 2 }]);
+        assert_eq!(on_talk(749, 1, &mut s), vec![Action::Talk { line: 6 }, Action::Message { line: 9 }]);
+        assert!(entity_setup(749, &mut s).len() <= 1 && s.entity_tables.contains_key(&749));
+        // 752: 76 sets 265 with line 6; then line 3.
+        s.set(76, true);
+        assert_eq!(on_talk(752, 1, &mut s), vec![Action::Message { line: 6 }]);
+        assert_eq!(on_talk(752, 1, &mut s), vec![Action::Message { line: 3 }]);
+        assert_eq!(on_enter(749, &mut s), vec![Action::Talk { line: 0 }]);
+        // 776: the leave posts 10 for eW 31; the arrival with 10 moves the hero to locator 1.
+        assert_eq!(on_teleport(776, 0, &mut s)[0], Action::LeaveInterior { slot: 44 });
+        assert_eq!(on_activate(776, &mut s)[0], Action::MoveHero { locator: 1 });
+        assert!(on_activate(776, &mut s).is_empty());
     }
 
     #[test]
