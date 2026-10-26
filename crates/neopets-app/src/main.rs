@@ -41,6 +41,23 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let range = neopets_data::effect::table_in_chain(&bytes, &chain.chunks).ok_or("no effect table")?;
     let table = EffectTable::parse(&bytes[range])?;
     println!("Effect table: {} definitions, {} nodes; id 101 -> {:?}, 159 -> {:?}, 1201 -> {:?}, 938 -> {:?}, 4007 -> {:?}, 162 -> {:?}", table.definitions.len(), table.nodes.len(), table.find(101), table.find(159), table.find(1201), table.find(938), table.find(4007), table.find(162));
+    // SPEC-0034 4.5 / SPEC-0046: light-emitter records, the definitions using one, and the
+    // point lights effect 1300 publishes after 60 ticks.
+    let lit = table.definitions.iter().filter(|d| d.nodes.iter().any(|&n| table.a[table.nodes[n].a].light)).count();
+    let with_material = table.nodes.iter().filter(|n| table.a[n.a].light && n.material.is_some()).count();
+    let light_nodes = table.nodes.iter().filter(|n| table.a[n.a].light).count();
+    println!("Light emitters: {} A records, {lit} definitions, {light_nodes} nodes ({with_material} with a material)", table.a.iter().filter(|a| a.light).count());
+    for id in [1300, 2202, 4012] {
+        let mut fx = Effects::new();
+        let h = fx.add_object(EffectObject::new(&table, id, [0.0; 3], IDENTITY));
+        fx.update(&table, h, None, &mut Midpoint);
+        for _ in 0..60 {
+            fx.tick(&table, &mut Midpoint);
+        }
+        let l = fx.lights(&table);
+        let first = l.first().map(|e| format!("colour ({:.1}, {:.1}, {:.1}) strength {:.3} radius {:.3}", e.colour[0], e.colour[1], e.colour[2], e.strength, e.radius));
+        println!("  effect {id} after 60 ticks: {} listed lights, first {first:?}", l.len());
+    }
     for (id, node, ticks) in [(1201, 414usize, 300u32), (159, 1371, 370), (400, 446, 70)] {
         let mut t = table.clone();
         let Some(d) = t.find(id) else { continue };

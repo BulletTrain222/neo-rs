@@ -3,8 +3,9 @@
 //! particles with birth (4.1), motion (4.2) and the colour and size curves (4.6). The clocks and
 //! curve sums use the console's truncating single-precision adds (SPEC-0008).
 //!
-//! Not covered: model particles are stepped but have no draw (no child models), light emitters
-//! publish no light, the swing trail, the pulse kind, presets (3.9), the per-character and
+//! Light emitters publish their point lights (4.5) through `Effects::lights`.
+//!
+//! Not covered: model particles are stepped but have no draw (no child models), the swing trail, the pulse kind, presets (3.9), the per-character and
 //! per-world pools (only the shared pools of group 3), and birth modes 2 and 3 (the target point
 //! stays the spawner's position, so they place at the spawner).
 use ps2_float::fpu::{add, div, mul, sub};
@@ -844,6 +845,40 @@ impl Effects {
         })
     }
 
+    /// The pass's dynamic point lights (4.5; SPEC-0046 Character lights): each live particle of a
+    /// light emitter whose node has a material writes its spawner's light entry (type 3 at the
+    /// particle position, colour channel 1 x 255 with alpha 0, strength channel 1's alpha, radius
+    /// channel 2's x and its square; flag and zone 0) and lists it, so a spawner with k live
+    /// particles is listed k times with its last particle's values (original quirk). At most
+    /// 200 entries.
+    pub fn lights(&self, table: &EffectTable) -> Vec<crate::charlight::Entry> {
+        let mut last: std::collections::HashMap<usize, crate::charlight::Entry> = std::collections::HashMap::new();
+        let mut order = Vec::new();
+        for p in self.particles.iter().flatten() {
+            let node = &table.nodes[p.node];
+            if !table.a[node.a].light || node.material.is_none() {
+                continue;
+            }
+            let r = p.size[0];
+            last.insert(
+                p.spawner,
+                crate::charlight::Entry {
+                    position: p.position,
+                    direction: [0.0; 3],
+                    colour: [p.colour[0] * 255.0, p.colour[1] * 255.0, p.colour[2] * 255.0, 0.0],
+                    kind: 3,
+                    strength: p.colour[3],
+                    flag: 0,
+                    radius: r,
+                    radius_sq: r * r,
+                    zone: 0,
+                },
+            );
+            order.push(p.spawner);
+        }
+        order.into_iter().take(200).map(|s| last[&s]).collect()
+    }
+
     pub fn live_particles(&self) -> usize {
         self.particles.iter().flatten().count()
     }
@@ -954,6 +989,27 @@ mod tests {
             fx.tick(&t, &mut Midpoint);
         }
         assert_eq!((fx.live_particles(), fx.live_spawners()), (0, 0));
+    }
+
+    #[test]
+    fn light_emitters_list_their_spawner_per_particle() {
+        let mut a = record_a(0.1, 2, 1.0, false);
+        a.light = true;
+        a.size = [3.0, 1.0, 1.0, 1.0];
+        let t = table(a, [0.0; 4]);
+        let mut fx = Effects::new();
+        let h = fx.add_object(EffectObject::new(&t, 500, [1.0, 2.0, 3.0], IDENTITY));
+        fx.update(&t, h, None, &mut Midpoint);
+        fx.tick(&t, &mut Midpoint);
+        let lights = fx.lights(&t);
+        // Two live particles of one spawner: the spawner's entry is listed twice.
+        assert_eq!(fx.live_particles(), 2);
+        assert_eq!(lights.len(), 2);
+        assert_eq!(lights[0], lights[1]);
+        let e = lights[0];
+        assert_eq!((e.kind, e.radius, e.radius_sq, e.colour[3]), (3, 3.0, 9.0, 0.0));
+        // Light-emitter particles are never sprites.
+        assert_eq!(fx.sprites(&t).count(), 0);
     }
 
     #[test]

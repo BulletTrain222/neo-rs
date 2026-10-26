@@ -5144,13 +5144,14 @@ impl Play {
     /// SPEC-0046 Character lights, once per pass after the effect pools: for the hero and each
     /// region character standing on a ground entry whose zone passes the zone query (with the
     /// character's world id), the walk over the current area's light set (entry zone gate: the
-    /// query with key -1) and its colour fill; a character that fails keeps its state. No
-    /// dynamic point lights are published (light emitters publish none yet); states of
-    /// released characters are dropped.
+    /// query with key -1) and the pass's dynamic point lights from the light emitters, and its
+    /// colour fill; a character that fails keeps its state. States of released characters are
+    /// dropped.
     fn light_step(&mut self) {
         let grid = self.world.zones.as_ref();
         let zones = self.zones;
         let entry_zone = |z: u8| zones.query(grid, z as i32, -1);
+        let dynamic = self.effects.lights(&self.effect_table);
         let mut walk = |key: Option<u64>, at: [f32; 3], world: Option<&World>| {
             let Some(w) = world else { return };
             let hit = w.probe(at[0], at[2], at[1] + 2.5);
@@ -5159,7 +5160,7 @@ impl Play {
                 return;
             }
             let s = self.char_lights.entry(key).or_default();
-            s.walk(&self.world.lights, &[], at, &entry_zone);
+            s.walk(&self.world.lights, &dynamic, at, &entry_zone);
             s.fill();
         };
         walk(None, self.loco.position(), Some(&self.world));
