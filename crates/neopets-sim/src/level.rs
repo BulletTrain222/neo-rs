@@ -201,6 +201,16 @@ pub enum Action {
     /// section 9): on sets its active flag (it starts nothing itself), off clears it and drains
     /// the record.
     SwitchEffect { slot: usize, on: bool },
+    /// SetObjToTime(obj, seconds).
+    SetObjTime { obj: usize, seconds: f32 },
+    /// SetObjToTime(obj, r / 100) with r = Random(0, 100), both ends included (the host draws).
+    SetObjTimeRandom { obj: usize },
+    /// RegisterScriptGroupType(W, kind, run, init) (SPEC-0048 Script groups, type
+    /// registration): the host registers the first trigger of every entry of that kind (with
+    /// its group as owner, replacing an earlier registration) and runs `group_init` for each.
+    RegisterGroupType { kind: u32 },
+    /// Wait while the trigger record `index` stays non-zero (the firer is still inside).
+    WaitInside { index: u16 },
     SleepRandom { lo: u32, hi: u32 },
 }
 
@@ -666,13 +676,24 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 1023 | 1133 | 1148 | 1150 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0042 1171 Init: objects 0, 1, 2, 11, 13, 15, 17, 20, 23 and 26 off; the levers on
+        // triggers 5 to 7 (routines 5 to 7), T0 and T1 on 0 and 1 (routines 0 and 1); the
+        // switch handler on 29 to 32 (replaced below, never run); the drain-flag loop's
+        // SetBreakableActive calls are not reproduced (breakables, R-0040); then group type 12
+        // (which replaces triggers 29 to 32). AddAnimObjSound is not built.
+        1171 => {
+            let mut v: Vec<Action> = [0, 1, 2, 11, 13, 15, 17, 20, 23, 26].into_iter().map(|obj| Action::InitObjOn { obj, end: false }).collect();
+            v.extend([reg(5, 5), reg(6, 6), reg(7, 7), reg(29, 29), reg(30, 29), reg(31, 29), reg(32, 29), reg(0, 0), reg(1, 1)]);
+            v.push(Action::RegisterGroupType { kind: 12 });
+            v
+        }
         // SPEC-0039 1244 Init: SetGameState(271, 1); with 273 clear objects 5, 0, 1 and 4 off and
         // handlers 1 to 5 on triggers 0, 1, 2, 4 and 3.
         1244 => {
@@ -964,11 +985,102 @@ fn road_end(pack: u32) -> Vec<Action> {
     v
 }
 
+/// The init callback of a registered script-group type for one entry (its objects in order).
+pub fn group_init(pack: u32, kind: u32, objects: &[usize]) -> Vec<Action> {
+    match (pack, kind, objects) {
+        // SPEC-0048 / SPEC-0042 1171 init routine G: A off, its time r / 100, looped at 1.0.
+        (1171, 12, &[a, ..]) => vec![Action::InitObjOn { obj: a, end: false }, Action::SetObjTimeRandom { obj: a }, Action::LoopAnim { obj: a, speed: 1.0 }],
+        _ => Vec::new(),
+    }
+}
+
+/// The run callback of a registered script-group type, for a fire of the entry's first trigger
+/// (the callback thread is keyed by the trigger, so it starts on the entering fire).
+pub fn group_run(pack: u32, kind: u32, call: TriggerCall, objects: &[usize]) -> Vec<Action> {
+    match (pack, kind, objects) {
+        // SPEC-0048 / SPEC-0042 1171 run routine R: A off; B shown and played (wait); one tick
+        // at a time while the hero is inside; B off; C shown at time 0 and played (wait); C off;
+        // A shown and looped at 1.0.
+        (1171, 12, &[a, b, c, ..]) if call.state == 1 && call.object => vec![
+            Action::DeactivateObj { obj: a },
+            Action::InitObjOn { obj: b, end: false },
+            Action::PlayAnim { obj: b, speed: 1.0, wait: true },
+            Action::WaitInside { index: call.index },
+            Action::DeactivateObj { obj: b },
+            Action::InitObjOn { obj: c, end: false },
+            Action::SetObjTime { obj: c, seconds: 0.0 },
+            Action::PlayAnim { obj: c, speed: 1.0, wait: true },
+            Action::DeactivateObj { obj: c },
+            Action::InitObjOn { obj: a, end: false },
+            Action::LoopAnim { obj: a, speed: 1.0 },
+        ],
+        _ => Vec::new(),
+    }
+}
+
+/// SPEC-0042 1171 counting helper: for each set flag of 637 to 641, in order, the count rises
+/// by one and flag 162 + count is set; returns the count.
+fn clogs_1171(state: &mut GameState) -> u16 {
+    let mut n = 0;
+    for f in 637..=641 {
+        if state.flag(f) {
+            n += 1;
+            state.set(162 + n, true);
+        }
+    }
+    n
+}
+
 /// Run a registered script trigger routine of a pack for one fire of its record.
 pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameState) -> TriggerOut {
     let mut out = TriggerOut::default();
     let first = call.state == 1 && call.object;
     match (pack, routine) {
+        // SPEC-0042 1171 levers L5 to L7 (triggers 5 to 7), once per load (words 5 to 7): the
+        // Square prompt (message 6) while inside; on Square the walk and orient to the walk
+        // point, the first lever object off and the second shown and played, hero animation
+        // 140, a 0.5 s fade out and in, the camera track, the lever's looping sound, the gate
+        // object played, 1 s, the sound killed, a fade out, the normal camera, a fade in.
+        (1171, 5..=7) if call.state != 0 && state.word(pack, routine) == 0 => {
+            let (a, b, walk, track, sound, gate) = match routine {
+                5 => (11, 12, 56, 4, 56, 2),
+                6 => (13, 14, 57, 7, 57, 0),
+                _ => (15, 16, 58, 6, 58, 1),
+            };
+            out.prompt = Some(6);
+            if call.square && !state.talking {
+                state.set_word(pack, routine, 1);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: walk, wait: true, orient: true },
+                    Action::DeactivateObj { obj: a },
+                    Action::InitObjOn { obj: b, end: false },
+                    Action::PlayAnim { obj: b, speed: 1.0, wait: false },
+                    Action::HeroAnim { anim: 140, wait: false },
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::FadeIn { seconds: 0.5, wait: true },
+                    Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 },
+                    Action::LoopSound { cue: sound, locator: None },
+                    Action::PlayAnim { obj: gate, speed: 1.0, wait: false },
+                    wait(1.0),
+                    Action::KillSound { cue: sound, locator: None },
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::FadeIn { seconds: 0.5, wait: true },
+                ]);
+            }
+        }
+        // 1171 T0 (trigger 0): object present, state 1 and flag 33 clear: the clog count; below
+        // 5 the conscience line of that count.
+        (1171, 0) if call.object && call.state == 1 && !state.flag(33) => {
+            let n = clogs_1171(state);
+            if n < 5 {
+                out.actions.push(Action::Message { line: n });
+            }
+        }
+        // 1171 T1 (trigger 1): the exterior replacement load of eW 126. The blackboard value 120
+        // for world 126 is not added: its message type is not given (R-0053).
+        (1171, 1) if call.object && call.state == 1 => out.actions.push(Action::ReplaceExterior { slot: 126, plane: -1 }),
         // SPEC-0039 1244 trigger 0 (handler 1): the first fire with 272 clear in swap mode 2, the
         // story switch to Roberta at locator 16 and her scene; it ends locked to Roberta (mode
         // 1). NeedHeroAlive and the weapon sheathe sound are not reproduced.
@@ -3222,6 +3334,35 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1171_levers_counts_and_floats() {
+        let mut s = GameState::default();
+        let init = on_init(1171, &mut s);
+        assert!(init.contains(&Action::RegisterGroupType { kind: 12 }));
+        // T0 with flag 638 set: flag 163 (count 1) and line 1; at count 5 nothing is said.
+        s.set(638, true);
+        let call = TriggerCall { index: 0, state: 1, object: true, square: false };
+        assert_eq!(on_trigger(1171, 0, call, &mut s).actions, vec![Action::Message { line: 1 }]);
+        assert!(s.flag(163) && !s.flag(33));
+        for f in 637..=641 {
+            s.set(f, true);
+        }
+        assert!(on_trigger(1171, 0, call, &mut s).actions.is_empty());
+        // A lever prompts while inside, runs on Square, then never again this load.
+        let lever = TriggerCall { index: 5, state: 2, object: true, square: false };
+        let out = on_trigger(1171, 5, lever, &mut s);
+        assert_eq!((out.prompt, out.actions.len()), (Some(6), 0));
+        let run = on_trigger(1171, 5, TriggerCall { square: true, ..lever }, &mut s).actions;
+        assert!(run.contains(&Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }) && run.contains(&Action::PlayAnim { obj: 2, speed: 1.0, wait: false }));
+        assert_eq!(on_trigger(1171, 5, TriggerCall { square: true, ..lever }, &mut s).prompt, None);
+        // Entry 4's floating object (20, 21, 22): R on the entering fire only.
+        let enter = TriggerCall { index: 30, state: 1, object: true, square: false };
+        let r = group_run(1171, 12, enter, &[20, 21, 22]);
+        assert_eq!((r[0], r[3], r[10]), (Action::DeactivateObj { obj: 20 }, Action::WaitInside { index: 30 }, Action::LoopAnim { obj: 20, speed: 1.0 }));
+        assert!(group_run(1171, 12, TriggerCall { state: 2, ..enter }, &[20, 21, 22]).is_empty());
+        assert_eq!(group_init(1171, 12, &[17, 18, 19])[1], Action::SetObjTimeRandom { obj: 17 });
     }
 
     #[test]

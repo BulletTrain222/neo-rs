@@ -127,6 +127,20 @@ impl ObjAnim {
         self.speed = speed;
     }
 
+    /// SetObjToTime: the time clamped to 0 .. duration; at or past the end the object is
+    /// finished (8, time = duration), below it stopped (10) at that time.
+    pub fn set_time(&mut self, m: &Motion, t: f32) {
+        self.scripted = true;
+        let d = m.duration();
+        if t >= d {
+            self.time = d;
+            self.state = 8;
+        } else {
+            self.time = t.max(0.0);
+            self.state = 10;
+        }
+    }
+
     /// StopAnim: state 10 unless finished (8).
     pub fn stop(&mut self) {
         self.scripted = true;

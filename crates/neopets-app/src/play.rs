@@ -89,6 +89,9 @@ pub struct World {
     capacity: usize,
     volumes: Vec<neopets_sim::trigger::Volume>,
     routines: HashMap<u16, u8>,
+    /// Script-group type registrations: trigger index to its owner group (SPEC-0048 Script
+    /// groups, type registration); a later RegisterTrigger on the index replaces it.
+    group_routes: HashMap<u16, usize>,
     records: HashMap<u16, neopets_sim::trigger::Record>,
     pub groups: Vec<neopets_data::trigger::ScriptGroup>,
     placements: Vec<(u8, u8)>,
@@ -179,6 +182,7 @@ impl World {
             capacity: 0,
             volumes: Vec::new(),
             routines: HashMap::new(),
+            group_routes: HashMap::new(),
             records: HashMap::new(),
             groups: neopets_data::trigger::script_groups(&bytes, &chain.chunks),
             placements: neopets_data::travel::placement_table(&bytes, &chain.chunks),
@@ -420,6 +424,8 @@ enum Wait {
     Cage(usize),
     /// PlayHeroAnim with WAIT: while the hero stays in the one-shot state.
     HeroOneShot,
+    /// While the current world's trigger record stays non-zero.
+    Inside(u16),
 }
 
 pub struct Play {
@@ -1460,6 +1466,7 @@ impl Play {
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
             Wait::WheelSpin => self.wheel_spin.is_none(),
             Wait::HeroOneShot => self.loco.state != neopets_sim::hero::ONE_SHOT,
+            Wait::Inside(i) => self.world.records.get(&i).is_none_or(|r| r.state == 0),
             Wait::Cage(i) => self.state.burrows.as_ref().and_then(|b| b.cages.get(i)).is_none_or(|c| c.state != 4),
             Wait::ObjAnim(pack, i) => [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.object_anims.get(i)).is_none_or(|a| a.state != 2),
         }
@@ -1832,8 +1839,41 @@ impl Play {
                     let _ = pack;
                     if (index as usize) < self.world.capacity {
                         self.world.routines.insert(index, routine);
+                        self.world.group_routes.remove(&index);
                     }
                 }
+                Action::RegisterGroupType { kind } => {
+                    // Each entry of the kind: its first trigger to the run callback (replacing an
+                    // earlier registration), then the init callback at once.
+                    let entries: Vec<(usize, Option<u16>, Vec<usize>)> = self
+                        .world
+                        .groups
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, g)| g.kind == kind)
+                        .map(|(i, g)| (i, g.triggers.first().and_then(|&t| u16::try_from(t).ok()), g.objects.iter().filter_map(|&o| usize::try_from(o).ok()).collect()))
+                        .collect();
+                    for (i, trigger, objects) in entries {
+                        if let Some(t) = trigger.filter(|&t| (t as usize) < self.world.capacity) {
+                            self.world.routines.remove(&t);
+                            self.world.group_routes.insert(t, i);
+                        }
+                        let init = level::group_init(self.world.pack, kind, &objects);
+                        self.apply(&init);
+                    }
+                }
+                Action::SetObjTime { obj, seconds } => {
+                    let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                    if let Some(w) = w.filter(|w| obj < w.object_anims.len()) {
+                        w.object_anims[obj].set_time(&w.motions[obj], seconds);
+                    }
+                }
+                Action::SetObjTimeRandom { obj } => {
+                    // Random(0, 100) / 100, computed in double precision and stored as a float.
+                    let r = self.rng.range(0, 100);
+                    self.apply(&[Action::SetObjTime { obj, seconds: (r as f64 / 100.0) as f32 }]);
+                }
+                Action::WaitInside { index } => return Some(Wait::Inside(index)),
                 Action::LockChest { id, key, message } => {
                     if self.world.locks.len() < 2 {
                         self.world.locks.push((id, key, message));
@@ -3579,6 +3619,14 @@ impl Play {
                         ]);
                     }
                 }
+                continue;
+            }
+            if let Some(&gi) = self.world.group_routes.get(&i) {
+                let Some(g) = self.world.groups.get(gi) else { continue };
+                let objects: Vec<usize> = g.objects.iter().filter_map(|&o| usize::try_from(o).ok()).collect();
+                let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square };
+                let out = level::group_run(self.world.pack, g.kind, call, &objects);
+                self.apply(&out);
                 continue;
             }
             let Some(&routine) = self.world.routines.get(&i) else { continue };
