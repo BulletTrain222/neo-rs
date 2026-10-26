@@ -1340,6 +1340,10 @@ fn step_sim(
                     m.flow.set(&a.f, menus::CARD);
                 }
             }
+            // NEOPETS_TRACE_QUICK=n: an Up press edge on play tick n (the quick-item panel opens).
+            if std::env::var("NEOPETS_TRACE_QUICK").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
+                play.play.panel_latch.up = true;
+            }
             // NEOPETS_TRACE_BOOK="value@n": the book cursor set to a station value on play tick n
             // (diagnostic: the reader opens on the next pass).
             if let Some((v, k)) = std::env::var("NEOPETS_TRACE_BOOK").ok().and_then(|v| v.split_once('@').and_then(|(a, b)| Some((a.trim().parse::<i32>().ok()?, b.trim().parse::<u64>().ok()?)))) {
@@ -3038,6 +3042,10 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                         // SPEC-0035 section 6.1: the page timer's start and minimum.
                         if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, 0x002D_B2E0, 2) {
                             flow.book_words = (f32::from_bits(w[0]), f32::from_bits(w[1]));
+                        }
+                        // Rule 5: the block x, y and line-limit words and the text width.
+                        if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, neopets_sim::book::PAGE_WORDS, 9) {
+                            flow.page_words = neopets_sim::book::PageWords::read(&w);
                         }
                     }
                     commands.insert_resource(menu_view::Menu::new(flow));

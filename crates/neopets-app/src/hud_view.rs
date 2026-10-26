@@ -30,8 +30,9 @@ const MONSTER_FILL: u32 = 0x23;
 const MONSTER_NAME: u32 = 0x32;
 /// SPEC-0023 section 11: the selected quick item panel, the equipment panels (weapon slot 2,
 /// armour slot 0, shield slot 1), the right quick-item cross icon (its group is the cross), and
-/// the item-icon elements whose art comes from the children of the item-icon node (key 0x9F) by
-/// an item kind that no spec defines yet (R-0020), so they are not drawn.
+/// the item-icon elements, whose art is the child of the item-icon node (key 0x9F) at the item's
+/// id (R-0020): the four cross icons show the quick-item list's entries 0 to 3 (right, up, left,
+/// down) and 0xA0 and 0xA1 the selected item (the marker), each while its count is above 0.
 const ITEM_PANEL: u32 = 0x30;
 const EQUIP: [u32; 3] = [0x1C, 0x1D, 0x1E];
 const CROSS_RIGHT: u32 = 0x9C;
@@ -271,8 +272,7 @@ pub fn sync_hud(
     for &r in &panels {
         subtree(f, r, &mut panel_nodes);
     }
-    let icons: Vec<usize> = ITEM_ICONS.iter().filter_map(|&k| f.key(k)).collect();
-    nodes.extend(panel_nodes.iter().copied().filter(|n| !icons.contains(n)));
+    nodes.extend(panel_nodes.iter().copied());
     let Ok((root, mut root_node)) = canvas.single_mut() else {
         let root = commands
             .spawn((Node { position_type: PositionType::Absolute, ..default() }, HudCanvas, GlobalZIndex(10)))
@@ -361,6 +361,19 @@ pub fn sync_hud(
         subtree(f, t, &mut tinted);
     }
     let shown = p.spawned && !p.dialogue_open && p.death.page.is_none() && !p.menu_open;
+    // SPEC-0023 section 11: the item id each icon element shows, and its art node (the child of
+    // key 0x9F at that id; none past the last child).
+    let icon_children: Vec<usize> = f.key(0x9F).map(|g| f.children(g)).unwrap_or_default();
+    let held = |id: i32| u16::try_from(id).ok().and_then(|id| p.state.items.get(&id)).is_some_and(|&n| n > 0);
+    let icon_art: HashMap<usize, Option<usize>> = ITEM_ICONS
+        .iter()
+        .enumerate()
+        .filter_map(|(k, &key)| {
+            let id = if k < 4 { p.quick.entries[k] } else { p.quick.marker };
+            let art = usize::try_from(id).ok().filter(|_| held(id)).and_then(|i| icon_children.get(i).copied());
+            Some((f.key(key)?, art))
+        })
+        .collect();
     let mut wanted: Vec<(usize, u32, u32)> = Vec::new();
     for (sprite, mut node, mut image, mut vis) in &mut sprites {
         let n = sprite.0;
@@ -395,10 +408,13 @@ pub fn sync_hud(
         }
         let w = *ws.get(&n).unwrap_or(&(f.nodes[n].width as i32));
         let h = f.nodes[n].height as i32;
-        if !ok || w <= 0 || h <= 0 {
+        // An item icon element draws its item's art, or nothing.
+        let art = icon_art.get(&n).copied().unwrap_or(Some(n));
+        if !ok || w <= 0 || h <= 0 || art.is_none() {
             *vis = Visibility::Hidden;
             continue;
         }
+        let art = art.unwrap_or(n);
         let (x, y, mut sx, sy) = place(f, n, &xs, &ws);
         if Some(n) == f.key(MONSTER_FILL) {
             // The fill is drawn with its x scale reset to 1.0.
@@ -421,9 +437,9 @@ pub fn sync_hud(
             hud.bars_alpha
         };
         image.color = Color::srgba(c(rgb[0]), c(rgb[1]), c(rgb[2]), c(a).min(1.0));
-        match cache.get(&(n, w as u32, h as u32)) {
+        match cache.get(&(art, w as u32, h as u32)) {
             Some(handle) => image.image = handle.clone(),
-            None => wanted.push((n, w as u32, h as u32)),
+            None => wanted.push((art, w as u32, h as u32)),
         }
         *vis = Visibility::Inherited;
     }

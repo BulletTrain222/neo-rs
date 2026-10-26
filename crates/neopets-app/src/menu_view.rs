@@ -150,6 +150,59 @@ pub struct MenuCache {
     pictures: HashMap<u32, Option<neopets_data::texture::Image>>,
     /// The map marker's image, redrawn each frame at the marker's angle.
     marker: Option<Handle<Image>>,
+    /// The open book's flat page image, by book index.
+    book: Option<(usize, Handle<Image>)>,
+}
+
+/// SPEC-0035 6.1 rules 10 and 11: the book's flat page, 448 x 448: the 128 x 128 paper picture
+/// over the whole page, then each laid-out line in the book's glyph sheet, colour (100, 100,
+/// 100, 128), every glyph's advance plus the line's extra and each candidate's further extra.
+fn book_page(b: &neopets_data::book::Book, words: &neopets_sim::book::PageWords) -> neopets_data::texture::Image {
+    const N: u32 = 448;
+    let mut rgba = vec![0u8; (N * N * 4) as usize];
+    if let Some(p) = &b.paper {
+        for y in 0..N {
+            for x in 0..N {
+                let (sx, sy) = (x * p.width / N, y * p.height / N);
+                let si = ((sy * p.width + sx) * 4) as usize;
+                let di = ((y * N + x) * 4) as usize;
+                rgba[di..di + 4].copy_from_slice(&p.rgba[si..si + 4]);
+            }
+        }
+    }
+    if let (Some(font), Some(sheet)) = (&b.font, &b.sheet) {
+        let advance = |c: u8| font.glyph(c).map(|g| g.advance as i32);
+        for line in neopets_sim::book::layout(&b.body, b.style, words, font.line_height(), &advance) {
+            let mut pen = 0.0f32;
+            let mut glyphs = Vec::new();
+            for &c in &b.body[line.start..line.end] {
+                let Some(g) = font.glyph(c) else { continue };
+                glyphs.push((pen, g));
+                pen += g.advance as f32 + line.glyph_extra + if c == b' ' || c == b'_' { line.space_extra } else { 0.0 };
+            }
+            let (img, up) = neopets_data::frontend::render_glyphs(sheet, font.line_height(), &glyphs, [100, 100, 100, 128]);
+            let (ox, oy) = (line.x, line.y - up);
+            for y in 0..img.height as i32 {
+                for x in 0..img.width as i32 {
+                    let (dx, dy) = (ox + x, oy + y);
+                    if dx < 0 || dy < 0 || dx >= N as i32 || dy >= N as i32 {
+                        continue;
+                    }
+                    let si = ((y as u32 * img.width + x as u32) * 4) as usize;
+                    let a = img.rgba[si + 3] as u32;
+                    if a == 0 {
+                        continue;
+                    }
+                    let di = ((dy as u32 * N + dx as u32) * 4) as usize;
+                    for k in 0..3 {
+                        rgba[di + k] = ((img.rgba[si + k] as u32 * a + rgba[di + k] as u32 * (255 - a)) / 255) as u8;
+                    }
+                    rgba[di + 3] = 255;
+                }
+            }
+        }
+    }
+    neopets_data::texture::Image { width: N, height: N, rgba }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -253,6 +306,16 @@ pub fn sync_menu(
                 }
                 cache.labels.get(&node).map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32 * scale, *w as f32 * scale, *h as f32 * scale, Color::WHITE))
             }
+            Draw::BookPage { x, y } => match (menu.flow.book.as_ref(), menu.flow.page_words.as_ref()) {
+                (Some(b), Some(words)) => {
+                    if cache.book.as_ref().is_none_or(|(i, _)| *i != b.index) {
+                        let img = book_page(&b.book, words);
+                        cache.book = Some((b.index, images.add(crate::rgba_image(img.width, img.height, img.rgba))));
+                    }
+                    cache.book.as_ref().map(|(_, h0)| (h0.clone(), x, y, 448.0, 448.0, Color::WHITE))
+                }
+                _ => None,
+            },
             Draw::Marker { node, x, y, angle, colour } => {
                 // SPEC-0051 section 7: each corner offset (x, y) of the 32 x 32 quad goes to the
                 // screen offset ((6/7)(C x - S y), S x + C y); drawn into a 48 x 48 image by the

@@ -176,6 +176,9 @@ pub enum Draw {
     Label { node: usize, x: f32, y: f32, scale: f32 },
     /// A run of text in a font, with its baseline at y.
     Text { font: usize, text: Vec<u8>, spacing: i32, x: f32, y: f32, colour: [u8; 4] },
+    /// The open book's flat page (SPEC-0035 6.1 rule 11): the 448 x 448 paper with the body, its
+    /// top-left corner at (x, y) on the canvas.
+    BookPage { x: f32, y: f32 },
     /// The map's hero marker (SPEC-0051 section 7): sprite node `node`'s whole 32 x 32 art as a
     /// quad centred on (x, y), turned by `angle` and squashed to 6/7 of its width, tinted.
     Marker { node: usize, x: f32, y: f32, angle: f32, colour: [u8; 4] },
@@ -275,6 +278,8 @@ pub struct Flow {
     /// (0x2DB2E0, 0x2DB2E4).
     pub book: Option<BookPage>,
     pub book_words: (f32, f32),
+    /// The book page layout words (SPEC-0035 6.1 rule 5), read at start-up.
+    pub page_words: Option<neopets_sim::book::PageWords>,
     /// The pause page's quit box is open (SPEC-0035 Behavior 2, states 6 and 7): its record 26
     /// shows in `card`, and the input block hides the menu words from the focus states and
     /// the generic step.
@@ -376,7 +381,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), display_focus: 0, display_requests: Vec::new() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -1577,32 +1582,17 @@ fn node_xy(fe: &Frontend, n: usize) -> (f32, f32) {
     (x, y)
 }
 
-/// The book reader's text (SPEC-0035 section 6.1 rule 5 gives the slot template, but not how
-/// the paragraphs fill it or how the pages are drawn; R-0071): a placeholder layout with the
-/// title in font 0 and the paragraphs wrapped at 192 pixels in the front-end font 2 (the book's
-/// own glyph sheet is not drawn), block A at x 20 and block B at x 234 from y 54, 18 pixels a
-/// line, 19 lines each.
+/// The book reader's page (SPEC-0035 6.1 rules 8 to 13): the flat page (paper and body, drawn
+/// from the book's own glyphs) shown flat with its 448-wide spread centred on the canvas, and the
+/// title in front-end font 0 centred on x 256 at baseline 40 in (112, 112, 2, 128). The 3D page
+/// sheet and decoration mesh, its tilt by the page angle and its placement before the camera
+/// (rule 12, Low for the placement) are not drawn.
 pub fn book_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
     let mut out = Vec::new();
     let (true, Some(b)) = (flow.current == BOOK, flow.book.as_ref()) else { return out };
-    let colour = [128, 128, 128, 128];
+    out.push(Draw::BookPage { x: 32.0, y: 0.0 });
     let tw = fe.fonts.first().map_or(0, |f| f.measure(&b.book.title, 0));
-    out.push(Draw::Text { font: 0, text: b.book.title.clone(), spacing: 0, x: 256.0 - (tw / 2) as f32, y: 36.0, colour });
-    let mut lines: Vec<Vec<u8>> = Vec::new();
-    for p in &b.book.paragraphs {
-        for part in p.split(|&c| c == b'\n') {
-            let wrapped = fe.wrap(2, part, 192, 0);
-            if wrapped.is_empty() {
-                lines.push(Vec::new());
-            }
-            lines.extend(wrapped.iter().map(|&(a, z)| part[a..z].to_vec()));
-        }
-        lines.push(Vec::new());
-    }
-    for (i, line) in lines.into_iter().take(38).enumerate() {
-        let (x, row) = if i < 19 { (20.0, i) } else { (234.0, i - 19) };
-        out.push(Draw::Text { font: 2, text: line, spacing: 0, x, y: 54.0 + 18.0 * (row as f32 + 1.0), colour });
-    }
+    out.push(Draw::Text { font: 0, text: b.book.title.clone(), spacing: 0, x: (256.0 - tw as f32 / 2.0).trunc(), y: 40.0, colour: [112, 112, 2, 128] });
     out
 }
 
