@@ -394,6 +394,12 @@ pub struct GameState {
     /// (GetAssetGroupCharacterRange with IsAI_Dead over it), filled by the host each tick; a slot
     /// that is empty or still loading has no entry.
     pub slot_alive: std::collections::BTreeMap<u8, usize>,
+    /// The current world's entities that took a hit this tick (their hit reaction), filled by
+    /// the host before Update.
+    pub hit_now: BTreeSet<usize>,
+    /// SetEntityUndamageable as an Update sets it this tick (beside the fixed lists of
+    /// `undamageable`), kept by the host until the next Update.
+    pub undamageable_now: BTreeSet<usize>,
     /// NumMiamiceInCage (SPEC-0029 Behavior 28), filled by the host.
     pub miamice_caged: u32,
     /// NumMortogsOnTarget (SPEC-0041 1363). The host has no Mortog behaviour yet, so it stays 0.
@@ -499,6 +505,9 @@ pub struct HeroView {
     pub strike: bool,
     /// GetHitPoints(-1): the current hero's hit points.
     pub hp: i32,
+    /// The attack button (R2 or Circle): its press edge this tick, and held.
+    pub fire: bool,
+    pub fire_held: bool,
 }
 
 impl GameState {
@@ -600,7 +609,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) || (pack == 1300 && door <= 2) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) || (pack == 1300 && door <= 2) || (pack == 1327 && door <= 1) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -708,6 +717,27 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             vec![Action::EnterInterior { slot }]
         }
         (1363, 0..=2) => vec![Action::Message { line: 0 }],
+        // SPEC-0044 1327 teleports (context 13): 0 posts 30 for eW 151; with 240 set and 245 clear
+        // the Act 3 start (245 to 247; 400, 223 and 397; act start 3; flags 74, 57, 49, 93, 85, 31,
+        // 19, 11, 83 and 4; movies 27, 29, 90 and 30 are not played, and their return world eW 64,
+        // pack 886, is loaded at once); else the load of eW 151 (pack 1300). 1: with 93 set and
+        // 94 clear value 80 for eW 150 and its load (pack 1299); else line 76.
+        (1327, 0) => {
+            state.blackboard.insert((2, 151), 30);
+            if state.flag(240) && !state.flag(245) {
+                for f in [245, 246, 247, 400, 223, 397, 74, 57, 49, 93, 85, 31, 19, 11, 83, 4] {
+                    state.set(f, true);
+                }
+                vec![Action::ActStart { stage: 3 }, Action::ReplaceExterior { slot: 64, plane: -1 }]
+            } else {
+                vec![Action::ReplaceExterior { slot: 151, plane: -1 }]
+            }
+        }
+        (1327, 1) if state.flag(93) && !state.flag(94) => {
+            state.blackboard.insert((2, 150), 80);
+            vec![Action::ReplaceExterior { slot: 150, plane: -1 }]
+        }
+        (1327, 1) => vec![Action::Message { line: 76 }],
         // SPEC-0045 1300 teleports (context 13): 1: with 235 set and 92 and 94 clear value 20 for
         // eW 155 and its load (pack 1335); 0: with 94 clear value 60 for eW 151 and the entry into
         // eW 192 (pack 1433); 2: with 222 set and 94 clear value 30 for eW 154 and its load (pack
@@ -1506,6 +1536,32 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0044 1327 Init: the slot thread (94: none; 93: set 4; 92: swap mode 1 and set 2;
+        // else swap mode 1, set 1, and set 5 into the second store with 222 set and 234 clear, or
+        // 235; region 1328 + set); with 92 clear group 6's effects and objects 1 and 0, else
+        // object 2. The animated-object offset loop of groups 0 to 5 is not built.
+        1327 => {
+            let f = |n| state.flag(n);
+            let load = |slot: u8, j: u32| Action::LoadRegion { slot, region: Some(1328 + j) };
+            let mut v = Vec::new();
+            if f(94) {
+            } else if f(93) {
+                v.push(load(0, 4));
+            } else if f(92) {
+                v.extend([Action::SwapMode { mode: 1 }, load(0, 2)]);
+            } else {
+                v.extend([Action::SwapMode { mode: 1 }, load(0, 1)]);
+                if (f(222) && !f(234)) || f(235) {
+                    v.push(load(1, 5));
+                }
+            }
+            if f(92) {
+                v.push(Action::InitObjOn { obj: 2, end: false });
+            } else {
+                v.extend([Action::GroupEffects { group: 6 }, Action::InitObjOn { obj: 1, end: false }, Action::InitObjOn { obj: 0, end: false }]);
+            }
+            v
+        }
         // SPEC-0045 1300 Init: 91 and 221 on the first visit; objects by 594 and 400; effect 8 by
         // 227; swap mode 1 while 248 is clear; the triggers; the slot thread (routine 36): 94:
         // set 21 into slot 0 with 367; 93: sets 16 and 2 into slots 0 and 5; 92: 15 and 2; 222:
@@ -2631,6 +2687,171 @@ fn talk_1350(routine: u8, s: &mut GameState) -> Vec<Action> {
         }
         _ => Vec::new(),
     }
+}
+
+/// A rotation with a head line shown once and then the cycle ("a; then b, c"), with a branch
+/// marker (words 10 + 2r and 11 + 2r of the pack).
+fn head_then(s: &mut GameState, pack: u32, routine: u8, case: i32, head: u16, lines: &[u16]) -> Vec<Action> {
+    let (cw, pw) = (10 + 2 * routine, 11 + 2 * routine);
+    let mut pos = s.word(pack, pw);
+    if s.word(pack, cw) != case + 1 {
+        s.set_word(pack, cw, case + 1);
+        pos = 0;
+    }
+    s.set_word(pack, pw, pos + 1);
+    let line = if pos == 0 { head } else { lines[(pos as usize - 1) % lines.len()] };
+    vec![Action::Talk { line }]
+}
+
+/// SPEC-0044 1327's proximity routines: 43 (the trainer, a branch marker), 1 to 5 (shared
+/// counters, bases 0, 18, 36, 27, 9) and 44.
+fn talk_1327(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let f = |s: &GameState, n: u16| s.flag(n);
+    match routine {
+        43 if f(s, 235) => cycle_in(s, 1327, 43, 1, &[48, 49, 50]),
+        43 if f(s, 234) => vec![Action::Talk { line: 51 }],
+        43 if f(s, 233) => head_then(s, 1327, 43, 3, 52, &[53, 54]),
+        43 if f(s, 232) => head_then(s, 1327, 43, 4, 55, &[56, 57]),
+        43 if f(s, 231) => head_then(s, 1327, 43, 5, 58, &[59, 60]),
+        43 if f(s, 230) => head_then(s, 1327, 43, 6, 61, &[62, 63]),
+        43 if f(s, 229) => cycle_in(s, 1327, 43, 7, &[64, 65]),
+        43 if !f(s, 224) => {
+            s.set(224, true);
+            vec![Action::Talk { line: 74 }]
+        }
+        43 => {
+            let line = match (f(s, 225), f(s, 226), f(s, 227)) {
+                (true, true, true) => {
+                    s.remove_all(10);
+                    s.remove_all(11);
+                    s.set(228, true);
+                    s.set(229, true);
+                    return vec![Action::Equip { on: true }, Action::Talk { line: 66 }];
+                }
+                (true, true, false) => 69,
+                (true, false, true) => 68,
+                (true, false, false) => 72,
+                (false, true, true) => 67,
+                (false, true, false) => 71,
+                (false, false, true) => 70,
+                (false, false, false) => 73,
+            };
+            vec![Action::Talk { line }]
+        }
+        1..=5 => {
+            let b = [0, 18, 36, 27, 9][routine as usize - 1];
+            let k = if f(s, 235) { 0 } else if f(s, 228) { 3 } else { 6 };
+            cycle_shared(s, 1327, routine, &[b + k, b + k + 1, b + k + 2])
+        }
+        44 => head_then(s, 1327, 44, 1, 45, &[46, 47]),
+        _ => Vec::new(),
+    }
+}
+
+/// SPEC-0044 1327's target-practice thread (228 set, 234 clear; the step is the highest set of
+/// 229 to 233; the trainer's talk after each step). Words: 40 the target set loaded, 41 busy,
+/// 42 the step a wait belongs to, 43 the hold count, 44 the press count, 45 its 30-tick clock.
+/// Roberta's hit-point refill is not built.
+fn practice_1327(s: &mut GameState) -> Vec<Action> {
+    let p = 1327;
+    if !s.flag(228) || s.flag(234) || s.word(p, 41) != 0 {
+        return Vec::new();
+    }
+    let step = (229..=233).rev().find(|&f| s.flag(f));
+    let mut out = Vec::new();
+    if step.is_some() && s.word(p, 40) == 0 {
+        s.set_word(p, 40, 1);
+        out.extend([Action::LoadRegion { slot: 2, region: None }, Action::LoadRegion { slot: 2, region: Some(1328) }]);
+    }
+    let busy = |v: &mut Vec<Action>| v.push(Action::Bits { word: 41, set: 0, clear: 1 });
+    let talk = |s: &mut GameState| talk_1327(43, s);
+    match step {
+        Some(229) if s.hero.fire => {
+            s.set(230, true);
+            s.set_word(p, 41, 1);
+            out.push(wait(1.0));
+            out.extend(talk(s));
+            busy(&mut out);
+        }
+        Some(230) if s.word(p, 42) != 230 => {
+            s.set_word(p, 42, 230);
+            s.set_word(p, 41, 1);
+            out.extend([
+                Action::LoadRegion { slot: 2, region: None },
+                Action::LoadRegion { slot: 2, region: Some(1328) },
+                Action::PlayCamera { track: 0, wait: false, end: 1, speed: 1.0 },
+                wait(2.5),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+            busy(&mut out);
+        }
+        Some(230) if s.hit_now.contains(&0) => {
+            s.set(231, true);
+            out.push(Action::HitPointsPercent { entity: 0, percent: 100.0 });
+            out.extend(talk(s));
+        }
+        Some(231) => {
+            if s.word(p, 42) != 231 {
+                s.set_word(p, 42, 231);
+                out.push(Action::ActivateEntity { entity: 0 });
+            }
+            let held = if s.hero.fire_held { s.word(p, 43) + 1 } else { 0 };
+            s.set_word(p, 43, held);
+            if held >= 31 {
+                s.set(232, true);
+                s.set_word(p, 41, 1);
+                out.extend([wait(1.5), Action::HitPointsPercent { entity: 0, percent: 100.0 }]);
+                out.extend(talk(s));
+                busy(&mut out);
+            }
+        }
+        Some(232) => {
+            let mut n = s.word(p, 44) + s.hero.fire as i32;
+            let clock = s.word(p, 45) + 1;
+            if clock >= 30 {
+                n = (n - 1).max(0);
+                s.set_word(p, 45, 0);
+            } else {
+                s.set_word(p, 45, clock);
+            }
+            s.set_word(p, 44, n);
+            if n >= 3 {
+                s.set(233, true);
+                s.set_word(p, 41, 1);
+                out.extend([wait(1.0), Action::HitPointsPercent { entity: 0, percent: 100.0 }]);
+                out.extend(talk(s));
+                out.push(Action::GiveItem { item: 160, count: 100 });
+                busy(&mut out);
+            }
+        }
+        Some(233) => {
+            if s.word(p, 42) != 233 {
+                s.set_word(p, 42, 233);
+                out.push(Action::ActivateEntity { entity: 0 });
+            }
+            if s.ai_dead.contains(&0) {
+                s.set(234, true);
+                s.blackboard.insert((2, 151), 10);
+                out.extend([
+                    Action::Message { line: 75 },
+                    Action::LoadRegion { slot: 3, region: Some(1334) },
+                    Action::WaitLoads,
+                    wait(0.5),
+                    Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                    Action::Message { line: 77 },
+                    wait(0.3),
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::LoadRegion { slot: 3, region: None },
+                ]);
+                out.extend(talk(s));
+                s.set(235, true);
+                // Movie 19 is not played; its return world eW 151 (pack 1300) is loaded at once.
+                out.push(Action::ReplaceExterior { slot: 151, plane: -1 });
+            }
+        }
+        _ => {}
+    }
+    out
 }
 
 /// A routine's shared-counter cycling (no branch marker; word 11 + 2r of the pack).
@@ -6358,6 +6579,20 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0044 1327 Update: the item flags 225 to 227 (items 11, 10, 62); entity 0
+        // undamageable while 228 is set and 233 clear; the target-practice thread.
+        1327 => {
+            for (item, flag) in [(11, 225), (10, 226), (62, 227)] {
+                if state.has_item(item) && !state.flag(flag) {
+                    state.set(flag, true);
+                }
+            }
+            state.undamageable_now.clear();
+            if state.flag(228) && !state.flag(233) {
+                state.undamageable_now.insert(0);
+            }
+            out.extend(practice_1327(state));
+        }
         // SPEC-0045 1300 Update: items 11, 10 and 62 held set 225, 226 and 227. The petpet
         // ritual's colour ramp (routine 2) is not built.
         1300 => {
@@ -7066,6 +7301,20 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             .map(|locator| Action::MoveHero { locator })
             .into_iter()
             .collect();
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
+        // SPEC-0044 1327 arrival (eW 154): 30 moves the hero to locator 28, 80 to 27; any value but
+        // -1 returns the camera; the value is reset.
+        1327 => {
+            let v = state.take_message(2, 154);
+            let mut out: Vec<Action> = match v {
+                30 => vec![Action::MoveHero { locator: 28 }],
+                80 => vec![Action::MoveHero { locator: 27 }],
+                _ => Vec::new(),
+            };
             if v != -1 {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
@@ -9014,6 +9263,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0044 1327: entities 43, 1 to 5 and 44.
+        (1327, 43 | 1..=5 | 44) => Some(entity as u8),
         // SPEC-0045 1300: the registrations of Init (routine by entity).
         (1300, 7..=10 | 55) => Some(1),
         (1300, 11..=13) => Some(4),
@@ -9137,6 +9388,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1300 {
         return talk_1300(routine, state);
+    }
+    if pack == 1327 {
+        return talk_1327(routine, state);
     }
     // SPEC-0043 1335 proximity: 34 line 3 in the frame unless Random(1, 3) is 1; 31 line 15 and
     // 13 line 24 in the frame; 32, 33 and 35 lines 9, 12 and 6.
@@ -9517,6 +9771,70 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1327_lines_and_practice() {
+        // Vector 1: entity 43 with 229 to 235 and 224 clear: line 74 and 224; then with 225 and
+        // 227 set: line 68.
+        let mut s = GameState::default();
+        assert_eq!(on_talk(1327, 43, &mut s), vec![Action::Talk { line: 74 }]);
+        assert!(s.flag(224));
+        s.give(11, 1);
+        s.give(62, 1);
+        on_update(1327, &mut s, false);
+        assert_eq!(on_talk(1327, 43, &mut s), vec![Action::Talk { line: 68 }]);
+        // Vector 2: entity 1 with 228: 3, 4; then with 235: 2, 0, 1.
+        let mut s = GameState::default();
+        s.set(228, true);
+        let mut lines = vec![on_talk(1327, 1, &mut s), on_talk(1327, 1, &mut s)];
+        s.set(235, true);
+        lines.extend((0..3).map(|_| on_talk(1327, 1, &mut s)));
+        assert_eq!(lines, [3, 4, 2, 0, 1].map(|line| vec![Action::Talk { line }]).to_vec());
+        // Vector 3: entity 44: 45, 46, 47, 46, 47.
+        let got: Vec<_> = (0..5).map(|_| on_talk(1327, 44, &mut s)).collect();
+        assert_eq!(got, [45, 46, 47, 46, 47].map(|line| vec![Action::Talk { line }]).to_vec());
+        // The practice: all three items start it (228, 229); a press moves to 230.
+        let mut s = GameState::default();
+        s.set(224, true);
+        for i in [10, 11, 62] {
+            s.give(i, 1);
+        }
+        on_update(1327, &mut s, false);
+        assert!(on_talk(1327, 43, &mut s).contains(&Action::Talk { line: 66 }) && s.flag(229));
+        assert!(on_update(1327, &mut s, false).contains(&Action::LoadRegion { slot: 2, region: Some(1328) }));
+        assert!(s.undamageable_now.contains(&0));
+        s.hero.fire = true;
+        on_update(1327, &mut s, false);
+        assert!(s.flag(230));
+        s.hero.fire = false;
+        s.set_word(1327, 41, 0);
+        on_update(1327, &mut s, false);
+        s.set_word(1327, 41, 0);
+        // A hit on the target (it takes no damage) moves to 231; 31 ticks held to 232.
+        s.hit_now.insert(0);
+        on_update(1327, &mut s, false);
+        assert!(s.flag(231));
+        s.hit_now.clear();
+        s.hero.fire_held = true;
+        for _ in 0..31 {
+            on_update(1327, &mut s, false);
+        }
+        assert!(s.flag(232));
+        // Three quick presses to 233 (item 160 x100); the target's death ends it (235).
+        s.set_word(1327, 41, 0);
+        s.hero.fire_held = false;
+        for _ in 0..3 {
+            s.hero.fire = true;
+            on_update(1327, &mut s, false);
+        }
+        assert!(s.flag(233));
+        s.set_word(1327, 41, 0);
+        s.hero.fire = false;
+        s.ai_dead.insert(0);
+        let end = on_update(1327, &mut s, false);
+        assert!(end.contains(&Action::ReplaceExterior { slot: 151, plane: -1 }) && end.contains(&Action::Talk { line: 51 }));
+        assert!(s.flag(234) && s.flag(235));
     }
 
     #[test]

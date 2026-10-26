@@ -1471,6 +1471,8 @@ impl Play {
 
     /// SPEC-0006 Make current: the new world's script runs its activate-world routine.
     fn activated(&mut self) {
+        // An Update's per-tick undamageable set belongs to the world that was current.
+        self.state.undamageable_now.clear();
         // The world's own region (its embedded type-32 characters), slot 255, once per load.
         let pack = self.world.pack;
         if !self.slot_regions.contains_key(&(pack, EMBEDDED_SLOT)) {
@@ -3145,7 +3147,11 @@ impl Play {
         let hero_at = from;
         // The script's undamageable entities (SPEC-0044 1056 Update) take no damage.
         let pack = self.world.pack;
-        let damage = if self.characters.get(i).and_then(|c| c.entity).is_some_and(|e| level::undamageable(pack).contains(&e)) { 0 } else { damage };
+        let entity = self.characters.get(i).and_then(|c| c.entity);
+        if let Some(e) = entity.filter(|_| self.characters[i].pack == pack) {
+            self.state.hit_now.insert(e);
+        }
+        let damage = if entity.is_some_and(|e| level::undamageable(pack).contains(&e) || self.state.undamageable_now.contains(&e)) { 0 } else { damage };
         let Some(c) = self.characters.get_mut(i) else { return };
         {
             if let Some(e) = c.enemy.as_mut() {
@@ -4247,6 +4253,8 @@ impl Play {
             self.confirm = true;
         }
         self.square_now = input.square;
+        self.state.hero.fire = input.attack;
+        self.state.hero.fire_held = input.attack_held;
         self.save_point_step(input.square);
         self.music_step();
         // The attack press edge enters state 13 from the ground states (SPEC-0036); the step
@@ -4464,6 +4472,7 @@ impl Play {
             self.state.hero.tick = self.ticks;
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
             self.state.hero.hits.clear();
+            self.state.hit_now.clear();
             self.apply(&actions);
             // The shared entity-control routine (SPEC-0043), called by the module's Update.
             let talking: Vec<usize> = self.characters.iter().filter(|c| c.pack == pack && self.dialogue_open && self.talk_with == Some(c.id)).filter_map(|c| c.entity).collect();
