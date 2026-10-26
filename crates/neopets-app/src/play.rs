@@ -1942,6 +1942,14 @@ impl Play {
                 Action::WaitInside { index } => return Some(Wait::Inside(index)),
                 Action::WaitWord { word } => return Some(Wait::Word(pack, word)),
                 Action::WaitItem { item } => return Some(Wait::Item(item)),
+                Action::ActivateTimer { start, limit, up } => self.state.timer.activate(start, limit, up),
+                Action::DeactivateTimer => self.state.timer.deactivate(),
+                Action::FreezeTrial => {
+                    let t = self.state.timer.value;
+                    self.state.set_word(pack, 3, t.to_bits() as i32);
+                    self.state.timer.activate(t, t, false);
+                    self.last_fx = format!("time trial finished in {t:.2} s on tick {}", self.ticks);
+                }
                 Action::DisplayMask { mask } => {
                     self.display_mask.insert(pack, 2 * mask);
                 }
@@ -4401,6 +4409,10 @@ impl Play {
         }
         self.status_display_step();
         self.shake_now = self.shake.step();
+        // SPEC-0023 section 31: the countdown timer steps in play, not while a box is up.
+        if !self.dialogue_open {
+            self.state.timer.tick();
+        }
         self.zone_step();
         self.foliage_step();
         self.placed_release_step();

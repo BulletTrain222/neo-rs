@@ -220,6 +220,13 @@ pub enum Action {
     ObjYaw { obj: usize, degrees: f32 },
     /// Wait, one tick at a time, until the hero holds an item.
     WaitItem { item: u16 },
+    /// ActivateTimer(start, limit, direction) at this point of the thread (SPEC-0030 row 244).
+    ActivateTimer { start: f32, limit: f32, up: bool },
+    /// DeactivateTimer.
+    DeactivateTimer,
+    /// SPEC-0059 section 5, the 758 finish gate's freeze: T = the timer value, kept in word 3 as
+    /// float bits, and the timer shown at T counting down to T.
+    FreezeTrial,
     /// SetWorldDisplayMask(M) for the thread's world (the display word stores 2M; SPEC-0030
     /// row 212). SetWorldCollisMask is not built.
     DisplayMask { mask: u32 },
@@ -357,6 +364,8 @@ pub struct GameState {
     pub collected: BTreeSet<u32>,
     /// Held treasure maps by treasure number (SPEC-0021 Treasure maps; SPEC-0051 section 10).
     pub maps: BTreeSet<u32>,
+    /// The on-screen countdown timer (SPEC-0023 section 31), engine-wide.
+    pub timer: crate::timer::Timer,
     /// The shared entity-control tables of the level modules, by pack (SPEC-0043).
     pub entity_tables: HashMap<u32, crate::entityctl::Table>,
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
@@ -916,6 +925,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set(251, true);
             let mut v: Vec<Action> = [32, 33, 34, 35, 6, 7, 8, 9, 10, 0].map(|i| reg(i, 34)).to_vec();
             v.extend([2, 6, 3].map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend([reg(15, 15), reg(14, 14)]);
             v.extend([reg(3, 56), Action::LoadRegion { slot: 0, region: Some(759) }, Action::LoadRegion { slot: 1, region: Some(771) }, Action::WheelPattern]);
             v
         }
@@ -1958,6 +1968,10 @@ fn brightvale_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
             let k = step(s, 3);
             talk(316 + k)
         }
+        // SPEC-0059 section 5, the keeper: line 147 with 435 (talk only), else the offer prompt
+        // 148 (433), 149 (431) or 150.
+        26 if s.flag(435) => talk(147),
+        26 => vec![Action::Prompt { line: if s.flag(433) { 148 } else if s.flag(431) { 149 } else { 150 }, routine: 26 }],
         _ => Vec::new(),
     }
 }
@@ -2855,6 +2869,48 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
             }
+        }
+        // SPEC-0059 section 5, the 758 finish gate (trigger 15, entering): object 2 forward; armed
+        // (word 1) and not finished (word 2): finished, T frozen on the clock, objects 6 and 3
+        // played; then, after the hero leaves, object 2 backward.
+        (758, 15) if call.state == 1 => {
+            out.actions.push(Action::PlayAnim { obj: 2, speed: 1.0, wait: false });
+            if state.word(pack, 1) == 1 && state.word(pack, 2) == 0 {
+                state.set_word(pack, 2, 1);
+                out.actions.extend([Action::FreezeTrial, Action::PlayAnim { obj: 6, speed: 1.0, wait: false }, Action::PlayAnim { obj: 3, speed: 1.0, wait: false }]);
+            }
+            out.actions.extend([Action::WaitInside { index: call.index }, Action::PlayAnim { obj: 2, speed: -1.0, wait: false }]);
+        }
+        // The judge (trigger 14, entering, finished): the walk to locator 148; t = T truncated
+        // qualifies at 45, at 90 with 433 clear, at 180 with 433 and 431 clear; a pass sets 435
+        // (line 151), 433 (152) or 431 (153) by the ladder; a fail shows 154, 155 or 156; then the
+        // camera, the course reset and the clock off.
+        (758, 14) if call.state == 1 && state.word(pack, 2) == 1 => {
+            let t = f32::from_bits(state.word(pack, 3) as u32).trunc() as i32;
+            let (f431, f433) = (state.flag(431), state.flag(433));
+            let pass = t <= 45 || (t <= 90 && !f433) || (t <= 180 && !f433 && !f431);
+            let line = if pass {
+                let (flag, line) = if f433 { (435, 151) } else if f431 { (433, 152) } else { (431, 153) };
+                state.set(flag, true);
+                line
+            } else if f433 {
+                154
+            } else if f431 {
+                155
+            } else {
+                156
+            };
+            state.set_word(pack, 1, 0);
+            state.set_word(pack, 2, 0);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::WalkHero { locator: 148, wait: true, orient: false },
+                Action::Message { line },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::InitObjOn { obj: 6, end: false },
+                Action::InitObjOn { obj: 3, end: false },
+                Action::DeactivateTimer,
+            ]);
         }
         // SPEC-0045 758 routine 34, the signs: the Square context 3 while inside; a press shows the
         // index's line.
@@ -5682,6 +5738,27 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             vec![Action::Talk { line: 20 + k }]
         }
         (1358, 1, false) => vec![Action::Talk { line: 28 + s.talk_roll.clamp(1, 3) as u16 }],
+        // SPEC-0059 section 5, the keeper's answer: no 158; yes 159 and the start (the clock held
+        // at 0, a fade out, the course reset, the hero to locator 150, the normal camera, a fade
+        // in, line 157, armed, the clock counting up to 600).
+        (758, 26, false) => vec![Action::Talk { line: 158 }],
+        (758, 26, true) => {
+            s.set_word(pack, 2, 0);
+            vec![
+                Action::Talk { line: 159 },
+                Action::ActivateTimer { start: 0.0, limit: 0.0, up: true },
+                Action::HoldHero,
+                Action::FadeOut { seconds: 0.5, wait: true },
+                Action::InitObjOn { obj: 6, end: false },
+                Action::InitObjOn { obj: 3, end: false },
+                Action::MoveHero { locator: 150 },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::FadeIn { seconds: 0.5, wait: true },
+                Action::Message { line: 157 },
+                Action::Bits { word: 1, set: 1, clear: 0 },
+                Action::ActivateTimer { start: 0.0, limit: 600.0, up: true },
+            ]
+        }
         (880, 7, false) | (1230, 4, false) => vec![Action::Talk { line: 16 }],
         (880, 7, true) | (1230, 4, true) => {
             let shop = map_shop(pack);
@@ -5918,6 +5995,7 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (758, 10 | 12) => Some(10),
         (758, 23 | 25) => Some(23),
         (758, 11 | 13) => Some(11),
+        (758, 26 | 28) => Some(26),
         // SPEC-0041 1353: P16 to P24 on entities 16 to 24.
         (1353, 16..=24) => Some(entity as u8),
         // SPEC-0043 1358: the delivery giver on entity 20 and line 90 on entity 21 (entities 16 to
@@ -6314,6 +6392,27 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn time_trial_ladder() {
+        // SPEC-0059 section 5: a 100 s run with no flags qualifies (180) and sets 431; then a
+        // 100 s run fails with 431 set (line 155); a 60 s run sets 433.
+        let mut s = GameState::default();
+        let judge = TriggerCall { index: 14, state: 1, object: true, square: false };
+        let run = |s: &mut GameState, t: f32| {
+            s.set_word(758, 1, 1);
+            s.set_word(758, 2, 1);
+            s.set_word(758, 3, t.to_bits() as i32);
+            on_trigger(758, 14, judge, s).actions
+        };
+        assert!(run(&mut s, 100.4).contains(&Action::Message { line: 153 }) && s.flag(431));
+        assert!(run(&mut s, 100.0).contains(&Action::Message { line: 155 }));
+        assert!(run(&mut s, 60.9).contains(&Action::Message { line: 152 }) && s.flag(433));
+        assert!(run(&mut s, 45.99).contains(&Action::Message { line: 151 }) && s.flag(435));
+        assert_eq!(on_talk(758, 26, &mut s), vec![Action::Talk { line: 147 }]);
+        // Without the finish the judge does nothing.
+        assert!(on_trigger(758, 14, judge, &mut s).actions.is_empty());
     }
 
     #[test]

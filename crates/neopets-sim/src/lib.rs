@@ -49,6 +49,7 @@ pub mod status;
 pub mod swap;
 mod step;
 pub mod textbox;
+pub mod timer;
 pub mod travel;
 pub mod trigger;
 pub mod walker;
