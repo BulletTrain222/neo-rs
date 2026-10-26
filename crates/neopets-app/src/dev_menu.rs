@@ -5,6 +5,9 @@
 //! paused; Up and Down pick an entry, Left and Right change its value (Shift
 //! for steps of 10), Enter or Space applies it. F2 toggles the free camera: WASD or the arrows
 //! move, E and Q rise and sink, J/L and I/K or a right-button drag look around, Shift is fast.
+//! On a controller both stick clicks together (L3 + R3) toggle it; the left stick moves, the
+//! right stick looks, the right and left triggers (R2, L2) rise and sink, and holding the south
+//! button (Cross / A) is fast.
 //! While the menu is open or the free camera is on, the hero and the game menus get no input.
 //! Warp rebuilds the game in another world pack (the save's world-key list), keeping the
 //! session (flags, items, Neopoints, maps, the heroes' pools and equipment, cheats, options).
@@ -145,7 +148,7 @@ pub fn spawn_panel(mut commands: Commands) {
 }
 
 /// The menu's keys and actions, before the game reads its input.
-pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
+pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
     let Some(mut play) = play else { return };
     let toggle_free = |dev: &mut DevMenu| {
         dev.free = match dev.free {
@@ -195,7 +198,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
     if keys.just_pressed(KeyCode::F1) {
         dev.open = !dev.open;
     }
-    if keys.just_pressed(KeyCode::F2) {
+    // L3 + R3 together on a controller: one stick click pressed while the other is held.
+    let chord = gamepads.iter().any(|g| {
+        let (l, r) = (GamepadButton::LeftThumb, GamepadButton::RightThumb);
+        (g.just_pressed(l) && g.pressed(r)) || (g.just_pressed(r) && g.pressed(l))
+    });
+    if keys.just_pressed(KeyCode::F2) || chord {
         toggle_free(&mut dev);
     }
     if keys.just_pressed(KeyCode::F4) {
@@ -326,7 +334,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
 
 /// The free camera: moves and looks, then replaces the play camera's pose (after the play's
 /// frame has set it).
-pub fn free_camera(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, mut dev: ResMut<DevMenu>, mut cameras: Query<&mut Transform, With<Orbit>>) {
+pub fn free_camera(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, gamepads: Query<&Gamepad>, mut dev: ResMut<DevMenu>, mut cameras: Query<&mut Transform, With<Orbit>>) {
     let open = dev.open;
     let Some(fc) = dev.free.as_mut() else { return };
     let dt = time.delta_secs().min(0.1);
@@ -339,13 +347,25 @@ pub fn free_camera(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mouse: Res<
             fc.yaw -= motion.delta.x * 0.004;
             fc.pitch -= motion.delta.y * 0.004;
         }
+        // The controller: sticks past a small dead zone, triggers as rise and sink.
+        let dead = |v: Vec2| if v.length() > 0.15 { v } else { Vec2::ZERO };
+        let (mut stick, mut look, mut lift, mut fast) = (Vec2::ZERO, Vec2::ZERO, 0.0, false);
+        for g in &gamepads {
+            stick += dead(g.left_stick());
+            look += dead(g.right_stick());
+            lift += g.get(GamepadButton::RightTrigger2).unwrap_or(0.0) - g.get(GamepadButton::LeftTrigger2).unwrap_or(0.0);
+            fast |= g.pressed(GamepadButton::South);
+        }
+        fc.yaw -= look.x * turn;
+        fc.pitch += look.y * turn;
         fc.pitch = fc.pitch.clamp(-1.5, 1.5);
-        let speed = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { 120.0 } else { 30.0 } * dt;
+        let fast = fast || keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]);
+        let speed = if fast { 120.0 } else { 30.0 } * dt;
         let f = fc.forward();
         let right = Vec3::new(-fc.yaw.cos(), 0.0, fc.yaw.sin());
-        let ahead = key(&[KeyCode::KeyW, KeyCode::ArrowUp]) - key(&[KeyCode::KeyS, KeyCode::ArrowDown]);
-        let side = key(&[KeyCode::KeyD, KeyCode::ArrowRight]) - key(&[KeyCode::KeyA, KeyCode::ArrowLeft]);
-        let up = key(&[KeyCode::KeyE]) - key(&[KeyCode::KeyQ]);
+        let ahead = (key(&[KeyCode::KeyW, KeyCode::ArrowUp]) - key(&[KeyCode::KeyS, KeyCode::ArrowDown]) + stick.y).clamp(-1.0, 1.0);
+        let side = (key(&[KeyCode::KeyD, KeyCode::ArrowRight]) - key(&[KeyCode::KeyA, KeyCode::ArrowLeft]) + stick.x).clamp(-1.0, 1.0);
+        let up = (key(&[KeyCode::KeyE]) - key(&[KeyCode::KeyQ]) + lift).clamp(-1.0, 1.0);
         fc.pos += (f * ahead + right * side + Vec3::Y * up) * speed;
     }
     let pose = Transform::from_translation(fc.pos).looking_to(fc.forward(), Vec3::Y);
@@ -407,7 +427,7 @@ pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Q
     }
     if let Some(fc) = dev.free {
         s.push_str(&format!(
-            "FREE CAMERA (F2 ends) at ({:.1}, {:.1}, {:.1}): WASD move, E/Q up/down, J/L I/K or right-drag look, Shift fast",
+            "FREE CAMERA (F2 or L3+R3 ends) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast",
             fc.pos.x, fc.pos.y, fc.pos.z
         ));
     }

@@ -9300,7 +9300,10 @@ fn clock_seed() -> u32 {
 fn followed(loco: &Locomotion, world: &World) -> Followed {
     let p = loco.position();
     let ground_kind = world.probe(p[0], p[2], p[1] + 2.5).kind;
-    Followed { position: p, facing: loco.facing, height: HERO_HEIGHT, moving: loco.moved(), ground_kind }
+    // SPEC-0033 Behavior 7: the camera follows the drawn copy, whose height lags the world
+    // height (so the 0.1 ground-constraint steps on a slope do not shake it).
+    let shown = [p[0], loco.follow.shown, p[2]];
+    Followed { position: shown, facing: loco.facing, height: HERO_HEIGHT, moving: loco.moved(), ground_kind }
 }
 
 /// The eye wall push (SPEC-0027 Walls): the cell's frame records other than type 6, then the

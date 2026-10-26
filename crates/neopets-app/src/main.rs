@@ -1987,7 +1987,7 @@ fn sync_worlds(
                     let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
                     archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false)
                 }),
-            WorldPart::Dome(d) => archive_view::model(disc, index, d),
+            WorldPart::Dome(d) => archive_view::dome(disc, index, d),
             WorldPart::Foliage(_) | WorldPart::Objects(..) => Ok(None),
         };
         match model {

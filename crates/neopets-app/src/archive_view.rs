@@ -138,6 +138,20 @@ pub fn model(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<Option<Mod
     Ok((!data.parts.is_empty()).then_some(data))
 }
 
+/// A sky dome resource's layer A (role 1) only: layer D (role 10, the purple cap and the
+/// two-pass layer) draws only while the atmosphere blend factor is above 0 (SPEC-0046 Sky
+/// domes, step 6), and play has no atmosphere zone pass yet, so the factor is 0.
+pub fn dome(disc: &mut Disc, index: &ArchiveIndex, d: u32) -> Result<Option<ModelData>, String> {
+    if index.get(d)?.is_empty() {
+        return Ok(None);
+    }
+    let bytes = index.read(disc, d)?;
+    let family = resource::classify(&bytes);
+    let chain = resource::walk_chunks(&bytes, resource::chunk_limit(d, family))?;
+    let data = model::build_roles(&bytes, &chain.chunks, None, Some(&[1]))?;
+    Ok((!data.parts.is_empty()).then_some(data))
+}
+
 /// A world pack's placed static scene (mask 0, no story layer; SPEC-0046), with its sky dome's
 /// layer A when `dome` is set (only the current world's dome is drawn in play).
 pub fn world_scene(

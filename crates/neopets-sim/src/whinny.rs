@@ -2,8 +2,9 @@
 //! each Whinny runs one of four modes in priority order (penned, lead, flee, wander); the group
 //! count sets flag 107 + p (p penned) whenever the group has three members.
 //! "A random point on its mesh" is read as a uniformly drawn triangle's centroid, the flee
-//! sub-step B's safe point as the far-centroid pick with D = 10 from the hero, and the path test
-//! of sub-step A as always clear, the blocked latch alone choosing sub-step B (R-0073). The navmesh is taken once at
+//! sub-step B's safe point as the far-centroid pick (uniform draws) with D = 10 from the hero, and the path test
+//! of sub-step A as the candidate lying on a triangle of the current mesh (SPEC-0029 Behavior 5;
+//! R-0073 answered); the latch is cleared whenever a flee sub-step ends. The navmesh is taken once at
 //! start (the first ground mesh holding the Whinny) and set directly only on entering lead (the
 //! pen's entrance mesh) and on becoming penned (the inner mesh); R-0013. The group sound is not
 //! played.
@@ -107,13 +108,13 @@ impl Whinny {
                     self.flee_step = 0;
                     return self.wander_tick(w, meshes, pens, hero, rng);
                 }
-                self.flee_tick(w, meshes, hero)
+                self.flee_tick(w, meshes, hero, rng)
             }
             Mode::Wander => {
                 if d < 5.0 {
                     self.mode = Mode::Flee;
                     self.flee_step = 0;
-                    return self.flee_tick(w, meshes, hero);
+                    return self.flee_tick(w, meshes, hero, rng);
                 }
                 self.wander_tick(w, meshes, pens, hero, rng)
             }
@@ -154,7 +155,7 @@ impl Whinny {
         }
     }
 
-    fn flee_tick(&mut self, w: &mut Walker, meshes: &[NavMesh], hero: Vec3) -> u32 {
+    fn flee_tick(&mut self, w: &mut Walker, meshes: &[NavMesh], hero: Vec3, rng: &mut Rng) -> u32 {
         let p = w.position();
         let mesh = w.mesh.and_then(|i| meshes.get(i));
         if self.flee_step == 1 && w.blocked {
@@ -164,22 +165,29 @@ impl Whinny {
         }
         let done = self.target.is_none_or(|t| hdist(p, t) < if self.flee_step == 1 { 2.5 } else { 2.0 })
             || self.flee_ticks == 0;
+        // A sub-step ending by timer or arrival clears the latch.
+        if self.flee_step != 0 && done {
+            w.blocked = false;
+        }
         if self.flee_step == 0 || done {
             let away = [p[0] - hero[0], 0.0, p[2] - hero[2]];
             let len = (away[0] * away[0] + away[2] * away[2]).sqrt().max(1e-6);
             let a = [p[0] + 4.0 * away[0] / len, p[1], p[2] + 4.0 * away[2] / len];
-            // The path test is read as clear (R-0073): the navmesh confinement stops the walk at
-            // a boundary edge and sets the blocked latch, which abandons it.
-            if !w.blocked {
+            // The path test: the candidate lies on a triangle of the current mesh (edges
+            // inclusive, only that mesh), and the latch is clear.
+            let clear = mesh.is_some_and(|m| m.locate_full(a).is_some());
+            if clear && !w.blocked {
                 self.flee_step = 1;
                 self.flee_ticks = 15;
                 self.target = Some(a);
             } else {
-                // Safe point: a triangle centroid more than 10 from the hero (up to T draws).
-                let safe = mesh.and_then(|m| {
+                // Safe point: the far centroid pick (SPEC-0056; SPEC-0029 Behavior 28): up to T
+                // uniform triangle draws, the first centroid more than 10 from the hero, else the
+                // last one drawn.
+                let safe = mesh.filter(|m| !m.is_empty()).and_then(|m| {
                     let mut last = None;
-                    for t in 0..m.len() {
-                        let c = m.centroid(t);
+                    for _ in 0..m.len() {
+                        let c = m.centroid(rng.index(m.len() as u32) as usize);
                         last = Some(c);
                         if hdist(c, hero) > 10.0 {
                             return Some(c);

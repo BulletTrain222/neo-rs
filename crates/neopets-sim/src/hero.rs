@@ -241,6 +241,59 @@ pub struct Locomotion {
     pub carry: u8,
     /// PlayHeroAnim's CTL: the one-shot ends in state 1 (set) or 33.
     pub one_shot_control: bool,
+    /// The displayed height and its follow (SPEC-0033 Behavior 7).
+    pub follow: HeightFollow,
+}
+
+/// SPEC-0033 Behavior 7, the hero height follow: the drawn copy's height, which the camera
+/// follows, catches up with the world height (quadratic in the gap, gain 0.04 at 0x2DA4BC).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeightFollow {
+    pub shown: f32,
+    catching: bool,
+    counter: u32,
+    v: f32,
+}
+
+impl HeightFollow {
+    pub fn at(y: f32) -> Self {
+        Self { shown: y, catching: false, counter: 0, v: 0.0 }
+    }
+
+    /// One tick with the world height and the hero state (the movement predicate passes only
+    /// in the jump states 7 to 11 and 43 to 46).
+    pub fn tick(&mut self, world: f32, state: u8) {
+        let g = world - self.shown;
+        if !self.catching {
+            let jumping = matches!(state, 7..=11 | 43..=46);
+            if g.abs() > 3.5 || !jumping {
+                self.catching = true;
+            } else if g.abs() > 0.1 {
+                self.counter += 1;
+                if self.counter > 120 || g < -0.5 {
+                    self.catching = true;
+                }
+            } else {
+                self.counter = 0;
+            }
+            self.v = 0.0;
+            if !self.catching {
+                return;
+            }
+        }
+        if g.abs() < 0.05 {
+            self.catching = false;
+            self.counter = 0;
+            return;
+        }
+        let q = 0.05 * g * g;
+        if q < self.v {
+            self.v = q;
+        } else {
+            self.v += 0.04 * q;
+        }
+        self.shown += g.signum() * self.v;
+    }
 }
 
 impl Locomotion {
@@ -262,6 +315,7 @@ impl Locomotion {
             status_scale: 1.0,
             carry: 0,
             one_shot_control: true,
+            follow: HeightFollow::at(position[1]),
         }
     }
 
@@ -339,6 +393,7 @@ impl Locomotion {
         self.state = STANCE;
         self.phase = 0;
         self.last_motion = [0.0; 3];
+        self.follow = HeightFollow::at(position[1]);
     }
 
     pub fn position(&self) -> Vec3 {
@@ -747,6 +802,7 @@ impl Locomotion {
         }
         self.body.integrate();
         self.last_motion = std::array::from_fn(|k| self.body.position[k] - start[k]);
+        self.follow.tick(self.body.position[1], self.state);
     }
 
     /// The travel step (SPEC-0040 Behavior 14C): the root step written on the previous pass,
@@ -788,6 +844,27 @@ mod tests {
 
     fn angle(a: Vec3, b: Vec3) -> f32 {
         dot(a, b).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    #[test]
+    fn height_follow() {
+        // Walking: the follow catches up; a 0.1 step closes smoothly over many ticks and stops
+        // within 0.05.
+        let mut f = HeightFollow::at(0.0);
+        let mut seen = Vec::new();
+        for _ in 0..400 {
+            f.tick(0.1, WALK);
+            seen.push(f.shown);
+        }
+        assert!(seen[0] > 0.0 && seen[0] < 0.01, "{}", seen[0]);
+        assert!(seen.windows(2).all(|w| w[1] >= w[0]));
+        assert!((0.1 - f.shown) < 0.05 + 1e-6);
+        // Jumping: a rise up to 3.5 waits (120 ticks); a drop over 0.5 starts at once.
+        let mut f = HeightFollow::at(0.0);
+        f.tick(2.0, 8);
+        assert_eq!(f.shown, 0.0);
+        f.tick(-1.0, 8);
+        assert!(f.shown < 0.0);
     }
 
     #[test]
