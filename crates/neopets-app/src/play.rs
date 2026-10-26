@@ -1114,6 +1114,7 @@ impl Play {
         let mut init = level::on_init(play.world.pack, &mut play.state);
         init.extend(play.group_setup());
         play.apply(&init);
+        play.entity_setup();
         play.activated();
         // Flags already set when play starts are not risings (no stingers for them).
         play.flags_seen = play.state.flags.clone();
@@ -1338,6 +1339,35 @@ impl Play {
         let mut init = level::on_init(self.world.pack, &mut self.state);
         init.extend(self.group_setup());
         self.apply(&init);
+        self.entity_setup();
+    }
+
+    /// The module's shared entity-control table (SPEC-0043), set up at its Init.
+    fn entity_setup(&mut self) {
+        let pack = self.world.pack;
+        let cmds = level::entity_setup(pack, &mut self.state);
+        self.entity_commands(pack, cmds);
+    }
+
+    /// The host side of the shared entity-control routine's requests: walks (WalkEntity or
+    /// WalkEntityAndOrient, no wait), one-shot plays and loops; an idle loop asked for again
+    /// while its clip already plays does not restart it.
+    fn entity_commands(&mut self, pack: u32, cmds: Vec<neopets_sim::entityctl::Command>) {
+        use neopets_sim::entityctl::Command;
+        for c in cmds {
+            let a = match c {
+                Command::Walk { entity, locator, stop, orient } => Action::WalkEntity { entity, locator, wait: false, orient, stop },
+                Command::Play { entity, anim } => Action::EntityAnim { entity, anim, looped: false, wait: false },
+                Command::Loop { entity, anim, seconds } => {
+                    let playing = self.characters.iter().find(|ch| ch.pack == pack && ch.entity == Some(entity)).is_some_and(|ch| ch.anim.clip_state().action == anim);
+                    if seconds == 0.0 && playing {
+                        continue;
+                    }
+                    Action::EntityAnim { entity, anim, looped: true, wait: false }
+                }
+            };
+            self.apply(&[a]);
+        }
     }
 
     /// SPEC-0048 set-up of the current world's type-40 groups at its load: a kind-1 chest's
@@ -1385,6 +1415,7 @@ impl Play {
             let mut init = level::on_init(self.world.pack, &mut self.state);
             init.extend(self.group_setup());
             self.apply(&init);
+            self.entity_setup();
             self.other = Some(std::mem::replace(&mut self.world, current));
         }
     }
@@ -4303,6 +4334,12 @@ impl Play {
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
             self.state.hero.hits.clear();
             self.apply(&actions);
+            // The shared entity-control routine (SPEC-0043), called by the module's Update.
+            let talking: Vec<usize> = self.characters.iter().filter(|c| c.pack == pack && self.dialogue_open && self.talk_with == Some(c.id)).filter_map(|c| c.entity).collect();
+            let walking: Vec<usize> = self.characters.iter().filter(|c| c.pack == pack && c.script_walk.is_some()).filter_map(|c| c.entity).collect();
+            let rng = &mut self.rng;
+            let cmds = level::entity_step(pack, &mut self.state, &|e| talking.contains(&e), &|e| walking.contains(&e), &mut |lo, hi| rng.range(lo, hi));
+            self.entity_commands(pack, cmds);
         }
         self.run_threads();
         // SPEC-0045 1217: the record thread steps the object records every pass.

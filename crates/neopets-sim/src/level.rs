@@ -350,6 +350,8 @@ pub struct GameState {
     pub collected: BTreeSet<u32>,
     /// Held treasure maps by treasure number (SPEC-0021 Treasure maps; SPEC-0051 section 10).
     pub maps: BTreeSet<u32>,
+    /// The shared entity-control tables of the level modules, by pack (SPEC-0043).
+    pub entity_tables: HashMap<u32, crate::entityctl::Table>,
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
     /// each tick: a bound character's dead test, else its kill memory of this load.
     pub ai_dead: BTreeSet<usize>,
@@ -2808,6 +2810,60 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 }
 
 /// Run a pack's activate-world routine when its world becomes current.
+/// The setup helper of a module's shared entity-control table (SPEC-0043, Shared entity-control
+/// routine, Records per module), run at its Init: the table is reset and its records added
+/// under their gates. Returns the adds' idle-loop requests. Modules whose records follow story
+/// stages or are parked during their cutscenes (909, 951, 1098, 1150, 1163) are not set up here.
+pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::Command> {
+    use crate::entityctl::{Point, Table};
+    let mut t = Table::default();
+    let mut out = Vec::new();
+    let std3 = [(40, 2.5), (96, 2.5), (41, 1.3)];
+    let std4 = [(40, 2.5), (95, 2.5), (96, 2.5), (41, 1.3)];
+    let mut add = |t: &mut Table, e: usize, idle: u32, anim: (f32, f32), dwell: (f32, f32), anims: &[(u32, f32)], points: &[(usize, bool, bool)]| {
+        out.extend(t.add(e, idle, anim, dwell));
+        for &(a, s) in anims {
+            t.add_anim(e, a, s);
+        }
+        for &(l, d, o) in points {
+            t.add_point(e, Point::new(l, d, o));
+        }
+    };
+    let dwell = (3.0, 4.0);
+    match pack {
+        750 => add(&mut t, 2, 0, (2.0, 5.0), (5.0, 7.0), &std3, &[]),
+        1008 => add(&mut t, 1, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[]),
+        1011 => add(&mut t, 1, 0, (5.0, 8.0), dwell, &[(41, 2.5), (95, 2.5), (96, 2.5)], &[]),
+        1014 => {
+            add(&mut t, 2, 0, (5.0, 8.0), dwell, &[(36, 2.5), (26, 2.5), (27, 2.5)], &[(1, true, true), (2, true, true), (3, true, true)]);
+            add(&mut t, 3, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[(4, true, true), (5, true, true)]);
+        }
+        1020 => add(&mut t, 1, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[(1, true, true), (2, true, true), (3, true, true)]),
+        1409 if state.flag(106) => {
+            for e in [0, 1] {
+                add(&mut t, e, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]);
+            }
+        }
+        1414 if state.flag(102) => {
+            let anims = [(110, 2.5), (95, 2.5), (40, 2.5), (41, 1.3)];
+            for (e, locs) in [(7usize, 0..=2usize), (8, 3..=6), (9, 7..=11)] {
+                let points: Vec<(usize, bool, bool)> = locs.map(|l| (l, true, true)).collect();
+                add(&mut t, e, 25, (5.0, 7.0), (8.0, 12.0), &anims, &points);
+            }
+        }
+        1421 if state.flag(102) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
+        1423 if state.flag(106) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
+        _ => return Vec::new(),
+    }
+    state.entity_tables.insert(pack, t);
+    out
+}
+
+/// One tick of a module's shared entity-control table (its Update's call).
+pub fn entity_step(pack: u32, state: &mut GameState, talking: &dyn Fn(usize) -> bool, walking: &dyn Fn(usize) -> bool, random: &mut dyn FnMut(i32, i32) -> i32) -> Vec<crate::entityctl::Command> {
+    state.entity_tables.get_mut(&pack).map(|t| t.step(talking, walking, random)).unwrap_or_default()
+}
+
 /// The hero pickup callback (RegisterHeroPickupItemCallback) of a pack, for a picked-up item.
 pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
     // SPEC-0037 1238 pickup P: item 83 (Pink Posies) sets flag 579 once.
