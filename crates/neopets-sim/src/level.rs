@@ -894,7 +894,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1392 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -941,6 +941,22 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1392 Init: triggers 0 to 23 and 25 to 36 on their own routines, the objects,
+        // and flag 696: the gate levers at their end (20, 22, 24) with the gates 11, 13 and 15
+        // at their start, else the levers at their start and effects 13 to 18 stopped. The
+        // AddAnimObjSound calls are not reproduced.
+        1392 => {
+            let mut v: Vec<Action> = (0..=36u16).filter(|&i| i != 24).map(|i| reg(i, i as u8)).collect();
+            v.extend([10, 12, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 29, 28, 27, 26, 30, 31, 33, 34, 32].map(|obj| Action::InitObjOn { obj, end: false }));
+            if state.flag(696) {
+                v.extend([11, 13, 15].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.extend([20, 22, 24].map(|obj| Action::InitObjOn { obj, end: true }));
+            } else {
+                v.extend([20, 22, 24].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.extend((13..=18).map(|slot| Action::StopEffect { slot }));
+            }
+            v
+        }
         // SPEC-0041 1394 Init: objects 3 to 6, 10, 12, 14, 16 and 1 off, 7 and 8 at their end; the
         // kill zones (S0, 0 to 10), S11 to S14, the levers (15, 18, 16, 17); flag 0 is clear in
         // play: object 9 off, effect 3 stopped, swap mode 3. Checkpoint words 21 and 22 start at
@@ -1927,6 +1943,30 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// SPEC-0041 1392's gate helpers A to C: open (the gate object off, its camera, the anim object
+/// forward with loop sound 5, 1 s, the camera back to preset 11 + g) or close (backward with
+/// loop sound 6).
+fn gate_1392(g: u8, open: bool) -> Vec<Action> {
+    let g = g as usize;
+    let anim = 10 + 2 * g;
+    if !open {
+        return vec![
+            Action::LoopSound { cue: 6, locator: None },
+            Action::PlayAnim { obj: anim, speed: -1.0, wait: true },
+            Action::KillSound { cue: 6, locator: None },
+        ];
+    }
+    vec![
+        Action::DeactivateObj { obj: 11 + 2 * g },
+        Action::PlayCamera { track: 5 + 2 * g, wait: false, end: 1, speed: 1.0 },
+        Action::LoopSound { cue: 5, locator: None },
+        Action::PlayAnim { obj: anim, speed: 1.0, wait: true },
+        Action::KillSound { cue: 5, locator: None },
+        wait(1.0),
+        Action::ReturnCamera { preset: 11 + g as i32, release: true },
+    ]
 }
 
 /// SPEC-0041 1394's respawn (kill zones and the run-out): with the final word a fade to locator 8;
@@ -3185,6 +3225,83 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1392 triggers. Words: 1 the fall-in latch, 10 to 12 gate A to C open, 20 to 22
+        // levers 25 to 27 pulled, 30 to 38 the helper levers 28 to 36 used.
+        (1392, 0) if call.object && call.state == 1 => state.set(696, true),
+        (1392, 1..=23) if call.object && call.state == 1 => {
+            let (g, first, last) = match routine {
+                1..=6 => (0u8, 1, 6),
+                7..=13 => (1, 7, 13),
+                _ => (2, 14, 23),
+            };
+            let open = state.word(pack, 10 + g) != 0;
+            let pulled = state.word(pack, 20 + g) != 0;
+            if routine == last {
+                if open {
+                    state.set_word(pack, 10 + g, 0);
+                    out.actions.extend(gate_1392(g, false));
+                    if pulled {
+                        out.actions.push(Action::InitObjOn { obj: 11 + 2 * g as usize, end: false });
+                    }
+                }
+            } else if !open && (routine != first || !pulled) {
+                state.set_word(pack, 10 + g, 1);
+                out.actions.extend(gate_1392(g, true));
+            }
+        }
+        // The gate levers 25 to 27 (once per load, Square context 4): the hero to locator 16 to
+        // 18, hero animation 140, the lever, its camera, sound 7, the two effects, and the gate
+        // object shown.
+        (1392, 25..=27) if call.object && state.word(pack, routine - 5) == 0 => {
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                let g = (routine - 25) as usize;
+                state.set_word(pack, routine - 5, 1);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::MoveHero { locator: 16 + g },
+                    Action::HeroAnim { anim: 140, wait: false },
+                    Action::PlayAnim { obj: 20 + 2 * g, speed: 1.0, wait: false },
+                    Action::PlayCamera { track: 4 + 2 * g, wait: true, end: 1, speed: 1.0 },
+                    Action::PlaySound { cue: 7, locator: None },
+                    Action::StartEffect { slot: 13 + 2 * g, camera: true },
+                    Action::StartEffect { slot: 14 + 2 * g, camera: true },
+                    Action::Sleep { ticks: 20 },
+                    Action::InitObjOn { obj: 11 + 2 * g, end: false },
+                    wait(2.0),
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+        }
+        // The nine helper levers (button helper D): (locator, camera, lever object, object).
+        (1392, 28..=36) if call.object && state.word(pack, routine + 2) == 0 => {
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                let (locator, track, lever, obj) = match routine {
+                    31 => (22, 20, 29, 1),
+                    30 => (21, 18, 28, 2),
+                    29 => (20, 15, 27, 3),
+                    28 => (19, 14, 26, 4),
+                    32 => (23, 21, 30, 5),
+                    33 => (24, 23, 31, 6),
+                    35 => (26, 27, 33, 7),
+                    36 => (27, 30, 34, 8),
+                    _ => (25, 32, 32, 9),
+                };
+                state.set_word(pack, routine + 2, 1);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::MoveHero { locator },
+                    Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 },
+                    Action::HeroAnim { anim: 141, wait: false },
+                    Action::PlayAnim { obj: lever, speed: 1.0, wait: false },
+                    Action::PlaySound { cue: 13, locator: None },
+                    Action::PlayAnim { obj, speed: 1.0, wait: true },
+                    Action::KillSound { cue: 13, locator: None },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+        }
         // SPEC-0041 1394 triggers. Words: 1 exit open, 2 room, 3 final, 4 busy, 5 to 8 the lever
         // once-words, 9 the intro done, 20 the countdown armed, 21 and 22 the checkpoint.
         (1394, 0) if call.state == 1 && state.word(pack, 4) == 0 => out.actions.extend(respawn_1394(state)),
@@ -4297,6 +4414,15 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     state.set(258, true);
                     out.extend((15..=48).map(|slot| Action::StopEffect { slot }));
                 }
+            }
+        }
+        // SPEC-0041 1392 Update, the fall-in (once per load while 696 is clear): the hero to
+        // locator 0, 3 s, the camera back. StartHeroLongFall and the hero-tracking camera 10 are
+        // not built.
+        1392 => {
+            if !state.flag(696) && state.word(pack, 1) == 0 {
+                state.set_word(pack, 1, 1);
+                out.extend([Action::HoldHero, Action::MoveHero { locator: 0 }, wait(3.0), Action::ReturnCamera { preset: -1, release: true }]);
             }
         }
         // SPEC-0041 1394 Update, the countdown: while armed and the exit closed, object 2 sinks by
@@ -6934,6 +7060,27 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1392_gates_and_levers() {
+        let mut s = GameState::default();
+        on_init(1392, &mut s);
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        // The fall-in runs once while 696 is clear.
+        assert!(on_update(1392, &mut s, false).contains(&Action::MoveHero { locator: 0 }));
+        assert!(on_update(1392, &mut s, false).is_empty());
+        on_trigger(1392, 0, enter(0), &mut s);
+        assert!(s.flag(696));
+        // Helper lever 31: locator 22, camera 20, objects 29 and 1; once only.
+        let out = on_trigger(1392, 31, enter(31), &mut s).actions;
+        assert!(out.contains(&Action::MoveHero { locator: 22 }) && out.contains(&Action::PlayAnim { obj: 1, speed: 1.0, wait: true }));
+        assert!(on_trigger(1392, 31, enter(31), &mut s).actions.is_empty());
+        // Gate A: trigger 1 opens (object 11 off, camera 5, object 10 forward); 6 closes.
+        let open = on_trigger(1392, 1, enter(1), &mut s).actions;
+        assert_eq!(open[..2], [Action::DeactivateObj { obj: 11 }, Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 }]);
+        assert!(on_trigger(1392, 6, enter(6), &mut s).actions.contains(&Action::PlayAnim { obj: 10, speed: -1.0, wait: true }));
+        assert!(on_trigger(1392, 6, enter(6), &mut s).actions.is_empty());
     }
 
     #[test]
