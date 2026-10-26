@@ -2197,6 +2197,7 @@ impl Play {
                 Action::ActivateTimer { start, limit, up } => self.state.timer.activate(start, limit, up),
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
+                Action::GameOver => self.death.flag_e = true,
                 Action::LongFall => {
                     self.attack = None;
                     self.loco.long_fall_start();

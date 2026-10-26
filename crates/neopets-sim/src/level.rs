@@ -248,6 +248,8 @@ pub enum Action {
     StopTimer,
     /// StartHeroLongFall (SPEC-0030 row 280): the active hero to state 48.
     LongFall,
+    /// SetGameOver(n) (SPEC-0030 row 154; SPEC-0055): flag E set (the argument is unused).
+    GameOver,
     /// A target play (SPEC-0027; PlayTrackHeroCamera and PlayLookAtPlayerCamera, rows 37 and
     /// 39, target the hero): as PlayCamera, the view turned to the target.
     PlayTarget { track: usize, wait: bool, end: u8, speed: f32, target: CameraTarget },
@@ -3449,8 +3451,8 @@ fn nav_pass(state: &GameState, pack: u32, n: usize) -> Vec<Action> {
 /// finale), rule 3 (flag 2 with 3 clear: the timeout ending), rule 4 (flag 0 with 1 clear: the
 /// entry sequence), rule 5 (level state 11: the director) and rule 6 (11 clear, 9 set, 10 clear:
 /// the fight start step). The sequences hold the thread (word 2) until their last step. Movies 78,
-/// 85 and 80 are counted as played; the finale loads eW 151 in place of movie 85; SetGameOver, the
-/// boss-fight tweaks, the hero move of the fight start step (no locator is given) and control
+/// 85 and 80 are counted as played; the finale loads eW 151 in place of movie 85; the boss-fight
+/// tweaks, the hero move of the fight start step (no locator is given) and control
 /// thread B (the Minion Grunts) are not built.
 fn fight_1432(state: &mut GameState) -> Vec<Action> {
     const P: u32 = 1432;
@@ -3482,7 +3484,7 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
         let mut v = vec![Action::FadeOut { seconds: FADE, wait: true }];
         v.extend([0, 5, 6, 7].map(|entity| Action::DeactivateEntity { entity }));
         v.extend((0..=2).map(|obj| Action::DeactivateObj { obj }));
-        v.extend([Action::SwapMode { mode: 2 }, done(3), done(6), release]);
+        v.extend([Action::SwapMode { mode: 2 }, Action::GameOver, done(3), done(6), release]);
         return v;
     }
     if f(0) && !f(1) {
@@ -3786,9 +3788,9 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
             out.push(Action::StartEffect { slot: 0, camera: false });
         }
         // The game-over check: hero 1 dead without item 50 while 328 is clear; as Roberta swap
-        // mode 1 (SetGameOver is not built).
-        if !s.flag(328) && s.hero.dead[1] && !s.has_item(50) && s.hero.selected == 1 {
-            out.push(Action::SwapMode { mode: 1 });
+        // mode 1, else SetGameOver.
+        if !s.flag(328) && s.hero.dead[1] && !s.has_item(50) {
+            out.push(if s.hero.selected == 1 { Action::SwapMode { mode: 1 } } else { Action::GameOver });
         }
     }
     out
@@ -9115,8 +9117,9 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // entities 4 to 18 off each pass; the entry (movie 52 counted, the hero to locator 26,
         // object 3, level state 4 cleared), movie 53 counted after the shield break (level state
         // 1), and the boss end after level state 2 (321, 93, 322; value 50 for eW 151 and the
-        // load of eW 151, pack 1300, in place of movie 54). The boss-fight refills and the
-        // hero-down game over are not built.
+        // load of eW 151, pack 1300, in place of movie 54); between the entry and movie 53 the
+        // hero-down check (hero 1 down without item 50: swap mode 1 as Roberta, else
+        // SetGameOver). The boss-fight refills are not built.
         1122 => {
             // The fixed navmesh table each tick (Medium): entities 0 to 3 mesh 0, 4 and 9 mesh 4,
             // 5 and 8 mesh 3, 6 and 7 mesh 2, 11 to 18 mesh 1.
@@ -9186,6 +9189,9 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     }
                     if state.level(2) {
                         state.set_word(pack, 3, state.word(pack, 3) | 16);
+                    }
+                    if b & 2 != 0 && b & 8 == 0 && state.hero.dead[1] && !state.has_item(50) {
+                        out.push(if state.hero.selected == 1 { Action::SwapMode { mode: 1 } } else { Action::GameOver });
                     }
                 }
             }
@@ -11893,8 +11899,7 @@ fn burrows_spawn(n: u8) -> Vec<Action> {
 
 /// SPEC-0045 1217 fight controller, one step per pass while no controller scene runs: the intro
 /// (A in Act 1, B in Act 3), the win with its outro, the stage starts, the stage scenes (Act 3
-/// starts the stage at once), the fight monitor and, in Act 3, the defeat check (SetGameOver is
-/// not built; the swap lock is).
+/// starts the stage at once), the fight monitor and, in Act 3, the defeat check.
 /// The skip intro (button 5 at the intro's start) is not read; the main records' scenes are
 /// not played (they are object animations), so the death step of the records counts as done
 /// when the entities are dead.
@@ -12105,9 +12110,15 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
         }
     }
     // 4. The defeat check (Act 3): hero 1 down with no Potion of Revival (item 50) locks the
-    // swap when hero 1 is active (SetGameOver(2) otherwise is not built).
-    if act3 && state.hero.dead[1] && !state.has_item(50) && state.hero.selected == 1 && state.hero.swap_mode != 1 {
-        v.push(SwapMode { mode: 1 });
+    // swap when hero 1 is active, else SetGameOver(2).
+    if act3 && state.hero.dead[1] && !state.has_item(50) {
+        if state.hero.selected == 1 {
+            if state.hero.swap_mode != 1 {
+                v.push(SwapMode { mode: 1 });
+            }
+        } else {
+            v.push(GameOver);
+        }
     }
     v
 }
