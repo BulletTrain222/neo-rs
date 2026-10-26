@@ -1954,6 +1954,7 @@ impl Play {
                 Action::ActivateTimer { start, limit, up } => self.state.timer.activate(start, limit, up),
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
+                Action::WaitObj { obj } => return Some(Wait::ObjAnim(pack, obj)),
                 Action::AddItem { locator, item } => {
                     if let Some(&(p, _)) = self.world.entries.get(locator) {
                         let charm = self.item_kind(item) == 17;
