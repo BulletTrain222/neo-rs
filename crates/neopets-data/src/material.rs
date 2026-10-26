@@ -35,6 +35,11 @@ pub struct Group {
     /// The character colour slot (group byte 0x27, 0 to 14; SPEC-0003): a character part of
     /// this group is drawn with colour word j of the character's record (SPEC-0040 Behavior 26).
     pub colour_slot: u8,
+    /// Pass 0's UV mode (group offset 0x4C: 0 none, 1 environment map, 2 scroll, 3 flipbook)
+    /// and, for scroll, its speeds per main-loop pass (0x60, 0x64; SPEC-0003 UV modes).
+    pub uv_mode: u32,
+    /// The speeds' float bits (see `uv_speed`).
+    pub uv_speed_bits: [u32; 2],
     /// TEX0 of the first register set (render pass 0), when the state block is well formed.
     pub tex0: Option<Tex0>,
     /// TEX0 of the second register set (render pass 1, mode 2 only).
@@ -49,7 +54,19 @@ pub struct Group {
     pub program: u32,
 }
 
+/// The UV scroll offset of one axis (SPEC-0003 UV modes, mode 2): s x N - trunc(s x N), with N
+/// the 16-bit pass counter (it wraps at 65536).
+pub fn scroll_offset(speed: f32, n: u16) -> f32 {
+    let x = speed * n as f32;
+    x - x.trunc()
+}
+
 impl Group {
+    /// Pass 0's UV scroll speeds (su, sv).
+    pub fn uv_speed(&self) -> [f32; 2] {
+        self.uv_speed_bits.map(f32::from_bits)
+    }
+
     /// The blend's B field is 2 (zero): source x alpha + destination, the additive rule of
     /// SPEC-0034 2.8. Every other setting (or none) blends by alpha.
     pub fn additive(&self) -> bool {
@@ -136,6 +153,8 @@ impl ShaderList {
                     mode,
                     texture_chunk: group[0x28],
                     colour_slot: group[0x27].min(14),
+                    uv_mode: u32_at(group, 0x4C).unwrap_or(0),
+                    uv_speed_bits: [u32_at(group, 0x60).unwrap_or(0), u32_at(group, 0x64).unwrap_or(0)],
                     tex0: regs.tex0,
                     tex0_pass1: regs.tex0_pass1,
                     clamp: regs.clamp,
@@ -228,6 +247,16 @@ pub fn lists_in_chain(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn scroll_vectors() {
+        // SPEC-0046 pack 1414: speeds (0, +0.00125) and (0, -0.00125): +0.75 and -0.75 after 600
+        // passes, 0 after 800.
+        assert!((scroll_offset(0.00125, 600) - 0.75).abs() < 1e-4);
+        assert!((scroll_offset(-0.00125, 600) + 0.75).abs() < 1e-4);
+        assert!(scroll_offset(0.00125, 800).abs() < 1e-4);
+    }
+
     use super::*;
 
     fn tex0(tbp: u64, psm: u64, cbp: u64) -> u64 {

@@ -116,6 +116,8 @@ pub struct MeshPart {
     /// The zone column that gates this part: its leaf's enclosing type-3 node, else the
     /// instance's or placed object's column (None draws always).
     pub zone: Option<u8>,
+    /// Pass 0's UV scroll speeds (UV mode 2), when it scrolls.
+    pub scroll: Option<[f32; 2]>,
     pub positions: Vec<[f32; 3]>,
     /// Layout B has no normals; its parts get +Y placeholders (it is drawn unlit).
     pub normals: Vec<[f32; 3]>,
@@ -332,6 +334,7 @@ impl Builder {
                 program: group.map(|g| g.program),
                 colour_slot: group.map_or(0, |g| g.colour_slot),
                 zone: leaf.zone.or(zone),
+                scroll: group.filter(|g| g.uv_mode == 2 && g.uv_speed() != [0.0; 2]).map(|g| g.uv_speed()),
                 positions: Vec::new(),
                 normals: Vec::new(),
                 uvs: Vec::new(),

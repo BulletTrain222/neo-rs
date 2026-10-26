@@ -831,7 +831,7 @@ fn main() {
                 (dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1876,6 +1876,9 @@ fn sync_worlds(
                     if let (WorldPart::Scene(pack), Some(z)) = (*part, m.parts[i].zone) {
                         e.insert(ZoneGate(pack, z));
                     }
+                    if let Some(speed) = m.parts[i].scroll.filter(|_| m.parts[i].texture.is_some()) {
+                        e.insert(UvScroll(speed));
+                    }
                 }
             }
             Ok(None) => {}
@@ -1883,6 +1886,23 @@ fn sync_worlds(
         }
     }
     *shown = want;
+}
+
+/// A world part's UV scroll speeds per pass (SPEC-0003 UV mode 2).
+#[derive(Component, Clone, Copy)]
+struct UvScroll([f32; 2]);
+
+/// Each frame: a scrolling part's UV offset is frac(s x N) per axis, N the 16-bit pass counter
+/// (the play tick).
+fn sync_uv_scroll(state: Option<Res<PlayState>>, parts: Query<(&UvScroll, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let Some(state) = state else { return };
+    let n = state.play.ticks as u16;
+    for (s, m) in &parts {
+        if let Some(mut mat) = materials.get_mut(&m.0) {
+            let off = Vec2::new(neopets_data::material::scroll_offset(s.0[0], n), neopets_data::material::scroll_offset(s.0[1], n));
+            mat.uv_transform = bevy::math::Affine2::from_translation(off);
+        }
+    }
 }
 
 /// A world part's zone gate: (world pack, zone column).
@@ -2108,6 +2128,18 @@ pub(crate) fn part_assets(
         .iter()
         .enumerate()
         .map(|(i, part)| {
+            // A scrolling part (level water, SPEC-0046) has its own blended material, whose UV
+            // offset moves every frame.
+            let scrolling = match (part.scroll, part.texture) {
+                (Some(_), Some(t)) => Some(materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(model_texture(&m.textures[t]))),
+                    unlit: true,
+                    alpha_mode: AlphaMode::Blend,
+                    cull_mode: None,
+                    ..default()
+                })),
+                _ => None,
+            };
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
             // The GS modulates in gamma space; Bevy blends vertex colour in linear space.
             let colors: Vec<[f32; 4]> = part
@@ -2120,15 +2152,12 @@ pub(crate) fn part_assets(
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             mesh.insert_indices(Indices::U32(part.indices.clone()));
-            let material = part.texture.map_or(untextured.clone(), |t| handles[t].clone());
+            let material = scrolling.unwrap_or_else(|| part.texture.map_or(untextured.clone(), |t| handles[t].clone()));
             (i, meshes.add(mesh), material)
         })
         .collect()
 }
 
-/// The status tint (SPEC-0034 5.4) on a part's linear vertex colours: the lit colours, or the
-/// unlit part's own colours, multiplied per channel. With no tint the lit colours pass and an
-/// unlit part gets its own colours back (so a cleared tint is undone).
 /// A part's linear vertex colours: lit (or stored), times the status tint and, for a region
 /// character, times the colour of the part's slot (SPEC-0040 Behavior 26 item 9; the scale
 /// applies in the GS's gamma space, so it is raised to 2.2 like the colours).
