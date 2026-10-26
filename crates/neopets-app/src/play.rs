@@ -402,6 +402,22 @@ pub struct Character {
     pub draik: Option<neopets_sim::draik::Draik>,
     /// The Darkest Faerie controller (behaviour class 37; SPEC-0054).
     pub faerie: Option<neopets_sim::darkest::Faerie>,
+    /// The row's attack-slot spawn keys (+0x3CC + 2k; SPEC-0029 Behavior 31).
+    pub spawn_keys: [u16; 4],
+}
+
+/// A summon-reserved record of a character block (SPEC-0029 Behavior 31), with the character it
+/// is bound to.
+struct Reserve {
+    pack: u32,
+    slot: u8,
+    region: u32,
+    pl: neopets_data::region::Placement,
+    model: ModelData,
+    anim: HeroAnim,
+    row: Option<neopets_data::monster::Row>,
+    tuning: Option<neopets_data::monster::Tuning>,
+    bound: Option<u64>,
 }
 
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
@@ -597,8 +613,11 @@ pub struct Play {
     sister_group: neopets_sim::sisters::Group,
     draik_words: neopets_sim::draik::Words,
     faerie_words: neopets_sim::darkest::Words,
+    reserves: Vec<Reserve>,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
+    /// The last spawn-by-key request's outcome.
+    pub last_summon: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
     /// pending save values, the bonus words and the low-time mark.
     pub petpet: Option<neopets_sim::petpet::Live>,
@@ -1184,8 +1203,10 @@ impl Play {
             sister_group: Default::default(),
             draik_words,
             faerie_words,
+            reserves: Vec::new(),
             boss_hits: Vec::new(),
             last_boss: String::new(),
+            last_summon: String::new(),
             petpet: None,
             pet_char: None,
             pet_spawn: None,
@@ -3627,16 +3648,44 @@ impl Play {
         // A record whose entity the embedded region has bound since the request is not bound twice.
         let bound = |o: usize| self.entity_of(pack, pack, o).is_some_and(|e| self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e)));
         let loaded: Vec<_> = if slot == REBIND_SLOT { loaded.into_iter().filter(|(pl, ..)| wanted.contains(&pl.ordinal) && !bound(pl.ordinal)).collect() } else { loaded };
+        let rebind = slot == REBIND_SLOT;
         let (slot, region) = if slot == REBIND_SLOT {
             self.slot_regions.remove(&(pack, REBIND_SLOT));
             (EMBEDDED_SLOT, pack)
         } else {
             (slot, region)
         };
+        // The block's summon-reserved records are kept for spawn by key, not bound.
+        if !rebind {
+            self.reserves.retain(|r| !(r.pack == pack && r.slot == slot));
+        }
         for (pl, model, anim, row, tuning) in loaded {
+            if pl.summon {
+                if !rebind {
+                    self.reserves.push(Reserve { pack, slot, region, pl, model, anim, row, tuning, bound: None });
+                }
+                continue;
+            }
+            let drop = usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied());
+            self.bind_character(pack, slot, region, pl, (model, anim, row, tuning), drop);
+        }
+    }
+
+    /// Bind a record of a block as a character: on the ground under its point (the ground step
+    /// probes 2.5 above; SPEC-0018; the fall itself is not simulated), with the controllers of
+    /// its class. Returns its id.
+    #[allow(clippy::type_complexity)]
+    fn bind_character(
+        &mut self,
+        pack: u32,
+        slot: u8,
+        region: u32,
+        pl: neopets_data::region::Placement,
+        (model, anim, row, tuning): (ModelData, HeroAnim, Option<neopets_data::monster::Row>, Option<neopets_data::monster::Tuning>),
+        drop: Option<neopets_data::region::ItemPoint>,
+    ) -> u64 {
+        {
             self.next_character += 1;
-            // Characters have motion records and settle on the ground under their placement
-            // (the ground step probes 2.5 above; SPEC-0018). The fall itself is not simulated.
             let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
             let position = match world.and_then(|w| w.ground_at(pl.position[0], pl.position[2], pl.position[1] + 2.5)) {
                 Some(h) => [pl.position[0], h, pl.position[2]],
@@ -3664,7 +3713,7 @@ impl Play {
                     _ => None,
                 },
                 weapons: tuning.map_or([(0.0, 0.0); 5], |t| t.weapons),
-                drop: usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied()),
+                drop,
                 colour: pl.colour,
                 root_step: [0.0; 3],
                 script_walk: None,
@@ -3680,6 +3729,7 @@ impl Play {
                 sister_hit: None,
                 draik: row.filter(|r| r.class == Some(12)).map(|_| neopets_sim::draik::Draik::new(&self.draik_words, &mut self.rng)),
                 faerie: row.filter(|r| r.class == Some(37)).map(|_| neopets_sim::darkest::Faerie::default()),
+                spawn_keys: tuning.map_or([0; 4], |t| std::array::from_fn(|k| t.slots[k].spawn_key)),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3690,6 +3740,59 @@ impl Play {
                 model,
             });
         }
+        self.next_character
+    }
+
+    /// A spawn-by-key request (SPEC-0029 Behavior 31): the block of a character's request, or
+    /// for a world-level request (no block) the embedded block and then each slot in order; the
+    /// first reserved record of the key not bound to a live character is bound at the point and
+    /// facing, with the drop item as its direct drop, and starts in agro (state 19) or, for the
+    /// minion keys and the arrival flag, with animation 82 in state 21. Returns whether one
+    /// spawned. The block's free-object and cap tests and the summoner id are not built.
+    fn summon(&mut self, pack: u32, block: Option<u8>, key: i16, at: [f32; 3], facing: [f32; 3], drop: Option<u16>, arrive: bool) -> bool {
+        let live: std::collections::HashSet<u64> = self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)).map(|c| c.id).collect();
+        for r in &mut self.reserves {
+            if r.bound.is_some_and(|id| !live.contains(&id)) {
+                r.bound = None;
+            }
+        }
+        let blocks: Vec<u8> = match block {
+            Some(s) => vec![s],
+            None => {
+                let mut v: Vec<u8> = self.reserves.iter().filter(|r| r.pack == pack).map(|r| r.slot).collect();
+                v.sort_by_key(|&s| (s != EMBEDDED_SLOT, s));
+                v.dedup();
+                v
+            }
+        };
+        for s in blocks {
+            let recs: Vec<usize> = (0..self.reserves.len()).filter(|&i| self.reserves[i].pack == pack && self.reserves[i].slot == s).collect();
+            let keyed: Vec<neopets_sim::summon::Reserved> = recs.iter().map(|&i| neopets_sim::summon::Reserved { key: self.reserves[i].pl.key, bound: self.reserves[i].bound.is_some() }).collect();
+            let Some(k) = neopets_sim::summon::find(&keyed, key) else { continue };
+            let i = recs[k];
+            let r = &self.reserves[i];
+            let mut pl = r.pl.clone();
+            pl.position = at;
+            pl.facing = facing;
+            let parts = (r.model.clone(), r.anim.clone(), r.row, r.tuning);
+            let region = r.region;
+            let drop = drop.map(|id| neopets_data::region::ItemPoint { position: at, facing, flags: 0, group: -1, key: id as i16, luck: 0, count: 0, map: 0 });
+            let id = self.bind_character(pack, s, region, pl, parts, drop);
+            self.reserves[i].bound = Some(id);
+            let hero = self.loco.position();
+            let rng = &mut self.rng;
+            if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
+                c.inactive = false;
+                c.deactivated = false;
+                if let Some(a) = c.enemy.as_mut().and_then(|e| e.summoned(arrive || neopets_sim::summon::minion(key), hero, rng)) {
+                    c.anim.play(a);
+                }
+            }
+            self.last_summon = format!("summoned key {key} at {:.1},{:.1},{:.1} on tick {}", at[0], at[1], at[2], self.ticks);
+            return true;
+        }
+        self.last_summon = format!("no reserved record for key {key} on tick {}", self.ticks);
+        false
     }
 
     /// The petpet package's character record ordinal 0 becomes the live petpet's character at
@@ -3736,6 +3839,7 @@ impl Play {
             sister_hit: None,
             draik: None,
             faerie: None,
+            spawn_keys: [0; 4],
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -5067,7 +5171,13 @@ impl Play {
                         self.statuses.apply(code, seconds);
                     }
                 }
-                neopets_sim::projectile::Event::Summon { .. } => {}
+                neopets_sim::projectile::Event::Summon { key, at } => {
+                    // SPEC-0029 Behavior 31 source 3: a world-level request at the landing point,
+                    // facing the hero (the shot's forward axis is not kept).
+                    let to = [hero[0] - at[0], 0.0, hero[2] - at[2]];
+                    let pack = self.world.pack;
+                    self.summon(pack, None, key as i16, at, unit(to), None, false);
+                }
                 neopets_sim::projectile::Event::Leach => {
                     // SPEC-0011 Leach: effect 4039 at the hero's model point, then 50 MP drained
                     // (not below 0; the MP-empty rule is not built).
@@ -6173,6 +6283,7 @@ impl Play {
                 self.last_boss = format!("Darkest Faerie code {before} -> {after} (absorbs {}, stuns {}) on tick {}", f.absorbs, f.stuns, self.ticks);
             }
             let from = c.position;
+            let (keys, slot, facing) = (c.spawn_keys, c.slot, c.facing);
             for &(flag, on) in &act.levels {
                 self.state.set_level(flag, on);
             }
@@ -6187,8 +6298,12 @@ impl Play {
             for &(fx, at) in &act.impacts {
                 self.effects.one_shot(&table, fx, at, neopets_sim::effect::IDENTITY, &mut self.rng);
             }
-            if !act.summons.is_empty() {
-                self.last_boss = format!("Darkest Faerie summons {} (by key; not built) on tick {}", act.summons.len(), self.ticks);
+            for &(burst, at) in &act.summons {
+                // The burst by the slot-1 key facing her forward; the bolt by the slot-0 key
+                // facing away from her; both drop item 172.
+                let key = keys[burst as usize] as i16;
+                let face = if burst { facing } else { unit([at[0] - from[0], 0.0, at[2] - from[2]]) };
+                self.summon(pack, Some(slot), key, at, face, Some(172), false);
             }
             let d = {
                 let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);

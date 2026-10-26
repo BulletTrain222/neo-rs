@@ -235,8 +235,9 @@ type RegionCharacter = (
 /// A loaded region: its characters and its kind-8 item points.
 type RegionLoad = (Vec<RegionCharacter>, Vec<neopets_data::region::ItemPoint>);
 
-/// Read a region resource and build each placed character (summon-reserved records and records
-/// with no position are left out: they are placed by a summoner).
+/// Read a region resource and build each placed character, and each summon-reserved record (its
+/// summon byte set; kept by the host for spawn by key). Records with no position that are not
+/// reserved are left out.
 fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::monster::MonsterTable, region: u32) -> Result<RegionLoad, String> {
     let file = index.read(disc, region)?;
     let chain = neopets_data::resource::walk_chunks(&file, None)?;
@@ -254,7 +255,7 @@ fn load_region(disc: &mut Disc, index: &ArchiveIndex, table: &neopets_data::mons
     let r = neopets_data::region::Region::of(&bytes, &chunks);
     let lists = std::sync::Arc::new(r.records.effect_lists.clone());
     let mut out = Vec::new();
-    for pl in r.records.placements.iter().filter(|p| !p.summon && p.position != [0.0; 3]) {
+    for pl in r.records.placements.iter().filter(|p| p.summon || p.position != [0.0; 3]) {
         match archive_view::region_character(disc, index, &bytes, &r, pl) {
             Ok((model, mut anim)) => {
                 anim.set_effect_lists(lists.clone());
@@ -2108,6 +2109,7 @@ fn play_trace(
     let mut last_status = String::new();
     let mut last_pet = String::new();
     let mut last_boss = String::new();
+    let mut last_summon = String::new();
     let mut last_swap = String::new();
     let mut last_fx = String::new();
     let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
@@ -2381,6 +2383,10 @@ fn play_trace(
         if switch_at.contains(&(play.ticks + 1)) {
             play.l1_latch = true;
             play.r1_latch = true;
+        }
+        if !play.last_summon.is_empty() && play.last_summon != last_summon {
+            last_summon = play.last_summon.clone();
+            println!("      {last_summon}");
         }
         if !play.last_boss.is_empty() && play.last_boss != last_boss {
             last_boss = play.last_boss.clone();

@@ -689,6 +689,29 @@ impl Enemy {
         Some(18)
     }
 
+    /// A summoned enemy's start (SPEC-0029 Behavior 31): the agro state 19, or for the minion
+    /// keys (and the arrival flag) animation 82 and state 21, the search with the hero as the
+    /// last-seen point. Returns the animation it requests.
+    pub fn summoned(&mut self, arrive: bool, hero: Vec3, rng: &mut Rng) -> Option<u32> {
+        if self.dead {
+            return None;
+        }
+        self.previous = self.state;
+        self.through = None;
+        if arrive {
+            self.state = 21;
+            self.search = rng.frange(self.p.search_min, self.p.search_max) as i32;
+            self.last_seen = hero;
+            Some(82)
+        } else {
+            self.state = 19;
+            self.outer = 0;
+            self.recovery = 0;
+            self.cooldown = [0; 4];
+            None
+        }
+    }
+
     pub fn die(&mut self) {
         if !self.dead {
             self.dead = true;

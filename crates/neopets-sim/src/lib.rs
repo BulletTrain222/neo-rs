@@ -28,6 +28,7 @@ pub mod items;
 pub mod gnarfas;
 pub mod juppie;
 pub mod sisters;
+pub mod summon;
 pub mod werelupe;
 pub mod miamouse;
 pub mod level;

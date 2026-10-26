@@ -5,6 +5,7 @@ use neopets_data::anim::{self, Affine, BoneTable, Family, FamilyData, Joint};
 use neopets_sim::clip::{ClipInfo, PlaybackRecord};
 use neopets_sim::hero::ClipState;
 
+#[derive(Clone)]
 struct FamilyState {
     data: FamilyData,
     record: PlaybackRecord,
@@ -18,6 +19,7 @@ struct FamilyState {
     role: u8,
 }
 
+#[derive(Clone)]
 pub struct HeroAnim {
     bones: BoneTable,
     families: Vec<FamilyState>,
