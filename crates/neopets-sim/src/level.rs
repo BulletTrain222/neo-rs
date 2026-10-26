@@ -692,13 +692,32 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 880 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 880 | 886 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0039 886 Init: handler 1 on trigger 5, 2 on 2, 4 on 0; object 3 off while 250 is
+        // clear; 249 set when 248 is set, 249 clear and movie 30 not played (movies are not
+        // built, so it counts as not played); thread 3 loads slot 0 with set 3, 2, 1 or 0 by
+        // the first set flag of 52, 51, 50 and 49 (region 887 + set), and nothing otherwise.
+        // SetWorldCollisMask is not built.
+        886 => {
+            let mut v = vec![reg(5, 1), reg(2, 2)];
+            if !state.flag(250) {
+                v.push(Action::InitObjOn { obj: 3, end: false });
+            }
+            if state.flag(248) && !state.flag(249) {
+                state.set(249, true);
+            }
+            if let Some(set) = [(52, 3), (51, 2), (50, 1), (49, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(887 + set) });
+            }
+            v.push(reg(0, 4));
+            v
+        }
         // SPEC-0039 1230 Init: slot 0 and thread 1; handler 2 on triggers 0, 2 and 1, handler 3
         // on 5; with flag 20 or 19 handlers 5 and 6 on 3 and 4; object 0 off with 64 set and 248
         // clear. SetWorldCollisMask and SetWorldDisplayMask under 248 are not built.
@@ -1121,6 +1140,17 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
     let mut out = TriggerOut::default();
     let first = call.state == 1 && call.object;
     match (pack, routine) {
+        // SPEC-0039 886 handler 1 (trigger 5), entered with 250 clear: line 6; handler 2
+        // (trigger 2): the Square context 3, a press shows line 7; handler 4 (trigger 0),
+        // entered with 252 clear: line 8.
+        (886, 1) if call.state == 1 && call.object && !state.flag(250) => out.actions.push(Action::Message { line: 6 }),
+        (886, 2) if call.state != 0 && call.object => {
+            out.prompt = Some(3);
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: 7 });
+            }
+        }
+        (886, 4) if call.state == 1 && call.object && !state.flag(252) => out.actions.push(Action::Message { line: 8 }),
         // SPEC-0039 1230 handler 2 (triggers 0, 1, 2): while inside, the Square context 3; a
         // press shows line 18, 20 or 19.
         (1230, 2) if call.state != 0 => {
@@ -1581,6 +1611,32 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
         }
         1217 => out = burrows_fight(state, dialog),
+        // SPEC-0039 886 Update. The end helper: with 250 clear and AI 16, 17 and 18 dead, object
+        // 3 off, 250, 6 s, a 1 s fade out (movie 32 is not built), 1 tick, a 1 s fade in. The
+        // hint helper, while 250 is clear: a 300-tick counter (word 0), then once line 1 unless
+        // hero 1 is active (word 1), then once, with hero 1 active, AI 16 and 17 dead and 18
+        // alive, 2 s and line 3 (word 2).
+        886 => {
+            let dead = |e: usize| state.ai_dead.contains(&e);
+            if !state.flag(250) && dead(16) && dead(17) && dead(18) {
+                state.set(250, true);
+                out.extend([Action::DeactivateObj { obj: 3 }, wait(6.0), Action::FadeOut { seconds: 1.0, wait: true }, Action::Sleep { ticks: 1 }, Action::FadeIn { seconds: 1.0, wait: false }]);
+            } else if !state.flag(250) {
+                let n = state.word(pack, 0);
+                if n < 300 {
+                    state.set_word(pack, 0, n + 1);
+                } else if state.word(pack, 1) == 0 {
+                    state.set_word(pack, 1, 1);
+                    if state.hero.selected != 1 {
+                        out.push(Action::Message { line: 1 });
+                    }
+                    out.push(Action::Sleep { ticks: 1 });
+                } else if state.word(pack, 2) == 0 && state.hero.selected == 1 && dead(16) && dead(17) && !dead(18) {
+                    state.set_word(pack, 2, 1);
+                    out.extend([wait(2.0), Action::Message { line: 3 }]);
+                }
+            }
+        }
         // SPEC-0039 1230 Update: object 0 off unless 64 is set and 248 clear.
         1230 => {
             if !(state.flag(64) && !state.flag(248)) {
@@ -3519,6 +3575,26 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_886_hints_and_end() {
+        let mut s = GameState::default();
+        s.set(50, true);
+        assert!(on_init(886, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(888) }));
+        // The first hint after 300 ticks, then the hero-1 hint with 16 and 17 dead and 18 alive.
+        let mut lines = Vec::new();
+        for _ in 0..301 {
+            lines.extend(on_update(886, &mut s, false));
+        }
+        assert_eq!(lines, vec![Action::Message { line: 1 }, Action::Sleep { ticks: 1 }]);
+        s.hero.selected = 1;
+        s.ai_dead.extend([16, 17]);
+        assert_eq!(on_update(886, &mut s, false)[1], Action::Message { line: 3 });
+        assert!(on_update(886, &mut s, false).is_empty());
+        s.ai_dead.insert(18);
+        assert_eq!(on_update(886, &mut s, false)[0], Action::DeactivateObj { obj: 3 });
+        assert!(s.flag(250));
     }
 
     #[test]
