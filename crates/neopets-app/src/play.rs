@@ -620,6 +620,10 @@ pub struct Play {
     /// The Faerie Sisters' tuning words (overwritten by alternate loop A) and their shared group.
     sister_words: neopets_sim::sisters::Words,
     sister_group: neopets_sim::sisters::Group,
+    /// The Mote-eater drain (SPEC-0034 3.13): the drain, its body effect and its slots' effects
+    /// with their offsets.
+    drain: Option<(neopets_sim::sisters::Drain, usize, Vec<(usize, [f32; 3])>)>,
+    drain_words: neopets_sim::sisters::DrainWords,
     draik_words: neopets_sim::draik::Words,
     faerie_words: neopets_sim::darkest::Words,
     reserves: Vec<Reserve>,
@@ -1022,6 +1026,7 @@ impl Play {
                 far_weight: sh[4],
             }
         };
+        let drain_words = neopets_sim::sisters::DrainWords::read(&words(neopets_sim::sisters::DRAIN_WORDS, 7)?, &words(neopets_sim::sisters::DRAIN_TABLE, 14)?).ok_or("The drain words are short")?;
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
         let mortog_words = neopets_sim::mortog::Words::read(&words(neopets_sim::mortog::BASE, neopets_sim::mortog::WORDS)?).ok_or("The Mortog words are short")?;
@@ -1222,6 +1227,8 @@ impl Play {
             king_words,
             sister_words,
             sister_group: Default::default(),
+            drain: None,
+            drain_words,
             draik_words,
             faerie_words,
             reserves: Vec::new(),
@@ -5321,6 +5328,15 @@ impl Play {
                     let pack = self.world.pack;
                     self.summon(pack, None, key as i16, at, unit(to), None, false);
                 }
+                neopets_sim::projectile::Event::MoteEater => {
+                    // The drain starts when none is active: its body effect 464 above the hero.
+                    if self.drain.is_none() {
+                        let d = neopets_sim::sisters::Drain::start(&self.drain_words, &mut self.rng);
+                        let at = add(self.loco.position(), [0.0, self.drain_words.body_height, 0.0]);
+                        let body = self.effects.add_object(neopets_sim::effect::EffectObject::new(&self.effect_table, 464, at, neopets_sim::effect::IDENTITY));
+                        self.drain = Some((d, body, Vec::new()));
+                    }
+                }
                 neopets_sim::projectile::Event::Leach => {
                     // SPEC-0011 Leach: effect 4039 at the hero's model point, then 50 MP drained
                     // (not below 0; the MP-empty rule is not built).
@@ -6156,6 +6172,8 @@ impl Play {
             let Some(s) = c.sister.as_mut() else { continue };
             let before = s.state;
             let act = s.tick(&v, &mut self.sister_group, &mut self.sister_words, id, &mut self.rng);
+            // Each sister loop still stepped advances the drain once (SPEC-0034 3.13).
+            let step = self.drain.as_mut().map(|(d, ..)| d.tick(&self.drain_words, &mut self.rng));
             let after = s.state;
             if let Some(n) = act.anim {
                 if clip.action != n || (clip.progress >= 0.99 && before != after) {
@@ -6191,6 +6209,47 @@ impl Play {
             }
             if let Some(setup) = act.launch {
                 self.shots.submit(setup);
+            }
+            if let Some(step) = step {
+                self.drain_step(step);
+            }
+        }
+    }
+
+    /// One call of the Mote-eater drain: the effects follow the hero; a reveal starts its slot's
+    /// effect and uses its Mote's charge (a Mote not held or spent is cleared from the
+    /// equipment); the stop ends every effect. The slot effects' 0.5 scale is not applied.
+    fn drain_step(&mut self, step: neopets_sim::sisters::DrainStep) {
+        use neopets_sim::sisters::DrainStep;
+        let hero = self.loco.position();
+        let table = self.effect_table.clone();
+        let Some((_, body, slots)) = self.drain.as_mut() else { return };
+        match step {
+            DrainStep::Stop => {
+                let (body, slots) = (*body, std::mem::take(slots));
+                for h in std::iter::once(body).chain(slots.iter().map(|s| s.0)) {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
+                self.drain = None;
+                return;
+            }
+            DrainStep::Reveal { mote, effect, offset, charge, .. } => {
+                if effect >= 0 {
+                    let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, effect, add(hero, offset), neopets_sim::effect::IDENTITY));
+                    slots.push((h, offset));
+                }
+                if charge > 0 {
+                    let word = self.equipment.motes[self.hero_index.min(1)].iter().position(|&m| m == Some(mote)).unwrap_or(0);
+                    self.spend_charge(word, mote, charge);
+                }
+            }
+            DrainStep::Follow => {}
+        }
+        if let Some((_, body, slots)) = self.drain.as_ref() {
+            self.effects.set_position(*body, add(hero, [0.0, self.drain_words.body_height, 0.0]));
+            for &(h, o) in slots {
+                self.effects.set_position(h, add(hero, o));
             }
         }
     }

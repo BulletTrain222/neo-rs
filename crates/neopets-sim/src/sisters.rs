@@ -485,6 +485,100 @@ impl Sister {
     }
 }
 
+/// The Mote-eater drain words (SPEC-0034 3.13): 7 from 0x2DCAC8 and the 14-word per-Mote
+/// effect table at 0x2DCAE8.
+pub const DRAIN_WORDS: u32 = 0x002D_CAC8;
+pub const DRAIN_TABLE: u32 = 0x002D_CAE8;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct DrainWords {
+    pub seconds: f32,
+    pub body_height: f32,
+    pub slot_height: f32,
+    pub spread: f32,
+    pub scale: f32,
+    pub charge_switch: i32,
+    pub charge: i32,
+    pub effects: [i32; 14],
+}
+
+impl DrainWords {
+    pub fn read(w: &[u32], table: &[u32]) -> Option<Self> {
+        if w.len() < 7 || table.len() < 14 {
+            return None;
+        }
+        let f = |k: usize| f32::from_bits(w[k]);
+        Some(Self {
+            seconds: f(0),
+            body_height: f(1),
+            slot_height: f(2),
+            spread: f(3),
+            scale: f(4),
+            charge_switch: w[5] as i32,
+            charge: w[6] as i32,
+            effects: std::array::from_fn(|k| table[k] as i32),
+        })
+    }
+}
+
+/// The Mote-eater drain (SPEC-0034 3.13): the slots' Mote ids and effects, the countdown, the
+/// period and the revealed count.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Drain {
+    pub slots: Vec<(u16, i32)>,
+    pub countdown: i32,
+    pub period: i32,
+    pub revealed: usize,
+}
+
+/// What one drain call does.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DrainStep {
+    /// Nothing new (the effects follow the hero).
+    Follow,
+    /// Slot k is revealed at the offset: its Mote, its effect, and the charge it uses (0: none).
+    Reveal { slot: usize, mote: u16, effect: i32, offset: Vec3, charge: i32 },
+    /// The countdown reached 0: everything stops.
+    Stop,
+}
+
+impl Drain {
+    /// The start: 8 picks from the twelve Motes 160 to 171 (a repeat steps to (pick mod 12) + 1;
+    /// a walk past 11 gives 12, which adds no slot), each slot's effect from the table, the
+    /// countdown trunc(seconds x 60) + 1 and the period countdown / slots (at least 1).
+    pub fn start(w: &DrainWords, rng: &mut Rng) -> Self {
+        let mut picks: Vec<i32> = Vec::new();
+        for _ in 0..8 {
+            let mut p = rng.range(0, 11);
+            while picks.contains(&p) {
+                p = (p % 12) + 1;
+            }
+            picks.push(p);
+        }
+        let slots: Vec<(u16, i32)> = picks.iter().filter(|&&p| p < 12).map(|&p| (160 + p as u16, w.effects[p as usize])).collect();
+        let countdown = (w.seconds * 60.0) as i32 + 1;
+        let period = (countdown / slots.len().max(1) as i32).max(1);
+        Self { slots, countdown, period, revealed: 0 }
+    }
+
+    /// One call (each sister loop still stepped makes one per tick).
+    pub fn tick(&mut self, w: &DrainWords, rng: &mut Rng) -> DrainStep {
+        self.countdown -= 1;
+        if self.countdown <= 0 {
+            return DrainStep::Stop;
+        }
+        if self.countdown % self.period == 0 && self.revealed < 8 && self.revealed < self.slots.len() {
+            let k = self.revealed;
+            self.revealed += 1;
+            let a = w.spread;
+            let offset = [rng.frange(-a, a), w.slot_height, rng.frange(-a, a)];
+            let (mote, effect) = self.slots[k];
+            return DrainStep::Reveal { slot: k, mote, effect, offset, charge: if w.charge_switch != 0 { w.charge } else { 0 } };
+        }
+        DrainStep::Follow
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -683,6 +777,43 @@ mod tests {
         v.frame_bits = 0x20;
         let m = s.tick(&v, &mut g, &mut w, 7, &mut rng).launch.unwrap();
         assert_eq!((m.kind, m.visual, m.damage, m.status.0, m.status.1), (11, 17, 10.0, 3, 100));
+    }
+
+    #[test]
+    fn mote_eater_drain() {
+        let w = DrainWords::read(&[30.0f32.to_bits(), 4.5f32.to_bits(), 4.0f32.to_bits(), 0.0f32.to_bits(), 0.5f32.to_bits(), 1, 20], &[6000, 6000, 6001, 6001, 6002, 6002, 6003, 6003, 6004, 6004, 6005, 6005, u32::MAX, u32::MAX]).unwrap();
+        let mut rng = Rng::seeded(9);
+        // 8 slots: reveals on calls 1, 226, ..., 1576; the stop on call 1801.
+        let mut d = Drain { slots: (0..8).map(|k| (160 + k, 6000)).collect(), countdown: 1801, period: 225, revealed: 0 };
+        let mut reveals = Vec::new();
+        let mut stop = 0;
+        for call in 1..=1801 {
+            match d.tick(&w, &mut rng) {
+                DrainStep::Reveal { charge, offset, .. } => {
+                    assert_eq!((charge, offset), (20, [0.0, 4.0, 0.0]));
+                    reveals.push(call);
+                }
+                DrainStep::Stop => {
+                    stop = call;
+                    break;
+                }
+                DrainStep::Follow => {}
+            }
+        }
+        assert_eq!(reveals, vec![1, 226, 451, 676, 901, 1126, 1351, 1576]);
+        assert_eq!(stop, 1801);
+        // 7 slots (period 257): the first reveal on call 2, the last on 1544.
+        let mut d = Drain { slots: (0..7).map(|k| (160 + k, 6000)).collect(), countdown: 1801, period: 257, revealed: 0 };
+        let calls: Vec<i32> = (1..=1801).filter(|_| matches!(d.tick(&w, &mut rng), DrainStep::Reveal { .. })).collect();
+        assert_eq!((calls[0], *calls.last().unwrap()), (2, 1544));
+        // A start: 7 or 8 distinct Motes, the period from the slot count.
+        for seed in 0..20 {
+            let d = Drain::start(&w, &mut Rng::seeded(seed));
+            let mut ids: Vec<u16> = d.slots.iter().map(|s| s.0).collect();
+            ids.dedup();
+            assert!((7..=8).contains(&d.slots.len()) && d.slots.iter().all(|s| (160..=171).contains(&s.0)));
+            assert_eq!((d.countdown, d.period), (1801, 1801 / d.slots.len() as i32));
+        }
     }
 
     #[test]
