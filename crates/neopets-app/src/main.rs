@@ -160,7 +160,7 @@ fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::
 
 /// Play mode was asked for, in this world pack (`--pack`, default 909).
 #[derive(Resource)]
-struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>, bool, Vec<u16>);
+struct PlayRequest(u32, Option<[f32; 2]>, Vec<u16>, bool, Vec<u16>, Option<[f32; 3]>);
 
 /// Diagnostic: hold the stick forward at walk tilt in play mode (`--autowalk`), so screenshots
 /// can show travel without a person at the controls; `--autojump` also presses Cross every 2 s.
@@ -732,7 +732,7 @@ fn main() {
     if let Some(archive) = archive {
         app.insert_resource(archive);
         if play_mode {
-            app.insert_resource(PlayRequest(play_pack, look, give.clone(), title, flags.clone()));
+            app.insert_resource(PlayRequest(play_pack, look, give.clone(), title, flags.clone(), start));
         }
         if let Some(auto) = autowalk {
             app.insert_resource(auto);
@@ -766,7 +766,7 @@ fn main() {
                 (read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
             )
                 .chain(),
         );
@@ -1554,6 +1554,26 @@ enum WorldPart {
     Dome(u32),
     /// The world's foliage patches (SPEC-0060).
     Foliage(u32),
+    /// The world's placed objects (type 29), each on its own transform (SPEC-0028 7.1).
+    Objects(u32),
+}
+
+/// A placed object's root entity: (pack, object index).
+#[derive(Component, Clone, Copy)]
+struct ObjectRoot(u32, usize);
+
+/// Each frame: a placed object's root takes its drawn transform from the play, or hides.
+fn sync_objects(state: Option<Res<PlayState>>, mut roots: Query<(&ObjectRoot, &mut Transform, &mut Visibility)>) {
+    let Some(state) = state else { return };
+    for (o, mut t, mut vis) in &mut roots {
+        match state.play.object_matrix(o.0, o.1) {
+            Some(m) => {
+                *t = Transform::from_matrix(Mat4::from_cols_array(&m));
+                *vis = Visibility::Visible;
+            }
+            None => *vis = Visibility::Hidden,
+        }
+    }
 }
 
 /// Keep the drawn worlds in step with the resident buffers (SPEC-0006): the current world, the
@@ -1572,12 +1592,13 @@ fn sync_worlds(
 ) {
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
     let p = &state.play;
-    let mut want = vec![WorldPart::Scene(p.world.pack)];
+    let mut want = vec![WorldPart::Scene(p.world.pack), WorldPart::Objects(p.world.pack)];
     if p.foliage.contains_key(&p.world.pack) {
         want.push(WorldPart::Foliage(p.world.pack));
     }
     if let (true, Some(o)) = (p.other_drawn(), &p.other) {
         want.push(WorldPart::Scene(o.pack));
+        want.push(WorldPart::Objects(o.pack));
         if p.foliage.contains_key(&o.pack) {
             want.push(WorldPart::Foliage(o.pack));
         }
@@ -1595,6 +1616,36 @@ fn sync_worlds(
     let Archive { disc, index } = &mut *archive;
     for part in &want {
         if shown.contains(part) {
+            continue;
+        }
+        if let WorldPart::Objects(pack) = *part {
+            let world = [&p.world].into_iter().chain(p.other.as_ref()).find(|w| w.pack == pack);
+            let built = index.read(disc, pack).and_then(|bytes| {
+                let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+                let mut out = Vec::new();
+                for (i, o) in world.map_or(&[][..], |w| &w.objects[..]).iter().enumerate() {
+                    let Some(tree) = o.as_ref().and_then(|o| o.tree.clone()) else { continue };
+                    if let Ok(m) = neopets_data::model::build_tree(&bytes, &chain.chunks, tree, 0) {
+                        if !m.parts.is_empty() {
+                            out.push((i, m));
+                        }
+                    }
+                }
+                Ok(out)
+            });
+            match built {
+                Ok(list) => {
+                    for (i, m) in list {
+                        let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        commands.spawn((Transform::IDENTITY, Visibility::Visible, ObjectRoot(pack, i), *part)).with_children(|c| {
+                            for (_, mesh, material) in parts {
+                                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            }
+                        });
+                    }
+                }
+                Err(e) => error!("objects of {pack}: {e}"),
+            }
             continue;
         }
         if let WorldPart::Foliage(pack) = *part {
@@ -1620,7 +1671,7 @@ fn sync_worlds(
                     archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false)
                 }),
             WorldPart::Dome(d) => archive_view::model(disc, index, d),
-            WorldPart::Foliage(_) => Ok(None),
+            WorldPart::Foliage(_) | WorldPart::Objects(_) => Ok(None),
         };
         match model {
             Ok(Some(m)) => {
@@ -2251,6 +2302,11 @@ fn play_trace(
             println!("      flags on {on:?} off {off:?} on tick {}", play.ticks);
             flags_seen = play.state.flags.clone();
         }
+        if play.ticks == 2 || (play.ticks % 600 == 0 && play.ticks > 0) {
+            let w = &play.world;
+            let list: Vec<String> = w.object_anims.iter().enumerate().filter(|(_, o)| o.scripted).map(|(i, o)| format!("{i}:{}{}", o.state, if play.object_matrix(w.pack, i).is_some() { "" } else { " hidden" })).collect();
+            println!("      objects of {} ({} in all) on tick {}: scripted [{}]", w.pack, w.objects.len(), play.ticks, list.join(", "));
+        }
         if !play.last_fx.is_empty() && play.last_fx != last_fx {
             last_fx = play.last_fx.clone();
             println!("      {last_fx}");
@@ -2380,7 +2436,10 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
     // `--flag N` (repeatable): diagnostic story flags set before the start world's Init.
     match play::Play::load_with_flags(disc, index, request.0, PLAY_OUTFIT, &request.4) {
         Ok(mut play) => {
-            // `--look x,z`: diagnostic start facing.
+            // `--start x,z[,y]`: diagnostic start point; `--look x,z`: diagnostic start facing.
+            if let Some([x, z, c]) = request.5 {
+                play.place_at(x, z, c);
+            }
             if let Some([x, z]) = request.1 {
                 play.face_point(x, z);
             }

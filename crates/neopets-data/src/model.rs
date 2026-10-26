@@ -381,6 +381,15 @@ impl Builder {
     }
 }
 
+/// Build one node tree (a byte range of `bytes`) in its own frame, drawn with the chain's
+/// shader list (a placed object's inline mesh).
+pub fn build_tree(bytes: &[u8], top: &[Chunk], payload: std::ops::Range<usize>, layer_mask: u32) -> Result<ModelData, String> {
+    let materials = vec![ChainMaterials::of(bytes, top)?];
+    let mut b = Builder::new(materials, None);
+    b.add_tree(bytes, payload, 0, None, Some(layer_mask))?;
+    Ok(b.finish())
+}
+
 /// Build every node tree of a resource into mesh parts. `shared` supplies the shader list for
 /// chains without one: resources 544–575 draw with resource 7's list (SPEC-0004).
 pub fn build(
@@ -419,7 +428,16 @@ pub fn build_roles(
 /// Trees that do not walk (stale references) are skipped and counted. `layer_mask` is the world
 /// layer mask of SPEC-0046 (0 for a new game: mask word 0 and no story layer visible).
 pub fn build_world(bytes: &[u8], top: &[Chunk], layer_mask: u32) -> Result<ModelData, String> {
-    let scene = crate::world::scene(bytes, top);
+    build_world_parts(bytes, top, layer_mask, true)
+}
+
+/// As `build_world`, leaving out the placed objects (type 29) when `objects` is false (they are
+/// drawn on their own with `build_tree`).
+pub fn build_world_parts(bytes: &[u8], top: &[Chunk], layer_mask: u32, objects: bool) -> Result<ModelData, String> {
+    let mut scene = crate::world::scene(bytes, top);
+    if !objects {
+        scene.trees.retain(|t| t.source != crate::world::PLACED_OBJECTS);
+    }
     let materials = vec![ChainMaterials::of(bytes, top)?];
     let mut b = Builder::new(materials, None);
     for t in &scene.trees {

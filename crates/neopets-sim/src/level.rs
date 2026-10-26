@@ -160,6 +160,14 @@ pub enum Action {
     /// effects (SPEC-0030 rows 5 and 6).
     StartEffect { slot: usize, camera: bool },
     StopEffect { slot: usize },
+    /// The animated-object calls of SPEC-0030 rows 1 to 4, 9 and 11 on the thread's world:
+    /// InitObjOn and ActivateObj (start or end pose), PlayAnim (with WAIT the thread waits while
+    /// the object plays once), LoopAnim, StopAnim and DeactivateObj.
+    InitObjOn { obj: usize, end: bool },
+    PlayAnim { obj: usize, speed: f32, wait: bool },
+    LoopAnim { obj: usize, speed: f32 },
+    StopAnim { obj: usize },
+    DeactivateObj { obj: usize },
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -508,6 +516,13 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
     }
 }
 
+/// Whether a module's object calls are reproduced: its objects then follow the draw gate (hidden
+/// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
+/// rest until their calls are built.
+pub fn objects_scripted(pack: u32) -> bool {
+    matches!(pack, 909)
+}
+
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
@@ -527,10 +542,26 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // clear.
         909 => {
             let mut out = vec![Action::WhinnyPen { inner: 0, entrance: 5, locator: 8 }];
-            // The object helper sets the word of Update's flag-110 step when 110 is already
-            // set, so that step does not run again.
+            // The object helper (every load): objects 18, 17, 20 and 19 and 7 and 8 at their
+            // start pose, effects 3 and 4 stopped; by flag 122 objects 15 and 16 (start, with
+            // object 4 and the word of Update's flag-122 step set; or end, with object 5); by
+            // flag 110 objects 10 and 11 (start, with object 3; or end, with object 2 and the
+            // word of Update's flag-110 step set, so that step does not run again).
+            let at = |obj, end| Action::InitObjOn { obj, end };
+            out.extend([at(18, false), at(17, false), at(20, false), at(19, false)]);
+            out.extend([Action::StopEffect { slot: 3 }, Action::StopEffect { slot: 4 }, at(7, false), at(8, false)]);
+            if state.flag(122) {
+                out.extend([at(15, true), at(16, true), at(5, false)]);
+                state.set_word(pack, 6, 0);
+            } else {
+                out.extend([at(15, false), at(16, false), at(4, false)]);
+                state.set_word(pack, 6, 1);
+            }
             if state.flag(110) {
+                out.extend([at(10, true), at(11, true), at(2, false)]);
                 state.set_word(pack, 5, 1);
+            } else {
+                out.extend([at(10, false), at(11, false), at(3, false)]);
             }
             out.extend((0..4).map(|i| reg(i, 10)));
             out.push(reg(5, 11));
@@ -977,15 +1008,23 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             } else if state.word(pack, 3) != 0 {
                 out.actions.push(Action::Message { line: 167 });
             } else if state.flag(111) && !state.flag(112) && state.has_item(6) {
-                // Fade out, hero to locator 29, camera 27, fade in, sounds 9 and 10, lines 166
-                // and 162, camera returned (objects 9, 17 to 20, effects 3 and 4 and the shake
-                // are not reproduced).
-                out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 29 }, camera(27), fade_in()]);
+                // Fade out, hero to locator 29, object 9 activated, camera 27, fade in, sound 9,
+                // objects 18, 20 and 17 played, object 20 stopped and deactivated, object 19
+                // played, effects 3 and 4 started, sound 10, line 166, object 9 deactivated,
+                // line 162, camera returned (the shake is not reproduced; the plays wait in turn,
+                // Medium in the spec).
+                out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 29 }, Action::InitObjOn { obj: 9, end: false }, camera(27), fade_in()]);
                 out.actions.push(Action::PlaySound { cue: 9, locator: None });
+                for obj in [18, 20, 17] {
+                    out.actions.push(Action::PlayAnim { obj, speed: 1.0, wait: true });
+                }
+                out.actions.extend([Action::StopAnim { obj: 20 }, Action::DeactivateObj { obj: 20 }, Action::PlayAnim { obj: 19, speed: 1.0, wait: true }]);
+                out.actions.extend([Action::StartEffect { slot: 3, camera: false }, Action::StartEffect { slot: 4, camera: false }]);
                 out.actions.push(Action::PlaySound { cue: 10, locator: None });
                 state.remove_all(6);
                 out.actions.push(Action::Message { line: 166 });
                 state.give(7, 1);
+                out.actions.push(Action::DeactivateObj { obj: 9 });
                 out.actions.push(Action::Message { line: 162 });
                 out.actions.push(release_camera());
                 state.set(112, true);
@@ -1114,12 +1153,23 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
             // Flag 110 with its word clear (Init sets the word when 110 was set at load): hero
-            // to locator 7, camera 7, sound 5 (objects 2, 3, 10 and 11 are not reproduced). The
-            // keyed camera 7 is played with end mode 2, which frees the hero at its end (R-0025).
+            // to locator 7, camera 7, sound 5, objects 10 and 11 played, object 3 deactivated and
+            // object 2 activated. The keyed camera 7 is played with end mode 2, which frees the
+            // hero at its end (R-0025).
             if state.flag(110) && state.word(pack, 5) == 0 {
                 state.set_word(pack, 5, 1);
                 out.extend([Action::HoldHero, Action::MoveHero { locator: 7 }, Action::PlayCamera { track: 7, wait: false, end: 2, speed: 1.0 }]);
                 out.push(Action::PlaySound { cue: 5, locator: None });
+                out.extend([Action::PlayAnim { obj: 10, speed: 1.0, wait: false }, Action::PlayAnim { obj: 11, speed: 1.0, wait: false }]);
+                out.extend([Action::DeactivateObj { obj: 3 }, Action::InitObjOn { obj: 2, end: false }]);
+            }
+            // The flag-122 step (its word set by Init when 122 was clear at load): sound 5,
+            // objects 15 and 16 played, object 4 deactivated, object 5 activated, word cleared.
+            if state.word(pack, 6) != 0 && state.flag(122) {
+                state.set_word(pack, 6, 0);
+                out.push(Action::PlaySound { cue: 5, locator: None });
+                out.extend([Action::PlayAnim { obj: 15, speed: 1.0, wait: false }, Action::PlayAnim { obj: 16, speed: 1.0, wait: false }]);
+                out.extend([Action::DeactivateObj { obj: 4 }, Action::InitObjOn { obj: 5, end: false }]);
             }
             if !state.flag(111) && state.has_item(6) && state.flag(110) {
                 state.set(111, true);
@@ -1147,12 +1197,14 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 17 }, camera(12), fade_in()]);
                 out.push(Action::WalkEntity { entity: 44, locator: 16, wait: true, orient: false, stop: 0.0 });
                 out.push(Action::PlaySound { cue: 12, locator: None });
+                out.extend([Action::PlayAnim { obj: 19, speed: 1.0, wait: false }, Action::StopEffect { slot: 3 }, Action::StopEffect { slot: 4 }]);
                 out.extend([Action::WalkEntity { entity: 44, locator: 15, wait: true, orient: false, stop: 0.0 }, fade_out()]);
                 out.extend([Action::LoadRegion { slot: 3, region: Some(926) }, Action::LoadRegion { slot: 3, region: Some(928) }, Action::WaitLoads]);
                 state.set(119, true);
+                out.extend([Action::DeactivateObj { obj: 8 }, Action::DeactivateObj { obj: 7 }, Action::InitObjOn { obj: 6, end: false }]);
                 out.extend([Action::MoveEntity { entity: 45, locator: 21, face: true }, camera(15), fade_in()]);
-                out.extend([Action::WalkEntity { entity: 45, locator: 23, wait: true, orient: false, stop: 0.0 }, fade_out()]);
-                out.extend([Action::LoadRegion { slot: 3, region: None }, release_camera(), fade_in()]);
+                out.extend([Action::WalkEntity { entity: 45, locator: 23, wait: true, orient: false, stop: 0.0 }, Action::PlayAnim { obj: 6, speed: 1.0, wait: true }, fade_out()]);
+                out.extend([Action::LoadRegion { slot: 3, region: None }, release_camera(), fade_in(), Action::InitObjOn { obj: 8, end: false }]);
             }
             if state.flag(278) {
                 state.set(279, true);
@@ -1258,12 +1310,12 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 // out then in, R-0025).
                 Some(1) if state.flag(122) && !state.flag(123) => {
                     state.set(123, true);
-                    actions.extend([Action::WaitLoads, Action::HoldHero, Action::MoveHero { locator: 13 }, camera(10)]);
+                    actions.extend([Action::WaitLoads, Action::DeactivateObj { obj: 8 }, Action::HoldHero, Action::MoveHero { locator: 13 }, camera(10)]);
                     actions.extend([Action::Converse { entity: 47, line: 168 }, Action::Converse { entity: 39, line: 169 }]);
                     for (entity, locator) in [(47, 10), (39, 11), (33, 9)] {
                         actions.push(Action::MoveEntity { entity, locator, face: true });
                     }
-                    actions.extend([camera(11), Action::WalkHero { locator: 14, wait: true, orient: false }, fade_out(), release_camera(), fade_in()]);
+                    actions.extend([camera(11), Action::WalkHero { locator: 14, wait: true, orient: false }, fade_out(), Action::InitObjOn { obj: 8, end: false }, release_camera(), fade_in()]);
                 }
                 Some(2) if !state.flag(147) && !state.flag(145) => state.set(145, true),
                 _ => {}

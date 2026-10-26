@@ -30,6 +30,7 @@ pub mod nav;
 pub mod projectile;
 pub mod quick;
 pub mod npc;
+pub mod object;
 pub mod options;
 pub mod petpet;
 pub mod rng;

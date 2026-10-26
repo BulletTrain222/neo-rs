@@ -37,6 +37,11 @@ pub struct World {
     pub buffer: Buffer,
     /// The placed effects (type 39), by slot.
     pub placed_effects: Vec<neopets_data::effect::Placed>,
+    /// The placed objects (type 29) with their motion streams and script states (SPEC-0028
+    /// section 7.1), by object index.
+    pub objects: Vec<Option<neopets_data::world::Object>>,
+    pub motions: Vec<neopets_sim::object::Motion>,
+    pub object_anims: Vec<neopets_sim::object::ObjAnim>,
     /// The foliage patches (type 16) and the registry ids of the pack's type-8 children.
     pub patches: Vec<neopets_data::foliage::Patch>,
     pub children: Vec<u16>,
@@ -125,6 +130,9 @@ impl World {
             buffer,
             placed_effects: neopets_data::effect::placed(&bytes, &chain.chunks),
             patches: neopets_data::foliage::patches(&bytes, &chain.chunks),
+            objects: Vec::new(),
+            motions: Vec::new(),
+            object_anims: Vec::new(),
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
             boxes: ground::rectangles(&bytes, &chain.chunks)
@@ -171,6 +179,13 @@ impl World {
                 .collect(),
         };
         let mut world = world;
+        world.objects = neopets_data::world::objects(&bytes, &chain.chunks);
+        world.motions = world
+            .objects
+            .iter()
+            .map(|o| o.as_ref().and_then(|o| neopets_sim::object::Motion::parse(&bytes[o.stream.clone()?], o.keys as usize)).unwrap_or_default())
+            .collect();
+        world.object_anims = vec![Default::default(); world.objects.len()];
         let (ambients, spheres) = ground::sound_emitters(&bytes, &chain.chunks);
         world.ambient_counters = vec![0; ambients.len()];
         world.ambients = ambients;
@@ -377,6 +392,8 @@ enum Wait {
     HeroNear([f32; 3], f32),
     /// A LevelPrompt's answer, then `on_answer` of the pack's routine.
     Choice(u8),
+    /// PlayAnim with WAIT: while the object is in play-once state.
+    ObjAnim(u32, usize),
 }
 
 pub struct Play {
@@ -1347,6 +1364,7 @@ impl Play {
             }
             Wait::Dialog => !self.dialogue_open,
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
+            Wait::ObjAnim(pack, i) => [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.object_anims.get(i)).is_none_or(|a| a.state != 2),
         }
     }
 
@@ -1478,6 +1496,25 @@ impl Play {
                 }
                 Action::ActStart { stage } => self.act_start(stage),
                 Action::StartEffect { slot, camera } => self.start_placed(pack, slot, camera),
+                Action::InitObjOn { obj, .. } | Action::PlayAnim { obj, .. } | Action::LoopAnim { obj, speed: _ } | Action::StopAnim { obj } | Action::DeactivateObj { obj }
+                    if [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).is_some_and(|w| obj < w.object_anims.len()) =>
+                {
+                    let w = if self.world.pack == pack { &mut self.world } else { self.other.as_mut().unwrap() };
+                    let (m, o) = (&w.motions[obj], &mut w.object_anims[obj]);
+                    match a {
+                        Action::InitObjOn { end, .. } => o.init_on(m, end),
+                        Action::PlayAnim { speed, wait, .. } => {
+                            o.play(m, speed);
+                            if wait {
+                                return Some(Wait::ObjAnim(pack, obj));
+                            }
+                        }
+                        Action::LoopAnim { speed, .. } => o.looped(speed),
+                        Action::StopAnim { .. } => o.stop(),
+                        _ => o.deactivate(),
+                    }
+                }
+                Action::InitObjOn { .. } | Action::PlayAnim { .. } | Action::LoopAnim { .. } | Action::StopAnim { .. } | Action::DeactivateObj { .. } => {}
                 Action::StopEffect { slot } => {
                     let table = self.effect_table.clone();
                     if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
@@ -3823,6 +3860,12 @@ impl Play {
         self.root_step = self.hero.tick();
         self.sound_step();
         self.clip_effects_step();
+        // SPEC-0028 7.1: the resident worlds' animated objects step before the hero update.
+        for w in [&mut self.world].into_iter().chain(self.other.as_mut()) {
+            for (o, m) in w.object_anims.iter_mut().zip(&w.motions) {
+                o.tick(m);
+            }
+        }
         self.status_display_step();
         self.foliage_step();
         self.placed_release_step();
@@ -4789,6 +4832,28 @@ impl Play {
         let l = self.weapon_reach() + 2.0;
         let p0 = add(w.t, scale(axis, 0.25));
         Some(neopets_sim::combat::Cylinder { center: add(p0, scale(axis, 0.5 * l)), axis, radius: 0.0, length: l })
+    }
+
+    /// A placed object's drawn transform (SPEC-0028 7.1 step 6) as a column-major matrix, or
+    /// None while it is hidden. In a pack whose object calls are not reproduced yet, an object no
+    /// script call has touched is drawn at its rest block (a deviation: the original hides it
+    /// until InitObjOn).
+    pub fn object_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
+        let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+        let obj = w.objects.get(i)?.as_ref()?;
+        let a = w.object_anims.get(i)?;
+        if !a.scripted && !level::objects_scripted(pack) {
+            return Some(obj.rest);
+        }
+        if !a.visible() {
+            return None;
+        }
+        let (q, root, scale) = w.motions.get(i)?.sample(a.time);
+        let r = neopets_sim::object::rotation(q);
+        let t = [obj.rest[12] + root[0], obj.rest[13] + root[1], obj.rest[14] + root[2]];
+        let c = |k: usize| r[k].map(|v| v * scale[k]);
+        let (c0, c1, c2) = (c(0), c(1), c(2));
+        Some([c0[0], c0[1], c0[2], 0.0, c1[0], c1[1], c1[2], 0.0, c2[0], c2[1], c2[2], 0.0, t[0], t[1], t[2], 1.0])
     }
 
     /// The id the status displays use for the selected hero.

@@ -124,6 +124,44 @@ fn instances(p: &[u8], base: usize, scene: &mut Scene) {
     }
 }
 
+/// A type-29 placed object (SPEC-0028 section 7 and 7.1), by its index in the world's object
+/// table: its inline mesh tree (absolute byte range), the rest block (+0xC0), the scale
+/// (+0x140), the disc state (+0x1A0), and the key count F (+0x1E4) with its motion stream bytes
+/// (offset +0x1E8, payload-relative; up to the chunk end).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Object {
+    pub tree: Option<Range<usize>>,
+    pub rest: Matrix,
+    pub scale: [f32; 3],
+    pub state: i32,
+    pub keys: u16,
+    pub stream: Option<Range<usize>>,
+}
+
+/// Every placed object of the first type-29 chunk of a world pack's top chain, in table order
+/// (the order the script calls index). A table entry that is not an object gives None.
+pub fn objects(bytes: &[u8], top: &[Chunk]) -> Vec<Option<Object>> {
+    let Some(c) = top.iter().find(|c| c.kind == PLACED_OBJECTS) else { return Vec::new() };
+    let p = &bytes[c.payload.clone()];
+    let base = c.payload.start;
+    let count = u32_at(p, 0).unwrap_or(0) as usize;
+    let table = u32_at(p, 4).unwrap_or(0) as usize;
+    (0..count.min(MAX_OBJECTS))
+        .map(|k| {
+            let obj = u32_at(p, table + 4 * k)? as usize;
+            if obj == 0 || obj + 0x1EC > p.len() {
+                return None;
+            }
+            let rest = matrix_at(p, obj + OBJECT_MATRIX)?;
+            let f = |at: usize| u32_at(p, obj + at).map(f32::from_bits).unwrap_or(1.0);
+            let tree = u32_at(p, obj + OBJECT_TREE).filter(|&t| t != 0).and_then(|t| inline_chunk(p, t as usize)).map(|r| base + r.start..base + r.end);
+            let keys = u16::from_le_bytes([p[obj + 0x1E4], p[obj + 0x1E5]]);
+            let stream = u32_at(p, obj + 0x1E8).map(|o| o as usize).filter(|&o| o != 0 && o < p.len()).map(|o| base + o..base + p.len());
+            Some(Object { tree, rest, scale: [f(0x140), f(0x144), f(0x148)], state: u32_at(p, obj + 0x1A0).unwrap_or(3) as i32, keys, stream })
+        })
+        .collect()
+}
+
 /// Collect the drawable static scene of a world pack's top-level chain.
 pub fn scene(bytes: &[u8], top: &[Chunk]) -> Scene {
     let mut s = Scene::default();

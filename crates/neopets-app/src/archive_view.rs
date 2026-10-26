@@ -148,7 +148,7 @@ pub fn world_scene(
     chunks: &[resource::Chunk],
     dome: bool,
 ) -> Result<Option<ModelData>, String> {
-    let mut world = model::build_world(bytes, chunks, 0)?;
+    let mut world = model::build_world_parts(bytes, chunks, 0, false)?;
     if dome {
         // The world's sky dome by its area slot; only layer A (role 1) draws without an
         // atmosphere zone (SPEC-0046 Sky domes).
