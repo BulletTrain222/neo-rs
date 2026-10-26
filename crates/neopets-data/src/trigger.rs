@@ -87,6 +87,61 @@ pub fn volumes(bytes: &[u8], top: &[Chunk]) -> (usize, Vec<Volume>) {
     (capacity, out)
 }
 
+/// A movable-block source: an n1 entry of the type-11 chunk (SPEC-0028 section 6, 0x24-byte
+/// entries, count at header +0x1C, table at +0x44; SPEC-0048 Movable block record +0x68) with its
+/// box, a kind-4 rectangle record (entry +0x20) whose flags have bit 1 set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BlockSource {
+    /// Entry +0x10, the size S (the step length is half of it).
+    pub size: f32,
+    /// Entry +0x14, the height H.
+    pub height: f32,
+    /// Entry +0x18, the registry model id (-1 on disc).
+    pub model: i32,
+    /// Entry +0x1C, the inline mesh (byte range of the pack).
+    pub mesh: Option<std::ops::Range<usize>>,
+    /// The box: its reference corner (+0x30), first axis A (+0x40), second axis B (+0x50),
+    /// vertical axis (+0x60) and extents (vertical +0x24, along B +0x28, along A +0x2C).
+    pub corner: [f32; 3],
+    pub axes: [[f32; 3]; 3],
+    pub extents: [f32; 3],
+    pub flags: u16,
+}
+
+/// Every n1 entry that builds a movable block, in entry order (SPEC-0048 Source). The table and
+/// the two pointers are payload-relative offsets, as the header's other tables (SPEC-0028
+/// section 6: rewritten at load).
+pub fn movable_blocks(bytes: &[u8], top: &[Chunk]) -> Vec<BlockSource> {
+    let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return Vec::new() };
+    let Some(p) = bytes.get(c.payload.clone()) else { return Vec::new() };
+    let n = i32_at(p, 0x1C).unwrap_or(0).clamp(0, 1 << 10) as usize;
+    let Some(table) = u32_at(p, 0x44).map(|v| v as usize) else { return Vec::new() };
+    (0..n)
+        .filter_map(|i| {
+            let e = table + i * 0x24;
+            let r = u32_at(p, e + 0x20)? as usize;
+            if r == 0 || r + 0x70 > p.len() {
+                return None;
+            }
+            let flags = u16_at(p, r + 0x12)?;
+            if flags & 0x0002 == 0 {
+                return None;
+            }
+            let mesh = u32_at(p, e + 0x1C).filter(|&o| o != 0).and_then(|o| crate::world::inline_payload(p, o as usize)).map(|m| c.payload.start + m.start..c.payload.start + m.end);
+            Some(BlockSource {
+                size: f32_at(p, e + 0x10)?,
+                height: f32_at(p, e + 0x14)?,
+                model: i32_at(p, e + 0x18)?,
+                mesh,
+                corner: v3(p, r + 0x30)?,
+                axes: [v3(p, r + 0x40)?, v3(p, r + 0x50)?, v3(p, r + 0x60)?],
+                extents: v3(p, r + 0x24)?,
+                flags,
+            })
+        })
+        .collect()
+}
+
 /// A type-40 script group entry.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScriptGroup {

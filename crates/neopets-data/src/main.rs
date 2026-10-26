@@ -36,6 +36,7 @@ fn run() -> Result<(), String> {
     let mut scenes = Vec::new();
     let mut registries = Vec::new();
     let mut lights = false;
+    let mut blocks = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -49,6 +50,7 @@ fn run() -> Result<(), String> {
             "--areas" => areas = true,
             "--effects" => effects = true,
             "--lights" => lights = true,
+            "--blocks" => blocks = true,
             "--registry" => {
                 let n = args.next().ok_or("--registry needs a resource number")?;
                 registries.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -84,7 +86,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(blocks || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -144,6 +146,9 @@ fn run() -> Result<(), String> {
     }
     if ground {
         inspect_mesh::ground(&mut disc, &index)?;
+    }
+    if blocks {
+        block_census(&mut disc, &index)?;
     }
     if survey || coverage {
         let report = survey_all(&mut disc, &index)?;
@@ -502,5 +507,38 @@ fn material_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> 
         let why = if *well_formed { "no matching entry" } else { "malformed state block" };
         println!("  resource {n} group {g}: {why}");
     }
+    Ok(())
+}
+
+/// SPEC-0048 Source: the movable blocks of every chunk file (the spec counts 90 in 17 packs).
+fn block_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    let (mut packs, mut total, mut meshes) = (0u32, 0usize, 0usize);
+    for n in 0..index.len() as u32 {
+        let bytes = index.read(disc, n)?;
+        let family = resource::classify(&bytes);
+        if !matches!(family, Family::ChunkFile(_)) {
+            continue;
+        }
+        let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+        let b = neopets_data::trigger::movable_blocks(&bytes, &chain.chunks);
+        if b.is_empty() {
+            continue;
+        }
+        packs += 1;
+        total += b.len();
+        meshes += b.iter().filter(|b| b.mesh.is_some()).count();
+        let mut flags: Vec<u16> = b.iter().map(|b| b.flags).collect();
+        flags.sort_unstable();
+        flags.dedup();
+        print!("flags {flags:x?} ");
+        let first = &b[0];
+        if std::env::var("NEOPETS_BLOCKS_PACK").ok().and_then(|v| v.parse::<u32>().ok()) == Some(n) {
+            for (k, b) in b.iter().enumerate() {
+                println!("  block {k}: size {} height {} corner {:?} extents {:?}", b.size, b.height, b.corner, b.extents);
+            }
+        }
+        println!("pack {n}: {} blocks; block 0 size {} height {} model {} corner {:?} axes {:?} extents {:?} mesh {}", b.len(), first.size, first.height, first.model, first.corner, first.axes, first.extents, first.mesh.is_some());
+    }
+    println!("movable blocks: {total} in {packs} packs, {meshes} with an inline mesh");
     Ok(())
 }

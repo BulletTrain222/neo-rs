@@ -42,6 +42,9 @@ pub struct World {
     pub objects: Vec<Option<neopets_data::world::Object>>,
     /// The world breakables (type-29 second list, SPEC-0048), each with its live state word.
     pub breakables: Vec<neopets_data::world::Breakable>,
+    /// The movable blocks (SPEC-0048 Movable blocks) and each one's inline mesh.
+    pub blocks: Vec<neopets_sim::block::Block>,
+    pub block_meshes: Vec<Option<std::ops::Range<usize>>>,
     pub motions: Vec<neopets_sim::object::Motion>,
     pub object_anims: Vec<neopets_sim::object::ObjAnim>,
     /// The foliage patches (type 16) and the registry ids of the pack's type-8 children.
@@ -177,6 +180,8 @@ impl World {
             }),
             objects: Vec::new(),
             breakables: Vec::new(),
+            blocks: Vec::new(),
+            block_meshes: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
@@ -275,6 +280,22 @@ impl World {
             .collect();
         world.volumes = all.into_iter().map(|(v, _)| v).filter(|v| v.fires_on_contact(0xFFFF) || v.fires_on_shot(0xFFFF)).collect();
         world.all_volumes = world.volumes.clone();
+        // SPEC-0048 Source and Placement: each n1 entry with a bit-1 box is a block, placed on
+        // the ground. Its box is the block's own solid (it moves with it), so it is not also a
+        // static push box.
+        let sources = neopets_data::trigger::movable_blocks(&bytes, &chain.chunks);
+        let blocks: Vec<neopets_sim::block::Block> = sources
+            .iter()
+            .map(|s| {
+                neopets_sim::block::Block::new(s.size, s.height, s.corner, s.axes, s.extents, |x, z, c| {
+                    let h = world.probe(x, z, c);
+                    h.found.then_some(h.height)
+                })
+            })
+            .collect();
+        world.blocks = blocks;
+        world.block_meshes = sources.iter().map(|s| s.mesh.clone()).collect();
+        world.all_boxes.retain(|(_, b)| !sources.iter().any(|s| s.corner == b.origin));
         world.set_collis_mask(0);
         Ok((world, bytes))
     }
@@ -628,6 +649,9 @@ pub struct Play {
     /// The Miamouse catch switch, meshes and count, and the carried Miamouse (character id).
     pub catch: neopets_sim::miamouse::Catch,
     carried: Option<u64>,
+    /// The hero's block state (state 18, SPEC-0033 Behavior 4A.2).
+    hold: Option<neopets_sim::block::Hold>,
+    stick_centred: bool,
     /// Hero switching (SPEC-0053): the selected hero (0 Tor, 1 Roberta), the parked hero, the
     /// swap mode, the running swap task and the L1 and R1 press edges kept for the next tick.
     pub hero_index: usize,
@@ -1275,6 +1299,8 @@ impl Play {
             last_swap: String::new(),
             catch: Default::default(),
             carried: None,
+            hold: None,
+            stick_centred: true,
             gesture: Default::default(),
             gesture_words,
             pending_off: Default::default(),
@@ -3284,6 +3310,99 @@ impl Play {
     /// SPEC-0029 Behavior 28 and SPEC-0033 Behavior 18: the "Catch Miamouse" prompt (label 27)
     /// for the first catchable Miamouse within 4.0 in front of a free hero, and the "Drop
     /// Miamouse" prompt (label 28) while carrying; Square catches (state 57) or drops.
+    /// SPEC-0022 Square chooser, the block rows: in state 18 with the stick centred and clip 40
+    /// "Let go" (label 20), whose press returns the hero to state 1; otherwise "Grab block"
+    /// (label 10) while the face finder finds a face of the hero's current block, whose press
+    /// enters state 18 (SPEC-0033 Behaviors 4A.2 and 15A).
+    fn block_step(&mut self) -> bool {
+        if self.loco.state == hero_states::BLOCK {
+            if self.hero.clip_state().action == neopets_sim::block::ANIM_STILL && self.stick_centred {
+                self.door_prompt = Some(20);
+                if self.square_now {
+                    self.loco.state = hero_states::STANCE;
+                    self.hold = None;
+                }
+            }
+            return true;
+        }
+        if neopets_sim::hero::busy_state(self.loco.state) || !(1..=6).contains(&self.loco.state) {
+            return false;
+        }
+        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let Some((k, d)) = neopets_sim::block::current(&self.world.blocks, hero) else { return false };
+        let Some(m) = neopets_sim::block::face(&self.world.blocks[k], d, hero, f) else { return false };
+        self.door_prompt = Some(10);
+        if self.square_now {
+            self.loco.enter_block();
+            self.hold = Some(neopets_sim::block::Hold { block: k, face: m, latched: false, at: None });
+        }
+        true
+    }
+
+    /// State 18 each tick (SPEC-0033 Behavior 4A.2): with no block record the hero goes to state
+    /// 1; else the hold's step sets the clip, the facing (the approach walk keeps its stick
+    /// motion; the grab clears the motion) and starts the block moves, with cue 11 and the
+    /// strain voice (Tor 33, Roberta 57) on an accepted push.
+    fn hold_step(&mut self, input: &HeroInput) {
+        self.stick_centred = neopets_sim::hero::speed_value(input) <= 0.0;
+        if self.loco.state != hero_states::BLOCK {
+            self.hold = None;
+            return;
+        }
+        let Some(mut hold) = self.hold.filter(|h| h.block < self.world.blocks.len()) else {
+            self.hold = None;
+            self.loco.state = hero_states::STANCE;
+            return;
+        };
+        let v = neopets_sim::hero::speed_value(input);
+        let stick = self.loco.target.map(|c| c * v);
+        let clip = self.hero.hold_clip();
+        let step = hold.tick(&mut self.world.blocks, self.loco.position(), self.loco.facing, stick, clip);
+        self.hold = Some(hold);
+        if let Some((dir, rate)) = step.steer {
+            self.loco.steer_toward(dir, rate);
+        }
+        if hold.latched {
+            self.loco.body.velocity[0] = 0.0;
+            self.loco.body.velocity[2] = 0.0;
+            for k in [0, 2] {
+                self.loco.body.position[k] += step.follow[k];
+            }
+        }
+        self.loco.block_request(step.request);
+        if step.pushed {
+            self.cue(11);
+            let voice = if self.hero_index == 0 { 33 } else { 57 };
+            self.sound.play(neopets_sim::sound::VOICE, voice, neopets_sim::sound::Play::default());
+            if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+                let b = &self.world.blocks[hold.block];
+                println!("      block {} push toward {} for {} ticks on tick {} from {:?}", hold.block, b.dir, b.n, self.ticks, b.position);
+            }
+        }
+    }
+
+    /// Diagnostic: the hero's state, clip, prompt and hold, and the nearest block's position and
+    /// motion (positions rounded to 0.1).
+    pub fn block_trace(&self) -> String {
+        let r = |v: [f32; 3]| v.map(|c| (c * 10.0).round() / 10.0);
+        let hero = self.loco.position();
+        let near = neopets_sim::block::current(&self.world.blocks, hero).map(|(k, d)| {
+            let b = &self.world.blocks[k];
+            (k, (d * 10.0).round() / 10.0, r(b.position), b.moving, neopets_sim::block::face(b, d, hero, self.loco.facing))
+        });
+        format!("state {} clip {} prompt {:?} hold {:?} hero {:?} facing {:?} root {:?} block {:?}", self.loco.state, self.hero.clip_state().action, self.prompt_shown, self.hold.map(|h| (h.block, h.face, h.latched)), r(hero), r(self.loco.facing), self.root_step, near)
+    }
+
+    /// Diagnostic: the stick (forward, side) that points into the held block face once the grab
+    /// has latched (the camera-relative form of the scripted walk).
+    pub fn block_trace_stick(&self) -> Option<(f32, f32)> {
+        let h = self.hold.filter(|h| h.latched)?;
+        let n = self.world.blocks.get(h.block)?.direction(h.face as i32)?;
+        let (f, l) = self.camera.rows();
+        let fl = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
+        Some(((n[0] * f[0] + n[2] * f[2]) / fl, n[0] * l[0] + n[2] * l[2]))
+    }
+
     fn catch_step(&mut self) -> bool {
         if self.loco.state == hero_states::CARRY {
             if matches!(self.loco.carry, 1 | 2) && self.carried.is_some() {
@@ -4964,6 +5083,7 @@ impl Play {
         self.loco.shield = self.shield.is_some();
         self.status_step();
         self.loco.update(&input, forward, left, self.hero.clip_state());
+        self.hold_step(&input);
         self.pending_step();
         // While a conversation runs the emote consumer owns the hero's main id.
         if !self.dialogue_open {
@@ -4972,6 +5092,7 @@ impl Play {
         self.hero.set_rate(self.loco.rate);
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
+        let block_contact = !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
         let swap = Cell::new(false);
         self.loco.record_tick(
             self.root_step,
@@ -5002,6 +5123,10 @@ impl Play {
                     contact::resolve_walls(p, &walls, contact::HERO_RADIUS);
                 }
                 contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
+                // SPEC-0048 Solid for characters: the movable blocks' boxes.
+                if block_contact {
+                    neopets_sim::block::contact(&world.blocks, p);
+                }
                 // SPEC-0018 Sphere contact: out of the pushing spheres to r + 1.25.
                 contact::resolve_spheres(p, &world.push_spheres);
             },
@@ -5054,7 +5179,7 @@ impl Play {
         // The interaction chooser: a talk candidate claims Square before the doors.
         self.talk_prompt = false;
         self.book_prompt = false;
-        if !self.dialogue_open && !self.buy_step() && !self.talk_step() && !self.catch_step() {
+        if !self.dialogue_open && !self.buy_step() && !self.talk_step() && !self.catch_step() && !self.block_step() {
             self.door_step();
             // SPEC-0022 the idle list's Read Book (after the door prompt; a caption set earlier
             // in the pass stops it): the prompt, the pending index cleared, a Square edge takes
@@ -5138,6 +5263,10 @@ impl Play {
         for w in [&mut self.world].into_iter().chain(self.other.as_mut()) {
             for (o, m) in w.object_anims.iter_mut().zip(&w.motions) {
                 o.tick(m);
+            }
+            // SPEC-0048 Per tick: the movable-block list after the object animations.
+            for b in &mut w.blocks {
+                b.tick();
             }
         }
         self.status_display_step();
@@ -7269,6 +7398,14 @@ impl Play {
                 self.attack_fx.trace = now;
             }
         }
+    }
+
+    /// A movable block's draw matrix (column-major): axes B, vertical and A, and its position.
+    pub fn block_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
+        let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+        let b = w.blocks.get(i)?;
+        let (x, y, z, p) = (b.b, b.up, b.a, b.position);
+        Some([x[0], x[1], x[2], 0.0, y[0], y[1], y[2], 0.0, z[0], z[1], z[2], 0.0, p[0], p[1], p[2], 1.0])
     }
 
     /// A breakable's draw matrix while it is drawn: states 1 and 3 (SPEC-0048 Breakable draw).

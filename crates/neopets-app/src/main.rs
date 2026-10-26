@@ -840,6 +840,7 @@ fn main() {
                 .chain(),
         );
     app.add_systems(Update, sync_breakables.after(sync_objects));
+    app.add_systems(Update, sync_blocks.after(sync_objects));
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
@@ -1784,6 +1785,21 @@ enum WorldPart {
 struct ObjectRoot(u32, usize);
 
 /// Each frame: a placed object's root takes its drawn transform from the play, or hides.
+/// A drawn movable block, by (pack, block index).
+#[derive(Component)]
+struct BlockRoot(u32, usize);
+
+/// Movable blocks draw their mesh (local, about the base centre) at the block position with
+/// axis B as its x and axis A as its z.
+fn sync_blocks(state: Option<Res<PlayState>>, mut roots: Query<(&BlockRoot, &mut Transform)>) {
+    let Some(state) = state else { return };
+    for (b, mut t) in &mut roots {
+        if let Some(m) = state.play.block_matrix(b.0, b.1) {
+            *t = Transform::from_matrix(Mat4::from_cols_array(&m));
+        }
+    }
+}
+
 /// A drawn breakable, by (pack, entry index).
 #[derive(Component)]
 struct BreakableRoot(u32, usize);
@@ -1877,10 +1893,33 @@ fn sync_worlds(
                         }
                     }
                 }
-                Ok((out, breakables))
+                // SPEC-0048 Movable block record +0x64: each block draws its inline mesh.
+                let mut blocks = Vec::new();
+                for (i, tree) in world.map_or(&[][..], |w| &w.block_meshes[..]).iter().enumerate() {
+                    let Some(tree) = tree.clone() else { continue };
+                    if let Ok(m) = neopets_data::model::build_tree(&bytes, &chain.chunks, tree, layers) {
+                        if !m.parts.is_empty() {
+                            if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+                                let pts = m.parts.iter().flat_map(|p| p.positions.iter());
+                                let (lo, hi) = pts.fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
+                                println!("      block {i} of {pack} mesh bounds {lo:?} to {hi:?}");
+                            }
+                            blocks.push((i, m));
+                        }
+                    }
+                }
+                Ok((out, breakables, blocks))
             });
             match built {
-                Ok((list, breakables)) => {
+                Ok((list, breakables, blocks)) => {
+                    for (i, m) in blocks {
+                        let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        commands.spawn((Transform::IDENTITY, Visibility::Visible, BlockRoot(pack, i), *part)).with_children(|c| {
+                            for (_, mesh, material) in parts {
+                                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            }
+                        });
+                    }
                     for (i, matrix, m) in breakables {
                         let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
                         commands.spawn((Transform::from_matrix(Mat4::from_cols_array(&matrix)), Visibility::Visible, BreakableRoot(pack, i), *part)).with_children(|c| {
@@ -2518,6 +2557,7 @@ fn play_trace(
     let mut last_summon = String::new();
     let mut last_swap = String::new();
     let mut last_fx = String::new();
+    let mut last_block = String::new();
     let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
@@ -2592,6 +2632,14 @@ fn play_trace(
         }
         // NEOPETS_TRACE_BREAK: on tick 60 the current world's breakables (count, kinds of
         // volume, the nearest three).
+        // NEOPETS_TRACE_BLOCK: the hero's block state and the held block whenever they change.
+        if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+            let now = play.block_trace();
+            if now != last_block {
+                println!("      tick {}: {now}", play.ticks);
+                last_block = now;
+            }
+        }
         if play.ticks == 60 && std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
             let hero = play.loco.position();
             let mut near: Vec<(f32, usize, [f32; 3], Option<u8>, i32)> = play.world.breakables.iter().enumerate().map(|(i, b)| { let p = b.position(); (((p[0] - hero[0]).powi(2) + (p[2] - hero[2]).powi(2)).sqrt(), i, p, b.volume.map(|v| v.kind), b.state) }).collect();
@@ -2732,6 +2780,11 @@ fn play_trace(
             let m = if fight.is_some_and(|f| f.1) && play.hero_index == 1 { if aligned { 0.0 } else { 0.15 } } else { 0.7 };
             forward = m * (dx * f[0] + dz * f[2]) / len / (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
             side = m * (dx * l[0] + dz * l[2]) / len;
+        }
+        // NEOPETS_TRACE_BLOCK: in the block state the stick points into the held face (centred
+        // during the approach), so the hero pushes; the Square prompts are pressed as usual.
+        if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
+            (forward, side) = play.block_trace_stick().unwrap_or((0.0, 0.0));
         }
         // Around a diagnostic switch the stick rests (the chord needs a standing hero).
         if switch_at.iter().any(|&k| play.ticks + 30 >= k && play.ticks <= k + 60) {

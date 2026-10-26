@@ -73,6 +73,11 @@ fn inline_chunk(b: &[u8], at: usize) -> Option<Range<usize>> {
     (start <= end && end <= b.len()).then_some(start..end)
 }
 
+/// The payload of an inline chunk at `at` of a payload (crate use).
+pub(crate) fn inline_payload(b: &[u8], at: usize) -> Option<Range<usize>> {
+    inline_chunk(b, at)
+}
+
 fn placed_objects(p: &[u8], base: usize, scene: &mut Scene) {
     let count = u32_at(p, 0).unwrap_or(0) as usize;
     let table = u32_at(p, 4).unwrap_or(0) as usize;

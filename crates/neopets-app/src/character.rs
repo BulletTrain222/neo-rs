@@ -110,6 +110,18 @@ impl HeroAnim {
         }
     }
 
+    /// The main layer's clip for the block state (SPEC-0033 Behavior 4A.2): id, phase, cursor and
+    /// key count.
+    pub fn hold_clip(&self) -> neopets_sim::block::HoldClip {
+        let record = self.families.first().map(|f| &f.record);
+        neopets_sim::block::HoldClip {
+            action: self.action,
+            progress: record.map_or(1.0, |r| r.progress()),
+            cursor: record.map_or(0.0, |r| r.cursor()),
+            keys: record.and_then(|r| r.clip()).map_or(0, |c| c.frames as u32),
+        }
+    }
+
     /// The main family's table holds a clip for the action.
     pub fn has(&self, action: u32) -> bool {
         self.families.first().is_some_and(|f| f.data.clip_for(action).is_some())

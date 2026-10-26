@@ -35,6 +35,8 @@ pub const SCRIPTED: u8 = 33;
 pub const GUARD: u8 = 20;
 /// Carry a Miamouse (SPEC-0033 Behavior 18).
 pub const CARRY: u8 = 57;
+/// Push and pull a block (SPEC-0033 Behavior 4A.2; the block state's tick is `block::Hold`).
+pub const BLOCK: u8 = 18;
 /// Sneak idle, sneak reverse walk (39) and sneak walk (SPEC-0033 Behavior 4A.1 and 5.1).
 pub const SNEAK: u8 = 22;
 pub const SNEAK_WALK: u8 = 40;
@@ -430,6 +432,16 @@ impl Locomotion {
     /// The camera's recentring gate T (SPEC-0027): the hero moved in its last motion step and
     /// is not in state 1.
     /// Turn the facing by the steering rule (the talking hero uses weight 0.1).
+    /// State 18's entry (the grab-block press) and its clip request each tick.
+    pub fn enter_block(&mut self) {
+        self.state = BLOCK;
+        self.request = 40;
+    }
+
+    pub fn block_request(&mut self, id: u32) {
+        self.request = id;
+    }
+
     pub fn steer_toward(&mut self, t: Vec3, w: f32) {
         self.facing = steer(self.facing, t, w);
         self.target = self.facing;
@@ -448,7 +460,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -492,6 +504,8 @@ impl Locomotion {
             }
             SCRIPTED => return,
             CARRY => return self.carry_step(v > 0.0, clip),
+            // State 18: the block hold decides the clip and the facing (after this update).
+            BLOCK => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
