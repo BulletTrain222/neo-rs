@@ -394,6 +394,8 @@ enum Wait {
     Choice(u8),
     /// PlayAnim with WAIT: while the object is in play-once state.
     ObjAnim(u32, usize),
+    /// A wheel spin until it stops.
+    WheelSpin,
 }
 
 pub struct Play {
@@ -438,6 +440,8 @@ pub struct Play {
     pub message: Option<(u16, u64)>,
     /// Square was pressed this tick (a script door starts only on a press edge).
     square_now: bool,
+    /// Square's press edge as the script button query reads it (also while the hero is held).
+    button_square: bool,
     /// The Talk label is shown this tick, and the talked character (the speaker of its lines).
     pub talk_prompt: bool,
     pub talk_partner: Option<String>,
@@ -603,6 +607,10 @@ pub struct Play {
     /// Roberta's hold effect and leap glow (SPEC-0036): their timers and effect objects.
     r_displays: neopets_sim::roberta::Displays,
     r_fx: [Option<usize>; 2],
+    /// The prize wheel's running spin (its pack) and each world's display mask word
+    /// (SetWorldDisplayMask; the display word stores 2M).
+    wheel_spin: Option<(u32, neopets_sim::wheel::Spin)>,
+    pub display_mask: HashMap<u32, u32>,
     /// Status displays by character (the hero is u64::MAX): the display, its effect object and
     /// last tick's active statuses.
     displays: HashMap<u64, (neopets_sim::status::Display, Option<usize>, [bool; 14])>,
@@ -895,6 +903,7 @@ impl Play {
             state: GameState::default(),
             message: None,
             square_now: false,
+            button_square: false,
             talk_prompt: false,
             talk_partner: None,
             talk_with: None,
@@ -926,6 +935,8 @@ impl Play {
             placed_fx: HashMap::new(),
             r_displays: Default::default(),
             r_fx: [None; 2],
+            wheel_spin: None,
+            display_mask: HashMap::new(),
             displays: HashMap::new(),
             foliage: HashMap::new(),
             attack: None,
@@ -1338,6 +1349,13 @@ impl Play {
             }
             let Some(a) = self.threads[i].calls.pop_front() else { return };
             let pack = self.threads[i].pack;
+            // The wheel's round step continues this thread with its calls (SPEC-0059).
+            if a == Action::WheelRound {
+                for x in level::wheel_round(pack, &mut self.state).into_iter().rev() {
+                    self.threads[i].calls.push_front(x);
+                }
+                continue;
+            }
             if let Some(w) = self.execute(a, pack) {
                 self.threads[i].wait = Some(w);
             }
@@ -1364,6 +1382,7 @@ impl Play {
             }
             Wait::Dialog => !self.dialogue_open,
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
+            Wait::WheelSpin => self.wheel_spin.is_none(),
             Wait::ObjAnim(pack, i) => [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.object_anims.get(i)).is_none_or(|a| a.state != 2),
         }
     }
@@ -1515,6 +1534,33 @@ impl Play {
                     }
                 }
                 Action::InitObjOn { .. } | Action::PlayAnim { .. } | Action::LoopAnim { .. } | Action::StopAnim { .. } | Action::DeactivateObj { .. } => {}
+                Action::WheelLights { even } => {
+                    let mut w = level::wheel_of(pack, &self.state);
+                    w.light_show(if even { 0 } else { 5 });
+                    level::set_wheel(pack, &mut self.state, &w);
+                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::VILLAGE.shift));
+                }
+                Action::WheelPattern => {
+                    let mut w = level::wheel_of(pack, &self.state);
+                    let rng = &mut self.rng;
+                    w.new_pattern(&mut || rng.range(0, 7));
+                    level::set_wheel(pack, &mut self.state, &w);
+                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::VILLAGE.shift));
+                }
+                Action::WheelSpin => {
+                    self.wheel_spin = Some((pack, neopets_sim::wheel::Spin::default()));
+                    return Some(Wait::WheelSpin);
+                }
+                Action::WheelResult => {
+                    let mut w = level::wheel_of(pack, &self.state);
+                    let won = w.result();
+                    level::set_wheel(pack, &mut self.state, &w);
+                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::VILLAGE.shift));
+                    let (win, loss) = neopets_sim::wheel::VILLAGE.sounds;
+                    self.apply(&[Action::PlaySound { cue: if won { win } else { loss }, locator: None }]);
+                    self.last_fx = format!("wheel stopped at {:.1} on cell {}: {} on tick {}", w.angle, w.cell(), if won { "win" } else { "loss" }, self.ticks);
+                }
+                Action::WheelRound => {}
                 Action::StopEffect { slot } => {
                     let table = self.effect_table.clone();
                     if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
@@ -3612,6 +3658,8 @@ impl Play {
         }
         // SPEC-0052 Control locks: the script hold, a running camera play and a moving fade
         // take the hero's input; a scripted walk (SPEC-0033 4A.4 and 4A.5) steers it instead.
+        // The script button query (IsButtonPressed) reads the pad, not the hero's input.
+        self.button_square = input.square;
         if self.held || self.cut.is_some_and(|c| c.state == 1) || self.fade.moving() {
             input = HeroInput::default();
         }
@@ -3856,6 +3904,20 @@ impl Play {
             self.apply(&actions);
         }
         self.run_threads();
+        // The wheel's spin (SPEC-0059 section 2): the stop prompt (context 4) at full rate and
+        // the Square press; the spin ends after the tick the press was seen.
+        if let Some((pack, mut spin)) = self.wheel_spin.take() {
+            let mut w = level::wheel_of(pack, &self.state);
+            if spin.stopped {
+                level::set_wheel(pack, &mut self.state, &w);
+            } else {
+                if spin.tick(&mut w, self.button_square) {
+                    self.door_prompt = Some(4);
+                }
+                level::set_wheel(pack, &mut self.state, &w);
+                self.wheel_spin = Some((pack, spin));
+            }
+        }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
         self.sound_step();
@@ -4847,6 +4909,16 @@ impl Play {
         let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)));
         if !a.scripted && (!level::objects_scripted(pack) || grouped) {
             return Some(obj.rest);
+        }
+        // SPEC-0059 Layout: the 1023 wheel is object 0 turned to A about its depth axis.
+        if pack == 1023 && i == 0 && a.visible() {
+            let angle = level::wheel_of(pack, &self.state).angle.to_radians();
+            let (s, c) = angle.sin_cos();
+            let m = obj.rest;
+            let (x, y) = ([m[0], m[1], m[2]], [m[4], m[5], m[6]]);
+            let rx: [f32; 3] = std::array::from_fn(|k| c * x[k] + s * y[k]);
+            let ry: [f32; 3] = std::array::from_fn(|k| -s * x[k] + c * y[k]);
+            return Some([rx[0], rx[1], rx[2], 0.0, ry[0], ry[1], ry[2], 0.0, m[8], m[9], m[10], 0.0, m[12], m[13], m[14], 1.0]);
         }
         if !a.visible() {
             return None;

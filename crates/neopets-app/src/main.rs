@@ -1554,8 +1554,9 @@ enum WorldPart {
     Dome(u32),
     /// The world's foliage patches (SPEC-0060).
     Foliage(u32),
-    /// The world's placed objects (type 29), each on its own transform (SPEC-0028 7.1).
-    Objects(u32),
+    /// The world's placed objects (type 29), each on its own transform (SPEC-0028 7.1), built
+    /// with the world's display mask word.
+    Objects(u32, u32),
 }
 
 /// A placed object's root entity: (pack, object index).
@@ -1592,13 +1593,14 @@ fn sync_worlds(
 ) {
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
     let p = &state.play;
-    let mut want = vec![WorldPart::Scene(p.world.pack), WorldPart::Objects(p.world.pack)];
+    let mask = |pack: u32| p.display_mask.get(&pack).copied().unwrap_or(0);
+    let mut want = vec![WorldPart::Scene(p.world.pack), WorldPart::Objects(p.world.pack, mask(p.world.pack))];
     if p.foliage.contains_key(&p.world.pack) {
         want.push(WorldPart::Foliage(p.world.pack));
     }
     if let (true, Some(o)) = (p.other_drawn(), &p.other) {
         want.push(WorldPart::Scene(o.pack));
-        want.push(WorldPart::Objects(o.pack));
+        want.push(WorldPart::Objects(o.pack, mask(o.pack)));
         if p.foliage.contains_key(&o.pack) {
             want.push(WorldPart::Foliage(o.pack));
         }
@@ -1618,14 +1620,14 @@ fn sync_worlds(
         if shown.contains(part) {
             continue;
         }
-        if let WorldPart::Objects(pack) = *part {
+        if let WorldPart::Objects(pack, layers) = *part {
             let world = [&p.world].into_iter().chain(p.other.as_ref()).find(|w| w.pack == pack);
             let built = index.read(disc, pack).and_then(|bytes| {
                 let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
                 let mut out = Vec::new();
                 for (i, o) in world.map_or(&[][..], |w| &w.objects[..]).iter().enumerate() {
                     let Some(tree) = o.as_ref().and_then(|o| o.tree.clone()) else { continue };
-                    if let Ok(m) = neopets_data::model::build_tree(&bytes, &chain.chunks, tree, 0) {
+                    if let Ok(m) = neopets_data::model::build_tree(&bytes, &chain.chunks, tree, layers) {
                         if !m.parts.is_empty() {
                             out.push((i, m));
                         }
@@ -1671,7 +1673,7 @@ fn sync_worlds(
                     archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false)
                 }),
             WorldPart::Dome(d) => archive_view::model(disc, index, d),
-            WorldPart::Foliage(_) | WorldPart::Objects(_) => Ok(None),
+            WorldPart::Foliage(_) | WorldPart::Objects(..) => Ok(None),
         };
         match model {
             Ok(Some(m)) => {

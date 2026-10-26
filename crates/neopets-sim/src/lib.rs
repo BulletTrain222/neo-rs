@@ -48,6 +48,7 @@ pub mod textbox;
 pub mod travel;
 pub mod trigger;
 pub mod walker;
+pub mod wheel;
 pub mod whinny;
 pub use step::FixedStep;
 

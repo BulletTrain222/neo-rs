@@ -168,6 +168,73 @@ pub enum Action {
     LoopAnim { obj: usize, speed: f32 },
     StopAnim { obj: usize },
     DeactivateObj { obj: usize },
+    /// The prize wheel (SPEC-0059 section 2) on the thread's world: the cells lit by the light
+    /// show's half (even or odd cells), a new pattern, a spin (the thread waits until it
+    /// stops), the result, and the round step (`wheel_round`).
+    WheelLights { even: bool },
+    WheelPattern,
+    WheelSpin,
+    WheelResult,
+    WheelRound,
+}
+
+/// The prize wheel's module words in pack 1023: G, r, the angle A (f32 bits) and the lit cells.
+pub const WHEEL_WORDS: [u8; 4] = [20, 21, 22, 23];
+
+/// The wheel's game words of a pack.
+pub fn wheel_of(pack: u32, s: &GameState) -> crate::wheel::Wheel {
+    let lit = s.word(pack, WHEEL_WORDS[3]);
+    crate::wheel::Wheel {
+        g: s.word(pack, WHEEL_WORDS[0]),
+        r: s.word(pack, WHEEL_WORDS[1]) as u32,
+        angle: f32::from_bits(s.word(pack, WHEEL_WORDS[2]) as u32),
+        lit: std::array::from_fn(|i| lit & (1 << i) != 0),
+    }
+}
+
+/// Store the wheel's game words.
+pub fn set_wheel(pack: u32, s: &mut GameState, w: &crate::wheel::Wheel) {
+    s.set_word(pack, WHEEL_WORDS[0], w.g);
+    s.set_word(pack, WHEEL_WORDS[1], w.r as i32);
+    s.set_word(pack, WHEEL_WORDS[2], w.angle.to_bits() as i32);
+    s.set_word(pack, WHEEL_WORDS[3], (0..8).filter(|&i| w.lit[i]).fold(0, |m, i| m | 1 << i));
+}
+
+/// The spin sequence: Wait(1.0 s), a spin, Wait(1.0 s), the result, the next round step.
+fn wheel_spin() -> Vec<Action> {
+    vec![Action::Sleep { ticks: 60 }, Action::WheelSpin, Action::Sleep { ticks: 60 }, Action::WheelResult, Action::WheelRound]
+}
+
+/// The round step (SPEC-0059 section 2): G 0 the start prompt (routine 60); G 1 with r below 4
+/// go-on prompt r (routine 61); G 1 with r = 4 the five-win line and pay-out; G -1 the loss
+/// line. A game end resets G and r; the hero is let go with the camera returned.
+pub fn wheel_round(pack: u32, s: &mut GameState) -> Vec<Action> {
+    let c = crate::wheel::VILLAGE;
+    let mut w = wheel_of(pack, s);
+    let end = |s: &mut GameState, w: &mut crate::wheel::Wheel| {
+        w.g = 0;
+        w.r = 0;
+        set_wheel(pack, s, w);
+    };
+    match (w.g, w.r) {
+        (0, _) => vec![Action::Prompt { line: c.start_prompt, routine: 60 }],
+        (1, r) if r < 4 => vec![Action::Prompt { line: c.go_on_prompts[r as usize], routine: 61 }],
+        (1, _) => {
+            s.neopoints += c.payouts[4];
+            if let Some(f) = c.flags {
+                s.set(f[2], true);
+            }
+            end(s, &mut w);
+            vec![Action::Message { line: c.five_win }, release_camera()]
+        }
+        (_, r) => {
+            if let Some(f) = c.flags {
+                s.set(f[0], true);
+            }
+            end(s, &mut w);
+            vec![Action::Message { line: c.loss[(r as usize).min(4)] }, release_camera()]
+        }
+    }
 }
 
 /// Wait(f): trunc(f x 60) ticks, the product one console multiply (SPEC-0030 section 4).
@@ -632,6 +699,24 @@ fn village_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     let mut out: Vec<Action> = [6u16, 7, 8, 9, 10, 11, 12, 13, 4, 3, 14, 15, 16].into_iter().map(|i| reg(i, 1)).collect();
     out.extend([reg(1, 2), reg(2, 2), reg(0, 2), reg(17, 6)]);
+    // The prize wheel (routine 56) when flags 64 and 11 are clear (the walk-up greetings 37 to
+    // 40 are not built).
+    if !state.flag(64) && !state.flag(11) {
+        out.push(reg(36, 56));
+    }
+    // Objects: 0 always; 5 on (end pose) or off by flags 150, 10 and 15; with 64 set and 248
+    // clear, 1, 2 and 3 off. Then the wheel's new pattern (the three shuffle entries).
+    out.push(Action::InitObjOn { obj: 0, end: false });
+    let (f150, f10, f15) = (state.flag(150), state.flag(10), state.flag(15));
+    if (f150 && !f10) || (!f150 && f15) || (f150 && f10 && f15) {
+        out.push(Action::InitObjOn { obj: 5, end: true });
+    } else if !f15 && (!f150 || f10) {
+        out.push(Action::InitObjOn { obj: 5, end: false });
+    }
+    if state.flag(64) && !state.flag(248) {
+        out.extend([1, 2, 3].map(|obj| Action::InitObjOn { obj, end: false }));
+    }
+    out.push(Action::WheelPattern);
     if !state.flag(11) {
         if state.flag(10) {
             out.push(Action::LoadRegion { slot: 1, region: Some(1023 + 1 + 6) });
@@ -893,6 +978,21 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::Sleep { ticks: 30 },
                 Action::FadeIn { seconds: FADE, wait: false },
             ]);
+        }
+        // SPEC-0059 section 2, the 1023 prize wheel (trigger 36, routine 56): context 5 while
+        // inside; on Square, the too-poor line below the fee, else hero control and the round
+        // step (the music override is not played).
+        (1023, 56) if call.state != 0 => {
+            if !call.square {
+                out.prompt = Some(5);
+            } else if !state.talking && !state.hero.occupied {
+                let c = crate::wheel::VILLAGE;
+                if state.neopoints < c.fee {
+                    out.actions.push(Action::Message { line: c.too_poor });
+                } else {
+                    out.actions.extend([Action::HoldHero, Action::WheelRound]);
+                }
+            }
         }
         // SPEC-0042 1184 trigger 0 (E0): with 145 set, the first time (645), line 14.
         (1184, 1) if first && state.flag(145) && !state.flag(645) => {
@@ -2436,6 +2536,39 @@ pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
 pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Action> {
     let line = |line| Action::Message { line };
     match (pack, routine, yes) {
+        // SPEC-0059 section 2: the wheel's start prompt (pay the fee, the light show, a new
+        // pattern, the spin) and go-on prompt r (the go-on line and the next spin, or the
+        // cash-out line, pay-out r and the cash-out flag).
+        (1023, 60, true) => {
+            let c = crate::wheel::VILLAGE;
+            s.neopoints -= c.fee;
+            let mut v: Vec<Action> = (0..14).flat_map(|k| [Action::WheelLights { even: k % 2 == 0 }, Action::Sleep { ticks: 5 }]).collect();
+            v.push(Action::WheelPattern);
+            v.extend(wheel_spin());
+            v
+        }
+        (1023, 60, false) => vec![release_camera()],
+        (1023, 61, true) => {
+            let mut w = wheel_of(pack, s);
+            w.r += 1;
+            set_wheel(pack, s, &w);
+            let mut v = vec![Action::Message { line: crate::wheel::VILLAGE.go_on_line }];
+            v.extend(wheel_spin());
+            v
+        }
+        (1023, 61, false) => {
+            let c = crate::wheel::VILLAGE;
+            let mut w = wheel_of(pack, s);
+            let r = (w.r as usize).min(3);
+            s.neopoints += c.payouts[r];
+            if let Some(f) = c.flags {
+                s.set(f[1], true);
+            }
+            w.g = 0;
+            w.r = 0;
+            set_wheel(pack, s, &w);
+            vec![Action::Message { line: c.cash_out[r] }, release_camera()]
+        }
         // 1148 prompt 43: buy item 42 for 100 Neopoints.
         (1148, 0, true) if s.neopoints >= 100 => {
             s.neopoints -= 100;
