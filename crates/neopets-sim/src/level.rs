@@ -807,6 +807,26 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1409, 1421 and 1423 Init: their blackboard value (30 for world 160, 30 for
+        // world 159, 40 for world 160); the callbacks are registered under flag 106 (1409, 1423)
+        // or 102 (1421) and gated in their routines; 1409's thread loads slot 0 with set 0
+        // (region 1410) under 106 and returns the camera; 1421's and 1423's thread loads are not
+        // given (partly known), only their camera returns. The idle loops and the shared
+        // entity-control routine are not reproduced.
+        1409 | 1421 | 1423 => {
+            let (w, v) = match pack {
+                1421 => (159, 30),
+                1423 => (160, 40),
+                _ => (160, 30),
+            };
+            state.blackboard.insert((2, w), v);
+            let mut out = Vec::new();
+            if pack == 1409 && state.flag(106) {
+                out.push(Action::LoadRegion { slot: 0, region: Some(1410) });
+            }
+            out.push(Action::ReturnCamera { preset: -1, release: true });
+            out
+        }
         // SPEC-0043 750 Init: the control thread loads slot 0 with set 0 (region 751) while flag
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
@@ -1436,6 +1456,39 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     out
+}
+
+/// SPEC-0041 1409, 1421 and 1423 proximity callbacks (each line in the conversation frame).
+fn palace_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
+    let talk = |line| vec![Action::Talk { line }];
+    match pack {
+        // 1409 callbacks 1 and 2 (registered with 106): with 102, line 0/3 or 10/13 by 104.
+        1409 if !s.flag(106) || !s.flag(102) => Vec::new(),
+        1409 => {
+            let base = if routine == 2 { 10 } else { 0 };
+            talk(base + if s.flag(104) { 0 } else { 3 })
+        }
+        // 1421 CB2 (registered with 102): the Random(1, 3) draw first; 605 with 679 clear takes
+        // item 33, sets 679, line 13; then draw 1 line 10; else with 100 line 4 (106) or 7.
+        1421 if !s.flag(102) || !s.flag(605) => Vec::new(),
+        1421 if !s.flag(679) => {
+            s.take(33, 1);
+            s.set(679, true);
+            talk(13)
+        }
+        1421 if s.talk_roll == 1 => talk(10),
+        1421 if s.flag(100) => talk(if s.flag(106) { 4 } else { 7 }),
+        // 1423 CB2 (registered with 106): 609 with 683 clear takes item 33, sets 683, line 7;
+        // then with 104 line 8 (102) or 11.
+        1423 if !s.flag(106) || !s.flag(609) => Vec::new(),
+        1423 if !s.flag(683) => {
+            s.take(33, 1);
+            s.set(683, true);
+            talk(7)
+        }
+        1423 if s.flag(104) => talk(if s.flag(102) { 8 } else { 11 }),
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC-0043 750's line cycling for routine r (1 to 4; 0 is the on-enter routine): one position
@@ -2576,6 +2629,10 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         // frame; else line 2 (202), 4 (150) or 6.
         984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
         984 => vec![Action::Message { line: if state.flag(202) { 2 } else if state.flag(150) { 4 } else { 6 } }],
+        // SPEC-0041 1421 CB1 (registered with 102): with 100, line 0 (106) or 2. 1423 CB1
+        // (registered with 106): with 104, line 0 (102) or 3.
+        1421 if state.flag(102) && state.flag(100) => vec![Action::Message { line: if state.flag(106) { 0 } else { 2 } }],
+        1423 if state.flag(106) && state.flag(104) => vec![Action::Message { line: if state.flag(102) { 0 } else { 3 } }],
         // SPEC-0043 750 on-enter (Medium): two lines in turn per case, 27/28 (421), 29/30 (420),
         // 31/32 (76) or 33/34, with the routine's shared counter.
         750 => {
@@ -4203,6 +4260,9 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
+        (1409, 0 | 1) => Some(entity as u8 + 1),
+        (1421 | 1423, 0) => Some(2),
         // SPEC-0043 750: routines 1 to 4 on entities 3, 1, 0 and 2.
         (750, 3) => Some(1),
         (750, 1) => Some(2),
@@ -4272,6 +4332,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 750 {
         return talk_750(routine, state);
+    }
+    if matches!(pack, 1409 | 1421 | 1423) {
+        return palace_talk(pack, routine, state);
     }
     if eastside_interior(pack).is_some() && routine == 0 {
         return eastside_talk(pack, state);
@@ -4541,6 +4604,30 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn palace_rooms() {
+        // SPEC-0041 1409 vectors: 102 and 104 set: lines 0 and 10; 104 clear: 3 and 13; 102
+        // clear: nothing.
+        let mut s = GameState::default();
+        s.set(106, true);
+        assert!(on_talk(1409, 1, &mut s).is_empty());
+        s.set(102, true);
+        s.set(104, true);
+        assert_eq!((on_talk(1409, 1, &mut s), on_talk(1409, 2, &mut s)), (vec![Action::Talk { line: 0 }], vec![Action::Talk { line: 10 }]));
+        s.set(104, false);
+        assert_eq!(on_talk(1409, 2, &mut s), vec![Action::Talk { line: 13 }]);
+        assert!(on_init(1409, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1410) }));
+        // 1421: the item-33 hand-in once, then draw 1 gives line 10.
+        s.set(605, true);
+        s.give(33, 1);
+        assert_eq!(on_talk(1421, 2, &mut s), vec![Action::Talk { line: 13 }]);
+        s.talk_roll = 1;
+        assert_eq!(on_talk(1421, 2, &mut s), vec![Action::Talk { line: 10 }]);
+        // 1423 on-enter with 104 and 102: line 0.
+        s.set(104, true);
+        assert_eq!(on_enter(1423, &mut s), vec![Action::Message { line: 0 }]);
     }
 
     #[test]
