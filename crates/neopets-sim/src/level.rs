@@ -216,6 +216,10 @@ pub enum Action {
     RegisterInstance { routine: u8, trigger: u16, group: usize },
     /// Wait until a module word of the thread's pack is 0.
     WaitWord { word: u8 },
+    /// StartCameraShake(T, A, S, p4, R, phi, Z) (SPEC-0027 Camera shake).
+    CameraShake { t: f32, a: f32, s: f32, p4: f32, r: f32, phi: f32, z: f32 },
+    /// StartCameraShakeMode(type, duration, strength).
+    CameraShakeMode { kind: i32, duration: f32, strength: f32 },
     SleepRandom { lo: u32, hi: u32 },
 }
 

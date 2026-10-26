@@ -644,6 +644,9 @@ pub struct Play {
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
     /// The drop direction of a dig reward while it pays out (SPEC-0051 section 10 step 11).
     dig_drop: Option<[f32; 3]>,
+    /// The camera shake record and this frame's movement (SPEC-0027 Camera shake).
+    pub shake: neopets_sim::shake::Shake,
+    pub shake_now: Option<neopets_sim::shake::Offset>,
     /// Entities that died in a resident world this load (pack, entity id): the kill memory the
     /// IsAI_Dead test falls back on (cleared when the world is released).
     killed: std::collections::HashSet<(u32, usize)>,
@@ -983,6 +986,8 @@ impl Play {
             r_fx: [None; 2],
             char_lights: HashMap::new(),
             dig_drop: None,
+            shake: Default::default(),
+            shake_now: None,
             placed_on: Default::default(),
             killed: Default::default(),
             zones: Default::default(),
@@ -1885,6 +1890,8 @@ impl Play {
                 }
                 Action::WaitInside { index } => return Some(Wait::Inside(index)),
                 Action::WaitWord { word } => return Some(Wait::Word(pack, word)),
+                Action::CameraShake { t, a, s, p4, r, phi, z } => self.shake.start(t, a, s, p4, r, phi, z),
+                Action::CameraShakeMode { kind, duration, strength } => self.shake.start_mode(kind, duration, strength),
                 Action::RegisterInstance { routine, trigger, group } => {
                     let triggers: Vec<u16> = match self.world.groups.get(group) {
                         Some(g) if g.kind == 7 => g.triggers.iter().filter_map(|&t| u16::try_from(t).ok()).collect(),
@@ -1973,13 +1980,25 @@ impl Play {
     /// The view the window draws: the camera play's pose (while it plays or holds its last
     /// pose) or the follow camera; eye, forward, up and focal length (SPEC-0027 Projection).
     pub fn view(&self) -> ([f32; 3], [f32; 3], [f32; 3], f32) {
-        match self.cut.filter(|c| c.state != 0).and_then(|c| c.last) {
+        let (eye, forward, up, focal) = match self.cut.filter(|c| c.state != 0).and_then(|c| c.last) {
             Some(p) => (p.eye, p.rows[2], p.rows[1], p.focal),
             None => {
                 let (e, f) = (self.camera.eye, self.camera.focus);
                 ([e[0], e[1], e[2]], [f[0] - e[0], f[1] - e[1], f[2] - e[2]], [0.0, 1.0, 0.0], neopets_sim::camera::FOCAL)
             }
-        }
+        };
+        // SPEC-0027 Per-frame use of the shake: the view (not the camera) moves by the frame's
+        // amounts along its level right axis and the world up; with an aim distance it keeps
+        // looking at the point that far ahead of the unshaken eye.
+        let Some(o) = self.shake_now else { return (eye, forward, up, focal) };
+        let f = unit(forward);
+        let h = unit([-f[2], 0.0, f[0]]);
+        let moved = [eye[0] + o.side * h[0], eye[1] + o.up, eye[2] + o.side * h[2]];
+        let forward = match o.aim {
+            Some(l) => [eye[0] + l * f[0] - moved[0], eye[1] + l * f[1] - moved[1], eye[2] + l * f[2] - moved[2]],
+            None => forward,
+        };
+        (moved, forward, up, focal)
     }
 
     /// SPEC-0006 Doors, default rule, for door n of the current world (already confirmed).
@@ -3723,8 +3742,7 @@ impl Play {
 
     /// SPEC-0051 section 10, when a dig starts: a repeat fire (state 2) with a nonzero object
     /// value, object 0 active, the treasure not collected and its map held; then the dig
-    /// sequence as a script thread. Not built: SetHeroEquippedState 0 and the HUD reset (step 2)
-    /// and the camera shake (step 6).
+    /// sequence as a script thread. Not built: SetHeroEquippedState 0 and the HUD reset (step 2).
     fn dig_step(&mut self, g: usize, rec: neopets_sim::trigger::Record) {
         let Some(group) = self.world.groups.get(g).cloned() else { return };
         let objs: Vec<usize> = group.objects.iter().filter_map(|&o| usize::try_from(o).ok()).filter(|&o| o < self.world.object_anims.len()).collect();
@@ -3748,6 +3766,8 @@ impl Play {
         let mut v: Vec<Action> = vec![Action::HoldHero];
         v.extend(camera(0));
         v.extend(group.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::SwitchEffect { slot, on: false }));
+        // Step 6: the camera shake (2.0, 0.3, 25.0, 0.5, 0.8, 1.5708, 0.2).
+        v.push(Action::CameraShake { t: 2.0, a: 0.3, s: 25.0, p4: 0.5, r: 0.8, phi: 1.5708, z: 0.2 });
         // Step 7: object 0 played once and waited for, deactivated; objects 2 and 1 at time 0;
         // object 1 played once and waited for.
         v.extend([
@@ -4287,6 +4307,7 @@ impl Play {
             }
         }
         self.status_display_step();
+        self.shake_now = self.shake.step();
         self.zone_step();
         self.foliage_step();
         self.placed_release_step();

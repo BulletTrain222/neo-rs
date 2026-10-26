@@ -2342,6 +2342,9 @@ fn play_trace(
             let off = play.characters.iter().filter(|c| c.inactive && !c.deactivated).count();
             println!("      zones: grid {} row {} key {}; patches on {} of {}; characters {} ({off} cell-off)", w.zones.as_ref().map_or(0, |g| g.blocks.len()), play.zones.row, play.zones.key, on.iter().sum::<usize>(), on.len(), play.characters.len());
         }
+        if let Some(o) = play.shake_now.filter(|_| play.ticks % 10 == 0) {
+            println!("      shake on tick {}: side {:.4} up {:.4} aim {:?} (amplitude {:.3})", play.ticks, o.side, o.up, o.aim, play.shake.amplitude);
+        }
         if !play.last_fx.is_empty() && play.last_fx != last_fx {
             last_fx = play.last_fx.clone();
             println!("      {last_fx}");
