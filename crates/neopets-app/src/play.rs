@@ -4002,8 +4002,17 @@ impl Play {
 
     /// SPEC-0040 Behavior 29: set or clear both flags.
     fn draw_items(&mut self, on: bool) {
-        self.weapon_drawn = on;
+        self.set_weapon_drawn(on);
         self.shield_raised = on;
+    }
+
+    /// The weapon-drawn flag; a change plays the weapon slot's unsheathe (cue 0) or sheathe
+    /// (cue 1) sound (SPEC-0040 Behavior 29; SPEC-0031 Weapon slot uses).
+    fn set_weapon_drawn(&mut self, on: bool) {
+        if self.weapon_drawn != on && self.weapon.is_some() {
+            self.sound.play(neopets_sim::sound::WEAPON, if on { 0 } else { 1 }, neopets_sim::sound::Play::default());
+        }
+        self.weapon_drawn = on;
     }
 
     /// SPEC-0040 Behavior 29 per tick: the L1 guard with a shield sets both flags; states 25 and
@@ -6933,7 +6942,8 @@ impl Play {
         // SPEC-0040 Behavior 29 item 2: a hit (not a poison tick, attacker -2) with the weapon
         // sheathed draws Tor's weapon when he has one and raises the hero's shield.
         if !self.weapon_drawn && what != "poison" {
-            self.weapon_drawn = self.equipment.entries[0][0].is_some();
+            let tor_armed = self.equipment.entries[0][0].is_some();
+            self.set_weapon_drawn(tor_armed);
             self.shield_raised = self.shield.is_some();
         }
         // A hit on a living hero ends an active stun.
