@@ -3362,7 +3362,7 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
     };
     if !l(s, 0) && b & 1 != 0 {
         s.set_level(0, true);
-        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 9 }, Action::FadeIn { seconds: FADE, wait: true }, Action::HoldHero, cam(25, true), anim(25)]);
+        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 9 }, Action::BossFight { instance: 5 }, Action::FadeIn { seconds: FADE, wait: true }, Action::HoldHero, cam(25, true), anim(25)]);
         for (line, track) in (0..=5).zip([26, 27, 28, 29, 30, 33]) {
             v.extend([cam(track, false), Action::Converse { entity: 0, line }]);
         }
