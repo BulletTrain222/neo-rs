@@ -160,6 +160,9 @@ pub enum Action {
     /// effects (SPEC-0030 rows 5 and 6).
     StartEffect { slot: usize, camera: bool },
     StopEffect { slot: usize },
+    /// MoveEffect(slot, locator, face off) (SPEC-0030 row 28): the placed effect's position
+    /// becomes the locator's (entry record) position.
+    MoveEffect { slot: usize, locator: usize },
     /// The animated-object calls of SPEC-0030 rows 1 to 4, 9 and 11 on the thread's world:
     /// InitObjOn and ActivateObj (start or end pose), PlayAnim (with WAIT the thread waits while
     /// the object plays once), LoopAnim, StopAnim and DeactivateObj.

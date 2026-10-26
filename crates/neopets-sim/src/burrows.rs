@@ -4,8 +4,7 @@
 //! 8 changes nothing, a request equal to the state is dropped, any other becomes the state and
 //! that pass is the state's entry; the request is then 8).
 //!
-//! Not covered: moving effects 21, 22 and 23 to their locators (MoveEffect is not built; they
-//! start where the level places them) and the Act 3 records.
+//! Not covered: the Act 3 records.
 use crate::level::Action;
 
 /// The request that changes nothing.
@@ -61,6 +60,7 @@ pub struct Inner {
     pub r: [usize; 2],
     pub s: Vec<usize>,
     pub t: usize,
+    pub q_locator: usize,
     pub r_locator: usize,
     pub s_locator: usize,
     pub state: i32,
@@ -127,6 +127,7 @@ impl Burrows {
                     r: [366 + 4 * r, 367 + 4 * r],
                     s: range(408 + 13 * r, 13),
                     t: 2 + r,
+                    q_locator: 55 + 3 * r,
                     r_locator: 56 + 3 * r,
                     s_locator: 57 + 3 * r,
                     state: 8,
@@ -368,7 +369,7 @@ impl Inner {
             3 => {
                 if entry {
                     out.push(Action::InitObjOn { obj: self.q, end: false });
-                    out.push(Action::StartEffect { slot: 23, camera: false });
+                    out.extend([Action::MoveEffect { slot: 23, locator: self.q_locator }, Action::StartEffect { slot: 23, camera: false }]);
                     out.extend(off(&[self.p, self.r[0], self.r[1]]));
                     out.extend(off(&self.s));
                     out.push(Action::PlayAnim { obj: self.q, speed: 1.0, wait: false });
@@ -391,7 +392,7 @@ impl Inner {
                     if !self.sounded && self.stamp.is_some_and(|s| tick >= s + 24) {
                         self.sounded = true;
                         out.push(Action::PlaySound { cue: 10, locator: Some(self.r_locator) });
-                        out.push(Action::StartEffect { slot: 21, camera: false });
+                        out.extend([Action::MoveEffect { slot: 21, locator: self.r_locator }, Action::StartEffect { slot: 21, camera: false }]);
                     }
                     if self.sounded && !self.r.iter().any(|&o| animating(o)) {
                         out.push(Action::InitObjOn { obj: self.t, end: false });
@@ -402,7 +403,7 @@ impl Inner {
             7 => {
                 if entry {
                     out.extend(on(&self.s, false));
-                    out.push(Action::StartEffect { slot: 22, camera: false });
+                    out.extend([Action::MoveEffect { slot: 22, locator: self.s_locator }, Action::StartEffect { slot: 22, camera: false }]);
                     out.extend(off(&[self.p, self.q, self.r[0], self.r[1], self.t]));
                     out.push(Action::PlaySound { cue: 11, locator: Some(self.s_locator) });
                     out.extend(play(&self.s, 1.0));

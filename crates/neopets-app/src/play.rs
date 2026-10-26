@@ -1568,6 +1568,17 @@ impl Play {
                 Action::BurrowsStagger => self.apply(&level::burrows_stagger()),
                 Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
                 Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
+                Action::MoveEffect { slot, locator } => {
+                    if let Some((at, _)) = self.locator(pack, locator) {
+                        let h = self.placed_object(pack, slot);
+                        if let Some(h) = h {
+                            self.effects.set_position(h, at);
+                            if let Some(Some(o)) = self.effects.objects.get_mut(h) {
+                                o.position = at;
+                            }
+                        }
+                    }
+                }
                 Action::StopEffect { slot } => {
                     let table = self.effect_table.clone();
                     if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
@@ -5022,24 +5033,30 @@ impl Play {
     /// outside the table does nothing.
     fn start_placed(&mut self, pack: u32, slot: usize, camera: bool) {
         let table = self.effect_table.clone();
-        let Some(r) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.placed_effects.get(slot)).copied() else { return };
-        let h = match self.placed_fx.get(&(pack, slot)) {
-            Some(&h) => h,
-            None => {
-                let mut o = neopets_sim::effect::EffectObject::new(&table, r.id, r.position, r.frame);
-                if r.cull > 0.0 || r.cull == -1.0 {
-                    o.cull = Some(r.cull);
-                }
-                let h = self.effects.add_object(o);
-                self.placed_fx.insert((pack, slot), h);
-                h
-            }
-        };
+        let Some(h) = self.placed_object(pack, slot) else { return };
         let listener = camera.then(|| {
             let (eye, focus) = (self.camera.eye, self.camera.focus);
             (eye, unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]))
         });
         self.effects.update(&table, h, listener, &mut self.rng);
+    }
+
+    /// Placed record `slot` of world `pack` as an effect object (made on first use): bound to its
+    /// definition, with the record's own cull kept when positive or -1. None for an index
+    /// outside the table.
+    fn placed_object(&mut self, pack: u32, slot: usize) -> Option<usize> {
+        if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
+            return Some(h);
+        }
+        let table = self.effect_table.clone();
+        let r = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.placed_effects.get(slot)).copied()?;
+        let mut o = neopets_sim::effect::EffectObject::new(&table, r.id, r.position, r.frame);
+        if r.cull > 0.0 || r.cull == -1.0 {
+            o.cull = Some(r.cull);
+        }
+        let h = self.effects.add_object(o);
+        self.placed_fx.insert((pack, slot), h);
+        Some(h)
     }
 
     /// World reset of the placed effects (SPEC-0034 section 6): a world no longer resident
