@@ -411,6 +411,9 @@ pub struct GameState {
     /// HasMoviePlayed: the movies a module asked to play. No movie is shown in this build, but
     /// a PlayFMV the script makes counts as played.
     pub movies: BTreeSet<u16>,
+    /// The trigger indices a hero shot hit this tick (SPEC-0041 1428's target). The host does not
+    /// test shots against trigger volumes yet, so it stays empty.
+    pub shot_hits: BTreeSet<u16>,
     /// NumMiamiceInCage (SPEC-0029 Behavior 28), filled by the host.
     pub miamice_caged: u32,
     /// NumMortogsOnTarget (SPEC-0041 1363). The host has no Mortog behaviour yet, so it stays 0.
@@ -1572,6 +1575,26 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 1428 Init: effects 0, 24 to 26, 1 and 11 to 20 stopped; with 322 set the nine
+        // triggers (CB1 to CB9 on 5, 4, 2, 1, 0, 3, 6, 7, 8), objects 0 to 2, level state 19 and
+        // the switches' start states when 328 is already set; with 322 clear effects 2 to 10
+        // stopped. Words: 1 the step bits, 2 the meter armed, 3 THREAD-A busy, 4 the pulse, 20
+        // the next taunt tick, 21 the taunt count, 22 the last taunt tick, 23 the last switch
+        // press tick, 40 to 42 the switch states, 50 to 59 the shot stamps (tick + 1).
+        1428 => {
+            let mut v: Vec<Action> = [0, 24, 25, 26, 1].into_iter().chain(11..=20).map(|slot| Action::StopEffect { slot }).collect();
+            if state.flag(322) {
+                v.extend([reg(5, 1), reg(4, 2), reg(2, 3), reg(1, 4), reg(0, 5), reg(3, 6), reg(6, 7), reg(7, 8), reg(8, 9)]);
+                v.extend((0..3).map(|obj| Action::InitObjOn { obj, end: false }));
+                state.set_level(19, true);
+                if state.flag(328) {
+                    v.extend(switch_start_1428(state));
+                }
+            } else {
+                v.extend((2..=10).map(|slot| Action::StopEffect { slot }));
+            }
+            v
+        }
         // SPEC-0042 1381 Init: effect 0 stopped; the three known helper set-ups (objects 36, 72, 74;
         // 37, 76, 78; 32, 56, 58; the first of each looped at 0.4); the pads, areas, targets and
         // the flat zone (34) registered. The fourth helper call's objects are not given; the block
@@ -3048,6 +3071,139 @@ fn thread3_956(s: &GameState) -> Vec<Action> {
         _ => 7,
     };
     vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(957 + set) }]
+}
+
+/// SPEC-0041 1428 switch k's three state effects.
+const SWITCH_FX_1428: [[usize; 3]; 3] = [[2, 3, 4], [5, 6, 7], [8, 9, 10]];
+
+/// The switches' start states (first, second, third), shown.
+fn switch_start_1428(s: &mut GameState) -> Vec<Action> {
+    let mut v = Vec::new();
+    for k in 0..3 {
+        s.set_word(1428, 40 + k as u8, k as i32);
+        v.extend(SWITCH_FX_1428[k].iter().enumerate().map(|(i, &slot)| if i == k { Action::StartEffect { slot, camera: false } } else { Action::StopEffect { slot } }));
+    }
+    v
+}
+
+/// Switch k advanced one state (first, second, third, first), its effects swapped.
+fn advance_switch_1428(s: &mut GameState, k: usize) -> Vec<Action> {
+    let w = 40 + k as u8;
+    let old = s.word(1428, w).rem_euclid(3) as usize;
+    let new = (old + 1) % 3;
+    s.set_word(1428, w, new as i32);
+    vec![Action::StopEffect { slot: SWITCH_FX_1428[k][old] }, Action::StartEffect { slot: SWITCH_FX_1428[k][new], camera: false }]
+}
+
+/// SPEC-0041 1428 THREAD-A's rules and the update helper (the pulse and the shot meter H13).
+fn arena_1428(s: &mut GameState) -> Vec<Action> {
+    let p = 1428;
+    let now = s.hero.tick as i32;
+    let mut out = Vec::new();
+    // The pulse: level state 2 for one tick.
+    let pulse = s.word(p, 4) != 0;
+    s.set_level(2, pulse);
+    s.set_word(p, 4, 0);
+    // H13: ten shot hits on trigger 5 within 10 s set 328.
+    if s.word(p, 2) != 0 && !s.flag(328) {
+        if s.shot_hits.contains(&5) {
+            let slot = (0..10).min_by_key(|&i| s.word(p, 50 + i)).unwrap_or(0);
+            s.set_word(p, 50 + slot, now + 1);
+        }
+        let live = (0..10).filter(|&i| s.word(p, 50 + i) > 0 && now + 1 - s.word(p, 50 + i) < 600).count();
+        for i in 0..10 {
+            if s.word(p, 50 + i) > 0 && now + 1 - s.word(p, 50 + i) >= 600 {
+                s.set_word(p, 50 + i, 0);
+            }
+        }
+        out.extend((0..10).map(|i| if i < live { Action::StartEffect { slot: 11 + i, camera: false } } else { Action::StopEffect { slot: 11 + i } }));
+        if live >= 10 {
+            s.set(328, true);
+            s.set_word(p, 20, now + 30);
+            out.extend([Action::StopEffect { slot: 1 }, Action::StartEffect { slot: 0, camera: false }]);
+            out.extend(switch_start_1428(s));
+        } else if live > 0 {
+            out.push(Action::StartEffect { slot: 1, camera: false });
+        }
+    }
+    let bits = s.word(p, 1);
+    if bits & 1 == 0 || s.word(p, 3) != 0 {
+        return out;
+    }
+    let busy = |s: &mut GameState, v: &mut Vec<Action>| {
+        s.set_word(p, 3, 1);
+        v.push(Action::Bits { word: 3, set: 0, clear: 1 });
+    };
+    if bits & 128 != 0 {
+        // The act start (movies 56, 91, 57 and 58 counted; act 4; 333; the return world eW 178,
+        // pack 1411, loaded at once). BossFightTweakHero is not built.
+        s.set_word(p, 1, (bits & !128) | 256);
+        for m in [56, 91, 57, 58] {
+            s.movies.insert(m);
+        }
+        s.set(333, true);
+        out.extend([Action::ActStart { stage: 4 }, Action::ReplaceExterior { slot: 178, plane: -1 }]);
+    } else if bits & 0b11100 != 0 {
+        // H15, the switch press: camera 4, the hero at locator 5 + k, hero animation 141, the
+        // switch object, switch k and its linked switch advanced.
+        let k = (2..5).find(|&b| bits & (1 << b) != 0).unwrap_or(2) - 2;
+        s.set_word(p, 1, bits & !0b11100);
+        s.set_word(p, 23, now);
+        out.extend([
+            Action::HoldHero,
+            Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
+            Action::MoveHero { locator: 5 + k },
+            wait(0.3),
+            Action::HeroAnim { anim: 141, wait: false },
+            Action::PlayAnim { obj: k, speed: 1.0, wait: false },
+        ]);
+        out.extend(advance_switch_1428(s, k));
+        out.extend(advance_switch_1428(s, (k + 1) % 3));
+        out.extend([Action::WaitObj { obj: k }, Action::InitObjOn { obj: k, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
+        busy(s, &mut out);
+    } else if bits & 32 != 0 && bits & 64 == 0 {
+        s.set(331, true);
+        s.set_word(p, 1, bits | 128);
+        out.extend([Action::DeactivateEntity { entity: 1 }, Action::DeactivateEntity { entity: 0 }]);
+    } else if bits & 2 == 0 {
+        // The boss-room return: movie 55 counted, 326, entity 1, item 117 for item 116, the
+        // normal camera, a fade in, object 3, effects 24 to 26. The entity and hero moves (their
+        // locators are not given) and the boss-fight tweak are not built.
+        s.set_word(p, 1, bits | 2);
+        s.movies.insert(55);
+        s.set(326, true);
+        s.remove_all(117);
+        out.extend([Action::ActivateEntity { entity: 1 }, Action::GiveItem { item: 116, count: 1 }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 1.0, wait: false }, Action::InitObjOn { obj: 3, end: false }]);
+        out.extend((24..=26).map(|slot| Action::StartEffect { slot, camera: false }));
+    } else {
+        // H17, the taunts (by 330, 329, 328, 327, none: the first three lines then the last two
+        // alternating), when the delay has run out and the hero is free.
+        if now >= s.word(p, 20) && !s.hero.occupied && !s.hero.swapping && s.hero.hp > 0 {
+            let g = [330, 329, 328, 327].iter().position(|&f| s.flag(f)).unwrap_or(4) as u16;
+            let b = 3 * g;
+            let n = s.word(p, 21) + 1;
+            s.set_word(p, 21, n);
+            s.set_word(p, 22, now);
+            s.set_word(p, 20, now + if n <= 3 { 1200 } else { 3600 });
+            let talk = head_then(s, p, 1, g as i32, b, &[b + 1, b + 2]);
+            out.extend(talk.into_iter().map(|a| match a {
+                Action::Talk { line } => Action::Message { line },
+                a => a,
+            }));
+        }
+        // The flag 330 check: all three switches in their first state.
+        if s.flag(329) && !s.flag(330) && (0..3).all(|k| s.word(p, 40 + k) == 0) {
+            s.set(330, true);
+            s.set_word(p, 20, now + 30);
+            out.push(Action::StartEffect { slot: 0, camera: false });
+        }
+        // The game-over check: hero 1 dead without item 50 while 328 is clear; as Roberta swap
+        // mode 1 (SetGameOver is not built).
+        if !s.flag(328) && s.hero.dead[1] && !s.has_item(50) && s.hero.selected == 1 {
+            out.push(Action::SwapMode { mode: 1 });
+        }
+    }
+    out
 }
 
 /// RegisterScriptTrigger outside Init.
@@ -5144,6 +5300,44 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0041 1428 CB2 (trigger 4): S0, which starts THREAD-A.
+        (1428, 2) if call.object => state.set_word(pack, 1, state.word(pack, 1) | 1),
+        // CB3 (trigger 2): 327 and the meter armed (the next taunt 0.5 s later).
+        (1428, 3) if !state.flag(327) => {
+            state.set(327, true);
+            state.set_word(pack, 2, 1);
+            state.set_word(pack, 20, state.hero.tick as i32 + 30);
+        }
+        // CB4 (trigger 1, here on entry): 329 with 328 set; with 329 set and 330 clear the level
+        // state 2 pulse (the summons stop) and the taunt delay rule.
+        (1428, 4) if call.object && call.state == 1 => {
+            let now = state.hero.tick as i32;
+            if state.flag(328) && !state.flag(329) {
+                state.set(329, true);
+                state.set_word(pack, 20, now + 30);
+            } else if state.flag(329) && !state.flag(330) {
+                state.set_word(pack, 4, 1);
+                let wait = if now - state.word(pack, 23) < 300 && state.word(pack, 23) > 0 {
+                    1200
+                } else if now - state.word(pack, 22) < 180 && state.word(pack, 22) > 0 {
+                    300
+                } else {
+                    30
+                };
+                state.set_word(pack, 20, now + 60 + wait);
+            }
+        }
+        // CB5 (trigger 0, 330 set): S5.
+        (1428, 5) if call.object && state.flag(330) => state.set_word(pack, 1, state.word(pack, 1) | 32),
+        // CB7 to CB9 (triggers 6 to 8, the switches; 329 set, 330 clear, none pending): context
+        // 4; a press sets S2, S3 or S4. CB6's SetExternalMissileTarget is not built.
+        (1428, 7..=9) if call.object && state.flag(329) && !state.flag(330) && state.word(pack, 1) & 0b11100 == 0 => {
+            if call.square && !state.talking {
+                state.set_word(pack, 1, state.word(pack, 1) | (4 << (routine - 7)));
+            } else {
+                out.prompt = Some(4);
             }
         }
         // SPEC-0042 1381 pads (context 13; the station unsolved): sound 169 and the hero sent to
@@ -7718,6 +7912,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0041 1428 Update (322 set): the update helper and THREAD-A.
+        1428 if state.flag(322) => out.extend(arena_1428(state)),
         // SPEC-0042 1381 Update: the timed objects switch on for 2 s and off for 4 s together
         // (each switch re-binds its trigger, object + 58, to the return routine or to nothing; word
         // 2 the last phase + 1); the hazard thread: hazard k starts 0.4 s after k - 1, its object
@@ -12085,6 +12281,60 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1428_meter_switches_and_taunts() {
+        let mut s = GameState::default();
+        s.set(322, true);
+        on_init(1428, &mut s);
+        let at = |s: &mut GameState, t: u64| {
+            s.hero.tick = t;
+            on_update(1428, s, false)
+        };
+        // Trigger 4 (S0): the boss-room return (326, item 116).
+        on_trigger(1428, 2, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut s);
+        assert!(at(&mut s, 1).contains(&Action::GiveItem { item: 116, count: 1 }) && s.flag(326));
+        // The meter vector: hits at 0 to 8 s and 9.5 s: 328 at 9.5 s.
+        on_trigger(1428, 3, TriggerCall { index: 2, state: 1, object: true, square: false }, &mut s);
+        for k in 0..9u64 {
+            s.shot_hits = [5].into();
+            at(&mut s, 100 + 60 * k);
+            s.shot_hits.clear();
+        }
+        assert!(!s.flag(328));
+        s.shot_hits = [5].into();
+        at(&mut s, 100 + 570);
+        s.shot_hits.clear();
+        assert!(s.flag(328));
+        // The switch vector: start (first, second, third); switch 0, switch 0, switch 2 gives
+        // (first, first, first) and 330 once 329 is set.
+        s.set(329, true);
+        assert_eq!((0..3).map(|k| s.word(1428, 40 + k)).collect::<Vec<_>>(), vec![0, 1, 2]);
+        for (n, idx, routine) in [(0, 6, 7), (1, 6, 7), (2, 8, 9)] {
+            s.set_word(1428, 3, 0);
+            let press = TriggerCall { index: idx, state: 2, object: true, square: true };
+            on_trigger(1428, routine, press, &mut s);
+            at(&mut s, 1000 + n);
+        }
+        assert_eq!((0..3).map(|k| s.word(1428, 40 + k)).collect::<Vec<_>>(), vec![0, 0, 0]);
+        s.set_word(1428, 3, 0);
+        at(&mut s, 2000);
+        assert!(s.flag(330));
+        // The taunts with 330: lines 0, 1, 2, 1 (delays aside; the hero alive).
+        s.hero.hp = 10;
+        let mut lines = Vec::new();
+        for k in 0..4 {
+            s.set_word(1428, 20, 0);
+            let out = at(&mut s, 3000 + k);
+            lines.extend(out.into_iter().filter(|a| matches!(a, Action::Message { .. })));
+        }
+        assert_eq!(lines, [0, 1, 2, 1].map(|line| Action::Message { line }).to_vec());
+        // Trigger 0 with 330: S5, then 331 and the act start (act 4, eW 178).
+        on_trigger(1428, 5, TriggerCall { index: 0, state: 1, object: true, square: false }, &mut s);
+        at(&mut s, 4000);
+        assert!(s.flag(331));
+        assert!(at(&mut s, 4001).contains(&Action::ActStart { stage: 4 }) && s.flag(333));
     }
 
     #[test]
