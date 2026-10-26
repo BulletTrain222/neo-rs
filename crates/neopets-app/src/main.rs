@@ -2334,6 +2334,7 @@ fn play_trace(
             println!("      objects of {} ({} in all, {shown} drawn) on tick {}: scripted [{}]", w.pack, w.objects.len(), play.ticks, list.join(", "));
             println!("      hero lights ({} light-set records): {}", w.lights.len(), play.light_summary());
             let on: Vec<usize> = play.foliage.get(&w.pack).map(|p| p.iter().map(|q| usize::from(q.on)).collect()).unwrap_or_default();
+            println!("      placed records on: [{}]", play.placed_summary());
             let off = play.characters.iter().filter(|c| c.inactive && !c.deactivated).count();
             println!("      zones: grid {} row {} key {}; patches on {} of {}; characters {} ({off} cell-off)", w.zones.as_ref().map_or(0, |g| g.blocks.len()), play.zones.row, play.zones.key, on.iter().sum::<usize>(), on.len(), play.characters.len());
         }

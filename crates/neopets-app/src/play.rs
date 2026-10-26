@@ -636,6 +636,8 @@ pub struct Play {
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
     /// The drop direction of a dig reward while it pays out (SPEC-0051 section 10 step 11).
     dig_drop: Option<[f32; 3]>,
+    /// Placed records with their active flag set (the switch path; SPEC-0028 section 9).
+    placed_on: std::collections::HashSet<(u32, usize)>,
     /// The zone manager (SPEC-0006 Zone manager); its grid is the current world's.
     pub zones: neopets_sim::zone::Zones,
     /// The prize wheel's running spin (its pack) and each world's display mask word
@@ -970,6 +972,7 @@ impl Play {
             r_fx: [None; 2],
             char_lights: HashMap::new(),
             dig_drop: None,
+            placed_on: Default::default(),
             zones: Default::default(),
             wheel_spin: None,
             display_mask: HashMap::new(),
@@ -1337,11 +1340,11 @@ impl Play {
                     if self.state.collected.contains(&g.key) {
                         out.extend(o(2).map(|obj| Action::InitObjOn { obj, end: false }));
                         out.extend(o(1).map(|obj| Action::InitObjOn { obj, end: true }));
-                        out.extend(marker.map(|slot| Action::StopEffect { slot }));
+                        out.extend(marker.map(|slot| Action::SwitchEffect { slot, on: false }));
                     } else {
                         out.push(Action::InitObjOn { obj, end: false });
                         let held = g.key.checked_sub(200).is_some_and(|i| self.state.maps.contains(&i));
-                        out.extend(marker.map(|slot| if held { Action::StartEffect { slot, camera: false } } else { Action::StopEffect { slot } }));
+                        out.extend(marker.map(|slot| Action::SwitchEffect { slot, on: held }));
                     }
                 }
                 _ => {}
@@ -1590,6 +1593,7 @@ impl Play {
                 }
                 Action::ActStart { stage } => self.act_start(stage),
                 Action::StartEffect { slot, camera } => self.start_placed(pack, slot, camera),
+                Action::SwitchEffect { slot, on } => self.switch_placed(pack, slot, on),
                 Action::InitObjOn { obj, .. } | Action::PlayAnim { obj, .. } | Action::LoopAnim { obj, speed: _ } | Action::StopAnim { obj } | Action::DeactivateObj { obj }
                     if [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).is_some_and(|w| obj < w.object_anims.len()) =>
                 {
@@ -3662,7 +3666,7 @@ impl Play {
         self.effects.one_shot(&table, 4036, [p[0] + 2.9 * d[0], p[1] + 2.9 * d[1], p[2] + 2.9 * d[2]], neopets_sim::effect::IDENTITY, &mut self.rng);
         let mut v: Vec<Action> = vec![Action::HoldHero];
         v.extend(camera(0));
-        v.extend(group.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::StopEffect { slot }));
+        v.extend(group.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::SwitchEffect { slot, on: false }));
         // Step 7: object 0 played once and waited for, deactivated; objects 2 and 1 at time 0;
         // object 1 played once and waited for.
         v.extend([
@@ -3730,10 +3734,13 @@ impl Play {
             return;
         }
         self.cue(159);
-        let pack = self.world.pack;
-        let site = self.world.groups.iter().find(|g| g.kind == 6 && g.key == 200 + n && !self.state.collected.contains(&g.key)).and_then(|g| g.effects.first().and_then(|&e| usize::try_from(e).ok()));
-        if let Some(slot) = site {
-            self.start_placed(pack, slot, false);
+        // The site with key 200 + n, current world first (the switch setter's search).
+        let site = [&self.world].into_iter().chain(self.other.as_ref()).find_map(|w| {
+            let g = w.groups.iter().find(|g| g.kind == 6 && g.key == 200 + n)?;
+            Some((w.pack, usize::try_from(*g.effects.first()?).ok()?))
+        });
+        if let Some((pack, slot)) = site {
+            self.switch_placed(pack, slot, true);
         }
     }
 
@@ -4202,6 +4209,7 @@ impl Play {
         self.zone_step();
         self.foliage_step();
         self.placed_release_step();
+        self.placed_zone_step();
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
         self.light_step();
@@ -5379,6 +5387,19 @@ impl Play {
         }
     }
 
+    /// Diagnostic: the active placed records and the live spawners of each.
+    pub fn placed_summary(&self) -> String {
+        let mut on: Vec<(u32, usize)> = self.placed_on.iter().copied().collect();
+        on.sort_unstable();
+        on.iter()
+            .map(|&(p, k)| {
+                let live = self.placed_fx.get(&(p, k)).and_then(|&h| self.effects.objects.get(h)).and_then(|o| o.as_ref()).map_or(0, |o| o.slots.iter().flatten().count());
+                format!("{p}:{k} ({live} live)")
+            })
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
     /// Whether patch `i` of world `pack` passed its zone gate this pass.
     pub fn patch_on(&self, pack: u32, i: usize) -> bool {
         self.foliage.get(&pack).and_then(|p| p.get(i)).is_none_or(|p| p.on)
@@ -5423,11 +5444,51 @@ impl Play {
         Some(h)
     }
 
+    /// The switch setter's effect on placed record `slot` of world `pack` (SPEC-0030 section
+    /// 2.1): on sets the active flag; off clears it and drains the record.
+    fn switch_placed(&mut self, pack: u32, slot: usize, on: bool) {
+        if on {
+            if [&self.world].into_iter().chain(self.other.as_ref()).any(|w| w.pack == pack && slot < w.placed_effects.len()) {
+                self.placed_on.insert((pack, slot));
+            }
+            return;
+        }
+        self.placed_on.remove(&(pack, slot));
+        if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
+            let table = self.effect_table.clone();
+            self.effects.stop(&table, h);
+        }
+    }
+
+    /// The per-pass zone gate of the placed records (SPEC-0028 section 9; SPEC-0034 section 6):
+    /// every active record of the current and the second world is queried with its zone (+0x44,
+    /// low byte) and that world's id; it is updated with the camera as the listener when the
+    /// query passes and stopped when it fails.
+    fn placed_zone_step(&mut self) {
+        let table = self.effect_table.clone();
+        let (eye, focus) = (self.camera.eye, self.camera.focus);
+        let listener = (eye, unit([focus[0] - eye[0], focus[1] - eye[1], focus[2] - eye[2]]));
+        let mut on: Vec<(u32, usize)> = self.placed_on.iter().copied().collect();
+        on.sort_unstable();
+        for (pack, slot) in on {
+            let Some(w) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { continue };
+            let Some(r) = w.placed_effects.get(slot) else { continue };
+            let visible = self.zones.query(self.world.zones.as_ref(), (r.zone & 0xFF) as i32, w.world_id);
+            let Some(h) = self.placed_object(pack, slot) else { continue };
+            if visible {
+                self.effects.update(&table, h, Some(listener), &mut self.rng);
+            } else {
+                self.effects.stop(&table, h);
+            }
+        }
+    }
+
     /// World reset of the placed effects (SPEC-0034 section 6): a world no longer resident
     /// drains and releases its started records.
     fn placed_release_step(&mut self) {
         let table = self.effect_table.clone();
         let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
+        self.placed_on.retain(|(p, _)| resident.contains(p));
         let gone: Vec<(u32, usize)> = self.placed_fx.keys().filter(|(p, _)| !resident.contains(p)).copied().collect();
         for k in gone {
             if let Some(h) = self.placed_fx.remove(&k) {
@@ -6033,12 +6094,8 @@ impl Play {
                 Some((w.pack, usize::try_from(*g.effects.first()?).ok()?))
             });
             if let Some((pack, slot)) = found {
-                if self.state.maps.contains(&i) {
-                    self.start_placed(pack, slot, false);
-                } else if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
-                    let table = self.effect_table.clone();
-                    self.effects.stop(&table, h);
-                }
+                let on = self.state.maps.contains(&i);
+                self.switch_placed(pack, slot, on);
             }
         }
         self.statuses.clear_all();

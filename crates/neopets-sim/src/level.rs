@@ -197,6 +197,10 @@ pub enum Action {
     /// A dig site's steps (SPEC-0051 section 10, dig sequence) for script group g: 8 (effect
     /// 790 at P + 2.9 D facing D), 11 (the reward) and 13 (the collected entry).
     DigStep { group: u16, step: u8 },
+    /// The switch setter's effect on a placed record (SPEC-0030 section 2.1; SPEC-0028
+    /// section 9): on sets its active flag (it starts nothing itself), off clears it and drains
+    /// the record.
+    SwitchEffect { slot: usize, on: bool },
     SleepRandom { lo: u32, hi: u32 },
 }
 
