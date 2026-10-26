@@ -1990,6 +1990,13 @@ impl Play {
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
                 Action::WaitObj { obj } => return Some(Wait::ObjAnim(pack, obj)),
+                Action::GroupEffects { group } => {
+                    let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+                    let fx: Vec<usize> = w.and_then(|w| w.groups.get(group)).map(|g| g.effects.iter().filter_map(|&e| usize::try_from(e).ok()).collect()).unwrap_or_default();
+                    for slot in fx {
+                        self.start_placed(pack, slot, true);
+                    }
+                }
                 Action::LoadOverride { slot } => {
                     if (0..193).contains(&slot) && pack == self.world.pack {
                         self.pending_slot = Some(slot as u32);

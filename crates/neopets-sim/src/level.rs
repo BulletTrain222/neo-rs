@@ -231,6 +231,9 @@ pub enum Action {
     /// current world's pending slot, used by the next pending step in place of the cell's exit
     /// value; an argument of 193 or more (or negative) is ignored.
     LoadOverride { slot: i32 },
+    /// StartEffect (bool true) for every effect id that script-group instance `group` of the
+    /// thread's world lists.
+    GroupEffects { group: usize },
     /// Wait, one tick at a time, while an object of the thread's world animates.
     WaitObj { obj: usize },
     /// StopTimer (running off; SPEC-0030 row 248).
@@ -1450,6 +1453,35 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0044 1411 Init: 95 (with 99, 105, 101 and 103) on the first visit; 96 and 335 once
+        // 100, 102, 104 and 106 are all set; the triggers (3 exit, 0 mosaic, 17, 16, 1, the signs
+        // 4 to 15, 18); the mosaic-camera thread (each set story flag of 100, 102, 106, 104 sets
+        // 688, 689, 690 or 691; its group camera is not played); the slot thread (98: set 0, else
+        // with 96 set 1; region 1412 + set). The six object setups are not given in the spec.
+        1411 => {
+            if !state.flag(95) {
+                for f in [95, 99, 105, 101, 103] {
+                    state.set(f, true);
+                }
+            }
+            if [100, 102, 104, 106].iter().all(|&f| state.flag(f)) {
+                state.set(96, true);
+                state.set(335, true);
+            }
+            let mut v = vec![reg(3, 3), reg(0, 0), reg(17, 17), reg(16, 16), reg(1, 1), reg(18, 18)];
+            v.extend((4..=15).map(|i| reg(i, 4)));
+            for (a, b) in [(100, 688), (102, 689), (106, 690), (104, 691)] {
+                if state.flag(a) && !state.flag(b) {
+                    state.set(b, true);
+                }
+            }
+            if state.flag(98) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1412) });
+            } else if state.flag(96) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1413) });
+            }
+            v
+        }
         // SPEC-0043 1398 Init: routines 1 to 5 on triggers 34, 38, 33, 35 and 37; flag 355; the
         // four Whinny pens; with 106 clear objects 0, 1, 2 and 5, effect 15 stopped, the done words
         // (21 to 25) from flags 720 to 724 (723 also arms stage 4, word 30) and thread 6 for the
@@ -2442,6 +2474,19 @@ fn talk_1350(routine: u8, s: &mut GameState) -> Vec<Action> {
         }
         _ => Vec::new(),
     }
+}
+
+/// A routine's line cycling with a case marker (words 10 + 2r and 11 + 2r of the pack): the
+/// position restarts at the case's first line when the case changes.
+fn cycle_in(s: &mut GameState, pack: u32, routine: u8, case: i32, lines: &[u16]) -> Vec<Action> {
+    let (cw, pw) = (10 + 2 * routine, 11 + 2 * routine);
+    let mut pos = s.word(pack, pw);
+    if s.word(pack, cw) != case + 1 {
+        s.set_word(pack, cw, case + 1);
+        pos = 0;
+    }
+    s.set_word(pack, pw, (pos + 1) % lines.len() as i32);
+    vec![Action::Talk { line: lines[pos as usize % lines.len()] }]
 }
 
 /// SPEC-0043 1066's line cycling: the routine's case and position (words 10 + 2r and 11 + 2r);
@@ -3866,6 +3911,75 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
             }
+        }
+        // SPEC-0044 1411 trigger 0, the mosaic (entering): with 333 clear 333 set (movie 59 is not
+        // played; in play 333 is always set here); with 334 clear each held piece of 25, 26 and 27
+        // is placed (removed, object 2, 3 or 4 on, the count word 1 up) with camera 5; at 3 the
+        // mosaic completes (334, a fade, camera 4 with sound 6; movie 60 is not played); below 3
+        // line 63.
+        (1411, 0) if call.object && call.state == 1 => {
+            state.set(333, true);
+            if !state.flag(334) {
+                let pieces: Vec<(u16, usize)> = [(25, 2), (26, 3), (27, 4)].into_iter().filter(|&(i, _)| state.has_item(i)).collect();
+                let held: Vec<usize> = pieces.iter().map(|&(_, o)| o).collect();
+                for &(i, _) in &pieces {
+                    state.remove_all(i);
+                }
+                if !held.is_empty() {
+                    out.actions.extend(held.iter().map(|&obj| Action::InitObjOn { obj, end: false }));
+                    state.set_word(pack, 1, state.word(pack, 1) + held.len() as i32);
+                    out.actions.extend([Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 }, Action::ReturnCamera { preset: -1, release: true }]);
+                }
+                if state.word(pack, 1) >= 3 {
+                    state.set(334, true);
+                    out.actions.extend([2, 3, 4].map(|obj| Action::InitObjOn { obj, end: false }));
+                    out.actions.extend([
+                        Action::FadeOut { seconds: FADE, wait: true },
+                        Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                        Action::FadeIn { seconds: FADE, wait: true },
+                        Action::PlaySound { cue: 6, locator: None },
+                        Action::Sleep { ticks: 60 },
+                        Action::FadeOut { seconds: FADE, wait: true },
+                        Action::ReturnCamera { preset: -1, release: true },
+                        Action::FadeIn { seconds: FADE, wait: true },
+                    ]);
+                } else {
+                    out.actions.push(Action::Message { line: 63 });
+                }
+            }
+        }
+        // Trigger 17 (335 set, 336 clear): 336 and 97, camera 13, line 66 (movie 69 is not played).
+        (1411, 17) if state.flag(335) && !state.flag(336) => {
+            state.set(336, true);
+            state.set(97, true);
+            out.actions.extend([Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::Message { line: 66 }, Action::ReturnCamera { preset: -1, release: true }]);
+        }
+        // Trigger 16 (337 set, 338 clear): 338 (movie 71 is not played).
+        (1411, 16) if state.flag(337) && !state.flag(338) => state.set(338, true),
+        // Trigger 1 (entering, 338 set): the movie return world eW 191 (pack 1432) and movie 72;
+        // with no movie player the load of eW 191 follows at once.
+        (1411, 1) if call.state == 1 && state.flag(338) => out.actions.push(Action::ReplaceExterior { slot: 191, plane: -1 }),
+        // Trigger 18 (entering, 703 clear): cameras 6, 7 and 8 with lines 64 and 65, 703.
+        (1411, 18) if call.object && call.state == 1 && !state.flag(703) => {
+            state.set(703, true);
+            let cam = |track| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+            out.actions.extend([cam(6), Action::Message { line: 64 }, cam(7), Action::Message { line: 65 }, cam(8), Action::ReturnCamera { preset: -1, release: true }]);
+        }
+        // Trigger 3, the exit (button): value 10 for eW 160 and the load of eW 160 (pack 1363).
+        (1411, 3) if call.object && call.state != 0 && call.square && !state.talking => {
+            state.blackboard.insert((2, 160), 10);
+            out.actions.push(Action::ReplaceExterior { slot: 160, plane: -1 });
+        }
+        // The signs (4 to 15, button): line 51 + index - 4; 5, 7, 11 and 15 set 354, 340, 351, 347.
+        (1411, 4) if call.object && call.state != 0 && call.square && !state.talking => {
+            match call.index {
+                5 => state.set(354, true),
+                7 => state.set(340, true),
+                11 => state.set(351, true),
+                15 => state.set(347, true),
+                _ => {}
+            }
+            out.actions.push(Action::Message { line: 51 + call.index - 4 });
         }
         // SPEC-0043 1398 routine 2 (trigger 38), the stage 1 trap: armed (word 31) with the hero's
         // hit points kept (word 32), objects 11 off and 10 played, 3 and 4 off, 1 and 2 on and
@@ -5587,6 +5701,19 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0044 1411 Update: line 67 the first time 25, 26 and 27 are held together; the
+        // group effects for 104 (instance 4), 106 (1), 102 (2) and 100 (3), every tick.
+        1411 => {
+            if state.word(pack, 2) == 0 && [25, 26, 27].iter().all(|&i| state.has_item(i)) {
+                state.set_word(pack, 2, 1);
+                out.push(Action::Message { line: 67 });
+            }
+            for (f, group) in [(104, 4), (106, 1), (102, 2), (100, 3)] {
+                if state.flag(f) {
+                    out.push(Action::GroupEffects { group });
+                }
+            }
+        }
         // SPEC-0043 1398 Update: the stage 1 trap (a hit-point drop since the last tick trips
         // it; the five entities' hit reactions are not listed in the spec), stage 2 (AI 13 to 15
         // dead on the tick before), stage 3 (four Miamice caged), and entities 16 to 18 at full
@@ -6119,6 +6246,13 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
             add(&mut t, 0, 0, (1.0, 3.0), dwell, &[(54, 2.5), (49, 2.5), (52, 2.5), (62, 2.5), (55, 2.5)], &points);
         }
         1407 => add(&mut t, 0, 0, (8.0, 14.0), (5.0, 7.0), &std3, &[]),
+        // SPEC-0044 1411: eleven adds (entity 0 idle 50); the nine-record limit refuses 3 and 5.
+        1411 => {
+            let anims = [(51, 2.5), (40, 2.5), (95, 2.5), (96, 2.5), (42, 2.5), (41, 2.5)];
+            for e in [0, 1, 2, 4, 6, 7, 8, 9, 10, 3, 5] {
+                add(&mut t, e, if e == 0 { 50 } else { 0 }, (8.0, 12.0), dwell, &anims, &[]);
+            }
+        }
         1417 if state.flag(102) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
         1419 if state.flag(100) => add(&mut t, 0, 0, (8.0, 14.0), (5.0, 7.0), &std3, &[]),
         1425 if state.flag(106) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
@@ -8172,6 +8306,13 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0044 1411: E1 to E6.
+        (1411, 4 | 10) => Some(1),
+        (1411, 3 | 9) => Some(2),
+        (1411, 1 | 7) => Some(3),
+        (1411, 5) => Some(4),
+        (1411, 2 | 8) => Some(5),
+        (1411, 0 | 6) => Some(6),
         // SPEC-0042 772: C on entity 2, D on entity 14.
         (772, 2) => Some(1),
         (772, 14) => Some(2),
@@ -8261,6 +8402,17 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 772 {
         return talk_772(routine, state);
+    }
+    // SPEC-0044 1411 E1 to E6: groups of three by 338, 337, else (E4: 338, else); the line steps
+    // through the group (restarting when the group changes).
+    if pack == 1411 && (1..=6).contains(&routine) {
+        let g = if state.flag(338) { 0 } else if state.flag(337) && routine != 4 { 1 } else { 2 };
+        let base: u16 = match (routine, g) {
+            (4, 0) => 27,
+            (4, _) => 30,
+            _ => [0, 9, 18, 0, 33, 42][routine as usize - 1] + 3 * g as u16,
+        };
+        return cycle_in(state, 1411, routine, g, &[base, base + 1, base + 2]);
     }
     // SPEC-0043 749 proximity: with 76 line 4 in the frame; else line 6 in the frame and line 9.
     if pack == 749 {
@@ -8617,6 +8769,40 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1411_mosaic_and_lines() {
+        let mut s = GameState::default();
+        on_init(1411, &mut s);
+        assert!(s.flag(95) && s.flag(103));
+        // Two pieces then the third: line 63, then the mosaic completes.
+        s.give(25, 1);
+        s.give(27, 1);
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let out = on_trigger(1411, 0, enter(0), &mut s).actions;
+        assert!(out.contains(&Action::InitObjOn { obj: 4, end: false }) && out.contains(&Action::Message { line: 63 }));
+        s.give(26, 1);
+        assert!(on_trigger(1411, 0, enter(0), &mut s).actions.contains(&Action::PlaySound { cue: 6, locator: None }));
+        assert!(s.flag(334));
+        // Sign 11 sets 351 and shows line 58.
+        assert_eq!(on_trigger(1411, 4, enter(11), &mut s).actions, vec![Action::Message { line: 58 }]);
+        assert!(s.flag(351));
+        // E2 with 337: 12, 13, 14, 12; with 338: 9.
+        s.set(337, true);
+        let got: Vec<_> = (0..4).map(|_| on_talk(1411, 2, &mut s)).collect();
+        assert_eq!(got, [12, 13, 14, 12].map(|line| vec![Action::Talk { line }]).to_vec());
+        s.set(338, true);
+        assert_eq!(on_talk(1411, 2, &mut s), vec![Action::Talk { line: 9 }]);
+        // Update's vector: 100 and 104 set: instances 4 and 3, in that order.
+        let mut s = GameState::default();
+        s.set(100, true);
+        s.set(104, true);
+        assert_eq!(on_update(1411, &mut s, false), vec![Action::GroupEffects { group: 4 }, Action::GroupEffects { group: 3 }]);
+        // The villager table keeps nine records.
+        let mut s = GameState::default();
+        entity_setup(1411, &mut s);
+        assert_eq!(s.entity_tables[&1411].records.len(), 9);
     }
 
     #[test]
