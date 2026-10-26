@@ -612,7 +612,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) || (pack == 1300 && door <= 2) || (pack == 1327 && door <= 1) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) || (pack == 1300 && door <= 2) || (pack == 1327 && door <= 1) || (pack, door) == (1324, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -720,6 +720,11 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             vec![Action::EnterInterior { slot }]
         }
         (1363, 0..=2) => vec![Action::Message { line: 0 }],
+        // SPEC-0041 1324 teleport 0 (context 13): value 70 for eW 155 and its load (pack 1335).
+        (1324, 0) => {
+            state.blackboard.insert((2, 155), 70);
+            vec![Action::ReplaceExterior { slot: 155, plane: -1 }]
+        }
         // SPEC-0044 1327 teleports (context 13): 0 posts 30 for eW 151; with 240 set and 245 clear
         // the Act 3 start (245 to 247; 400, 223 and 397; act start 3; flags 74, 57, 49, 93, 85, 31,
         // 19, 11, 83 and 4; movies 27, 29, 90 and 30 are not played, and their return world eW 64,
@@ -1539,6 +1544,31 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 1324 Init: object 29 looped at 0.5; with 239 clear (the unsolved layout)
+        // objects 21, 15, 17, 19, 14, 0 and 1 at their start and the normal camera; with 239 set
+        // object 21, the stage-1 plates 16, 18 and 20 pressed and beam object 9 looped with the
+        // 1 s rhythm (words 1 the beam object + 1, 6 the period in ticks). The plate triggers (0
+        // to 4) answer only movable blocks, which are not built, so they are not registered; the
+        // thread's block moves and the solved layout's block calls are not reproduced.
+        1324 => {
+            let mut v = vec![Action::LoopAnim { obj: 29, speed: 0.5 }];
+            if state.flag(239) {
+                v.extend([
+                    Action::InitObjOn { obj: 21, end: false },
+                    Action::InitObjOn { obj: 16, end: true },
+                    Action::InitObjOn { obj: 18, end: true },
+                    Action::InitObjOn { obj: 20, end: true },
+                ]);
+                v.extend([10, 11, 12, 13, 14].map(|obj| Action::DeactivateObj { obj }));
+                v.extend([Action::InitObjOn { obj: 9, end: false }, Action::LoopAnim { obj: 9, speed: 1.0 }]);
+                state.set_word(pack, 1, 10);
+                state.set_word(pack, 6, 60);
+            } else {
+                v.extend([21, 15, 17, 19, 14, 0, 1].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            v
+        }
         // SPEC-0039 1246 Init: objects 5 and 3 at their start; handler 1 on trigger 1, handler 2
         // on trigger 0.
         1246 => vec![Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 3, end: false }, reg(1, 1), reg(0, 2)],
@@ -6703,6 +6733,44 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0041 1324 Update: line 0 once per load while 239 is clear; the beam rhythm while a
+        // beam is set (a beat each time the clock passes the last beat by more than the period:
+        // object 0 one frame on, counter mod 61; objects 1 to 7 advance 3 frames a tick up to the
+        // target, which rises 15 a beat and wraps at 360). Words: 2 the last beat tick, 3 the
+        // counter, 4 the target, 5 the running value.
+        1324 => {
+            if !state.flag(239) && state.word(pack, 7) == 0 {
+                state.set_word(pack, 7, 1);
+                out.push(Action::Message { line: 0 });
+            }
+            if state.word(pack, 1) != 0 {
+                let now = state.hero.tick as i32;
+                if now - state.word(pack, 2) > state.word(pack, 6) {
+                    state.set_word(pack, 2, now);
+                    let c = (state.word(pack, 3) + 1) % 61;
+                    state.set_word(pack, 3, c);
+                    out.push(Action::SetObjTime { obj: 0, seconds: c as f32 / 30.0 });
+                    let t = state.word(pack, 4);
+                    if t >= 360 {
+                        state.set_word(pack, 4, 15);
+                        state.set_word(pack, 5, 0);
+                    } else {
+                        state.set_word(pack, 4, t + 15);
+                    }
+                }
+                let r = state.word(pack, 5);
+                if r < state.word(pack, 4) {
+                    let r = r + 3;
+                    out.extend((1..=7).map(|obj| Action::SetObjTime { obj, seconds: r as f32 / 30.0 }));
+                    if r >= 360 {
+                        state.set_word(pack, 4, 0);
+                        state.set_word(pack, 5, 0);
+                    } else {
+                        state.set_word(pack, 5, r);
+                    }
+                }
+            }
+        }
         // SPEC-0044 1327 Update: the item flags 225 to 227 (items 11, 10, 62); entity 0
         // undamageable while 228 is set and 233 clear; the target-practice thread.
         1327 => {
@@ -9895,6 +9963,36 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1324_beam_rhythm() {
+        // The spec's vector: P = 4.0 s, the last beat at 0, the clock at 4.01 s: a beat, object 0
+        // at 1/30 s, objects 1 to 7 at 0.1 to 0.5 s over this tick and the next four.
+        let mut s = GameState::default();
+        s.set(239, true);
+        on_init(1324, &mut s);
+        s.set_word(1324, 6, 240);
+        s.hero.tick = 241;
+        let out = on_update(1324, &mut s, false);
+        assert!(out.contains(&Action::SetObjTime { obj: 0, seconds: 1.0 / 30.0 }) && out.contains(&Action::SetObjTime { obj: 7, seconds: 0.1 }));
+        for k in 2..=5 {
+            s.hero.tick += 1;
+            assert!(on_update(1324, &mut s, false).contains(&Action::SetObjTime { obj: 1, seconds: (3 * k) as f32 / 30.0 }));
+        }
+        s.hero.tick += 1;
+        assert!(on_update(1324, &mut s, false).is_empty());
+        // The next beat on the first tick more than 240 ticks after the last.
+        s.hero.tick = 481;
+        assert!(on_update(1324, &mut s, false).is_empty());
+        s.hero.tick = 482;
+        assert!(on_update(1324, &mut s, false).contains(&Action::SetObjTime { obj: 0, seconds: 2.0 / 30.0 }));
+        // Unsolved: line 0 once; the door posts 70 for eW 155.
+        let mut s = GameState::default();
+        on_init(1324, &mut s);
+        assert_eq!(on_update(1324, &mut s, false), vec![Action::Message { line: 0 }]);
+        assert!(on_update(1324, &mut s, false).is_empty());
+        assert_eq!(on_teleport(1324, 0, &mut s), vec![Action::ReplaceExterior { slot: 155, plane: -1 }]);
     }
 
     #[test]
