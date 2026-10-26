@@ -431,6 +431,8 @@ enum Wait {
     Inside(u16),
     /// Until a module word of a pack is 0.
     Word(u32, u8),
+    /// Until the hero holds an item.
+    Item(u16),
 }
 
 pub struct Play {
@@ -1530,6 +1532,7 @@ impl Play {
             Wait::HeroOneShot => self.loco.state != neopets_sim::hero::ONE_SHOT,
             Wait::Inside(i) => self.world.records.get(&i).is_none_or(|r| r.state == 0),
             Wait::Word(pack, w) => self.state.word_of(pack, w) == 0,
+            Wait::Item(item) => self.state.has_item(item),
             Wait::Cage(i) => self.state.burrows.as_ref().and_then(|b| b.cages.get(i)).is_none_or(|c| c.state != 4),
             Wait::ObjAnim(pack, i) => [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.object_anims.get(i)).is_none_or(|a| a.state != 2),
         }
@@ -1938,6 +1941,7 @@ impl Play {
                 }
                 Action::WaitInside { index } => return Some(Wait::Inside(index)),
                 Action::WaitWord { word } => return Some(Wait::Word(pack, word)),
+                Action::WaitItem { item } => return Some(Wait::Item(item)),
                 Action::DisplayMask { mask } => {
                     self.display_mask.insert(pack, 2 * mask);
                 }

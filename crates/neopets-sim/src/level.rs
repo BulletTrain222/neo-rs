@@ -218,6 +218,8 @@ pub enum Action {
     WaitWord { word: u8 },
     /// SetAnimObjAdditionRotY: the object's added yaw about its own Y axis, in degrees.
     ObjYaw { obj: usize, degrees: f32 },
+    /// Wait, one tick at a time, until the hero holds an item.
+    WaitItem { item: u16 },
     /// SetWorldDisplayMask(M) for the thread's world (the display word stores 2M; SPEC-0030
     /// row 212). SetWorldCollisMask is not built.
     DisplayMask { mask: u32 },
@@ -553,7 +555,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
+    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -585,7 +587,9 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
-        // SPEC-0039 1248 teleport 0 (context 13): the replacement to eW 147 (pack 1257).
+        // SPEC-0039 1248 and SPEC-0041 1247 and 1249 teleport 0 (context 13): the replacement to
+        // eW 147 (pack 1257) (1247 and 1249 then wait 3 s).
+        (1247 | 1249, 0) => vec![Action::ReplaceExterior { slot: 147, plane: -1 }, wait(3.0)],
         (1248, 0) => vec![Action::ReplaceExterior { slot: 147, plane: -1 }],
         // SPEC-0039 706 teleport 0 (context 13): with 67 clear and 64 set line 1; else the entry
         // into eW 76 (pack 984), 3 s.
@@ -837,7 +841,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -884,6 +888,34 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1249 Init: by flag 80 the levers' up objects (47, 43, 45) or down objects (48,
+        // 44, 46) with the other object sets of each branch; effects 0 to 15 stopped; the levers
+        // CB6 to CB8 on triggers 18, 16 and 17 and CB10 on 0. The object-swap callbacks CB1 to
+        // CB5 (Medium) and AddAnimObjSound are not reproduced.
+        1249 => {
+            let up = state.flag(80);
+            let objs: &[usize] = if up { &[13, 16, 20, 24, 10, 17, 21, 25, 47, 43, 45, 9, 1, 5, 7, 6] } else { &[13, 16, 20, 24, 10, 15, 19, 23, 48, 44, 46, 8, 0, 2, 4, 3] };
+            let mut v: Vec<Action> = objs.iter().map(|&obj| Action::InitObjOn { obj, end: false }).collect();
+            for k in 0..3u8 {
+                state.set_word(pack, 30 + k, up as i32);
+            }
+            v.extend((0..=15).map(|slot| Action::StopEffect { slot }));
+            v.extend([reg(18, 6), reg(16, 7), reg(17, 8), reg(0, 10)]);
+            v
+        }
+        // SPEC-0041 1247 Init: effect 0 stopped; with flag 78 set its 18 objects, else its 17 and
+        // CB7 on trigger 4 (the object-swap callbacks CB1 to CB6, Medium, are not reproduced);
+        // the teleport and the arrival are fixed rules.
+        1247 => {
+            let mut v = vec![Action::StopEffect { slot: 0 }];
+            if state.flag(78) {
+                v.extend([1, 0, 7, 9, 11, 12, 15, 17, 19, 21, 23, 25, 27, 28, 31, 33, 35, 4].map(|obj| Action::InitObjOn { obj, end: false }));
+            } else {
+                v.extend([2, 3, 7, 8, 10, 12, 15, 16, 18, 23, 24, 26, 29, 31, 32, 34, 5].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.push(reg(4, 7));
+            }
+            v
+        }
         // SPEC-0041 1130 Init: with flag 675 clear objects 0, 29, 31, 33, 27, 1, 12, 15, 18 and 11
         // off and callbacks 1 to 7 on triggers 5, 6, 7, 4, 2, 1 and 0; with it set objects 29, 31,
         // 33, 27 and 1 at their end and 11, 14, 17 and 19 off, no triggers. AddAnimObjSound and
@@ -2693,6 +2725,72 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1249 levers CB6 to CB8 (triggers 18, 16, 17): the Square context 2 while the
+        // lever is up, else 1; a press walks the hero to its point and moves it (down: hero
+        // animation 139, the down object swapped for the up one and played, camera 4; with the
+        // other two up as well, camera 6 and flag 80; up: hero animation 140 and the reverse).
+        // Word 33 keeps a move from starting twice.
+        (1249, 6..=8) if call.object && call.state != 0 && state.word(pack, 33) == 0 => {
+            let k = (routine - 6) as usize;
+            let (upo, down, point) = [(47, 48, 22), (43, 44, 20), (45, 46, 21)][k];
+            let up = state.word(pack, 30 + k as u8) != 0;
+            out.prompt = Some(if up { 2 } else { 1 });
+            if call.square && !state.talking {
+                state.set_word(pack, 33, 1);
+                state.set_word(pack, 30 + k as u8, (!up) as i32);
+                let (from, to, anim) = if up { (upo, down, 140) } else { (down, upo, 139) };
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: point, wait: true, orient: true },
+                    Action::HeroAnim { anim, wait: false },
+                    Action::DeactivateObj { obj: from },
+                    Action::InitObjOn { obj: to, end: false },
+                    Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                    Action::PlayAnim { obj: to, speed: 1.0, wait: true },
+                ]);
+                if !up && (0..3u8).all(|j| state.word(pack, 30 + j) != 0) {
+                    state.set(80, true);
+                    out.actions.push(Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 });
+                }
+                out.actions.extend([Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 1 }, Action::Bits { word: 33, set: 0, clear: 1 }]);
+            }
+        }
+        // 1249 CB10 (trigger 0, the body): line 0 once with 269 clear (object 36's finish taken).
+        (1249, 10) if call.state == 1 && call.object && !state.flag(269) && state.word(pack, 34) == 0 => {
+            state.set_word(pack, 34, 1);
+            out.actions.push(Action::Message { line: 0 });
+        }
+        // SPEC-0041 1247 CB7 (trigger 4): holding item 29 sets 78, 269 and 270 at once; else on the
+        // first fire object 5 off, 4 on, camera 8, object 4 played, the normal camera, SetAI_Agro
+        // on 10 (no effect on a dead AI), the wait for item 29, 1.8 s, object 4 off, 5 on, camera
+        // 8, object 5 played, the three flags and the normal camera.
+        (1247, 7) if state.has_item(29) => {
+            for f in [78, 269, 270] {
+                state.set(f, true);
+            }
+        }
+        (1247, 7) if call.state == 1 && call.object && state.word(pack, 0) == 0 => {
+            state.set_word(pack, 0, 1);
+            let cam = Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 };
+            out.actions.extend([
+                Action::DeactivateObj { obj: 5 },
+                Action::InitObjOn { obj: 4, end: false },
+                cam,
+                Action::PlayAnim { obj: 4, speed: 1.0, wait: true },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::Agro { entity: 10 },
+                Action::WaitItem { item: 29 },
+                wait(1.8),
+                Action::DeactivateObj { obj: 4 },
+                Action::InitObjOn { obj: 5, end: false },
+                cam,
+                Action::PlayAnim { obj: 5, speed: 1.0, wait: true },
+                Action::SetFlag { flag: 78, on: true },
+                Action::SetFlag { flag: 269, on: true },
+                Action::SetFlag { flag: 270, on: true },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
         // SPEC-0041 1130 callback 6 (trigger 1): line 3 the first time (word 20). Callback 5
         // (trigger 2, entering with the body): with 675 clear (and object 2 not yet shown, word
         // 21) the one-shot switch: 675, object 1 off, object 2 on and played, object 0 on, the
@@ -3882,6 +3980,16 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0041 1247 and 1249 activate-world: value 10 (1247) or 30 (1249) for eW 147 places
+        // the hero at locator 0 with the normal camera.
+        1247 | 1249 => {
+            let want = if pack == 1247 { 10 } else { 30 };
+            if state.take_message(2, 147) == want {
+                vec![Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }]
+            } else {
+                Vec::new()
+            }
+        }
         // SPEC-0039 1248 activate-world: value 20 for eW 147 places the hero at locator 5; any
         // value but -1 returns the camera.
         1248 => {
@@ -6025,6 +6133,26 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_1249_1247() {
+        // SPEC-0041 1249: each lever up once sets 80 on the third pull, in any order.
+        let mut s = GameState::default();
+        on_init(1249, &mut s);
+        let press = |idx: u16| TriggerCall { index: idx, state: 2, object: true, square: true };
+        for (r, i) in [(7, 16), (6, 18)] {
+            on_trigger(1249, r, press(i), &mut s);
+            s.set_word(1249, 33, 0);
+        }
+        assert!(!s.flag(80));
+        on_trigger(1249, 8, press(17), &mut s);
+        assert!(s.flag(80));
+        // 1247 CB7: holding item 29 sets the three flags at once.
+        let mut t = GameState::default();
+        t.give(29, 1);
+        on_trigger(1247, 7, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut t);
+        assert!(t.flag(78) && t.flag(269) && t.flag(270));
     }
 
     #[test]
