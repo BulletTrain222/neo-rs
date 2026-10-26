@@ -634,6 +634,8 @@ pub struct Play {
     /// Character light states (SPEC-0046 Character lights): the hero's (key None) and each
     /// region character's, by id.
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
+    /// The drop direction of a dig reward while it pays out (SPEC-0051 section 10 step 11).
+    dig_drop: Option<[f32; 3]>,
     /// The zone manager (SPEC-0006 Zone manager); its grid is the current world's.
     pub zones: neopets_sim::zone::Zones,
     /// The prize wheel's running spin (its pack) and each world's display mask word
@@ -967,6 +969,7 @@ impl Play {
             r_displays: Default::default(),
             r_fx: [None; 2],
             char_lights: HashMap::new(),
+            dig_drop: None,
             zones: Default::default(),
             wheel_spin: None,
             display_mask: HashMap::new(),
@@ -1325,6 +1328,22 @@ impl Play {
                 1 => out.push(Action::InitObjOn { obj, end: self.state.collected.contains(&g.key) }),
                 // Kind 5 (a reaction object): object 0 on and looped at 1.0.
                 5 => out.extend([Action::InitObjOn { obj, end: false }, Action::LoopAnim { obj, speed: 1.0 }]),
+                // Kind 6 (a dig site, SPEC-0051 section 10 Site set-up): undug, object 0 at its
+                // start and the marker on exactly when the map is held; dug, object 2 at its
+                // start and object 1 at its end, the marker off.
+                6 if g.objects.len() >= 3 => {
+                    let o = |k: usize| usize::try_from(g.objects[k]).ok();
+                    let marker = g.effects.first().and_then(|&e| usize::try_from(e).ok());
+                    if self.state.collected.contains(&g.key) {
+                        out.extend(o(2).map(|obj| Action::InitObjOn { obj, end: false }));
+                        out.extend(o(1).map(|obj| Action::InitObjOn { obj, end: true }));
+                        out.extend(marker.map(|slot| Action::StopEffect { slot }));
+                    } else {
+                        out.push(Action::InitObjOn { obj, end: false });
+                        let held = g.key.checked_sub(200).is_some_and(|i| self.state.maps.contains(&i));
+                        out.extend(marker.map(|slot| if held { Action::StartEffect { slot, camera: false } } else { Action::StopEffect { slot } }));
+                    }
+                }
                 _ => {}
             }
         }
@@ -1620,6 +1639,7 @@ impl Play {
                 Action::BurrowsRequest { .. } | Action::BurrowsClose { .. } => level::burrows_request(&mut self.state, a),
                 Action::BurrowsStagger => self.apply(&level::burrows_stagger()),
                 Action::ChestReward { group } => self.chest_reward(group as usize),
+                Action::DigStep { group, step } => self.dig_thread_step(group as usize, step),
                 Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
                 Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
                 Action::MoveEffect { slot, locator } => {
@@ -1674,6 +1694,7 @@ impl Play {
                 }
                 Action::WaitWalks { entities } => return Some(Wait::EntityWalks(pack, entities)),
                 Action::SetFlag { flag, on } => self.state.set(flag, on),
+                Action::GiveItem { item, count } if item == level::TREASURE_MAP => self.map_held(count),
                 Action::GiveItem { item, count } => self.state.give(item, count),
                 Action::WaitHeroNear { locator, distance } => {
                     let (l, _) = self.locator(pack, locator)?;
@@ -3526,6 +3547,10 @@ impl Play {
                 self.chest_step(g, rec, square);
                 continue;
             }
+            if let Some(g) = self.world.groups.iter().position(|g| g.kind == 6 && g.triggers.first() == Some(&(i as i32))) {
+                self.dig_step(g, rec);
+                continue;
+            }
             // SPEC-0048 Reaction object (kind 5): on a fire of trigger 0 while no run is going on,
             // object 0 hidden, object 1 shown, played once and waited for, set to time 0 and
             // hidden, then object 0 shown and looped again.
@@ -3608,6 +3633,107 @@ impl Play {
                 v.extend([Action::Sleep { ticks: 90 }, Action::WaitDialog, Action::ReturnCamera { preset: -1, release: true }]);
                 self.apply(&v);
             }
+        }
+    }
+
+    /// SPEC-0051 section 10, when a dig starts: a repeat fire (state 2) with a nonzero object
+    /// value, object 0 active, the treasure not collected and its map held; then the dig
+    /// sequence as a script thread. Not built: SetHeroEquippedState 0 and the HUD reset (step 2)
+    /// and the camera shake (step 6).
+    fn dig_step(&mut self, g: usize, rec: neopets_sim::trigger::Record) {
+        let Some(group) = self.world.groups.get(g).cloned() else { return };
+        let objs: Vec<usize> = group.objects.iter().filter_map(|&o| usize::try_from(o).ok()).filter(|&o| o < self.world.object_anims.len()).collect();
+        let [o0, o1, o2, ..] = objs.as_slice() else { return };
+        let (o0, o1, o2) = (*o0, *o1, *o2);
+        let a = self.world.object_anims[o0];
+        let held = group.key.checked_sub(200).is_some_and(|i| self.state.maps.contains(&i));
+        // A started dig is marked for this load (clean side: the sequence is not started twice
+        // while the hero stays in the sphere).
+        if rec.state != 2 || !rec.object || !a.drawn || a.state == 4 || self.state.collected.contains(&group.key) || !held || self.world.opened.contains(&g) {
+            return;
+        }
+        self.world.opened.insert(g);
+        let Some((p, d)) = group.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()) else { return };
+        // Step 1: the hero at P - 2.2 D, facing D.
+        self.loco.teleport([p[0] - 2.2 * d[0], p[1] - 2.2 * d[1], p[2] - 2.2 * d[2]], d);
+        // Steps 3 to 5: camera [0], the marker off, effect 4036 at P + 2.9 D with no rotation.
+        let camera = |k: usize| group.cameras.get(k).and_then(|&c| usize::try_from(c).ok()).map(|track| Action::PlayCamera { track, wait: false, end: 0, speed: 1.0 });
+        let table = self.effect_table.clone();
+        self.effects.one_shot(&table, 4036, [p[0] + 2.9 * d[0], p[1] + 2.9 * d[1], p[2] + 2.9 * d[2]], neopets_sim::effect::IDENTITY, &mut self.rng);
+        let mut v: Vec<Action> = vec![Action::HoldHero];
+        v.extend(camera(0));
+        v.extend(group.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::StopEffect { slot }));
+        // Step 7: object 0 played once and waited for, deactivated; objects 2 and 1 at time 0;
+        // object 1 played once and waited for.
+        v.extend([
+            Action::PlayAnim { obj: o0, speed: 1.0, wait: true },
+            Action::DeactivateObj { obj: o0 },
+            Action::InitObjOn { obj: o2, end: false },
+            Action::InitObjOn { obj: o1, end: false },
+            Action::PlayAnim { obj: o1, speed: 1.0, wait: true },
+            Action::Sleep { ticks: 1 },
+            Action::DigStep { group: g as u16, step: 8 },
+            Action::Sleep { ticks: 60 },
+        ]);
+        v.extend(camera(1));
+        v.extend([
+            Action::HeroAnim { anim: 186, wait: false },
+            Action::DigStep { group: g as u16, step: 11 },
+            Action::Sleep { ticks: 120 },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::DigStep { group: g as u16, step: 13 },
+            Action::Sleep { ticks: 1 },
+        ]);
+        self.last_door = format!("dig started at group {g} (key {})", group.key);
+        self.apply(&v);
+    }
+
+    /// The dig's thread steps 8, 11 and 13 (SPEC-0051 section 10).
+    fn dig_thread_step(&mut self, g: usize, step: u8) {
+        let Some(group) = self.world.groups.get(g).cloned() else { return };
+        let Some((p, d)) = group.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()) else { return };
+        match step {
+            8 => {
+                let f = unit([d[0], 0.0, d[2]]);
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, 790, [p[0] + 2.9 * d[0], p[1] + 2.9 * d[1], p[2] + 2.9 * d[2]], [[f[2], 0.0, -f[0]], [0.0, 1.0, 0.0], f], &mut self.rng);
+            }
+            11 => {
+                // The drop action on reward [0] at P + 2.2 D with direction -D (each coin 0.4 s
+                // after the one before); reward [1]'s character activation is not used on disc.
+                let point = group
+                    .drops
+                    .first()
+                    .and_then(|&id| usize::try_from(id).ok())
+                    .and_then(|id| self.world.placements.get(id))
+                    .filter(|(region, _)| *region == 0xFF)
+                    .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
+                let pack = self.world.pack;
+                let at = [p[0] + 2.2 * d[0], p[1] + 2.2 * d[1], p[2] + 2.2 * d[2]];
+                self.dig_drop = Some([-d[0], -d[1], -d[2]]);
+                self.pay_out(pack, at, point);
+                self.dig_drop = None;
+                self.last_door = format!("dig reward of group {g} (key {}): {:?} at {at:?}", group.key, point.map(|q| (q.key, q.group, q.count)));
+            }
+            13 => {
+                self.state.collected.insert(group.key);
+                self.last_door = format!("dig of group {g} done: entry {} set, maps held {:?}", group.key, self.state.maps);
+            }
+            _ => {}
+        }
+    }
+
+    /// Mark map n held (SPEC-0021 Treasure maps): cue 159 (the stinger request is dropped), and
+    /// a dig site of the current world with key 200 + n turns its marker on at once.
+    pub fn map_held(&mut self, n: u32) {
+        if !self.state.maps.insert(n) {
+            return;
+        }
+        self.cue(159);
+        let pack = self.world.pack;
+        let site = self.world.groups.iter().find(|g| g.kind == 6 && g.key == 200 + n && !self.state.collected.contains(&g.key)).and_then(|g| g.effects.first().and_then(|&e| usize::try_from(e).ok()));
+        if let Some(slot) = site {
+            self.start_placed(pack, slot, false);
         }
     }
 
@@ -4727,6 +4853,7 @@ impl Play {
     /// drop action (money roll, coin split or item roll; SPEC-0021 Drop and money flow).
     fn pay_out(&mut self, pack: u32, at: [f32; 3], drop: Option<neopets_data::region::ItemPoint>) {
         let Some(p) = drop else { return };
+        let direction = self.dig_drop;
         let drop_spawn = |id: u16, charm: bool| neopets_sim::items::Spawn {
             id,
             point: at,
@@ -4736,7 +4863,7 @@ impl Play {
             s1: 1.0,
             delay: 0.0,
             larg: -1.0,
-            direction: None,
+            direction,
             flag: p.flags,
             map: p.map,
             price: 0,
@@ -4761,8 +4888,10 @@ impl Play {
         };
         match roll {
             neopets_sim::items::Drop::Coins(m) => {
-                for id in neopets_sim::items::coin_split(m, &self.coins.0, &self.coins.1) {
-                    self.spawn_item(pack, drop_spawn(id, false));
+                // With a direction (a dig reward) each coin starts 0.4 s after the one before.
+                let step = if direction.is_some() { 0.4 } else { 0.0 };
+                for (k, id) in neopets_sim::items::coin_split(m, &self.coins.0, &self.coins.1).into_iter().enumerate() {
+                    self.spawn_item(pack, neopets_sim::items::Spawn { delay: step * k as f32, ..drop_spawn(id, false) });
                 }
             }
             neopets_sim::items::Drop::Item(id) => {
@@ -4819,6 +4948,12 @@ impl Play {
             self.cue(165);
             self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.state.neopoints, self.ticks);
         } else {
+            if it.id == level::TREASURE_MAP {
+                // A map pickup's number is the placement byte +0x2C plus 1.
+                self.map_held(it.map as u32 + 1);
+                self.last_pickup = format!("picked up map {} on tick {}", it.map as u32 + 1, self.ticks);
+                return;
+            }
             let count = if it.charm { 100 } else { 1 };
             *self.state.items.entry(it.id).or_insert(0) += count;
             if matches!(it.id, 19 | 20 | 151 | 154 | 174) {

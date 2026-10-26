@@ -31,6 +31,9 @@
 
 use std::collections::{BTreeSet, HashMap};
 
+/// The treasure map item (SPEC-0021 Treasure maps).
+pub const TREASURE_MAP: u16 = 175;
+
 /// What a handler asks the host to do, in order.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Action {
@@ -191,6 +194,9 @@ pub enum Action {
     /// A lock chest's reward step (SPEC-0048 Lock chests, step 6): the drop action on group g's
     /// reward placement, the character of reward [1], and its collected entry set.
     ChestReward { group: u16 },
+    /// A dig site's steps (SPEC-0051 section 10, dig sequence) for script group g: 8 (effect
+    /// 790 at P + 2.9 D facing D), 11 (the reward) and 13 (the collected entry).
+    DigStep { group: u16, step: u8 },
     SleepRandom { lo: u32, hi: u32 },
 }
 
@@ -314,6 +320,8 @@ pub struct GameState {
     pub words: HashMap<(u32, u8), i32>,
     /// The shared collected table (SPEC-0048 Script groups, Key; SPEC-0051): rows set to 1.
     pub collected: BTreeSet<u32>,
+    /// Held treasure maps by treasure number (SPEC-0021 Treasure maps; SPEC-0051 section 10).
+    pub maps: BTreeSet<u32>,
     /// The current hit points of the current world's entities by entity id (filled by the host
     /// before each Update; GetAI_HitPoints).
     pub entity_hp: HashMap<usize, i32>,
@@ -464,6 +472,12 @@ impl GameState {
 
     /// GiveItemToHero(item, n).
     pub fn give(&mut self, item: u16, n: u32) {
+        // Item 175 takes a treasure number: the give marks map n held (refused when it is held
+        // already) and the item count is not changed.
+        if item == TREASURE_MAP {
+            self.maps.insert(n);
+            return;
+        }
         *self.items.entry(item).or_insert(0) += n;
     }
 
@@ -3204,6 +3218,16 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn treasure_map_give_marks_the_map() {
+        // SPEC-0021 Treasure maps: the give's quantity is the treasure number; no item is kept.
+        let mut s = GameState::default();
+        s.give(TREASURE_MAP, 11);
+        s.give(TREASURE_MAP, 11);
+        assert_eq!(s.maps.iter().copied().collect::<Vec<_>>(), vec![11]);
+        assert!(!s.items.contains_key(&TREASURE_MAP));
     }
 
     #[test]

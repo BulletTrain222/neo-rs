@@ -2015,6 +2015,10 @@ fn play_trace(
     if let Some([x, z, y]) = start {
         play.place_at(x, z, y);
     }
+    // NEOPETS_TRACE_MAPS="n,...": diagnostic treasure maps held from the start (SPEC-0051).
+    for n in std::env::var("NEOPETS_TRACE_MAPS").unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u32>().ok()) {
+        play.map_held(n);
+    }
     // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic).
     if let Some(hp) = std::env::var("NEOPETS_TRACE_HP").ok().and_then(|v| v.parse::<i32>().ok()) {
         play.hero_hp = hp;
