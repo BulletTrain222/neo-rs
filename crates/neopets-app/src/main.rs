@@ -2053,6 +2053,10 @@ fn play_trace(
     let mut hops = 0;
     let mut last_hit = String::new();
     let mut save_prompt = false;
+    if let Some((line, at)) = play.message {
+        let text = play.world.lines.line(line as usize).map(|l| format!("{}: {}", l.speaker, l.text));
+        println!("Open at the start: LevelMsg line {line} on tick {at}: {text:?}");
+    }
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
     let placed: Vec<String> = play.world.placed_effects.iter().take(12).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();

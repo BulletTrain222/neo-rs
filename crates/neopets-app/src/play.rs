@@ -1390,6 +1390,9 @@ impl Play {
         }
         let actions = level::on_activate(self.world.pack, &mut self.state);
         self.apply(&actions);
+        // RegisterOnEnterCallback (SPEC-0030 row 255): right after the activate-world callback.
+        let actions = level::on_enter(self.world.pack, &mut self.state);
+        self.apply(&actions);
         // SPEC-0047 Scene start restore.
         match self.pet_pending.scene_start() {
             neopets_sim::petpet::Restore::Spawn { type_id, t, f } => self.activate_pet(type_id, t, f),

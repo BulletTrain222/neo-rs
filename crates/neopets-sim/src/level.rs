@@ -724,6 +724,9 @@ pub fn objects_scripted(pack: u32) -> bool {
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0039 984 Init: the proximity and on-enter callbacks are fixed rules; the four
+        // item-ask callbacks never fire (SPEC-0030 row 257); thread 7 returns the normal camera.
+        984 => vec![Action::ReturnCamera { preset: -1, release: true }],
         // SPEC-0044 1017 Init: flag 85; thread K1 loads slot 0 with set 1 (flag 86) or 0 (region
         // 1018 + set); 297 set when clear (thread K2, the opening cutscene, is not reproduced:
         // R-0056; thread K3 neither). Proximity routines, teleports 0 and 1 (context 13) and the
@@ -2004,6 +2007,18 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 }
 
 /// Run a pack's activate-world routine when its world becomes current.
+/// The on-enter callback (RegisterOnEnterCallback, SPEC-0030 row 255), started each time the
+/// world becomes current, right after the activate-world callback.
+pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
+    match pack {
+        // SPEC-0039 984 on-enter (handler 2): with 67 entity 0's line 0 in the conversation
+        // frame; else line 2 (202), 4 (150) or 6.
+        984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
+        984 => vec![Action::Message { line: if state.flag(202) { 2 } else if state.flag(150) { 4 } else { 6 } }],
+        _ => Vec::new(),
+    }
+}
+
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
         // SPEC-0044 1017 activate-world: the value for eW 81 places the hero at locator 2 (50) or
@@ -3538,6 +3553,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (678 | 686 | 691, 9) => Some(0),
         // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
         (1148, 0..=3) => Some(entity as u8),
+        // SPEC-0039 984: handler 1 on entity 0.
+        (984, 0) => Some(1),
         // SPEC-0044 1017: set D on entities 0 and 4, C on 1 and 5, A on 2 and 6, B on 3 and 7.
         (1017, 0 | 4) => Some(0),
         (1017, 1 | 5) => Some(1),
@@ -3597,6 +3614,15 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1017 {
         return guild_talk(routine, state);
+    }
+    // SPEC-0039 984 entity 0 (handler 1): with 67 line 12 in the conversation frame; else line
+    // 15 (202), 18 (150) or 21 alone.
+    if (pack, routine) == (984, 1) {
+        return if state.flag(67) {
+            vec![Action::Talk { line: 12 }]
+        } else {
+            vec![Action::Message { line: if state.flag(202) { 15 } else if state.flag(150) { 18 } else { 21 } }]
+        };
     }
     let key = (pack, routine);
     let mut rot = state.rotations.get(&key).copied().unwrap_or_default();
@@ -3851,6 +3877,17 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_984_lines() {
+        let mut s = GameState::default();
+        assert_eq!(on_enter(984, &mut s), vec![Action::Message { line: 6 }]);
+        s.set(150, true);
+        assert_eq!(on_talk(984, 1, &mut s), vec![Action::Message { line: 18 }]);
+        s.set(67, true);
+        assert_eq!(on_enter(984, &mut s), vec![Action::Converse { entity: 0, line: 0 }]);
+        assert_eq!(on_talk(984, 1, &mut s), vec![Action::Talk { line: 12 }]);
     }
 
     #[test]
