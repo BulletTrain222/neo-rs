@@ -700,6 +700,8 @@ pub struct Play {
     slot_arrived: std::collections::HashSet<(u32, u8)>,
     /// The attack window was open on the last tick (for the strike edge).
     window_was: bool,
+    /// The current world's pending slot (SetWorldLoadOverRide), None for -1.
+    pending_slot: Option<u32>,
     pub region_wanted: Vec<(u32, u8, u32)>,
     next_character: u64,
     /// Set once the hero's meshes exist.
@@ -1105,6 +1107,7 @@ impl Play {
             slot_regions: HashMap::new(),
             slot_arrived: Default::default(),
             window_was: false,
+            pending_slot: None,
             region_wanted: Vec::new(),
             next_character: 0,
             spawned: false,
@@ -1304,6 +1307,14 @@ impl Play {
 
     /// The neighbour pack the cell under (x, z) names (tag 0x0B, tables B and A), unless it is
     /// paired with the current pack.
+    /// The pack of a world id (eW), unless it pairs with the current pack.
+    fn world_pack(&self, id: u32) -> Option<u32> {
+        let areas = &self.boot.areas;
+        let slot = areas.world_ids.iter().position(|&w| w == id)?;
+        let target = areas.packs[slot];
+        (!self.boot.paired(self.world.pack, target)).then_some(target)
+    }
+
     fn neighbour_at(&self, x: f32, z: f32) -> Option<u32> {
         let v = self.world.ground.as_ref().map_or(-1, |g| g.cell_value(x, z));
         let id = self.world.neighbours.get(v);
@@ -1325,7 +1336,13 @@ impl Play {
     /// the other buffer when the buffer rule allows and it is not resident there already.
     fn pending_step(&mut self) {
         let p = self.loco.position();
-        let Some(target) = self.neighbour_at(p[0], p[2]) else { return };
+        // The pending slot (SetWorldLoadOverRide) stands in for the cell's exit value, and is
+        // set back to -1 whatever the step decides.
+        let target = match self.pending_slot.take() {
+            Some(slot) => self.world_pack(slot),
+            None => self.neighbour_at(p[0], p[2]),
+        };
+        let Some(target) = target else { return };
         if self.resident(target) {
             return;
         }
@@ -1973,6 +1990,12 @@ impl Play {
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
                 Action::WaitObj { obj } => return Some(Wait::ObjAnim(pack, obj)),
+                Action::LoadOverride { slot } => {
+                    if (0..193).contains(&slot) && pack == self.world.pack {
+                        self.pending_slot = Some(slot as u32);
+                        self.last_door = format!("pending slot {slot} on tick {}", self.ticks);
+                    }
+                }
                 Action::AddItem { locator, item } => {
                     if let Some(&(p, _)) = self.world.entries.get(locator) {
                         let charm = self.item_kind(item) == 17;

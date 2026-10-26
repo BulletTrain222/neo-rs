@@ -227,6 +227,10 @@ pub enum Action {
     /// AddItemToWorld, the locator form (SPEC-0030 row 364): the item at the locator, snapped,
     /// placed and never expiring.
     AddItem { locator: usize, item: u16 },
+    /// SetWorldLoadOverRide(slot) (SPEC-0030 row 217; SPEC-0006 Pending slot writer): the
+    /// current world's pending slot, used by the next pending step in place of the cell's exit
+    /// value; an argument of 193 or more (or negative) is ignored.
+    LoadOverride { slot: i32 },
     /// Wait, one tick at a time, while an object of the thread's world animates.
     WaitObj { obj: usize },
     /// StopTimer (running off; SPEC-0030 row 248).
@@ -1384,6 +1388,12 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0037 1427 Init: triggers 0 to 7 on routines E0 to E4 (0; 1 and 2; 3 and 4; 5 and
+        // 6; 7).
+        1427 => (0..=7).map(|i| reg(i, ((i + 1) / 2) as u8)).collect(),
+        // SPEC-0037 1391 Init: object 0 at its start, S2, S0 and S1 on triggers 2, 0 and 1 (the
+        // object sound is not reproduced).
+        1391 => vec![Action::InitObjOn { obj: 0, end: false }, reg(2, 2), reg(0, 0), reg(1, 1)],
         // SPEC-0043 1066 Init: T2 on triggers 0 to 2, T1 on 3; the world masks from flags 17 and
         // 414 (helpers A or B, then C or D; 16 set when 17 is clear); the slot-set chooser.
         1066 => {
@@ -3575,6 +3585,28 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0037 1427 E0 to E4: helper H sets the pending slot 187 + routine once per tick
+        // (any state, no object test).
+        (1427, 0..=4) => {
+            if state.word(pack, 1) == 0 {
+                state.set_word(pack, 1, 1);
+                out.actions.push(Action::LoadOverride { slot: 187 + routine as i32 });
+            }
+        }
+        // SPEC-0037 1391 S2 (trigger 2, entering): the shake, object 0 played, the hero held
+        // until it ends. The look-at-player camera 4 is not built; the normal camera returns
+        // after the poll (in the original it returns before the hold).
+        (1391, 2) if call.object && call.state == 1 => out.actions.extend([
+            Action::CameraShake { t: 5.5, a: 0.3, s: 25.0, p4: 0.5, r: 0.8, phi: 1.5708, z: 0.2 },
+            wait(1.5),
+            Action::PlayAnim { obj: 0, speed: 1.0, wait: false },
+            wait(4.0),
+            Action::HoldHero,
+            Action::WaitObj { obj: 0 },
+            Action::ReturnCamera { preset: -1, release: true },
+        ]),
+        // S1 (trigger 1, any state): the pending slot 165.
+        (1391, 1) if call.object => out.actions.push(Action::LoadOverride { slot: 165 }),
         // SPEC-0043 1066 T1 (trigger 3, entering, 145 clear): line 4 + r (143 clear) or 6 + r,
         // r = Random(0, 1), then the walk to locator 75.
         (1066, 1) if call.object && call.state == 1 && !state.flag(145) => {
@@ -5174,6 +5206,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0037 1427 Update: the once-word cleared.
+        1427 => state.set_word(pack, 1, 0),
         // SPEC-0043 1066 Update: with flag 2 object 0 off (once; the button swaps never run).
         1066 => {
             if state.flag(2) && state.word(pack, 1) == 0 {
@@ -8028,6 +8062,24 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_1427_1391() {
+        // SPEC-0030's vector: index 1 then 0 in one tick gives 188 only; after Update 0 gives 187.
+        let mut s = GameState::default();
+        on_init(1427, &mut s);
+        let any = |i| TriggerCall { index: i, state: 2, object: false, square: false };
+        assert_eq!(on_trigger(1427, 1, any(1), &mut s).actions, vec![Action::LoadOverride { slot: 188 }]);
+        assert!(on_trigger(1427, 0, any(0), &mut s).actions.is_empty());
+        on_update(1427, &mut s, false);
+        assert_eq!(on_trigger(1427, 0, any(0), &mut s).actions, vec![Action::LoadOverride { slot: 187 }]);
+        assert_eq!(on_trigger(1427, 4, any(7), &mut s).actions, vec![]);
+        on_update(1427, &mut s, false);
+        assert_eq!(on_trigger(1427, 4, any(7), &mut s).actions, vec![Action::LoadOverride { slot: 191 }]);
+        let on = TriggerCall { index: 1, state: 2, object: true, square: false };
+        assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
+        assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
     }
 
     #[test]
