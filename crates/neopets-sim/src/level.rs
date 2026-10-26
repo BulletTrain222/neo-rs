@@ -736,13 +736,35 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 880 | 886 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 799 | 880 | 886 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0037 1225 and 1220 Init: thread A loads slot 0 with set 3, 2, 1 or 0 by the first
+        // set flag of 84, 83, 82, 81 (region P + 1 + set), nothing otherwise; 1220 also
+        // registers S0 on trigger 0.
+        1225 | 1220 => {
+            let mut v: Vec<Action> = [(84, 3), (83, 2), (82, 1), (81, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(pack + 1 + j) }).into_iter().collect();
+            if pack == 1220 {
+                v.push(reg(0, 0));
+            }
+            v
+        }
+        // SPEC-0037 1259 Init: routine S on triggers 0 to 49 (the slot table's entries).
+        1259 => (0..50).map(|i| reg(i, 0)).collect(),
+        // SPEC-0037 1253 Init: S0 on trigger 0; the arrival is a fixed rule.
+        1253 => vec![reg(0, 0)],
+        // SPEC-0037 799 Init: objects 1, 2 and 0 off; S0, S1 (empty) and S3 on triggers 0, 1, 3.
+        799 => vec![
+            Action::InitObjOn { obj: 1, end: false },
+            Action::InitObjOn { obj: 2, end: false },
+            Action::InitObjOn { obj: 0, end: false },
+            reg(0, 0),
+            reg(3, 3),
+        ],
         // SPEC-0037 1152 Init: thread S loads slot 0 with set 2 (flag 31), 1 (30) or 0 (region
         // 1153 + set); the proximity routine, teleports 0 and 1 (kind 13) and the arrival are
         // fixed rules.
@@ -1662,6 +1684,63 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
             out.actions.extend([Action::WaitInside { index: call.index }, Action::LoadRegion { slot: 1, region: None }, slots_880(state)]);
         }
+        // SPEC-0037 1220 S0 (trigger 0, entering with the body): camera 5, the walk to locator
+        // 26, a 1 s fade out (wait), the hero to locator 29 and value 1 (type 3) for eW 129.
+        (1220, 0) if call.object && call.state == 1 => {
+            state.blackboard.insert((3, 129), 1);
+            out.actions.extend([
+                Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                Action::WalkHero { locator: 26, wait: false, orient: false },
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::MoveHero { locator: 29 },
+            ]);
+        }
+        // SPEC-0037 1259 S (triggers 0 to 49, with the body): slot 0 reset and loaded with the set
+        // of the trigger's index (region 1260 + index).
+        (1259, 0) if call.object && call.state == 1 => out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1260 + call.index as u32) }]),
+        // SPEC-0037 1253 S0 (trigger 0, entering with the body): value 40 for eW 141 and the
+        // exterior replacement to eW 141.
+        (1253, 0) if call.object && call.state == 1 => {
+            state.blackboard.insert((2, 141), 40);
+            out.actions.push(Action::ReplaceExterior { slot: 141, plane: -1 });
+        }
+        // SPEC-0037 799 S0 (trigger 0; a hero shot is not modelled, so every fire runs it): the
+        // Square context 6; a press with 416 set takes every item 16, opens the lever (object 0
+        // off, objects 1 and 2 played forward, 2 with wait), sets 663, waits until the hero
+        // leaves, 1.5 s, plays them backward and turns object 0 on; with 416 clear line 0. Word 0
+        // keeps a running sequence from starting again.
+        (799, 0) if call.state != 0 && state.word(pack, 0) == 0 => {
+            out.prompt = Some(6);
+            if call.square && !state.talking {
+                if state.flag(416) {
+                    state.set_word(pack, 0, 1);
+                    state.remove_all(16);
+                    out.actions.extend([
+                        Action::DeactivateObj { obj: 0 },
+                        Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                        Action::PlayAnim { obj: 2, speed: 1.0, wait: true },
+                        Action::SetFlag { flag: 663, on: true },
+                        Action::WaitInside { index: call.index },
+                        wait(1.5),
+                        Action::PlayAnim { obj: 1, speed: -1.0, wait: false },
+                        Action::PlayAnim { obj: 2, speed: -1.0, wait: false },
+                        Action::InitObjOn { obj: 0, end: false },
+                        Action::Bits { word: 0, set: 0, clear: 1 },
+                    ]);
+                } else {
+                    out.actions.push(Action::Message { line: 0 });
+                }
+            }
+        }
+        // 799 S3 (trigger 3, entering with the body, item 12 not held, 416 set): line 1 on every
+        // second qualifying entry (word 1 alternates, from 0).
+        (799, 3) if call.object && call.state == 1 && !state.has_item(12) && state.flag(416) => {
+            let c = state.word(pack, 1);
+            if c > 0 {
+                out.actions.push(Action::Message { line: 1 });
+            }
+            state.set_word(pack, 1, (c + 1) % 2);
+        }
         // SPEC-0037 784 S1 (trigger 1, every fire; a hero shot never fires it here, and the
         // attack word is taken as 0): without the button and with 543 clear the Square context
         // 4; with the button, 543 clear and the body: line 5 while 542 is clear, else the walk
@@ -2327,6 +2406,43 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0037 1220 activate-world A2 (Medium order): with value 1 (type 3) for eW 131 a
+        // cut to black, 1 s, a 0.5 s fade in, the hero to locator 25, camera 4 (wait), 0.5 s and
+        // the normal camera; value -1 for eW 132 (as the spec gives). StartHeroLongFall is not
+        // built.
+        1220 => {
+            if state.take_message(3, 131) != 1 {
+                return Vec::new();
+            }
+            state.blackboard.insert((3, 132), -1);
+            vec![
+                Action::FadeOut { seconds: 0.0, wait: false },
+                wait(1.0),
+                Action::FadeIn { seconds: 0.5, wait: false },
+                Action::MoveHero { locator: 25 },
+                Action::PlayCamera { track: 4, wait: true, end: 1, speed: 0.5 },
+                wait(0.5),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]
+        }
+        // SPEC-0037 1253 activate-world: every arrival, by the value for eW 143 (20: locator 1
+        // and track 6; 30: 2 and 7; else 0 and 5): the hero to the locator, a 0.5 s fade in, the
+        // track played with wait (PlayTrackHeroCamera, taken as a camera track here; the long
+        // fall is not built), 1.5 s, the normal camera.
+        1253 => {
+            let (locator, track) = match state.take_message(2, 143) {
+                20 => (1, 6),
+                30 => (2, 7),
+                _ => (0, 5),
+            };
+            vec![
+                Action::MoveHero { locator },
+                Action::FadeIn { seconds: 0.5, wait: false },
+                Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 },
+                wait(1.5),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]
+        }
         // SPEC-0037 1152 activate-world: the value for eW 119; 110 places the hero at locator 1,
         // any other value at locator 0; the normal camera (10 s) in both cases.
         1152 => {
@@ -4214,6 +4330,30 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_1225_1259_1253_799() {
+        let mut s = GameState::default();
+        s.set(82, true);
+        s.set(81, true);
+        assert_eq!(on_init(1225, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(1227) }]);
+        // SPEC-0037 vector: 1259 trigger 2 with the body resets the slot and loads set 2.
+        let call = TriggerCall { index: 2, state: 1, object: true, square: false };
+        assert_eq!(on_trigger(1259, 0, call, &mut s).actions, vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1262) }]);
+        // 1253 vectors: value 30 -> locator 2, track 7; no message -> locator 0, track 5.
+        s.blackboard.insert((2, 143), 30);
+        let a = on_activate(1253, &mut s);
+        assert_eq!((a[0], a[2]), (Action::MoveHero { locator: 2 }, Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }));
+        assert_eq!(on_activate(1253, &mut s)[0], Action::MoveHero { locator: 0 });
+        // 799 vector: trigger 3 entered three times with 416 set and no item 12: no line, line
+        // 1, no line.
+        s.set(416, true);
+        let enter = TriggerCall { index: 3, state: 1, object: true, square: false };
+        let lines: Vec<usize> = (0..3).map(|_| on_trigger(799, 3, enter, &mut s).actions.len()).collect();
+        assert_eq!(lines, vec![0, 1, 0]);
+        let lever = TriggerCall { index: 0, state: 2, object: true, square: true };
+        assert!(on_trigger(799, 0, lever, &mut s).actions.contains(&Action::SetFlag { flag: 663, on: true }));
     }
 
     #[test]
