@@ -1947,6 +1947,20 @@ impl Play {
                 Action::Sleep { ticks } => return Some(Wait::Ticks(ticks)),
                 Action::WaitLoads => return Some(Wait::Loads),
                 Action::WaitDialog => return Some(Wait::Dialog),
+                Action::KillHero => {
+                    if self.loco.state != hero_states::DEAD {
+                        self.default_death();
+                    }
+                }
+                Action::RegisterGroupTriggers { group, routine } => {
+                    let members: Vec<u16> = self.world.groups.get(group).map(|g| g.triggers.iter().filter_map(|&t| u16::try_from(t).ok()).collect()).unwrap_or_default();
+                    for index in members {
+                        if (index as usize) < self.world.capacity {
+                            self.world.routines.insert(index, routine);
+                            self.world.group_routes.remove(&index);
+                        }
+                    }
+                }
                 Action::RegisterTrigger { index, routine } => {
                     let _ = pack;
                     if (index as usize) < self.world.capacity {

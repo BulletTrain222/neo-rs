@@ -231,6 +231,10 @@ pub enum Action {
     /// current world's pending slot, used by the next pending step in place of the cell's exit
     /// value; an argument of 193 or more (or negative) is ignored.
     LoadOverride { slot: i32 },
+    /// KillCurrentHero: the default death of the active hero (no callback gate; health kept).
+    KillHero,
+    /// RegisterScriptTrigger for every member trigger of script group `group` to a routine.
+    RegisterGroupTriggers { group: usize, routine: u8 },
     /// StartEffect (bool true) for every effect id that script-group instance `group` of the
     /// thread's world lists.
     GroupEffects { group: usize },
@@ -725,6 +729,10 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             state.blackboard.insert((2, 155), 70);
             vec![Action::ReplaceExterior { slot: 155, plane: -1 }]
         }
+        // SPEC-0044 735 arrival (eW 22): 10, 20, 30, 40, 60 and 70 move the hero to locator 10, 12,
+        // 14, 8, 9 and 7 with the normal camera and a fade in; 80 to locator 4 (the long fall is
+        // not built); then with 263 clear object 12, else level state 13, objects 54 and 12 off and
+        // 0 and 13 on.
         // SPEC-0044 1327 teleports (context 13): 0 posts 30 for eW 151; with 240 set and 245 clear
         // the Act 3 start (245 to 247; 400, 223 and 397; act start 3; flags 74, 57, 49, 93, 85, 31,
         // 19, 11, 83 and 4; movies 27, 29, 90 and 30 are not played, and their return world eW 64,
@@ -1544,6 +1552,28 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0044 735 Init: T1 on trigger 21, the exit routine on script group 8's members,
+        // triggers 4, 5 and 2, and with 263 clear trigger 23 (the boss start); effect 1 stopped;
+        // 262; objects 14 to 16 looped; thread K1 (76: set 1 with 530 set and 531 clear, else 0;
+        // 75: 0; else 3 or 2; region 736 + set). Words: 1 the watcher's busy word, 2 the post-fight
+        // word cleared (the file holds it set), 3 to 5 the stored hit points, 6 the monitor's
+        // start tick (0: not started), 7 line 3 shown, 30 and 31 the item scenes' once-words.
+        // The breakables, the platform and breaker threads, the stepping stones and the AI
+        // activate callback are not built.
+        735 => {
+            let mut v = vec![reg(21, 1), Action::RegisterGroupTriggers { group: 8, routine: 8 }, reg(4, 4), reg(5, 5), reg(2, 2)];
+            if !state.flag(263) {
+                v.push(reg(23, 23));
+            }
+            v.push(Action::StopEffect { slot: 1 });
+            state.set(262, true);
+            v.extend([(14, 0.1), (15, 0.2), (16, 0.1)].map(|(obj, speed)| Action::LoopAnim { obj, speed }));
+            let f = |n| state.flag(n);
+            let ritual = f(530) && !f(531);
+            let set = if f(76) { ritual as u32 } else if f(75) { 0 } else if ritual { 3 } else { 2 };
+            v.push(Action::LoadRegion { slot: 0, region: Some(736 + set) });
+            v
+        }
         // SPEC-0041 1324 Init: object 29 looped at 0.5; with 239 clear (the unsolved layout)
         // objects 21, 15, 17, 19, 14, 0 and 1 at their start and the normal camera; with 239 set
         // object 21, the stage-1 plates 16, 18 and 20 pressed and beam object 9 looped with the
@@ -4619,6 +4649,95 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0044 735 trigger 23 (263 and level states 8 and 9 clear): level state 8, the intro.
+        (735, 23) if call.object && !state.flag(263) && !state.level(8) && !state.level(9) => state.set_level(8, true),
+        // Trigger 2: with 263 set the post-fight word is set again.
+        (735, 2) if state.flag(263) => state.set_word(pack, 2, 0),
+        // The exit routine (group 8's members): the music levels on every fire; with the hero the
+        // value 40, 60, 10, 20 or 30 for eW 21 by index 6 to 10, the fade, hero animation 174 and
+        // the hero to locator 3.
+        (735, 8) => {
+            out.actions.extend([Action::SetAdventure { level: 1.0 }, Action::SetExcite { level: 22 }]);
+            if call.object {
+                let v = match call.index {
+                    6 => 40,
+                    7 => 60,
+                    8 => 10,
+                    9 => 20,
+                    10 => 30,
+                    _ => -1,
+                };
+                state.blackboard.insert((2, 21), v);
+                out.actions.extend([Action::FadeOut { seconds: 0.5, wait: false }, Action::HeroAnim { anim: 174, wait: true }, Action::MoveHero { locator: 3 }]);
+            }
+        }
+        // T1 (trigger 21, entering, 261 clear): sequence S1 (entity 74's scene, lines 0 and 1,
+        // entities 12, 51 and 50 made aggressive). A fade in follows the hero's move (none is
+        // listed until the end); the character (de)activations and TriggerBaggus are not built.
+        (735, 1) if call.state == 1 && !state.flag(261) => {
+            state.set(261, true);
+            let cam = |track, wait| Action::PlayCamera { track, wait, end: 1, speed: 1.0 };
+            let anim = |anim, looped, wait| Action::EntityAnim { entity: 74, anim, looped, wait };
+            out.actions.extend([
+                Action::HoldHero,
+                Action::FadeOut { seconds: 0.7, wait: true },
+                Action::LetterBox { on: true, seconds: 0.7, wait: false },
+                Action::LoadRegion { slot: 1, region: None },
+                Action::LoadRegion { slot: 1, region: Some(741) },
+                Action::MoveHero { locator: 21 },
+                cam(6, false),
+                Action::FadeIn { seconds: 0.7, wait: true },
+                Action::WalkHero { locator: 22, wait: true, orient: false },
+                anim(112, true, false),
+                cam(7, false),
+                Action::WalkHero { locator: 23, wait: true, orient: true },
+                anim(103, false, true),
+                anim(112, true, false),
+                cam(8, false),
+                Action::Message { line: 0 },
+                cam(9, false),
+                anim(102, false, false),
+                wait(1.0),
+                cam(10, false),
+                cam(8, false),
+                Action::Message { line: 1 },
+                anim(104, false, true),
+                Action::Agro { entity: 12 },
+                Action::Agro { entity: 51 },
+                Action::Agro { entity: 50 },
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::LetterBox { on: false, seconds: 0.7, wait: false },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::FadeIn { seconds: 0.5, wait: true },
+                Action::LoadRegion { slot: 1, region: None },
+            ]);
+        }
+        // Triggers 4 (item 5) and 5 (item 4): with 263 clear, once per load, a short scene.
+        (735, 4 | 5) if call.object && call.state == 1 && !state.flag(263) && state.word(pack, 26 + routine) == 0 && state.has_item(if routine == 4 { 5 } else { 4 }) => {
+            state.set_word(pack, 26 + routine, 1);
+            out.actions.extend([Action::WaitDialog, Action::Sleep { ticks: 5 }, Action::HoldHero, Action::HeroAnim { anim: 0, wait: true }]);
+            if routine == 4 {
+                out.actions.extend([
+                    Action::MoveHero { locator: 6 },
+                    Action::PlayAnim { obj: 3, speed: 1.0, wait: false },
+                    Action::PlayAnim { obj: 4, speed: 1.0, wait: false },
+                    Action::PlayCamera { track: 11, wait: false, end: 1, speed: 1.0 },
+                    Action::StartEffect { slot: 2, camera: false },
+                    Action::Sleep { ticks: 180 },
+                    Action::StopEffect { slot: 2 },
+                ]);
+            } else {
+                out.actions.extend([
+                    Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                    Action::PlayCamera { track: 12, wait: true, end: 1, speed: 1.0 },
+                    Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 },
+                    Action::StartEffect { slot: 1, camera: false },
+                    wait(2.5),
+                    Action::StopEffect { slot: 1 },
+                ]);
+            }
+            out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+        }
         // SPEC-0039 1246 handler 1 (trigger 1, the entrance; entering, level state 0 clear):
         // level state 0, the walk to locator 10, the fade, the hero at locator 11 and movie 41 the
         // first time (counted as played; not shown). BossFightTweakHero and SetHeroStartPos are
@@ -6733,6 +6852,79 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0044 735 Update, the boss watcher (263 clear; not while a scene runs): level state
+        // 8 and not 9: the intro (the boss set 4 into slot 1, cameras 22 and 23, entity 73's
+        // animations 3 and 4, objects 54 and 12 off, level state 13, then 9 with the hit points
+        // kept); 11 and not 12: the victory (263, 75, 50, 70; movie 38 counted; objects 0 and 13;
+        // camera 4 and line 2; level state 12; the post-fight word cleared); 9: the monitor (AI 73
+        // dead: level state 11; else line 3 once, 5 s after AI 73 is seen unhurt while the hero is
+        // hurt). The boss-fight tweaks and breakable 0 are not built.
+        735 => {
+            if !state.flag(263) && state.word(pack, 1) == 0 {
+                if state.level(8) && !state.level(9) {
+                    state.set_level(13, true);
+                    state.set_level(9, true);
+                    state.set_word(pack, 1, 1);
+                    state.set_word(pack, 3, state.hero.hp);
+                    state.set_word(pack, 5, state.entity_hp.get(&73).copied().unwrap_or(0));
+                    out.extend([
+                        Action::HoldHero,
+                        Action::FadeOut { seconds: 1.0, wait: true },
+                        Action::LoadRegion { slot: 1, region: None },
+                        Action::LoadRegion { slot: 1, region: Some(740) },
+                        Action::WaitLoads,
+                        Action::LetterBox { on: true, seconds: 1.0, wait: false },
+                        Action::PlayCamera { track: 22, wait: false, end: 1, speed: 1.0 },
+                        Action::FadeIn { seconds: 0.5, wait: true },
+                        wait(2.0),
+                        Action::MoveEntity { entity: 73, locator: 28, face: true },
+                        Action::EntityAnim { entity: 73, anim: 3, looped: false, wait: true },
+                        Action::DeactivateObj { obj: 54 },
+                        Action::DeactivateObj { obj: 12 },
+                        wait(1.0),
+                        Action::EntityAnim { entity: 73, anim: 4, looped: false, wait: true },
+                        wait(1.0),
+                        Action::PlayCamera { track: 23, wait: true, end: 1, speed: 1.0 },
+                        Action::LetterBox { on: false, seconds: 1.0, wait: false },
+                        Action::ReturnCamera { preset: -1, release: true },
+                        Action::ReleaseEntity { entity: 73 },
+                        Action::Bits { word: 1, set: 0, clear: 1 },
+                    ]);
+                } else if state.level(11) && !state.level(12) {
+                    for f in [263, 75, 50, 70] {
+                        state.set(f, true);
+                    }
+                    state.movies.insert(38);
+                    state.set_level(12, true);
+                    state.set_word(pack, 2, 1);
+                    out.extend([
+                        Action::MoveHero { locator: 5 },
+                        Action::LoadRegion { slot: 1, region: None },
+                        Action::InitObjOn { obj: 0, end: false },
+                        Action::PlayAnim { obj: 0, speed: 1.0, wait: false },
+                        Action::InitObjOn { obj: 13, end: false },
+                        Action::Sleep { ticks: 1 },
+                        Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
+                        Action::Message { line: 2 },
+                        wait(2.0),
+                        Action::ReturnCamera { preset: -1, release: true },
+                    ]);
+                } else if state.level(9) {
+                    if state.ai_dead.contains(&73) {
+                        state.set_level(11, true);
+                    } else if state.word(pack, 7) == 0 {
+                        let start = state.word(pack, 6);
+                        let unhurt = state.entity_hp.get(&73).copied().unwrap_or(0) == state.word(pack, 5);
+                        if start == 0 && unhurt && state.hero.hp < state.word(pack, 3) {
+                            state.set_word(pack, 6, state.hero.tick as i32 + 1);
+                        } else if start != 0 && state.hero.tick as i32 + 1 - start > 300 {
+                            state.set_word(pack, 7, 1);
+                            out.push(Action::Message { line: 3 });
+                        }
+                    }
+                }
+            }
+        }
         // SPEC-0041 1324 Update: line 0 once per load while 239 is clear; the beam rhythm while a
         // beam is set (a beat each time the clock passes the last beat by more than the period:
         // object 0 one frame on, counter mod 61; objects 1 to 7 advance 3 frames a tick up to the
@@ -7406,6 +7598,12 @@ pub fn on_hero_death(pack: u32, hero: usize, s: &mut GameState) -> Option<(bool,
             };
             busy(s, true, v)
         }
+        // SPEC-0055 735 (flag 1): with 263 clear or the post-fight word set, the active hero is
+        // killed by script; in the post-fight window the hero is moved to locator 5.
+        735 => {
+            let v = if !s.flag(263) || s.word(pack, 2) == 0 { vec![Action::KillHero] } else { vec![Action::MoveHero { locator: 5 }] };
+            busy(s, true, v)
+        }
         // SPEC-0055 1098 (flag 0; registered with flag 31 clear and 30 set): value 120 for eW 106
         // and its replacement load.
         1098 if !s.flag(31) && s.flag(30) => {
@@ -7546,6 +7744,34 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             .collect();
             if v != -1 {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
+        735 => {
+            let v = state.take_message(2, 22);
+            let mut out = Vec::new();
+            let at = match v {
+                10 => Some(10),
+                20 => Some(12),
+                30 => Some(14),
+                40 => Some(8),
+                60 => Some(9),
+                70 => Some(7),
+                80 => Some(4),
+                _ => None,
+            };
+            if let Some(locator) = at {
+                out.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator }]);
+                if v != 80 {
+                    out.push(Action::ReturnCamera { preset: -1, release: true });
+                }
+                out.push(Action::FadeIn { seconds: 0.5, wait: false });
+            }
+            if state.flag(263) {
+                state.set_level(13, true);
+                out.extend([Action::DeactivateObj { obj: 54 }, Action::DeactivateObj { obj: 12 }, Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 13, end: false }]);
+            } else {
+                out.push(Action::InitObjOn { obj: 12, end: false });
             }
             out
         }
@@ -10580,6 +10806,39 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_735_boss_and_callback() {
+        let mut s = GameState::default();
+        assert!(on_init(735, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(738) }));
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        on_trigger(735, 23, enter(23), &mut s);
+        assert!(s.level(8));
+        // The intro sets 9 and keeps the hit points; the monitor's AI 73 death leads to the
+        // victory, which clears the post-fight word.
+        s.hero.hp = 20;
+        s.entity_hp.insert(73, 50);
+        assert!(on_update(735, &mut s, false).contains(&Action::LoadRegion { slot: 1, region: Some(740) }));
+        assert!(s.level(9) && s.word(735, 3) == 20);
+        s.set_word(735, 1, 0);
+        // Line 3 once, 5 s after the hero is hurt while AI 73 is not.
+        s.hero.hp = 18;
+        s.hero.tick = 1000;
+        assert!(on_update(735, &mut s, false).is_empty());
+        s.hero.tick = 1301;
+        assert_eq!(on_update(735, &mut s, false), vec![Action::Message { line: 3 }]);
+        s.ai_dead.insert(73);
+        on_update(735, &mut s, false);
+        assert!(s.level(11));
+        assert!(on_update(735, &mut s, false).contains(&Action::Message { line: 2 }) && s.flag(263));
+        // The death callback: in the post-fight window the hero goes to locator 5; after trigger
+        // 2 the current hero is killed.
+        let (skip, v) = on_hero_death(735, 0, &mut s).unwrap();
+        assert!(skip && v.contains(&Action::MoveHero { locator: 5 }));
+        s.set_word(735, 250, 0);
+        on_trigger(735, 2, enter(2), &mut s);
+        assert!(on_hero_death(735, 0, &mut s).unwrap().1.contains(&Action::KillHero));
     }
 
     #[test]
