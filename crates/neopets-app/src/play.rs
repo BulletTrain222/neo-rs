@@ -378,6 +378,9 @@ pub struct Character {
     /// The 15 colour slots (SPEC-0040 Behavior 26): (red, green, blue) / 255 of the record's
     /// colour words; a part draws with the slot of its material group.
     pub slots: [[f32; 3]; 15],
+    /// The hit flash's frames left (SPEC-0046 Per-frame draw order, step 6): while above 0
+    /// every part draws with (1.5, 0.5, 0.5) in place of its slot colour.
+    pub flash: u8,
     /// The kind-8 record its drop placement ordinal names (SPEC-0038 Behavior 34, part B).
     drop: Option<neopets_data::region::ItemPoint>,
     root_step: [f32; 3],
@@ -803,6 +806,8 @@ pub struct Play {
     pub reload_wanted: bool,
     /// The developer menu's cheats (a test tool of this build; no spec).
     pub cheats: Cheats,
+    /// The hero's hit flash frames left (SPEC-0046 step 6).
+    pub hero_flash: u8,
     /// The book words (SPEC-0035 section 6.1) and whether the chooser shows "Read Book".
     pub books: neopets_sim::book::Books,
     book_prompt: bool,
@@ -1324,6 +1329,7 @@ impl Play {
             snapshot: None,
             reload_wanted: false,
             cheats: Cheats::default(),
+            hero_flash: 0,
             books: Default::default(),
             book_prompt: false,
             music: Default::default(),
@@ -3461,6 +3467,10 @@ impl Play {
     /// attacker), then the death hook at 0 HP; SPEC-0056, a townsfolk take-hit returns at once.
     fn character_take_hit(&mut self, i: usize, damage: i32, from: [f32; 3], by: &str) {
         let hero_at = from;
+        // SPEC-0046 step 6: a hit through the enemy class's hit method starts the 14-frame flash.
+        if let Some(c) = self.characters.get_mut(i) {
+            c.flash = HIT_FLASH;
+        }
         // The script's undamageable entities (SPEC-0044 1056 Update) take no damage.
         let pack = self.world.pack;
         // SPEC-0019: the Werelupe King takes the damage at once and flinches on its next tick; its
@@ -3869,6 +3879,7 @@ impl Play {
                 drop,
                 colour: pl.colour,
                 slots: slot_colours(&pl.colours),
+                flash: 0,
                 root_step: [0.0; 3],
                 script_walk: None,
                 held: false,
@@ -3984,6 +3995,7 @@ impl Play {
             drop: None,
             colour: pl.colour,
             slots: slot_colours(&pl.colours),
+            flash: 0,
             root_step: [0.0; 3],
             script_walk: None,
             held: false,
@@ -4581,6 +4593,11 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
+        // The hit flashes run down one frame a tick (60 ticks a second).
+        self.hero_flash = self.hero_flash.saturating_sub(1);
+        for c in &mut self.characters {
+            c.flash = c.flash.saturating_sub(1);
+        }
         // Developer cheats: full health and magic every tick.
         if self.cheats.god {
             self.hero_hp = self.hero_max;
@@ -5882,6 +5899,7 @@ impl Play {
             self.loco.hurt(self.weapon.is_some());
         }
         self.hero_hp -= damage;
+        self.hero_flash = HIT_FLASH;
         self.last_hurt = format!("took {damage} ({what}) on tick {}, hp {}", self.ticks, self.hero_hp.max(0));
         // SPEC-0031 Hero impact: melee or projectile with no armour plays 170; the voice slot
         // plays hit big (1) on a fair draw of 0, else hit small (0).
@@ -8480,6 +8498,11 @@ fn boot_string(boot: &[u8], va: u32) -> Vec<u8> {
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     bytes.into_iter().take_while(|&b| b != 0).collect()
 }
+
+/// The hit flash: 14 frames (a 4-frame and a 10-frame stage) with colour-override slot 1 at
+/// (1.5, 0.5, 0.5) (SPEC-0046 Per-frame draw order, step 6).
+pub const HIT_FLASH: u8 = 14;
+pub const FLASH_COLOUR: [[f32; 3]; 15] = [[1.5, 0.5, 0.5]; 15];
 
 /// The colour slot vectors of a record's 15 colour words: (byte 0, byte 1, byte 2) / 255.
 pub fn slot_colours(words: &[u32; 15]) -> [[f32; 3]; 15] {

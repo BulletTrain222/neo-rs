@@ -2085,7 +2085,8 @@ fn sync_characters(
         for (handle, i) in &skinned[&c.id] {
             let part = &c.model.parts[*i];
             let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-            let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, Some(&c.slots));
+            let slots = if c.flash > 0 { &play::FLASH_COLOUR } else { &c.slots };
+            let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, Some(slots));
             if let Some(mut mesh) = meshes.get_mut(handle) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
@@ -2950,7 +2951,8 @@ fn play_frame(
     for (handle, i) in &state.skinned {
         let part = &state.play.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-        let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, None);
+        let flash = (state.play.hero_flash > 0).then_some(&play::FLASH_COLOUR);
+        let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, flash);
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
