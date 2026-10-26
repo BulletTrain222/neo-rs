@@ -406,6 +406,10 @@ pub struct GameState {
     /// (message type, eW slot) to value; a read resets it to -1 (absent).
     pub blackboard: HashMap<(u8, usize), i32>,
     pub items: HashMap<u16, u32>,
+    /// The stash (container B, SPEC-0025 Item lists) and its wallet (0x204): the Act 2 start
+    /// moves the party inventory and wallet here, the Act 3 start merges them back.
+    pub stash: HashMap<u16, u32>,
+    pub stash_neopoints: i32,
     /// Rotation words of the proximity routines, by (pack, routine). Module data: a pack's
     /// words return to 0 when it is loaded again (`reload_module`).
     pub rotations: HashMap<(u32, u8), Rotation>,

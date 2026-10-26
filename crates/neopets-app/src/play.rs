@@ -763,6 +763,8 @@ pub struct Play {
     dig_drop: Option<[f32; 3]>,
     /// The hero's position on the last bush logic step (for the bend's speed).
     bend_last: Option<[f32; 3]>,
+    /// Where a swap's effects were placed (the outgoing hero's position at step 2).
+    swap_at: [f32; 3],
     /// Added object yaw (SetAnimObjAdditionRotY), degrees, by (pack, object).
     obj_yaw: HashMap<(u32, usize), f32>,
     /// Added vertical offset (SetAnimObjPositionOffset), by (pack, object).
@@ -1225,6 +1227,7 @@ impl Play {
             char_lights: HashMap::new(),
             dig_drop: None,
             bend_last: None,
+            swap_at: [0.0; 3],
             obj_yaw: HashMap::new(),
             obj_offset: HashMap::new(),
             shake: Default::default(),
@@ -3096,8 +3099,8 @@ impl Play {
     /// TriggerActStart(stage) (SPEC-0053 3.7): the swap mode, the hero (stage 1 by a normal
     /// switch request, stages 2 and 3 selected directly with no task and both heroes placed at
     /// the world's entry record 0), the story flag and the heal of the heroes in the mask (hit
-    /// points to the maximum, status timers cleared). The Act 2 stash copy and Roberta's fresh
-    /// kit (SPEC-0025) are not reproduced (R-0042).
+    /// points to the maximum, status timers cleared), the Act 2 stash and kit and the Act 3
+    /// stash merge (R-0042; SPEC-0025 Item lists).
     pub fn act_start(&mut self, stage: i32) {
         let (mode, select, flag, heal) = neopets_sim::swap::act_start(stage);
         self.swap_mode = mode;
@@ -3108,16 +3111,49 @@ impl Play {
                 }
             }
             Some((h, false)) => {
+                // Stages 2 and 3 (R-0042): the named hero is bound and spawned as at a new game
+                // at entry 0 of the current world; nothing writes its action state.
                 self.swap = None;
                 if h != self.hero_index {
                     self.exchange_heroes();
-                    self.loco.state = 1;
                 }
                 if let Some(&e) = self.world.entries.first() {
                     self.arrive(e);
                 }
             }
             None => {}
+        }
+        match stage {
+            // Stage 2 (R-0042): the party inventory and wallet to the stash, the party cleared,
+            // then the kit through the normal add: items 150 x 3, 149 x 3, 127 x 1 and coin 135
+            // x 1150 (1150 Neopoints to the wallet).
+            2 => {
+                let s = &mut self.state;
+                s.stash = std::mem::take(&mut s.items);
+                s.stash_neopoints = std::mem::replace(&mut s.neopoints, 0);
+                self.equipment_step();
+                for (id, n) in [(150, 3), (149, 3), (127, 1)] {
+                    for _ in 0..n {
+                        self.give(id);
+                    }
+                }
+                self.state.neopoints += 1150;
+            }
+            // Stage 3 (SPEC-0025 Item lists): the stash merges back (an item the party does not
+            // hold takes the stash's count; Medium for the per-entry reading), the wallets add,
+            // and the stash is cleared.
+            3 => {
+                let s = &mut self.state;
+                for (id, n) in std::mem::take(&mut s.stash) {
+                    let e = s.items.entry(id).or_insert(0);
+                    if *e == 0 {
+                        *e = n;
+                    }
+                }
+                s.neopoints += std::mem::take(&mut s.stash_neopoints);
+                self.equipment_step();
+            }
+            _ => {}
         }
         if let Some(f) = flag {
             self.state.set(f, true);
@@ -3188,17 +3224,36 @@ impl Play {
         let Some(mut task) = self.swap.take() else { return false };
         let done = self.fade.alpha == self.fade.target;
         match task.tick(done) {
-            Some(neopets_sim::swap::Step::Start { flash }) => {
-                // Step 2: the hero attack pools are reset.
+            Some(neopets_sim::swap::Step::Start { flash, effects }) => {
+                // Step 2: the hero attack pools are reset; the first flag plays sound 0xB0 and
+                // starts the first swap effect (4025) at the outgoing hero.
                 self.mote_objects.clear();
                 self.hero_shots.clear();
                 self.r_attack = None;
+                if effects {
+                    self.cue(0xB0);
+                    let table = self.effect_table.clone();
+                    let at = self.loco.position();
+                    self.swap_at = at;
+                    self.effects.one_shot(&table, 0xFB9, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+                }
                 if flash {
                     self.fade.out([255; 3], 37);
                 }
             }
             Some(neopets_sim::swap::Step::Exchange) => self.exchange_heroes(),
-            Some(neopets_sim::swap::Step::FadeIn) => self.fade.fade_in([255; 3], 8),
+            Some(neopets_sim::swap::Step::EndFlags { flash, effects }) => {
+                // Step 10: the third swap effect (4027) where the instances were placed (the
+                // outgoing hero's position); the second (4026) is never started.
+                if effects {
+                    let table = self.effect_table.clone();
+                    let at = self.swap_at;
+                    self.effects.one_shot(&table, 0xFBB, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+                }
+                if flash {
+                    self.fade.fade_in([255; 3], 8);
+                }
+            }
             Some(neopets_sim::swap::Step::Carry { state, extra }) => {
                 self.loco.state = state;
                 if extra {
@@ -7864,7 +7919,7 @@ impl Play {
         }
         s.0[at::MOVIES..at::MOVIES + 368].fill(0);
         s.set_i32(at::WALLET, self.state.neopoints);
-        s.set_i32(at::STASH, 0);
+        s.set_i32(at::STASH, self.state.stash_neopoints);
         s.set_i32(at::LUCK, self.luck);
         // Each hero's maxima, by index (the parked hero's from its record).
         let parked = self.parked.as_ref().map_or((self.growth.start[1], self.growth.start[3], self.growth.start[1], self.growth.start[3]), |p| (p.hp, p.mp, p.hp_max, p.mp_max));
@@ -7895,6 +7950,14 @@ impl Play {
             };
             lists.entry(g).or_default().push((id, n));
         }
+        // Container B (the stash) by each item's group, in id order.
+        let mut stash_lists: HashMap<Group, Vec<(u16, u32)>> = HashMap::new();
+        let mut stashed: Vec<(&u16, &u32)> = self.state.stash.iter().filter(|(_, n)| **n > 0).collect();
+        stashed.sort();
+        for (&id, &n) in stashed {
+            let g = self.design.item_category(id).and_then(Group::of_category).unwrap_or(Group::General);
+            stash_lists.entry(g).or_default().push((id, n));
+        }
         let family = |e: Option<u16>| e.map(|id| vec![(id, 1u32)]).unwrap_or_default();
         for g in Group::ORDER {
             let list = match g {
@@ -7910,7 +7973,10 @@ impl Play {
                     Some(&(id, n)) => s.set_entry(0, g, i, Some(id), n as i32),
                     None => s.set_entry(0, g, i, None, 0),
                 }
-                s.set_entry(1, g, i, None, 0);
+                match stash_lists.get(&g).and_then(|l| l.get(i)) {
+                    Some(&(id, n)) => s.set_entry(1, g, i, Some(id), n as i32),
+                    None => s.set_entry(1, g, i, None, 0),
+                }
             }
         }
         for h in 0..2 {
@@ -7969,9 +8035,13 @@ impl Play {
         self.weapon = None;
         self.shield = None;
         self.state.neopoints = s.i32(at::WALLET);
+        self.state.stash.clear();
+        self.state.stash_neopoints = s.i32(at::STASH);
         for (c, g, i, id, v) in s.adds() {
             let Ok(id) = u16::try_from(id) else { continue };
             if c != 0 {
+                // Container B, the stash: every entry by its count.
+                *self.state.stash.entry(id).or_insert(0) += v as u32;
                 continue;
             }
             match g {

@@ -2643,8 +2643,11 @@ fn play_trace(
         }
         let herd = to.is_some_and(|t| t[1] == 2.0);
         if let Some((st, k)) = act_at.filter(|&(_, k)| play.ticks == k) {
+            let before = (play.state.neopoints, play.state.items.len());
             play.act_start(st);
-            println!("      diagnostic: act start {st} on tick {k}");
+            let mut kit: Vec<(u16, u32)> = play.state.items.iter().map(|(&i, &n)| (i, n)).collect();
+            kit.sort();
+            println!("      diagnostic: act start {st} on tick {k}: hero {}, NP {} -> {}, party {} -> {kit:?}, stash {} items and {} NP", play.hero_index, before.0, play.state.neopoints, before.1, play.state.stash.len(), play.state.stash_neopoints);
         }
         for &(f, k) in &level_at {
             if play.ticks == k {

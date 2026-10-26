@@ -61,7 +61,7 @@ pub mod at {
 
 /// The six entry groups of one item container, in save and load order (Item lists): offset in
 /// the container and capacity.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Group {
     /// Kind 0, the item grid (every category without its own list).
     General,

@@ -3,8 +3,8 @@
 //! tick at a time and which tells the host what to do at each step.
 //!
 //! Not covered: the one-shot states 0x33 of the outgoing and incoming heroes (their animation
-//! is not given; the task does not wait on them), the three swap effects, the sound settle, the
-//! HUD portrait swing, and mode 4's own-spot placement (mode 4 has no writer).
+//! is not given; the task does not wait on them), the sound settle, the HUD portrait swing, and
+//! mode 4's own-spot placement (mode 4 has no writer).
 
 /// Rule M (boot, new game and start-point loads): flag 220 clear gives mode 0; 220 set and 248
 /// clear gives 1; both give 2.
@@ -65,13 +65,16 @@ pub fn ready(r: &Ready) -> bool {
 /// What the host does at a task step.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
-    /// Reset the hero attack pools; with the second flag, fade to white over 37 ticks.
-    Start { flash: bool },
+    /// Reset the hero attack pools; with the first flag, sound 0xB0 and the first swap effect
+    /// (4025, 0xFB9) at the outgoing hero; with the second, fade to white over 37 ticks.
+    Start { flash: bool, effects: bool },
     /// Exchange the heroes: bind the incoming hero at the outgoing hero's place, select it,
     /// clear its status timers and empty its target list.
     Exchange,
-    /// With the second flag, fade back from white over 8 ticks.
-    FadeIn,
+    /// The end flags (step 10): with the first flag, the second effect stopped (it never
+    /// started) and the third (4027, 0xFBB) started; with the second, fade back from white over
+    /// 8 ticks.
+    EndFlags { flash: bool, effects: bool },
     /// Set the incoming hero's state to the carried state; with the extra flag, the six HUD
     /// visibility timers go to 240.
     Carry { state: u8, extra: bool },
@@ -119,7 +122,7 @@ impl Task {
         match self.phase {
             Phase::Start => {
                 self.phase = Phase::Settle(0);
-                Some(Step::Start { flash: self.flash })
+                Some(Step::Start { flash: self.flash, effects: self.effects })
             }
             Phase::Settle(n) => {
                 if n + 1 >= 3 && fade_done {
@@ -130,12 +133,12 @@ impl Task {
                 None
             }
             Phase::Exchange => {
-                self.phase = if self.flash { Phase::FadeIn } else { Phase::Carry };
+                self.phase = if self.flash || self.effects { Phase::FadeIn } else { Phase::Carry };
                 Some(Step::Exchange)
             }
             Phase::FadeIn => {
                 self.phase = Phase::Carry;
-                Some(Step::FadeIn)
+                Some(Step::EndFlags { flash: self.flash, effects: self.effects })
             }
             Phase::Carry => {
                 self.phase = Phase::Hold(0);
@@ -203,7 +206,7 @@ mod tests {
         assert_eq!(hold_ticks(), 41);
         // A dead outgoing hero carries state 1.
         let mut t = Task::new(1, true, true, true, 16, true);
-        assert_eq!(t.tick(true), Some(Step::Start { flash: true }));
+        assert_eq!(t.tick(true), Some(Step::Start { flash: true, effects: true }));
         let mut steps = Vec::new();
         for _ in 0..80 {
             if let Some(s) = t.tick(true) {
@@ -213,7 +216,7 @@ mod tests {
                 }
             }
         }
-        assert_eq!(steps, vec![Step::Exchange, Step::FadeIn, Step::Carry { state: 1, extra: true }, Step::Done]);
+        assert_eq!(steps, vec![Step::Exchange, Step::EndFlags { flash: true, effects: true }, Step::Carry { state: 1, extra: true }, Step::Done]);
         // Without the flash the hold is exactly 41 ticks after the carry.
         let mut t = Task::new(0, false, false, false, 3, false);
         t.tick(true);
