@@ -5858,7 +5858,12 @@ impl Play {
         let hero_swing = swing_sub.and_then(|s| enemy::swing_class(self.hero_index, s));
         let shot_paths: Vec<([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect();
         let guarding = self.loco.state == hero_states::GUARD;
-        let attackable = self.loco.state != hero_states::DEAD && !self.dialogue_open;
+        // SPEC-0007 Hit reaction and invulnerability / SPEC-0036 Hittable predicate: no common
+        // enemy picks an attack (and its cooldowns wait) while the hero is not hittable: in
+        // states 16, 17, 25, 33, 36, 48, 50 to 55, 57, 59 and 60, in Roberta's leap and landing
+        // sub-states (8 and 13), under the script hold, or while a dialogue box is up.
+        let roberta_leap = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13));
+        let attackable = !matches!(self.loco.state, 16 | 17 | 25 | 33 | 36 | 48 | 50..=55 | 57 | 59 | 60) && !roberta_leap && !self.held && !self.dialogue_open;
         let world = &self.world;
         let mut strikes = Vec::new();
         let mut dots = Vec::new();

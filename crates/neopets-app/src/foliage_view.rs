@@ -71,6 +71,8 @@ pub fn spawn<C: Component + Copy>(
         if let Some(c) = neopets_sim::foliage::cut_model(p.model).filter(|_| bush) {
             drawn.push((c, true));
         }
+        // A family with no near model draws its far sprite (grass).
+        let far_only = p.kind.near.is_none();
         for (id, cut) in drawn {
             let Some(model) = models.get(&id) else { continue };
             let parts = assets.entry(id).or_insert_with(|| crate::part_assets(model, meshes, materials, images)).clone();
@@ -79,16 +81,19 @@ pub fn spawn<C: Component + Copy>(
                 let visibility = if cut { Visibility::Hidden } else { Visibility::Visible };
                 for (_, mesh, material) in &parts {
                     let m = tinted
-                        .entry((material.id(), q.colour))
+                        .entry((material.id(), if far_only { q.colour } else { [0; 4] }))
                         .or_insert_with(|| {
                             let mut base = materials.get(material).cloned().unwrap_or_default();
-                            // The plant colour is the draw context colour k = byte / 128 (128 = full),
-                            // sent as the colour scale of SPEC-0046: s = 1 when k's RGB lie in 0.49 to
-                            // 0.51 (the usual word 0x80404040), else 2k (Medium; R-0072).
-                            let k = q.colour.map(|b| b as f32 / 128.0);
-                            let neutral = k[..3].iter().all(|v| (0.49..=0.51).contains(v));
-                            let f = |v: f32| if neutral { 1.0 } else { (2.0 * v).min(1.0) };
-                            base.base_color = Color::srgba(f(k[0]), f(k[1]), f(k[2]), k[3].min(1.0));
+                            // SPEC-0060 Plant colour in the draw (R-0072): a plant drawn by its near
+                            // model ignores the colour word (the fixed default colour, opaque); one
+                            // drawn only by its far sprite takes it as the GS vertex colour with
+                            // MODULATE: each channel byte / 128 (64 grey draws at half brightness)
+                            // and the alpha byte / 128 as its opacity.
+                            if far_only {
+                                let k = q.colour.map(|b| (b as f32 / 128.0).min(2.0));
+                                base.base_color = Color::srgba(k[0].min(1.0), k[1].min(1.0), k[2].min(1.0), k[3].min(1.0));
+                                base.alpha_mode = AlphaMode::Blend;
+                            }
                             materials.add(base)
                         })
                         .clone();
