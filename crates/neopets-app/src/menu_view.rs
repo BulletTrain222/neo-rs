@@ -139,6 +139,7 @@ pub fn sync_menu(
     draws.extend(menus::item_draws(&art.f, flow, &lines));
     draws.extend(menus::map_draws(&art.f, flow));
     draws.extend(menus::journal_draws(&art.f, flow));
+    draws.extend(menus::book_draws(&art.f, flow));
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {
         commands.spawn((

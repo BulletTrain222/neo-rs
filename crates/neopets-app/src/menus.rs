@@ -40,6 +40,8 @@ pub const ITEMS: usize = 6;
 /// The quest journal (record 22, state 25; code 0x1B8) and the map pages (record 31 + area,
 /// state 30; code 0x26C + 20 x area).
 pub const JOURNAL: usize = 22;
+/// The book reader (record 20, state 24; code 0x190).
+pub const BOOK: usize = 20;
 pub const MAPS: usize = 31;
 
 /// Menu bits of the rising-edge word (SPEC-0035 section 4).
@@ -78,6 +80,8 @@ pub enum Command {
     Marker(i32),
     EquipMote { word: usize, id: u16 },
     Cloak,
+    /// The book reader's exit: the book cursor to -1, and with `true` the saved book word too.
+    BookClose(bool),
 }
 
 /// The slot picker of the load and save screens (SPEC-0035 section 7): the stage, the cursor,
@@ -231,6 +235,14 @@ impl Default for MapState {
     }
 }
 
+/// The book the reader holds (the one-slot cache of SPEC-0024 Book index) and its page timer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct BookPage {
+    pub index: usize,
+    pub book: neopets_data::book::Book,
+    pub timer: neopets_sim::book::PageTimer,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flow {
     pub current: usize,
@@ -250,6 +262,10 @@ pub struct Flow {
     pub map_data: MapData,
     pub map_view: MapView,
     pub map: MapState,
+    /// The loaded book with its page timer, and the timer's start and minimum words
+    /// (0x2DB2E0, 0x2DB2E4).
+    pub book: Option<BookPage>,
+    pub book_words: (f32, f32),
     /// The pause page's quit box is open (SPEC-0035 Behavior 2, states 6 and 7): its record 26
     /// shows in `card`, and the input block hides the menu words from the focus states and
     /// the generic step.
@@ -344,7 +360,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12) };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -696,6 +712,10 @@ impl Flow {
     /// One front-end pass. `edge` is the rising-edge menu word, `second` the button-only word.
     pub fn tick(&mut self, fe: &Frontend, edge: u16, second: u16, ctx: &Ctx) -> Option<Command> {
         let mut command = None;
+        // The page driver runs on every pass while a book is loaded, whatever the screen.
+        if let Some(b) = self.book.as_mut() {
+            b.timer.tick();
+        }
         let state = fe.screens.get(self.current).map_or(0xFFFF, |s| s.state);
         // The screen state; 0 lets the generic step run, -4 keeps only the focus moves.
         let mut result: Option<usize> = None;
@@ -729,6 +749,9 @@ impl Flow {
             11 => {
                 if ctx.game_over {
                     result = Some(GAME_OVER);
+                } else if ctx.book_gate {
+                    // Section 6 step 3: the book reader while the cursor (or saved word) is set.
+                    result = Some(BOOK);
                 } else if second & SELECT != 0 {
                     result = Some(PAUSE);
                 } else if (edge | second) & START != 0 {
@@ -774,6 +797,24 @@ impl Flow {
                 return command;
             }
             7 if second & SELECT != 0 => result = Some(PLAY),
+            // SPEC-0035 section 6.1: the book reader. With no index it leaves at once (the cursor
+            // to -1, the music override cleared, no cue); Cross, once the book is loaded, plays
+            // 0x9A, closes the book and returns to play. Triangle is left to the generic back
+            // rule, so play's gate opens the reader again (the bounce quirk).
+            24 => match ctx.book_index {
+                None => {
+                    command = Some(Command::BookClose(false));
+                    self.bank_override = None;
+                    result = Some(PLAY);
+                }
+                Some(_) if edge & CROSS != 0 && self.book.is_some() => {
+                    self.sounds.push(0x9A);
+                    command = Some(Command::BookClose(true));
+                    self.book = None;
+                    result = Some(PLAY);
+                }
+                _ => {}
+            },
             // SPEC-0035 section 14.3: the quest journal.
             25 => {
                 if self.pass == 0 {
@@ -1120,6 +1161,10 @@ pub struct Ctx {
     /// D-pad Up or Down press opening one this tick, no dialogue box).
     pub dpad: u16,
     pub shortcuts: bool,
+    /// Play's book gate (the book cursor or the saved book word is 0 or more) and the reader's
+    /// book index (SPEC-0035 section 6.1).
+    pub book_gate: bool,
+    pub book_index: Option<usize>,
 }
 
 /// Predicate table A (section 9c), the slots this build implements: 0, 2 and 56 always 1;
@@ -1337,6 +1382,35 @@ fn node_xy(fe: &Frontend, n: usize) -> (f32, f32) {
         at = d.parent;
     }
     (x, y)
+}
+
+/// The book reader's text (SPEC-0035 section 6.1 rule 5 gives the slot template, but not how
+/// the paragraphs fill it or how the pages are drawn; R-0071): a placeholder layout with the
+/// title in font 0 and the paragraphs wrapped at 192 pixels in the front-end font 2 (the book's
+/// own glyph sheet is not drawn), block A at x 20 and block B at x 234 from y 54, 18 pixels a
+/// line, 19 lines each.
+pub fn book_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
+    let mut out = Vec::new();
+    let (true, Some(b)) = (flow.current == BOOK, flow.book.as_ref()) else { return out };
+    let colour = [128, 128, 128, 128];
+    let tw = fe.fonts.first().map_or(0, |f| f.measure(&b.book.title, 0));
+    out.push(Draw::Text { font: 0, text: b.book.title.clone(), spacing: 0, x: 256.0 - (tw / 2) as f32, y: 36.0, colour });
+    let mut lines: Vec<Vec<u8>> = Vec::new();
+    for p in &b.book.paragraphs {
+        for part in p.split(|&c| c == b'\n') {
+            let wrapped = fe.wrap(2, part, 192, 0);
+            if wrapped.is_empty() {
+                lines.push(Vec::new());
+            }
+            lines.extend(wrapped.iter().map(|&(a, z)| part[a..z].to_vec()));
+        }
+        lines.push(Vec::new());
+    }
+    for (i, line) in lines.into_iter().take(38).enumerate() {
+        let (x, row) = if i < 19 { (20.0, i) } else { (234.0, i - 19) };
+        out.push(Draw::Text { font: 2, text: line, spacing: 0, x, y: 54.0 + 18.0 * (row as f32 + 1.0), colour });
+    }
+    out
 }
 
 /// The objective node's font (key 0x33) and its line height.
@@ -1705,6 +1779,41 @@ mod tests {
         flow.sounds.clear();
         assert_eq!(flow.tick(&f, CIRCLE, CIRCLE, &ctx), Some(Command::Quit));
         assert_eq!((flow.current, flow.quit_box, flow.sounds.clone()), (CARD, false, vec![0x98]));
+    }
+
+    #[test]
+    fn book_reader_flow() {
+        let mut f = fe();
+        f.screens[BOOK] = Screen { node: Some(0), back: -1, state: 24 };
+        let mut flow = Flow::new(&f);
+        flow.set(&f, PLAY);
+        let open = Ctx { book_gate: true, book_index: Some(81), ..Default::default() };
+        // The gate opens the reader; it waits while the book is not loaded (Cross does nothing).
+        flow.tick(&f, 0, 0, &open);
+        assert_eq!(flow.current, BOOK);
+        assert_eq!(flow.tick(&f, CROSS, CROSS, &open), None);
+        assert_eq!(flow.current, BOOK);
+        // Loaded: the page timer steps each pass; Cross plays 0x9A, closes the book (cursor and
+        // saved word) and returns to play.
+        flow.book = Some(BookPage { index: 81, book: Default::default(), timer: neopets_sim::book::PageTimer::new(1.2, 0.12) });
+        flow.tick(&f, 0, 0, &open);
+        assert!((flow.book.as_ref().unwrap().timer.angle - 1.1856).abs() < 1e-5);
+        flow.sounds.clear();
+        assert_eq!(flow.tick(&f, CROSS, CROSS, &open), Some(Command::BookClose(true)));
+        assert_eq!((flow.current, flow.sounds.clone(), flow.book.is_none()), (PLAY, vec![0x9A], true));
+        // Triangle (from pass 2) pops to play, and the gate opens the reader again.
+        flow.tick(&f, 0, 0, &open);
+        for _ in 0..2 {
+            flow.tick(&f, 0, 0, &open);
+        }
+        flow.tick(&f, TRIANGLE, TRIANGLE, &open);
+        assert_eq!(flow.current, PLAY);
+        flow.tick(&f, 0, 0, &open);
+        assert_eq!(flow.current, BOOK);
+        // No index: the reader leaves at once with no cue.
+        flow.sounds.clear();
+        assert_eq!(flow.tick(&f, 0, 0, &Ctx { book_gate: true, book_index: None, ..Default::default() }), Some(Command::BookClose(false)));
+        assert_eq!((flow.current, flow.sounds.is_empty()), (PLAY, true));
     }
 
     #[test]

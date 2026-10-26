@@ -1149,6 +1149,8 @@ fn step_sim(
                     game_over: play.play.death.page.is_some() || play.play.death.flag_e,
                     dpad: if l.left { menus::LEFT } else { 0 } | if l.right { menus::RIGHT } else { 0 },
                     shortcuts: !play.play.quick.open && !l.up && !l.down && !play.play.dialogue_open,
+                    book_gate: play.play.books.gate(),
+                    book_index: play.play.books.index(),
                 };
                 m.flow.held = held;
                 m.flow.view = play.play.item_view(&m.flow.grid_ids);
@@ -1171,9 +1173,27 @@ fn step_sim(
                         m.flow.written(ok.is_ok());
                     }
                     Some(menus::Command::Load(k)) => pending = m.flow.picker.file.slot(k).cloned(),
+                    Some(menus::Command::BookClose(saved)) => {
+                        play.play.books.cursor = -1;
+                        if saved {
+                            play.play.books.saved = -1;
+                        }
+                    }
                     Some(menus::Command::Quit) => quit = true,
                     Some(c) => play.play.item_command(&c),
                     None => {}
+                }
+                // SPEC-0024 Book index: the reader's request; a new index replaces the loaded
+                // book and starts its page timer, the loaded one is kept.
+                if m.flow.current == menus::BOOK {
+                    if let (Some(i), Some(archive)) = (play.play.books.index(), archive.as_deref_mut()) {
+                        if m.flow.book.as_ref().map(|b| b.index) != Some(i) {
+                            let crate::Archive { disc, index } = archive;
+                            let book = play.play.book_entry(i).and_then(|e| index.read(disc, neopets_data::book::RESOURCE).ok().and_then(|bytes| neopets_data::book::read(&bytes, e)));
+                            let (start, min) = m.flow.book_words;
+                            m.flow.book = book.map(|book| menus::BookPage { index: i, book, timer: neopets_sim::book::PageTimer::new(start, min) });
+                        }
+                    }
                 }
                 let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER);
                 // SPEC-0023 section 4.1: opening the pause page clears the HUD timers and the
@@ -1240,6 +1260,13 @@ fn step_sim(
                 quit = true;
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     m.flow.set(&a.f, menus::CARD);
+                }
+            }
+            // NEOPETS_TRACE_BOOK="value@n": the book cursor set to a station value on play tick n
+            // (diagnostic: the reader opens on the next pass).
+            if let Some((v, k)) = std::env::var("NEOPETS_TRACE_BOOK").ok().and_then(|v| v.split_once('@').and_then(|(a, b)| Some((a.trim().parse::<i32>().ok()?, b.trim().parse::<u64>().ok()?)))) {
+                if k == play.play.ticks {
+                    play.play.books.cursor = v;
                 }
             }
             // NEOPETS_TRACE_PAGE="map@n" or "journal@n": View Map or View Quests on play tick n
@@ -2155,6 +2182,7 @@ fn play_trace(
         println!("Open at the start: LevelMsg line {line} on tick {at}: {text:?}");
     }
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
+    println!("Book stations of {} (value, trigger index): {:?}", play.world.pack, play.book_stations());
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
     let placed: Vec<String> = play.world.placed_effects.iter().take(12).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
     println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
@@ -2703,6 +2731,10 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                         }
                         if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, 0x002D_D010, 1) {
                             flow.map_data.name_colour = w[0].to_le_bytes();
+                        }
+                        // SPEC-0035 section 6.1: the page timer's start and minimum.
+                        if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, 0x002D_B2E0, 2) {
+                            flow.book_words = (f32::from_bits(w[0]), f32::from_bits(w[1]));
                         }
                     }
                     commands.insert_resource(menu_view::Menu { flow });

@@ -92,6 +92,8 @@ pub struct World {
     /// table and the groups opened in this load.
     capacity: usize,
     volumes: Vec<neopets_sim::trigger::Volume>,
+    /// The book stations (SPEC-0028 Book station) with their 1-based book values.
+    books: Vec<(neopets_sim::trigger::Volume, u16)>,
     /// Every volume that fires on contact or from a hero shot under some collision mask, and those
     /// a hero shot fires under the current mask.
     all_volumes: Vec<neopets_sim::trigger::Volume>,
@@ -201,6 +203,7 @@ impl World {
             spheres: Vec::new(),
             capacity: 0,
             volumes: Vec::new(),
+            books: Vec::new(),
             all_volumes: Vec::new(),
             shot_volumes: Vec::new(),
             routines: HashMap::new(),
@@ -234,7 +237,7 @@ impl World {
         world.spheres = spheres;
         let (capacity, volumes) = neopets_data::trigger::volumes(&bytes, &chain.chunks);
         world.capacity = capacity;
-        world.volumes = volumes
+        let all: Vec<(neopets_sim::trigger::Volume, u16)> = volumes
             .into_iter()
             .map(|v| {
                 use neopets_data::trigger::Shape as D;
@@ -244,10 +247,11 @@ impl World {
                     D::Cylinder { base, axis, length, radius } => S::Cylinder { base, axis, length, radius },
                     D::Rectangle { origin, axes, extents } => S::Rectangle { origin, axes, extents },
                 };
-                neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }
+                (neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }, v.class)
             })
-            .filter(|v| v.fires_on_contact(0xFFFF) || v.fires_on_shot(0xFFFF))
             .collect();
+        world.books = all.iter().filter(|(v, _)| neopets_sim::book::is_station(v.kind, v.flags)).copied().collect();
+        world.volumes = all.into_iter().map(|(v, _)| v).filter(|v| v.fires_on_contact(0xFFFF) || v.fires_on_shot(0xFFFF)).collect();
         world.all_volumes = world.volumes.clone();
         world.set_collis_mask(0);
         Ok((world, bytes))
@@ -794,6 +798,9 @@ pub struct Play {
     last_area: Option<i32>,
     pub snapshot: Option<neopets_sim::save::Slot>,
     pub reload_wanted: bool,
+    /// The book words (SPEC-0035 section 6.1) and whether the chooser shows "Read Book".
+    pub books: neopets_sim::book::Books,
+    book_prompt: bool,
     /// The music controller's stream channels (SPEC-0009 Streams) and this tick's selection.
     pub music: neopets_sim::music::Streams,
     pub music_selection: Option<neopets_sim::music::Selection>,
@@ -1311,6 +1318,8 @@ impl Play {
             last_area: None,
             snapshot: None,
             reload_wanted: false,
+            books: Default::default(),
+            book_prompt: false,
             music: Default::default(),
             music_selection: None,
             bank_music: Default::default(),
@@ -4260,6 +4269,13 @@ impl Play {
         let frame = self.ticks as i64;
         let p = self.loco.position();
         let mut fired: Vec<u16> = self.world.volumes.iter().filter(|v| v.touches(p)).map(|v| v.index).collect();
+        // SPEC-0028 Book station: on each tick the body overlaps one, the pending book index
+        // takes its book value.
+        for (v, value) in &self.world.books {
+            if v.touches(p) {
+                self.books.pending = *value as i32;
+            }
+        }
         fired.sort_unstable();
         fired.dedup();
         for &i in &fired {
@@ -4893,10 +4909,21 @@ impl Play {
         }
         // The interaction chooser: a talk candidate claims Square before the doors.
         self.talk_prompt = false;
+        self.book_prompt = false;
         if !self.dialogue_open && !self.buy_step() && !self.talk_step() && !self.catch_step() {
             self.door_step();
+            // SPEC-0022 the idle list's Read Book (after the door prompt; a caption set earlier
+            // in the pass stops it): the prompt, the pending index cleared, a Square edge takes
+            // the book (cue 0xAF).
+            if self.door_prompt.is_none() && self.prompt_shown.is_none() && !self.save_prompt {
+                let (shown, took) = self.books.step(self.square_now);
+                self.book_prompt = shown;
+                if took {
+                    self.cue(0xAF);
+                }
+            }
             // The chooser's last fallback: Square with no target enters the sneak.
-            if self.square_now && self.door_prompt.is_none() && self.prompt_shown.is_none() {
+            if self.square_now && !self.book_prompt && self.door_prompt.is_none() && self.prompt_shown.is_none() {
                 self.loco.sneak();
             }
         }
@@ -5443,6 +5470,8 @@ impl Play {
             Some(8)
         } else if self.prompt_shown.is_some() {
             self.prompt_shown
+        } else if self.book_prompt {
+            Some(31)
         } else if self.save_prompt {
             Some(25)
         } else {
@@ -7934,6 +7963,16 @@ impl Play {
     }
 
     /// The item screen's view of the party (SPEC-0035 section 14.1) for the grid ids.
+    /// Diagnostic: the current world's book stations (value, trigger index).
+    pub fn book_stations(&self) -> Vec<(u16, u16)> {
+        self.world.books.iter().map(|(v, value)| (*value, v.index)).collect()
+    }
+
+    /// Book i's directory entry in resource 576 (the books' path record; SPEC-0024 Book index).
+    pub fn book_entry(&self, i: usize) -> Option<(u32, u32)> {
+        self.design.paths.get(2)?.get(i).copied()
+    }
+
     /// The map page's and the journal's tables (SPEC-0051 Layout): the quest rows (table 1),
     /// the treasure rows (table 3) and the area names (table 5), with their texts.
     pub fn map_tables(&self) -> (Vec<neopets_sim::mappage::Quest>, Vec<neopets_sim::mappage::Treasure>, Vec<Vec<u8>>) {
