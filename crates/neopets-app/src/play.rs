@@ -3438,6 +3438,16 @@ impl Play {
                 continue;
             }
             self.hit_list.push(c.id);
+            // SPEC-0036 Hit detection step 4: a guarding (blocking) target refuses a hit that is
+            // not the power step when dot(target facing, hero facing) is below its Blocking
+            // Angle; the block plays its hit reaction (SPEC-0038 Behavior 44, outer 7).
+            let hf = self.loco.facing;
+            if let Some(e) = c.enemy.as_mut().filter(|e| e.blocking && sub != 10) {
+                if c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < e.p.defence.angle {
+                    e.block_hit = true;
+                    continue;
+                }
+            }
             // SPEC-0036 Damage: x = P A B C D E (P, B, C, E are 1 without a Mote or petpet), y = x
             // − defence, truncated; D by sub-state.
             let d_factor = match sub {
@@ -5240,13 +5250,21 @@ impl Play {
             })
             .collect();
         let bands = enemy::band_factors(self.loco.state, &self.bands.0, &self.bands.1);
+        // SPEC-0038 Behavior 44 defences: the hero's swing class (attack sub-state +0xF90 by
+        // hero) and the live hero shots as (position, velocity per tick).
+        let swing_sub = match self.hero_index {
+            0 => self.attack.as_ref().map(|a| a.sub),
+            _ => self.r_attack.as_ref().map(|a| a.sub),
+        };
+        let hero_swing = swing_sub.and_then(|s| enemy::swing_class(self.hero_index, s));
+        let shot_paths: Vec<([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect();
         let guarding = self.loco.state == hero_states::GUARD;
         let attackable = self.loco.state != hero_states::DEAD && !self.dialogue_open;
         let world = &self.world;
         let mut strikes = Vec::new();
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
-            let Character { id, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, .. } = c else { continue };
+            let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, .. } = c else { continue };
             let p = wk.position();
             if e.dead {
                 let clip = anim.clip_state();
@@ -5306,7 +5324,19 @@ impl Play {
             // facing) at most -0.5.
             let wf = wk.facing;
             v.hero_blocks = guarding && hero_facing[0] * wf[0] + hero_facing[1] * wf[1] + hero_facing[2] * wf[2] <= -0.5;
+            // The missile defence: each live hero shot's path from its position to position +
+            // velocity x the defend time (ticks) against the enemy's body capsule.
+            v.hero_swing = hero_swing;
+            v.hero_shot_live = !shot_paths.is_empty();
+            let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
+            let look = e.p.defence.hold.max(0) as f32;
+            v.missile_threat = shot_paths.iter().any(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body));
+            let outer_before = e.outer;
             let act = e.tick(&v, &mut self.rng);
+            // NEOPETS_TRACE_DEFENCE: a defence starting (outers 5 to 8).
+            if e.outer != outer_before && (5..=8).contains(&e.outer) && std::env::var_os("NEOPETS_TRACE_DEFENCE").is_some() {
+                println!("      defence: {name} enters outer {} (swing class {:?}) on tick {}", e.outer, v.hero_swing, self.ticks);
+            }
             // A missile slot's spawn event: the spawner from the emit point of the event bit
             // (attach frame n; the body middle when the frame has no bone; R-0016).
             if let Some(req) = act.shot {
@@ -8495,6 +8525,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         disappear: r.disappear as i32,
         element: t.element as i32,
         slots: t.slots.each_ref().map(slot),
+        defence: enemy::Defence { hold: t.defend_time, missile: t.missile_defence, block: t.melee_block, dodge: t.melee_dodge, exit: t.defence_timer, angle: t.blocking_angle },
     }
 }
 
@@ -8528,6 +8559,9 @@ fn enemy_view<'a>(
         speed,
         contact,
         hero_blocks: false,
+        hero_swing: None,
+        missile_threat: false,
+        hero_shot_live: false,
         spawn_bits: 0,
         radii: 0.0,
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },

@@ -2540,6 +2540,13 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_DEFENCE: on tick 60, each enemy's defence words (SPEC-0038 0xE0 to 0x10C).
+        if play.ticks == 60 && std::env::var_os("NEOPETS_TRACE_DEFENCE").is_some() {
+            for c in play.characters.iter().filter(|c| c.enemy.is_some()) {
+                let d = c.enemy.as_ref().unwrap().p.defence;
+                println!("      defence {} (pack {}): {d:?}", c.name, c.pack);
+            }
+        }
         // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
         if std::env::var("NEOPETS_TRACE_DROP").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
             let n = play.dev_drop(160);

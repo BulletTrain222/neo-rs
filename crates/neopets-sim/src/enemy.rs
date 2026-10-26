@@ -4,14 +4,15 @@
 //! set-up, rush, keep distance, strafe, search after lost sight, hit reactions), the normal
 //! attack choice (Behavior 7), the distance draws (Behavior 4), the attack sequencer (Behavior 13:
 //! melee, charge and loop states), the agro tail with the leash (Behavior 23), the chase stop
-//! (Behavior 48.6), the take-hit hook (Behavior 37) and the dead state (Behaviors 34 and 36).
+//! (Behavior 48.6), the take-hit hook (Behavior 37), the dead state (Behaviors 34 and 36) and the
+//! melee and missile defences (outers 5 to 8, with the defence hold and exit).
 //!
 //! Not covered: the alarm groups and the group alert (Behaviors 3 and 10), socialize, the global
 //! AI pause (state 20), the retarget countdown and flyer re-launch (state 22 is played but never
 //! entered), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target state 9 (it
 //! stands and notices), the alarm-group emerge of state 8, wandering in
 //! states 5 to 7 (they stand and notice), retreat home (state 14) and the distance-hide gate,
-//! the melee and missile defences (outers 5 to 8), the counter-attack choice (Behavior 14), the
+//! the counter-attack choice (Behavior 14), the
 //! confused outer 11, the attack manager and the wait in line (outer 12), projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
 //! ghosts, reanimation (state 16 of rows 224, 226, 227), drops and coins, and flyers (the AI is
@@ -104,6 +105,44 @@ pub struct Params {
     /// Alignment (+0x3C): the element of every projectile the enemy fires.
     pub element: i32,
     pub slots: [Slot; 4],
+    pub defence: Defence,
+}
+
+/// The defence words of the monster row (SPEC-0038 Layout section 2, 0xE0 to 0x108).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Defence {
+    /// Missile defend time (0xE0): the defence hold set when a defence starts, and the missile
+    /// look-ahead in ticks.
+    pub hold: i32,
+    /// Missile dodge and block chances (0xE4, 0xE8).
+    pub missile: (f32, f32),
+    /// Melee block and dodge chances for quick, normal and heavy swings (0xEC to 0xF4, 0xF8 to
+    /// 0x100).
+    pub block: [f32; 3],
+    pub dodge: [f32; 3],
+    /// Defence timer min and max (0x104, 0x108), drawn when a defence ends.
+    pub exit: (f32, f32),
+    /// Blocking Angle (0x10C; SPEC-0036 Hit detection step 4).
+    pub angle: f32,
+}
+
+/// The hero's reach and facing arc for the melee defence (hero +0x14B8 and +0x14B4, set at
+/// spawn: 8.0 units and cosine 0.5 for both heroes).
+pub const DEFENCE_REACH: f32 = 8.0;
+pub const DEFENCE_ARC: f32 = 0.5;
+
+/// The swing class of a hero attack sub-state (R-0017): 0 quick, 1 normal, 2 heavy, None for a
+/// sub-state that never draws a block or dodge. `hero` 0 is Tor, 1 Roberta.
+pub fn swing_class(hero: usize, sub: u8) -> Option<u8> {
+    match (hero, sub) {
+        (0, 5 | 6) => Some(0),
+        (0, 2 | 3 | 9) => Some(1),
+        (0, 4 | 7 | 8 | 12) => Some(2),
+        (1, 5 | 6 | 7 | 10) => Some(0),
+        (1, 2 | 3 | 8 | 11 | 12) => Some(1),
+        (1, 4) => Some(2),
+        _ => None,
+    }
 }
 
 /// What the enemy sees this tick (computed by the caller from the world).
@@ -130,6 +169,12 @@ pub struct View<'a> {
     pub contact: bool,
     /// The hero guards and faces this enemy (dot of the facings at most -0.5).
     pub hero_blocks: bool,
+    /// The hero's melee swing class while it swings (swing_class), None otherwise.
+    pub hero_swing: Option<u8>,
+    /// A live hero shot's path over the look-ahead meets this enemy's body capsule, and whether
+    /// any hero shot is live.
+    pub missile_threat: bool,
+    pub hero_shot_live: bool,
     /// Event bits on the current frame: 0x20 is the release event (the missile slot's spawn
     /// event, SPEC-0005 table B), and 0x1 to 0x10 on that frame pick emit points 0 to 4.
     pub spawn_bits: u32,
@@ -324,6 +369,13 @@ pub struct Enemy {
     timers: [i32; 14],
     poison: (i32, i32),
     fire: (i32, i32),
+    /// The defence hold (0xAB8) and the melee-defence swing latch (0xB88).
+    defence_hold: i32,
+    swing_latch: bool,
+    /// Base actor state 20 (blocking): set by the melee block, read by the hero's swing.
+    pub blocking: bool,
+    /// The pending block-hit flag: the melee block plays 126 once.
+    pub block_hit: bool,
 }
 
 impl Enemy {
@@ -372,6 +424,10 @@ impl Enemy {
             timers: [0; 14],
             poison: (-1, -1),
             fire: (-1, -1),
+            defence_hold: 0,
+            swing_latch: false,
+            blocking: false,
+            block_hit: false,
             ticks: 0,
             loop_count: 0,
             reentered: false,
@@ -1013,11 +1069,108 @@ impl Enemy {
         }
     }
 
+    /// Behavior 44 missile and melee defence (before the other choices). Each starts outer 6 or
+    /// 8 (missile) or 5 or 7 (melee) and sets the defence hold.
+    fn defend(&mut self, v: &View, rng: &mut Rng) {
+        let d = self.p.defence;
+        // The melee latch follows the hero's swing every tick, so a swing is judged once.
+        let swinging = v.hero_swing.is_some();
+        let edge = swinging && !self.swing_latch;
+        self.swing_latch = swinging;
+        if self.outer != 10 && !(self.outer == 2 && self.seq == 5) && self.defence_hold < 1 && v.missile_threat {
+            let mut to = None;
+            if rng.range(1, 100) < d.missile.0 as i32 {
+                to = Some(6);
+            }
+            if rng.range(1, 100) < d.missile.1 as i32 {
+                to = Some(8);
+            }
+            if let Some(o) = to {
+                self.start_defence(o, rng);
+                return;
+            }
+        }
+        let gate = self.outer != 10 && !(self.outer == 2 && ![0, 1, 5].contains(&self.seq)) && self.defence_hold < 1;
+        if let (true, true, Some(class)) = (edge, gate, v.hero_swing) {
+            let off = sub(v.position, v.hero);
+            let reach = len(off) < DEFENCE_REACH && dot(v.hero_facing, unit(off)) > DEFENCE_ARC;
+            if reach {
+                let (r1, r2) = (rng.range(1, 100), rng.range(1, 100));
+                let c = class.min(2) as usize;
+                if r1 <= d.block[c] as i32 {
+                    self.start_defence(7, rng);
+                } else if r2 < d.dodge[c] as i32 {
+                    self.start_defence(5, rng);
+                }
+            }
+        }
+    }
+
+    fn start_defence(&mut self, outer: u32, rng: &mut Rng) {
+        self.outer = outer;
+        // Outer 6 picks its dodge, 53 or 54, by int[0, 1].
+        self.inner = if outer == 6 { 53 + rng.range(0, 1) as u32 } else { 0 };
+        self.through = None;
+        self.block_hit = false;
+        self.defence_hold = self.p.defence.hold;
+    }
+
+    /// The defence exit: outer 0, base state 1, defence hold = int[int(0x104), int(0x108)].
+    fn defence_exit(&mut self, rng: &mut Rng) {
+        self.outer = 0;
+        self.blocking = false;
+        let (lo, hi) = (self.p.defence.exit.0 as i32, self.p.defence.exit.1 as i32);
+        self.defence_hold = rng.range(lo.min(hi), lo.max(hi));
+    }
+
+    /// Outers 5 to 8.
+    fn defence(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        match self.outer {
+            5 | 6 => {
+                let id = if self.outer == 5 { 55 } else { self.inner };
+                if self.through(id, v, a) {
+                    self.defence_exit(rng);
+                }
+            }
+            7 => {
+                if v.hero_swing.is_some() {
+                    self.blocking = true;
+                    if self.block_hit && (v.has)(126) {
+                        if self.through(126, v, a) {
+                            self.block_hit = false;
+                        }
+                        a.face = Some((v.hero, self.p.turn));
+                    } else {
+                        self.block_hit = false;
+                        self.hold_anim(56, self.p.turn, v, a);
+                    }
+                } else {
+                    self.defence_exit(rng);
+                }
+            }
+            _ => {
+                if v.hero_shot_live {
+                    a.anim = Some(56);
+                } else {
+                    self.defence_exit(rng);
+                }
+            }
+        }
+    }
+
     /// Behavior 44: one agro tick.
     fn agro(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
         if self.recovery > 0 {
             self.recovery -= 1;
         }
+        // Base state 20 holds only through the blocks (outers 7 and 8).
+        if self.blocking && !matches!(self.outer, 7 | 8) {
+            self.blocking = false;
+        }
+        if self.defence_hold > 0 {
+            self.defence_hold -= 1;
+        }
+        self.defend(v, rng);
         // Lost-sight test (no grab-and-throw slots run here).
         if self.outer != 9 && !v.sight {
             self.outer = 9;
@@ -1144,6 +1297,7 @@ impl Enemy {
                 }
             }
             10 => self.reaction(v, a),
+            5..=8 => self.defence(v, rng, a),
             _ => {}
         }
         // The agro tail (Behavior 23).
@@ -1552,11 +1706,62 @@ mod tests {
             speed: 0.0,
             contact: false,
             hero_blocks: false,
+            hero_swing: None,
+            missile_threat: false,
+            hero_shot_live: false,
             spawn_bits: 0,
             radii: 2.0,
             clip: Clip::default(),
             has,
         }
+    }
+
+    #[test]
+    fn melee_defence_blocks_or_dodges_once_per_swing() {
+        let has = |_| true;
+        let mut rng = Rng::seeded(3);
+        let mut p = skeleton();
+        p.defence = Defence { hold: 30, block: [100.0, 100.0, 100.0], dodge: [0.0; 3], exit: (5.0, 5.0), ..Defence::default() };
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        e.state = 19;
+        e.outer = 1;
+        // The hero 4 units away, facing the enemy (dot 1 with the negated offset).
+        let mut v = view([4.0, 0.0, 0.0], &has);
+        v.hero_swing = Some(1);
+        e.tick(&v, &mut rng);
+        assert_eq!(e.outer, 7, "a 100 percent block chance blocks");
+        assert!(e.blocking);
+        v.hero_swing = None;
+        e.tick(&v, &mut rng);
+        assert_eq!(e.outer, 0, "the swing over: the defence exit");
+        assert!(!e.blocking);
+        // Out of the arc (the hero facing away) or beyond 8.0 units: nothing.
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        e.state = 19;
+        e.outer = 1;
+        let mut v = view([4.0, 0.0, 0.0], &has);
+        v.hero_facing = [1.0, 0.0, 0.0];
+        v.hero_swing = Some(0);
+        e.tick(&v, &mut rng);
+        assert_ne!(e.outer, 7);
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        e.state = 19;
+        e.outer = 1;
+        let mut v = view([8.0, 0.0, 0.0], &has);
+        v.hero_swing = Some(0);
+        e.tick(&v, &mut rng);
+        assert_ne!(e.outer, 7, "8.0 is not within the reach");
+    }
+
+    #[test]
+    fn swing_classes() {
+        assert_eq!(swing_class(0, 5), Some(0));
+        assert_eq!(swing_class(0, 9), Some(1));
+        assert_eq!(swing_class(0, 12), Some(2));
+        assert_eq!(swing_class(0, 10), None, "Tor's power step never draws a defence");
+        assert_eq!(swing_class(1, 10), Some(0));
+        assert_eq!(swing_class(1, 4), Some(2));
+        assert_eq!(swing_class(1, 9), None);
     }
 
     #[test]

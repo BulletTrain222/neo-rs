@@ -136,6 +136,16 @@ pub struct Tuning {
     pub retreat: (f32, f32),
     pub strafe: (f32, f32),
     pub backbiter: f32,
+    /// The defence words (0xE0 missile defend time; 0xE4, 0xE8 missile dodge and block; 0xEC to
+    /// 0xF4 melee block; 0xF8 to 0x100 melee dodge; 0x104, 0x108 defence timer min and max).
+    pub defend_time: i32,
+    pub missile_defence: (f32, f32),
+    pub melee_block: [f32; 3],
+    pub melee_dodge: [f32; 3],
+    pub defence_timer: (f32, f32),
+    /// Blocking Angle (0x10C): a guarding target blocks a hit when dot(target facing, hero
+    /// facing) is below it (SPEC-0036 Hit detection step 4).
+    pub blocking_angle: f32,
     pub slots: [AttackSlot; 4],
     /// Weapon N: (radius +4(N-1), full length +0x14 + 4(N-1)), clamped to 40.0.
     pub weapons: [(f32, f32); 5],
@@ -254,6 +264,12 @@ impl MonsterTable {
             retreat: (f(0x4EC), f(0x4F0)),
             strafe: (f(0x4F4), f(0x4F8)),
             backbiter: f(0x500),
+            defend_time: w(0xE0) as i32,
+            missile_defence: (f(0xE4), f(0xE8)),
+            melee_block: [f(0xEC), f(0xF0), f(0xF4)],
+            melee_dodge: [f(0xF8), f(0xFC), f(0x100)],
+            defence_timer: (f(0x104), f(0x108)),
+            blocking_angle: f(0x10C),
             slots: std::array::from_fn(slot),
             weapons: std::array::from_fn(|n| (f(4 * n).min(40.0), f(0x14 + 4 * n).min(40.0))),
         })
