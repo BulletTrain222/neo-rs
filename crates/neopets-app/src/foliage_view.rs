@@ -82,8 +82,13 @@ pub fn spawn<C: Component + Copy>(
                         .entry((material.id(), q.colour))
                         .or_insert_with(|| {
                             let mut base = materials.get(material).cloned().unwrap_or_default();
-                            let f = |b: u8| (b as f32 / 128.0).min(1.0);
-                            base.base_color = Color::srgba(f(q.colour[0]), f(q.colour[1]), f(q.colour[2]), f(q.colour[3]));
+                            // The plant colour is the draw context colour k = byte / 128 (128 = full),
+                            // sent as the colour scale of SPEC-0046: s = 1 when k's RGB lie in 0.49 to
+                            // 0.51 (the usual word 0x80404040), else 2k (Medium; R-0072).
+                            let k = q.colour.map(|b| b as f32 / 128.0);
+                            let neutral = k[..3].iter().all(|v| (0.49..=0.51).contains(v));
+                            let f = |v: f32| if neutral { 1.0 } else { (2.0 * v).min(1.0) };
+                            base.base_color = Color::srgba(f(k[0]), f(k[1]), f(k[2]), k[3].min(1.0));
                             materials.add(base)
                         })
                         .clone();
