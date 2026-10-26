@@ -188,6 +188,9 @@ pub enum Action {
     BurrowsClose { index: u8 },
     BurrowsStagger,
     WaitCage { index: u8 },
+    /// A lock chest's reward step (SPEC-0048 Lock chests, step 6): the drop action on group g's
+    /// reward placement, the character of reward [1], and its collected entry set.
+    ChestReward { group: u16 },
     SleepRandom { lo: u32, hi: u32 },
 }
 

@@ -1053,7 +1053,8 @@ impl Play {
         for &f in flags {
             play.state.set(f, true);
         }
-        let init = level::on_init(play.world.pack, &mut play.state);
+        let mut init = level::on_init(play.world.pack, &mut play.state);
+        init.extend(play.group_setup());
         play.apply(&init);
         play.activated();
         // Flags already set when play starts are not risings (no stingers for them).
@@ -1276,15 +1277,29 @@ impl Play {
 
     /// The current world's Init (a world loaded by a door job).
     fn run_init(&mut self) {
-        let init = level::on_init(self.world.pack, &mut self.state);
+        let mut init = level::on_init(self.world.pack, &mut self.state);
+        init.extend(self.group_setup());
         self.apply(&init);
+    }
+
+    /// SPEC-0048 set-up of the current world's type-40 groups at its load: a kind-1 chest's
+    /// object 0 is drawn at its start (state 9), or at its last frame (finished) when its
+    /// collected entry is set.
+    fn group_setup(&self) -> Vec<Action> {
+        self.world
+            .groups
+            .iter()
+            .filter(|g| g.kind == 1)
+            .filter_map(|g| Some(Action::InitObjOn { obj: usize::try_from(*g.objects.first()?).ok()?, end: self.state.collected.contains(&g.key) }))
+            .collect()
     }
 
     /// A newly loaded other world runs its Init (its actions apply to that world).
     fn init_other(&mut self) {
         if let Some(o) = self.other.take() {
             let current = std::mem::replace(&mut self.world, o);
-            let init = level::on_init(self.world.pack, &mut self.state);
+            let mut init = level::on_init(self.world.pack, &mut self.state);
+            init.extend(self.group_setup());
             self.apply(&init);
             self.other = Some(std::mem::replace(&mut self.world, current));
         }
@@ -1566,6 +1581,7 @@ impl Play {
                 Action::WheelRound => {}
                 Action::BurrowsRequest { .. } | Action::BurrowsClose { .. } => level::burrows_request(&mut self.state, a),
                 Action::BurrowsStagger => self.apply(&level::burrows_stagger()),
+                Action::ChestReward { group } => self.chest_reward(group as usize),
                 Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
                 Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
                 Action::MoveEffect { slot, locator } => {
@@ -3474,12 +3490,19 @@ impl Play {
         }
     }
 
-    /// SPEC-0048 Lock chests, the press rule for script group g (kind 1). The chest object's
-    /// animation, cameras, effect 790 and hero animation 162 are not reproduced; the gate's
-    /// animation test is the group's opened mark for this load and its collected row.
+    /// SPEC-0048 Lock chests, the press rule for script group g (kind 1): the gate (the chest
+    /// object drawn, not animating and not finished), the Open prompt, the press, the lock, and
+    /// the open sequence as a script thread (camera 0, the hero to locator 0, the chest's open
+    /// clip, effect 790 at B facing d, cue 142, hero animation 162 (not played: PlayHeroAnim is
+    /// not built), the reward, a 1 s wait, camera 1, a 1.5 s wait, the normal camera).
     fn chest_step(&mut self, g: usize, rec: neopets_sim::trigger::Record, square: bool) {
         let Some(group) = self.world.groups.get(g).cloned() else { return };
-        if rec.state == 0 || !rec.object || self.world.opened.contains(&g) || self.state.collected.contains(&group.key) {
+        let obj = group.objects.first().and_then(|&o| usize::try_from(o).ok()).filter(|&o| o < self.world.object_anims.len());
+        let ready = match obj.map(|o| self.world.object_anims[o]) {
+            Some(a) => a.drawn && !a.animating() && !matches!(a.state, 4 | 6 | 8),
+            None => !self.world.opened.contains(&g) && !self.state.collected.contains(&group.key),
+        };
+        if rec.state == 0 || !rec.object || !ready {
             return;
         }
         // The Square caption's shown count must be zero.
@@ -3495,27 +3518,47 @@ impl Play {
             level::ChestPress::Open => {
                 self.world.opened.insert(g);
                 let locator = group.locators.first().and_then(|&k| usize::try_from(k).ok());
-                if let Some(k) = locator {
-                    self.apply(&[Action::MoveHero { locator: k }]);
+                let camera = |k: usize| group.cameras.get(k).and_then(|&c| usize::try_from(c).ok()).map(|track| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 });
+                let mut v: Vec<Action> = vec![Action::HoldHero];
+                v.extend(camera(0));
+                v.extend(locator.map(|locator| Action::MoveHero { locator }));
+                if let Some(obj) = obj {
+                    v.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]);
                 }
-                self.cue(142);
+                // Effect 790 at B = X + 2.9 d, facing d, and cue 142 on the main slot.
                 let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
-                let a = [x[0] + 2.4 * d[0], x[1] + 2.4 * d[1] + 0.4, x[2] + 2.4 * d[2]];
-                // The reward: placement id drops[0] through the placement id table (the
-                // embedded region only).
-                let point = group
-                    .drops
-                    .first()
-                    .and_then(|&id| usize::try_from(id).ok())
-                    .and_then(|id| self.world.placements.get(id))
-                    .filter(|(region, _)| *region == 0xFF)
-                    .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
-                let pack = self.world.pack;
-                self.pay_out(pack, a, point);
-                self.state.collected.insert(group.key);
-                self.last_door = format!("chest group {g} opened (key {}), reward {:?}", group.key, point.map(|p| p.key));
+                let b = [x[0] + 2.9 * d[0], x[1] + 2.9 * d[1], x[2] + 2.9 * d[2]];
+                let f = unit([d[0], 0.0, d[2]]);
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, 790, b, [[f[2], 0.0, -f[0]], [0.0, 1.0, 0.0], f], &mut self.rng);
+                self.cue(142);
+                v.extend([Action::HeroAnim { anim: 162, wait: true }, Action::ChestReward { group: g as u16 }, Action::Sleep { ticks: 60 }]);
+                v.extend(camera(1));
+                v.extend([Action::Sleep { ticks: 90 }, Action::WaitDialog, Action::ReturnCamera { preset: -1, release: true }]);
+                self.apply(&v);
             }
         }
+    }
+
+    /// SPEC-0048 Lock chests step 6: the drop action on reward [0] (a placement id through the
+    /// placement id table; the embedded region only) at A = X + 2.4 d + 0.4 up, and the
+    /// collected entry (step 7's mark, set here with the reward).
+    fn chest_reward(&mut self, g: usize) {
+        let Some(group) = self.world.groups.get(g).cloned() else { return };
+        let locator = group.locators.first().and_then(|&k| usize::try_from(k).ok());
+        let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+        let a = [x[0] + 2.4 * d[0], x[1] + 2.4 * d[1] + 0.4, x[2] + 2.4 * d[2]];
+        let point = group
+            .drops
+            .first()
+            .and_then(|&id| usize::try_from(id).ok())
+            .and_then(|id| self.world.placements.get(id))
+            .filter(|(region, _)| *region == 0xFF)
+            .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
+        let pack = self.world.pack;
+        self.pay_out(pack, a, point);
+        self.state.collected.insert(group.key);
+        self.last_door = format!("chest group {g} opened (key {}), reward {:?}", group.key, point.map(|p| p.key));
     }
 
     /// SPEC-0006 door step after the hero's motion (its trigger step): a touched door of the
