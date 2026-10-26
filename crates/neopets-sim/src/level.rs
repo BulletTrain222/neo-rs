@@ -837,7 +837,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -884,6 +884,21 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1130 Init: with flag 675 clear objects 0, 29, 31, 33, 27, 1, 12, 15, 18 and 11
+        // off and callbacks 1 to 7 on triggers 5, 6, 7, 4, 2, 1 and 0; with it set objects 29, 31,
+        // 33, 27 and 1 at their end and 11, 14, 17 and 19 off, no triggers. AddAnimObjSound and
+        // movie 50 (trigger 0) are not built.
+        1130 => {
+            if state.flag(675) {
+                let mut v: Vec<Action> = [29, 31, 33, 27, 1].map(|obj| Action::InitObjOn { obj, end: true }).to_vec();
+                v.extend([11, 14, 17, 19].map(|obj| Action::InitObjOn { obj, end: false }));
+                v
+            } else {
+                let mut v: Vec<Action> = [0, 29, 31, 33, 27, 1, 12, 15, 18, 11].map(|obj| Action::InitObjOn { obj, end: false }).to_vec();
+                v.extend([reg(5, 1), reg(6, 2), reg(7, 3), reg(4, 4), reg(2, 5), reg(1, 6)]);
+                v
+            }
+        }
         // SPEC-0039 1344 Init: triggers 0 to 4 (handlers 2, 3, 6, 4, 5), objects 2, 3, 4, 5, 1 and 0
         // off; thread 7 loads slot 0 with set 0, 1 or 2 by flags 94, 93, 92 (only when flag 92
         // was set, as that create stores the word they read) or, with 239 and 240, set 3 (only
@@ -1928,6 +1943,174 @@ fn apothecary_talk(entity: u8, s: &mut GameState) -> Vec<Action> {
     }
 }
 
+/// SPEC-0041 1130's water-lever puzzle. Words: junctions 1 and 2 (1, 2: 0 = a, 1 = b), junction
+/// 3 (3: 0 rest, 1 c, 2 d), levers 5, 6 and 7 pulled (5, 6, 7), the reset tail's first line (24),
+/// and 22 while a step runs. Routine 1 to 3 is lever 5 to 7, 4 the test button. The junction
+/// rules and the test are High in the spec; the call order of the objects is Medium (each step
+/// here: the walk, hero animation 140, the lever object, camera 6 with the outcome object, the
+/// normal camera).
+fn water_puzzle(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let p = 1130;
+    let w = |s: &GameState, k: u8| s.word(p, k);
+    let (j1, j2, j3) = (w(s, 1), w(s, 2), w(s, 3));
+    let show = |obj: usize| [Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: true }];
+    let mut v = vec![Action::HoldHero];
+    let walk_lever = |v: &mut Vec<Action>, locator: usize, rest: usize, pulled: usize, pull: bool| {
+        v.extend([
+            Action::WalkHero { locator, wait: true, orient: true },
+            Action::HeroAnim { anim: 140, wait: false },
+            Action::DeactivateObj { obj: if pull { rest } else { pulled } },
+            Action::InitObjOn { obj: if pull { pulled } else { rest }, end: false },
+            Action::PlayAnim { obj: if pull { pulled } else { rest }, speed: 1.0, wait: false },
+            Action::Sleep { ticks: 42 },
+            Action::PlaySound { cue: 7, locator: None },
+        ]);
+    };
+    match routine {
+        // Lever 5 (junction 1): a pull with junction 3 not c sets b (object 12); a pull at c is
+        // blocked (13; the lever springs back); a push back sets a (14).
+        1 => {
+            let pulled = w(s, 5) != 0;
+            walk_lever(&mut v, 5, 30, 29, !pulled);
+            v.extend([7, 12, 13, 14].map(|obj| Action::DeactivateObj { obj }));
+            v.push(Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 });
+            let obj = if pulled {
+                s.set_word(p, 1, 0);
+                s.set_word(p, 5, 0);
+                14
+            } else if j3 != 1 {
+                s.set_word(p, 1, 1);
+                s.set_word(p, 5, 1);
+                12
+            } else {
+                13
+            };
+            v.extend(show(obj));
+            if !pulled && obj == 13 {
+                v.extend([Action::DeactivateObj { obj: 29 }, Action::InitObjOn { obj: 30, end: false }]);
+            }
+        }
+        // Lever 6 (junction 2): a pull with junction 3 not rest sets b (15); at rest blocked (16);
+        // a push back sets a (17).
+        2 => {
+            let pulled = w(s, 6) != 0;
+            walk_lever(&mut v, 6, 32, 31, !pulled);
+            v.extend([8, 9, 15, 16, 17].map(|obj| Action::DeactivateObj { obj }));
+            v.push(Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 });
+            let obj = if pulled {
+                s.set_word(p, 2, 0);
+                s.set_word(p, 6, 0);
+                17
+            } else if j3 != 0 {
+                s.set_word(p, 2, 1);
+                s.set_word(p, 6, 1);
+                15
+            } else {
+                16
+            };
+            v.extend(show(obj));
+            if !pulled && obj == 16 {
+                v.extend([Action::DeactivateObj { obj: 31 }, Action::InitObjOn { obj: 32, end: false }]);
+            }
+        }
+        // Lever 7 (junction 3): a pull at rest sets c with junction 1 a (18) or is blocked with b
+        // (20); a pull at c or d only sets the lever (objects 18 to 22 and 10 off); a push back
+        // from c gives rest with junction 2 a (19) or d with b (21); from rest or d nothing.
+        3 => {
+            let pulled = w(s, 7) != 0;
+            walk_lever(&mut v, 7, 34, 33, !pulled);
+            v.extend([18, 19, 20, 21, 22, 10].map(|obj| Action::DeactivateObj { obj }));
+            let obj = if !pulled {
+                if j3 != 0 {
+                    s.set_word(p, 7, 1);
+                    None
+                } else if j1 == 0 {
+                    s.set_word(p, 3, 1);
+                    s.set_word(p, 7, 1);
+                    Some(18)
+                } else {
+                    Some(20)
+                }
+            } else {
+                s.set_word(p, 7, 0);
+                if j3 == 1 {
+                    s.set_word(p, 3, if j2 == 0 { 0 } else { 2 });
+                    Some(if j2 == 0 { 19 } else { 21 })
+                } else {
+                    None
+                }
+            };
+            if let Some(obj) = obj {
+                v.push(Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 });
+                v.extend(show(obj));
+                if !pulled && obj == 20 {
+                    v.extend([Action::DeactivateObj { obj: 33 }, Action::InitObjOn { obj: 34, end: false }]);
+                }
+            }
+        }
+        // The test button: solved at b, b, d (flag 675; objects 7, 9, 10 and 11 shown and played,
+        // object 1 played, camera 4, object 0 off); else the partial outcome (junction 2 a: object
+        // 8; b without d: 9; b, d with junction 1 a: 9 and 10) and the reset tail (line 5 the
+        // first time, the start states restored, the levers played back to rest).
+        _ => {
+            v.extend([
+                Action::DeactivateObj { obj: 28 },
+                Action::InitObjOn { obj: 27, end: false },
+                Action::WalkHero { locator: 4, wait: true, orient: true },
+                Action::HeroAnim { anim: 140, wait: false },
+                Action::PlayAnim { obj: 27, speed: 1.0, wait: false },
+                Action::Sleep { ticks: 42 },
+                Action::PlaySound { cue: 7, locator: None },
+            ]);
+            if (j1, j2, j3) == (1, 1, 2) {
+                s.set(675, true);
+                for obj in [7, 9, 10, 11] {
+                    v.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]);
+                }
+                v.extend([
+                    Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                    Action::PlayCamera { track: 4, wait: true, end: 0, speed: 1.0 },
+                    Action::DeactivateObj { obj: 0 },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+                return v;
+            }
+            v.extend([8, 9, 15, 16, 17].map(|obj| Action::DeactivateObj { obj }));
+            v.push(Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 });
+            let outcome: &[usize] = if j2 == 0 { &[8] } else if j3 != 2 { &[9] } else { &[9, 10] };
+            for &obj in outcome {
+                v.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 2.0, wait: true }]);
+            }
+            v.extend([
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::DeactivateObj { obj: 27 },
+                Action::InitObjOn { obj: 28, end: false },
+                Action::PlayAnim { obj: 28, speed: 1.0, wait: false },
+                Action::Sleep { ticks: 36 },
+            ]);
+            if w(s, 24) == 0 {
+                s.set_word(p, 24, 1);
+                v.push(Action::Message { line: 5 });
+            }
+            v.extend([7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22].map(|obj| Action::DeactivateObj { obj }));
+            v.push(Action::InitObjOn { obj: if j1 == 0 { 12 } else { 14 }, end: false });
+            v.push(Action::InitObjOn { obj: if j2 == 0 { 15 } else { 17 }, end: false });
+            v.push(Action::InitObjOn { obj: [18, 19, 22][j3.clamp(0, 2) as usize], end: false });
+            for k in 1..=3 {
+                s.set_word(p, k, 0);
+            }
+            for (word, pulled, rest) in [(5, 29, 30), (6, 31, 32), (7, 33, 34)] {
+                if w(s, word) != 0 {
+                    s.set_word(p, word, 0);
+                    v.extend([Action::DeactivateObj { obj: pulled }, Action::InitObjOn { obj: rest, end: false }, Action::PlayAnim { obj: rest, speed: 1.0, wait: true }]);
+                }
+            }
+        }
+    }
+    v.push(Action::ReturnCamera { preset: -1, release: true });
+    v
+}
+
 /// The registration gate of SPEC-0039 1405, 1407, 1417, 1419 and 1425.
 fn gate_1405(pack: u32, s: &GameState) -> bool {
     match pack {
@@ -2508,6 +2691,39 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0041 1130 callback 6 (trigger 1): line 3 the first time (word 20). Callback 5
+        // (trigger 2, entering with the body): with 675 clear (and object 2 not yet shown, word
+        // 21) the one-shot switch: 675, object 1 off, object 2 on and played, object 0 on, the
+        // normal camera.
+        (1130, 6) if state.word(pack, 20) == 0 => {
+            state.set_word(pack, 20, 1);
+            out.actions.push(Action::Message { line: 3 });
+        }
+        (1130, 5) if call.state == 1 && call.object && !state.flag(675) && state.word(pack, 21) == 0 => {
+            state.set_word(pack, 21, 1);
+            state.set(675, true);
+            out.actions.extend([
+                Action::DeactivateObj { obj: 1 },
+                Action::InitObjOn { obj: 2, end: false },
+                Action::PlayAnim { obj: 2, speed: 1.0, wait: false },
+                Action::InitObjOn { obj: 0, end: false },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        // 1130 levers (callbacks 1 to 3 on triggers 5 to 7) and the test button (callback 4 on
+        // trigger 4): the Square context 4 while inside with 675 clear; a press runs the step.
+        (1130, 1..=4) if call.object && call.state != 0 && !state.flag(675) && state.word(pack, 22) == 0 => {
+            if routine == 4 && state.word(pack, 23) == 0 {
+                state.set_word(pack, 23, 1);
+                out.actions.push(Action::Message { line: 2 });
+            }
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                state.set_word(pack, 22, 1);
+                out.actions.extend(water_puzzle(routine, state));
+                out.actions.push(Action::Bits { word: 22, set: 0, clear: 1 });
             }
         }
         // SPEC-0039 1344 trigger 0 (entering with the body): with 237 set and 238 clear, 238 (movie
@@ -5809,6 +6025,27 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn water_lever_puzzle() {
+        // SPEC-0041 vector: start a, a, rest; lever 7 -> c; lever 6 -> b; lever 7 back -> d;
+        // lever 5 -> b; the test solves it (flag 675).
+        let mut s = GameState::default();
+        for lever in [3, 2, 3, 1] {
+            water_puzzle(lever, &mut s);
+        }
+        assert_eq!((s.word(1130, 1), s.word(1130, 2), s.word(1130, 3)), (1, 1, 2));
+        water_puzzle(4, &mut s);
+        assert!(s.flag(675));
+        // Lever 5 first (b, a, rest): lever 7 is then blocked (object 20), and a test resets.
+        let mut t = GameState::default();
+        water_puzzle(1, &mut t);
+        assert!(water_puzzle(3, &mut t).contains(&Action::InitObjOn { obj: 20, end: false }));
+        assert_eq!(t.word(1130, 3), 0);
+        let reset = water_puzzle(4, &mut t);
+        assert!(reset.contains(&Action::Message { line: 5 }) && !t.flag(675));
+        assert_eq!((t.word(1130, 1), t.word(1130, 5)), (0, 0));
     }
 
     #[test]
