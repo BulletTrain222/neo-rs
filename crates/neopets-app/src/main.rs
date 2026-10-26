@@ -532,6 +532,8 @@ fn main() {
     let mut smoke_test = false;
     let mut screenshot = None;
     let mut hide_hud = false;
+    // `--show-info`: in play, start with the developer info panel shown (F6 toggles it).
+    let mut show_info = false;
     let mut catch_up = MAX_CATCH_UP;
     let mut play_mode = false;
     let mut play_pack = PLAY_PACK;
@@ -656,6 +658,8 @@ fn main() {
             catch_up = 1;
         } else if arg == "--hide-hud" {
             hide_hud = true;
+        } else if arg == "--show-info" {
+            show_info = true;
         } else if arg == "--screenshot-at" {
             shot_at = args.next().and_then(|v| v.parse().ok()).unwrap_or_else(|| {
                 eprintln!("--screenshot-at requires seconds");
@@ -802,6 +806,8 @@ fn main() {
             app.insert_resource(auto);
         }
     }
+    // In play the developer info panel starts hidden unless asked for.
+    let hide_hud = hide_hud || (play_mode && !show_info);
     app.insert_resource(DiscStatus(status))
         .insert_resource(HudHidden(hide_hud))
         .insert_resource(driver)
@@ -1515,8 +1521,9 @@ fn orbit_camera(
     }
 }
 
+/// F6 shows or hides the developer info panel (Tab is the game's Start key).
 fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<Hud>>) {
-    if keys.just_pressed(KeyCode::Tab) {
+    if keys.just_pressed(KeyCode::F6) {
         for mut node in &mut huds {
             node.display = match node.display {
                 Display::None => Display::Flex,
