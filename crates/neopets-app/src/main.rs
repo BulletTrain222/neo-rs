@@ -2,6 +2,7 @@ mod archive_view;
 mod character;
 mod controls;
 mod dev_menu;
+mod perf;
 mod effect_view;
 mod foliage_view;
 mod orbit;
@@ -183,6 +184,34 @@ fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::
 /// world slots, both heroes, the sound and the world state are replaced by a new game's (909
 /// in E with its Init; SPEC-0006 a new game), so a later New Game starts fresh and no session
 /// snapshot (pending flag) is kept. The options block belongs to the front end and stays.
+/// The developer menu's warp: a new game state in world pack `pack`, whose Init runs with the
+/// current story flags, keeping the session (items, Neopoints, maps and collected treasures,
+/// the transition map, books, both heroes' pools, the equipment, the active hero, the options
+/// and the cheats). A test tool of this build; the original has no such travel.
+fn warp(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play, pack: u32) -> Result<play::Play, String> {
+    let flags: Vec<u16> = old.state.flags.iter().copied().collect();
+    let mut play = play::Play::load_with_flags(disc, index, pack, PLAY_OUTFIT, &flags)?;
+    let s = &old.state;
+    play.state.items = s.items.clone();
+    play.state.neopoints = s.neopoints;
+    play.state.maps = s.maps.clone();
+    play.state.collected = s.collected.clone();
+    play.state.transition_map = s.transition_map;
+    play.equipment = old.equipment.clone();
+    play.books = old.books;
+    if old.hero_index != play.hero_index {
+        play.trace_select_hero(old.hero_index);
+    }
+    play.hero_max = old.hero_max;
+    play.hero_hp = old.hero_hp;
+    play.hero_mp_max = old.hero_mp_max;
+    play.hero_mp = old.hero_mp;
+    play.generation = old.generation + 1;
+    play.options = old.options;
+    play.cheats = old.cheats;
+    Ok(play)
+}
+
 fn new_game(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play) -> Result<play::Play, String> {
     let mut play = play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT)?;
     play.generation = old.generation + 1;
@@ -793,7 +822,8 @@ fn main() {
             ..default()
         }))
         .init_resource::<dev_menu::DevMenu>()
-        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel))
+        .init_resource::<perf::PerfOverlay>()
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, perf::spawn_panel))
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
             Update,
@@ -801,7 +831,7 @@ fn main() {
                 (dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1024,7 +1054,7 @@ fn step_sim(
     art: Option<Res<hud_view::HudArt>>,
     mut archive: Option<ResMut<Archive>>,
     mut commands: Commands,
-    dev: Res<dev_menu::DevMenu>,
+    mut dev: ResMut<dev_menu::DevMenu>,
 ) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
@@ -1312,6 +1342,19 @@ fn step_sim(
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     m.flow.set(&a.f, menus::PLAY);
                 }
+            }
+        }
+        if let (Some(pack), Some(archive)) = (dev.warp.take(), archive.as_deref_mut()) {
+            match warp(&mut archive.disc, &archive.index, &play.play, pack) {
+                Ok(new) => {
+                    play.play = new;
+                    match archive.disc.reopen() {
+                        Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
+                        Err(e) => error!("No loader thread, streaming is off: {e}"),
+                    }
+                    info!("Warped to world pack {pack}");
+                }
+                Err(e) => error!("Warp to {pack} failed: {e}"),
             }
         }
         if let (true, Some(archive)) = (quit, archive.as_deref_mut()) {

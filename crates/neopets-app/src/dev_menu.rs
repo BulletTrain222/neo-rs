@@ -5,6 +5,8 @@
 //! for steps of 10), Enter or Space applies it. F2 toggles the free camera: WASD or the arrows
 //! move, E and Q rise and sink, J/L and I/K or a right-button drag look around, Shift is fast.
 //! While the menu is open or the free camera is on, the hero and the game menus get no input.
+//! Warp rebuilds the game in another world pack (the save's world-key list), keeping the
+//! session (flags, items, Neopoints, maps, the heroes' pools and equipment, cheats, options).
 
 use bevy::input::mouse::AccumulatedMouseMotion;
 use bevy::prelude::*;
@@ -19,6 +21,9 @@ pub struct DevMenu {
     amount: usize,
     item: u16,
     flag: u16,
+    /// The warp list's cursor, and a warp the host runs after this frame's ticks.
+    warp_at: usize,
+    pub warp: Option<u32>,
     pub free: Option<FreeCam>,
     note: String,
 }
@@ -69,9 +74,18 @@ enum Entry {
     Item,
     Hero,
     Flag,
+    Warp,
 }
 
-const ENTRIES: [Entry; 10] = [Entry::God, Entry::Magic, Entry::Charge, Entry::FreeCam, Entry::Neopoints, Entry::Heal, Entry::Motes, Entry::Item, Entry::Hero, Entry::Flag];
+const ENTRIES: [Entry; 11] = [Entry::God, Entry::Magic, Entry::Charge, Entry::FreeCam, Entry::Warp, Entry::Neopoints, Entry::Heal, Entry::Motes, Entry::Item, Entry::Hero, Entry::Flag];
+
+/// The warp list: the save's world keys (nonzero, sorted, each once).
+fn worlds(p: &crate::play::Play) -> Vec<u32> {
+    let mut v: Vec<u32> = p.world_keys.0.iter().copied().filter(|&k| k > 0).collect();
+    v.sort_unstable();
+    v.dedup();
+    v
+}
 
 pub fn spawn_panel(mut commands: Commands) {
     commands
@@ -87,7 +101,7 @@ pub fn spawn_panel(mut commands: Commands) {
 }
 
 /// The menu's keys and actions, before the game reads its input.
-pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut frames: Local<u32>) {
+pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
     let Some(mut play) = play else { return };
     let toggle_free = |dev: &mut DevMenu| {
         dev.free = match dev.free {
@@ -95,12 +109,15 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             None => cameras.iter().next().map(FreeCam::from_transform),
         };
     };
-    // NEOPETS_DEV="menu,free": open the menu and/or start the free camera once play has run a
-    // few frames (diagnostic, for screenshots); with "free" the camera also backs up and rises.
+    // NEOPETS_DEV="menu,free,perf,warp=N": open the menu, start the free camera, show the
+    // performance overlay and/or warp to world pack N once play has run a few frames
+    // (diagnostic, for screenshots); with "free" the camera also backs up and rises.
     *frames += 1;
     if *frames == 30 {
         let v = std::env::var("NEOPETS_DEV").unwrap_or_default();
         dev.open |= v.contains("menu");
+        perf.on |= v.contains("perf");
+        dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
         if v.contains("free") && dev.free.is_none() {
             toggle_free(&mut dev);
             if let Some(fc) = dev.free.as_mut() {
@@ -140,6 +157,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             Entry::Neopoints => dev.amount = (dev.amount as i32 + delta.signum()).clamp(0, AMOUNTS.len() as i32 - 1) as usize,
             Entry::Item => dev.item = (dev.item as i32 + delta).clamp(0, 180) as u16,
             Entry::Flag => dev.flag = (dev.flag as i32 + delta).clamp(0, u16::MAX as i32) as u16,
+            Entry::Warp => {
+                let n = worlds(&play.play).len().max(1) as i32;
+                dev.warp_at = (dev.warp_at as i32 + delta).rem_euclid(n) as usize;
+            }
             _ => {}
         }
     }
@@ -195,6 +216,13 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             p.state.set(f, v);
             format!("Story flag {f} {}", if v { "set" } else { "cleared" })
         }
+        Entry::Warp => match worlds(p).get(dev.warp_at).copied() {
+            Some(pack) => {
+                dev.warp = Some(pack);
+                format!("Warping to world pack {pack}")
+            }
+            None => "No world list".into(),
+        },
     };
 }
 
@@ -256,6 +284,10 @@ pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Q
                 Entry::Item => format!("Give item: < {} > {}", dev.item, p.item_label(dev.item)),
                 Entry::Hero => format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }),
                 Entry::Flag => format!("Toggle story flag: < {} > ({})", dev.flag, if p.state.flag(dev.flag) { "set" } else { "clear" }),
+                Entry::Warp => {
+                    let w = worlds(p);
+                    format!("Warp to world: < {} > ({} of {}; here: {} {})", w.get(dev.warp_at).map_or("-".to_string(), |k| k.to_string()), dev.warp_at + 1, w.len(), p.world.pack, String::from_utf8_lossy(&p.location_name()))
+                }
             };
             s.push_str(if k == dev.cursor { "> " } else { "  " });
             s.push_str(&line);
