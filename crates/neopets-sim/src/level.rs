@@ -10627,10 +10627,14 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0045 1217 activate-world routines 3 and 4 (Act 3).
         1217 => burrows_activate(state),
         // SPEC-0054 1432 activation: level state 10, objects 0, 1 and 2, flag 9.
+        // SPEC-0054 Activation (open question 22): level state 10, objects 0 to 2, effects 18 to
+        // 25 started and flag 9.
         1432 => {
             state.set_level(10, true);
             state.set_word(pack, 1, state.word(pack, 1) | 1 << 9);
-            (0..=2).map(|obj| Action::InitObjOn { obj, end: false }).collect()
+            let mut v: Vec<Action> = (0..=2).map(|obj| Action::InitObjOn { obj, end: false }).collect();
+            v.extend((18..=25).map(|slot| Action::StartEffect { slot, camera: false }));
+            v
         }
         // SPEC-0043 1122 activate-world (registered with 31): level state 4.
         1122 if state.flag(31) => {
