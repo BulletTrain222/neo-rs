@@ -1954,6 +1954,10 @@ impl Play {
                         self.apply(&[Action::StopEffect { slot }]);
                     }
                 }
+                Action::DamageHero { amount } => {
+                    let facing = self.loco.facing;
+                    self.hero_hit(amount as f32, 0.0, false, facing, "script".into());
+                }
                 Action::KillHero => {
                     if self.loco.state != hero_states::DEAD {
                         self.default_death();

@@ -233,6 +233,8 @@ pub enum Action {
     LoadOverride { slot: i32 },
     /// StopEffect for every effect id that script-group instance `group` lists.
     GroupEffectsStop { group: usize },
+    /// DamageHero(n) (SPEC-0030 row 169): the hero's full hit routine with no attacker.
+    DamageHero { amount: i32 },
     /// KillCurrentHero: the default death of the active hero (no callback gate; health kept).
     KillHero,
     /// RegisterScriptTrigger for every member trigger of script group `group` to a routine.
@@ -1570,6 +1572,17 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 1090 Init: 314 and 42; the hurt triggers of bank A (1 to 7) and bank B (8 to
+        // 14). The firing loops (threads C and D) run from Update. The object sounds and the
+        // Update's comparison tree (Low in the spec) are not reproduced.
+        1090 => {
+            state.set(314, true);
+            state.set(42, true);
+            (1..=14).map(|i| reg(i, if i <= 7 { 1 } else { 2 })).collect()
+        }
+        // SPEC-0041 989 Init: objects 2 and 0 at their start. Thread A (Low in the spec) and the
+        // effect moves of Update are not built; thread B runs from Update.
+        989 => vec![Action::InitObjOn { obj: 2, end: false }, Action::InitObjOn { obj: 0, end: false }],
         // SPEC-0044 893 Init: 46; triggers 4, 1, 5, 2 and 3; the main slot thread (193 clear: set 8;
         // 524 set, 525 clear, item 77 not held: 11; 524 and 525 set, 526 clear: 6; then with 47
         // clear 9 or 10 by 490, 491 and 64, and with 494 set and 495 clear set 4 and the boss
@@ -5086,6 +5099,17 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1090 T1 and T2 (the hurt zones): while the hero is inside a firing hazard,
+        // DamageHero(20) about once a second (the routine's 1 s wait; words 20 + k).
+        (1090, 1 | 2) if call.object && call.state != 0 => {
+            let k = (call.index as usize).saturating_sub(1).min(13);
+            let active = state.word(pack, 2 + (k / 7) as u8) & (1 << (k % 7)) != 0;
+            let now = state.hero.tick as i32;
+            if active && now >= state.word(pack, 20 + k as u8) {
+                state.set_word(pack, 20 + k as u8, now + 61);
+                out.actions.push(Action::DamageHero { amount: 20 });
+            }
+        }
         // SPEC-0044 893 trigger 4 (the boss area): line 3 on the first entry with 494 set and 495
         // clear; the area word (2) is 1 while the hero is inside.
         (893, 4) if call.object => {
@@ -7590,6 +7614,56 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0041 1090 threads C and D, the firing loops: bank A fires four hazards for 42 ticks
+        // then waits 42, bank B for 30 then 30, each through its four steps (words 2 and 3 the
+        // firing masks, 1 the start tick + 1).
+        1090 => {
+            if state.word(pack, 1) == 0 {
+                state.set_word(pack, 1, state.hero.tick as i32 + 1);
+            }
+            let t = state.hero.tick as i32 + 1 - state.word(pack, 1);
+            let banks: [(u8, usize, i32, [[usize; 4]; 4]); 2] = [
+                (2, 3, 42, [[0, 2, 4, 1], [1, 3, 0, 5], [2, 1, 6, 3], [4, 5, 6, 2]]),
+                (3, 10, 30, [[0, 6, 4, 1], [2, 3, 5, 1], [0, 1, 2, 3], [4, 5, 6, 2]]),
+            ];
+            for (word, first, len, steps) in banks {
+                let phase = t / len;
+                let step = steps[((phase / 2) % 4) as usize];
+                if t % (2 * len) == 0 {
+                    state.set_word(pack, word, step.iter().map(|&i| 1 << i).sum());
+                    out.extend(step.iter().map(|&i| Action::PlayAnim { obj: first + i, speed: 1.0, wait: false }));
+                } else if t % (2 * len) == len {
+                    state.set_word(pack, word, 0);
+                }
+            }
+        }
+        // SPEC-0041 989 thread B: level states 2 and 3 clear-then-set: movie 46 counted, 3 and 4;
+        // then (H1) 5 and 1; 6 once 1 and 0 (the boss's defeat) are set; with 5 and 6 the post-
+        // fight block once (value 2 for eW 78, entity 0 off, 51, 298 and 86, and the load of eW
+        // 78 in place of movie 47). The boss-fight tweaks are not built.
+        989 => {
+            let l = |n| state.level(n);
+            if l(2) && !l(3) {
+                state.movies.insert(46);
+                state.set_level(3, true);
+                state.set_level(4, true);
+            } else if l(3) && l(4) && !l(5) {
+                state.set_level(5, true);
+                state.set_level(1, true);
+            }
+            if state.level(1) && !state.level(6) && state.level(0) {
+                state.set_level(6, true);
+            }
+            if state.level(5) && state.level(6) && !state.level(7) && state.word(pack, 1) == 0 {
+                state.set_word(pack, 1, 1);
+                for f in [51, 298, 86] {
+                    state.set(f, true);
+                }
+                state.movies.insert(47);
+                state.blackboard.insert((2, 78), 2);
+                out.extend([Action::FadeOut { seconds: 0.1, wait: true }, Action::DeactivateEntity { entity: 0 }, Action::ReplaceExterior { slot: 78, plane: -1 }]);
+            }
+        }
         // SPEC-0044 893 Update: the item-70 watcher (490 set, 491 and 64 clear, five held: 491) and
         // the boss check (armed: AI 39 below 50 hit points while the hero is in trigger 4's area:
         // entities 36 to 38 off, camera 4, 495, line 4, slot 0 emptied).
@@ -8724,6 +8798,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
+        }
+        // SPEC-0041 989 W3: level state 2.
+        989 => {
+            state.set_level(2, true);
+            Vec::new()
         }
         // SPEC-0044 893 arrival: the value for eW 65 is read and reset.
         893 => {
@@ -11835,6 +11914,46 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn modules_1090_989() {
+        // The spec's vector: bank A step 1 at tick 0 fires objects 3, 5, 7 and 4 for ticks 0 to
+        // 41; none for 42 to 83; step 2 (objects 4, 6, 3, 8) at tick 84.
+        let mut s = GameState::default();
+        on_init(1090, &mut s);
+        let fire = |s: &mut GameState, t: u64| {
+            s.hero.tick = t;
+            on_update(1090, s, false)
+        };
+        let out = fire(&mut s, 0);
+        for obj in [3, 5, 7, 4] {
+            assert!(out.contains(&Action::PlayAnim { obj, speed: 1.0, wait: false }));
+        }
+        // Inside trigger 3 (hazard 2) while it fires: 20 damage, then not again within 1 s.
+        let inside = TriggerCall { index: 3, state: 2, object: true, square: false };
+        s.hero.tick = 10;
+        assert_eq!(on_trigger(1090, 1, inside, &mut s).actions, vec![Action::DamageHero { amount: 20 }]);
+        s.hero.tick = 20;
+        assert!(on_trigger(1090, 1, inside, &mut s).actions.is_empty());
+        for t in 1..=42 {
+            fire(&mut s, t);
+        }
+        assert_eq!(s.word(1090, 2), 0);
+        let out = fire(&mut s, 84);
+        for obj in [4, 6, 3, 8] {
+            assert!(out.contains(&Action::PlayAnim { obj, speed: 1.0, wait: false }));
+        }
+        // 989: the arrival sets level state 2; the stages run to 5; the boss's defeat (level
+        // state 0) leads to the post-fight block once.
+        let mut s = GameState::default();
+        on_activate(989, &mut s);
+        on_update(989, &mut s, false);
+        on_update(989, &mut s, false);
+        assert!(s.level(5) && s.level(1) && s.movies.contains(&46));
+        s.set_level(0, true);
+        assert!(on_update(989, &mut s, false).contains(&Action::ReplaceExterior { slot: 78, plane: -1 }));
+        assert!(s.flag(298) && on_update(989, &mut s, false).is_empty());
     }
 
     #[test]
