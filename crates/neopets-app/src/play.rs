@@ -680,6 +680,8 @@ pub struct Play {
     slot_regions: HashMap<(u32, u8), u32>,
     /// Script slots whose last load has arrived (for the slot's living count).
     slot_arrived: std::collections::HashSet<(u32, u8)>,
+    /// The attack window was open on the last tick (for the strike edge).
+    window_was: bool,
     pub region_wanted: Vec<(u32, u8, u32)>,
     next_character: u64,
     /// Set once the hero's meshes exist.
@@ -1084,6 +1086,7 @@ impl Play {
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             slot_arrived: Default::default(),
+            window_was: false,
             region_wanted: Vec::new(),
             next_character: 0,
             spawned: false,
@@ -1951,6 +1954,27 @@ impl Play {
                 Action::ActivateTimer { start, limit, up } => self.state.timer.activate(start, limit, up),
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
+                Action::AddItem { locator, item } => {
+                    if let Some(&(p, _)) = self.world.entries.get(locator) {
+                        let charm = self.item_kind(item) == 17;
+                        let spawn = neopets_sim::items::Spawn {
+                            id: item,
+                            point: p,
+                            placed: true,
+                            charm,
+                            s0: 1.0,
+                            s1: 1.0,
+                            delay: 0.0,
+                            larg: -1.0,
+                            direction: None,
+                            flag: 0,
+                            map: 0,
+                            price: 0,
+                        };
+                        self.spawn_item(pack, spawn);
+                        self.last_fx = format!("item {item} added at locator {locator} on tick {}", self.ticks);
+                    }
+                }
                 Action::ObjOffset { obj, y } => {
                     self.obj_offset.insert((pack, obj), y);
                 }
@@ -4367,6 +4391,9 @@ impl Play {
             let live_dead = self.loco.state == hero_states::DEAD;
             self.state.hero.dead = if self.hero_index == 0 { [live_dead, parked_dead] } else { [parked_dead, live_dead] };
             self.state.hero.swapping = self.swap.is_some();
+            let window = self.attack.is_some() && self.hero.frame_bits() & 1 != 0;
+            self.state.hero.strike = window && !self.window_was;
+            self.window_was = window;
             self.trigger_step();
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();

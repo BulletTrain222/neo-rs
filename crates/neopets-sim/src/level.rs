@@ -224,6 +224,9 @@ pub enum Action {
     ActivateTimer { start: f32, limit: f32, up: bool },
     /// DeactivateTimer.
     DeactivateTimer,
+    /// AddItemToWorld, the locator form (SPEC-0030 row 364): the item at the locator, snapped,
+    /// placed and never expiring.
+    AddItem { locator: usize, item: u16 },
     /// StopTimer (running off; SPEC-0030 row 248).
     StopTimer,
     /// SetAnimObjPositionOffset's vertical part (ResetAnimObjOffsets is y = 0).
@@ -473,6 +476,8 @@ pub struct HeroView {
     pub selected: usize,
     pub dead: [bool; 2],
     pub swapping: bool,
+    /// The hero's attack window (SPEC-0036, frame bit 0x1) opened this tick: a strike.
+    pub strike: bool,
 }
 
 impl GameState {
@@ -954,6 +959,29 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1382 Init: object 2; each pedestal's triggers (CB1 strike, CB2 stand), its
+        // set-up objects and the put-out body, the lit count 0; objects 15 to 20; the floor
+        // switches (CB5) with their first objects; CB4 on trigger 2; CB6 on 9 to 14; object 28;
+        // effects 2, 3 and 1 stopped. Words: 1 the lit count, 2 the reveal counter, 3 the CB4
+        // arming, 4 CB4 done, 5 the completion done, 6 the exit once, 7 the last-loaded set,
+        // 10 + r lit, 20 + r locked, 30 + r armed, 40 + r dropped, 50 + i the switch once-words.
+        1382 => {
+            let mut v = vec![Action::InitObjOn { obj: 2, end: false }];
+            for (r, p) in PEDESTALS_1382.iter().enumerate() {
+                v.extend([reg(p.strike, 1), reg(p.stand, 2)]);
+                v.extend(p.setup.map(|obj| Action::InitObjOn { obj, end: false }));
+                v.extend(put_out_1382(state, r));
+            }
+            state.set_word(pack, 1, 0);
+            v.extend((15..=20).map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend([10, 7, 4, 12, 6, 13].map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend([3, 4, 8, 6, 7, 5].map(|i| reg(i, 5)));
+            v.push(reg(2, 4));
+            v.extend([9, 10, 14, 12, 13, 11].map(|i| reg(i, 6)));
+            state.set_word(pack, 7, -1);
+            v.extend([Action::InitObjOn { obj: 28, end: false }, Action::StopEffect { slot: 2 }, Action::StopEffect { slot: 3 }, Action::StopEffect { slot: 1 }]);
+            v
+        }
         // SPEC-0041 1371 Init, branch B (a normal visit): effect 0 stopped, Z0 to Z2 on triggers
         // 0 to 4, object 1 at its start, the wave word (1) at -1. Branch A (an arena round from
         // pack 1350, value 20 for eW 157) is not built: pack 1350 is not.
@@ -1963,6 +1991,71 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// A SPEC-0041 1382 pedestal record: strike and stand triggers, the two accepted Motes (lesser
+/// first), the drop locator, the set-up and lit objects and the five effects.
+struct Pedestal {
+    strike: u16,
+    stand: u16,
+    motes: [u16; 2],
+    drop: usize,
+    setup: [usize; 2],
+    lit: [usize; 2],
+    effects: [usize; 5],
+}
+
+const PEDESTALS_1382: [Pedestal; 6] = [
+    Pedestal { strike: 19, stand: 25, motes: [168, 169], drop: 5, setup: [47, 57], lit: [34, 35], effects: [4, 15, 21, 22, 33] },
+    Pedestal { strike: 21, stand: 27, motes: [160, 161], drop: 6, setup: [48, 56], lit: [36, 37], effects: [6, 13, 19, 23, 31] },
+    Pedestal { strike: 20, stand: 26, motes: [166, 167], drop: 7, setup: [51, 53], lit: [38, 39], effects: [9, 10, 16, 24, 28] },
+    Pedestal { strike: 16, stand: 22, motes: [170, 171], drop: 8, setup: [46, 52], lit: [40, 41], effects: [5, 14, 20, 25, 32] },
+    Pedestal { strike: 18, stand: 24, motes: [162, 163], drop: 9, setup: [49, 55], lit: [42, 43], effects: [7, 12, 18, 26, 30] },
+    Pedestal { strike: 17, stand: 23, motes: [164, 165], drop: 10, setup: [50, 54], lit: [44, 45], effects: [8, 11, 17, 27, 29] },
+];
+
+/// SPEC-0041 1382's lit body: unlocked, the count up on a first lighting, sound 7, the effects
+/// and lit objects in order. CharacterActivate of the record's fight-slot characters is not
+/// built.
+fn lit_1382(s: &mut GameState, r: usize) -> Vec<Action> {
+    let p = &PEDESTALS_1382[r];
+    let r = r as u8;
+    if s.word(1382, 20 + r) != 0 {
+        return Vec::new();
+    }
+    if s.word(1382, 10 + r) == 0 {
+        s.set_word(1382, 1, s.word(1382, 1) + 1);
+    }
+    s.set_word(1382, 10 + r, 1);
+    let fx = |slot: usize| Action::StartEffect { slot, camera: false };
+    vec![
+        Action::PlaySound { cue: 7, locator: None },
+        fx(p.effects[0]),
+        wait(0.25),
+        Action::InitObjOn { obj: p.lit[0], end: false },
+        fx(p.effects[1]),
+        fx(p.effects[2]),
+        fx(p.effects[3]),
+        Action::InitObjOn { obj: p.lit[1], end: false },
+        fx(p.effects[4]),
+    ]
+}
+
+/// SPEC-0041 1382's put-out body: unlocked, the count down when it was lit, the effects stopped
+/// and the lit objects off.
+fn put_out_1382(s: &mut GameState, r: usize) -> Vec<Action> {
+    let p = &PEDESTALS_1382[r];
+    let r = r as u8;
+    if s.word(1382, 20 + r) != 0 {
+        return Vec::new();
+    }
+    if s.word(1382, 10 + r) == 1 {
+        s.set_word(1382, 1, s.word(1382, 1) - 1);
+    }
+    s.set_word(1382, 10 + r, 0);
+    let mut v: Vec<Action> = p.effects.map(|slot| Action::StopEffect { slot }).to_vec();
+    v.extend(p.lit.map(|obj| Action::DeactivateObj { obj }));
+    v
 }
 
 /// SPEC-0041 1392's gate helpers A to C: open (the gate object off, its camera, the anim object
@@ -3245,6 +3338,92 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1382 CB2 (stand): armed while the hero's own path fires it (state 1 or 2).
+        (1382, 2) => {
+            if let Some(r) = PEDESTALS_1382.iter().position(|p| p.stand == call.index) {
+                let armed = matches!(call.state, 1 | 2) && call.object;
+                state.set_word(pack, 30 + r as u8, armed as i32);
+            }
+        }
+        // CB1 (strike): a strike while armed; the weapon Mote of the pedestal's element lights it
+        // after 0.5 s, anything else drops its lesser Mote once per load.
+        (1382, 1) if matches!(call.state, 1 | 2) && state.hero.strike => {
+            if let Some(r) = PEDESTALS_1382.iter().position(|p| p.strike == call.index) {
+                let p = &PEDESTALS_1382[r];
+                if state.word(pack, 30 + r as u8) != 0 {
+                    if state.hero.attack_mote.is_some_and(|m| p.motes.contains(&m)) {
+                        out.actions.push(wait(0.5));
+                        out.actions.extend(lit_1382(state, r));
+                    } else if state.word(pack, 40 + r as u8) == 0 {
+                        state.set_word(pack, 40 + r as u8, 1);
+                        out.actions.push(Action::AddItem { locator: p.drop, item: p.motes[0] });
+                    }
+                }
+            }
+        }
+        // CB5, the floor switches: the pair swapped; the first step on each raises the next
+        // marker (objects 15 to 20 and 21 to 26, camera 4); the pair swapped back once the hero
+        // leaves; all six stepped on arms CB4.
+        (1382, 5) if call.object && call.state == 1 => {
+            let (a, b) = match call.index {
+                3 => (10, 9),
+                4 => (7, 8),
+                5 => (13, 14),
+                6 => (12, 11),
+                7 => (6, 5),
+                _ => (4, 3),
+            };
+            out.actions.extend([Action::PlaySound { cue: 5, locator: None }, Action::DeactivateObj { obj: a }, Action::InitObjOn { obj: b, end: false }]);
+            let once = 50 + call.index as u8;
+            let n = state.word(pack, 2);
+            if state.word(pack, once) == 0 && n != -1 {
+                state.set_word(pack, once, 1);
+                out.actions.extend([
+                    wait(0.5),
+                    Action::PlaySound { cue: 6, locator: None },
+                    Action::PlayAnim { obj: 15 + n as usize, speed: 1.0, wait: true },
+                    Action::PlayCamera { track: 4, wait: true, end: 2, speed: 1.0 },
+                    Action::KillSound { cue: 6, locator: None },
+                    Action::InitObjOn { obj: 21 + n as usize, end: false },
+                ]);
+                state.set_word(pack, 2, if n >= 5 { -1 } else { n + 1 });
+            }
+            out.actions.extend([Action::WaitInside { index: call.index }, Action::PlaySound { cue: 4, locator: None }, Action::DeactivateObj { obj: b }, Action::InitObjOn { obj: a, end: false }]);
+            if (3..=8).all(|i| state.word(pack, 50 + i) != 0) {
+                state.set_word(pack, 3, 1);
+            }
+        }
+        // CB6: set index - 8 (regions 1384 to 1389) into the six-entry slot (2) when it is not
+        // the last loaded.
+        (1382, 6) if call.object => {
+            let set = call.index as i32 - 8;
+            if set != state.word(pack, 7) {
+                state.set_word(pack, 7, set);
+                out.actions.extend([Action::LoadRegion { slot: 2, region: None }, Action::LoadRegion { slot: 2, region: Some(1383 + set as u32) }]);
+            }
+        }
+        // CB4 (trigger 2, armed): the markers sink (objects 15 to 20 and 27 played), then CB3
+        // loads set 7 (region 1390) into the fight slot (1). The look-at-player camera 5 is not
+        // built.
+        (1382, 4) if call.object && state.word(pack, 4) == 0 && state.word(pack, 3) != 0 => {
+            state.set_word(pack, 4, 1);
+            out.actions.extend([Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }, Action::DeactivateObj { obj: 2 }, wait(2.0), Action::InitObjOn { obj: 27, end: false }]);
+            out.actions.extend((21..=26).map(|obj| Action::DeactivateObj { obj }));
+            out.actions.push(Action::PlaySound { cue: 6, locator: None });
+            out.actions.extend((15..=20).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
+            out.actions.extend([
+                Action::PlayAnim { obj: 27, speed: 1.0, wait: true },
+                Action::DeactivateObj { obj: 1 },
+                Action::KillSound { cue: 6, locator: None },
+                Action::LoadRegion { slot: 1, region: Some(1390) },
+            ]);
+        }
+        // The exit routine (trigger 28, registered by the completion): a fade and the
+        // replacement load of eW 178 (pack 1411).
+        (1382, 28) if call.object && state.word(pack, 6) == 0 => {
+            state.set_word(pack, 6, 1);
+            out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::ReplaceExterior { slot: 178, plane: 0 }]);
+        }
         // SPEC-0041 1371 Z0: with the exit word (3) the won result for eW 157 (pack 1350) and its
         // replacement load.
         (1371, 0) if call.state == 1 && call.object && state.word(pack, 3) != 0 => {
@@ -4490,6 +4669,31 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     state.set(258, true);
                     out.extend((15..=48).map(|slot| Action::StopEffect { slot }));
                 }
+            }
+        }
+        // SPEC-0041 1382 Update, the completion (six lit, once per load): the fade, 1.5 s, all
+        // six put out and locked, entities 32 to 40, 43, 48 and 49 off, the fight slot emptied,
+        // flags 98 and 337, object 28 off, effect 1, the exit routine on trigger 28. Movie 70 is
+        // not played; a fade in follows in its place.
+        1382 => {
+            if state.word(pack, 1) == 6 && state.word(pack, 5) == 0 {
+                state.set_word(pack, 5, 1);
+                out.extend([Action::HoldHero, Action::FadeOut { seconds: 1.0, wait: false }, wait(1.5)]);
+                for r in 0..6 {
+                    out.extend(put_out_1382(state, r));
+                    state.set_word(pack, 20 + r as u8, 1);
+                }
+                out.extend([32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 48, 49].map(|entity| Action::DeactivateEntity { entity }));
+                state.set(98, true);
+                state.set(337, true);
+                out.extend([
+                    Action::LoadRegion { slot: 1, region: None },
+                    Action::DeactivateObj { obj: 28 },
+                    Action::StartEffect { slot: 1, camera: false },
+                    Action::RegisterTrigger { index: 28, routine: 28 },
+                    Action::FadeIn { seconds: 1.0, wait: true },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
             }
         }
         // SPEC-0041 1371 Update, the wave controller: with a wave word j of 0 or more and every
@@ -7168,6 +7372,67 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1382_pedestals() {
+        let mut s = GameState::default();
+        on_init(1382, &mut s);
+        let fire = |i| TriggerCall { index: i, state: 2, object: true, square: false };
+        let strike = |s: &mut GameState, mote: Option<u16>| {
+            s.hero.attack_mote = mote;
+            s.hero.strike = true;
+            on_trigger(1382, 2, fire(27), s);
+            on_trigger(1382, 1, fire(21), s).actions
+        };
+        // Vector 3: Mote 162 at record 1 drops Mote 160 at locator 6, once.
+        assert_eq!(strike(&mut s, Some(162)), vec![Action::AddItem { locator: 6, item: 160 }]);
+        assert!(strike(&mut s, None).is_empty());
+        // Vectors 1, 2 and 4: Mote 160 lights it (count 1); 161 replays it; the count stays 1.
+        assert!(strike(&mut s, Some(160)).contains(&Action::InitObjOn { obj: 36, end: false }));
+        assert_eq!(s.word(1382, 1), 1);
+        assert!(!strike(&mut s, Some(161)).is_empty());
+        assert_eq!(s.word(1382, 1), 1);
+        // Not armed (the stand cylinder fired by another path): nothing.
+        on_trigger(1382, 2, TriggerCall { object: false, ..fire(27) }, &mut s);
+        assert!(on_trigger(1382, 1, fire(21), &mut s).actions.is_empty());
+        // Vector 5: all six lit; the next Update sets 98 and 337 and registers trigger 28.
+        for (r, m) in [(0, 168), (2, 166), (3, 170), (4, 162), (5, 164)] {
+            let p = &PEDESTALS_1382[r];
+            s.hero.attack_mote = Some(m);
+            on_trigger(1382, 2, fire(p.stand), &mut s);
+            on_trigger(1382, 1, fire(p.strike), &mut s);
+        }
+        assert_eq!(s.word(1382, 1), 6);
+        assert!(on_update(1382, &mut s, false).contains(&Action::RegisterTrigger { index: 28, routine: 28 }));
+        assert!(s.flag(98) && s.flag(337) && s.word(1382, 1) == 0);
+        assert!(on_update(1382, &mut s, false).is_empty());
+        assert!(on_trigger(1382, 28, fire(28), &mut s).actions.contains(&Action::ReplaceExterior { slot: 178, plane: 0 }));
+        // Vector 6: a reload puts all six out with the count at 0.
+        let mut s = GameState::default();
+        on_init(1382, &mut s);
+        assert_eq!(s.word(1382, 1), 0);
+    }
+
+    #[test]
+    fn module_1382_switches_and_sets() {
+        let mut s = GameState::default();
+        on_init(1382, &mut s);
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        // The markers rise in stepping order: switch 8 first raises marker 15 and object 21.
+        let out = on_trigger(1382, 5, enter(8), &mut s).actions;
+        assert!(out.contains(&Action::PlayAnim { obj: 15, speed: 1.0, wait: true }) && out.contains(&Action::InitObjOn { obj: 21, end: false }));
+        assert!(!on_trigger(1382, 5, enter(8), &mut s).actions.contains(&Action::PlayAnim { obj: 16, speed: 1.0, wait: true }));
+        assert!(on_trigger(1382, 4, enter(2), &mut s).actions.is_empty());
+        for i in [3, 4, 5, 6, 7] {
+            on_trigger(1382, 5, enter(i), &mut s);
+        }
+        assert_eq!(s.word(1382, 2), -1);
+        assert!(on_trigger(1382, 4, enter(2), &mut s).actions.contains(&Action::LoadRegion { slot: 1, region: Some(1390) }));
+        // CB6: trigger 9 loads region 1384 once; trigger 14 then region 1389.
+        assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
+        assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
+        assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
     }
 
     #[test]
