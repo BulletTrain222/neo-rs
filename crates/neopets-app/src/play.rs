@@ -8261,14 +8261,18 @@ impl Play {
 
     /// The map page's and the journal's tables (SPEC-0051 Layout): the quest rows (table 1),
     /// the treasure rows (table 3) and the area names (table 5), with their texts.
-    pub fn map_tables(&self) -> (Vec<neopets_sim::mappage::Quest>, Vec<neopets_sim::mappage::Treasure>, Vec<Vec<u8>>) {
+    /// The map's tables: quest rows (table 1), treasure rows (3), area names, and the area id of
+    /// each collected-table row (table 6, 248 rows; SPEC-0051 section 3).
+    #[allow(clippy::type_complexity)]
+    pub fn map_tables(&self) -> (Vec<neopets_sim::mappage::Quest>, Vec<neopets_sim::mappage::Treasure>, Vec<Vec<u8>>, Vec<i32>) {
         let t = &self.design.tables;
         let text = |k: usize| move |p: u32| t.get(k).and_then(|tb| tb.string(p)).map(<[u8]>::to_vec).unwrap_or_default();
         let rows = |k: usize| t.get(k).map(|tb| (0..tb.count).filter_map(|i| tb.record(i)).collect::<Vec<_>>()).unwrap_or_default();
         let quests = rows(1).into_iter().filter_map(|r| neopets_sim::mappage::Quest::read(r, &text(1))).collect();
         let treasures = rows(3).into_iter().filter_map(|r| neopets_sim::mappage::Treasure::read(r, &text(3))).collect();
         let names = (0..neopets_sim::mappage::AREAS).map(|m| self.design.location_name(m).unwrap_or_default()).collect();
-        (quests, treasures, names)
+        let areas = rows(6).into_iter().map(|r| r.get(0..4).map_or(-1, |b| i32::from_le_bytes(b.try_into().unwrap()))).collect();
+        (quests, treasures, names, areas)
     }
 
     /// The map and journal's view of the game this pass. The hero map area is the current

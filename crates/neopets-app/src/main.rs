@@ -3025,8 +3025,8 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                     }
                     // SPEC-0051: the quest, treasure and area-name tables, the pulse words and
                     // the two label colours.
-                    let (quests, treasures, names) = play.map_tables();
-                    flow.map_data = menus::MapData { quests, treasures, names, ..Default::default() };
+                    let (quests, treasures, names, collected_areas) = play.map_tables();
+                    flow.map_data = menus::MapData { quests, treasures, names, collected_areas, ..Default::default() };
                     if let Ok(boot) = neopets_data::archive::verified_boot_program(disc) {
                         if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, neopets_sim::mappage::PULSE_WORDS, 8) {
                             flow.map_data.pulse = neopets_sim::mappage::PulseWords::read(&w).unwrap_or_default();

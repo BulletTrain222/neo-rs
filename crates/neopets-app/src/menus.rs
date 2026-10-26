@@ -176,8 +176,9 @@ pub enum Draw {
     Label { node: usize, x: f32, y: f32, scale: f32 },
     /// A run of text in a font, with its baseline at y.
     Text { font: usize, text: Vec<u8>, spacing: i32, x: f32, y: f32, colour: [u8; 4] },
-    /// A plain rectangle (the map's placeholder icons and marker; R-0070).
-    Rect { x: f32, y: f32, w: f32, h: f32, colour: [u8; 4] },
+    /// The map's hero marker (SPEC-0051 section 7): sprite node `node`'s whole 32 x 32 art as a
+    /// quad centred on (x, y), turned by `angle` and squashed to 6/7 of its width, tinted.
+    Marker { node: usize, x: f32, y: f32, angle: f32, colour: [u8; 4] },
 }
 
 /// The map and journal's tables and words, read once: the quest rows (table 1), the treasure
@@ -191,6 +192,8 @@ pub struct MapData {
     pub pulse: PulseWords,
     pub label_colour: [u8; 4],
     pub name_colour: [u8; 4],
+    /// The area id of each collected-table row (table 6); -1 names no area.
+    pub collected_areas: Vec<i32>,
 }
 
 /// The game as the map and journal read it each pass: the hero map area (-1 none), the hero's
@@ -330,6 +333,9 @@ pub struct Pc {
     pub up_arrow: bool,
     pub more_below: bool,
     pub rows: i32,
+    /// The map page's Treasures line: the collected count and the area total (variables 16
+    /// and 17; SPEC-0051 section 3).
+    pub treasures: (i32, i32),
 }
 
 /// The item screen's predicate inputs: the tab, the cursor, the Items-tab grid ids (0 for a cell
@@ -402,7 +408,24 @@ impl Flow {
             up_arrow: m.journal.top != 0,
             more_below: m.more,
             rows: m.rows.len() as i32,
+            treasures: self.treasure_counts(),
         }
+    }
+
+    /// SPEC-0051 section 3 on the selected map page: the total is the number of collected-table
+    /// rows naming the area; the collected count those of them that are set.
+    fn treasure_counts(&self) -> (i32, i32) {
+        if !(MAPS..MAPS + mappage::AREAS).contains(&self.current) {
+            return (0, 0);
+        }
+        let area = (self.current - MAPS) as i32;
+        let rows = self.map_data.collected_areas.iter().enumerate().filter(|(_, a)| **a == area);
+        let (mut n, mut m) = (0, 0);
+        for (i, _) in rows {
+            m += 1;
+            n += self.map_view.collected.contains(&(i as u32)) as i32;
+        }
+        (n, m)
     }
 
     /// The item screen's predicate inputs for this pass.
@@ -1301,12 +1324,12 @@ fn predicate(slot: i16, arg: u8, pc: Pc) -> i32 {
         68 => pc.words[2] as i32,
         72 => (pc.pass > 120) as i32,
         // SPEC-0035 section 9c: the journal's and the map's slots; 73, the selected area's
-        // total, is zero for every area on disc (SPEC-0051 section 3).
+        // total is nonzero (SPEC-0051 section 3).
         26 => pc.cross_hint as i32,
         69 => pc.up_arrow as i32,
         70 => pc.more_below as i32,
         71 => pc.rows,
-        73 => 0,
+        73 => (pc.treasures.1 != 0) as i32,
         _ => 0,
     }
 }
@@ -1603,37 +1626,57 @@ pub fn map_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
     }
     let area = (flow.current - MAPS) as i32;
     let d = &flow.map_data;
-    let font = objective_font(fe).map_or(0, |f| f.0);
+    // The cursor label is front-end font 2 (line height 14), the area name font 0 (R-0070).
+    let (label_font, name_font) = (2usize, 0usize);
+    let measure = |font: usize, t: &[u8]| fe.fonts.get(font).map_or(0, |f| f.measure(t, 0));
+    // The marker first (section 7): node key 26, centred on its point, turned by the marker
+    // angle with the 6/7 squash, its colour bytes the pulse's.
+    let v = &flow.map_view;
+    if v.hero_area == area {
+        if let (Some((x, y)), Some(node)) = (mappage::project(area, v.hero[0], v.hero[2]), fe.key(26)) {
+            let c = mappage::marker_channel(flow.map.pulses.bright);
+            let alpha = fe.sprite(node).map_or(128, |s| s.colour[3]);
+            let angle = mappage::marker_angle(area, mappage::facing_angle(v.facing));
+            out.push(Draw::Marker { node, x: x as f32, y: y as f32, angle, colour: [c, c, c, alpha] });
+        }
+    }
+    // The icons (section 4): the art of kind k is child k of the group node with key 210, drawn
+    // centred on the projected point; the cursor icon scaled by the integer pulse.
+    let arts: Vec<usize> = fe.key(210).map(|g| fe.children(g).into_iter().take(3).collect()).unwrap_or_default();
     for (k, icon) in flow.map.icons.iter().enumerate() {
         let Some((x, y)) = mappage::project(area, icon.x, icon.z) else { continue };
-        let (w, h, colour) = match icon.kind {
-            0 => (26.0, 32.0, [222, 160, 1, 255]),
-            1 => (26.0, 29.0, [155, 155, 129, 255]),
-            _ => (31.0, 31.0, [78, 119, 174, 255]),
-        };
+        let Some(&art) = arts.get(icon.kind as usize) else { continue };
+        let nd = fe.nodes[art];
+        let (w, h) = (nd.width.max(1) as f32, nd.height.max(1) as f32);
         let s = if k == flow.map.cursor { flow.map.pulses.scale as f32 / 4096.0 } else { 1.0 };
-        let (w, h) = (w * s * 0.5, h * s * 0.5);
-        out.push(Draw::Rect { x: x as f32 - w / 2.0, y: y as f32 - h / 2.0, w, h, colour });
+        let (dw, dh) = (w * s, h * s);
+        let colour = fe.sprite(art).map_or([128; 4], |sp| sp.colour);
+        out.push(Draw::Sprite { node: art, x: (x as f32 - dw / 2.0).trunc(), y: (y as f32 - dh / 2.0).trunc(), w: dw, h: dh, colour, texels: [w as u32, h as u32] });
         if k == flow.map.cursor {
             let label = match icon.target {
                 Target::Quest(i) => d.quests.get(i).map(|q| q.title.clone()),
                 Target::Treasure(i) => d.treasures.get(i).map(|t| t.name.clone()),
             };
             if let Some(text) = label {
-                let tw = fe.fonts.get(font).map_or(0, |f| f.measure(&text, 0));
-                out.push(Draw::Text { font, text, spacing: 0, x: x as f32 - (tw / 2) as f32, y: y as f32 - 14.0, colour: d.label_colour });
+                // Centred on x (half the width toward zero), at least x 16, baseline 14 above.
+                let start = (x - measure(label_font, &text) / 2).max(16);
+                out.push(Draw::Text { font: label_font, text, spacing: 0, x: start as f32, y: (y - 14) as f32, colour: d.label_colour });
             }
         }
     }
-    let v = &flow.map_view;
-    if v.hero_area == area {
-        if let Some((x, y)) = mappage::project(area, v.hero[0], v.hero[2]) {
-            let c = mappage::marker_channel(flow.map.pulses.bright);
-            out.push(Draw::Rect { x: x as f32 - 6.0, y: y as f32 - 6.0, w: 12.0, h: 12.0, colour: [c, c, c, 255] });
-        }
+    // The overlay group (section 8): node key 214, every tick, draw offset (0, 0).
+    if let Some(n) = fe.key(214) {
+        let mut counter = 0;
+        draw_node(fe, n, (0.0, 0.0, 1.0, 1.0), false, flow.focus, flow.pc(), &mut counter, &mut out);
+        // The area-name node (key 215) has its text replaced by the page each tick: its stored
+        // text is not drawn; the name is drawn below.
+        let name_node = fe.key(215);
+        out.retain(|d| !matches!(d, Draw::Label { node, .. } if Some(*node) == name_node));
     }
+    // The area name: font 0, centred at x 256, baseline 40.
     if let Some(name) = d.names.get(area as usize) {
-        out.push(Draw::Text { font, text: name.clone(), spacing: 0, x: 40.0, y: 420.0, colour: d.name_colour });
+        let x = (256.0 - measure(name_font, name) as f32 / 2.0).trunc();
+        out.push(Draw::Text { font: name_font, text: name.clone(), spacing: 0, x, y: 40.0, colour: d.name_colour });
     }
     out
 }
@@ -1793,6 +1836,20 @@ fn draw_node(fe: &Frontend, n: usize, t: (f32, f32, f32, f32), focused: bool, fo
             }
         }
         2 => out.push(Draw::Label { node: n, x, y, scale: sx }),
+        // A value-text node (section K): the map's Treasures numbers (variables 16 and 17) as
+        // decimals in the record's font, spacing and colour; other variables are not drawn.
+        6 => {
+            if let Some(v) = fe.values.get(&node.data).filter(|v| v.gate != 0 && v.format == 1) {
+                let value = match v.variable {
+                    16 => Some(pc.treasures.0),
+                    17 => Some(pc.treasures.1),
+                    _ => None,
+                };
+                if let Some(value) = value {
+                    out.push(Draw::Text { font: v.font as usize, text: value.to_string().into_bytes(), spacing: v.spacing as i32, x, y, colour: v.colour });
+                }
+            }
+        }
         4 => {
             child_focused = *counter == focus;
             *counter += 1;

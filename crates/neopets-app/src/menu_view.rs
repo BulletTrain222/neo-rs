@@ -148,7 +148,8 @@ pub struct MenuCache {
     labels: HashMap<usize, (Handle<Image>, u32, u32, i32)>,
     texts: HashMap<(usize, Vec<u8>, i32, [u8; 4]), Option<(Handle<Image>, u32, u32, i32)>>,
     pictures: HashMap<u32, Option<neopets_data::texture::Image>>,
-    white: Option<Handle<Image>>,
+    /// The map marker's image, redrawn each frame at the marker's angle.
+    marker: Option<Handle<Image>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -252,10 +253,45 @@ pub fn sync_menu(
                 }
                 cache.labels.get(&node).map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32 * scale, *w as f32 * scale, *h as f32 * scale, Color::WHITE))
             }
-            Draw::Rect { x, y, w, h, colour } => {
-                let white = cache.white.get_or_insert_with(|| images.add(crate::rgba_image(1, 1, vec![255; 4]))).clone();
-                let c = |v: u8| v as f32 / 255.0;
-                Some((white, x, y, w, h, Color::srgba(c(colour[0]), c(colour[1]), c(colour[2]), c(colour[3]))))
+            Draw::Marker { node, x, y, angle, colour } => {
+                // SPEC-0051 section 7: each corner offset (x, y) of the 32 x 32 quad goes to the
+                // screen offset ((6/7)(C x - S y), S x + C y); drawn into a 48 x 48 image by the
+                // inverse map, nearest texel.
+                const N: i32 = 48;
+                let src = f.sprite_image(mem, node, 32, 32);
+                let (c, s) = (angle.cos(), angle.sin());
+                let mut rgba = vec![0u8; (N * N * 4) as usize];
+                if let Some(src) = src {
+                    for oy in 0..N {
+                        for ox in 0..N {
+                            let (sx, sy) = (ox as f32 + 0.5 - N as f32 / 2.0, oy as f32 + 0.5 - N as f32 / 2.0);
+                            let u = sx * 7.0 / 6.0;
+                            let (lx, ly) = (c * u + s * sy, -s * u + c * sy);
+                            let (tx, ty) = ((lx + 16.0).floor() as i32, (ly + 16.0).floor() as i32);
+                            if (0..32).contains(&tx) && (0..32).contains(&ty) {
+                                let i = ((ty * 32 + tx) * 4) as usize;
+                                let o = ((oy * N + ox) * 4) as usize;
+                                rgba[o..o + 4].copy_from_slice(&src.rgba[i..i + 4]);
+                            }
+                        }
+                    }
+                }
+                let image = crate::rgba_image(N as u32, N as u32, rgba);
+                let handle = match cache.marker.as_ref() {
+                    Some(h0) => {
+                        if let Some(mut img) = images.get_mut(h0) {
+                            *img = image;
+                        }
+                        h0.clone()
+                    }
+                    None => {
+                        let h0 = images.add(image);
+                        cache.marker = Some(h0.clone());
+                        h0
+                    }
+                };
+                let k = |v: u8| v as f32 / 128.0;
+                Some((handle, (x - N as f32 / 2.0).round(), (y - N as f32 / 2.0).round(), N as f32, N as f32, Color::srgba(k(colour[0]), k(colour[1]), k(colour[2]), k(colour[3]).min(1.0))))
             }
             Draw::Text { font, text, spacing, x, y, colour } => {
                 // The alpha is applied to the drawn image, so a fading row reuses its image.

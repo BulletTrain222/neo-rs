@@ -192,6 +192,11 @@ mod tests {
         let lp: Vec<u8> = [0u8, 4, 2, 3].iter().flat_map(|&f| frame(f)).collect();
         let s = decode_sample(&lp);
         assert_eq!((s.pcm.len(), s.loop_start), (112, Some(28)));
+        // The "other" class (SPEC-0031, 312 samples): no end frame before the final one, which
+        // carries all three bits, so it loops its last frame.
+        let other: Vec<u8> = [0u8, 0, 7].iter().flat_map(|&f| frame(f)).collect();
+        let s = decode_sample(&other);
+        assert_eq!((s.pcm.len(), s.loop_start), (84, Some(56)));
     }
 
     #[test]
