@@ -44,6 +44,9 @@ pub struct World {
     pub breakables: Vec<neopets_data::world::Breakable>,
     /// The movable blocks (SPEC-0048 Movable blocks) and each one's inline mesh.
     pub blocks: Vec<neopets_sim::block::Block>,
+    /// The poses of the drawn placed objects that own ground patches, for the probe's owner
+    /// placement (SPEC-0018 Ground probe steps 2 and 4), refreshed each tick.
+    pub owner_poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose>,
     pub block_meshes: Vec<Option<std::ops::Range<usize>>>,
     pub motions: Vec<neopets_sim::object::Motion>,
     pub object_anims: Vec<neopets_sim::object::ObjAnim>,
@@ -181,6 +184,7 @@ impl World {
             objects: Vec::new(),
             breakables: Vec::new(),
             blocks: Vec::new(),
+            owner_poses: Default::default(),
             block_meshes: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
@@ -244,6 +248,15 @@ impl World {
         // modes 1 and 2 apply only to an entry whose broken bit is set, and no disc entry has
         // them, so nothing changes here.
         world.breakables = neopets_data::world::breakables(&bytes, &chain.chunks);
+        // SPEC-0018 Patch-id table: each placed object's inline model set is registered under
+        // its patch id.
+        if let Some(g) = world.ground.as_mut() {
+            for (i, o) in world.objects.iter().enumerate() {
+                if let Some(r) = o.as_ref().and_then(|o| o.model_set.clone()) {
+                    g.add_object_set(i, &bytes[r]);
+                }
+            }
+        }
         world.motions = world
             .objects
             .iter()
@@ -355,7 +368,7 @@ impl World {
     }
 
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
-        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None }, |g| g.probe_hit(x, z, c))
+        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
     }
 }
 
@@ -1942,6 +1955,8 @@ impl Play {
                     }
                 }
                 Action::MoveBlock { block, locator } => {
+                    // The placement probes the ground with the objects as they stand now.
+                    self.owner_pose_step();
                     if let (Some(&(x, _)), true) = (self.world.entries.get(locator), block < self.world.blocks.len()) {
                         let w = &mut self.world;
                         let mut b = w.blocks[block].clone();
@@ -1953,6 +1968,7 @@ impl Play {
                     }
                 }
                 Action::ReacquireBlock { block } => {
+                    self.owner_pose_step();
                     if block < self.world.blocks.len() {
                         let w = &mut self.world;
                         let mut b = w.blocks[block].clone();
@@ -3406,7 +3422,7 @@ impl Play {
         self.door_prompt = Some(10);
         if self.square_now {
             self.loco.enter_block();
-            self.hold = Some(neopets_sim::block::Hold { block: k, face: m, latched: false, at: None });
+            self.hold = Some(neopets_sim::block::Hold { block: k, face: m, latched: false });
         }
         true
     }
@@ -3435,12 +3451,9 @@ impl Play {
         if let Some((dir, rate)) = step.steer {
             self.loco.steer_toward(dir, rate);
         }
-        if hold.latched {
-            self.loco.body.velocity[0] = 0.0;
-            self.loco.body.velocity[2] = 0.0;
-            for k in [0, 2] {
-                self.loco.body.position[k] += step.follow[k];
-            }
+        if let Some(p) = step.place {
+            self.loco.body.velocity = [0.0; 3];
+            self.loco.body.position = p;
         }
         self.loco.block_request(step.request);
         if step.pushed {
@@ -3458,6 +3471,10 @@ impl Play {
     /// kind, flags, shape) in the current world.
     pub fn block_survey(&self) -> Vec<String> {
         let mut v: Vec<String> = self.world.blocks.iter().enumerate().map(|(k, b)| format!("block {k}: at {:?} size {} active {}", b.position, b.size, b.active)).collect();
+        if let Some(g) = &self.world.ground {
+            v.push(format!("object patch sets (id, object): {:?}; drawn owners {:?}", g.object_sets(), self.world.owner_poses.keys().collect::<Vec<_>>()));
+        }
+        v.push(format!("probe at (-19.082, 11.697) ceiling 36.076: {}", self.world.probe(-19.082, 11.697, 36.076).height));
         v.extend(self.world.all_volumes.iter().filter(|x| x.fires_on_block(self.world.collis_mask)).map(|x| format!("block volume {}: kind {} flags {:#x} routine {:?} {:?}", x.index, x.kind, x.flags, self.world.routines.get(&x.index), x.shape)));
         v
     }
@@ -3579,7 +3596,7 @@ impl Play {
         self.loco.body.no_gravity = true;
         self.loco.body.velocity = [0.0; 3];
         if let Some(d) = step.facing {
-            self.loco.steer_toward(d, 1.0);
+            self.loco.steer_toward(d, 0.5);
         }
         if let Some(p) = step.place {
             self.loco.body.position = p;
@@ -5540,6 +5557,7 @@ impl Play {
                 b.tick();
             }
         }
+        self.owner_pose_step();
         self.status_display_step();
         self.shake_now = self.shake.step();
         // SPEC-0023 section 31: the countdown timer steps in play, not while a box is up.
@@ -7677,6 +7695,26 @@ impl Play {
             if now != fx.trace {
                 eprintln!("[fx] tick {}: {now}", self.ticks);
                 self.attack_fx.trace = now;
+            }
+        }
+    }
+
+    /// The drawn placed objects that own ground patches, with their current and rest frames,
+    /// for each resident world's probe (an object that is not drawn gives no patches).
+    fn owner_pose_step(&mut self) {
+        for other in [false, true] {
+            let Some(w) = (if other { self.other.as_ref() } else { Some(&self.world) }) else { continue };
+            let pack = w.pack;
+            let owners: Vec<usize> = w.ground.as_ref().map_or(Vec::new(), |g| g.object_sets().into_iter().map(|(_, o)| o).collect());
+            let poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose> = owners
+                .into_iter()
+                .filter_map(|i| {
+                    let rest = w.objects.get(i)?.as_ref()?.rest;
+                    Some((i, neopets_data::ground::OwnerPose { current: self.object_matrix(pack, i)?, rest }))
+                })
+                .collect();
+            if let Some(w) = if other { self.other.as_mut() } else { Some(&mut self.world) } {
+                w.owner_poses = poses;
             }
         }
     }

@@ -321,10 +321,17 @@ pub struct EdgeClip {
     pub progress: f32,
 }
 
-/// The ease of an approach: half the remaining way each tick (the spec's "rate 0.5"; how the
-/// hero gets to the edge point is not given, R-0079).
-fn ease(hero: Vec3, target: Vec3) -> Vec3 {
-    std::array::from_fn(|k| hero[k] + 0.5 * (target[k] - hero[k]))
+/// An approach step (SPEC-0033 Behavior 51, R-0079): `len` units along the straight 3D line to
+/// the target while farther than `snap`, else the target itself. Returns the point and whether
+/// it snapped.
+fn approach(hero: Vec3, target: Vec3, len: f32, snap: f32) -> (Vec3, bool) {
+    let d = sub(target, hero);
+    let dist = dot(d, d).sqrt();
+    if dist > snap {
+        (add(hero, scale(d, len / dist)), false)
+    } else {
+        (target, true)
+    }
 }
 
 /// State 19, hanging from a block's top edge (SPEC-0033 Behavior 51).
@@ -356,20 +363,21 @@ impl Hang {
                 if clip.action != 72 {
                     return step;
                 }
-                // The edge point: the block position less D (S / 2 + 0.35), at the top less 3.7
-                // (the spec's box-record terms read as the block top; R-0079).
+                // The edge point T: the block position less D (S / 2 + 0.35), 3.7 below the block
+                // top. Below the hero on the ground: state 1; else 0.5 a tick along the line to
+                // T, snapping within 0.25.
                 let half = 0.5 * b.size + 0.35;
                 let target = [b.position[0] - d[0] * half, b.top() - 3.7, b.position[2] - d[2] * half];
-                let along = dot([target[0] - hero[0], 0.0, target[2] - hero[2]], d);
-                if along < 0.0 && gap <= 0.01 {
+                if target[1] < hero[1] && gap <= 0.01 {
                     step.request = 0;
                     step.exit = Some((1, 0.0));
-                } else if along > 0.25 {
-                    step.place = Some(ease(hero, target));
                 } else {
-                    self.sub = 2;
-                    step.request = 71;
-                    step.place = Some(target);
+                    let (p, snapped) = approach(hero, target, 0.5, 0.25);
+                    step.place = Some(p);
+                    if snapped {
+                        self.sub = 2;
+                        step.request = 71;
+                    }
                 }
             }
             2 => {
@@ -383,19 +391,24 @@ impl Hang {
                 }
             }
             3 => {
+                // A shimmy cycle reads no stick: at 0.95 it returns to the idle 73.
+                if matches!(clip.action, 60 | 61) {
+                    step.request = if clip.progress >= 0.95 { 73 } else { clip.action };
+                    return step;
+                }
                 step.request = 73;
                 if forward {
                     self.sub = 4;
                     step.request = 59;
                 } else {
-                    // The along position on the edge, 0 to S: shimmy 61 lowers it (gate above
-                    // 1.0) and 60 raises it (gate below S - 1.0). The edge's direction is the
-                    // hero's side axis (its sign is not given; R-0079).
-                    let e = [-d[2], 0.0, d[0]];
-                    let along = 0.5 * b.size + dot(sub(hero, b.position), e);
-                    if side > 0.0 && along > 1.0 {
+                    // along = S / 2 + A . (p - P) with A = up x D: 0 at the face's end on the
+                    // hero's right. Right (side below 0) plays 61 (toward along 0) above 1.0;
+                    // left plays 60 below S - 1.0.
+                    let a = [d[2], 0.0, -d[0]];
+                    let along = 0.5 * b.size + dot(sub(hero, b.position), a);
+                    if side < 0.0 && along > 1.0 {
                         step.request = 61;
-                    } else if side < 0.0 && along < b.size - 1.0 {
+                    } else if side > 0.0 && along < b.size - 1.0 {
                         step.request = 60;
                     }
                 }
@@ -429,17 +442,17 @@ impl Climb {
         let Some(d) = b.direction(self.face as i32) else { return EdgeStep { exit: Some((1, 0.0)), ..EdgeStep::default() } };
         let mut step = EdgeStep { facing: Some(d), ..EdgeStep::default() };
         if self.sub == 0 {
-            // The target: the block position less D (S / 2 + 0.75), at the top less 1.2.
+            // The target: the block position plus the outward face vector times S / 2 + 0.75, at
+            // the top less 1.2; 0.2 a tick along the line to it, snapping within 0.2 (the touched
+            // flag's early snap is not kept).
             step.request = 70;
             let half = 0.5 * b.size + 0.75;
             let target = [b.position[0] - d[0] * half, b.top() - 1.2, b.position[2] - d[2] * half];
-            let far = horizontal_distance(target, hero) > LATCH || (target[1] - hero[1]).abs() > LATCH;
-            if far {
-                step.place = Some(ease(hero, target));
-            } else {
+            let (p, snapped) = approach(hero, target, 0.2, 0.2);
+            step.place = Some(p);
+            if snapped {
                 self.sub = 2;
                 step.request = 134;
-                step.place = Some(target);
             }
         } else {
             step.request = 134;
@@ -479,9 +492,9 @@ pub struct HoldStep {
     pub walking: bool,
     /// A push start was accepted (cue 11 and the strain voice play).
     pub pushed: bool,
-    /// The held block's horizontal motion since the last tick, which the hero follows while it
-    /// holds the block (not from the spec: the push clips carry no root motion, R-0077).
-    pub follow: Vec3,
+    /// The grab phase's position write: the grab spot (the block position less the face normal
+    /// times S / 2 + 1.5) at the block's height, every tick (SPEC-0033 Behavior 4A.2; R-0077).
+    pub place: Option<Vec3>,
 }
 
 /// The hero's block state (SPEC-0033 Behavior 4A.2).
@@ -492,8 +505,6 @@ pub struct Hold {
     pub face: u8,
     /// The grab latch (the approach ends within 0.25 of the grab spot).
     pub latched: bool,
-    /// The block position on the last tick of the grab.
-    pub at: Option<Vec3>,
 }
 
 /// The block clips: still, pull, push, and the two side moves.
@@ -529,16 +540,17 @@ impl Hold {
             } else {
                 let dir = scale(to, 1.0 / d);
                 if dot(facing, dir) < 0.99 {
-                    // The walk-turn request's clip is not given: the hero turns on the spot.
+                    // The turn requests the idle picker's clip (0): the hero turns in his idle pose.
                     return HoldStep { request: 0, steer: Some((dir, APPROACH_TURN)), ..HoldStep::default() };
                 }
                 return HoldStep { request: 2, steer: Some((dir, 1.0)), walking: true, ..HoldStep::default() };
             }
         }
-        // Grab: face the block at rate 1.0; the stick on the face normal and the side axis.
-        let follow = self.at.map_or([0.0; 3], |at| [b.position[0] - at[0], 0.0, b.position[2] - at[2]]);
-        self.at = Some(b.position);
-        let mut step = HoldStep { steer: Some((normal, 1.0)), request: ANIM_STILL, follow, ..HoldStep::default() };
+        // Grab (also on the latching tick): face the block at rate 1.0, the hero placed on the grab
+        // spot from the block's position of this tick; the stick on the face normal and the side
+        // axis.
+        let spot = sub(b.position, scale(normal, 0.5 * b.size + 1.5));
+        let mut step = HoldStep { steer: Some((normal, 1.0)), request: ANIM_STILL, place: Some(spot), ..HoldStep::default() };
         let side_axis = b.direction((m + 1) % 4).unwrap_or([0.0; 3]);
         let (pp, sv) = (dot(stick, normal), dot(stick, side_axis));
         let stick_on = dot(stick, stick) > 0.0;
@@ -630,7 +642,7 @@ mod tests {
     #[test]
     fn hold_pushes_in_the_window() {
         let mut v = vec![block(-1.0, -1.0, 2.0)];
-        let mut h = Hold { block: 0, face: 0, latched: false, at: None };
+        let mut h = Hold { block: 0, face: 0, latched: false };
         // From afar the hero walks to the grab spot (z = -2.5).
         let s = h.tick(&mut v, [0.0, 0.0, -6.0], [0.0, 0.0, 1.0], [0.0; 3], HoldClip::default());
         assert!(s.walking && s.request == 2);
@@ -685,7 +697,10 @@ mod tests {
         let v = vec![block(-1.0, -1.0, 2.0)];
         let mut h = Hang::new(0, 0);
         assert_eq!(h.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip::default()).request, 72);
-        let s = h.tick(&v, [0.0, 0.0, -1.35], 0.0, false, 0.0, EdgeClip { action: 72, progress: 0.5 });
+        // In the air (gap 1.0) 1 unit above the edge point: one 0.5 step, then the snap.
+        let s = h.tick(&v, [0.0, -0.7, -1.35], 0.0, false, 1.0, EdgeClip { action: 72, progress: 0.5 });
+        assert_eq!((h.sub, s.place.map(|p| (p[1] * 100.0).round())), (1, Some(-120.0)));
+        let s = h.tick(&v, [0.0, -1.5, -1.35], 0.0, false, 1.0, EdgeClip { action: 72, progress: 0.5 });
         assert_eq!((h.sub, s.request, s.place), (2, 71, Some([0.0, -1.7, -1.35])));
         h.tick(&v, [0.0, -1.7, -1.35], 0.0, false, 0.0, EdgeClip { action: 71, progress: 0.96 });
         assert_eq!(h.sub, 3);
@@ -693,8 +708,14 @@ mod tests {
         let s = h.tick(&v, [0.0, 2.0, -0.4], 0.0, false, 0.0, EdgeClip { action: 59, progress: 0.96 });
         assert_eq!(s.exit, Some((1, 0.1)));
         // The climb: 70 to the target at the top less 1.2, then 134 and the exit.
+        // A block lower than 3.7: the edge point is below a hero on the ground, so state 1.
+        let mut low = Hang::new(0, 0);
+        low.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip::default());
+        assert_eq!(low.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip { action: 72, progress: 0.1 }).exit, Some((1, 0.0)));
         let mut c = Climb::new(0, 0);
-        let s = c.tick(&v, [0.0, 0.8, -1.75], false, EdgeClip::default());
+        let s = c.tick(&v, [0.0, 0.0, -1.75], false, EdgeClip::default());
+        assert_eq!((c.sub, s.place.map(|p| (p[1] * 100.0).round())), (0, Some(20.0)));
+        let s = c.tick(&v, [0.0, 0.7, -1.75], false, EdgeClip::default());
         assert_eq!((c.sub, s.request), (2, 134));
         assert_eq!(c.tick(&v, [0.0, 2.0, 0.5], true, EdgeClip { action: 134, progress: 0.96 }).exit, Some((4, 0.0)));
     }

@@ -42,44 +42,12 @@ fn outline_record_counts(x: f32, z: f32, oz: f32, scalar: f32, r: [f32; 3]) -> b
     span && ((x * r[0] + z * r[1] + r[2] > 0.0) != (r[0] > 0.0))
 }
 
-/// One type-5 height patch.
-#[derive(Clone, Copy, Debug)]
-struct Patch {
-    /// Offset of the entry within the model-set payload.
-    at: usize,
-    cell: f32,
-    spacing: f32,
-    stride: usize,
-    a: i32,
-    b: i32,
-    x0: f32,
-    z0: f32,
-    cells: usize,
-}
-
-/// A world pack's ground: its grid and the patches of its own model set (patch id 0). Patches
-/// of placed objects' inline model sets (moving platforms and the like) are not read yet.
-pub struct Ground {
-    grid: Vec<u8>,
-    set: Vec<u8>,
-    x_min: f32,
-    z_min: f32,
-    cell: f32,
-    nx: i32,
-    nz: i32,
-    table: usize,
-    pub order: CellOrder,
-    patches: Vec<Option<Patch>>,
-}
-
-impl Ground {
-    /// The pack's first type-19 grid and first top-level type-5 model set (copied).
-    pub fn of(bytes: &[u8], top: &[Chunk], order: CellOrder) -> Option<Self> {
-        let grid = &bytes[top.iter().find(|c| c.kind == GRID)?.payload.clone()];
-        let set = &bytes[top.iter().find(|c| c.kind == MODEL_SET)?.payload.clone()];
-        let count = (u32_at(set, 4)? as usize).min(MAX_ENTRIES);
-        let table = u32_at(set, 8)? as usize;
-        let patches = (0..count)
+/// The height patches of a type-5 model-set payload (count +0x04, entry table +0x08).
+fn read_patches(set: &[u8]) -> Option<Vec<Option<Patch>>> {
+    let count = (u32_at(set, 4)? as usize).min(MAX_ENTRIES);
+    let table = u32_at(set, 8)? as usize;
+    Some(
+        (0..count)
             .map(|i| {
                 let at = u32_at(set, table + 4 * i)? as usize;
                 let p = Patch {
@@ -95,7 +63,75 @@ impl Ground {
                 };
                 (p.a > 0 && p.b > 0 && p.cells != 0 && p.cell > 0.0 && p.spacing > 0.0).then_some(p)
             })
-            .collect();
+            .collect(),
+    )
+}
+
+/// A placed object's inline model set, registered under its patch id (the first word of its
+/// payload; SPEC-0018 Patch-id table), with the object it belongs to.
+struct OwnedSet {
+    id: i32,
+    object: usize,
+    set: Vec<u8>,
+    patches: Vec<Option<Patch>>,
+}
+
+/// An owner object's two transform blocks for the probe's owner placement (SPEC-0018 Ground
+/// probe step 4), column-major: its current block (+0x100) and its rest block (+0xC0).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct OwnerPose {
+    pub current: [f32; 16],
+    pub rest: [f32; 16],
+}
+
+impl OwnerPose {
+    /// The sampling point p' in the rest frame and the height raise O.y - T.y.
+    pub fn map(&self, x: f32, z: f32) -> (f32, f32, f32) {
+        let (c, r) = (&self.current, &self.rest);
+        let (ox, oz) = (c[12], c[14]);
+        let d1 = c[0] * (x - ox) + c[2] * (z - oz);
+        let d2 = c[8] * (x - ox) + c[10] * (z - oz);
+        (r[12] + d1 * r[0] + d2 * r[8], r[14] + d1 * r[2] + d2 * r[10], c[13] - r[13])
+    }
+}
+
+/// One type-5 height patch.
+#[derive(Clone, Copy, Debug)]
+struct Patch {
+    /// Offset of the entry within the model-set payload.
+    at: usize,
+    cell: f32,
+    spacing: f32,
+    stride: usize,
+    a: i32,
+    b: i32,
+    x0: f32,
+    z0: f32,
+    cells: usize,
+}
+
+/// A world pack's ground: its grid, the patches of its own model set (patch id 0) and those of
+/// the placed objects' inline model sets (registered with `add_object_set`).
+pub struct Ground {
+    grid: Vec<u8>,
+    set: Vec<u8>,
+    x_min: f32,
+    z_min: f32,
+    cell: f32,
+    nx: i32,
+    nz: i32,
+    table: usize,
+    pub order: CellOrder,
+    patches: Vec<Option<Patch>>,
+    owned: Vec<OwnedSet>,
+}
+
+impl Ground {
+    /// The pack's first type-19 grid and first top-level type-5 model set (copied).
+    pub fn of(bytes: &[u8], top: &[Chunk], order: CellOrder) -> Option<Self> {
+        let grid = &bytes[top.iter().find(|c| c.kind == GRID)?.payload.clone()];
+        let set = &bytes[top.iter().find(|c| c.kind == MODEL_SET)?.payload.clone()];
+        let patches = read_patches(set)?;
         let nx = i32_at(grid, 0x14)?;
         let nz = i32_at(grid, 0x18)?;
         if nx <= 0 || nz <= 0 || nx as usize * nz as usize > MAX_CELLS {
@@ -112,13 +148,14 @@ impl Ground {
             table: u32_at(grid, 0x1C)? as usize,
             order,
             patches,
+            owned: Vec::new(),
         })
     }
+}
 
-    /// Height and surface normal of one patch at (x, z): bilinear over the four samples of the
-    /// sample square, or None outside the patch or on an empty cell (SPEC-0018, Height at a
-    /// point; the normal from the truncated half-sums of the corner differences).
-    fn sample(&self, p: &Patch, x: f32, z: f32) -> Option<(f32, [f32; 3])> {
+/// Height and normal of one patch of the set payload `set` at (x, z).
+fn sample_in(set: &[u8], p: &Patch, x: f32, z: f32) -> Option<(f32, [f32; 3])> {
+    {
         if x < p.x0 || z < p.z0 {
             return None;
         }
@@ -127,19 +164,19 @@ impl Ground {
         if cx >= p.a as i64 || cz >= p.b as i64 {
             return None;
         }
-        let cell_at = u32_at(&self.set, p.at + p.cells + 4 * (cx + cz * p.a as i64) as usize)? as usize;
+        let cell_at = u32_at(set, p.at + p.cells + 4 * (cx + cz * p.a as i64) as usize)? as usize;
         if cell_at == 0 {
             return None;
         }
         let cell = p.at + cell_at;
-        let heights = cell + u32_at(&self.set, cell)? as usize;
+        let heights = cell + u32_at(set, cell)? as usize;
         let lx = x - p.x0 - cx as f32 * p.cell;
         let lz = z - p.z0 - cz as f32 * p.cell;
         let ix = (lx / p.spacing).trunc() as usize;
         let iz = (lz / p.spacing).trunc() as usize;
         let fx = lx / p.spacing - ix as f32;
         let fz = lz / p.spacing - iz as f32;
-        let h = |i: usize, j: usize| f32_at(&self.set, heights + 4 * (i + j * p.stride));
+        let h = |i: usize, j: usize| f32_at(set, heights + 4 * (i + j * p.stride));
         let (h00, h10, h01, h11) = (h(ix, iz)?, h(ix + 1, iz)?, h(ix, iz + 1)?, h(ix + 1, iz + 1)?);
         let top = h00 * (1.0 - fx) + h10 * fx;
         let bottom = h01 * (1.0 - fx) + h11 * fx;
@@ -152,11 +189,13 @@ impl Ground {
         let n = if l > 0.0 { r.map(|c| c / l) } else { [0.0; 3] };
         Some((top * (1.0 - fz) + bottom * fz, n))
     }
+}
 
+impl Ground {
     /// Ground probe with ceiling `c`: the highest sampled height above the best so far and at
     /// most `c`; if none qualifies, the last rejected height; MISS when nothing was sampled; 0.0
-    /// when the grid has no cell or entries here (SPEC-0018, Ground probe). Not implemented:
-    /// runtime gates (owner, mask, count), the candidate outline test, owner placement.
+    /// when the grid has no cell or entries here (SPEC-0018, Ground probe). Placed objects'
+    /// patches are skipped here (see `probe_owned`); the mask and count gates are not applied.
     pub fn probe(&self, x: f32, z: f32, c: f32) -> f32 {
         self.probe_normal(x, z, c).0
     }
@@ -201,6 +240,27 @@ impl Ground {
     /// The probe with the chosen entry's ground kind (the u32 at entry +0x38, which selects
     /// the camera profile in SPEC-0027).
     pub fn probe_hit(&self, x: f32, z: f32, c: f32) -> ProbeHit {
+        self.probe_owned(x, z, c, &|_| None)
+    }
+
+    /// Register a placed object's inline model set (its type-5 payload) under its patch id.
+    pub fn add_object_set(&mut self, object: usize, set: &[u8]) {
+        let (Some(id), Some(patches)) = (i32_at(set, 0), read_patches(set)) else { return };
+        if id != 0 {
+            self.owned.push(OwnedSet { id, object, set: set.to_vec(), patches });
+        }
+    }
+
+    /// The registered patch ids and their objects.
+    pub fn object_sets(&self) -> Vec<(i32, usize)> {
+        self.owned.iter().map(|o| (o.id, o.object)).collect()
+    }
+
+    /// The probe with placed-object patches (SPEC-0018 Ground probe steps 2 and 4): an entry
+    /// whose patch id names a placed object's inline model set is tried only while `owner`
+    /// gives that object's pose (the object drawn, its draw-test byte set); the point is mapped
+    /// into the object's rest frame and the height raised by the frames' height difference.
+    pub fn probe_owned(&self, x: f32, z: f32, c: f32, owner: &dyn Fn(usize) -> Option<OwnerPose>) -> ProbeHit {
         const UP: [f32; 3] = [0.0, 1.0, 0.0];
         let none = |height| ProbeHit { height, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None };
         let Some(rec) = self.cell_at(x, z) else {
@@ -214,25 +274,36 @@ impl Ground {
         let (mut best, mut rejected, mut sampled) = (none(MISS), None, false);
         for e in 0..count.min(MAX_ENTRIES) {
             let at = entries + CELL_ENTRY * e;
-            let (Some(0), Some(index)) = (i32_at(&self.grid, at), i32_at(&self.grid, at + 4)) else {
+            let (Some(id), Some(index)) = (i32_at(&self.grid, at), i32_at(&self.grid, at + 4)) else {
                 continue;
             };
-            let Some(Some(p)) = self.patches.get(index as usize) else { continue };
+            // The patch id: 0 the pack's own set, else a placed object's set, tried only while
+            // the object is drawn, at the point mapped into its rest frame.
+            let (set, patches, pose) = if id == 0 {
+                (&self.set[..], &self.patches, None)
+            } else {
+                let Some(o) = self.owned.iter().find(|o| o.id == id) else { continue };
+                let Some(pose) = owner(o.object) else { continue };
+                (&o.set[..], &o.patches, Some(pose))
+            };
+            let Some(Some(p)) = patches.get(index as usize) else { continue };
+            let (sx, sz, raise) = pose.map_or((x, z, 0.0), |q| q.map(x, z));
             // SPEC-0018 Ground probe step 3: with two or more entries in the cell, the patch must
             // pass its outline list test.
-            if count >= 2 && !self.list_test(p, x, z) {
+            if count >= 2 && !list_test_in(set, p, sx, sz) {
                 continue;
             }
-            let Some((h, n)) = self.sample(p, x, z) else { continue };
+            let Some((h, n)) = sample_in(set, p, sx, sz) else { continue };
+            let h = h + raise;
             sampled = true;
             let hit = ProbeHit {
                 height: h,
                 normal: n,
-                kind: u32_at(&self.set, p.at + 0x38),
+                kind: u32_at(set, p.at + 0x38),
                 found: true,
-                respawn: self.set.get(p.at + 0x0D).copied(),
-                surface: self.set.get(p.at + 0x40..p.at + 0x42).map(|b| u16::from_le_bytes([b[0], b[1]])),
-                zone: self.set.get(p.at + 0x0C).copied(),
+                respawn: set.get(p.at + 0x0D).copied(),
+                surface: set.get(p.at + 0x40..p.at + 0x42).map(|b| u16::from_le_bytes([b[0], b[1]])),
+                zone: set.get(p.at + 0x0C).copied(),
             };
             if h > best.height && h <= c {
                 best = hit;
@@ -246,15 +317,11 @@ impl Ground {
             (true, false) => rejected.unwrap_or(none(MISS)),
         }
     }
+}
 
-    /// The candidate list test (SPEC-0018 Ground probe step 3): of the entry's C outline records
-    /// (0x70 bytes at entry +0x54, count at +0x50), count those that pass the z-span gate (origin
-    /// z at +0x08, scalar at +0x68: with origin z < z the record qualifies when z - origin z is
-    /// below the scalar, otherwise when it is at least the scalar) and for which exactly one of
-    /// Q . R > 0 and R.x > 0 holds (Q = (x, 0, z, 1), R the row at +0x10). The patch passes on
-    /// an odd count or an empty list.
-    fn list_test(&self, p: &Patch, x: f32, z: f32) -> bool {
-        let set = &self.set;
+/// The candidate list test over the set payload `set`.
+fn list_test_in(set: &[u8], p: &Patch, x: f32, z: f32) -> bool {
+    {
         let n = i32_at(set, p.at + 0x50).unwrap_or(0);
         if n <= 0 {
             return true;
@@ -272,7 +339,9 @@ impl Ground {
         }
         hits % 2 == 1
     }
+}
 
+impl Ground {
     /// The exit value of the cell under (x, z): the low 16 bits of the word at cell record
     /// +0x18 (SPEC-0006 Pending step), or -1 when there is no cell.
     pub fn cell_value(&self, x: f32, z: f32) -> i32 {
@@ -336,6 +405,26 @@ pub fn navmesh_vertices(bytes: &[u8], top: &[Chunk]) -> Vec<[f32; 3]> {
 
 #[cfg(test)]
 mod tests {
+    use super::OwnerPose;
+
+    #[test]
+    fn owner_mapping() {
+        // SPEC-0018 step 4's vector: O = (10, 5, 20) with identity axes, p = (12, 23), T =
+        // (100, 2, 200), A = (0, 0, 1), B = (-1, 0, 0): p' = (97, 202), raised by 3.
+        let mut current = [0.0f32; 16];
+        current[0] = 1.0;
+        current[5] = 1.0;
+        current[10] = 1.0;
+        current[15] = 1.0;
+        current[12..15].copy_from_slice(&[10.0, 5.0, 20.0]);
+        let mut rest = [0.0f32; 16];
+        rest[2] = 1.0;
+        rest[5] = 1.0;
+        rest[8] = -1.0;
+        rest[15] = 1.0;
+        rest[12..15].copy_from_slice(&[100.0, 2.0, 200.0]);
+        assert_eq!(OwnerPose { current, rest }.map(12.0, 23.0), (97.0, 202.0, 3.0));
+    }
 
     #[test]
     fn outline_record_rule() {

@@ -110,11 +110,19 @@ impl Volume {
     /// (0.6 S against a moving rectangle) and height H (SPEC-0048 Trigger volumes; the shapes
     /// are Medium there and the tests are the body tests with that cylinder).
     pub fn block_hits(&self, p: [f32; 3], size: f32, height: f32) -> bool {
-        let r = match self.shape {
-            Shape::Rectangle { extents, .. } if extents[2] > 0.0 => 0.6 * size,
-            _ => size,
-        };
-        self.touches_with(p, r, height)
+        match self.shape {
+            // The moving rectangle's five faces (SPEC-0048, The block's moving-rectangle test):
+            // with a, b and u the position's coordinates from the corner along the +0x40, +0x50
+            // and +0x60 axes, the net rule is a in [-r, eA + r], b in [-r, eB + r] and u > -H,
+            // r = 0.6 S.
+            Shape::Rectangle { origin, axes, extents } if extents[2] > 0.0 => {
+                let r = 0.6 * size;
+                let d = sub(p, origin);
+                let (u, b, a) = (dot(d, axes[0]), dot(d, axes[1]), dot(d, axes[2]));
+                (-r..=extents[2] + r).contains(&a) && (-r..=extents[1] + r).contains(&b) && u > -height
+            }
+            _ => self.touches_with(p, size, height),
+        }
     }
 
     /// Whether the body standing at feet point `p` touches the volume.
@@ -269,6 +277,18 @@ mod tests {
         assert!(!s.fires_on_shot(0));
         let c = Volume { kind: 3, flags: 0x0008, mask: 0, index: 1, shape: Shape::Cylinder { base: [0.0; 3], axis: [0.0, 1.0, 0.0], length: 3.0, radius: 6.0 } };
         assert!(c.fires_on_shot(0) && c.shot_hits([6.2, 1.0, 0.0], 0.5) && !c.shot_hits([7.0, 1.0, 0.0], 0.5));
+    }
+
+    #[test]
+    fn block_moving_rectangle() {
+        // SPEC-0048's worked example: pack 1324's plate 2 and bell 0 (S 3.305, H 9.2) pushed
+        // along -Z: nothing at z 3.608 (step 34 of the sixth push), a hit at z 3.565 (step 35);
+        // with the bell on the ground at 0.0 nothing ever fires.
+        let plate = Volume { kind: 4, flags: 0x0020, mask: 0, index: 2, shape: Shape::Rectangle { origin: [-20.221, 31.162, 1.266], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [10.0, 5.553, 0.340] } };
+        assert!(plate.fires_on_block(0));
+        assert!(!plate.block_hits([-17.429, 31.191, 3.608], 3.305, 9.2));
+        assert!(plate.block_hits([-17.429, 31.191, 3.565], 3.305, 9.2));
+        assert!(!plate.block_hits([-17.429, 0.0, 3.565], 3.305, 9.2));
     }
 
     #[test]
