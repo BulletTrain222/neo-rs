@@ -2031,7 +2031,12 @@ impl Play {
             neopets_sim::shop::Buy::Bought => {
                 self.state.neopoints -= it.price as i32;
                 self.state.neopoints = self.state.neopoints.max(0);
-                self.state.give(it.id, if neopets_sim::mote::is_mote(it.id) { 100 } else { 1 });
+                if it.id == level::TREASURE_MAP {
+                    // A bought map is map +0x2C plus 1 (SPEC-0021 Treasure maps).
+                    self.map_held(it.map as u32 + 1);
+                } else {
+                    self.state.give(it.id, if neopets_sim::mote::is_mote(it.id) { 100 } else { 1 });
+                }
                 let taken = neopets_sim::shop::takes(it.id, self.item_kind(it.id));
                 if let Some(pool) = self.pools.get_mut(&pack) {
                     if taken {
@@ -4809,6 +4814,10 @@ impl Play {
             if p.key >= 0 && self.vetoed(p.key as u16, pack) {
                 continue;
             }
+            // A map placement is not spawned when its map (+0x2C plus 1) is held.
+            if p.key == level::TREASURE_MAP as i16 && self.state.maps.contains(&(p.map as u32 + 1)) {
+                continue;
+            }
             if p.flags > 1 || p.key < 0 {
                 continue;
             }
@@ -4832,7 +4841,8 @@ impl Play {
     }
 
     /// The equipment veto (types 1 to 6; Tor's entries for 4 to 6) and the quest-style vetoes
-    /// (once-per-area ids 19, 20, 151, 154 and 174; item 126 when held; map 175 not covered).
+    /// (once-per-area ids 19, 20, 151, 154 and 174; item 126 when held). Map 175's veto needs
+    /// the placement's map byte and is applied by the callers.
     fn vetoed(&self, id: u16, pack: u32) -> bool {
         let kind = self.item_kind(id);
         if (4..=6).contains(&kind) {
@@ -4941,6 +4951,9 @@ impl Play {
         if it.id >= 191 && !it.charm {
             return;
         }
+        if it.id == level::TREASURE_MAP && self.state.maps.contains(&(it.map as u32 + 1)) {
+            return;
+        }
         if let Some(pool) = self.pools.get_mut(&pack) {
             pool.take(i);
         }
@@ -4957,7 +4970,8 @@ impl Play {
             self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.state.neopoints, self.ticks);
         } else {
             if it.id == level::TREASURE_MAP {
-                // A map pickup's number is the placement byte +0x2C plus 1.
+                // A map pickup's number is the placement byte +0x2C plus 1; the pickup is
+                // vetoed (handled before the take) when that map is held.
                 self.map_held(it.map as u32 + 1);
                 self.last_pickup = format!("picked up map {} on tick {}", it.map as u32 + 1, self.ticks);
                 return;
