@@ -153,7 +153,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             None => cameras.iter().next().map(FreeCam::from_transform),
         };
     };
-    // NEOPETS_DEV="menu,free,perf,warp=N,speed=K,drop": open the menu, start the free camera, show
+    // NEOPETS_DEV="menu,free,perf,warp=N,speed=K,drop,view=NAME": open the menu, start the free camera, show
     // the performance overlay, warp to world pack N and/or set speed step K (0 paused, 3 normal) once play has run a few frames
     // (diagnostic, for screenshots); with "free" the camera also backs up and rises.
     *frames += 1;
@@ -164,6 +164,18 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
         dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
         if let Some(k) = v.split(',').find_map(|t| t.trim().strip_prefix("speed=")?.parse::<usize>().ok()) {
             dev.speed = k.min(SPEEDS.len() - 1);
+        }
+        // "view=NAME" (or "view=NAME:D"): the free camera D units (default 4) in front of the
+        // named character, looking at its chest.
+        if let Some(arg) = v.split(',').find_map(|t| t.trim().strip_prefix("view=")) {
+            let (name, d) = arg.split_once(':').map_or((arg, 4.0), |(n, d)| (n, d.parse().unwrap_or(4.0)));
+            if let Some(c) = play.play.characters.iter().find(|c| c.name == name) {
+                let p = Vec3::from(c.position);
+                let f = Vec3::new(c.facing[0], 0.0, c.facing[2]).normalize_or(Vec3::Z);
+                let pos = p + f * d + Vec3::Y * 2.2;
+                let to = p + Vec3::Y * 1.8 - pos;
+                dev.free = Some(FreeCam { pos, yaw: to.x.atan2(to.z), pitch: (to.y / to.length()).asin() });
+            }
         }
         if v.contains("free") && dev.free.is_none() {
             toggle_free(&mut dev);

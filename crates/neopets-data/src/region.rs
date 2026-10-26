@@ -40,6 +40,9 @@ pub struct Placement {
     pub variant: u16,
     /// Behavior code (+0x84), the AI mode the townsfolk routine starts from (SPEC-0056).
     pub ai_code: i16,
+    /// The main family's translation scale selector (+0x8C; SPEC-0005 Per-bone translation
+    /// scale): a 1-based set of the main definition's scale block, 0 for none.
+    pub scale_set: i16,
     pub summon: bool,
     /// The character kind key (s16 +0xAC) that a spawn-by-key request matches (SPEC-0029
     /// Behavior 31).
@@ -206,6 +209,7 @@ pub fn records(p: &[u8]) -> Records {
                     model_set: s(0xA4),
                     monster_type: s(0xB4) as u16,
                     ai_code: s(0x84),
+                    scale_set: i16_at(p, data + 0x8C).unwrap_or(0),
                     variant: s(0xB2) as u16,
                     summon: p.get(data + 0xB6).is_some_and(|&b| b != 0),
                     key: s(0xAC),

@@ -226,7 +226,14 @@ pub fn region_character(
     if families.is_empty() {
         return Err("No animation family".into());
     }
+    // NEOPETS_TRACE_RIG: each region character's families (role, skeleton, joints) and its bone
+    // table size (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_RIG").is_some() {
+        let f: Vec<(u8, i16, usize)> = families.iter().map(|(r, d)| (*r, placement.skeletons[*r as usize], d.def.len())).collect();
+        println!("      rig {}: bones {}, families (role, skeleton, joints) {f:?}", placement.name, bones.len());
+    }
     let mut anim = crate::character::HeroAnim::with_roles(bones, families);
+    anim.set_scale_set(placement.scale_set);
     anim.play(0);
     Ok((model, anim))
 }

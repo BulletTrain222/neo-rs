@@ -8257,7 +8257,7 @@ impl Play {
                     c.position[0],
                     c.position[2]
                 ),
-                Some(t) => format!("{} [mode {} id {}]", c.name, t.mode, c.anim.action()),
+                Some(t) => format!("{} [mode {} id {} at {:.0},{:.0}]", c.name, t.mode, c.anim.action(), c.position[0], c.position[2]),
                 None if c.enemy.is_some() => {
                     let e = c.enemy.as_ref().unwrap();
                     let what = if e.dead { "dead".to_string() } else { format!("state {} outer {} inner {} seq {}", e.state, e.outer, e.inner, e.seq) };

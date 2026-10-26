@@ -33,10 +33,14 @@ fn f32_at(b: &[u8], at: usize) -> Option<f32> {
 
 /// A skeleton definition (chunk types 22–24, or a headerless family header): per joint, its
 /// parent (None for the root) and mirror partner.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct SkeletonDef {
     pub parents: Vec<Option<u32>>,
     pub partners: Vec<u32>,
+    /// The per-bone translation scale sets (SPEC-0005 Per-bone translation scale): K floats per
+    /// joint (header word 0x14), joint i's at the end of the records (0x2C) plus its record's
+    /// third field. Empty when K is 0.
+    pub scales: Vec<Vec<f32>>,
 }
 
 impl SkeletonDef {
@@ -46,17 +50,34 @@ impl SkeletonDef {
         if n == 0 || n > MAX_BONES {
             return Err(format!("{n} joints is outside 1..={MAX_BONES}"));
         }
+        let k = u32_at(b, 0x14).unwrap_or(0) as usize;
+        let end = u32_at(b, 0x2C).unwrap_or(0) as usize;
         let mut def = SkeletonDef {
             parents: Vec::with_capacity(n),
             partners: Vec::with_capacity(n),
+            scales: Vec::new(),
         };
         for i in 0..n {
             let at = records + 12 * i;
             let parent = u32_at(b, at).ok_or("Skeleton record past the end")?;
             def.parents.push((parent != 0xFF).then_some(parent));
             def.partners.push(u32_at(b, at + 4).ok_or("Skeleton record past the end")?);
+            if (1..=64).contains(&k) {
+                let block = end + u32_at(b, at + 8).unwrap_or(0) as usize;
+                def.scales.push((0..k).map(|j| u32_at(b, block + 4 * j).map_or(1.0, f32::from_bits)).collect());
+            }
         }
         Ok(def)
+    }
+
+    /// The translation factor of joint i for scale selector `sel` (1-based; 0 or negative, or a
+    /// set the joint lacks, is no scaling).
+    pub fn translation_scale(&self, i: usize, sel: i16) -> f32 {
+        usize::try_from(sel)
+            .ok()
+            .and_then(|s| s.checked_sub(1))
+            .and_then(|s| self.scales.get(i)?.get(s).copied())
+            .unwrap_or(1.0)
     }
 
     pub fn len(&self) -> usize {
@@ -418,21 +439,25 @@ pub fn sample_into(
     joints: &mut [Option<Joint>],
     replace: bool,
     phi: f32,
+    scale: &dyn Fn(usize) -> f32,
 ) {
     if k >= clip.frames || k2 >= clip.frames {
         return;
     }
     for (i, &bit) in clip.bones.iter().enumerate() {
-        let Some(slot) = bit.checked_sub(base).and_then(|j| joints.get_mut(j as usize)) else {
+        let Some(j) = bit.checked_sub(base).map(|j| j as usize).filter(|&j| j < joints.len()) else {
             continue;
         };
+        // Both keys' translations are scaled before the blend (Per-bone translation scale).
+        let f = scale(j);
         let sample = blend_key(
             clip.rotation(k, i),
             clip.rotation(k2, i),
-            clip.translation(k, i),
-            clip.translation(k2, i),
+            clip.translation(k, i).map(|v| v * f),
+            clip.translation(k2, i).map(|v| v * f),
             t,
         );
+        let slot = &mut joints[j];
         combine(slot, sample, replace, phi);
     }
 }
@@ -541,6 +566,30 @@ pub fn skin_matrices(bones: &BoneTable, main: &Family, others: &[Family]) -> Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A two-joint main definition with K = 2: joint 0's set at block offset 0, joint 1's at 8.
+    #[test]
+    fn translation_scale_sets() {
+        let mut b = vec![0u8; 0x30 + 24 + 16];
+        b[0..4].copy_from_slice(&2u32.to_le_bytes());
+        b[0x14..0x18].copy_from_slice(&2u32.to_le_bytes());
+        b[0x18..0x1C].copy_from_slice(&0x30u32.to_le_bytes());
+        b[0x2C..0x30].copy_from_slice(&0x48u32.to_le_bytes());
+        b[0x30..0x34].copy_from_slice(&0xFFu32.to_le_bytes());
+        b[0x3C..0x40].copy_from_slice(&0u32.to_le_bytes());
+        b[0x44..0x48].copy_from_slice(&8u32.to_le_bytes());
+        for (o, v) in [(0x48, 1.046f32), (0x4C, 2.0), (0x50, 0.5), (0x54, 3.0)] {
+            b[o..o + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        let def = SkeletonDef::parse(&b).unwrap();
+        assert_eq!(def.parents, [None, Some(0)]);
+        // SPEC-0005 vector: selector 1, joint 0 translation y 1.145 gives 1.145 x 1.046.
+        assert!((1.145 * def.translation_scale(0, 1) - 1.198).abs() < 1e-3);
+        assert_eq!(def.translation_scale(1, 2), 3.0);
+        assert_eq!(def.translation_scale(1, 0), 1.0, "selector 0: no scaling");
+        assert_eq!(def.translation_scale(1, -1), 1.0, "a negative selector: no scaling");
+        assert_eq!(def.translation_scale(1, 3), 1.0, "a set past K: no scaling");
+    }
 
     #[test]
     fn quaternion_matches_spec_example() {
@@ -670,7 +719,7 @@ mod tests {
             hurt: Vec::new(),
             attach: Vec::new(),
         };
-        let def = SkeletonDef { parents: vec![None, Some(0)], partners: vec![0, 1] };
+        let def = SkeletonDef { parents: vec![None, Some(0)], partners: vec![0, 1], scales: Vec::new() };
         let rest = skin_matrices(&bones, &Family { def: &def, skin_base: 0, joints: &[None, None] }, &[]);
         assert!(rest.iter().all(|m| m.apply([5.0, 6.0, 7.0]) == [5.0, 6.0, 7.0]));
         // Turn the root 90° about +Y: a point at bone 1's rest position stays on bone 1.

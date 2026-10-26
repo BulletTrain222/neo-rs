@@ -2490,6 +2490,16 @@ fn play_trace(
             let n = play.dev_kill_enemies();
             println!("      developer kill on tick {}: {n} enemies hit", play.ticks);
         }
+        // NEOPETS_TRACE_RIG=Name: that character's main joint translations on tick 30.
+        if play.ticks == 30 {
+            if let Ok(name) = std::env::var("NEOPETS_TRACE_RIG") {
+                if let Some(c) = play.characters.iter().find(|c| c.name == name) {
+                    for (i, p, t, r) in c.anim.main_translations() {
+                        println!("      {name} joint {i} parent {p:?}: sampled {t:?} rest {r:?}");
+                    }
+                }
+            }
+        }
         // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
         if std::env::var("NEOPETS_TRACE_DROP").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
             let n = play.dev_drop(160);

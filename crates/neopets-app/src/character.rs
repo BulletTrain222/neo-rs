@@ -33,6 +33,8 @@ pub struct HeroAnim {
     /// the owner's position on the last chain step.
     chains: Vec<neopets_sim::chain::Chain>,
     last_owner: Option<[f32; 3]>,
+    /// The main family's translation scale selector (SPEC-0005; 0 for the heroes).
+    scale_set: i16,
 }
 
 /// Action ids valid for the hero tables (SPEC-0005: ids 0 to 192).
@@ -66,7 +68,7 @@ impl HeroAnim {
                 state
             })
             .collect();
-        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None };
+        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None, scale_set: 0 };
         hero.play(3);
         hero
     }
@@ -160,6 +162,7 @@ impl HeroAnim {
     pub fn tick(&mut self) -> [f32; 3] {
         self.face_step();
         let mut root = [0.0; 3];
+        let sel = self.scale_set;
         for (i, f) in self.families.iter_mut().enumerate() {
             let (Some(c), Some(s)) = (f.current, f.record.tick()) else { continue };
             if i == 0 {
@@ -178,9 +181,16 @@ impl HeroAnim {
                 &mut f.joints,
                 s.replace,
                 s.blend,
+                // Only main-family samples are scaled.
+                &|j| if i == 0 { f.data.def.translation_scale(j, sel) } else { 1.0 },
             );
         }
         root
+    }
+
+    /// Set the main family's translation scale selector (kind-3 data +0x8C).
+    pub fn set_scale_set(&mut self, sel: i16) {
+        self.scale_set = sel;
     }
 
     /// Set the chain mode's chains. A link whose joint does not hang from its link joint in the
@@ -236,6 +246,14 @@ impl HeroAnim {
             }
         }
         self.chains = chains;
+    }
+
+    /// Diagnostic: per main joint, (joint, parent, sampled translation, rest local translation).
+    pub fn main_translations(&self) -> Vec<(usize, Option<u32>, Option<[f32; 3]>, [f32; 3])> {
+        let f = &self.families[0];
+        (0..f.joints.len())
+            .map(|i| (i, f.data.def.parents.get(i).copied().flatten(), f.joints[i].map(|j| j.1), self.bones.rest_local.get(i).copied().unwrap_or_default()))
+            .collect()
     }
 
     /// The bone table the animation poses.
