@@ -216,6 +216,8 @@ pub enum Action {
     RegisterInstance { routine: u8, trigger: u16, group: usize },
     /// Wait until a module word of the thread's pack is 0.
     WaitWord { word: u8 },
+    /// SetAnimObjAdditionRotY: the object's added yaw about its own Y axis, in degrees.
+    ObjYaw { obj: usize, degrees: f32 },
     /// StartCameraShake(T, A, S, p4, R, phi, Z) (SPEC-0027 Camera shake).
     CameraShake { t: f32, a: f32, s: f32, p4: f32, r: f32, phi: f32, z: f32 },
     /// StartCameraShakeMode(type, duration, strength).
@@ -548,7 +550,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack == 1358 && door <= 5) {
+    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -580,6 +582,13 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0041 1353 teleport 0: with flag 104 value 10 for eW 158 and the entry into eW 175
+        // (pack 1405), 3 s; else line 0.
+        (1353, 0) if state.flag(104) => {
+            state.blackboard.insert((2, 158), 10);
+            vec![Action::EnterInterior { slot: 175 }, wait(3.0)]
+        }
+        (1353, 0) => vec![Action::Message { line: 0 }],
         // SPEC-0043 1358 teleports (kind 13): 4 and 3 post 50 or 10 for eW 180 and go there; 2
         // posts 40 for eW 173, sets 348 and goes there; 5 with 695 posts 60 for eW 173 and goes
         // there, else line 0; 0 and 1 with 102 post 20 or 30 for eW 159 and enter eW 181 or 183,
@@ -813,7 +822,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 796 | 799 | 880 | 1173 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 796 | 799 | 880 | 1173 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -860,6 +869,33 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1353 Init: effect 0 stopped; Z2, Z1, Z0 and Z3 on triggers 2, 1, 0 and 3
+        // unless flags 353 and 104 are both set; Z78 on 7 and 8 (Z4 to Z6's prompts are partly
+        // known and not reproduced); thread X loads slot 0 with set 2 (region 1356) under 104, else
+        // set 0 (1354); thread Z sets up the statues (objects 2, 1 and 0 at 270, 90 and 45
+        // degrees, or 0 with flag 694) and the door (solved with 694 unless 353 and 104 are set).
+        // The proximity routines, teleport 0 and the arrival are fixed rules.
+        1353 => {
+            let mut v = vec![Action::StopEffect { slot: 0 }];
+            if !(state.flag(353) && state.flag(104)) {
+                v.extend([reg(2, 0), reg(1, 0), reg(0, 0), reg(3, 3)]);
+            }
+            v.extend([reg(7, 7), reg(8, 7)]);
+            v.push(Action::LoadRegion { slot: 0, region: Some(if state.flag(104) { 1356 } else { 1354 }) });
+            let solved = state.flag(694);
+            for (k, (obj, start)) in [(2usize, 270), (1, 90), (0, 45)].into_iter().enumerate() {
+                let a = if solved { 0 } else { start };
+                state.set_word(pack, 10 + k as u8, a);
+                v.extend([Action::InitObjOn { obj, end: false }, Action::ObjYaw { obj, degrees: a as f32 }]);
+            }
+            if solved && !(state.flag(353) && state.flag(104)) {
+                v.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 3, end: true }, Action::InitObjOn { obj: 4, end: true }]);
+                state.set_word(pack, 13, 1);
+            } else {
+                v.extend([Action::InitObjOn { obj: 6, end: false }, Action::InitObjOn { obj: 3, end: false }, Action::InitObjOn { obj: 4, end: false }]);
+            }
+            v
+        }
         // SPEC-0043 1358 Init: the sign routine (20) on triggers 5 and 7, the slot swap (19) on 3
         // and 4; with 102 the latch lines (21, 22) on 1 and 2 and the prize wheel (56) on 0; the
         // slot thread loads slot 0 with set 1 (region 1360) under 102, else set 0 (1359); object 0
@@ -1621,6 +1657,62 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     out
 }
 
+/// SPEC-0041 1353 proximity routines. P16: the package hand-in (612, 686, line 53), else the map
+/// shop by its counter S (word 1): held maps skipped, S 0 the greeting 54, S 1 to 3 prompts 55 to
+/// 57 for maps 36, 40 and 38 (200, 200, 300 NP), S 4 line 58 and back to 1. P17 and P20 to P24
+/// (with 690 and 688 clear): one of their three lines by Random(1, 3). P18 and P19: lines 20 / 23
+/// and 8 / 11 by flags 688 and 690 (Medium in the spec for the line pairing).
+fn shrine_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let talk = |line| vec![Action::Talk { line }];
+    let roll = (s.talk_roll.clamp(1, 3) - 1) as u16;
+    let quiet = !s.flag(690) && !s.flag(688);
+    match routine {
+        16 if s.flag(612) && !s.flag(686) => {
+            s.remove_all(33);
+            s.set(686, true);
+            talk(53)
+        }
+        16 => {
+            let mut c = s.word(1353, 1);
+            for (k, map) in [(1, 36), (2, 40), (3, 38)] {
+                if c == k && s.maps.contains(&map) {
+                    c = k + 1;
+                }
+            }
+            match c {
+                0 => {
+                    s.set_word(1353, 1, 1);
+                    talk(54)
+                }
+                1..=3 => {
+                    s.set_word(1353, 1, c);
+                    vec![Action::Prompt { line: 54 + c as u16, routine: 16 }]
+                }
+                _ => {
+                    s.set_word(1353, 1, 1);
+                    talk(58)
+                }
+            }
+        }
+        17 | 20..=24 if quiet => {
+            let first = match routine {
+                17 => 87,
+                20 => 69,
+                21 => 35,
+                22 => 44,
+                23 => 26,
+                _ => 78,
+            };
+            talk(first + 3 * roll)
+        }
+        18 | 19 if s.flag(688) => {
+            let (a, b) = if routine == 18 { (20, 23) } else { (8, 11) };
+            talk(if s.flag(690) { a } else { b })
+        }
+        _ => Vec::new(),
+    }
+}
+
 /// SPEC-0059 section 7, the 1358 delivery giver (entity 20): 604 first (line 32); a taken task's
 /// reminder (4 + k); else an offer from the list of open tasks with their prerequisites (none
 /// for 1 and 2; 100 for 3 and 4; 106 for 5 and 6; 104 for 7 and 8) by r = Random(1, n) counted
@@ -2291,6 +2383,39 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1353 Z0 to Z2 (triggers 0, 1, 2; statues 2, 1, 0; angle words 10 to 12):
+        // while inside and the door word (13) is 0, the Square context 4; a press turns the statue
+        // by 45 degrees over 30 ticks with sound 7, then 0.5 s (word 14 while it turns).
+        (1353, 0) if call.state != 0 && state.word(pack, 13) == 0 && state.word(pack, 14) == 0 => {
+            out.prompt = Some(4);
+            if call.square && !state.talking && call.index <= 2 {
+                let k = call.index as u8;
+                let obj = [2, 1, 0][k as usize];
+                let from = state.word(pack, 10 + k);
+                state.set_word(pack, 10 + k, from + 45);
+                state.set_word(pack, 14, 1);
+                out.actions.extend([Action::HoldHero, Action::KillSound { cue: 7, locator: None }, Action::PlaySound { cue: 7, locator: None }]);
+                for t in 1..=30 {
+                    out.actions.extend([Action::ObjYaw { obj, degrees: from as f32 + 1.5 * t as f32 }, Action::Sleep { ticks: 1 }]);
+                }
+                out.actions.extend([Action::KillSound { cue: 7, locator: None }, wait(0.5), release_camera(), Action::Bits { word: 14, set: 0, clear: 1 }]);
+            }
+        }
+        // Z3 (trigger 3, entering with the body, the door open): value 10 for eW 158 and the
+        // replacement to eW 168 (pack 1392).
+        (1353, 3) if call.state == 1 && call.object && state.word(pack, 13) != 0 => {
+            state.blackboard.insert((2, 158), 10);
+            out.actions.push(Action::ReplaceExterior { slot: 168, plane: -1 });
+        }
+        // Z78 (triggers 7 and 8, entering, flag 104): thread Y reloads slot 0 with set 1 (7) or
+        // 3 (8) when the argument differs from the last one (word 15 holds it).
+        (1353, 7) if call.state == 1 && state.flag(104) => {
+            let arg = if call.index == 8 { 3 } else { 1 };
+            if state.word(pack, 15) != arg {
+                state.set_word(pack, 15, arg);
+                out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1354 + arg as u32) }]);
+            }
+        }
         // SPEC-0043 1358 latch (trigger 1, entering with the body, latch word 2 clear): entity
         // 21's line 87 the first time, 88 the second (word 3 counts), then nothing; trigger 2
         // clears the latch.
@@ -2936,6 +3061,25 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set(562, true);
             }
         }
+        // SPEC-0041 1353 Update, the statue check: all three angles multiples of 360 with the door
+        // closed: flag 694, sound 8, objects 3 and 4 played, 6 off and 5 on, camera 6 (wait), 1 s,
+        // the normal camera, the door open.
+        1353 => {
+            if state.word(pack, 13) == 0 && (10..=12).all(|w| state.word(pack, w) % 360 == 0) && state.word(pack, 14) == 0 {
+                state.set_word(pack, 13, 1);
+                state.set(694, true);
+                out.extend([
+                    Action::PlaySound { cue: 8, locator: None },
+                    Action::PlayAnim { obj: 3, speed: 1.0, wait: false },
+                    Action::PlayAnim { obj: 4, speed: 1.0, wait: false },
+                    Action::DeactivateObj { obj: 6 },
+                    Action::InitObjOn { obj: 5, end: false },
+                    Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
+                    wait(1.0),
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+        }
         // SPEC-0039 880 Update: while 296 is clear, AI 21, 22 and 23 all dead set 296.
         880 => {
             if !state.flag(296) && [21, 22, 23].iter().all(|e| state.ai_dead.contains(e)) {
@@ -3244,6 +3388,20 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0041 1353 activate-world: the value for eW 158; 10 places the hero at locator 1, 20
+        // at 3 (and starts effect 0); any value but -1 returns the normal camera.
+        1353 => {
+            let v = state.take_message(2, 158);
+            let mut out = match v {
+                10 => vec![Action::MoveHero { locator: 1 }],
+                20 => vec![Action::MoveHero { locator: 3 }, Action::StartEffect { slot: 0, camera: false }],
+                _ => Vec::new(),
+            };
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0043 1358 activate-world: the value for eW 159 (10 to 50 to locators 2 to 6, 60 to
         // 77); with any value the normal camera; the value reset.
         1358 => {
@@ -4695,6 +4853,22 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             let item = (s.word(pack, 0) - 1).max(0) as u16;
             vec![Action::GiveItem { item, count: 1 }, Action::Talk { line: 15 }]
         }
+        // SPEC-0041 1353 P16 answers (offer k = S - 1): yes with enough Neopoints gives map 36,
+        // 40 or 38 for 200, 200 or 300 and line 62 + k; no 65 + k; too few 68; S goes up by 1.
+        (1353, 16, yes) => {
+            let c = s.word(pack, 1).clamp(1, 3);
+            let k = (c - 1) as usize;
+            let (map, price) = [(36, 200), (40, 200), (38, 300)][k];
+            s.set_word(pack, 1, c + 1);
+            if !yes {
+                vec![Action::Talk { line: 65 + k as u16 }]
+            } else if s.neopoints < price {
+                vec![Action::Talk { line: 68 }]
+            } else {
+                s.neopoints -= price;
+                vec![Action::GiveItem { item: TREASURE_MAP, count: map }, Action::Talk { line: 62 + k as u16 }]
+            }
+        }
         // SPEC-0059 section 7 answers: yes takes task k (its flag; accept line 20 + k, whose
         // dialogue command gives one item 33); no shows 29, 30 or 31 by Random(1, 3).
         (1358, 1, true) => {
@@ -4929,6 +5103,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0041 1353: P16 to P24 on entities 16 to 24.
+        (1353, 16..=24) => Some(entity as u8),
         // SPEC-0043 1358: the delivery giver on entity 20 and line 90 on entity 21 (entities 16 to
         // 19 are Medium in the spec and not routed).
         (1358, 20) => Some(1),
@@ -5024,6 +5200,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 745 {
         return apothecary_talk(routine, state);
+    }
+    if pack == 1353 {
+        return shrine_talk(routine, state);
     }
     if (pack, routine) == (1358, 2) {
         return vec![Action::Talk { line: 90 }];
@@ -5311,6 +5490,30 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1353_statues_and_shop() {
+        let mut s = GameState { neopoints: 250, ..Default::default() };
+        on_init(1353, &mut s);
+        // SPEC-0041 vector: the statue at 270 (Z0) is done after two presses, undone after a third.
+        let press = TriggerCall { index: 0, state: 2, object: true, square: true };
+        for n in 1..=3 {
+            assert!(!on_trigger(1353, 0, press, &mut s).actions.is_empty());
+            s.set_word(1353, 14, 0);
+            assert_eq!(s.word(1353, 10) % 360 == 0, n == 2);
+        }
+        // All three at multiples of 360 open the door and set 694.
+        for w in 10..=12 {
+            s.set_word(1353, w, 360);
+        }
+        assert!(!on_update(1353, &mut s, false).is_empty());
+        assert!(s.flag(694) && s.word(1353, 13) == 1);
+        // P16 vector: S = 1, no map 36, yes with 250 NP: map 36, 50 left, line 62, S = 2.
+        s.set_word(1353, 1, 1);
+        assert_eq!(on_talk(1353, 16, &mut s), vec![Action::Prompt { line: 55, routine: 16 }]);
+        assert_eq!(on_answer(1353, 16, true, &mut s), vec![Action::GiveItem { item: TREASURE_MAP, count: 36 }, Action::Talk { line: 62 }]);
+        assert_eq!((s.neopoints, s.word(1353, 1)), (50, 2));
     }
 
     #[test]

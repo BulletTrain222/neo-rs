@@ -647,6 +647,8 @@ pub struct Play {
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
     /// The drop direction of a dig reward while it pays out (SPEC-0051 section 10 step 11).
     dig_drop: Option<[f32; 3]>,
+    /// Added object yaw (SetAnimObjAdditionRotY), degrees, by (pack, object).
+    obj_yaw: HashMap<(u32, usize), f32>,
     /// The camera shake record and this frame's movement (SPEC-0027 Camera shake).
     pub shake: neopets_sim::shake::Shake,
     pub shake_now: Option<neopets_sim::shake::Offset>,
@@ -989,6 +991,7 @@ impl Play {
             r_fx: [None; 2],
             char_lights: HashMap::new(),
             dig_drop: None,
+            obj_yaw: HashMap::new(),
             shake: Default::default(),
             shake_now: None,
             placed_on: Default::default(),
@@ -1929,6 +1932,9 @@ impl Play {
                 }
                 Action::WaitInside { index } => return Some(Wait::Inside(index)),
                 Action::WaitWord { word } => return Some(Wait::Word(pack, word)),
+                Action::ObjYaw { obj, degrees } => {
+                    self.obj_yaw.insert((pack, obj), degrees);
+                }
                 Action::CameraShake { t, a, s, p4, r, phi, z } => self.shake.start(t, a, s, p4, r, phi, z),
                 Action::CameraShakeMode { kind, duration, strength } => self.shake.start_mode(kind, duration, strength),
                 Action::DeactivateGroup { group } => {
@@ -5438,7 +5444,14 @@ impl Play {
         let r = neopets_sim::object::rotation(q);
         let t = [obj.rest[12] + root[0], obj.rest[13] + root[1], obj.rest[14] + root[2]];
         let c = |k: usize| r[k].map(|v| v * scale[k]);
-        let (c0, c1, c2) = (c(0), c(1), c(2));
+        let (mut c0, c1, mut c2) = (c(0), c(1), c(2));
+        // SetAnimObjAdditionRotY: the added yaw turns the frame about its own Y axis.
+        if let Some(&deg) = self.obj_yaw.get(&(pack, i)) {
+            let (sn, cs) = deg.to_radians().sin_cos();
+            let (x, z) = (c0, c2);
+            c0 = std::array::from_fn(|k| cs * x[k] - sn * z[k]);
+            c2 = std::array::from_fn(|k| sn * x[k] + cs * z[k]);
+        }
         Some([c0[0], c0[1], c0[2], 0.0, c1[0], c1[1], c1[2], 0.0, c2[0], c2[1], c2[2], 0.0, t[0], t[1], t[2], 1.0])
     }
 
