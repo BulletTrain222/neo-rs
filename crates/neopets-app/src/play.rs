@@ -404,6 +404,8 @@ pub struct Character {
     pub faerie: Option<neopets_sim::darkest::Faerie>,
     /// The row's attack-slot spawn keys (+0x3CC + 2k; SPEC-0029 Behavior 31).
     pub spawn_keys: [u16; 4],
+    /// The Queen Fyora controller (behaviour class 38; SPEC-0029 Behavior 30).
+    pub fyora: Option<neopets_sim::fyora::Fyora>,
 }
 
 /// A summon-reserved record of a character block (SPEC-0029 Behavior 31), with the character it
@@ -614,6 +616,10 @@ pub struct Play {
     draik_words: neopets_sim::draik::Words,
     faerie_words: neopets_sim::darkest::Words,
     reserves: Vec<Reserve>,
+    /// The duel's shared slots (SPEC-0029 Behavior 19), its words, and the loop-B summons.
+    duel: neopets_sim::fyora::Slots,
+    duel_words: neopets_sim::fyora::Words,
+    duel_summons: Vec<u64>,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
     /// The last spawn-by-key request's outcome.
@@ -1007,6 +1013,7 @@ impl Play {
         };
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
+        let duel_words = neopets_sim::fyora::Words::read(&words(neopets_sim::fyora::WORDS, 2)?).ok_or("The duel words are short")?;
         let faerie_words = {
             use neopets_sim::darkest::*;
             Words::read(&words(BASE, WORDS)?, &words(BASE_B, WORDS_B)?).ok_or("The Darkest Faerie's tuning words are short")?
@@ -1204,6 +1211,9 @@ impl Play {
             draik_words,
             faerie_words,
             reserves: Vec::new(),
+            duel: [None; 4],
+            duel_words,
+            duel_summons: Vec::new(),
             boss_hits: Vec::new(),
             last_boss: String::new(),
             last_summon: String::new(),
@@ -3333,7 +3343,8 @@ impl Play {
         }
         // SPEC-0029 Behavior 6.4: the Undead Draik registers hits on its own bone groups; the
         // Darkest Faerie is invulnerable for her whole life (SPEC-0054 Hit points).
-        if self.characters.get(i).is_some_and(|c| c.draik.is_some() || c.faerie.is_some()) {
+        // Queen Fyora's take-hit is not given; she takes no hit here.
+        if self.characters.get(i).is_some_and(|c| c.draik.is_some() || c.faerie.is_some() || c.fyora.is_some()) {
             return;
         }
         // SPEC-0020: Gnarfas takes a hit through its own flinch (the damage lands when it ends).
@@ -3730,6 +3741,7 @@ impl Play {
                 draik: row.filter(|r| r.class == Some(12)).map(|_| neopets_sim::draik::Draik::new(&self.draik_words, &mut self.rng)),
                 faerie: row.filter(|r| r.class == Some(37)).map(|_| neopets_sim::darkest::Faerie::default()),
                 spawn_keys: tuning.map_or([0; 4], |t| std::array::from_fn(|k| t.slots[k].spawn_key)),
+                fyora: row.filter(|r| r.class == Some(38)).map(|_| neopets_sim::fyora::Fyora::default()),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3747,9 +3759,9 @@ impl Play {
     /// for a world-level request (no block) the embedded block and then each slot in order; the
     /// first reserved record of the key not bound to a live character is bound at the point and
     /// facing, with the drop item as its direct drop, and starts in agro (state 19) or, for the
-    /// minion keys and the arrival flag, with animation 82 in state 21. Returns whether one
-    /// spawned. The block's free-object and cap tests and the summoner id are not built.
-    fn summon(&mut self, pack: u32, block: Option<u8>, key: i16, at: [f32; 3], facing: [f32; 3], drop: Option<u16>, arrive: bool) -> bool {
+    /// minion keys and the arrival flag, with animation 82 in state 21. Returns the summoned
+    /// character. The block's free-object and cap tests and the summoner id are not built.
+    fn summon(&mut self, pack: u32, block: Option<u8>, key: i16, at: [f32; 3], facing: [f32; 3], drop: Option<u16>, arrive: bool) -> Option<u64> {
         let live: std::collections::HashSet<u64> = self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)).map(|c| c.id).collect();
         for r in &mut self.reserves {
             if r.bound.is_some_and(|id| !live.contains(&id)) {
@@ -3789,10 +3801,10 @@ impl Play {
                 }
             }
             self.last_summon = format!("summoned key {key} at {:.1},{:.1},{:.1} on tick {}", at[0], at[1], at[2], self.ticks);
-            return true;
+            return Some(id);
         }
         self.last_summon = format!("no reserved record for key {key} on tick {}", self.ticks);
-        false
+        None
     }
 
     /// The petpet package's character record ordinal 0 becomes the live petpet's character at
@@ -3840,6 +3852,7 @@ impl Play {
             draik: None,
             faerie: None,
             spawn_keys: [0; 4],
+            fyora: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4895,6 +4908,7 @@ impl Play {
         self.sisters_step();
         self.draik_step();
         self.faerie_step();
+        self.fyora_step();
         self.mice_step();
         self.enemies_step();
         self.items_step();
@@ -6237,6 +6251,8 @@ impl Play {
             let level_flags = self.state.level_flags.clone();
             let level = |f: u16| level_flags.contains(&f);
             let progress = self.state.flag(364);
+            let partner = self.characters.iter().find(|o| o.pack == pack && o.row.is_some_and(|r| r.class == Some(38))).map(|o| o.position);
+            let summons_alive = self.duel_summons.iter().any(|id| self.characters.iter().any(|o| o.id == *id && o.dying.is_none() && !o.enemy.as_ref().is_some_and(|e| e.dead)));
             let c = &mut self.characters[i];
             let (radius, height) = c.row.map_or((1.0, 3.0), |r| (r.radius, r.height));
             let near = (hero[0] - c.position[0]).hypot(hero[2] - c.position[2]) < 65.0;
@@ -6246,6 +6262,7 @@ impl Play {
             let ground = self.world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0);
             let v = neopets_sim::darkest::View {
                 position: c.position,
+                facing: c.facing,
                 hero,
                 hero_facing: hf,
                 hero_guard: guarding,
@@ -6265,9 +6282,10 @@ impl Play {
                 level: &level,
             };
             let Some(f) = c.faerie.as_mut() else { continue };
-            let before = f.code;
-            let act = f.tick(&v, &self.faerie_words, &mut self.rng);
-            let after = f.code;
+            let duel = !progress && !level(18);
+            let before = if duel { 20 + f.b_state } else { f.code };
+            let act = if duel { f.loop_b(&v, &self.faerie_words, partner, &mut self.duel, summons_alive, &mut self.rng) } else { f.tick(&v, &self.faerie_words, &mut self.rng) };
+            let after = if duel { 20 + f.b_state } else { f.code };
             if let Some(n) = act.anim {
                 if clip.action != n || (clip.progress >= 0.99 && before != after) {
                     c.anim.play(n);
@@ -6275,6 +6293,9 @@ impl Play {
             }
             if let Some(w) = act.face {
                 c.facing = neopets_sim::hero::steer(c.facing, [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]], w);
+            }
+            if let Some((p, w)) = act.turn_to {
+                c.facing = neopets_sim::hero::steer(c.facing, [p[0] - c.position[0], 0.0, p[2] - c.position[2]], w);
             }
             if let Some(y) = act.height {
                 c.position[1] = y;
@@ -6318,6 +6339,67 @@ impl Play {
                 let at = add(self.loco.position(), p.offset);
                 self.loco.body.position = at;
                 self.loco.knock(p.velocity);
+            }
+        }
+    }
+
+    /// SPEC-0029 Behavior 30 per tick for Queen Fyora (class 38) in the current world: she waits
+    /// for a class-37 object, advances the duel's shared slots, faces it and runs her state; a
+    /// deflected orb that reaches the hero hits for the word's 5 with no attacker, and a type-2
+    /// orb that reaches the hero summons the Faerie's slot-0 key at the hero. Her sample point is
+    /// taken 0.75 of her height up (her hand or staff point is not given).
+    fn fyora_step(&mut self) {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.fyora.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        if ids.is_empty() {
+            self.duel = [None; 4];
+            return;
+        }
+        let faerie = self.characters.iter().find(|o| o.pack == pack && o.row.is_some_and(|r| r.class == Some(37))).map(|o| (o.position, o.spawn_keys[0], o.slot));
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level2 = self.state.level(2);
+            let c = &mut self.characters[i];
+            let height = c.row.map_or(3.0, |r| r.height);
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::fyora::View {
+                position: c.position,
+                facing: c.facing,
+                faerie: faerie.map(|f| f.0),
+                hero,
+                sample: add(c.position, [0.0, 0.75 * height, 0.0]),
+                clip: (clip.action, clip.progress >= 0.99),
+                frame_bits: c.anim.frame_bits(),
+                level2,
+            };
+            let Some(q) = c.fyora.as_mut() else { continue };
+            let before = q.state;
+            let act = q.tick(&v, &mut self.duel, &self.duel_words, &mut self.rng);
+            let after = q.state;
+            if let Some(n) = act.anim {
+                if clip.action != n || (clip.progress >= 0.99 && before != after) {
+                    c.anim.play(n);
+                }
+            }
+            if let Some(f) = act.face {
+                c.facing = f;
+            }
+            if before != after {
+                self.last_boss = format!("Queen Fyora state {before} -> {after} (slots {:?}) on tick {}", self.duel.iter().map(|s| s.map(|s| s.ty)).collect::<Vec<_>>(), self.ticks);
+            }
+            let table = self.effect_table.clone();
+            for &(fx, at) in &act.effects {
+                self.effects.one_shot(&table, fx, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            for &damage in &act.events.hero_damage {
+                self.hero_hit(damage as f32, 0.0, false, hf, "a deflected orb".into());
+            }
+            if let (true, Some((_, key, slot))) = (act.events.summon, faerie) {
+                if let Some(s) = self.summon(pack, Some(slot), key as i16, hero, hf, None, false) {
+                    self.duel_summons.push(s);
+                }
             }
         }
     }

@@ -25,6 +25,7 @@ pub mod hero;
 pub mod hud;
 pub mod inventory;
 pub mod items;
+pub mod fyora;
 pub mod gnarfas;
 pub mod juppie;
 pub mod sisters;

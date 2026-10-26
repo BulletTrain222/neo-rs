@@ -91,6 +91,7 @@ pub struct Slot {
 /// What she sees this tick.
 pub struct View<'a> {
     pub position: Vec3,
+    pub facing: Vec3,
     pub hero: Vec3,
     pub hero_facing: Vec3,
     /// The hero's guard query; its slot-1 attack kind.
@@ -143,6 +144,8 @@ pub struct Act {
     pub impacts: Vec<(i32, Vec3)>,
     /// The cast glow started (kind) or stopped.
     pub glow: Option<Option<u8>>,
+    /// Turn toward a point at a weight (loop B's turn toward Queen Fyora).
+    pub turn_to: Option<(Vec3, f32)>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -162,6 +165,10 @@ pub struct Faerie {
     fired: bool,
     pub slots: [Option<Slot>; 4],
     countdown: i32,
+    /// Loop B: the state, the cooldown and the once flag.
+    pub b_state: u8,
+    b_cool: i32,
+    b_flag: bool,
 }
 
 fn sub(a: Vec3, b: Vec3) -> Vec3 {
@@ -201,7 +208,7 @@ pub fn shove(from: Vec3, hero: Vec3, radii: f32, speed: f32) -> Push {
 
 impl Default for Faerie {
     fn default() -> Self {
-        Self { code: 0, first: true, step: 0, timer: 0, cooldown: 0, kind: 1, absorbs: 0, hold: 0, stuns: 0, hold_flag: false, flinch: false, flinching: false, fired: false, slots: [None; 4], countdown: 0 }
+        Self { code: 0, first: true, step: 0, timer: 0, cooldown: 0, kind: 1, absorbs: 0, hold: 0, stuns: 0, hold_flag: false, flinch: false, flinching: false, fired: false, slots: [None; 4], countdown: 0, b_state: 0, b_cool: 0, b_flag: false }
     }
 }
 
@@ -231,6 +238,83 @@ impl Faerie {
             // Loop B (the duel with Queen Fyora) is not built: she holds animation 0.
             Act { anim: Some(0), ..Act::default() }
         }
+    }
+
+    /// Loop B (game state 364 and level state 18 clear: the duel with Queen Fyora, SPEC-0029
+    /// Behavior 7) once a class-38 partner exists: the chooser (the cooldown; a type-1 orb within
+    /// 1.5 of her: the deflect; the hero within the knockback range: the knockback; from states 0
+    /// and 2 with no type-0 orb and the cooldown done: the summon cast when the summon test passes
+    /// (level state 2 clear, one in four, none of her summons alive), else the cast at Fyora), the
+    /// turn toward Fyora with blend 1.0 (toward the hero at 0.25 in state 5), and the states: idle
+    /// (6), the deflect (10; the first type-1 orb becomes type 3 with effect 4008), the cast (7; a
+    /// type-0 orb at the event; cooldown 30 to 45), the knockback (9; loop A's lanes without the
+    /// push-out at the loop B speed) and the summon cast (7; a type-2 orb; cooldown 120 to 240).
+    #[allow(clippy::too_many_arguments)]
+    pub fn loop_b(&mut self, v: &View, w: &Words, partner: Option<Vec3>, slots: &mut crate::fyora::Slots, summons_alive: bool, rng: &mut Rng) -> Act {
+        use crate::fyora;
+        let mut a = Act::default();
+        let Some(fy) = partner else { return a };
+        if self.b_cool > 0 {
+            self.b_cool -= 1;
+        }
+        let d = (v.hero[0] - v.position[0]).hypot(v.hero[2] - v.position[2]);
+        if fyora::near(slots, 1, v.position) {
+            self.b_state = 2;
+            self.b_flag = false;
+        } else if d < w.b_range {
+            self.b_state = 4;
+            self.b_flag = false;
+        } else if matches!(self.b_state, 0 | 2) && !fyora::active(slots, 0) && self.b_cool < 1 {
+            let summon = !(v.level)(2) && rng.index(4) == 0 && !summons_alive;
+            self.b_state = if summon { 5 } else { 3 };
+            self.b_flag = false;
+        }
+        if self.b_state == 5 {
+            a.face = Some(0.25);
+        } else {
+            a.turn_to = Some((fy, 1.0));
+        }
+        let current = |n: u32| v.clip.0 == n;
+        match self.b_state {
+            2 => {
+                a.anim = Some(10);
+                if current(10) && !v.clip.1 && !self.b_flag {
+                    self.b_flag = true;
+                    if let Some(p) = fyora::deflect(slots, 1, v.facing, rng) {
+                        a.impacts.push((4008, p));
+                    }
+                }
+                if current(10) && v.clip.1 && self.b_flag {
+                    self.b_state = 0;
+                }
+            }
+            3 | 5 => {
+                a.anim = Some(7);
+                if current(7) && v.frame_bits != 0 && !self.b_flag {
+                    self.b_flag = true;
+                    fyora::open(slots, if self.b_state == 3 { 0 } else { 2 }, v.mouth);
+                }
+                if current(7) && v.clip.1 && self.b_flag {
+                    self.b_cool = if self.b_state == 3 { rng.range(30, 45) } else { rng.range(120, 240) };
+                    self.b_state = 0;
+                }
+            }
+            4 => {
+                a.anim = Some(9);
+                if current(9) && !self.b_flag {
+                    self.b_flag = true;
+                    let mut p = shove(v.position, v.hero, 0.0, w.b_speed);
+                    p.offset = [0.0; 3];
+                    p.state = 48;
+                    a.push = Some(p);
+                }
+                if current(9) && v.clip.1 {
+                    self.b_state = 0;
+                }
+            }
+            _ => a.anim = Some(6),
+        }
+        a
     }
 
     fn loop_a(&mut self, v: &View, w: &Words) -> Act {
@@ -452,11 +536,12 @@ impl Faerie {
         for slot in &mut self.slots {
             let Some(s) = slot.as_mut() else { continue };
             let target = if s.ty == 2 { body } else { aim };
-            s.position = toward(s.position, target, w.speed);
+            // The gates use the separation before the step, strictly below (SPEC-0029 Behavior 19).
             let gap = len(sub(target, s.position));
+            s.position = toward(s.position, target, w.speed);
             let impact = KIND_EFFECTS[s.kind.min(6) as usize].1;
             match s.ty {
-                0 if gap <= 1.5 => {
+                0 if gap < 1.5 => {
                     let to = sub(s.position, v.hero);
                     let h = (to[0] * to[0] + to[2] * to[2]).sqrt().max(1e-6);
                     let faces = (v.hero_facing[0] * to[0] + v.hero_facing[2] * to[2]) / h > 0.5;
@@ -468,12 +553,12 @@ impl Faerie {
                         *slot = None;
                     }
                 }
-                1 if gap <= 2.0 => {
+                1 if gap < 2.0 => {
                     a.summons.push((false, s.position));
                     a.impacts.push((impact, s.position));
                     *slot = None;
                 }
-                2 if gap <= 1.5 => {
+                2 if gap < 1.5 => {
                     a.impacts.push((impact, s.position));
                     *slot = None;
                     stun = true;
@@ -507,6 +592,7 @@ mod tests {
     fn view<'a>(level: &'a dyn Fn(u16) -> bool, shots: &'a [(Vec3, f32)], d: f32) -> View<'a> {
         View {
             position: [0.0, 10.0, 0.0],
+            facing: [0.0, 0.0, 1.0],
             hero: [0.0, 0.0, d],
             hero_facing: [0.0, 0.0, -1.0],
             hero_guard: false,
@@ -580,13 +666,13 @@ mod tests {
         // An unblocked orb hits once for 10 at 1.5.
         let mut f = Faerie::default();
         f.cooldown = 1000;
-        f.slots[0] = Some(Slot { ty: 0, kind: 3, position: [0.0, 1.75, 30.0 - 2.0] });
+        f.slots[0] = Some(Slot { ty: 0, kind: 3, position: [0.0, 1.75, 30.0 - 1.4] });
         let a = f.tick(&view(&no, &[], 30.0), &w, &mut rng);
         assert_eq!((a.hero_damage.clone(), f.slots[0]), (vec![10], None));
         // A hero facing it with the matching kind (or 7) reflects it; its arrival stuns for 180.
         let mut f = Faerie::default();
         f.cooldown = 1000;
-        f.slots[0] = Some(Slot { ty: 0, kind: 3, position: [0.0, 1.75, 30.0 - 2.0] });
+        f.slots[0] = Some(Slot { ty: 0, kind: 3, position: [0.0, 1.75, 30.0 - 1.4] });
         let mut v = view(&no, &[], 30.0);
         v.hero_kind = 7;
         f.tick(&v, &w, &mut rng);
@@ -599,7 +685,9 @@ mod tests {
         // The aimed bolt detonates at 2.0 into a summon.
         let mut f = Faerie::default();
         f.cooldown = 1000;
-        f.slots[1] = Some(Slot { ty: 1, kind: 0, position: [0.0, 1.75, 30.0 - 2.5] });
+        // Pre-step separation 2.0 fails the strict gate, moves to 1.25, then passes.
+        f.slots[1] = Some(Slot { ty: 1, kind: 0, position: [0.0, 1.75, 30.0 - 2.0] });
+        assert!(f.tick(&view(&no, &[], 30.0), &w, &mut rng).summons.is_empty());
         let a = f.tick(&view(&no, &[], 30.0), &w, &mut rng);
         assert_eq!(a.summons.len(), 1);
         assert!(!a.summons[0].0);
@@ -663,6 +751,50 @@ mod tests {
         assert_eq!(f.code, 8);
         let a = f.tick(&view(&no, &[], 30.0), &w, &mut rng);
         assert!((a.height.unwrap() - 9.95).abs() < 1e-5);
+    }
+
+    #[test]
+    fn loop_b_duel() {
+        let w = words();
+        let mut rng = Rng::seeded(5);
+        let no = |_: u16| false;
+        let mut slots: crate::fyora::Slots = [None; 4];
+        let mut f = Faerie::default();
+        let mut v = view(&no, &[], 40.0);
+        v.progress = false;
+        // Waiting for the class-38 partner: nothing.
+        assert_eq!(f.loop_b(&v, &w, None, &mut slots, false, &mut rng), Act::default());
+        // A cast (3) or a summon cast (5) at once; she turns toward Fyora unless summoning.
+        let fy = [0.0, 10.0, 20.0];
+        let a = f.loop_b(&v, &w, Some(fy), &mut slots, false, &mut rng);
+        assert!(matches!(f.b_state, 3 | 5));
+        assert_eq!(a.turn_to.is_some(), f.b_state == 3);
+        // With a summon alive she always casts at Fyora; its event opens a type-0 orb.
+        let mut f = Faerie::default();
+        f.loop_b(&v, &w, Some(fy), &mut slots, true, &mut rng);
+        assert_eq!(f.b_state, 3);
+        v.clip = (7, false);
+        v.frame_bits = 0x20;
+        f.loop_b(&v, &w, Some(fy), &mut slots, true, &mut rng);
+        assert!(crate::fyora::active(&slots, 0));
+        v.clip = (7, true);
+        v.frame_bits = 0;
+        f.loop_b(&v, &w, Some(fy), &mut slots, true, &mut rng);
+        assert_eq!(f.b_state, 0);
+        // A type-1 orb within 1.5: the deflect makes it type 3.
+        let mut slots: crate::fyora::Slots = [None; 4];
+        crate::fyora::open(&mut slots, 1, [1.0, 10.0, 0.0]);
+        let mut f = Faerie::default();
+        v.clip = (10, false);
+        let a = f.loop_b(&v, &w, Some(fy), &mut slots, true, &mut rng);
+        assert_eq!((f.b_state, slots[0].map(|s| s.ty), a.impacts.len()), (2, Some(3), 1));
+        // The hero within 15: the knockback at 10.0, state 48, no push-out.
+        let mut f = Faerie::default();
+        let mut v = view(&no, &[], 5.0);
+        v.progress = false;
+        v.clip = (9, false);
+        let p = f.loop_b(&v, &w, Some(fy), &mut [None; 4], false, &mut rng).push.unwrap();
+        assert!((len(p.velocity) - 10.0).abs() < 1e-4 && p.state == 48 && p.offset == [0.0; 3]);
     }
 
     #[test]
