@@ -1570,6 +1570,40 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0044 893 Init: 46; triggers 4, 1, 5, 2 and 3; the main slot thread (193 clear: set 8;
+        // 524 set, 525 clear, item 77 not held: 11; 524 and 525 set, 526 clear: 6; then with 47
+        // clear 9 or 10 by 490, 491 and 64, and with 494 set and 495 clear set 4 and the boss
+        // check; with 47 set 7; region 894 + set). Slots: 0 for sets 8, 4 and 7, 1 for 6, 2 for
+        // the exchange's 1 to 3, 3 for 9 and 10, 4 for 11 (which words hold 9 to 11 is open).
+        893 => {
+            state.set(46, true);
+            let f = |n| state.flag(n);
+            let load = |slot: u8, set: u32| Action::LoadRegion { slot, region: Some(894 + set) };
+            let mut v = vec![reg(4, 4), reg(1, 1), reg(5, 5), reg(2, 2), reg(3, 2)];
+            if !f(193) {
+                v.push(load(0, 8));
+            }
+            if f(524) && !f(525) && !state.has_item(77) {
+                v.push(load(4, 11));
+            }
+            if f(524) && f(525) && !f(526) {
+                v.push(load(1, 6));
+            }
+            let mut boss = false;
+            if !f(47) {
+                v.push(load(3, if f(490) && !f(491) && !f(64) { 9 } else { 10 }));
+                if f(494) && !f(495) {
+                    v.push(load(0, 4));
+                    boss = true;
+                }
+            } else {
+                v.push(load(0, 7));
+            }
+            if boss {
+                state.set_word(pack, 1, 1);
+            }
+            v
+        }
         // SPEC-0043 1122 Init: trigger 5 (the waves); objects by 31 and 320; the slot thread (31:
         // set 0, 30: 1, else 2; region 1123 + set) into slot 0; with 31 trigger 6 (the arena
         // entry). Triggers 0 to 3 (ActivateTransitionAssets, RegisterTransitionMap) and the
@@ -2985,6 +3019,93 @@ fn thread3_956(s: &GameState) -> Vec<Action> {
         _ => 7,
     };
     vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(957 + set) }]
+}
+
+/// SPEC-0044 893's score S: flags 731, 726, 727, 728, 729 and 730 as bits 0 to 5.
+const SCORE_893: [u16; 6] = [731, 726, 727, 728, 729, 730];
+
+fn score_893(s: &GameState) -> u32 {
+    SCORE_893.iter().enumerate().filter(|&(_, &f)| s.flag(f)).map(|(i, _)| 1 << i).sum()
+}
+
+/// Adding n: below 40, S becomes min(S + n, 40) and the six flags are rewritten.
+fn add_score_893(s: &mut GameState, n: u32) {
+    let v = score_893(s);
+    if v >= 40 {
+        return;
+    }
+    let v = (v + n).min(40);
+    for (i, &f) in SCORE_893.iter().enumerate() {
+        s.set(f, v & (1 << i) != 0);
+    }
+}
+
+/// SPEC-0044 893's proximity routines: 59 (the item 8 exchange), 41 and 58.
+fn talk_893(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let talk = |lines: &[u16]| lines.iter().map(|&line| Action::Talk { line }).collect::<Vec<_>>();
+    match routine {
+        59 if s.flag(588) && !s.flag(589) => {
+            s.take(86, 1);
+            s.set(589, true);
+            talk(&[5])
+        }
+        59 if s.flag(389) && s.has_item(8) => {
+            let n = s.items.get(&8).copied().unwrap_or(0);
+            add_score_893(s, n);
+            s.remove_all(8);
+            let v = score_893(s);
+            let exchange = |s: &GameState| {
+                let set = match (s.flag(394), s.flag(395)) {
+                    (false, false) => Some(1),
+                    (true, false) => Some(2),
+                    (true, true) => Some(3),
+                    (false, true) => None,
+                };
+                let mut v = vec![Action::LoadRegion { slot: 2, region: None }];
+                v.extend(set.map(|j| Action::LoadRegion { slot: 2, region: Some(894 + j) }));
+                v
+            };
+            let mut out;
+            if v >= 40 {
+                s.set(395, true);
+                out = talk(&[6, 15]);
+                out.extend(exchange(s));
+            } else if v >= 25 {
+                s.set(394, true);
+                out = talk(&[7, 14]);
+                out.extend(exchange(s));
+            } else if v >= 15 {
+                s.set(392, true);
+                out = talk(&[8, 12]);
+                out.push(Action::GiveItem { item: 138, count: 2 * n });
+            } else if v >= 10 {
+                s.set(391, true);
+                out = talk(&[9, 13]);
+                out.push(Action::GiveItem { item: 139, count: n });
+            } else {
+                s.set(390, true);
+                out = talk(&[10, 11]);
+                out.push(Action::GiveItem { item: 139, count: n });
+            }
+            out
+        }
+        59 if s.flag(394) || s.flag(395) => cycle_in(s, 893, 59, 1, &[16, 17, 18]),
+        59 if s.flag(392) => talk(&[24]),
+        59 if s.flag(389) => cycle_in(s, 893, 59, 2, &[19, 20, 21]),
+        59 => {
+            s.set(389, true);
+            talk(&[22])
+        }
+        41 if !s.flag(526) => {
+            s.set(526, true);
+            let mut v = talk(&[1, 0]);
+            v.extend([Action::FadeOut { seconds: FADE, wait: true }, Action::LoadRegion { slot: 1, region: None }, Action::FadeIn { seconds: FADE, wait: true }]);
+            v
+        }
+        58 if s.flag(150) => cycle_in(s, 893, 58, 1, &[65, 66, 67]),
+        58 => cycle_in(s, 893, 58, 2, &[62, 63, 64]),
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC-0045 777's library records: the book flag, the record's objects and its extra object.
@@ -4963,6 +5084,30 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0044 893 trigger 4 (the boss area): line 3 on the first entry with 494 set and 495
+        // clear; the area word (2) is 1 while the hero is inside.
+        (893, 4) if call.object => {
+            let inside = matches!(call.state, 1 | 2);
+            state.set_word(pack, 2, inside as i32);
+            if call.state == 1 && state.flag(494) && !state.flag(495) && state.word(pack, 3) == 0 {
+                state.set_word(pack, 3, 1);
+                out.actions.push(Action::Message { line: 3 });
+            }
+        }
+        // Trigger 5 (193 clear, entering, the hero not occupied): line 59.
+        (893, 5) if call.object && call.state == 1 && !state.flag(193) && !state.hero.occupied => out.actions.push(Action::Message { line: 59 }),
+        // Triggers 2 and 3 (the button): line 60 or 61.
+        (893, 2) if call.object && call.square && !state.talking => out.actions.push(Action::Message { line: 58 + call.index }),
+        // Trigger 1 (the button): line 58 while 405 is clear; else value 10 for eW 65 and the load
+        // of eW 66 (pack 906).
+        (893, 1) if call.object && call.square && !state.talking => {
+            if state.flag(405) {
+                state.blackboard.insert((2, 65), 10);
+                out.actions.push(Action::ReplaceExterior { slot: 66, plane: -1 });
+            } else {
+                out.actions.push(Action::Message { line: 58 });
             }
         }
         // SPEC-0043 1122 trigger 5 (entering, 320 clear, once per load): the opening (cameras 4
@@ -7445,6 +7590,20 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0044 893 Update: the item-70 watcher (490 set, 491 and 64 clear, five held: 491) and
+        // the boss check (armed: AI 39 below 50 hit points while the hero is in trigger 4's area:
+        // entities 36 to 38 off, camera 4, 495, line 4, slot 0 emptied).
+        893 => {
+            if state.flag(490) && !state.flag(491) && !state.flag(64) && state.items.get(&70).is_some_and(|&n| n >= 5) {
+                state.set(491, true);
+            }
+            if state.word(pack, 1) == 1 && state.word(pack, 2) == 1 && state.entity_hp.get(&39).is_some_and(|&hp| hp < 50) {
+                state.set_word(pack, 1, 2);
+                state.set(495, true);
+                out.extend((36..=38).map(|entity| Action::DeactivateEntity { entity }));
+                out.extend([Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }, Action::Message { line: 4 }, Action::LoadRegion { slot: 0, region: None }, Action::ReturnCamera { preset: -1, release: true }]);
+            }
+        }
         // SPEC-0043 1122 Update: the waves (word 2: 1 to 3) advance once every character of slot
         // 1 is dead (3 s, the next set: 4 then 5, their AIs aggressive), and after the third the
         // end (320, the hero to locator 24, the objects back). With 31 and 320 the arena thread:
@@ -8434,6 +8593,11 @@ pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
     if (pack, item) == (1238, 83) && !state.flag(579) {
         state.set(579, true);
     }
+    // SPEC-0044 893: item 77 sets 525 and loads set 6 (region 900) into slot 1.
+    if (pack, item) == (893, 77) {
+        state.set(525, true);
+        return vec![Action::LoadRegion { slot: 1, region: Some(900) }];
+    }
     // SPEC-0037 906 pickup P: item 24 sets flag 406.
     if (pack, item) == (906, 24) {
         state.set(406, true);
@@ -8560,6 +8724,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
+        }
+        // SPEC-0044 893 arrival: the value for eW 65 is read and reset.
+        893 => {
+            state.take_message(2, 65);
+            Vec::new()
         }
         // SPEC-0043 1122 activate-world (registered with 31): level state 4.
         1122 if state.flag(31) => {
@@ -10561,6 +10730,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0044 893: entities 59 (the exchange), 41 and 58.
+        (893, 59 | 41 | 58) => Some(entity as u8),
         // SPEC-0043 1122: entities 10, 7, 8 and 9.
         (1122, 7..=10) => Some(entity as u8),
         // SPEC-0045 777: routines 1 to 9.
@@ -10700,6 +10871,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 777 {
         return talk_777(routine, state);
+    }
+    if pack == 893 {
+        return talk_893(routine, state);
     }
     // SPEC-0043 1122: entity 10 by flags 29, 28 and 27 (lines 1 to 10); entities 7, 8 and 9 by
     // 29, 28 and 24 (blocks from 11, 21 and 31): three lines, one, three, else three.
@@ -11661,6 +11835,34 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_893_exchange() {
+        let mut s = GameState::default();
+        on_init(893, &mut s);
+        assert!(s.flag(46));
+        // The first talk sets 389 (line 22); then 12 of item 8: S 12, lines 9 and 13, item 139 x12.
+        assert_eq!(on_talk(893, 59, &mut s), vec![Action::Talk { line: 22 }]);
+        s.give(8, 12);
+        let out = on_talk(893, 59, &mut s);
+        assert!(out.contains(&Action::Talk { line: 9 }) && out.contains(&Action::GiveItem { item: 139, count: 12 }));
+        assert_eq!(score_893(&s), 12);
+        assert!(!s.flag(731) && s.flag(727) && s.flag(728) && !s.has_item(8));
+        // 30 more: S capped at 40 and 395 set; with 394 clear the exchange thread only empties
+        // its slot (the spec's jump straight to 40).
+        s.give(8, 30);
+        let out = on_talk(893, 59, &mut s);
+        assert!(out.contains(&Action::Talk { line: 15 }) && out.contains(&Action::LoadRegion { slot: 2, region: None }));
+        assert!(!out.iter().any(|a| matches!(a, Action::LoadRegion { slot: 2, region: Some(_) })));
+        assert_eq!(score_893(&s), 40);
+        assert!(s.flag(395));
+        // Then lines 16, 17, 18 in turn.
+        assert_eq!(on_talk(893, 59, &mut s), vec![Action::Talk { line: 16 }]);
+        // Trigger 1 with 405 set loads eW 66.
+        s.set(405, true);
+        let press = TriggerCall { index: 1, state: 1, object: true, square: true };
+        assert_eq!(on_trigger(893, 1, press, &mut s).actions, vec![Action::ReplaceExterior { slot: 66, plane: -1 }]);
     }
 
     #[test]
