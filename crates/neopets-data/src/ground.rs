@@ -33,6 +33,15 @@ pub enum CellOrder {
     ZMajor,
 }
 
+/// One outline record of the candidate list test (SPEC-0018 Ground probe step 3): the z-span
+/// gate (origin z, scalar), then exactly one of Q . R > 0 (Q = (x, 0, z, 1); R given as its x,
+/// z and w lanes) and R.x > 0.
+fn outline_record_counts(x: f32, z: f32, oz: f32, scalar: f32, r: [f32; 3]) -> bool {
+    let dz = z - oz;
+    let span = if oz < z { dz < scalar } else { dz >= scalar };
+    span && ((x * r[0] + z * r[1] + r[2] > 0.0) != (r[0] > 0.0))
+}
+
 /// One type-5 height patch.
 #[derive(Clone, Copy, Debug)]
 struct Patch {
@@ -209,6 +218,11 @@ impl Ground {
                 continue;
             };
             let Some(Some(p)) = self.patches.get(index as usize) else { continue };
+            // SPEC-0018 Ground probe step 3: with two or more entries in the cell, the patch must
+            // pass its outline list test.
+            if count >= 2 && !self.list_test(p, x, z) {
+                continue;
+            }
             let Some((h, n)) = self.sample(p, x, z) else { continue };
             sampled = true;
             let hit = ProbeHit {
@@ -231,6 +245,32 @@ impl Ground {
             (true, true) => best,
             (true, false) => rejected.unwrap_or(none(MISS)),
         }
+    }
+
+    /// The candidate list test (SPEC-0018 Ground probe step 3): of the entry's C outline records
+    /// (0x70 bytes at entry +0x54, count at +0x50), count those that pass the z-span gate (origin
+    /// z at +0x08, scalar at +0x68: with origin z < z the record qualifies when z - origin z is
+    /// below the scalar, otherwise when it is at least the scalar) and for which exactly one of
+    /// Q . R > 0 and R.x > 0 holds (Q = (x, 0, z, 1), R the row at +0x10). The patch passes on
+    /// an odd count or an empty list.
+    fn list_test(&self, p: &Patch, x: f32, z: f32) -> bool {
+        let set = &self.set;
+        let n = i32_at(set, p.at + 0x50).unwrap_or(0);
+        if n <= 0 {
+            return true;
+        }
+        let base = p.at + u32_at(set, p.at + 0x54).unwrap_or(0) as usize;
+        let f = |o: usize| u32_at(set, o).map(f32::from_bits);
+        let mut hits = 0;
+        for k in 0..(n as usize).min(4096) {
+            let r = base + 0x70 * k;
+            let (Some(oz), Some(scalar), Some(rx), Some(ry), Some(rz), Some(rw)) = (f(r + 0x08), f(r + 0x68), f(r + 0x10), f(r + 0x14), f(r + 0x18), f(r + 0x1C)) else { break };
+            let _ = ry;
+            if outline_record_counts(x, z, oz, scalar, [rx, rz, rw]) {
+                hits += 1;
+            }
+        }
+        hits % 2 == 1
     }
 
     /// The exit value of the cell under (x, z): the low 16 bits of the word at cell record
@@ -296,6 +336,19 @@ pub fn navmesh_vertices(bytes: &[u8], top: &[Chunk]) -> Vec<[f32; 3]> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn outline_record_rule() {
+        // R = (1, 0, -5, w 0) here as (x 1, z 0, w -5): Q . R = x - 5. A point at x 3 gives -2
+        // (not positive) with R.x positive: exactly one holds, so it counts; at x 7 both hold.
+        assert!(outline_record_counts(3.0, 0.0, -1.0, 10.0, [1.0, 0.0, -5.0]));
+        assert!(!outline_record_counts(7.0, 0.0, -1.0, 10.0, [1.0, 0.0, -5.0]));
+        // The z-span gate: origin z below z needs z - oz under the scalar; else at least it.
+        assert!(!outline_record_counts(3.0, 20.0, -1.0, 10.0, [1.0, 0.0, -5.0]));
+        assert!(outline_record_counts(3.0, 0.0, 5.0, -10.0, [1.0, 0.0, -5.0]));
+        assert!(!outline_record_counts(3.0, 0.0, 5.0, 0.0, [1.0, 0.0, -5.0]));
+    }
+
     use super::*;
 
     fn put(b: &mut Vec<u8>, at: usize, v: &[u8]) {

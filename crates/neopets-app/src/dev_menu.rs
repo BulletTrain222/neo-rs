@@ -167,8 +167,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             toggle_free(&mut dev);
             if let Some(fc) = dev.free.as_mut() {
                 let f = fc.forward();
-                fc.pos += -f * 25.0 + Vec3::Y * 15.0;
-                fc.pitch -= 0.35;
+                // "freehigh" backs much further away and looks down more, for overviews.
+                let (back, up, tilt) = if v.contains("freehigh") { (90.0, 70.0, 0.6) } else { (25.0, 15.0, 0.35) };
+                fc.pos += -f * back + Vec3::Y * up;
+                fc.pitch -= tilt;
             }
         }
     }
