@@ -157,6 +157,7 @@ pub fn sync_menu(
     state: Option<Res<PlayState>>,
     menu: Option<Res<Menu>>,
     art: Option<Res<HudArt>>,
+    display: Option<Res<crate::display::DisplaySettings>>,
     mut archive: Option<ResMut<crate::Archive>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
@@ -177,6 +178,8 @@ pub fn sync_menu(
     draws.extend(menus::map_draws(&art.f, flow));
     draws.extend(menus::journal_draws(&art.f, flow));
     draws.extend(menus::book_draws(&art.f, flow));
+    let rows = display.map(|d| d.rows().to_vec()).unwrap_or_default();
+    draws.extend(menus::display_draws(&art.f, flow, &rows));
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {
         commands.spawn((

@@ -2,6 +2,7 @@ mod archive_view;
 mod character;
 mod controls;
 mod dev_menu;
+mod display;
 mod perf;
 mod effect_view;
 mod foliage_view;
@@ -823,7 +824,10 @@ fn main() {
         }))
         .init_resource::<dev_menu::DevMenu>()
         .init_resource::<perf::PerfOverlay>()
-        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, perf::spawn_panel))
+        .insert_resource(display::DisplaySettings::load())
+        .init_resource::<display::SceneTarget>()
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, perf::spawn_panel, display::setup))
+        .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
             Update,
@@ -1343,13 +1347,14 @@ fn step_sim(
                     play.play.books.cursor = v;
                 }
             }
-            // NEOPETS_TRACE_PAGE="map@n" or "journal@n": View Map or View Quests on play tick n
+            // NEOPETS_TRACE_PAGE="map@n", "journal@n" or "options@n": View Map, View Quests or
+            // the Options page on play tick n
             // (diagnostic, for a screenshot).
             if let Some((page, k)) = std::env::var("NEOPETS_TRACE_PAGE").ok().and_then(|v| v.split_once('@').map(|(a, b)| (a.to_string(), b.trim().parse::<u64>().ok()))) {
                 if k == Some(play.play.ticks) {
                     if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                         m.flow.map_view = play.play.map_view();
-                        m.flow.trace_open(&a.f, page == "journal");
+                        m.flow.trace_open(&a.f, &page);
                     }
                 }
             }

@@ -32,6 +32,10 @@ pub const LOGO: usize = 30;
 pub const LOAD: usize = 17;
 /// The credits roll (record 14, state 18) and the Options page (record 11).
 pub const CREDITS: usize = 14;
+pub const OPTIONS: usize = 11;
+/// The Display page: no disc record; this build's display settings, opened from a "Display"
+/// row added under the Options page's items.
+pub const DISPLAY: usize = 1000;
 pub const SAVE: usize = 18;
 /// The item screen's tabs for Tor: records 6, 7 and 8 (states 8, 9 and 10; codes 0x78, 0x8C,
 /// 0xA0), whose page pictures show Tor; Roberta's are records 3 to 5 (codes 0x3C, 0x50, 0x64).
@@ -305,6 +309,10 @@ pub struct Flow {
     pub quest_cursor: usize,
     pub grid_ids: [i32; 20],
     pub view: ItemView,
+    /// The Display page (this build's display settings, not a disc page): its focused row, and
+    /// the (row, step) changes for the host to apply.
+    pub display_focus: usize,
+    pub display_requests: Vec<(usize, i32)>,
 }
 
 /// What the predicates read: the pass count, the option words of slots 66 to 68 (Vibration,
@@ -362,7 +370,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12) };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), display_focus: 0, display_requests: Vec::new() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -562,14 +570,62 @@ impl Flow {
     }
 
     /// Diagnostic: open the map of the hero map area (View Map) or the journal (View Quests).
-    pub fn trace_open(&mut self, fe: &Frontend, journal: bool) {
+    pub fn trace_open(&mut self, fe: &Frontend, page: &str) {
         let ctx = Ctx::default();
-        if journal {
+        if page == "options" {
+            self.enter(fe, OPTIONS, &ctx);
+        } else if page == "display" {
+            self.enter(fe, OPTIONS, &ctx);
+            self.open_display();
+        } else if page == "journal" {
             self.map.area = self.map_view.hero_area;
             self.enter(fe, JOURNAL, &ctx);
         } else if let Some(r) = self.open_map(self.map_view.hero_area) {
             self.enter(fe, r, &ctx);
         }
+    }
+
+    /// Open the Display page from the Options page's Display row.
+    fn open_display(&mut self) {
+        self.came_from = Some(self.current);
+        if self.stack.len() < 32 {
+            self.stack.push(DISPLAY);
+        }
+        self.current = DISPLAY;
+        self.pass = 0;
+        self.display_focus = 0;
+    }
+
+    /// One pass of the Display page: Up and Down move between the rows, Left and Right (or
+    /// Cross, as Right) change the focused row, Triangle returns to the Options page's Display
+    /// row. Changes are silent, as the option rows' are (SPEC-0035 Behavior 3).
+    fn display_tick(&mut self, fe: &Frontend, edge: u16, ctx: &Ctx) {
+        let n = crate::display::ROWS;
+        if self.pass >= 2 {
+            if edge & TRIANGLE != 0 {
+                self.sounds.push(0x99);
+                if self.stack.last() == Some(&DISPLAY) {
+                    self.stack.pop();
+                }
+                self.current = OPTIONS;
+                self.pass = 0;
+                self.default_focus(fe, ctx);
+                self.focus = items(fe, OPTIONS).len();
+                return;
+            }
+            if edge & DOWN != 0 {
+                self.display_focus = (self.display_focus + 1) % n;
+                self.sounds.push(0x9A);
+            } else if edge & UP != 0 {
+                self.display_focus = (self.display_focus + n - 1) % n;
+                self.sounds.push(0x9A);
+            } else if edge & LEFT != 0 {
+                self.display_requests.push((self.display_focus, -1));
+            } else if edge & (RIGHT | CROSS) != 0 {
+                self.display_requests.push((self.display_focus, 1));
+            }
+        }
+        self.pass = (self.pass + 1).min(9999);
     }
 
     /// Open the pause page's quit box (record 26 of the system message table).
@@ -717,6 +773,10 @@ impl Flow {
         // The page driver runs on every pass while a book is loaded, whatever the screen.
         if let Some(b) = self.book.as_mut() {
             b.timer.tick();
+        }
+        if self.current == DISPLAY {
+            self.display_tick(fe, edge, ctx);
+            return command;
         }
         let state = fe.screens.get(self.current).map_or(0xFFFF, |s| s.state);
         // The screen state; 0 lets the generic step run, -4 keeps only the focus moves.
@@ -1065,8 +1125,35 @@ impl Flow {
         }
         // The focused item: refocus to the first passing item when it fails; its focus state.
         let list = items(fe, self.current);
-        if list.get(self.focus).is_none_or(|&i| !item_ok(fe, i, self.current, ctx, self)) {
+        // The Options page's added Display row sits after its items (index = item count).
+        let on_display_row = self.current == OPTIONS && self.focus == list.len();
+        if !on_display_row && list.get(self.focus).is_none_or(|&i| !item_ok(fe, i, self.current, ctx, self)) {
             self.focus = list.iter().position(|&i| item_ok(fe, i, self.current, ctx, self)).unwrap_or(0);
+        }
+        // Moves into, out of and on the Display row (this build).
+        let mut moved = false;
+        if result.is_none() && generic && self.pass >= 2 && self.current == OPTIONS {
+            let passing: Vec<usize> = (0..list.len()).filter(|&k| item_ok(fe, list[k], self.current, ctx, self)).collect();
+            let (first, last) = (passing.first().copied(), passing.last().copied());
+            if on_display_row {
+                if edge & CROSS != 0 {
+                    self.sounds.push(0x98);
+                    self.open_display();
+                    return command;
+                } else if edge & DOWN != 0 {
+                    self.focus = first.unwrap_or(0);
+                    moved = true;
+                } else if edge & UP != 0 {
+                    self.focus = last.unwrap_or(0);
+                    moved = true;
+                }
+            } else if (edge & DOWN != 0 && Some(self.focus) == last) || (edge & UP != 0 && Some(self.focus) == first) {
+                self.focus = list.len();
+                moved = true;
+            }
+            if moved {
+                self.sounds.push(0x9A);
+            }
         }
         if result.is_none() {
             let focus_state = list.get(self.focus).and_then(|i| fe.targets.get(i)).map_or(-1, |t| t.state);
@@ -1146,7 +1233,7 @@ impl Flow {
                     self.back(fe, ctx);
                     return command;
                 }
-            } else if page_of(fe, self.current).is_some_and(|p| p.list) && edge & (DOWN | UP) != 0 {
+            } else if !moved && page_of(fe, self.current).is_some_and(|p| p.list) && edge & (DOWN | UP) != 0 {
                 let passing: Vec<usize> = (0..list.len()).filter(|&k| item_ok(fe, list[k], self.current, ctx, self)).collect();
                 if let Some(at) = passing.iter().position(|&k| k == self.focus) {
                     self.sounds.push(0x9A);
@@ -1302,6 +1389,73 @@ pub fn draw_list(fe: &Frontend, record: usize, focus: usize, pc: Pc) -> Vec<Draw
     let Some(root) = fe.screens.get(record).and_then(|s| s.node) else { return out };
     let mut counter = 0usize;
     draw_node(fe, root, (0.0, 0.0, 1.0, 1.0), false, focus, pc, &mut counter, &mut out);
+    out
+}
+
+/// Whether node n lies under an item node (kind 4).
+fn under_item(fe: &Frontend, mut n: usize) -> bool {
+    while let Some(p) = fe.nodes[n].parent {
+        if fe.nodes[p].kind == 4 {
+            return true;
+        }
+        n = p;
+    }
+    false
+}
+
+/// The Display row and page (this build), drawn in the Options page's item label font: on the
+/// Options page a "Display" row one row pitch under the last item, in the focused colour when
+/// focused; on the Display page the Options page without its item labels, and the rows
+/// "name: value" from the first item's place (with "< >" around the focused value).
+pub fn display_draws(fe: &Frontend, flow: &Flow, rows: &[(String, String)]) -> Vec<Draw> {
+    if !matches!(flow.current, OPTIONS | DISPLAY) {
+        return Vec::new();
+    }
+    let pc = flow.pc();
+    // The item labels with focus on item 0 (focused colour) and on none (plain colour).
+    let item_labels = |focus: usize| -> Vec<(usize, f32, f32)> {
+        draw_list(fe, OPTIONS, focus, pc)
+            .into_iter()
+            .filter_map(|d| match d {
+                Draw::Label { node, x, y, .. } if under_item(fe, node) => Some((node, x, y)),
+                _ => None,
+            })
+            .collect()
+    };
+    let (on, off) = (item_labels(0), item_labels(usize::MAX));
+    let (Some(&(first, fx, fy)), Some(&(last, lx, ly))) = (off.first(), off.last()) else { return Vec::new() };
+    let pitch = if off.len() >= 2 { ly - off[off.len() - 2].2 } else { 40.0 };
+    let label = |n: usize| fe.label(n);
+    let Some(plain) = label(last) else { return Vec::new() };
+    let font = plain.font.max(0) as usize;
+    // The focused item's highlight: the first label drawn with focus on item 0 whose colour is
+    // not the plain one.
+    let focused = on.iter().filter_map(|&(n, ..)| label(n)).map(|l| l.colour).find(|&c| c != plain.colour).unwrap_or(plain.colour);
+    // The first spelling the font can draw in full (the disc fonts lack some symbols).
+    let drawable = |options: &[String]| -> String {
+        let has = |t: &str| fe.fonts.get(font).is_some_and(|f| t.bytes().all(|c| c == b' ' || f.glyph(c).is_some()));
+        options.iter().find(|t| has(t)).or(options.last()).cloned().unwrap_or_default()
+    };
+    let centre = |n: usize, x: f32| x + fe.label(n).map_or(0, |l| fe.fonts.get(font).map_or(0, |f| f.measure(&l.text, l.spacing as i32))) as f32 / 2.0;
+    let cx = (centre(first, fx) + centre(last, lx)) / 2.0;
+    let text = |t: &str, y: f32, colour: [u8; 4]| {
+        let bytes = t.as_bytes().to_vec();
+        let w = fe.fonts.get(font).map_or(0, |f| f.measure(&bytes, plain.spacing as i32));
+        Draw::Text { font, text: bytes, spacing: plain.spacing as i32, x: (cx - w as f32 / 2.0).round(), y, colour }
+    };
+    if flow.current == OPTIONS {
+        let is_focused = flow.focus == items(fe, OPTIONS).len();
+        return vec![text("Display", ly + pitch, if is_focused { focused } else { plain.colour })];
+    }
+    let mut out: Vec<Draw> = draw_list(fe, OPTIONS, usize::MAX, pc).into_iter().filter(|d| !matches!(d, Draw::Label { node, .. } if under_item(fe, *node))).collect();
+    let step = pitch * 0.8;
+    for (k, (name, value)) in rows.iter().enumerate() {
+        let f = k == flow.display_focus;
+        // A percent value falls back to the word.
+        let value = drawable(&[value.clone(), value.replace('%', " percent")]);
+        let line = if f { drawable(&[format!("{name}: < {value} >"), format!("{name}: ( {value} )"), format!("{name}: {value}")]) } else { format!("{name}: {value}") };
+        out.push(text(&line, fy + step * k as f32, if f { focused } else { plain.colour }));
+    }
     out
 }
 
