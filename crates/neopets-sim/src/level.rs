@@ -1575,6 +1575,21 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0044 1174 Init: level states 18 and 0, flag 218, trigger 1 (the Act 2 start), the
+        // section triggers 2 to 4, effects 9 to 14 stopped, and thread W4's character set 0
+        // (region 1175). The floor tiles, checkpoints, breakables and two-hit object (fired by
+        // shots and the act-1 primitive path, with the DFS_Act1 calls) are not built. Words: 1
+        // the stage bits, 2 W1 busy, 10 + g the barrier group raised, 20 + i the barrier damage
+        // tick.
+        1174 => {
+            state.set_level(18, true);
+            state.set(218, true);
+            state.set_level(0, true);
+            let mut v = vec![reg(1, 1), reg(2, 2), reg(3, 2), reg(4, 2)];
+            v.extend((9..=14).map(|slot| Action::StopEffect { slot }));
+            v.push(Action::LoadRegion { slot: 0, region: Some(1175) });
+            v
+        }
         // SPEC-0041 1428 Init: effects 0, 24 to 26, 1 and 11 to 20 stopped; with 322 set the nine
         // triggers (CB1 to CB9 on 5, 4, 2, 1, 0, 3, 6, 7, 8), objects 0 to 2, level state 19 and
         // the switches' start states when 328 is already set; with 322 clear effects 2 to 10
@@ -3071,6 +3086,102 @@ fn thread3_956(s: &GameState) -> Vec<Action> {
         _ => 7,
     };
     vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(957 + set) }]
+}
+
+/// SPEC-0044 1174's barrier groups: their effects and object (the seventh has no trigger; group
+/// g's damage trigger is taken as 30 + g).
+const BARRIERS_1174: [(&[usize], Option<usize>); 7] = [(&[50, 51, 52, 53], Some(5)), (&[42, 43, 44, 45, 46, 47, 48, 49], None), (&[35, 36, 37, 38], Some(4)), (&[32, 33, 34], None), (&[39, 40], None), (&[29, 30], None), (&[22, 23], None)];
+
+/// A barrier group raised (its effects, its object, its damage trigger) or lowered.
+fn barrier_1174(s: &mut GameState, g: usize, up: bool) -> Vec<Action> {
+    let (fx, obj) = BARRIERS_1174[g];
+    let mut v: Vec<Action> = fx.iter().map(|&slot| if up { Action::StartEffect { slot, camera: false } } else { Action::StopEffect { slot } }).collect();
+    v.extend(obj.map(|obj| if up { Action::InitObjOn { obj, end: false } } else { Action::DeactivateObj { obj } }));
+    if g < 6 {
+        s.set_word(1174, 10 + g as u8, up as i32);
+        v.push(reg_at(30 + g as u16, if up { 30 } else { 31 }));
+    }
+    v
+}
+
+/// SPEC-0044 1174 thread W1, one helper a tick in the spec's order.
+fn stage_1174(s: &mut GameState) -> Vec<Action> {
+    let p = 1174;
+    let bits = s.word(p, 1);
+    let has = |b: u32| bits & (1 << b) != 0;
+    let set = |s: &mut GameState, b: u32| s.set_word(p, 1, s.word(p, 1) | 1 << b);
+    if s.word(p, 2) != 0 {
+        return Vec::new();
+    }
+    let mut v = Vec::new();
+    if has(0) && !has(1) {
+        set(s, 1);
+        v.extend([Action::FadeOut { seconds: FADE, wait: true }, Action::WaitLoads, Action::Equip { on: true }, Action::FadeIn { seconds: 0.5, wait: true }, Action::ReturnCamera { preset: -1, release: true }]);
+        return v;
+    }
+    if !has(2) && !has(3) && !has(4) {
+        if let Some(b) = [1, 2, 3].iter().position(|&l| s.level(l)) {
+            set(s, 2 + b as u32);
+        }
+    } else if !has(5) {
+        set(s, 5);
+        s.set_level(4, false);
+        return v;
+    }
+    let lvl4 = |on: bool| Action::LevelState { flag: 4, on };
+    if has(6) && !has(7) {
+        set(s, 7);
+        for g in [0, 1, 6] {
+            v.extend(barrier_1174(s, g, true));
+        }
+    } else if has(10) && !has(11) {
+        set(s, 11);
+        v.extend([lvl4(true), Action::HoldHero, Action::FadeOut { seconds: 0.0, wait: true }]);
+        for g in [0, 1, 6] {
+            v.extend(barrier_1174(s, g, false));
+        }
+        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 3 }, Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: 0.5, wait: true }, Action::WalkHero { locator: 4, wait: true, orient: false }]);
+        v.extend(barrier_1174(s, 4, true));
+        v.extend([Action::HeroAnim { anim: 32, wait: false }, wait(2.0)]);
+        v.extend([(1, 41), (2, 42), (3, 43)].map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
+        v.extend(barrier_1174(s, 2, true));
+        v.extend(barrier_1174(s, 3, true));
+        v.extend([
+            Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 },
+            Action::EntityAnim { entity: 1, anim: 7, looped: false, wait: false },
+            wait(0.2),
+            Action::EntityAnim { entity: 3, anim: 4, looped: false, wait: false },
+            wait(0.3),
+            Action::EntityAnim { entity: 2, anim: 5, looped: false, wait: false },
+            wait(2.0),
+            Action::LetterBox { on: false, seconds: 1.0, wait: false },
+            Action::MoveHero { locator: 4 },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::ReleaseEntity { entity: 1 },
+            Action::ReleaseEntity { entity: 2 },
+            Action::ReleaseEntity { entity: 3 },
+            lvl4(false),
+        ]);
+    } else if has(12) && !has(13) {
+        set(s, 13);
+        v.extend([lvl4(true), Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 }, wait(0.3), Action::HoldHero, Action::MoveHero { locator: 5 }, Action::WalkHero { locator: 2, wait: true, orient: false }]);
+        v.extend((9..=14).map(|slot| Action::StartEffect { slot, camera: false }));
+        v.push(wait(0.5));
+        v.extend([(1, 53), (2, 54), (3, 55)].map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
+        v.push(wait(1.0));
+        for g in 0..7 {
+            v.extend(barrier_1174(s, g, g == 5));
+        }
+        v.extend([Action::HeroAnim { anim: 32, wait: true }]);
+        v.extend((1..=3).map(|entity| Action::EntityAnim { entity, anim: 4, looped: false, wait: false }));
+        v.extend([wait(0.5), wait(4.5), Action::ReturnCamera { preset: -1, release: true }, Action::LetterBox { on: false, seconds: 1.0, wait: false }, lvl4(false)]);
+        v.extend((1..=3).map(|entity| Action::ReleaseEntity { entity }));
+    } else {
+        return v;
+    }
+    s.set_word(p, 2, 1);
+    v.push(Action::Bits { word: 2, set: 0, clear: 1 });
+    v
 }
 
 /// SPEC-0041 1428 switch k's three state effects.
@@ -5300,6 +5411,34 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0044 1174 trigger 1, the Act 2 start (any fire; bit 15 is never set): bit 14, the
+        // fade, 219 and 220, movie 16, act start 2, movie 89, 221, and the load of eW 151 (pack
+        // 1300) in place of movie 18 and its return world. The boss-fight tweak is not built.
+        (1174, 1) if state.word(pack, 3) == 0 => {
+            state.set_word(pack, 3, 1);
+            state.set_word(pack, 1, state.word(pack, 1) | 1 << 14);
+            state.set(219, true);
+            state.set(220, true);
+            state.set(221, true);
+            for m in [16, 89, 18] {
+                state.movies.insert(m);
+            }
+            out.actions.extend([Action::FadeOut { seconds: 0.3, wait: true }, Action::ActStart { stage: 2 }, Action::ReplaceExterior { slot: 151, plane: -1 }]);
+        }
+        // The section triggers (2, 3, 4; the hero's own contact): bits 6, 10 and 12, once each.
+        (1174, 2) if call.object => {
+            let bit = [6, 10, 12][(call.index as usize).saturating_sub(2).min(2)];
+            state.set_word(pack, 1, state.word(pack, 1) | 1 << bit);
+        }
+        // A raised barrier group's trigger (30 to 35): 3 damage at most once every 1.5 s.
+        (1174, 30) if call.object && call.state != 0 => {
+            let i = call.index.saturating_sub(30).min(5) as u8;
+            let now = state.hero.tick as i32;
+            if state.word(pack, 10 + i) != 0 && now >= state.word(pack, 20 + i) {
+                state.set_word(pack, 20 + i, now + 90);
+                out.actions.push(Action::DamageHero { amount: 3 });
             }
         }
         // SPEC-0041 1428 CB2 (trigger 4): S0, which starts THREAD-A.
@@ -7912,6 +8051,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0044 1174 Update: thread W1 (the stage thread).
+        1174 => out.extend(stage_1174(state)),
         // SPEC-0041 1428 Update (322 set): the update helper and THREAD-A.
         1428 if state.flag(322) => out.extend(arena_1428(state)),
         // SPEC-0042 1381 Update: the timed objects switch on for 2 s and off for 4 s together
@@ -9144,6 +9285,14 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
+        }
+        // SPEC-0044 1174 arrival: effects 15 to 21 stopped, the normal camera, the hero at locator
+        // 0, stage bit 0 (the record set-ups are not built).
+        1174 => {
+            state.set_word(1174, 1, state.word(1174, 1) | 1);
+            let mut v: Vec<Action> = (15..=21).map(|slot| Action::StopEffect { slot }).collect();
+            v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
+            v
         }
         // SPEC-0042 1381 activate-world restore: each solved station (708 + k) and each block piece
         // (714 + k) put in its solved state; all six pieces with 337 clear: object 18 on, 19 off.
@@ -12281,6 +12430,36 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1174_escape_run() {
+        let mut s = GameState::default();
+        on_init(1174, &mut s);
+        assert!(s.level(18) && s.level(0) && s.flag(218));
+        on_activate(1174, &mut s);
+        // Bit 0: the arrival step; then the level-state vector: level state 2 sets bit 3, the next
+        // pass bit 5.
+        assert!(on_update(1174, &mut s, false).contains(&Action::WaitLoads));
+        s.set_word(1174, 2, 0);
+        s.set_level(2, true);
+        on_update(1174, &mut s, false);
+        assert!(s.word(1174, 1) & (1 << 3) != 0);
+        on_update(1174, &mut s, false);
+        assert!(s.word(1174, 1) & (1 << 5) != 0);
+        // Section 1 (trigger 2): the barriers 50 to 53, 42 to 49 and 22, 23 raised; inside trigger
+        // 30 the hero takes 3, at most once every 1.5 s.
+        on_trigger(1174, 2, TriggerCall { index: 2, state: 1, object: true, square: false }, &mut s);
+        assert!(on_update(1174, &mut s, false).contains(&Action::StartEffect { slot: 50, camera: false }));
+        let inside = TriggerCall { index: 30, state: 2, object: true, square: false };
+        s.hero.tick = 500;
+        assert_eq!(on_trigger(1174, 30, inside, &mut s).actions, vec![Action::DamageHero { amount: 3 }]);
+        s.hero.tick = 550;
+        assert!(on_trigger(1174, 30, inside, &mut s).actions.is_empty());
+        // Trigger 1: the Act 2 start (219 to 221, act start 2, eW 151), once.
+        let out = on_trigger(1174, 1, TriggerCall { index: 1, state: 1, object: false, square: false }, &mut s).actions;
+        assert!(out.contains(&Action::ActStart { stage: 2 }) && out.contains(&Action::ReplaceExterior { slot: 151, plane: -1 }) && s.flag(221));
+        assert!(on_trigger(1174, 1, TriggerCall { index: 1, state: 2, object: true, square: false }, &mut s).actions.is_empty());
     }
 
     #[test]
