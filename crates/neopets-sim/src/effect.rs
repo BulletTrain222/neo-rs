@@ -6,8 +6,8 @@
 //! Light emitters publish their point lights (4.5) through `Effects::lights`.
 //!
 //! Not covered: model particles are stepped but have no draw (no child models), the swing trail, the pulse kind, presets (3.9), the per-character and
-//! per-world pools (only the shared pools of group 3), and birth modes 2 and 3 (the target point
-//! stays the spawner's position, so they place at the spawner).
+//! per-world pools (only the shared pools of group 3). Birth modes 2 and 3 place particles along
+//! the segment from the spawner to its target (4.1 step 2); `set_target` writes the target.
 use ps2_float::fpu::{add, div, mul, sub};
 
 const DEF_SIZE: usize = 0x90;
@@ -519,6 +519,17 @@ impl Effects {
         }
     }
 
+    /// Set an object's spawners' target point (the attack-effect driver's write, 3.17; read by
+    /// birth modes 2 and 3).
+    pub fn set_target(&mut self, handle: usize, t: V3) {
+        let Some(Some(o)) = self.objects.get(handle) else { return };
+        for s in o.slots.iter().flatten() {
+            if let Some(sp) = self.spawners[*s].as_mut() {
+                sp.target = t;
+            }
+        }
+    }
+
     /// Set an object's position: copied to every live spawner (3.16).
     pub fn set_position(&mut self, handle: usize, p: V3) {
         let Some(Some(o)) = self.objects.get_mut(handle) else { return };
@@ -689,6 +700,10 @@ impl Effects {
             let radius = if node.ring_fill != 0 { node.ring } else { r.uniform(0.0, node.ring) };
             p[0] = add(p[0], mul(radius, series_cos(alpha)));
             p[2] = add(p[2], mul(radius, series_sin(alpha)));
+        }
+        // Launch modes 2 and 3: P is rebuilt from S alone, one draw along the segment to T.
+        if matches!(a.birth_mode, 2 | 3) {
+            p = along_segment(s.position, s.target, r);
         }
         let life = add(a.life, r.uniform(-a.life_jitter, a.life_jitter));
         let clock = add(c.clock.0, r.uniform(-c.clock.1, c.clock.1));
@@ -889,8 +904,35 @@ impl Effects {
     }
 }
 
+/// 4.1 step 2, modes 2 and 3: S + u t with u = (T - S) / L and one draw t = U(0, L); with L = 0
+/// the point is S (the draw still runs).
+fn along_segment(s: V3, t: V3, r: &mut impl Uniform) -> V3 {
+    let d = [t[0] - s[0], t[1] - s[1], t[2] - s[2]];
+    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+    let k = r.uniform(0.0, l);
+    if l == 0.0 {
+        return s;
+    }
+    std::array::from_fn(|i| s[i] + d[i] / l * k)
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn birth_along_the_target_segment() {
+        // SPEC-0034 4.1 test vector: S (0, 1, 0), T (3, 1, 4): t = 2 gives (1.2, 1, 1.6).
+        struct Fixed(f32);
+        impl Uniform for Fixed {
+            fn uniform(&mut self, _lo: f32, _hi: f32) -> f32 {
+                self.0
+            }
+        }
+        let p = along_segment([0.0, 1.0, 0.0], [3.0, 1.0, 4.0], &mut Fixed(2.0));
+        assert!((p[0] - 1.2).abs() < 1e-5 && (p[1] - 1.0).abs() < 1e-5 && (p[2] - 1.6).abs() < 1e-5, "{p:?}");
+        assert_eq!(along_segment([1.0; 3], [1.0; 3], &mut Fixed(0.0)), [1.0; 3]);
+    }
+
+
     use super::*;
 
     fn record_a(period: f32, per_burst: i32, life: f32, looped: bool) -> RecordA {

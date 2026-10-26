@@ -772,6 +772,8 @@ pub struct Play {
     bend_last: Option<[f32; 3]>,
     /// Where a swap's effects were placed (the outgoing hero's position at step 2).
     swap_at: [f32; 3],
+    /// The hero attack-effect driver (SPEC-0034 3.17): its tables and live effects.
+    attack_fx: AttackFx,
     /// Added object yaw (SetAnimObjAdditionRotY), degrees, by (pack, object).
     obj_yaw: HashMap<(u32, usize), f32>,
     /// Added vertical offset (SetAnimObjPositionOffset), by (pack, object).
@@ -1235,6 +1237,7 @@ impl Play {
             dig_drop: None,
             bend_last: None,
             swap_at: [0.0; 3],
+            attack_fx: AttackFx::default(),
             obj_yaw: HashMap::new(),
             obj_offset: HashMap::new(),
             shake: Default::default(),
@@ -1391,6 +1394,7 @@ impl Play {
         play.activated();
         // Flags already set when play starts are not risings (no stingers for them).
         play.flags_seen = play.state.flags.clone();
+        play.load_attack_tables(&boot_bytes);
         Ok(play)
     }
 
@@ -4903,6 +4907,7 @@ impl Play {
             self.roberta_step(&input);
         }
         self.roberta_displays_step();
+        self.attack_fx_step();
         if self.hero_index == 0 && self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
         }
@@ -7147,6 +7152,125 @@ impl Play {
         pack != self.world.pack || self.zones.query(self.world.zones.as_ref(), c as i32, -1)
     }
 
+    /// Read the attack-family tables (SPEC-0034 Where it lives; 14 ids each, index m - 160).
+    pub fn load_attack_tables(&mut self, boot: &[u8]) {
+        let t = |at: u32| neopets_data::archive::boot_u32_table(boot, at, 14).map(|w| std::array::from_fn(|k| w[k] as i32)).unwrap_or([-1; 14]);
+        self.attack_fx.tables = AttackTables {
+            line: t(0x0031_5280),
+            aura: t(0x0031_53D0),
+            charge: t(0x0031_5398),
+            burst: [t(0x0031_5328), t(0x0031_5360)],
+            hold: [t(0x0031_52B8), t(0x0031_52F0)],
+            light: t(0x0031_5588),
+        };
+        if std::env::var_os("NEOPETS_TRACE_FX").is_some() {
+            eprintln!("[fx] tables {:?}", self.attack_fx.tables);
+        }
+    }
+
+    /// SPEC-0034 3.17, once per pass for the active hero: the near-hand point N = position + 0.48
+    /// Z0 and the tip T = position + R Z0 (Z0 attach point 0's third axis, R the weapon reach),
+    /// both moved 0.2 toward the camera eye. Tor: the Mote weapon line (frame at N, target T),
+    /// the tip light, and the swing glows 244, 243 and 246 (0.25, 0.2 and 0.25 s into sub-states
+    /// 2, 3 and 4, at T, followed while the sub-state stays). Roberta: the Mote aura and charge-up
+    /// effect at the hero, the spin glow 242 at T in sub-states 6 and 7. Both: on the first pass
+    /// of sub-state 1 past the full-press threshold (50 Tor, 80 Roberta) the burst (detached; 243
+    /// for Tor and 240 for Roberta with no Mote) and the charged-hold loop (N, target T; 245 for
+    /// Roberta with no Mote) until sub-state 1 ends. Roberta's shot visuals are not built.
+    fn attack_fx_step(&mut self) {
+        let table = self.effect_table.clone();
+        let h = self.hero_index;
+        let pos = self.loco.position();
+        let m = self.equipment.motes[h.min(1)][2].map(|id| id as i32);
+        let idx = m.and_then(|id| usize::try_from(id - 160).ok()).filter(|&k| k < 14);
+        let (sub, f) = match h {
+            0 => self.attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
+            _ => self.r_attack.as_ref().map_or((0, 0), |a| (a.sub, a.f)),
+        };
+        let charged = f > if h == 0 { 50 } else { 80 };
+        let place = placement(pos, self.loco.facing);
+        let frames = self.hero.bone_frames();
+        let z0 = self.hero.bones().attach.first().and_then(|&(bone, angles, offset)| Some(unit(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).cols[2]))).unwrap_or(self.loco.facing);
+        let eye = self.camera.eye;
+        let toward = |p: [f32; 3]| add(p, scale(unit(sub_v(eye, p)), 0.2));
+        let n = toward(add(pos, scale(z0, 0.48)));
+        let t = toward(add(pos, scale(z0, self.weapon_reach())));
+        let fw = unit([self.loco.facing[0], 0.0, self.loco.facing[2]]);
+        let frame = [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw];
+        let fx = &mut self.attack_fx;
+        let (effects, rng) = (&mut self.effects, &mut self.rng);
+        let tb = fx.tables;
+        let mut keep = |slot: &mut Option<(i32, usize)>, want: Option<i32>, at: [f32; 3], target: Option<[f32; 3]>| keep_fx(effects, &table, rng, frame, slot, want, at, target);
+        if h == 0 {
+            keep(&mut fx.line, idx.map(|k| tb.line[k]), n, Some(t));
+            keep(&mut fx.light, idx.map(|k| tb.light[k]), t, None);
+            keep(&mut fx.aura, None, pos, None);
+            keep(&mut fx.charge, None, pos, None);
+        } else {
+            keep(&mut fx.line, None, n, None);
+            keep(&mut fx.light, None, t, None);
+            keep(&mut fx.aura, idx.map(|k| tb.aura[k]), pos, None);
+            keep(&mut fx.charge, idx.filter(|_| !charged).map(|k| tb.charge[k]), pos, None);
+        }
+        // The full-charge burst and the charged-hold loop.
+        if sub == 1 && charged && !fx.burst_done {
+            fx.burst_done = true;
+            let burst = idx.map_or(if h == 0 { 243 } else { 240 }, |k| tb.burst[h.min(1)][k]);
+            let hold = idx.map_or(if h == 0 { -1 } else { 245 }, |k| tb.hold[h.min(1)][k]);
+            keep(&mut fx.hold, Some(hold), n, Some(t));
+            fx.burst = Some(burst);
+        } else if sub == 1 && fx.burst_done {
+            let id = fx.hold.map(|(id, _)| id);
+            keep(&mut fx.hold, id, n, Some(t));
+        } else if sub != 1 {
+            fx.burst_done = false;
+            keep(&mut fx.hold, None, n, None);
+        }
+        if let Some(burst) = fx.burst.take().filter(|&b| b >= 0) {
+            self.effects.one_shot(&table, burst, pos, frame, &mut self.rng);
+        }
+        // The swing glows (Tor) and the spin glow (Roberta): on a sub-state change the timer and
+        // the started flag reset and the old glow is released to play out; the glow starts once
+        // its time is reached and follows T while the sub-state lasts.
+        let glow = match (h, sub) {
+            (0, 2) => Some((0.25, 244)),
+            (0, 3) => Some((0.2, 243)),
+            (0, 4) => Some((0.25, 246)),
+            (1, 6 | 7) => Some((0.0, 242)),
+            _ => None,
+        };
+        let fx = &mut self.attack_fx;
+        if fx.glow_sub != sub {
+            fx.glow_sub = sub;
+            fx.glow_timer = 0.0;
+            fx.glow_started = false;
+            if let Some(hd) = fx.glow.take() {
+                self.effects.release(hd);
+            }
+        }
+        if let Some((at_time, id)) = glow {
+            fx.glow_timer = fx.glow_timer + 1.0 / 60.0;
+            if !fx.glow_started && fx.glow_timer >= at_time {
+                fx.glow_started = true;
+                let hd = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, t, frame));
+                self.effects.update(&table, hd, None, &mut self.rng);
+                fx.glow = Some(hd);
+            }
+            if let Some(hd) = fx.glow {
+                self.effects.set_position(hd, t);
+            }
+        }
+        // NEOPETS_TRACE_FX: the driver's roles whenever they change.
+        if std::env::var_os("NEOPETS_TRACE_FX").is_some() {
+            let fx = &self.attack_fx;
+            let now = format!("mote {m:?} sub {sub} f {f} line {:?} light {:?} aura {:?} charge {:?} hold {:?} glow {:?}", fx.line, fx.light, fx.aura, fx.charge, fx.hold, fx.glow);
+            if now != fx.trace {
+                eprintln!("[fx] tick {}: {now}", self.ticks);
+                self.attack_fx.trace = now;
+            }
+        }
+    }
+
     /// A breakable's draw matrix while it is drawn: states 1 and 3 (SPEC-0048 Breakable draw).
     pub fn breakable_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
         let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
@@ -8870,4 +8994,68 @@ fn segment_box(a: [f32; 3], b: [f32; 3], origin: [f32; 3], axes: [[f32; 3]; 3], 
         }
     }
     true
+}
+
+/// The attack-family tables the driver reads (SPEC-0034 3.17), 14 ids each by Mote index; the
+/// burst and hold tables are by hero.
+#[derive(Clone, Copy, Debug)]
+struct AttackTables {
+    line: [i32; 14],
+    aura: [i32; 14],
+    charge: [i32; 14],
+    burst: [[i32; 14]; 2],
+    hold: [[i32; 14]; 2],
+    light: [i32; 14],
+}
+
+impl Default for AttackTables {
+    fn default() -> Self {
+        Self { line: [-1; 14], aura: [-1; 14], charge: [-1; 14], burst: [[-1; 14]; 2], hold: [[-1; 14]; 2], light: [-1; 14] }
+    }
+}
+
+/// The driver's live effects: (effect id, handle) per role, the glow of the current sub-state
+/// with its timer and started flag, and the burst latch of sub-state 1.
+#[derive(Default)]
+struct AttackFx {
+    tables: AttackTables,
+    line: Option<(i32, usize)>,
+    light: Option<(i32, usize)>,
+    aura: Option<(i32, usize)>,
+    charge: Option<(i32, usize)>,
+    hold: Option<(i32, usize)>,
+    glow: Option<usize>,
+    glow_sub: u8,
+    glow_timer: f32,
+    glow_started: bool,
+    burst_done: bool,
+    burst: Option<i32>,
+    trace: String,
+}
+
+/// One driver role: start (or replace) its effect when the wanted id changes, stop and release it
+/// when none is wanted, and move it (and its spawners' target) every pass.
+#[allow(clippy::too_many_arguments)]
+fn keep_fx(effects: &mut neopets_sim::effect::Effects, table: &neopets_sim::effect::EffectTable, rng: &mut neopets_sim::rng::Rng, frame: neopets_sim::effect::Frame, slot: &mut Option<(i32, usize)>, want: Option<i32>, at: [f32; 3], target: Option<[f32; 3]>) {
+    let want = want.filter(|&id| id >= 0);
+    if slot.map(|(id, _)| id) != want {
+        if let Some((_, hd)) = slot.take() {
+            effects.stop(table, hd);
+            effects.release(hd);
+        }
+        if let Some(id) = want {
+            let hd = effects.add_object(neopets_sim::effect::EffectObject::new(table, id, at, frame));
+            if let Some(tg) = target {
+                effects.set_target(hd, tg);
+            }
+            effects.update(table, hd, None, rng);
+            *slot = Some((id, hd));
+        }
+    }
+    if let Some((_, hd)) = *slot {
+        effects.set_position(hd, at);
+        if let Some(tg) = target {
+            effects.set_target(hd, tg);
+        }
+    }
 }
