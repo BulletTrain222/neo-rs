@@ -618,7 +618,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack, door) == (777, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) || (pack == 1300 && door <= 2) || (pack == 1327 && door <= 1) || (pack, door) == (1324, 0) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack, door) == (777, 0) || (pack, door) == (956, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) || (pack == 1300 && door <= 2) || (pack == 1327 && door <= 1) || (pack, door) == (1324, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -804,6 +804,13 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
                 Some(53) => vec![Action::Message { line: 194 }],
                 _ => vec![Action::EnterInterior { slot: [55, 54, 57, 56][door] }, wait(3.0)],
             }
+        }
+        // SPEC-0043 956 teleport 0 (context 13): with 67 clear and 64 set line 71; else value 250
+        // for eW 74 and the entry into eW 76 (pack 984).
+        (956, 0) if !state.flag(67) && state.flag(64) => vec![Action::Message { line: 71 }],
+        (956, 0) => {
+            state.blackboard.insert((2, 74), 250);
+            vec![Action::EnterInterior { slot: 76 }]
         }
         // SPEC-0045 777 teleport 0: with 252 set and a book flag of 253 to 256 clear line 235; else
         // in the quest state line 236; else value 70 for eW 31 and its load; then 3 s.
@@ -1563,6 +1570,61 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0043 956 Init: the first-update word; objects 2 and 1 by 214 and 283; object 17;
+        // the lift (object 10 when not ready with 66 set, else object 9 and the lift down; 211
+        // set once all four knights are free); the triggers; the cages (211 clear: registered,
+        // the cage objects at their start; set: at their end); the effects and object 0 by the
+        // glade stage h; 65 with 248; thread 3's set (9 with 248, 8 with 64, else 7; region
+        // 957 + set) into slot S (0). Slots: S 0, Z 1, K 2. The proximity routines (Medium
+        // mapping), the navmesh cache and the locks' breakables are not built.
+        956 => {
+            let f = |n| state.flag(n);
+            let mut v = vec![];
+            if !f(214) {
+                v.extend([Action::InitObjOn { obj: 2, end: false }, Action::InitObjOn { obj: 1, end: false }]);
+            } else if !f(283) {
+                v.push(Action::InitObjOn { obj: 2, end: false });
+            }
+            v.push(Action::InitObjOn { obj: 17, end: false });
+            let ready = lift_ready_956(state);
+            if !ready && state.flag(66) {
+                v.push(Action::InitObjOn { obj: 10, end: false });
+            } else {
+                v.push(Action::InitObjOn { obj: 9, end: false });
+            }
+            state.set_word(pack, 1, 1);
+            state.set_word(pack, 2, 0);
+            state.set_word(pack, 3, -1);
+            v.extend([reg(8, 8), reg(9, 9), reg(1, 1), reg(0, 1), reg(2, 1), reg(14, 14), reg(15, 15), reg(16, 16), reg(10, 10), reg(11, 11), reg(12, 12)]);
+            v.extend((3..=6).map(|i| reg(i, 3)));
+            for k in &KNIGHTS_956 {
+                if state.flag(211) {
+                    v.push(Action::InitObjOn { obj: k.cage_obj, end: true });
+                } else {
+                    v.extend([reg(k.cage, 21), Action::InitObjOn { obj: k.cage_obj, end: false }]);
+                }
+            }
+            let h = (62..=67).rev().find(|&fl| state.flag(fl));
+            match h {
+                Some(62 | 63) => {
+                    v.extend((9..=51).map(|slot| Action::StartEffect { slot, camera: false }));
+                    v.push(Action::InitObjOn { obj: 0, end: false });
+                }
+                Some(64 | 65) => {
+                    v.extend((9..=51).map(|slot| Action::StopEffect { slot }));
+                    v.push(Action::InitObjOn { obj: 0, end: false });
+                }
+                _ => {
+                    v.extend((9..=51).map(|slot| Action::StopEffect { slot }));
+                    v.push(Action::DeactivateObj { obj: 0 });
+                }
+            }
+            if state.flag(248) {
+                state.set(65, true);
+            }
+            v.extend(thread3_956(state));
+            v
+        }
         // SPEC-0045 777 Init: the object poses by 252, 592 and 593 (helpers 10 and 11); the library
         // set-up (effects stopped and record objects posed by flags 252 to 256); triggers 0 (13),
         // 1 (the hint) and 4 to 8 (the library); thread 12's slot loads (A: region 778 or 779; B:
@@ -2870,6 +2932,44 @@ fn talk_1350(routine: u8, s: &mut GameState) -> Vec<Action> {
         }
         _ => Vec::new(),
     }
+}
+
+/// A SPEC-0043 956 knight record (the fields this build uses).
+struct Knight956 {
+    cage: u16,
+    cage_obj: usize,
+    guard: usize,
+    lock_line: u16,
+}
+
+const KNIGHTS_956: [Knight956; 4] = [
+    Knight956 { cage: 21, cage_obj: 18, guard: 23, lock_line: 62 },
+    Knight956 { cage: 23, cage_obj: 20, guard: 24, lock_line: 78 },
+    Knight956 { cage: 22, cage_obj: 19, guard: 25, lock_line: 76 },
+    Knight956 { cage: 24, cage_obj: 21, guard: 26, lock_line: 74 },
+];
+
+/// SPEC-0043 956's lift readiness: 64 clear and 211 set, or all four knights free (then 211).
+fn lift_ready_956(s: &mut GameState) -> bool {
+    if s.flag(64) {
+        return false;
+    }
+    if !s.flag(211) && [208, 209, 210, 623].iter().all(|&f| s.flag(f)) {
+        s.set(211, true);
+    }
+    s.flag(211)
+}
+
+/// SPEC-0043 956 thread 3: set 9 with 248 (67 clear), 8 with 64, else 7 (region 957 + set) into
+/// slot S; nothing with 248 and 67 set.
+fn thread3_956(s: &GameState) -> Vec<Action> {
+    let set = match (s.flag(248), s.flag(67), s.flag(64)) {
+        (true, true, _) => return Vec::new(),
+        (true, false, _) => 9,
+        (false, _, true) => 8,
+        _ => 7,
+    };
+    vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(957 + set) }]
 }
 
 /// SPEC-0045 777's library records: the book flag, the record's objects and its extra object.
@@ -4849,6 +4949,112 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
             }
+        }
+        // SPEC-0043 956 trigger routine 1 (0 to 2, entering): a new choice (index 1: 0, 0: 1, 2: 2)
+        // starts thread 4: with 67 set, set 10, 12 or 11 (regions 967, 969, 968) into slot K.
+        (956, 1) if call.object && call.state == 1 => {
+            let c = match call.index {
+                1 => 0,
+                0 => 1,
+                _ => 2,
+            };
+            if c != state.word(pack, 3) {
+                state.set_word(pack, 3, c);
+                if state.flag(67) {
+                    out.actions.extend([Action::LoadRegion { slot: 2, region: None }, Action::LoadRegion { slot: 2, region: Some([967, 969, 968][c as usize]) }]);
+                }
+            }
+        }
+        // The zone triggers (3 to 6, entering, 214 and 248 clear): record g's zone load into Z
+        // while the hero stands in it (thread 5; one at a time), unless the record's flag is set.
+        (956, 3) if call.object && call.state == 1 && !state.flag(214) && !state.flag(248) && state.word(pack, 4) == 0 => {
+            let g = match call.index {
+                4 => 1,
+                5 => 2,
+                6 => 3,
+                _ if state.flag(208) => 4,
+                _ => 0,
+            };
+            let (flag, region) = [(208, 962), (209, 961), (210, 960), (623, 959), (64, 963)][g];
+            if !state.flag(flag) {
+                state.set_word(pack, 4, 1);
+                out.actions.extend([
+                    Action::LoadRegion { slot: 1, region: None },
+                    Action::LoadRegion { slot: 1, region: Some(region) },
+                    Action::WaitInside { index: call.index },
+                    Action::LoadRegion { slot: 1, region: None },
+                    Action::Bits { word: 4, set: 0, clear: 1 },
+                ]);
+            }
+        }
+        // The cage triggers (21 to 24): the guard alive: context 3; dead: the lock line once per
+        // load. Breaking the lock and the release (R-0040) are not built.
+        (956, 21) if call.state != 0 && !state.flag(211) => {
+            if let Some(k) = KNIGHTS_956.iter().position(|k| k.cage == call.index) {
+                let r = &KNIGHTS_956[k];
+                if !state.ai_dead.contains(&r.guard) {
+                    out.prompt = Some(3);
+                } else if state.word(pack, 10 + k as u8) == 0 {
+                    state.set_word(pack, 10 + k as u8, 1);
+                    out.actions.push(Action::Message { line: r.lock_line });
+                }
+            }
+        }
+        // The lift (trigger 8 at the top calls it up, 9 at the bottom down; object 9 idle and the
+        // lift ready): object 17 and entity 6's loop, object 9 played, sound 8 going up.
+        (956, 8 | 9) if call.object && call.state == 1 && !state.animating.contains(&9) && lift_ready_956(state) => {
+            let up = state.word(pack, 2) == 0;
+            if (routine == 8) == up {
+                state.set_word(pack, 2, up as i32);
+                let s = if up { 1.0 } else { -1.0 };
+                out.actions.extend([Action::LoopAnim { obj: 17, speed: -s }, Action::EntityAnim { entity: 6, anim: 64, looped: true, wait: false }]);
+                if up {
+                    out.actions.push(Action::PlaySound { cue: 8, locator: None });
+                }
+                out.actions.extend([Action::PlayAnim { obj: 9, speed: s, wait: false }, Action::WaitObj { obj: 9 }]);
+                if up {
+                    out.actions.push(Action::KillSound { cue: 8, locator: None });
+                }
+                out.actions.extend([Action::ReleaseEntity { entity: 6 }, Action::StopAnim { obj: 17 }]);
+            }
+        }
+        // Trigger 16 (212 clear): 212 once the hero leaves.
+        (956, 16) if call.object && call.state == 1 && !state.flag(212) => out.actions.extend([Action::WaitInside { index: call.index }, Action::SetFlag { flag: 212, on: true }]),
+        // Trigger 15: with 212 set and 214 clear movie 11 (counted) and the load of eW 77 (pack
+        // 985); else with 66 set and 283 clear the load between fades.
+        (956, 15) if call.object && call.state == 1 => {
+            if state.flag(212) && !state.flag(214) {
+                state.movies.insert(11);
+                out.actions.push(Action::ReplaceExterior { slot: 77, plane: -1 });
+            } else if state.flag(66) && !state.flag(283) {
+                out.actions.extend([Action::FadeOut { seconds: FADE, wait: true }, Action::ReplaceExterior { slot: 77, plane: -1 }, Action::FadeIn { seconds: FADE, wait: true }]);
+            }
+        }
+        // Trigger 14 (214 set, 216 clear): objects 3 to 5 off; movie 13 counted.
+        (956, 14) if call.object && call.state == 1 && state.flag(214) && !state.flag(216) => {
+            state.movies.insert(13);
+            out.actions.extend((3..=5).map(|obj| Action::DeactivateObj { obj }));
+        }
+        // Trigger 10 (248 set, 281 clear): 281 and 66, object 9 off and 10 on, movie 43 counted.
+        // Its hero line (64 or 65, which hero gets which is not resolved) and SetTargetActive are
+        // not built.
+        (956, 10) if call.object && call.state == 1 && state.flag(248) && !state.flag(281) => {
+            state.set(281, true);
+            state.set(66, true);
+            state.movies.insert(43);
+            out.actions.extend([Action::DeactivateObj { obj: 9 }, Action::InitObjOn { obj: 10, end: false }]);
+        }
+        // Trigger 11 (281 set, 282 clear): 282.
+        (956, 11) if call.object && call.state == 1 && state.flag(281) && !state.flag(282) => state.set(282, true),
+        // Trigger 12 (282 set, 284 clear): 284, 67, 20 and 302; movie 44 counted; item 14 taken
+        // and item 30 given.
+        (956, 12) if call.object && call.state == 1 && state.flag(282) && !state.flag(284) => {
+            for f in [284, 67, 20, 302] {
+                state.set(f, true);
+            }
+            state.movies.insert(44);
+            state.remove_all(14);
+            out.actions.push(Action::GiveItem { item: 30, count: 1 });
         }
         // SPEC-0045 777 trigger routine 1 (the library hint; once per load, 253 clear): camera 4
         // between fades and line 241.
@@ -7190,6 +7396,57 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             if state.flag(198) && state.word(pack, 2) == 0 {
                 state.set_word(pack, 2, 1);
                 out.push(Action::DeactivateObj { obj: 1 });
+            }
+        }
+        // SPEC-0043 956 Update: the first update clears its word (SetTargetActive is not built);
+        // with 214 set and 216 clear the aftermath scene runs once (flags 216, 10, 18, 30, 47 and
+        // 64, movie 14 counted, 217, thread 3, then the scene with entity 28, lines 63 and 72).
+        956 => {
+            state.set_word(pack, 1, 0);
+            if state.flag(214) && !state.flag(216) {
+                for f in [216, 10, 18, 30, 47, 64] {
+                    state.set(f, true);
+                }
+                state.movies.insert(14);
+                state.set(217, true);
+                out.extend(thread3_956(state));
+                let cam = |track, wait, speed| Action::PlayCamera { track, wait, end: 1, speed };
+                out.extend([
+                    Action::Sleep { ticks: 1 },
+                    Action::HoldHero,
+                    Action::FadeOut { seconds: 0.0, wait: true },
+                    Action::LetterBox { on: true, seconds: 1.0, wait: false },
+                    Action::FadeIn { seconds: 1.8, wait: false },
+                    cam(30, true, 1.0),
+                    Action::Equip { on: false },
+                    Action::MoveHero { locator: 2 },
+                    Action::HeroAnim { anim: 137, wait: false },
+                    Action::Sleep { ticks: 20 },
+                    Action::CameraShakeMode { kind: 0, duration: 0.6, strength: 0.5 },
+                    Action::Sleep { ticks: 30 },
+                    Action::HeroAnim { anim: 158, wait: true },
+                    Action::Sleep { ticks: 30 },
+                    cam(31, false, 1.0),
+                    Action::Message { line: 63 },
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::FadeIn { seconds: 0.5, wait: false },
+                    cam(32, true, 0.6),
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::ActivateEntity { entity: 28 },
+                    Action::FadeIn { seconds: 0.5, wait: false },
+                    Action::WalkEntity { entity: 28, locator: 46, wait: false, orient: false, stop: 1.5 },
+                    cam(33, true, 1.0),
+                    Action::Sleep { ticks: 30 },
+                    cam(34, false, 1.0),
+                    Action::Equip { on: true },
+                    wait(1.2),
+                    Action::Message { line: 72 },
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::Agro { entity: 28 },
+                    Action::LetterBox { on: false, seconds: 1.0, wait: false },
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::FadeIn { seconds: 0.5, wait: false },
+                ]);
             }
         }
         // SPEC-0045 777 thread 14 (the quest state): once AIs 6 to 10 are all dead, the six
@@ -11259,6 +11516,38 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_956_glade() {
+        // Act 1 (h 62): set 7 into slot S (region 964), the effects on, the cages registered.
+        let mut s = GameState::default();
+        s.set(62, true);
+        let v = on_init(956, &mut s);
+        assert!(v.contains(&Action::LoadRegion { slot: 0, region: Some(964) }) && v.contains(&Action::StartEffect { slot: 9, camera: false }));
+        assert!(v.contains(&Action::RegisterTrigger { index: 23, routine: 21 }));
+        // The spec's cage vector, first half: record 1's guard (AI 24) dead: line 78 once.
+        s.ai_dead.insert(24);
+        let inside = TriggerCall { index: 23, state: 2, object: true, square: false };
+        assert_eq!(on_trigger(956, 21, inside, &mut s).actions, vec![Action::Message { line: 78 }]);
+        assert!(on_trigger(956, 21, inside, &mut s).actions.is_empty());
+        // Zone trigger 4 loads region 961 while the hero is inside.
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        assert!(on_trigger(956, 3, enter(4), &mut s).actions.contains(&Action::LoadRegion { slot: 1, region: Some(961) }));
+        // The lift: not ready until the knights are free.
+        assert!(on_trigger(956, 8, enter(8), &mut s).actions.is_empty());
+        for f in [208, 209, 210, 623] {
+            s.set(f, true);
+        }
+        assert!(on_trigger(956, 8, enter(8), &mut s).actions.contains(&Action::PlayAnim { obj: 9, speed: 1.0, wait: false }));
+        assert!(s.flag(211));
+        // The aftermath (214 set): flags 216 and 64, set 8 into S (region 965).
+        s.set(214, true);
+        let out = on_update(956, &mut s, false);
+        assert!(out.contains(&Action::LoadRegion { slot: 0, region: Some(965) }) && out.contains(&Action::Message { line: 72 }));
+        assert!(s.flag(216) && s.flag(64) && on_update(956, &mut s, false).is_empty());
+        // The door: line 71 with 64 set and 67 clear.
+        assert_eq!(on_teleport(956, 0, &mut s), vec![Action::Message { line: 71 }]);
     }
 
     #[test]
