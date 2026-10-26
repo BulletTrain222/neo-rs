@@ -10406,6 +10406,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.take_message(2, 65);
             Vec::new()
         }
+        // SPEC-0045 1217 activate-world routines 3 and 4 (Act 3).
+        1217 => burrows_activate(state),
         // SPEC-0054 1432 activation: level state 10, objects 0, 1 and 2, flag 9.
         1432 => {
             state.set_level(10, true);
@@ -11793,7 +11795,9 @@ const BUSY: i32 = 1 << 15;
 /// thread routine 12 (entity 3 loops animation 94) and the streaming filter of callback 6
 /// (only embedded ordinal 3, Lucy, binds; the others wait for their explicit activation).
 /// Callback 5 (not due) refuses every ordinal. On the fight-due branch the object records are
-/// filled (`crate::burrows`). The Act 3 branch is not built.
+/// filled (`crate::burrows`) and word 1 marks the fight controller as started. Act 3 (flag 83):
+/// the three farmer cages (thread routine 12: request 2, entities 4 to 6 loop animation 94) and
+/// region 1219 (index 1) into the slot; not due, the gates only and thread routine 9.
 fn burrows_init(state: &mut GameState) -> Vec<Action> {
     state.set(81, true);
     if state.flag(248) {
@@ -11814,11 +11818,53 @@ fn burrows_init(state: &mut GameState) -> Vec<Action> {
         out.extend([0, 1, 2, 4, 5, 6].map(off));
         out.push(Action::LoadRegion { slot: 0, region: Some(1218) });
         out.push(Action::EntityAnim { entity: 3, anim: 94, looped: true, wait: false });
+    } else if due {
+        let (mut b, fill) = crate::burrows::Burrows::act3();
+        for c in &mut b.cages {
+            c.request = 2;
+        }
+        state.burrows = Some(b);
+        out.extend(fill);
+        out.extend([0, 1, 2, 3].map(off));
+        out.push(Action::LoadRegion { slot: 0, region: Some(1219) });
+        out.extend((4..=6).map(|entity| Action::EntityAnim { entity, anim: 94, looped: true, wait: false }));
+    } else if act3 {
+        // Thread routine 9: move hero 1, camera 18, the fall, the fade in, the hero camera 8,
+        // 1.5 s, the camera back; the gate-only stepper.
+        state.burrows = Some(crate::burrows::Burrows::gates_only());
+        out.extend((0..7).map(off));
+        out.extend([
+            Action::MoveHero { locator: 1 },
+            Action::PlayCamera { track: 18, wait: false, end: 1, speed: 1.0 },
+            Action::LongFall,
+            Action::FadeIn { seconds: 0.5, wait: false },
+            Action::PlayTarget { track: 8, wait: true, end: 1, speed: 1.0, target: CameraTarget::Hero },
+            wait(1.5),
+            Action::ReturnCamera { preset: -1, release: true },
+        ]);
     } else {
         state.burrows = None;
         out.extend((0..7).map(off));
     }
+    state.set_word(1217, 1, due as i32);
     out
+}
+
+/// SPEC-0045 1217 activate-world: in Act 3 routine 3 (fight due) sets the start bit; routine 4
+/// (not due) sets it, fades out at once, stops effects 10 to 23 and requests state 2 on gate 0.
+fn burrows_activate(state: &mut GameState) -> Vec<Action> {
+    if !state.flag(83) {
+        return Vec::new();
+    }
+    let w = state.word(1217, 0);
+    state.set_word(1217, 0, w | 1);
+    if state.word(1217, 1) != 0 {
+        return Vec::new();
+    }
+    let mut v = vec![Action::FadeOut { seconds: 0.0, wait: false }];
+    v.extend((10..=23).map(|slot| Action::StopEffect { slot }));
+    v.push(Action::BurrowsRequest { kind: 1, index: 0, request: 2, inner: -1 });
+    v
 }
 
 /// The stage spawns of 1217: spawn 1 entity 0 at locator 13 (bit 10); spawn 2 entities 0 and 1
@@ -11845,23 +11891,41 @@ fn burrows_spawn(n: u8) -> Vec<Action> {
     }
 }
 
-/// SPEC-0045 1217 fight controller (Act 1), one step per pass while no controller scene runs:
-/// the intro A, the win with outro A, the stage starts, the stage scenes and the fight monitor.
+/// SPEC-0045 1217 fight controller, one step per pass while no controller scene runs: the intro
+/// (A in Act 1, B in Act 3), the win with its outro, the stage starts, the stage scenes (Act 3
+/// starts the stage at once), the fight monitor and, in Act 3, the defeat check (SetGameOver is
+/// not built; the swap lock is).
 /// The skip intro (button 5 at the intro's start) is not read; the main records' scenes are
 /// not played (they are object animations), so the death step of the records counts as done
 /// when the entities are dead.
 fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
     use Action::*;
     let w = state.word(1217, 0);
-    if w & BUSY != 0 || dialog || state.flag(83) {
+    if w & BUSY != 0 || dialog || state.word(1217, 1) == 0 {
         return Vec::new();
     }
+    let act3 = state.flag(83);
     let bit = |b: i32| w & (1 << b) != 0;
     let busy = |state: &mut GameState| state.set_word(1217, 0, w | BUSY);
     let done = |b: i32| Bits { word: 0, set: 1 << b, clear: BUSY };
     let cut = |track| [FadeOut { seconds: 0.7, wait: true }, PlayCamera { track, wait: false, end: 1, speed: 1.0 }, FadeIn { seconds: 0.4, wait: false }];
     let cam_wait = |track| PlayCamera { track, wait: true, end: 1, speed: 1.0 };
     let anim = |anim, wait| EntityAnim { entity: 7, anim, looped: false, wait };
+    // 1. The intro (B, Act 3): the records' requests at once, the fall and the cameras.
+    if !bit(1) && bit(0) && act3 {
+        busy(state);
+        let mut v: Vec<Action> = (0..11u8).map(|index| BurrowsRequest { kind: 0, index, request: 2, inner: 2 }).collect();
+        v.extend([BurrowsRequest { kind: 1, index: 0, request: 2, inner: -1 }, BurrowsRequest { kind: 1, index: 1, request: 2, inner: -1 }]);
+        v.extend([HoldHero, FadeOut { seconds: 0.5, wait: true }, WaitLoads, ActivateEntity { entity: 8 }, wait(0.5), EntityAnim { entity: 8, anim: 2, looped: true, wait: false }]);
+        v.extend([Sleep { ticks: 3 }, camera(18), LetterBox { on: true, seconds: 1.0, wait: false }, MoveHero { locator: 1 }, LongFall, FadeIn { seconds: 0.5, wait: false }]);
+        v.extend([PlayTarget { track: 8, wait: true, end: 1, speed: 1.0, target: CameraTarget::Hero }, wait(0.5), camera(18)]);
+        v.extend([EntityAnim { entity: 8, anim: 21, looped: false, wait: true }, Equip { on: true }, EntityAnim { entity: 8, anim: 6, looped: false, wait: true }]);
+        v.extend([EntityAnim { entity: 8, anim: 7, looped: false, wait: false }, ReleaseEntity { entity: 8 }, Sleep { ticks: 60 }]);
+        v.extend(burrows_spawn(1));
+        v.extend([cam_wait(19), cam_wait(20), cam_wait(21), FadeOut { seconds: 0.5, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, release_camera()]);
+        v.extend([FadeIn { seconds: 0.5, wait: false }, done(1)]);
+        return v;
+    }
     // 1. The intro (A).
     if !bit(1) && bit(0) {
         busy(state);
@@ -11885,6 +11949,30 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
     }
     if !bit(1) || bit(3) {
         return Vec::new();
+    }
+    // 2. The win in Act 3: flags 278, 84, 5 and 6, then outro B (each farmer's cage opened with
+    // its camera, then the farmers' thanks).
+    if bit(2) && act3 {
+        busy(state);
+        for f in [278, 84, 5, 6] {
+            state.set(f, true);
+        }
+        let mut v = vec![FadeOut { seconds: 0.5, wait: true }, LetterBox { on: true, seconds: 1.0, wait: false }, camera(14), HoldHero, FadeIn { seconds: 0.5, wait: false }];
+        v.extend([EntityAnim { entity: 8, anim: 0, looped: false, wait: true }, LevelState { flag: 18, on: true }, Sleep { ticks: 20 }, camera(10)]);
+        v.extend((0..11u8).flat_map(|index| [BurrowsClose { index }, Sleep { ticks: 15 }]));
+        v.extend([BurrowsRequest { kind: 1, index: 1, request: 4, inner: -1 }, wait(1.0), DeactivateEntity { entity: 8 }]);
+        for (k, track) in [(0u8, 19), (1, 20), (2, 21)] {
+            v.extend([BurrowsRequest { kind: 2, index: k, request: 4, inner: -1 }, camera(track), Sleep { ticks: 1 }, WaitCage { index: k }, Sleep { ticks: 60 }]);
+        }
+        v.extend(cut(14));
+        v.extend([FadeOut { seconds: 0.5, wait: true }, MoveHero { locator: 92 }]);
+        for (entity, locator) in [(4, 22), (6, 24), (5, 23)] {
+            v.extend([MoveEntity { entity, locator, face: true }, WalkEntity { entity, locator, wait: false, orient: true, stop: 1.1 }]);
+        }
+        v.extend([FadeIn { seconds: 0.5, wait: false }, camera(22), Converse { entity: 4, line: 0 }, Converse { entity: 5, line: 1 }, Converse { entity: 6, line: 4 }]);
+        v.extend([FadeOut { seconds: 0.5, wait: true }, DeactivateEntity { entity: 6 }, DeactivateEntity { entity: 5 }, DeactivateEntity { entity: 4 }, release_camera()]);
+        v.extend([Equip { on: false }, LetterBox { on: false, seconds: 0.0, wait: false }, FadeIn { seconds: 0.5, wait: false }, done(3)]);
+        return v;
     }
     // 2. The win: flags 82 and 147, then outro A.
     if bit(2) {
@@ -11917,6 +12005,10 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
     // A stage scene (Act 1): fade, camera, letterbox, the line, then the stage start. Which of
     // cameras 10 and 6 each scene uses is not given (R-0036): 10 for the first, 6 after.
     for (req, partner, line, flag, track) in [(4, 5, 7, 1, 10), (6, 7, 8, 5, 6), (8, 9, 9, 10, 6)] {
+        if bit(req) && !bit(partner) && act3 {
+            state.set_word(1217, 0, w | (1 << partner));
+            return vec![LevelState { flag, on: true }];
+        }
         if bit(req) && !bit(partner) {
             busy(state);
             let mut v = vec![HoldHero, FadeOut { seconds: 0.7, wait: true }, camera(track), LetterBox { on: true, seconds: 1.0, wait: false }, FadeIn { seconds: 0.4, wait: false }];
@@ -12011,6 +12103,11 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
         } else if state.level(9) && complete(state, records) {
             set(state, if bit(8) { 13 } else { 8 });
         }
+    }
+    // 4. The defeat check (Act 3): hero 1 down with no Potion of Revival (item 50) locks the
+    // swap when hero 1 is active (SetGameOver(2) otherwise is not built).
+    if act3 && state.hero.dead[1] && !state.has_item(50) && state.hero.selected == 1 && state.hero.swap_mode != 1 {
+        v.push(SwapMode { mode: 1 });
     }
     v
 }
@@ -15447,6 +15544,42 @@ mod tests {
         let outro = on_update(1217, &mut s, false);
         assert!(s.flag(82) && s.flag(147) && !s.flag(5));
         assert!(outro.contains(&Action::Converse { entity: 3, line: 13 }) && outro.contains(&Action::LevelState { flag: 18, on: true }));
+    }
+
+    #[test]
+    fn burrows_act3() {
+        // SPEC-0045 1217, Act 3 (flag 83, 278 clear): the farmer cages, region 1219 and the
+        // farmers' loops; the activation starts the fight; intro B (the fall, the cameras, spawn 1).
+        let mut s = GameState::default();
+        s.set(83, true);
+        let init = on_init(1217, &mut s);
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1219) }) && init.contains(&Action::EntityAnim { entity: 5, anim: 94, looped: true, wait: false }));
+        assert_eq!(s.burrows.as_ref().map(|b| b.cages.iter().map(|c| (c.entity, c.request)).collect::<Vec<_>>()), Some(vec![(4, 2), (5, 2), (6, 2)]));
+        on_activate(1217, &mut s);
+        let intro = on_update(1217, &mut s, false);
+        assert!(intro.contains(&Action::LongFall) && intro.contains(&Action::ActivateEntity { entity: 8 }) && intro.contains(&Action::MoveEntity { entity: 0, locator: 13, face: true }));
+        for a in &intro {
+            if let Action::Bits { word, set, clear } = *a {
+                let w = s.word(1217, word);
+                s.set_word(1217, word, (w | set) & !clear);
+            }
+        }
+        // A stage request starts the stage at once (no scene); the win sets 278, 84, 5 and 6.
+        s.set_word(1217, 0, s.word(1217, 0) | 1 << 4);
+        assert_eq!(on_update(1217, &mut s, false), vec![Action::LevelState { flag: 1, on: true }]);
+        s.set_level(14, true);
+        on_update(1217, &mut s, false);
+        let outro = on_update(1217, &mut s, false);
+        assert!(s.flag(278) && s.flag(84) && s.flag(5) && s.flag(6));
+        assert!(outro.contains(&Action::Converse { entity: 6, line: 4 }) && outro.contains(&Action::WaitCage { index: 2 }));
+        // Not due (278 set): the gates only and thread routine 9's fall.
+        let mut s = GameState::default();
+        s.set(83, true);
+        s.set(278, true);
+        let init = on_init(1217, &mut s);
+        assert!(init.contains(&Action::LongFall) && s.burrows.as_ref().is_some_and(|b| b.mains.is_empty()));
+        assert!(on_activate(1217, &mut s).contains(&Action::BurrowsRequest { kind: 1, index: 0, request: 2, inner: -1 }));
+        assert!(on_update(1217, &mut s, false).is_empty());
     }
 
     #[test]

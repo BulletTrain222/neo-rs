@@ -4,7 +4,7 @@
 //! 8 changes nothing, a request equal to the state is dropped, any other becomes the state and
 //! that pass is the state's entry; the request is then 8).
 //!
-//! Not covered: the Act 3 records.
+//! Act 3 has the same main records and gates and three cages (the farmers).
 use crate::level::Action;
 
 /// The request that changes nothing.
@@ -148,6 +148,20 @@ impl Burrows {
         let mut fill: Vec<Action> = (10..=23).map(|slot| Action::StopEffect { slot }).collect();
         fill.push(Action::InitObjOn { obj: 554, end: false });
         (Self { gates, mains, cages }, fill)
+    }
+
+    /// The Act 3 records of the fight-due branch: the same main records and gates, and the
+    /// three Act 3 cages (entities 4, 5 and 6). Returns the fill's calls (effects 10 to 23
+    /// stopped, the cages' extra objects 553, 552 and 551 at their start pose).
+    pub fn act3() -> (Self, Vec<Action>) {
+        let (b, _) = Self::act1();
+        let range = |a: usize, n: usize| (a..a + n).collect::<Vec<_>>();
+        let cages = [(583, 590, 4, 553, 41), (569, 576, 5, 552, 42), (555, 562, 6, 551, 43)]
+            .map(|(a, bb, entity, extra, locator)| Cage { a: range(a, 7), b: range(bb, 7), entity, extra, locator, state: 0, request: NONE, prev: 0 })
+            .to_vec();
+        let mut fill: Vec<Action> = (10..=23).map(|slot| Action::StopEffect { slot }).collect();
+        fill.extend([553, 552, 551].map(|obj| Action::InitObjOn { obj, end: false }));
+        (Self { gates: b.gates, mains: b.mains, cages }, fill)
     }
 
     /// The gates only (both branches of the fight-due test fill them).
