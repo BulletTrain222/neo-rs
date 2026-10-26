@@ -19,6 +19,11 @@ use crate::rng::Rng;
 
 type Vec3 = [f32; 3];
 
+/// The knight's locomotion slot values (SPEC-0012; R-0067): mode 0 plays entry 3 (clip 40), mode 5
+/// entry 4 (clip 38, positive sideways root: it moves to its left) and mode 6 entry 5 (clip 39,
+/// to its right).
+pub const SLOTS: [i32; 7] = [3, 3, 3, -1, -1, 5, 4];
+
 /// The tuning block: 56 words from 0x2DA3E8 to 0x2DA4C7.
 pub const BASE: u32 = 0x002D_A3E8;
 pub const WORDS: usize = 56;
@@ -376,7 +381,17 @@ impl Knight {
     }
 
     /// One tick (SPEC-0012 Per-tick order).
+    /// One tick; while it travels by a locomotion mode without its own clip, the clip is the
+    /// mode's slot entry (SLOTS, R-0067).
     pub fn tick(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
+        let mut a = self.tick_inner(v, w, rng);
+        if let (None, Some((mode, _))) = (a.anim, a.travel) {
+            a.anim = crate::enemy::slot_entry(&SLOTS, mode);
+        }
+        a
+    }
+
+    fn tick_inner(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
         let mut a = Act::default();
         // 1. The glow, from the flags of the previous tick.
         for k in 0..6 {

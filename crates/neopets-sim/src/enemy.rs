@@ -126,6 +126,19 @@ pub struct Defence {
     pub angle: f32,
 }
 
+/// The clip entry a locomotion mode plays from the seven values of the shared slot setter
+/// (SPEC-0029 Behavior 2; R-0067): modes 0 to 4 read values 1 to 5, mode 6 the 6th and mode 5
+/// the 7th; -1 (or any other mode) plays nothing.
+pub fn slot_entry(slots: &[i32; 7], mode: u8) -> Option<u32> {
+    let v = match mode {
+        0..=4 => slots[mode as usize],
+        5 => slots[6],
+        6 => slots[5],
+        _ => -1,
+    };
+    u32::try_from(v).ok()
+}
+
 /// The hero's reach and facing arc for the melee defence (hero +0x14B8 and +0x14B4, set at
 /// spawn: 8.0 units and cosine 0.5 for both heroes).
 pub const DEFENCE_REACH: f32 = 8.0;
@@ -1751,6 +1764,15 @@ mod tests {
         v.hero_swing = Some(0);
         e.tick(&v, &mut rng);
         assert_ne!(e.outer, 7, "8.0 is not within the reach");
+    }
+
+    #[test]
+    fn slot_entries() {
+        // SPEC-0029 Behavior 2: the setter's 6th value is mode 6's clip, the 7th mode 5's.
+        let knight = [3, 3, 3, -1, -1, 5, 4];
+        assert_eq!([0, 3, 5, 6].map(|m| slot_entry(&knight, m)), [Some(3), None, Some(4), Some(5)]);
+        let ixi = [9, 10, 30, 14, 15, 17, 16];
+        assert_eq!([1, 5, 6, 9].map(|m| slot_entry(&ixi, m)), [Some(10), Some(16), Some(17), None]);
     }
 
     #[test]

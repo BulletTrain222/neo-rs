@@ -6,13 +6,17 @@
 //! whirl), the movement band, the orbit, the charge's sub-steps, the push and the damage scale.
 //!
 //! The movement states ask for a locomotion mode (0 rush, 1 strafe close, 3 strafe back, 5 and 6
-//! orbit) and a target; the clip of each mode is not given (R-0067), so the host plays them once
-//! it is. The host measures the missile contact, the hero's hits, the weapon tests and the
+//! orbit) and a target; each mode plays its slot entry (SLOTS; R-0067). The host measures the missile contact, the hero's hits, the weapon tests and the
 //! navigation check. Every tuning value is read from the boot data at the addresses of SPEC-0014.
 
 use crate::rng::Rng;
 
 type Vec3 = [f32; 3];
+
+/// The Ixi Chief's locomotion slot values (SPEC-0014; R-0067), set before every state handler:
+/// modes 0, 1, 2, 3 and 4 play entries 9, 10, 30, 14 and 15; mode 5 entry 16 (clip 27, it
+/// circles to its left) and mode 6 entry 17 (clip 28, to its right).
+pub const SLOTS: [i32; 7] = [9, 10, 30, 14, 15, 17, 16];
 
 /// The tuning block: 47 words from 0x2DAE90 to 0x2DAF4B (the base damage scale is the last).
 pub const BASE: u32 = 0x002D_AE90;
@@ -287,7 +291,17 @@ impl Ixi {
     }
 
     /// One tick (SPEC-0014 Each tick, in order).
+    /// One tick; while it travels by a locomotion mode without its own clip, the clip is the
+    /// mode's slot entry (SLOTS, R-0067).
     pub fn tick(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
+        let mut a = self.tick_inner(v, w, rng);
+        if let (None, Some((mode, _))) = (a.anim, a.travel) {
+            a.anim = crate::enemy::slot_entry(&SLOTS, mode);
+        }
+        a
+    }
+
+    fn tick_inner(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
         let mut a = Act::default();
         for c in &mut self.cool {
             if *c > 0 {
@@ -591,6 +605,8 @@ impl Ixi {
                 None => fail(self, rng),
             },
             1 => {
+                // The charge's own slot write: slot 0 plays entry 30 (clip 9, 20.0 units/s).
+                a.anim = Some(30);
                 a.travel = Some((0, target));
                 if hdist(v.position, target) < 1.0 {
                     self.state = State::Charge(2, target);

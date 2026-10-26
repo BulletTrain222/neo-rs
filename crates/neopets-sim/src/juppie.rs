@@ -123,11 +123,13 @@ pub struct Juppie {
     slam_latch: bool,
     once: bool,
     pub uses: u32,
+    /// The controller's start request of animation 7 has been made.
+    started: bool,
 }
 
 impl Default for Juppie {
     fn default() -> Self {
-        Self { stage: 0, marker: None, top: Top::Hub { played: false }, cooldown: 0, stun: 0, counted: 0, slam_latch: false, once: false, uses: 0 }
+        Self { stage: 0, marker: None, top: Top::Hub { played: false }, cooldown: 0, stun: 0, counted: 0, slam_latch: false, once: false, uses: 0, started: false }
     }
 }
 
@@ -158,12 +160,17 @@ impl Juppie {
     pub fn tick(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
         let mut a = Act::default();
         match self.top {
-            Top::Hub { played } => {
-                if !played {
-                    if Self::play(&mut a, v, 6) {
-                        self.top = Top::Hub { played: true };
-                    }
-                } else {
+            Top::Hub { .. } => {
+                // The controller's start requests animation 7 once (R-0036 4); after that the
+                // hub's rule: nothing while 7 is current, 6 from any other animation, and 7 once
+                // 6 reaches the 0.99 gate.
+                if !self.started {
+                    self.started = true;
+                    a.anim = Some(7);
+                } else if v.clip.0 == 7 {
+                } else if v.clip.0 != 6 {
+                    a.anim = Some(6);
+                } else if v.clip.2 {
                     a.anim = Some(7);
                 }
                 let next = match self.stage {
@@ -373,6 +380,21 @@ mod tests {
 
     fn view<'a>(level: &'a dyn Fn(u16) -> bool, locator: &'a dyn Fn(usize) -> Option<Vec3>, clip: (u32, f32, bool)) -> View<'a> {
         View { position: [0.0; 3], facing: [0.0, 0.0, 1.0], head: [0.0, 0.0, 3.0], hero: [0.0, 0.0, 20.0], clip, can_act: true, hp: 190, max_hp: 190, level, locator, hero_hit: None }
+    }
+
+    #[test]
+    fn the_fight_starts_on_animation_7() {
+        // SPEC-0015 test vector (R-0036 4).
+        let w = words();
+        let mut rng = Rng::seeded(1);
+        let no = |_: u16| false;
+        let none = |_: usize| None;
+        let mut j = Juppie::default();
+        assert_eq!(j.tick(&view(&no, &none, (0, 0.0, false)), &w, &mut rng).anim, Some(7), "the start requests 7");
+        assert_eq!(j.tick(&view(&no, &none, (7, 0.3, false)), &w, &mut rng).anim, None, "7 current: nothing");
+        assert_eq!(j.tick(&view(&no, &none, (17, 1.0, true)), &w, &mut rng).anim, Some(6), "after a set-back: 6");
+        assert_eq!(j.tick(&view(&no, &none, (6, 0.5, false)), &w, &mut rng).anim, None);
+        assert_eq!(j.tick(&view(&no, &none, (6, 0.99, true)), &w, &mut rng).anim, Some(7));
     }
 
     #[test]
