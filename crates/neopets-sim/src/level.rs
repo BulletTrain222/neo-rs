@@ -1570,6 +1570,21 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0043 1122 Init: trigger 5 (the waves); objects by 31 and 320; the slot thread (31:
+        // set 0, 30: 1, else 2; region 1123 + set) into slot 0; with 31 trigger 6 (the arena
+        // entry). Triggers 0 to 3 (ActivateTransitionAssets, RegisterTransitionMap) and the
+        // navmesh assignments are not built.
+        1122 => {
+            let mut v = vec![reg(5, 5)];
+            if state.flag(31) {
+                v.extend([Action::InitObjOn { obj: 2, end: false }, Action::InitObjOn { obj: 4, end: state.flag(320) }, reg(6, 6)]);
+            } else {
+                v.extend([Action::InitObjOn { obj: 1, end: false }, Action::InitObjOn { obj: 4, end: false }]);
+            }
+            let set = if state.flag(31) { 0 } else if state.flag(30) { 1 } else { 2 };
+            v.push(Action::LoadRegion { slot: 0, region: Some(1123 + set) });
+            v
+        }
         // SPEC-0043 956 Init: the first-update word; objects 2 and 1 by 214 and 283; object 17;
         // the lift (object 10 when not ready with 66 set, else object 9 and the lift down; 211
         // set once all four knights are free); the triggers; the cages (211 clear: registered,
@@ -4950,6 +4965,38 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0043 1122 trigger 5 (entering, 320 clear, once per load): the opening (cameras 4
+        // and 5, objects 1, 2, 0, 4 and 5), then wave 1 (set 3 into slot 1, AIs 11 to 13
+        // aggressive); Update runs the next waves and the end. DisableInvisibility is not built.
+        (1122, 5) if call.object && call.state == 1 && !state.flag(320) && state.word(pack, 1) == 0 => {
+            state.set_word(pack, 1, 1);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                Action::MoveHero { locator: 25 },
+                Action::DeactivateObj { obj: 1 },
+                Action::InitObjOn { obj: 2, end: false },
+                wait(0.5),
+                Action::PlayAnim { obj: 2, speed: 1.0, wait: true },
+                wait(1.0),
+                Action::InitObjOn { obj: 0, end: false },
+                Action::DeactivateObj { obj: 4 },
+                Action::InitObjOn { obj: 5, end: false },
+                Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                wait(0.5),
+                Action::PlayAnim { obj: 5, speed: 1.0, wait: true },
+                wait(1.0),
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::InitObjOn { obj: 4, end: false },
+                Action::LoadRegion { slot: 1, region: Some(1126) },
+                Action::Agro { entity: 11 },
+                Action::Agro { entity: 12 },
+                Action::Agro { entity: 13 },
+                Action::Bits { word: 2, set: 1, clear: 0 },
+            ]);
+        }
+        // Trigger 6 (the hero's own fire): the arena entry requested (stage bit 0 of word 3).
+        (1122, 6) if call.object => state.set_word(pack, 3, state.word(pack, 3) | 1),
         // SPEC-0043 956 trigger routine 1 (0 to 2, entering): a new choice (index 1: 0, 0: 1, 2: 2)
         // starts thread 4: with 67 set, set 10, 12 or 11 (regions 967, 969, 968) into slot K.
         (956, 1) if call.object && call.state == 1 => {
@@ -7398,6 +7445,82 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0043 1122 Update: the waves (word 2: 1 to 3) advance once every character of slot
+        // 1 is dead (3 s, the next set: 4 then 5, their AIs aggressive), and after the third the
+        // end (320, the hero to locator 24, the objects back). With 31 and 320 the arena thread:
+        // entities 4 to 18 off each pass; the entry (movie 52 counted, the hero to locator 26,
+        // object 3, level state 4 cleared), movie 53 counted after the shield break (level state
+        // 1), and the boss end after level state 2 (321, 93, 322; value 50 for eW 151 and the
+        // load of eW 151, pack 1300, in place of movie 54). The boss-fight refills and the
+        // hero-down game over are not built.
+        1122 => {
+            let w = state.word(pack, 2);
+            if (1..=3).contains(&w) && state.slot_alive.get(&1) == Some(&0) {
+                state.set_word(pack, 2, 0);
+                let next = |set: u32, ais: &[usize], stage: i32| {
+                    let mut v = vec![wait(3.0), Action::LoadRegion { slot: 1, region: None }, Action::LoadRegion { slot: 1, region: Some(1123 + set) }];
+                    v.extend(ais.iter().map(|&entity| Action::Agro { entity }));
+                    v.push(Action::Bits { word: 2, set: stage, clear: !stage });
+                    v
+                };
+                match w {
+                    1 => out.extend(next(4, &[14, 15, 13], 2)),
+                    2 => out.extend(next(5, &[17, 18], 3)),
+                    _ => {
+                        state.set(320, true);
+                        out.extend([
+                            wait(3.0),
+                            Action::HoldHero,
+                            Action::MoveHero { locator: 24 },
+                            Action::DeactivateObj { obj: 5 },
+                            Action::InitObjOn { obj: 4, end: false },
+                            Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                            wait(0.5),
+                            Action::PlayAnim { obj: 4, speed: 1.0, wait: true },
+                            wait(1.0),
+                            Action::DeactivateObj { obj: 2 },
+                            Action::InitObjOn { obj: 1, end: false },
+                            Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                            wait(0.5),
+                            Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                            Action::DeactivateObj { obj: 0 },
+                            Action::ReturnCamera { preset: -1, release: true },
+                        ]);
+                    }
+                }
+            }
+            if state.flag(31) && state.flag(320) && state.word(pack, 4) == 0 {
+                out.extend((4..=18).map(|entity| Action::DeactivateEntity { entity }));
+                let b = state.word(pack, 3);
+                if b & 1 != 0 && b & 2 == 0 {
+                    state.set_word(pack, 3, b | 2);
+                    state.set_word(pack, 4, 1);
+                    state.movies.insert(52);
+                    state.set_level(4, false);
+                    out.extend([Action::HoldHero, Action::FadeOut { seconds: 0.1, wait: true }, Action::MoveHero { locator: 26 }, Action::ReturnCamera { preset: -1, release: true }]);
+                    out.extend((4..=18).map(|entity| Action::DeactivateEntity { entity }));
+                    out.extend([Action::InitObjOn { obj: 3, end: false }, Action::Equip { on: true }, Action::FadeIn { seconds: 0.5, wait: true }, wait(0.5), Action::Bits { word: 4, set: 0, clear: 1 }]);
+                } else if b & 4 != 0 && b & 8 == 0 {
+                    state.set_word(pack, 3, b | 8);
+                    state.movies.insert(53);
+                } else if b & 16 != 0 && state.word(pack, 5) == 0 {
+                    state.set_word(pack, 5, 1);
+                    for f in [321, 93, 322] {
+                        state.set(f, true);
+                    }
+                    state.movies.insert(54);
+                    state.blackboard.insert((2, 151), 50);
+                    out.extend([Action::FadeOut { seconds: 0.3, wait: true }, Action::ReplaceExterior { slot: 151, plane: -1 }]);
+                } else {
+                    if state.level(1) && b & 4 == 0 {
+                        state.set_word(pack, 3, state.word(pack, 3) | 4);
+                    }
+                    if state.level(2) {
+                        state.set_word(pack, 3, state.word(pack, 3) | 16);
+                    }
+                }
+            }
+        }
         // SPEC-0043 956 Update: the first update clears its word (SetTargetActive is not built);
         // with 214 set and 216 clear the aftermath scene runs once (flags 216, 10, 18, 30, 47 and
         // 64, movie 14 counted, 217, thread 3, then the scene with entity 28, lines 63 and 72).
@@ -8437,6 +8560,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
+        }
+        // SPEC-0043 1122 activate-world (registered with 31): level state 4.
+        1122 if state.flag(31) => {
+            state.set_level(4, true);
+            Vec::new()
         }
         // SPEC-0045 777 arrival: value 70 for eW 31 moves the hero to locator 0 with the normal
         // camera; the value is reset.
@@ -10433,6 +10561,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0043 1122: entities 10, 7, 8 and 9.
+        (1122, 7..=10) => Some(entity as u8),
         // SPEC-0045 777: routines 1 to 9.
         (777, 0 | 4) => Some(1),
         (777, 1 | 3) => Some(2),
@@ -10570,6 +10700,21 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 777 {
         return talk_777(routine, state);
+    }
+    // SPEC-0043 1122: entity 10 by flags 29, 28 and 27 (lines 1 to 10); entities 7, 8 and 9 by
+    // 29, 28 and 24 (blocks from 11, 21 and 31): three lines, one, three, else three.
+    if pack == 1122 && (7..=10).contains(&routine) {
+        let (b, third) = if routine == 10 { (1, 27) } else { (11 + 10 * (routine as u16 - 7), 24) };
+        let f = |n| state.flag(n);
+        return if f(29) {
+            cycle_in(state, 1122, routine, 1, &[b, b + 1, b + 2])
+        } else if f(28) {
+            vec![Action::Talk { line: b + 3 }]
+        } else if f(third) {
+            cycle_in(state, 1122, routine, 2, &[b + 4, b + 5, b + 6])
+        } else {
+            cycle_in(state, 1122, routine, 3, &[b + 7, b + 8, b + 9])
+        };
     }
     // SPEC-0043 1335 proximity: 34 line 3 in the frame unless Random(1, 3) is 1; 31 line 15 and
     // 13 line 24 in the frame; 32, 33 and 35 lines 9, 12 and 6.
@@ -11516,6 +11661,38 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1122_waves_and_arena() {
+        let mut s = GameState::default();
+        assert!(on_init(1122, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1125) }));
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        assert!(on_trigger(1122, 5, enter(5), &mut s).actions.contains(&Action::LoadRegion { slot: 1, region: Some(1126) }));
+        assert!(on_trigger(1122, 5, enter(5), &mut s).actions.is_empty());
+        // The waves: each all-dead slot loads the next (sets 4, 5), then the end sets 320.
+        s.set_word(1122, 2, 1);
+        s.slot_alive.insert(1, 0);
+        assert!(on_update(1122, &mut s, false).contains(&Action::LoadRegion { slot: 1, region: Some(1127) }));
+        s.set_word(1122, 2, 2);
+        assert!(on_update(1122, &mut s, false).contains(&Action::LoadRegion { slot: 1, region: Some(1128) }));
+        s.set_word(1122, 2, 3);
+        assert!(on_update(1122, &mut s, false).contains(&Action::MoveHero { locator: 24 }) && s.flag(320));
+        // Entity 8 with 24 set: lines 25, 26, 27.
+        s.set(24, true);
+        assert_eq!(on_talk(1122, 8, &mut s), vec![Action::Talk { line: 25 }]);
+        // The arena (31 and 320): trigger 6, then the entry; level state 2 leads to the end.
+        let mut s = GameState::default();
+        s.set(31, true);
+        s.set(320, true);
+        on_init(1122, &mut s);
+        on_trigger(1122, 6, enter(6), &mut s);
+        assert!(on_update(1122, &mut s, false).contains(&Action::MoveHero { locator: 26 }));
+        s.set_word(1122, 4, 0);
+        s.set_level(2, true);
+        on_update(1122, &mut s, false);
+        assert!(on_update(1122, &mut s, false).contains(&Action::ReplaceExterior { slot: 151, plane: -1 }));
+        assert!(s.flag(321) && s.flag(322));
     }
 
     #[test]
