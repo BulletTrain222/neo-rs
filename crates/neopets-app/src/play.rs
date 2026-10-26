@@ -92,6 +92,8 @@ pub struct World {
     /// Script-group type registrations: trigger index to its owner group (SPEC-0048 Script
     /// groups, type registration); a later RegisterTrigger on the index replaces it.
     group_routes: HashMap<u16, usize>,
+    /// Triggers of deactivated script groups (DeactivateScriptGroup): they start nothing.
+    disabled_triggers: std::collections::HashSet<u16>,
     records: HashMap<u16, neopets_sim::trigger::Record>,
     pub groups: Vec<neopets_data::trigger::ScriptGroup>,
     placements: Vec<(u8, u8)>,
@@ -183,6 +185,7 @@ impl World {
             volumes: Vec::new(),
             routines: HashMap::new(),
             group_routes: HashMap::new(),
+            disabled_triggers: Default::default(),
             records: HashMap::new(),
             groups: neopets_data::trigger::script_groups(&bytes, &chain.chunks),
             placements: neopets_data::travel::placement_table(&bytes, &chain.chunks),
@@ -1341,9 +1344,14 @@ impl Play {
     /// object 0 is drawn at its start (state 9), or at its last frame (finished) when its
     /// collected entry is set.
     fn group_setup(&self) -> Vec<Action> {
+        (0..self.world.groups.len()).flat_map(|i| self.group_setup_one(i)).collect()
+    }
+
+    /// The built-in set-up of one script group by its kind (also ReActivateScriptGroup).
+    fn group_setup_one(&self, i: usize) -> Vec<Action> {
         let mut out = Vec::new();
-        for g in &self.world.groups {
-            let Some(obj) = g.objects.first().and_then(|&o| usize::try_from(o).ok()) else { continue };
+        if let Some(g) = self.world.groups.get(i) {
+            let Some(obj) = g.objects.first().and_then(|&o| usize::try_from(o).ok()) else { return out };
             match g.kind {
                 1 => out.push(Action::InitObjOn { obj, end: self.state.collected.contains(&g.key) }),
                 // Kind 5 (a reaction object): object 0 on and looped at 1.0.
@@ -1892,6 +1900,26 @@ impl Play {
                 Action::WaitWord { word } => return Some(Wait::Word(pack, word)),
                 Action::CameraShake { t, a, s, p4, r, phi, z } => self.shake.start(t, a, s, p4, r, phi, z),
                 Action::CameraShakeMode { kind, duration, strength } => self.shake.start_mode(kind, duration, strength),
+                Action::DeactivateGroup { group } => {
+                    if let Some(g) = self.world.groups.get(group).cloned() {
+                        for t in g.triggers.iter().filter_map(|&t| u16::try_from(t).ok()) {
+                            self.world.routines.remove(&t);
+                            self.world.group_routes.remove(&t);
+                            self.world.disabled_triggers.insert(t);
+                        }
+                        let objs: Vec<Action> = g.objects.iter().filter_map(|&o| usize::try_from(o).ok()).map(|obj| Action::DeactivateObj { obj }).collect();
+                        self.apply(&objs);
+                    }
+                }
+                Action::ReactivateGroup { group } => {
+                    if let Some(g) = self.world.groups.get(group).cloned() {
+                        for t in g.triggers.iter().filter_map(|&t| u16::try_from(t).ok()) {
+                            self.world.disabled_triggers.remove(&t);
+                        }
+                    }
+                    let setup = self.group_setup_one(group);
+                    self.apply(&setup);
+                }
                 Action::RegisterInstance { routine, trigger, group } => {
                     let triggers: Vec<u16> = match self.world.groups.get(group) {
                         Some(g) if g.kind == 7 => g.triggers.iter().filter_map(|&t| u16::try_from(t).ok()).collect(),
@@ -3638,6 +3666,9 @@ impl Play {
         // The callbacks read the pad's newly-pressed word themselves; an open box keeps it.
         let square = self.square_now && !self.dialogue_open;
         for i in fired {
+            if self.world.disabled_triggers.contains(&i) {
+                continue;
+            }
             let rec = self.world.records.get(&i).copied().unwrap_or_default();
             if let Some(g) = self.world.groups.iter().position(|g| g.kind == 1 && g.triggers.first() == Some(&(i as i32))) {
                 self.chest_step(g, rec, square);

@@ -220,6 +220,11 @@ pub enum Action {
     CameraShake { t: f32, a: f32, s: f32, p4: f32, r: f32, phi: f32, z: f32 },
     /// StartCameraShakeMode(type, duration, strength).
     CameraShakeMode { kind: i32, duration: f32, strength: f32 },
+    /// DeactivateScriptGroup(i) (SPEC-0030 row 270): its member triggers start nothing and its
+    /// member objects are deactivated.
+    DeactivateGroup { group: usize },
+    /// ReActivateScriptGroup(i) (row 271): the built-in set-up of its kind runs again.
+    ReactivateGroup { group: usize },
     SleepRandom { lo: u32, hi: u32 },
 }
 
@@ -755,13 +760,15 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 799 | 880 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 796 | 799 | 880 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0037 796 Init: objects 1, 0 and 17 off; S1 on trigger 1 and S0 on trigger 0.
+        796 => vec![Action::InitObjOn { obj: 1, end: false }, Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 17, end: false }, reg(1, 1), reg(0, 0)],
         // SPEC-0037 1369 Init: objects 0 and 1 off, value 10 (type 2) for eW 157, T1 on trigger 1
         // and T0 on trigger 0.
         1369 => {
@@ -1740,6 +1747,35 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 1, region: Some(885) }]);
             }
             out.actions.extend([Action::WaitInside { index: call.index }, Action::LoadRegion { slot: 1, region: None }, slots_880(state)]);
+        }
+        // SPEC-0037 796 S1 (trigger 1): the Square context 4; a press walks the hero to locator 7,
+        // plays object 0 (wait) and object 17, deactivates group 19, re-activates groups 20 and
+        // 21, plays object 1, cameras 5 and 4 (wait) and returns the camera (word 0 keeps it
+        // from starting twice while it runs). S0 (trigger 0, entering with the body): value 80
+        // for eW 22, a 1 s fade out, the replacement to eW 22, a 1 s fade in (Medium order).
+        (796, 1) if call.state != 0 && state.word(pack, 0) == 0 => {
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                state.set_word(pack, 0, 1);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: 7, wait: false, orient: true },
+                    Action::PlayAnim { obj: 0, speed: 1.0, wait: true },
+                    Action::PlayAnim { obj: 17, speed: 1.0, wait: false },
+                    Action::DeactivateGroup { group: 19 },
+                    Action::ReactivateGroup { group: 20 },
+                    Action::ReactivateGroup { group: 21 },
+                    Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                    Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 },
+                    Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::Bits { word: 0, set: 0, clear: 1 },
+                ]);
+            }
+        }
+        (796, 0) if call.object && call.state == 1 => {
+            state.blackboard.insert((2, 22), 80);
+            out.actions.extend([Action::FadeOut { seconds: 1.0, wait: false }, Action::ReplaceExterior { slot: 22, plane: -1 }, Action::FadeIn { seconds: 1.0, wait: false }]);
         }
         // SPEC-0037 1369 T1 (trigger 1, the body; no state test): the exterior replacement to eW
         // 157. T0 (trigger 0, the body): the Square context 4; a press walks the hero to locator 1,
@@ -4448,6 +4484,18 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_796_lever_and_exit() {
+        let mut s = GameState::default();
+        let call = TriggerCall { index: 1, state: 2, object: true, square: true };
+        let run = on_trigger(796, 1, call, &mut s).actions;
+        assert!(run.contains(&Action::DeactivateGroup { group: 19 }) && run.contains(&Action::ReactivateGroup { group: 21 }));
+        assert!(on_trigger(796, 1, call, &mut s).actions.is_empty());
+        let exit = on_trigger(796, 0, TriggerCall { index: 0, state: 1, ..call }, &mut s).actions;
+        assert_eq!(exit[1], Action::ReplaceExterior { slot: 22, plane: -1 });
+        assert_eq!(s.blackboard.get(&(2, 22)), Some(&80));
     }
 
     #[test]
