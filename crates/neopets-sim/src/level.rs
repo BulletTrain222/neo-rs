@@ -382,6 +382,8 @@ pub struct GameState {
     /// (GetAssetGroupCharacterRange with IsAI_Dead over it), filled by the host each tick; a slot
     /// that is empty or still loading has no entry.
     pub slot_alive: std::collections::BTreeMap<u8, usize>,
+    /// NumMortogsOnTarget (SPEC-0041 1363). The host has no Mortog behaviour yet, so it stays 0.
+    pub mortogs_on_target: u8,
     /// The current world's objects that are animating (IsObjAnimating), filled by the host.
     pub animating: BTreeSet<usize>,
     /// The current hit points of the current world's entities by entity id (filled by the host
@@ -579,7 +581,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -667,6 +669,14 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         }
         // SPEC-0041 1353 teleport 0: with flag 104 value 10 for eW 158 and the entry into eW 175
         // (pack 1405), 3 s; else line 0.
+        // SPEC-0041 1363 teleports 0 to 2 (context 13): with flag 106 value 40, 50 or 30 for
+        // eW 160 and the entry into eW 184, 185 or 177 (packs 1423, 1425, 1409); else line 0.
+        (1363, 0..=2) if state.flag(106) => {
+            let (v, slot) = [(40, 184), (50, 185), (30, 177)][door];
+            state.blackboard.insert((2, 160), v);
+            vec![Action::EnterInterior { slot }]
+        }
+        (1363, 0..=2) => vec![Action::Message { line: 0 }],
         // SPEC-0041 1371 TP0 (context 13): with flag 100 value 60 for eW 157 and the replacement
         // to it (pack 1350), 3 s; else line 2.
         (1371, 0) if state.flag(100) => {
@@ -959,6 +969,26 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1363 Init: objects 3 and 4 by flag 693, objects 0 and 2 by flag 692 (set:
+        // the puzzle done), triggers 0 to 8, the Mortog hold times 25 and 30, and thread M's
+        // first step: with flag 106 clear set 0 (region 1364) into the slot. Words: 1 done, 2 the
+        // camera latch, 3 the puzzle level (ease step), 4 the shake count, 5 the rise count, 6 the
+        // last count, 7 thread M's busy ticks, 8 and 9 the hold times. InitMortogBehavior is not
+        // built.
+        1363 => {
+            let f693 = state.flag(693);
+            let f692 = state.flag(692);
+            let mut v: Vec<Action> = [3, 4].map(|obj| Action::InitObjOn { obj, end: f693 }).to_vec();
+            v.extend([0, 2].map(|obj| Action::InitObjOn { obj, end: f692 }));
+            state.set_word(pack, 1, f692 as i32);
+            v.extend((0..=8).map(|i| reg(i, i as u8)));
+            state.set_word(pack, 8, 25);
+            state.set_word(pack, 9, 30);
+            if !state.flag(106) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1364) });
+            }
+            v
+        }
         // SPEC-0041 1382 Init: object 2; each pedestal's triggers (CB1 strike, CB2 stand), its
         // set-up objects and the put-out body, the lit count 0; objects 15 to 20; the floor
         // switches (CB5) with their first objects; CB4 on trigger 2; CB6 on 9 to 14; object 28;
@@ -1991,6 +2021,29 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// SPEC-0041 1363's ease curve for object 2: full depth a = -0.25 over L = 40 steps,
+/// a x 2 (n / L)^2 to the middle, a x (1 - 2 (1 - n / L)^2) after it.
+fn ease_1363(n: i32) -> f32 {
+    let t = n as f32 / 40.0;
+    if n <= 20 {
+        -0.25 * 2.0 * t * t
+    } else {
+        -0.25 * (1.0 - 2.0 * (1.0 - t) * (1.0 - t))
+    }
+}
+
+/// Object 2 moved from step `from` to step `to`, one step a tick.
+fn ease_moves_1363(from: i32, to: i32) -> Vec<Action> {
+    let dir = if to >= from { 1 } else { -1 };
+    let mut v = Vec::new();
+    let mut n = from;
+    while n != to {
+        n += dir;
+        v.extend([Action::ObjOffset { obj: 2, y: ease_1363(n) }, Action::Sleep { ticks: 1 }]);
+    }
+    v
 }
 
 /// A SPEC-0041 1382 pedestal record: strike and stand triggers, the two accepted Motes (lesser
@@ -3338,6 +3391,84 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1363 trigger A, the pressure plate (puzzle not done): object 2 down to step
+        // 40 one step a tick (camera 4 the first time), object 1 off, object 0 shown and played;
+        // after the hero leaves, object 2 back up to the puzzle level, object 0 off, object 1
+        // shown with sound 8 and played.
+        (1363, 0) if call.object && call.state == 1 && state.word(pack, 1) == 0 => {
+            let level = state.word(pack, 3);
+            let first = state.word(pack, 2) == 0;
+            state.set_word(pack, 2, 1);
+            if first {
+                out.actions.push(Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 });
+            }
+            out.actions.extend(ease_moves_1363(level, 40));
+            out.actions.extend([
+                Action::DeactivateObj { obj: 1 },
+                Action::InitObjOn { obj: 0, end: false },
+                Action::PlayAnim { obj: 0, speed: 1.0, wait: true },
+                Action::WaitInside { index: call.index },
+            ]);
+            out.actions.extend(ease_moves_1363(40, level));
+            out.actions.extend([
+                Action::DeactivateObj { obj: 0 },
+                Action::InitObjOn { obj: 1, end: false },
+                Action::PlaySound { cue: 8, locator: None },
+                Action::PlayAnim { obj: 1, speed: 1.0, wait: true },
+            ]);
+            if first {
+                out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+        }
+        // Trigger B: with the button objects 3 and 4 played and 693 set; else context 6.
+        (1363, 1) if call.object && call.state != 0 && !state.flag(693) => {
+            if call.square && !state.talking {
+                state.set(693, true);
+                out.actions.extend([Action::PlayAnim { obj: 3, speed: 1.0, wait: false }, Action::PlayAnim { obj: 4, speed: 1.0, wait: false }]);
+            } else {
+                out.prompt = Some(6);
+            }
+        }
+        // Trigger C: with the button value 10 for eW 178 and 160 and the load of eW 178 (pack
+        // 1411), 3 s; else context 13.
+        (1363, 2) if call.object && call.state != 0 => {
+            if call.square && !state.talking {
+                state.blackboard.insert((2, 178), 10);
+                state.blackboard.insert((2, 160), 10);
+                out.actions.extend([Action::ReplaceExterior { slot: 178, plane: -1 }, wait(3.0)]);
+            } else {
+                out.prompt = Some(13);
+            }
+        }
+        // Trigger D, the shrine door: with the button, the puzzle done (or 692 or 355) value 20
+        // for eW 174 and 160 and the load of eW 174 (pack 1398), 3 s; else line 0.
+        (1363, 3) if call.object && call.state != 0 && call.square && !state.talking => {
+            if state.word(pack, 1) != 0 || state.flag(692) || state.flag(355) {
+                state.blackboard.insert((2, 174), 20);
+                state.blackboard.insert((2, 160), 20);
+                out.actions.extend([Action::ReplaceExterior { slot: 174, plane: -1 }, wait(3.0)]);
+            } else {
+                out.actions.push(Action::Message { line: 0 });
+            }
+        }
+        // Trigger E (4 and 5): context 3; with the button line 1 or 2.
+        (1363, 4 | 5) if call.object && call.state != 0 => {
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: if call.index == 4 { 1 } else { 2 } });
+            } else {
+                out.prompt = Some(3);
+            }
+        }
+        // Trigger F (6 to 8) with flag 106: thread G empties the slot and loads set 3, 2 or 1
+        // (regions 1367, 1366, 1365) for index 7, 6 or 8, on every entry.
+        (1363, 6..=8) if call.object && call.state == 1 && state.flag(106) => {
+            let set = match call.index {
+                7 => 3,
+                6 => 2,
+                _ => 1,
+            };
+            out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1364 + set) }]);
+        }
         // SPEC-0041 1382 CB2 (stand): armed while the hero's own path fires it (state 1 or 2).
         (1382, 2) => {
             if let Some(r) = PEDESTALS_1382.iter().position(|p| p.stand == call.index) {
@@ -4671,6 +4802,58 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0041 1363 Mortog thread M, here sampled each Update while it is not busy: a camera
+        // shake on each new count below 4; a rise (hold times up 5 on odd rises, sound 11, object
+        // 2 ten steps down) or a fall (ten steps up), each move taking ten ticks; at 4 the puzzle
+        // done (hold times 0, camera 4, object 1 off, object 0 shown with sound 7 and played,
+        // 1 s, the camera back, flag 692).
+        1363 => {
+            let busy = state.word(pack, 7);
+            if busy > 0 {
+                state.set_word(pack, 7, busy - 1);
+            } else if state.word(pack, 1) == 0 {
+                let n = state.mortogs_on_target as i32;
+                let (shake, last, level) = (state.word(pack, 4), state.word(pack, 6), state.word(pack, 3));
+                if n > shake && n < 4 {
+                    out.push(Action::CameraShakeMode { kind: 0, duration: 1.0, strength: 0.3 });
+                    state.set_word(pack, 4, shake + 1);
+                }
+                if n == 4 {
+                    state.set_word(pack, 1, 1);
+                    state.set_word(pack, 8, 0);
+                    state.set_word(pack, 9, 0);
+                    out.extend([
+                        Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                        Action::DeactivateObj { obj: 1 },
+                        Action::InitObjOn { obj: 0, end: false },
+                        Action::PlaySound { cue: 7, locator: None },
+                        Action::PlayAnim { obj: 0, speed: 1.0, wait: true },
+                        wait(1.0),
+                        Action::ReturnCamera { preset: -1, release: true },
+                        Action::SetFlag { flag: 692, on: true },
+                    ]);
+                } else if n > last {
+                    let rises = state.word(pack, 5) + 1;
+                    state.set_word(pack, 5, rises);
+                    if rises % 2 == 1 {
+                        state.set_word(pack, 8, state.word(pack, 8) + 5);
+                        state.set_word(pack, 9, state.word(pack, 9) + 5);
+                    }
+                    let to = (level + 10).min(40);
+                    state.set_word(pack, 3, to);
+                    state.set_word(pack, 7, to - level);
+                    out.push(Action::PlaySound { cue: 11, locator: None });
+                    out.extend(ease_moves_1363(level, to));
+                    out.push(Action::KillSound { cue: 11, locator: None });
+                } else if n < last {
+                    let to = (level - 10).max(0);
+                    state.set_word(pack, 3, to);
+                    state.set_word(pack, 7, level - to);
+                    out.extend(ease_moves_1363(level, to));
+                }
+                state.set_word(pack, 6, n);
+            }
+        }
         // SPEC-0041 1382 Update, the completion (six lit, once per load): the fade, 1.5 s, all
         // six put out and locked, entities 32 to 40, 43, 48 and 49 off, the fight slot emptied,
         // flags 98 and 337, object 28 off, effect 1, the exit routine on trigger 28. Movie 70 is
@@ -5135,6 +5318,26 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0041 1363 W14 (eW 160): value 10, 20, 30, 40 or 50 moves the hero to locator 1,
+        // 3, 5, 2 or 4; any value but -1 returns the camera.
+        1363 => {
+            let v = state.take_message(2, 160);
+            let mut out: Vec<Action> = match v {
+                10 => Some(1),
+                20 => Some(3),
+                30 => Some(5),
+                40 => Some(2),
+                50 => Some(4),
+                _ => None,
+            }
+            .map(|locator| Action::MoveHero { locator })
+            .into_iter()
+            .collect();
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0041 1371 W: value 60 for eW 163 moves the hero to locator 16 and returns the
         // camera; the value is reset.
         1371 if state.take_message(2, 163) == 60 => vec![Action::MoveHero { locator: 16 }, Action::ReturnCamera { preset: -1, release: true }],
@@ -7372,6 +7575,48 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1363_mortog_thread() {
+        // The spec's vector (flag 106 set): n 0, 1, 2: two shakes; hold times 30 and 35 after
+        // the first rise, unchanged after the second; object 2 at step 20 (-0.125); n back to 1:
+        // step 10.
+        let mut s = GameState::default();
+        s.set(106, true);
+        on_init(1363, &mut s);
+        let run = |s: &mut GameState, n: u8| {
+            s.mortogs_on_target = n;
+            let mut all = on_update(1363, s, false);
+            while s.word(1363, 7) > 0 {
+                all.extend(on_update(1363, s, false));
+            }
+            all
+        };
+        assert!(run(&mut s, 0).is_empty());
+        assert!(run(&mut s, 1).contains(&Action::CameraShakeMode { kind: 0, duration: 1.0, strength: 0.3 }));
+        assert_eq!((s.word(1363, 8), s.word(1363, 9)), (30, 35));
+        let out = run(&mut s, 2);
+        assert!(out.contains(&Action::CameraShakeMode { kind: 0, duration: 1.0, strength: 0.3 }));
+        assert_eq!((s.word(1363, 8), s.word(1363, 9)), (30, 35));
+        assert_eq!(s.word(1363, 4), 2);
+        assert_eq!(out.iter().rev().find(|a| matches!(a, Action::ObjOffset { .. })), Some(&Action::ObjOffset { obj: 2, y: -0.125 }));
+        let out = run(&mut s, 1);
+        assert_eq!(s.word(1363, 3), 10);
+        assert_eq!(out.iter().rev().find(|a| matches!(a, Action::ObjOffset { .. })), Some(&Action::ObjOffset { obj: 2, y: ease_1363(10) }));
+        // The third rise raises the hold times again; four on target finish the puzzle, and the
+        // shrine door then opens in the same visit.
+        run(&mut s, 2);
+        assert_eq!(s.word(1363, 8), 35);
+        assert!(run(&mut s, 4).contains(&Action::SetFlag { flag: 692, on: true }));
+        let press = TriggerCall { index: 3, state: 1, object: true, square: true };
+        assert!(on_trigger(1363, 3, press, &mut s).actions.contains(&Action::ReplaceExterior { slot: 174, plane: -1 }));
+        // Thread G: trigger 8 loads set 1 (region 1365).
+        let f = TriggerCall { index: 8, state: 1, object: true, square: false };
+        assert!(on_trigger(1363, 8, f, &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(1365) }));
+        // The return from eW 184: value 40 moves the hero to locator 2.
+        s.blackboard.insert((2, 160), 40);
+        assert_eq!(on_activate(1363, &mut s)[0], Action::MoveHero { locator: 2 });
     }
 
     #[test]
