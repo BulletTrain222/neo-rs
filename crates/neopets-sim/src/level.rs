@@ -6990,6 +6990,15 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // H5, swap mode 2, the won result for eW 157 and its load (pack 1350). The loss (both
         // heroes dead) needs the hero-death callback, which is not built.
         1371 if state.word(pack, 4) == 1 => {
+            // The round lost (both heroes down): 595, swap mode 2, the lost result for eW 157 and
+            // its load. The loss scene (Medium in the spec) is not reproduced.
+            if state.word(pack, 5) == 0 && state.word(pack, 6) == 1 {
+                state.set_word(pack, 5, 1);
+                state.set(595, true);
+                state.blackboard.insert((2, 157), 20);
+                state.blackboard.insert((1, 157), -1);
+                out.extend([Action::FadeOut { seconds: 1.0, wait: true }, Action::SwapMode { mode: 2 }, Action::ReplaceExterior { slot: 157, plane: 0 }]);
+            }
             if state.word(pack, 5) == 0 && state.slot_alive.get(&0) == Some(&0) {
                 state.set_word(pack, 5, 1);
                 state.blackboard.insert((2, 157), 20);
@@ -7363,6 +7372,48 @@ pub fn entity_step(pack: u32, state: &mut GameState, talking: &dyn Fn(usize) -> 
         return Vec::new();
     }
     state.entity_tables.get_mut(&pack).map(|t| t.step(talking, walking, random)).unwrap_or_default()
+}
+
+/// The hero-death callback of a pack (RegisterHeroDeathCallback; SPEC-0055 section 5) for a death
+/// of `hero` that the gate allows: its flag (true skips the default death) and the task's
+/// actions (empty while an earlier task of the area still runs). None: no callback is registered.
+pub fn on_hero_death(pack: u32, hero: usize, s: &mut GameState) -> Option<(bool, Vec<Action>)> {
+    // Word 250 of the pack marks a running task; the task's last action clears it.
+    let busy = |s: &mut GameState, flag: bool, mut v: Vec<Action>| {
+        if s.word(pack, 250) != 0 {
+            return Some((flag, Vec::new()));
+        }
+        s.set_word(pack, 250, 1);
+        v.push(Action::Bits { word: 250, set: 0, clear: 1 });
+        Some((flag, v))
+    };
+    match pack {
+        // SPEC-0041 1394 (flag 0): the kill-zone handler (the respawn at the checkpoint).
+        1394 => {
+            let v = if s.word(pack, 4) == 0 { respawn_1394(s) } else { Vec::new() };
+            busy(s, false, v)
+        }
+        // SPEC-0041 1371 in an arena round (flag 1): the first hero down switches to the partner
+        // (swap mode 3); the second loops the death clip and marks the round lost (word 6).
+        1371 if s.word(pack, 4) == 1 => {
+            let other = 1 - hero.min(1);
+            let v = if s.word(pack, 60 + other as u8) == 0 {
+                s.set_word(pack, 60 + hero.min(1) as u8, 1);
+                vec![Action::SwitchHero { hero: other as i32, effects: true, flash: true }, Action::SwapMode { mode: 3 }]
+            } else {
+                s.set_word(pack, 6, 1);
+                vec![Action::HeroAnim { anim: 34, wait: false }]
+            };
+            busy(s, true, v)
+        }
+        // SPEC-0055 1098 (flag 0; registered with flag 31 clear and 30 set): value 120 for eW 106
+        // and its replacement load.
+        1098 if !s.flag(31) && s.flag(30) => {
+            s.blackboard.insert((2, 106), 120);
+            busy(s, false, vec![Action::ReplaceExterior { slot: 106, plane: -1 }])
+        }
+        _ => None,
+    }
 }
 
 /// The hero pickup callback (RegisterHeroPickupItemCallback) of a pack, for a picked-up item.
@@ -10529,6 +10580,30 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn hero_death_callbacks() {
+        // 1371 round: the first death switches to the partner and skips the default death; the
+        // second marks the round lost, which the watcher turns into the lost result.
+        let mut s = GameState::default();
+        s.blackboard.insert((2, 157), 20);
+        on_init(1371, &mut s);
+        let (flag, v) = on_hero_death(1371, 0, &mut s).unwrap();
+        assert!(flag && v.contains(&Action::SwitchHero { hero: 1, effects: true, flash: true }));
+        s.set_word(1371, 250, 0);
+        let (_, v) = on_hero_death(1371, 1, &mut s).unwrap();
+        assert!(v.contains(&Action::HeroAnim { anim: 34, wait: false }));
+        assert!(on_update(1371, &mut s, false).contains(&Action::ReplaceExterior { slot: 157, plane: 0 }));
+        assert!(s.flag(595) && s.blackboard.get(&(1, 157)) == Some(&-1));
+        // 1394: flag 0 and the checkpoint respawn; a second death while it runs starts nothing.
+        let mut s = GameState::default();
+        on_init(1394, &mut s);
+        let (flag, v) = on_hero_death(1394, 0, &mut s).unwrap();
+        assert!(!flag && v.contains(&Action::MoveHero { locator: 0 }));
+        assert!(on_hero_death(1394, 0, &mut s).unwrap().1.is_empty());
+        // No callback elsewhere (and 1371 outside a round).
+        assert!(on_hero_death(909, 0, &mut s).is_none() && on_hero_death(1371, 0, &mut GameState::default()).is_none());
     }
 
     #[test]

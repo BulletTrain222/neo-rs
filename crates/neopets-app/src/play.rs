@@ -4413,7 +4413,7 @@ impl Play {
                     self.effects.one_shot(&table, e as i32, self.loco.position(), neopets_sim::effect::IDENTITY, &mut self.rng);
                 }
             }
-            self.default_death();
+            self.death_hook();
         } else if self.loco.state != hero_states::DEAD
             && neopets_sim::death::hurting_tick(hp.found.then_some(hp.surface).flatten(), deadly.is_some(), self.loco.body.gap, self.ticks as f32 / 60.0, 1.0 / 60.0)
         {
@@ -5346,7 +5346,7 @@ impl Play {
         self.sound.play(neopets_sim::sound::VOICE, if big { 1 } else { 0 }, neopets_sim::sound::Play::default());
         if self.hero_hp <= 0 {
             self.hero_hp = 0;
-            self.default_death();
+            self.death_hook();
             return true;
         }
         if damage > 0 && knockback > 0.0 {
@@ -5357,8 +5357,23 @@ impl Play {
         false
     }
 
-    /// SPEC-0036 Health and death, step 3 (no death callback is registered by any level here):
-    /// state 16, the melee hit list cleared.
+    /// SPEC-0055 Death hook with the gate allowed (a death from damage or deadly ground): a hero
+    /// not yet dead consults the current area's death callback, whose task actions start and
+    /// whose flag 1 skips the default death.
+    fn death_hook(&mut self) {
+        if self.loco.state != hero_states::DEAD {
+            if let Some((skip, actions)) = level::on_hero_death(self.world.pack, self.hero_index, &mut self.state) {
+                self.last_fx = format!("death callback of {} on tick {} (skip {skip})", self.world.pack, self.ticks);
+                self.apply(&actions);
+                if skip {
+                    return;
+                }
+            }
+        }
+        self.default_death();
+    }
+
+    /// SPEC-0036 Health and death, step 3: state 16, the melee hit list cleared.
     fn default_death(&mut self) {
         // SPEC-0055 Death cue test: sound event 3 (stinger 3, "Character Dies") while the other
         // hero is not dead (Roberta is not in this build and counts as alive).
