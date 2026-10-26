@@ -528,7 +528,7 @@ impl GameState {
 /// The registered teleport callback of a pack's door: its prompt context (13 "Enter", 26
 /// "Exit"; 0 starts on contact), or None when no handler is described.
 pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
-    if (pack, door) == (880, 0) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) {
+    if (pack, door) == (880, 0) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
         return Some(13);
     }
     match (pack, door) {
@@ -557,6 +557,13 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0037 783 to 789 teleport 0 (kind 13): the value for eW 31, the leave to eW 44,
+        // then 3 s.
+        (783 | 786 | 787 | 788 | 789, 0) => {
+            let (v, _) = eastside_interior(pack).unwrap_or_default();
+            state.blackboard.insert((2, 31), v);
+            vec![Action::LeaveInterior { slot: 44 }, wait(3.0)]
+        }
         // SPEC-0044 1017 teleports 0 and 1: value 60 or 50 for eW 81 (type 2) and the exterior
         // load to eW 81 (pack 991).
         (1017, 0 | 1) => {
@@ -1279,6 +1286,64 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     out
+}
+
+/// SPEC-0037 interiors of eW 44 (783, 786, 787, 788, 789): the type-2 value their teleport 0
+/// posts for eW 31 and the locator their arrival uses for it.
+fn eastside_interior(pack: u32) -> Option<(i32, usize)> {
+    match pack {
+        783 => Some((60, 0)),
+        786 => Some((20, 1)),
+        787 => Some((30, 0)),
+        788 => Some((50, 0)),
+        789 => Some((40, 1)),
+        _ => None,
+    }
+}
+
+/// Their proximity routine on entity 0 (each line in the conversation frame).
+fn eastside_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
+    let talk = |line| vec![Action::Talk { line }];
+    match pack {
+        788 => talk(4),
+        // 787: with 447 set, 500 Neopoints buy flag 448 (line 3; 448 is not tested) or line 4;
+        // else lines 5 to 10 in turn (module counter, word 0).
+        787 if s.flag(447) && s.neopoints >= 500 => {
+            s.set(448, true);
+            s.neopoints -= 500;
+            talk(3)
+        }
+        787 if s.flag(447) => talk(4),
+        787 => {
+            let c = s.word(pack, 0).rem_euclid(6);
+            s.set_word(pack, 0, (c + 1) % 6);
+            talk(5 + c as u16)
+        }
+        789 if s.hero.selected == 1 => talk(10),
+        789 => talk(if s.flag(86) { 4 } else { 7 }),
+        783 if s.flag(421) => talk(9),
+        783 if s.flag(420) => {
+            s.set(421, true);
+            talk(12)
+        }
+        783 if s.flag(419) => talk(13),
+        783 => {
+            s.set(419, true);
+            talk(16)
+        }
+        786 if s.flag(425) => talk(10),
+        786 if s.flag(424) => {
+            s.set(425, true);
+            talk(13)
+        }
+        786 if s.flag(423) => talk(14),
+        786 if s.flag(76) => {
+            s.set(423, true);
+            talk(17)
+        }
+        786 => talk(18),
+        _ => Vec::new(),
+    }
 }
 
 /// The flag-67 line rotation of SPEC-0039 880 and 1230: lines 0 to 2 with flag 67 set, 3 to 5
@@ -2021,6 +2086,20 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0037 783 to 789 activate-world: the value for eW 31; this interior's value moves
+        // the hero to its locator; any value returns the normal camera; the value is reset.
+        783 | 786 | 787 | 788 | 789 => {
+            let (value, locator) = eastside_interior(pack).unwrap_or_default();
+            let v = state.take_message(2, 31);
+            let mut out = Vec::new();
+            if v == value {
+                out.push(Action::MoveHero { locator });
+            }
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0044 1017 activate-world: the value for eW 81 places the hero at locator 2 (50) or
         // 3 (60); the normal camera; the value reset.
         1017 => {
@@ -3553,6 +3632,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (678 | 686 | 691, 9) => Some(0),
         // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
         (1148, 0..=3) => Some(entity as u8),
+        // SPEC-0037 783, 786, 787, 788 and 789: P on entity 0.
+        (783 | 786 | 787 | 788 | 789, 0) => Some(0),
         // SPEC-0039 984: handler 1 on entity 0.
         (984, 0) => Some(1),
         // SPEC-0044 1017: set D on entities 0 and 4, C on 1 and 5, A on 2 and 6, B on 3 and 7.
@@ -3614,6 +3695,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1017 {
         return guild_talk(routine, state);
+    }
+    if eastside_interior(pack).is_some() && routine == 0 {
+        return eastside_talk(pack, state);
     }
     // SPEC-0039 984 entity 0 (handler 1): with 67 line 12 in the conversation frame; else line
     // 15 (202), 18 (150) or 21 alone.
@@ -3877,6 +3961,27 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn eastside_interiors() {
+        let mut s = GameState { neopoints: 600, ..Default::default() };
+        // 787: lines 5 to 10 in turn; with 447, 500 Neopoints for line 3.
+        let lines: Vec<_> = (0..7).map(|_| on_talk(787, 0, &mut s)).collect();
+        assert_eq!((lines[0].clone(), lines[6].clone()), (vec![Action::Talk { line: 5 }], vec![Action::Talk { line: 5 }]));
+        s.set(447, true);
+        assert_eq!(on_talk(787, 0, &mut s), vec![Action::Talk { line: 3 }]);
+        assert_eq!((s.neopoints, on_talk(787, 0, &mut s)), (100, vec![Action::Talk { line: 4 }]));
+        // 783's ladder: 16 (sets 419), 13, then with 420: 12 (sets 421), then 9.
+        assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 16 }]);
+        assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 13 }]);
+        s.set(420, true);
+        assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 12 }]);
+        assert_eq!(on_talk(783, 0, &mut s), vec![Action::Talk { line: 9 }]);
+        // 786 teleport 0 posts 20 for eW 31 and leaves to eW 44; the arrival uses locator 1.
+        assert_eq!(on_teleport(786, 0, &mut s)[0], Action::LeaveInterior { slot: 44 });
+        assert_eq!(on_activate(786, &mut s)[0], Action::MoveHero { locator: 1 });
+        assert_eq!(teleport_context(789, 0), Some(13));
     }
 
     #[test]
