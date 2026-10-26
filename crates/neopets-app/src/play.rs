@@ -551,6 +551,8 @@ pub struct Play {
     /// region loads the loader still has out.
     threads: Vec<Thread>,
     pub cut: Option<neopets_sim::scene::CameraPlay>,
+    /// The target of a target play (SPEC-0027 Target plays): the pack and the target.
+    cut_target: Option<(u32, neopets_sim::level::CameraTarget)>,
     pub fade: neopets_sim::scene::Fade,
     pub bars: neopets_sim::scene::Bars,
     hero_walk: Option<([f32; 3], Option<[f32; 3]>, f32)>,
@@ -1148,6 +1150,7 @@ impl Play {
             dialogue_open: false,
             threads: Vec::new(),
             cut: None,
+            cut_target: None,
             fade: Default::default(),
             bars: Default::default(),
             hero_walk: None,
@@ -1850,6 +1853,14 @@ impl Play {
                     // A track outside the list does nothing; WAIT waits only on a keyed track.
                     let keyed = !self.world.tracks.get(track)?.keys.is_empty();
                     self.cut = Some(neopets_sim::scene::CameraPlay::new(track, end, speed));
+                    self.cut_target = None;
+                    self.held = true;
+                    return (wait && keyed).then_some(Wait::Camera);
+                }
+                Action::PlayTarget { track, wait, end, speed, target } => {
+                    let keyed = !self.world.tracks.get(track)?.keys.is_empty();
+                    self.cut = Some(neopets_sim::scene::CameraPlay::new(track, end, speed));
+                    self.cut_target = Some((pack, target));
                     self.held = true;
                     return (wait && keyed).then_some(Wait::Camera);
                 }
@@ -2384,11 +2395,27 @@ impl Play {
         )
     }
 
+    /// A target play's anchor point: the hero at half its height, or an animated object's origin.
+    fn target_anchor(&self, pack: u32, t: neopets_sim::level::CameraTarget) -> Option<[f32; 3]> {
+        match t {
+            neopets_sim::level::CameraTarget::Hero => Some(add(self.loco.position(), [0.0, 0.5 * HERO_HEIGHT, 0.0])),
+            neopets_sim::level::CameraTarget::Object(i) => self.object_matrix(pack, i).map(|m| [m[12], m[13], m[14]]),
+        }
+    }
+
     /// The view the window draws: the camera play's pose (while it plays or holds its last
     /// pose) or the follow camera; eye, forward, up and focal length (SPEC-0027 Projection).
     pub fn view(&self) -> ([f32; 3], [f32; 3], [f32; 3], f32) {
         let (eye, forward, up, focal) = match self.cut.filter(|c| c.state != 0).and_then(|c| c.last) {
-            Some(p) => (p.eye, p.rows[2], p.rows[1], p.focal),
+            Some(p) => match self.cut_target.and_then(|(pack, t)| self.target_anchor(pack, t)) {
+                // The hero's anchor is taken at half its height and an object's at its origin
+                // (the anchors are not given).
+                Some(at) => {
+                    let (f, u) = neopets_sim::scene::look_at(p.eye, at);
+                    (p.eye, f, u, p.focal)
+                }
+                None => (p.eye, p.rows[2], p.rows[1], p.focal),
+            },
             None => {
                 let (e, f) = (self.camera.eye, self.camera.focus);
                 ([e[0], e[1], e[2]], [f[0] - e[0], f[1] - e[1], f[2] - e[2]], [0.0, 1.0, 0.0], neopets_sim::camera::FOCAL)

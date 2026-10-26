@@ -124,6 +124,25 @@ impl CameraPlay {
     }
 }
 
+/// A target play's view (SPEC-0027 Target plays, Medium): the eye stays at the sampled track
+/// position and the basis is rebuilt to look at the target: forward toward it, the side axis
+/// from the world up and the forward, flattened to horizontal (its y set to 0) when its |x| +
+/// |z| exceeds 0.01, and the up axis from the forward and the side. Returns forward and up.
+pub fn look_at(eye: [f32; 3], target: [f32; 3]) -> ([f32; 3], [f32; 3]) {
+    let unit = |v: [f32; 3]| {
+        let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+        if l > 0.0 { v.map(|c| c / l) } else { v }
+    };
+    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let f = unit([target[0] - eye[0], target[1] - eye[1], target[2] - eye[2]]);
+    let mut s = cross([0.0, 1.0, 0.0], f);
+    if s[0].abs() + s[2].abs() > 0.01 {
+        s[1] = 0.0;
+    }
+    let s = unit(s);
+    (f, unit(cross(f, s)))
+}
+
 /// Frames for a script time in seconds: max(1, trunc(s x 60)), the product one console
 /// single-precision multiply (SPEC-0008 Seconds to ticks: 0.7 s gives 41).
 pub fn frames(seconds: f32) -> u32 {
@@ -235,6 +254,18 @@ impl Bars {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn target_play_look_at() {
+        // An eye at (0, 2, -10) looking at a target at (0, 2, 0): forward +z, up +y, level.
+        let (f, u) = look_at([0.0, 2.0, -10.0], [0.0, 2.0, 0.0]);
+        assert!((f[2] - 1.0).abs() < 1e-6 && (u[1] - 1.0).abs() < 1e-6);
+        // Looking down at 45 degrees keeps the side axis horizontal.
+        let (f, u) = look_at([0.0, 10.0, -10.0], [0.0, 0.0, 0.0]);
+        let s = [u[1] * f[2] - u[2] * f[1], u[2] * f[0] - u[0] * f[2], u[0] * f[1] - u[1] * f[0]];
+        assert!(s[1].abs() < 1e-6 && u[1] > 0.0);
+    }
+
     use super::*;
 
     fn key(p: [f32; 3], q: [f32; 4]) -> Key {

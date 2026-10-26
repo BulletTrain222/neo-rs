@@ -248,6 +248,9 @@ pub enum Action {
     StopTimer,
     /// StartHeroLongFall (SPEC-0030 row 280): the active hero to state 48.
     LongFall,
+    /// A target play (SPEC-0027; PlayTrackHeroCamera and PlayLookAtPlayerCamera, rows 37 and
+    /// 39, target the hero): as PlayCamera, the view turned to the target.
+    PlayTarget { track: usize, wait: bool, end: u8, speed: f32, target: CameraTarget },
     /// InitMortogBehavior(W, t, i, j, hmin, hmax) (SPEC-0030 row 84): the zone centre at locator
     /// i, the squared radius from locators i and j, the hold range, the zone count 0.
     InitMortog { target: i32, centre: usize, edge: usize, hold: (f32, f32) },
@@ -3413,6 +3416,13 @@ fn barrier_1174(s: &mut GameState, g: usize, up: bool) -> Vec<Action> {
         v.push(reg_at(30 + g as u16, if up { 30 } else { 31 }));
     }
     v
+}
+
+/// The target of a target play (SPEC-0027 Starting a play).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CameraTarget {
+    Hero,
+    Object(usize),
 }
 
 /// The first module word of a per-tick navigation table (an entry holds the mesh id plus 1, so 0
@@ -7169,10 +7179,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.push(Action::LoadOverride { slot: 187 + routine as i32 });
             }
         }
-        // SPEC-0037 1391 S2 (trigger 2, entering): the shake, object 0 played, the hero held
-        // until it ends. The look-at-player camera 4 is not built; the normal camera returns
-        // after the poll (in the original it returns before the hold).
+        // SPEC-0037 1391 S2 (trigger 2, entering): the look-at-player camera 4, the shake, object
+        // 0 played, the hero held until it ends. The normal camera returns after the poll (in the
+        // original it returns before the hold).
         (1391, 2) if call.object && call.state == 1 => out.actions.extend([
+            Action::PlayTarget { track: 4, wait: false, end: 0, speed: 1.0, target: CameraTarget::Hero },
             Action::CameraShake { t: 5.5, a: 0.3, s: 25.0, p4: 0.5, r: 0.8, phi: 1.5708, z: 0.2 },
             wait(1.5),
             Action::PlayAnim { obj: 0, speed: 1.0, wait: false },
@@ -7514,11 +7525,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         // CB4 (trigger 2, armed): the markers sink (objects 15 to 20 and 27 played), then CB3
-        // loads set 7 (region 1390) into the fight slot (1). The look-at-player camera 5 is not
-        // built.
+        // loads set 7 (region 1390) into the fight slot (1), with the look-at-player camera 5 (end
+        // mode 2) after the 2 s wait.
         (1382, 4) if call.object && state.word(pack, 4) == 0 && state.word(pack, 3) != 0 => {
             state.set_word(pack, 4, 1);
-            out.actions.extend([Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }, Action::DeactivateObj { obj: 2 }, wait(2.0), Action::InitObjOn { obj: 27, end: false }]);
+            out.actions.extend([Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }, Action::DeactivateObj { obj: 2 }, wait(2.0), Action::PlayTarget { track: 5, wait: false, end: 2, speed: 1.0, target: CameraTarget::Hero }, Action::InitObjOn { obj: 27, end: false }]);
             out.actions.extend((21..=26).map(|obj| Action::DeactivateObj { obj }));
             out.actions.push(Action::PlaySound { cue: 6, locator: None });
             out.actions.extend((15..=20).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
@@ -9709,11 +9720,18 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
         }
         // SPEC-0041 1392 Update, the fall-in (once per load while 696 is clear): the hero to
-        // locator 0, the long fall, 3 s, the camera back. The hero-tracking camera 10 is not built.
+        // locator 0, the long fall, the hero-tracking camera 10 (wait), 3 s, the camera back.
         1392 => {
             if !state.flag(696) && state.word(pack, 1) == 0 {
                 state.set_word(pack, 1, 1);
-                out.extend([Action::HoldHero, Action::MoveHero { locator: 0 }, Action::LongFall, wait(3.0), Action::ReturnCamera { preset: -1, release: true }]);
+                out.extend([
+                    Action::HoldHero,
+                    Action::MoveHero { locator: 0 },
+                    Action::LongFall,
+                    Action::PlayTarget { track: 10, wait: true, end: 1, speed: 1.0, target: CameraTarget::Hero },
+                    wait(3.0),
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
             }
         }
         // SPEC-0041 1394 Update, the countdown: while armed and the exit closed, object 2 sinks by
@@ -10266,21 +10284,21 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             out
         }
         // SPEC-0042 1077 A (eW 109): any value but -1 returns the camera; 20 moves the hero to
-        // locator 0; 10 to locator 1 with the long fall and sets 305 (the hero-tracking camera 4
-        // is not built); the value is reset.
+        // locator 0; 10 to locator 1 with the long fall and the hero-tracking camera 4 (wait; its
+        // end mode is not given, 0 here) and sets 305; the value is reset.
         1077 | 1129 => {
             let v = state.take_message(2, 109);
             let mut out = Vec::new();
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
             match v {
                 20 => out.push(Action::MoveHero { locator: 0 }),
                 10 => {
                     state.set(305, true);
-                    out.extend([Action::MoveHero { locator: 1 }, Action::LongFall]);
+                    out.extend([Action::MoveHero { locator: 1 }, Action::LongFall, Action::PlayTarget { track: 4, wait: true, end: 0, speed: 1.0, target: CameraTarget::Hero }]);
                 }
                 _ => {}
-            }
-            if v != -1 {
-                out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
         }
@@ -10643,7 +10661,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0039 732 activate-world: the value for eW 21 (10, 20, 30, 40, 60 give locators 1
         // to 5 and tracks 8, 7, 6, 5, 4): the hero to the locator, a 0.5 s fade in, the track
-        // with the long fall first (PlayTrackHeroCamera, played as a track) and 1.5 s;
+        // with the long fall first (PlayTrackHeroCamera, a target play) and 1.5 s;
         // in every case the value reset, the fade in and the normal camera.
         732 => {
             let pick = match state.take_message(2, 21) {
@@ -10657,7 +10675,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             let mut out: Vec<Action> = pick.map(|(locator, _)| Action::MoveHero { locator }).into_iter().collect();
             out.push(Action::FadeIn { seconds: 0.5, wait: false });
             if let Some((_, track)) = pick {
-                out.extend([Action::LongFall, Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }, wait(1.5)]);
+                out.extend([Action::LongFall, Action::PlayTarget { track, wait: false, end: 1, speed: 1.0, target: CameraTarget::Hero }, wait(1.5)]);
             }
             out.push(Action::ReturnCamera { preset: -1, release: true });
             out
@@ -10696,8 +10714,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0037 1253 activate-world: every arrival, by the value for eW 143 (20: locator 1
         // and track 6; 30: 2 and 7; else 0 and 5): the hero to the locator, a 0.5 s fade in, the
-        // long fall, the track played with wait (PlayTrackHeroCamera, taken as a camera track
-        // here), 1.5 s, the normal camera.
+        // long fall, the hero-tracking camera with wait (PlayTrackHeroCamera), 1.5 s, the normal
+        // camera.
         1253 => {
             let (locator, track) = match state.take_message(2, 143) {
                 20 => (1, 6),
@@ -10708,7 +10726,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 Action::MoveHero { locator },
                 Action::FadeIn { seconds: 0.5, wait: false },
                 Action::LongFall,
-                Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 },
+                Action::PlayTarget { track, wait: true, end: 1, speed: 1.0, target: CameraTarget::Hero },
                 wait(1.5),
                 Action::ReturnCamera { preset: -1, release: true },
             ]
@@ -14570,7 +14588,7 @@ mod tests {
         // 732: arrival 30 -> locator 3 and track 6.
         s.blackboard.insert((2, 21), 30);
         let a = on_activate(732, &mut s);
-        assert_eq!((a[0], a[2], a[3]), (Action::MoveHero { locator: 3 }, Action::LongFall, Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 }));
+        assert_eq!((a[0], a[2], a[3]), (Action::MoveHero { locator: 3 }, Action::LongFall, Action::PlayTarget { track: 6, wait: false, end: 1, speed: 1.0, target: CameraTarget::Hero }));
         // 793 entities 1 and 2: 410 takes item 13 and sets 412 with line 12, then line 9.
         s.set(410, true);
         s.give(13, 1);
@@ -14706,7 +14724,7 @@ mod tests {
         // 1253 vectors: value 30 -> locator 2, track 7; no message -> locator 0, track 5.
         s.blackboard.insert((2, 143), 30);
         let a = on_activate(1253, &mut s);
-        assert_eq!((a[0], a[2], a[3]), (Action::MoveHero { locator: 2 }, Action::LongFall, Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }));
+        assert_eq!((a[0], a[2], a[3]), (Action::MoveHero { locator: 2 }, Action::LongFall, Action::PlayTarget { track: 7, wait: true, end: 1, speed: 1.0, target: CameraTarget::Hero }));
         assert_eq!(on_activate(1253, &mut s)[0], Action::MoveHero { locator: 0 });
         // 799 vector: trigger 3 entered three times with 416 set and no item 12: no line, line
         // 1, no line.
