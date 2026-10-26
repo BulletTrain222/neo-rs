@@ -97,12 +97,13 @@ enum Entry {
     Warp,
     Speed,
     Kill,
+    Drop,
     Start,
     ToCamera,
     Maps,
 }
 
-const ENTRIES: [Entry; 16] = [
+const ENTRIES: [Entry; 17] = [
     Entry::God,
     Entry::Magic,
     Entry::Charge,
@@ -117,6 +118,7 @@ const ENTRIES: [Entry; 16] = [
     Entry::Motes,
     Entry::Maps,
     Entry::Item,
+    Entry::Drop,
     Entry::Hero,
     Entry::Flag,
 ];
@@ -151,7 +153,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             None => cameras.iter().next().map(FreeCam::from_transform),
         };
     };
-    // NEOPETS_DEV="menu,free,perf,warp=N,speed=K": open the menu, start the free camera, show
+    // NEOPETS_DEV="menu,free,perf,warp=N,speed=K,drop": open the menu, start the free camera, show
     // the performance overlay, warp to world pack N and/or set speed step K (0 paused, 3 normal) once play has run a few frames
     // (diagnostic, for screenshots); with "free" the camera also backs up and rises.
     *frames += 1;
@@ -173,6 +175,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
                 fc.pitch -= tilt;
             }
         }
+    }
+    // NEOPETS_DEV="drop": the coin drop (with item 160) a second after the options apply.
+    if *frames == 90 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drop")) {
+        info!("Developer drop: {} world items", play.play.dev_drop(160));
     }
     if keys.just_pressed(KeyCode::F1) {
         dev.open = !dev.open;
@@ -279,6 +285,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             "Normal speed".into()
         }
         Entry::Kill => format!("Defeated {} enemies here", p.dev_kill_enemies()),
+        Entry::Drop => format!("Dropped {} world items", p.dev_drop(dev.item)),
         Entry::Start => {
             if p.dev_go_start(dev.start) { format!("To start point {}", dev.start) } else { "No start points here".into() }
         }
@@ -365,6 +372,7 @@ pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Q
                 Entry::Flag => format!("Toggle story flag: < {} > ({})", dev.flag, if p.state.flag(dev.flag) { "set" } else { "clear" }),
                 Entry::Speed => format!("Game speed: < {} >  (F4 pause, F5 step)", speed_label(dev.speed)),
                 Entry::Kill => "Defeat every enemy in this world".to_string(),
+                Entry::Drop => format!("Drop coins and item {} here", dev.item),
                 Entry::Start => format!("Go to start point: < {} > of {}", dev.start, p.dev_start_points()),
                 Entry::ToCamera => "Move the hero under the free camera".to_string(),
                 Entry::Maps => "Give every treasure map".to_string(),

@@ -8016,6 +8016,36 @@ impl Play {
         true
     }
 
+    /// Developer menu: a 141 NP coin split (one coin of each denomination) and the chosen item,
+    /// dropped as a drop action would drop them, 6 units in front of the hero. Returns how many
+    /// world items were spawned.
+    pub fn dev_drop(&mut self, item: u16) -> usize {
+        let pack = self.world.pack;
+        let p = self.loco.position();
+        let f = self.loco.facing;
+        let at = [p[0] + 6.0 * f[0], p[1] + 1.0, p[2] + 6.0 * f[2]];
+        let spawn = |id: u16, charm: bool| neopets_sim::items::Spawn {
+            id,
+            point: at,
+            placed: false,
+            charm,
+            s0: 0.25,
+            s1: 1.0,
+            delay: 0.0,
+            larg: -1.0,
+            direction: None,
+            flag: 0,
+            map: 0,
+            price: 0,
+        };
+        let mut n = 0;
+        for id in neopets_sim::items::coin_split(141, &self.coins.0, &self.coins.1) {
+            n += self.spawn_item(pack, spawn(id, false)) as usize;
+        }
+        let charm = self.item_kind(item) == 17;
+        n + self.spawn_item(pack, spawn(item, charm)) as usize
+    }
+
     /// Developer menu: both heroes to full health and magic.
     pub fn dev_heal(&mut self) {
         self.hero_hp = self.hero_max;

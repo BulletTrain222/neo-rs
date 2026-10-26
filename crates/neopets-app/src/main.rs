@@ -1959,16 +1959,58 @@ fn sync_shots(
 #[derive(Component)]
 struct ItemMarker(u32, usize);
 
-/// World items are drawn as small plain markers (gold for coins, blue for charms, green for
-/// other items), turned by their spin angle and scaled by their drawn scale: the item display
-/// models of SPEC-0021 are not loaded, so this is a diagnostic stand-in.
+/// An item id's registry model (SPEC-0021 Item model registry; SPEC-0004 Item model registry
+/// key): ids 98 to 190 from resource 7's boot containers, by header u16 = id - 98 (the coins
+/// 135 to 139, the Motes, the treasure map); the potions 50 to 59 from resource 515 + id, drawn
+/// with resource 7's materials. Any other id has no model here (weapon and shield models are
+/// registered only while equipped).
+fn item_model(
+    disc: &mut neopets_data::Disc,
+    index: &neopets_data::archive::ArchiveIndex,
+    boot: &mut Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)>,
+    id: u32,
+) -> Result<Option<neopets_data::model::ModelData>, String> {
+    let m = match id {
+        98..=190 => {
+            if boot.is_none() {
+                let b = index.read(disc, 7)?;
+                let family = neopets_data::resource::classify(&b);
+                let c = neopets_data::resource::walk_chunks(&b, neopets_data::resource::chunk_limit(7, family))?.chunks;
+                *boot = Some((b, c));
+            }
+            let (b, c) = boot.as_ref().unwrap();
+            neopets_data::model::build_roles(b, c, None, Some(&[(id - 98) as u16]))?
+        }
+        50..=59 => match archive_view::model(disc, index, 515 + id)? {
+            Some(m) => m,
+            None => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    Ok((!m.parts.is_empty()).then_some(m))
+}
+
+/// A world item's parts, each with its own material so the item's life value can fade it.
+#[derive(Component)]
+struct ItemPart;
+
+/// World items are drawn with their registry model (`item_model`), turned by their spin angle,
+/// scaled by their drawn scale and faded by their life value (SPEC-0021 Ring layout and item
+/// draw). Items with no registry model here are drawn as small plain markers (blue for charms,
+/// green for other items) as a diagnostic stand-in.
+#[allow(clippy::too_many_arguments)]
 fn sync_items(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
-    mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility)>,
+    archive: Option<ResMut<Archive>>,
+    mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility, Option<&Children>)>,
+    parts: Query<&MeshMaterial3d<StandardMaterial>, With<ItemPart>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     mut assets: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
+    mut models: Local<std::collections::HashMap<u32, Option<Vec<(Handle<Mesh>, StandardMaterial)>>>>,
+    mut boot: Local<Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)>>,
 ) {
     let Some(state) = state else { return };
     let p = &state.play;
@@ -1980,7 +2022,7 @@ fn sync_items(
         )
     });
     let mut seen = std::collections::HashSet::new();
-    for (e, m, mut t, mut vis) in &mut markers {
+    for (e, m, mut t, mut vis, children) in &mut markers {
         match p.pools.get(&m.0).and_then(|pool| pool.slots.get(m.1).copied().flatten()) {
             Some(it) if p.pack_drawn(m.0) => {
                 t.translation = Vec3::from(it.position);
@@ -1988,6 +2030,17 @@ fn sync_items(
                 t.scale = Vec3::splat(it.drawn_scale().max(0.001));
                 *vis = Visibility::Visible;
                 seen.insert((m.0, m.1));
+                let alpha = it.life.clamp(0.0, 1.0);
+                for c in children.into_iter().flatten() {
+                    if let Ok(h) = parts.get(*c) {
+                        if let Some(mut mat) = materials.get_mut(&h.0) {
+                            if (mat.base_color.alpha() - alpha).abs() > 1e-3 {
+                                mat.base_color.set_alpha(alpha);
+                                mat.alpha_mode = AlphaMode::Blend;
+                            }
+                        }
+                    }
+                }
             }
             Some(_) => {
                 *vis = Visibility::Hidden;
@@ -1996,20 +2049,50 @@ fn sync_items(
             None => commands.entity(e).despawn(),
         }
     }
+    let mut archive = archive;
     for (&pack, pool) in &p.pools {
         for (i, it) in pool.slots.iter().enumerate() {
             let Some(it) = it else { continue };
             if seen.contains(&(pack, i)) {
                 continue;
             }
-            let k = if neopets_sim::items::is_coin(it.id) {
-                0
-            } else if it.charm {
-                1
-            } else {
-                2
-            };
-            commands.spawn((ItemMarker(pack, i), Mesh3d(mesh.clone()), MeshMaterial3d(mats[k].clone()), Transform::from_translation(Vec3::from(it.position)), Visibility::Hidden));
+            let id = it.id as u32;
+            if !models.contains_key(&id) {
+                let built = match archive.as_deref_mut() {
+                    Some(Archive { disc, index }) => item_model(disc, index, &mut boot, id).unwrap_or_else(|e| {
+                        error!("item model {id}: {e}");
+                        None
+                    }),
+                    None => None,
+                };
+                let list = built.map(|m| {
+                    part_assets(&m, &mut meshes, &mut materials, &mut images)
+                        .into_iter()
+                        .map(|(_, mesh, mat)| (mesh, materials.get(&mat).cloned().unwrap_or_default()))
+                        .collect::<Vec<_>>()
+                });
+                models.insert(id, list);
+            }
+            let root = (ItemMarker(pack, i), Transform::from_translation(Vec3::from(it.position)), Visibility::Hidden);
+            match &models[&id] {
+                Some(list) => {
+                    commands.spawn(root).with_children(|c| {
+                        for (mesh, mat) in list {
+                            c.spawn((ItemPart, Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
+                        }
+                    });
+                }
+                None => {
+                    let k = if neopets_sim::items::is_coin(it.id) {
+                        0
+                    } else if it.charm {
+                        1
+                    } else {
+                        2
+                    };
+                    commands.spawn((root, Mesh3d(mesh.clone()), MeshMaterial3d(mats[k].clone())));
+                }
+            }
         }
     }
 }
@@ -2406,6 +2489,11 @@ fn play_trace(
             println!("      enemies before (name, inactive): {alive:?}");
             let n = play.dev_kill_enemies();
             println!("      developer kill on tick {}: {n} enemies hit", play.ticks);
+        }
+        // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
+        if std::env::var("NEOPETS_TRACE_DROP").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
+            let n = play.dev_drop(160);
+            println!("      developer drop on tick {}: {n} world items", play.ticks);
         }
         if quit_at.is_some_and(|k| k == play.ticks) || std::mem::take(&mut play.teardown_wanted) {
             quit_at = None;
