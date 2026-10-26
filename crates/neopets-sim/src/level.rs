@@ -411,8 +411,8 @@ pub struct GameState {
     /// HasMoviePlayed: the movies a module asked to play. No movie is shown in this build, but
     /// a PlayFMV the script makes counts as played.
     pub movies: BTreeSet<u16>,
-    /// The trigger indices a hero shot hit this tick (SPEC-0041 1428's target). The host does not
-    /// test shots against trigger volumes yet, so it stays empty.
+    /// The trigger indices a hero shot fired this tick (SPEC-0028 Hero shot pass), filled by the
+    /// host's trigger step.
     pub shot_hits: BTreeSet<u16>,
     /// NumMiamiceInCage (SPEC-0029 Behavior 28), filled by the host.
     pub miamice_caged: u32,
@@ -6116,7 +6116,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // The station targets (the area word set; a hero strike): an unsolved station's object
         // removed and 708 + k set; every matched hit returns the hero to the hub. The piece
         // scene's camera and objects are not given; hero shots and the movable blocks are not built.
-        (1381, 3) if call.state != 0 && state.hero.strike => {
+        (1381, 3) if call.state != 0 && (state.hero.strike || state.shot_hits.contains(&call.index)) => {
             if let Some(k) = TARGETS_1381.iter().position(|&t| t == call.index) {
                 if state.word(pack, 10 + k as u8) != 0 {
                     if !state.flag(708 + k as u16) {

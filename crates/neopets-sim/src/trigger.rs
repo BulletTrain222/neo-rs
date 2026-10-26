@@ -52,6 +52,44 @@ impl Volume {
         }
     }
 
+    /// The hero shot pass's fire gate (SPEC-0028 section 13, Script trigger fire by flag bit):
+    /// kinds 1 to 3 with bit 3, a static rectangle with bit 8, a moving one with bit 5, and the
+    /// gate mask against the world's gate word.
+    pub fn fires_on_shot(&self, world_mask: u16) -> bool {
+        if self.mask != 0 && self.mask & world_mask == 0 {
+            return false;
+        }
+        let bit = |n: u16| self.flags & (1 << n) != 0;
+        match (self.kind, self.shape) {
+            (1..=3, _) => bit(3),
+            (4 | 7, Shape::Rectangle { extents, .. }) if extents[2] <= 0.0 => bit(8),
+            (4 | 7, Shape::Rectangle { .. }) => bit(5),
+            _ => false,
+        }
+    }
+
+    /// Whether a shot at point `p` with radius `r` touches the volume (the shot's test is not
+    /// given in the spec; here the volume grown by r: a sphere and a cylinder axis by distance,
+    /// a rectangle by its extents and, for a static one, within r of its plane).
+    pub fn shot_hits(&self, p: [f32; 3], r: f32) -> bool {
+        match self.shape {
+            Shape::Sphere { centre, radius } => dot(sub(p, centre), sub(p, centre)).sqrt() <= radius + r,
+            Shape::Cylinder { base, axis, length, radius } => {
+                let end = [base[0] + axis[0] * length, base[1] + axis[1] * length, base[2] + axis[2] * length];
+                segment_point(base, end, p) <= radius + r
+            }
+            Shape::Rectangle { origin, axes, extents } => {
+                let d = sub(p, origin);
+                let within = |k: usize, e: f32| {
+                    let a = dot(d, axes[k]);
+                    a >= e.min(0.0) - r && a <= e.max(0.0) + r
+                };
+                let across = if extents[2] > 0.0 { within(2, extents[2]) } else { dot(d, axes[2]).abs() <= r };
+                within(0, extents[0]) && within(1, extents[1]) && across
+            }
+        }
+    }
+
     /// Whether the body standing at feet point `p` touches the volume.
     pub fn touches(&self, p: [f32; 3]) -> bool {
         let top = [p[0], p[1] + BODY_HEIGHT, p[2]];
@@ -182,6 +220,19 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shot_gates_and_hits() {
+        // The 0x0120 boxes of pack 1174 fire from shots only (bit 8 blocks the body's moving test).
+        let b = Volume { kind: 4, flags: 0x0120, mask: 0, index: 36, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], extents: [2.0, 2.0, 2.0] } };
+        assert!(b.fires_on_shot(0) && !b.fires_on_contact(0));
+        assert!(b.shot_hits([1.0, 1.0, 1.0], 0.5) && b.shot_hits([2.4, 1.0, 1.0], 0.5) && !b.shot_hits([3.0, 1.0, 1.0], 0.5));
+        // A flags-0x0001 solid volume never fires.
+        let s = Volume { kind: 1, flags: 0x0001, mask: 0, index: 0, shape: Shape::Sphere { centre: [0.0; 3], radius: 1.0 } };
+        assert!(!s.fires_on_shot(0));
+        let c = Volume { kind: 3, flags: 0x0008, mask: 0, index: 1, shape: Shape::Cylinder { base: [0.0; 3], axis: [0.0, 1.0, 0.0], length: 3.0, radius: 6.0 } };
+        assert!(c.fires_on_shot(0) && c.shot_hits([6.2, 1.0, 0.0], 0.5) && !c.shot_hits([7.0, 1.0, 0.0], 0.5));
+    }
 
     #[test]
     fn hero_contact_states_and_decay() {

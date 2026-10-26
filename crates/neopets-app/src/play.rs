@@ -92,8 +92,10 @@ pub struct World {
     /// table and the groups opened in this load.
     capacity: usize,
     volumes: Vec<neopets_sim::trigger::Volume>,
-    /// Every volume that fires on contact under some collision mask.
+    /// Every volume that fires on contact or from a hero shot under some collision mask, and those
+    /// a hero shot fires under the current mask.
     all_volumes: Vec<neopets_sim::trigger::Volume>,
+    shot_volumes: Vec<neopets_sim::trigger::Volume>,
     routines: HashMap<u16, u8>,
     /// Script-group type registrations: trigger index to its owner group (SPEC-0048 Script
     /// groups, type registration); a later RegisterTrigger on the index replaces it.
@@ -115,6 +117,7 @@ impl World {
     pub fn set_collis_mask(&mut self, mask: u16) {
         self.collis_mask = mask;
         self.volumes = self.all_volumes.iter().filter(|v| v.fires_on_contact(mask)).copied().collect();
+        self.shot_volumes = self.all_volumes.iter().filter(|v| v.fires_on_shot(mask)).copied().collect();
         self.boxes = self.all_boxes.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
     }
 
@@ -199,6 +202,7 @@ impl World {
             capacity: 0,
             volumes: Vec::new(),
             all_volumes: Vec::new(),
+            shot_volumes: Vec::new(),
             routines: HashMap::new(),
             group_routes: HashMap::new(),
             disabled_triggers: Default::default(),
@@ -242,7 +246,7 @@ impl World {
                 };
                 neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }
             })
-            .filter(|v| v.fires_on_contact(0xFFFF))
+            .filter(|v| v.fires_on_contact(0xFFFF) || v.fires_on_shot(0xFFFF))
             .collect();
         world.all_volumes = world.volumes.clone();
         world.set_collis_mask(0);
@@ -3851,6 +3855,16 @@ impl Play {
         for &i in &fired {
             self.world.records.entry(i).or_default().fire(frame, true, -1);
         }
+        // SPEC-0028 Hero shot pass: each live shot fires the volumes its point and radius touch,
+        // with object 0 (the shot word set); a shot can fire several triggers in one tick.
+        let mut shot: Vec<u16> = self.hero_shots.iter().flat_map(|s| self.world.shot_volumes.iter().filter(|v| v.shot_hits(s.position, s.radius)).map(|v| v.index)).collect();
+        shot.sort_unstable();
+        shot.dedup();
+        for &i in &shot {
+            self.world.records.entry(i).or_default().fire(frame, false, -1);
+        }
+        self.state.shot_hits = shot.iter().copied().collect();
+        fired.extend(shot.iter().filter(|i| !fired.contains(i)).copied().collect::<Vec<_>>());
         // The callbacks read the pad's newly-pressed word themselves; an open box keeps it.
         let square = self.square_now && !self.dialogue_open;
         for i in fired {
