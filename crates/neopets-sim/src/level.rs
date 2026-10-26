@@ -830,6 +830,27 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0039 1405, 1407, 1417, 1419 and 1425 Init: their blackboard values (1417: 20 for
+        // eW 159; 1425: 50 for eW 160); 1407 sets flag 100 first; the thread loads slot 0 with set
+        // 0 (region P + 1) and returns the camera under each pack's gate (104, always, 102, 100,
+        // 106). The callbacks are registered under the same gates (gated in their routines).
+        1405 | 1407 | 1417 | 1419 | 1425 => {
+            match pack {
+                1407 => state.set(100, true),
+                1417 => {
+                    state.blackboard.insert((2, 159), 20);
+                }
+                1425 => {
+                    state.blackboard.insert((2, 160), 50);
+                }
+                _ => {}
+            }
+            if gate_1405(pack, state) {
+                vec![Action::LoadRegion { slot: 0, region: Some(pack + 1) }, Action::ReturnCamera { preset: -1, release: true }]
+            } else {
+                Vec::new()
+            }
+        }
         // SPEC-0039 1139 Init: object 0 at its end (flag 35) or start; with 304 clear, 304 and 13
         // set; value 10 for eW 109. The proximity routines, the teleports (index 1's context by
         // flag 35) and the arrival are fixed rules.
@@ -1529,6 +1550,47 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     out
+}
+
+/// The registration gate of SPEC-0039 1405, 1407, 1417, 1419 and 1425.
+fn gate_1405(pack: u32, s: &GameState) -> bool {
+    match pack {
+        1405 => s.flag(104),
+        1407 => true,
+        1417 => s.flag(102),
+        1419 => s.flag(100),
+        1425 => s.flag(106),
+        _ => false,
+    }
+}
+
+/// Their entity-0 routines: 1407 in full (the hand-in, then 8 to 10 with 102 and 104, else 11 to
+/// 13); for 1417, 1419 and 1425 the item-33 hand-ins only (their other branches are Medium in
+/// the spec and show nothing here); 1405's routine is not reproduced (Medium).
+fn hall_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
+    if !gate_1405(pack, s) {
+        return Vec::new();
+    }
+    let (need, done, line) = match pack {
+        1407 => (607, 681, 14),
+        1417 => (606, 680, 10),
+        1419 => (608, 682, 13),
+        1425 => (610, 684, 10),
+        _ => return Vec::new(),
+    };
+    if s.flag(need) && !s.flag(done) {
+        s.remove_all(33);
+        s.set(done, true);
+        return vec![Action::Talk { line }];
+    }
+    if pack != 1407 {
+        return Vec::new();
+    }
+    let key = (pack, 0);
+    let mut rot = s.rotations.get(&key).copied().unwrap_or_default();
+    let line = if s.flag(102) && s.flag(104) { rot.pick(0, &cycle(&[8, 9, 10])) } else { rot.pick(1, &cycle(&[11, 12, 13])) };
+    s.rotations.insert(key, rot);
+    line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
 }
 
 /// SPEC-0039 1139, 732, 793 and 874 proximity routines.
@@ -2852,6 +2914,11 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
             }
         }
         1421 if state.flag(102) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
+        1405 if state.flag(104) => add(&mut t, 0, 0, (5.0, 8.0), (5.0, 7.0), &std3, &[]),
+        1407 => add(&mut t, 0, 0, (8.0, 14.0), (5.0, 7.0), &std3, &[]),
+        1417 if state.flag(102) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
+        1419 if state.flag(100) => add(&mut t, 0, 0, (8.0, 14.0), (5.0, 7.0), &std3, &[]),
+        1425 if state.flag(106) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
         1423 if state.flag(106) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
         _ => return Vec::new(),
     }
@@ -2881,6 +2948,10 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         // frame; else line 2 (202), 4 (150) or 6.
         984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
         984 => vec![Action::Message { line: if state.flag(202) { 2 } else if state.flag(150) { 4 } else { 6 } }],
+        // SPEC-0039 1417 on-enter (registered with 102): with 100, line 0 (106) or 2. 1419 (with
+        // 100): line 0 with 102 and 104, else 2.
+        1417 if state.flag(102) && state.flag(100) => vec![Action::Message { line: if state.flag(106) { 0 } else { 2 } }],
+        1419 if state.flag(100) => vec![Action::Message { line: if state.flag(102) && state.flag(104) { 0 } else { 2 } }],
         // SPEC-0041 1421 CB1 (registered with 102): with 100, line 0 (106) or 2. 1423 CB1
         // (registered with 106): with 104, line 0 (102) or 3.
         1421 if state.flag(102) && state.flag(100) => vec![Action::Message { line: if state.flag(106) { 0 } else { 2 } }],
@@ -4560,6 +4631,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0039 1405 to 1425: the entity-0 routine.
+        (1405 | 1407 | 1417 | 1419 | 1425, 0) => Some(0),
         // SPEC-0039 1139: handlers 1 to 5 on entities 0 to 4; 732: handler 3 on entity 1; 793:
         // handler 1 on entity 0, handler 2 on 1 and 2; 874: handlers 1 and 2 on entities 6 and 7.
         (1139, 0..=4) => Some(entity as u8 + 1),
@@ -4643,6 +4716,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 750 {
         return talk_750(routine, state);
+    }
+    if matches!(pack, 1405 | 1407 | 1417 | 1419 | 1425) && routine == 0 {
+        return hall_talk(pack, state);
     }
     if matches!(pack, 1139 | 732 | 793 | 874) {
         return town_talk(pack, routine, state);
@@ -4918,6 +4994,23 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn halls_1405_to_1425() {
+        let mut s = GameState::default();
+        // 1407 sets 100 at Init, so its record and slot load always run.
+        assert_eq!(on_init(1407, &mut s)[0], Action::LoadRegion { slot: 0, region: Some(1408) });
+        assert_eq!(entity_setup(1407, &mut s).len(), 1);
+        assert_eq!(on_talk(1407, 0, &mut s), vec![Action::Talk { line: 11 }]);
+        s.set(607, true);
+        s.give(33, 2);
+        assert_eq!(on_talk(1407, 0, &mut s), vec![Action::Talk { line: 14 }]);
+        assert!(!s.has_item(33) && s.flag(681));
+        // 1425 without 106: nothing registered, no load, no record.
+        assert!(on_init(1425, &mut s).is_empty() && entity_setup(1425, &mut s).is_empty());
+        assert_eq!(s.blackboard.get(&(2, 160)), Some(&50));
+        assert!(on_enter(1419, &mut s) == vec![Action::Message { line: 2 }]);
     }
 
     #[test]
