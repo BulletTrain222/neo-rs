@@ -1575,6 +1575,50 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0042 986 Init: flags 87 to 89 kept at load (words 11 to 13); the triggers; the
+        // objects and world masks by those flags; the slot-load thread (86 clear: set 0, region
+        // 987). Breakable 0's SetBreakableActive, the navmesh table and the debug registrar are
+        // not built.
+        986 => {
+            let (f87, f88, f89) = (state.flag(87), state.flag(88), state.flag(89));
+            state.set_word(pack, 11, f87 as i32);
+            state.set_word(pack, 12, f88 as i32);
+            state.set_word(pack, 13, f89 as i32);
+            let mut v = vec![reg(0, 0), reg(1, 1), reg(2, 2), reg(3, 2), reg(4, 4), reg(6, 6), reg(7, 7)];
+            if f89 {
+                v.extend([Action::InitObjOn { obj: 1, end: false }, Action::CollisMask { mask: 1 }, Action::DisplayMask { mask: 1 }]);
+            } else {
+                v.extend([Action::InitObjOn { obj: 2, end: false }, Action::LoopAnim { obj: 2, speed: 1.0 }, Action::CollisMask { mask: 0 }, Action::DisplayMask { mask: 0 }]);
+            }
+            if !f88 {
+                v.push(Action::InitObjOn { obj: 7, end: false });
+            }
+            if f87 {
+                v.extend([Action::InitObjOn { obj: 8, end: true }, Action::InitObjOn { obj: 3, end: true }, Action::InitObjOn { obj: 4, end: true }, Action::DeactivateObj { obj: 6 }]);
+            } else {
+                v.extend([8, 3, 4, 5].map(|obj| Action::InitObjOn { obj, end: false }));
+            }
+            if !state.flag(86) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(987) });
+            }
+            v
+        }
+        // SPEC-0041 800 Init: the slot thread CB1 (58: set 4; 57: 3; 56: 2; 55: 1; else 0, 5 and 6;
+        // region 801 + set; sets 5 and 6 into slots 1 and 2 here, the spec loads all three into
+        // one slot); object 0 with 55; CB5 on trigger 1.
+        800 => {
+            let f = |n| state.flag(n);
+            let mut v = vec![reg(1, 5)];
+            let one = [(58, 4), (57, 3), (56, 2), (55, 1)].into_iter().find(|&(fl, _)| f(fl)).map(|(_, j)| j);
+            match one {
+                Some(j) => v.push(Action::LoadRegion { slot: 0, region: Some(801 + j) }),
+                None => v.extend([(0, 0), (1, 5), (2, 6)].map(|(slot, j)| Action::LoadRegion { slot, region: Some(801 + j) })),
+            }
+            if f(55) {
+                v.push(Action::InitObjOn { obj: 0, end: false });
+            }
+            v
+        }
         // SPEC-0041 822 Init: object 7; objects by 55; objects 18 to 21 looped; the nine triggers;
         // step 8 (621 set and 57 clear: objects 5 and 4 with the loops; 57: effects 55 to 60
         // stopped; both clear: the loops at speed 0 and the effects stopped); the slot loader.
@@ -5616,6 +5660,97 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0042 986 T0 (context 13): with the button the load of eW 79 (pack 989) while 298
+        // is clear, else line 1. T4 (context 6): with 298 the load of eW 80 (pack 990), else line 0.
+        (986, 0 | 4) if call.object => {
+            if !(call.square && !state.talking) {
+                out.prompt = Some(if routine == 0 { 13 } else { 6 });
+            } else {
+                let go = (routine == 0) != state.flag(298);
+                out.actions.push(if go { Action::ReplaceExterior { slot: if routine == 0 { 79 } else { 80 }, plane: -1 } } else { Action::Message { line: if routine == 0 { 1 } else { 0 } } });
+            }
+        }
+        // T1 (a strike inside, 89 clear at load): camera 5, hero animation 12, objects 2 off and
+        // 1 played, mask bit 0 set, 89.
+        (986, 1) if call.state != 0 && state.hero.strike && state.word(pack, 13) == 0 && !state.flag(89) => {
+            state.set(89, true);
+            out.actions.extend([
+                Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                Action::HeroAnim { anim: 12, wait: false },
+                Action::DeactivateObj { obj: 2 },
+                Action::InitObjOn { obj: 1, end: false },
+                Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                Action::CollisMask { mask: 1 },
+                Action::DisplayMask { mask: 1 },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        // T2 and T3 (any fire, not while running): camera 7; the first run with 88 clear removes
+        // object 7 (the floor; breakable 0's Break is not built) and sets 88; every run plays hero
+        // animation 136 and moves the hero to locator 11 (StartHeroLongFall is not built).
+        (986, 2) if state.word(pack, 20) == 0 => {
+            state.set_word(pack, 20, 1);
+            out.actions.extend([Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 }, Action::Sleep { ticks: 10 }]);
+            let first = state.word(pack, 12) == 0;
+            if first {
+                out.actions.push(Action::DeactivateObj { obj: 7 });
+            }
+            out.actions.extend([Action::HeroAnim { anim: 136, wait: true }, wait(2.0), Action::MoveHero { locator: 11 }, Action::Sleep { ticks: 1 }, Action::ReturnCamera { preset: -1, release: true }]);
+            if first {
+                state.set_word(pack, 12, 1);
+                out.actions.push(Action::SetFlag { flag: 88, on: true });
+            }
+            out.actions.push(Action::Bits { word: 20, set: 0, clear: 1 });
+        }
+        // T6 (entering, once per load): the walk to point 13, camera 9, the camera preset 14.
+        (986, 6) if call.state == 1 && state.word(pack, 21) == 0 => {
+            state.set_word(pack, 21, 1);
+            out.actions.extend([Action::HoldHero, Action::WalkHero { locator: 13, wait: true, orient: false }, Action::PlayCamera { track: 9, wait: true, end: 0, speed: 1.0 }, Action::ReturnCamera { preset: 14, release: true }]);
+        }
+        // T7 (87 clear at load; context 4): the lever (point 96, hero animation 140, objects 8, 3,
+        // 4, 5, 6, camera 6) and 87.
+        (986, 7) if call.state != 0 && state.word(pack, 11) == 0 => {
+            if call.square && !state.talking {
+                state.set(87, true);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: 96, wait: true, orient: true },
+                    Action::HeroAnim { anim: 140, wait: false },
+                    Action::PlayAnim { obj: 8, speed: 1.0, wait: false },
+                    Action::InitObjOn { obj: 3, end: false },
+                    Action::InitObjOn { obj: 4, end: false },
+                    Action::DeactivateObj { obj: 5 },
+                    Action::InitObjOn { obj: 6, end: false },
+                    Action::PlayAnim { obj: 3, speed: 1.0, wait: false },
+                    Action::PlayAnim { obj: 4, speed: 1.0, wait: false },
+                    Action::PlayCamera { track: 6, wait: true, end: 0, speed: 1.0 },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            } else {
+                out.prompt = Some(4);
+            }
+        }
+        // SPEC-0041 800 CB5 (trigger 1, entering, 55 clear, stage A not done): stage A (the
+        // camera and dialogue lines 0 to 6 with entities 10 and 11), then the stage chain armed.
+        (800, 5) if call.object && call.state == 1 && !state.flag(55) && state.word(pack, 1) == 0 => {
+            state.set_word(pack, 1, 1);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::MoveEntity { entity: 10, locator: 25, face: true },
+                Action::MoveEntity { entity: 11, locator: 26, face: true },
+                Action::LetterBox { on: true, seconds: 1.0, wait: false },
+                Action::FadeOut { seconds: 0.7, wait: true },
+                Action::PlayCamera { track: 6, wait: false, end: 1, speed: 0.8 },
+                Action::FadeIn { seconds: 0.4, wait: true },
+                Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.6 },
+                Action::PlayCamera { track: 11, wait: false, end: 1, speed: 1.0 },
+                Action::WalkHero { locator: 13, wait: true, orient: false },
+            ]);
+            for (line, track) in (0..=6).zip([6, 10, 8, 9, 8, 10, 11]) {
+                out.actions.extend([Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }, Action::Converse { entity: 9, line }]);
+            }
+            out.actions.extend([Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 }, Action::Sleep { ticks: 45 }, Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }]);
+        }
         // SPEC-0041 822 CB3 (trigger 2, entering, after the first arrival): object 7, value 50 for
         // eW 60 and the load of eW 60 (pack 864).
         (822, 3) if call.object && call.state == 1 && state.word(pack, 5) != 0 => {
@@ -8448,6 +8583,46 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0041 800 CB2 to CB4: after stage A, stage B once AIs 10 and 11 are dead (lines 7 and
+        // 8, level state 0), stage C on level state 1 (set 7 into slot 3, lines 9 and 10, entities
+        // 12 to 16 aggressive, level state 2), stage D on level state 3 (lines 11 and 12, object 0,
+        // flags 55 and 200). Level states 1 and 3 come from the raider fight (not built); the
+        // boss-fight tweaks and stage D's item activation are not built.
+        800 => {
+            let w = |s: &GameState, k| s.word(800, k);
+            if w(state, 1) == 1 && w(state, 2) == 0 && state.ai_dead.contains(&10) && state.ai_dead.contains(&11) {
+                state.set_word(pack, 2, 1);
+                state.set_level(0, true);
+                out.extend([
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::LetterBox { on: true, seconds: 1.0, wait: false },
+                    Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                    Action::FadeIn { seconds: 0.5, wait: true },
+                    Action::Converse { entity: 9, line: 7 },
+                    Action::FadeOut { seconds: 0.7, wait: true },
+                    Action::PlayCamera { track: 14, wait: false, end: 1, speed: 1.0 },
+                    Action::FadeIn { seconds: 0.4, wait: true },
+                    Action::Converse { entity: 9, line: 8 },
+                    Action::LetterBox { on: false, seconds: 1.0, wait: false },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            } else if w(state, 2) == 1 && w(state, 3) == 0 && state.level(1) {
+                state.set_word(pack, 3, 1);
+                state.set_level(2, true);
+                out.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::LoadRegion { slot: 3, region: Some(808) }, Action::FadeIn { seconds: FADE, wait: true }, Action::PlayCamera { track: 17, wait: false, end: 1, speed: 1.0 }, Action::Converse { entity: 9, line: 9 }, Action::FadeOut { seconds: 0.7, wait: true }, Action::PlayCamera { track: 15, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }]);
+                out.extend((12..=16).rev().zip(20..=24).map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
+                out.push(Action::Converse { entity: 9, line: 10 });
+                out.extend((12..=16).map(|entity| Action::Agro { entity }));
+                out.extend([wait(1.0), Action::FadeOut { seconds: 0.5, wait: true }, Action::ReturnCamera { preset: -1, release: true }, Action::ReleaseEntity { entity: 9 }, Action::FadeIn { seconds: FADE, wait: true }]);
+            } else if w(state, 3) == 1 && w(state, 4) == 0 && state.level(3) {
+                state.set_word(pack, 4, 1);
+                state.set(55, true);
+                state.set(200, true);
+                out.extend([Action::FadeOut { seconds: 1.0, wait: true }, Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }, Action::Converse { entity: 9, line: 11 }, Action::PlayCamera { track: 19, wait: false, end: 1, speed: 1.0 }, wait(1.0)]);
+                out.extend((12..=16).zip(27..=31).map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
+                out.extend([wait(1.5), Action::Converse { entity: 9, line: 12 }, Action::Sleep { ticks: 55 }, Action::InitObjOn { obj: 0, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
+            }
+        }
         // SPEC-0041 985 Update: the thread of the load's branch.
         985 => out.extend(thread_985(state)),
         // SPEC-0041 1096 Update: with 45 clear CB7 (the level-state pairs 1 and 2, 4 and 5, 7 and
@@ -9624,6 +9799,10 @@ pub fn on_exit(pack: u32, state: &mut GameState, active: &dyn Fn(usize) -> bool)
         state.timer.running = false;
         state.timer.deactivate();
     }
+    // SPEC-0041 800 Exit: item 9 given when not held.
+    if pack == 800 && !state.has_item(9) {
+        state.give(9, 1);
+    }
     // SPEC-0039 1248 Exit: objects 0 and 2 inactive with 1 active set flag 79.
     if pack == 1248 && !active(0) && !active(2) && active(1) {
         state.set(79, true);
@@ -9730,6 +9909,19 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             .map(|locator| Action::MoveHero { locator })
             .into_iter()
             .collect();
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
+        // SPEC-0042 986 A (eW 78): value 2 puts the hero at locator 10; any value but -1 returns
+        // the camera; the value is reset.
+        986 => {
+            let v = state.take_message(2, 78);
+            let mut out = Vec::new();
+            if v == 2 {
+                out.push(Action::MoveHero { locator: 10 });
+            }
             if v != -1 {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
@@ -12959,6 +13151,43 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn modules_986_800() {
+        // 986's vector: with 89 clear at load a strike in trigger 1 runs the object-1 sequence and
+        // sets 89; a contact fire does nothing. With 88 clear the first trigger-2 run removes the
+        // floor and sets 88; a later run skips the break.
+        let mut s = GameState::default();
+        on_init(986, &mut s);
+        let fire = |i| TriggerCall { index: i, state: 2, object: true, square: false };
+        assert!(on_trigger(986, 1, fire(1), &mut s).actions.is_empty());
+        s.hero.strike = true;
+        assert!(on_trigger(986, 1, fire(1), &mut s).actions.contains(&Action::CollisMask { mask: 1 }) && s.flag(89));
+        let first = on_trigger(986, 2, fire(2), &mut s).actions;
+        assert!(first.contains(&Action::DeactivateObj { obj: 7 }) && first.contains(&Action::SetFlag { flag: 88, on: true }));
+        assert!(on_trigger(986, 2, fire(3), &mut s).actions.is_empty());
+        s.set_word(986, 20, 0);
+        assert!(!on_trigger(986, 2, fire(3), &mut s).actions.contains(&Action::DeactivateObj { obj: 7 }));
+        // T0 with the button and 298 clear: the load of eW 79.
+        let press = TriggerCall { index: 0, state: 1, object: true, square: true };
+        assert_eq!(on_trigger(986, 0, press, &mut s).actions, vec![Action::ReplaceExterior { slot: 79, plane: -1 }]);
+        // 800: trigger 1 runs stage A once; AIs 10 and 11 dead give stage B (level state 0); the
+        // raider fight's level states 1 and 3 give stages C and D (flags 55 and 200).
+        let mut s = GameState::default();
+        on_init(800, &mut s);
+        let enter = TriggerCall { index: 1, state: 1, object: true, square: false };
+        assert!(on_trigger(800, 5, enter, &mut s).actions.contains(&Action::Converse { entity: 9, line: 6 }));
+        assert!(on_trigger(800, 5, enter, &mut s).actions.is_empty());
+        s.ai_dead.extend([10, 11]);
+        assert!(on_update(800, &mut s, false).contains(&Action::Converse { entity: 9, line: 8 }) && s.level(0));
+        s.set_level(1, true);
+        assert!(on_update(800, &mut s, false).contains(&Action::Agro { entity: 14 }));
+        s.set_level(3, true);
+        on_update(800, &mut s, false);
+        assert!(s.flag(55) && s.flag(200));
+        on_exit(800, &mut s, &|_| false);
+        assert!(s.has_item(9));
     }
 
     #[test]
