@@ -2283,7 +2283,7 @@ impl Play {
                 if pack == 1139 {
                     self.state.talk_five = self.rng.range(1, 5);
                 }
-                if pack == 1358 {
+                if pack == 1358 || pack == 934 {
                     self.state.talk_raw = self.rng.next_u32();
                 }
                 self.state.talk_roll = self.rng.range(1, 3);
