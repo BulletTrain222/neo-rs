@@ -2032,9 +2032,13 @@ fn play_trace(
     if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
         play.trace_select_hero(1);
     }
-    // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic).
+    // NEOPETS_TRACE_TARGET=<name>: the fight trace fights only characters with that name.
+    play.fight_target = std::env::var("NEOPETS_TRACE_TARGET").ok().filter(|n| !n.is_empty());
+    // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic); a value above the
+    // maximum raises the maximum too, so the boss-fight refills keep it.
     if let Some(hp) = std::env::var("NEOPETS_TRACE_HP").ok().and_then(|v| v.parse::<i32>().ok()) {
         play.hero_hp = hp;
+        play.hero_max = play.hero_max.max(hp);
     }
     // NEOPETS_TRACE_PET="type,T": a diagnostic petpet activated by type at the start (F = T).
     if let Ok(v) = std::env::var("NEOPETS_TRACE_PET") {
@@ -2233,7 +2237,9 @@ fn play_trace(
         } else if herd {
             play.herd_goal()
         } else if let Some((g, close)) = fight {
-            (!close).then_some(g)
+            // Roberta keeps turning toward her target when close (a slow step) so her shots,
+            // which fly along her facing, can reach it.
+            (!close || play.hero_index == 1).then_some(g)
         } else {
             route.first().copied().or(to.filter(|t| !t[0].is_nan()))
         };
@@ -2245,8 +2251,12 @@ fn play_trace(
             let (f, l) = play.camera.rows();
             let (dx, dz) = (tx - p[0], tz - p[2]);
             let len = (dx * dx + dz * dz).sqrt().max(1e-6);
-            forward = 0.7 * (dx * f[0] + dz * f[2]) / len / (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
-            side = 0.7 * (dx * l[0] + dz * l[2]) / len;
+            // Close, Roberta only turns: a slow step while her facing is off the target, none
+            // once it is within about 8 degrees.
+            let aligned = (dx * play.loco.facing[0] + dz * play.loco.facing[2]) / (dx * dx + dz * dz).sqrt().max(1e-6) > 0.99;
+            let m = if fight.is_some_and(|f| f.1) && play.hero_index == 1 { if aligned { 0.0 } else { 0.15 } } else { 0.7 };
+            forward = m * (dx * f[0] + dz * f[2]) / len / (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
+            side = m * (dx * l[0] + dz * l[2]) / len;
         }
         // Around a diagnostic switch the stick rests (the chord needs a standing hero).
         if switch_at.iter().any(|&k| play.ticks + 30 >= k && play.ticks <= k + 60) {

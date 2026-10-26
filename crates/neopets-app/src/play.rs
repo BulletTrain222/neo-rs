@@ -608,6 +608,8 @@ pub struct Play {
     /// Roberta's attack step, her six shot slots and the shot rows (SPEC-0036).
     r_attack: Option<neopets_sim::roberta::RobertaAttack>,
     pub hero_shots: Vec<neopets_sim::roberta::Shot>,
+    /// Diagnostic: the fight trace's target by character name (NEOPETS_TRACE_TARGET).
+    pub fight_target: Option<String>,
     shot_rows: neopets_sim::roberta::Rows,
     /// Forced binds waiting for the embedded region: (pack, ordinal).
     rebind: Vec<(u32, usize)>,
@@ -1209,6 +1211,7 @@ impl Play {
             rebind: Vec::new(),
             r_attack: None,
             hero_shots: Vec::new(),
+            fight_target: None,
             shot_rows,
             hero_index: 0,
             parked,
@@ -2777,7 +2780,7 @@ impl Play {
             });
             launched += 1;
         }
-        self.last_hit = format!("Roberta launched {launched} shot(s) (class {class}, held {held}) on tick {}", self.ticks);
+        self.last_hit = format!("Roberta launched {launched} shot(s) (class {class}, held {held}, homing {}) on tick {}", row.homing, self.ticks);
     }
 
     /// SPEC-0036 Roberta full-charge hold effect and Timed glow: effect 239 at the hero's frame
@@ -3700,13 +3703,15 @@ impl Play {
             .iter()
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
+            .filter(|c| self.fight_target.as_ref().is_none_or(|n| *n == c.name))
             .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
             })?;
         let d = (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
-        Some(([c.position[0], c.position[2]], d < 4.5))
+        // Roberta fights from range: close within 16 (her shots fly along her facing).
+        Some(([c.position[0], c.position[2]], d < if self.hero_index == 1 { 16.0 } else { 4.5 }))
     }
 
     /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
