@@ -1552,6 +1552,45 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 1176 Init and CB1, the encounter thread: round r by flags 384 to 381; slots A
+        // (region 1177), C (1178) and B (1179 + r); the opponent entity 12 + r (word 1); the
+        // opening scene (cameras 6, 4, 5 and 7, the opponent's intro animation, line 53 - r,
+        // entity 11's walk to locator 1 and loop 55). SetMaxActiveAI, the spectators' random
+        // loops and the use-item sound are not built.
+        1176 => {
+            let r = [(384, 4), (383, 3), (382, 2), (381, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, r)| r);
+            let opp = 12 + r as usize;
+            state.set_word(pack, 1, opp as i32);
+            state.set_word(pack, 4, r);
+            let cut = [Action::FadeOut { seconds: FADE, wait: true }, Action::FadeIn { seconds: FADE, wait: true }];
+            let cam = |track, wait| Action::PlayCamera { track, wait, end: 1, speed: 1.0 };
+            let mut v = vec![
+                Action::FadeOut { seconds: 0.0, wait: false },
+                Action::LoadRegion { slot: 0, region: Some(1177) },
+                Action::LoadRegion { slot: 2, region: Some(1178) },
+                Action::LoadRegion { slot: 1, region: Some(1179 + r as u32) },
+                Action::WaitLoads,
+                Action::HoldHero,
+                Action::MoveHero { locator: 0 },
+                Action::MoveEntity { entity: 11, locator: 1, face: true },
+                Action::FadeIn { seconds: 0.7, wait: true },
+                cam(6, true),
+            ];
+            v.extend(cut.clone());
+            v.extend([Action::MoveEntity { entity: opp, locator: 2, face: true }, cam(4, false), Action::EntityAnim { entity: opp, anim: [70, 13, 70, 73, 68][r as usize], looped: false, wait: true }]);
+            v.extend(cut.clone());
+            v.extend([cam(5, false), Action::HeroAnim { anim: 182, wait: true }]);
+            v.extend(cut.clone());
+            v.extend([cam(7, false), Action::Message { line: 53 - r as u16 }]);
+            v.extend(cut);
+            v.extend([
+                Action::ReleaseEntity { entity: opp },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::WalkEntity { entity: 11, locator: 1, wait: true, orient: true, stop: 1.1 },
+                Action::EntityAnim { entity: 11, anim: 55, looped: true, wait: false },
+            ]);
+            v
+        }
         // SPEC-0044 735 Init: T1 on trigger 21, the exit routine on script group 8's members,
         // triggers 4, 5 and 2, and with 263 clear trigger 23 (the boss start); effect 1 stopped;
         // 262; objects 14 to 16 looped; thread K1 (76: set 1 with 530 set and 531 clear, else 0;
@@ -6852,6 +6891,59 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0041 1176 CB2, the death watcher: the hero-death marker (word 2) ends the round
+        // lost (380; the hero-death cutscene with the opponent's victory animation and line 61 - r;
+        // the lost result for eW 90 and its load); the opponent's death wins it (the death
+        // sequence with line 54, 55 or 56 by flags 202 and 150; the won result and the load).
+        // The HUD reset and LoopHeroAnim's 4 s loop are not reproduced.
+        1176 => {
+            let opp = state.word(pack, 1);
+            let r = state.word(pack, 4) as usize;
+            if state.word(pack, 3) == 0 && opp >= 0 {
+                if state.word(pack, 2) == 1 {
+                    state.set_word(pack, 3, 1);
+                    state.set(380, true);
+                    state.blackboard.insert((2, 90), 10);
+                    state.blackboard.insert((1, 90), -1);
+                    out.extend([
+                        Action::FadeOut { seconds: 0.7, wait: true },
+                        Action::HoldHero,
+                        Action::Equip { on: false },
+                        Action::MoveEntity { entity: opp as usize, locator: 2, face: true },
+                        Action::MoveHero { locator: 0 },
+                        Action::FadeIn { seconds: 0.7, wait: true },
+                        Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                        Action::HeroAnim { anim: 190, wait: false },
+                        wait(3.0),
+                        Action::FadeOut { seconds: FADE, wait: true },
+                        Action::FadeIn { seconds: FADE, wait: true },
+                        Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                        Action::EntityAnim { entity: opp as usize, anim: [71, 73, 73, 22, 73][r.min(4)], looped: false, wait: true },
+                        Action::Message { line: 61 - r.min(4) as u16 },
+                        Action::ReplaceExterior { slot: 90, plane: 0 },
+                    ]);
+                } else if state.ai_dead.contains(&(opp as usize)) {
+                    state.set_word(pack, 3, 1);
+                    state.blackboard.insert((2, 90), 10);
+                    state.blackboard.insert((1, 90), 1);
+                    let line = if state.flag(202) { 54 } else if state.flag(150) { 55 } else { 56 };
+                    out.extend([
+                        wait(1.0),
+                        Action::HoldHero,
+                        Action::Equip { on: false },
+                        Action::FadeOut { seconds: 0.7, wait: true },
+                        Action::DeactivateEntity { entity: opp as usize },
+                        Action::MoveHero { locator: 0 },
+                        Action::FadeIn { seconds: 0.7, wait: true },
+                        Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                        Action::HeroAnim { anim: 182, wait: false },
+                        Action::Message { line },
+                        Action::Sleep { ticks: 1 },
+                        Action::ReplaceExterior { slot: 90, plane: 0 },
+                    ]);
+                }
+            }
+        }
         // SPEC-0044 735 Update, the boss watcher (263 clear; not while a scene runs): level state
         // 8 and not 9: the intro (the boss set 4 into slot 1, cameras 22 and 23, entity 73's
         // animations 3 and 4, objects 54 and 12 off, level state 13, then 9 with the hit points
@@ -7598,6 +7690,8 @@ pub fn on_hero_death(pack: u32, hero: usize, s: &mut GameState) -> Option<(bool,
             };
             busy(s, true, v)
         }
+        // SPEC-0041 1176 CB3 (flag 1): death clip 34, 0.7 s, then the hero-death marker (word 2).
+        1176 => busy(s, true, vec![Action::HeroAnim { anim: 34, wait: false }, wait(0.7), Action::Bits { word: 2, set: 1, clear: 0 }]),
         // SPEC-0055 735 (flag 1): with 263 clear or the post-fight word set, the active hero is
         // killed by script; in the post-fight window the hero is moved to locator 5.
         735 => {
@@ -10806,6 +10900,30 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1176_arena_rounds() {
+        // Round 2 (382 set): region 1181, opponent 14 with intro animation 70 and line 51.
+        let mut s = GameState::default();
+        s.set(382, true);
+        let v = on_init(1176, &mut s);
+        assert!(v.contains(&Action::LoadRegion { slot: 1, region: Some(1181) }) && v.contains(&Action::Message { line: 51 }));
+        assert!(v.contains(&Action::EntityAnim { entity: 14, anim: 70, looped: false, wait: true }));
+        // The win: the opponent dead, line 56, the won result for eW 90.
+        s.ai_dead.insert(14);
+        assert!(on_update(1176, &mut s, false).contains(&Action::Message { line: 56 }));
+        assert_eq!(s.blackboard.get(&(1, 90)), Some(&1));
+        assert!(on_update(1176, &mut s, false).is_empty());
+        // The loss: the callback skips the default death; the marker ends the round (380, line 59).
+        let mut s = GameState::default();
+        s.set(382, true);
+        on_init(1176, &mut s);
+        let (skip, v) = on_hero_death(1176, 0, &mut s).unwrap();
+        assert!(skip && v.contains(&Action::Bits { word: 2, set: 1, clear: 0 }));
+        s.set_word(1176, 2, 1);
+        assert!(on_update(1176, &mut s, false).contains(&Action::Message { line: 59 }));
+        assert!(s.flag(380) && s.blackboard.get(&(1, 90)) == Some(&-1));
     }
 
     #[test]
