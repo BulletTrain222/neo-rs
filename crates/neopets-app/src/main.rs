@@ -2098,6 +2098,7 @@ fn item_model(
     index: &neopets_data::archive::ArchiveIndex,
     boot: &mut Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)>,
     id: u32,
+    pack: u32,
 ) -> Result<Option<neopets_data::model::ModelData>, String> {
     let m = match id {
         98..=190 => {
@@ -2114,6 +2115,14 @@ fn item_model(
             Some(m) => m,
             None => return Ok(None),
         },
+        // SPEC-0004 / SPEC-0006 type 8: a world pack registers each type-8 child under its role
+        // id as a global model id, so other ids (the farm's bucket, 6) are the spawning world's
+        // own child models.
+        0..=322 => {
+            let bytes = index.read(disc, pack)?;
+            let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
+            neopets_data::model::build_roles(&bytes, &chain.chunks, None, Some(&[id as u16]))?
+        }
         _ => return Ok(None),
     };
     Ok((!m.parts.is_empty()).then_some(m))
@@ -2138,7 +2147,7 @@ fn sync_items(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut assets: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
-    mut models: Local<std::collections::HashMap<u32, Option<Vec<(Handle<Mesh>, StandardMaterial)>>>>,
+    mut models: Local<std::collections::HashMap<(u32, u32), Option<Vec<(Handle<Mesh>, StandardMaterial)>>>>,
     mut boot: Local<Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)>>,
 ) {
     let Some(state) = state else { return };
@@ -2186,9 +2195,11 @@ fn sync_items(
                 continue;
             }
             let id = it.id as u32;
-            if !models.contains_key(&id) {
+            // Boot models and potions are global; other ids come from the spawning world.
+            let key = (id, if matches!(id, 50..=59 | 98..=190) { 0 } else { pack });
+            if !models.contains_key(&key) {
                 let built = match archive.as_deref_mut() {
-                    Some(Archive { disc, index }) => item_model(disc, index, &mut boot, id).unwrap_or_else(|e| {
+                    Some(Archive { disc, index }) => item_model(disc, index, &mut boot, id, pack).unwrap_or_else(|e| {
                         error!("item model {id}: {e}");
                         None
                     }),
@@ -2200,10 +2211,10 @@ fn sync_items(
                         .map(|(_, mesh, mat)| (mesh, materials.get(&mat).cloned().unwrap_or_default()))
                         .collect::<Vec<_>>()
                 });
-                models.insert(id, list);
+                models.insert(key, list);
             }
             let root = (ItemMarker(pack, i), Transform::from_translation(Vec3::from(it.position)), Visibility::Hidden);
-            match &models[&id] {
+            match &models[&key] {
                 Some(list) => {
                     commands.spawn(root).with_children(|c| {
                         for (mesh, mat) in list {

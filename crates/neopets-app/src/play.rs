@@ -3496,6 +3496,20 @@ impl Play {
             v.push(format!("object patch sets (id, object): {:?}; drawn owners {:?}", g.object_sets(), self.world.owner_poses.keys().collect::<Vec<_>>()));
         }
         v.push(format!("probe at (-19.082, 11.697) ceiling 36.076: {}", self.world.probe(-19.082, 11.697, 36.076).height));
+        for (g, grp) in self.world.groups.iter().enumerate() {
+            v.push(format!("group {g}: kind {} key {} objects {:?} effects {:?} triggers {:?}", grp.kind, grp.key, grp.objects, grp.effects, grp.triggers));
+        }
+        for (g, grp) in self.world.groups.iter().enumerate().filter(|(_, g)| matches!(g.kind, 1 | 2)) {
+            for &o in &grp.objects {
+                let at = usize::try_from(o).ok().and_then(|i| self.world.objects.get(i)?.as_ref()).map(|ob| [ob.rest[12], ob.rest[13], ob.rest[14]]);
+                v.push(format!("chest group {g} (kind {}) object {o} at {:?}", grp.kind, at));
+            }
+        }
+        for (pack, pool) in &self.pools {
+            for it in pool.slots.iter().flatten() {
+                v.push(format!("world item {} of {pack} at {:?}", it.id, it.position));
+            }
+        }
         // The ladders whose up axis is vertical: the foot point in front of the face, its
         // ground and the ladder's base and top heights.
         for (k, r) in self.world.rails.iter().enumerate().filter(|(_, r)| r.v[1] > 0.99) {
@@ -7922,9 +7936,11 @@ impl Play {
             return None;
         }
         let a = w.object_anims.get(i)?;
-        // An object a type-40 group names (chests and the other group kinds, whose setup is not
-        // built) is also drawn at rest until a script touches it.
-        let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)));
+        // An object a type-40 group names (the group kinds whose setup is not built) is also
+        // drawn at rest until a script touches it. A lock chest's set-up poses only its object 0
+        // (SPEC-0048 Set-up poses by kind), so its other objects keep the disc state 3 and are
+        // not drawn (SPEC-0028 Draw gate) until a script turns them on.
+        let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)) && !(g.kind == 1 && g.objects.first() != Some(&(i as i32))));
         let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i));
         // The 758 wheel turns even while no script has touched it (its pack's objects are drawn
         // at rest).
