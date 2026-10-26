@@ -52,6 +52,7 @@ pub mod trigger;
 pub mod walker;
 pub mod wheel;
 pub mod whinny;
+pub mod zone;
 pub use step::FixedStep;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

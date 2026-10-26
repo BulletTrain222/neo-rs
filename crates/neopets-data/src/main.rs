@@ -160,10 +160,11 @@ fn run() -> Result<(), String> {
 /// SPEC-0034 Layout section 2: where the resource-9 effect table is, and the blend of the shader
 /// list's groups (the records are read by the sim's parser; the app's `--effects` checks them).
 /// SPEC-0028 section 2: the type-30 light sets of every chunk file, with the spec's counts and
-/// resource 685's records 0 and 1.
+/// resource 685's records 0 and 1; and the type-35 binary grids (SPEC-0006).
 fn light_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     use neopets_data::light;
     let (mut packs, mut records, mut gated, mut counts, mut exact) = (0u32, 0usize, 0usize, [0usize; 3], 0u32);
+    let (mut grids, mut blocks, mut square, mut unreadable) = (0u32, 0usize, 0usize, 0u32);
     for n in 0..index.len() as u32 {
         let bytes = index.read(disc, n)?;
         let family = resource::classify(&bytes);
@@ -171,6 +172,13 @@ fn light_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             continue;
         }
         let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+        if let Some(g) = neopets_data::zone::zone_grid(&bytes, &chain.chunks) {
+            grids += 1;
+            blocks += g.len();
+            square += usize::from(g.first().is_some_and(|b| b.width == b.height && b.key == -1));
+        } else if chain.chunks.iter().any(|c| c.kind == neopets_data::zone::ZONE_CHUNK) {
+            unreadable += 1;
+        }
         let Some(c) = chain.chunks.iter().find(|c| c.kind == light::LIGHT_CHUNK) else { continue };
         let sets = light::light_sets(&bytes, &chain.chunks);
         // The chain ends exactly at the payload end when every record is read.
@@ -192,7 +200,12 @@ fn light_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             counts[2] += s.c.len();
         }
         if n == 685 {
-            println!("  685: {} records", sets.len());
+            let zones: Vec<String> = sets.iter().map(|s| format!("{}{}", s.a.iter().chain(&s.b).chain(&s.c).next().map_or(-1, |e| e.zone as i32), if s.gate != 0 { "g" } else { "" })).collect();
+            println!("  685: {} records, first-entry zones {}", sets.len(), zones.join(" "));
+            if let Some(b) = neopets_data::zone::zone_grid(&bytes, &chain.chunks).and_then(|g| g.into_iter().next()) {
+                let rows: Vec<String> = b.cells.chunks(b.width.max(1) as usize).map(|r| r.iter().map(|c| c.to_string()).collect::<String>()).collect();
+                println!("  685 block 0 ({} x {}): {}", b.width, b.height, rows.join(" "));
+            }
             for (i, s) in sets.iter().take(2).enumerate() {
                 println!("    record {i}: gate {} counts ({}, {}, {})", s.gate, s.a.len(), s.b.len(), s.c.len());
                 for e in s.a.iter().chain(&s.c) {
@@ -211,6 +224,7 @@ fn light_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         counts[2],
         counts.iter().sum::<usize>()
     );
+    println!("Binary grids (type 35): {grids} chunks ({unreadable} unreadable), {blocks} blocks, {square} with a square block 0 keyed -1");
     Ok(())
 }
 

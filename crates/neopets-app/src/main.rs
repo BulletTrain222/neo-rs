@@ -2312,6 +2312,8 @@ fn play_trace(
             let shown = (0..w.objects.len()).filter(|&i| play.object_matrix(w.pack, i).is_some()).count();
             println!("      objects of {} ({} in all, {shown} drawn) on tick {}: scripted [{}]", w.pack, w.objects.len(), play.ticks, list.join(", "));
             println!("      hero lights ({} light-set records): {}", w.lights.len(), play.light_summary());
+            let on: Vec<usize> = play.foliage.get(&w.pack).map(|p| p.iter().map(|q| usize::from(q.on)).collect()).unwrap_or_default();
+            println!("      zones: grid {} row {} key {}; patches on {} of {}", w.zones.as_ref().map_or(0, |g| g.blocks.len()), play.zones.row, play.zones.key, on.iter().sum::<usize>(), on.len());
         }
         if !play.last_fx.is_empty() && play.last_fx != last_fx {
             last_fx = play.last_fx.clone();

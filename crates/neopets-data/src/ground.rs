@@ -193,7 +193,7 @@ impl Ground {
     /// the camera profile in SPEC-0027).
     pub fn probe_hit(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         const UP: [f32; 3] = [0.0, 1.0, 0.0];
-        let none = |height| ProbeHit { height, normal: UP, kind: None, found: false, respawn: None, surface: None };
+        let none = |height| ProbeHit { height, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None };
         let Some(rec) = self.cell_at(x, z) else {
             return none(0.0);
         };
@@ -218,6 +218,7 @@ impl Ground {
                 found: true,
                 respawn: self.set.get(p.at + 0x0D).copied(),
                 surface: self.set.get(p.at + 0x40..p.at + 0x42).map(|b| u16::from_le_bytes([b[0], b[1]])),
+                zone: self.set.get(p.at + 0x0C).copied(),
             };
             if h > best.height && h <= c {
                 best = hit;
@@ -564,6 +565,8 @@ pub struct ProbeHit {
     /// the deadly-ground rules (SPEC-0055 Layout).
     pub respawn: Option<u8>,
     pub surface: Option<u16>,
+    /// The entry's zone number z: the low byte of its header word +0x0C (SPEC-0006 Zones).
+    pub zone: Option<u8>,
 }
 
 /// A frame record (0x70 bytes): a wall edge named by a grid cell's entry items (SPEC-0018,

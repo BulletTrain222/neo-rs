@@ -46,6 +46,10 @@ pub struct World {
     pub patches: Vec<neopets_data::foliage::Patch>,
     /// The area's character light sets (type 30, SPEC-0028 section 2), in table order.
     pub lights: Vec<neopets_sim::charlight::Record>,
+    /// The world id (the area table's id of this pack; -1 when it has none) and its binary
+    /// grid (type 35) with block 0 keyed by that id (SPEC-0006 Binary grids).
+    pub world_id: i32,
+    pub zones: Option<neopets_sim::zone::Grid>,
     pub children: Vec<u16>,
     ground: Option<Ground>,
     /// Rectangle primitives that push characters out (SPEC-0018 box push; new-game mask 0).
@@ -133,6 +137,14 @@ impl World {
             placed_effects: neopets_data::effect::placed(&bytes, &chain.chunks),
             patches: neopets_data::foliage::patches(&bytes, &chain.chunks),
             lights: neopets_data::light::light_sets(&bytes, &chain.chunks).iter().map(light_record).collect(),
+            world_id: world_id(boot, pack),
+            zones: neopets_data::zone::zone_grid(&bytes, &chain.chunks).map(|blocks| neopets_sim::zone::Grid {
+                blocks: blocks
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, b)| neopets_sim::zone::Block { key: if i == 0 { world_id(boot, pack) } else { b.key }, width: b.width, height: b.height, cells: b.cells, after: b.after })
+                    .collect(),
+            }),
             objects: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
@@ -267,7 +279,7 @@ impl World {
     }
 
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
-        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None }, |g| g.probe_hit(x, z, c))
+        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None }, |g| g.probe_hit(x, z, c))
     }
 }
 
@@ -367,6 +379,9 @@ pub struct LivePatch {
     pub centre: [f32; 3],
     pub plants: Vec<neopets_sim::foliage::Placed>,
     pub bushes: Vec<neopets_sim::foliage::Bush>,
+    /// The zone number (+0x20, low byte) and whether this pass's zone query passed.
+    pub zone: u8,
+    pub on: bool,
 }
 
 /// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
@@ -617,6 +632,8 @@ pub struct Play {
     /// Character light states (SPEC-0046 Character lights): the hero's (key None) and each
     /// region character's, by id.
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
+    /// The zone manager (SPEC-0006 Zone manager); its grid is the current world's.
+    pub zones: neopets_sim::zone::Zones,
     /// The prize wheel's running spin (its pack) and each world's display mask word
     /// (SetWorldDisplayMask; the display word stores 2M).
     wheel_spin: Option<(u32, neopets_sim::wheel::Spin)>,
@@ -946,6 +963,7 @@ impl Play {
             r_displays: Default::default(),
             r_fx: [None; 2],
             char_lights: HashMap::new(),
+            zones: Default::default(),
             wheel_spin: None,
             display_mask: HashMap::new(),
             displays: HashMap::new(),
@@ -4046,6 +4064,7 @@ impl Play {
             }
         }
         self.status_display_step();
+        self.zone_step();
         self.foliage_step();
         self.placed_release_step();
         let table = self.effect_table.clone();
@@ -4910,9 +4929,16 @@ impl Play {
                     .collect();
                 let bushes = if kind.family == neopets_sim::foliage::Family::Bush { plants.iter().map(|q| neopets_sim::foliage::Bush::new(q.scale, &mut rng)).collect() } else { Vec::new() };
                 let centre = [(p.area[0] + p.area[1]) / 2.0, p.height, (p.area[2] + p.area[3]) / 2.0];
-                built.push(LivePatch { kind, model, centre, plants, bushes });
+                built.push(LivePatch { kind, model, centre, plants, bushes, zone: p.zone as u8, on: true });
             }
             self.foliage.insert(pack, built);
+        }
+        // The gate's zone query: key -1 for the current world, the world's id otherwise.
+        for (&pack, patches) in self.foliage.iter_mut() {
+            let key = if pack == self.world.pack { -1 } else { self.other.as_ref().map_or(-1, |o| o.world_id) };
+            for p in patches.iter_mut() {
+                p.on = self.zones.query(self.world.zones.as_ref(), p.zone as i32, key);
+            }
         }
         // The bush logic.
         let eye = self.camera.eye;
@@ -4924,7 +4950,7 @@ impl Play {
         let mut sparkles = Vec::new();
         let current = self.world.pack;
         for (&pack, patches) in self.foliage.iter_mut() {
-            for p in patches.iter_mut().filter(|p| !p.bushes.is_empty()) {
+            for p in patches.iter_mut().filter(|p| !p.bushes.is_empty() && p.on) {
                 let d = [p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]];
                 if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= 100.0 * 100.0 {
                     continue;
@@ -5110,22 +5136,30 @@ impl Play {
     }
 
     /// SPEC-0046 Character lights, once per pass after the effect pools: for the hero and each
-    /// region character, the walk over the current area's light set and its colour fill. The
-    /// zone query passes (no zone grids are built) and no dynamic point lights are published
-    /// (light emitters publish none yet); states of released characters are dropped.
+    /// region character standing on a ground entry whose zone passes the zone query (with the
+    /// character's world id), the walk over the current area's light set (entry zone gate: the
+    /// query with key -1) and its colour fill; a character that fails keeps its state. No
+    /// dynamic point lights are published (light emitters publish none yet); states of
+    /// released characters are dropped.
     fn light_step(&mut self) {
-        let records = std::mem::take(&mut self.world.lights);
-        let all = |_: u8| true;
-        let walk = |key: Option<u64>, at: [f32; 3], lights: &mut HashMap<Option<u64>, neopets_sim::charlight::State>| {
-            let s = lights.entry(key).or_default();
-            s.walk(&records, &[], at, &all);
+        let grid = self.world.zones.as_ref();
+        let zones = self.zones;
+        let entry_zone = |z: u8| zones.query(grid, z as i32, -1);
+        let mut walk = |key: Option<u64>, at: [f32; 3], world: Option<&World>| {
+            let Some(w) = world else { return };
+            let hit = w.probe(at[0], at[2], at[1] + 2.5);
+            let Some(z) = hit.zone.filter(|_| hit.found) else { return };
+            if !zones.query(grid, z as i32, w.world_id) {
+                return;
+            }
+            let s = self.char_lights.entry(key).or_default();
+            s.walk(&self.world.lights, &[], at, &entry_zone);
             s.fill();
         };
-        walk(None, self.loco.position(), &mut self.char_lights);
+        walk(None, self.loco.position(), Some(&self.world));
         for c in &self.characters {
-            walk(Some(c.id), c.position, &mut self.char_lights);
+            walk(Some(c.id), c.position, [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == c.pack));
         }
-        self.world.lights = records;
         let live: std::collections::HashSet<u64> = self.characters.iter().map(|c| c.id).collect();
         self.char_lights.retain(|k, _| k.is_none_or(|id| live.contains(&id)));
     }
@@ -5154,6 +5188,21 @@ impl Play {
             })
             .collect::<Vec<_>>()
             .join(" ")
+    }
+
+    /// The camera's zone update (SPEC-0006 Zone manager): K = the current world's id and R =
+    /// the zone of the hero's ground entry (camera mode 0 follows the hero); the active block is
+    /// block 0 for the current world's passes.
+    fn zone_step(&mut self) {
+        let p = self.loco.position();
+        let hit = self.world.probe(p[0], p[2], p[1] + 2.5);
+        self.zones.active = Some(0);
+        self.zones.update(self.world.zones.as_ref(), self.world.world_id, hit.zone.filter(|_| hit.found));
+    }
+
+    /// Whether patch `i` of world `pack` passed its zone gate this pass.
+    pub fn patch_on(&self, pack: u32, i: usize) -> bool {
+        self.foliage.get(&pack).and_then(|p| p.get(i)).is_none_or(|p| p.on)
     }
 
     /// The steady status tint of the hero (None) or a character (SPEC-0034 5.4).
@@ -6322,4 +6371,9 @@ fn light_record(r: &neopets_data::light::LightRecord) -> neopets_sim::charlight:
         zone: x.zone,
     };
     neopets_sim::charlight::Record { gate: r.gate != 0, a: r.a.iter().map(e).collect(), b: r.b.iter().map(e).collect(), c: r.c.iter().map(e).collect() }
+}
+
+/// The world id of `pack` in the area table (SPEC-0006), or -1.
+fn world_id(boot: &BootTravel, pack: u32) -> i32 {
+    boot.areas.packs.iter().position(|&p| p == pack).and_then(|s| boot.areas.world_ids.get(s)).map_or(-1, |&w| w as i32)
 }

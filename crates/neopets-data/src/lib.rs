@@ -33,6 +33,7 @@ pub mod track;
 pub mod travel;
 pub mod trigger;
 pub mod world;
+pub mod zone;
 pub use iso::{Disc, Entry};
 pub use mods::AssetSource;
 

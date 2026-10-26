@@ -87,7 +87,7 @@ pub fn spawn<C: Component + Copy>(
                             materials.add(base)
                         })
                         .clone();
-                    let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), transform, visibility, tag));
+                    let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), transform, visibility, tag, PatchPart { pack, patch: pi }));
                     if bush {
                         e.insert(BushPart { pack, patch: pi, plant: k, cut });
                     }
@@ -99,14 +99,30 @@ pub fn spawn<C: Component + Copy>(
     count
 }
 
-/// Each frame: a bush's main model shows unless it is cut (state 0), its cut model only then,
-/// both at the bush's draw scale.
-pub fn sync_bushes(state: Option<Res<crate::PlayState>>, mut parts: Query<(&BushPart, &mut Transform, &mut Visibility)>) {
+/// The patch a plant entity belongs to (for the zone gate).
+#[derive(Component, Clone, Copy)]
+pub struct PatchPart {
+    pub pack: u32,
+    pub patch: usize,
+}
+
+/// Each frame: a plant shows only while its patch passed the zone gate; a bush's main model
+/// shows unless it is cut (state 0), its cut model only then, both at the bush's draw scale.
+pub fn sync_bushes(state: Option<Res<crate::PlayState>>, mut parts: Query<(&PatchPart, Option<&BushPart>, &mut Transform, &mut Visibility)>) {
     let Some(state) = state else { return };
-    for (b, mut t, mut vis) in &mut parts {
-        let Some(bush) = state.play.foliage.get(&b.pack).and_then(|p| p.get(b.patch)).and_then(|p| p.bushes.get(b.plant)) else { continue };
-        let shown = (bush.state == 0) == b.cut;
-        *vis = if shown { Visibility::Visible } else { Visibility::Hidden };
-        t.scale = Vec3::splat(bush.scale().max(0.0));
+    for (p, b, mut t, mut vis) in &mut parts {
+        let on = state.play.patch_on(p.pack, p.patch);
+        let shown = match b {
+            None => on,
+            Some(b) => {
+                let Some(bush) = state.play.foliage.get(&b.pack).and_then(|p| p.get(b.patch)).and_then(|p| p.bushes.get(b.plant)) else { continue };
+                t.scale = Vec3::splat(bush.scale().max(0.0));
+                on && (bush.state == 0) == b.cut
+            }
+        };
+        let want = if shown { Visibility::Visible } else { Visibility::Hidden };
+        if *vis != want {
+            *vis = want;
+        }
     }
 }
