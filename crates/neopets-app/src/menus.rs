@@ -42,6 +42,8 @@ pub const ITEMS: usize = 6;
 pub const JOURNAL: usize = 22;
 /// The book reader (record 20, state 24; code 0x190).
 pub const BOOK: usize = 20;
+/// The box host (record 19, state 23; code 0x17C): play while the dialogue box is busy.
+pub const BOX_HOST: usize = 19;
 pub const MAPS: usize = 31;
 
 /// Menu bits of the rising-edge word (SPEC-0035 section 4).
@@ -752,6 +754,9 @@ impl Flow {
                 } else if ctx.book_gate {
                     // Section 6 step 3: the book reader while the cursor (or saved word) is set.
                     result = Some(BOOK);
+                } else if ctx.box_busy {
+                    // A busy overlay box hands play to the box host (code 0x17C).
+                    result = Some(BOX_HOST);
                 } else if second & SELECT != 0 {
                     result = Some(PAUSE);
                 } else if (edge | second) & START != 0 {
@@ -815,6 +820,15 @@ impl Flow {
                 }
                 _ => {}
             },
+            // The box host: the world runs while the box is up; when the box is idle it returns
+            // to play (its cue 0x97 is played by the box's close in play). Its entry and exit
+            // fades are not built.
+            23 => {
+                generic = false;
+                if !ctx.box_busy {
+                    result = Some(PLAY);
+                }
+            }
             // SPEC-0035 section 14.3: the quest journal.
             25 => {
                 if self.pass == 0 {
@@ -1165,6 +1179,8 @@ pub struct Ctx {
     /// book index (SPEC-0035 section 6.1).
     pub book_gate: bool,
     pub book_index: Option<usize>,
+    /// The overlay (dialogue) box is busy: a page is shown or one follows (Behavior 6).
+    pub box_busy: bool,
 }
 
 /// Predicate table A (section 9c), the slots this build implements: 0, 2 and 56 always 1;
@@ -1779,6 +1795,24 @@ mod tests {
         flow.sounds.clear();
         assert_eq!(flow.tick(&f, CIRCLE, CIRCLE, &ctx), Some(Command::Quit));
         assert_eq!((flow.current, flow.quit_box, flow.sounds.clone()), (CARD, false, vec![0x98]));
+    }
+
+    #[test]
+    fn box_host() {
+        let mut f = fe();
+        f.screens[BOX_HOST] = Screen { node: Some(0), back: -1, state: 23 };
+        f.screens[PAUSE] = Screen { node: Some(6), back: -1, state: 7 };
+        let mut flow = Flow::new(&f);
+        flow.set(&f, PLAY);
+        let busy = Ctx { box_busy: true, ..Default::default() };
+        // A busy box takes play to the box host, where Select does not pause.
+        flow.tick(&f, SELECT, SELECT, &busy);
+        assert_eq!(flow.current, BOX_HOST);
+        flow.tick(&f, SELECT, SELECT, &busy);
+        assert_eq!(flow.current, BOX_HOST);
+        // The box idle: back to play.
+        flow.tick(&f, 0, 0, &Ctx::default());
+        assert_eq!(flow.current, PLAY);
     }
 
     #[test]

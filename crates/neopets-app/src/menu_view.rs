@@ -132,7 +132,8 @@ pub fn sync_menu(
     let (Some(_state), Some(menu), Some(art)) = (state, menu, art) else { return };
     let Some(window) = windows.iter().next() else { return };
     let flow = &menu.flow;
-    let mut draws = if flow.current == menus::PLAY { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pc()) };
+    // Play and the box host draw over the running world (the box itself is the HUD's).
+    let mut draws = if matches!(flow.current, menus::PLAY | menus::BOX_HOST) { Vec::new() } else { menus::draw_list(&art.f, flow.current, flow.focus, flow.pc()) };
     draws.extend(menus::picker_draws(&art.f, flow));
     draws.extend(menus::credits_draws(&art.f, flow));
     let lines = _state.play.item_lines(flow.pc().items.selected);

@@ -1151,6 +1151,7 @@ fn step_sim(
                     shortcuts: !play.play.quick.open && !l.up && !l.down && !play.play.dialogue_open,
                     book_gate: play.play.books.gate(),
                     book_index: play.play.books.index(),
+                    box_busy: play.play.dialogue_open && play.play.textbox.open,
                 };
                 m.flow.held = held;
                 m.flow.view = play.play.item_view(&m.flow.grid_ids);
@@ -1195,7 +1196,8 @@ fn step_sim(
                         }
                     }
                 }
-                let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER);
+                // The box host sets the play-active word too, so the world runs under it.
+                let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER | menus::BOX_HOST);
                 // SPEC-0023 section 4.1: opening the pause page clears the HUD timers and the
                 // monster bar timer, so the HUD stays hidden on return until a re-arm.
                 if m.flow.current == menus::PAUSE && !play.play.menu_open {
