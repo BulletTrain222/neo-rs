@@ -38,6 +38,7 @@ fn run() -> Result<(), String> {
     let mut lights = false;
     let mut blocks = false;
     let mut panels = false;
+    let mut object_headers = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -53,6 +54,7 @@ fn run() -> Result<(), String> {
             "--lights" => lights = true,
             "--blocks" => blocks = true,
             "--panels" => panels = true,
+            "--object-headers" => object_headers = true,
             "--registry" => {
                 let n = args.next().ok_or("--registry needs a resource number")?;
                 registries.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -88,7 +90,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(panels || blocks || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(object_headers || panels || blocks || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -154,6 +156,9 @@ fn run() -> Result<(), String> {
     }
     if panels {
         panel_census(&mut disc, &index)?;
+    }
+    if object_headers {
+        object_header_census(&mut disc, &index)?;
     }
     if survey || coverage {
         let report = survey_all(&mut disc, &index)?;
@@ -517,6 +522,50 @@ fn material_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> 
 
 /// SPEC-0006 Type 10: the ladders and climb panels of every chunk file, with the check that
 /// each record's origin lies inside its group's radius.
+/// SPEC-0028 section 7 (object +0x1D8): the placed objects' inline type-11 headers, their
+/// volumes and locators; NEOPETS_HEADERS_PACK lists one pack's in full.
+fn object_header_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    let only: Option<u32> = std::env::var("NEOPETS_HEADERS_PACK").ok().and_then(|v| v.parse().ok());
+    let (mut objects, mut volumes, mut locators) = (0usize, 0usize, 0usize);
+    for n in 0..index.len() as u32 {
+        if only.is_some_and(|o| o != n) {
+            continue;
+        }
+        let bytes = index.read(disc, n)?;
+        let family = resource::classify(&bytes);
+        if !matches!(family, Family::ChunkFile(_)) {
+            continue;
+        }
+        let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+        if only.is_some() {
+            let e: Vec<_> = (0..4).map_while(|i| neopets_data::ground::entry_record(&bytes, &chain.chunks, i)).map(|e| e.0).collect();
+            println!("world entries 0 to 3: {e:?}");
+            for v in neopets_data::trigger::volumes(&bytes, &chain.chunks).1.iter().filter(|v| v.index < 8) {
+                println!("world volume kind {} index {} flags {:#x} {:?}", v.kind, v.index, v.flags, v.shape);
+            }
+        }
+        for (i, o) in neopets_data::world::objects(&bytes, &chain.chunks).iter().enumerate() {
+            let Some(r) = o.as_ref().and_then(|o| o.header.clone()) else { continue };
+            let h = neopets_data::trigger::object_header(&bytes[r]);
+            objects += 1;
+            volumes += h.volumes.len();
+            locators += h.locators.len();
+            if only.is_some() {
+                let o = o.as_ref().unwrap();
+                println!("object {i}: rest t {:?}, capacity {}, {} volumes, {} locators, {} keys", &o.rest[12..15], h.capacity, h.volumes.len(), h.locators.len(), o.keys);
+                for v in &h.volumes {
+                    println!("  volume kind {} index {} flags {:#x} {:?}", v.kind, v.index, v.flags, v.shape);
+                }
+                for (k, l) in h.locators.iter().enumerate() {
+                    println!("  locator {k} at {:?}", l.0);
+                }
+            }
+        }
+    }
+    println!("object headers: {objects} objects, {volumes} volumes, {locators} locators");
+    Ok(())
+}
+
 fn panel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let (mut packs, mut ladders, mut panels, mut outside) = (0u32, 0usize, 0usize, 0usize);
     for n in 0..index.len() as u32 {

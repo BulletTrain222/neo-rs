@@ -64,6 +64,31 @@ pub struct Volume {
 pub fn volumes(bytes: &[u8], top: &[Chunk]) -> (usize, Vec<Volume>) {
     let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return (0, Vec::new()) };
     let Some(p) = bytes.get(c.payload.clone()) else { return (0, Vec::new()) };
+    volumes_in(p)
+}
+
+/// A placed object's inline type-11 header (object +0x1D8, SPEC-0028 sections 6 and 7): its
+/// trigger count (the first word), its primitives and its inline locator list (count +0x24,
+/// 0x50-byte records at +0x4C, each with its point +0x30 and direction +0x40; SPEC-0030 Note on
+/// animated locators). The primitives are in the object's rest frame.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ObjectHeader {
+    pub capacity: usize,
+    pub volumes: Vec<Volume>,
+    pub locators: Vec<([f32; 3], [f32; 3])>,
+}
+
+/// Read an object's inline type-11 header from its payload.
+pub fn object_header(p: &[u8]) -> ObjectHeader {
+    let (capacity, volumes) = volumes_in(p);
+    let n = i32_at(p, 0x24).unwrap_or(0).clamp(0, 1 << 12) as usize;
+    let list = u32_at(p, 0x4C).unwrap_or(0) as usize;
+    let locators = (0..n).map_while(|i| Some((v3(p, list + 0x50 * i + 0x30)?, v3(p, list + 0x50 * i + 0x40)?))).collect();
+    ObjectHeader { capacity, volumes, locators }
+}
+
+/// The trigger capacity and the volumes of a type-11 payload.
+fn volumes_in(p: &[u8]) -> (usize, Vec<Volume>) {
     let capacity = u32_at(p, 0).unwrap_or(0).min(1 << 12) as usize;
     let mut out = Vec::new();
     let lists: [(u8, usize, usize, usize); 4] = [(1, 0x08, 0x30, 0x40), (3, 0x0C, 0x38, 0x50), (4, 0x18, 0x40, 0x70), (7, 0x14, 0x3C, 0x70)];

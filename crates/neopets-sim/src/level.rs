@@ -294,6 +294,17 @@ pub enum Action {
     MoveBlock { block: usize, locator: usize },
     /// ReacquireMovableBlockHeightPatch(block) (row 63): placed again where it stands.
     ReacquireBlock { block: usize },
+    /// MoveObjToAnimatedLocator with follow (SPEC-0030 row 124): object `obj` follows the current
+    /// position of locator `locator` of host object `host`'s inline list.
+    AttachObj { obj: usize, host: usize, locator: usize },
+    /// MoveEffectToAnimatedLocator for each placed effect of script group `group`, in its list
+    /// order, to locators `locator`, `locator` + 1, ... of host `host` (face false; row 12).
+    GroupEffectsToObjLocators { group: usize, host: usize, locator: usize },
+    /// SetSpeedFactor (row 14): the object's play speed; its state is not changed.
+    SpeedFactor { obj: usize, factor: f32 },
+    /// RegisterScriptAnimatedTrigger (row 266): record `index` of host object `host`'s inline
+    /// trigger list to `routine`; the volume moves with the host's pose.
+    RegisterAnimTrigger { host: usize, index: u16, routine: u8 },
 }
 
 /// The prize wheel's module words in pack 1023: G, r, the angle A (f32 bits) and the lit cells.
@@ -490,6 +501,11 @@ pub struct GameState {
     pub hero: HeroView,
     /// The object records of pack 1217 while its fight is due (module data).
     pub burrows: Option<crate::burrows::Burrows>,
+    /// GetObjCurrentTime of the current world's objects (filled by the host before Update).
+    pub obj_times: std::collections::BTreeMap<usize, f32>,
+    /// The current positions of the inline locators of the objects `tracked_locators` names
+    /// (formula A, SPEC-0030 Note on animated locators), filled by the host before Update.
+    pub anim_locators: std::collections::BTreeMap<usize, Vec<[f32; 3]>>,
 }
 
 /// Carry out a 1217 record request or close on the records (the host calls it in thread order).
@@ -533,6 +549,89 @@ pub fn burrows_stagger() -> Vec<Action> {
     (0..11u8).flat_map(|index| [Action::BurrowsRequest { kind: 0, index, request: 1, inner: -1 }, Action::SleepRandom { lo: 10, hi: 20 }]).collect()
 }
 
+/// SPEC-0042 1089 Update (steps 1 to 5) and thread A (the hazard thread).
+fn update_1089(state: &mut GameState) -> Vec<Action> {
+    let pack = 1089;
+    let mut out = Vec::new();
+    // 1. The groups' effects to locators F + 6 and F + 7 of object 0.
+    for &(_, f, g) in &RECORDS_1089 {
+        out.push(Action::GroupEffectsToObjLocators { group: g, host: 0, locator: f + 6 });
+    }
+    // 2. On the first tick the five objects of every record are activated. (The later ticks'
+    // time-sync helper is not reproduced: its calls are listed without their rule.)
+    if state.word(pack, 4) != 0 {
+        state.set_word(pack, 4, 0);
+        for &(b, _, _) in &RECORDS_1089 {
+            out.extend((1..=5).map(|k| Action::InitObjOn { obj: b + k, end: false }));
+        }
+    }
+    // 3. Object 0's time passing 18.4 clears the hazard word, and with 4 presses starts the
+    // slow-down at 0.6.
+    let t = state.obj_times.get(&0).copied().unwrap_or(-1.0);
+    if t > 18.4 && state.word(pack, 5) == 0 {
+        state.set_word(pack, 5, 1);
+        state.set_word(pack, 1, 0);
+        if state.word(pack, 3) >= 4 {
+            state.set_word(pack, 6, 1);
+            state.set_word(pack, 7, 0.6f32.to_bits() as i32);
+        }
+    }
+    // 4. The slow-down: 0.005 less each tick; the speed factor while above 0, then the stop and
+    // the four groups' effects stopped.
+    if state.word(pack, 6) != 0 {
+        let v = ps2_float::fpu::sub(f32::from_bits(state.word(pack, 7) as u32), 0.005);
+        state.set_word(pack, 7, v.to_bits() as i32);
+        if v > 0.0 {
+            out.extend(SLOW_1089.map(|obj| Action::SpeedFactor { obj, factor: v }));
+        } else {
+            out.extend(SLOW_1089.map(|obj| Action::StopAnim { obj }));
+            out.extend(RECORDS_1089.map(|(_, _, group)| Action::GroupEffectsStop { group }));
+            state.set_word(pack, 6, 0);
+        }
+    }
+    // 5. The timeout: the kill, the reset (object 0 back to time 0), the hero to entry 0 of the
+    // world's list (SPEC-0030 row 156) and the normal camera.
+    if t > 19.9 && state.word(pack, 6) == 0 {
+        out.push(Action::KillHero);
+        out.extend(reset_1089(state));
+        out.extend([Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: 10, release: true }]);
+    }
+    // Thread A: while the hazard word is set, locators 0 to 11 of object 7 in turn; a hero within
+    // 6.0 (3-D) and less than 2.0 above the locator takes 1 point and the thread waits 0.5 s
+    // before the next locator; after the twelve, or while the word is clear, one tick.
+    let now = state.hero.tick as i32;
+    if now >= state.word(pack, 21) {
+        if state.word(pack, 1) == 0 {
+            state.set_word(pack, 20, 0);
+            state.set_word(pack, 21, now + 1);
+        } else {
+            let p = state.hero.position;
+            let locs = state.anim_locators.get(&7).cloned().unwrap_or_default();
+            let mut k = state.word(pack, 20).max(0) as usize;
+            let mut resume = now + 1;
+            while k < 12 {
+                let hit = locs.get(k).is_some_and(|l| hazard_hit_1089(*l, p));
+                k += 1;
+                if hit {
+                    out.push(Action::DamageHero { amount: 1 });
+                    resume = now + 30;
+                    break;
+                }
+            }
+            state.set_word(pack, 20, if k >= 12 { 0 } else { k as i32 });
+            state.set_word(pack, 21, resume);
+        }
+    }
+    out
+}
+
+/// Thread A's test of one locator: the 3-D distance below 6.0 and the hero's height minus the
+/// locator's below 2.0 (no lower bound).
+pub fn hazard_hit_1089(l: [f32; 3], hero: [f32; 3]) -> bool {
+    let d = [hero[0] - l[0], hero[1] - l[1], hero[2] - l[2]];
+    (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < 6.0 && hero[1] - l[1] < 2.0
+}
+
 /// The hero as the lesson Update reads it this tick.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HeroView {
@@ -560,6 +659,8 @@ pub struct HeroView {
     /// The attack button (R2 or Circle): its press edge this tick, and held.
     pub fire: bool,
     pub fire_held: bool,
+    /// The selected hero's position.
+    pub position: [f32; 3],
 }
 
 impl GameState {
@@ -1128,6 +1229,38 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// Whether a module's object calls are reproduced: its objects then follow the draw gate (hidden
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
+/// The objects whose inline locators a module's Update reads (SPEC-0042 1089: locator set 7).
+pub fn tracked_locators(pack: u32) -> &'static [usize] {
+    match pack {
+        1089 => &[7],
+        _ => &[],
+    }
+}
+
+/// SPEC-0042 1089 group records by animated trigger index: the base object B (the five
+/// animation objects are B + 1 to B + 5), the first locator F on host object 0 and the script
+/// group G (module constants filled by Init; R-0074).
+const RECORDS_1089: [(usize, usize, usize); 4] = [(12, 1, 1), (18, 9, 2), (30, 25, 4), (24, 17, 3)];
+/// Objects 0, 8, 11, 10 and 9 (the slow-down and the stop), and 7 with them where T0 plays them.
+const SLOW_1089: [usize; 5] = [0, 8, 11, 10, 9];
+/// Module words: 1 the hazard word, 2 the T0 latch, 3 the press counter, 4 the first-tick word,
+/// 5 the 18.4 mark, 6 the slow-down (with its speed's bits in 7), 8 T0 running, 10 to 13 the
+/// pressed flags, 20 thread A's next locator and 21 the tick it resumes on.
+fn reset_1089(state: &mut GameState) -> Vec<Action> {
+    let pack = 1089;
+    for w in [2, 1, 3, 5, 6, 8, 10, 11, 12, 13, 20, 21] {
+        state.set_word(pack, w, 0);
+    }
+    let mut v = Vec::new();
+    for &(b, _, g) in &RECORDS_1089 {
+        v.extend((1..=5).map(|k| Action::InitObjOn { obj: b + k, end: false }));
+        v.push(Action::GroupEffectsStop { group: g });
+    }
+    // ActivateObj(false) (SPEC-0030 row 3): at time zero, stopped.
+    v.extend([0, 8, 11, 10, 9, 7].map(|obj| Action::InitObjOn { obj, end: false }));
+    v
+}
+
 pub fn objects_scripted(pack: u32) -> bool {
     matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1392 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
@@ -1841,6 +1974,22 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set(314, true);
             state.set(42, true);
             (1..=14).map(|i| reg(i, if i <= 7 { 1 } else { 2 })).collect()
+        }
+        // SPEC-0042 1089 Init: T0 on trigger 0; the four animated triggers of object 0 (0, 1, 3
+        // and 2) to routine K; object 0 set up; per record (0, 1, 3, 2) the group's effects
+        // stopped and the six moves (B + k to locator F + k of object 0, follow); the first-tick
+        // word. Thread A runs from Update.
+        1089 => {
+            let mut v = vec![reg(0, 1)];
+            v.extend([0, 1, 3, 2].map(|index| Action::RegisterAnimTrigger { host: 0, index, routine: 2 }));
+            v.push(Action::InitObjOn { obj: 0, end: false });
+            for i in [0, 1, 3, 2] {
+                let (b, f, g) = RECORDS_1089[i];
+                v.push(Action::GroupEffectsStop { group: g });
+                v.extend((0..6).map(|k| Action::AttachObj { obj: b + k, host: 0, locator: f + k }));
+            }
+            state.set_word(pack, 4, 1);
+            v
         }
         // SPEC-0041 989 Init: objects 2 and 0 at their start. Thread A (Low in the spec) and the
         // effect moves of Update are not built; thread B runs from Update.
@@ -6536,6 +6685,45 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.push(Action::DamageHero { amount: 5 });
             }
         }
+        // SPEC-0042 1089 T0 (trigger 0, once per load; the latch, word 2): four rounds of the
+        // records 0, 3, 2 and 1 (B + 5 backwards at speed 1, B + 1 to B + 4 at speed 2; sleeps
+        // 30, 10, 40 and 10), objects 0, 8, 11, 10, 9 and 7 at 0.6, 30 ticks, then the latch and
+        // the hazard word. Word 8 marks the callback thread running.
+        (1089, 1) if call.object && call.state != 0 && state.word(pack, 2) == 0 && state.word(pack, 8) == 0 => {
+            state.set_word(pack, 8, 1);
+            for (i, sleep) in [(0, 30), (3, 10), (2, 40), (1, 10)] {
+                let b = RECORDS_1089[i].0;
+                out.actions.push(Action::PlayAnim { obj: b + 5, speed: -1.0, wait: false });
+                out.actions.extend((1..=4).map(|k| Action::PlayAnim { obj: b + k, speed: -2.0, wait: false }));
+                out.actions.push(Action::Sleep { ticks: sleep });
+            }
+            out.actions.extend([0, 8, 11, 10, 9, 7].map(|obj| Action::PlayAnim { obj, speed: 0.6, wait: false }));
+            out.actions.push(Action::Sleep { ticks: 30 });
+            out.actions.push(Action::Bits { word: 2, set: 1, clear: 0 });
+            out.actions.push(Action::Bits { word: 1, set: 1, clear: 0 });
+        }
+        // SPEC-0042 1089 routine K (animated triggers 0 to 3 of object 0; Medium): only while the
+        // hazard word is set; the Square prompt (context 4) until the record is pressed; the
+        // press plays B + 5 from time 0 at 1.0 and B + 1 to B + 4 at 2.0, counts, waits 1 s and
+        // starts the group's effects.
+        (1089, 2) if call.object && call.state != 0 && state.word(pack, 1) != 0 => {
+            let i = (call.index as usize).min(3);
+            let flag = 10 + i as u8;
+            if state.word(pack, flag) == 0 {
+                if call.square {
+                    let (b, _, g) = RECORDS_1089[i];
+                    state.set_word(pack, flag, 1);
+                    state.set_word(pack, 3, state.word(pack, 3) + 1);
+                    out.actions.extend([Action::SetObjTime { obj: b + 5, seconds: 0.0 }, Action::PlayAnim { obj: b + 5, speed: 1.0, wait: false }]);
+                    for k in 1..=4 {
+                        out.actions.extend([Action::SetObjTime { obj: b + k, seconds: 0.0 }, Action::PlayAnim { obj: b + k, speed: 2.0, wait: false }]);
+                    }
+                    out.actions.extend([wait(1.0), Action::GroupEffects { group: g }]);
+                } else {
+                    out.prompt = Some(4);
+                }
+            }
+        }
         // SPEC-0041 1090 T1 and T2 (the hurt zones): while the hero is inside a firing hazard,
         // DamageHero(20) about once a second (the routine's 1 s wait; words 20 + k).
         (1090, 1 | 2) if call.object && call.state != 0 => {
@@ -9247,6 +9435,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0042 1089 Update and thread A.
+        1089 => out = update_1089(state),
         // SPEC-0041 1090 threads C and D, the firing loops: bank A fires four hazards for 42 ticks
         // then waits 42, bank B for 30 then 30, each through its four steps (words 2 and 3 the
         // firing masks, 1 the start tick + 1).
@@ -14199,6 +14389,64 @@ mod tests {
         s.hero.tick = 1000;
         assert_eq!(on_trigger(1381, 6, inside(13), &mut s).actions, vec![Action::DamageHero { amount: 5 }]);
         assert!(on_trigger(1381, 6, inside(13), &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1089() {
+        // SPEC-0042 1089 thread A vectors: locator 0 at rest (97.591, -13.348, -475.933).
+        let l = [97.591, -13.348, -475.933];
+        assert!(hazard_hit_1089(l, [97.0, -13.0, -476.0]) && !hazard_hit_1089(l, [97.0, -10.0, -476.0]));
+        let l = [97.591, -45.431, -475.933];
+        assert!(hazard_hit_1089(l, [97.6, -44.0, -475.9]) && !hazard_hit_1089(l, [97.6, -40.0, -475.9]));
+        let mut s = GameState::default();
+        let init = on_init(1089, &mut s);
+        assert!(init.contains(&Action::AttachObj { obj: 29, host: 0, locator: 22 }) && init.contains(&Action::RegisterAnimTrigger { host: 0, index: 3, routine: 2 }));
+        // Before the hazard word routine K does nothing; T0 runs once and ends by setting it.
+        let at = |index, square| TriggerCall { index, state: 2, object: true, square, block: -1 };
+        assert_eq!(on_trigger(1089, 2, at(3, false), &mut s).prompt, None);
+        let t0 = on_trigger(1089, 1, at(0, false), &mut s).actions;
+        assert_eq!(t0.first(), Some(&Action::PlayAnim { obj: 17, speed: -1.0, wait: false }));
+        assert!(on_trigger(1089, 1, at(0, false), &mut s).actions.is_empty());
+        s.set_word(1089, 1, 1);
+        // The press on index 3: object 29 at 1.0, 25 to 28 at 2.0, 1 s, group 3's effects; a
+        // second press does nothing.
+        assert_eq!(on_trigger(1089, 2, at(3, false), &mut s).prompt, Some(4));
+        let press = on_trigger(1089, 2, at(3, true), &mut s).actions;
+        assert_eq!(&press[..2], &[Action::SetObjTime { obj: 29, seconds: 0.0 }, Action::PlayAnim { obj: 29, speed: 1.0, wait: false }]);
+        assert!(press.contains(&Action::PlayAnim { obj: 25, speed: 2.0, wait: false }) && press.ends_with(&[Action::Sleep { ticks: 60 }, Action::GroupEffects { group: 3 }]));
+        assert!(on_trigger(1089, 2, at(3, true), &mut s).actions.is_empty() && s.word(1089, 3) == 1);
+        // Three presses: at 18.4 the hazard stops, at 19.9 the kill and the reset.
+        for i in [0, 1] {
+            on_trigger(1089, 2, at(i, true), &mut s);
+        }
+        let mut tick = |s: &mut GameState, t: f32| {
+            s.obj_times.insert(0, t);
+            on_update(1089, s, false)
+        };
+        tick(&mut s, 18.5);
+        assert_eq!(s.word(1089, 1), 0);
+        assert!(!tick(&mut s, 19.8).contains(&Action::KillHero));
+        let out = tick(&mut s, 19.95);
+        assert!(out.contains(&Action::KillHero) && out.contains(&Action::MoveHero { locator: 0 }) && s.word(1089, 2) == 0);
+        assert!(out.contains(&Action::InitObjOn { obj: 0, end: false }) && !tick(&mut s, 0.0).contains(&Action::KillHero));
+        // Four presses: the slow-down for 120 ticks, then the stop and no kill.
+        s.set_word(1089, 1, 1);
+        for i in 0..4 {
+            on_trigger(1089, 2, at(i, true), &mut s);
+        }
+        tick(&mut s, 18.5);
+        let mut n = 0;
+        // The slowed object 0 stays below 19.9 (about 0.6 s more at the falling speed).
+        loop {
+            let out = tick(&mut s, 19.0);
+            assert!(!out.contains(&Action::KillHero));
+            n += 1;
+            if out.contains(&Action::StopAnim { obj: 0 }) {
+                break;
+            }
+            assert!(n < 200);
+        }
+        assert!((119..=121).contains(&n), "{n}");
     }
 
     #[test]

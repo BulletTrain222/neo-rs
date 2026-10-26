@@ -52,6 +52,13 @@ pub struct World {
     pub block_meshes: Vec<Option<std::ops::Range<usize>>>,
     pub motions: Vec<neopets_sim::object::Motion>,
     pub object_anims: Vec<neopets_sim::object::ObjAnim>,
+    /// The placed objects' inline type-11 headers (+0x1D8): their trigger volumes (rest frame)
+    /// and locators.
+    pub headers: Vec<Option<neopets_data::trigger::ObjectHeader>>,
+    /// MoveObjToAnimatedLocator links: object to (host, locator).
+    pub obj_links: std::collections::HashMap<usize, (usize, usize)>,
+    /// RegisterScriptAnimatedTrigger: record index to (host object, routine).
+    pub anim_routines: std::collections::BTreeMap<u16, (usize, u8)>,
     /// The foliage patches (type 16) and the registry ids of the pack's type-8 children.
     pub patches: Vec<neopets_data::foliage::Patch>,
     /// The area's character light sets (type 30, SPEC-0028 section 2), in table order.
@@ -191,6 +198,9 @@ impl World {
             block_meshes: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
+            headers: Vec::new(),
+            obj_links: Default::default(),
+            anim_routines: Default::default(),
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
             boxes: Vec::new(),
@@ -271,6 +281,7 @@ impl World {
             .map(|o| o.as_ref().and_then(|o| neopets_sim::object::Motion::parse(&bytes[o.stream.clone()?], o.keys as usize)).unwrap_or_default())
             .collect();
         world.object_anims = vec![Default::default(); world.objects.len()];
+        world.headers = world.objects.iter().map(|o| o.as_ref().and_then(|o| o.header.clone()).map(|r| neopets_data::trigger::object_header(&bytes[r]))).collect();
         let (ambients, spheres) = ground::sound_emitters(&bytes, &chain.chunks);
         world.ambient_counters = vec![0; ambients.len()];
         world.ambients = ambients;
@@ -279,16 +290,7 @@ impl World {
         world.capacity = capacity;
         let all: Vec<(neopets_sim::trigger::Volume, u16)> = volumes
             .into_iter()
-            .map(|v| {
-                use neopets_data::trigger::Shape as D;
-                use neopets_sim::trigger::Shape as S;
-                let shape = match v.shape {
-                    D::Sphere { centre, radius } => S::Sphere { centre, radius },
-                    D::Cylinder { base, axis, length, radius } => S::Cylinder { base, axis, length, radius },
-                    D::Rectangle { origin, axes, extents } => S::Rectangle { origin, axes, extents },
-                };
-                (neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }, v.class)
-            })
+            .map(|v| (sim_volume(&v), v.class))
             .collect();
         world.books = all.iter().filter(|(v, _)| neopets_sim::book::is_station(v.kind, v.flags)).copied().collect();
         world.all_spheres = all
@@ -2123,6 +2125,37 @@ impl Play {
                 Action::DigStep { group, step } => self.dig_thread_step(group as usize, step),
                 Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
                 Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
+                Action::AttachObj { obj, host, locator } => {
+                    let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                    if let Some(w) = w.filter(|w| obj < w.objects.len() && w.headers.get(host).and_then(|h| h.as_ref()).is_some_and(|h| locator < h.locators.len())) {
+                        w.obj_links.insert(obj, (host, locator));
+                    }
+                }
+                Action::GroupEffectsToObjLocators { group, host, locator } => {
+                    let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+                    let fx: Vec<usize> = w.and_then(|w| w.groups.get(group)).map(|g| g.effects.iter().filter_map(|&e| usize::try_from(e).ok()).collect()).unwrap_or_default();
+                    for (j, slot) in fx.into_iter().enumerate() {
+                        if let Some(at) = self.anim_locator(pack, host, locator + j, 0) {
+                            if let Some(h) = self.placed_object(pack, slot) {
+                                self.effects.set_position(h, at);
+                                if let Some(Some(o)) = self.effects.objects.get_mut(h) {
+                                    o.position = at;
+                                }
+                            }
+                        }
+                    }
+                }
+                Action::SpeedFactor { obj, factor } => {
+                    let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                    if let Some(o) = w.and_then(|w| w.object_anims.get_mut(obj)) {
+                        o.speed = factor;
+                    }
+                }
+                Action::RegisterAnimTrigger { host, index, routine } => {
+                    if pack == self.world.pack && self.world.headers.get(host).and_then(|h| h.as_ref()).is_some_and(|h| h.volumes.iter().any(|v| v.index == index)) {
+                        self.world.anim_routines.insert(index, (host, routine));
+                    }
+                }
                 Action::MoveEffect { slot, locator } => {
                     if let Some((at, _)) = self.locator(pack, locator) {
                         let h = self.placed_object(pack, slot);
@@ -4935,6 +4968,7 @@ impl Play {
         }
         // The callbacks read the pad's newly-pressed word themselves; an open box keeps it.
         let square = self.square_now && !self.dialogue_open;
+        self.anim_trigger_step(frame, p, square);
         for i in fired {
             if self.world.disabled_triggers.contains(&i) {
                 continue;
@@ -4992,6 +5026,79 @@ impl Play {
         for r in self.world.records.values_mut() {
             r.decay(frame);
         }
+    }
+
+    /// RegisterScriptAnimatedTrigger records (SPEC-0030 row 266): each registered record of a
+    /// host object's inline list is tested in the host's current pose (the hero point taken into
+    /// the host's rest frame), fires its own record and runs its routine with its index.
+    fn anim_trigger_step(&mut self, frame: i64, p: [f32; 3], square: bool) {
+        const BASE: u16 = 0x8000;
+        let pack = self.world.pack;
+        let list: Vec<(u16, usize, u8)> = self.world.anim_routines.iter().map(|(&k, &(h, r))| (k, h, r)).collect();
+        for (k, h, routine) in list {
+            let Some(v) = self.world.headers.get(h).and_then(|x| x.as_ref()).and_then(|x| x.volumes.iter().find(|v| v.index == k)).map(sim_volume) else { continue };
+            let (Some(m), Some(rest)) = (self.object_pose(pack, h, 0), self.world.objects.get(h).and_then(|o| o.as_ref()).map(|o| o.rest)) else { continue };
+            let d = [p[0] - m[12], p[1] - m[13], p[2] - m[14]];
+            let col = |c: usize| [m[4 * c], m[4 * c + 1], m[4 * c + 2]];
+            let dot = |a: [f32; 3]| (a[0] * d[0] + a[1] * d[1] + a[2] * d[2]) / (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).max(1e-12);
+            let local = [rest[12] + dot(col(0)), rest[13] + dot(col(1)), rest[14] + dot(col(2))];
+            if !v.touches(local) {
+                continue;
+            }
+            let rec = self.world.records.entry(BASE + k).or_default();
+            rec.fire(frame, true, -1);
+            let rec = *rec;
+            let call = level::TriggerCall { index: k, state: rec.state, object: rec.object, square, block: -1 };
+            self.state.talking = self.dialogue_open;
+            let out = level::on_trigger(pack, routine, call, &mut self.state);
+            if out.prompt.is_some() && self.door_prompt.is_none() && !self.talk_prompt {
+                self.door_prompt = out.prompt;
+            }
+            self.apply(&out.actions);
+        }
+    }
+
+    /// An object's current pose regardless of the draw gate: the motion sample at its time on its
+    /// base (the linked locator's current position, else the rest translation), or its rest
+    /// matrix while no script has touched it.
+    fn object_pose(&self, pack: u32, i: usize, depth: u8) -> Option<[f32; 16]> {
+        let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+        let obj = w.objects.get(i)?.as_ref()?;
+        let a = w.object_anims.get(i)?;
+        let base = self.obj_base(pack, i, depth);
+        let m = w.motions.get(i)?;
+        if !a.scripted || m.keys == 0 {
+            let mut r = obj.rest;
+            r[12..15].copy_from_slice(&base);
+            return Some(r);
+        }
+        let (q, root, scale) = m.sample(a.time);
+        let r = neopets_sim::object::rotation(q);
+        let c = |k: usize| r[k].map(|v| v * scale[k]);
+        let (c0, c1, c2) = (c(0), c(1), c(2));
+        Some([c0[0], c0[1], c0[2], 0.0, c1[0], c1[1], c1[2], 0.0, c2[0], c2[1], c2[2], 0.0, base[0] + root[0], base[1] + root[1], base[2] + root[2], 1.0])
+    }
+
+    /// An object's base: its linked locator's current position (SPEC-0028 section 7.1 step 5),
+    /// else its rest translation.
+    fn obj_base(&self, pack: u32, i: usize, depth: u8) -> [f32; 3] {
+        let Some(w) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { return [0.0; 3] };
+        let rest = w.objects.get(i).and_then(|o| o.as_ref()).map_or([0.0; 3], |o| [o.rest[12], o.rest[13], o.rest[14]]);
+        match w.obj_links.get(&i) {
+            Some(&(h, k)) if depth < 4 && h != i => self.anim_locator(pack, h, k, depth + 1).unwrap_or(rest),
+            _ => rest,
+        }
+    }
+
+    /// Formula A (SPEC-0030 Note on animated locators): the current position of locator k of
+    /// host h, P = T + r + R (L - T) with T the rest translation.
+    fn anim_locator(&self, pack: u32, h: usize, k: usize, depth: u8) -> Option<[f32; 3]> {
+        let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+        let l = w.headers.get(h)?.as_ref()?.locators.get(k)?.0;
+        let rest = w.objects.get(h)?.as_ref()?.rest;
+        let m = self.object_pose(pack, h, depth)?;
+        let d = [l[0] - rest[12], l[1] - rest[13], l[2] - rest[14]];
+        Some(std::array::from_fn(|j| m[12 + j] + m[j] * d[0] + m[4 + j] * d[1] + m[8 + j] * d[2]))
     }
 
     /// SPEC-0048 Lock chests, the press rule for script group g (kind 1): the gate (the chest
@@ -5623,7 +5730,21 @@ impl Play {
             self.state.miamice_caged = self.catch.count;
             self.state.hero.shield_mote = self.equipment.motes[0][1];
             self.state.hero.tick = self.ticks;
+            self.state.hero.position = self.loco.position();
+            self.state.obj_times = self.world.object_anims.iter().enumerate().map(|(i, a)| (i, a.time)).collect();
+            self.state.anim_locators = level::tracked_locators(pack)
+                .iter()
+                .map(|&h| (h, (0..self.world.headers.get(h).and_then(|x| x.as_ref()).map_or(0, |x| x.locators.len())).filter_map(|k| self.anim_locator(pack, h, k, 0)).collect()))
+                .collect();
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
+            // NEOPETS_TRACE_WORDS: the current module's words, object 0's time and the hero
+            // every 30 ticks.
+            if std::env::var_os("NEOPETS_TRACE_WORDS").is_some() && self.ticks % 30 == 0 {
+                let mut w: Vec<(u8, i32)> = self.state.words.iter().filter(|((p, _), v)| *p == pack && **v != 0).map(|((_, k), v)| (*k, *v)).collect();
+                w.sort_unstable();
+                let p = self.loco.position();
+                println!("      words of {pack} on tick {}: {w:?}; object 0 at {:.2}; hero ({:.1}, {:.1}, {:.1}) hp {} state {} held {}", self.ticks, self.state.obj_times.get(&0).copied().unwrap_or(-1.0), p[0], p[1], p[2], self.hero_hp, self.loco.state, self.held);
+            }
             self.state.hero.hits.clear();
             self.state.hit_now.clear();
             self.apply(&actions);
@@ -7992,7 +8113,8 @@ impl Play {
         let (q, root, scale) = w.motions.get(i)?.sample(a.time);
         let r = neopets_sim::object::rotation(q);
         let lift = self.obj_offset.get(&(pack, i)).copied().unwrap_or(0.0);
-        let t = [obj.rest[12] + root[0], obj.rest[13] + root[1] + lift, obj.rest[14] + root[2]];
+        let base = if w.obj_links.contains_key(&i) { self.obj_base(pack, i, 0) } else { [obj.rest[12], obj.rest[13], obj.rest[14]] };
+        let t = [base[0] + root[0], base[1] + root[1] + lift, base[2] + root[2]];
         let c = |k: usize| r[k].map(|v| v * scale[k]);
         let (mut c0, c1, mut c2) = (c(0), c(1), c(2));
         // SetAnimObjAdditionRotY: the added yaw turns the frame about its own Y axis.
@@ -9558,6 +9680,18 @@ pub struct Cheats {
     pub charge: bool,
 }
 
+/// A disc trigger volume as the trigger step tests it.
+fn sim_volume(v: &neopets_data::trigger::Volume) -> neopets_sim::trigger::Volume {
+    use neopets_data::trigger::Shape as D;
+    use neopets_sim::trigger::Shape as S;
+    let shape = match v.shape {
+        D::Sphere { centre, radius } => S::Sphere { centre, radius },
+        D::Cylinder { base, axis, length, radius } => S::Cylinder { base, axis, length, radius },
+        D::Rectangle { origin, axes, extents } => S::Rectangle { origin, axes, extents },
+    };
+    neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -9668,3 +9802,4 @@ fn keep_fx(effects: &mut neopets_sim::effect::Effects, table: &neopets_sim::effe
         }
     }
 }
+

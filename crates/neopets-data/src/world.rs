@@ -150,6 +150,8 @@ pub struct Object {
     pub zone: u8,
     /// The inline model set (0x1D4, a type-5 chunk): its payload's byte range in the pack.
     pub model_set: Option<Range<usize>>,
+    /// The inline type-11 header (0x1D8): its payload's byte range in the pack.
+    pub header: Option<Range<usize>>,
 }
 
 /// Every placed object of the first type-29 chunk of a world pack's top chain, in table order
@@ -171,8 +173,9 @@ pub fn objects(bytes: &[u8], top: &[Chunk]) -> Vec<Option<Object>> {
             let tree = u32_at(p, obj + OBJECT_TREE).filter(|&t| t != 0).and_then(|t| inline_chunk(p, t as usize)).map(|r| base + r.start..base + r.end);
             let keys = u16::from_le_bytes([p[obj + 0x1E4], p[obj + 0x1E5]]);
             let stream = u32_at(p, obj + 0x1E8).map(|o| o as usize).filter(|&o| o != 0 && o < p.len()).map(|o| base + o..base + p.len());
-            let model_set = u32_at(p, obj + 0x1D4).filter(|&t| t != 0).and_then(|t| inline_chunk(p, t as usize)).map(|r| base + r.start..base + r.end);
-            Some(Object { tree, rest, scale: [f(0x140), f(0x144), f(0x148)], state: u32_at(p, obj + 0x1A0).unwrap_or(3) as i32, keys, stream, zone: p.get(obj + 0x1B8).copied().unwrap_or(0), model_set })
+            let inline = |at: usize| u32_at(p, obj + at).filter(|&t| t != 0).and_then(|t| inline_chunk(p, t as usize)).map(|r| base + r.start..base + r.end);
+            let (model_set, header) = (inline(0x1D4), inline(0x1D8));
+            Some(Object { tree, rest, scale: [f(0x140), f(0x144), f(0x148)], state: u32_at(p, obj + 0x1A0).unwrap_or(3) as i32, keys, stream, zone: p.get(obj + 0x1B8).copied().unwrap_or(0), model_set, header })
         })
         .collect()
 }
