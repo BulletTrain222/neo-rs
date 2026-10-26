@@ -231,6 +231,8 @@ pub enum Action {
     /// current world's pending slot, used by the next pending step in place of the cell's exit
     /// value; an argument of 193 or more (or negative) is ignored.
     LoadOverride { slot: i32 },
+    /// StopEffect for every effect id that script-group instance `group` lists.
+    GroupEffectsStop { group: usize },
     /// KillCurrentHero: the default death of the active hero (no callback gate; health kept).
     KillHero,
     /// RegisterScriptTrigger for every member trigger of script group `group` to a routine.
@@ -1552,6 +1554,29 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 1078 Init: 309; object 1 (310 clear) or 0; the door table's start states (open
+        // with the record's flag, else closed; the plate up; the group stopped); groups 15 to 21
+        // stopped; the plate script on 3 to 8, the lever script on 26 to 30, the item check on 0
+        // and the short sequence on 1.
+        1078 => {
+            state.set(309, true);
+            let mut v = vec![Action::InitObjOn { obj: if state.flag(310) { 0 } else { 1 }, end: false }];
+            for d in &DOORS_1078 {
+                if state.flag(d.flag) {
+                    v.extend(d.doors.iter().flat_map(|&(shown, hidden)| [Action::DeactivateObj { obj: shown }, Action::InitObjOn { obj: hidden, end: true }]));
+                    v.extend(d.lever.iter().map(|&obj| Action::InitObjOn { obj, end: true }));
+                } else {
+                    v.extend(d.doors.iter().flat_map(|&(shown, hidden)| [Action::InitObjOn { obj: shown, end: false }, Action::DeactivateObj { obj: hidden }]));
+                    v.extend(d.lever.iter().map(|&obj| Action::InitObjOn { obj, end: false }));
+                }
+                v.extend([Action::DeactivateObj { obj: d.plate.0 }, Action::InitObjOn { obj: d.plate.1, end: false }, Action::GroupEffectsStop { group: d.group }]);
+            }
+            v.extend((15..=21).map(|group| Action::GroupEffectsStop { group }));
+            v.extend((3..=8).map(|i| reg(i, 3)));
+            v.extend((26..=30).map(|i| reg(i, 26)));
+            v.extend([reg(0, 0), reg(1, 1)]);
+            v
+        }
         // SPEC-0041 1176 Init and CB1, the encounter thread: round r by flags 384 to 381; slots A
         // (region 1177), C (1178) and B (1179 + r); the opponent entity 12 + r (word 1); the
         // opening scene (cameras 6, 4, 5 and 7, the opponent's intro animation, line 53 - r,
@@ -2792,6 +2817,35 @@ fn talk_1350(routine: u8, s: &mut GameState) -> Vec<Action> {
         }
         _ => Vec::new(),
     }
+}
+
+/// A SPEC-0041 1078 door record: the plate and lever triggers, the flag, the doors (shown,
+/// hidden), their cameras, the lever objects, the plate objects (down, up), the effect group and
+/// the lever locator.
+struct Door1078 {
+    plate_trigger: u16,
+    lever_trigger: Option<u16>,
+    flag: u16,
+    doors: &'static [(usize, usize)],
+    cameras: [usize; 2],
+    lever: &'static [usize],
+    plate: (usize, usize),
+    group: usize,
+    locator: usize,
+}
+
+const DOORS_1078: [Door1078; 6] = [
+    Door1078 { plate_trigger: 7, lever_trigger: Some(29), flag: 669, doors: &[(4, 7)], cameras: [5, 5], lever: &[5, 6, 75], plate: (61, 62), group: 19, locator: 20 },
+    Door1078 { plate_trigger: 8, lever_trigger: Some(27), flag: 672, doors: &[(8, 11)], cameras: [6, 6], lever: &[9, 10, 71], plate: (57, 58), group: 20, locator: 18 },
+    Door1078 { plate_trigger: 5, lever_trigger: Some(28), flag: 673, doors: &[(16, 20), (17, 21)], cameras: [8, 8], lever: &[18, 19, 73], plate: (63, 64), group: 17, locator: 19 },
+    Door1078 { plate_trigger: 6, lever_trigger: Some(30), flag: 671, doors: &[(12, 15)], cameras: [7, 7], lever: &[13, 14, 77], plate: (59, 60), group: 16, locator: 21 },
+    Door1078 { plate_trigger: 3, lever_trigger: None, flag: 674, doors: &[(2, 3)], cameras: [11, 11], lever: &[], plate: (67, 68), group: 18, locator: 0 },
+    Door1078 { plate_trigger: 4, lever_trigger: Some(26), flag: 670, doors: &[(22, 24), (23, 25)], cameras: [10, 9], lever: &[69], plate: (65, 66), group: 21, locator: 17 },
+];
+
+/// SPEC-0041 1078: a record's doors opened (the shown object hidden, the other shown and played).
+fn open_1078(d: &Door1078) -> Vec<Action> {
+    d.doors.iter().flat_map(|&(shown, hidden)| [Action::DeactivateObj { obj: shown }, Action::InitObjOn { obj: hidden, end: false }, Action::PlayAnim { obj: hidden, speed: 1.0, wait: false }]).collect()
 }
 
 /// SPEC-0039 1246 handler 2, by level state 8, flag 273 and the fight cascade (level states 7 down
@@ -4686,6 +4740,85 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0041 1078 plate script (triggers 3 to 8, entering, not attacking, the record's flag
+        // clear): the plate down, the group's effects, the doors open, the record's camera the
+        // first time; once the firer leaves Update closes them again unless the flag was set.
+        (1078, 3) if call.object && call.state == 1 && state.hero.sub == 0 => {
+            if let Some(r) = DOORS_1078.iter().position(|d| d.plate_trigger == call.index) {
+                let d = &DOORS_1078[r];
+                if !state.flag(d.flag) && state.word(pack, 40 + r as u8) == 0 {
+                    state.set_word(pack, 40 + r as u8, 1);
+                    out.actions.extend([Action::WaitObj { obj: d.plate.1 }, Action::DeactivateObj { obj: d.plate.1 }, Action::InitObjOn { obj: d.plate.0, end: false }, Action::PlayAnim { obj: d.plate.0, speed: 1.0, wait: false }, Action::GroupEffects { group: d.group }]);
+                    out.actions.extend(open_1078(d));
+                    if state.word(pack, 50 + r as u8) == 0 {
+                        state.set_word(pack, 50 + r as u8, 1);
+                        state.set_word(pack, 60 + r as u8, 1);
+                        out.actions.extend([Action::PlayCamera { track: d.cameras[0], wait: false, end: 1, speed: 1.0 }, wait(1.5), Action::ReturnCamera { preset: -1, release: true }]);
+                    } else {
+                        state.set_word(pack, 60 + r as u8, 0);
+                    }
+                    // Word 40 + r: 1 open, 2 waiting for Update to close.
+                    out.actions.extend([Action::WaitInside { index: call.index }, Action::Bits { word: 40 + r as u8, set: 2, clear: 1 }]);
+                }
+            }
+        }
+        // The lever script (triggers 26 to 30; the record's flag clear): context 4; a press sets
+        // the flag, walks the hero to the lever locator, plays hero animation 140 and the lever
+        // objects, and opens the doors for good.
+        (1078, 26) if call.object => {
+            if let Some(d) = DOORS_1078.iter().find(|d| d.lever_trigger == Some(call.index)) {
+                if !state.flag(d.flag) {
+                    if call.square && !state.talking {
+                        state.set(d.flag, true);
+                        out.actions.extend([Action::HoldHero, Action::WalkHero { locator: d.locator, wait: true, orient: true }, Action::HeroAnim { anim: 140, wait: false }]);
+                        out.actions.extend(d.lever.iter().map(|&obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
+                        out.actions.extend(open_1078(d));
+                        out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+                    } else {
+                        out.prompt = Some(4);
+                    }
+                }
+            }
+        }
+        // The short sequence (trigger 1, 310 clear): 310, objects 0 off and 1 on, camera 4,
+        // object 1 played, group 15's effects. Its camera shake's strength is not given.
+        (1078, 1) if call.object && !state.flag(310) => {
+            state.set(310, true);
+            out.actions.extend([
+                Action::DeactivateObj { obj: 0 },
+                Action::InitObjOn { obj: 1, end: false },
+                Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                wait(1.0),
+                Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                wait(0.3),
+                Action::GroupEffects { group: 15 },
+                wait(1.0),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        // The item check (trigger 0, 310 set, once per load): context 6; a press with 312 set or
+        // item 18 held opens it (object 1 off, 0 on and played, camera 4); else 311 and line 1.
+        (1078, 0) if call.object && state.flag(310) && state.word(pack, 1) == 0 => {
+            if call.square && !state.talking {
+                if state.flag(312) || state.has_item(18) {
+                    state.set_word(pack, 1, 1);
+                    out.actions.extend([
+                        Action::DeactivateObj { obj: 1 },
+                        Action::InitObjOn { obj: 0, end: false },
+                        Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                        wait(1.0),
+                        Action::PlayAnim { obj: 0, speed: 1.0, wait: true },
+                        wait(1.0),
+                        Action::ReturnCamera { preset: -1, release: true },
+                    ]);
+                } else {
+                    state.set(311, true);
+                    out.actions.push(Action::Message { line: 1 });
+                }
+            } else {
+                out.prompt = Some(6);
             }
         }
         // SPEC-0044 735 trigger 23 (263 and level states 8 and 9 clear): level state 8, the intro.
@@ -6889,6 +7022,31 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             if state.flag(198) && state.word(pack, 2) == 0 {
                 state.set_word(pack, 2, 1);
                 out.push(Action::DeactivateObj { obj: 1 });
+            }
+        }
+        // SPEC-0041 1078 Update: with 670 set, 40; a plate whose firer has left closes its doors
+        // (with the camera when it was shown this time), restores the plate and stops the
+        // group's effects, unless the record's flag was set meanwhile. The flag 311 and 312
+        // helper's item-18 rule is not given in enough detail to build.
+        1078 => {
+            if state.flag(670) && !state.flag(40) {
+                state.set(40, true);
+            }
+            for (r, d) in DOORS_1078.iter().enumerate() {
+                if state.word(pack, 40 + r as u8) == 2 {
+                    state.set_word(pack, 40 + r as u8, 0);
+                    if state.flag(d.flag) {
+                        continue;
+                    }
+                    if state.word(pack, 60 + r as u8) != 0 {
+                        out.push(Action::PlayCamera { track: d.cameras[0], wait: false, end: 1, speed: 1.0 });
+                    }
+                    out.extend(d.doors.iter().flat_map(|&(shown, hidden)| [Action::DeactivateObj { obj: hidden }, Action::InitObjOn { obj: shown, end: false }]));
+                    out.extend([Action::DeactivateObj { obj: d.plate.0 }, Action::InitObjOn { obj: d.plate.1, end: false }, Action::GroupEffectsStop { group: d.group }]);
+                    if state.word(pack, 60 + r as u8) != 0 {
+                        out.extend([wait(1.5), Action::ReturnCamera { preset: -1, release: true }]);
+                    }
+                }
             }
         }
         // SPEC-0041 1176 CB2, the death watcher: the hero-death marker (word 2) ends the round
@@ -10900,6 +11058,33 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1078_doors() {
+        let mut s = GameState::default();
+        on_init(1078, &mut s);
+        assert!(s.flag(309));
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        // Plate 5 (record 2): both doors open with camera 8 the first time; once the firer
+        // leaves Update closes them.
+        let out = on_trigger(1078, 3, enter(5), &mut s).actions;
+        assert!(out.contains(&Action::PlayAnim { obj: 21, speed: 1.0, wait: false }) && out.contains(&Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 }));
+        s.set_word(1078, 42, 2);
+        assert!(on_update(1078, &mut s, false).contains(&Action::InitObjOn { obj: 16, end: false }));
+        // A second press shows no camera; a lever pull (28) sets 673 and keeps the doors open.
+        assert!(!on_trigger(1078, 3, enter(5), &mut s).actions.contains(&Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 }));
+        assert!(on_trigger(1078, 26, enter(28), &mut s).actions.contains(&Action::WalkHero { locator: 19, wait: true, orient: true }));
+        assert!(s.flag(673));
+        s.set_word(1078, 42, 2);
+        assert!(on_update(1078, &mut s, false).is_empty());
+        // The item check: without item 18 or 312 line 1 and 311; the short sequence first.
+        assert!(on_trigger(1078, 0, enter(0), &mut s).actions.is_empty());
+        on_trigger(1078, 1, enter(1), &mut s);
+        assert_eq!(on_trigger(1078, 0, enter(0), &mut s).actions, vec![Action::Message { line: 1 }]);
+        assert!(s.flag(311));
+        s.give(18, 1);
+        assert!(on_trigger(1078, 0, enter(0), &mut s).actions.contains(&Action::PlayAnim { obj: 0, speed: 1.0, wait: true }));
     }
 
     #[test]

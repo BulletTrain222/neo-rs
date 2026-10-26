@@ -1947,6 +1947,13 @@ impl Play {
                 Action::Sleep { ticks } => return Some(Wait::Ticks(ticks)),
                 Action::WaitLoads => return Some(Wait::Loads),
                 Action::WaitDialog => return Some(Wait::Dialog),
+                Action::GroupEffectsStop { group } => {
+                    let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+                    let fx: Vec<usize> = w.and_then(|w| w.groups.get(group)).map(|g| g.effects.iter().filter_map(|&e| usize::try_from(e).ok()).collect()).unwrap_or_default();
+                    for slot in fx {
+                        self.apply(&[Action::StopEffect { slot }]);
+                    }
+                }
                 Action::KillHero => {
                     if self.loco.state != hero_states::DEAD {
                         self.default_death();
