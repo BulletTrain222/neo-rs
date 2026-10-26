@@ -528,7 +528,7 @@ impl GameState {
 /// The registered teleport callback of a pack's door: its prompt context (13 "Enter", 26
 /// "Exit"; 0 starts on contact), or None when no handler is described.
 pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
-    if (pack, door) == (880, 0) || (pack == 991 && door <= 7) {
+    if (pack, door) == (880, 0) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) {
         return Some(13);
     }
     match (pack, door) {
@@ -557,6 +557,12 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0044 1017 teleports 0 and 1: value 60 or 50 for eW 81 (type 2) and the exterior
+        // load to eW 81 (pack 991).
+        (1017, 0 | 1) => {
+            state.blackboard.insert((2, 81), if door == 0 { 60 } else { 50 });
+            vec![Action::ReplaceExterior { slot: 81, plane: -1 }]
+        }
         // SPEC-0045 991 teleports 0 to 7: a type-2 value for eW 81 (10 to 80 by index), the
         // transition (interiors eW 84 to 87 and 89; exterior loads to eW 88, also posting the
         // value for eW 88, and to eW 63), then 3 s.
@@ -718,6 +724,15 @@ pub fn objects_scripted(pack: u32) -> bool {
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0044 1017 Init: flag 85; thread K1 loads slot 0 with set 1 (flag 86) or 0 (region
+        // 1018 + set); 297 set when clear (thread K2, the opening cutscene, is not reproduced:
+        // R-0056; thread K3 neither). Proximity routines, teleports 0 and 1 (context 13) and the
+        // arrival are fixed rules.
+        1017 => {
+            state.set(85, true);
+            state.set(297, true);
+            vec![Action::LoadRegion { slot: 0, region: Some(1018 + state.flag(86) as u32) }]
+        }
         // SPEC-0045 991 Init: flag 85; trigger routine A (8) on triggers 4 and 5 and on the
         // kind-7 group 0's instance trigger (the crowd zones); thread 2 loads slot 0 with set 3
         // (region 995) under flag 86, else set 8 (1000). The teleports (kind 13) and the
@@ -1139,6 +1154,49 @@ fn slots_1230(state: &GameState) -> Option<Action> {
         [(19, 3), (18, 2), (52, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, j)| j)
     };
     Some(Action::LoadRegion { slot: 0, region: Some(1231 + set) })
+}
+
+/// SPEC-0044 1017 dialogue sets. Set D (Guildmaster Marl, routine 0): the first set flag of 593,
+/// 590, 589, 587, 586, 585, 299 picks its three lines in turn; 298 gives line 98 (its dialogue
+/// command gives item 23) and sets 299; 297 lines 99 to 101; else line 102 and 297. Sets A to C
+/// (routines 2, 3, 1) keep only their flag sets: which line each branch shows is not given
+/// (R-0056), so they show none.
+fn guild_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let f = |n: u16| s.flag(n);
+    match routine {
+        0 => {
+            let key = (1017, 0);
+            let mut rot = s.rotations.get(&key).copied().unwrap_or_default();
+            let triple = |a: u16| cycle(&[a, a + 1, a + 2]);
+            let list = [(593, triple(77)), (590, triple(80)), (589, triple(83)), (587, triple(86)), (586, triple(89)), (585, triple(92)), (299, triple(95))];
+            let line = if let Some(l) = cascade(s, &mut rot, &list) {
+                l
+            } else if f(298) {
+                s.set(299, true);
+                rot.pick(7, &Lines::One(98))
+            } else if f(297) {
+                rot.pick(8, &triple(99))
+            } else {
+                s.set(297, true);
+                rot.pick(9, &Lines::One(102))
+            };
+            s.rotations.insert(key, rot);
+            line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+        }
+        2 if !f(593) && !f(590) && !f(589) && !f(587) && f(586) => {
+            s.set(587, true);
+            Vec::new()
+        }
+        3 if !f(593) && !f(590) && f(589) => {
+            s.set(590, true);
+            Vec::new()
+        }
+        1 if !f(593) && !f(590) && !f(589) && !f(587) && !f(586) && !f(585) && f(299) => {
+            s.set(585, true);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC-0045 991 proximity routines (routine = the entity, or the first of a shared group).
@@ -1948,6 +2006,21 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 /// Run a pack's activate-world routine when its world becomes current.
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0044 1017 activate-world: the value for eW 81 places the hero at locator 2 (50) or
+        // 3 (60); the normal camera; the value reset.
+        1017 => {
+            let v = state.take_message(2, 81);
+            let mut out = Vec::new();
+            match v {
+                50 => out.push(Action::MoveHero { locator: 2 }),
+                60 => out.push(Action::MoveHero { locator: 3 }),
+                _ => {}
+            }
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0045 991 activate-world: the type-2 value for eW 81 places the hero at the return
         // locator of the teleport used (10 -> 3 ... 80 -> 10); any value but -1 returns the
         // normal camera; the value is reset.
@@ -3465,6 +3538,11 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (678 | 686 | 691, 9) => Some(0),
         // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
         (1148, 0..=3) => Some(entity as u8),
+        // SPEC-0044 1017: set D on entities 0 and 4, C on 1 and 5, A on 2 and 6, B on 3 and 7.
+        (1017, 0 | 4) => Some(0),
+        (1017, 1 | 5) => Some(1),
+        (1017, 2 | 6) => Some(2),
+        (1017, 3 | 7) => Some(3),
         // SPEC-0045 991: one routine per entity, with 9/12/40, 10/13, 15/42 and 16/41 shared.
         (991, 9 | 12 | 40) => Some(9),
         (991, 10 | 13) => Some(10),
@@ -3516,6 +3594,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 991 {
         return lakeside_talk(routine, state);
+    }
+    if pack == 1017 {
+        return guild_talk(routine, state);
     }
     let key = (pack, routine);
     let mut rot = state.rotations.get(&key).copied().unwrap_or_default();
@@ -3770,6 +3851,25 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1017_guildmaster() {
+        let mut s = GameState::default();
+        assert_eq!(on_init(1017, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(1018) }]);
+        // 297 is set at Init, so Marl's first lines are 99 to 101; then 298 gives 98 once.
+        assert_eq!(on_talk(1017, 0, &mut s), vec![Action::Talk { line: 99 }]);
+        assert_eq!(on_talk(1017, 0, &mut s), vec![Action::Talk { line: 100 }]);
+        s.set(298, true);
+        assert_eq!(on_talk(1017, 0, &mut s), vec![Action::Talk { line: 98 }]);
+        assert!(s.flag(299));
+        assert_eq!(on_talk(1017, 0, &mut s), vec![Action::Talk { line: 95 }]);
+        // Set C sets 585 with 299 set; Marl then moves to 92.
+        on_talk(1017, 1, &mut s);
+        assert!(s.flag(585));
+        assert_eq!(on_talk(1017, 0, &mut s), vec![Action::Talk { line: 92 }]);
+        assert_eq!(on_teleport(1017, 1, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
+        assert_eq!(on_activate(1017, &mut s)[0], Action::MoveHero { locator: 2 });
     }
 
     #[test]
