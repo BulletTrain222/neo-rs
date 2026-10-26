@@ -751,13 +751,19 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 799 | 880 | 886 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 799 | 880 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0037 1369 Init: objects 0 and 1 off, value 10 (type 2) for eW 157, T1 on trigger 1
+        // and T0 on trigger 0.
+        1369 => {
+            state.blackboard.insert((2, 157), 10);
+            vec![Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }, reg(1, 1), reg(0, 0)]
+        }
         // SPEC-0037 1238 Init and thread T1: with flag 50 slot 0 (table A) loads set 3 and slot 1
         // (table B) set 1 (567 set, 568 clear) or set 2; without it slot 0 loads set 0; then with
         // 578 set and 579 clear slot 2 (table C) loads set 4 (region 1239 + set). Thread T2 is in
@@ -1730,6 +1736,28 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 1, region: Some(885) }]);
             }
             out.actions.extend([Action::WaitInside { index: call.index }, Action::LoadRegion { slot: 1, region: None }, slots_880(state)]);
+        }
+        // SPEC-0037 1369 T1 (trigger 1, the body; no state test): the exterior replacement to eW
+        // 157. T0 (trigger 0, the body): the Square context 4; a press walks the hero to locator 1,
+        // plays hero animation 140, object 1 (wait), camera 4, object 0 (wait), 1 s and the normal
+        // camera (word 0 keeps it from starting twice while it runs).
+        (1369, 1) if call.object => out.actions.push(Action::ReplaceExterior { slot: 157, plane: -1 }),
+        (1369, 0) if call.object && state.word(pack, 0) == 0 => {
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                state.set_word(pack, 0, 1);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: 1, wait: true, orient: true },
+                    Action::HeroAnim { anim: 140, wait: false },
+                    Action::PlayAnim { obj: 1, speed: 1.0, wait: true },
+                    Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                    Action::PlayAnim { obj: 0, speed: 1.0, wait: true },
+                    wait(1.0),
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::Bits { word: 0, set: 0, clear: 1 },
+                ]);
+            }
         }
         // SPEC-0037 947 S2 (trigger 2, the body) arms word 0; S0 (trigger 0, entering with the
         // body) with the word armed and 375 clear shows line 0 and disarms it; S1 (trigger 1,
@@ -4416,6 +4444,18 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1369_walk_and_exit() {
+        let mut s = GameState::default();
+        on_init(1369, &mut s);
+        assert_eq!(s.blackboard.get(&(2, 157)), Some(&10));
+        let call = TriggerCall { index: 0, state: 2, object: true, square: false };
+        assert_eq!(on_trigger(1369, 0, call, &mut s).prompt, Some(4));
+        let run = on_trigger(1369, 0, TriggerCall { square: true, ..call }, &mut s).actions;
+        assert!(run.contains(&Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }));
+        assert_eq!(on_trigger(1369, 1, TriggerCall { index: 1, ..call }, &mut s).actions, vec![Action::ReplaceExterior { slot: 157, plane: -1 }]);
     }
 
     #[test]
