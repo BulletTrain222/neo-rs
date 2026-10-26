@@ -398,6 +398,8 @@ enum Wait {
     WheelSpin,
     /// While a 1217 cage record is in state 4.
     Cage(usize),
+    /// PlayHeroAnim with WAIT: while the hero stays in the one-shot state.
+    HeroOneShot,
 }
 
 pub struct Play {
@@ -1400,6 +1402,7 @@ impl Play {
             Wait::Dialog => !self.dialogue_open,
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
             Wait::WheelSpin => self.wheel_spin.is_none(),
+            Wait::HeroOneShot => self.loco.state != neopets_sim::hero::ONE_SHOT,
             Wait::Cage(i) => self.state.burrows.as_ref().and_then(|b| b.cages.get(i)).is_none_or(|c| c.state != 4),
             Wait::ObjAnim(pack, i) => [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.object_anims.get(i)).is_none_or(|a| a.state != 2),
         }
@@ -1731,7 +1734,15 @@ impl Play {
                     self.state.set_word(pack, word, (w | set) & !clear);
                 }
                 // PlayHeroAnim and the equipment display are not reproduced.
-                Action::HeroAnim { .. } | Action::Equip { .. } => {}
+                // PlayHeroAnim: the one-shot state 51 (the clip restarted); the call yields one
+                // tick, and with WAIT while the hero stays in state 51. The scripts' CTL is taken
+                // as 1 (the hero returns to state 1).
+                Action::HeroAnim { anim, wait } => {
+                    self.loco.play_one_shot(anim, true);
+                    self.hero.request(anim, true);
+                    return Some(if wait { Wait::HeroOneShot } else { Wait::Ticks(1) });
+                }
+                Action::Equip { .. } => {}
                 Action::ReplaceExterior { slot, plane } => {
                     if let Some(&p) = self.boot.areas.packs.get(slot) {
                         self.job = Some(Job::Replace(p, plane));

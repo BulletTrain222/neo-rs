@@ -27,6 +27,10 @@ pub const LONG_FALL: u8 = 48;
 /// SPEC-0055 death-end states: 59 arrival or return (clip 175), 60 respawn after deadly ground
 /// (clip 137).
 pub const ARRIVAL: u8 = 59;
+/// The scripted one-shot animation (PlayHeroAnim; SPEC-0040 Behavior 15.3 route 51) and the
+/// script-control state it can end in (0x21).
+pub const ONE_SHOT: u8 = 51;
+pub const SCRIPTED: u8 = 33;
 /// SPEC-0033 Behavior 4A.3: the shield guard.
 pub const GUARD: u8 = 20;
 /// Carry a Miamouse (SPEC-0033 Behavior 18).
@@ -228,6 +232,8 @@ pub struct Locomotion {
     pub status_scale: f32,
     /// State 57's sub-state: 0 pick up, 1 stand, 2 walk, 3 put down.
     pub carry: u8,
+    /// PlayHeroAnim's CTL: the one-shot ends in state 1 (set) or 33.
+    pub one_shot_control: bool,
 }
 
 impl Locomotion {
@@ -248,6 +254,7 @@ impl Locomotion {
             shield: false,
             status_scale: 1.0,
             carry: 0,
+            one_shot_control: true,
         }
     }
 
@@ -329,6 +336,13 @@ impl Locomotion {
 
     pub fn position(&self) -> Vec3 {
         self.body.position
+    }
+
+    /// PlayHeroAnim (SPEC-0030 row 157): the one-shot state 51 with the animation and CTL.
+    pub fn play_one_shot(&mut self, anim: u32, control: bool) {
+        self.state = ONE_SHOT;
+        self.request = anim;
+        self.one_shot_control = control;
     }
 
     /// Enter or leave the attack step, and set the clip it requests.
@@ -426,7 +440,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -460,6 +474,14 @@ impl Locomotion {
                 return;
             }
             LONG_FALL => return self.long_fall(clip),
+            // Route 51: at progress 0.99 of the clip, state 1 with the control flag set, else 33.
+            ONE_SHOT => {
+                if clip.action == self.request && clip.progress >= 0.99 {
+                    self.state = if self.one_shot_control { STANCE } else { SCRIPTED };
+                }
+                return;
+            }
+            SCRIPTED => return,
             CARRY => return self.carry_step(v > 0.0, clip),
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
