@@ -90,20 +90,53 @@ impl Volume {
         }
     }
 
+    /// The movable-block fire gate (SPEC-0048 Trigger volumes): a sphere or a cylinder with
+    /// flag bit 3, a static rectangle (kind 4, switch value 0 or below) with bit 8, a moving one
+    /// with bit 5, and the gate mask against the world's gate word. Kinds 2 and 7 never fire.
+    pub fn fires_on_block(&self, world_mask: u16) -> bool {
+        if self.mask != 0 && self.mask & world_mask == 0 {
+            return false;
+        }
+        let bit = |n: u16| self.flags & (1 << n) != 0;
+        match (self.kind, self.shape) {
+            (1 | 3, _) => bit(3),
+            (4, Shape::Rectangle { extents, .. }) if extents[2] <= 0.0 => bit(8),
+            (4, Shape::Rectangle { .. }) => bit(5),
+            _ => false,
+        }
+    }
+
+    /// A moving block's test: an upright finite cylinder from the block position, radius S
+    /// (0.6 S against a moving rectangle) and height H (SPEC-0048 Trigger volumes; the shapes
+    /// are Medium there and the tests are the body tests with that cylinder).
+    pub fn block_hits(&self, p: [f32; 3], size: f32, height: f32) -> bool {
+        let r = match self.shape {
+            Shape::Rectangle { extents, .. } if extents[2] > 0.0 => 0.6 * size,
+            _ => size,
+        };
+        self.touches_with(p, r, height)
+    }
+
     /// Whether the body standing at feet point `p` touches the volume.
     pub fn touches(&self, p: [f32; 3]) -> bool {
-        let top = [p[0], p[1] + BODY_HEIGHT, p[2]];
+        self.touches_with(p, BODY_RADIUS, BODY_HEIGHT)
+    }
+
+    /// An upright cylinder of radius `body_radius` and height `body_height` from `p` against
+    /// the volume.
+    fn touches_with(&self, p: [f32; 3], body_radius: f32, body_height: f32) -> bool {
+        let top = [p[0], p[1] + body_height, p[2]];
         match self.shape {
-            Shape::Sphere { centre, radius } => segment_point(p, top, centre) <= radius + BODY_RADIUS,
+            Shape::Sphere { centre, radius } => segment_point(p, top, centre) <= radius + body_radius,
             Shape::Cylinder { base, axis, length, radius } if axis[1].abs() > 0.999 => {
                 // Upright: the two circles meet and the height ranges overlap.
                 let (lo, hi) = (base[1].min(base[1] + axis[1] * length), base[1].max(base[1] + axis[1] * length));
                 let (dx, dz) = (p[0] - base[0], p[2] - base[2]);
-                (dx * dx + dz * dz).sqrt() <= radius + BODY_RADIUS && top[1] >= lo && p[1] <= hi
+                (dx * dx + dz * dz).sqrt() <= radius + body_radius && top[1] >= lo && p[1] <= hi
             }
             Shape::Cylinder { base, axis, length, radius } => {
                 let end = [base[0] + axis[0] * length, base[1] + axis[1] * length, base[2] + axis[2] * length];
-                segment_segment(p, top, base, end) <= radius + BODY_RADIUS
+                segment_segment(p, top, base, end) <= radius + body_radius
             }
             Shape::Rectangle { origin, axes, extents } => {
                 let d = [p[0] - origin[0], p[1] - origin[1], p[2] - origin[2]];
@@ -111,8 +144,8 @@ impl Volume {
                 // The body's extent along each axis is its axis segment plus the radius across.
                 let span = |k: usize| {
                     let a = along(k, d);
-                    let b = a + BODY_HEIGHT * axes[k][1];
-                    let r = BODY_RADIUS * (1.0 - axes[k][1] * axes[k][1]).max(0.0).sqrt();
+                    let b = a + body_height * axes[k][1];
+                    let r = body_radius * (1.0 - axes[k][1] * axes[k][1]).max(0.0).sqrt();
                     (a.min(b) - r, a.max(b) + r)
                 };
                 let inside = |k: usize, e: f32| {
@@ -182,11 +215,14 @@ pub struct Record {
     pub stamp: i64,
     /// The object word: true only when the selected hero's body fired it.
     pub object: bool,
+    /// +0x28, the last fire argument: -1 for hero fires, the movable block's number when a
+    /// movable-block contact fired it (SPEC-0030 Layout section 3).
+    pub block: i32,
 }
 
 impl Default for Record {
     fn default() -> Self {
-        Self { state: 0, stamp: -1, object: false }
+        Self { state: 0, stamp: -1, object: false, block: -1 }
     }
 }
 
@@ -206,6 +242,7 @@ impl Record {
         }
         self.stamp = frame;
         self.object = object;
+        self.block = last;
     }
 
     /// The decay in the script step of `frame`: a record last written before frame - 1 toggles
@@ -232,6 +269,22 @@ mod tests {
         assert!(!s.fires_on_shot(0));
         let c = Volume { kind: 3, flags: 0x0008, mask: 0, index: 1, shape: Shape::Cylinder { base: [0.0; 3], axis: [0.0, 1.0, 0.0], length: 3.0, radius: 6.0 } };
         assert!(c.fires_on_shot(0) && c.shot_hits([6.2, 1.0, 0.0], 0.5) && !c.shot_hits([7.0, 1.0, 0.0], 0.5));
+    }
+
+    #[test]
+    fn block_gates_hits_and_number() {
+        // SPEC-0048 Trigger volumes: a bit-3 sphere fires for a block, a kind-7 box never; the
+        // block's cylinder has radius S and height H from its position.
+        let s = Volume { kind: 1, flags: 0x0008, mask: 0, index: 2, shape: Shape::Sphere { centre: [0.0, 1.0, 0.0], radius: 1.0 } };
+        assert!(s.fires_on_block(0) && s.block_hits([2.5, 0.0, 0.0], 2.0, 3.0) && !s.block_hits([3.5, 0.0, 0.0], 2.0, 3.0));
+        let r = Volume { kind: 7, flags: 0x0100, mask: 0, index: 3, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [2.0, 2.0, 0.0] } };
+        assert!(!r.fires_on_block(0));
+        // SPEC-0030 section 3: a block fire writes its number; a hero fire -1.
+        let mut rec = Record::default();
+        rec.fire(0, false, 3);
+        assert_eq!((rec.state, rec.block), (1, 3));
+        rec.fire(1, true, -1);
+        assert_eq!(rec.block, -1);
     }
 
     #[test]

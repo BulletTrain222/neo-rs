@@ -1913,6 +1913,35 @@ impl Play {
                     self.last_door = format!("script: left the interior to {}, reloading slot {slot}", self.world.pack);
                     self.activated();
                 }
+                // SPEC-0030 rows 18, 22 and 63 on the current world's movable blocks (an index
+                // out of range does nothing).
+                Action::ActivateBlock { block, on } => {
+                    if let Some(b) = self.world.blocks.get_mut(block) {
+                        b.active = on as i32;
+                    }
+                }
+                Action::MoveBlock { block, locator } => {
+                    if let (Some(&(x, _)), true) = (self.world.entries.get(locator), block < self.world.blocks.len()) {
+                        let w = &mut self.world;
+                        let mut b = w.blocks[block].clone();
+                        b.move_to(x, |px, pz, c| {
+                            let h = w.probe(px, pz, c);
+                            h.found.then_some(h.height)
+                        });
+                        w.blocks[block] = b;
+                    }
+                }
+                Action::ReacquireBlock { block } => {
+                    if block < self.world.blocks.len() {
+                        let w = &mut self.world;
+                        let mut b = w.blocks[block].clone();
+                        b.reacquire(|px, pz, c| {
+                            let h = w.probe(px, pz, c);
+                            h.found.then_some(h.height)
+                        });
+                        w.blocks[block] = b;
+                    }
+                }
                 Action::MoveHero { locator } => {
                     if let Some(&e) = self.world.entries.get(locator) {
                         self.arrive(e);
@@ -3381,6 +3410,14 @@ impl Play {
         }
     }
 
+    /// Diagnostic: each block (index, position, active) and each volume a block can fire (index,
+    /// kind, flags, shape) in the current world.
+    pub fn block_survey(&self) -> Vec<String> {
+        let mut v: Vec<String> = self.world.blocks.iter().enumerate().map(|(k, b)| format!("block {k}: at {:?} size {} active {}", b.position, b.size, b.active)).collect();
+        v.extend(self.world.all_volumes.iter().filter(|x| x.fires_on_block(self.world.collis_mask)).map(|x| format!("block volume {}: kind {} flags {:#x} routine {:?} {:?}", x.index, x.kind, x.flags, self.world.routines.get(&x.index), x.shape)));
+        v
+    }
+
     /// Diagnostic: the hero's state, clip, prompt and hold, and the nearest block's position and
     /// motion (positions rounded to 0.1).
     pub fn block_trace(&self) -> String {
@@ -4539,6 +4576,38 @@ impl Play {
         }
         self.state.shot_hits = shot.iter().copied().collect();
         fired.extend(shot.iter().filter(|i| !fired.contains(i)).copied().collect::<Vec<_>>());
+        // SPEC-0048 Trigger volumes: a block that moved this tick (or stopped on it) clears its
+        // last-fired volume and fires every volume its cylinder touches with object 0 and its
+        // number; an idle block fires its last volume again each tick.
+        let mask = self.world.collis_mask;
+        let mut by_block: Vec<(u16, i32)> = Vec::new();
+        for (k, b) in self.world.blocks.iter_mut().enumerate() {
+            if b.testing {
+                b.last_fired = None;
+                for v in self.world.all_volumes.iter().filter(|v| v.fires_on_block(mask) && v.block_hits(b.position, b.size, b.height)) {
+                    by_block.push((v.index, k as i32));
+                    b.last_fired = Some(v.index);
+                }
+            } else if let Some(i) = b.last_fired {
+                by_block.push((i, k as i32));
+            }
+        }
+        for &(i, k) in &by_block {
+            self.world.records.entry(i).or_default().fire(frame, false, k);
+            if !fired.contains(&i) {
+                fired.push(i);
+            }
+        }
+        // A record a block fired that is decaying (the block left) still runs its callback, so
+        // the scripts see the leaving state 3.
+        let leaving: Vec<u16> = self.world.records.iter().filter(|(i, r)| r.state == 3 && r.block >= 0 && !fired.contains(i)).map(|(i, _)| *i).collect();
+        fired.extend(leaving);
+        if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && !by_block.is_empty() {
+            let states: Vec<(u16, i32, u8)> = by_block.iter().map(|&(i, k)| (i, k, self.world.records.get(&i).map_or(0, |r| r.state))).collect();
+            if self.ticks % 30 == 0 || states.iter().any(|s| s.2 == 1) {
+                println!("      block fires on tick {}: {states:?}", self.ticks);
+            }
+        }
         // The callbacks read the pad's newly-pressed word themselves; an open box keeps it.
         let square = self.square_now && !self.dialogue_open;
         for i in fired {
@@ -4578,13 +4647,13 @@ impl Play {
             if let Some(&gi) = self.world.group_routes.get(&i) {
                 let Some(g) = self.world.groups.get(gi) else { continue };
                 let objects: Vec<usize> = g.objects.iter().filter_map(|&o| usize::try_from(o).ok()).collect();
-                let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square };
+                let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square, block: rec.block };
                 let out = level::group_run(self.world.pack, g.kind, call, &objects);
                 self.apply(&out);
                 continue;
             }
             let Some(&routine) = self.world.routines.get(&i) else { continue };
-            let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square };
+            let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square, block: rec.block };
             self.state.talking = self.dialogue_open;
             if self.world.pack == 1066 {
                 self.state.trigger_raw = self.rng.next_u32();

@@ -288,6 +288,12 @@ pub enum Action {
     /// ReActivateScriptGroup(i) (row 271): the built-in set-up of its kind runs again.
     ReactivateGroup { group: usize },
     SleepRandom { lo: u32, hi: u32 },
+    /// ActivateMovableBlock(block, on) (row 18): the block's active word.
+    ActivateBlock { block: usize, on: bool },
+    /// MoveMovableBlockToLocator(block, locator) (row 22): centred on the locator and placed.
+    MoveBlock { block: usize, locator: usize },
+    /// ReacquireMovableBlockHeightPatch(block) (row 63): placed again where it stands.
+    ReacquireBlock { block: usize },
 }
 
 /// The prize wheel's module words in pack 1023: G, r, the angle A (f32 bits) and the lit cells.
@@ -384,6 +390,9 @@ pub struct TriggerCall {
     pub state: u8,
     pub object: bool,
     pub square: bool,
+    /// +0x28, the last fire argument: the movable block's number on a block fire, -1 for a hero
+    /// fire.
+    pub block: i32,
 }
 
 /// What a trigger callback did: its actions and the Square context it posted (SPEC-0023 section
@@ -2091,11 +2100,12 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0041 1324 Init: object 29 looped at 0.5; with 239 clear (the unsolved layout)
-        // objects 21, 15, 17, 19, 14, 0 and 1 at their start and the normal camera; with 239 set
-        // object 21, the stage-1 plates 16, 18 and 20 pressed and beam object 9 looped with the
-        // 1 s rhythm (words 1 the beam object + 1, 6 the period in ticks). The plate triggers (0
-        // to 4) answer only movable blocks, which are not built, so they are not registered; the
-        // thread's block moves and the solved layout's block calls are not reproduced.
+        // objects 21, 15, 17, 19 at their start, the stage-2 plates (1 and 0, routine 1) and the
+        // stage-1 plates (2 to 4, routine 2) registered, objects 14, 0 and 1, and the thread (the
+        // normal camera, blocks 0 to 2 to locators 6 to 8); with 239 set object 21, the stage-1
+        // plates 16, 18 and 20 pressed, blocks 0 to 2 frozen, blocks 3 and 4 on their plates
+        // (locators 2 and 1) and frozen, and beam object 9 looped with the 1 s rhythm (words 1
+        // the beam object + 1, 6 the period in ticks). The block sound index is not kept.
         1324 => {
             let mut v = vec![Action::LoopAnim { obj: 29, speed: 0.5 }];
             if state.flag(239) {
@@ -2107,11 +2117,19 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 ]);
                 v.extend([10, 11, 12, 13, 14].map(|obj| Action::DeactivateObj { obj }));
                 v.extend([Action::InitObjOn { obj: 9, end: false }, Action::LoopAnim { obj: 9, speed: 1.0 }]);
+                v.extend((0..3).map(|block| Action::ActivateBlock { block, on: false }));
+                v.extend([Action::MoveBlock { block: 3, locator: 2 }, Action::MoveBlock { block: 4, locator: 1 }]);
+                v.extend((3..5).map(|block| Action::ActivateBlock { block, on: false }));
                 state.set_word(pack, 1, 10);
                 state.set_word(pack, 6, 60);
             } else {
-                v.extend([21, 15, 17, 19, 14, 0, 1].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.extend([21, 15, 17, 19].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.extend([reg(1, 1), reg(0, 1)]);
+                v.extend([14, 0].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.extend([reg(2, 2), reg(3, 2), reg(4, 2)]);
+                v.push(Action::InitObjOn { obj: 1, end: false });
                 v.push(Action::ReturnCamera { preset: -1, release: true });
+                v.extend((0..3).map(|block| Action::MoveBlock { block, locator: 6 + block }));
             }
             v
         }
@@ -3845,6 +3863,52 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
 /// RegisterScriptTrigger outside Init.
 fn reg_at(index: u16, routine: u8) -> Action {
     Action::RegisterTrigger { index, routine }
+}
+
+/// SPEC-0041 1324's stage-2 plate handler (plate 1: block 3 to locator 2, camera 1, hero to
+/// locator 10, mark A; plate 0: block 4 to locator 1, camera 0, hero to locator 9, mark B).
+fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
+    let (block, locator, track, hero, word) = if index == 1 { (3, 2, 1, 10, 8) } else { (4, 1, 0, 9, 9) };
+    let mut v = vec![Action::HoldHero, Action::FadeOut { seconds: 0.5, wait: true }, Action::MoveBlock { block, locator }];
+    if s.word(1324, 10) == 0 {
+        v.push(Action::MoveHero { locator: hero });
+    }
+    s.set_word(1324, word, 1);
+    v.extend([Action::HeroAnim { anim: 0, wait: false }, Action::FadeIn { seconds: 0.5, wait: false }, Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 }, wait(1.0)]);
+    if s.word(1324, 8) != 0 && s.word(1324, 9) != 0 && s.word(1324, 10) != 0 {
+        v.extend(solved_1324(s));
+    } else {
+        v.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 0.5, wait: false }]);
+    }
+    v
+}
+
+/// SPEC-0041 1324's beam helper: the other beam objects (9 to 14) hidden and `beam` looped; the
+/// rhythm period in seconds (None keeps the word and period; 14 with no period clears it).
+fn beam_1324(s: &mut GameState, beam: usize, period: Option<f32>) -> Vec<Action> {
+    let mut v: Vec<Action> = (9..=14).filter(|&o| o != beam).map(|obj| Action::DeactivateObj { obj }).collect();
+    v.extend([Action::InitObjOn { obj: beam, end: false }, Action::LoopAnim { obj: beam, speed: 1.0 }]);
+    match period {
+        Some(p) => {
+            s.set_word(1324, 1, beam as i32 + 1);
+            s.set_word(1324, 6, (p * 60.0) as i32);
+        }
+        None if beam == 14 => s.set_word(1324, 1, 0),
+        None => {}
+    }
+    v
+}
+
+/// SPEC-0041 1324's solved scene: sound 5, 2 s, flag 239 and the scene-done word, a 2 s fade
+/// out, sounds 4 and 5 off, a 0.5 s fade in (movie 23 is not played), then ten chimes of
+/// sounds 4 and 5, 15 ticks apart.
+fn solved_1324(_s: &mut GameState) -> Vec<Action> {
+
+    let mut v = vec![Action::PlaySound { cue: 5, locator: None }, wait(2.0), Action::SetFlag { flag: 239, on: true }, Action::FadeOut { seconds: 2.0, wait: true }, Action::KillSound { cue: 4, locator: None }, Action::KillSound { cue: 5, locator: None }, Action::FadeIn { seconds: 0.5, wait: false }];
+    for _ in 0..10 {
+        v.extend([Action::PlaySound { cue: 4, locator: None }, Action::PlaySound { cue: 5, locator: None }, Action::Sleep { ticks: 15 }]);
+    }
+    v
 }
 
 /// SPEC-0042 1381's stations 0 to 5: the pad, area and target trigger indices.
@@ -6323,10 +6387,98 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.prompt = Some(4);
             }
         }
+        // SPEC-0041 1324 trigger callback 1 (the stage-2 plates 1 and 0), fired by a block while
+        // the puzzle is unsolved: on entry the plate's marker block moves onto it (block 3 to
+        // locator 2 for plate 1, block 4 to locator 1 for plate 0) under a fade, with its camera
+        // and (stage 1 unfinished) the hero to locator 10 or 9, and the plate's mark (A word 8, B
+        // word 9); then the solved scene when both marks are set and stage 1 is finished, else
+        // the camera returned under a fade. On the block's leaving the mark clears and the beam
+        // object becomes 14 with no mark left, else 10 (A left) or 11 (B left).
+        (1324, 1) if call.block >= 0 && !state.flag(239) && call.state == 1 => out.actions.extend(plate2_1324(call.index, state)),
+        (1324, 1) if call.block >= 0 && !state.flag(239) && call.state == 3 => {
+            state.set_word(pack, if call.index == 1 { 8 } else { 9 }, 0);
+            let beam = match (state.word(pack, 8) != 0, state.word(pack, 9) != 0) {
+                (false, false) => 14,
+                (true, _) => 10,
+                (false, true) => 11,
+            };
+            out.actions.extend(beam_1324(state, beam, None));
+        }
+        // SPEC-0041 1324 trigger callback 2 (the stage-1 plates 2 to 4), entered by a block: the
+        // block placed and the plate pressed; the plate object swapped (15/16, 17/18, 19/20) with
+        // sound 9 and its animation; the hero to locator 3, 4 or 5; the plate scene (object 21
+        // shown and 22 to 28 hidden, the block frozen, camera 2, 3.6 s, sound 9 off, 1 s, the
+        // camera returned, the pressed-set object, 21 hidden, every unplaced block reacquired);
+        // the beam (13, 12 or 14 at 4, 2 or 1 s); with all three pressed sounds 4 (and 5 with
+        // both marks), stage 1 finished, camera 8, then the solved scene with both marks, or the
+        // set mark's plate handler again with one, and the camera returned.
+        (1324, 2) if call.block >= 0 && call.state == 1 && (2..=4).contains(&call.index) => {
+            let p = call.index as usize - 2;
+            let block = call.block as usize;
+            state.set_word(pack, 11 + p as u8, 1);
+            state.set_word(pack, 14 + block.min(9) as u8, 1);
+            let (off, on) = [(15, 16), (17, 18), (19, 20)][p];
+            let v = &mut out.actions;
+            v.extend([
+                Action::DeactivateObj { obj: off },
+                Action::InitObjOn { obj: on, end: false },
+                Action::PlaySound { cue: 9, locator: None },
+                Action::PlayAnim { obj: on, speed: 1.0, wait: false },
+                Action::HoldHero,
+                Action::MoveHero { locator: 3 + p },
+                Action::InitObjOn { obj: 21, end: false },
+            ]);
+            v.extend((22..=28).map(|obj| Action::DeactivateObj { obj }));
+            v.extend([
+                Action::HeroAnim { anim: 0, wait: false },
+                Action::ActivateBlock { block, on: false },
+                Action::PlayCamera { track: 2, wait: false, end: 1, speed: 1.0 },
+                wait(3.6),
+                Action::KillSound { cue: 9, locator: None },
+                wait(1.0),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+            let pressed: Vec<bool> = (0..3).map(|q| state.word(pack, 11 + q) != 0).collect();
+            let shown = match pressed.as_slice() {
+                [true, true, true] => 22,
+                [true, true, false] => 23,
+                [true, false, true] => 24,
+                [false, true, true] => 25,
+                [true, false, false] => 26,
+                [false, true, false] => 27,
+                _ => 28,
+            };
+            v.extend([Action::InitObjOn { obj: shown, end: false }, Action::DeactivateObj { obj: 21 }]);
+            v.extend((0..5u8).filter(|&b| state.word(pack, 14 + b) == 0).map(|b| Action::ReacquireBlock { block: b as usize }));
+            let count = pressed.iter().filter(|&&x| x).count();
+            if state.word(pack, 10) == 0 {
+                let (beam, period) = match count {
+                    1 => (13, 4.0),
+                    2 => (12, 2.0),
+                    _ => (14, 1.0),
+                };
+                out.actions.extend(beam_1324(state, beam, Some(period)));
+            }
+            if count == 3 {
+                let (a, b) = (state.word(pack, 8) != 0, state.word(pack, 9) != 0);
+                out.actions.push(Action::PlaySound { cue: 4, locator: None });
+                if a && b {
+                    out.actions.push(Action::PlaySound { cue: 5, locator: None });
+                }
+                state.set_word(pack, 10, 1);
+                out.actions.push(Action::PlayCamera { track: 8, wait: true, end: 1, speed: 0.5 });
+                if a && b {
+                    out.actions.extend(solved_1324(state));
+                } else if a || b {
+                    out.actions.extend(plate2_1324(if a { 1 } else { 0 }, state));
+                }
+                out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+        }
         // SPEC-0042 1381 pads (context 13; the station unsolved): sound 169 and the hero sent to
         // the station's locator; pad 3 turns the hazard on (word 1); pad 31 turns objects 80 to 169
-        // off with their triggers bound to the return routine. Pad 52's block reset and the
-        // sparkle effect are not built.
+        // off with their triggers bound to the return routine; pad 52 resets blocks 6 to 56 to
+        // locators 12 to 62. The sparkle effect is not built.
         (1381, 1) if call.object && call.state != 0 => {
             if let Some(k) = PADS_1381.iter().position(|&t| t == call.index) {
                 if !state.flag(708 + k as u16) {
@@ -6339,6 +6491,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                             for obj in 80..=169 {
                                 out.actions.extend([Action::DeactivateObj { obj }, reg_at(obj as u16 + 58, 4)]);
                             }
+                        }
+                        if call.index == 52 {
+                            out.actions.extend((6..=56).map(|block| Action::MoveBlock { block, locator: block + 6 }));
                         }
                     } else {
                         out.prompt = Some(13);
@@ -6355,15 +6510,16 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
         }
-        // The station targets (the area word set; a hero strike): an unsolved station's object
-        // removed and 708 + k set; every matched hit returns the hero to the hub. The piece
-        // scene's camera and objects are not given; hero shots and the movable blocks are not built.
+        // The station targets (the area word set; a hero strike or shot): an unsolved station's
+        // object removed, movable block k enabled and 708 + k set; every matched hit returns the
+        // hero to the hub. The piece scene's camera and objects and the four effects attached to
+        // the block are not given.
         (1381, 3) if call.state != 0 && (state.hero.strike || state.shot_hits.contains(&call.index)) => {
             if let Some(k) = TARGETS_1381.iter().position(|&t| t == call.index) {
                 if state.word(pack, 10 + k as u8) != 0 {
                     if !state.flag(708 + k as u16) {
                         state.set(708 + k as u16, true);
-                        out.actions.push(Action::DeactivateObj { obj: 50 + k });
+                        out.actions.extend([Action::DeactivateObj { obj: 50 + k }, Action::ActivateBlock { block: k, on: true }]);
                     }
                     out.actions.extend(hub_return_1381(state));
                 }
@@ -10437,20 +10593,20 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
             v
         }
-        // SPEC-0042 1381 activate-world restore: each solved station (708 + k) and each block piece
-        // (714 + k) put in its solved state; all six pieces with 337 clear: object 18 on, 19 off.
-        // The movable blocks' moves are not built.
+        // SPEC-0042 1381 activate-world restore: each solved station (708 + k; block k activated
+        // for k 1 to 5) and each block piece (714 + k; block k to locator k + 1) put in its solved
+        // state; all six pieces with 337 clear: object 18 on, 19 off.
         1381 => {
             let mut out = Vec::new();
             for k in 0..6usize {
                 if state.flag(708 + k as u16) {
                     out.extend([Action::InitObjOn { obj: 170 + 3 * k, end: false }, Action::InitObjOn { obj: 171 + 3 * k, end: false }, Action::DeactivateObj { obj: 172 + 3 * k }, Action::InitObjOn { obj: 44 + k, end: false }, Action::DeactivateObj { obj: 38 + k }]);
                     if k != 0 {
-                        out.push(Action::DeactivateObj { obj: 50 + k });
+                        out.extend([Action::DeactivateObj { obj: 50 + k }, Action::ActivateBlock { block: k, on: true }]);
                     }
                 }
                 if state.flag(714 + k as u16) {
-                    out.extend([Action::DeactivateObj { obj: 26 + k }, Action::DeactivateObj { obj: 20 + k }]);
+                    out.extend([Action::MoveBlock { block: k, locator: k + 1 }, Action::DeactivateObj { obj: 26 + k }, Action::DeactivateObj { obj: 20 + k }]);
                 }
             }
             if (714..=719).all(|f| state.flag(f)) && !state.flag(337) {
@@ -13122,7 +13278,7 @@ mod tests {
         let mut s = GameState::default();
         assert_eq!(on_init(908, &mut s).len(), 4);
         on_init(906, &mut s);
-        let press = TriggerCall { index: 2, state: 2, object: false, square: true };
+        let press = TriggerCall { index: 2, state: 2, object: false, square: true, block: -1 };
         assert_eq!(on_trigger(906, 2, press, &mut s).actions, vec![Action::ReplaceExterior { slot: 65, plane: -1 }]);
         on_pickup(906, 24, &mut s);
         assert!(s.flag(406));
@@ -13137,7 +13293,7 @@ mod tests {
         // SPEC-0030's vector: index 1 then 0 in one tick gives 188 only; after Update 0 gives 187.
         let mut s = GameState::default();
         on_init(1427, &mut s);
-        let any = |i| TriggerCall { index: i, state: 2, object: false, square: false };
+        let any = |i| TriggerCall { index: i, state: 2, object: false, square: false, block: -1 };
         assert_eq!(on_trigger(1427, 1, any(1), &mut s).actions, vec![Action::LoadOverride { slot: 188 }]);
         assert!(on_trigger(1427, 0, any(0), &mut s).actions.is_empty());
         on_update(1427, &mut s, false);
@@ -13145,9 +13301,43 @@ mod tests {
         assert_eq!(on_trigger(1427, 4, any(7), &mut s).actions, vec![]);
         on_update(1427, &mut s, false);
         assert_eq!(on_trigger(1427, 4, any(7), &mut s).actions, vec![Action::LoadOverride { slot: 191 }]);
-        let on = TriggerCall { index: 1, state: 2, object: true, square: false };
+        let on = TriggerCall { index: 1, state: 2, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1324_plates() {
+        let mut s = GameState::default();
+        on_init(1324, &mut s);
+        let call = |index: u16, state: u8, block: i32| TriggerCall { index, state, object: false, square: false, block };
+        // The spec's vector: plate 0 entered by block 2 moves block 4 to locator 1, plays camera
+        // 0 and sends the hero to locator 9, setting mark B.
+        let out = on_trigger(1324, 1, call(0, 1, 2), &mut s).actions;
+        assert!(out.contains(&Action::MoveBlock { block: 4, locator: 1 }));
+        assert!(out.contains(&Action::PlayCamera { track: 0, wait: true, end: 1, speed: 1.0 }));
+        assert!(out.contains(&Action::MoveHero { locator: 9 }));
+        assert_eq!(s.word(1324, 9), 1);
+        // A hero fire does nothing.
+        assert!(on_trigger(1324, 1, call(1, 1, -1), &mut s).actions.is_empty());
+        // Plate 2 entered by a block with plates 3 and 4 free: object 16, hero to locator 3,
+        // object 26 and beam object 13 (4 s).
+        let out = on_trigger(1324, 2, call(2, 1, 0), &mut s).actions;
+        for a in [Action::InitObjOn { obj: 16, end: false }, Action::MoveHero { locator: 3 }, Action::InitObjOn { obj: 26, end: false }, Action::LoopAnim { obj: 13, speed: 1.0 }] {
+            assert!(out.contains(&a), "{a:?}");
+        }
+        assert_eq!((s.word(1324, 1), s.word(1324, 6)), (14, 240));
+        // Plates 3 and 4: with mark B only, the third press runs plate 0's handler again; mark A
+        // then solves it.
+        on_trigger(1324, 2, call(3, 1, 1), &mut s);
+        let out = on_trigger(1324, 2, call(4, 1, 2), &mut s).actions;
+        assert!(out.contains(&Action::InitObjOn { obj: 22, end: false }) && out.contains(&Action::MoveBlock { block: 4, locator: 1 }));
+        assert!(!s.flag(239));
+        let out = on_trigger(1324, 1, call(1, 1, 0), &mut s).actions;
+        assert!(out.contains(&Action::SetFlag { flag: 239, on: true }));
+        // Leaving plate 1 clears mark A; mark B left gives beam 11.
+        on_trigger(1324, 1, call(1, 3, 0), &mut s);
+        assert_eq!(s.word(1324, 8), 0);
     }
 
     #[test]
@@ -13184,10 +13374,10 @@ mod tests {
     fn module_1246_arena() {
         let mut s = GameState::default();
         on_init(1246, &mut s);
-        let fire = TriggerCall { index: 0, state: 2, object: true, square: false };
+        let fire = TriggerCall { index: 0, state: 2, object: true, square: false, block: -1 };
         // Before movie 41 nothing happens; the entrance marks it played.
         assert!(on_trigger(1246, 2, fire, &mut s).actions.is_empty() && !s.level(2));
-        on_trigger(1246, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s);
+        on_trigger(1246, 1, TriggerCall { index: 1, state: 1, object: true, square: false, block: -1 }, &mut s);
         // Vector 1: one fire sets level state 2 and nothing else; the next runs the intro (3).
         assert!(on_trigger(1246, 2, fire, &mut s).actions.is_empty() && s.level(2));
         assert!(on_trigger(1246, 2, fire, &mut s).actions.contains(&Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }));
@@ -13284,7 +13474,7 @@ mod tests {
         assert_eq!(on_talk(1300, r, &mut s), vec![Action::Talk { line: 106 }]);
         // Trigger 0 exchanges item 61 for 62; the next talk to entity 18 plays the reward.
         s.give(61, 1);
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(1300, 3, enter(0), &mut s).actions.contains(&Action::GiveItem { item: 62, count: 1 }));
         s.give(62, 1);
         assert!(on_talk(1300, r, &mut s).contains(&Action::Talk { line: 105 }) && s.flag(400));
@@ -13314,7 +13504,7 @@ mod tests {
         let mut s = GameState::default();
         // First visit: set 7 into slot 1 (region 1343); trigger 2 loads set 5 once.
         assert!(on_init(1335, &mut s).contains(&Action::LoadRegion { slot: 1, region: Some(1343) }));
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         assert!(on_trigger(1335, 1, enter(2), &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(1341) }));
         assert!(on_trigger(1335, 1, enter(2), &mut s).actions.is_empty());
         // Trigger 5 with the button: 236 and 92, set 0; then trigger 6 runs once.
@@ -13335,7 +13525,7 @@ mod tests {
         // No stage: set 0 (region 843); the doors enter; trigger 1 sets 53.
         assert!(on_init(842, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(843) }));
         assert_eq!(on_teleport(842, 1, &mut s)[0], Action::EnterInterior { slot: 54 });
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         on_trigger(842, 1, enter(1), &mut s);
         assert!(s.flag(53));
         assert_eq!(on_teleport(842, 0, &mut s), vec![Action::Message { line: 194 }]);
@@ -13367,7 +13557,7 @@ mod tests {
         // Two pieces then the third: line 63, then the mosaic completes.
         s.give(25, 1);
         s.give(27, 1);
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         let out = on_trigger(1411, 0, enter(0), &mut s).actions;
         assert!(out.contains(&Action::InitObjOn { obj: 4, end: false }) && out.contains(&Action::Message { line: 63 }));
         s.give(26, 1);
@@ -13402,7 +13592,7 @@ mod tests {
         assert!(s.flag(355));
         // Stage 1: the trap arms, a hit-point drop trips it, and it can arm again.
         s.hero.hp = 20;
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         assert!(!on_trigger(1398, 2, enter(38), &mut s).actions.is_empty());
         assert!(on_trigger(1398, 2, enter(38), &mut s).actions.is_empty());
         assert!(on_update(1398, &mut s, false).is_empty());
@@ -13435,7 +13625,7 @@ mod tests {
         s.set(220, true);
         let v = on_init(714, &mut s);
         assert!(v.contains(&Action::RegisterTrigger { index: 2, routine: 2 }) && v.contains(&Action::LoadRegion { slot: 0, region: Some(715) }));
-        let enter = TriggerCall { index: 2, state: 1, object: true, square: false };
+        let enter = TriggerCall { index: 2, state: 1, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(714, 2, enter, &mut s).actions.len(), 4);
         assert!(s.flag(301) && on_trigger(714, 2, enter, &mut s).actions.is_empty());
         assert!(on_update(714, &mut s, false).contains(&Action::CollisMask { mask: 4 }));
@@ -13532,7 +13722,7 @@ mod tests {
         let want: Vec<_> = [0, 1, 2, 3, 1, 2].map(|line| vec![Action::Talk { line }]).to_vec();
         assert_eq!(lines, want);
         // T2 index 1: line 11 with the button.
-        let press = TriggerCall { index: 1, state: 1, object: true, square: true };
+        let press = TriggerCall { index: 1, state: 1, object: true, square: true, block: -1 };
         assert_eq!(on_trigger(1066, 2, press, &mut s).actions, vec![Action::Message { line: 11 }]);
     }
 
@@ -13540,7 +13730,7 @@ mod tests {
     fn modules_757_1250_1083() {
         let mut s = GameState::default();
         on_init(757, &mut s);
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(757, 2, enter(1), &mut s).actions.contains(&Action::Agro { entity: 15 }));
         assert!(on_trigger(757, 2, enter(1), &mut s).actions.is_empty());
         s.ai_dead.extend([14, 15]);
@@ -13582,7 +13772,7 @@ mod tests {
     fn module_1257_ambush_and_doors() {
         let mut s = GameState::default();
         assert!(on_init(1257, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1258) }));
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         let out = on_trigger(1257, 7, enter(0), &mut s).actions;
         assert!(out.contains(&Action::Converse { entity: 0, line: 18 }) && s.flag(676));
         assert!(on_trigger(1257, 7, enter(0), &mut s).actions.is_empty());
@@ -13645,10 +13835,10 @@ mod tests {
         run(&mut s, 2);
         assert_eq!(s.word(1363, 8), 35);
         assert!(run(&mut s, 4).contains(&Action::SetFlag { flag: 692, on: true }));
-        let press = TriggerCall { index: 3, state: 1, object: true, square: true };
+        let press = TriggerCall { index: 3, state: 1, object: true, square: true, block: -1 };
         assert!(on_trigger(1363, 3, press, &mut s).actions.contains(&Action::ReplaceExterior { slot: 174, plane: -1 }));
         // Thread G: trigger 8 loads set 1 (region 1365).
-        let f = TriggerCall { index: 8, state: 1, object: true, square: false };
+        let f = TriggerCall { index: 8, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(1363, 8, f, &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(1365) }));
         // The return from eW 184: value 40 moves the hero to locator 2.
         s.blackboard.insert((2, 160), 40);
@@ -13659,7 +13849,7 @@ mod tests {
     fn module_1382_pedestals() {
         let mut s = GameState::default();
         on_init(1382, &mut s);
-        let fire = |i| TriggerCall { index: i, state: 2, object: true, square: false };
+        let fire = |i| TriggerCall { index: i, state: 2, object: true, square: false, block: -1 };
         let strike = |s: &mut GameState, mote: Option<u16>| {
             s.hero.attack_mote = mote;
             s.hero.strike = true;
@@ -13699,7 +13889,7 @@ mod tests {
     fn module_1382_switches_and_sets() {
         let mut s = GameState::default();
         on_init(1382, &mut s);
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         // The markers rise in stepping order: switch 8 first raises marker 15 and object 21.
         let out = on_trigger(1382, 5, enter(8), &mut s).actions;
         assert!(out.contains(&Action::PlayAnim { obj: 15, speed: 1.0, wait: true }) && out.contains(&Action::InitObjOn { obj: 21, end: false }));
@@ -13720,7 +13910,7 @@ mod tests {
     fn module_1081_exit() {
         let mut s = GameState::default();
         assert!(on_init(1081, &mut s).contains(&Action::InitObjOn { obj: 3, end: false }));
-        let enter = TriggerCall { index: 0, state: 1, object: true, square: false };
+        let enter = TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(1081, 0, enter, &mut s).actions.contains(&Action::ReplaceExterior { slot: 105, plane: -1 }));
         assert!(s.flag(314) && s.flag(315));
     }
@@ -13734,7 +13924,7 @@ mod tests {
         s.blackboard.insert((2, 109), 10);
         assert!(on_activate(1129, &mut s).contains(&Action::MoveHero { locator: 1 }) && s.flag(305));
         // The levers: L22 sets 38 and 308; L21 sets 36 and 307; L2 sets 306.
-        let press = |i| TriggerCall { index: i, state: 2, object: true, square: true };
+        let press = |i| TriggerCall { index: i, state: 2, object: true, square: true, block: -1 };
         assert!(on_trigger(1129, 22, press(22), &mut s).actions.contains(&Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }));
         assert!(s.flag(38) && on_trigger(1129, 22, press(22), &mut s).actions.is_empty());
         on_trigger(1129, 21, press(21), &mut s);
@@ -13752,7 +13942,7 @@ mod tests {
         // floor and sets 88; a later run skips the break.
         let mut s = GameState::default();
         on_init(986, &mut s);
-        let fire = |i| TriggerCall { index: i, state: 2, object: true, square: false };
+        let fire = |i| TriggerCall { index: i, state: 2, object: true, square: false, block: -1 };
         assert!(on_trigger(986, 1, fire(1), &mut s).actions.is_empty());
         s.hero.strike = true;
         assert!(on_trigger(986, 1, fire(1), &mut s).actions.contains(&Action::CollisMask { mask: 1 }) && s.flag(89));
@@ -13762,13 +13952,13 @@ mod tests {
         s.set_word(986, 20, 0);
         assert!(!on_trigger(986, 2, fire(3), &mut s).actions.contains(&Action::DeactivateObj { obj: 7 }));
         // T0 with the button and 298 clear: the load of eW 79.
-        let press = TriggerCall { index: 0, state: 1, object: true, square: true };
+        let press = TriggerCall { index: 0, state: 1, object: true, square: true, block: -1 };
         assert_eq!(on_trigger(986, 0, press, &mut s).actions, vec![Action::ReplaceExterior { slot: 79, plane: -1 }]);
         // 800: trigger 1 runs stage A once; AIs 10 and 11 dead give stage B (level state 0); the
         // raider fight's level states 1 and 3 give stages C and D (flags 55 and 200).
         let mut s = GameState::default();
         on_init(800, &mut s);
-        let enter = TriggerCall { index: 1, state: 1, object: true, square: false };
+        let enter = TriggerCall { index: 1, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(800, 5, enter, &mut s).actions.contains(&Action::Converse { entity: 9, line: 6 }));
         assert!(on_trigger(800, 5, enter, &mut s).actions.is_empty());
         s.ai_dead.extend([10, 11]);
@@ -13788,7 +13978,7 @@ mod tests {
         // set 0 (region 823); with 57 set it would be set 3.
         let mut s = GameState::default();
         assert!(on_init(822, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(831) }));
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         assert!(on_trigger(822, 9, enter(5), &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(823) }));
         assert!(on_trigger(822, 9, enter(5), &mut s).actions.is_empty());
         s.set(57, true);
@@ -13811,7 +14001,7 @@ mod tests {
         let mut s = GameState::default();
         assert!(on_init(864, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(866) }));
         assert!(s.flag(287) && s.level(3));
-        let inside = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let inside = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         // The plain exit needs an arrival first.
         assert!(on_trigger(864, 24, inside(24), &mut s).actions.is_empty());
         on_activate(864, &mut s);
@@ -13846,7 +14036,7 @@ mod tests {
         assert!(s.flag(214));
         assert!(on_update(985, &mut s, false).contains(&Action::MoveHero { locator: 26 }));
         s.set_word(985, 4, 0);
-        on_trigger(985, 2, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut s);
+        on_trigger(985, 2, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(on_update(985, &mut s, false).contains(&Action::ReplaceExterior { slot: 74, plane: -1 }) && s.flag(64));
         // The 281 branch: the intro sets level state 0; level states 7 then the end with item 30.
         let mut s = GameState::default();
@@ -13859,7 +14049,7 @@ mod tests {
         on_update(985, &mut s, false);
         assert!(s.flag(284));
         s.set_word(985, 4, 0);
-        on_trigger(985, 5, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut s);
+        on_trigger(985, 5, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
         on_update(985, &mut s, false);
         assert!(on_update(985, &mut s, false).contains(&Action::GiveItem { item: 30, count: 1 }) && s.flag(67));
     }
@@ -13868,7 +14058,7 @@ mod tests {
     fn module_1096_draik_room() {
         let mut s = GameState::default();
         on_init(1096, &mut s);
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         // CB2: index 2 waits for index 3; index 0 for CB1.
         assert!(on_trigger(1096, 2, enter(2), &mut s).actions.is_empty());
         on_trigger(1096, 2, enter(3), &mut s);
@@ -13907,17 +14097,17 @@ mod tests {
         assert!(s.word(1174, 1) & (1 << 5) != 0);
         // Section 1 (trigger 2): the barriers 50 to 53, 42 to 49 and 22, 23 raised; inside trigger
         // 30 the hero takes 3, at most once every 1.5 s.
-        on_trigger(1174, 2, TriggerCall { index: 2, state: 1, object: true, square: false }, &mut s);
+        on_trigger(1174, 2, TriggerCall { index: 2, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(on_update(1174, &mut s, false).contains(&Action::StartEffect { slot: 50, camera: false }));
-        let inside = TriggerCall { index: 30, state: 2, object: true, square: false };
+        let inside = TriggerCall { index: 30, state: 2, object: true, square: false, block: -1 };
         s.hero.tick = 500;
         assert_eq!(on_trigger(1174, 30, inside, &mut s).actions, vec![Action::DamageHero { amount: 3 }]);
         s.hero.tick = 550;
         assert!(on_trigger(1174, 30, inside, &mut s).actions.is_empty());
         // Trigger 1: the Act 2 start (219 to 221, act start 2, eW 151), once.
-        let out = on_trigger(1174, 1, TriggerCall { index: 1, state: 1, object: false, square: false }, &mut s).actions;
+        let out = on_trigger(1174, 1, TriggerCall { index: 1, state: 1, object: false, square: false, block: -1 }, &mut s).actions;
         assert!(out.contains(&Action::ActStart { stage: 2 }) && out.contains(&Action::ReplaceExterior { slot: 151, plane: -1 }) && s.flag(221));
-        assert!(on_trigger(1174, 1, TriggerCall { index: 1, state: 2, object: true, square: false }, &mut s).actions.is_empty());
+        assert!(on_trigger(1174, 1, TriggerCall { index: 1, state: 2, object: true, square: false, block: -1 }, &mut s).actions.is_empty());
     }
 
     #[test]
@@ -13930,10 +14120,10 @@ mod tests {
             on_update(1428, s, false)
         };
         // Trigger 4 (S0): the boss-room return (326, item 116).
-        on_trigger(1428, 2, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut s);
+        on_trigger(1428, 2, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(at(&mut s, 1).contains(&Action::GiveItem { item: 116, count: 1 }) && s.flag(326));
         // The meter vector: hits at 0 to 8 s and 9.5 s: 328 at 9.5 s.
-        on_trigger(1428, 3, TriggerCall { index: 2, state: 1, object: true, square: false }, &mut s);
+        on_trigger(1428, 3, TriggerCall { index: 2, state: 1, object: true, square: false, block: -1 }, &mut s);
         for k in 0..9u64 {
             s.shot_hits = [5].into();
             at(&mut s, 100 + 60 * k);
@@ -13950,7 +14140,7 @@ mod tests {
         assert_eq!((0..3).map(|k| s.word(1428, 40 + k)).collect::<Vec<_>>(), vec![0, 1, 2]);
         for (n, idx, routine) in [(0, 6, 7), (1, 6, 7), (2, 8, 9)] {
             s.set_word(1428, 3, 0);
-            let press = TriggerCall { index: idx, state: 2, object: true, square: true };
+            let press = TriggerCall { index: idx, state: 2, object: true, square: true, block: -1 };
             on_trigger(1428, routine, press, &mut s);
             at(&mut s, 1000 + n);
         }
@@ -13968,7 +14158,7 @@ mod tests {
         }
         assert_eq!(lines, [0, 1, 2, 1].map(|line| Action::Message { line }).to_vec());
         // Trigger 0 with 330: S5, then 331 and the act start (act 4, eW 178).
-        on_trigger(1428, 5, TriggerCall { index: 0, state: 1, object: true, square: false }, &mut s);
+        on_trigger(1428, 5, TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 }, &mut s);
         at(&mut s, 4000);
         assert!(s.flag(331));
         assert!(at(&mut s, 4001).contains(&Action::ActStart { stage: 4 }) && s.flag(333));
@@ -13990,13 +14180,13 @@ mod tests {
         assert!(at(&mut s, 360).contains(&Action::RegisterTrigger { index: 142, routine: 4 }));
         // The station 1 vector: inside area 4, target 5 struck: 709 set, object 51 removed, then
         // the return to locator 0.
-        let inside = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let inside = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         on_trigger(1381, 2, inside(4), &mut s);
         s.hero.strike = true;
         let out = on_trigger(1381, 3, inside(5), &mut s).actions;
         assert!(s.flag(709) && out.contains(&Action::DeactivateObj { obj: 51 }) && out.contains(&Action::MoveHero { locator: 0 }));
         // Pad 3: the hazard on; a bound hazard trigger then hurts by 5 at most every 2 s.
-        let press = TriggerCall { index: 3, state: 1, object: true, square: true };
+        let press = TriggerCall { index: 3, state: 1, object: true, square: true, block: -1 };
         // A solved station's pad does nothing.
         assert!(on_trigger(1381, 1, press, &mut s).actions.is_empty());
         s.set(709, false);
@@ -14022,7 +14212,7 @@ mod tests {
             assert!(out.contains(&Action::PlayAnim { obj, speed: 1.0, wait: false }));
         }
         // Inside trigger 3 (hazard 2) while it fires: 20 damage, then not again within 1 s.
-        let inside = TriggerCall { index: 3, state: 2, object: true, square: false };
+        let inside = TriggerCall { index: 3, state: 2, object: true, square: false, block: -1 };
         s.hero.tick = 10;
         assert_eq!(on_trigger(1090, 1, inside, &mut s).actions, vec![Action::DamageHero { amount: 20 }]);
         s.hero.tick = 20;
@@ -14071,7 +14261,7 @@ mod tests {
         assert_eq!(on_talk(893, 59, &mut s), vec![Action::Talk { line: 16 }]);
         // Trigger 1 with 405 set loads eW 66.
         s.set(405, true);
-        let press = TriggerCall { index: 1, state: 1, object: true, square: true };
+        let press = TriggerCall { index: 1, state: 1, object: true, square: true, block: -1 };
         assert_eq!(on_trigger(893, 1, press, &mut s).actions, vec![Action::ReplaceExterior { slot: 66, plane: -1 }]);
     }
 
@@ -14079,7 +14269,7 @@ mod tests {
     fn module_1122_waves_and_arena() {
         let mut s = GameState::default();
         assert!(on_init(1122, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1125) }));
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(1122, 5, enter(5), &mut s).actions.contains(&Action::LoadRegion { slot: 1, region: Some(1126) }));
         assert!(on_trigger(1122, 5, enter(5), &mut s).actions.is_empty());
         // The waves: each all-dead slot loads the next (sets 4, 5), then the end sets 320.
@@ -14160,7 +14350,7 @@ mod tests {
         assert!(s.flag(274));
         assert_eq!(s.transition_map, None);
         // Any call for the trigger sets the map, with no state test; a later one replaces it.
-        let call = TriggerCall { index: 0, state: 0, object: false, square: false };
+        let call = TriggerCall { index: 0, state: 0, object: false, square: false, block: -1 };
         on_trigger(1255, 2, call, &mut s);
         assert_eq!(s.transition_map, Some(7));
         on_trigger(1122, 3, call, &mut s);
@@ -14199,7 +14389,7 @@ mod tests {
         assert!(on_update(1432, &mut s, false).is_empty());
         // Trigger 1 before the window: nothing. Trigger 0, then the entry: the clock at 180,
         // level 11 on and 10 off, movie 78.
-        let fire = |o| TriggerCall { index: 0, state: 1, object: o, square: false };
+        let fire = |o| TriggerCall { index: 0, state: 1, object: o, square: false, block: -1 };
         on_trigger(1432, 1, fire(true), &mut s);
         assert_eq!(s.word(1432, 1) & 1 << 4, 0);
         on_trigger(1432, 0, fire(true), &mut s);
@@ -14249,11 +14439,11 @@ mod tests {
         assert!(v.contains(&Action::RegisterTrigger { index: 23, routine: 21 }));
         // The spec's cage vector, first half: record 1's guard (AI 24) dead: line 78 once.
         s.ai_dead.insert(24);
-        let inside = TriggerCall { index: 23, state: 2, object: true, square: false };
+        let inside = TriggerCall { index: 23, state: 2, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(956, 21, inside, &mut s).actions, vec![Action::Message { line: 78 }]);
         assert!(on_trigger(956, 21, inside, &mut s).actions.is_empty());
         // Zone trigger 4 loads region 961 while the hero is inside.
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(956, 3, enter(4), &mut s).actions.contains(&Action::LoadRegion { slot: 1, region: Some(961) }));
         // The lift: not ready until the knights are free.
         assert!(on_trigger(956, 8, enter(8), &mut s).actions.is_empty());
@@ -14291,7 +14481,7 @@ mod tests {
         let mut s = GameState::default();
         s.set(252, true);
         on_init(777, &mut s);
-        let press = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let press = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         assert!(on_trigger(777, 11, press(8), &mut s).actions.contains(&Action::Message { line: 240 }));
         assert!(s.flag(256) && on_trigger(777, 11, press(5), &mut s).actions.is_empty());
         assert_eq!(on_teleport(777, 0, &mut s)[0], Action::Message { line: 235 });
@@ -14324,7 +14514,7 @@ mod tests {
         let mut s = GameState::default();
         on_init(1078, &mut s);
         assert!(s.flag(309));
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         // Plate 5 (record 2): both doors open with camera 8 the first time; once the firer
         // leaves Update closes them.
         let out = on_trigger(1078, 3, enter(5), &mut s).actions;
@@ -14374,7 +14564,7 @@ mod tests {
     fn module_735_boss_and_callback() {
         let mut s = GameState::default();
         assert!(on_init(735, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(738) }));
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         on_trigger(735, 23, enter(23), &mut s);
         assert!(s.level(8));
         // The intro sets 9 and keeps the hit points; the monitor's AI 73 death leads to the
@@ -14431,7 +14621,7 @@ mod tests {
     fn module_1371_wave_trial() {
         let mut s = GameState::default();
         on_init(1371, &mut s);
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         // Gates 4 and 3 are shut before wave 6; gate 2 opens it (region 1378).
         assert!(on_trigger(1371, 2, enter(4), &mut s).actions.is_empty());
         assert!(on_trigger(1371, 2, enter(3), &mut s).actions.is_empty());
@@ -14464,7 +14654,7 @@ mod tests {
     fn module_1392_gates_and_levers() {
         let mut s = GameState::default();
         on_init(1392, &mut s);
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         // The fall-in runs once while 696 is clear.
         assert!(on_update(1392, &mut s, false).contains(&Action::MoveHero { locator: 0 }));
         assert!(on_update(1392, &mut s, false).is_empty());
@@ -14486,7 +14676,7 @@ mod tests {
         let mut s = GameState::default();
         on_init(1394, &mut s);
         // The intro arms the 50 s clock; at 25 s left object 2 is 11.5 down.
-        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true, block: -1 };
         on_trigger(1394, 13, enter(13), &mut s);
         s.timer.activate(25.0, 0.0, false);
         assert!(on_update(1394, &mut s, false).contains(&Action::ObjOffset { obj: 2, y: -11.5 }));
@@ -14539,7 +14729,7 @@ mod tests {
         // SPEC-0059 section 5: a 100 s run with no flags qualifies (180) and sets 431; then a
         // 100 s run fails with 431 set (line 155); a 60 s run sets 433.
         let mut s = GameState::default();
-        let judge = TriggerCall { index: 14, state: 1, object: true, square: false };
+        let judge = TriggerCall { index: 14, state: 1, object: true, square: false, block: -1 };
         let run = |s: &mut GameState, t: f32| {
             s.set_word(758, 1, 1);
             s.set_word(758, 2, 1);
@@ -14570,7 +14760,7 @@ mod tests {
         assert!(s.flag(450) && !s.has_item(66));
         assert_eq!(on_talk(758, 18, &mut s), vec![Action::Talk { line: 178 }]);
         // The 758 wheel: fee 25, too-poor line 335.
-        let call = TriggerCall { index: 3, state: 2, object: true, square: true };
+        let call = TriggerCall { index: 3, state: 2, object: true, square: true, block: -1 };
         assert_eq!(on_trigger(758, 56, call, &mut s).actions, vec![Action::Message { line: 335 }]);
         // Door 2 to eW 39 (pack 788) with value 50; the arrival back puts the hero at locator 7.
         assert_eq!(on_teleport(758, 2, &mut s)[0], Action::EnterInterior { slot: 39 });
@@ -14582,7 +14772,7 @@ mod tests {
         // SPEC-0041 1249: each lever up once sets 80 on the third pull, in any order.
         let mut s = GameState::default();
         on_init(1249, &mut s);
-        let press = |idx: u16| TriggerCall { index: idx, state: 2, object: true, square: true };
+        let press = |idx: u16| TriggerCall { index: idx, state: 2, object: true, square: true, block: -1 };
         for (r, i) in [(7, 16), (6, 18)] {
             on_trigger(1249, r, press(i), &mut s);
             s.set_word(1249, 33, 0);
@@ -14593,7 +14783,7 @@ mod tests {
         // 1247 CB7: holding item 29 sets the three flags at once.
         let mut t = GameState::default();
         t.give(29, 1);
-        on_trigger(1247, 7, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut t);
+        on_trigger(1247, 7, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut t);
         assert!(t.flag(78) && t.flag(269) && t.flag(270));
     }
 
@@ -14623,7 +14813,7 @@ mod tests {
         let mut s = GameState::default();
         // 1344 vector: 236 set and 239 clear: each entry shows lines 3 then 4.
         s.set(236, true);
-        let enter = TriggerCall { index: 2, state: 1, object: true, square: false };
+        let enter = TriggerCall { index: 2, state: 1, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1344, 6, enter, &mut s).actions, vec![Action::Message { line: 3 }, Action::Message { line: 4 }]);
         s.set(239, true);
         assert!(on_trigger(1344, 6, enter, &mut s).actions.is_empty());
@@ -14657,13 +14847,13 @@ mod tests {
         assert_eq!(on_talk(753, 6, &mut s), vec![Action::Talk { line: 26 }]);
         s.set(258, false);
         s.set(256, true);
-        let call = TriggerCall { index: 1, state: 2, object: true, square: false };
+        let call = TriggerCall { index: 1, state: 2, object: true, square: false, block: -1 };
         on_trigger(753, 3, call, &mut s);
         assert!(on_update(753, &mut s, false).is_empty());
         assert!(!on_update(753, &mut s, false).is_empty());
         assert!(s.flag(258));
         // 790: crossing to side 0 reloads set 1 once.
-        let side = TriggerCall { index: 16, state: 1, object: true, square: false };
+        let side = TriggerCall { index: 16, state: 1, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(790, 5, side, &mut s).actions.len(), 2);
         assert!(on_trigger(790, 5, side, &mut s).actions.is_empty());
     }
@@ -14673,7 +14863,7 @@ mod tests {
         let mut s = GameState { neopoints: 250, ..Default::default() };
         on_init(1353, &mut s);
         // SPEC-0041 vector: the statue at 270 (Z0) is done after two presses, undone after a third.
-        let press = TriggerCall { index: 0, state: 2, object: true, square: true };
+        let press = TriggerCall { index: 0, state: 2, object: true, square: true, block: -1 };
         for n in 1..=3 {
             assert!(!on_trigger(1353, 0, press, &mut s).actions.is_empty());
             s.set_word(1353, 14, 0);
@@ -14711,7 +14901,7 @@ mod tests {
         assert!(on_talk(1358, 1, &mut t).is_empty());
         // The 1358 wheel copy: fee 100, too-poor line 109.
         let mut w = GameState { neopoints: 99, ..Default::default() };
-        let call = TriggerCall { index: 0, state: 2, object: true, square: true };
+        let call = TriggerCall { index: 0, state: 2, object: true, square: true, block: -1 };
         assert_eq!(on_trigger(1358, 56, call, &mut w).actions, vec![Action::Message { line: 109 }]);
         // Arrival 60 goes to locator 77.
         w.blackboard.insert((2, 159), 60);
@@ -14852,7 +15042,7 @@ mod tests {
     #[test]
     fn module_796_lever_and_exit() {
         let mut s = GameState::default();
-        let call = TriggerCall { index: 1, state: 2, object: true, square: true };
+        let call = TriggerCall { index: 1, state: 2, object: true, square: true, block: -1 };
         let run = on_trigger(796, 1, call, &mut s).actions;
         assert!(run.contains(&Action::DeactivateGroup { group: 19 }) && run.contains(&Action::ReactivateGroup { group: 21 }));
         assert!(on_trigger(796, 1, call, &mut s).actions.is_empty());
@@ -14866,7 +15056,7 @@ mod tests {
         let mut s = GameState::default();
         on_init(1369, &mut s);
         assert_eq!(s.blackboard.get(&(2, 157)), Some(&10));
-        let call = TriggerCall { index: 0, state: 2, object: true, square: false };
+        let call = TriggerCall { index: 0, state: 2, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1369, 0, call, &mut s).prompt, Some(4));
         let run = on_trigger(1369, 0, TriggerCall { square: true, ..call }, &mut s).actions;
         assert!(run.contains(&Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }));
@@ -14886,7 +15076,7 @@ mod tests {
         on_pickup(1238, 83, &mut s);
         assert!(s.flag(579));
         // 947: line 0 once per pass of trigger 2 then 0; AI 3 dead sets 375 with lines 1, 2.
-        let call = |index| TriggerCall { index, state: 1, object: true, square: false };
+        let call = |index| TriggerCall { index, state: 1, object: true, square: false, block: -1 };
         assert!(on_trigger(947, 0, call(0), &mut s).actions.is_empty());
         on_trigger(947, 2, call(2), &mut s);
         assert_eq!(on_trigger(947, 0, call(0), &mut s).actions, vec![Action::Message { line: 0 }]);
@@ -14908,7 +15098,7 @@ mod tests {
         s.set(81, true);
         assert_eq!(on_init(1225, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(1227) }]);
         // SPEC-0037 vector: 1259 trigger 2 with the body resets the slot and loads set 2.
-        let call = TriggerCall { index: 2, state: 1, object: true, square: false };
+        let call = TriggerCall { index: 2, state: 1, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1259, 0, call, &mut s).actions, vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1262) }]);
         // 1253 vectors: value 30 -> locator 2, track 7; no message -> locator 0, track 5.
         s.blackboard.insert((2, 143), 30);
@@ -14918,10 +15108,10 @@ mod tests {
         // 799 vector: trigger 3 entered three times with 416 set and no item 12: no line, line
         // 1, no line.
         s.set(416, true);
-        let enter = TriggerCall { index: 3, state: 1, object: true, square: false };
+        let enter = TriggerCall { index: 3, state: 1, object: true, square: false, block: -1 };
         let lines: Vec<usize> = (0..3).map(|_| on_trigger(799, 3, enter, &mut s).actions.len()).collect();
         assert_eq!(lines, vec![0, 1, 0]);
-        let lever = TriggerCall { index: 0, state: 2, object: true, square: true };
+        let lever = TriggerCall { index: 0, state: 2, object: true, square: true, block: -1 };
         assert!(on_trigger(799, 0, lever, &mut s).actions.contains(&Action::SetFlag { flag: 663, on: true }));
     }
 
@@ -14949,7 +15139,7 @@ mod tests {
         // 784 vector: trigger 1 with 543 clear, 542 set and the button: the walk and line 4.
         let mut s = GameState::default();
         s.set(542, true);
-        let call = TriggerCall { index: 1, state: 2, object: true, square: true };
+        let call = TriggerCall { index: 1, state: 2, object: true, square: true, block: -1 };
         let out = on_trigger(784, 1, call, &mut s);
         assert!(out.actions.contains(&Action::WalkHero { locator: 2, wait: true, orient: true }) && out.actions.contains(&Action::Message { line: 4 }));
         assert_eq!(on_trigger(784, 1, TriggerCall { square: false, ..call }, &mut s).prompt, Some(4));
@@ -15040,7 +15230,7 @@ mod tests {
             s.set(f, true);
         }
         // SPEC-0045 vector: set 1, trigger 5 loads 998 into the crowd slot, guarded by word 30.
-        let enter = TriggerCall { index: 5, state: 1, object: true, square: false };
+        let enter = TriggerCall { index: 5, state: 1, object: true, square: false, block: -1 };
         let a = on_trigger(991, 8, enter, &mut s).actions;
         assert_eq!((a[0], a[3], a[4]), (Action::WaitWord { word: 30 }, Action::LoadRegion { slot: 1, region: Some(998) }, Action::WaitInside { index: 5 }));
         assert!(on_trigger(991, 8, TriggerCall { index: 4, ..enter }, &mut s).actions.contains(&Action::LoadRegion { slot: 1, region: Some(997) }));
@@ -15099,7 +15289,7 @@ mod tests {
         assert!(!on_init(1230, &mut s).iter().any(|a| matches!(a, Action::LoadRegion { .. })));
         s.set(248, true);
         assert!(on_init(1230, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1237) }));
-        let call = TriggerCall { index: 2, state: 2, object: true, square: true };
+        let call = TriggerCall { index: 2, state: 2, object: true, square: true, block: -1 };
         assert_eq!(on_trigger(1230, 2, call, &mut s).actions, vec![Action::Message { line: 19 }]);
     }
 
@@ -15139,7 +15329,7 @@ mod tests {
         assert!(init.contains(&Action::RegisterGroupType { kind: 12 }));
         // T0 with flag 638 set: flag 163 (count 1) and line 1; at count 5 nothing is said.
         s.set(638, true);
-        let call = TriggerCall { index: 0, state: 1, object: true, square: false };
+        let call = TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1171, 0, call, &mut s).actions, vec![Action::Message { line: 1 }]);
         assert!(s.flag(163) && !s.flag(33));
         for f in 637..=641 {
@@ -15147,14 +15337,14 @@ mod tests {
         }
         assert!(on_trigger(1171, 0, call, &mut s).actions.is_empty());
         // A lever prompts while inside, runs on Square, then never again this load.
-        let lever = TriggerCall { index: 5, state: 2, object: true, square: false };
+        let lever = TriggerCall { index: 5, state: 2, object: true, square: false, block: -1 };
         let out = on_trigger(1171, 5, lever, &mut s);
         assert_eq!((out.prompt, out.actions.len()), (Some(6), 0));
         let run = on_trigger(1171, 5, TriggerCall { square: true, ..lever }, &mut s).actions;
         assert!(run.contains(&Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }) && run.contains(&Action::PlayAnim { obj: 2, speed: 1.0, wait: false }));
         assert_eq!(on_trigger(1171, 5, TriggerCall { square: true, ..lever }, &mut s).prompt, None);
         // Entry 4's floating object (20, 21, 22): R on the entering fire only.
-        let enter = TriggerCall { index: 30, state: 1, object: true, square: false };
+        let enter = TriggerCall { index: 30, state: 1, object: true, square: false, block: -1 };
         let r = group_run(1171, 12, enter, &[20, 21, 22]);
         assert_eq!((r[0], r[3], r[10]), (Action::DeactivateObj { obj: 20 }, Action::WaitInside { index: 30 }, Action::LoopAnim { obj: 20, speed: 1.0 }));
         assert!(group_run(1171, 12, TriggerCall { state: 2, ..enter }, &[20, 21, 22]).is_empty());
@@ -15265,7 +15455,7 @@ mod tests {
     }
 
     fn fire(s: &mut GameState, routine: u8, index: u16, square: bool) -> TriggerOut {
-        on_trigger(909, routine, TriggerCall { index, state: 1, object: true, square }, s)
+        on_trigger(909, routine, TriggerCall { index, state: 1, object: true, square, block: -1 }, s)
     }
 
     #[test]
@@ -15365,7 +15555,7 @@ mod tests {
         let init = on_init(691, &mut s);
         assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(692) }));
         assert!(init.contains(&Action::RegisterTrigger { index: 1, routine: 1 }));
-        let intro = on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s);
+        let intro = on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(s.flag(124) && intro.actions.contains(&Action::Agro { entity: 1 }));
         let hp = |s: &mut GameState, v: [i32; 3]| s.entity_hp = [(0, v[0]), (2, v[1]), (1, v[2])].into_iter().collect();
         hp(&mut s, [80, 60, 50]);
@@ -15380,7 +15570,7 @@ mod tests {
         assert_eq!(end[..2], [Action::DeactivateObj { obj: 0 }, Action::DeactivateObj { obj: 1 }]);
         assert!(s.flag(125) && s.flag(126) && s.items[&170] == 100);
         // The intro does not run again; the next visit loads set 3 (thread A).
-        assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());
+        assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false, block: -1 }, &mut s).actions.is_empty());
         s.reload_module(691);
         assert_eq!(on_init(691, &mut s).iter().filter(|a| matches!(a, Action::LoadRegion { .. })).collect::<Vec<_>>(), vec![&Action::LoadRegion { slot: 0, region: Some(695) }]);
     }
@@ -15415,7 +15605,7 @@ mod tests {
     #[test]
     fn village_greetings() {
         let mut s = GameState::default();
-        let call = |index| TriggerCall { index, state: 1, object: true, square: false };
+        let call = |index| TriggerCall { index, state: 1, object: true, square: false, block: -1 };
         let say = |s: &mut GameState, index| on_trigger(1023, if index % 2 == 1 { 54 } else { 55 }, call(index), s).actions;
         assert_eq!(say(&mut s, 39), vec![Action::Converse { entity: 65, line: 1020 }]);
         assert!(say(&mut s, 39).is_empty(), "latched");
@@ -15449,7 +15639,7 @@ mod tests {
         let init = on_init(1244, &mut s);
         assert!(s.flag(271));
         assert_eq!(init.len(), 9, "four objects off, five registrations");
-        let call = TriggerCall { index: 0, state: 1, object: true, square: false };
+        let call = TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 };
         // Not in swap mode 2: no scene.
         s.hero.swap_mode = 1;
         assert!(on_trigger(1244, 1, call, &mut s).actions.is_empty());
@@ -15505,7 +15695,7 @@ mod tests {
         s.set(22, true);
         let init = on_init(1056, &mut s);
         assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1057) }) && init.contains(&Action::LoadRegion { slot: 1, region: Some(1064) }));
-        let zone = |s: &mut GameState, i: u16| on_trigger(1056, 5, TriggerCall { index: i, state: 1, object: true, square: false }, s);
+        let zone = |s: &mut GameState, i: u16| on_trigger(1056, 5, TriggerCall { index: i, state: 1, object: true, square: false, block: -1 }, s);
         zone(&mut s, 10);
         assert_eq!(on_update(1056, &mut s, false), vec![Action::Converse { entity: 5, line: 58 }]);
         assert!(s.flag(154));
@@ -15565,7 +15755,7 @@ mod tests {
         assert!(s.flag(152));
         let lines: Vec<_> = (0..4).map(|_| on_talk(1098, r, &mut s)).collect();
         assert_eq!(lines, [11, 12, 13, 11].map(|line| vec![Action::Talk { line }]));
-        let call = TriggerCall { index: 0, state: 1, object: true, square: true };
+        let call = TriggerCall { index: 0, state: 1, object: true, square: true, block: -1 };
         let out = on_trigger(1098, 1, call, &mut s);
         assert!(out.prompt == Some(32) && out.actions.contains(&Action::Message { line: 50 }));
         assert!(s.flag(22) && s.flag(642) && s.flag(153));
@@ -15590,7 +15780,7 @@ mod tests {
         let init = on_init(1217, &mut s);
         assert!(init.contains(&Action::RegisterTrigger { index: 0, routine: 1 }) && init.contains(&Action::LoadRegion { slot: 0, region: Some(1218) }));
         // Trigger 0 sets the start bit; the next update runs intro A once (line 6, spawn 1).
-        let call = TriggerCall { index: 0, state: 1, object: true, square: false };
+        let call = TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 };
         on_trigger(1217, 1, call, &mut s);
         let intro = on_update(1217, &mut s, false);
         assert!(intro.contains(&Action::Message { line: 6 }) && intro.contains(&Action::MoveEntity { entity: 0, locator: 13, face: true }));
@@ -15683,7 +15873,7 @@ mod tests {
         let init = on_init(1023, &mut s);
         assert!(init.contains(&Action::RegisterTrigger { index: 17, routine: 6 }));
         assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1026) }));
-        let start = on_trigger(1023, 6, TriggerCall { index: 17, state: 1, object: true, square: false }, &mut s);
+        let start = on_trigger(1023, 6, TriggerCall { index: 17, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(s.flag(7) && s.flag(127) && !s.has_item(32));
         let flags: Vec<u16> = start.actions.iter().filter_map(|a| match a {
             Action::SetFlag { flag, .. } => Some(*flag),

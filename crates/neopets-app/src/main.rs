@@ -2632,6 +2632,12 @@ fn play_trace(
         }
         // NEOPETS_TRACE_BREAK: on tick 60 the current world's breakables (count, kinds of
         // volume, the nearest three).
+        // NEOPETS_TRACE_BLOCK on tick 5: the current world's blocks and the volumes blocks fire.
+        if play.ticks == 5 && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+            for line in play.block_survey() {
+                println!("      {line}");
+            }
+        }
         // NEOPETS_TRACE_BLOCK: the hero's block state and the held block whenever they change.
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
             let now = play.block_trace();

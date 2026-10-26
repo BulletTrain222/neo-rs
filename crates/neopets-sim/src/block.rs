@@ -67,6 +67,10 @@ pub struct Block {
     pub extents: [f32; 3],
     /// The box top as loaded (the climb test reads it; a push does not change it).
     pub loaded_top: f32,
+    /// +0x60, the volume the block last fired (its trigger index), and whether this tick's step
+    /// tests the volumes (while moving and on the tick the flag clears).
+    pub last_fired: Option<u16>,
+    pub testing: bool,
 }
 
 impl Block {
@@ -90,6 +94,8 @@ impl Block {
             box_axes,
             extents,
             loaded_top: corner[1] + extents[0],
+            last_fired: None,
+            testing: false,
         };
         b.place(probe);
         b
@@ -155,6 +161,7 @@ impl Block {
     /// Per tick (active blocks): while moving and i < n, one step of L / n along D; while
     /// moving and i >= n, the moving flag clears with no motion. Returns whether it moved.
     pub fn tick(&mut self) -> bool {
+        self.testing = self.active != 0 && self.moving;
         if self.active == 0 || !self.moving {
             return false;
         }
