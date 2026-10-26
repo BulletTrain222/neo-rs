@@ -1572,6 +1572,22 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0042 1381 Init: effect 0 stopped; the three known helper set-ups (objects 36, 72, 74;
+        // 37, 76, 78; 32, 56, 58; the first of each looped at 0.4); the pads, areas, targets and
+        // the flat zone (34) registered. The fourth helper call's objects are not given; the block
+        // group (movable blocks) is not built. Routines: 1 pads, 2 areas, 3 targets, 4 return to
+        // the hub, 5 nothing, 6 the hazard damage.
+        1381 => {
+            let mut v = vec![Action::StopEffect { slot: 0 }];
+            for (a, b, c) in [(36, 72, 74), (37, 76, 78), (32, 56, 58)] {
+                v.extend([Action::InitObjOn { obj: a, end: false }, Action::InitObjOn { obj: b, end: false }, Action::InitObjOn { obj: c, end: false }, Action::LoopAnim { obj: a, speed: 0.4 }]);
+            }
+            for k in 0..6 {
+                v.extend([reg(PADS_1381[k], 1), reg(AREAS_1381[k], 2), reg(TARGETS_1381[k], 3)]);
+            }
+            v.push(reg(34, 4));
+            v
+        }
         // SPEC-0041 1090 Init: 314 and 42; the hurt triggers of bank A (1 to 7) and bank B (8 to
         // 14). The firing loops (threads C and D) run from Update. The object sounds and the
         // Update's comparison tree (Low in the spec) are not reproduced.
@@ -3032,6 +3048,37 @@ fn thread3_956(s: &GameState) -> Vec<Action> {
         _ => 7,
     };
     vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(957 + set) }]
+}
+
+/// RegisterScriptTrigger outside Init.
+fn reg_at(index: u16, routine: u8) -> Action {
+    Action::RegisterTrigger { index, routine }
+}
+
+/// SPEC-0042 1381's stations 0 to 5: the pad, area and target trigger indices.
+const PADS_1381: [u16; 6] = [65, 3, 20, 31, 37, 52];
+const AREAS_1381: [u16; 6] = [64, 4, 19, 32, 38, 53];
+const TARGETS_1381: [u16; 6] = [63, 5, 18, 33, 39, 54];
+/// The timed objects (on 2 s, off 4 s by the game clock, all in phase).
+const TIMED_1381: [usize; 19] = [84, 88, 91, 98, 101, 105, 108, 112, 113, 122, 126, 131, 140, 146, 153, 157, 158, 162, 166];
+
+/// SPEC-0042 1381's return-to-hub routine: 0.5 s, sound 5 three times and 169, the hero at
+/// locator 0 with the normal camera, effect 0, 1.5 s; the pad-3 hazard off.
+fn hub_return_1381(s: &mut GameState) -> Vec<Action> {
+    s.set_word(1381, 1, 0);
+    vec![
+        wait(0.5),
+        Action::PlaySound { cue: 5, locator: None },
+        Action::PlaySound { cue: 5, locator: None },
+        Action::PlaySound { cue: 5, locator: None },
+        Action::PlaySound { cue: 169, locator: None },
+        Action::MoveHero { locator: 0 },
+        Action::HoldHero,
+        Action::Sleep { ticks: 1 },
+        Action::StartEffect { slot: 0, camera: true },
+        wait(1.5),
+        Action::ReturnCamera { preset: -1, release: true },
+    ]
 }
 
 /// SPEC-0044 893's score S: flags 731, 726, 727, 728, 729 and 730 as bits 0 to 5.
@@ -5097,6 +5144,63 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0042 1381 pads (context 13; the station unsolved): sound 169 and the hero sent to
+        // the station's locator; pad 3 turns the hazard on (word 1); pad 31 turns objects 80 to 169
+        // off with their triggers bound to the return routine. Pad 52's block reset and the
+        // sparkle effect are not built.
+        (1381, 1) if call.object && call.state != 0 => {
+            if let Some(k) = PADS_1381.iter().position(|&t| t == call.index) {
+                if !state.flag(708 + k as u16) {
+                    if call.square && !state.talking {
+                        out.actions.extend([Action::PlaySound { cue: 169, locator: None }, Action::HoldHero, Action::MoveHero { locator: [63, 7, 8, 9, 10, 11][k] }, wait(1.0), Action::ReturnCamera { preset: -1, release: true }]);
+                        if call.index == 3 {
+                            state.set_word(pack, 1, 1);
+                        }
+                        if call.index == 31 {
+                            for obj in 80..=169 {
+                                out.actions.extend([Action::DeactivateObj { obj }, reg_at(obj as u16 + 58, 4)]);
+                            }
+                        }
+                    } else {
+                        out.prompt = Some(13);
+                    }
+                }
+            }
+        }
+        // The station areas: the area word (10 + k) set while the hero is inside.
+        (1381, 2) if call.object && matches!(call.state, 1 | 2) => {
+            if let Some(k) = AREAS_1381.iter().position(|&t| t == call.index) {
+                if state.word(pack, 10 + k as u8) == 0 {
+                    state.set_word(pack, 10 + k as u8, 1);
+                    out.actions.extend([Action::WaitInside { index: call.index }, Action::Bits { word: 10 + k as u8, set: 0, clear: 1 }]);
+                }
+            }
+        }
+        // The station targets (the area word set; a hero strike): an unsolved station's object
+        // removed and 708 + k set; every matched hit returns the hero to the hub. The piece
+        // scene's camera and objects are not given; hero shots and the movable blocks are not built.
+        (1381, 3) if call.state != 0 && state.hero.strike => {
+            if let Some(k) = TARGETS_1381.iter().position(|&t| t == call.index) {
+                if state.word(pack, 10 + k as u8) != 0 {
+                    if !state.flag(708 + k as u16) {
+                        state.set(708 + k as u16, true);
+                        out.actions.push(Action::DeactivateObj { obj: 50 + k });
+                    }
+                    out.actions.extend(hub_return_1381(state));
+                }
+            }
+        }
+        (1381, 4) if call.object => out.actions.extend(hub_return_1381(state)),
+        // The hazard damage (bound while a hazard lands): DamageHero(5) and 2 s, while the pad-3
+        // hazard word is set (word 20 + k the next tick it may hit).
+        (1381, 6) if call.object && state.word(pack, 1) != 0 => {
+            let k = call.index.saturating_sub(12).min(5) as u8;
+            let now = state.hero.tick as i32;
+            if now >= state.word(pack, 20 + k) {
+                state.set_word(pack, 20 + k, now + 121);
+                out.actions.push(Action::DamageHero { amount: 5 });
             }
         }
         // SPEC-0041 1090 T1 and T2 (the hurt zones): while the hero is inside a firing hazard,
@@ -7614,6 +7718,52 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0042 1381 Update: the timed objects switch on for 2 s and off for 4 s together
+        // (each switch re-binds its trigger, object + 58, to the return routine or to nothing; word
+        // 2 the last phase + 1); the hazard thread: hazard k starts 0.4 s after k - 1, its object
+        // played with effect 2 + 2k, and when it lands trigger 12 + k is bound to the damage
+        // routine, the object hidden, effect 3 + 2k shown for a tick, 1.5 s, and unbound (words
+        // 30 + k the phase, 40 + k the phase's tick).
+        1381 => {
+            let tick = state.hero.tick as i32;
+            let on = (tick % 360) < 120;
+            if state.word(pack, 2) != on as i32 + 1 {
+                state.set_word(pack, 2, on as i32 + 1);
+                for &obj in &TIMED_1381 {
+                    if on {
+                        out.extend([Action::InitObjOn { obj, end: false }, reg_at(obj as u16 + 58, 4)]);
+                    } else {
+                        out.extend([Action::DeactivateObj { obj }, reg_at(obj as u16 + 58, 5)]);
+                    }
+                }
+            }
+            for k in 0..6u8 {
+                let (phase, at) = (state.word(pack, 30 + k), state.word(pack, 40 + k));
+                let obj = k as usize;
+                match phase {
+                    0 if tick >= 24 * k as i32 => {
+                        state.set_word(pack, 30 + k, 1);
+                        state.set_word(pack, 40 + k, tick);
+                        out.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }, Action::StartEffect { slot: 2 + 2 * obj, camera: false }]);
+                    }
+                    1 if tick > at + 2 && !state.animating.contains(&obj) => {
+                        state.set_word(pack, 30 + k, 2);
+                        state.set_word(pack, 40 + k, tick);
+                        out.extend([reg_at(12 + k as u16, 6), Action::DeactivateObj { obj }, Action::StopEffect { slot: 2 + 2 * obj }, Action::StartEffect { slot: 3 + 2 * obj, camera: false }]);
+                    }
+                    2 if tick > at => {
+                        state.set_word(pack, 30 + k, 3);
+                        out.push(Action::StopEffect { slot: 3 + 2 * obj });
+                    }
+                    3 if tick >= at + 91 => {
+                        state.set_word(pack, 30 + k, 0);
+                        state.set_word(pack, 40 + k, 0);
+                        out.push(reg_at(12 + k as u16, 5));
+                    }
+                    _ => {}
+                }
+            }
+        }
         // SPEC-0041 1090 threads C and D, the firing loops: bank A fires four hazards for 42 ticks
         // then waits 42, bank B for 30 then 30, each through its four steps (words 2 and 3 the
         // firing masks, 1 the start tick + 1).
@@ -8796,6 +8946,27 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             .collect();
             if v != -1 {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
+        // SPEC-0042 1381 activate-world restore: each solved station (708 + k) and each block piece
+        // (714 + k) put in its solved state; all six pieces with 337 clear: object 18 on, 19 off.
+        // The movable blocks' moves are not built.
+        1381 => {
+            let mut out = Vec::new();
+            for k in 0..6usize {
+                if state.flag(708 + k as u16) {
+                    out.extend([Action::InitObjOn { obj: 170 + 3 * k, end: false }, Action::InitObjOn { obj: 171 + 3 * k, end: false }, Action::DeactivateObj { obj: 172 + 3 * k }, Action::InitObjOn { obj: 44 + k, end: false }, Action::DeactivateObj { obj: 38 + k }]);
+                    if k != 0 {
+                        out.push(Action::DeactivateObj { obj: 50 + k });
+                    }
+                }
+                if state.flag(714 + k as u16) {
+                    out.extend([Action::DeactivateObj { obj: 26 + k }, Action::DeactivateObj { obj: 20 + k }]);
+                }
+            }
+            if (714..=719).all(|f| state.flag(f)) && !state.flag(337) {
+                out.extend([Action::InitObjOn { obj: 18, end: false }, Action::DeactivateObj { obj: 19 }]);
             }
             out
         }
@@ -11914,6 +12085,39 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1381_hub() {
+        // The timed-object vector: on from 0 to 2 s (bound to the return routine), off from 2 to
+        // 6 s, on again at 6 s.
+        let mut s = GameState::default();
+        on_init(1381, &mut s);
+        let at = |s: &mut GameState, t: u64| {
+            s.hero.tick = t;
+            on_update(1381, s, false)
+        };
+        assert!(at(&mut s, 0).contains(&Action::RegisterTrigger { index: 142, routine: 4 }));
+        assert!(at(&mut s, 60).iter().all(|a| !matches!(a, Action::RegisterTrigger { index: 142, .. })));
+        assert!(at(&mut s, 120).contains(&Action::RegisterTrigger { index: 142, routine: 5 }));
+        assert!(at(&mut s, 360).contains(&Action::RegisterTrigger { index: 142, routine: 4 }));
+        // The station 1 vector: inside area 4, target 5 struck: 709 set, object 51 removed, then
+        // the return to locator 0.
+        let inside = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        on_trigger(1381, 2, inside(4), &mut s);
+        s.hero.strike = true;
+        let out = on_trigger(1381, 3, inside(5), &mut s).actions;
+        assert!(s.flag(709) && out.contains(&Action::DeactivateObj { obj: 51 }) && out.contains(&Action::MoveHero { locator: 0 }));
+        // Pad 3: the hazard on; a bound hazard trigger then hurts by 5 at most every 2 s.
+        let press = TriggerCall { index: 3, state: 1, object: true, square: true };
+        // A solved station's pad does nothing.
+        assert!(on_trigger(1381, 1, press, &mut s).actions.is_empty());
+        s.set(709, false);
+        on_trigger(1381, 1, press, &mut s);
+        assert_eq!(s.word(1381, 1), 1);
+        s.hero.tick = 1000;
+        assert_eq!(on_trigger(1381, 6, inside(13), &mut s).actions, vec![Action::DamageHero { amount: 5 }]);
+        assert!(on_trigger(1381, 6, inside(13), &mut s).actions.is_empty());
     }
 
     #[test]
