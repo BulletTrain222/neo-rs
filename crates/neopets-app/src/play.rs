@@ -3085,6 +3085,13 @@ impl Play {
     /// The exchange of SPEC-0053 3.4 steps 6 to 9: the incoming hero takes the outgoing hero's
     /// place and facing (the locomotion record stays), its model and pools come in, its status
     /// timers are cleared, and the renderer re-spawns the hero.
+    /// A diagnostic selection of a hero at a trace's start (the exchange with the parked hero).
+    pub fn trace_select_hero(&mut self, hero: usize) {
+        if hero != self.hero_index {
+            self.exchange_heroes();
+        }
+    }
+
     fn exchange_heroes(&mut self) {
         let Some(mut p) = self.parked.take() else { return };
         std::mem::swap(&mut self.hero, &mut p.anim);

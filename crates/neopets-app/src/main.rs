@@ -2028,6 +2028,10 @@ fn play_trace(
     for n in std::env::var("NEOPETS_TRACE_MAPS").unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u32>().ok()) {
         play.map_held(n);
     }
+    // NEOPETS_TRACE_ROBERTA=1: the trace starts as Roberta (diagnostic; her attack fires shots).
+    if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
+        play.trace_select_hero(1);
+    }
     // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic).
     if let Some(hp) = std::env::var("NEOPETS_TRACE_HP").ok().and_then(|v| v.parse::<i32>().ok()) {
         play.hero_hp = hp;
