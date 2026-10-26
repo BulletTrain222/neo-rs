@@ -2402,6 +2402,12 @@ impl Play {
                 Action::WhinnyPen { inner, entrance, locator } => {
                     let point = self.world.entries.get(locator).map_or([0.0; 3], |e| e.0);
                     self.world.pens = vec![neopets_sim::whinny::Pen { inner, entrance, point, occupied: false }];
+                    // NEOPETS_TRACE_PEN: the pen's meshes as SetWhinnyPenmesh sets them (diagnostic).
+                    if std::env::var_os("NEOPETS_TRACE_PEN").is_some() {
+                        let m = &self.world.navmeshes;
+                        let info = |i: usize| m.get(i).map(|n| (n.kind, n.len(), n.locate_full(point).is_some()));
+                        println!("      Whinny pen: point {point:?}; inner {inner} (kind, triangles, holds point) {:?}; entrance {entrance} {:?}", info(inner), info(entrance));
+                    }
                 }
                 Action::PlaySound { cue, locator } | Action::LoopSound { cue, locator } | Action::VisitLoopSound { cue, locator } | Action::KillSound { cue, locator } => {
                     use neopets_sim::sound::{Play as Cue, AREA};

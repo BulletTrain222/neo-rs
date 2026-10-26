@@ -3,9 +3,10 @@
 //! count sets flag 107 + p (p penned) whenever the group has three members.
 //! "A random point on its mesh" is read as a uniformly drawn triangle's centroid, the flee
 //! sub-step B's safe point as the far-centroid pick with D = 10 from the hero, and the path test
-//! of sub-step A as the candidate lying on the mesh (Medium). A leading Whinny whose mesh does
-//! not hold the pen point walks on the first ground mesh holding both (R-0013). The group sound
-//! is not played.
+//! of sub-step A as always clear, the blocked latch alone choosing sub-step B (R-0073). The navmesh is taken once at
+//! start (the first ground mesh holding the Whinny) and set directly only on entering lead (the
+//! pen's entrance mesh) and on becoming penned (the inner mesh); R-0013. The group sound is not
+//! played.
 
 use crate::hero::Vec3;
 use crate::level::GameState;
@@ -46,6 +47,8 @@ pub struct Whinny {
     flee_step: u8,
     flee_ticks: u32,
     pen: Option<usize>,
+    /// The start navmesh pick has run.
+    started: bool,
 }
 
 fn hdist(a: Vec3, b: Vec3) -> f32 {
@@ -58,7 +61,7 @@ fn random_centroid(m: &NavMesh, rng: &mut Rng) -> Option<Vec3> {
 
 impl Default for Whinny {
     fn default() -> Self {
-        Self { mode: Mode::Wander, target: None, timer: 0, run: false, flee_step: 0, flee_ticks: 0, pen: None }
+        Self { mode: Mode::Wander, target: None, timer: 0, run: false, flee_step: 0, flee_ticks: 0, pen: None, started: false }
     }
 }
 
@@ -74,12 +77,11 @@ impl Whinny {
     /// One tick: picks the mode, steers the walker and returns the animation id to play.
     pub fn tick(&mut self, w: &mut Walker, meshes: &[NavMesh], pens: &mut [Pen], hero: Vec3, rng: &mut Rng) -> u32 {
         let p = w.position();
-        // The walker's mesh follows its position (re-picked when it leaves it).
-        if matches!(self.mode, Mode::Wander | Mode::Flee) && w.mesh.and_then(|i| meshes.get(i)).is_none_or(|m| m.locate_full(p).is_none()) {
+        // Start: the first ground mesh (kind 1) holding the Whinny, once; no search later.
+        if !self.started {
+            self.started = true;
             let pick = meshes.iter().position(|m| m.kind == 1 && m.locate_full(p).is_some());
-            if pick.is_some() {
-                w.assign_mesh(pick, meshes);
-            }
+            w.assign_mesh(pick, meshes);
         }
         let d = hdist(p, hero);
         match self.mode {
@@ -94,6 +96,8 @@ impl Whinny {
                     self.pen = Some(i);
                     self.timer = 30;
                     self.target = Some(pens[i].point);
+                    // The current navmesh is set directly to the entrance mesh (no search).
+                    w.assign_mesh(Some(pens[i].entrance), meshes);
                     w.set_target();
                     return self.lead_tick(w, meshes, pens, hero);
                 }
@@ -122,6 +126,7 @@ impl Whinny {
             self.mode = Mode::Penned;
             self.pen = Some(0);
             self.target = None;
+            w.assign_mesh(Some(pens[0].inner), meshes);
             return IDLE;
         }
         let arrived_out = self.target.is_some_and(|t| hdist(p, t) < 3.0) && self.timer < 1;
@@ -163,7 +168,9 @@ impl Whinny {
             let away = [p[0] - hero[0], 0.0, p[2] - hero[2]];
             let len = (away[0] * away[0] + away[2] * away[2]).sqrt().max(1e-6);
             let a = [p[0] + 4.0 * away[0] / len, p[1], p[2] + 4.0 * away[2] / len];
-            if mesh.is_some_and(|m| m.locate_full(a).is_some()) && !w.blocked {
+            // The path test is read as clear (R-0073): the navmesh confinement stops the walk at
+            // a boundary edge and sets the blocked latch, which abandons it.
+            if !w.blocked {
                 self.flee_step = 1;
                 self.flee_ticks = 15;
                 self.target = Some(a);
@@ -200,18 +207,11 @@ impl Whinny {
             return IDLE;
         };
         let p = w.position();
-        // This build's choice (R-0013): when the pen point is not on the walker's mesh, walk on
-        // the first ground mesh that holds both the Whinny and the pen point.
-        if w.mesh.and_then(|i| meshes.get(i)).is_none_or(|m| m.locate_full(pen.point).is_none()) {
-            let both = meshes.iter().position(|m| m.kind == 1 && m.locate_full(p).is_some() && m.locate_full(pen.point).is_some());
-            if both.is_some() {
-                w.assign_mesh(both, meshes);
-            }
-        }
         if hdist(p, pen.point) < 3.0 {
             if Self::inside(meshes, pen.inner, p) {
                 self.mode = Mode::Penned;
                 self.target = None;
+                w.assign_mesh(Some(pen.inner), meshes);
                 return IDLE;
             }
             self.timer = 30;
@@ -324,5 +324,48 @@ mod tests {
         let mut wh = Whinny::default();
         wh.tick(&mut w, &m, &mut pens, [0.0, 0.0, 0.0], &mut rng);
         assert!(wh.penned());
+        assert_eq!(w.mesh, Some(0), "becoming penned sets the inner mesh");
+    }
+
+    /// SPEC-0029 Behavior 5 test vector: a Whinny on its start mesh that stands inside the
+    /// entrance area while fleeing gets the entrance mesh at once and leads to the pen point on
+    /// it, even though its start mesh does not hold the pen point.
+    #[test]
+    fn fleeing_into_the_entrance_leads_on_the_entrance_mesh() {
+        let ground = |tris: Vec<[[f32; 3]; 3]>, neighbours, table| NavMesh { kind: 1, triangles: tris, neighbours, table };
+        // Start mesh: x 0 to 20. Entrance mesh (kind 0): x 15 to 40, holding the pen point.
+        let start = ground(
+            vec![[[0.0, 0.0, 0.0], [20.0, 0.0, 0.0], [20.0, 0.0, 20.0]], [[0.0, 0.0, 0.0], [20.0, 0.0, 20.0], [0.0, 0.0, 20.0]]],
+            vec![[-1, -1, 1], [0, -1, -1]],
+            vec![0b0000_1000],
+        );
+        let mut entrance = ground(
+            vec![[[15.0, 0.0, 0.0], [40.0, 0.0, 0.0], [40.0, 0.0, 20.0]], [[15.0, 0.0, 0.0], [40.0, 0.0, 20.0], [15.0, 0.0, 20.0]]],
+            vec![[-1, -1, 1], [0, -1, -1]],
+            vec![0b0000_1000],
+        );
+        entrance.kind = 0;
+        let inner = NavMesh { kind: 0, triangles: vec![[[32.0, 0.0, 2.0], [40.0, 0.0, 2.0], [40.0, 0.0, 18.0]]], neighbours: vec![[-1, -1, -1]], table: vec![0] };
+        let m = vec![inner, start, entrance];
+        let mut rng = Rng::seeded(1);
+        let mut w = Walker::new([17.0, 0.0, 10.0], [1.0, 0.0, 0.0], 1.0, 5.5, 2);
+        let mut pens = vec![Pen { inner: 0, entrance: 2, point: [37.0, 0.0, 10.0], occupied: false }];
+        let mut wh = Whinny::default();
+        let hero = [13.0, 0.0, 10.0];
+        wh.tick(&mut w, &m, &mut pens, hero, &mut rng);
+        assert_eq!(w.mesh, Some(1), "the start pick takes the first ground mesh");
+        wh.tick(&mut w, &m, &mut pens, hero, &mut rng);
+        assert_eq!(wh.mode, Mode::Lead);
+        assert_eq!(w.mesh, Some(2), "the entrance mesh is set directly");
+        let mut penned_at = None;
+        for t in 0..900 {
+            w.motion_tick([0.0, 0.0, 0.3], &m, |_, _, _| (0.0, [0.0, 1.0, 0.0]));
+            wh.tick(&mut w, &m, &mut pens, hero, &mut rng);
+            if wh.penned() {
+                penned_at = Some(t);
+                break;
+            }
+        }
+        assert!(penned_at.is_some(), "the lead reaches the pen: {:?} {:?}", wh.mode, w.position());
     }
 }
