@@ -1575,6 +1575,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 985 Init: by flag 281 (at load: word 9) CB2 or CB5 on trigger 4; the
+        // matching thread (CB3 or CB6) runs from Update and the arrival from on_activate. Words:
+        // 1 step word A, 2 step word B, 3 the arrival word, 4 busy.
+        985 => {
+            let set = state.flag(281);
+            state.set_word(pack, 9, set as i32 + 1);
+            vec![reg(4, if set { 5 } else { 2 })]
+        }
         // SPEC-0041 1096 Init: 315 and 44; the twelve objects; CB1 on 13 to 15, CB2 on 0 to 4, CB3
         // on 5, CB4 on 6, CB5 on 7. The breakable indices and Init's zero-length fade out (no
         // fade in follows on the flag-45-set side) are not reproduced.
@@ -3096,6 +3104,130 @@ fn thread3_956(s: &GameState) -> Vec<Action> {
         _ => 7,
     };
     vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(957 + set) }]
+}
+
+/// SPEC-0041 985's threads: CB3 (the Gnarfas fight; 281 clear at load) and CB6 (the glade fight's
+/// level-state chain; 281 set). The cutscene helpers' cameras and entity animations are Medium in
+/// the spec and given in order; the boss-fight tweaks, collision masks and navmesh assignments
+/// are not built.
+fn thread_985(s: &mut GameState) -> Vec<Action> {
+    let p = 985;
+    if s.word(p, 4) != 0 {
+        return Vec::new();
+    }
+    let l = |s: &GameState, n| s.level(n);
+    let mut v = Vec::new();
+    let busy = |s: &mut GameState, v: &mut Vec<Action>| {
+        s.set_word(p, 4, 1);
+        v.push(Action::Bits { word: 4, set: 0, clear: 1 });
+    };
+    let cam = |track, wait| Action::PlayCamera { track, wait, end: 1, speed: 1.0 };
+    let anim = |anim| Action::EntityAnim { entity: 0, anim, looped: false, wait: true };
+    if s.word(p, 9) == 1 {
+        let a = s.word(p, 1);
+        if l(s, 0) && !l(s, 1) {
+            s.movies.insert(12);
+            s.set(213, true);
+            s.set_level(1, true);
+            v.extend([Action::MoveHero { locator: 10 }, Action::MoveEntity { entity: 7, locator: 12, face: true }, Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 30 }, Action::Message { line: 14 }]);
+            busy(s, &mut v);
+        } else if l(s, 2) && a & 1 == 0 {
+            s.set(214, true);
+            s.set_word(p, 1, a | 3);
+            v.extend((7..=12).map(|slot| Action::StopEffect { slot }));
+            v.extend([Action::DeactivateEntity { entity: 7 }, Action::DeactivateEntity { entity: 8 }]);
+        } else if s.flag(214) {
+            if a & 2 != 0 && !s.movies.contains(&13) {
+                s.movies.insert(13);
+                v.extend([
+                    Action::FadeOut { seconds: FADE, wait: true },
+                    Action::MoveHero { locator: 26 },
+                    Action::DeactivateEntity { entity: 5 },
+                    Action::ActivateEntity { entity: 6 },
+                    Action::EntityAnim { entity: 6, anim: 3, looped: true, wait: false },
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::FadeIn { seconds: 1.0, wait: true },
+                ]);
+                busy(s, &mut v);
+            } else if a & 4 != 0 && !s.movies.contains(&14) {
+                // The setter of flag 64; movie 14's return world eW 74 (pack 956) loaded at once.
+                s.movies.insert(14);
+                s.set(64, true);
+                v.push(Action::ReplaceExterior { slot: 74, plane: -1 });
+                busy(s, &mut v);
+            }
+        } else if s.word(p, 3) != 0 {
+            s.set_word(p, 3, 0);
+            v.extend([Action::Sleep { ticks: 1 }, Action::MoveEntity { entity: 7, locator: 11, face: true }, Action::EntityAnim { entity: 8, anim: 0, looped: false, wait: false }]);
+        }
+        return v;
+    }
+    let b = s.word(p, 2);
+    let scene = |line_cam: &[(u16, usize)], a1: u32, a2: u32| {
+        let mut v = vec![
+            Action::FadeOut { seconds: FADE, wait: true },
+            Action::LetterBox { on: true, seconds: 1.0, wait: false },
+            Action::MoveEntity { entity: 0, locator: 27, face: true },
+            Action::MoveHero { locator: 28 },
+            Action::FadeIn { seconds: FADE, wait: true },
+            anim(25),
+            cam(31, false),
+            anim(a1),
+        ];
+        for &(line, track) in line_cam {
+            if track > 0 {
+                v.push(cam(track, false));
+            }
+            v.push(Action::Converse { entity: 0, line });
+        }
+        v.extend([anim(a2), Action::LetterBox { on: false, seconds: 1.0, wait: false }, cam(29, false), Action::ReleaseEntity { entity: 0 }, Action::ReturnCamera { preset: -1, release: true }]);
+        v
+    };
+    if !l(s, 0) && b & 1 != 0 {
+        s.set_level(0, true);
+        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 9 }, Action::FadeIn { seconds: FADE, wait: true }, Action::HoldHero, cam(25, true), anim(25)]);
+        for (line, track) in (0..=5).zip([26, 27, 28, 29, 30, 33]) {
+            v.extend([cam(track, false), Action::Converse { entity: 0, line }]);
+        }
+        v.extend([anim(1), anim(3), anim(4), anim(2), Action::Equip { on: true }, wait(0.5), Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }, Action::ReleaseEntity { entity: 0 }]);
+        busy(s, &mut v);
+    } else if l(s, 1) && !l(s, 2) {
+        s.set_level(2, true);
+        v.extend(scene(&[(8, 0)], 4, 23));
+        busy(s, &mut v);
+    } else if l(s, 3) && !l(s, 4) {
+        s.set_level(4, true);
+        v.extend(scene(&[(9, 0)], 5, 23));
+        busy(s, &mut v);
+    } else if l(s, 5) && !l(s, 6) {
+        s.set_level(6, true);
+        v.extend(scene(&[(10, 0), (11, 32), (12, 26)], 6, 23));
+        busy(s, &mut v);
+    } else if l(s, 7) && !l(s, 8) {
+        s.set_level(8, true);
+        s.set(284, true);
+        s.set(301, true);
+        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, anim(7), Action::Converse { entity: 0, line: 13 }, anim(24), Action::FadeOut { seconds: FADE, wait: true }, Action::ReturnCamera { preset: -1, release: true }]);
+        v.extend((0..=4).map(|entity| Action::DeactivateEntity { entity }));
+        v.extend((7..=12).map(|slot| Action::StopEffect { slot }));
+        v.extend([Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::FadeIn { seconds: FADE, wait: true }]);
+        busy(s, &mut v);
+    } else if l(s, 0) && s.flag(284) {
+        if b & 2 != 0 && b & 4 == 0 {
+            s.set_word(p, 2, b | 4 | 8);
+        } else if b & 8 != 0 && b & 16 == 0 {
+            // The end of the glade fight: item 30, flags 67, 283 and 302, movie 44 counted, and its
+            // return world eW 74 (pack 956) loaded at once.
+            s.set_word(p, 2, b | 16);
+            for f in [67, 283, 302] {
+                s.set(f, true);
+            }
+            s.movies.insert(44);
+            v.extend([Action::GiveItem { item: 30, count: 1 }, Action::ReplaceExterior { slot: 74, plane: -1 }]);
+            busy(s, &mut v);
+        }
+    }
+    v
 }
 
 /// SPEC-0044 1174's barrier groups: their effects and object (the seventh has no trigger; group
@@ -5423,6 +5555,10 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 985 CB2 (trigger 4, 281 clear at load): step A2 on every fire; CB5 (281 set):
+        // B1 with the hero.
+        (985, 2) => state.set_word(pack, 1, state.word(pack, 1) | 4),
+        (985, 5) if call.object => state.set_word(pack, 2, state.word(pack, 2) | 2),
         // SPEC-0041 1096 CB1 (13 to 15; context 4): the lever walks (points 15 to 17, hero
         // animation 140, objects 31, 33 or 35 and the rest) and the word that arms CB2's index 0
         // (word 1; the spec leaves which branch sets it Medium).
@@ -8111,6 +8247,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0041 985 Update: the thread of the load's branch.
+        985 => out.extend(thread_985(state)),
         // SPEC-0041 1096 Update: with 45 clear CB7 (the level-state pairs 1 and 2, 4 and 5, 7 and
         // 8, 10 and 11, and the finale on 12: camera 5, the shake, entity 0 and object 0 off,
         // sound 7, objects 2 to 5, 45 and 316, level state 14); with 45 set, 15 set and 16 clear
@@ -9395,6 +9533,24 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
+        }
+        // SPEC-0041 985 arrivals: CB1 (281 clear at load: the hero at locator 9, the camera, 212;
+        // with 214 clear level states 0 to 2 cleared; step word A cleared; the arrival word) and
+        // CB4 (281 set: the hero at locator 9, the camera; step word B = B0; the arrival word).
+        985 => {
+            state.set_word(985, 3, 1);
+            if state.word(985, 9) == 1 {
+                state.set(212, true);
+                if !state.flag(214) {
+                    for l in 0..=2 {
+                        state.set_level(l, false);
+                    }
+                }
+                state.set_word(985, 1, 0);
+            } else {
+                state.set_word(985, 2, 1);
+            }
+            vec![Action::MoveHero { locator: 9 }, Action::ReturnCamera { preset: -1, release: true }]
         }
         // SPEC-0041 1096 arrival: with 45 clear CB8 (the boss slot, objects 0 to 5, movie 51
         // counted, the hero at locator 10, object 14 off, entity 0, the fade in); with 45 set CB11
@@ -12552,6 +12708,39 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_985_glade_fights() {
+        // The Gnarfas branch: level state 0 (Gnarfas's event) gives the movie-12 step (213, level
+        // state 1); level state 2 the fight end (214); then movie 13; then trigger 4 (A2) sets 64.
+        let mut s = GameState::default();
+        on_init(985, &mut s);
+        on_activate(985, &mut s);
+        s.set_level(0, true);
+        assert!(on_update(985, &mut s, false).contains(&Action::Message { line: 14 }) && s.flag(213));
+        s.set_word(985, 4, 0);
+        s.set_level(2, true);
+        on_update(985, &mut s, false);
+        assert!(s.flag(214));
+        assert!(on_update(985, &mut s, false).contains(&Action::MoveHero { locator: 26 }));
+        s.set_word(985, 4, 0);
+        on_trigger(985, 2, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut s);
+        assert!(on_update(985, &mut s, false).contains(&Action::ReplaceExterior { slot: 74, plane: -1 }) && s.flag(64));
+        // The 281 branch: the intro sets level state 0; level states 7 then the end with item 30.
+        let mut s = GameState::default();
+        s.set(281, true);
+        on_init(985, &mut s);
+        on_activate(985, &mut s);
+        assert!(on_update(985, &mut s, false).contains(&Action::Converse { entity: 0, line: 5 }));
+        s.set_word(985, 4, 0);
+        s.set_level(7, true);
+        on_update(985, &mut s, false);
+        assert!(s.flag(284));
+        s.set_word(985, 4, 0);
+        on_trigger(985, 5, TriggerCall { index: 4, state: 1, object: true, square: false }, &mut s);
+        on_update(985, &mut s, false);
+        assert!(on_update(985, &mut s, false).contains(&Action::GiveItem { item: 30, count: 1 }) && s.flag(67));
     }
 
     #[test]
