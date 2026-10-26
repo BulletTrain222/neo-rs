@@ -600,7 +600,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack == 842 && door <= 3) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) || (pack == 842 && door <= 3) || (pack == 1335 && door <= 2) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -708,6 +708,29 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             vec![Action::EnterInterior { slot }]
         }
         (1363, 0..=2) => vec![Action::Message { line: 0 }],
+        // SPEC-0043 1335 teleports (kind 13): 0: with 236 set and 93 clear line 35, else value 20
+        // for eW 151 and its load (pack 1300); 1: with 241 set and 242 clear 242, value 80 for eW
+        // 150 and 155 and movie 26 with eW 150 (pack 1299) as its return world (here the load of
+        // eW 150 at once), else line 34; 2: with 238 set and 239 clear value 70 for eW 153 and
+        // 155 and the load of eW 153 (pack 1324), else line 33.
+        (1335, 0) if state.flag(236) && !state.flag(93) => vec![Action::Message { line: 35 }],
+        (1335, 0) => {
+            state.blackboard.insert((2, 151), 20);
+            vec![Action::ReplaceExterior { slot: 151, plane: -1 }]
+        }
+        (1335, 1) if state.flag(241) && !state.flag(242) => {
+            state.set(242, true);
+            state.blackboard.insert((2, 150), 80);
+            state.blackboard.insert((2, 155), 80);
+            vec![Action::ReplaceExterior { slot: 150, plane: -1 }]
+        }
+        (1335, 1) => vec![Action::Message { line: 34 }],
+        (1335, 2) if state.flag(238) && !state.flag(239) => {
+            state.blackboard.insert((2, 153), 70);
+            state.blackboard.insert((2, 155), 70);
+            vec![Action::ReplaceExterior { slot: 153, plane: -1 }]
+        }
+        (1335, 2) => vec![Action::Message { line: 33 }],
         // SPEC-0045 842 teleports (context 13; routines 1 to 4 on doors 0, 3, 1 and 2): the stage
         // kept in word 3; stage 57: line 196, 55: 195, 53: 194; else the entry into eW 55, 56, 54
         // or 57 (packs 856, 857, 855, 858), 3 s.
@@ -1466,6 +1489,27 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0043 1335 Init: 235; the triggers (0 to 3 shared, 5 to 9; 4 does nothing); object
+        // 1 (241 clear) or 0; the slot chooser (94: none; 93: set 2; 92: set 1 or 0 by 241, into
+        // slot 0; else set 7 into slot 1; region 1336 + set). The walk thread (entity 36 along
+        // group 0's points) and the navmesh assignment are not built; the line-37 thread waits
+        // for movie 22, which is not played.
+        1335 => {
+            state.set(235, true);
+            let mut v: Vec<Action> = (0..=3).map(|i| reg(i, 1)).collect();
+            v.extend([5, 6, 7, 8, 9].map(|i| reg(i, i as u8)));
+            v.push(Action::InitObjOn { obj: if state.flag(241) { 0 } else { 1 }, end: false });
+            let f = |n| state.flag(n);
+            if f(94) {
+            } else if f(93) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1338) });
+            } else if f(92) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1336 + f(241) as u32) });
+            } else {
+                v.push(Action::LoadRegion { slot: 1, region: Some(1343) });
+            }
+            v
+        }
         // SPEC-0045 842 Init: the slot thread's set by stage (59: 6, 58: 7, 57: 4, 56: 3, 55: 7,
         // 54: 1, else 0; region 843 + j); the AI-kill watch armed when 54 is clear (word 1);
         // triggers 0 to 4; object 0 by stage; 197; the signs 5 to 8; object 1 while 198 is
@@ -4053,6 +4097,59 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0043 1335 shared trigger (0 to 3, entering, 92 clear): set 3 + index into slot 0
+        // when it differs from the last loaded (word 1).
+        (1335, 1) if call.object && call.state == 1 && !state.flag(92) => {
+            let set = 3 + call.index as i32;
+            if set != state.word(pack, 1) {
+                state.set_word(pack, 1, set);
+                out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1336 + set as u32) }]);
+            }
+        }
+        // Trigger 5 (context 32): the fade; with 235 set and 92 clear both slots emptied, set 0,
+        // 236 and 92 (movie 20 is not played); 1 s and the fade in.
+        (1335, 5) => {
+            if call.square && !state.talking {
+                out.actions.push(Action::FadeOut { seconds: FADE, wait: true });
+                if state.flag(235) && !state.flag(92) {
+                    state.set(236, true);
+                    state.set(92, true);
+                    out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 1, region: None }, Action::LoadRegion { slot: 0, region: Some(1336) }]);
+                }
+                out.actions.extend([wait(1.0), Action::FadeIn { seconds: FADE, wait: true }]);
+            } else {
+                out.prompt = Some(32);
+            }
+        }
+        // Trigger 6 (entering; 236 set, 237 clear): 237, lines 30 and 31, camera 5, line 32.
+        (1335, 6) if call.object && call.state == 1 && state.flag(236) && !state.flag(237) => {
+            state.set(237, true);
+            out.actions.extend([
+                Action::Message { line: 30 },
+                Action::Message { line: 31 },
+                Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                Action::Message { line: 32 },
+                wait(0.5),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        // Trigger 7 (entering; 240 set, 241 clear): 241, object 1 off and 0 on, set 1 into slot 0
+        // (movie 25 is not played; a fade in follows in its place).
+        (1335, 7) if call.object && call.state == 1 && state.flag(240) && !state.flag(241) => {
+            state.set(241, true);
+            out.actions.extend([
+                Action::FadeOut { seconds: FADE, wait: true },
+                Action::DeactivateObj { obj: 1 },
+                Action::InitObjOn { obj: 0, end: false },
+                Action::LoadRegion { slot: 0, region: None },
+                Action::LoadRegion { slot: 0, region: Some(1337) },
+                Action::FadeIn { seconds: FADE, wait: true },
+            ]);
+        }
+        // Triggers 8 (402 set, 403 clear: 403; movie 21 is not played) and 9 (236 set, 402 clear:
+        // 402).
+        (1335, 8) if state.flag(402) && !state.flag(403) => state.set(403, true),
+        (1335, 9) if state.flag(236) && !state.flag(402) => state.set(402, true),
         // SPEC-0045 842 trigger 1 (entering): with no stage 53 set and the opening camera 5; with
         // stage 54 line 201.
         (842, 1) if call.object && call.state == 1 => match stage_842(state) {
@@ -6675,6 +6772,21 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             out
         }
+        // SPEC-0043 1335 A: value 70, 20 or 80 for eW 155 moves the hero to locator 3, 1 or 2;
+        // any value but -1 returns the camera; the value is reset.
+        1335 => {
+            let v = state.take_message(2, 155);
+            let mut out: Vec<Action> = match v {
+                70 => vec![Action::MoveHero { locator: 3 }],
+                20 => vec![Action::MoveHero { locator: 1 }],
+                80 => vec![Action::MoveHero { locator: 2 }],
+                _ => Vec::new(),
+            };
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0042 772 A: with 591 set and 592 clear set 2 (region 775) into slot 1.
         772 if state.flag(591) && !state.flag(592) => vec![Action::LoadRegion { slot: 1, region: Some(775) }],
         // SPEC-0042 1350 A: value 10, 30, 40, 50 or 60 for eW 157 moves the hero to locator 4, 1,
@@ -8576,6 +8688,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0043 1335: entities 31 to 35 and 13.
+        (1335, 31..=35 | 13) => Some(entity as u8),
         // SPEC-0045 842: nine routines over 36 entities.
         (842, 24 | 39) => Some(1),
         (842, 15 | 26 | 28 | 42) => Some(2),
@@ -8685,6 +8799,19 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 842 {
         return talk_842(routine, state);
+    }
+    // SPEC-0043 1335 proximity: 34 line 3 in the frame unless Random(1, 3) is 1; 31 line 15 and
+    // 13 line 24 in the frame; 32, 33 and 35 lines 9, 12 and 6.
+    if pack == 1335 {
+        return match routine {
+            34 if state.talk_roll != 1 => vec![Action::Talk { line: 3 }],
+            31 => vec![Action::Talk { line: 15 }],
+            13 => vec![Action::Talk { line: 24 }],
+            32 => vec![Action::Message { line: 9 }],
+            33 => vec![Action::Message { line: 12 }],
+            35 => vec![Action::Message { line: 6 }],
+            _ => Vec::new(),
+        };
     }
     // SPEC-0044 1411 E1 to E6: groups of three by 338, 337, else (E4: 338, else); the line steps
     // through the group (restarting when the group changes).
@@ -9052,6 +9179,26 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1335_triggers_and_doors() {
+        let mut s = GameState::default();
+        // First visit: set 7 into slot 1 (region 1343); trigger 2 loads set 5 once.
+        assert!(on_init(1335, &mut s).contains(&Action::LoadRegion { slot: 1, region: Some(1343) }));
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        assert!(on_trigger(1335, 1, enter(2), &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(1341) }));
+        assert!(on_trigger(1335, 1, enter(2), &mut s).actions.is_empty());
+        // Trigger 5 with the button: 236 and 92, set 0; then trigger 6 runs once.
+        assert!(on_trigger(1335, 5, enter(5), &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(1336) }));
+        assert!(s.flag(236) && s.flag(92));
+        assert!(on_trigger(1335, 6, enter(6), &mut s).actions.contains(&Action::Message { line: 32 }));
+        assert!(on_trigger(1335, 6, enter(6), &mut s).actions.is_empty());
+        // Door 0: line 35 with 236 set and 93 clear.
+        assert_eq!(on_teleport(1335, 0, &mut s), vec![Action::Message { line: 35 }]);
+        // The return with 70 for eW 155.
+        s.blackboard.insert((2, 155), 70);
+        assert_eq!(on_activate(1335, &mut s)[0], Action::MoveHero { locator: 3 });
     }
 
     #[test]
