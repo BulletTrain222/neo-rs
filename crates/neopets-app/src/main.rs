@@ -169,9 +169,22 @@ fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::
     if let Some(t) = t.filter(|&t| t != current && play.other.as_ref().is_none_or(|o| o.pack != t)) {
         play.load_other(disc, index, t)?;
     }
-    play.spawned = old.spawned;
+    // The hero and the characters are drawn again from the new game (its hero may be the
+    // other one, and its character ids start again).
+    play.generation = old.generation + 1;
     play.snapshot = Some(slot.clone());
     play.apply_slot(slot);
+    Ok(play)
+}
+
+/// The world teardown of Quit (SPEC-0026 Quit teardown; SPEC-0035 Behavior 2, state 7): both
+/// world slots, both heroes, the sound and the world state are replaced by a new game's (909
+/// in E with its Init; SPEC-0006 a new game), so a later New Game starts fresh and no session
+/// snapshot (pending flag) is kept. The options block belongs to the front end and stays.
+fn new_game(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play) -> Result<play::Play, String> {
+    let mut play = play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT)?;
+    play.generation = old.generation + 1;
+    play.options = old.options;
     Ok(play)
 }
 
@@ -1122,8 +1135,10 @@ fn step_sim(
         let held = menu_view::menu_held(&keys, &gamepads);
         // A slot to apply after this frame's ticks (a load, or Continue with the snapshot).
         let mut pending: Option<neopets_sim::save::Slot> = None;
+        // Quit's world teardown, run after this frame's ticks.
+        let mut quit = false;
         for _ in 0..ticks {
-            if pending.is_some() {
+            if pending.is_some() || quit {
                 break;
             }
             if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
@@ -1148,6 +1163,7 @@ fn step_sim(
                         m.flow.written(ok.is_ok());
                     }
                     Some(menus::Command::Load(k)) => pending = m.flow.picker.file.slot(k).cloned(),
+                    Some(menus::Command::Quit) => quit = true,
                     Some(c) => play.play.item_command(&c),
                     None => {}
                 }
@@ -1210,6 +1226,27 @@ fn step_sim(
             }
             if std::mem::take(&mut play.play.reload_wanted) {
                 pending = play.play.snapshot.clone();
+            }
+            // NEOPETS_TRACE_QUIT=n also works in the window: Quit's teardown on play tick n of
+            // the first game, then play again at once (the front end's pages are skipped).
+            if play.play.generation == 0 && std::env::var("NEOPETS_TRACE_QUIT").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
+                quit = true;
+                if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                    m.flow.set(&a.f, menus::PLAY);
+                }
+            }
+        }
+        if let (true, Some(archive)) = (quit, archive.as_deref_mut()) {
+            match new_game(&mut archive.disc, &archive.index, &play.play) {
+                Ok(new) => {
+                    play.play = new;
+                    match archive.disc.reopen() {
+                        Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
+                        Err(e) => error!("No loader thread, streaming is off: {e}"),
+                    }
+                    info!("Quit: the world was torn down; a new game waits in {}", play.play.world.pack);
+                }
+                Err(e) => error!("Quit teardown failed: {e}"),
             }
         }
         if let (Some(slot), Some(archive)) = (pending, archive.as_deref_mut()) {
@@ -1822,11 +1859,21 @@ fn sync_characters(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut skinned: Local<std::collections::HashMap<u64, Vec<(Handle<Mesh>, usize)>>>,
+    mut generation: Local<u32>,
 ) {
     let Some(state) = state else { return };
     let p = &state.play;
     let live: std::collections::HashSet<u64> = p.characters.iter().map(|c| c.id).collect();
+    // A rebuilt game (Quit or a load) draws every character again.
+    let rebuilt = std::mem::replace(&mut *generation, p.generation) != p.generation;
+    if rebuilt {
+        skinned.clear();
+    }
     for (e, root, mut t, mut vis) in &mut roots {
+        if rebuilt {
+            commands.entity(e).despawn();
+            continue;
+        }
         match p.characters.iter().find(|c| c.id == root.0) {
             None => {
                 commands.entity(e).despawn();
@@ -2145,7 +2192,25 @@ fn play_trace(
     });
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
+    // NEOPETS_TRACE_QUIT=n: Quit's world teardown on tick n (diagnostic; the pause page's Quit).
+    let mut quit_at: Option<u64> = std::env::var("NEOPETS_TRACE_QUIT").ok().and_then(|v| v.trim().parse().ok());
     for _ in 0..ticks {
+        // Once: the new game's tick count starts again.
+        if quit_at.is_some_and(|k| k == play.ticks) {
+            quit_at = None;
+            let held = |p: &play::Play| (p.world.pack, p.hero_index, p.hero_hp, p.state.flags.len(), p.state.neopoints, p.snapshot.is_some(), p.characters.len(), p.generation);
+            println!("      Quit on tick {}: before (world, hero, hp, flags, NP, snapshot, characters, game) {:?}", play.ticks, held(&play));
+            match new_game(&mut archive.disc, &archive.index, &play) {
+                Ok(new) => {
+                    play = new;
+                    if let Ok(second) = archive.disc.reopen() {
+                        streamer = Streamer::start(second, archive.index.clone(), play.boot.clone());
+                    }
+                    println!("      after {:?}; {}", held(&play), play.status());
+                }
+                Err(e) => println!("      Quit teardown failed: {e}"),
+            }
+        }
         // The trace waits for region loads (characters) before the next tick, up to a minute,
         // so that runs do not depend on the loader's speed.
         let waited = std::time::Instant::now();

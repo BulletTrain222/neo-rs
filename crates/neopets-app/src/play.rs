@@ -773,6 +773,9 @@ pub struct Play {
     next_character: u64,
     /// Set once the hero's meshes exist.
     pub spawned: bool,
+    /// Which game this is: a rebuild (New Game after a Quit, or a load) counts up, so the
+    /// renderer drops every drawn character (the new game's ids start again).
+    pub generation: u32,
     /// A front-end page other than play is up (the world is frozen and the HUD hidden).
     pub menu_open: bool,
     /// The save game (SPEC-0025): the world key table (keys, saved ids), the growth words, the
@@ -1294,6 +1297,7 @@ impl Play {
             region_wanted: Vec::new(),
             next_character: 0,
             spawned: false,
+            generation: 0,
             menu_open: false,
             world_keys,
             growth,
