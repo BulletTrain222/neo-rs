@@ -581,7 +581,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -669,6 +669,13 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         }
         // SPEC-0041 1353 teleport 0: with flag 104 value 10 for eW 158 and the entry into eW 175
         // (pack 1405), 3 s; else line 0.
+        // SPEC-0039 1257 teleports 0, 2 and 1 (handlers 3 to 5, context 13): value 10, 20 or 30
+        // for eW 147 and the exterior load to eW 138, 139 or 140, 3 s.
+        (1257, 0..=2) => {
+            let (v, slot) = [(10, 138), (30, 140), (20, 139)][door];
+            state.blackboard.insert((2, 147), v);
+            vec![Action::ReplaceExterior { slot, plane: -1 }, wait(3.0)]
+        }
         // SPEC-0037 776 teleport 0 (kind 13): value 10 for eW 31 and the leave to eW 44, 3 s.
         (776, 0) => {
             state.blackboard.insert((2, 31), 10);
@@ -1369,6 +1376,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0039 1257 Init: handler 1 on trigger 17, handler 7 on trigger 0, and thread 8's
+        // load of set 0 (region 1258). Handler 2 (triggers 1 to 16) is not registered: its
+        // GetCollisInfo tests are not specified.
+        1257 => vec![reg(17, 1), reg(0, 7), Action::LoadRegion { slot: 0, region: Some(1258) }],
         // SPEC-0043 749 Init: value 40 for eW 20 (type 2); thread B's normal camera. 748 and 752:
         // thread B's normal camera (their blackboard message's value is not given). The
         // on-enter, proximity and entity-control set-ups are fixed rules.
@@ -3407,6 +3418,51 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0039 1257 handler 1 (trigger 17): with 459 set, 77 clear, item 29 not held and
+        // level state 0 clear: level state 0 and line 0.
+        (1257, 1) if state.flag(459) && !state.flag(77) && !state.has_item(29) && !state.level(0) => {
+            state.set_level(0, true);
+            out.actions.push(Action::Message { line: 0 });
+        }
+        // Handler 7 (trigger 0, entering, 676 clear): the ambush scene, then 676. The two
+        // CharacterActivate and CharacterDeactivate calls (their character comes from module
+        // data) are not reproduced.
+        (1257, 7) if call.state == 1 && !state.flag(676) => {
+            state.set(676, true);
+            let cam = |track, wait| Action::PlayCamera { track, wait, end: 1, speed: 1.0 };
+            let anim = |entity, anim, looped, wait| Action::EntityAnim { entity, anim, looped, wait };
+            out.actions.extend([
+                Action::HoldHero,
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::LetterBox { on: true, seconds: 0.0, wait: false },
+                Action::MoveHero { locator: 4 },
+                Action::FadeIn { seconds: 0.7, wait: false },
+                Action::Sleep { ticks: 2 },
+                anim(0, 112, true, false),
+                cam(4, false),
+                Action::WalkHero { locator: 5, wait: true, orient: false },
+                Action::Sleep { ticks: 30 },
+                Action::Message { line: 17 },
+                cam(5, false),
+                Action::Converse { entity: 0, line: 18 },
+                cam(6, true),
+                cam(8, false),
+                anim(2, 10, false, true),
+                anim(2, 1, true, false),
+                cam(7, false),
+                Action::Equip { on: true },
+                Action::WalkEntity { entity: 0, locator: 6, wait: false, orient: false, stop: 1.1 },
+                anim(3, 10, false, true),
+                Action::Agro { entity: 3 },
+                Action::Message { line: 19 },
+                anim(0, 104, false, true),
+                anim(1, 10, false, false),
+                Action::Agro { entity: 1 },
+                Action::Agro { entity: 2 },
+                Action::LetterBox { on: false, seconds: 1.0, wait: false },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
         // SPEC-0041 1363 trigger A, the pressure plate (puzzle not done): object 2 down to step
         // 40 one step a tick (camera 4 the first time), object 1 off, object 0 shown and played;
         // after the hero leaves, object 2 back up to the puzzle level, object 0 off, object 1
@@ -5340,6 +5396,14 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0039 1257 handler 6: value 20, 10 or 30 for eW 147 moves the hero to locator 2, 0
+        // or 1; any other value returns the camera. The value is reset.
+        1257 => match state.take_message(2, 147) {
+            20 => vec![Action::MoveHero { locator: 2 }],
+            10 => vec![Action::MoveHero { locator: 0 }],
+            30 => vec![Action::MoveHero { locator: 1 }],
+            _ => vec![Action::ReturnCamera { preset: -1, release: true }],
+        },
         // SPEC-0037 776 A: value 10 for eW 31 moves the hero to locator 1 with the normal camera;
         // the value is reset.
         776 if state.take_message(2, 31) == 10 => vec![Action::MoveHero { locator: 1 }, Action::ReturnCamera { preset: -1, release: true }],
@@ -7620,6 +7684,22 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1257_ambush_and_doors() {
+        let mut s = GameState::default();
+        assert!(on_init(1257, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1258) }));
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        let out = on_trigger(1257, 7, enter(0), &mut s).actions;
+        assert!(out.contains(&Action::Converse { entity: 0, line: 18 }) && s.flag(676));
+        assert!(on_trigger(1257, 7, enter(0), &mut s).actions.is_empty());
+        s.set(459, true);
+        assert_eq!(on_trigger(1257, 1, enter(17), &mut s).actions, vec![Action::Message { line: 0 }]);
+        assert!(on_trigger(1257, 1, enter(17), &mut s).actions.is_empty());
+        // Teleport 2 posts 20 and loads eW 139; the return with 20 puts the hero at locator 2.
+        assert_eq!(on_teleport(1257, 2, &mut s)[0], Action::ReplaceExterior { slot: 139, plane: -1 });
+        assert_eq!(on_activate(1257, &mut s), vec![Action::MoveHero { locator: 2 }]);
     }
 
     #[test]
