@@ -545,7 +545,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if pack == 1139 && door <= 1 {
+    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -577,6 +577,11 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0043 1173 teleport 0: value 110 for eW 119 and the replacement to eW 119 (1152).
+        (1173, 0) => {
+            state.blackboard.insert((2, 119), 110);
+            vec![Action::ReplaceExterior { slot: 119, plane: -1 }]
+        }
         // SPEC-0039 1139 teleports: index 0 replaces the exterior with eW 90 (pack 1023); index 1
         // with flag 35 posts 10 for eW 109 and replaces it with eW 109 (pack 1129), else line 0;
         // then 3 s. (Index 1's context is 3 while flag 35 is clear; 13 is shown here.)
@@ -783,7 +788,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 796 | 799 | 880 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 796 | 799 | 880 | 1173 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -830,6 +835,28 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0044 745 Init: value 10 for eW 20; four or more of item 82 with 567 set sets 568;
+        // the slot thread: with 76 set slot 1 loads set 1 (region 747) while 569 is clear; with 76
+        // clear slot 0 loads set 0 (746) and slot 1 set 1 (while 569 is clear, as slot store B
+        // exists only then); the normal camera.
+        745 => {
+            state.blackboard.insert((2, 20), 10);
+            if state.flag(567) && state.items.get(&82).copied().unwrap_or(0) >= 4 {
+                state.set(568, true);
+            }
+            let mut v = Vec::new();
+            if !state.flag(76) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(746) });
+            }
+            if !state.flag(569) {
+                v.push(Action::LoadRegion { slot: 1, region: Some(747) });
+            }
+            v.push(Action::ReturnCamera { preset: -1, release: true });
+            v
+        }
+        // SPEC-0043 1173 Init: object 1 off; routine 2 on trigger 1 and routine 3 on trigger 0;
+        // teleport 0 (kind 13), entity 0's routine and the arrival are fixed rules.
+        1173 => vec![Action::InitObjOn { obj: 1, end: false }, reg(1, 2), reg(0, 3)],
         // SPEC-0039 1405, 1407, 1417, 1419 and 1425 Init: their blackboard values (1417: 20 for
         // eW 159; 1425: 50 for eW 160); 1407 sets flag 100 first; the thread loads slot 0 with set
         // 0 (region P + 1) and returns the camera under each pack's gate (104, always, 102, 100,
@@ -1552,6 +1579,59 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     out
 }
 
+/// SPEC-0044 745's item exchange: items 5, 4 and 3 (one of each) for line 16, flag 260 (if clear),
+/// and flags 76 and 264. None when an item is missing.
+fn exchange_745(s: &mut GameState) -> Option<Vec<Action>> {
+    if ![5, 4, 3].iter().all(|&i| s.has_item(i)) {
+        return None;
+    }
+    for i in [5, 4, 3] {
+        s.take(i, 1);
+    }
+    for f in [260, 76, 264] {
+        s.set(f, true);
+    }
+    Some(vec![Action::Talk { line: 16 }])
+}
+
+/// SPEC-0044 745 routines (entity 3: A, 0: B, 1: C, 2: D). "Cycle" steps three lines with one
+/// counter per routine (word 10 + routine).
+fn apothecary_talk(entity: u8, s: &mut GameState) -> Vec<Action> {
+    let word = 10 + entity;
+    let cyc = |s: &mut GameState, a: u16| {
+        let c = s.word(745, word).rem_euclid(3);
+        s.set_word(745, word, (c + 1) % 3);
+        vec![Action::Talk { line: a + c as u16 }]
+    };
+    let f = |s: &GameState, n| s.flag(n);
+    match entity {
+        3 if f(s, 569) => cyc(s, 8),
+        3 if f(s, 568) => {
+            s.set(569, true);
+            s.remove_all(82);
+            vec![Action::Talk { line: 11 }]
+        }
+        3 if f(s, 567) => cyc(s, 12),
+        3 if f(s, 76) => {
+            s.set(567, true);
+            vec![Action::Talk { line: 15 }]
+        }
+        3 if f(s, 75) => match exchange_745(s) {
+            Some(v) => v,
+            None if [5, 4, 3].iter().any(|&i| s.has_item(i)) => cyc(s, 17),
+            None => cyc(s, 20),
+        },
+        3 => {
+            s.set(260, true);
+            vec![Action::Talk { line: 23 }]
+        }
+        0 => cyc(s, if f(s, 76) { 24 } else { 27 }),
+        1 => cyc(s, if f(s, 76) { 30 } else { 33 }),
+        2 => cyc(s, if f(s, 569) { 36 } else if f(s, 76) { 39 } else { 42 }),
+        _ => Vec::new(),
+    }
+}
+
 /// The registration gate of SPEC-0039 1405, 1407, 1417, 1419 and 1425.
 fn gate_1405(pack: u32, s: &GameState) -> bool {
     match pack {
@@ -2132,6 +2212,44 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0043 1173 routine 2 (trigger 1; Medium-High): while object 1 is shown, the Square
+        // context 4; on a press with 162 set and 167 clear the walk to locator 7, hero animation
+        // 140, object 1 played (wait) and off, object 2 on, camera 4, sound 11, object 0 played,
+        // about 1 s, flag 630 and the normal camera; else line 0. Word 0 keeps it from starting
+        // twice; the object-1 test is taken from the word (set when the lever is used).
+        (1173, 2) if call.state != 0 && state.word(pack, 0) == 0 => {
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                if state.flag(162) && !state.flag(167) {
+                    state.set_word(pack, 0, 1);
+                    out.actions.extend([
+                        Action::HoldHero,
+                        Action::WalkHero { locator: 7, wait: true, orient: true },
+                        Action::HeroAnim { anim: 140, wait: false },
+                        Action::PlayAnim { obj: 1, speed: 1.0, wait: true },
+                        Action::DeactivateObj { obj: 1 },
+                        Action::InitObjOn { obj: 2, end: false },
+                        Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                        Action::PlaySound { cue: 11, locator: None },
+                        Action::PlayAnim { obj: 0, speed: 1.0, wait: false },
+                        wait(1.0),
+                        Action::SetFlag { flag: 630, on: true },
+                        Action::ReturnCamera { preset: -1, release: true },
+                    ]);
+                } else {
+                    out.actions.push(Action::Message { line: 0 });
+                }
+            }
+        }
+        // 1173 routine 3 (trigger 0, the body; Medium): with 630 the Square context 13; a press
+        // posts 120 for eW 124 and replaces the exterior with eW 124 (pack 1171).
+        (1173, 3) if call.object && state.flag(630) => {
+            out.prompt = Some(13);
+            if call.square && !state.talking {
+                state.blackboard.insert((2, 124), 120);
+                out.actions.push(Action::ReplaceExterior { slot: 124, plane: -1 });
             }
         }
         // SPEC-0039 732 handler 1 (triggers 0 to 2, every fire with the body): value 70, 60 or 40
@@ -2915,6 +3033,16 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
         }
         1421 if state.flag(102) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
         1405 if state.flag(104) => add(&mut t, 0, 0, (5.0, 8.0), (5.0, 7.0), &std3, &[]),
+        745 => {
+            add(&mut t, 0, 98, (2.0, 3.0), dwell, &[], &[]);
+            add(&mut t, 2, 98, (2.0, 3.0), dwell, &[], &[]);
+            add(&mut t, 1, 74, (5.0, 8.0), dwell, &[(146, 2.5), (147, 2.5)], &[]);
+            add(&mut t, 3, 0, (2.0, 5.0), (5.0, 7.0), &[(51, 2.5), (147, 1.2)], &[(8, true, true), (9, true, true), (7, true, true)]);
+        }
+        1173 => {
+            let points = [(3, true, true), (4, true, false), (5, false, false), (6, false, false)];
+            add(&mut t, 0, 0, (1.0, 3.0), dwell, &[(54, 2.5), (49, 2.5), (52, 2.5), (62, 2.5), (55, 2.5)], &points);
+        }
         1407 => add(&mut t, 0, 0, (8.0, 14.0), (5.0, 7.0), &std3, &[]),
         1417 if state.flag(102) => add(&mut t, 0, 0, (8.0, 15.0), (5.0, 7.0), &std4, &[]),
         1419 if state.flag(100) => add(&mut t, 0, 0, (8.0, 14.0), (5.0, 7.0), &std3, &[]),
@@ -2928,6 +3056,10 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
 
 /// One tick of a module's shared entity-control table (its Update's call).
 pub fn entity_step(pack: u32, state: &mut GameState, talking: &dyn Fn(usize) -> bool, walking: &dyn Fn(usize) -> bool, random: &mut dyn FnMut(i32, i32) -> i32) -> Vec<crate::entityctl::Command> {
+    // SPEC-0044 745 calls it only while flag 264 is clear.
+    if pack == 745 && state.flag(264) {
+        return Vec::new();
+    }
     state.entity_tables.get_mut(&pack).map(|t| t.step(talking, walking, random)).unwrap_or_default()
 }
 
@@ -2948,6 +3080,27 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         // frame; else line 2 (202), 4 (150) or 6.
         984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
         984 => vec![Action::Message { line: if state.flag(202) { 2 } else if state.flag(150) { 4 } else { 6 } }],
+        // SPEC-0044 745 routine E (on-enter): two lines in turn (word 20) by 569 (0, 1), 567 (2,
+        // 3), 76 (4, 5); with 75 set and 264 clear the item exchange when all three are held
+        // (else nothing); otherwise 6, 7.
+        745 => {
+            let pair = |state: &mut GameState, a: u16| {
+                let c = state.word(745, 20).rem_euclid(2);
+                state.set_word(745, 20, (c + 1) % 2);
+                vec![Action::Message { line: a + c as u16 }]
+            };
+            if state.flag(569) {
+                pair(state, 0)
+            } else if state.flag(567) {
+                pair(state, 2)
+            } else if state.flag(76) {
+                pair(state, 4)
+            } else if state.flag(75) && !state.flag(264) {
+                exchange_745(state).unwrap_or_default()
+            } else {
+                pair(state, 6)
+            }
+        }
         // SPEC-0039 1417 on-enter (registered with 102): with 100, line 0 (106) or 2. 1419 (with
         // 100): line 0 with 102 and 104, else 2.
         1417 if state.flag(102) && state.flag(100) => vec![Action::Message { line: if state.flag(106) { 0 } else { 2 } }],
@@ -2984,6 +3137,21 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0043 1173 activate-world: the value for eW 126; 120 locator 2, 110 locator 0, 130
+        // locator 1 and flag 319; the value reset and the normal camera in every case.
+        1173 => {
+            let mut out = match state.take_message(2, 126) {
+                120 => vec![Action::MoveHero { locator: 2 }],
+                110 => vec![Action::MoveHero { locator: 0 }],
+                130 => {
+                    state.set(319, true);
+                    vec![Action::MoveHero { locator: 1 }]
+                }
+                _ => Vec::new(),
+            };
+            out.push(Action::ReturnCamera { preset: -1, release: true });
+            out
+        }
         // SPEC-0039 1139 activate-world: the value for eW 114; 10 places the hero at locator 1,
         // 20 at 0; the normal camera.
         1139 => {
@@ -4631,6 +4799,9 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0044 745: routines A to D on entities 3, 0, 1 and 2; SPEC-0043 1173: routine 4 on 0.
+        (745, 0..=3) => Some(entity as u8),
+        (1173, 0) => Some(4),
         // SPEC-0039 1405 to 1425: the entity-0 routine.
         (1405 | 1407 | 1417 | 1419 | 1425, 0) => Some(0),
         // SPEC-0039 1139: handlers 1 to 5 on entities 0 to 4; 732: handler 3 on entity 1; 793:
@@ -4716,6 +4887,12 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 750 {
         return talk_750(routine, state);
+    }
+    if pack == 745 {
+        return apothecary_talk(routine, state);
+    }
+    if (pack, routine) == (1173, 4) {
+        return if state.flag(30) { vec![Action::Talk { line: 1 }] } else { vec![Action::Message { line: 4 }] };
     }
     if matches!(pack, 1405 | 1407 | 1417 | 1419 | 1425) && routine == 0 {
         return hall_talk(pack, state);
@@ -4994,6 +5171,30 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_745_1173() {
+        let mut s = GameState::default();
+        // 745 entity 3: 260 and line 23; with 75 and items 5, 4 and 3 the exchange (line 16).
+        assert_eq!(on_talk(745, 3, &mut s), vec![Action::Talk { line: 23 }]);
+        s.set(75, true);
+        assert_eq!(on_talk(745, 3, &mut s), vec![Action::Talk { line: 20 }]);
+        for i in [3, 4, 5] {
+            s.give(i, 1);
+        }
+        assert_eq!(on_talk(745, 3, &mut s), vec![Action::Talk { line: 16 }]);
+        assert!(s.flag(76) && s.flag(264) && !s.has_item(4));
+        // 76 then 567 (line 15); entity 0 cycles 24, 25, 26.
+        assert_eq!(on_talk(745, 3, &mut s), vec![Action::Talk { line: 15 }]);
+        assert_eq!(on_talk(745, 0, &mut s), vec![Action::Talk { line: 24 }]);
+        // While 264 is set the entity-control routine does not run.
+        entity_setup(745, &mut s);
+        assert!(entity_step(745, &mut s, &|_| false, &|_| false, &mut |lo, _| lo).is_empty());
+        // 1173 arrival 130: locator 1 and flag 319.
+        s.blackboard.insert((2, 126), 130);
+        assert_eq!(on_activate(1173, &mut s)[0], Action::MoveHero { locator: 1 });
+        assert!(s.flag(319));
     }
 
     #[test]
