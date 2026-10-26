@@ -218,6 +218,9 @@ pub enum Action {
     WaitWord { word: u8 },
     /// SetAnimObjAdditionRotY: the object's added yaw about its own Y axis, in degrees.
     ObjYaw { obj: usize, degrees: f32 },
+    /// SetWorldDisplayMask(M) for the thread's world (the display word stores 2M; SPEC-0030
+    /// row 212). SetWorldCollisMask is not built.
+    DisplayMask { mask: u32 },
     /// StartCameraShake(T, A, S, p4, R, phi, Z) (SPEC-0027 Camera shake).
     CameraShake { t: f32, a: f32, s: f32, p4: f32, r: f32, phi: f32, z: f32 },
     /// StartCameraShakeMode(type, duration, strength).
@@ -550,7 +553,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
+    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -582,6 +585,16 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0039 706 teleport 0 (context 13): with 67 clear and 64 set line 1; else the entry
+        // into eW 76 (pack 984), 3 s.
+        (706, 0) if !state.flag(67) && state.flag(64) => vec![Action::Message { line: 1 }],
+        (706, 0) => vec![Action::EnterInterior { slot: 76 }, wait(3.0)],
+        // SPEC-0039 753 teleport 0: value 80 for eW 31 (pack 758) and the replacement to it (with
+        // flag 68 clear the original plays movie 33 first, not built), 3 s.
+        (753, 0) => {
+            state.blackboard.insert((2, 31), 80);
+            vec![Action::ReplaceExterior { slot: 31, plane: -1 }, wait(3.0)]
+        }
         // SPEC-0041 1353 teleport 0: with flag 104 value 10 for eW 158 and the entry into eW 175
         // (pack 1405), 3 s; else line 0.
         (1353, 0) if state.flag(104) => {
@@ -822,7 +835,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 796 | 799 | 880 | 1173 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1173 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -869,6 +882,47 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0039 706 Init: triggers 1 (handler 1) and 2 (handler 3); flag 62 when none of 62 to
+        // 67 is set; with 248 set and no item 14, object 0 off and trigger 0 (handler 4); the
+        // display mask 2 (flag 205) or 1; thread 2 loads slot 0 with set 5 to 1 by the first set
+        // flag of 67 to 63, else set 0 (region 707 + set).
+        706 => {
+            let mut v = vec![reg(1, 1), reg(2, 3)];
+            if !(62..=67).any(|f| state.flag(f)) {
+                state.set(62, true);
+            }
+            if state.flag(248) && !state.has_item(14) {
+                v.extend([Action::InitObjOn { obj: 0, end: false }, reg(0, 4)]);
+            }
+            v.push(Action::DisplayMask { mask: if state.flag(205) { 2 } else { 1 } });
+            let set = [(67, 5), (66, 4), (65, 3), (64, 2), (63, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, j)| j);
+            v.push(Action::LoadRegion { slot: 0, region: Some(707 + set) });
+            v
+        }
+        // SPEC-0039 753 Init: effects 15 to 48 stopped; with flag 252 clear trigger 0 (handler 8);
+        // with 256 set and 258 clear (the event gate) trigger 1 (handler 3); the slot thread: with
+        // the gate slot 1 loads set 1 (region 755); slot 0 loads set 2 (756) with 427 set and 428
+        // clear, else set 0 (754). The movies 36, 37 and 33 are not built; the event runs
+        // without them.
+        753 => {
+            let mut v: Vec<Action> = (15..=48).map(|slot| Action::StopEffect { slot }).collect();
+            if !state.flag(252) {
+                v.push(reg(0, 8));
+            }
+            if state.flag(256) && !state.flag(258) {
+                v.extend([reg(1, 3), Action::LoadRegion { slot: 1, region: Some(755) }]);
+            }
+            v.push(Action::LoadRegion { slot: 0, region: Some(if state.flag(427) && !state.flag(428) { 756 } else { 754 }) });
+            v
+        }
+        // SPEC-0039 790 Init: objects 3, 0, 1, 2, 18 and 20 off; handlers 2 (trigger 14), 3 (15), 4
+        // (0) and 5 (8, and the kind-7 group 6's triggers 16 and 17). Trigger 1's handler 1
+        // branches on the trigger state in the middle of its sequence and is not reproduced.
+        790 => {
+            let mut v: Vec<Action> = [3, 0, 1, 2, 18, 20].into_iter().map(|obj| Action::InitObjOn { obj, end: false }).collect();
+            v.extend([reg(14, 2), reg(15, 3), reg(0, 4), reg(8, 5), Action::RegisterInstance { routine: 5, trigger: 0, group: 6 }]);
+            v
+        }
         // SPEC-0041 1353 Init: effect 0 stopped; Z2, Z1, Z0 and Z3 on triggers 2, 1, 0 and 3
         // unless flags 353 and 104 are both set; Z78 on 7 and 8 (Z4 to Z6's prompts are partly
         // known and not reproduced); thread X loads slot 0 with set 2 (region 1356) under 104, else
@@ -1657,6 +1711,38 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     out
 }
 
+/// SPEC-0039 706 entity 0 (lines 7 to 9 with flag 63, else 4 to 6, restarted on a change) and
+/// 753 entities 5 and 6 (by flags 86, 76, 258 with a hero split sharing one mode, 256, and the
+/// hero split of the rest).
+fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
+    let key = (pack, routine);
+    let mut rot = s.rotations.get(&key).copied().unwrap_or_default();
+    let triple = |a: u16| cycle(&[a, a + 1, a + 2]);
+    let tor = s.hero.selected == 0;
+    let line = match (pack, routine) {
+        (706, 5) => if s.flag(63) { rot.pick(0, &triple(7)) } else { rot.pick(1, &triple(4)) },
+        (753, 5 | 6) => {
+            let b: u16 = if routine == 5 { 0 } else { 17 };
+            if s.flag(86) {
+                rot.pick(0, &triple(b))
+            } else if s.flag(76) {
+                rot.pick(1, &triple(b + 3))
+            } else if s.flag(258) {
+                rot.pick(2, &triple(if tor { b + 6 } else { b + 9 }))
+            } else if s.flag(256) {
+                Some(b + 12)
+            } else if tor {
+                rot.pick(3, &triple(b + 13))
+            } else {
+                Some(b + 16)
+            }
+        }
+        _ => None,
+    };
+    s.rotations.insert(key, rot);
+    line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
 /// SPEC-0041 1353 proximity routines. P16: the package hand-in (612, 686, line 53), else the map
 /// shop by its counter S (word 1): held maps skipped, S 0 the greeting 54, S 1 to 3 prompts 55 to
 /// 57 for maps 36, 40 and 38 (200, 200, 300 NP), S 4 line 58 and back to 1. P17 and P20 to P24
@@ -2383,6 +2469,77 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0039 706 handler 1 (trigger 1, entering): flag 207. Handler 4 (trigger 0, entering
+        // with the body): lines 2 and 3. Handler 3 (trigger 2, the body): the Square context 3; a
+        // press shows line 0.
+        (706, 1) if call.state == 1 => state.set(207, true),
+        (706, 4) if call.state == 1 && call.object => out.actions.extend([Action::Message { line: 2 }, Action::Message { line: 3 }]),
+        (706, 3) if call.object && call.state != 0 => {
+            out.prompt = Some(3);
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: 0 });
+            }
+        }
+        // SPEC-0039 753 handler 8 (trigger 0, entering with the body, 252 clear): line 36. Handler
+        // 3 (trigger 1, the body): the first time (word 0; in place of "movie 36 not played") the
+        // hero to locator 3, the normal camera, effects 15 to 48 started and level state 1; in
+        // every case level state 2.
+        (753, 8) if call.state == 1 && call.object && !state.flag(252) => out.actions.push(Action::Message { line: 36 }),
+        (753, 3) if call.object => {
+            if state.word(pack, 0) == 0 {
+                state.set_word(pack, 0, 1);
+                out.actions.extend([Action::MoveHero { locator: 3 }, Action::ReturnCamera { preset: -1, release: true }]);
+                out.actions.extend((15..=48).map(|slot| Action::StartEffect { slot, camera: false }));
+                state.set_level(1, true);
+            }
+            state.set_level(2, true);
+        }
+        // SPEC-0039 790 handlers 2 and 3 (triggers 14 and 15, the body): the Square context 6; a
+        // press plays the lever sequence (camera 9, the walk to locator 48 or 49, hero animation
+        // 140, object 18 or 20 (wait), camera 6 or 7, object 1 or 2 (wait), the lever off, object
+        // 19 or 21 on, the normal camera). Word 1 or 2 keeps it from starting twice.
+        (790, 2 | 3) if call.state != 0 && call.object && state.word(pack, routine) == 0 => {
+            out.prompt = Some(6);
+            if call.square && !state.talking {
+                state.set_word(pack, routine, 1);
+                let (walk, lever, track, obj, after) = if routine == 2 { (48, 18, 6, 1, 19) } else { (49, 20, 7, 2, 21) };
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::PlayCamera { track: 9, wait: false, end: 0, speed: 1.0 },
+                    Action::WalkHero { locator: walk, wait: true, orient: true },
+                    Action::HeroAnim { anim: 140, wait: false },
+                    Action::PlayAnim { obj: lever, speed: 1.0, wait: true },
+                    Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 },
+                    Action::PlayAnim { obj, speed: 1.0, wait: true },
+                    Action::DeactivateObj { obj: lever },
+                    Action::InitObjOn { obj: after, end: false },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+        }
+        // 790 handler 4 (trigger 0, entering): fade out, bars on, fade in, the walk to locator 6,
+        // camera 4 (wait), bars off, the normal camera.
+        (790, 4) if call.state == 1 => out.actions.extend([
+            Action::HoldHero,
+            Action::FadeOut { seconds: 0.5, wait: true },
+            Action::Sleep { ticks: 3 },
+            Action::LetterBox { on: true, seconds: 0.0, wait: true },
+            Action::FadeIn { seconds: 0.5, wait: true },
+            Action::WalkHero { locator: 6, wait: false, orient: false },
+            Action::PlayCamera { track: 4, wait: true, end: 0, speed: 1.0 },
+            Action::LetterBox { on: false, seconds: 1.0, wait: false },
+            Action::ReturnCamera { preset: -1, release: true },
+        ]),
+        // 790 handler 5 (trigger 8: side 1; 16 and 17: side 0), entering with the body: when the
+        // side differs from the last one (word 0 holds side + 1), slot 0 is reset and loaded with
+        // set 0 (side 1, region 791) or set 1 (side 0, 792).
+        (790, 5) if call.state == 1 && call.object => {
+            let side = if call.index == 8 { 1 } else { 0 };
+            if state.word(pack, 0) != side + 1 {
+                state.set_word(pack, 0, side + 1);
+                out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(if side == 1 { 791 } else { 792 }) }]);
+            }
+        }
         // SPEC-0041 1353 Z0 to Z2 (triggers 0, 1, 2; statues 2, 1, 0; angle words 10 to 12):
         // while inside and the door word (13) is 0, the Square context 4; a press turns the statue
         // by 45 degrees over 30 ticks with sound 7, then 0.5 s (word 14 while it turns).
@@ -3061,6 +3218,27 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set(562, true);
             }
         }
+        // SPEC-0039 753 event thread (with the event gate at load): with 258 clear and level state
+        // 1: level state 0 runs the event end; else level state 2 is cleared if set, or level
+        // state 0 set and the end run. The end (movie 37 not built): effects 15 to 48 stopped and
+        // flag 258.
+        753 => {
+            if !state.flag(258) && state.level(1) {
+                let end = if state.level(0) {
+                    true
+                } else if state.level(2) {
+                    state.set_level(2, false);
+                    false
+                } else {
+                    state.set_level(0, true);
+                    true
+                };
+                if end {
+                    state.set(258, true);
+                    out.extend((15..=48).map(|slot| Action::StopEffect { slot }));
+                }
+            }
+        }
         // SPEC-0041 1353 Update, the statue check: all three angles multiples of 360 with the door
         // closed: flag 694, sound 8, objects 3 and 4 played, 6 off and 5 on, camera 6 (wait), 1 s,
         // the normal camera, the door open.
@@ -3388,6 +3566,23 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0039 753 activate-world: value 80 for eW 31: the hero to locator 0, 30 ticks, and
+        // with 660 clear lines 34 and 35 and 660; any value but -1 returns the camera.
+        753 => {
+            let v = state.take_message(2, 31);
+            let mut out = Vec::new();
+            if v == 80 {
+                out.extend([Action::MoveHero { locator: 0 }, Action::Sleep { ticks: 30 }]);
+                if !state.flag(660) {
+                    state.set(660, true);
+                    out.extend([Action::Message { line: 34 }, Action::Message { line: 35 }]);
+                }
+            }
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0041 1353 activate-world: the value for eW 158; 10 places the hero at locator 1, 20
         // at 3 (and starts effect 0); any value but -1 returns the normal camera.
         1353 => {
@@ -5103,6 +5298,9 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0039 706: handler 5 on entity 0; 753: handlers 4 and 5 on entities 5 and 6.
+        (706, 0) => Some(5),
+        (753, 5 | 6) => Some(entity as u8),
         // SPEC-0041 1353: P16 to P24 on entities 16 to 24.
         (1353, 16..=24) => Some(entity as u8),
         // SPEC-0043 1358: the delivery giver on entity 20 and line 90 on entity 21 (entities 16 to
@@ -5203,6 +5401,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1353 {
         return shrine_talk(routine, state);
+    }
+    if matches!(pack, 706 | 753) {
+        return glade_talk(pack, routine, state);
     }
     if (pack, routine) == (1358, 2) {
         return vec![Action::Talk { line: 90 }];
@@ -5490,6 +5691,34 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_706_753_790() {
+        let mut s = GameState::default();
+        let init = on_init(706, &mut s);
+        assert!(s.flag(62) && init.contains(&Action::LoadRegion { slot: 0, region: Some(707) }) && init.contains(&Action::DisplayMask { mask: 1 }));
+        assert_eq!(on_talk(706, 5, &mut s), vec![Action::Talk { line: 4 }]);
+        s.set(63, true);
+        assert_eq!(on_talk(706, 5, &mut s), vec![Action::Talk { line: 7 }]);
+        s.set(64, true);
+        assert_eq!(on_teleport(706, 0, &mut s), vec![Action::Message { line: 1 }]);
+        // 753 entity 6 as Roberta with 258: lines 26 to 28; the event ends on the tick after the
+        // hero leaves trigger 1.
+        s.hero.selected = 1;
+        s.set(258, true);
+        assert_eq!(on_talk(753, 6, &mut s), vec![Action::Talk { line: 26 }]);
+        s.set(258, false);
+        s.set(256, true);
+        let call = TriggerCall { index: 1, state: 2, object: true, square: false };
+        on_trigger(753, 3, call, &mut s);
+        assert!(on_update(753, &mut s, false).is_empty());
+        assert!(!on_update(753, &mut s, false).is_empty());
+        assert!(s.flag(258));
+        // 790: crossing to side 0 reloads set 1 once.
+        let side = TriggerCall { index: 16, state: 1, object: true, square: false };
+        assert_eq!(on_trigger(790, 5, side, &mut s).actions.len(), 2);
+        assert!(on_trigger(790, 5, side, &mut s).actions.is_empty());
     }
 
     #[test]

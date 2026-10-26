@@ -1932,6 +1932,9 @@ impl Play {
                 }
                 Action::WaitInside { index } => return Some(Wait::Inside(index)),
                 Action::WaitWord { word } => return Some(Wait::Word(pack, word)),
+                Action::DisplayMask { mask } => {
+                    self.display_mask.insert(pack, 2 * mask);
+                }
                 Action::ObjYaw { obj, degrees } => {
                     self.obj_yaw.insert((pack, obj), degrees);
                 }
