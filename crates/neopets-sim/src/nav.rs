@@ -108,6 +108,20 @@ impl NavMesh {
         self.locate_full(p)
     }
 
+    /// The far centroid pick (SPEC-0056): up to T uniform triangle draws, the first centroid
+    /// more than `d` horizontally from `p`, else the last one drawn; None for an empty mesh.
+    pub fn far_centroid(&self, p: Vec3, d: f32, rng: &mut crate::rng::Rng) -> Option<Vec3> {
+        let mut last = None;
+        for _ in 0..self.len() {
+            let c = self.centroid(rng.index(self.len() as u32) as usize);
+            last = Some(c);
+            if (c[0] - p[0]).hypot(c[2] - p[2]) > d {
+                return Some(c);
+            }
+        }
+        last
+    }
+
     pub fn centroid(&self, t: usize) -> Vec3 {
         let [a, b, c] = self.triangles[t];
         std::array::from_fn(|k| (a[k] + b[k] + c[k]) / 3.0)

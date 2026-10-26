@@ -184,17 +184,7 @@ impl Whinny {
                 // Safe point: the far centroid pick (SPEC-0056; SPEC-0029 Behavior 28): up to T
                 // uniform triangle draws, the first centroid more than 10 from the hero, else the
                 // last one drawn.
-                let safe = mesh.filter(|m| !m.is_empty()).and_then(|m| {
-                    let mut last = None;
-                    for _ in 0..m.len() {
-                        let c = m.centroid(rng.index(m.len() as u32) as usize);
-                        last = Some(c);
-                        if hdist(c, hero) > 10.0 {
-                            return Some(c);
-                        }
-                    }
-                    last
-                });
+                let safe = mesh.and_then(|m| m.far_centroid(hero, 10.0, rng));
                 self.flee_step = 2;
                 self.flee_ticks = 25;
                 self.target = safe.or(Some(a));

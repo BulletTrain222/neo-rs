@@ -6907,6 +6907,15 @@ impl Play {
             let (a, b) = (c.position, add(c.position, [0.0, height, 0.0]));
             let near = shots.iter().take(6).filter(|&&(p, v, r)| neopets_sim::gnarfas::segment_distance(p, add(p, scale(v, 10.0)), a, b) <= body + r).count();
             let clip = c.anim.clip_state();
+            // The alternate loops' avoid point: the far centroid pick of her ground mesh, 10 from
+            // the hero, while the hero is within 5.0 of her.
+            let close = (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]) < 5.0;
+            let far = if close && c.sister.as_ref().is_some_and(|s| s.alternate && s.avoid.is_none()) {
+                let meshes = &self.world.navmeshes;
+                usize::try_from(neopets_sim::nav::closest(meshes, c.position, 1)).ok().and_then(|m| meshes.get(m)).and_then(|m| m.far_centroid(hero, 10.0, &mut self.rng))
+            } else {
+                None
+            };
             let v = neopets_sim::sisters::View {
                 position: c.position,
                 hero,
@@ -6919,6 +6928,7 @@ impl Play {
                 frame_bits: c.anim.frame_bits(),
                 blocked: false,
                 level: &level,
+                far,
             };
             let Some(s) = c.sister.as_mut() else { continue };
             let before = s.state;
@@ -8885,6 +8895,9 @@ impl Play {
         let pose = ([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
         self.restart = Some(pose);
         self.arrive(pose);
+        // SPEC-0055 2A step 6 / SPEC-0025 Loading: the selected hero arrives in state 59 (clip
+        // 175, the arrival pose, to progress 0.99, then state 1); it reads no stick meanwhile.
+        self.loco.set_end_state(hero_states::ARRIVAL);
         self.flags_seen = self.state.flags.clone();
         // Options (Loading, step 15): the slot's block, then the apply rule.
         self.options.block = neopets_sim::options::Block::from_bytes(&s.0[at::OPTIONS..at::OPTIONS + 32]);

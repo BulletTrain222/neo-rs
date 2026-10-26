@@ -175,6 +175,9 @@ pub struct View<'a> {
     /// The body contact or navmesh blocked flag.
     pub blocked: bool,
     pub level: &'a dyn Fn(u16) -> bool,
+    /// The alternate loops' avoid point: the far centroid pick of her mesh, 10 from the hero
+    /// (SPEC-0056; SPEC-0011 Movement speed), offered while the hero is within 5.0.
+    pub far: Option<Vec3>,
 }
 
 /// What a sister asks for this tick.
@@ -226,6 +229,8 @@ pub struct Sister {
     /// starts, so nothing reads it).
     started: bool,
     group: i32,
+    /// The alternate loops' avoiding mode (+0x30 = 2) and its point.
+    pub avoid: Option<Vec3>,
 }
 
 fn ticks(s: f32) -> i32 {
@@ -287,7 +292,7 @@ impl Sister {
             16 => 2,
             _ => 0,
         };
-        Self { class, kind, state: State::Idle, energy: 0, status: 0, special: 0, dodge: 0, radius: None, dir: 1.0, taken: 0, alternate: false, started: false, group: 0 }
+        Self { class, kind, state: State::Idle, energy: 0, status: 0, special: 0, dodge: 0, radius: None, dir: 1.0, taken: 0, alternate: false, started: false, group: 0, avoid: None }
     }
 
     /// The controller start (R-0065): energy, status, group and special drawn in that order by
@@ -483,6 +488,22 @@ impl Sister {
             self.energy -= 1;
         }
         let alive = g.alive;
+        // SPEC-0011 Movement speed: the avoiding mode starts when the hero is within 5.0 of her
+        // horizontally and ends within 2.0 of its point or when blocked; meanwhile she runs to
+        // the point at twice the movement speed and makes no attack decision.
+        if self.avoid.is_none() && matches!(self.state, State::Idle | State::Move) && hdist(v.position, v.hero) < 5.0 {
+            self.avoid = v.far;
+        }
+        if let Some(p) = self.avoid {
+            if hdist(v.position, p) < 2.0 || v.blocked {
+                self.avoid = None;
+            } else {
+                self.state = State::Move;
+                a.anim = Some(1);
+                a.travel = Some((p, 2.0 * move_speed(w, alive)));
+                return a;
+            }
+        }
         if matches!(self.state, State::Idle | State::Move) {
             if self.energy < 1 {
                 // The target roll (a target entity is not built, so the flag has no use here).
@@ -655,7 +676,7 @@ mod tests {
     }
 
     fn view(level: &dyn Fn(u16) -> bool, hp: i32) -> View<'_> {
-        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), progress: 0.0, frame_bits: 0, blocked: false, level }
+        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), progress: 0.0, frame_bits: 0, blocked: false, level, far: None }
     }
 
     #[test]
@@ -872,6 +893,32 @@ mod tests {
             assert!((7..=8).contains(&d.slots.len()) && d.slots.iter().all(|s| (160..=171).contains(&s.0)));
             assert_eq!((d.countdown, d.period), (1801, 1801 / d.slots.len() as i32));
         }
+    }
+
+    #[test]
+    fn alternate_avoid() {
+        // SPEC-0011 Movement speed: in an alternate loop a hero within 5.0 starts the avoiding
+        // mode: she runs to the far point at twice the movement speed and makes no decision,
+        // until within 2.0 of it.
+        let mut w = Words::read(&block(), 50).unwrap();
+        let mut rng = Rng::seeded(4);
+        let zero = |f: u16| f == 0;
+        let mut g = Group::default();
+        g.recount(1);
+        let mut s = Sister::new(15);
+        s.energy = 100;
+        let mut v = view(&zero, 100);
+        v.hero = [17.0, 0.0, 0.0];
+        v.far = Some([40.0, 0.0, 0.0]);
+        let a = s.tick(&v, &mut g, &mut w, 1, &mut rng);
+        let speed = move_speed(&w, g.alive);
+        assert_eq!(a.travel, Some(([40.0, 0.0, 0.0], 2.0 * speed)));
+        assert_eq!(s.avoid, Some([40.0, 0.0, 0.0]));
+        // Within 2.0 of the point the mode ends.
+        v.position = [39.0, 0.0, 0.0];
+        v.hero = [30.0, 0.0, 0.0];
+        s.tick(&v, &mut g, &mut w, 1, &mut rng);
+        assert_eq!(s.avoid, None);
     }
 
     #[test]
