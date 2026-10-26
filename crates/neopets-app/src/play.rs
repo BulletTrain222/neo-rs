@@ -52,8 +52,12 @@ pub struct World {
     pub zones: Option<neopets_sim::zone::Grid>,
     pub children: Vec<u16>,
     ground: Option<Ground>,
-    /// Rectangle primitives that push characters out (SPEC-0018 box push; new-game mask 0).
+    /// Rectangle primitives that push characters out (SPEC-0018 box push) under the world's
+    /// collision mask, and all of them with their gate masks.
     boxes: Vec<BoxShape>,
+    all_boxes: Vec<(u16, BoxShape)>,
+    /// SetWorldCollisMask's gate word (0 at load).
+    collis_mask: u16,
     neighbours: Neighbours,
     /// Teleport planes (doors), the arrival-door list (tag 0x0E) and the entry records.
     pub planes: Vec<TeleportPlane>,
@@ -88,6 +92,8 @@ pub struct World {
     /// table and the groups opened in this load.
     capacity: usize,
     volumes: Vec<neopets_sim::trigger::Volume>,
+    /// Every volume that fires on contact under some collision mask.
+    all_volumes: Vec<neopets_sim::trigger::Volume>,
     routines: HashMap<u16, u8>,
     /// Script-group type registrations: trigger index to its owner group (SPEC-0048 Script
     /// groups, type registration); a later RegisterTrigger on the index replaces it.
@@ -105,6 +111,13 @@ pub struct World {
 }
 
 impl World {
+    /// SetWorldCollisMask: the trigger volumes and push boxes whose gate mask is 0 or meets it.
+    pub fn set_collis_mask(&mut self, mask: u16) {
+        self.collis_mask = mask;
+        self.volumes = self.all_volumes.iter().filter(|v| v.fires_on_contact(mask)).copied().collect();
+        self.boxes = self.all_boxes.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
+    }
+
     /// The script volumes' trigger indices and a point inside each (diagnostic).
     pub fn volume_points(&self) -> Vec<(u16, [i32; 3])> {
         use neopets_sim::trigger::Shape;
@@ -155,11 +168,13 @@ impl World {
             object_anims: Vec::new(),
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
-            boxes: ground::rectangles(&bytes, &chain.chunks)
+            boxes: Vec::new(),
+            all_boxes: ground::rectangles(&bytes, &chain.chunks)
                 .into_iter()
-                .filter(|r| r.pushes(0))
-                .map(|r| BoxShape { origin: r.origin, axes: r.axes, extents: r.extents })
+                .filter(|r| r.pushes(0xFFFF))
+                .map(|r| (r.mask, BoxShape { origin: r.origin, axes: r.axes, extents: r.extents }))
                 .collect(),
+            collis_mask: 0,
             neighbours: Neighbours::of(&bytes, &chain.chunks),
             planes: ground::teleport_planes(&bytes, &chain.chunks),
             arrivals: Neighbours::arrivals(&bytes, &chain.chunks),
@@ -183,6 +198,7 @@ impl World {
             spheres: Vec::new(),
             capacity: 0,
             volumes: Vec::new(),
+            all_volumes: Vec::new(),
             routines: HashMap::new(),
             group_routes: HashMap::new(),
             disabled_triggers: Default::default(),
@@ -226,8 +242,10 @@ impl World {
                 };
                 neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }
             })
-            .filter(|v| v.fires_on_contact(0))
+            .filter(|v| v.fires_on_contact(0xFFFF))
             .collect();
+        world.all_volumes = world.volumes.clone();
+        world.set_collis_mask(0);
         Ok((world, bytes))
     }
 
@@ -1987,6 +2005,12 @@ impl Play {
                 }
                 Action::DisplayMask { mask } => {
                     self.display_mask.insert(pack, 2 * mask);
+                }
+                Action::CollisMask { mask } => {
+                    let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                    if let Some(w) = w {
+                        w.set_collis_mask(mask as u16);
+                    }
                 }
                 Action::ObjYaw { obj, degrees } => {
                     self.obj_yaw.insert((pack, obj), degrees);
@@ -3813,6 +3837,9 @@ impl Play {
             let Some(&routine) = self.world.routines.get(&i) else { continue };
             let call = level::TriggerCall { index: i, state: rec.state, object: rec.object, square };
             self.state.talking = self.dialogue_open;
+            if self.world.pack == 1066 {
+                self.state.trigger_raw = self.rng.next_u32();
+            }
             let out = level::on_trigger(self.world.pack, routine, call, &mut self.state);
             if out.prompt.is_some() && self.door_prompt.is_none() && !self.talk_prompt {
                 self.door_prompt = out.prompt;
