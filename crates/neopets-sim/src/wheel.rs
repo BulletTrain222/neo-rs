@@ -40,6 +40,27 @@ pub const VILLAGE: Copy = Copy {
     shift: 2,
 };
 
+/// The pack 1358 copy (trigger 0, registered with flag 102).
+pub const PALACE: Copy = Copy {
+    fee: 100,
+    too_poor: 109,
+    start_prompt: 93,
+    go_on_prompts: [94, 95, 96, 97],
+    go_on_line: 99,
+    cash_out: [100, 101, 102, 103],
+    five_win: 98,
+    loss: [104, 105, 106, 107, 108],
+    payouts: [140, 180, 250, 400, 700],
+    flags: None,
+    sounds: (7, 6),
+    shift: 0,
+};
+
+/// The wheel copy of a pack (1358, else 1023's).
+pub fn copy_of(pack: u32) -> Copy {
+    if pack == 1358 { PALACE } else { VILLAGE }
+}
+
 /// The wheel's game words: stage G (0 new, 1 won, -1 lost), round r, angle A (degrees) and the
 /// lit cells.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]

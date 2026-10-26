@@ -1678,14 +1678,14 @@ impl Play {
                     let mut w = level::wheel_of(pack, &self.state);
                     w.light_show(if even { 0 } else { 5 });
                     level::set_wheel(pack, &mut self.state, &w);
-                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::VILLAGE.shift));
+                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::copy_of(pack).shift));
                 }
                 Action::WheelPattern => {
                     let mut w = level::wheel_of(pack, &self.state);
                     let rng = &mut self.rng;
                     w.new_pattern(&mut || rng.range(0, 7));
                     level::set_wheel(pack, &mut self.state, &w);
-                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::VILLAGE.shift));
+                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::copy_of(pack).shift));
                 }
                 Action::WheelSpin => {
                     self.wheel_spin = Some((pack, neopets_sim::wheel::Spin::default()));
@@ -1695,8 +1695,8 @@ impl Play {
                     let mut w = level::wheel_of(pack, &self.state);
                     let won = w.result();
                     level::set_wheel(pack, &mut self.state, &w);
-                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::VILLAGE.shift));
-                    let (win, loss) = neopets_sim::wheel::VILLAGE.sounds;
+                    self.display_mask.insert(pack, 2 * w.mask(neopets_sim::wheel::copy_of(pack).shift));
+                    let (win, loss) = neopets_sim::wheel::copy_of(pack).sounds;
                     self.apply(&[Action::PlaySound { cue: if won { win } else { loss }, locator: None }]);
                     self.last_fx = format!("wheel stopped at {:.1} on cell {}: {} on tick {}", w.angle, w.cell(), if won { "win" } else { "loss" }, self.ticks);
                 }
@@ -2255,6 +2255,9 @@ impl Play {
                 self.state.talk_d = self.rng.range(1, 6);
                 if pack == 1139 {
                     self.state.talk_five = self.rng.range(1, 5);
+                }
+                if pack == 1358 {
+                    self.state.talk_raw = self.rng.next_u32();
                 }
                 self.state.talk_roll = self.rng.range(1, 3);
                 let actions = level::on_talk(pack, routine, &mut self.state);
@@ -5400,6 +5403,23 @@ impl Play {
         let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i));
         if !a.scripted && (!gated || grouped) {
             return Some(obj.rest);
+        }
+        // SPEC-0059 Layout: the 1358 wheel is object 0 turned to A about locator 1's forward
+        // axis (through the object's origin).
+        if pack == 1358 && i == 0 && a.visible() {
+            if let Some((_, f)) = w.entries.get(1).copied() {
+                let k = unit(f);
+                let angle = level::wheel_of(pack, &self.state).angle.to_radians();
+                let (sn, cs) = angle.sin_cos();
+                let m = obj.rest;
+                let turn = |v: [f32; 3]| {
+                    let d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+                    let c = [k[1] * v[2] - k[2] * v[1], k[2] * v[0] - k[0] * v[2], k[0] * v[1] - k[1] * v[0]];
+                    std::array::from_fn::<f32, 3, _>(|j| v[j] * cs + c[j] * sn + k[j] * d * (1.0 - cs))
+                };
+                let (x, y, z) = (turn([m[0], m[1], m[2]]), turn([m[4], m[5], m[6]]), turn([m[8], m[9], m[10]]));
+                return Some([x[0], x[1], x[2], 0.0, y[0], y[1], y[2], 0.0, z[0], z[1], z[2], 0.0, m[12], m[13], m[14], 1.0]);
+            }
         }
         // SPEC-0059 Layout: the 1023 wheel is object 0 turned to A about its depth axis.
         if pack == 1023 && i == 0 && a.visible() {
