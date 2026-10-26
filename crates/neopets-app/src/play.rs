@@ -6957,9 +6957,20 @@ impl Play {
     /// None while it is hidden. In a pack whose object calls are not reproduced yet, an object no
     /// script call has touched is drawn at its rest block (a deviation: the original hides it
     /// until InitObjOn).
+    /// The draw zone gate (SPEC-0006 Binary grids; SPEC-0004, SPEC-0028): column `c` of world
+    /// `pack` with key -1 (the active block). The current world uses the camera's zone row; the
+    /// second world is not gated here (its block choice is the neighbour's).
+    pub fn zone_visible(&self, pack: u32, c: u8) -> bool {
+        pack != self.world.pack || self.zones.query(self.world.zones.as_ref(), c as i32, -1)
+    }
+
     pub fn object_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
         let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
         let obj = w.objects.get(i)?.as_ref()?;
+        // SPEC-0028 section 7: an object whose zone query fails is not drawn.
+        if !self.zone_visible(pack, obj.zone) {
+            return None;
+        }
         let a = w.object_anims.get(i)?;
         // An object a type-40 group names (chests and the other group kinds, whose setup is not
         // built) is also drawn at rest until a script touches it.

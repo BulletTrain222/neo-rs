@@ -50,6 +50,8 @@ pub struct Placed {
     /// None for world-space trees.
     pub matrix: Option<Matrix>,
     pub source: u16,
+    /// A type-20 instance's zone column (+0x40; SPEC-0004 Instanced meshes).
+    pub zone: Option<u8>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -89,6 +91,8 @@ fn placed_objects(p: &[u8], base: usize, scene: &mut Scene) {
                 payload: base + r.start..base + r.end,
                 matrix: Some(m),
                 source: PLACED_OBJECTS,
+                // SPEC-0028 section 7: the object's zone column (0x1B8), read as stored.
+                zone: p.get(obj + 0x1B8).copied(),
             }),
             _ => scene.unresolved += 1,
         }
@@ -117,6 +121,7 @@ fn instances(p: &[u8], base: usize, scene: &mut Scene) {
                     payload: base + tree.start..base + tree.end,
                     matrix: Some(m),
                     source: INSTANCES,
+                    zone: p.get(rec + at as usize + i * INSTANCE_SIZE + 0x40).copied(),
                 }),
                 None => scene.unresolved += 1,
             }
@@ -136,6 +141,8 @@ pub struct Object {
     pub state: i32,
     pub keys: u16,
     pub stream: Option<Range<usize>>,
+    /// The zone column (0x1B8): drawn only while the zone query passes (SPEC-0028 section 7).
+    pub zone: u8,
 }
 
 /// Every placed object of the first type-29 chunk of a world pack's top chain, in table order
@@ -157,7 +164,7 @@ pub fn objects(bytes: &[u8], top: &[Chunk]) -> Vec<Option<Object>> {
             let tree = u32_at(p, obj + OBJECT_TREE).filter(|&t| t != 0).and_then(|t| inline_chunk(p, t as usize)).map(|r| base + r.start..base + r.end);
             let keys = u16::from_le_bytes([p[obj + 0x1E4], p[obj + 0x1E5]]);
             let stream = u32_at(p, obj + 0x1E8).map(|o| o as usize).filter(|&o| o != 0 && o < p.len()).map(|o| base + o..base + p.len());
-            Some(Object { tree, rest, scale: [f(0x140), f(0x144), f(0x148)], state: u32_at(p, obj + 0x1A0).unwrap_or(3) as i32, keys, stream })
+            Some(Object { tree, rest, scale: [f(0x140), f(0x144), f(0x148)], state: u32_at(p, obj + 0x1A0).unwrap_or(3) as i32, keys, stream, zone: p.get(obj + 0x1B8).copied().unwrap_or(0) })
         })
         .collect()
 }
@@ -172,6 +179,7 @@ pub fn scene(bytes: &[u8], top: &[Chunk]) -> Scene {
                 payload: c.payload.clone(),
                 matrix: None,
                 source: LEVEL_TREE,
+                zone: None,
             }),
             PLACED_OBJECTS => placed_objects(p, c.payload.start, &mut s),
             INSTANCES => instances(p, c.payload.start, &mut s),

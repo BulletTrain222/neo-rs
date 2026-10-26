@@ -831,7 +831,7 @@ fn main() {
                 (dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1869,8 +1869,13 @@ fn sync_worlds(
         };
         match model {
             Ok(Some(m)) => {
-                for (_, mesh, material) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
-                    commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part));
+                for (i, mesh, material) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
+                    let mut e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part));
+                    // A part under a type-3 node, or of an instance or placed object, draws only
+                    // while its zone column passes.
+                    if let (WorldPart::Scene(pack), Some(z)) = (*part, m.parts[i].zone) {
+                        e.insert(ZoneGate(pack, z));
+                    }
                 }
             }
             Ok(None) => {}
@@ -1878,6 +1883,21 @@ fn sync_worlds(
         }
     }
     *shown = want;
+}
+
+/// A world part's zone gate: (world pack, zone column).
+#[derive(Component, Clone, Copy)]
+struct ZoneGate(u32, u8);
+
+/// Each frame: a gated world part shows only while its zone query passes.
+fn sync_zones(state: Option<Res<PlayState>>, mut parts: Query<(&ZoneGate, &mut Visibility)>) {
+    let Some(state) = state else { return };
+    for (g, mut v) in &mut parts {
+        let want = if state.play.zone_visible(g.0, g.1) { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
 }
 
 /// A live enemy projectile's marker, by pool slot.

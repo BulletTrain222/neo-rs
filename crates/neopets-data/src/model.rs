@@ -113,6 +113,9 @@ pub struct MeshPart {
     pub program: Option<u32>,
     /// The group's character colour slot (0 for no group).
     pub colour_slot: u8,
+    /// The zone column that gates this part: its leaf's enclosing type-3 node, else the
+    /// instance's or placed object's column (None draws always).
+    pub zone: Option<u8>,
     pub positions: Vec<[f32; 3]>,
     /// Layout B has no normals; its parts get +Y placeholders (it is drawn unlit).
     pub normals: Vec<[f32; 3]>,
@@ -277,6 +280,7 @@ impl Builder {
         chain: usize,
         matrix: Option<&crate::world::Matrix>,
         layer_mask: Option<u32>,
+        zone: Option<u8>,
     ) -> Result<(), String> {
         let ti = self.out.trees;
         self.out.trees += 1;
@@ -327,6 +331,7 @@ impl Builder {
                 group: group.map(|_| leaf.material_group),
                 program: group.map(|g| g.program),
                 colour_slot: group.map_or(0, |g| g.colour_slot),
+                zone: leaf.zone.or(zone),
                 positions: Vec::new(),
                 normals: Vec::new(),
                 uvs: Vec::new(),
@@ -389,7 +394,7 @@ impl Builder {
 pub fn build_tree(bytes: &[u8], top: &[Chunk], payload: std::ops::Range<usize>, layer_mask: u32) -> Result<ModelData, String> {
     let materials = vec![ChainMaterials::of(bytes, top)?];
     let mut b = Builder::new(materials, None);
-    b.add_tree(bytes, payload, 0, None, Some(layer_mask))?;
+    b.add_tree(bytes, payload, 0, None, Some(layer_mask), None)?;
     Ok(b.finish())
 }
 
@@ -438,7 +443,7 @@ pub fn build_masked(
     };
     let mut b = Builder::new(materials, shared);
     for t in trees.iter().filter(|t| roles.is_none_or(|r| r.contains(&t.role_id))) {
-        b.add_tree(bytes, t.payload.clone(), t.chain, None, layer_mask)?;
+        b.add_tree(bytes, t.payload.clone(), t.chain, None, layer_mask, None)?;
     }
     Ok(b.finish())
 }
@@ -461,7 +466,7 @@ pub fn build_world_parts(bytes: &[u8], top: &[Chunk], layer_mask: u32, objects: 
     let materials = vec![ChainMaterials::of(bytes, top)?];
     let mut b = Builder::new(materials, None);
     for t in &scene.trees {
-        if let Err(e) = b.add_tree(bytes, t.payload.clone(), 0, t.matrix.as_ref(), Some(layer_mask)) {
+        if let Err(e) = b.add_tree(bytes, t.payload.clone(), 0, t.matrix.as_ref(), Some(layer_mask), t.zone) {
             b.out.skipped_leaves.push(format!("tree at {:#x}: {e}", t.payload.start));
         }
     }

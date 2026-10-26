@@ -52,6 +52,10 @@ pub struct Leaf {
     pub batch_count: u32,
     /// Offset of the packet in the payload.
     pub packet: usize,
+    /// The zone column of the nearest enclosing type-3 node (+0x50, low byte), if any: the
+    /// subtree draws only while the zone query passes for it (SPEC-0004 Drawing a node tree,
+    /// item 3).
+    pub zone: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -84,8 +88,9 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
     let root_bounds = bounds_at(payload, 0).ok_or("Node tree shorter than one node")?;
     let mut leaves = Vec::new();
     let mut seen = HashSet::new();
-    let mut stack = vec![0usize];
-    while let Some(at) = stack.pop() {
+    // Each entry carries the zone column of its nearest enclosing type-3 node.
+    let mut stack: Vec<(usize, Option<u8>)> = vec![(0, None)];
+    while let Some((at, zone)) = stack.pop() {
         if !seen.insert(at) {
             continue;
         }
@@ -109,20 +114,22 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
                 let flags = u32_at(payload, at + 0x5C).unwrap();
                 flags != 0 && flags & m == 0
             });
-        let mut links = vec![u32_at(payload, at + 0x44).unwrap()];
+        // The sibling keeps the enclosing column; a type-3 node's own subtree takes its column.
+        let inner = if kind == NODE_VISIBILITY { Some(u8_at(payload, at + 0x50).unwrap()) } else { zone };
+        let mut links = vec![(u32_at(payload, at + 0x44).unwrap(), zone)];
         if !hidden {
-            links.push(u32_at(payload, at + 0x40).unwrap());
+            links.push((u32_at(payload, at + 0x40).unwrap(), inner));
             if kind == NODE_LOD {
-                links.extend([0x70, 0x74, 0x78].map(|o| u32_at(payload, at + o).unwrap()));
+                links.extend([0x70, 0x74, 0x78].map(|o| (u32_at(payload, at + o).unwrap(), inner)));
             }
         }
-        for link in links {
+        for (link, z) in links {
             let link = link as usize;
             if link != 0 {
                 if link % 4 != 0 || link >= payload.len() {
                     return Err(format!("Node at {at:#x} links outside the payload ({link:#x})"));
                 }
-                stack.push(link);
+                stack.push((link, z));
             }
         }
         if kind == NODE_LEAF {
@@ -138,6 +145,7 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
                 vertex_count: u32_at(payload, at + 0x64).unwrap(),
                 batch_count: u32_at(payload, at + 0x68).unwrap(),
                 packet,
+                zone,
             });
         }
     }
@@ -482,6 +490,11 @@ mod tests {
         assert_eq!(walk_tree_layers(&layered, Some(0)).unwrap().leaves.len(), 0);
         assert_eq!(walk_tree_layers(&layered, Some(0x0020_0000)).unwrap().leaves.len(), 2);
         assert_eq!(walk_tree_layers(&layered, None).unwrap().leaves.len(), 2);
+        // SPEC-0004 item 3: the leaves under the type-3 node carry its zone column (+0x50).
+        assert_eq!(t.leaves.iter().map(|l| l.zone).collect::<Vec<_>>(), [Some(0), Some(0)]);
+        let mut zoned = p.clone();
+        zoned[0x50 + 0x50] = 5;
+        assert_eq!(walk_tree(&zoned).unwrap().leaves.iter().map(|l| l.zone).collect::<Vec<_>>(), [Some(5), Some(5)]);
         let mut cycle = p.clone();
         cycle[0x180 + 0x44..0x180 + 0x48].copy_from_slice(&0u32.to_le_bytes());
         cycle[0x130 + 0x44..0x130 + 0x48].copy_from_slice(&0x50u32.to_le_bytes());
