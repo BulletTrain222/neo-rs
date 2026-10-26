@@ -3955,13 +3955,22 @@ impl Play {
     /// slot 0 model in the hand (axes Z0, Y0, -X0 at T0), its slot 6 model at W5, and its slot 1
     /// model while the clip's event bit 0x1000 is on and its selected attack's projectile type is
     /// below 5, at W0 to W4 by the clip's event bits 1, 2, 4, 8 and 0x10. Each entry: the
-    /// character id, the slot and the frame. The thrown-model word (a flying weapon drawn in
-    /// place of the hand model) is not reproduced.
+    /// character id, the slot and the frame. The thrown-model word is reproduced for the
+    /// Werelupe King's boomerang (the Black Knight is not in play).
     pub fn character_attachments(&self) -> Vec<(u64, u8, neopets_data::anim::Affine)> {
         let mut out = Vec::new();
         for c in self.characters.iter().filter(|c| !c.inactive && self.pack_drawn(c.pack) && c.enemy.as_ref().is_none_or(|e| !e.dead)) {
             for &(slot, _) in &c.model.attachments {
+                // The thrown-model word: while the Werelupe King's boomerang flies, its slot 0 model
+                // is drawn at the boomerang (SPEC-0019 Boomerang flight), spinning 0.6 radians per
+                // tick; the spin axis is taken as the vertical (the spec's eased axis is open).
+                let thrown = c.king.as_ref().and_then(|k| k.boomerang).map(|b| b.position);
                 let frame = match slot {
+                    0 if thrown.is_some() => Self::character_attach(c, 0).map(|w| {
+                        let (sn, cs) = (0.6 * (self.ticks % 10_000) as f32).sin_cos();
+                        let turn = |v: [f32; 3]| [cs * v[0] + sn * v[2], v[1], -sn * v[0] + cs * v[2]];
+                        neopets_data::anim::Affine { cols: [turn(w.cols[2]), turn(w.cols[1]), turn(w.cols[0].map(|v| -v))], t: thrown.unwrap_or(w.t) }
+                    }),
                     0 => Self::character_attach(c, 0).map(|w| neopets_data::anim::Affine { cols: [w.cols[2], w.cols[1], w.cols[0].map(|v| -v)], t: w.t }),
                     6 => Self::character_attach(c, 5),
                     1 => {
