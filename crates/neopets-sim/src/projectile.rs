@@ -4,7 +4,7 @@
 //! hero hit test, the ground test), and the straight, homing, ballistic and lobbed launches.
 //!
 //! Not covered: the effects and trails (SPEC-0034), the hold word, spells (kinds 2 to 7 never
-//! touch a character here), the poison cloud (kind 9), the mote eater's drain, the
+//! touch a character here), the mote eater's drain, the
 //! status roll (no statuses yet), the summon of a lobbed shot (Behavior 31), the attack
 //! manager's +3.0 scatter, the owner's own block query after a reflection (enemies do not guard
 //! here), the shield Mote's charge, and the world
@@ -93,6 +93,8 @@ pub struct Env<'a> {
     pub hero_facing: Vec3,
     pub guard: bool,
     pub shield: bool,
+    /// The hero holds the poison status (the poison cloud's gate).
+    pub poisoned: bool,
     pub owner_exists: &'a dyn Fn(u64) -> bool,
     /// An owner's body: position, motion-record radius and height.
     pub owner_body: &'a dyn Fn(u64) -> Option<(Vec3, f32, f32)>,
@@ -205,6 +207,30 @@ impl Pool {
             if p.life < 0 {
                 effect(p, 3, p.position, &mut out);
                 *slot = None;
+                continue;
+            }
+            // Kind 9, the sinking poison cloud (SPEC-0016 section 10): more than 2.0 above the
+            // ground under the hero it sinks 0.1, else it drifts 0.1 toward the hero
+            // horizontally; within its radius of a hero without poison, the status. The launch
+            // velocity is not used and the cloud makes no hit.
+            if p.s.kind == 9 {
+                let g = (env.ground)(env.hero[0], env.hero[2], env.hero[1] + 2.5).unwrap_or(env.hero[1]);
+                if p.position[1] > g + 2.0 {
+                    p.position[1] -= 0.1;
+                } else {
+                    let d = [env.hero[0] - p.position[0], env.hero[2] - p.position[2]];
+                    let l = d[0].hypot(d[1]);
+                    if l > 0.0 {
+                        let k = (0.1 / l).min(1.0);
+                        p.position[0] += d[0] * k;
+                        p.position[2] += d[1] * k;
+                    }
+                }
+                let h = (env.hero[0] - p.position[0]).hypot(env.hero[2] - p.position[2]);
+                if h < p.s.area_radius && !env.poisoned && p.s.status.0 != -1 {
+                    out.push(Event::Status { code: p.s.status.0, chance: p.s.status.1, seconds: p.s.status.2 });
+                }
+                p.life -= 1;
                 continue;
             }
             // Motion.
@@ -434,11 +460,33 @@ mod tests {
             hero_facing: [0.0, 0.0, -1.0],
             guard: false,
             shield: false,
+            poisoned: false,
             owner_exists: owner,
             owner_body: &|_| Some(([0.0; 3], 0.5, 3.0)),
             ground,
             wall,
         }
+    }
+
+    #[test]
+    fn poison_cloud() {
+        // Kind 9: sinks while more than 2.0 above the ground under the hero, then drifts 0.1;
+        // within 6.0 of an unpoisoned hero the status (2 for 15 s); at 6.0 nothing.
+        let (o, g, w) = (|_| true, |_: f32, _: f32, _: f32| Some(0.0), |_, _| false);
+        let mut pool = Pool::default();
+        let cloud = Setup { kind: 9, visual: 15, element: 0, owner: None, start: [0.0, 3.0, 0.0], velocity: [0.0, 0.0, 2.0], lifetime: 300, damage: 0.0, radius: 1.0, spin: 0.0, area_radius: 6.0, area_duration: 0, key: 0, ignore_world: true, status: (2, 100, 15), effects: [414, -1, -1, -1, -1, -1] };
+        pool.submit(cloud);
+        let ev = pool.tick(&env([0.0, 0.0, 6.1], &o, &g, &w));
+        let c = pool.slots[0].unwrap().position;
+        assert!((c[1] - 2.9).abs() < 1e-5 && c[2] == 0.0 && ev.is_empty());
+        let mut pool = Pool::default();
+        pool.submit(Setup { start: [0.0, 1.0, 0.0], ..cloud });
+        let ev = pool.tick(&env([0.0, 0.0, 6.0], &o, &g, &w));
+        assert!((pool.slots[0].unwrap().position[2] - 0.1).abs() < 1e-5);
+        assert_eq!(ev, vec![Event::Status { code: 2, chance: 100, seconds: 15 }]);
+        let mut e = env([0.0, 0.0, 6.0], &o, &g, &w);
+        e.poisoned = true;
+        assert!(pool.tick(&e).is_empty());
     }
 
     fn archer() -> Missile {
@@ -571,6 +619,7 @@ mod tests {
             hero_facing: [1.0, 0.0, 0.0],
             guard: false,
             shield: false,
+            poisoned: false,
             owner_exists: &o,
             owner_body: &|_| None,
             ground: &g,

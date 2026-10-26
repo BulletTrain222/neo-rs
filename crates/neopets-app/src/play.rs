@@ -406,6 +406,9 @@ pub struct Character {
     pub spawn_keys: [u16; 4],
     /// The Queen Fyora controller (behaviour class 38; SPEC-0029 Behavior 30).
     pub fyora: Option<neopets_sim::fyora::Fyora>,
+    /// The Plague Serpent controller (behaviour class 2; SPEC-0016) and the hero's hit on it.
+    pub serpent: Option<neopets_sim::serpent::Serpent>,
+    pub serpent_hit: Option<(i32, bool)>,
 }
 
 /// A summon-reserved record of a character block (SPEC-0029 Behavior 31), with the character it
@@ -619,6 +622,7 @@ pub struct Play {
     /// The duel's shared slots (SPEC-0029 Behavior 19), its words, and the loop-B summons.
     duel: neopets_sim::fyora::Slots,
     duel_words: neopets_sim::fyora::Words,
+    serpent_words: neopets_sim::serpent::Words,
     duel_summons: Vec<u64>,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
@@ -1013,6 +1017,7 @@ impl Play {
         };
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
+        let serpent_words = neopets_sim::serpent::Words::read(&words(neopets_sim::serpent::BASE, neopets_sim::serpent::WORDS)?).ok_or("The Plague Serpent's tuning block is short")?;
         let duel_words = neopets_sim::fyora::Words::read(&words(neopets_sim::fyora::WORDS, 2)?).ok_or("The duel words are short")?;
         let faerie_words = {
             use neopets_sim::darkest::*;
@@ -1213,6 +1218,7 @@ impl Play {
             reserves: Vec::new(),
             duel: [None; 4],
             duel_words,
+            serpent_words,
             duel_summons: Vec::new(),
             boss_hits: Vec::new(),
             last_boss: String::new(),
@@ -3335,6 +3341,11 @@ impl Play {
             c.pending_hit = Some(damage);
             return;
         }
+        // SPEC-0016: the Plague Serpent takes a hit only as its stun strike (its own controller).
+        if let Some(c) = self.characters.get_mut(i).filter(|c| c.serpent.is_some()) {
+            c.serpent_hit = Some((damage, by.contains("shot")));
+            return;
+        }
         // SPEC-0011: a Faerie Sister's own controller applies the hit (the shield, the flinch and
         // death); a hero shot is told apart from the swing and the Mote objects.
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.sister.is_some()) {
@@ -3584,7 +3595,7 @@ impl Play {
             .iter()
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -3742,6 +3753,8 @@ impl Play {
                 faerie: row.filter(|r| r.class == Some(37)).map(|_| neopets_sim::darkest::Faerie::default()),
                 spawn_keys: tuning.map_or([0; 4], |t| std::array::from_fn(|k| t.slots[k].spawn_key)),
                 fyora: row.filter(|r| r.class == Some(38)).map(|_| neopets_sim::fyora::Fyora::default()),
+                serpent: row.filter(|r| r.class == Some(2)).map(|_| neopets_sim::serpent::Serpent::default()),
+                serpent_hit: None,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3853,6 +3866,8 @@ impl Play {
             faerie: None,
             spawn_keys: [0; 4],
             fyora: None,
+            serpent: None,
+            serpent_hit: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4909,6 +4924,7 @@ impl Play {
         self.draik_step();
         self.faerie_step();
         self.fyora_step();
+        self.serpent_step();
         self.mice_step();
         self.enemies_step();
         self.items_step();
@@ -5138,6 +5154,7 @@ impl Play {
                 hero_facing,
                 guard: guarding,
                 shield,
+                poisoned: self.statuses.active(neopets_sim::status::POISON),
                 owner_exists: &owner_exists,
                 owner_body: &owner_body,
                 ground: &ground,
@@ -6399,6 +6416,124 @@ impl Play {
             if let (true, Some((_, key, slot))) = (act.events.summon, faerie) {
                 if let Some(s) = self.summon(pack, Some(slot), key as i16, hero, hf, None, false) {
                     self.duel_summons.push(s);
+                }
+            }
+        }
+    }
+
+    /// SPEC-0016 per tick for the Plague Serpent (class 2) in the current world: the anchors are
+    /// the world's locators of the anchor ids, the lunge's hit is weapon 3 of the monster weapon
+    /// test (event bit 0x4) against the hero's bone capsules, the stun strike is any hero hit
+    /// that reaches it (the head cylinder is not tested), and the mouth is taken 2.5 above its
+    /// position (the head bone is not given). A landed lunge is unreduced damage with the hit
+    /// flash 222 at the hero; the hero's reaction state 0x36 and the neck look are not built.
+    fn serpent_step(&mut self) {
+        use neopets_sim::combat::Cylinder;
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.serpent.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let hplace = placement(hero, hf);
+        let hframes = self.hero.bone_frames();
+        let caps: Vec<Cylinder> = self
+            .hero
+            .bones()
+            .hurt
+            .iter()
+            .zip(&hframes)
+            .filter(|(h, _)| h.1 > 0.0)
+            .map(|(&(base, length, radius), f)| {
+                let w = hplace.mul(f);
+                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+            })
+            .collect();
+        let world = &self.world;
+        let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
+        let anchors = neopets_sim::serpent::ANCHORS.map(|ids| ids.map(locator));
+        let (code, blocking, stunned) = (self.loco.state, self.loco.state == hero_states::GUARD, self.statuses.active(neopets_sim::status::STUN));
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let world = &self.world;
+            let ground = |x: f32, z: f32, from: f32| world.ground_at(x, z, from);
+            let c = &mut self.characters[i];
+            let bits = c.anim.frame_bits();
+            let place = placement(c.position, c.facing);
+            let frames = c.anim.bone_frames();
+            let lunge_contact = bits & 0x4 != 0
+                && c.anim.bones().attach.get(2).and_then(|&(b, angles, offset)| {
+                    let bw = frames.get(b?)?;
+                    let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+                    let (radius, length) = c.weapons[2];
+                    let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                    Some(caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap)))
+                }) == Some(true);
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::serpent::View {
+                position: c.position,
+                facing: c.facing,
+                hero,
+                hero_facing: hf,
+                hero_code: code,
+                hero_blocking: blocking,
+                hero_stunned: stunned,
+                hp: c.hp,
+                max_hp: c.row.map_or(1, |r| r.hit_points as i32),
+                anchors,
+                ground: &ground,
+                lunge_contact,
+                strike: c.serpent_hit.take(),
+                mouth: add(c.position, [0.0, 2.5, 0.0]),
+                clip: (clip.action, clip.progress >= 0.99),
+                frame_bits: bits,
+                level: &level,
+            };
+            let Some(sp) = c.serpent.as_mut() else { continue };
+            let before = sp.state;
+            let act = sp.tick(&v, &self.serpent_words, &mut self.rng);
+            let after = sp.state;
+            if let Some(n) = act.anim {
+                if clip.action != n || (clip.progress >= 0.99 && before != after) {
+                    c.anim.play(n);
+                }
+            }
+            c.anim.set_rate(act.rate);
+            if let Some((dir, w)) = act.face {
+                c.facing = neopets_sim::hero::steer(c.facing, dir, w);
+            }
+            if let Some(p) = act.place {
+                c.position = p;
+            }
+            c.hp = (c.hp - act.hp_loss).max(0);
+            if std::mem::discriminant(&before) != std::mem::discriminant(&after) || before != after && matches!(after, neopets_sim::serpent::State::Bite(_)) {
+                self.last_boss = format!("Plague Serpent {:?} -> {:?} (hp {}, phase {}, slot {}) on tick {}", before, after, c.hp, sp.phase, sp.slot, self.ticks);
+            }
+            let from = c.position;
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            for &(code, seconds) in &act.statuses {
+                self.statuses.apply(code, seconds);
+            }
+            if let Some(setup) = act.launch {
+                self.shots.submit(setup);
+            }
+            if act.consume_shot && !self.hero_shots.is_empty() {
+                self.hero_shots.remove(0);
+            }
+            if let Some(damage) = act.lunge {
+                let d = {
+                    let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                    let l = dx.hypot(dz).max(1e-6);
+                    [dx / l, 0.0, dz / l]
+                };
+                if self.hero_hit(damage as f32, 0.0, false, d, "the Plague Serpent's lunge".into()) {
+                    let table = self.effect_table.clone();
+                    self.effects.one_shot(&table, 222, add(hero, [0.0, 1.5, 0.0]), neopets_sim::effect::IDENTITY, &mut self.rng);
                 }
             }
         }

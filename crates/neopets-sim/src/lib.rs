@@ -49,6 +49,7 @@ pub mod save;
 pub mod scene;
 pub mod sound;
 pub mod sequencer;
+pub mod serpent;
 pub mod shake;
 pub mod shop;
 pub mod synth;
