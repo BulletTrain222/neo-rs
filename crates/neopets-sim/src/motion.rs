@@ -2,7 +2,7 @@
 //! constraint, gravity with the gain G, friction on the ground and the integrator. Velocity is in
 //! units per 1/30 step; one call of each step is one game tick (SPEC-0007, 60 Hz).
 //! Not covered: moving platforms (item 6b), the alternate friction branch, the clear-on-ground
-//! and no-snap flags, and the floor-contact flag.
+//! and no-snap flags. The floor-contact flag is set by the caller's contacts (`floor_contact`).
 
 use crate::hero::Vec3;
 
@@ -36,6 +36,10 @@ pub struct Body {
     /// Ground gap (+0x24) and ground normal (+0x10), measured at the start of the record tick.
     pub gap: f32,
     pub normal: Vec3,
+    /// +0x150, the floor-contact flag (SPEC-0033 Floor-contact flag): cleared at the start of
+    /// each record tick, set by a contact against a surface with |n.y| above 0.9; the gap reads
+    /// 0 while it is set.
+    pub floor: bool,
 }
 
 impl Body {
@@ -49,7 +53,18 @@ impl Body {
             no_gravity: false,
             gap: 0.0,
             normal: [0.0, 1.0, 0.0],
+            floor: false,
         }
+    }
+
+    /// A contact resolved against a floor (|n.y| > 0.9, pushing up): the flag is set, the gap
+    /// reads 0, and the downward parts of the velocity and the force are removed (the contact
+    /// response's into-face parts).
+    pub fn floor_contact(&mut self) {
+        self.floor = true;
+        self.gap = 0.0;
+        self.velocity[1] = self.velocity[1].max(0.0);
+        self.force[1] = self.force[1].max(0.0);
     }
 
     /// The ground step (SPEC-0040 Behavior 14 cadence, item 2): `probe(x, z, ceiling)` gives the

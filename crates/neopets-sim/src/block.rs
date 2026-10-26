@@ -250,17 +250,205 @@ pub fn current(blocks: &[Block], feet: Vec3) -> Option<(usize, f32)> {
         .map(|(k, d, _)| (k, d))
 }
 
+/// What the block contact pass found for one character.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Contact {
+    pub hit: bool,
+    /// A top face (|n.y| > 0.9): the floor-contact flag.
+    pub floor: bool,
+    /// A side face (|n.y| < 0.1) of a block whose top is more than 1.0 and less than 5.0 above
+    /// the character: the hero's side-touch latch.
+    pub side_touch: bool,
+}
+
 /// The block contact pass for one character (SPEC-0048 Solid for characters, steps 1 to 3):
 /// the active blocks within 10, nearest first, each pushing the reference point out of its box
-/// grown by 0.75. Returns whether any block touched.
-pub fn contact(blocks: &[Block], p: &mut Vec3) -> bool {
+/// grown by 0.75. A top-face push leaves the point 0.01 inside the face's test bound, so a
+/// character standing on a block keeps touching it every tick (not from the spec: the box test
+/// is strict at the bound).
+pub fn contact(blocks: &[Block], p: &mut Vec3) -> Contact {
     let mut near: Vec<(f32, &Block)> = blocks.iter().filter(|b| b.active != 0).map(|b| (horizontal_distance(b.position, *p), b)).filter(|(d, _)| d * d < SCAN_RADIUS * SCAN_RADIUS).collect();
     near.sort_by(|a, b| a.0.total_cmp(&b.0));
-    let mut hit = false;
+    let mut out = Contact::default();
     for (_, b) in near.into_iter().take(100) {
-        hit |= contact::resolve(p, std::slice::from_ref(&b.shape()), CONTACT_RADIUS);
+        let Some((_, n, dist)) = contact::push(*p, &b.shape(), CONTACT_RADIUS) else { continue };
+        for k in 0..3 {
+            p[k] += n[k] * dist;
+        }
+        out.hit = true;
+        if n[1].abs() > 0.9 {
+            out.floor = true;
+            if n[1] > 0.0 {
+                p[1] -= 0.01;
+            }
+        } else if n[1].abs() < 0.1 {
+            let above = b.top() - p[1];
+            out.side_touch |= above > 1.0 && above < 5.0;
+        }
     }
-    hit
+    out
+}
+
+/// The climb-onto-block fit test (SPEC-0033 Behavior 15), gates 3 to 5 (the caller checks the
+/// block and the moving state): the loaded top 0.2 to 3.5 above the feet (strict), the facing
+/// within the face (dot above 0.5), and the stick pushed into it (`a` along the facing above 0
+/// and above |`b`|, the side part).
+pub fn fits(b: &Block, m: u8, feet: Vec3, facing: Vec3, a: f32, side: f32) -> bool {
+    let h = b.loaded_top - feet[1];
+    let Some(d) = b.direction(m as i32) else { return false };
+    h > 0.2 && h < 3.5 && dot(facing, d) > 0.5 && a.abs() > side.abs() && a > 0.0
+}
+
+/// The push-into-face counter's limit (word 0x2DD574).
+pub const FACE_COUNT: u32 = 15;
+
+/// What states 19 and 58 ask of the hero this tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EdgeStep {
+    pub request: u32,
+    /// The facing to keep (the held face's direction).
+    pub facing: Option<Vec3>,
+    /// A position to move the hero to this tick (the approach's ease; not from the spec).
+    pub place: Option<Vec3>,
+    /// The state to leave to (1 or 4), with a move along the face direction.
+    pub exit: Option<(u8, f32)>,
+}
+
+/// A clip as the edge states read it: id and progress.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct EdgeClip {
+    pub action: u32,
+    pub progress: f32,
+}
+
+/// The ease of an approach: half the remaining way each tick (the spec's "rate 0.5"; how the
+/// hero gets to the edge point is not given, R-0079).
+fn ease(hero: Vec3, target: Vec3) -> Vec3 {
+    std::array::from_fn(|k| hero[k] + 0.5 * (target[k] - hero[k]))
+}
+
+/// State 19, hanging from a block's top edge (SPEC-0033 Behavior 51).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Hang {
+    pub block: usize,
+    pub face: u8,
+    pub sub: u8,
+}
+
+impl Hang {
+    pub fn new(block: usize, face: u8) -> Self {
+        Self { block, face, sub: 0 }
+    }
+
+    /// One tick. `side` is the stick's side value (positive to the left), `forward` whether the
+    /// stick is pushed forward, `gap` the ground gap.
+    pub fn tick(&mut self, blocks: &[Block], hero: Vec3, side: f32, forward: bool, gap: f32, clip: EdgeClip) -> EdgeStep {
+        let Some(b) = blocks.get(self.block) else { return EdgeStep { exit: Some((1, 0.0)), ..EdgeStep::default() } };
+        let Some(d) = b.direction(self.face as i32) else { return EdgeStep { exit: Some((1, 0.0)), ..EdgeStep::default() } };
+        let mut step = EdgeStep { facing: Some(d), ..EdgeStep::default() };
+        match self.sub {
+            0 => {
+                self.sub = 1;
+                step.request = 72;
+            }
+            1 => {
+                step.request = 72;
+                if clip.action != 72 {
+                    return step;
+                }
+                // The edge point: the block position less D (S / 2 + 0.35), at the top less 3.7
+                // (the spec's box-record terms read as the block top; R-0079).
+                let half = 0.5 * b.size + 0.35;
+                let target = [b.position[0] - d[0] * half, b.top() - 3.7, b.position[2] - d[2] * half];
+                let along = dot([target[0] - hero[0], 0.0, target[2] - hero[2]], d);
+                if along < 0.0 && gap <= 0.01 {
+                    step.request = 0;
+                    step.exit = Some((1, 0.0));
+                } else if along > 0.25 {
+                    step.place = Some(ease(hero, target));
+                } else {
+                    self.sub = 2;
+                    step.request = 71;
+                    step.place = Some(target);
+                }
+            }
+            2 => {
+                step.request = 71;
+                if forward {
+                    self.sub = 4;
+                    step.request = 59;
+                } else if clip.action == 71 && clip.progress >= 0.95 {
+                    self.sub = 3;
+                    step.request = 73;
+                }
+            }
+            3 => {
+                step.request = 73;
+                if forward {
+                    self.sub = 4;
+                    step.request = 59;
+                } else {
+                    // The along position on the edge, 0 to S: shimmy 61 lowers it (gate above
+                    // 1.0) and 60 raises it (gate below S - 1.0). The edge's direction is the
+                    // hero's side axis (its sign is not given; R-0079).
+                    let e = [-d[2], 0.0, d[0]];
+                    let along = 0.5 * b.size + dot(sub(hero, b.position), e);
+                    if side > 0.0 && along > 1.0 {
+                        step.request = 61;
+                    } else if side < 0.0 && along < b.size - 1.0 {
+                        step.request = 60;
+                    }
+                }
+            }
+            _ => {
+                step.request = 59;
+                if clip.action == 59 && clip.progress >= 0.95 {
+                    step.exit = Some(if forward { (4, 0.0) } else { (1, 0.1) });
+                }
+            }
+        }
+        step
+    }
+}
+
+/// State 58, climbing onto a block (SPEC-0033 Behavior 51).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Climb {
+    pub block: usize,
+    pub face: u8,
+    pub sub: u8,
+}
+
+impl Climb {
+    pub fn new(block: usize, face: u8) -> Self {
+        Self { block, face, sub: 0 }
+    }
+
+    pub fn tick(&mut self, blocks: &[Block], hero: Vec3, forward: bool, clip: EdgeClip) -> EdgeStep {
+        let Some(b) = blocks.get(self.block) else { return EdgeStep { exit: Some((1, 0.0)), ..EdgeStep::default() } };
+        let Some(d) = b.direction(self.face as i32) else { return EdgeStep { exit: Some((1, 0.0)), ..EdgeStep::default() } };
+        let mut step = EdgeStep { facing: Some(d), ..EdgeStep::default() };
+        if self.sub == 0 {
+            // The target: the block position less D (S / 2 + 0.75), at the top less 1.2.
+            step.request = 70;
+            let half = 0.5 * b.size + 0.75;
+            let target = [b.position[0] - d[0] * half, b.top() - 1.2, b.position[2] - d[2] * half];
+            let far = horizontal_distance(target, hero) > LATCH || (target[1] - hero[1]).abs() > LATCH;
+            if far {
+                step.place = Some(ease(hero, target));
+            } else {
+                self.sub = 2;
+                step.request = 134;
+                step.place = Some(target);
+            }
+        } else {
+            step.request = 134;
+            if clip.action == 134 && clip.progress >= 0.95 {
+                step.exit = Some(if forward { (4, 0.0) } else { (1, 0.0) });
+            }
+        }
+        step
+    }
 }
 
 /// The block face finder (SPEC-0033 Behavior 15A, no footprint step): the face index 0 to 3
@@ -470,7 +658,44 @@ mod tests {
     fn contact_pushes_out() {
         let v = vec![block(0.0, 0.0, 2.0)];
         let mut p = [1.0, 0.5, -0.5];
-        assert!(contact(&v, &mut p));
+        let c = contact(&v, &mut p);
+        assert!(c.hit && !c.floor && c.side_touch);
         assert!(p[2] <= -0.75 + 1e-4, "pushed out of the near face: {p:?}");
+        // Standing on the top (2.0): pushed up to just under the bound, the floor flag set, and
+        // again on the next tick.
+        let mut p = [1.0, 1.85, 1.0];
+        let c = contact(&v, &mut p);
+        assert!(c.floor && (p[1] - 1.89).abs() < 1e-4, "{p:?}");
+        assert!(contact(&v, &mut p).floor);
+    }
+
+    #[test]
+    fn fit_and_edge_states() {
+        // The spec's fit vector: pack 909's block (size 2.759, height 2.741), the hero on the
+        // floor at its base, face 0, stick forward 0.8 and side 0.1: passes; -0.8 or side 0.9
+        // fail. A 5.452 cube is too tall.
+        let b = Block::new(2.759, 2.741, [0.0; 3], AXES, [2.741, 2.759, 2.759], |_, _, _| Some(0.0));
+        assert!(fits(&b, 0, [1.38, 0.0, -1.0], [0.0, 0.0, 1.0], 0.8, 0.1));
+        assert!(!fits(&b, 0, [1.38, 0.0, -1.0], [0.0, 0.0, 1.0], -0.8, 0.1));
+        assert!(!fits(&b, 0, [1.38, 0.0, -1.0], [0.0, 0.0, 1.0], 0.8, 0.9));
+        let cube = block(0.0, 0.0, 5.452);
+        assert!(!fits(&cube, 0, [2.7, 0.0, -1.0], [0.0, 0.0, 1.0], 0.8, 0.1));
+        // The hang: grab (72), the approach to the edge point, 71, the hang idle 73, the pull-up
+        // 59 and the exit to state 1 with 0.1.
+        let v = vec![block(-1.0, -1.0, 2.0)];
+        let mut h = Hang::new(0, 0);
+        assert_eq!(h.tick(&v, [0.0, 0.0, -3.0], 0.0, false, 0.0, EdgeClip::default()).request, 72);
+        let s = h.tick(&v, [0.0, 0.0, -1.35], 0.0, false, 0.0, EdgeClip { action: 72, progress: 0.5 });
+        assert_eq!((h.sub, s.request, s.place), (2, 71, Some([0.0, -1.7, -1.35])));
+        h.tick(&v, [0.0, -1.7, -1.35], 0.0, false, 0.0, EdgeClip { action: 71, progress: 0.96 });
+        assert_eq!(h.sub, 3);
+        assert_eq!(h.tick(&v, [0.0, -1.7, -1.35], 0.0, true, 0.0, EdgeClip { action: 73, progress: 0.5 }).request, 59);
+        let s = h.tick(&v, [0.0, 2.0, -0.4], 0.0, false, 0.0, EdgeClip { action: 59, progress: 0.96 });
+        assert_eq!(s.exit, Some((1, 0.1)));
+        // The climb: 70 to the target at the top less 1.2, then 134 and the exit.
+        let mut c = Climb::new(0, 0);
+        let s = c.tick(&v, [0.0, 0.8, -1.75], false, EdgeClip::default());
+        assert_eq!((c.sub, s.request), (2, 134));
+        assert_eq!(c.tick(&v, [0.0, 2.0, 0.5], true, EdgeClip { action: 134, progress: 0.96 }).exit, Some((4, 0.0)));
     }
 }

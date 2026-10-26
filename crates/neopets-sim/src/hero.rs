@@ -37,6 +37,10 @@ pub const GUARD: u8 = 20;
 pub const CARRY: u8 = 57;
 /// Push and pull a block (SPEC-0033 Behavior 4A.2; the block state's tick is `block::Hold`).
 pub const BLOCK: u8 = 18;
+/// Hang from a block's top edge and climb onto a block (SPEC-0033 Behavior 51, states 19 and
+/// 58; their ticks are `block::Hang` and `block::Climb`).
+pub const HANG: u8 = 19;
+pub const CLIMB: u8 = 58;
 /// Sneak idle, sneak reverse walk (39) and sneak walk (SPEC-0033 Behavior 4A.1 and 5.1).
 pub const SNEAK: u8 = 22;
 pub const SNEAK_WALK: u8 = 40;
@@ -438,6 +442,12 @@ impl Locomotion {
         self.request = 40;
     }
 
+    /// Enter a block state (19 or 58) with its first request.
+    pub fn enter_state(&mut self, state: u8, request: u32) {
+        self.state = state;
+        self.request = request;
+    }
+
     pub fn block_request(&mut self, id: u32) {
         self.request = id;
     }
@@ -460,7 +470,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK | HANG | CLIMB => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -505,7 +515,7 @@ impl Locomotion {
             SCRIPTED => return,
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
-            BLOCK => return,
+            BLOCK | HANG | CLIMB => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -655,13 +665,14 @@ impl Locomotion {
             }
             2..=4 => {
                 self.body.gain = GAIN_FALL;
-                if vy < -7.0 || (vy < 0.0 && gap <= LAND_GAP) {
+                // Or the floor-contact flag (a block top the probe does not report).
+                if vy < -7.0 || (vy < 0.0 && gap <= LAND_GAP) || self.body.floor {
                     self.phase = 5;
                     self.body.gain = GAIN_DESCENT;
                 }
             }
             5 => {
-                if gap <= LAND_GAP {
+                if gap <= LAND_GAP || self.body.floor {
                     let fall = self.start_height - self.body.position[1];
                     self.phase = if fall > HARD_FALL {
                         10
@@ -722,14 +733,18 @@ impl Locomotion {
         &mut self,
         root_step: Vec3,
         probe: impl Fn(f32, f32, f32) -> (f32, Vec3),
-        contacts: impl FnOnce(&mut Vec3),
+        contacts: impl FnOnce(&mut Vec3) -> bool,
     ) {
         let start = self.body.position;
         self.body.measure(probe);
         self.travel(root_step);
         self.body.constrain();
         self.body.gravity();
-        contacts(&mut self.body.position);
+        // The driver clears the floor-contact flag, then a floor contact sets it.
+        self.body.floor = false;
+        if contacts(&mut self.body.position) {
+            self.body.floor_contact();
+        }
         self.body.integrate();
         self.last_motion = std::array::from_fn(|k| self.body.position[k] - start[k]);
     }
@@ -741,7 +756,9 @@ impl Locomotion {
         let step = if dot(self.target, self.facing) < 0.0 { [0.0; 3] } else { root_step };
         let [b1, b2, b3] = basis(self.facing);
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
-        if self.body.gap < 1.0 {
+        // In the edge states the clips' root motion lifts the hero (the pull-up 59 rises 3.7 and
+        // the climb 134 1.2), so it is not flattened onto the ground there.
+        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB) {
             let n = self.body.normal;
             let dn = dot(d, n);
             d = std::array::from_fn(|k| d[k] - dn * n[k]);
@@ -766,7 +783,7 @@ mod tests {
     /// One tick on flat ground with no root motion: hero update, then the record tick.
     fn tick(h: &mut Locomotion, input: &HeroInput, probe: impl Fn(f32, f32, f32) -> (f32, Vec3)) {
         h.update(input, FWD, LEFT, ClipState::default());
-        h.record_tick([0.0; 3], probe, |_| {});
+        h.record_tick([0.0; 3], probe, |_| false);
     }
 
     fn angle(a: Vec3, b: Vec3) -> f32 {

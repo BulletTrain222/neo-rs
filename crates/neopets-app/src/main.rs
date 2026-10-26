@@ -2446,6 +2446,12 @@ fn play_trace(
     for &id in give {
         play.give(id);
     }
+    // NEOPETS_TRACE_ROOTS="a,b,...": each hero clip's key count and summed root records.
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_ROOTS") {
+        for id in v.split(',').filter_map(|t| t.trim().parse::<u32>().ok()) {
+            println!("      hero clip {id}: {:?}", play.hero.root_sum(id));
+        }
+    }
     // NEOPETS_TRACE_MOTES="w0,w1,w2": diagnostic Mote ids set into Tor's equipment words 0 to
     // 2 (each must be held; "-" leaves a word empty).
     if let Ok(m) = std::env::var("NEOPETS_TRACE_MOTES") {
@@ -2558,6 +2564,7 @@ fn play_trace(
     let mut last_swap = String::new();
     let mut last_fx = String::new();
     let mut last_block = String::new();
+    let cross_at: Vec<u64> = std::env::var("NEOPETS_TRACE_CROSS").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut flags_seen = play.state.flags.clone();
     // NEOPETS_TRACE_HOLD=n: the fight trace holds the attack n ticks (default 10; 50 or more
@@ -2632,6 +2639,10 @@ fn play_trace(
         }
         // NEOPETS_TRACE_BREAK: on tick 60 the current world's breakables (count, kinds of
         // volume, the nearest three).
+        // NEOPETS_TRACE_NPCBLOCK=n: on tick n block 0 is moved onto the first walking character.
+        if std::env::var("NEOPETS_TRACE_NPCBLOCK").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
+            println!("      block 0 moved onto character {:?} on tick {}", play.block_onto_npc(), play.ticks);
+        }
         // NEOPETS_TRACE_BLOCK on tick 5: the current world's blocks and the volumes blocks fire.
         if play.ticks == 5 && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
             for line in play.block_survey() {
@@ -2787,6 +2798,11 @@ fn play_trace(
             forward = m * (dx * f[0] + dz * f[2]) / len / (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
             side = m * (dx * l[0] + dz * l[2]) / len;
         }
+        // NEOPETS_TRACE_PUSH="x,z": the stick points straight at the point (no route search),
+        // except while climbing.
+        if let Some((x, z)) = std::env::var("NEOPETS_TRACE_PUSH").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)) }) {
+            (forward, side) = if play.loco.state == 58 { (0.0, 0.0) } else { play.stick_toward(x, z) };
+        }
         // NEOPETS_TRACE_BLOCK: in the block state the stick points into the held face (centred
         // during the approach), so the hero pushes; the Square prompts are pressed as usual.
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
@@ -2803,7 +2819,9 @@ fn play_trace(
             // With NEOPETS_TRACE_MICE the drop prompt is pressed only inside the cage, and a
             // stalk starts the sneak with one press.
             square_held: stalk.is_some(),
-            square: (play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()))
+            // NEOPETS_TRACE_CLIMB: the grab-block prompt (10) is not pressed, so the hero keeps
+            // walking into the block.
+            square: (play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(play.prompt_shown == Some(10) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()))
                 || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
@@ -2814,7 +2832,8 @@ fn play_trace(
             // edges at its tick offsets in every 120 (a combo).
             attack: ((jump || fight.is_some_and(|f| f.1)) && play.ticks % 120 == 30) || (play.textbox.asking() && play.ticks % 10 == 5) || presses.contains(&(play.ticks % 120)),
             // On the game-over page the trace taps Cross every 60 ticks.
-            jump: (jump && play.ticks % 240 == 0 && play.ticks > 0) || (play.death.page.is_some() && play.ticks % 60 == 0),
+            // NEOPETS_TRACE_CROSS="a,b,...": Cross press edges on these ticks.
+            jump: (jump && play.ticks % 240 == 0 && play.ticks > 0) || (play.death.page.is_some() && play.ticks % 60 == 0) || cross_at.contains(&play.ticks),
             ..Default::default()
         };
         // In a fight below half health the trace drinks: it opens the quick panel, selects the

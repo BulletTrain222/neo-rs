@@ -651,6 +651,12 @@ pub struct Play {
     carried: Option<u64>,
     /// The hero's block state (state 18, SPEC-0033 Behavior 4A.2).
     hold: Option<neopets_sim::block::Hold>,
+    /// States 19 and 58 (SPEC-0033 Behavior 51), the side-touch latch (Behavior 15A) and the
+    /// push-into-face counter (Behavior 15).
+    hang: Option<neopets_sim::block::Hang>,
+    climb: Option<neopets_sim::block::Climb>,
+    side_touch: bool,
+    face_count: u32,
     stick_centred: bool,
     /// Hero switching (SPEC-0053): the selected hero (0 Tor, 1 Roberta), the parked hero, the
     /// swap mode, the running swap task and the L1 and R1 press edges kept for the next tick.
@@ -1300,6 +1306,10 @@ impl Play {
             catch: Default::default(),
             carried: None,
             hold: None,
+            hang: None,
+            climb: None,
+            side_touch: false,
+            face_count: 0,
             stick_centred: true,
             gesture: Default::default(),
             gesture_words,
@@ -3344,6 +3354,18 @@ impl Play {
     /// (label 10) while the face finder finds a face of the hero's current block, whose press
     /// enters state 18 (SPEC-0033 Behaviors 4A.2 and 15A).
     fn block_step(&mut self) -> bool {
+        if self.loco.state == hero_states::HANG {
+            if self.hero.clip_state().action == 73 {
+                self.door_prompt = Some(20);
+                if self.square_now {
+                    self.leave_edge(hero_states::STANCE, 0.0);
+                }
+            }
+            return true;
+        }
+        if self.loco.state == hero_states::CLIMB {
+            return true;
+        }
         if self.loco.state == hero_states::BLOCK {
             if self.hero.clip_state().action == neopets_sim::block::ANIM_STILL && self.stick_centred {
                 self.door_prompt = Some(20);
@@ -3374,6 +3396,7 @@ impl Play {
     /// strain voice (Tor 33, Roberta 57) on an accepted push.
     fn hold_step(&mut self, input: &HeroInput) {
         self.stick_centred = neopets_sim::hero::speed_value(input) <= 0.0;
+        self.edge_step(input);
         if self.loco.state != hero_states::BLOCK {
             self.hold = None;
             return;
@@ -3427,7 +3450,17 @@ impl Play {
             let b = &self.world.blocks[k];
             (k, (d * 10.0).round() / 10.0, r(b.position), b.moving, neopets_sim::block::face(b, d, hero, self.loco.facing))
         });
-        format!("state {} clip {} prompt {:?} hold {:?} hero {:?} facing {:?} root {:?} block {:?}", self.loco.state, self.hero.clip_state().action, self.prompt_shown, self.hold.map(|h| (h.block, h.face, h.latched)), r(hero), r(self.loco.facing), self.root_step, near)
+        format!("state {} touch {} clip {} prompt {:?} hold {:?} hero {:?} facing {:?} root {:?} block {:?}", self.loco.state, self.side_touch, self.hero.clip_state().action, self.prompt_shown, self.hold.map(|h| (h.block, h.face, h.latched)), r(hero), r(self.loco.facing), self.root_step, near)
+    }
+
+    /// Diagnostic: the full stick (forward, side) that points the hero straight at a point.
+    pub fn stick_toward(&self, x: f32, z: f32) -> (f32, f32) {
+        let p = self.loco.position();
+        let (dx, dz) = (x - p[0], z - p[2]);
+        let d = dx.hypot(dz).max(1e-6);
+        let (f, l) = self.camera.rows();
+        let fl = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
+        ((dx * f[0] + dz * f[2]) / d / fl, (dx * l[0] + dz * l[2]) / d)
     }
 
     /// Diagnostic: the stick (forward, side) that points into the held block face once the grab
@@ -3438,6 +3471,131 @@ impl Play {
         let (f, l) = self.camera.rows();
         let fl = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
         Some(((n[0] * f[0] + n[2] * f[2]) / fl, n[0] * l[0] + n[2] * l[2]))
+    }
+
+    /// Diagnostic: move block 0 of the current world so that the first walking character of the
+    /// world stands 0.5 inside its west face; returns the character and its position.
+    pub fn block_onto_npc(&mut self) -> Option<(u64, [f32; 3])> {
+        let pack = self.world.pack;
+        let c = self.characters.iter().find(|c| c.pack == pack && c.walker.is_some())?;
+        let (id, p) = (c.id, c.position);
+        let b = self.world.blocks.first()?.clone();
+        let x = [p[0] + 0.5 * b.size - 0.5, p[1], p[2]];
+        let w = &mut self.world;
+        let mut nb = b;
+        nb.move_to(x, |px, pz, cl| {
+            let h = w.probe(px, pz, cl);
+            h.found.then_some(h.height)
+        });
+        w.blocks[0] = nb;
+        Some((id, p))
+    }
+
+    /// Leave state 19 or 58 to `state`, moved `push` along the held face, with gravity back on.
+    fn leave_edge(&mut self, state: u8, push: f32) {
+        let face = self.hang.map(|h| (h.block, h.face)).or(self.climb.map(|c| (c.block, c.face)));
+        if let Some(d) = face.and_then(|(k, m)| self.world.blocks.get(k)?.direction(m as i32)) {
+            for k in [0, 2] {
+                self.loco.body.position[k] += d[k] * push;
+            }
+        }
+        self.hang = None;
+        self.climb = None;
+        self.loco.body.no_gravity = false;
+        self.loco.enter_state(state, if state == hero_states::RUN { 4 } else { 0 });
+    }
+
+    /// SPEC-0033 Behaviors 15, 15A and 51, after the hero update: in states 19 and 58 their
+    /// step (no gravity; the clips' root motion lifts the hero); otherwise the block-edge grab
+    /// (the side-touch latch and a face, on Cross from the ground or in air phases 0 to 5)
+    /// enters state 19, and the push-into-face counter with the fit test enters state 58.
+    fn edge_step(&mut self, input: &HeroInput) {
+        let hero = self.loco.position();
+        let c = self.hero.clip_state();
+        let clip = neopets_sim::block::EdgeClip { action: c.action, progress: c.progress };
+        let v = neopets_sim::hero::speed_value(input);
+        let stick = self.loco.target.map(|x| x * v);
+        let f = self.loco.facing;
+        let side_axis = neopets_sim::hero::basis(f)[0];
+        let (a, b) = (stick[0] * f[0] + stick[2] * f[2], stick[0] * side_axis[0] + stick[2] * side_axis[2]);
+        let forward = a > 0.0 && a.abs() > b.abs();
+        let step = match self.loco.state {
+            hero_states::HANG => self.hang.as_mut().map(|h| h.tick(&self.world.blocks, hero, input.side, forward, self.loco.body.gap, clip)),
+            hero_states::CLIMB => self.climb.as_mut().map(|h| h.tick(&self.world.blocks, hero, forward, clip)),
+            _ => {
+                self.hang = None;
+                self.climb = None;
+                let found = neopets_sim::block::current(&self.world.blocks, hero).and_then(|(k, d)| Some((k, neopets_sim::block::face(&self.world.blocks[k], d, hero, f)?)));
+                let grab = (input.jump && (1..=10).contains(&self.loco.state)) || (self.loco.airborne() && (0..=5).contains(&self.loco.phase));
+                if let (true, true, Some((k, m))) = (grab, self.side_touch, found) {
+                    self.hang = Some(neopets_sim::block::Hang::new(k, m));
+                    self.loco.enter_state(hero_states::HANG, 72);
+                    self.trace_edge("hang", k, m);
+                } else if (1..=6).contains(&self.loco.state) {
+                    // The counter: reset with no face, up to 15 at one; from 15 the fit test runs
+                    // every tick and a pass enters state 58.
+                    match found {
+                        None => self.face_count = 0,
+                        Some((k, m)) => {
+                            if self.face_count < neopets_sim::block::FACE_COUNT {
+                                self.face_count += 1;
+                            } else if neopets_sim::block::fits(&self.world.blocks[k], m, hero, f, a, b) {
+                                self.climb = Some(neopets_sim::block::Climb::new(k, m));
+                                self.loco.enter_state(hero_states::CLIMB, 70);
+                                self.face_count = 0;
+                                self.trace_edge("climb", k, m);
+                            }
+                        }
+                    }
+                }
+                None
+            }
+        };
+        if !matches!(self.loco.state, hero_states::HANG | hero_states::CLIMB) {
+            return;
+        }
+        let Some(step) = step.or(Some(neopets_sim::block::EdgeStep { request: self.loco.action(), ..Default::default() })) else { return };
+        self.loco.body.no_gravity = true;
+        self.loco.body.velocity = [0.0; 3];
+        if let Some(d) = step.facing {
+            self.loco.steer_toward(d, 1.0);
+        }
+        if let Some(p) = step.place {
+            self.loco.body.position = p;
+        }
+        self.loco.block_request(step.request);
+        if let Some((state, push)) = step.exit {
+            self.leave_edge(state, push);
+            self.trace_edge("leave", state as usize, 0);
+        }
+    }
+
+    fn trace_edge(&self, what: &str, a: usize, b: u8) {
+        if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+            println!("      {what} {a} {b} on tick {} at {:?}", self.ticks, self.loco.position());
+        }
+    }
+
+    /// SPEC-0048 Solid for characters for the region characters (SPEC-0040 Behavior 14A branch
+    /// 1): after their motion, each walking character of the current world is pushed out of the
+    /// active blocks (not in owner states 18, 19, 30, 41 and 58, which no region character uses).
+    fn npc_block_step(&mut self) {
+        if self.world.blocks.is_empty() {
+            return;
+        }
+        let pack = self.world.pack;
+        let blocks = &self.world.blocks;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack) {
+            let Some(wk) = c.walker.as_mut() else { continue };
+            let mut p = wk.body.position;
+            if neopets_sim::block::contact(blocks, &mut p).hit {
+                if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+                    println!("      character {} ({}) against a block on tick {} at {:?}", c.id, c.name, self.ticks, p);
+                }
+                wk.body.position = p;
+                c.position = p;
+            }
+        }
     }
 
     fn catch_step(&mut self) -> bool {
@@ -5162,6 +5320,7 @@ impl Play {
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
         let block_contact = !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
+        let side_touch = Cell::new(false);
         let swap = Cell::new(false);
         self.loco.record_tick(
             self.root_step,
@@ -5192,14 +5351,17 @@ impl Play {
                     contact::resolve_walls(p, &walls, contact::HERO_RADIUS);
                 }
                 contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
-                // SPEC-0048 Solid for characters: the movable blocks' boxes.
-                if block_contact {
-                    neopets_sim::block::contact(&world.blocks, p);
-                }
+                // SPEC-0048 Solid for characters: the movable blocks' boxes; a top face sets the
+                // floor-contact flag and a side face of a block 1 to 5 taller the side-touch latch.
+                let c = if block_contact { neopets_sim::block::contact(&world.blocks, p) } else { Default::default() };
+                side_touch.set(c.side_touch);
                 // SPEC-0018 Sphere contact: out of the pushing spheres to r + 1.25.
                 contact::resolve_spheres(p, &world.push_spheres);
+                c.floor
             },
         );
+        // The side-touch latch the next hero update reads (SPEC-0033 Behavior 15A).
+        self.side_touch = side_touch.get();
         // SPEC-0055 8A: the deadly-ground kill (kind 2, gap 0.085 or less; no health change),
         // then the death-state handler of state 16.
         let hp = {
@@ -5208,7 +5370,9 @@ impl Play {
         };
         let deadly = (hp.found && hp.kind == Some(2))
             .then(|| neopets_sim::death::Deadly { respawn: hp.respawn.unwrap_or(0xFF), surface: hp.surface.unwrap_or(0) });
-        if neopets_sim::death::deadly_kill(deadly, self.loco.body.gap) {
+        // The probed gap (a block top under the hero is not deadly ground).
+        let probed_gap = self.loco.position()[1] - hp.height;
+        if neopets_sim::death::deadly_kill(deadly, probed_gap) {
             // The death effect of the surface (0x81 hot burst, 0xBC water splash; SPEC-0055 8A,
             // SPEC-0034 section 37) when the hero enters the death state.
             if self.loco.state != hero_states::DEAD {
@@ -5436,6 +5600,7 @@ impl Play {
         self.serpent_step();
         self.mice_step();
         self.enemies_step();
+        self.npc_block_step();
         self.items_step();
         // SPEC-0023: the in-play HUD steps only while the in-play state runs, so not while a
         // dialogue box is up.

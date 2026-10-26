@@ -122,6 +122,15 @@ impl HeroAnim {
         }
     }
 
+    /// Diagnostic: the main family's clip for an action: its key count, speed byte and the sum
+    /// of its root records (the travel of one play at play rate 1 is this times 0.5 / speed).
+    pub fn root_sum(&self, action: u32) -> Option<(usize, [f32; 3])> {
+        let f = self.families.first()?;
+        let c = &f.data.clips[f.data.clip_for(action)?];
+        let sum = c.root.iter().fold([0.0f32; 3], |a, r| [a[0] + r[0], a[1] + r[1], a[2] + r[2]]);
+        Some((c.root.len(), sum))
+    }
+
     /// The main family's table holds a clip for the action.
     pub fn has(&self, action: u32) -> bool {
         self.families.first().is_some_and(|f| f.data.clip_for(action).is_some())
