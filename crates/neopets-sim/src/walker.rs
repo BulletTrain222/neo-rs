@@ -37,6 +37,12 @@ pub struct Walker {
     /// Blocked flag and timer (set to 120 by the confinement).
     pub blocked: bool,
     pub blocked_timer: u32,
+    /// The motion record's lock word (+0x280; SPEC-0056 Lock value): a one-tick flag that skips
+    /// the edge guard and the off-mesh restore; cleared at the end of every motion tick.
+    pub lock: bool,
+    /// The class kind query returns 1 (SPEC-0040 Behavior 14E): the edge guard applies. On for
+    /// every walker (no hero walks with one).
+    pub edge_guard: bool,
     saved: Vec3,
     id: u32,
 }
@@ -65,6 +71,8 @@ impl Walker {
             arrived: false,
             blocked: false,
             blocked_timer: 0,
+            lock: false,
+            edge_guard: true,
             saved: position,
             id,
         }
@@ -213,6 +221,7 @@ impl Walker {
     /// confinement, integrator. `probe(x, z, ceiling)` gives the ground height and normal.
     pub fn motion_tick(&mut self, root_step: Vec3, meshes: &[NavMesh], probe: impl Fn(f32, f32, f32) -> (f32, Vec3)) {
         self.body.measure(probe);
+        let p0 = self.body.position;
         let [b1, b2, b3] = basis(self.facing);
         let mut d: Vec3 = std::array::from_fn(|k| root_step[0] * b1[k] + root_step[1] * b2[k] + root_step[2] * b3[k]);
         if self.body.gap < 1.0 {
@@ -223,10 +232,18 @@ impl Walker {
         for k in 0..3 {
             self.body.position[k] += d[k];
         }
-        self.body.constrain();
+        // SPEC-0040 Behavior 14E: with the lock word clear and the ground gap above 2.0 in
+        // magnitude, this tick's root step is reversed (P' = P0 - D) and the rest of the pre-step
+        // (the ground constraint) is skipped.
+        if self.edge_guard && !self.lock && self.body.gap.abs() > 2.0 {
+            self.body.position = std::array::from_fn(|k| p0[k] - d[k]);
+        } else {
+            self.body.constrain();
+        }
         self.body.gravity();
         self.confine(meshes, d);
         self.body.integrate();
+        self.lock = false;
     }
 
     /// SPEC-0056 navmesh confinement: the blocked timer; boundary edges of the current triangle
@@ -281,11 +298,12 @@ impl Walker {
                 self.current = Some(t);
                 self.saved = p;
             }
-            None => {
+            None if !self.lock => {
                 self.body.position = self.saved;
                 self.blocked = true;
                 self.blocked_timer = 120;
             }
+            None => {}
         }
     }
 
@@ -350,5 +368,23 @@ mod tests {
         }
         assert!(w.position()[0] <= 10.0, "{:?}", w.position());
         assert!(w.blocked);
+    }
+
+    #[test]
+    fn the_edge_guard_reverses_the_step_over_a_drop() {
+        // SPEC-0040 Behavior 14E: with the gap above 2.0 the root step D is reversed (P0 - D);
+        // with the lock word set it is kept.
+        let drop = |_: f32, _: f32, _: f32| (-10.0, [0.0, 1.0, 0.0]);
+        let mut w = Walker::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 1.0, 5.5, 1);
+        w.motion_tick([0.0, 0.0, 0.5], &[], drop);
+        assert!((w.position()[2] + 0.5).abs() < 1e-4, "{:?}", w.position());
+        let mut w = Walker::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 1.0, 5.5, 1);
+        w.lock = true;
+        w.motion_tick([0.0, 0.0, 0.5], &[], drop);
+        assert!((w.position()[2] - 0.5).abs() < 1e-4 && !w.lock, "{:?}", w.position());
+        // On flat ground (gap 0) the step is kept.
+        let mut w = Walker::new([0.0, 0.0, 0.0], [0.0, 0.0, 1.0], 1.0, 5.5, 1);
+        w.motion_tick([0.0, 0.0, 0.5], &[], flat);
+        assert!((w.position()[2] - 0.5).abs() < 1e-4);
     }
 }

@@ -665,9 +665,24 @@ impl Ixi {
     }
 }
 
+/// SPEC-0014 Height check: at the start of every stage-rule pass the boss's lock word is set
+/// when its height and the controlled hero's differ by more than 1.0 (strictly); it then skips
+/// the edge guard and the off-mesh restore of its motion record (`Walker::lock`).
+pub fn height_lock(boss_y: f32, hero_y: f32) -> bool {
+    (boss_y - hero_y).abs() > 1.0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn height_lock_vectors() {
+        // SPEC-0014 Height check: 12.0 and 10.5 lock; 12.0 and 11.2 do not; exactly 1.0 does not.
+        assert!(height_lock(12.0, 10.5));
+        assert!(!height_lock(12.0, 11.2));
+        assert!(!height_lock(12.0, 11.0));
+    }
 
     fn words() -> Words {
         let mut b = vec![0u32; WORDS];
