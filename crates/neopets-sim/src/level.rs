@@ -692,13 +692,27 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 880 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 880 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0039 1230 Init: slot 0 and thread 1; handler 2 on triggers 0, 2 and 1, handler 3
+        // on 5; with flag 20 or 19 handlers 5 and 6 on 3 and 4; object 0 off with 64 set and 248
+        // clear. SetWorldCollisMask and SetWorldDisplayMask under 248 are not built.
+        1230 => {
+            let mut v = vec![reg(0, 2), reg(2, 2), reg(1, 2), reg(5, 3)];
+            if state.flag(20) || state.flag(19) {
+                v.extend([reg(3, 5), reg(4, 6)]);
+            }
+            if state.flag(64) && !state.flag(248) {
+                v.push(Action::InitObjOn { obj: 0, end: false });
+            }
+            v.extend(slots_1230(state));
+            v
+        }
         // SPEC-0039 880 Init: objects 0 and 1 off; slots 0 (sets 0 to 4) and 1 (set 4); triggers
         // 5 to 7 handler 1, 0 handler 2, 1 handler 3, 2 handler 9; thread 4 (the flag-chosen
         // set); the instance trigger of group 2 (handler 5); teleport 0 (context 13) and the
@@ -1053,8 +1067,41 @@ fn slots_880(state: &GameState) -> Action {
     Action::LoadRegion { slot: 0, region: Some(881 + set) }
 }
 
-/// SPEC-0039 880 map shop: (map, prompt, price) in offer order.
-const MAPS_880: [(u32, u16, i32); 8] = [(1, 6, 250), (8, 7, 250), (30, 8, 250), (27, 9, 300), (18, 10, 400), (3, 17, 300), (6, 18, 300), (11, 19, 400)];
+/// The treasure-map shops of SPEC-0039 880 and 1230: (map, prompt, price) in offer order.
+fn map_shop(pack: u32) -> &'static [(u32, u16, i32)] {
+    match pack {
+        880 => &[(1, 6, 250), (8, 7, 250), (30, 8, 250), (27, 9, 300), (18, 10, 400), (3, 17, 300), (6, 18, 300), (11, 19, 400)],
+        1230 => &[(1, 6, 250), (8, 7, 250), (30, 8, 250), (27, 9, 300), (18, 10, 500), (10, 17, 300)],
+        _ => &[],
+    }
+}
+
+/// SPEC-0039 1230 thread 1: slot 0 loads set 6 with flag 248; else set 3, 2 or 1 by flags 19,
+/// 18 and 52, or set 0. With flag 20 set the set depends on two flags the spec does not name
+/// (R-0054), and nothing is loaded.
+fn slots_1230(state: &GameState) -> Option<Action> {
+    let set = if state.flag(248) {
+        6
+    } else if state.flag(20) {
+        return None;
+    } else {
+        [(19, 3), (18, 2), (52, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, j)| j)
+    };
+    Some(Action::LoadRegion { slot: 0, region: Some(1231 + set) })
+}
+
+/// The flag-67 line rotation of SPEC-0039 880 and 1230: lines 0 to 2 with flag 67 set, 3 to 5
+/// clear, one counter (word 2) restarted the first time 67 is seen set (word 3).
+fn rotation_67(pack: u32, state: &mut GameState) -> u16 {
+    let set = state.flag(67);
+    if set && state.word(pack, 3) == 0 {
+        state.set_word(pack, 3, 1);
+        state.set_word(pack, 2, 0);
+    }
+    let k = state.word(pack, 2).rem_euclid(3);
+    state.set_word(pack, 2, k + 1);
+    if set { k as u16 } else { 3 + k as u16 }
+}
 
 /// SPEC-0042 1171 counting helper: for each set flag of 637 to 641, in order, the count rises
 /// by one and flag 162 + count is set; returns the count.
@@ -1074,6 +1121,24 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
     let mut out = TriggerOut::default();
     let first = call.state == 1 && call.object;
     match (pack, routine) {
+        // SPEC-0039 1230 handler 2 (triggers 0, 1, 2): while inside, the Square context 3; a
+        // press shows line 18, 20 or 19.
+        (1230, 2) if call.state != 0 => {
+            out.prompt = Some(3);
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: match call.index { 0 => 18, 2 => 19, _ => 20 } });
+            }
+        }
+        // Handler 3 (trigger 5), with 64 set, 248 clear and the object present: line 21 (the
+        // BlockPlayerControl and ReturnHeroAnimToIdle calls are not reproduced).
+        (1230, 3) if call.object && call.state != 0 && state.flag(64) && !state.flag(248) && !state.talking => out.actions.push(Action::Message { line: 21 }),
+        // Handlers 5 and 6 (triggers 3 and 4): entity 46's line once per pass of 4 then 3, by
+        // the flag-67 rotation (as 880's handlers 2 and 3).
+        (1230, 5) if call.object && call.state == 1 && state.word(pack, 1) == 0 => {
+            state.set_word(pack, 1, 1);
+            out.actions.push(Action::Converse { entity: 46, line: rotation_67(pack, state) });
+        }
+        (1230, 6) if call.object && call.state == 1 => state.set_word(pack, 1, 0),
         // SPEC-0039 880 handler 1 (triggers 5 to 7): while inside, the Square context 3; a press
         // shows line 21, 22 or 24.
         (880, 1) if call.state != 0 => {
@@ -1087,14 +1152,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // restarted the first time 67 is seen set, word 3). Handler 3 (trigger 1) clears it.
         (880, 2) if call.object && call.state == 1 && state.word(pack, 1) == 0 => {
             state.set_word(pack, 1, 1);
-            let set = state.flag(67);
-            if set && state.word(pack, 3) == 0 {
-                state.set_word(pack, 3, 1);
-                state.set_word(pack, 2, 0);
-            }
-            let k = state.word(pack, 2).rem_euclid(3);
-            state.set_word(pack, 2, k + 1);
-            out.actions.push(Action::Converse { entity: 3, line: if set { k as u16 } else { 3 + k as u16 } });
+            out.actions.push(Action::Converse { entity: 3, line: rotation_67(pack, state) });
         }
         (880, 3) if call.object && call.state == 1 => state.set_word(pack, 1, 0),
         // Handler 9 (trigger 2), entered with flag 252 clear: line 25.
@@ -1523,6 +1581,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
         }
         1217 => out = burrows_fight(state, dialog),
+        // SPEC-0039 1230 Update: object 0 off unless 64 is set and 248 clear.
+        1230 => {
+            if !(state.flag(64) && !state.flag(248)) {
+                out.push(Action::DeactivateObj { obj: 0 });
+            }
+        }
         // SPEC-0039 880 Update: while 296 is clear, AI 21, 22 and 23 all dead set 296.
         880 => {
             if !state.flag(296) && [21, 22, 23].iter().all(|e| state.ai_dead.contains(e)) {
@@ -2936,9 +3000,10 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
     match (pack, routine, yes) {
         // SPEC-0039 880 map shop answers: declined line 16; too few Neopoints line 15; else the
         // map given (item 175 with the map number), the price taken and line 14.
-        (880, 7, false) => vec![Action::Talk { line: 16 }],
-        (880, 7, true) => {
-            let (map, _, price) = MAPS_880[(s.word(pack, 4).clamp(0, 7)) as usize];
+        (880, 7, false) | (1230, 4, false) => vec![Action::Talk { line: 16 }],
+        (880, 7, true) | (1230, 4, true) => {
+            let shop = map_shop(pack);
+            let (map, _, price) = shop[(s.word(pack, 4).clamp(0, shop.len() as i32 - 1)) as usize];
             if s.neopoints < price {
                 vec![Action::Talk { line: 15 }]
             } else {
@@ -3158,8 +3223,10 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (678 | 686 | 691, 9) => Some(0),
         // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
         (1148, 0..=3) => Some(entity as u8),
-        // SPEC-0039 880: the map shop (handler 7) on entities 3 and 7.
+        // SPEC-0039 880: the map shop (handler 7) on entities 3 and 7; 1230: handler 4 on 46
+        // and 84.
         (880, 3 | 7) => Some(7),
+        (1230, 46 | 84) => Some(4),
         // SPEC-0042 1150: P0 to P4 on entities 0 to 4.
         (1150, 0..=4) => Some(entity as u8),
         // SPEC-0039 1133: entity 1 with flag 10 set, else entity 0.
@@ -3186,13 +3253,14 @@ fn cycle(lines: &[u16]) -> Lines {
 /// Run a proximity routine: the first branch whose test holds picks a line (with its side
 /// effects); the talk frame (SetConversationTarget, LevelMsg, EndConversation) wraps it.
 pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
-    // SPEC-0039 880 handler 7, the map shop: the first map not held is offered with its prompt
-    // (its index kept in word 4 for the answer); with all eight held, lines 11, 12 and 13 in
-    // rotation (word 5).
-    if (pack, routine) == (880, 7) {
-        if let Some(k) = MAPS_880.iter().position(|m| !state.maps.contains(&m.0)) {
+    // SPEC-0039 880 handler 7 and 1230 handler 4, the map shop: the first map not held is
+    // offered with its prompt (its index kept in word 4 for the answer); with every map held,
+    // lines 11, 12 and 13 in rotation (word 5).
+    if matches!((pack, routine), (880, 7) | (1230, 4)) {
+        let shop = map_shop(pack);
+        if let Some(k) = shop.iter().position(|m| !state.maps.contains(&m.0)) {
             state.set_word(pack, 4, k as i32);
-            return vec![Action::Prompt { line: MAPS_880[k].1, routine: 7 }];
+            return vec![Action::Prompt { line: shop[k].1, routine }];
         }
         let r = state.word(pack, 5).rem_euclid(3);
         state.set_word(pack, 5, r + 1);
@@ -3451,6 +3519,25 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1230_shop_slots_and_lines() {
+        let mut s = GameState { neopoints: 1000, ..Default::default() };
+        s.maps.extend([1, 8, 30, 27]);
+        assert_eq!(on_talk(1230, 4, &mut s), vec![Action::Prompt { line: 10, routine: 4 }]);
+        assert_eq!(on_answer(1230, 4, true, &mut s)[0], Action::GiveItem { item: TREASURE_MAP, count: 18 });
+        assert_eq!(s.neopoints, 500);
+        // Thread 1: flag 18 gives set 2; flag 248 gives set 6; flag 20 alone loads nothing.
+        s.set(18, true);
+        assert!(on_init(1230, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1233) }));
+        s.set(18, false);
+        s.set(20, true);
+        assert!(!on_init(1230, &mut s).iter().any(|a| matches!(a, Action::LoadRegion { .. })));
+        s.set(248, true);
+        assert!(on_init(1230, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1237) }));
+        let call = TriggerCall { index: 2, state: 2, object: true, square: true };
+        assert_eq!(on_trigger(1230, 2, call, &mut s).actions, vec![Action::Message { line: 19 }]);
     }
 
     #[test]
