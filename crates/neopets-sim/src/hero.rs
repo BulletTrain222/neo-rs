@@ -43,6 +43,8 @@ pub const HANG: u8 = 19;
 pub const CLIMB: u8 = 58;
 /// The ladder (SPEC-0033 Behavior 13; its tick is `ladder::Ladder`).
 pub const LADDER: u8 = 41;
+/// The climb on a climb panel (SPEC-0033 Behavior 51; its tick is `climb::Climb`).
+pub const PANEL: u8 = 21;
 /// Sneak idle, sneak reverse walk (39) and sneak walk (SPEC-0033 Behavior 4A.1 and 5.1).
 pub const SNEAK: u8 = 22;
 pub const SNEAK_WALK: u8 = 40;
@@ -509,6 +511,17 @@ impl Locomotion {
         self.body.gain = GAIN_FALL;
     }
 
+    /// The climb's Stop Climbing (SPEC-0033 Behavior 51, state 21 exits): state 7 in air phase
+    /// 5 with request 67, falling from rest.
+    pub fn drop_off(&mut self) {
+        self.enter_air(JUMP);
+        self.phase = 5;
+        self.request = 67;
+        self.body.velocity = [0.0; 3];
+        self.body.no_gravity = false;
+        self.body.gain = GAIN_FALL;
+    }
+
     /// Enter a block state (19 or 58) with its first request.
     pub fn enter_state(&mut self, state: u8, request: u32) {
         self.state = state;
@@ -537,7 +550,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK | HANG | CLIMB | LADDER => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK | HANG | CLIMB | LADDER | PANEL => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -582,7 +595,7 @@ impl Locomotion {
             SCRIPTED => return,
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
-            BLOCK | HANG | CLIMB | LADDER => return,
+            BLOCK | HANG | CLIMB | LADDER | PANEL => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -821,12 +834,14 @@ impl Locomotion {
     /// discarded when the stick points behind the facing, turned by the facing basis, projected
     /// onto the ground plane while the gap is below 1.0, and added to the position.
     pub fn travel(&mut self, root_step: Vec3) {
-        let step = if dot(self.target, self.facing) < 0.0 { [0.0; 3] } else { root_step };
+        // The step is kept with the stick behind the facing in states 21, 23 and 41 (SPEC-0033
+        // Behavior 14C).
+        let step = if dot(self.target, self.facing) < 0.0 && !matches!(self.state, PANEL | 23 | LADDER) { [0.0; 3] } else { root_step };
         let [b1, b2, b3] = basis(self.facing);
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
         // In the edge states the clips' root motion lifts the hero (the pull-up 59 rises 3.7 and
         // the climb 134 1.2), so it is not flattened onto the ground there.
-        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB | LADDER) {
+        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB | LADDER | PANEL) {
             let n = self.body.normal;
             let dn = dot(d, n);
             d = std::array::from_fn(|k| d[k] - dn * n[k]);

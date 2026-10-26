@@ -14419,7 +14419,7 @@ mod tests {
         for i in [0, 1] {
             on_trigger(1089, 2, at(i, true), &mut s);
         }
-        let mut tick = |s: &mut GameState, t: f32| {
+        let tick = |s: &mut GameState, t: f32| {
             s.obj_times.insert(0, t);
             on_update(1089, s, false)
         };

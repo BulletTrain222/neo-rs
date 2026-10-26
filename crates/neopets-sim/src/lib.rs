@@ -5,6 +5,7 @@ pub use ps2_float::{F, Vf};
 pub mod attack;
 pub mod camera;
 pub mod chain;
+pub mod climb;
 pub mod block;
 pub mod book;
 pub mod burrows;

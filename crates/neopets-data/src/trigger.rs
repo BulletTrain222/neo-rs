@@ -183,6 +183,10 @@ pub struct Panel {
     pub lu: f32,
     pub lv: f32,
     pub kind: i8,
+    /// The four neighbour links (+0x50 to +0x5C) as indices into the returned list: 0 the panel
+    /// below, 1 the side at u = LU, 2 the panel above, 3 the side at u = 0 (SPEC-0033 Climb
+    /// terms).
+    pub links: [Option<usize>; 4],
 }
 
 /// Every record of the first type-10 chunk, group by group. The chunk's offsets count from the
@@ -194,6 +198,9 @@ pub fn panels(bytes: &[u8], top: &[Chunk]) -> Vec<Panel> {
     let groups = u32_at(p, 0).unwrap_or(0).min(1 << 10) as usize;
     let Some(table) = u32_at(p, 4).and_then(|v| (v as usize).checked_sub(16)) else { return Vec::new() };
     let mut out = Vec::new();
+    // Each record's chunk-relative offset and its raw links, resolved to indices at the end.
+    let mut at_of = std::collections::HashMap::new();
+    let mut raw = Vec::new();
     for g in 0..groups {
         let at = table + 0x20 * g;
         let (Some(n), Some(list)) = (u32_at(p, at + 0x10), u32_at(p, at + 0x14)) else { break };
@@ -201,11 +208,16 @@ pub fn panels(bytes: &[u8], top: &[Chunk]) -> Vec<Panel> {
             let Some(r) = (list as usize).checked_sub(16).map(|l| l + 0x60 * k) else { break };
             let rec = (|| {
                 let o = v4(r)?;
-                Some(Panel { origin: [o[0], o[1], o[2]], normal: v4(r + 0x10)?, u: v4(r + 0x20)?, v: v4(r + 0x30)?, lu: f32_at(p, r + 0x40)?, lv: f32_at(p, r + 0x44)?, kind: *p.get(r + 0x4C)? as i8 })
+                Some(Panel { origin: [o[0], o[1], o[2]], normal: v4(r + 0x10)?, u: v4(r + 0x20)?, v: v4(r + 0x30)?, lu: f32_at(p, r + 0x40)?, lv: f32_at(p, r + 0x44)?, kind: *p.get(r + 0x4C)? as i8, links: [None; 4] })
             })();
             let Some(rec) = rec else { break };
+            at_of.insert(r + 16, out.len());
+            raw.push([0, 4, 8, 12].map(|j| u32_at(p, r + 0x50 + j).unwrap_or(0)));
             out.push(rec);
         }
+    }
+    for (rec, links) in out.iter_mut().zip(raw) {
+        rec.links = links.map(|l| (l != 0).then(|| at_of.get(&(l as usize)).copied()).flatten());
     }
     out
 }

@@ -49,6 +49,8 @@ pub struct World {
     pub owner_poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose>,
     /// The ladders of the type-10 groups (SPEC-0006 Type 10, records of type -3).
     pub rails: Vec<neopets_sim::ladder::Rail>,
+    /// Every type-10 record with its links (the climb panels are those of type -2).
+    pub panels: Vec<neopets_sim::climb::Panel>,
     pub block_meshes: Vec<Option<std::ops::Range<usize>>>,
     pub motions: Vec<neopets_sim::object::Motion>,
     pub object_anims: Vec<neopets_sim::object::ObjAnim>,
@@ -195,6 +197,7 @@ impl World {
             blocks: Vec::new(),
             owner_poses: Default::default(),
             rails: Vec::new(),
+            panels: Vec::new(),
             block_meshes: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
@@ -261,11 +264,9 @@ impl World {
         // modes 1 and 2 apply only to an entry whose broken bit is set, and no disc entry has
         // them, so nothing changes here.
         world.breakables = neopets_data::world::breakables(&bytes, &chain.chunks);
-        world.rails = neopets_data::trigger::panels(&bytes, &chain.chunks)
-            .into_iter()
-            .filter(|p| p.kind == -3)
-            .map(|p| neopets_sim::ladder::Rail { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv })
-            .collect();
+        let records = neopets_data::trigger::panels(&bytes, &chain.chunks);
+        world.rails = records.iter().filter(|p| p.kind == -3).map(|p| neopets_sim::ladder::Rail { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv }).collect();
+        world.panels = records.iter().map(|p| neopets_sim::climb::Panel { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv, kind: p.kind, links: p.links }).collect();
         // SPEC-0018 Patch-id table: each placed object's inline model set is registered under
         // its patch id.
         if let Some(g) = world.ground.as_mut() {
@@ -685,6 +686,8 @@ pub struct Play {
     /// State 41 and the grab cooldown (Behavior 20) the jump off sets.
     ladder: Option<neopets_sim::ladder::Ladder>,
     grab_cooldown: u32,
+    /// State 21 (SPEC-0033 Behavior 51).
+    panel: Option<neopets_sim::climb::Climb>,
     side_touch: bool,
     face_count: u32,
     stick_centred: bool,
@@ -1355,6 +1358,7 @@ impl Play {
             climb: None,
             ladder: None,
             grab_cooldown: 0,
+            panel: None,
             side_touch: false,
             face_count: 0,
             stick_centred: true,
@@ -3451,6 +3455,18 @@ impl Play {
     /// (label 10) while the face finder finds a face of the hero's current block, whose press
     /// enters state 18 (SPEC-0033 Behaviors 4A.2 and 15A).
     fn block_step(&mut self) -> bool {
+        // SPEC-0033 state 21 exits: "Stop Climbing" (label 18) in any sub-mode but 7; Square
+        // drops the hero off (state 7, air phase 5, request 67).
+        if self.loco.state == hero_states::PANEL {
+            if self.panel.is_some_and(|c| c.sub != 7) {
+                self.door_prompt = Some(18);
+                if self.square_now {
+                    self.panel = None;
+                    self.loco.drop_off();
+                }
+            }
+            return true;
+        }
         // SPEC-0022: on the ladder "Stop Climbing" (label 18); Square returns to state 1.
         if self.loco.state == hero_states::LADDER {
             self.door_prompt = Some(18);
@@ -3642,6 +3658,12 @@ impl Play {
     /// (the side-touch latch and a face, on Cross from the ground or in air phases 0 to 5)
     /// enters state 19, and the push-into-face counter with the fit test enters state 58.
     fn edge_step(&mut self, input: &HeroInput) {
+        // The grab cooldown (Behavior 20) the panel and ladder grabs share.
+        self.grab_cooldown = self.grab_cooldown.saturating_sub(1);
+        self.panel_step(input);
+        if self.loco.state == hero_states::PANEL {
+            return;
+        }
         self.ladder_step(input);
         if self.loco.state == hero_states::LADDER {
             return;
@@ -3706,6 +3728,58 @@ impl Play {
         }
     }
 
+    /// SPEC-0033 Behaviors 22A and 51: the wall-panel grab from the ground and while jumping
+    /// (the cooldown 0), and state 21 each tick: no gravity, the motion cleared, the climb's
+    /// hold, requests, clip rate and exits.
+    fn panel_step(&mut self, input: &HeroInput) {
+        let hero = self.loco.position();
+        if self.loco.state != hero_states::PANEL {
+            self.panel = None;
+            let ground = (1..=6).contains(&self.loco.state);
+            let jumping = (7..=10).contains(&self.loco.state) || (43..=46).contains(&self.loco.state);
+            if self.grab_cooldown > 0 || !(ground || jumping) || self.world.panels.is_empty() {
+                return;
+            }
+            let v = neopets_sim::hero::speed_value(input);
+            let Some(k) = neopets_sim::climb::grab_wall(&self.world.panels, hero, self.loco.facing, self.loco.target, v) else { return };
+            self.panel = Some(neopets_sim::climb::Climb::new(k));
+            self.loco.enter_state(hero_states::PANEL, 121);
+            self.trace_edge("panel", k, 1);
+        }
+        let Some(mut c) = self.panel else {
+            self.leave_ladder();
+            return;
+        };
+        let clip = self.hero.clip_state();
+        let view = neopets_sim::climb::View { hero, f: input.forward, s: input.side, gap: self.loco.body.gap, clip: (clip.action, clip.progress), cooldown: self.grab_cooldown };
+        let sub = c.sub;
+        let step = c.tick(&self.world.panels, view);
+        self.panel = Some(c);
+        if c.sub != sub {
+            self.trace_edge("panel sub", c.target, c.sub);
+        }
+        self.loco.body.no_gravity = true;
+        self.loco.body.velocity = [0.0; 3];
+        if let Some((f, w)) = step.facing {
+            self.loco.steer_toward(f, w);
+        }
+        if let Some(p) = step.place {
+            self.loco.body.position = p;
+        }
+        if let Some(r) = step.request {
+            self.loco.block_request(r);
+        }
+        if let Some(k) = step.cooldown {
+            self.grab_cooldown = k;
+        }
+        self.loco.rate = step.rate;
+        if step.leave {
+            self.panel = None;
+            self.leave_ladder();
+            self.trace_edge("panel off", c.target, 0);
+        }
+    }
+
     /// Leave the ladder to state 1 with gravity back on.
     fn leave_ladder(&mut self) {
         self.ladder = None;
@@ -3717,7 +3791,6 @@ impl Play {
     /// (the cooldown 0), and state 41 each tick: facing the ladder, motion cleared, no gravity,
     /// the mount move, the rung clips, the climb off the top, stepping off, and the jump off.
     fn ladder_step(&mut self, input: &HeroInput) {
-        self.grab_cooldown = self.grab_cooldown.saturating_sub(1);
         let hero = self.loco.position();
         let v = neopets_sim::hero::speed_value(input);
         if self.loco.state != hero_states::LADDER {

@@ -567,7 +567,7 @@ fn object_header_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), Str
 }
 
 fn panel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
-    let (mut packs, mut ladders, mut panels, mut outside) = (0u32, 0usize, 0usize, 0usize);
+    let (mut packs, mut ladders, mut panels, mut outside, mut links) = (0u32, 0usize, 0usize, 0usize, 0usize);
     for n in 0..index.len() as u32 {
         let bytes = index.read(disc, n)?;
         let family = resource::classify(&bytes);
@@ -585,6 +585,7 @@ fn panel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             print!("{n}:{here} ");
         }
         ladders += here;
+        links += recs.iter().map(|r| r.links.iter().flatten().count()).sum::<usize>();
         panels += recs.iter().filter(|r| r.kind == -2).count();
         let groups = neopets_data::trigger::panel_groups(&bytes, &chain.chunks);
         let mut k = 0;
@@ -598,12 +599,16 @@ fn panel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
             k += count;
         }
         if std::env::var("NEOPETS_PANELS_PACK").ok().and_then(|v| v.parse::<u32>().ok()) == Some(n) {
-            for r in recs.iter().filter(|r| r.kind == -3) {
-                println!("  ladder origin {:?} n {:?} u {:?} v {:?} lu {} lv {}", r.origin, r.normal, r.u, r.v, r.lu, r.lv);
+            for (i, r) in recs.iter().enumerate() {
+                println!("  {i}: kind {} origin {:?} n {:?} u {:?} v {:?} lu {} lv {} links {:?}", r.kind, r.origin, r.normal, r.u, r.v, r.lu, r.lv, r.links);
             }
         }
+        let walls = recs.iter().filter(|r| r.kind == -2 && r.normal[1].abs() < 0.5).count();
+        if walls > 0 && std::env::var_os("NEOPETS_PANELS_WALLS").is_some() {
+            print!("[{n}: {walls} walls] ");
+        }
     }
-    println!("type 10: {ladders} ladders and {panels} climb panels in {packs} packs; {outside} records outside their group radius");
+    println!("type 10: {ladders} ladders and {panels} climb panels in {packs} packs; {outside} records outside their group radius; {links} neighbour links resolved");
     Ok(())
 }
 
