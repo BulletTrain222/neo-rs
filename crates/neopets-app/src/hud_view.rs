@@ -481,7 +481,7 @@ pub fn sync_hud(
     for (line, mut node, mut image, mut vis) in &mut prices {
         // SPEC-0023 section 13: element 0xD8 shows the countdown timer as M:SS:CC while it is
         // visible, right-aligned at x 436 with its baseline at y 77, in the element's value-text
-        // font (font 0 when it has none) and the timer's default colour.
+        // font (font 0 when it has none) and the timer's colour word.
         if line.0 == 2 {
             if !p.state.timer.visible {
                 *vis = Visibility::Hidden;
@@ -490,8 +490,8 @@ pub fn sync_hud(
             let text = neopets_sim::timer::text(p.state.timer.value).into_bytes();
             let rec = f.key(0xD8).and_then(|n| f.values.get(&f.nodes[n].data).copied());
             let (font, spacing) = rec.map_or((0, 0), |v| (v.font.max(0) as usize, v.spacing as i32));
-            let colour = [128, 128, 128, 128];
-            let key = (9002, String::from_utf8_lossy(&text).into_owned());
+            let colour = p.state.timer.colour;
+            let key = (9002, format!("{}{colour:?}", String::from_utf8_lossy(&text)));
             if !value_images.contains_key(&key) {
                 if let Some((img, base)) = f.text_image(mem, font, &text, spacing, colour) {
                     let (w, h) = (img.width, img.height);

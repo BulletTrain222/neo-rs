@@ -4164,6 +4164,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             out.push(if running { Action::InitObjOn { obj: 0, end: false } } else { Action::DeactivateObj { obj: 0 } });
             if running {
                 state.set_word(pack, 12, 1);
+                // Below 10 s the clock blinks: (220, 40, 40, 128) when floor(2t) is odd, else the
+                // default colour (SetTimerColor).
+                let t = state.timer.value;
+                if t < 10.0 {
+                    state.timer.colour = if (2.0 * t).floor() as i64 % 2 == 1 { [220, 40, 40, 128] } else { crate::timer::DEFAULT_COLOUR };
+                }
                 if state.timer.visible && state.timer.value <= 0.0 && state.word(pack, 11) == 0 {
                     state.set_word(pack, 11, 1);
                     state.set(470, false);

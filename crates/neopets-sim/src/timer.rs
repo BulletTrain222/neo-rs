@@ -5,7 +5,10 @@
 /// The frame step (1/60 s, float32).
 pub const STEP: f32 = 1.0 / 60.0;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+/// The default colour word (0x2DD040): 128 per channel.
+pub const DEFAULT_COLOUR: [u8; 4] = [128; 4];
+
+#[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Timer {
     pub visible: bool,
     pub running: bool,
@@ -13,6 +16,14 @@ pub struct Timer {
     pub limit: f32,
     /// Counting up (direction not 0).
     pub up: bool,
+    /// The colour written to element 0xD8 each tick (Activate's or SetTimerColor's).
+    pub colour: [u8; 4],
+}
+
+impl Default for Timer {
+    fn default() -> Self {
+        Self { visible: false, running: false, value: 0.0, limit: 0.0, up: false, colour: DEFAULT_COLOUR }
+    }
 }
 
 impl Timer {
@@ -21,6 +32,7 @@ impl Timer {
         self.value = start;
         self.limit = limit;
         self.up = up;
+        self.colour = DEFAULT_COLOUR;
         self.visible = true;
         self.running = true;
     }
