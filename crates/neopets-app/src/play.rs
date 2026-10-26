@@ -7934,6 +7934,32 @@ impl Play {
     }
 
     /// The item screen's view of the party (SPEC-0035 section 14.1) for the grid ids.
+    /// The map page's and the journal's tables (SPEC-0051 Layout): the quest rows (table 1),
+    /// the treasure rows (table 3) and the area names (table 5), with their texts.
+    pub fn map_tables(&self) -> (Vec<neopets_sim::mappage::Quest>, Vec<neopets_sim::mappage::Treasure>, Vec<Vec<u8>>) {
+        let t = &self.design.tables;
+        let text = |k: usize| move |p: u32| t.get(k).and_then(|tb| tb.string(p)).map(<[u8]>::to_vec).unwrap_or_default();
+        let rows = |k: usize| t.get(k).map(|tb| (0..tb.count).filter_map(|i| tb.record(i)).collect::<Vec<_>>()).unwrap_or_default();
+        let quests = rows(1).into_iter().filter_map(|r| neopets_sim::mappage::Quest::read(r, &text(1))).collect();
+        let treasures = rows(3).into_iter().filter_map(|r| neopets_sim::mappage::Treasure::read(r, &text(3))).collect();
+        let names = (0..neopets_sim::mappage::AREAS).map(|m| self.design.location_name(m).unwrap_or_default()).collect();
+        (quests, treasures, names)
+    }
+
+    /// The map and journal's view of the game this pass. The hero map area is the current
+    /// world's (RegisterTransitionMap's fallback is not built, so a world without an area gives
+    /// -1).
+    pub fn map_view(&self) -> crate::menus::MapView {
+        crate::menus::MapView {
+            hero_area: self.world.map_area.unwrap_or(-1),
+            hero: self.loco.position(),
+            facing: self.loco.facing,
+            flags: self.state.flags.iter().copied().collect(),
+            maps: self.state.maps.iter().copied().collect(),
+            collected: self.state.collected.iter().copied().collect(),
+        }
+    }
+
     pub fn item_view(&self, grid: &[i32; 20]) -> crate::menus::ItemView {
         let count = |id: i32| u16::try_from(id).ok().and_then(|id| self.state.items.get(&id)).copied().unwrap_or(0);
         let mut v = crate::menus::ItemView { marker: self.quick.marker, ..Default::default() };

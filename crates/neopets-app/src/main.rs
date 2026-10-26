@@ -1142,9 +1142,17 @@ fn step_sim(
                 break;
             }
             if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
-                let ctx = menus::Ctx { game_over: play.play.death.page.is_some() || play.play.death.flag_e };
+                // SPEC-0035 section 6: the map and journal shortcuts take the D-pad's Left and
+                // Right edges while no quick panel is open or opening and no box is up.
+                let l = play.play.panel_latch;
+                let ctx = menus::Ctx {
+                    game_over: play.play.death.page.is_some() || play.play.death.flag_e,
+                    dpad: if l.left { menus::LEFT } else { 0 } | if l.right { menus::RIGHT } else { 0 },
+                    shortcuts: !play.play.quick.open && !l.up && !l.down && !play.play.dialogue_open,
+                };
                 m.flow.held = held;
                 m.flow.view = play.play.item_view(&m.flow.grid_ids);
+                m.flow.map_view = play.play.map_view();
                 // SPEC-0025 Clean-side mapping of the card jobs: the scans read the save file,
                 // the write job writes the whole file at once.
                 match m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx) {
@@ -1232,6 +1240,16 @@ fn step_sim(
                 quit = true;
                 if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                     m.flow.set(&a.f, menus::CARD);
+                }
+            }
+            // NEOPETS_TRACE_PAGE="map@n" or "journal@n": View Map or View Quests on play tick n
+            // (diagnostic, for a screenshot).
+            if let Some((page, k)) = std::env::var("NEOPETS_TRACE_PAGE").ok().and_then(|v| v.split_once('@').map(|(a, b)| (a.to_string(), b.trim().parse::<u64>().ok()))) {
+                if k == Some(play.play.ticks) {
+                    if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                        m.flow.map_view = play.play.map_view();
+                        m.flow.trace_open(&a.f, page == "journal");
+                    }
                 }
             }
             // NEOPETS_TRACE_QUITBOX=n: the pause page with its quit box open on play tick n
@@ -2673,6 +2691,19 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
                     }
                     if let Ok(w) = neopets_data::archive::verified_boot_program(disc).and_then(|b| neopets_data::archive::boot_u32_table(&b, 0x002D_D410, 1)) {
                         flow.busy_hold = (f32::from_bits(w[0]) * 60.0) as u32;
+                    }
+                    // SPEC-0051: the quest, treasure and area-name tables, the pulse words and
+                    // the two label colours.
+                    let (quests, treasures, names) = play.map_tables();
+                    flow.map_data = menus::MapData { quests, treasures, names, ..Default::default() };
+                    if let Ok(boot) = neopets_data::archive::verified_boot_program(disc) {
+                        if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, neopets_sim::mappage::PULSE_WORDS, 8) {
+                            flow.map_data.pulse = neopets_sim::mappage::PulseWords::read(&w).unwrap_or_default();
+                            flow.map_data.label_colour = w[2].to_le_bytes();
+                        }
+                        if let Ok(w) = neopets_data::archive::boot_u32_table(&boot, 0x002D_D010, 1) {
+                            flow.map_data.name_colour = w[0].to_le_bytes();
+                        }
                     }
                     commands.insert_resource(menu_view::Menu { flow });
                     if let Some(art) = hud_view::HudArt::new(f) {

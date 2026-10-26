@@ -69,6 +69,13 @@ pub fn menu_words(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> (u
     if keys.just_pressed(KeyCode::KeyC) || pad(GamepadButton::RightTrigger) {
         buttons |= menus::R1;
     }
+    // L2 and R2 (V and B, or the lower triggers) turn the item screen, map and journal ring.
+    if keys.just_pressed(KeyCode::KeyV) || pad(GamepadButton::LeftTrigger2) {
+        buttons |= menus::L2;
+    }
+    if keys.just_pressed(KeyCode::KeyB) || pad(GamepadButton::RightTrigger2) {
+        buttons |= menus::R2;
+    }
     let mut edge = buttons;
     if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp) {
         edge |= menus::UP;
@@ -105,6 +112,7 @@ pub struct MenuCache {
     labels: HashMap<usize, (Handle<Image>, u32, u32, i32)>,
     texts: HashMap<(usize, Vec<u8>, i32, [u8; 4]), Option<(Handle<Image>, u32, u32, i32)>>,
     pictures: HashMap<u32, Option<neopets_data::texture::Image>>,
+    white: Option<Handle<Image>>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -129,6 +137,8 @@ pub fn sync_menu(
     draws.extend(menus::credits_draws(&art.f, flow));
     let lines = _state.play.item_lines(flow.pc().items.selected);
     draws.extend(menus::item_draws(&art.f, flow, &lines));
+    draws.extend(menus::map_draws(&art.f, flow));
+    draws.extend(menus::journal_draws(&art.f, flow));
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {
         commands.spawn((
@@ -200,6 +210,11 @@ pub fn sync_menu(
                     }
                 }
                 cache.labels.get(&node).map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32 * scale, *w as f32 * scale, *h as f32 * scale, Color::WHITE))
+            }
+            Draw::Rect { x, y, w, h, colour } => {
+                let white = cache.white.get_or_insert_with(|| images.add(crate::rgba_image(1, 1, vec![255; 4]))).clone();
+                let c = |v: u8| v as f32 / 255.0;
+                Some((white, x, y, w, h, Color::srgba(c(colour[0]), c(colour[1]), c(colour[2]), c(colour[3]))))
             }
             Draw::Text { font, text, spacing, x, y, colour } => {
                 // The alpha is applied to the drawn image, so a fading row reuses its image.

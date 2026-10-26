@@ -18,6 +18,7 @@
 
 use neopets_data::frontend::Frontend;
 use neopets_sim::save::{self, SaveFile};
+use neopets_sim::mappage::{self, Icon, Journal, Pulses, PulseWords, Quest, Target, Treasure};
 use neopets_sim::textbox::{self, TextBox};
 
 pub const CARD: usize = 0;
@@ -36,6 +37,10 @@ pub const SAVE: usize = 18;
 /// 0xA0), whose page pictures show Tor; Roberta's are records 3 to 5 (codes 0x3C, 0x50, 0x64).
 /// The spec gives the six codes by tab and hero without the order (R-0031).
 pub const ITEMS: usize = 6;
+/// The quest journal (record 22, state 25; code 0x1B8) and the map pages (record 31 + area,
+/// state 30; code 0x26C + 20 x area).
+pub const JOURNAL: usize = 22;
+pub const MAPS: usize = 31;
 
 /// Menu bits of the rising-edge word (SPEC-0035 section 4).
 pub const UP: u16 = 0x1000;
@@ -49,6 +54,9 @@ pub const SQUARE: u16 = 0x0080;
 pub const SELECT: u16 = 0x0100;
 pub const START: u16 = 0x0800;
 pub const L1: u16 = 0x0004;
+/// L2 and R2 (the page ring of SPEC-0051 section 9).
+pub const L2: u16 = 0x0001;
+pub const R2: u16 = 0x0002;
 pub const R1: u16 = 0x0008;
 
 /// What the game around the front end must do.
@@ -158,6 +166,69 @@ pub enum Draw {
     Label { node: usize, x: f32, y: f32, scale: f32 },
     /// A run of text in a font, with its baseline at y.
     Text { font: usize, text: Vec<u8>, spacing: i32, x: f32, y: f32, colour: [u8; 4] },
+    /// A plain rectangle (the map's placeholder icons and marker; R-0070).
+    Rect { x: f32, y: f32, w: f32, h: f32, colour: [u8; 4] },
+}
+
+/// The map and journal's tables and words, read once: the quest rows (table 1), the treasure
+/// rows (table 3), the area names (table 5), the pulse words (0x2DD310), the icon label colour
+/// (0x2DD318) and the area name colour (0x2DD010).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct MapData {
+    pub quests: Vec<Quest>,
+    pub treasures: Vec<Treasure>,
+    pub names: Vec<Vec<u8>>,
+    pub pulse: PulseWords,
+    pub label_colour: [u8; 4],
+    pub name_colour: [u8; 4],
+}
+
+/// The game as the map and journal read it each pass: the hero map area (-1 none), the hero's
+/// position and facing, the set story flags (sorted), the held maps and the collected entries.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapView {
+    pub hero_area: i32,
+    pub hero: [f32; 3],
+    pub facing: [f32; 3],
+    pub flags: Vec<u16>,
+    pub maps: Vec<u32>,
+    pub collected: Vec<u32>,
+}
+
+impl Default for MapView {
+    fn default() -> Self {
+        Self { hero_area: -1, hero: [0.0; 3], facing: [0.0, 0.0, 1.0], flags: Vec::new(), maps: Vec::new(), collected: Vec::new() }
+    }
+}
+
+impl MapView {
+    fn with_flags<R>(&self, f: impl FnOnce(&mappage::Flags) -> R) -> R {
+        let flag = |id: i32| u16::try_from(id).is_ok_and(|id| self.flags.binary_search(&id).is_ok());
+        let held = |i: usize| self.maps.contains(&(i as u32));
+        let collected = |i: usize| self.collected.contains(&(200 + i as u32));
+        f(&mappage::Flags { flag: &flag, held: &held, collected: &collected })
+    }
+}
+
+/// The selected map area, the pending target, the map's icon list, cursor and pulses, and the
+/// journal's rows and cursor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MapState {
+    pub area: i32,
+    pub pending: Option<Target>,
+    pub icons: Vec<Icon>,
+    pub cursor: usize,
+    pub pulses: Pulses,
+    pub rows: Vec<Target>,
+    pub journal: Journal,
+    /// The journal's more-below flag of this pass's layout.
+    pub more: bool,
+}
+
+impl Default for MapState {
+    fn default() -> Self {
+        Self { area: -1, pending: None, icons: Vec::new(), cursor: 0, pulses: Pulses::new(&PulseWords::default()), rows: Vec::new(), journal: Journal::default(), more: false }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -174,6 +245,11 @@ pub struct Flow {
     /// The card message on screen, the table-9 records, the substitution slots (0: the card
     /// slot "1"; 1: the needed KB) and the busy hold in passes.
     pub card: Option<CardBox>,
+    /// The map page's and the journal's tables, game state and own state (SPEC-0051; SPEC-0035
+    /// section 14.3).
+    pub map_data: MapData,
+    pub map_view: MapView,
+    pub map: MapState,
     /// The pause page's quit box is open (SPEC-0035 Behavior 2, states 6 and 7): its record 26
     /// shows in `card`, and the input block hides the menu words from the focus states and
     /// the generic step.
@@ -222,6 +298,12 @@ pub struct Pc {
     pub words: [u32; 3],
     pub knobs: Option<[i32; 3]>,
     pub items: ItemPc,
+    /// The journal's and the map's slots: 26 the Cross hint, 69 the up arrow, 70 the down arrow
+    /// (the more-below flag), 71 the row count.
+    pub cross_hint: bool,
+    pub up_arrow: bool,
+    pub more_below: bool,
+    pub rows: i32,
 }
 
 /// The item screen's predicate inputs: the tab, the cursor, the Items-tab grid ids (0 for a cell
@@ -262,7 +344,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -278,7 +360,23 @@ impl Flow {
     /// The predicates' inputs of this pass.
     pub fn pc(&self) -> Pc {
         let b = self.options.block;
-        Pc { pass: self.pass, words: [b.vibration, b.invert_lr, b.invert_ud], knobs: self.options.knobs, items: self.item_pc() }
+        let m = &self.map;
+        let d = &self.map_data;
+        let cross_hint = match self.current {
+            JOURNAL => usize::try_from(m.journal.cursor).ok().and_then(|c| m.rows.get(c)).is_some_and(|&r| mappage::area_of(r, &d.quests, &d.treasures).is_some()),
+            c if (MAPS..MAPS + mappage::AREAS).contains(&c) => m.icons.get(m.cursor).is_some(),
+            _ => false,
+        };
+        Pc {
+            pass: self.pass,
+            words: [b.vibration, b.invert_lr, b.invert_ud],
+            knobs: self.options.knobs,
+            items: self.item_pc(),
+            cross_hint,
+            up_arrow: m.journal.top != 0,
+            more_below: m.more,
+            rows: m.rows.len() as i32,
+        }
     }
 
     /// The item screen's predicate inputs for this pass.
@@ -301,6 +399,16 @@ impl Flow {
         if buttons & (TRIANGLE | START) != 0 {
             self.sounds.push(0x95);
             return Some(PLAY);
+        }
+        // The page ring (SPEC-0051 section 9): L2 the journal, R2 the map of the hero map area
+        // (the journal when it is negative).
+        if buttons & L2 != 0 {
+            self.sounds.push(0x98);
+            return Some(JOURNAL);
+        }
+        if buttons & R2 != 0 {
+            self.sounds.push(0x99);
+            return Some(self.open_map(self.map_view.hero_area).unwrap_or(JOURNAL));
         }
         if buttons & L1 != 0 {
             self.sounds.push(0x98);
@@ -407,6 +515,42 @@ impl Flow {
         } else {
             self.show(6, false);
             self.picker.stage = S_FAILED;
+        }
+    }
+
+    /// The map page of an area (record 31 + area), setting the selected map area; none when the
+    /// area is negative (or past the last page).
+    fn open_map(&mut self, area: i32) -> Option<usize> {
+        let k = usize::try_from(area).ok().filter(|&k| k < mappage::AREAS)?;
+        self.map.area = area;
+        Some(MAPS + k)
+    }
+
+    /// Each journal row's objective line count (treasure rows have none), wrapped at the row
+    /// drawer's width in the objective node's font.
+    fn journal_lines(&self, fe: &Frontend) -> (Vec<usize>, i32) {
+        let Some((font, line)) = objective_font(fe) else { return (vec![0; self.map.rows.len()], 14) };
+        let d = &self.map_data;
+        let lines = self
+            .map
+            .rows
+            .iter()
+            .map(|r| match r {
+                Target::Quest(i) => d.quests.get(*i).map_or(0, |q| fe.wrap(font, &q.objective, self.rows.wrap, 0).len()),
+                Target::Treasure(_) => 0,
+            })
+            .collect();
+        (lines, line)
+    }
+
+    /// Diagnostic: open the map of the hero map area (View Map) or the journal (View Quests).
+    pub fn trace_open(&mut self, fe: &Frontend, journal: bool) {
+        let ctx = Ctx::default();
+        if journal {
+            self.map.area = self.map_view.hero_area;
+            self.enter(fe, JOURNAL, &ctx);
+        } else if let Some(r) = self.open_map(self.map_view.hero_area) {
+            self.enter(fe, r, &ctx);
         }
     }
 
@@ -590,6 +734,14 @@ impl Flow {
                 } else if (edge | second) & START != 0 {
                     // SPEC-0035: Start opens the item screen on its current tab (Tor's records).
                     result = Some(ITEMS + self.item_tab);
+                } else if ctx.shortcuts && ctx.dpad & LEFT != 0 {
+                    // Section 6: D-pad Left opens the map of the hero map area (cue 0x9A even
+                    // when the area is negative and play stays).
+                    self.sounds.push(0x9A);
+                    result = self.open_map(self.map_view.hero_area);
+                } else if ctx.shortcuts && ctx.dpad & RIGHT != 0 {
+                    self.sounds.push(0x9A);
+                    result = Some(JOURNAL);
                 }
                 // Play's own buttons belong to the hero; the HUD page has no menu items.
                 generic = false;
@@ -622,6 +774,63 @@ impl Flow {
                 return command;
             }
             7 if second & SELECT != 0 => result = Some(PLAY),
+            // SPEC-0035 section 14.3: the quest journal.
+            25 => {
+                if self.pass == 0 {
+                    let d = &self.map_data;
+                    self.map.rows = self.map_view.with_flags(|f| mappage::journal_rows(&d.quests, &d.treasures, f));
+                    let pending = self.map.pending.take();
+                    self.map.journal.open(&self.map.rows, pending);
+                }
+                let (lo, hi, step) = (self.rows.pulse_min, self.rows.pulse_max, self.rows.pulse_step);
+                self.map.journal.pulse(lo, hi, step);
+                if self.map.journal.keys(self.map.rows.len(), edge & DOWN != 0, edge & UP != 0, hi) {
+                    self.sounds.push(0x9A);
+                }
+                let (lines, line) = self.journal_lines(fe);
+                let (_, full, more) = mappage::layout(self.map.journal.top, &lines, line);
+                self.map.more = more;
+                self.map.journal.scroll(full);
+                let row = usize::try_from(self.map.journal.cursor).ok().and_then(|c| self.map.rows.get(c)).copied();
+                let d = &self.map_data;
+                if edge & CROSS != 0 {
+                    // Cross on a row with an area: that row pending, its area's map.
+                    if let Some((r, a)) = row.and_then(|r| Some((r, mappage::area_of(r, &d.quests, &d.treasures)?))) {
+                        self.map.pending = Some(r);
+                        self.sounds.push(0x98);
+                        result = self.open_map(a);
+                    }
+                } else if second & L2 != 0 {
+                    self.sounds.push(0x99);
+                    result = self.open_map(self.map_view.hero_area).or(Some(ITEMS + self.item_tab));
+                } else if second & R2 != 0 {
+                    self.sounds.push(0x98);
+                    result = Some(ITEMS + self.item_tab);
+                }
+            }
+            // SPEC-0051 section 4: the map page of the selected area.
+            30 => {
+                let d = &self.map_data;
+                if self.pass == 0 {
+                    let area = self.map.area;
+                    self.map.icons = self.map_view.with_flags(|f| mappage::icons(&d.quests, &d.treasures, area, f));
+                    let pending = self.map.pending.take();
+                    self.map.cursor = pending.and_then(|p| self.map.icons.iter().position(|i| i.target == p)).unwrap_or(0);
+                    self.map.pulses = Pulses::new(&d.pulse);
+                }
+                self.map.pulses.step(&d.pulse);
+                self.map.cursor = mappage::map_cursor(self.map.cursor, self.map.icons.len(), edge & (UP | RIGHT) != 0, edge & (DOWN | LEFT) != 0);
+                let icon = self.map.icons.get(self.map.cursor).copied();
+                if edge & SELECT != 0 {
+                    result = Some(PLAY);
+                } else if (edge & CROSS != 0 && icon.is_some()) || second & R2 != 0 {
+                    self.map.pending = icon.map(|i| i.target);
+                    self.sounds.push(0x98);
+                    result = Some(JOURNAL);
+                } else if second & L2 != 0 {
+                    result = Some(ITEMS + self.item_tab);
+                }
+            }
             8..=10 => {
                 if self.pass == 0 && self.current == ITEMS && self.view.grid_counts[self.item_cursor] == 0 {
                     self.item_cursor = 0;
@@ -837,6 +1046,17 @@ impl Flow {
                 _ => {}
             }
             match focus_state {
+                // View Map: the map of the hero map area (nothing when it is negative).
+                2 if second & CROSS != 0 => {
+                    if let Some(r) = self.open_map(self.map_view.hero_area) {
+                        result = Some(r);
+                    }
+                }
+                // View Quests: the selected area becomes the hero's; the journal.
+                3 if second & CROSS != 0 => {
+                    self.map.area = self.map_view.hero_area;
+                    result = Some(JOURNAL);
+                }
                 5 if second & CROSS != 0 => result = Some(PLAY),
                 // Quit opens the quit box (cue 0x9A); its answer is taken by the pause state.
                 6 if second & CROSS != 0 && self.current == PAUSE => {
@@ -895,6 +1115,11 @@ impl Flow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Ctx {
     pub game_over: bool,
+    /// Play's map and journal shortcuts (SPEC-0035 section 6): the D-pad's Left and Right press
+    /// edges (LEFT, RIGHT) and whether the shortcuts may run (both quick panels closed, no
+    /// D-pad Up or Down press opening one this tick, no dialogue box).
+    pub dpad: u16,
+    pub shortcuts: bool,
 }
 
 /// Predicate table A (section 9c), the slots this build implements: 0, 2 and 56 always 1;
@@ -927,6 +1152,13 @@ fn predicate(slot: i16, arg: u8, pc: Pc) -> i32 {
         67 => pc.words[1] as i32,
         68 => pc.words[2] as i32,
         72 => (pc.pass > 120) as i32,
+        // SPEC-0035 section 9c: the journal's and the map's slots; 73, the selected area's
+        // total, is zero for every area on disc (SPEC-0051 section 3).
+        26 => pc.cross_hint as i32,
+        69 => pc.up_arrow as i32,
+        70 => pc.more_below as i32,
+        71 => pc.rows,
+        73 => 0,
         _ => 0,
     }
 }
@@ -1105,6 +1337,114 @@ fn node_xy(fe: &Frontend, n: usize) -> (f32, f32) {
         at = d.parent;
     }
     (x, y)
+}
+
+/// The objective node's font (key 0x33) and its line height.
+fn objective_font(fe: &Frontend) -> Option<(usize, i32)> {
+    let n = fe.key(0x33)?;
+    let font = fe.label(n).filter(|l| l.font >= 0)?.font as usize;
+    Some((font, fe.fonts.get(font).map_or(14, |f| f.line_height())))
+}
+
+/// The map page's own parts (SPEC-0051 sections 4, 7 and 8): the icons at their projected
+/// points (the cursor icon scaled by the integer pulse), the cursor icon's label 14 pixels above
+/// it, the hero marker when the hero's area is shown, and the area name. The icon, marker and
+/// label art, fonts and the name's place are not identified (R-0070): the icons and marker are
+/// placeholder squares in the journal's row colours, the labels use the objective font, and
+/// the name sits at a placeholder point.
+pub fn map_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
+    let mut out = Vec::new();
+    if !(MAPS..MAPS + mappage::AREAS).contains(&flow.current) {
+        return out;
+    }
+    let area = (flow.current - MAPS) as i32;
+    let d = &flow.map_data;
+    let font = objective_font(fe).map_or(0, |f| f.0);
+    for (k, icon) in flow.map.icons.iter().enumerate() {
+        let Some((x, y)) = mappage::project(area, icon.x, icon.z) else { continue };
+        let (w, h, colour) = match icon.kind {
+            0 => (26.0, 32.0, [222, 160, 1, 255]),
+            1 => (26.0, 29.0, [155, 155, 129, 255]),
+            _ => (31.0, 31.0, [78, 119, 174, 255]),
+        };
+        let s = if k == flow.map.cursor { flow.map.pulses.scale as f32 / 4096.0 } else { 1.0 };
+        let (w, h) = (w * s * 0.5, h * s * 0.5);
+        out.push(Draw::Rect { x: x as f32 - w / 2.0, y: y as f32 - h / 2.0, w, h, colour });
+        if k == flow.map.cursor {
+            let label = match icon.target {
+                Target::Quest(i) => d.quests.get(i).map(|q| q.title.clone()),
+                Target::Treasure(i) => d.treasures.get(i).map(|t| t.name.clone()),
+            };
+            if let Some(text) = label {
+                let tw = fe.fonts.get(font).map_or(0, |f| f.measure(&text, 0));
+                out.push(Draw::Text { font, text, spacing: 0, x: x as f32 - (tw / 2) as f32, y: y as f32 - 14.0, colour: d.label_colour });
+            }
+        }
+    }
+    let v = &flow.map_view;
+    if v.hero_area == area {
+        if let Some((x, y)) = mappage::project(area, v.hero[0], v.hero[2]) {
+            let c = mappage::marker_channel(flow.map.pulses.bright);
+            out.push(Draw::Rect { x: x as f32 - 6.0, y: y as f32 - 6.0, w: 12.0, h: 12.0, colour: [c, c, c, 255] });
+        }
+    }
+    if let Some(name) = d.names.get(area as usize) {
+        out.push(Draw::Text { font, text: name.clone(), spacing: 0, x: 40.0, y: 420.0, colour: d.name_colour });
+    }
+    out
+}
+
+/// The journal's rows (SPEC-0035 section 14.3) by the row drawer: quest rows (type 0 main, 1
+/// side) with title and wrapped objective, treasure rows (type 2) with the name; the selected
+/// row's bar pulsed. No row is drawn on the first pass. The arrows, the empty-list message and
+/// the hints are not drawn (their nodes are not identified; R-0070).
+pub fn journal_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
+    let mut out = Vec::new();
+    if flow.current != JOURNAL || flow.pass == 0 {
+        return out;
+    }
+    let node = |k: u32| fe.key(k);
+    let (Some(left), Some(right), Some(bar), Some(icons), Some(title), Some(objective)) = (node(0xD3), node(0x37), node(0x36), node(0xDD), node(0x34), node(0x33)) else {
+        return out;
+    };
+    let font_of = |n: usize| fe.label(n).filter(|l| l.font >= 0).map(|l| l.font as usize);
+    let (Some(title_font), Some((text_font, line))) = (font_of(title), objective_font(fe)) else { return out };
+    let w = &flow.rows;
+    let d = &flow.map_data;
+    let sprite = |n: usize, p: f32, width: Option<f32>, colour: Option<[u8; 4]>| {
+        let nd = fe.nodes[n];
+        let width = width.unwrap_or(nd.width as f32);
+        Draw::Sprite { node: n, x: nd.x as f32, y: nd.y as f32 + p, w: width, h: nd.height as f32, texels: [width.max(1.0) as u32, nd.height.max(1) as u32], colour: colour.unwrap_or_else(|| fe.sprite(n).map_or([128; 4], |s| s.colour)) }
+    };
+    let (lines, _) = flow.journal_lines(fe);
+    let (laid, _, _) = mappage::layout(flow.map.journal.top, &lines, line);
+    for l in laid {
+        let Some(&row) = flow.map.rows.get(l.row) else { continue };
+        let (kind, head, text): (usize, &[u8], &[u8]) = match row {
+            Target::Quest(i) => d.quests.get(i).map_or((1, &b""[..], &b""[..]), |q| ((q.kind == 1) as usize, &q.title[..], &q.objective[..])),
+            Target::Treasure(i) => (2, d.treasures.get(i).map_or(&b""[..], |t| &t.name[..]), &b""[..]),
+        };
+        let base: [u8; 3] = if kind == 0 { [222, 160, 1] } else { [155, 155, 129] };
+        let colour = if l.row as i32 == flow.map.journal.cursor {
+            let c = |v: u8| (v as f32 * flow.map.journal.pulse).round().clamp(0.0, 255.0) as u8;
+            [c(base[0]), c(base[1]), c(base[2]), 128]
+        } else {
+            [base[0], base[1], base[2], 128]
+        };
+        let p = l.p as f32;
+        out.push(sprite(left, p, None, None));
+        out.push(sprite(right, p, None, None));
+        out.push(sprite(bar, p, Some(w.bar_width), Some(colour)));
+        if let Some(&icon) = fe.children(icons).get(kind) {
+            out.push(sprite(icon, p, None, None));
+        }
+        out.push(Draw::Text { font: title_font, text: head.to_vec(), spacing: 0, x: fe.nodes[title].x as f32, y: fe.nodes[title].y as f32 + p, colour: w.title_colour });
+        let (ox, oy) = (fe.nodes[objective].x as f32, fe.nodes[objective].y as f32 + p);
+        for (i, &(a, b)) in fe.wrap(text_font, text, w.wrap, 0).iter().take(l.lines).enumerate() {
+            out.push(Draw::Text { font: text_font, text: text[a..b].to_vec(), spacing: 0, x: ox, y: oy + (line as usize * i) as f32, colour: w.text_colour });
+        }
+    }
+    out
 }
 
 /// The slot picker's rows (sections 7.1 and 14.3): four rows by the journal row drawer, each at
@@ -1331,9 +1671,9 @@ mod tests {
         assert_eq!(flow.current, PLAY);
         // A game over takes play to the game-over page, and its end back to play.
         f.screens[GAME_OVER] = Screen { node: Some(6), back: -2, state: 26 };
-        flow.tick(&f, 0, 0, &Ctx { game_over: true });
+        flow.tick(&f, 0, 0, &Ctx { game_over: true, ..Default::default() });
         assert_eq!(flow.current, GAME_OVER);
-        flow.tick(&f, 0, 0, &Ctx { game_over: false });
+        flow.tick(&f, 0, 0, &Ctx { game_over: false, ..Default::default() });
         assert_eq!(flow.current, PLAY);
     }
 
@@ -1365,6 +1705,65 @@ mod tests {
         flow.sounds.clear();
         assert_eq!(flow.tick(&f, CIRCLE, CIRCLE, &ctx), Some(Command::Quit));
         assert_eq!((flow.current, flow.quit_box, flow.sounds.clone()), (CARD, false, vec![0x98]));
+    }
+
+    #[test]
+    fn map_and_journal_ring() {
+        let mut f = fe();
+        f.screens.resize(MAPS + mappage::AREAS, Screen { node: Some(0), back: 9, state: 30 });
+        f.screens[JOURNAL] = Screen { node: Some(0), back: 9, state: 25 };
+        f.screens[ITEMS] = Screen { node: Some(0), back: -2, state: 8 };
+        let mut flow = Flow::new(&f);
+        flow.map_data.quests = vec![mappage::Quest { start: 107, done: 108, stage: 1, scene: 9, title: b"Q".to_vec(), ..Default::default() }];
+        flow.map_data.treasures = vec![mappage::Treasure { area: 9, ..Default::default() }];
+        flow.map_view = MapView { hero_area: 9, flags: vec![107], maps: vec![0], ..Default::default() };
+        let ctx = Ctx::default();
+        flow.set(&f, PLAY);
+        // D-pad Left in play with the shortcuts on: cue 0x9A and the hero area's map; its first
+        // pass builds the quest icon, then the treasure icon.
+        flow.tick(&f, 0, 0, &Ctx { dpad: LEFT, shortcuts: false, ..Default::default() });
+        assert_eq!(flow.current, PLAY);
+        flow.tick(&f, 0, 0, &Ctx { dpad: LEFT, shortcuts: true, ..Default::default() });
+        assert_eq!((flow.current, flow.sounds.last()), (MAPS + 9, Some(&0x9A)));
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.map.icons.iter().map(|i| i.target).collect::<Vec<_>>(), vec![mappage::Target::Quest(0), mappage::Target::Treasure(0)]);
+        // Up to the treasure; Cross opens the journal with it pending.
+        flow.tick(&f, UP, 0, &ctx);
+        assert_eq!(flow.map.cursor, 1);
+        flow.sounds.clear();
+        flow.tick(&f, CROSS, CROSS, &ctx);
+        assert_eq!((flow.current, flow.sounds.clone()), (JOURNAL, vec![0x98]));
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!((flow.map.rows.len(), flow.map.journal.cursor), (2, 1));
+        // Up to the quest row; Cross opens its area's map with the quest pending: cursor 0.
+        flow.tick(&f, UP, 0, &ctx);
+        flow.tick(&f, CROSS, CROSS, &ctx);
+        assert_eq!(flow.current, MAPS + 9);
+        flow.tick(&f, 0, 0, &ctx);
+        assert_eq!(flow.map.cursor, 0);
+        // The ring: map L2 to the item screen; item L2 to the journal; journal R2 to the item
+        // screen; item R2 to the map; map R2 to the journal; journal L2 to the map.
+        flow.tick(&f, L2, L2, &ctx);
+        assert_eq!(flow.current, ITEMS);
+        flow.tick(&f, L2, L2, &ctx);
+        assert_eq!(flow.current, JOURNAL);
+        flow.tick(&f, R2, R2, &ctx);
+        assert_eq!(flow.current, ITEMS);
+        flow.tick(&f, R2, R2, &ctx);
+        assert_eq!(flow.current, MAPS + 9);
+        flow.tick(&f, R2, R2, &ctx);
+        assert_eq!(flow.current, JOURNAL);
+        flow.tick(&f, L2, L2, &ctx);
+        assert_eq!(flow.current, MAPS + 9);
+        // Select leaves the map for play; with no hero area D-pad Left stays in play.
+        flow.tick(&f, SELECT, SELECT, &ctx);
+        assert_eq!(flow.current, PLAY);
+        flow.map_view.hero_area = -1;
+        flow.tick(&f, 0, 0, &Ctx { dpad: LEFT, shortcuts: true, ..Default::default() });
+        assert_eq!(flow.current, PLAY);
+        // D-pad Right: the journal.
+        flow.tick(&f, 0, 0, &Ctx { dpad: RIGHT, shortcuts: true, ..Default::default() });
+        assert_eq!(flow.current, JOURNAL);
     }
 
     /// Run passes until the flow emits a command (or a limit).
