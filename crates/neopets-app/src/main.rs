@@ -2463,7 +2463,7 @@ fn play_trace(
                 let summary = |p: &play::Play| {
                     let mut inv: Vec<_> = p.state.items.iter().map(|(k, v)| (*k, *v)).collect();
                     inv.sort();
-                    format!("weapon {:?}, shield {:?}, items {inv:?}, flags {:?}, luck {}, statuses {:?}, restart {:?}", p.weapon, p.shield, p.state.flags, p.luck, p.statuses.timers, p.restart)
+                    format!("weapon {:?}, shield {:?}, items {inv:?}, flags {:?}, luck {}, statuses {:?}, restart {:?}, collected {:?}, maps {:?}", p.weapon, p.shield, p.state.flags, p.luck, p.statuses.timers, p.restart, p.state.collected, p.state.maps)
                 };
                 println!("Round trip before: {}", summary(&play));
                 println!("Round trip after:  {}", summary(&loaded));

@@ -13,6 +13,9 @@ pub const SLOTS: usize = 4;
 pub const FLAGS: u16 = 743;
 /// Rows of the per-world tables and bits of the once-per-area sets.
 pub const WORLDS: usize = 193;
+/// Rows of the collected table and of the treasure table (SPEC-0025 Treasure sets; SPEC-0051).
+pub const COLLECTED_ROWS: usize = 248;
+pub const MAP_ROWS: usize = 48;
 /// Item ids with a count byte.
 pub const COUNTS: usize = 191;
 
@@ -302,6 +305,32 @@ impl Slot {
     }
 
     /// Once-per-area set s (0 to 4: items 19, 20, 151, 174, 154), bit = world index.
+    /// The treasure sets (Treasure sets): the collected set at 0x2F2F, bit i for row i of the
+    /// collected table (rows 1 to n - 1 with n = 248; bit 0 always clear), and the held-map set
+    /// at 0x2F4F, bit i for treasure row i (rows 0 to 47). Bit i is bit (i AND 7) of byte i >> 3.
+    pub fn set_treasures(&mut self, collected: &std::collections::BTreeSet<u32>, maps: &std::collections::BTreeSet<u32>) {
+        let mut put = |base: usize, i: usize, on: bool| {
+            let b = &mut self.0[base + (i >> 3)];
+            if on {
+                *b |= 1 << (i & 7);
+            } else {
+                *b &= !(1 << (i & 7));
+            }
+        };
+        for i in 0..COLLECTED_ROWS {
+            put(at::TREASURE, i, i >= 1 && collected.contains(&(i as u32)));
+        }
+        for i in 0..MAP_ROWS {
+            put(at::MAPS, i, maps.contains(&(i as u32)));
+        }
+    }
+
+    /// The rows the treasure sets mark: (collected rows 1 to n - 1, held maps 0 to 47).
+    pub fn treasures(&self) -> (Vec<u32>, Vec<u32>) {
+        let bit = |base: usize, i: usize| self.0[base + (i >> 3)] & (1 << (i & 7)) != 0;
+        ((1..COLLECTED_ROWS).filter(|&i| bit(at::TREASURE, i)).map(|i| i as u32).collect(), (0..MAP_ROWS).filter(|&i| bit(at::MAPS, i)).map(|i| i as u32).collect())
+    }
+
     pub fn once(&self, s: usize, world: usize) -> bool {
         world < WORLDS && self.0[at::ONCE + 25 * s + (world >> 3)] & (1 << (world & 7)) != 0
     }
@@ -604,6 +633,22 @@ impl SavePoints {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn treasure_sets_vector() {
+        // SPEC-0025 test vector 5: maps 3 and 13 held, treasure 13 dug (row 213).
+        let mut s = Slot::empty();
+        let maps = [3, 13].into_iter().collect();
+        let collected = [213].into_iter().collect();
+        s.set_treasures(&collected, &maps);
+        assert_eq!((s.0[0x2F4F], s.0[0x2F50], s.0[0x2F49]), (0x08, 0x20, 0x20));
+        let nonzero = (0x2F2F..0x2F6F).filter(|&i| s.0[i] != 0).count();
+        assert_eq!(nonzero, 3);
+        assert_eq!(s.treasures(), (vec![213], vec![3, 13]));
+        // Row 0 of the collected set is never written.
+        s.set_treasures(&[0].into_iter().collect(), &Default::default());
+        assert_eq!(s.0[0x2F2F], 0);
+    }
 
     #[test]
     fn layout_and_template() {

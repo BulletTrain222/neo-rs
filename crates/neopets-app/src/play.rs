@@ -5853,7 +5853,7 @@ impl Play {
 
     /// Rebuild a slot from the live game (SPEC-0025 Saving, step 3). Only Tor is in this build:
     /// Roberta's words hold her start pools, her timers are inactive and her entries empty;
-    /// the stash, petpet, movies, per-world tables, treasure sets and count table have no live
+    /// the stash, petpet, movies, per-world tables and count table have no live
     /// state yet and are written empty; the options block holds the start-up defaults.
     pub fn write_slot(&self, s: &mut neopets_sim::save::Slot, date: &[u8]) {
         use neopets_sim::save::{self as sv, Group, at};
@@ -5960,6 +5960,7 @@ impl Play {
             }
         }
         s.0[at::TREASURE..at::LOCATION].fill(0);
+        s.set_treasures(&self.state.collected, &self.state.maps);
         s.set_location(&self.location_name());
         s.set_date(date);
         s.0[at::TIER] = sv::tier(|n| self.state.flag(n));
@@ -5976,8 +5977,8 @@ impl Play {
     /// (carry limit on the general and quest lists), the cloak, the once-per-area sets, the
     /// status restore, luck, maxima and current pools, the restart point and the hero's
     /// placement at vectors A and B, and the options with their apply rule. Not applied:
-    /// Roberta, the stash, the petpet, movies, per-world tables, treasure sets, the count table,
-    /// swap mode and Motes.
+    /// Roberta, the stash, the petpet, movies, per-world tables, the count table, swap mode and
+    /// Motes.
     pub fn apply_slot(&mut self, s: &neopets_sim::save::Slot) {
         use neopets_sim::save::{self as sv, Group, at};
         self.state.flags.clear();
@@ -6016,6 +6017,27 @@ impl Play {
                     if let Some(&pack) = self.world_keys.0.get(w) {
                         self.once.insert((id, pack));
                     }
+                }
+            }
+        }
+        // Treasure sets (Loading step 11): the collected rows and held maps, then the dig-site
+        // switch of each map row in the resident worlds (current first): a site is switched on
+        // for a held map and off otherwise, without testing the collected set.
+        let (rows, maps) = s.treasures();
+        self.state.collected.retain(|&k| k == 0 || k >= sv::COLLECTED_ROWS as u32);
+        self.state.collected.extend(rows);
+        self.state.maps = maps.into_iter().collect();
+        for i in 0..sv::MAP_ROWS as u32 {
+            let found = [&self.world].into_iter().chain(self.other.as_ref()).find_map(|w| {
+                let g = w.groups.iter().find(|g| g.kind == 6 && g.key == 200 + i)?;
+                Some((w.pack, usize::try_from(*g.effects.first()?).ok()?))
+            });
+            if let Some((pack, slot)) = found {
+                if self.state.maps.contains(&i) {
+                    self.start_placed(pack, slot, false);
+                } else if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
+                    let table = self.effect_table.clone();
+                    self.effects.stop(&table, h);
                 }
             }
         }
