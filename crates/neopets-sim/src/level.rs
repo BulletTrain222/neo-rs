@@ -528,7 +528,7 @@ impl GameState {
 /// The registered teleport callback of a pack's door: its prompt context (13 "Enter", 26
 /// "Exit"; 0 starts on contact), or None when no handler is described.
 pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
-    if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
+    if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1152 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
         return Some(13);
     }
     match (pack, door) {
@@ -557,6 +557,13 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0037 1152 teleports 1 and 0 (kind 13): value 90 for eW 106 or 126 and the exterior
+        // replacement to that world.
+        (1152, 0 | 1) => {
+            let w = if door == 1 { 106 } else { 126 };
+            state.blackboard.insert((2, w), 90);
+            vec![Action::ReplaceExterior { slot: w, plane: -1 }]
+        }
         // SPEC-0037 1429 teleport 0 (kind 13): value 60 for eW 151 and the leave to eW 156.
         (1429, 0) => {
             state.blackboard.insert((2, 151), 60);
@@ -729,13 +736,34 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 880 | 886 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 784 | 880 | 886 | 1230 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0037 1152 Init: thread S loads slot 0 with set 2 (flag 31), 1 (30) or 0 (region
+        // 1153 + set); the proximity routine, teleports 0 and 1 (kind 13) and the arrival are
+        // fixed rules.
+        1152 => {
+            let set = if state.flag(31) { 2 } else if state.flag(30) { 1 } else { 0 };
+            vec![Action::LoadRegion { slot: 0, region: Some(1153 + set) }]
+        }
+        // SPEC-0037 784 Init: with 543 clear object 2 off and S1 on trigger 1, else object 3 off;
+        // thread K: with 590 set and 591 clear slot 0 loads set 0 (region 785) and entity 0 is
+        // undamageable (undamageable()).
+        784 => {
+            let mut v = if state.flag(543) { vec![Action::InitObjOn { obj: 3, end: false }] } else { vec![Action::InitObjOn { obj: 2, end: false }, reg(1, 1)] };
+            if state.flag(590) && !state.flag(591) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(785) });
+            }
+            v
+        }
+        // SPEC-0037 1251 Init: the proximity and on-enter callbacks; thread A's slot load (with
+        // activate false) and its ItemActivate calls are not reproduced (the item slot is
+        // Medium in the spec); the item-ask callback never fires.
+        1251 => Vec::new(),
         // SPEC-0037 855, 856, 857, 858 and 1429 Init: the entry thread's line (argument 0: in
         // entity 0's conversation frame; 857's argument -1: none) and the normal camera. 856's
         // item-ask callbacks never fire (SPEC-0030 row 257); the buy callbacks are on_buy.
@@ -1429,6 +1457,89 @@ fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
             s.set_word(pack, 0, (c + 1) % 3);
             talk(first + c as u16)
         }
+        // 1152: 29 lines 1 to 3; 28 line 4 (the words unchanged); 27 lines 5 to 7; 23 and 633
+        // with 167 lines 8 to 10, with 162 lines 11 to 13, else 162 set and line 14; otherwise
+        // lines 15 to 17 (set word 0 and counter 1, restarted on a change of set).
+        1152 => {
+            let (set, first) = if f(s, 29) {
+                (1, 1)
+            } else if f(s, 28) {
+                return talk(4);
+            } else if f(s, 27) {
+                (2, 5)
+            } else if f(s, 23) && f(s, 633) {
+                if f(s, 167) {
+                    (3, 8)
+                } else if f(s, 162) {
+                    (4, 11)
+                } else {
+                    s.set(162, true);
+                    return talk(14);
+                }
+            } else {
+                (5, 15)
+            };
+            if s.word(pack, 0) != set {
+                s.set_word(pack, 0, set);
+                s.set_word(pack, 1, 0);
+            }
+            let c = s.word(pack, 1).rem_euclid(3);
+            s.set_word(pack, 1, (c + 1) % 3);
+            talk(first + c as u16)
+        }
+        // 1251: 585 without 586 takes every item 84, sets 586, line 28; 460: 29 (273), 30 (270)
+        // or the pair 31, 32; 457 with item 49: 460 set, line 33 (270) or 34, every item 49
+        // taken (the ItemDeactivate and ItemActivate calls are not reproduced); 457: lines 35 to
+        // 37; else 457 set and line 38 (273), 39 (270) or 40. Both rotations share set number
+        // 2: the counter restarts only when the set word is not 2, and the pair gives no line at
+        // counter 2.
+        1251 if f(s, 585) && !f(s, 586) => {
+            s.remove_all(84);
+            s.set(586, true);
+            talk(28)
+        }
+        1251 if f(s, 460) && f(s, 273) => talk(29),
+        1251 if f(s, 460) && f(s, 270) => talk(30),
+        1251 if f(s, 457) && !f(s, 460) && s.has_item(49) => {
+            s.set(460, true);
+            let line = if f(s, 270) { 33 } else { 34 };
+            s.remove_all(49);
+            talk(line)
+        }
+        1251 if f(s, 460) || f(s, 457) => {
+            if s.word(pack, 0) != 2 {
+                s.set_word(pack, 0, 2);
+                s.set_word(pack, 1, 0);
+            }
+            let c = s.word(pack, 1);
+            if f(s, 460) {
+                match c {
+                    0 => {
+                        s.set_word(pack, 1, 1);
+                        talk(31)
+                    }
+                    1 => {
+                        s.set_word(pack, 1, 0);
+                        talk(32)
+                    }
+                    _ => Vec::new(),
+                }
+            } else {
+                let c = c.rem_euclid(3);
+                s.set_word(pack, 1, (c + 1) % 3);
+                talk(35 + c as u16)
+            }
+        }
+        1251 => {
+            s.set(457, true);
+            talk(if f(s, 273) { 38 } else if f(s, 270) { 39 } else { 40 })
+        }
+        // 784: line 0 with 591, else 591 set and line 3.
+        784 if f(s, 591) => talk(0),
+        784 => {
+            s.set(591, true);
+            talk(3)
+        }
         _ => Vec::new(),
     }
 }
@@ -1550,6 +1661,34 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 1, region: Some(885) }]);
             }
             out.actions.extend([Action::WaitInside { index: call.index }, Action::LoadRegion { slot: 1, region: None }, slots_880(state)]);
+        }
+        // SPEC-0037 784 S1 (trigger 1, every fire; a hero shot never fires it here, and the
+        // attack word is taken as 0): without the button and with 543 clear the Square context
+        // 4; with the button, 543 clear and the body: line 5 while 542 is clear, else the walk
+        // to locator 2, hero animation 140, object 2 played, 0.6 s, 0.8 s, 15 ticks, line 4 and
+        // 543 set (word 2 keeps it from starting twice).
+        (784, 1) if !state.flag(543) => {
+            if !call.square {
+                out.prompt = Some(4);
+            } else if call.object && !state.talking && state.word(pack, 2) == 0 {
+                if !state.flag(542) {
+                    out.actions.push(Action::Message { line: 5 });
+                } else {
+                    state.set_word(pack, 2, 1);
+                    out.actions.extend([
+                        Action::HoldHero,
+                        Action::WalkHero { locator: 2, wait: true, orient: true },
+                        Action::HeroAnim { anim: 140, wait: false },
+                        Action::PlayAnim { obj: 2, speed: 1.0, wait: false },
+                        Action::Sleep { ticks: 36 },
+                        Action::Sleep { ticks: 48 },
+                        Action::Sleep { ticks: 15 },
+                        Action::Message { line: 4 },
+                        Action::SetFlag { flag: 543, on: true },
+                        release_camera(),
+                    ]);
+                }
+            }
         }
         // SPEC-0042 1171 levers L5 to L7 (triggers 5 to 7), once per load (words 5 to 7): the
         // Square prompt (message 6) while inside; on Square the walk and orient to the walk
@@ -2167,12 +2306,33 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         // frame; else line 2 (202), 4 (150) or 6.
         984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
         984 => vec![Action::Message { line: if state.flag(202) { 2 } else if state.flag(150) { 4 } else { 6 } }],
+        // SPEC-0037 1251 on-enter E: 460: 18 (273) or 19; 457: 20 (item 49) or 21; else 22
+        // (item 49) or 23; in entity 0's conversation frame.
+        1251 => {
+            let held = state.has_item(49);
+            let line = if state.flag(460) {
+                if state.flag(273) { 18 } else { 19 }
+            } else if state.flag(457) {
+                if held { 20 } else { 21 }
+            } else if held {
+                22
+            } else {
+                23
+            };
+            vec![Action::Converse { entity: 0, line }]
+        }
         _ => Vec::new(),
     }
 }
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0037 1152 activate-world: the value for eW 119; 110 places the hero at locator 1,
+        // any other value at locator 0; the normal camera (10 s) in both cases.
+        1152 => {
+            let v = state.take_message(2, 119);
+            vec![Action::MoveHero { locator: if v == 110 { 1 } else { 0 } }, Action::ReturnCamera { preset: -1, release: true }]
+        }
         // SPEC-0037 783 to 789 activate-world: the value for eW 31; this interior's value moves
         // the hero to its locator; any value returns the normal camera; the value is reset.
         783 | 786 | 787 | 788 | 789 => {
@@ -2706,6 +2866,8 @@ fn yard_activate(state: &mut GameState) -> Vec<Action> {
 pub fn undamageable(pack: u32) -> &'static [usize] {
     match pack {
         1056 => &[4, 7, 8, 9, 20, 21, 14],
+        // SPEC-0037 784 thread K's SetEntityUndamageable(entity 0) (taken for every load).
+        784 => &[0],
         _ => &[],
     }
 }
@@ -3719,8 +3881,9 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (678 | 686 | 691, 9) => Some(0),
         // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
         (1148, 0..=3) => Some(entity as u8),
-        // SPEC-0037 783, 786, 787, 788 and 789, and 855 to 858 and 1429: P on entity 0.
-        (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429, 0) => Some(0),
+        // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
+        // entity 0.
+        (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
         // SPEC-0039 984: handler 1 on entity 0.
         (984, 0) => Some(1),
         // SPEC-0044 1017: set D on entities 0 and 4, C on 1 and 5, A on 2 and 6, B on 3 and 7.
@@ -3786,7 +3949,7 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     if eastside_interior(pack).is_some() && routine == 0 {
         return eastside_talk(pack, state);
     }
-    if matches!(pack, 855..=858 | 1429) && routine == 0 {
+    if matches!(pack, 855..=858 | 1429 | 1152 | 1251 | 784) && routine == 0 {
         return outskirts_talk(pack, state);
     }
     // SPEC-0039 984 entity 0 (handler 1): with 67 line 12 in the conversation frame; else line
@@ -4051,6 +4214,36 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_1152_1251_784() {
+        // SPEC-0037 vector: 1152 with only 23 and 633 set: 162 set and line 14, then line 11.
+        let mut s = GameState::default();
+        s.set(23, true);
+        s.set(633, true);
+        assert_eq!(on_talk(1152, 0, &mut s), vec![Action::Talk { line: 14 }]);
+        assert_eq!(on_talk(1152, 0, &mut s), vec![Action::Talk { line: 11 }]);
+        s.blackboard.insert((2, 119), 110);
+        assert_eq!(on_activate(1152, &mut s)[0], Action::MoveHero { locator: 1 });
+        assert_eq!(on_activate(1152, &mut s)[0], Action::MoveHero { locator: 0 });
+        // 1251 vectors: 585 clear, 460 set, 273 and 270 clear: 31, 32, 31; a new visit with
+        // 460 clear, 457 set and no item 49: 35, 36, 37, 35.
+        let mut s = GameState::default();
+        s.set(460, true);
+        let a: Vec<_> = (0..3).map(|_| on_talk(1251, 0, &mut s)).collect();
+        assert_eq!(a.concat(), [31, 32, 31].map(|line| Action::Talk { line }).to_vec());
+        let mut s = GameState::default();
+        s.set(457, true);
+        let b: Vec<_> = (0..4).map(|_| on_talk(1251, 0, &mut s)).collect();
+        assert_eq!(b.concat(), [35, 36, 37, 35].map(|line| Action::Talk { line }).to_vec());
+        // 784 vector: trigger 1 with 543 clear, 542 set and the button: the walk and line 4.
+        let mut s = GameState::default();
+        s.set(542, true);
+        let call = TriggerCall { index: 1, state: 2, object: true, square: true };
+        let out = on_trigger(784, 1, call, &mut s);
+        assert!(out.actions.contains(&Action::WalkHero { locator: 2, wait: true, orient: true }) && out.actions.contains(&Action::Message { line: 4 }));
+        assert_eq!(on_trigger(784, 1, TriggerCall { square: false, ..call }, &mut s).prompt, Some(4));
     }
 
     #[test]
