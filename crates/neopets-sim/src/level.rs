@@ -1575,6 +1575,24 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0044 864 Init: 287; 60 when clear; level state 3; with 58 clear triggers 1 (the
+        // fight start) and 22 (the story exit); trigger 24 (the plain exit); the slot-load thread
+        // (58: set 0, else set 1; region 865 + set) into store A (slot 0). The hazard triggers 4
+        // to 9, the animated triggers, the other control threads, the object setups and the
+        // per-tick animation sequence (Medium-Low) are not reproduced. Words: 1 the stage bits,
+        // 5 the plain exit armed (by the arrival), 6 busy.
+        864 => {
+            state.set(287, true);
+            state.set(60, true);
+            state.set_level(3, true);
+            let mut v = Vec::new();
+            if !state.flag(58) {
+                v.extend([reg(1, 1), reg(22, 22)]);
+            }
+            v.push(reg(24, 24));
+            v.push(Action::LoadRegion { slot: 0, region: Some(865 + !state.flag(58) as u32) });
+            v
+        }
         // SPEC-0041 985 Init: by flag 281 (at load: word 9) CB2 or CB5 on trigger 4; the
         // matching thread (CB3 or CB6) runs from Update and the arrival from on_activate. Words:
         // 1 step word A, 2 step word B, 3 the arrival word, 4 busy.
@@ -5555,6 +5573,30 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0044 864 trigger 1 (the hero inside): stage bit 0, the fight start.
+        (864, 1) if call.object && call.state != 0 => state.set_word(pack, 1, state.word(pack, 1) | 1),
+        // Trigger 22 (the story exit; the hero inside, 293 set): cameras 16 and 17, line 3, store
+        // C emptied, flags 58 and 288 to 292, value 50 for eW 50 and the load of eW 50 (pack 822).
+        (864, 22) if call.object && call.state != 0 && state.flag(293) && state.word(pack, 7) == 0 => {
+            state.set_word(pack, 7, 1);
+            for f in [58, 292, 291, 290, 289, 288] {
+                state.set(f, true);
+            }
+            state.blackboard.insert((2, 50), 50);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::PlayCamera { track: 16, wait: true, end: 1, speed: 1.0 },
+                Action::PlayCamera { track: 17, wait: false, end: 1, speed: 1.0 },
+                Action::Message { line: 3 },
+                Action::LoadRegion { slot: 2, region: None },
+                Action::ReplaceExterior { slot: 50, plane: -1 },
+            ]);
+        }
+        // Trigger 24 (the plain exit; entering, after an arrival): value 50 for eW 50 and its load.
+        (864, 24) if call.object && call.state == 1 && state.word(pack, 5) != 0 => {
+            state.blackboard.insert((2, 50), 50);
+            out.actions.push(Action::ReplaceExterior { slot: 50, plane: -1 });
+        }
         // SPEC-0041 985 CB2 (trigger 4, 281 clear at load): step A2 on every fire; CB5 (281 set):
         // B1 with the hero.
         (985, 2) => state.set_word(pack, 1, state.word(pack, 1) | 4),
@@ -8247,6 +8289,55 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
+        // SPEC-0044 864 the stage thread: level states 1 and 2 mark bits 5 and 6; bit 0 (the
+        // fight start: cameras 8, 10, 11 and 7, line 6, level state 3 cleared; bits 1 and 2); bit
+        // 3 (the fight end: camera 10, entity 44 off, camera 15, 668; bit 4, bit 2 cleared; 293);
+        // with bit 2 and level state 0 (the boss's event) bit 3 and 293. The boss-fight tweaks,
+        // the camera shakes (their values are not given), the second thread's cameras and the
+        // 32-object loop are not built.
+        864 => {
+            let b = state.word(pack, 1);
+            let has = |n: u32| b & (1 << n) != 0;
+            if state.level(1) && !has(5) {
+                state.set_word(pack, 1, state.word(pack, 1) | 32);
+            }
+            if state.level(2) && !has(6) {
+                state.set_word(pack, 1, state.word(pack, 1) | 64);
+            }
+            let b = state.word(pack, 1);
+            let has = |n: u32| b & (1 << n) != 0;
+            if state.word(pack, 6) == 0 {
+                if has(0) && !has(1) {
+                    state.set_word(pack, 1, b | 6);
+                    state.set_word(pack, 6, 1);
+                    state.set_level(3, false);
+                    out.extend([
+                        Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 },
+                        Action::Message { line: 6 },
+                        Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                        Action::PlayCamera { track: 11, wait: true, end: 1, speed: 1.0 },
+                        Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
+                        Action::ReturnCamera { preset: -1, release: true },
+                        Action::Bits { word: 6, set: 0, clear: 1 },
+                    ]);
+                } else if has(3) && !has(4) {
+                    state.set_word(pack, 1, (b | 16) & !4);
+                    state.set_word(pack, 6, 1);
+                    state.set(668, true);
+                    state.set(293, true);
+                    out.extend([
+                        Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                        Action::DeactivateEntity { entity: 44 },
+                        Action::PlayCamera { track: 15, wait: true, end: 1, speed: 1.0 },
+                        Action::ReturnCamera { preset: -1, release: true },
+                        Action::Bits { word: 6, set: 0, clear: 1 },
+                    ]);
+                } else if !state.flag(293) && has(2) && !has(3) && state.level(0) {
+                    state.set_word(pack, 1, b | 8);
+                    state.set(293, true);
+                }
+            }
+        }
         // SPEC-0041 985 Update: the thread of the load's branch.
         985 => out.extend(thread_985(state)),
         // SPEC-0041 1096 Update: with 45 clear CB7 (the level-state pairs 1 and 2, 4 and 5, 7 and
@@ -9533,6 +9624,12 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 out.push(Action::ReturnCamera { preset: -1, release: true });
             }
             out
+        }
+        // SPEC-0044 864 arrival: the value for eW 60 is read and reset; the plain exit is armed.
+        864 => {
+            state.take_message(2, 60);
+            state.set_word(864, 5, 1);
+            Vec::new()
         }
         // SPEC-0041 985 arrivals: CB1 (281 clear at load: the hero at locator 9, the camera, 212;
         // with 214 clear level states 0 to 2 cleared; step word A cleared; the arrival word) and
@@ -11603,6 +11700,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0044 864: P45, P47, P43 and P48.
+        (864, 43 | 45 | 47 | 48) => Some(entity as u8),
         // SPEC-0044 893: entities 59 (the exchange), 41 and 58.
         (893, 59 | 41 | 58) => Some(entity as u8),
         // SPEC-0043 1122: entities 10, 7, 8 and 9.
@@ -11747,6 +11846,32 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 893 {
         return talk_893(routine, state);
+    }
+    // SPEC-0044 864 proximity: 45, 47 and 48 a line (0, 1, 5), a camera (12, 13, 14), the hero
+    // to locator 49, 51 or 53, the entity's animation 30 and its walk (48, 50, 52), the fade, flag
+    // 288, 289 or 292 and store C emptied; 43 line 3 and store C emptied.
+    if pack == 864 {
+        if routine == 43 {
+            return vec![Action::Talk { line: 3 }, Action::LoadRegion { slot: 2, region: None }];
+        }
+        let (line, track, at, walk, flag) = match routine {
+            45 => (0, 12, 49, 48, 288),
+            47 => (1, 13, 51, 50, 289),
+            _ => (5, 14, 53, 52, 292),
+        };
+        state.set(flag, true);
+        let e = routine as usize;
+        return vec![
+            Action::Talk { line },
+            Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 },
+            Action::MoveHero { locator: at },
+            Action::EntityAnim { entity: e, anim: 30, looped: false, wait: true },
+            Action::WalkEntity { entity: e, locator: walk, wait: false, orient: false, stop: 1.1 },
+            Action::FadeOut { seconds: FADE, wait: true },
+            Action::LoadRegion { slot: 2, region: None },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::FadeIn { seconds: FADE, wait: true },
+        ];
     }
     // SPEC-0043 1122: entity 10 by flags 29, 28 and 27 (lines 1 to 10); entities 7, 8 and 9 by
     // 29, 28 and 24 (blocks from 11, 21 and 31): three lines, one, three, else three.
@@ -12708,6 +12833,31 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_864_chieftain_area() {
+        let mut s = GameState::default();
+        assert!(on_init(864, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(866) }));
+        assert!(s.flag(287) && s.level(3));
+        let inside = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        // The plain exit needs an arrival first.
+        assert!(on_trigger(864, 24, inside(24), &mut s).actions.is_empty());
+        on_activate(864, &mut s);
+        assert_eq!(on_trigger(864, 24, inside(24), &mut s).actions, vec![Action::ReplaceExterior { slot: 50, plane: -1 }]);
+        // The fight: start, then the boss's level state 0 marks the end (293) and the end stage.
+        on_trigger(864, 1, inside(1), &mut s);
+        assert!(on_update(864, &mut s, false).contains(&Action::Message { line: 6 }) && !s.level(3));
+        s.set_word(864, 6, 0);
+        s.set_level(0, true);
+        on_update(864, &mut s, false);
+        assert!(s.flag(293));
+        assert!(on_update(864, &mut s, false).contains(&Action::DeactivateEntity { entity: 44 }) && s.flag(668));
+        // The story exit: flags 58 and 288 to 292 and the load of eW 50.
+        assert!(on_trigger(864, 22, inside(22), &mut s).actions.contains(&Action::ReplaceExterior { slot: 50, plane: -1 }));
+        assert!(s.flag(58) && s.flag(290));
+        // P47: line 1, flag 289.
+        assert_eq!(on_talk(864, 47, &mut s)[0], Action::Talk { line: 1 });
     }
 
     #[test]
