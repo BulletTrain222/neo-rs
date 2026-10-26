@@ -29,6 +29,7 @@ pub mod ixi;
 pub mod fyora;
 pub mod gnarfas;
 pub mod juppie;
+pub mod knight;
 pub mod sisters;
 pub mod summon;
 pub mod werelupe;
