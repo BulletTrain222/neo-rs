@@ -4842,7 +4842,10 @@ impl Play {
         let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
         let obj = w.objects.get(i)?.as_ref()?;
         let a = w.object_anims.get(i)?;
-        if !a.scripted && !level::objects_scripted(pack) {
+        // An object a type-40 group names (chests and the other group kinds, whose setup is not
+        // built) is also drawn at rest until a script touches it.
+        let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)));
+        if !a.scripted && (!level::objects_scripted(pack) || grouped) {
             return Some(obj.rest);
         }
         if !a.visible() {

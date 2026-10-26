@@ -520,7 +520,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 1133 | 1148 | 1150 | 1172 | 1184 | 1056 | 1163)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -574,7 +574,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0041 951 Init: LockChest(chest 0, key item 15, message 124); then the thread
         // body, which runs once: the first-entry step (120, movie 2, item 15) and the slot step.
         951 => {
-            let mut out = vec![Action::LockChest { id: 0, key: 15, message: 124 }];
+            // Init step 4: object 0 at its start pose, or at its end with flag 121 set.
+            let mut out = vec![Action::LockChest { id: 0, key: 15, message: 124 }, Action::InitObjOn { obj: 0, end: state.flag(121) }];
             if state.flag(119) && !state.flag(120) {
                 state.set(120, true);
                 state.give(15, 1);
@@ -1220,12 +1221,14 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 if let Some(sum) = sum {
                     state.set_word(pack, 1, 1);
                     state.set_word(pack, 8, sum);
+                    out.extend([Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }]);
                 }
             } else if state.word(pack, 1) == 1 && !state.flag(125) {
                 let current = sum.unwrap_or(0);
                 if state.word(pack, 8) - current >= 31 {
                     state.set_word(pack, 1, 2);
-                    out = road_end(pack);
+                    out = vec![Action::DeactivateObj { obj: 0 }, Action::DeactivateObj { obj: 1 }];
+                    out.extend(road_end(pack));
                     state.set(124, true);
                     state.set(126, true);
                     state.give(170, 100);
@@ -1564,7 +1567,7 @@ fn mice_start(state: &mut GameState) -> Vec<Action> {
 fn kitchen_init(state: &mut GameState) -> Vec<Action> {
     let mut out = Vec::new();
     if !state.flag(155) || castle_stage(state) == 30 {
-        out.push(Action::RegisterTrigger { index: 0, routine: 1 });
+        out.extend([Action::InitObjOn { obj: 0, end: false }, Action::RegisterTrigger { index: 0, routine: 1 }]);
     }
     let j = if state.flag(31) || state.flag(11) {
         2
@@ -3038,7 +3041,7 @@ mod tests {
         let mut s = GameState::default();
         s.set(119, true);
         let init = on_init(951, &mut s);
-        assert_eq!(init, vec![Action::LockChest { id: 0, key: 15, message: 124 }, Action::LoadRegion { slot: 0, region: Some(953) }]);
+        assert_eq!(init, vec![Action::LockChest { id: 0, key: 15, message: 124 }, Action::InitObjOn { obj: 0, end: false }, Action::LoadRegion { slot: 0, region: Some(953) }]);
         assert!(s.flag(120) && s.has_item(15));
         assert!(!on_init(951, &mut s).is_empty() && s.items[&15] == 1, "item 15 once");
         // The leave door holds Tor in with line 126 until the parcel.
@@ -3071,13 +3074,15 @@ mod tests {
         assert!(s.flag(124) && intro.actions.contains(&Action::Agro { entity: 1 }));
         let hp = |s: &mut GameState, v: [i32; 3]| s.entity_hp = [(0, v[0]), (2, v[1]), (1, v[2])].into_iter().collect();
         hp(&mut s, [80, 60, 50]);
-        assert!(on_update(691, &mut s, false).is_empty());
+        // The fight start activates objects 0 and 1.
+        assert_eq!(on_update(691, &mut s, false), vec![Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }]);
         hp(&mut s, [55, 55, 50]);
         assert!(on_update(691, &mut s, false).is_empty());
         assert!(!s.flag(125));
         hp(&mut s, [54, 55, 50]);
         let end = on_update(691, &mut s, false);
         assert!(end.contains(&Action::LoadRegion { slot: 0, region: Some(695) }));
+        assert_eq!(end[..2], [Action::DeactivateObj { obj: 0 }, Action::DeactivateObj { obj: 1 }]);
         assert!(s.flag(125) && s.flag(126) && s.items[&170] == 100);
         // The intro does not run again; the next visit loads set 3 (thread A).
         assert!(on_trigger(691, 1, TriggerCall { index: 1, state: 1, object: true, square: false }, &mut s).actions.is_empty());

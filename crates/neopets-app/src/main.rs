@@ -2305,7 +2305,8 @@ fn play_trace(
         if play.ticks == 2 || (play.ticks % 600 == 0 && play.ticks > 0) {
             let w = &play.world;
             let list: Vec<String> = w.object_anims.iter().enumerate().filter(|(_, o)| o.scripted).map(|(i, o)| format!("{i}:{}{}", o.state, if play.object_matrix(w.pack, i).is_some() { "" } else { " hidden" })).collect();
-            println!("      objects of {} ({} in all) on tick {}: scripted [{}]", w.pack, w.objects.len(), play.ticks, list.join(", "));
+            let shown = (0..w.objects.len()).filter(|&i| play.object_matrix(w.pack, i).is_some()).count();
+            println!("      objects of {} ({} in all, {shown} drawn) on tick {}: scripted [{}]", w.pack, w.objects.len(), play.ticks, list.join(", "));
         }
         if !play.last_fx.is_empty() && play.last_fx != last_fx {
             last_fx = play.last_fx.clone();
