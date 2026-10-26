@@ -1227,6 +1227,13 @@ fn step_sim(
             if std::mem::take(&mut play.play.reload_wanted) {
                 pending = play.play.snapshot.clone();
             }
+            // The game-over exit with nothing pending: the teardown and record 0.
+            if std::mem::take(&mut play.play.teardown_wanted) {
+                quit = true;
+                if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                    m.flow.set(&a.f, menus::CARD);
+                }
+            }
             // NEOPETS_TRACE_QUITBOX=n: the pause page with its quit box open on play tick n
             // (diagnostic, for a screenshot).
             if std::env::var("NEOPETS_TRACE_QUITBOX").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
@@ -2203,8 +2210,9 @@ fn play_trace(
     // NEOPETS_TRACE_QUIT=n: Quit's world teardown on tick n (diagnostic; the pause page's Quit).
     let mut quit_at: Option<u64> = std::env::var("NEOPETS_TRACE_QUIT").ok().and_then(|v| v.trim().parse().ok());
     for _ in 0..ticks {
-        // Once: the new game's tick count starts again.
-        if quit_at.is_some_and(|k| k == play.ticks) {
+        // Once: the new game's tick count starts again. A game-over exit with nothing pending
+        // tears the world down the same way.
+        if quit_at.is_some_and(|k| k == play.ticks) || std::mem::take(&mut play.teardown_wanted) {
             quit_at = None;
             let held = |p: &play::Play| (p.world.pack, p.hero_index, p.hero_hp, p.state.flags.len(), p.state.neopoints, p.snapshot.is_some(), p.characters.len(), p.generation);
             println!("      Quit on tick {}: before (world, hero, hp, flags, NP, snapshot, characters, game) {:?}", play.ticks, held(&play));

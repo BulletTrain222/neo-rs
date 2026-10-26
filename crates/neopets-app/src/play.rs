@@ -703,10 +703,12 @@ pub struct Play {
     pub labels: Vec<Vec<u8>>,
     pub box_words: BoxWords,
     /// The death flow (SPEC-0055): death mode, timers E and F, flag E and the game-over page;
-    /// the state-60 penalty due on the next tick; a Continue that wants the placeholder restart.
+    /// the state-60 penalty due on the next tick.
     pub death: neopets_sim::death::DeathFlow,
     penalty_due: bool,
-    pub continued: bool,
+    /// The game-over page's exit with no save or load pending: the host tears the world down
+    /// and the front end goes to record 0 (SPEC-0026 Game over flag; SPEC-0035 state 26).
+    pub teardown_wanted: bool,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
     /// Effects (SPEC-0034): the resource-9 definition table, its material images, the shared
@@ -1288,7 +1290,7 @@ impl Play {
             box_words,
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
-            continued: false,
+            teardown_wanted: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             slot_arrived: Default::default(),
@@ -4580,11 +4582,12 @@ impl Play {
         if self.death.page.is_some() {
             if self.death.page_pass(input.jump) {
                 // SPEC-0025 Session snapshot: with a save or load in the session, Continue
-                // applies the snapshot; otherwise the placeholder for the title flow.
+                // applies the snapshot; otherwise the world is torn down (the title flow).
                 if self.snapshot.is_some() {
                     self.reload_wanted = true;
                 } else {
-                    self.continue_placeholder();
+                    self.teardown_wanted = true;
+                    self.last_hurt = format!("game over: the world is torn down on tick {}", self.ticks);
                 }
             }
             return;
@@ -7985,19 +7988,6 @@ impl Play {
             Command::Cloak => self.cloak_worn = !self.cloak_worn,
             _ => {}
         }
-    }
-
-    /// The game-over page's quit exit. With no save or load in the session the game tears the
-    /// world down and goes to the card state and the title flow, which this build does not have:
-    /// as a placeholder (not the game's behaviour) the hero comes back at the current world's
-    /// entry record 0 with full health in state 59, and `continued` is set.
-    fn continue_placeholder(&mut self) {
-        let pose = self.world.entries.first().copied().unwrap_or((self.loco.position(), self.loco.facing));
-        self.arrive(pose);
-        self.hero_hp = self.hero_max;
-        self.loco.set_end_state(hero_states::ARRIVAL);
-        self.continued = true;
-        self.last_hurt = format!("continued on tick {} (placeholder for the title flow)", self.ticks);
     }
 
     pub fn status_camera(&self) -> String {

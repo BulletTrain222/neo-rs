@@ -576,6 +576,8 @@ impl Flow {
                 if self.idle > 1800 {
                     result = Some(LOGO);
                 } else if self.focus == 0 && self.pass >= 5 && edge & CROSS != 0 {
+                    // SPEC-0035 section 5, index 0: cue 0x9A, the world reset, play.
+                    self.sounds.push(0x9A);
                     command = Some(Command::NewGame);
                     result = Some(PLAY);
                 }
