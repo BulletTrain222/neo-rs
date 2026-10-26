@@ -348,8 +348,8 @@ pub fn fan_draw(rng: &mut Rng) -> f32 {
     rng.frange(-1.0, 1.0)
 }
 
-/// The attack-family driver's two timed displays of Roberta (SPEC-0036 Roberta full-charge
-/// hold effect and Timed glow): each accumulates the tick length by a truncating add while its
+/// The attack-family driver's two timed displays of Roberta (SPEC-0036 Roberta charge-up hold
+/// effect and Timed glow): each accumulates the tick length by a truncating add while its
 /// gate holds and is reset to 0 when it fails.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Displays {
@@ -357,17 +357,18 @@ pub struct Displays {
     glow: f32,
 }
 
-/// Effect 239 (the full-charge hold) and 0xF1 (the leap glow).
+/// Effect 239 (the charge-up hold, while not yet charged) and 0xF1 (the leap glow).
 pub const HOLD_EFFECT: i32 = 239;
 pub const GLOW_EFFECT: i32 = 0xF1;
 
 impl Displays {
     /// One driver pass: returns (hold shown, glow shown). The hold shows from the pass on which
-    /// the accumulator of sub-state 1 with F at least 80 reaches 0.8 s; the glow while the
-    /// accumulator of sub-state 8 is in [0.5, 0.8).
+    /// the accumulator of sub-state 1 with F at or below 80 (not yet charged) reaches 0.8 s,
+    /// and stops (the accumulator to 0) once F is above 80 or the sub-state ends; the glow while
+    /// the accumulator of sub-state 8 is in [0.5, 0.8).
     pub fn step(&mut self, sub: u8, f: u32) -> (bool, bool) {
         let dt = 1.0f32 / 60.0;
-        if sub == 1 && f >= 80 {
+        if sub == 1 && f <= 80 {
             self.hold = ps2_float::fpu::add(self.hold, dt);
         } else {
             self.hold = 0.0;
@@ -467,15 +468,23 @@ mod tests {
         assert_eq!((charge_full(25, 100.0), charge_full(40, 100.0)), (25, 40));
     }
 
-    /// SPEC-0036 test vectors: the hold shows on pass 49 (F at least 80), not with F = 79; the
-    /// glow shows from tick 31 through 48 of the leap and resets on another sub-state.
+    /// SPEC-0036 test vectors: with F rising 1 a pass from 1, the hold starts on pass 49 (F 49),
+    /// plays through F = 80 and stops (the accumulator 0) when F becomes 81, not restarting
+    /// while she keeps holding; leaving sub-state 1 stops it; the glow shows from tick 31
+    /// through 48 of the leap and resets on another sub-state.
     #[test]
     fn hold_and_glow_timers() {
         let mut d = Displays::default();
-        assert!(!d.step(1, 79).0);
-        let shown: Vec<bool> = (1..=49).map(|_| d.step(1, 80).0).collect();
-        assert!(!shown[47] && shown[48]);
-        assert!(!d.step(13, 80).0);
+        let shown: Vec<bool> = (1..=80).map(|f| d.step(1, f).0).collect();
+        assert!(!shown[47] && shown[48] && shown[79]);
+        assert!(!d.step(1, 81).0);
+        assert_eq!(d.hold, 0.0);
+        assert!(!d.step(1, 82).0);
+        let mut d = Displays::default();
+        for f in 1..=60 {
+            d.step(1, f);
+        }
+        assert!(!d.step(13, 60).0);
         let mut d = Displays::default();
         let glow: Vec<bool> = (1..=49).map(|_| d.step(8, 0).1).collect();
         assert!(!glow[29] && glow[30] && glow[47] && !glow[48]);

@@ -1,7 +1,7 @@
 //! Camera shake (SPEC-0027 Camera shake, Camera shake record): one timed record started by
-//! StartCameraShake or StartCameraShakeMode and stepped once per frame with dt = 1/60 s. A
-//! start does not reset the elapsed time or the key index, so in a session only the first shake
-//! moves the view (original defect, reproduced).
+//! StartCameraShake or StartCameraShakeMode and stepped once per frame with dt = 1/60 s. Every
+//! start clears the elapsed time, the key index, the phase, the finished flag and the whole key
+//! list, so each shake plays in full from its own beginning and replaces a running one.
 
 const DT: f32 = 1.0 / 60.0;
 
@@ -56,11 +56,14 @@ pub fn preset(kind: i32, duration: f32) -> Option<(f32, f32, f32, f32, f32)> {
 }
 
 impl Shake {
-    /// StartCameraShake(T, A, S, p4, R, phi, Z): keys (0, 0), (p4, A), (T - R, A), (T, 0) at rate
-    /// S (keys 4 and 5 keep their values), the counters cleared, the current amplitude 0; the
-    /// elapsed time and key index are kept.
+    /// StartCameraShake(T, A, S, p4, R, phi, Z): the record cleared (elapsed time, key index,
+    /// phase, finished flag and all six keys), then keys (0, 0), (p4, A), (T - R, A), (T, 0) at
+    /// rate S (keys 4 and 5 stay zero) and the current amplitude 0.
     #[allow(clippy::too_many_arguments)]
     pub fn start(&mut self, t: f32, a: f32, s: f32, p4: f32, r: f32, phi: f32, z: f32) {
+        self.keys = [(0.0, 0.0, 0.0); 6];
+        self.elapsed = 0.0;
+        self.key = 0;
         self.keys[0] = (0.0, 0.0, s);
         self.keys[1] = (p4, a, s);
         self.keys[2] = (t - r, a, s);
@@ -142,7 +145,7 @@ mod tests {
     }
 
     #[test]
-    fn short_shake_drops_and_only_the_first_moves() {
+    fn short_shake_drops_and_every_shake_plays_in_full() {
         // StartCameraShakeMode(0, 0.5, 1.0): the third key (0.0) is earlier than the second, so
         // at 0.3 s the amplitude drops to 0.3 x (1 - 0.3 / 0.5) = 0.12.
         let mut s = Shake::default();
@@ -153,16 +156,22 @@ mod tests {
         }
         // Frame 18 (e = 0.3 s) is the first after the drop.
         assert!(a[16] > 0.25 && (a[17] - 0.12).abs() < 1e-4, "{} {}", a[16], a[17]);
-        // A second shake keeps the key index 5 and the elapsed time: its amplitude stays 0, and
-        // one whose T is at most the old elapsed time ends on its first frame.
+        // SPEC-0027: a second shake plays exactly like the first (every start clears the record).
+        let first = a.clone();
+        s.start_mode(0, 0.5, 1.0);
+        assert_eq!((s.key, s.elapsed), (0, 0.0));
+        let mut b = Vec::new();
+        while s.step().is_some() {
+            b.push(s.amplitude);
+        }
+        assert_eq!(b, first);
+        // A start while one runs replaces it at once from elapsed time 0.
         s.start_mode(1, 5.0, 1.0);
-        assert_eq!(s.key, 5);
-        for _ in 0..30 {
-            let o = s.step().unwrap();
-            assert_eq!((o.up, s.amplitude), (0.0, 0.0));
+        for _ in 0..10 {
+            s.step();
         }
         s.start_mode(0, 0.3, 1.0);
-        assert!(s.step().is_some() && s.step().is_none());
+        assert_eq!((s.key, s.elapsed), (0, 0.0));
         // Types outside 0 to 5 start nothing.
         assert!(preset(6, 1.0).is_none());
     }

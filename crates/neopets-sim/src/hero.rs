@@ -35,9 +35,10 @@ pub const SCRIPTED: u8 = 33;
 pub const GUARD: u8 = 20;
 /// Carry a Miamouse (SPEC-0033 Behavior 18).
 pub const CARRY: u8 = 57;
-/// Sneak idle and sneak walk (SPEC-0033 Behavior 4A.1; the helper state 39 is not entered).
+/// Sneak idle, sneak reverse walk (39) and sneak walk (SPEC-0033 Behavior 4A.1 and 5.1).
 pub const SNEAK: u8 = 22;
 pub const SNEAK_WALK: u8 = 40;
+pub const SNEAK_REVERSE: u8 = 39;
 const ANIM_PICK_UP: u32 = 178;
 const ANIM_CARRY_STAND: u32 = 179;
 const ANIM_CARRY_WALK: u32 = 180;
@@ -451,6 +452,7 @@ impl Locomotion {
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
+            SNEAK_REVERSE => 82,
             RESPAWN => ANIM_LONG_LAND,
             _ => 0,
         }
@@ -519,11 +521,18 @@ impl Locomotion {
                 if v > 0.0 {
                     self.facing = turn_moving(self.facing, self.target);
                 }
-                // Sneak: while Square is held the tiers give 22 (stopped) or 40 (no factor);
-                // released, the hero is back in state 1.
-                if matches!(self.state, SNEAK | 39 | SNEAK_WALK) {
+                // Sneak: while Square is held the tiers give 22 (stopped), 40 (forward) or 39
+                // (the stick pulled back, here: pointing more than 90 degrees from the facing;
+                // the sign rule is Medium), with no factor; released, the hero is back in state 1.
+                if matches!(self.state, SNEAK | SNEAK_REVERSE | SNEAK_WALK) {
                     if input.square_held {
-                        self.state = if v <= 0.1 { SNEAK } else { SNEAK_WALK };
+                        self.state = if v <= 0.1 {
+                            SNEAK
+                        } else if dot(self.target, self.facing) < 0.0 {
+                            SNEAK_REVERSE
+                        } else {
+                            SNEAK_WALK
+                        };
                         return;
                     }
                     self.state = STANCE;

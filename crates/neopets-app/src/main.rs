@@ -2143,10 +2143,11 @@ pub(crate) fn part_assets(
             };
             let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
             // The GS modulates in gamma space; Bevy blends vertex colour in linear space.
+            let g = gs_unit(part);
             let colors: Vec<[f32; 4]> = part
                 .colors
                 .iter()
-                .map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)])
+                .map(|c| [(c[0] * g).powf(2.2), (c[1] * g).powf(2.2), (c[2] * g).powf(2.2), c[3].min(1.0)])
                 .collect();
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
@@ -2159,6 +2160,14 @@ pub(crate) fn part_assets(
         .collect()
 }
 
+/// The vertex colours are kept as GS output / 128, the unit a texture is modulated by (128
+/// leaves it unchanged). A part with no texture shows its output itself, on the GS's 0 to 255
+/// scale, so its scale is 128 / 255: an untextured NPC part whose lit output is 248 is nearly
+/// full colour, not twice as bright (SPEC-0046 Light slots and the lit draw; SPEC-0004 Colour).
+fn gs_unit(part: &neopets_data::model::MeshPart) -> f32 {
+    if part.texture.is_some() { 1.0 } else { 128.0 / 255.0 }
+}
+
 /// A part's linear vertex colours: lit (or stored), times the status tint and, for a region
 /// character, times the colour of the part's slot (SPEC-0040 Behavior 26 item 9; the scale
 /// applies in the GS's gamma space, so it is raised to 2.2 like the colours).
@@ -2166,7 +2175,8 @@ fn tinted(part: &neopets_data::model::MeshPart, lit: Option<Vec<[f32; 4]>>, tint
     let base = lit.unwrap_or_else(|| part.colors.iter().map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)]).collect());
     let s = slots.map_or([1.0; 3], |s| s[part.colour_slot.min(14) as usize]);
     let t = tint.unwrap_or([1.0; 3]);
-    let t = [t[0] * s[0], t[1] * s[1], t[2] * s[2]].map(|c| c.max(0.0).powf(2.2));
+    let g = gs_unit(part);
+    let t = [t[0] * s[0] * g, t[1] * s[1] * g, t[2] * s[2] * g].map(|c| c.max(0.0).powf(2.2));
     Some(base.into_iter().map(|c| [c[0] * t[0], c[1] * t[1], c[2] * t[2], c[3]]).collect())
 }
 
