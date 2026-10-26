@@ -1056,7 +1056,15 @@ fn step_sim(
     mut commands: Commands,
     mut dev: ResMut<dev_menu::DevMenu>,
 ) {
-    let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
+    let mut elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
+    // The developer menu's game speed: the elapsed time scaled (0 while paused); a step while
+    // paused runs exactly one tick's time.
+    if dev.speed() != 1.0 {
+        elapsed = (elapsed as f64 * dev.speed()) as u64;
+    }
+    if std::mem::take(&mut dev.step) {
+        elapsed = 1_000_000_000 / 60 + 1;
+    }
     let SimDriver {
         sim, clock, input, ..
     } = &mut *driver;
@@ -2323,6 +2331,14 @@ fn play_trace(
     for _ in 0..ticks {
         // Once: the new game's tick count starts again. A game-over exit with nothing pending
         // tears the world down the same way.
+        // NEOPETS_TRACE_KILL=n: the developer menu's enemy defeat on tick n.
+        if std::env::var("NEOPETS_TRACE_KILL").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
+            let pk = play.world.pack;
+            let alive: Vec<(String, bool)> = play.characters.iter().filter(|c| c.pack == pk && c.enemy.as_ref().is_some_and(|e| !e.dead)).map(|c| (c.name.clone(), c.inactive)).collect();
+            println!("      enemies before (name, inactive): {alive:?}");
+            let n = play.dev_kill_enemies();
+            println!("      developer kill on tick {}: {n} enemies hit", play.ticks);
+        }
         if quit_at.is_some_and(|k| k == play.ticks) || std::mem::take(&mut play.teardown_wanted) {
             quit_at = None;
             let held = |p: &play::Play| (p.world.pack, p.hero_index, p.hero_hp, p.state.flags.len(), p.state.neopoints, p.snapshot.is_some(), p.characters.len(), p.generation);

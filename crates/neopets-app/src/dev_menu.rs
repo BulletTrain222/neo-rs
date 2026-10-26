@@ -1,7 +1,8 @@
 //! The developer menu: cheats and a free camera for testing. It is a tool of this build, not
 //! part of the original game, and follows no spec.
 //!
-//! F1 opens and closes the menu; Up and Down pick an entry, Left and Right change its value (Shift
+//! F1 opens and closes the menu; F4 pauses or resumes the game and F5 steps one tick while it is
+//! paused; Up and Down pick an entry, Left and Right change its value (Shift
 //! for steps of 10), Enter or Space applies it. F2 toggles the free camera: WASD or the arrows
 //! move, E and Q rise and sink, J/L and I/K or a right-button drag look around, Shift is fast.
 //! While the menu is open or the free camera is on, the hero and the game menus get no input.
@@ -14,7 +15,7 @@ use bevy::prelude::*;
 use crate::orbit::Orbit;
 use crate::PlayState;
 
-#[derive(Resource, Default)]
+#[derive(Resource)]
 pub struct DevMenu {
     pub open: bool,
     cursor: usize,
@@ -24,11 +25,30 @@ pub struct DevMenu {
     /// The warp list's cursor, and a warp the host runs after this frame's ticks.
     warp_at: usize,
     pub warp: Option<u32>,
+    /// The game speed (an index into SPEEDS; 0 is paused) and a one-tick step asked for.
+    speed: usize,
+    pub step: bool,
+    start: usize,
     pub free: Option<FreeCam>,
     note: String,
 }
 
+/// The game speeds: paused, a quarter, a half, normal, double, four times.
+pub const SPEEDS: [f64; 6] = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0];
+const NORMAL: usize = 3;
+
+impl Default for DevMenu {
+    fn default() -> Self {
+        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new() }
+    }
+}
+
 impl DevMenu {
+    /// The factor applied to the frame's elapsed time (0 while paused).
+    pub fn speed(&self) -> f64 {
+        SPEEDS[self.speed]
+    }
+
     /// The hero and the game menus get no input this frame.
     pub fn blocks_input(&self) -> bool {
         self.open || self.free.is_some()
@@ -75,9 +95,31 @@ enum Entry {
     Hero,
     Flag,
     Warp,
+    Speed,
+    Kill,
+    Start,
+    ToCamera,
+    Maps,
 }
 
-const ENTRIES: [Entry; 11] = [Entry::God, Entry::Magic, Entry::Charge, Entry::FreeCam, Entry::Warp, Entry::Neopoints, Entry::Heal, Entry::Motes, Entry::Item, Entry::Hero, Entry::Flag];
+const ENTRIES: [Entry; 16] = [
+    Entry::God,
+    Entry::Magic,
+    Entry::Charge,
+    Entry::Speed,
+    Entry::FreeCam,
+    Entry::ToCamera,
+    Entry::Warp,
+    Entry::Start,
+    Entry::Kill,
+    Entry::Neopoints,
+    Entry::Heal,
+    Entry::Motes,
+    Entry::Maps,
+    Entry::Item,
+    Entry::Hero,
+    Entry::Flag,
+];
 
 /// The warp list: the save's world keys (nonzero, sorted, each once).
 fn worlds(p: &crate::play::Play) -> Vec<u32> {
@@ -109,8 +151,8 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             None => cameras.iter().next().map(FreeCam::from_transform),
         };
     };
-    // NEOPETS_DEV="menu,free,perf,warp=N": open the menu, start the free camera, show the
-    // performance overlay and/or warp to world pack N once play has run a few frames
+    // NEOPETS_DEV="menu,free,perf,warp=N,speed=K": open the menu, start the free camera, show
+    // the performance overlay, warp to world pack N and/or set speed step K (0 paused, 3 normal) once play has run a few frames
     // (diagnostic, for screenshots); with "free" the camera also backs up and rises.
     *frames += 1;
     if *frames == 30 {
@@ -118,6 +160,9 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
         dev.open |= v.contains("menu");
         perf.on |= v.contains("perf");
         dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
+        if let Some(k) = v.split(',').find_map(|t| t.trim().strip_prefix("speed=")?.parse::<usize>().ok()) {
+            dev.speed = k.min(SPEEDS.len() - 1);
+        }
         if v.contains("free") && dev.free.is_none() {
             toggle_free(&mut dev);
             if let Some(fc) = dev.free.as_mut() {
@@ -132,6 +177,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
     }
     if keys.just_pressed(KeyCode::F2) {
         toggle_free(&mut dev);
+    }
+    if keys.just_pressed(KeyCode::F4) {
+        dev.speed = if dev.speed == 0 { NORMAL } else { 0 };
+    }
+    if keys.just_pressed(KeyCode::F5) && dev.speed == 0 {
+        dev.step = true;
     }
     if !dev.open {
         return;
@@ -160,6 +211,11 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             Entry::Warp => {
                 let n = worlds(&play.play).len().max(1) as i32;
                 dev.warp_at = (dev.warp_at as i32 + delta).rem_euclid(n) as usize;
+            }
+            Entry::Speed => dev.speed = (dev.speed as i32 + delta.signum()).clamp(0, SPEEDS.len() as i32 - 1) as usize,
+            Entry::Start => {
+                let n = play.play.dev_start_points().max(1) as i32;
+                dev.start = (dev.start as i32 + delta).rem_euclid(n) as usize;
             }
             _ => {}
         }
@@ -216,6 +272,27 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, mut dev: ResMut<DevMenu>, play
             p.state.set(f, v);
             format!("Story flag {f} {}", if v { "set" } else { "cleared" })
         }
+        Entry::Speed => {
+            dev.speed = NORMAL;
+            "Normal speed".into()
+        }
+        Entry::Kill => format!("Defeated {} enemies here", p.dev_kill_enemies()),
+        Entry::Start => {
+            if p.dev_go_start(dev.start) { format!("To start point {}", dev.start) } else { "No start points here".into() }
+        }
+        Entry::ToCamera => match dev.free {
+            Some(fc) => {
+                p.place_at(fc.pos.x, fc.pos.z, fc.pos.y);
+                "Hero moved under the free camera".into()
+            }
+            None => "Turn the free camera on first".into(),
+        },
+        Entry::Maps => {
+            for n in 1..=46 {
+                p.map_held(n);
+            }
+            "Every treasure map held".into()
+        }
         Entry::Warp => match worlds(p).get(dev.warp_at).copied() {
             Some(pack) => {
                 dev.warp = Some(pack);
@@ -259,7 +336,7 @@ pub fn free_camera(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mouse: Res<
 /// The panel's text: the entries with their values, the last result and the free camera's
 /// keys.
 pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Query<&mut Node, With<DevPanel>>, mut texts: Query<&mut Text, With<DevText>>) {
-    let visible = dev.open || dev.free.is_some();
+    let visible = dev.open || dev.free.is_some() || dev.speed != NORMAL;
     for mut n in &mut panels {
         n.display = if visible { Display::Flex } else { Display::None };
     }
@@ -284,6 +361,11 @@ pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Q
                 Entry::Item => format!("Give item: < {} > {}", dev.item, p.item_label(dev.item)),
                 Entry::Hero => format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }),
                 Entry::Flag => format!("Toggle story flag: < {} > ({})", dev.flag, if p.state.flag(dev.flag) { "set" } else { "clear" }),
+                Entry::Speed => format!("Game speed: < {} >  (F4 pause, F5 step)", speed_label(dev.speed)),
+                Entry::Kill => "Defeat every enemy in this world".to_string(),
+                Entry::Start => format!("Go to start point: < {} > of {}", dev.start, p.dev_start_points()),
+                Entry::ToCamera => "Move the hero under the free camera".to_string(),
+                Entry::Maps => "Give every treasure map".to_string(),
                 Entry::Warp => {
                     let w = worlds(p);
                     format!("Warp to world: < {} > ({} of {}; here: {} {})", w.get(dev.warp_at).map_or("-".to_string(), |k| k.to_string()), dev.warp_at + 1, w.len(), p.world.pack, String::from_utf8_lossy(&p.location_name()))
@@ -298,6 +380,9 @@ pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Q
             s.push_str(&format!("{}\n", dev.note));
         }
     }
+    if !dev.open && dev.speed != NORMAL {
+        s.push_str(&format!("GAME SPEED {} (F4 pause/resume, F5 step)\n", speed_label(dev.speed)));
+    }
     if let Some(fc) = dev.free {
         s.push_str(&format!(
             "FREE CAMERA (F2 ends) at ({:.1}, {:.1}, {:.1}): WASD move, E/Q up/down, J/L I/K or right-drag look, Shift fast",
@@ -307,4 +392,8 @@ pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Q
     for mut t in &mut texts {
         *t = Text::new(s.clone());
     }
+}
+
+fn speed_label(k: usize) -> String {
+    if k == 0 { "paused".into() } else { format!("{}x", SPEEDS[k]) }
 }

@@ -7930,6 +7930,34 @@ impl Play {
 
     /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is
     /// equipped; every item is also counted as held.
+    /// Developer menu: every living enemy of the current world takes a defeating hit (bosses that
+    /// refuse damage keep refusing it). Returns how many were hit.
+    pub fn dev_kill_enemies(&mut self) -> usize {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let targets: Vec<usize> = (0..self.characters.len())
+            .filter(|&i| {
+                let c = &self.characters[i];
+                c.pack == pack && !c.inactive && c.dying.is_none() && c.enemy.as_ref().is_some_and(|e| !e.dead)
+            })
+            .collect();
+        for &i in &targets {
+            self.character_take_hit(i, 1_000_000, hero, "the developer menu ");
+        }
+        targets.len()
+    }
+
+    /// Developer menu: the current world's start points, and a move to start point k.
+    pub fn dev_start_points(&self) -> usize {
+        self.world.entries.len()
+    }
+
+    pub fn dev_go_start(&mut self, k: usize) -> bool {
+        let Some(&pose) = self.world.entries.get(k) else { return false };
+        self.arrive(pose);
+        true
+    }
+
     /// Developer menu: both heroes to full health and magic.
     pub fn dev_heal(&mut self) {
         self.hero_hp = self.hero_max;
