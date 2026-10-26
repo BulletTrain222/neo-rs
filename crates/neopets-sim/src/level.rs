@@ -224,6 +224,10 @@ pub enum Action {
     ActivateTimer { start: f32, limit: f32, up: bool },
     /// DeactivateTimer.
     DeactivateTimer,
+    /// StopTimer (running off; SPEC-0030 row 248).
+    StopTimer,
+    /// SetAnimObjPositionOffset's vertical part (ResetAnimObjOffsets is y = 0).
+    ObjOffset { obj: usize, y: f32 },
     /// SPEC-0059 section 5, the 758 finish gate's freeze: T = the timer value, kept in word 3 as
     /// float bits, and the timer shown at T counting down to T.
     FreezeTrial,
@@ -890,7 +894,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -937,6 +941,20 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0041 1394 Init: objects 3 to 6, 10, 12, 14, 16 and 1 off, 7 and 8 at their end; the
+        // kill zones (S0, 0 to 10), S11 to S14, the levers (15, 18, 16, 17); flag 0 is clear in
+        // play: object 9 off, effect 3 stopped, swap mode 3. Checkpoint words 21 and 22 start at
+        // locator 0 and camera 2. The dead-hero revive, the hero-death callback and the
+        // AddAnimObjSound calls are not reproduced.
+        1394 => {
+            let mut v: Vec<Action> = [3, 4, 5, 6, 10, 12, 14, 16, 1].map(|obj| Action::InitObjOn { obj, end: false }).to_vec();
+            v.extend([7, 8].map(|obj| Action::InitObjOn { obj, end: true }));
+            v.extend((0..=10).map(|i| reg(i, 0)));
+            v.extend([reg(11, 11), reg(12, 12), reg(13, 13), reg(14, 14), reg(15, 15), reg(16, 16), reg(17, 17), reg(18, 18)]);
+            v.extend([Action::InitObjOn { obj: 9, end: false }, Action::StopEffect { slot: 3 }, Action::SwapMode { mode: 3 }]);
+            state.set_word(pack, 22, 2);
+            v
+        }
         // SPEC-0045 934 Init: flag 276 with 4 set and 276 clear; objects 10 and 11; trigger routine
         // 16 on 7 to 9 and 17 on 3 to 5; the area threads 9 to 11 as routines on triggers 0 to 2
         // (clean side: the original polls those records from threads) and thread 12's load (set 5,
@@ -1909,6 +1927,31 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// SPEC-0041 1394's respawn (kill zones and the run-out): with the final word a fade to locator 8;
+/// else the clock stopped and hidden, a fade, the platform offset reset, the hero at the
+/// checkpoint with its camera, and the 50 s clock re-armed (unless S14 stopped it for good).
+fn respawn_1394(s: &mut GameState) -> Vec<Action> {
+    let p = 1394;
+    if s.word(p, 3) != 0 {
+        return vec![Action::FadeOut { seconds: 0.8, wait: true }, Action::MoveHero { locator: 8 }, Action::FadeIn { seconds: 1.0, wait: true }];
+    }
+    let mut v = vec![
+        Action::PlaySound { cue: 5, locator: None },
+        Action::DeactivateTimer,
+        Action::Sleep { ticks: 1 },
+        Action::FadeOut { seconds: 0.8, wait: true },
+        Action::ObjOffset { obj: 2, y: 0.0 },
+        Action::MoveHero { locator: s.word(p, 21).max(0) as usize },
+        Action::ReturnCamera { preset: s.word(p, 22), release: true },
+        wait(1.0),
+        Action::FadeIn { seconds: 1.0, wait: true },
+    ];
+    if s.word(p, 1) == 0 {
+        v.push(Action::ActivateTimer { start: 50.0, limit: 0.0, up: false });
+    }
+    v
 }
 
 /// SPEC-0059 section 6: the offer's line and time limit by the one-target results.
@@ -3142,6 +3185,107 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0041 1394 triggers. Words: 1 exit open, 2 room, 3 final, 4 busy, 5 to 8 the lever
+        // once-words, 9 the intro done, 20 the countdown armed, 21 and 22 the checkpoint.
+        (1394, 0) if call.state == 1 && state.word(pack, 4) == 0 => out.actions.extend(respawn_1394(state)),
+        (1394, 14) if call.object && state.word(pack, 1) == 0 => {
+            state.set_word(pack, 1, 1);
+            state.set_word(pack, 3, 1);
+            state.set_word(pack, 20, 0);
+            out.actions.extend([Action::DeactivateTimer, Action::SwapMode { mode: 2 }, Action::Sleep { ticks: 10 }]);
+        }
+        (1394, 11) if state.word(pack, 2) == 0 && call.object && call.state == 1 => {
+            state.set_word(pack, 2, 1);
+            state.set_word(pack, 20, 0);
+            state.set(104, true);
+            state.set(353, true);
+            out.actions.extend([
+                Action::SwapMode { mode: 2 },
+                Action::DeactivateTimer,
+                Action::HoldHero,
+                Action::FadeOut { seconds: 0.5, wait: true },
+                Action::MoveHero { locator: 9 },
+                Action::DeactivateObj { obj: 9 },
+                Action::StartEffect { slot: 3, camera: false },
+                Action::FadeIn { seconds: 1.0, wait: true },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        (1394, 12) if state.word(pack, 2) != 0 && call.object && call.state == 1 => out.actions.push(Action::ReplaceExterior { slot: 158, plane: -1 }),
+        (1394, 13) if call.object && call.state == 1 && state.word(pack, 9) == 0 => {
+            state.set_word(pack, 9, 1);
+            state.set_word(pack, 20, 1);
+            out.actions.extend([
+                Action::FadeOut { seconds: 0.5, wait: true },
+                Action::HoldHero,
+                Action::PlayCamera { track: 9, wait: true, end: 1, speed: 1.0 },
+                Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                Action::Message { line: 2 },
+                Action::PlayCamera { track: 12, wait: false, end: 1, speed: 1.0 },
+                Action::Message { line: 3 },
+                Action::Message { line: 4 },
+                Action::PlayAnim { obj: 7, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: 8, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: 2, speed: 1.0, wait: true },
+                Action::DeactivateObj { obj: 1 },
+                Action::DeactivateObj { obj: 7 },
+                Action::DeactivateObj { obj: 8 },
+                Action::InitObjOn { obj: 2, end: false },
+                Action::SwapMode { mode: 2 },
+                Action::SwitchHero { hero: 0, effects: false, flash: false },
+                Action::SwapMode { mode: 3 },
+                Action::Message { line: 5 },
+                Action::MoveHero { locator: 0 },
+                Action::FadeIn { seconds: 0.3, wait: false },
+                Action::ReturnCamera { preset: 2, release: true },
+                Action::ObjOffset { obj: 2, y: 0.0 },
+                Action::ActivateTimer { start: 50.0, limit: 0.0, up: false },
+            ]);
+        }
+        // The checkpoint levers S1 to S4 (triggers 15, 18, 16, 17): once per load, while the busy
+        // word is clear; the Square context 4; a press stops the clock, moves the hero to the
+        // lever, plays hero animation 140 and the lever, its camera, swaps the hero, moves to the
+        // new checkpoint and re-arms the 50 s clock.
+        (1394, 15..=18) if call.state != 0 && state.word(pack, 4) == 0 && state.word(pack, routine - 10) == 0 => {
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                state.set_word(pack, routine - 10, 1);
+                let (a, b, hero, cp, track) = match routine {
+                    15 => (10, 11, 1, (1, 3), 11),
+                    16 => (12, 13, 0, (15, 4), 4),
+                    18 => (16, 17, 1, (16, 5), 5),
+                    _ => (14, 15, 0, (8, 4), 12),
+                };
+                state.set_word(pack, 21, cp.0);
+                state.set_word(pack, 22, cp.1);
+                if routine == 17 {
+                    state.set_word(pack, 3, 1);
+                }
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::PlaySound { cue: 5, locator: None },
+                    Action::DeactivateTimer,
+                    Action::MoveHero { locator: routine as usize },
+                    Action::HeroAnim { anim: 140, wait: false },
+                    Action::PlayAnim { obj: a, speed: 1.0, wait: true },
+                    Action::DeactivateObj { obj: a },
+                    Action::InitObjOn { obj: b, end: false },
+                    Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 },
+                    wait(1.0),
+                    Action::PlaySound { cue: 6, locator: None },
+                    Action::KillSound { cue: 6, locator: None },
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::SwapMode { mode: 2 },
+                    Action::SwitchHero { hero, effects: false, flash: false },
+                    Action::SwapMode { mode: 3 },
+                    Action::MoveHero { locator: cp.0 as usize },
+                    Action::ReturnCamera { preset: cp.1, release: true },
+                    Action::FadeIn { seconds: 1.0, wait: true },
+                    Action::ObjOffset { obj: 2, y: 0.0 },
+                    Action::ActivateTimer { start: 50.0, limit: 0.0, up: false },
+                ]);
+            }
+        }
         // SPEC-0045 934 area threads 9 to 11 (triggers 0 to 2, entering with the body): wait while
         // the lock (word 10) is set; load slot 0 with set 0/9, 1/10 (flag 248) or, for area 2,
         // set 3 (flag 2 with 145 clear) or 2 (flag 4 clear or 5 set) or nothing; then lock, wait
@@ -4152,6 +4296,30 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 if end {
                     state.set(258, true);
                     out.extend((15..=48).map(|slot| Action::StopEffect { slot }));
+                }
+            }
+        }
+        // SPEC-0041 1394 Update, the countdown: while armed and the exit closed, object 2 sinks by
+        // (50 - t) x 0.46; at 0 (busy word 4) the clock is stopped, sound 5, the run-out scene
+        // (object 2 off, object 0 shown, camera 11, object 0 played), and the respawn.
+        1394 => {
+            if state.word(pack, 20) != 0 && state.word(pack, 1) == 0 && state.timer.visible {
+                let t = state.timer.value;
+                out.push(Action::ObjOffset { obj: 2, y: (50.0 - t) * -0.46 });
+                if t <= 0.0 && state.word(pack, 4) == 0 && state.timer.running {
+                    state.set_word(pack, 4, 1);
+                    out.extend([
+                        Action::HoldHero,
+                        Action::StopTimer,
+                        Action::PlaySound { cue: 5, locator: None },
+                        Action::DeactivateObj { obj: 2 },
+                        Action::InitObjOn { obj: 0, end: false },
+                        Action::PlayCamera { track: 11, wait: false, end: 1, speed: 1.0 },
+                        Action::PlayAnim { obj: 0, speed: 1.0, wait: true },
+                        Action::ReturnCamera { preset: -1, release: true },
+                    ]);
+                    out.extend(respawn_1394(state));
+                    out.push(Action::Bits { word: 4, set: 0, clear: 1 });
                 }
             }
         }
@@ -6766,6 +6934,28 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_1394_countdown_and_levers() {
+        let mut s = GameState::default();
+        on_init(1394, &mut s);
+        // The intro arms the 50 s clock; at 25 s left object 2 is 11.5 down.
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        on_trigger(1394, 13, enter(13), &mut s);
+        s.timer.activate(25.0, 0.0, false);
+        assert!(on_update(1394, &mut s, false).contains(&Action::ObjOffset { obj: 2, y: -11.5 }));
+        // Lever S3 (trigger 16): hero 0, checkpoint (15, 4); a second press does nothing; a kill
+        // zone then returns the hero to locator 15 with camera 4.
+        let out = on_trigger(1394, 16, enter(16), &mut s);
+        assert!(out.actions.contains(&Action::SwitchHero { hero: 0, effects: false, flash: false }));
+        assert!(on_trigger(1394, 16, enter(16), &mut s).actions.is_empty());
+        let kill = on_trigger(1394, 0, enter(3), &mut s).actions;
+        assert!(kill.contains(&Action::MoveHero { locator: 15 }) && kill.contains(&Action::ReturnCamera { preset: 4, release: true }));
+        // S11 then S12: flags 104 and 353, then the load of eW 158.
+        on_trigger(1394, 11, enter(11), &mut s);
+        assert!(s.flag(104) && s.flag(353));
+        assert_eq!(on_trigger(1394, 12, enter(12), &mut s).actions, vec![Action::ReplaceExterior { slot: 158, plane: -1 }]);
     }
 
     #[test]

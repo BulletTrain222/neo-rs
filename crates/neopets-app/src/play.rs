@@ -651,6 +651,8 @@ pub struct Play {
     dig_drop: Option<[f32; 3]>,
     /// Added object yaw (SetAnimObjAdditionRotY), degrees, by (pack, object).
     obj_yaw: HashMap<(u32, usize), f32>,
+    /// Added vertical offset (SetAnimObjPositionOffset), by (pack, object).
+    obj_offset: HashMap<(u32, usize), f32>,
     /// The camera shake record and this frame's movement (SPEC-0027 Camera shake).
     pub shake: neopets_sim::shake::Shake,
     pub shake_now: Option<neopets_sim::shake::Offset>,
@@ -994,6 +996,7 @@ impl Play {
             char_lights: HashMap::new(),
             dig_drop: None,
             obj_yaw: HashMap::new(),
+            obj_offset: HashMap::new(),
             shake: Default::default(),
             shake_now: None,
             placed_on: Default::default(),
@@ -1944,6 +1947,10 @@ impl Play {
                 Action::WaitItem { item } => return Some(Wait::Item(item)),
                 Action::ActivateTimer { start, limit, up } => self.state.timer.activate(start, limit, up),
                 Action::DeactivateTimer => self.state.timer.deactivate(),
+                Action::StopTimer => self.state.timer.running = false,
+                Action::ObjOffset { obj, y } => {
+                    self.obj_offset.insert((pack, obj), y);
+                }
                 Action::FreezeTrial => {
                     let t = self.state.timer.value;
                     self.state.set_word(pack, 3, t.to_bits() as i32);
@@ -5469,7 +5476,8 @@ impl Play {
         }
         let (q, root, scale) = w.motions.get(i)?.sample(a.time);
         let r = neopets_sim::object::rotation(q);
-        let t = [obj.rest[12] + root[0], obj.rest[13] + root[1], obj.rest[14] + root[2]];
+        let lift = self.obj_offset.get(&(pack, i)).copied().unwrap_or(0.0);
+        let t = [obj.rest[12] + root[0], obj.rest[13] + root[1] + lift, obj.rest[14] + root[2]];
         let c = |k: usize| r[k].map(|v| v * scale[k]);
         let (mut c0, c1, mut c2) = (c(0), c(1), c(2));
         // SetAnimObjAdditionRotY: the added yaw turns the frame about its own Y axis.
