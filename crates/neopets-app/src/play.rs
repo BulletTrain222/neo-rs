@@ -7947,11 +7947,10 @@ impl Play {
     }
 
     /// The map and journal's view of the game this pass. The hero map area is the current
-    /// world's (RegisterTransitionMap's fallback is not built, so a world without an area gives
-    /// -1).
+    /// world's, else the transition map (SPEC-0051 section 1), else -1.
     pub fn map_view(&self) -> crate::menus::MapView {
         crate::menus::MapView {
-            hero_area: self.world.map_area.unwrap_or(-1),
+            hero_area: self.world.map_area.or(self.state.transition_map).unwrap_or(-1),
             hero: self.loco.position(),
             facing: self.loco.facing,
             flags: self.state.flags.iter().copied().collect(),

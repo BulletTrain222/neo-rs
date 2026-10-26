@@ -399,6 +399,10 @@ pub struct TriggerOut {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GameState {
     pub flags: BTreeSet<u16>,
+    /// The transition map (RegisterTransitionMap, SPEC-0030 row 263; SPEC-0051 section 1): the
+    /// map area the map page uses when the current world's area word is -1. None until a call
+    /// sets it; world loads keep it.
+    pub transition_map: Option<i32>,
     /// (message type, eW slot) to value; a read resets it to -1 (absent).
     pub blackboard: HashMap<(u8, usize), i32>,
     pub items: HashMap<u16, u32>,
@@ -1116,6 +1120,27 @@ pub fn objects_scripted(pack: u32) -> bool {
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
+/// The transition-map trigger routines (SPEC-0032 685 and 1255; SPEC-0042 696; SPEC-0043 1122;
+/// SPEC-0045 1098) and the map area each one registers.
+fn transition_map(pack: u32, routine: u8) -> Option<i32> {
+    Some(match (pack, routine) {
+        (685, 0) => 54,
+        (685, 1) => 43,
+        (1255, 0 | 1) => 5,
+        (1255, 2) => 7,
+        (696, 4) => 64,
+        (696, 5) => 73,
+        (696, 6) => 21,
+        (696, 7) => 37,
+        (1122, 1) => 50,
+        (1122, 2) => 51,
+        (1122, 3) => 52,
+        (1098, 7) => 48,
+        (1098, 8) => 49,
+        _ => return None,
+    })
+}
+
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
@@ -1851,10 +1876,24 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0043 1122 Init: trigger 5 (the waves); objects by 31 and 320; the slot thread (31:
         // set 0, 30: 1, else 2; region 1123 + set) into slot 0; with 31 trigger 6 (the arena
-        // entry). Triggers 0 to 3 (ActivateTransitionAssets, RegisterTransitionMap) are not
-        // built; the navmesh table runs in Update.
+        // entry); triggers 1 to 3 set the transition maps 50 to 52 (trigger 0's
+        // ActivateTransitionAssets is not built); the navmesh table runs in Update.
+        // SPEC-0032 685: triggers 0 and 1 set the transition maps 54 and 43.
+        685 => vec![reg(0, 0), reg(1, 1)],
+        // SPEC-0032 1255: flag 274 set when 273 is set and 274 clear; triggers 4 and 3 (TM5), 4
+        // again (TM5b, replacing) and 5 (TM5b), 0 and 1 (TM7).
+        1255 => {
+            if state.flag(273) && !state.flag(274) {
+                state.set(274, true);
+            }
+            vec![reg(4, 0), reg(3, 0), reg(4, 1), reg(5, 1), reg(0, 2), reg(1, 2)]
+        }
+        // SPEC-0042 696, partly: the transition-map triggers (4: 64; 5 and 8: 73; 6: 21; 7: 37),
+        // registered on every path. Not built: trigger 0's line, object 0, the prompt trigger 9,
+        // triggers 1 to 3 and the effect stops.
+        696 => vec![reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)],
         1122 => {
-            let mut v = vec![reg(5, 5)];
+            let mut v = vec![reg(5, 5), reg(1, 1), reg(2, 2), reg(3, 3)];
             if state.flag(31) {
                 v.extend([Action::InitObjOn { obj: 2, end: false }, Action::InitObjOn { obj: 4, end: state.flag(320) }, reg(6, 6)]);
             } else {
@@ -5756,6 +5795,11 @@ fn clogs_1171(state: &mut GameState) -> u16 {
 pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameState) -> TriggerOut {
     let mut out = TriggerOut::default();
     let first = call.state == 1 && call.object;
+    // RegisterTransitionMap routines: any call for the trigger sets the map (no state test).
+    if let Some(m) = transition_map(pack, routine) {
+        state.transition_map = Some(m);
+        return out;
+    }
     match (pack, routine) {
         // SPEC-0045 991 trigger routine A (crowd zones 0 to 2: triggers 4, 5 and the group's
         // trigger), on an entering fire: the crowd set (2 with 86 clear; 1 with 86, 299 and 414
@@ -11586,7 +11630,8 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
     if castle_stage(state) == 31 {
         state.set_word(1098, 0, 1);
     }
-    let mut out = vec![reg(0, 1)];
+    // Triggers 7 and 8 set the transition maps 48 and 49 (registered in every case).
+    let mut out = vec![reg(0, 1), reg(7, 7), reg(8, 8)];
     let (f30, f31) = (state.flag(30), state.flag(31));
     if !f30 && !f31 {
         out.extend([reg(1, 2), reg(11, 11), reg(12, 12), reg(14, 14)]);
@@ -14099,6 +14144,30 @@ mod tests {
         let v = on_update(1122, &mut s, false);
         assert!(v.contains(&Action::NavmeshAssign { entity: 9, mesh: 4 }) && v.contains(&Action::NavmeshAssign { entity: 18, mesh: 1 }));
         assert!(!v.iter().any(|a| matches!(a, Action::NavmeshAssign { entity: 10, .. })));
+    }
+
+    #[test]
+    fn transition_maps() {
+        let mut s = GameState::default();
+        let reg = |index, routine| Action::RegisterTrigger { index, routine };
+        // 1255: flag 274 follows 273; index 4 is registered twice (TM5, then TM5b).
+        s.set(273, true);
+        assert_eq!(on_init(1255, &mut s), vec![reg(4, 0), reg(3, 0), reg(4, 1), reg(5, 1), reg(0, 2), reg(1, 2)]);
+        assert!(s.flag(274));
+        assert_eq!(s.transition_map, None);
+        // Any call for the trigger sets the map, with no state test; a later one replaces it.
+        let call = TriggerCall { index: 0, state: 0, object: false, square: false };
+        on_trigger(1255, 2, call, &mut s);
+        assert_eq!(s.transition_map, Some(7));
+        on_trigger(1122, 3, call, &mut s);
+        assert_eq!(s.transition_map, Some(52));
+        on_trigger(696, 5, call, &mut s);
+        assert_eq!(s.transition_map, Some(73));
+        // 685 and 1098 register their map triggers.
+        assert_eq!(on_init(685, &mut s), vec![reg(0, 0), reg(1, 1)]);
+        assert!(on_init(1098, &mut GameState::default()).iter().take(3).eq([reg(0, 1), reg(7, 7), reg(8, 8)].iter()));
+        on_trigger(1098, 8, call, &mut s);
+        assert_eq!(s.transition_map, Some(49));
     }
 
     #[test]
