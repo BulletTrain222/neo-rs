@@ -2186,6 +2186,10 @@ impl Play {
                 Action::ActivateTimer { start, limit, up } => self.state.timer.activate(start, limit, up),
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
+                Action::LongFall => {
+                    self.attack = None;
+                    self.loco.long_fall_start();
+                }
                 Action::InitMortog { target, centre, edge, hold } => {
                     // SPEC-0030 row 84: both locators must exist; the zone count starts at 0.
                     if let (Some((a, _)), Some((b, _))) = (self.locator(pack, centre), self.locator(pack, edge)) {

@@ -410,6 +410,13 @@ impl Locomotion {
         self.state = state;
     }
 
+    /// StartHeroLongFall (SPEC-0030 row 280): the hero enters the long fall (state 48) with its
+    /// velocity kept; no health change.
+    pub fn long_fall_start(&mut self) {
+        self.state = LONG_FALL;
+        self.request = ANIM_LONG_FALL;
+    }
+
     /// SPEC-0036 Knockback on the hero: the velocity is replaced and the hero enters the long
     /// fall (state 48, SPEC-0033 Behavior 9B).
     pub fn knock(&mut self, velocity: Vec3) {
