@@ -471,6 +471,10 @@ pub struct Character {
     pub pending_hit: Option<i32>,
     /// The Werelupe King controller (behaviour class 32; SPEC-0019).
     pub king: Option<neopets_sim::werelupe::King>,
+    /// The Ixi Chief's controller (SPEC-0014; class 11) and the summed damage of the hero shots
+    /// that hit it this tick (its melee hit is `pending_hit`).
+    pub ixi: Option<neopets_sim::ixi::Ixi>,
+    pub pending_shot: Option<i32>,
     /// A Faerie Sister's controller (behaviour classes 13, 15 and 16; SPEC-0011) and the hero's
     /// hit on her this tick (damage, and whether it was a shot).
     pub sister: Option<neopets_sim::sisters::Sister>,
@@ -722,6 +726,7 @@ pub struct Play {
     drain: Option<(neopets_sim::sisters::Drain, usize, Vec<(usize, [f32; 3])>)>,
     drain_words: neopets_sim::sisters::DrainWords,
     draik_words: neopets_sim::draik::Words,
+    ixi_words: neopets_sim::ixi::Words,
     faerie_words: neopets_sim::darkest::Words,
     reserves: Vec<Reserve>,
     /// The duel's shared slots (SPEC-0029 Behavior 19), its words, and the loop-B summons.
@@ -1155,6 +1160,7 @@ impl Play {
         let drain_words = neopets_sim::sisters::DrainWords::read(&words(neopets_sim::sisters::DRAIN_WORDS, 7)?, &words(neopets_sim::sisters::DRAIN_TABLE, 14)?).ok_or("The drain words are short")?;
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
+        let ixi_words = neopets_sim::ixi::Words::read(&words(neopets_sim::ixi::BASE, neopets_sim::ixi::WORDS)?).ok_or("The Ixi Chief's tuning block is short")?;
         let mortog_words = neopets_sim::mortog::Words::read(&words(neopets_sim::mortog::BASE, neopets_sim::mortog::WORDS)?).ok_or("The Mortog words are short")?;
         let serpent_words = neopets_sim::serpent::Words::read(&words(neopets_sim::serpent::BASE, neopets_sim::serpent::WORDS)?).ok_or("The Plague Serpent's tuning block is short")?;
         let duel_words = neopets_sim::fyora::Words::read(&words(neopets_sim::fyora::WORDS, 2)?).ok_or("The duel words are short")?;
@@ -1373,6 +1379,7 @@ impl Play {
             drain: None,
             drain_words,
             draik_words,
+            ixi_words,
             faerie_words,
             reserves: Vec::new(),
             duel: [None; 4],
@@ -4287,6 +4294,16 @@ impl Play {
             c.pending_hit = Some(damage);
             return;
         }
+        // SPEC-0014 Incoming hits: the Ixi Chief's controller applies the hit (the hold, lava and
+        // death take none; a melee hit and the summed shots reach it separately).
+        if let Some(c) = self.characters.get_mut(i).filter(|c| c.ixi.is_some()) {
+            if by.contains("shot") {
+                c.pending_shot = Some(c.pending_shot.unwrap_or(0) + damage.max(0));
+            } else {
+                c.pending_hit = Some(damage.max(0));
+            }
+            return;
+        }
         // SPEC-0016: the Plague Serpent takes a hit only as its stun strike (its own controller).
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.serpent.is_some()) {
             c.serpent_hit = Some((damage, by.contains("shot")));
@@ -4551,7 +4568,7 @@ impl Play {
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
             .filter(|c| self.fight_target.as_ref().is_none_or(|n| *n == c.name))
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.ixi.as_ref().is_some_and(|k| k.state != neopets_sim::ixi::State::Death) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -4684,7 +4701,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 12 | 14 | 21 | 32 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 11 | 12 | 14 | 21 | 32 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -4711,6 +4728,8 @@ impl Play {
                 gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
                 pending_hit: None,
                 king: row.filter(|r| r.class == Some(32)).map(|_| neopets_sim::werelupe::King::new(position)),
+                ixi: row.filter(|r| r.class == Some(11)).map(|_| neopets_sim::ixi::Ixi::new(neopets_sim::ixi::fight_mode(self.state.flag(358), self.state.flag(60)), &self.ixi_words)),
+                pending_shot: None,
                 sister: row.and_then(|r| r.class).filter(|c| matches!(c, 13 | 15 | 16)).map(|c| neopets_sim::sisters::Sister::new(c as u8)),
                 sister_hit: None,
                 draik: row.filter(|r| r.class == Some(12)).map(|_| neopets_sim::draik::Draik::new(&self.draik_words, &mut self.rng)),
@@ -4827,6 +4846,8 @@ impl Play {
             gnarfas: None,
             pending_hit: None,
             king: None,
+            ixi: None,
+            pending_shot: None,
             sister: None,
             sister_hit: None,
             draik: None,
@@ -6105,6 +6126,7 @@ impl Play {
         self.boss_step();
         self.gnarfas_step();
         self.king_step();
+        self.ixi_step();
         self.sisters_step();
         self.draik_step();
         self.faerie_step();
@@ -7123,6 +7145,149 @@ impl Play {
     /// flag 273). The reach test's weapon cylinder (radius 2.5, length 7.0, from 1.5 behind the
     /// anchor) is taken from a chest-high anchor along the facing, since the anchor is not given;
     /// the hero's body records are taken as one 1.0 by 3.5 upright cylinder.
+    /// SPEC-0014 per tick for the Ixi Chief (class 11) in the current world: the view (the hero's
+    /// attack, guard and state; the missile contact of a hero shot's 120-tick path with the boss's
+    /// body; the hits it took; the monster weapon tests of attach points 0 to 4 on the clip's
+    /// event bits; the navigation check against its mesh; the level flags), then the controller's
+    /// clip, facing, travel by its locomotion mode on the clip's root motion, hits, push, level
+    /// flags, HP loss and hit flash (effect 222).
+    fn ixi_step(&mut self) {
+        use neopets_sim::combat::Cylinder;
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.ixi.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let hplace = placement(hero, hf);
+        let hframes = self.hero.bone_frames();
+        let caps: Vec<Cylinder> = self
+            .hero
+            .bones()
+            .hurt
+            .iter()
+            .zip(&hframes)
+            .filter(|(h, _)| h.1 > 0.0)
+            .map(|(&(base, length, radius), f)| {
+                let w = hplace.mul(f);
+                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+            })
+            .collect();
+        let st = self.loco.state;
+        let attacking = self.attack.is_some() || self.r_attack.is_some();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let world = &self.world;
+            let c = &mut self.characters[i];
+            let (radius, height) = c.row.map_or((1.5, 3.5), |r| (r.radius, r.height.max(1.0)));
+            let body = Cylinder { center: add(c.position, [0.0, 0.5 * height, 0.0]), axis: UP, radius, length: height };
+            let missile_contact = self.hero_shots.iter().any(|s| {
+                let end = add(s.position, scale(s.dir, s.speed * 120.0));
+                neopets_sim::combat::segment_meets(s.position, end, &Cylinder { radius: radius + s.radius, ..body })
+            });
+            let place = placement(c.position, c.facing);
+            let frames = c.anim.bone_frames();
+            let bits = c.anim.frame_bits();
+            let weapons: [bool; 5] = std::array::from_fn(|n| {
+                if bits & (1 << n) == 0 {
+                    return false;
+                }
+                let Some(&(Some(b), angles, offset)) = c.anim.bones().attach.get(n) else { return false };
+                let Some(bw) = frames.get(b) else { return false };
+                let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+                let (r, length) = c.weapons[n];
+                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius: r, length };
+                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+            });
+            let mesh = c.walker.as_ref().and_then(|wk| wk.mesh).and_then(|m| world.navmeshes.get(m));
+            let valid = |p: [f32; 3]| mesh.is_none_or(|m| m.locate_full(p).is_some());
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::ixi::View {
+                position: c.position,
+                facing: c.facing,
+                hero,
+                hero_facing: hf,
+                hero_attacking: attacking,
+                hero_guard: st == hero_states::GUARD,
+                hero_state: st,
+                hp: c.hp,
+                max_hp: c.row.map_or(1, |r| r.hit_points as i32),
+                missile_contact,
+                melee_hit: c.pending_hit.take(),
+                shot_hit: c.pending_shot.take(),
+                weapons,
+                frame_bits: bits,
+                clip: (clip.action, clip.progress >= 0.99),
+                blocked: c.walker.as_ref().is_some_and(|wk| wk.blocked),
+                hero_knocked: st == hero_states::LONG_FALL,
+                valid: &valid,
+                level: &level,
+            };
+            let Some(k) = c.ixi.as_mut() else { continue };
+            let before = k.state;
+            let act = k.tick(&v, &self.ixi_words, &mut self.rng);
+            let after = k.state;
+            if let Some(a) = act.anim {
+                if clip.action != a || (clip.progress >= 0.99 && std::mem::discriminant(&before) != std::mem::discriminant(&after)) {
+                    c.anim.play(a);
+                }
+            }
+            if let Some(rate) = act.face {
+                let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
+                c.facing = neopets_sim::hero::steer(c.facing, to, rate);
+            }
+            if let Some((mode, target)) = act.travel {
+                let m = [target[0] - c.position[0], 0.0, target[2] - c.position[2]];
+                if m[0] != 0.0 || m[2] != 0.0 {
+                    let (dir, w) = match mode {
+                        5 | 6 => {
+                            let p = if mode == 5 { [m[2], 0.0, -m[0]] } else { [-m[2], 0.0, m[0]] };
+                            let l = p[0].hypot(p[2]).max(1e-6);
+                            (p, if (c.facing[0] * p[0] + c.facing[2] * p[2]) / l > 0.9 { 1.0 } else { 0.1 })
+                        }
+                        _ => (m, 0.2),
+                    };
+                    c.facing = neopets_sim::hero::steer(c.facing, dir, w);
+                }
+            }
+            // The boss moves only by its clip's root travel (SPEC-0014 Movement).
+            let ground = &world.ground;
+            if let Some(wk) = c.walker.as_mut() {
+                wk.facing = c.facing;
+                wk.lock = neopets_sim::ixi::height_lock(c.position[1], hero[1]);
+                wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                c.position = wk.position();
+            }
+            c.hp -= act.hp_loss.max(0);
+            if std::mem::discriminant(&before) != std::mem::discriminant(&after) {
+                self.last_boss = format!("Ixi Chief {:?} -> {:?} (hp {}, mode {}) on tick {}", before, after, c.hp, k.mode, self.ticks);
+            }
+            let from = c.position;
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            if act.flash {
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, 222, add(from, [0.0, 2.0, 0.0]), neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            let d = {
+                let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                [dx / l, 0.0, dz / l]
+            };
+            if let Some((damage, blocked)) = act.hero_damage {
+                self.hero_hit(damage as f32, 0.0, blocked, d, "the Ixi Chief".into());
+            }
+            if let Some(p) = act.push {
+                self.attack = None;
+                self.loco.knock(p);
+            }
+        }
+    }
+
     fn king_step(&mut self) {
         let pack = self.world.pack;
         let hero = self.loco.position();
