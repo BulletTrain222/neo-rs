@@ -174,6 +174,10 @@ pub struct Flow {
     /// The card message on screen, the table-9 records, the substitution slots (0: the card
     /// slot "1"; 1: the needed KB) and the busy hold in passes.
     pub card: Option<CardBox>,
+    /// The pause page's quit box is open (SPEC-0035 Behavior 2, states 6 and 7): its record 26
+    /// shows in `card`, and the input block hides the menu words from the focus states and
+    /// the generic step.
+    pub quit_box: bool,
     pub messages: Vec<neopets_data::design::Message>,
     pub slots: Vec<Vec<u8>>,
     pub busy_hold: u32,
@@ -258,7 +262,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -404,6 +408,12 @@ impl Flow {
             self.show(6, false);
             self.picker.stage = S_FAILED;
         }
+    }
+
+    /// Open the pause page's quit box (record 26 of the system message table).
+    pub fn open_quit_box(&mut self) {
+        self.quit_box = true;
+        self.show(26, false);
     }
 
     /// Open a card message: a busy record, or a question.
@@ -581,6 +591,33 @@ impl Flow {
                 }
                 // Play's own buttons belong to the hero; the HUD page has no menu items.
                 generic = false;
+            }
+            // The pause page. While its quit box is open the box takes Circle (Quit: cue 0x98,
+            // the world teardown, record 0) or Triangle (Resume: cue 0x99, the box closes and
+            // the page stays), Square pages it, and the input block holds everything else.
+            7 if self.quit_box => {
+                let mut answer = None;
+                if let Some(c) = self.card.as_mut() {
+                    c.text.update(false, edge & SQUARE != 0);
+                    answer = c.text.choose(edge & CIRCLE != 0, edge & TRIANGLE != 0);
+                }
+                if let Some(a) = answer {
+                    self.card = None;
+                    self.quit_box = false;
+                    if a == 1 {
+                        self.sounds.push(0x98);
+                        command = Some(Command::Quit);
+                        result = Some(CARD);
+                    } else {
+                        self.sounds.push(0x99);
+                    }
+                }
+                // The answer's pass is still blocked.
+                match result {
+                    Some(r) => self.enter(fe, r, ctx),
+                    None => self.pass = (self.pass + 1).min(9999),
+                }
+                return command;
             }
             7 if second & SELECT != 0 => result = Some(PLAY),
             8..=10 => {
@@ -799,9 +836,11 @@ impl Flow {
             }
             match focus_state {
                 5 if second & CROSS != 0 => result = Some(PLAY),
-                6 if second & CROSS != 0 => {
-                    command = Some(Command::Quit);
-                    result = Some(CARD);
+                // Quit opens the quit box (cue 0x9A); its answer is taken by the pause state.
+                6 if second & CROSS != 0 && self.current == PAUSE => {
+                    self.sounds.push(0x9A);
+                    self.open_quit_box();
+                    generic = false;
                 }
                 _ => {}
             }
@@ -1294,6 +1333,36 @@ mod tests {
         assert_eq!(flow.current, GAME_OVER);
         flow.tick(&f, 0, 0, &Ctx { game_over: false });
         assert_eq!(flow.current, PLAY);
+    }
+
+    #[test]
+    fn quit_box() {
+        let mut f = fe();
+        f.screens[PAUSE] = Screen { node: Some(6), back: -1, state: 7 };
+        let mut flow = Flow::new(&f);
+        flow.messages = vec![neopets_data::design::Message { text: b"Quit?".to_vec(), labels: [Some(b"Quit".to_vec()), Some(b"Resume".to_vec())], colour: [128; 3] }; 27];
+        let ctx = Ctx::default();
+        flow.set(&f, PAUSE);
+        // The box as the Quit item opens it (record 26).
+        let open = |flow: &mut Flow| {
+            flow.open_quit_box();
+            while !flow.card.as_ref().is_some_and(|c| c.text.asking()) {
+                flow.tick(&f, SQUARE, 0, &ctx);
+            }
+        };
+        open(&mut flow);
+        // Select is blocked while it is open.
+        flow.tick(&f, SELECT, SELECT, &ctx);
+        assert_eq!((flow.current, flow.quit_box), (PAUSE, true));
+        // Triangle: cue 0x99, the box closes, the pause page stays.
+        flow.sounds.clear();
+        assert_eq!(flow.tick(&f, TRIANGLE, TRIANGLE, &ctx), None);
+        assert_eq!((flow.current, flow.quit_box, flow.card.is_none(), flow.sounds.clone()), (PAUSE, false, true, vec![0x99]));
+        // Circle: cue 0x98, the teardown command and record 0.
+        open(&mut flow);
+        flow.sounds.clear();
+        assert_eq!(flow.tick(&f, CIRCLE, CIRCLE, &ctx), Some(Command::Quit));
+        assert_eq!((flow.current, flow.quit_box, flow.sounds.clone()), (CARD, false, vec![0x98]));
     }
 
     /// Run passes until the flow emits a command (or a limit).

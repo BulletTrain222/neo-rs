@@ -1227,6 +1227,14 @@ fn step_sim(
             if std::mem::take(&mut play.play.reload_wanted) {
                 pending = play.play.snapshot.clone();
             }
+            // NEOPETS_TRACE_QUITBOX=n: the pause page with its quit box open on play tick n
+            // (diagnostic, for a screenshot).
+            if std::env::var("NEOPETS_TRACE_QUITBOX").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
+                if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                    m.flow.set(&a.f, menus::PAUSE);
+                    m.flow.open_quit_box();
+                }
+            }
             // NEOPETS_TRACE_QUIT=n also works in the window: Quit's teardown on play tick n of
             // the first game, then play again at once (the front end's pages are skipped).
             if play.play.generation == 0 && std::env::var("NEOPETS_TRACE_QUIT").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.play.ticks) {
