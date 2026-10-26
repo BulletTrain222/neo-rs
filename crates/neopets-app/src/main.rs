@@ -2341,6 +2341,19 @@ fn play_trace(
             last_swap = play.last_swap.clone();
             println!("      {last_swap}");
         }
+        // NEOPETS_TRACE_STATUS="code,seconds": the status on the hero at tick 60, and the hero's
+        // colour-slot vector every 15 ticks while it is not white.
+        if let Some((code, secs)) = std::env::var("NEOPETS_TRACE_STATUS").ok().and_then(|v| {
+            let (a, b) = v.split_once(',')?;
+            Some((a.trim().parse::<i32>().ok()?, b.trim().parse::<i32>().ok()?))
+        }) {
+            if play.ticks == 60 {
+                play.statuses.apply(code, secs);
+            }
+            if let Some(t) = play.status_tint(None).filter(|_| play.ticks % 15 == 0) {
+                println!("      hero tint ({:.3}, {:.3}, {:.3}) on tick {}", t[0], t[1], t[2], play.ticks);
+            }
+        }
         // NEOPETS_TRACE_SWITCH="tick,...": the chord (L1 held, R1 newly pressed) on those ticks.
         if switch_at.contains(&(play.ticks + 1)) {
             play.l1_latch = true;

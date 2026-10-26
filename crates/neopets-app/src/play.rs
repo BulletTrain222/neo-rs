@@ -643,6 +643,8 @@ pub struct Play {
     /// Status displays by character (the hero is u64::MAX): the display, its effect object and
     /// last tick's active statuses.
     displays: HashMap<u64, (neopets_sim::status::Display, Option<usize>, [bool; 14])>,
+    /// Colour-override slot 0 per display (SPEC-0046 draw step 6; SPEC-0034 section 21).
+    overrides: HashMap<u64, neopets_sim::status::Override>,
     /// The resident worlds' foliage (SPEC-0060), by pack.
     pub foliage: HashMap<u32, Vec<LivePatch>>,
     /// Region characters of the resident worlds, the region each (pack, slot) should hold, and
@@ -969,6 +971,7 @@ impl Play {
             wheel_spin: None,
             display_mask: HashMap::new(),
             displays: HashMap::new(),
+            overrides: HashMap::new(),
             foliage: HashMap::new(),
             attack: None,
             attack_latch: false,
@@ -5101,6 +5104,7 @@ impl Play {
         let live: std::collections::HashSet<u64> = who.iter().map(|w| w.0).collect();
         let gone: Vec<u64> = self.displays.keys().filter(|k| !live.contains(k)).copied().collect();
         for k in gone {
+            self.overrides.remove(&k);
             if let Some((_, Some(h), _)) = self.displays.remove(&k) {
                 self.effects.stop(&table, h);
                 self.effects.release(h);
@@ -5123,6 +5127,29 @@ impl Play {
                 self.effects.one_shot(&table, neopets_sim::status::STUN_END_EFFECT, at, neopets_sim::effect::IDENTITY, &mut self.rng);
             }
             changed |= d.tick(&|c: i32| active.get(c as usize).copied().unwrap_or(false));
+            // Colour-override slot 0: cleared when the shown status changes; the stun start sets
+            // it once in mode 0; the tint step of codes 1 to 5 and 7 sets it in mode 1 (cleared
+            // when the capped colour is white); one blend tick, with the region character's
+            // per-tick colour push (the hero has none).
+            let o = self.overrides.entry(id).or_default();
+            if changed {
+                o.clear();
+                // Deviation (R-0052): the hero's colour is restored to white at the clear;
+                // read literally, it would keep the drifted colour, as it has no push.
+                if id == Self::HERO_DISPLAY {
+                    o.colour = [1.0; 3];
+                }
+            }
+            if active[0] && !prev[0] {
+                o.set(neopets_sim::status::STUN_TINT, 0);
+            }
+            if matches!(d.shown, 1..=5 | 7) {
+                match neopets_sim::status::tint(d.shown, if id == Self::HERO_DISPLAY { self.hero_index } else { 0 }) {
+                    Some(t) => o.set(t, 1),
+                    None => o.clear(),
+                }
+            }
+            o.tick((id != Self::HERO_DISPLAY).then_some([1.0; 3]));
             let point = if d.shown == 1 { [at[0], at[1] + 1.5, at[2]] } else { at };
             if changed {
                 if let Some(old) = h.take() {
@@ -5222,10 +5249,11 @@ impl Play {
         self.foliage.get(&pack).and_then(|p| p.get(i)).is_none_or(|p| p.on)
     }
 
-    /// The steady status tint of the hero (None) or a character (SPEC-0034 5.4).
+    /// The colour-slot vector of the hero (None) or a character (SPEC-0034 5.4 and section 21):
+    /// its colour-override slot 0's stored colour, None while it is white.
     pub fn status_tint(&self, id: Option<u64>) -> Option<[f32; 3]> {
-        let (d, ..) = self.displays.get(&id.unwrap_or(Self::HERO_DISPLAY))?;
-        neopets_sim::status::tint(d.shown, if id.is_none() { self.hero_index } else { 0 })
+        let o = self.overrides.get(&id.unwrap_or(Self::HERO_DISPLAY))?;
+        (o.colour != [1.0; 3]).then_some(o.colour)
     }
 
     /// StartEffect (SPEC-0030 row 6; SPEC-0034 section 6): placed record `slot` of world `pack`

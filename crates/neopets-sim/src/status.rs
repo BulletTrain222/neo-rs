@@ -203,6 +203,68 @@ pub fn tint(code: i32, hero: usize) -> Option<[f32; 3]> {
     (t != [1.0; 3]).then_some(t)
 }
 
+/// The stun start's steady tint target (SPEC-0034 5.4; mode 0, not capped).
+pub const STUN_TINT: [f32; 3] = [0.0, 0.5, 1.7];
+
+/// The triangle fraction of a 60-tick counter (SPEC-0034 21.2): t / 30 for t = counter mod 60
+/// up to 30, (60 - t) / 30 above.
+pub fn triangle(counter: i32) -> f32 {
+    let t = counter.rem_euclid(60);
+    if t <= 30 { t as f32 / 30.0 } else { (60 - t) as f32 / 30.0 }
+}
+
+/// Colour-override slot 0 of a character's render object (SPEC-0046 draw step 6; SPEC-0034
+/// section 21): the reference colour, the mode (counter-enable word), the counter and the
+/// stored colour-slot vector it blends (kept between ticks; 1.0 for white slot records).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Override {
+    pub on: bool,
+    pub target: [f32; 3],
+    pub mode: u8,
+    pub counter: i32,
+    pub colour: [f32; 3],
+}
+
+impl Default for Override {
+    fn default() -> Self {
+        Self { on: false, target: [1.0; 3], mode: 0, counter: 0, colour: [1.0; 3] }
+    }
+}
+
+impl Override {
+    /// The slot-0 set: a slot that is not on starts its counter at 0 in mode 1, 30 otherwise.
+    pub fn set(&mut self, target: [f32; 3], mode: u8) {
+        if !self.on {
+            self.counter = if mode == 1 { 0 } else { 30 };
+        }
+        self.on = true;
+        self.target = target;
+        self.mode = mode;
+    }
+
+    pub fn clear(&mut self) {
+        self.on = false;
+    }
+
+    /// One tick: `base` is the colour push of a region character (every tick; the hero has
+    /// none, so its stored colour accumulates); the counter rises in mode 1; while the slot is
+    /// on the stored colour becomes (1 - f) x itself + f x the target.
+    pub fn tick(&mut self, base: Option<[f32; 3]>) {
+        if let Some(b) = base {
+            self.colour = b;
+        }
+        if self.mode == 1 {
+            self.counter = self.counter.wrapping_add(1);
+        }
+        if self.on {
+            let f = triangle(self.counter);
+            for k in 0..3 {
+                self.colour[k] = (1.0 - f) * self.colour[k] + f * self.target[k];
+            }
+        }
+    }
+}
+
 /// A character's status display: the shown status (-1 none) and the 240-tick rotation timer.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Display {
@@ -256,6 +318,37 @@ impl Display {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn override_slot_pulses_and_holds() {
+        // SPEC-0046: mode 1 at counter 0, 15, 30, 45, 60 gives w = 0, 0.5, 1, 0.5, 0.
+        assert_eq!([0, 15, 30, 45, 60].map(triangle), [0.0, 0.5, 1.0, 0.5, 0.0]);
+        // A region character (pushed to white every tick) shows the triangle weight itself.
+        let mut o = Override::default();
+        o.set([0.2, 1.0, 0.6], 1);
+        for _ in 0..15 {
+            o.tick(Some([1.0; 3]));
+        }
+        assert!((o.colour[0] - 0.6).abs() < 1e-6 && o.counter == 15);
+        // Setting an active slot again does not reset the counter.
+        o.set([0.2, 1.0, 0.6], 1);
+        assert_eq!(o.counter, 15);
+        // Mode 0 holds f = 1: the colour is the target on the first tick.
+        let mut stun = Override::default();
+        stun.set(STUN_TINT, 0);
+        stun.tick(None);
+        assert_eq!((stun.counter, stun.colour), (30, STUN_TINT));
+        // Without a push the stored colour accumulates and stays after the clear.
+        let mut hero = Override::default();
+        hero.set([0.0; 3], 1);
+        hero.tick(None);
+        hero.tick(None);
+        let kept = hero.colour;
+        hero.clear();
+        hero.tick(None);
+        assert_eq!(hero.colour, kept);
+        assert!(kept[0] < 1.0 - 1.0 / 30.0);
+    }
 
     #[test]
     fn immunities_block_and_clear() {
