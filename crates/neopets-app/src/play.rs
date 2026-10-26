@@ -40,6 +40,8 @@ pub struct World {
     /// The placed objects (type 29) with their motion streams and script states (SPEC-0028
     /// section 7.1), by object index.
     pub objects: Vec<Option<neopets_data::world::Object>>,
+    /// The world breakables (type-29 second list, SPEC-0048), each with its live state word.
+    pub breakables: Vec<neopets_data::world::Breakable>,
     pub motions: Vec<neopets_sim::object::Motion>,
     pub object_anims: Vec<neopets_sim::object::ObjAnim>,
     /// The foliage patches (type 16) and the registry ids of the pack's type-8 children.
@@ -174,6 +176,7 @@ impl World {
                     .collect(),
             }),
             objects: Vec::new(),
+            breakables: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
@@ -232,6 +235,10 @@ impl World {
         };
         let mut world = world;
         world.objects = neopets_data::world::objects(&bytes, &chain.chunks);
+        // SPEC-0048 Start mode and reset: an entry keeps its pack state (1 on disc) at each load;
+        // modes 1 and 2 apply only to an entry whose broken bit is set, and no disc entry has
+        // them, so nothing changes here.
+        world.breakables = neopets_data::world::breakables(&bytes, &chain.chunks);
         world.motions = world
             .objects
             .iter()
@@ -3524,6 +3531,10 @@ impl Play {
             }
             hits.push((i, damage));
         }
+        // Step 6: the breakable walk on every tick of the window.
+        let tip = add(p0, scale(axis, l));
+        let prev = d2.map_or(tip, |d| add(p0, scale(d, l)));
+        self.breakable_walk(p0, tip, prev);
         // SPEC-0036 Damage, take-hit: in the power step a status request of the word-2 Mote
         // also goes to the target (SPEC-0029 Behavior 27.1).
         let request = mote_id.filter(|_| sub == 10).and_then(|id| neopets_sim::mote::status_request(0, id, |k| self.design.attack_power(k)));
@@ -7136,6 +7147,74 @@ impl Play {
         pack != self.world.pack || self.zones.query(self.world.zones.as_ref(), c as i32, -1)
     }
 
+    /// A breakable's draw matrix while it is drawn: states 1 and 3 (SPEC-0048 Breakable draw).
+    pub fn breakable_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
+        let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+        let b = w.breakables.get(i)?;
+        matches!(b.state, 1 | 3).then_some(b.matrix)
+    }
+
+    /// SPEC-0048 Break routes, the hero melee route (SPEC-0036 Hit detection, step 6): each tick of
+    /// the window, the swing triangle (P0 and the current and previous-tick tips) against every
+    /// intact breakable's volume of the current world. A hit runs the element gate (the entry's
+    /// class 0 or 7, or the slot-2 Mote's kind), the break effect from state 1 and the contact
+    /// cue by material. The script hook, Tor's recoil on a mismatch, the spawn by key, the piece
+    /// spawns and the timed effect are not built.
+    fn breakable_walk(&mut self, p0: [f32; 3], tip: [f32; 3], prev: [f32; 3]) {
+        use neopets_sim::combat::{Cylinder, segment_distance, segment_meets};
+        let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
+        let edges = [(p0, tip), (p0, prev), (tip, prev)];
+        let pack = self.world.pack;
+        let mut broken = Vec::new();
+        let mut cues = Vec::new();
+        for (i, b) in self.world.breakables.iter_mut().enumerate() {
+            let Some(v) = b.volume else { continue };
+            if !matches!(b.state, 1 | 3) {
+                continue;
+            }
+            let hit = match v.kind {
+                1 => edges.iter().any(|&(a, c)| segment_distance(a, c, v.centre, v.centre) <= v.radius),
+                3 => {
+                    let cyl = Cylinder::from_base(v.centre, unit(v.axis), v.radius, v.height);
+                    edges.iter().any(|&(a, c)| segment_meets(a, c, &cyl))
+                }
+                4 | 7 => edges.iter().any(|&(a, c)| segment_box(a, c, v.centre, v.axes, v.extents)),
+                _ => false,
+            };
+            if !hit {
+                continue;
+            }
+            let e = b.element as i32;
+            if !(e == 0 || e == 7 || e == kind) {
+                continue;
+            }
+            if b.state == 1 {
+                b.state = 2;
+                broken.push((i, b.position(), b.drop));
+            }
+            cues.push(match b.material {
+                2 => 143,
+                3 => 145,
+                4 => 146,
+                _ => 144,
+            });
+        }
+        for (i, at, drop) in broken {
+            // Break effect step 2: the drop action for the placement (no luck gate).
+            let point = usize::try_from(drop).ok().and_then(|d| self.world.item_points.get(d).copied());
+            if point.is_some() {
+                self.payouts.push((pack, at, point));
+            }
+            self.last_pickup = format!("breakable {i} of {pack} broken on tick {}", self.ticks);
+            if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
+                println!("      breakable {i} of {pack} broken at {at:?} on tick {} (drop {drop})", self.ticks);
+            }
+        }
+        for c in cues {
+            self.cue(c);
+        }
+    }
+
     pub fn object_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
         let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
         let obj = w.objects.get(i)?.as_ref()?;
@@ -8762,4 +8841,33 @@ mod tests {
         assert_eq!(out, [160, 95, 52]);
         assert_eq!(s[0].map(|c| (128.0 * 1.25 * c) as u32), [160, 160, 160]);
     }
+}
+
+fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+    a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
+}
+
+/// A segment against an oriented box (origin, three axes, extents along them; the rectangle of
+/// SPEC-0018): the slab test in the box's frame.
+fn segment_box(a: [f32; 3], b: [f32; 3], origin: [f32; 3], axes: [[f32; 3]; 3], ext: [f32; 3]) -> bool {
+    let (mut t0, mut t1) = (0.0f32, 1.0f32);
+    for k in 0..3 {
+        let ax = unit(axes[k]);
+        let (pa, pb) = (dot(sub_v(a, origin), ax), dot(sub_v(b, origin), ax));
+        let (lo, hi) = (ext[k].min(0.0), ext[k].max(0.0));
+        let d = pb - pa;
+        if d.abs() < 1e-9 {
+            if pa < lo || pa > hi {
+                return false;
+            }
+        } else {
+            let (u, w) = ((lo - pa) / d, (hi - pa) / d);
+            t0 = t0.max(u.min(w));
+            t1 = t1.min(u.max(w));
+            if t0 > t1 {
+                return false;
+            }
+        }
+    }
+    true
 }

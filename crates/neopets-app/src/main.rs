@@ -839,6 +839,7 @@ fn main() {
             )
                 .chain(),
         );
+    app.add_systems(Update, sync_breakables.after(sync_objects));
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
@@ -1783,6 +1784,21 @@ enum WorldPart {
 struct ObjectRoot(u32, usize);
 
 /// Each frame: a placed object's root takes its drawn transform from the play, or hides.
+/// A drawn breakable, by (pack, entry index).
+#[derive(Component)]
+struct BreakableRoot(u32, usize);
+
+/// Breakables are drawn in states 1 and 3 with their own matrix (SPEC-0048 Breakable draw).
+fn sync_breakables(state: Option<Res<PlayState>>, mut roots: Query<(&BreakableRoot, &mut Visibility)>) {
+    let Some(state) = state else { return };
+    for (b, mut vis) in &mut roots {
+        let want = if state.play.breakable_matrix(b.0, b.1).is_some() { Visibility::Visible } else { Visibility::Hidden };
+        if *vis != want {
+            *vis = want;
+        }
+    }
+}
+
 fn sync_objects(state: Option<Res<PlayState>>, mut roots: Query<(&ObjectRoot, &mut Transform, &mut Visibility)>) {
     let Some(state) = state else { return };
     for (o, mut t, mut vis) in &mut roots {
@@ -1844,6 +1860,15 @@ fn sync_worlds(
             let built = index.read(disc, pack).and_then(|bytes| {
                 let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
                 let mut out = Vec::new();
+                let mut breakables = Vec::new();
+                for (i, b) in world.map_or(&[][..], |w| &w.breakables[..]).iter().enumerate() {
+                    let Some(tree) = b.mesh.clone() else { continue };
+                    if let Ok(m) = neopets_data::model::build_tree(&bytes, &chain.chunks, tree, layers) {
+                        if !m.parts.is_empty() {
+                            breakables.push((i, b.matrix, m));
+                        }
+                    }
+                }
                 for (i, o) in world.map_or(&[][..], |w| &w.objects[..]).iter().enumerate() {
                     let Some(tree) = o.as_ref().and_then(|o| o.tree.clone()) else { continue };
                     if let Ok(m) = neopets_data::model::build_tree(&bytes, &chain.chunks, tree, layers) {
@@ -1852,10 +1877,18 @@ fn sync_worlds(
                         }
                     }
                 }
-                Ok(out)
+                Ok((out, breakables))
             });
             match built {
-                Ok(list) => {
+                Ok((list, breakables)) => {
+                    for (i, matrix, m) in breakables {
+                        let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        commands.spawn((Transform::from_matrix(Mat4::from_cols_array(&matrix)), Visibility::Visible, BreakableRoot(pack, i), *part)).with_children(|c| {
+                            for (_, mesh, material) in parts {
+                                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            }
+                        });
+                    }
                     for (i, m) in list {
                         let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
                         commands.spawn((Transform::IDENTITY, Visibility::Visible, ObjectRoot(pack, i), *part)).with_children(|c| {
@@ -2556,6 +2589,14 @@ fn play_trace(
                 let d = c.enemy.as_ref().unwrap().p.defence;
                 println!("      defence {} (pack {}): {d:?}", c.name, c.pack);
             }
+        }
+        // NEOPETS_TRACE_BREAK: on tick 60 the current world's breakables (count, kinds of
+        // volume, the nearest three).
+        if play.ticks == 60 && std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
+            let hero = play.loco.position();
+            let mut near: Vec<(f32, usize, [f32; 3], Option<u8>, i32)> = play.world.breakables.iter().enumerate().map(|(i, b)| { let p = b.position(); (((p[0] - hero[0]).powi(2) + (p[2] - hero[2]).powi(2)).sqrt(), i, p, b.volume.map(|v| v.kind), b.state) }).collect();
+            near.sort_by(|a, b| a.0.total_cmp(&b.0));
+            println!("      breakables {} (meshes {}), nearest {:?}", play.world.breakables.len(), play.world.breakables.iter().filter(|b| b.mesh.is_some()).count(), &near[..near.len().min(3)]);
         }
         // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
         if std::env::var("NEOPETS_TRACE_DROP").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {

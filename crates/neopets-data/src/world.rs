@@ -169,6 +169,108 @@ pub fn objects(bytes: &[u8], top: &[Chunk]) -> Vec<Option<Object>> {
         .collect()
 }
 
+/// A breakable's type-11 volume record (SPEC-0048 +0x60; SPEC-0028 section 6): its kind byte
+/// (+0x10; 1 sphere, 3 cylinder, 4 and 7 rectangles), and the body fields the attack contact
+/// tests read (SPEC-0036 Hit detection, step 6): the centre or origin (+0x30), the radius in the
+/// fourth lane (+0x3C), the cylinder height (+0x24) and axis (+0x40), and for a rectangle its
+/// three axes (+0x60, +0x50, +0x40) and extents (+0x24).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Volume {
+    pub kind: u8,
+    pub centre: [f32; 3],
+    pub radius: f32,
+    pub height: f32,
+    pub axis: [f32; 3],
+    pub axes: [[f32; 3]; 3],
+    pub extents: [f32; 3],
+}
+
+/// A world breakable, an entry of the type-29 second list (SPEC-0048 Breakable entry).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Breakable {
+    /// The draw matrix (the entry's first 64 bytes, column-major); its translation is the break
+    /// position.
+    pub matrix: Matrix,
+    pub state: i32,
+    /// The mesh it draws (byte range of the pack): the inline type-12 chunk at +0x44, or the
+    /// near mesh of record +0x48 of the first type-20 chunk.
+    pub mesh: Option<Range<usize>>,
+    pub pieces: u32,
+    pub spawn_key: i16,
+    pub drop: i16,
+    pub script: i16,
+    pub break_float: i16,
+    pub material: i16,
+    pub element: u8,
+    pub start_mode: u8,
+    pub volume: Option<Volume>,
+}
+
+impl Breakable {
+    pub fn position(&self) -> [f32; 3] {
+        [self.matrix[12], self.matrix[13], self.matrix[14]]
+    }
+}
+
+/// The near mesh (the record's tree chunk) of record k of the first type-20 chunk.
+fn instance_tree(bytes: &[u8], top: &[Chunk], k: usize) -> Option<Range<usize>> {
+    let c = top.iter().find(|c| c.kind == INSTANCES)?;
+    let p = &bytes[c.payload.clone()];
+    if k >= u32_at(p, 0)? as usize {
+        return None;
+    }
+    let rec = u32_at(p, u32_at(p, 4)? as usize + 4 * k)? as usize;
+    inline_chunk(p, rec + RECORD_TREE_CHUNK).map(|r| c.payload.start + r.start..c.payload.start + r.end)
+}
+
+/// Every breakable of the first type-29 chunk: count at +0x08, offset table at +0x0C, each entry
+/// at its offset measured from the start of the table.
+pub fn breakables(bytes: &[u8], top: &[Chunk]) -> Vec<Breakable> {
+    let Some(c) = top.iter().find(|c| c.kind == PLACED_OBJECTS) else { return Vec::new() };
+    let p = &bytes[c.payload.clone()];
+    let base = c.payload.start;
+    let count = u32_at(p, 8).unwrap_or(0) as usize;
+    let table = u32_at(p, 0x0C).unwrap_or(0) as usize;
+    (0..count.min(MAX_OBJECTS))
+        .filter_map(|k| {
+            let e = table + u32_at(p, table + 4 * k)? as usize;
+            let i16_at = |o: usize| p.get(e + o..e + o + 2).map(|b| i16::from_le_bytes([b[0], b[1]]));
+            let f = |o: usize| u32_at(p, o).map(f32::from_bits);
+            let v3 = |o: usize| Some([f(o)?, f(o + 4)?, f(o + 8)?]);
+            let matrix = matrix_at(p, e)?;
+            let instance = u32_at(p, e + 0x48)? as i32;
+            let inline = u32_at(p, e + 0x44).filter(|&o| o != 0).and_then(|o| inline_chunk(p, e + o as usize)).map(|r| base + r.start..base + r.end);
+            let mesh = usize::try_from(instance).ok().and_then(|i| instance_tree(bytes, top, i)).or(inline);
+            let volume = u32_at(p, e + 0x60).filter(|&o| o != 0).and_then(|o| {
+                let r = e + o as usize;
+                Some(Volume {
+                    kind: *p.get(r + 0x10)?,
+                    centre: v3(r + 0x30)?,
+                    radius: f(r + 0x3C)?,
+                    height: f(r + 0x24)?,
+                    axis: v3(r + 0x40)?,
+                    axes: [v3(r + 0x60)?, v3(r + 0x50)?, v3(r + 0x40)?],
+                    extents: v3(r + 0x24)?,
+                })
+            });
+            Some(Breakable {
+                matrix,
+                state: u32_at(p, e + 0x40)? as i32,
+                mesh,
+                pieces: u32_at(p, e + 0x4C)?,
+                spawn_key: i16_at(0x54)?,
+                drop: i16_at(0x56)?,
+                script: i16_at(0x58)?,
+                break_float: i16_at(0x5A)?,
+                material: i16_at(0x5C)?,
+                element: *p.get(e + 0x5E)?,
+                start_mode: *p.get(e + 0x5F)?,
+                volume,
+            })
+        })
+        .collect()
+}
+
 /// Collect the drawable static scene of a world pack's top-level chain.
 pub fn scene(bytes: &[u8], top: &[Chunk]) -> Scene {
     let mut s = Scene::default();
@@ -192,6 +294,39 @@ pub fn scene(bytes: &[u8], top: &[Chunk]) -> Scene {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn breakable_entries() {
+        // A type-29 payload: no objects; one second-list entry at table + 0x10, with a sphere
+        // volume at entry + 0x80.
+        let mut p = vec![0u8; 0x200];
+        p[8..12].copy_from_slice(&1u32.to_le_bytes());
+        p[0x0C..0x10].copy_from_slice(&0x20u32.to_le_bytes());
+        p[0x20..0x24].copy_from_slice(&0x10u32.to_le_bytes());
+        let e = 0x30;
+        for (i, v) in [1.0f32, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 5.0, 6.0, 7.0, 1.0].iter().enumerate() {
+            p[e + 4 * i..e + 4 * i + 4].copy_from_slice(&v.to_le_bytes());
+        }
+        p[e + 0x40..e + 0x44].copy_from_slice(&1u32.to_le_bytes());
+        p[e + 0x48..e + 0x4C].copy_from_slice(&(-1i32).to_le_bytes());
+        p[e + 0x56..e + 0x58].copy_from_slice(&3i16.to_le_bytes());
+        p[e + 0x58..e + 0x5A].copy_from_slice(&9i16.to_le_bytes());
+        p[e + 0x5C..e + 0x5E].copy_from_slice(&4i16.to_le_bytes());
+        p[e + 0x60..e + 0x64].copy_from_slice(&0x80u32.to_le_bytes());
+        let r = e + 0x80;
+        p[r + 0x10] = 1;
+        for (i, v) in [1.0f32, 2.0, 3.0, 0.75].iter().enumerate() {
+            p[r + 0x30 + 4 * i..r + 0x34 + 4 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        let mut file = idm(PLACED_OBJECTS, &p);
+        file.extend(idm(0, &[]));
+        let chain = crate::resource::walk_chunks(&file, None).unwrap();
+        let b = breakables(&file, &chain.chunks);
+        assert_eq!(b.len(), 1);
+        assert_eq!((b[0].position(), b[0].state, b[0].drop, b[0].script, b[0].material, b[0].mesh.clone()), ([5.0, 6.0, 7.0], 1, 3, 9, 4, None));
+        let v = b[0].volume.unwrap();
+        assert_eq!((v.kind, v.centre, v.radius), (1, [1.0, 2.0, 3.0], 0.75));
+    }
 
     #[test]
     fn spec_placement_vector() {
