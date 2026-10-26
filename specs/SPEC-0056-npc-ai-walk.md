@@ -168,14 +168,13 @@ What reads the townsfolk flag:
 1. When the call's data pointer is not null, the 28 bytes of its data block are copied over the placement record's AI block (kind-3 data +0xBC to +0xD7). This happens on every call.
 2. If the code differs from the stored code, the code is stored and the mode is set to 0 directly. The mode setter is not used, so there is no remap and no timer draw. If the code is the same, only the block copy happens.
 3. New values act at their next use, for example at the next wander point.
-4. In the level scripts, SetAI_Behavior uses only codes 0, 5, 6 and 8.
-
+4. In the level scripts, SetAI_Behavior uses codes 0, 5, 6, 7 and 8. Code 7 is used once, by the road-fight intro of the module shared by packs 678, 686 and 691 (SPEC-0042): after the scene it sets entities 1 and 2, the two road enemies, to code 7 and then turns their aggression on.
 ### Mode from code (High)
 
 1. The behavior code starts as the placement record's code (kind-3 data +0x84). Every placement has one, and SetAI_Behavior replaces it.
 2. Each class-6 tick begins with a pre-step (see "Townsfolk routine"). While the mode is 0, the pre-step calls the mode setter with the code. So the mode becomes the code in the same tick, before the mode body runs.
 3. A code-0 character stays in mode 0. A character with code c is never in mode 0 when its mode body runs. It returns to c on the first tick after anything sets mode 0.
-4. On-disc codes of the 666 class-6 placements: code 0 in 414, code 6 in 121, code 7 in 67 (mostly guards and officials), code 5 in 51, code 10 in 6, code 9 in 5 and code 12 in 2. Codes 7, 9, 10 and 12 therefore come from the disc, not from scripts. No placement uses code 11.
+4. On-disc codes of the 666 class-6 placements: code 0 in 414, code 6 in 121, code 7 in 67 (mostly guards and officials), code 5 in 51, code 10 in 6, code 9 in 5 and code 12 in 2. Codes 7, 9, 10 and 12 therefore come from the disc for townsfolk, not from scripts (the one script use of code 7 is on two enemies). No placement uses code 11.
 5. Two other routines set the mode from the code: one sets mode 8 for code 8 and mode 0 otherwise, and one waits for animation 81 and then sets the code. Both belong to the common-enemy class 17 (its start-up and its mode 23; SPEC-0038). Neither runs for townsfolk.
 
 ### Mode 0 remap (High)

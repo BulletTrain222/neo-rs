@@ -1,6 +1,6 @@
 # SPEC-0013: Boss behavior: Gelert Assassin
 
-- Answers: proactive (none requested)
+- Answers: proactive (none requested); R-0067 (the approach, strafe and back-up clips, their root travel, and the dagger's hand attachment point); R-0068 (the address of every word in the ten-word melee/strafe group and the 23 shadow-slip bucket words, the light arc's two end objects and the path of its balls, and the mirror attack's lateral axis)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Tuning values and HP thresholds: High (taken from the boot program's data). Unused rows: High for the rows marked unused, including the invisible bucket, the just-appear-mirror word and the invisibility reappear pair. Ranges and chances in the decision rules: High for the numbers, Medium for their intent. Shadow-slip gate: High for the rules and for the source of its request (the navmesh blocked flag). Reappear and landing values: Medium-High (world units). Elapsed-time counter: High. Melee attacks (thrust lunge, sword swing, jump thrust, back-stab): High for the once-per-attack rule, the block test, the damage values (25, 20, 5, 5), the contact shape and the attack windows in frames; Medium for the exact first tick of each window and for the turn helper. Shadow thrust-lunge: unreachable (Medium-High). Rainbow dash (target points, visiting order, speed, hits per point) and light arc damage: High; light-arc hit shape: Medium. Heal arithmetic (including a negative heal): High. Missile and melee reactions: High for the rolls (the second roll is a fresh roll) and the contact shapes; Medium-High for the bone cylinder placement. Dagger throw and shadow dagger: High for the windup, the release event, the launch values (damage, radius, speed, lifetime) and the launch count. Settle and smoothing (4.14, the shared tracked-point rule defined in SPEC-0040): dormant in the shipped build. No state of this boss reaches it (High for the call graph; Medium overall). The rule's constants and steps: High for the 0.02 threshold (a fixed constant), the 0.15 blend, the settled flag and the second latch's set; Medium for the two-point count and the event 0x13 report. Other counters and the call-site details: Low (see Open questions). Sounds (animation cues, the silent clones, the unused die cue) and the code-started effects (heal aura 428, clone puff 559, flinch flash 222): High; the flinch flash point: Medium; clip effect lists: Medium-High.
@@ -33,8 +33,8 @@ The boss's tuning words are 97 consecutive signed 32-bit integers, stored in add
 | Missile dodge chance (four patterns and a mirror-image value) and missile deflect chance (four patterns) | 0x2DAC3C–0x2DAC5F | 9 | Used (4.13). |
 | Dodge chance, melee (attack-pattern slots 1 to 4 and a mirror-image slot; their meaning is open) | 0x2DAC60–0x2DAC73 | 5 | Used (4.13). |
 | Jump-thrust chance, melee (four patterns and a mirror-image value) | 0x2DAC74–0x2DAC87 | 5 | Used (4.13). |
-| Dagger throw distances and chance, melee range, lunge chance, strafe distances and chances | 0x2DAC88–0x2DACAF | 10 | Used (4.4), except the strafe left/right range and taunt chance, which are stored but unused. |
-| Shadow-slip buckets: backstab, dagger, invisible, light arc or heal, mirror images, rainbow dash, just-appear mirror | 0x2DACB0–0x2DAD0B | 23 | Used (4.8), except the invisible bucket (0x2DACD8 to 0x2DACE0) and the just-appear-mirror word (0x2DAD08), which are unused (High; Open question 13). |
+| Dagger throw distances and chance, melee range, lunge chance, strafe distances and chances | 0x2DAC88–0x2DACAF | 10 | Used (4.4), except the strafe left/right range and taunt chance, which are stored but unused. Word order in "Word order of the two groups" below. |
+| Shadow-slip buckets: backstab, dagger, invisible, light arc or heal, mirror images, rainbow dash, just-appear mirror | 0x2DACB0–0x2DAD0B | 23 | Used (4.8), except the words listed as unused in "Word order of the two groups" below (the pattern 1 words, the clone backstab word, the three invisible words, the pattern 2 mirror word, the pattern 3 rainbow word and the just-appear-mirror word; High; Open question 13). |
 | Backstab range | 0x2DAD0C | 1 | Used (4.4b). |
 | Thrust-lunge range | 0x2DAD10 | 1 | Unused. |
 | Dagger reappear distances, min and max | 0x2DAD14–0x2DAD1B | 2 | Minimum used (Edge cases); maximum unused. |
@@ -47,6 +47,57 @@ The boss's tuning words are 97 consecutive signed 32-bit integers, stored in add
 | Rainbow-dash speed and radius | 0x2DAD54–0x2DAD5B | 2 | Used (4.8). |
 
 The invisibility reappear pair's second word (stored value 30) is its maximum. Neither word has any reader, so both are unused (High; Open question 12). The clean side should store both and not apply them.
+
+### Word order of the two groups
+
+All 33 words below are signed 32-bit integers. The distances are converted to floating point before they are compared with the horizontal distance d of 4.4; the chances and buckets are compared with an integer roll r in 0 to 100 inclusive. Confidence: High for every address, value and role.
+
+**Ten melee and strafe words (0x2DAC88 to 0x2DACAF)**
+
+| Address | Value | Role |
+| --- | --- | --- |
+| 0x2DAC88 | 40 | Dagger throw far limit: a throw needs d < 40. |
+| 0x2DAC8C | 20 | Dagger throw near limit: a throw needs d > 20. |
+| 0x2DAC90 | 30 | Dagger throw chance: a throw needs r < 30. |
+| 0x2DAC94 | 15 | Melee range: a thrust lunge or sword swing is chosen only when d < 15. |
+| 0x2DAC98 | 60 | Lunge threshold, used only for d ≤ 10 (the distance 10 is a fixed constant, not a word): r ≥ 60 gives the thrust lunge, r < 60 the sword swing. |
+| 0x2DAC9C | 20 | Strafe outer range: d > 20 approaches; d ≤ 20 enters the strafe and back-up rules. |
+| 0x2DACA0 | 20 | Strafe left/right range. Unused. |
+| 0x2DACA4 | 10 | Taunt chance. Unused. |
+| 0x2DACA8 | 15 | Back-up distance: the back-up rules apply when d < 15. |
+| 0x2DACAC | 100 | Back-up chance: a back-up starts when r < 100. |
+
+The dagger roll is made only when 20 < d < 40 and the boss is neither invisible nor a mirror image; the melee roll is made only when d ≤ 10. The back-up roll is made only on the tick that sets the back-up cooldown (4.4).
+
+**Twenty-three shadow-slip bucket words (0x2DACB0 to 0x2DAD0B)**
+
+| Address | Value | Bucket and pattern | Use |
+| --- | --- | --- | --- |
+| 0x2DACB0 | 0 | backstab, pattern 1 | Unused: pattern 1 always just-appears. |
+| 0x2DACB4 | 33 | backstab, pattern 2 | Used. |
+| 0x2DACB8 | 25 | backstab, pattern 3 | Used. |
+| 0x2DACBC | 4 | backstab, pattern 4 | Used. |
+| 0x2DACC0 | 25 | backstab, mirror image | Unused: the chooser uses the pattern value for a clone too. |
+| 0x2DACC4 | 0 | dagger, pattern 1 | Unused (pattern 1). |
+| 0x2DACC8 | 33 | dagger, pattern 2 | Used. |
+| 0x2DACCC | 25 | dagger, pattern 3 | Used. |
+| 0x2DACD0 | 4 | dagger, pattern 4 | Used. |
+| 0x2DACD4 | 25 | dagger, mirror image | Used in place of the pattern value when the acting entity is a mirror image. |
+| 0x2DACD8 | 10 | invisible, pattern 1 | Unused. |
+| 0x2DACDC | 10 | invisible, pattern 2 | Unused. |
+| 0x2DACE0 | 5 | invisible, pattern 3 | Unused. |
+| 0x2DACE4 | 30 | light arc or heal, pattern 1 | Unused (pattern 1). |
+| 0x2DACE8 | 33 | light arc or heal, pattern 2 | Used (always the light arc at pattern 2). |
+| 0x2DACEC | 25 | light arc or heal, pattern 3 | Used. |
+| 0x2DACF0 | 32 | light arc or heal, pattern 4 | Used. |
+| 0x2DACF4 | 10 | mirror images, pattern 2 | Unused: the pattern 2 chooser has no mirror bucket. |
+| 0x2DACF8 | 10 | mirror images, pattern 3 | Used. |
+| 0x2DACFC | 10 | mirror images, pattern 4 | Used. |
+| 0x2DAD00 | 20 | rainbow dash, pattern 3 | Unused: the pattern 3 chooser has no rainbow bucket. |
+| 0x2DAD04 | 50 | rainbow dash, pattern 4 | Used. |
+| 0x2DAD08 | 50 | just-appear mirror image | Unused. |
+
+There are no mirror-image words for the light-arc-or-heal, mirror and rainbow buckets, and no pattern 1 mirror or rainbow word. A pattern lookup for a value outside 1 to 4 returns 0.
 
 ### Other constants read from data
 
@@ -141,11 +192,23 @@ When a dagger throw, back-stab, thrust lunge or sword swing ends, T_a is set to 
 
 | Distance d | Result |
 | --- | --- |
-| d > 20 | Approach the hero (approach state, speed 3.0 units/s, Medium). |
+| d > 20 | Approach the hero (approach state; locomotion mode 0, speed from the clip root travel, see Locomotion clips). |
 | 15 ≤ d ≤ 20 | If backing up, or already strafing left or right, keep the state. Otherwise pick left or right with a 50 % coin each. |
 | d < 15 | If backing up, keep it. If T_b = 0: set T_b = 60 (1 s), then back up with chance 100/101 (any roll below 100). Otherwise, if T_b > 0 and the boss is idle or approaching, pick left or right with a 50 % coin; in other states keep the current state. |
 
-Strafing targets a point 3 units from the boss, perpendicular to the line from the boss to the hero: strafe right goes to one side and strafe left to the other. The approach speed of 3.0 units per second is separate (Medium).
+Strafing targets a point 3 units from the boss, perpendicular to the line from the boss to the hero: strafe right goes to one side and strafe left to the other. The 3 units are the offset of the move target, not a speed. The approach has no speed value of its own: every strafe and approach state moves only by the root travel of its clip.
+
+**Locomotion clips** (High for the values and clips, Medium-High for the travel). The boss's creation routine fills its seven locomotion slots with the shared slot setter (SPEC-0029, Behavior 2) using the values (12, 12, 12, -1, -1, 15, 14). In the setter's order these are the slots of modes 0, 1, 2, 3 and 4, then mode 6, then mode 5. Each value is an entry number of the boss's main animation table (SPEC-0005), and the entry names a clip of its model clip bank (42 clips for fight region 755, counted from 0). All the clips below have speed byte 2, so at play rate 1.0 a clip advances a quarter of a key per tick (4 ticks per key). Travel per tick is the root value x 0.000977 / 4.
+
+| State | How it plays | Table entry | Clip | Keys (ticks) | Root value per key | Travel |
+| --- | --- | --- | --- | --- | --- | --- |
+| Approach | mode 0 (modes 1 and 2 are the same) | 12 | 34 | 15 (60), loops | forward: 185, 275, 325, 373, 398, 398, 409, 396, 329, 254, 356, 386, 392, 399, 399; sideways sway of at most 43 | 5.15 units per cycle, 5.15 units/s on average |
+| Strafe right | mode 5 | 14 | 35 | 11 (44), loops | sideways: 328, 521, 714, 584, 410, 206, 426, 464, 449, 364, 364 | 4.72 units per cycle, 6.43 units/s on average |
+| Strafe left | mode 6 | 15 | 36 | 11 (44), loops | sideways: -364, -449, -464, -426, -206, -410, -584, -714, -521, -328, -328 | 4.68 units per cycle the other way, 6.39 units/s on average |
+| Back-up | played directly as entry 13, not through a mode | 13 | 33 | 10 (40), loops | forward -1145 at every key | -0.2797 per tick, 16.78 units/s backward, 11.19 units per cycle |
+| Idle strafe | played directly as entry 0 | 0 | 3 | 25 (100), loops | none | stands still |
+
+The strafe right and strafe left clips are separate clips; the right one is the mode 5 clip and the left one the mode 6 clip. The sign of the sideways value is relative to the boss's own frame; the steering side for modes 5 and 6 is given in SPEC-0029, Behavior 2.
 
 - A back-up lasts until its animation ends, then the boss is idle.
 - The back-up cooldown is set whenever the close-range check runs with T_b = 0, even when the roll then does not back up.
@@ -187,7 +250,7 @@ Test vector: a window on frames 5 to 7 of a clip requested on tick 0 is active o
 - **Jump thrust** (animation 29): a melee reaction (4.13). Once per attack, the same contact and block tests apply; otherwise a hit of 5 damage is sent. Ends idle.
 - **Dagger throw** (animation 31 for the windup; daggers are released while event bit 0x20, event 32, is on). During the windup the boss turns toward the hero with steer weight 0.5 on every tick (Medium).
   - Release: event bit 0x20 is on at frames 6, 12 and 18 of the clip (ticks 24 to 27, 48 to 51 and 72 to 75). A dagger is launched only when the animation's integer frame differs from the frame recorded at the previous launch, so each release frame gives one launch: three daggers per throw. (High)
-  - Launch: the origin is the boss's attachment point for the hand (Medium). The aim point is the hero's position raised 2.5 units (Medium). Each dagger is an enemy-pool projectile of kind 0, visual 0, radius 1.25, damage 10.0 (word at 0x2DAD78). Its velocity is the unit direction from origin to aim point times 1.5 units per tick (word at 0x2DAD70). (High)
+  - Launch: the origin is the boss's attachment point 1 (the second attachment frame, the one gated by event bit 2). The boss's origin query takes the first of event bits 1, 2, 4, 8 and 16 that is on in the current frame, and uses attachment 0 when none is on; the dagger throw clip has bit 2 on, together with bit 0x20, at frames 6, 12 and 18, so the origin is attachment 1 at each release (Medium-High, because the query is the shared one of the character class). The aim point is the hero's position raised 2.5 units (Medium). Each dagger is an enemy-pool projectile of kind 0, visual 0, radius 1.25, damage 10.0 (word at 0x2DAD78). Its velocity is the unit direction from origin to aim point times 1.5 units per tick (word at 0x2DAD70). (High)
   - Lifetime: trunc((distance + 10) / 1.5) ticks, so the dagger travels about distance + 10 units. (High)
   - Hits on the hero follow the pool rule of SPEC-0029 Behavior 9 (shield, armour, a block gives max(1, 0.25 D), reflection of kind 0 with a shield Mote).
   - Ends idle, and T_a is reset.
@@ -252,7 +315,7 @@ Shadow attacks:
 | Shadow back-stab | Lands 3 units behind the hero. Animation speed is 2.0 during the whole attack. No weapon volume and no block test (unblockable): a hit of 5 damage is sent once, on the first tick that the horizontal distance to the hero is below 6.0 while animation 30 plays (High). If the landing point is not walkable, a shadow dagger is used instead. | 30 (reappear at speed 2.0) | Idle; attack timer and shadow-slip timer re-armed |
 | Shadow thrust-lunge | Never entered: no chooser selects it (Edge cases). If entered it would act as the thrust lunge (4.4b) with 5 damage: weapon 1 contact, the block test, the once-per-attack rule and the invisibility rule. | 28 | Idle; shadow-slip timer and attack timer re-armed |
 | Shadow dagger | Throws daggers while event bit 0x20 (event 32) of animation 31 is on, at frames 6, 12 and 18. There is no frame rule: a dagger is launched on every tick the bit is on, 4 ticks per release frame, so 12 launches are attempted per attack; at most 10 can be live at once (pool limit 10). Each is an enemy-pool projectile of kind 0, radius 1.25, damage 3.0, speed 5.0 units per tick (unit direction times 5.0), lifetime trunc((distance + 10) / 5.0) ticks; hits follow the pool rule (SPEC-0029 Behavior 9). Aim point: the hero's position raised 2.5 units (Medium). Landing distance uses the dagger-reappear minimum (Edge cases). (High) | 31 (windup), 32 (release) | Idle; shadow-slip timer re-armed |
-| Light arc | Waits, then loops an arc for up to 200 ticks. Each arc ball flies at 20 units per second (one step per tick: 20/60) with a 1.5 height offset. Hit test: each arc ball is a sphere of radius 2.0 tested against the hero's body cylinder (the hero's motion-record radius and height). The arc deals the light-arc damage (20, word at 0x2DAD50) once per arc, unreduced, with attacker id 0. Missile wall (High for the rule, Medium-High for the sign of n): on every loop tick the arc also cancels hero missiles. Let A and B be the positions of the arc's two end objects, u the horizontal unit vector from A to B, and n = (−u.z, 0, u.x). For each of the hero's six missile slots that is active, with point P and per-tick step s (its direction times its speed times the tick time step), let Q = P + 10 s. If n · (horizontal unit vector from A to P) > 0 and n · (horizontal unit vector from B to Q) < 0, the slot is made inactive at once (the missile is removed with no hit). So a hero missile due to cross the arc's vertical line from the n side within 10 ticks is stopped; the line has no end limits, and a missile crossing the other way passes. High for speed and damage; Medium for the hit shape and the height meaning. | 36 (wait), 37, 38 (loop), 39 | Idle; shadow-slip timer re-armed |
+| Light arc | Waits, then loops an arc for up to 200 ticks. The arc is two moving ball objects, A and B (the "end objects"; they are spawned effect objects, not level locators and not parts of the boss). At the tick the windup animation (37) ends, both are created at the boss's position raised by the height offset 1.5 (the float word at 0x2DAD8C), and the loop (animation 38) starts. Let d be the horizontal unit direction from the boss to the hero at that tick (4.4) and l = (−d.z, 0, d.x). The direction is fixed for the whole arc; the balls do not home. Ball A flies along (d + l) / √2 and ball B along (d − l) / √2, so their paths diverge at 90 degrees (45 degrees either side of d) at constant height. Each ball moves 20 / 60 units per tick (the speed word at 0x2DAD48 divided by the tick rate), starting on the first loop tick after the launch tick, so after k loop ticks each ball is 0.3333 k units from the start and the segment from A to B is perpendicular to d, centred on the point 0.2357 k units from the start along d, of length 0.4714 k units. The arc ends after 200 loop ticks (about 66.7 units of flight per ball) or at the first hit on the hero. Hit test: each arc ball is a sphere of radius 2.0 tested against the hero's body cylinder (the hero's motion-record radius and height). The arc deals the light-arc damage (20, word at 0x2DAD50) once per arc, unreduced, with attacker id 0. Missile wall (High for the rule and for the sign of n): on every loop tick the arc also cancels hero missiles. Let A and B be the positions of the two ball objects above, u the horizontal unit vector from A to B (u = −l, so u = (d.z, 0, −d.x)), and n = (−u.z, 0, u.x); this makes n equal d, the boss-to-hero direction at the launch, for the whole arc. The wall is therefore the line through A and B, perpendicular to d, advancing along d at 0.2357 units per tick. For each of the hero's six missile slots that is active, with point P and per-tick step s (its direction times its speed times the tick time step), let Q = P + 10 s. If n · (horizontal unit vector from A to P) > 0 and n · (horizontal unit vector from B to Q) < 0, the slot is made inactive at once (the missile is removed with no hit). So a hero missile due to cross the arc's vertical line from the n side within 10 ticks is stopped; the line has no end limits, and a missile crossing the other way passes. High for speed and damage; Medium for the hit shape and the height meaning. | 36 (wait), 37, 38 (loop), 39 | Idle; shadow-slip timer re-armed |
 | Shadow healing | See 4.9. | 32, 33, 34, 35 | Idle; shadow-slip timer re-armed |
 | Mirror attack | The boss plays 41 at speed 2.0, then 42. When animation 42 passes half-way, the clones waiting in base state 42 are woken (4.10). | 41 (speed 2.0), 42 | Idle; clone mode on (4.10) |
 | Rainbow dash | Visits eight target points in a random order (see Rainbow dash below). A hit of 15 damage (word at 0x2DAD90), unreduced and unblockable, is sent on the first tick with the horizontal hero distance below 8.0 (word at 0x2DAD58), once per target point, so up to 8 hits per dash (High). After the eighth point the boss plays animation 45 until it ends, then is idle and its shadow-slip countdown is re-armed. | 44 (points), 45 (end) | Idle; shadow-slip timer re-armed; the pattern is recomputed |
@@ -287,7 +350,7 @@ Healing starts only from the chooser's light-arc-or-heal bucket (4.8) at pattern
 
 ### 4.10 Mirror images (clones)
 
-- The boss has up to four mirror-image slots. Slot 1 is placed at +5 units from the boss along the lateral direction, slot 2 at +10, slot 3 at −5, slot 4 at −10 (High for the offsets; Medium for the axis).
+- The boss has up to four mirror-image slots. Slot 1 is placed at +5 units from the boss along the lateral axis, slot 2 at +10, slot 3 at −5, slot 4 at −10 (High for the offsets and for the axis). The lateral axis is the boss's own side axis: with f the boss's horizontal facing (unit length) at the tick of the placement, it is the unit vector (0, 1, 0) × f = (f.z, 0, −f.x). It is the same side axis the character's heading basis keeps (SPEC-0040), so for a boss facing +Z it is +X. The clone's position is the boss's position plus the offset times this axis (same height as the boss), and the clone takes the boss's facing. Example: boss at (10, 2, 20) facing +Z: slots 1 to 4 land at (15, 2, 20), (20, 2, 20), (5, 2, 20) and (0, 2, 20).
 - The boss and its clones are the characters of one block: block slot 0 is the boss, and slots 1 to 4 are the clones. The clone flag and the slot index of each character come from its block slot (High).
 - At set-up the boss's block is made non-streaming (keep 0; SPEC-0006), so the streaming pass never wakes the clones. Each clone is put into base state 42 (the parked state of SPEC-0040) and AI mode 32, with its clone flag set (High).
 - An inactive clone waits in base state 42 in AI mode 32. It is not drawn (SPEC-0046, Drawable test), and its update returns at once (High).
@@ -526,6 +589,9 @@ Melee and dagger details (synthetic):
 
 Strafe:
 
+- Locomotion clips: the slot values are (12, 12, 12, -1, -1, 15, 14), so approach plays table entry 12 (clip 34), strafe right entry 14 (clip 35), strafe left entry 15 (clip 36). Back-up plays entry 13 (clip 33): 40 ticks x -0.2797 = -11.19 units. Strafe right over its 44-tick cycle moves 4.72 units sideways.
+- Dagger origin: at frame 6 of the throw the event bits are 0x22, so the first set low bit is 2 and the origin is attachment 1; with only 0x20 on, the origin would be attachment 0.
+
 - d = 25 → approach.
 - d = 18, state idle → left or right by a 50 % coin.
 - d = 12, back-up cooldown 0 → cooldown set to 60, back up on a roll of 0–99 (100 of 101 values); roll 100 → idle.
@@ -536,6 +602,10 @@ Shadow chooser:
 - Pattern 2 (M = 33, D = 33, H = 33): r = 20 → backstab; r = 40 → dagger; r = 70 → light arc; r = 99 → just-appear.
 - Pattern 3 (M = 25, D = 25, H = 25, MI = 10, max HP 800): r = 60 with HP 360 (0.45 max) → 0.45 ≥ 0.375 → light arc. r = 60 with HP 260 (0.325 max) and a second roll of 10 → healing. r = 80 → mirror attack (75 ≤ 80 < 85).
 - Pattern 4 (M = 4, D = 4, H = 32, MI = 10, RD = 50): r = 3 → backstab; r = 6 → dagger; r = 20 → light arc or healing; r = 45 → mirror attack; r = 99 → rainbow dash; r = 100 → just-appear.
+- Light-arc ball paths (synthetic): boss at (0, 10, 0), hero at (0, 10, 30), so d = (0, 0, 1) and l = (−1, 0, 0). Both balls start at (0, 11.5, 0). After 30 loop ticks (each ball moves 0.2357 per tick on each of x and z): A = (−7.071, 11.5, 7.071) and B = (7.071, 11.5, 7.071). The wall then runs along x at z = 7.071 and n = (0, 0, 1). After 200 loop ticks each ball is 66.67 units from the start, at (∓47.14, 11.5, 47.14), and the arc ends. Boss at (0, 10, 0), hero at (30, 10, 0): d = (1, 0, 0), l = (0, 0, 1): A flies toward (0.7071, 0, 0.7071) and B toward (0.7071, 0, −0.7071).
+- Melee and strafe words (synthetic): d = 30, r = 29: dagger (20 < 30 < 40 and 29 < 30). d = 20 exactly or d = 40 exactly: no dagger. d = 10, r = 60: thrust lunge; r = 59: sword swing. d = 14.9 uses the lunge with no roll. d = 15: no melee attack. d = 20 enters the strafe rules; d = 20.1 approaches. d = 14.9 with the back-up cooldown at 0: cooldown set, back up on any roll 0 to 99.
+- Bucket words (synthetic): pattern 3 clone (acting entity a mirror image): dagger bucket 25 (0x2DACD4), backstab bucket 25 (pattern value, 0x2DACB8), light-arc-or-heal 25, mirror 10; cumulative edges 25, 50, 75, 85. Pattern 2 uses 33, 33, 33: edges 33, 66, 99, so r = 100 gives just-appear.
+- Mirror attack placement (synthetic): see the example in 4.10 (boss at (10, 2, 20) facing +Z). Boss facing +X, at the origin: f = (1, 0, 0), axis (0, 0, −1); slots 1 to 4 at (0, 0, −5), (0, 0, −10), (0, 0, 5), (0, 0, 10).
 - Light-arc missile wall (synthetic): A = (0, 0, 0), B = (10, 0, 0), so u = (1, 0, 0) and n = (0, 0, 1). A hero missile at P = (5, 1, 2) with step s = (0, 0, −0.5): Q = (5, 1, −3); n · unit(P − A) > 0 and n · unit(Q − B) < 0, so it is removed. The same missile with s = (0, 0, −0.1): Q = (5, 1, 1), not removed this tick. A missile at (5, 1, −2) moving +z: not removed. A missile at (50, 1, 2) with s = (0, 0, −0.5): removed (the line has no ends).
 
 Healing (max HP 900, pattern 3, target 300, HP 150 at the start):
@@ -567,6 +637,9 @@ Shadow-slip request latch:
 
 ## Open questions
 
+- Default if unresolved (rewrite choice): the words listed as unused in "Word order of the two groups" (including 0x2DACA0 and 0x2DACA4) may have a reader in code not reachable from the described states. Store them, and apply none of them.
+- Resolved (R-0067, side of root x): in modes 5 and 6 the shared steering turns the boss's move direction toward the hero (SPEC-0029, Behavior 2: with d the direction to the side target, mode 5 steers to up x d and mode 6 to d x up, which is the direction to the hero), and the root step of a clip is applied along the record's side axis, up x forward (SPEC-0040, Behavior 14C), a positive root x going along it. The table entries of these clips carry no mirror flag. With the boss facing +Z that axis is +X, which is the boss's left (SPEC-0004: the right side is -X). So the mode 5 clip, whose sideways root is positive, moves the boss to its left of the line to the hero, and the mode 6 clip, whose sideways root is negative, to its right. This is the opposite of the side point that the target names; that point only feeds the steering (High for the rule; Medium-High for what shows on screen). Test vector: boss at (0, 0, 0) and hero at (0, 0, 10): mode 5 moves toward +X and mode 6 toward -X, while the mode 5 target point is (-3, 0, 0) and the mode 6 target point is (3, 0, 0). Gelert Assassin: the strafe right state (mode 5, positive sideways root) moves the boss to its left of the line to the hero and the strafe left state (mode 6, negative) to its right; the strafe-right target point, 3 units to the boss's right, only feeds the steering.
+
 Numbers of removed questions are not reused.
 
 1. **Runtime overrides.** Are the tuning words overridden at load time from the disc or a config file? Only registration is described.
@@ -580,7 +653,7 @@ Numbers of removed questions are not reused.
 10. **Rainbow target points.** Resolved: the level locators with ids 200 to 207, visited in a permutation built from draws mod 7 (4.8, Rainbow dash; High).
 11. **Flinch conditions.** Resolved: the boss's hit check runs only in the hittable states listed in 4.13; a hit there flinches the boss except in healing (moves to phase 2) and the sword-blocked shadow-slip roll, and a hit during the light arc removes the arc and flinches (High; Medium for the arc removal).
 12. **Invisibility reappear pair.** Resolved: the words 0x2DAD1C and 0x2DAD20 have no reader, so both are unused (High).
-13. **Invisible bucket and just-appear mirror words.** Resolved: 0x2DACD8 to 0x2DACE0 and 0x2DAD08 are read only by getters that have no caller, so they are unused (High).
+13. **Invisible bucket, clone backstab, just-appear mirror and other unused bucket words.** Resolved: 0x2DACD8 to 0x2DACE0, 0x2DACC0 and 0x2DAD08 are read only by getters that have no caller; the pattern 1 words, 0x2DACF4 and 0x2DAD00 are not read by the chooser of their pattern. All are unused (High). The full list is in "Word order of the two groups".
 14. **Melee contact test.** Resolved: weapon 1 of monster row 4 (radius 6.0, full length 1.75), tested against the hero's bone capsules while event bit 0x1 is on (4.4b; High).
 15. **Shadow thrust-lunge timers.** At its end the shadow thrust-lunge re-arms both the shadow-slip countdown and the attack countdown (4.8, 4.11). Confidence: High for the two calls; Medium-High for the end-of-animation placement.
 16. **Thrust-lunge and sword-swing timers.** The attack timer is re-armed at the end of both, as stated in 4.4b (High).
@@ -601,7 +674,7 @@ Numbers of removed questions are not reused.
 31. **Rainbow-dash latch.** Resolved: cleared at the dash start and at every target point, so up to eight hits per dash (4.8; High).
 32. **Light-arc third object.** Resolved: the third test is not a cylinder against the hero; it is the arc's missile wall, a side test of each active hero missile (now and 10 ticks ahead) against the vertical line through the arc's two end objects, which removes a crossing missile (4.8, Light arc; High for the rule, Medium-High for the side sign).
 33. Resolved: **first tick of a window.** The clip starts on the request tick (tick 0) at cursor 0 and is advanced to 0.25 in that same tick; the fade-in does not move the cursor. The window test reads the frame before each tick's advance, so frame f is read on ticks 4f to 4f + 3, except frame 0, which is read on ticks 1 to 3 (4.4b; Medium-High).
-34. **Weapon attachment.** Which model bone attachment 0 (the anchor of weapon 1) follows is not identified; it is most likely the sword.
+34. **Weapon attachment.** (The dagger's hand point is attachment 1; see the dagger throw.) Which model bone attachment 0 (the anchor of weapon 1) follows is not identified; it is most likely the sword.
 35. **Row 5.** Monster row 5 (weapon 1 radius 5.5, length 4.0, no class) is used by regions 741 and 1258. Whether either region holds a Gelert fight, and which weapon sizes such a fight would use, is not established. The Gelert records of both regions carry no sound words.
 36. **Sound step gates and the flinch point.** The boss is taken to be a world character like every character spawned from a level's character records, so the world-character sound rule applies (Medium-High). Two further gates of the animation-sound step, a motion-block gate and a per-character mute word, are not named. The exact point of the flinch hit flash is Medium.
 37. **Dagger trail field.** The dagger projectiles' trail field holds a word of the boss's model set; whether it is an effect id at all is not established (Low).

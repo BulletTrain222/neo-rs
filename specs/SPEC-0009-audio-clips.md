@@ -237,6 +237,22 @@ Selector counts over the 192 world packs on disc: 0 (58 packs), 1 (13), 2 (45), 
 
 When the flag is on, the bank offset gets +67 and the stream offset gets +55. The block is not changed.
 
+Story span of each selector (Medium; the bits are progress flags whose setters are in SPEC-0049 and SPEC-0058). Bit 216 is set in the aftermath of the Gnarfas fight (walkthrough step 20) and is never cleared, so no pack plays the alternate music before that point. After that, a selector's span is from the story moment that sets its first bit until the moment that sets its second bit:
+
+| Selector | Span in which the alternate music plays (progress bit 216 also set) |
+| --- | --- |
+| 1 | from the start of Act 3 (bit 83) until the Act 3 Juppie fight is won (bit 5) |
+| 2 | from the aftermath of the Gnarfas fight (bit 10) until King Skarl is freed (bit 322) |
+| 3 | from the Gnarfas defeat (bit 64) until the Gelert Assassin is beaten and Illusen revived (bit 283) |
+| 4 | from the start of Act 3 (bit 57) until bit 58 is set by the exit cutscene after the Ixi Chieftain is beaten in the Cogham mines (walkthrough step 37; script trigger 22 of pack 864 with flag 293 on). Stage rows of stages 2 and 6 also set bit 58, so a game begun from start index 3, 7 or 8 never plays the alternate music of this selector (High) |
+| 5 | from the start of Act 3 (bit 74) until the Plague Serpent is beaten (bit 263) |
+| 6 | from the start of Act 3 (bit 85) until the Black Knight is beaten (bit 298) |
+| 7 | from Roberta's night in Fyora's palace in Act 2 (bit 92) until the final fight is won (bit 94) |
+| 8 | from the start of Act 3 (bit 248) to the end of the game |
+| 9, 10, 11 | from the start of Act 4 (bit 332) until the legend flag 100, 102 or 104 is set (the Altador shrine legends) |
+
+Test vector (synthetic): a pack with selector 5, bits 216 and 74 set and bit 263 clear plays bank offset + 67 and stream offset + 55; when the Plague Serpent is beaten (bit 263 set) the next tick plays the plain row. A pack with selector 8 and bit 216 clear plays the plain row even when bit 248 is set.
+
 ### Volume and ramps
 
 Confidence: High; the stinger ramp limit during a bank change Medium.
@@ -631,7 +647,7 @@ Synthetic:
 - Music, flag for packs without a selector: pack 532 has no record and selector 0, so the flag is never set for it. Whether any other known route sets the flag on the default row (bank 78) is not known.
 - Music, record count: table 4 has 194 records but ids 0 to 192 are looked up. Whether record 193 is ever used is not known.
 - Resolved: Music, table addresses. Value table 0x31F2B0, area key table 0x31EFA8 (193 slots each), default record 0x2DA3D0 (see Area to music row).
-- Music, story meaning of the selector bits: the progress bits tested by the selector tests stand for story states that are not described here (see SPEC-0025).
+- Resolved (Medium): music, story meaning of the selector bits. Each selector names a story span, from the event that sets its first bit to the event that sets its second (Run-time flag, Story span of each selector).
 - Music, second-hero path: it re-keys other hero objects through the area-key step. Its inputs are not known, so whether it changes the row that the controller reads is not known.
 - Resolved: Music, excite counter. It is the adventure counter C, reloaded to 100 on every tick with E >= 1 and counting down by 1 otherwise (Intensity inputs) (High).
 - Resolved: Music, adventure level 0. The level is not a divisor; SetMidiAdventureLevel(0) gives C = 49 (Intensity inputs) (High).

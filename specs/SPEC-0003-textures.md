@@ -1,6 +1,6 @@
 # SPEC-0003: Texture chunks, palettes, and material texture state
 
-- Answers: R-0003
+- Answers: R-0003, R-0008
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Texture chunk layout and decoding: High. Material (shader list) texture fields and the texture-chunk selector: High for layout and lookup, Medium for the meaning of filter and blend settings in a modern renderer. Material record (passes, vertex programs, attribute masks, UV modes): High for layout, counts and what each vertex program does. Billboard program 3: High for the arithmetic, Medium for the corner UV orientation. UV modes: High for the arithmetic; environment-map space High for level geometry, Medium-Low for placed objects. Load-time handling of shader lists and texture chunks: High, including the two shader-list fix-ups. Sub-texture frame addressing: High for the cell arithmetic, the output and the frame source of both variants. Texture residency: High for the rules, Medium for the queueing detail. Run-time upload packet builder: Medium for the order; High for the chunking and the per-format sizes. Transfer-word helper: Low (its meaning conflicts with another reading). Material slot check: High. All are labelled in their sections.
@@ -21,7 +21,7 @@ All fields are little-endian. "Payload" means chunk start + 16 + E, where E is t
 ### Texture chunk header bytes
 
 - Chunk header bytes 12–15 are 01 01 00 00 in all 686 texture chunks. Nothing reads them; ignore them.
-- The extra-header area (E bytes) is all zero except in the texture packs (577–677), where E = 112 and the bytes hold leftover build-tool values. Nothing reads them; skip them.
+- The extra-header area (E bytes) is all zero except in the texture packs (577–677), where E = 112 and the bytes hold leftover build-tool values. Nothing reads them; skip them. E is not 0 in most texture chunks: it pads the payload to a 16-byte boundary of the file, so it runs from 8 to 124 in the chunks of model sets and outfits (for example 12, 28 and 108). Always locate the payload as chunk start + 16 + E; a reader that assumes the payload starts right after the 16-byte header sees a wrong texture table and finds no texture.
 
 ### Texture payload header (16 bytes)
 
@@ -51,7 +51,7 @@ Note that the sub-texture entries start at table + 0x40 regardless of *n*. This 
 
 | Offset | Size | Meaning |
 | --- | --- | --- |
-| 0 | 4 | Bits 0–13: destination base block address (the segment TBP). Bits 14–19: buffer width in units of 64 pixels (= segment width / 64). Other bits 0. |
+| 0 | 4 | Bits 0–13: destination base block address (the segment TBP). Bits 16–21: buffer width in units of 64 pixels (= segment width / 64). Bits 14–15 and 22–31 are 0. The upload packet's BITBLTBUF carries the same width in its DBW field. |
 | 4 | 4 | Bits 0–11: width in pixels. Bits 12–23: height in pixels. Bits 24–31: GS pixel format (PSM) of the upload. |
 | 8 | 40 | Unused (0) |
 
@@ -207,9 +207,45 @@ The check answers "does this draw need a new camera block for the vector unit" (
 
 When the result is true, the caller takes a new camera block (at most 32 per parity per frame; a 33rd request is reported as an error and gets no block) holding the eye point and the matrix, and sends it before the batch. Clean side: recompute the environment UVs from the current eye point and matrix on every draw; reproduce the quirk only for strict parity.
 
+### GS local-memory addressing (PSMCT32, PSMT8, PSMT4)
+
+Confidence: High. The rules below are the standard PS2 Graphics Synthesizer layout. Every format the disc uses is covered: PSMCT32 (upload images and palettes), PSMT8 and PSMT4 (textures). No other pixel format appears in a texture chunk. A renderer that keeps its own copy of the decoded pixels does not need this section at run time, but it needs it once to decode the stored block.
+
+**Units.** Local memory is 4 MiB. A block address (TBP, CBP, DBP) counts 256-byte blocks, so the range is 0 to 16,383. A page is 32 consecutive blocks (8,192 bytes). A buffer width (TBW, DBW) counts 64-pixel units, for every format.
+
+| Format | Block size (pixels) | Page size (pixels) | Pages per buffer row | Blocks per page across × down |
+| --- | --- | --- | --- | --- |
+| PSMCT32 | 8 × 8 | 64 × 32 | width value (at least 1) | 8 × 4 |
+| PSMT8 | 16 × 16 | 128 × 64 | width value / 2, rounded down (at least 1) | 8 × 4 |
+| PSMT4 | 32 × 16 | 128 × 128 | width value / 2, rounded down (at least 1) | 4 × 8 |
+
+**Address of texel (x, y)** for a buffer with base block B and width value W:
+1. Page number = (y div page height) × pages per row + (x div page width).
+2. Block-in-page number from the block column bx = (x div block width) mod blocks-across and the block row by = (y div block height) mod blocks-down:
+   - PSMCT32 and PSMT8: (bx AND 1) + 4 × ((bx div 2) AND 1) + 16 × (bx div 4) + 2 × (by AND 1) + 8 × (by div 2).
+   - PSMT4: 2 × (bx AND 1) + 8 × (bx div 2) + (by AND 1) + 4 × ((by div 2) AND 1) + 16 × (by div 4).
+3. Block address = B + 32 × page number + block-in-page number. The addition is plain; B need not be a multiple of 32 (disc values such as 592 are not).
+4. Offset inside the block, from the in-block coordinates u = x mod block width and v = y mod block height:
+   - PSMCT32 (a word is 4 bytes): word = (u AND 1) + 4 × (u div 2) + 2 × (v AND 1) + 16 × (v div 2). Byte offset = 4 × word.
+   - PSMT8: let r = v AND 3 and c = v div 4 (0 to 3). Start from t = 4 × (u AND 1) + 16 × ((u div 2) AND 3) + 2 × (u div 8) + 8 × (r AND 1). If (c AND 1) differs from (r div 2), flip bit 5 of t (add or remove 32). Byte offset = 64 × c + t + (r div 2).
+   - PSMT4: let r = v AND 3 and c = v div 4 (0 to 3). Start from t = 8 × (u AND 1) + 32 × ((u div 2) AND 3) + 2 × (u div 8) + 16 × (r AND 1). If (c AND 1) differs from (r div 2), flip bit 6 of t (add or remove 64). Nibble offset = 128 × c + t + (r div 2); a block holds 512 nibbles.
+5. Byte address = 256 × block address + byte offset. For PSMT4, nibble address = 512 × block address + nibble offset; the byte is the nibble address div 2, and the index is the low four bits of that byte when the nibble address is even and the high four bits when it is odd.
+
+**Segment seen as indexed texture.** A segment is uploaded as PSMCT32 with buffer width equal to its pixel width / 64 (4 for a 256-pixel segment). The sub-textures read the same memory as PSMT8 or PSMT4, and their TBW is twice that value (8 for a 256-pixel segment), because a PSMT8 or PSMT4 page is twice as wide in pixels as a PSMCT32 page. The pixels of the stored block are therefore not the texture image in raster order; only the memory-address mapping above recovers it.
+
+**Palettes (CSM1).** A palette is a PSMCT32 image read with buffer width 1 from its CBP:
+- 256 entries (for PSMT8) form a 16 × 16 image. Linear entry j is the pixel (j mod 16, j div 16). The colour for index i is linear entry e, where e is i with bits 3 and 4 exchanged (the swap in "Decode one indexed texture").
+- 16 entries (for PSMT4) form an 8 × 2 image. Index i is the pixel (i mod 8, i div 8). There is no swap. CSA is 0, so the palette starts at its first entry.
+- Each palette entry is the 4 bytes R, G, B, A (alpha 0 to 128).
+- A PSMT8 texture uses a 16 × 16 palette and a PSMT4 texture an 8 × 2 one. The palette is the one the material's TEX0 names by CBP, not the first palette in the chunk.
+
+**Register placement.** Each material group's state block carries its TEX0 as a register pair (see "Load-time handling of shader lists and texture chunks"). In a mode-1 group the pair numbered 7 is TEX0 (of the second GS drawing context). In a mode-2 group, pass 0 uses the pair numbered 7 and pass 1 the pair numbered 6 (TEX0 of the first drawing context). Find the pairs by register number. TBP, TBW, PSM, TW, TH and CBP come from that value and nowhere else.
+
+**Warning: all-white or wrong-colour pictures.** Two shortcuts produce all-white or badly coloured textures. (1) Ignoring the segment base: in the 102 front-end chunks the segment TBP is 0x2A00 and every sub-entry and palette address is absolute, so the texture must be read relative to the segment, not at address 0. (2) Using a fixed or "first" palette instead of the group's own: the palette is the one whose address equals the CBP in the group's TEX0, and different groups of one chunk use different palettes (some share a texture with a different palette). Skipping the CSM1 swap gives correct shapes with scrambled colours.
+
 ### Decode one indexed texture to RGBA
 
-1. For each texel (x, y), 0 ≤ x < real width, 0 ≤ y < real height: read the index at the PSMT8 (or PSMT4) address for (x, y) with base TBP and buffer width TBW.
+1. For each texel (x, y), 0 ≤ x < real width, 0 ≤ y < real height: read the index at the PSMT8 (or PSMT4) address for (x, y) with base TBP and buffer width TBW, using the rules of "GS local-memory addressing".
 2. Look up the palette (see below for which palette). Palettes are stored with the GS "CSM1" layout:
    - A 16 × 16 PSMCT32 palette: read its 256 colors in row-major order from the PSMCT32 image at (TBP, buffer width 1). Then swap the CSM1 order: index *i* uses linear entry *i* with bits 3 and 4 exchanged. In other words, entries 8–15 and 16–23 of every group of 32 swap places.
    - An 8 × 2 palette for PSMT4: read its 16 colors in row-major order from (TBP, buffer width 1). No swap.
@@ -305,6 +341,7 @@ Group (0x270 bytes; group *g* at group table + g × 0x270):
 | 0x22 | 2 | u16 | Written by the engine at load (upload area 0 base); ignore on disc |
 | 0x24 | 2 | u16 | Written by the engine at load (upload area 1 base); ignore on disc |
 | 0x26 | 1 | u8 | Mode: 0 = no texture state (670 top-level groups), 1 = one texture context (14,422), 2 = two texture contexts (500) |
+| 0x27 | 1 | u8 | Character colour slot, 0 to 14. Used only when a character is drawn: the part that uses this group is drawn with the colour of that slot (colour word *j* of the character's record; SPEC-0040, Behavior 26, item 9). It applies to textured and untextured groups alike. Over the 1,157 character model sets (17,217 groups) 4,733 groups have a slot above 0; over the 16 hero outfits only 9 of 331 do, so a hero looks right even if the slot colour is ignored and an NPC does not. Level and prop groups leave it 0 |
 | 0x28 | 1 | u8 | Texture chunk index *k*, 0 … B − 1: the group's addresses refer to the *k*-th texture chunk after this shader list. Always 0 when B = 1. |
 | 0x29 | 1 | u8 | CPU vertex animator id: 0 none, 1 environment map, 2 UV scroll, 3 water (see "UV modes"). 3 in 2 groups on disc (resource 9 groups 20 and 21), otherwise 0. |
 | 0x2B | 1 | u8 | Texture animator kind, pass 0: 0 none, 1 variant 1, 2 variant 2. 1 in 2 groups; 2 in 5 nested groups of resource 1260. |
@@ -314,7 +351,7 @@ Group (0x270 bytes; group *g* at group table + g × 0x270):
 | 0xD0 | 0xD0 | | State block 0 |
 | 0x1A0 | 0xD0 | | State block 1, a copy of block 0 (identical in 15,589 of the 15,592 top-level groups) |
 
-Other group bytes are zero or not used.
+Other group bytes are zero or not used. A group with mode 0 (no texture state) is not a missing material: it is a flat-colour part whose colour comes from the vertex colours and the character colour slot (see 0x27 above). The 17,217 groups of the character model sets split into 9,415 textured and 7,802 untextured (2,614 of them with a slot above 0); an NPC's skin, hair and clothes are mostly such untextured groups.
 
 A state block is a GS register list. It starts with a 16-byte GIF tag. NLOOP is bits 0–14 of its first u16, and the tag uses packed A+D mode. After the tag come NLOOP pairs of 16 bytes: an 8-byte register value followed by an 8-byte register number (only the low byte matters). The clean side should read the pairs by register number, not by position.
 
@@ -459,7 +496,7 @@ Confidence: High for the layout (all 101 packs and the four dome-format resource
 
 ## Test vectors
 
-Synthetic, not taken from the disc:
+Synthetic values:
 
 - A sub-entry with TBP 0x3C, TBW 4, width 32, height 17 and PSM 0x13 (PSMT8). The sampling size is 32 × 32.
 - A sub-entry with width 8, height 2 and PSM 0 (an 8 × 2 palette).
@@ -467,7 +504,12 @@ Synthetic, not taken from the disc:
 - Alpha: palette alpha 0x80 → 255 (opaque); 0x40 → 128; 0x00 → 0.
 - A TEX0 value with TBP 0x2C, TBW 4, PSM 0x13, TW 5, TH 5, TCC 1 and CBP 0x38 is 0x0000_0705_5531_002C. Decoding that value must give back the same fields.
 - TEX1 K field 0xFC0 (12-bit) = −64 / 16 = −4.0; 0xFFF = −1 / 16.
-- Upload segment word 0 = 0x0001_0000: TBP 0, TBW 4 (a 256-wide segment). Word 0 = 0x0001_2A00: TBP 0x2A00, TBW 4. In such a chunk a sub-entry with TBP 0x2A10 lies 0x10 blocks into the upload.
+- Upload segment word 0 = 0x0004_0000: TBP 0, TBW 4 (a 256-wide segment: bits 16–21 hold 4). Word 0 = 0x0004_2A00: TBP 0x2A00, TBW 4. Word 0 = 0x0001_2A00 would be TBP 0x2A00, TBW 1 (a 64-wide segment). In such a chunk a sub-entry with TBP 0x2A10 lies 0x10 blocks into the upload.
+
+Taken from the disc (end to end, upload to colour):
+
+- **PSMT8 texel from a world texture.** World pack resource 1327. The shader list's group 1 has mode 1 and a TEX0 value of 0x8000_6405_9932_0250: TBP 592, TBW 8, PSM 0x13, TW 6, TH 6, CBP 800. The group's texture-chunk slot is 0, the first type-4 chunk (starts at resource offset 4,721,200). Its segment is 256 × 256 PSMCT32 with TBP 0 and DBW 4; its pixel block starts at resource offset 4,725,312; the matching sub-entry is 64 × 64 PSMT8. Texel (4, 0): page 0, block column 0, block row 0, so block 592; in-block u = 4, v = 0 gives byte offset 32; GS byte address 151,584. That byte sits in segment pixel (164, 128), so the index is stored at resource offset 4,857,040 and equals 137. Palette lookup: 137 is 10001001 in binary; exchanging bits 3 and 4 gives 10010001 = 145, which is pixel (1, 9) of the 16 × 16 palette at block 800: block 802, byte offset 12, GS byte address 205,324. That entry is segment pixel (65, 201), resource offset 4,931,396, bytes 177, 122, 142, 128. Final colour RGBA = (177, 122, 142, 255). Texel (0, 0) of the same texture has index 36 (bits 3 and 4 clear, no swap effect) and palette entry (179, 125, 145, 128), RGBA (179, 125, 145, 255).
+- **PSMT4 texel from a font sheet.** Resource 532 (front-end database), the type-4 chunk starting at resource offset 156,348. Segment TBP 0x2A00 (10,752), 256 × 512 PSMCT32, DBW 4; pixel block at resource offset 171,200. Font 0's texture value is 0x8006_3C26_2142_2A00: TBP 10,752, TBW 8, PSM 0x14, TW 8, TH 8, CBP 0x31E1 (an 8 × 2 palette). Texel (26, 7): page 0, block address 10,752; in-block u = 26, v = 7 gives r = 3, c = 1, t = 38 + 16 = 54, no flip (c odd and r div 2 = 1 agree), nibble offset 128 + 54 + 1 = 183, which is byte 91 of the block, high nibble. GS byte address 2,752,603, which is segment pixel (2, 3) byte 3, at resource offset 174,283. The stored byte is 0x2B, so the index (high nibble) is 2. Palette entry 2 is pixel (2, 0) of the 8 × 2 image at block 0x31E1, at resource offset 663,528, bytes 15, 14, 14, 128. Final colour RGBA = (15, 14, 14, 255). Texel (8, 7) of the same sheet has index 0 and palette entry (26, 25, 25, 0): fully transparent.
 
 Census (check, on disc): in all 191 game world packs, the texture count *B* stored in each shader list is consistent with the number of texture chunks in its pack (SPEC-0006 census). The front-end pack has no shader list and one texture chunk.
 

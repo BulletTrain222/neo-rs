@@ -27,7 +27,7 @@ Every resource is a sector-aligned slice of `GAMEFILE.DAT`, located through SPEC
 | Headerless skeleton headers | none | 6 | 492, 494, 496, 498, 500, 502 (SPEC-0005) |
 | Plain ASCII text | none | 1 | 527 |
 | Headerless hero action tables | none | 6 | 520–525 (role Medium) |
-| Headerless save-size blob | none | 1 | 491 (holds no model; role Medium) |
+| Headerless blob, meaning unknown | none | 1 | 491 (51,200 bytes; its size equals the save array rounded up to whole sectors, but its contents are not a save image and no loader reads it; role unknown, Medium) |
 | Headerless item/drop configuration | no magic; little-endian item-record count 208 at +0x00 | 1 | 529 (format: SPEC-0021, “Item config table”) |
 | Headerless species/monster table | little-endian row-type count 112 at +0x00, followed by 112 first-row indexes | 1 | 530 (row schema: SPEC-0024 and SPEC-0029) |
 | Headerless villager/companion table | same count-and-index header; 0x60-byte rows | 1 | 531 (row schema: SPEC-0024) |
@@ -76,7 +76,28 @@ Counts are over all top-level chunks on the disc. The meanings come from loader 
 | 38 | front-end pack (resource 532) | front-end database (SPEC-0035) | High (layout) |
 | 15 | world packs | tagged lookup tables and the entity-id and placement-id tables (SPEC-0006) | High (layout) |
 | 2000, 2001 | book records (resource 576) | book text (2000) and book glyph layout (2001); see SPEC-0024, Book records | High (layout) |
-| 3, 5, 10, 11, 16, 19–30, 34–37, 39–43, 1000, 1001 | world packs and model sets | not yet identified | — |
+| 3 | world packs | level display tree, world space (SPEC-0004) | High |
+| 5 | world packs, placed objects | model set: height patches and frame records (SPEC-0006, SPEC-0018) | High |
+| 10 | world packs | ladders and climb panels (SPEC-0006) | High |
+| 11 | world packs | object header: entry records, collision primitives and teleport planes (SPEC-0006, SPEC-0028) | High |
+| 16 | world packs | box records, foliage patches (SPEC-0006, SPEC-0060) | High |
+| 19 | world packs | spatial grid (SPEC-0006, SPEC-0018) | High |
+| 20 | 23 world packs | instanced meshes (SPEC-0004) | High (layout) |
+| 21 | 135 world packs | navigation meshes (SPEC-0018) | High |
+| 22, 23, 24 | character regions | skeleton definitions: main, sub-parts, face (SPEC-0005) | High |
+| 25, 26, 27 | character regions | animation clip entries paired with types 22, 23, 24 (SPEC-0005) | High |
+| 28 | world packs | camera track records (SPEC-0052, SPEC-0028) | High |
+| 29 | world packs | placed objects (SPEC-0028) | High |
+| 30 | world packs | light sets (SPEC-0028) | High (layout); Medium (use) |
+| 34 | resource 9 and 4 world packs | effect definitions; resource 9 holds the shared table (SPEC-0034) | High (resource 9); Low (the small world-pack groups) |
+| 35 | world packs | binary zone-visibility grids (SPEC-0006) | High |
+| 36 | 575 character regions | character region table: characters, animation tables, items, effects (SPEC-0004, SPEC-0005, SPEC-0006) | High |
+| 37 | 173 world packs | level script module, "SNR2" container (SPEC-0030) | High (container) |
+| 39 | world packs | placed effect spawns (SPEC-0034, SPEC-0028) | High |
+| 40, 41 | world packs | switch-keyed entries; atmosphere zones (SPEC-0028, SPEC-0006) | High (layout); Medium (use) |
+| 42, 43 | resource 533 (17 and 3 chunks) | design tables (42) and path records (43) (SPEC-0024) | High (layout) |
+| 1000 | world packs | dialogue line table (SPEC-0022, SPEC-0028) | High |
+| 1001 | world packs | zone id lookup (SPEC-0006) | High |
 
 Typical chains (type sequences):
 
@@ -132,7 +153,7 @@ Seven headerless resources (493, 495, 497, 499, 501, 503, 526) are flat clip ban
   - 492 to 503: loaded in play by the hero set-up. They hold the bone headers and clip banks of the two heroes' three families each. Medium-High.
   - 526: a clip bank with no bones and no mesh, loaded together with header 492 by a second hero set-up. Medium.
   - 504 to 511 (first hero) and 512 to 519 (second hero): outfit chains, loaded by the outfit routine as a base number plus an offset taken from the equipped item. Medium-High (whether every outfit offset is reachable through an item is open).
-  - 7 and 9: loaded at boot as part of the item data. Resource 7 holds 33 type-13 mesh containers; resource 9 holds a type-8 mesh container and a texture. High for 7; Medium for 9.
+  - 7 and 9: loaded at boot as part of the item data. Resource 7 holds 33 type-13 mesh containers; resource 9 holds five chunks in this order: a shader list, a type-8 mesh container, a type-34 effect-definition chunk of 837,856 bytes (SPEC-0034), and two textures (the effect sprite sheets). High for 7; High for 9.
   - 532: the front-end world pack, loaded by the front end (SPEC-0035). Medium.
   - 576: the book records, loaded by index by the book reader (SPEC-0024). Medium-High.
   - 534 to 543: pet packages, one per pet kind k at 534 + k, each holding one character's models, skeletons and clips. A package loads only when a saved pet of that kind is present. No known routine creates a first pet, so whether these load in a normal game is open. Medium for the route; Low for use in a normal game. The pet buffer is sized at boot from the largest of 534 to 543, excluding 536. High for the size rule; Medium for the reason (kind 2 is never activated, so package 536 never needs to fit).
@@ -206,7 +227,7 @@ Disc scan (test facts for the compressed-block check, LZO1X only; High):
 
 ## Open questions
 
-- The meaning of most chunk types (the table rows marked "—"). Several of these are specified in SPEC-0003 to SPEC-0006.
+- Resolved: the chunk types once listed as unidentified are identified in the chunk-type table, each with its owning spec. Resource 491 stays unidentified (no loader, contents not a save image).
 - The resource number → typed slot mapping (which loader asks for which number) for resources outside the fixed set, the world packs and the character regions. Answered for those: Behavior ("Fixed resources and the kind of routine that loads them" and "Resources with no known loader"), SPEC-0006 and SPEC-0004.
 - Answered: the odd VAGs 144 and 145 are the emote clip banks; see SPEC-0009, Emote voice banks.
 - Resolved: **Stereo-stream (` KPV`) data start and size relation.** The stream header and interleave layout are in SPEC-0009, “Stereo stream”; playable block boundaries and the observed audible tail beyond the nominal per-channel size are further bounded in SPEC-0031, “KPV silence.” The samples begin at byte 0x800. The header's size is bytes per channel; do not infer a resource length from `2 × S` because some streams contain additional audible blocks and all resources are sector-padded.

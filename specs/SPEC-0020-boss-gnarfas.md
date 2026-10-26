@@ -1,6 +1,6 @@
 # SPEC-0020: Boss behavior: Gnarfas
 
-- Answers: proactive, none requested (boss AI)
+- Answers: proactive, none requested (boss AI); R-0064 (in part: how Gnarfas becomes active in pack 985; the full answer is in SPEC-0019)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Tuning values, the phase hub, the attack order and the cooldown rules: High. Damage taking (own hit check, flinch and exhaustion): High for the control flow, Medium-High for the hit test. Missile reaction: High for the rolls and timer; Medium-High for the missile contact shapes (bone cylinders for the reaction, body cylinder for the hit). Wait state never entered: Medium-High. Melee reaction: High. Orbit, approach and jump-to-tree sequence: High for states and exits; High for the landing height rule; Medium for the flight meanings. Body slam and head butt: High (damage and reach). Knockback: High. Chain whip and rapid strike: High for timing, the windows, the bone-chain test and its hero cylinder, the once-only rapid strike and the full-damage block. Raw boss damage (no hero defences): High. Block-counter branch: unreachable (High). Facing by locomotion mode: High for the shared steering rule (the 0.1 turn blend, the 0.9 switch, the snap weight 1.0, the caller blends and the mode lists, see Facing); Medium for which modes Gnarfas uses beyond orbit (Open question 14). Run or walk at 5.0: High. Travel speeds and distances at R = 1 (clip root motion): High. Per-tick animation-speed tunable and same-tick clip-rate effect: High; shipped default 1.0. Animation sounds (block 393) and the chain sparks (effect 710): High; clip effect lists: Medium-High.
@@ -277,7 +277,7 @@ A knockback of strength s:
 - **Damage is raw.** Each hit sends its damage (15, words 0x2DADE4 and 0x2DADFC) straight to the hero's take-hit; the hero's shield, armour, armour Mote and petpet factor do not reduce it (SPEC-0029 Behavior 10.5).
 - **Block still deals full damage.** If the hero is guarding and faces Gnarfas (dot of the hero's forward direction with the direction from the hero to Gnarfas above 0.5), the take-hit runs with the full 15 and the blocked flag set: the hero loses 15 HP and plays its block reaction instead of its hit reaction, and there is no knockback. Otherwise the hit is unblocked: 15 with the hit reaction and a knockback of strength 1.0. The "hero not down" check before the knockback is the hero's busy condition, the same as the hub's hold test (High).
 - **Once per attack.** The chain whip hits once per attack. The rapid strike's hit latch would be re-armed only on a frame carrying event bit 0x20, and no frame of its clip carries that bit, so the rapid strike also hits at most once per attack, although its clip has four windows.
-- **Windows** (frames with the event bit on, from the fight region 1264 clips; monster row 6, which has no weapon volumes):
+- **Windows** (frames with the event bit on, from the fight region 1264 clips; monster row 6, whose five weapon volumes (radius 3.0, length 0.5 each) are never tested by his attacks):
 
 | Attack (animation) | Windows | Damage |
 | --- | --- | --- |
@@ -293,7 +293,7 @@ The chain power has no guard test in its hit. It uses the bone-chain test with a
 
 ### Arena flow (level script module 985; owned by SPEC-0041; Confidence: High for the calls and order unless noted)
 
-The fight runs in the exterior world whose level script is module 985, in the branch taken when game state 281 is clear (the branch with 281 set is the Werelupe King's chain). Gnarfas is placed in that world pack.
+The fight runs in the exterior world whose level script is module 985, in the branch taken when game state 281 is clear (the branch with 281 set is the Gelert Assassin fight, SPEC-0013). Gnarfas is placed in that world pack as record 7 of the embedded block (entity 7). No placement flag or host call activates him: the module's activation filter admits ordinal 7 when flag 281 is clear, the character streaming binds him on the first pass after the hero is placed at locator 9 (21 units away), and his controller runs from the bind. The pack's Werelupe King (entity 8) is bound the same way but is grabbed by the script on the arrival tick and stays held (SPEC-0019, Activation in play).
 
 - **On world activation** (game state 281 clear): the hero is moved to locator 9, the normal camera is set (3 s), and game state 212 is set. If game state 214 (Gnarfas beaten) is clear, level states 0, 1 and 2 are cleared and the boss-fight refill runs (boss-fight instance 1, stage 0).
 - **Phase 2 hand-over.** Each tick the script's control thread checks: if level state 0 is set and level state 1 is clear, it plays movie 12 (25.63 s) and waits for it, moves the hero to locator 10, moves entity 7 (Gnarfas; Medium-High) to position 12, sets the normal camera (3 s), sets game state 213, sets level state 1, sleeps 30 ticks and shows dialogue line 14 (and waits for it). Gnarfas then sees level states 0 and 1 set and enters phase 2 once, healing the hero to full (Phase hub, step 3).

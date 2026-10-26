@@ -9,7 +9,7 @@
 
 The engine has no hazard volume type. The hero takes environmental damage in four ways:
 
-1. Level scripts call the damage, status, kill and fall host operations when a trigger or a zone fires. These are the level-script hazards of SPEC-0044 (modules 1091, 864 and 1174).
+1. Level scripts call the damage, status, kill and fall host operations when a trigger or a zone fires. These are the level-script hazards of SPEC-0044 (modules 1091, 864 and 1174 in SPEC-0044, 1090 in SPEC-0041, 1089 and 1381 in SPEC-0042; Behavior 5A lists the last three).
 2. The per-tick poison status deals periodic damage through the normal take-hit path, limited so that the hero keeps at least 1 HP (SPEC-0036). Fire has no per-tick effect on a hero: a fire status on a hero shows the fire effect and counts down, but deals no damage. Fire damage over time exists only in the enemy per-tick routine (SPEC-0029).
 3. Enemy attacks and projectiles apply statuses on a hit (SPEC-0036; the plague serpent's poison cloud in SPEC-0016). They call the hero's own status-apply method, so the hero's immunities block them.
 4. The hero's motion tick has three ground rules (Behavior 7A): deadly ground (SPEC-0055), a hurting surface that deals 10 HP once every 2.5 s of game clock, and a deep overlay surface that kills both heroes.
@@ -50,24 +50,24 @@ Reached counts: call sites reachable from each module's entry points, deduplicat
 
 | Host call | Reached sites | Reached modules | Hazard use |
 | --- | --- | --- | --- |
-| DamageHero | 4 | 3 | 1091: 2 (animated-hazard helper and sweep). 864: 1 (zone helper). 1174: 1 (zone with cooldown). |
-| KillCurrentHero | 2 | 2 | 1091: 1 (animated-hazard helper, kill branch). 735: 1 (hero-death callback; SPEC-0055). |
+| DamageHero | 8 | 6 | 1091: 2 (animated-hazard helper and sweep). 864: 1 (zone helper). 1174: 1 (zone with cooldown). 1089: 1 (hazard thread, 1 HP). 1090: 2 (hurt-zone routines for the two banks, 20 HP). 1381: 1 (falling-hazard routine, 5 HP; Behavior 5A). |
+| KillCurrentHero | 3 | 3 | 1091: 1 (animated-hazard helper, kill branch). 735: 1 (hero-death callback; SPEC-0055). 1089: 1 (timeout kill of the crusher sequence; Behavior 5A). |
 | SetHeroStatus | 1 | 1 | 1091: 1 (sweep; poison, status index 2, default duration). |
-| StartHeroLongFall | 10 | 9 | Falls, not damage. No fall deals damage (Behavior 6). |
+| StartHeroLongFall | 14 | 12 | Falls, not damage. No fall deals damage (Behavior 6). |
 | SetHitPointsPercentage | 5 | 3 | Not a hazard call (boss and scripted health; SPEC-0036). |
 | RegisterScriptAnimatedTrigger | 13 | 3 | 1091: 8. 956: 1. 1089: 4 animated triggers to a shared handler that dispatches to its button/animation routine. |
 | RegisterScriptTrigger | 580 | 84 | All trigger kinds. Hazard callbacks among them: 1091, 1174, 1098, 735 and others not classified. |
 
 Import-list totals. The module import lists also hold call sites that are not reached from any entry point. Totals over all listed sites:
-- DamageHero: 11 sites in 6 modules. The 7 unreached sites are in modules 864, 1089, 1090 and 1381.
-- KillCurrentHero: 3 sites in 3 modules. The unreached site is in module 1089.
+- DamageHero: 11 sites in 6 modules. Three sites are dead: two in module 864 (no routine that is registered, started or called reaches them) and one in module 1089 (a short body under the hazard word that nothing references). The other 8 are reached, 4 of them only behind tests of module data words that start at 0 and are set later in play (1089, 1090 and 1381; Behavior 5A). Counting only the call sites that a plain walk from the entry points lists would miss those four.
+- KillCurrentHero: 3 sites in 3 modules, all reached. The 1089 site is the timeout kill, behind the same kind of test.
 - SetHeroStatus: 1 site, the only one listed.
 - StartHeroLongFall: 14 sites in 12 modules.
 - SetHitPointsPercentage: 7 sites. The 2 unreached sites are in module 1350.
 - RegisterScriptAnimatedTrigger: 21 sites in 5 modules.
 - RegisterScriptTrigger: 704 sites in 95 modules.
 
-Caveats. Module 1089 registers four animated triggers from its initializer; their handler reaches a button/animation routine, but no trigger-object inventory establishes which instances fire. Its two DamageHero(1) calls and one KillCurrentHero call remain outside the statically connected initializer, update, thread and registered-handler paths. No in-play damage or kill is attributed to those imports. No level module applies fire, slow, curse, confusion, strength or speed to the hero. The only status that level scripts apply is poison.
+Caveats. Module 1089 registers four animated triggers from its initializer; their handler reaches a button/animation routine. One of its two DamageHero(1) calls is in a control thread that the initializer starts and the other is in the dead body named above; its KillCurrentHero call is in the per-tick update. Both live calls are gated by module words that are 0 at load, so a listing that decides those branches from the load-time value drops them; they run in play (Behavior 5A). No level module applies fire, slow, curse, confusion, strength or speed to the hero. The only status that level scripts apply is poison.
 
 Not hazards, although they hurt or affect the hero:
 - Enemy and boss contact damage and attacks (SPEC-0016, SPEC-0029, SPEC-0038).
@@ -206,10 +206,19 @@ Test vectors:
 - TV-D4: the hero within 2.0 of objects 0 and 5: hit (object 0), 18 ticks, hit (object 5), 18 ticks, 1 tick, repeat: 2 hits per 37 ticks.
 - TV-D5 (shake gate): the hero 20 units from object 0's locator 0 and more than 2.0 units from every listed object, in normal play: shakes start, about one every 0.05 s, with no damage. The same spot while the trigger 22 scene runs: no shake until that scene ends.
 
+### 5A. Other module hazards (modules 1090, 1089 and 1381)
+
+Confidence: High for the calls, the gates and the constants; Medium for how often a player meets each one. The full module scripts are in SPEC-0041 (1090) and SPEC-0042 (1089, 1381).
+
+- **Module 1090, hurt zones.** Two banks of seven hazards each have a trigger. Threads started by the initializer fire the hazards in repeating four-step patterns (0.7 s per firing in bank A, 0.5 s in bank B). While the hero stands in the trigger of a hazard that is firing, the zone routine calls DamageHero(20) and then Wait(1.0 s), and tests again one tick later: the hero loses 20 HP once every 61 ticks. A zone whose hazard is not firing does nothing.
+- **Module 1089, crusher hazard thread.** The first trigger of the module (index 0) starts the sequence and, after its setup scene and a 30-tick sleep, sets a module word that is 0 at load. While that word is set, a control thread started by the initializer checks 12 animated locators in turn and, for each locator whose horizontal distance to the hero is below 6.0 and whose height is less than 2.0 above the hero's, calls DamageHero(1) and Wait(0.5 s). The word is cleared when the first object's animation time passes 18.4 s. If fewer than 4 button presses were counted, the update then calls KillCurrentHero when that time passes 19.9 s and moves the hero to locator 0 (the sequence can run again); with 4 or more presses the objects slow down and stop and nobody is killed. Outside death callbacks and the module 1091 kill objects, this is the only level-script path that kills a hero.
+- **Module 1381, falling hazards.** Six falling hazards bind their trigger to a damage routine for part of each cycle. The routine calls DamageHero(5) and then Wait(2.0 s), and only while a module word is set. That word is 0 at load and is set when the hero uses the warp pad with trigger index 3.
+- None of these calls checks the hero's health: damage equal to the health kills (Behavior 7).
+
 ### 6. Kills and falls
 
 - KillCurrentHero kills the active hero. The death callbacks and the rules after a death are in SPEC-0055. In pattern A the kill branch then waits 1.0 s and moves the hero to locator 6 in state 1 with its health unchanged (Behavior 2, Kill outcome).
-- StartHeroLongFall starts a long fall (state 48). It is a movement, not a damage call. Ten sites in nine modules call it (Behavior 1). It is the area-entry arrival animation: the script moves the hero to a locator high up, starts the long fall, runs a tracking camera and a fade in, and waits (SPEC-0033, Behavior 9B).
+- StartHeroLongFall starts a long fall (state 48). It is a movement, not a damage call. Fourteen sites in twelve modules call it (Behavior 1). It is the area-entry arrival animation: the script moves the hero to a locator high up, starts the long fall, runs a tracking camera and a fade in, and waits (SPEC-0033, Behavior 9B).
 - No fall damage exists (High). The jump and fall air states, the hard landing and the long fall never call the hit or the deduct routines, so no fall of any height changes health. The clean side must not add fall damage.
 - Hard landing: the fall height is the take-off height (the start point stored when the jump or fall began) minus the hero's height at the landing decision, not the height of the apex. The decision is taken up to 1.0 above the ground, so the real drop can be up to 1.0 more than the fall height: a walk-off from 3.75 is soft and from 4.0 hard (SPEC-0033, Behaviors 9A and 50). A fall height above 3.0 (the data word 0x2DD828) gives the hard landing (animation 118), which deals no damage (SPEC-0033, Behavior 50).
 - The soft-landing camera shake for a fall height above 4.0 (the data word 0x2DD814) can never run: any fall above 4.0 is already above 3.0 and so takes the hard landing first. Reproduce: a landing never shakes the camera.
@@ -308,7 +317,7 @@ Numbers of removed questions are not reused.
 3. The clock read by GetSystemTime. Resolved: the game clock in seconds (High).
 4. Sweep id. Resolved: in PlayAnim(id, 0, 5.0) the loop id (such as 36 to 40 for trigger 43) is an animated-object index, 0 is the wait mode and 5.0 the speed factor; each call plays that object's clip once at 5x speed without waiting (Behavior 3). **[Medium-High]**
 6. The hero's poison and fire words. Resolved: -1 from the hero's creation, and every source passes -1 for a hero, so hero poison is always 2 HP every 4 s and no source passes a zero period (High).
-9. Module 1089. Resolved in part: its initializer registers four animated triggers to a handler that dispatches to a button/animation routine. The resource's pack is present in the static stream graph via pack 1096, though this does not establish that a particular trigger instance fires in a playthrough. The two `DamageHero(1)` calls and one `KillCurrentHero` call remain outside the paths connected to the initializer, update, thread and registered handlers; no load-time data registration was found linking them. No in-play damage or kill is attributed to those imports. **[High for initializer registrations and in-module path boundary; unresolved for trigger-instance activation and any unrecovered indirect entry]**
+9. Module 1089. Resolved in part: its initializer registers four animated triggers to a handler that dispatches to a button/animation routine. The resource's pack is present in the static stream graph via pack 1096, though this does not establish that a particular trigger instance fires in a playthrough. One `DamageHero(1)` call (the hazard thread) and the `KillCurrentHero` call (the timeout of the crusher sequence, in the update) are on paths that the initializer starts; the second `DamageHero(1)` call is in a body nothing references. The two live calls sit behind module words that are 0 at load and are set by the first trigger, so they are not dead (Behavior 5A). **[High for the thread, the update path and the gates; unresolved for which trigger instance the player first touches]**
 15. Fire status on a hero. Answered: it shows the fire effect (effect 0xCA on three emitters) and the fire tint and deals no damage, and confusion is ignored from every source (SPEC-0036, Status display and cues). Fire reaches a hero through the enemy status rolls of bites and projectiles and through SetHeroStatus(7, ...), which no level module uses; which enemy rows and projectiles carry fire is in SPEC-0029.
 16. Surface meanings. Resolved in part: surface word 2 is a hot surface, not acid, and surface word 8 is water (the deep overlay); the game ties them to the hot-burst and water-splash deaths (Layout). The exact pack-local ordinals of all 23 non-deadly surface-2 entries are listed in Layout. Pack 879's entry 4 is in a pack with no module and no incoming transition edge in the disc route graph, so that record is disc-present but not established as player-reachable (SPEC-0006). Still open: mapping the other entry indices to named sub-areas or player-facing map locations. **[High for the entry inventory; Medium-High for the surface meanings and pack 879 reachability boundary]**
 18. Repeated overlay kill. Resolved: the deep overlay and deadly-ground rules run on every tick the condition holds, and each kill of a hero already in the death state re-runs the default death (SPEC-0055, repeated death and section 8A). **[Medium-High]**

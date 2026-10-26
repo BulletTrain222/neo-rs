@@ -492,7 +492,7 @@ A kind-8 placement with key 0 or more names the item id directly. No money roll 
 
 ### Stat-up Negg and shield placements (direct keys)
 
-Confidence: Medium. The lists are archive resources whose type-36 region children hold a direct-key placement (key 0 or more) for the item id. Except where marked, they are world packs (SPEC-0006). Only the presence of the placements is listed here. The flag-1 placements among them are shop stock priced at their fixed count (SPEC-0050 sections 8 and 10): Golden Negg in packs 984 and 1423 (2000 NP) and 1429, 1430, 1431 and 1433 (5000 NP); Starry Negg in packs 857 and 1251 (800 NP) and 1011 (1000 NP); Red Negg in packs 749 (1000 NP) and 1011 (1250 NP). Packs 749, 1430 and 1431 are not reached. The other placements of these ids have flags 0 or 2 to 4.
+Confidence: Medium. The lists are archive resources whose type-36 region children hold a direct-key placement (key 0 or more) for the item id. Except where marked, they are world packs (SPEC-0006). Only the presence of the placements is listed here. The flag-1 placements among them are shop stock priced at their fixed count (SPEC-0050 sections 8 and 10): Golden Negg in packs 984 and 1423 (2000 NP) and 1429, 1430, 1431 and 1433 (5000 NP); Starry Negg in packs 857 and 1251 (800 NP) and 1011 (1000 NP); Red Negg in packs 749 (1000 NP) and 1011 (1250 NP). Packs 749, 1430 and 1431 are reached under the 174-pack reach of SPEC-0006 (Medium). The other placements of these ids have flags 0 or 2 to 4.
 
 - Golden Negg (151): packs 796, 984, 1423, 1429, 1430, 1431 and 1433.
 - Starry Negg (154): packs 857, 1011, 1230, 1250, 1251, 1253 and 1358. Resource 733 is also a source, but it is a character region, not a world pack: a top-level type-36 region whose only kind-8 record has key 154, flag 3 and count 0. It is the only region resource with a Negg or shield key. A Giant Slorg in region 733 drops it on death: its spawn record names that region's only placement (drop placement ordinal 0), and the key 154 spawns directly (Medium-High; it depends on region 733 being loaded for the fight).
@@ -558,7 +558,7 @@ A spawn takes an item id, a point (and for one form a facing), two flags *snap* 
 
 | Route | Point | snap | placed | S0 to S1 | Delay | Larg | Direction |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| Region load (flag 0 or 1 placements) | the placement point, optionally moved to the ground plus 0.5 (placement byte +0x21; Medium-High) | no | yes | 1 to 1 | 0 | -1 (infinite) | the placement's facing |
+| Region load (flag 0 or 1 placements) | the placement point; when placement byte +0x21 is non-zero (3,029 of 3,421 on disc) its height is replaced by the ground height under it plus 0.5, the probe cast from 4.0 above the stored height (0.5 when no ground is found; High). The scripted add by placement number applies the same rule to the placement's point, unless the caller supplies its own point or facing, which then replace the placement's | no | yes | 1 to 1 | 0 | -1 (infinite) | the placement's facing |
 | Drop action, one item (breakable, enemy placement with key -1, interactables) | the object's or enemy's position | no | no | 0.25 to 1 | 0 | -1 (11.2 s or 15.2 s) | the caller's, else random |
 | Drop action, coins (coin split) | the same point for every coin | no | no | 0.25 to 1 | 0, then 0.4 s more per coin when a direction is given | -1 | the caller's, else random |
 | Enemy carried Neopoints | the enemy's position | no | no | 0.25 to 1 | 0 for every coin | -1 | random |
@@ -782,14 +782,14 @@ Confidence: High for the grant sites, the map numbers, the world-pickup veto and
 - A give is refused when map n is already held (Medium). A world pickup, a purchase and a script give all reach the same add of item 175, so all three set the held flag of map n in the same way, play the same cue and dropped stinger, and leave the item count unchanged (High). For a world pickup or a purchase, the map number is the placement's byte +0x2C plus 1; that byte is copied into the world-item record at +0x8C at spawn. A map placement is not spawned when its map is already held (High).
 - Twenty-one treasure maps are granted by level scripts: maps 1, 3, 6, 8, 10, 11, 13, 14, 16, 17, 18, 21, 24, 27, 28, 30, 35, 36, 38, 40 and 46. There are 26 grant sites in five level modules: 8 in module 880, 6 in module 1230, 6 in module 1023, 3 in module 991 (maps 21, 17 and 35, for 300, 350 and 400 NP; SPEC-0045) and 3 in module 1353 (maps 36, 40 and 38, for 200, 200 and 300 NP; SPEC-0041). The map number of each of the 991 and 1353 grants is a fixed argument of its give call (High). Each site sits in a yes/no prompt that charges Neopoints (SPEC-0050). A site runs only when its map is not held, and in some chains it also needs the earlier maps of the chain to be held (High for the sites; Medium for the chain gates).
 - The other 23 real treasures (rows 2, 4, 5, 9, 12, 19, 20, 22, 23, 25, 26, 29, 31 to 34, 37, 39 and 41 to 45) have no grant in any level script. Map placements (item 175) supply all of them: 24 placements carry maps 1, 2, 4, 5, 9, 12, 19, 20, 22, 23, 25, 26, 29, 31 to 34, 37, 39 and 41 to 45. 21 of them are flag-1 shop stock; three are flag-4 placements (maps 20, 23 and 34, a conditional route). So every one of the 44 real treasures has a map source on disc (High).
-- Maps 2, 4, 9, 12, 25, 32 and 33 are sold only in shops that are listed as never reached (Counts; Open question 90), so in normal play those seven treasures cannot be dug (Medium; it depends on the reach classes).
+- Maps 2, 4, 9, 12, 25, 32 and 33 are sold only as shop stock: maps 25 and 33 in pack 749 and maps 2, 4, 9, 12 and 32 in pack 787. Both packs are reached under the 174-pack reach of SPEC-0006, so all 44 real treasures have a source in reached packs (Medium; it depends on the reach classes and on the stock gates of SPEC-0050).
 - Some level scripts use the number 175 as a message id (modules 758, 909 and 934) or as a game-state id (module 1056). Those calls are not grants and are not counted above (High).
 
 ### Outfit items (body family)
 
 Confidence: High for the id mapping and for the list of grant sites; Medium for their gates; Low for the sources of the unsourced items.
 
-- The outfit shown is read from the hero's body entry (the hero's slot of the category-5 list). Hero 0's outfit k (k from 0 to 7) is item 119 + k. Hero 1's outfit k is item 127 + k. An empty body entry gives outfit 0. Outfit k loads model resource 504 + k for hero 0 and 512 + k for hero 1. Item 126 in the body entry gives outfit 7 for either hero (for hero 1, 126 minus 127 is -1, which maps to outfit 7), so the cloak model is resource 511 for Tor and 519 for Roberta. Item 126 reaches the body entry only through the cloak swap (Tattered Cloak, below; High).
+- The outfit shown is read from the hero's body entry (the hero's slot of the category-5 list). Hero 0's outfit k (k from 0 to 7) is item 119 + k. Hero 1's outfit k is item 127 + k. An empty body entry gives outfit 0. Outfit k loads model resource 504 + k for hero 0 and 512 + k for hero 1. Item 126 in the body entry gives outfit 7 for either hero (for hero 1, 126 minus 127 is -1, which maps to outfit 7), so the cloak model is resource 511 for Tor and 519 for Roberta. Item 126 reaches the body entry only through the cloak swap (Tattered Cloak, below; High). Roberta's body entry is empty when she first joins (no body-family item with a source reaches it on that path), so she shows outfit 0, model resource 512, until a body item is placed there (Medium-High; SPEC-0036 Open questions, R-0041).
 - Item 134 never reaches a body entry (High). Its text row has category 0, so an add puts it in the general list, and no swap or equip path moves a general-list item into the category-5 list. Its outfit offset (7 for hero 1; 15 for hero 0, outside outfits 0 to 7) is therefore never used.
 - Known sources:
   - Item 120: one script grant, in level module 1148.
@@ -797,7 +797,7 @@ Confidence: High for the id mapping and for the list of grant sites; Medium for 
   - Item 126: a grant chain in level module 842. Most of its grant sites sit under a debug-mode test. Two sites are outside it: one unconditional site, and one under a callback that checks state values.
   - Item 130: shop stock (a flag-1 direct placement) in pack 859, priced 6000 NP, with a purchase hook in level module 859 that reacts to a purchase of 130 (SPEC-0050 section 4).
   - Items 121 (resource 1132, shop pack 1131), 123 (pack 1005), 125 (resource 1406, shop pack 1405), 131 (pack 1005), 132 (packs 1429 and 1433) and 133 (resource 1406, shop pack 1405): shop stock (flag-1 direct placements) in reached packs, sold at their placement's fixed count (SPEC-0050 section 10).
-  - Item 129: a flag-1 direct placement only in pack 776, which is unreachable (see Sources).
+  - Item 129: a flag-1 direct placement only in pack 776, which is reached under the 174-pack reach (see Sources).
 - Item 119: a new game puts it into the inventory (Sources, New game).
 - No known source: items 127 and 128 (price 0). Item 124 (price 0) has only a conditional source, a flag-4 direct placement in pack 1096. Item 134 is a blank row (no text name, category 0, price 0) and has no source.
 - Drop groups never contain items 119 to 134 (High). Equipment outfits do not come from drops.
@@ -991,7 +991,7 @@ Item names for the model resources (item text table 0; Medium-High):
 | 565 to 574 | 50 to 59, the ten potions |
 | 575 | 36 Rope Gun |
 
-Five of these models belong to items whose only sources are in packs that are not reached (Counts): 547 (item 101), 551 (105), 552 (111), 553 (112) and 562 (108). All ten potions have reached sources.
+Three of these models belong to items whose only sources are in packs that are not reached (Counts): 547 (item 101), 551 (105) and 552 (111), all in pack 1259. Items 108 (model 562) and 112 (model 553) have placements in reached packs: 108 is shop stock in pack 776, and 112 has only a conditional flag-4 placement in pack 793. All ten potions have reached sources.
 
 These indexes are display positions for models. They do not replace the slot rules below (Open questions).
 
@@ -1190,7 +1190,7 @@ Bush drops (coin bushes and Negg bushes) are specified in SPEC-0060, Foliage pat
 ### Outfit placements
 
 - Outfits sold as shop stock (flag-1 direct placements) in a reachable pack: 121 (resource 1132, shop pack 1131), 123 (pack 1005), 125 (resource 1406, shop pack 1405), 130 (pack 859), 131 (pack 1005), 132 (packs 1429 and 1433) and 133 (resource 1406, shop pack 1405).
-- Item 129 has a flag-1 placement only in pack 776, which is unreachable. Item 119 comes from the new game (below). Items 127 and 128 have no source.
+- Item 129 has a flag-1 placement only in pack 776, which is reached under the 174-pack reach. Item 119 comes from the new game (below). Items 127 and 128 have no source.
 
 ### New game
 
@@ -1202,9 +1202,9 @@ Bush drops (coin bushes and Negg bushes) are specified in SPEC-0060, Foliage pat
 
 | Class | Count | Ids |
 | --- | --- | --- |
-| Obtainable in play (an unconditional source: a flag-0 or flag-1 direct placement in a reachable pack, a non-debug script grant, the coin spawn of item 139, or the new-game items) | 108 | all ids not in the rows below |
-| Obtainable in play, conditional only (drop-group roll, a flag 2 to 4 placement, a placement in an unnamed region, or a coin split) | 15 | 8, 12, 13, 18, 29, 69, 70, 76, 78, 79, 80, 82, 124, 148, 178 |
-| Obtainable only in unreachable packs | 8 | 68, 101, 105, 108, 111, 112, 129, 177 |
+| Obtainable in play (an unconditional source: a flag-0 or flag-1 direct placement in a reachable pack, a non-debug script grant, the coin spawn of item 139, or the new-game items) | 111 | all ids not in the rows below |
+| Obtainable in play, conditional only (drop-group roll, a flag 2 to 4 placement, a placement in an unnamed region, or a coin split) | 16 | 8, 12, 13, 18, 29, 69, 70, 76, 78, 79, 80, 82, 112, 124, 148, 178 |
+| Obtainable only in unreachable packs | 4 | 68 (pack 1170), 101, 105 and 111 (pack 1259) |
 | Debug-only | 0 | none |
 | Dialogue give only (a give-item command, kind 0x13 of SPEC-0022, in a line of the pack named in "Dialogue grants" below) | 18 | 1, 16, 17, 21, 23, 33, 38, 64, 65, 66, 67, 71, 74, 75, 84, 85, 87, 128 |
 | No source | 59 | 43 blank or placeholder rows and 16 named items |
@@ -1219,7 +1219,7 @@ Named items with no source (16):
 - Tal currency (4): 140 Tal; 141 5 Tal; 143 25 Tal; 144 100 Tal. No placement, drop sub-table row, script grant, dialogue give or fixed code id names them (High).
 - Item 180 Aegis Omnibus: only the boot grant handler (above).
 
-Dialogue grants (High for the commands; whether each pack is reached follows the pack classes of Open question 90). These ids have no placement and no script grant; their only grant is a give-item command (count 1) inside a dialogue line, run when the line is shown (SPEC-0022):
+Dialogue grants (High for the commands; whether each pack is reached follows the pack classes of Open question 90; every pack named in the table is reached under the 174-pack reach). These ids have no placement and no script grant; their only grant is a give-item command (count 1) inside a dialogue line, run when the line is shown (SPEC-0022):
 
 | Id | Item | Pack (speaker) |
 | --- | --- | --- |
@@ -1381,7 +1381,7 @@ Synthetic and hand-checkable. Random draws are given as the value the draw retur
 64. **Placement id table, pack 685** (from the disc; one region with six entries). Entries 0 to 5 each have region byte 0xFF and ordinal k, so entry k names the kind-8 record that is k-th in walk order. Those records are: ordinal 0 key 169, flag 0; ordinal 1 key 169, flag 0; ordinal 2 key 49, flag 3; ordinal 3 key -1, group -1, count 0, flag 3; ordinal 4 the same as ordinal 3; ordinal 5 key 18, flag 3. Region start spawns items 169 and 169 only. A breakable whose drop id is 3 or 4 gives nothing. A drop id of 5 spawns item 18 directly.
 65. **Shop copy and take** (synthetic placements): flag 1, key 153, fixed count 75; Neopoints 500. Buy: Neopoints 425 and the world item stays; buy again: 350. Flag 1, key 114, count 3000, and a second record with key 114, count 10000, in the same pack: buying either one (Q = 1) removes both, and neither spawns on the next visit.
 66. **Shop map** (synthetic): flag 1, key 175, fixed count 200, placement byte +0x2C = 0x12. Buying it gives map 19. With map 19 already held, the placement is not spawned.
-67. **Once per area** (synthetic): Golden Negg bought in world id 910: both heroes gain the health and magic steps. A second Golden Negg add in world id 910 is refused. An add in another world id is accepted.
+67. **Once per area** (synthetic): Golden Negg bought in the world of pack 909 (world index 68, the key table of SPEC-0025): both heroes gain the health and magic steps. A second Golden Negg add in that world is refused. An add in another world id is accepted.
 68. **Placed potion** (synthetic): a potion spawned by region load is in state 1 at its point. It does not move, spin or age on any tick, is always ready and never expires.
 69. **Nearest-item search** (synthetic): the hero's motion record at (0, 0, 0) and one ready item with token 1 at (3, 1.9738, 4). Stored: token 1, unit direction (0.5581, 0.3672, 0.7441), distance 5.3755.
 70. **Lifetime defaults** (synthetic): a drop of item 153 with Larg -1, not placed: L = 11.2 s. A drop of Mote 164: 15.2 s. Item 153 at region load: infinite. A script spawn of a coin with Larg 5.0 and placed 0: 5.0 s.
@@ -1488,10 +1488,10 @@ Synthetic and hand-checkable. Random draws are given as the value the draw retur
 75. Resolved (Medium-High): the weapon family is the category-1 list, the shield family the category-2 list and the body family the category-5 list, each indexed by the hero index; the Mote words are separate (Equipment slots).
 76. Answered: item 50 revives the partner to full health (Consumable effects by item id; SPEC-0053).
 77. Resolved: the map number is placement byte +0x2C plus 1. The byte is copied into the world-item record (+0x8C) with the rest of the placement data at spawn (Treasure maps; High).
-78. Resolved: **every map has a source.** Script grants give 21 maps at 26 sites in five modules; modules 991 and 1353 give maps 21, 17, 35 and 36, 40, 38. The other 23 treasures have map placements, 20 as shop stock and 3 as flag-4 placements (Treasure maps; High). Seven of those (maps 2, 4, 9, 12, 25, 32 and 33) are sold only in shops listed as never reached (Medium; Open question 90).
+78. Resolved: **every map has a source.** Script grants give 21 maps at 26 sites in five modules; modules 991 and 1353 give maps 21, 17, 35 and 36, 40, 38. The other 23 treasures have map placements, 20 as shop stock and 3 as flag-4 placements (Treasure maps; High). Seven of those (maps 2, 4, 9, 12, 25, 32 and 33) are shop stock in packs 749 and 787, which are reached (Medium; Open question 90).
 79. Resolved: a world pickup, a purchase and a script give of item 175 reach the same add, which sets map n's held flag and leaves the count unchanged (Treasure maps; High).
 80. Resolved: **items 126 and 134.** Item 126 (config type 15, text category 9) fills both cloak entries and is worn only through the cloak swap (Square on the Items tab), which puts it in the active hero's body entry; it then shows outfit 7 for either hero and the wearing query sees it. Item 134 (config type 1, text category 0, no name) goes to the general list, never reaches a body entry and has no source (Outfit items; Tattered Cloak; High).
-81. Resolved: the flag-1 placements of outfits 121, 123, 125, 130, 131, 132 and 133 are shop stock, sold at their fixed counts (Outfit items; SPEC-0050 section 10; High). Item 130 is the stock of pack 859, whose purchase hook reacts to it. Item 129 is stock only in an unreachable pack. Item 119 comes from the new game. Items 127 and 128 have no source. Item 124 has only a conditional source.
+81. Resolved: the flag-1 placements of outfits 121, 123, 125, 130, 131, 132 and 133 are shop stock, sold at their fixed counts (Outfit items; SPEC-0050 section 10; High). Item 130 is the stock of pack 859, whose purchase hook reacts to it. Item 129 is stock only in pack 776, which is reached. Item 119 comes from the new game. Items 127 and 128 have no source. Item 124 has only a conditional source.
 82. Answered: the panel and the item screen always force the use (Consumable healing; Using an equipped item).
 83. Answered: the luck gate applies to region start-up and scripted adds alike (Pickup dispatch and the luck gate).
 84. Answered: the second panel is a Mote picker (Second quick panel and Mote equipping; Open questions 95 to 104).
@@ -1501,7 +1501,8 @@ Synthetic and hand-checkable. Random draws are given as the value the draw retur
 87. Resolved: the use-request gate is the use hook of a level script (host row 269); see Use-request gate and charm-only flag (High).
 88. Answered: an entry left on an unowned candidate or -1 has count 0, so its cross icon is hidden (SPEC-0023 section 11).
 89. Answered: the item screen forces the use like the panel, with notify 0 (Using an equipped item; Open question 116).
-90. **Pack reachability** (Medium): of the 191 world packs, 154 are classed as reachable and 37 as unreachable, using the region-load links that are known. Some links are not confirmed, so the classes can change. The classes affect the 8 ids with sources only in unreachable packs and the placements cited as reachable in Sources and Outfit items.
+90. **Pack reachability** (Medium): of the 191 world packs, 174 are classed as reachable and 17 as unreachable (SPEC-0006, Reach; a static upper bound that ignores story gates): 678, 683, 684, 686, 720, 742, 879, 970, 1003, 1004, 1055, 1077, 1082, 1170, 1259, 1298 and 1323. Some links are not confirmed, so the classes can change. The classes affect the 4 ids with sources only in unreachable packs (68, 101, 105 and 111) and the placements cited as reachable in Sources and Outfit items.
+   Default if unresolved (rewrite choice): treat every pack the reach of SPEC-0006 marks as reached as a place where its placements and shop stock can appear, and give the four ids above no obtainable source.
 91. **Group -1 drop placements** (partly resolved): all 394 are referenced. 325 are in world packs whose placement-id table lists every placement of the pack, so that table is a complete list rather than proof of use. 69 are in character regions and are reached only through enemy drop ordinals. 131 are the target of an enemy drop ordinal (the 69 included), and 67 of those have a fixed count above 0 and give coins only. A complete placement-id and breakable-reference crosswalk finds one breakable reference to a key -1/group -1/fixed-count-0 placement: pack 816, breakable entry 11, placement ID 11, current-region ordinal 11. Its drop path has neither a money roll nor a fixed-count payout nor an item roll, so it yields no reward when triggered. The one distinct id-form ItemActivate call site in the listed level modules passes ID 12; pack 800's table maps it to slot 5, resource 806, ordinal 0, whose key is 9, so it is not one of these placements. The other listed ItemActivate calls use the world form with region -1 and return without spawning. These are static call/reference findings; they do not prove live route or trigger reachability (Sources, Drop placements).
 92. Resolved: flags 2, 3 and 4 partition the conditional placements by trigger: flag 2 breakable drops, flag 3 enemy drops, flag 4 type-40 chest, dig and chain rewards (Sources, Conditional placements; SPEC-0050 section 12; High).
 93. Resolved for the module and direct boot call paths: the module-1382 spawn field has one direct writer, called six times to set the first Mote id of each pair (Sources); the paired id is stored separately. The module's zero-fill acts on a three-byte local buffer, not this record field. The boot grant handler has no direct caller or registered table entry and is not an identified item source. Indirect runtime entry or external writes remain unestablished.

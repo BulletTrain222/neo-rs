@@ -1,6 +1,6 @@
 # SPEC-0060: Foliage patches (type 16)
 
-- Answers: SPEC-0006 open questions on the type-16 fields, build selector, thresholds, query point, items and purpose; SPEC-0028 open questions 57 to 59 (six-slot look-ahead) and 80 (type-16 field reading); proactive otherwise (bush cutting, drops, regrowth, trees and reeds)
+- Answers: SPEC-0006 open questions on the type-16 fields, build selector, thresholds, query point, items and purpose; SPEC-0028 open questions 57 to 59 (six-slot look-ahead) and 80 (type-16 field reading); proactive otherwise (bush cutting, drops, regrowth, trees and reeds); R-0046 (in part; the LOD fields and the trunk model open in Open questions)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). Check the three data words in Where it lives before trusting the values.
 - Confidence: per section. Record layout and field roles: High (counted on all 75 chunks). Build dispatch, families and model ids: High. Once-per-area gates and the slot quirk: High. Placement: Medium-High (jitter and scale rules High; the per-model ground probe Medium). Per-frame gates: High for the order, Medium-High for the source of the eye point. Fade bands: High. Grass logic: Medium-High. Bush rules (state machine, cut triggers, drops, regrowth, sparkle): High; hero bend formula Medium; plant-side melee capsule geometry High. Trees: Medium-High. Reeds: Medium-High (fall states High). Flowers: Low.
@@ -106,7 +106,7 @@ Each type-16 chunk takes a free world slot (up to ten). Every record builds one 
 | 0, 12 | G grass | far model 283 (resource 9) | always. Key 0 snaps to the ground; key 12 does not. | 0: 811 (30 packs); 12: 122 (5 packs) |
 | 1, 6, 7 | S flowers | 194 (keys 1 and 7), 193 (key 6) | the model belongs to this world | 6: 55; 7: 34; 1: none |
 | 2, 3, 5, 9, 16 to 22, 28 to 34, 36 to 39 | B bushes | see the bush table below | always built. Without its main model, a patch has no models and an inner distance of 0, so it is inert. | 1,437 (inert: 66 of key 19, 2 of key 22, 1 of key 28, all 7 of key 32) |
-| 4, 13, 25 | H trees | 4: near 200 plus a trunk; 25: near 200, far 199; 13: far 220 | always (the near model is absent or belongs to this world) | 4: 226 (15 packs); 25: 458 (18 packs); 13: 8 (pack 721) |
+| 4, 13, 25 | H trees | 4: near 200 only, with a solid cylinder; 25: near 200, far 199; 13: far 220 | always (the near model is absent or belongs to this world) | 4: 226 (15 packs); 25: 458 (18 packs); 13: 8 (pack 721) |
 | 8 | K reeds | near 202, far 203 | model 202 belongs to this world | 24 (packs 909, 934 and 1056) |
 | 10, 11, 14, 23, 24, 26, 27, 35 | C rustle and clover beds | 10: 197; 11: 204; 14: 221; 23: 233; 24: 234; 26: 235; 27: 239 (Four-Leaf Clover); 35: 268 (Twelve-Leaf Clover) | the model belongs to this world | 10: 62; 11: 325 (106 not built); 14: 463; 23: 166 (57 not built); 26: 1; 27: 10 (10 packs); 35: 3 (packs 706, 1184, 1300) |
 | 15, 40 and up | none | none | never | none on disc |
@@ -140,6 +140,8 @@ Bush records on disc by key: 9: 866; 5: 199; 16: 123; 19: 70; 20: 58; 17: 44; 33
 | 38 | 151 (Golden Negg) |
 | 39 | 154 (Starry Negg) |
 
+The save words that hold these sets are at slot offsets 0x2EB2 (item 19), 0x2ECB (item 20), 0x2EE4 (item 151), 0x2EFD (item 174) and 0x2F16 (item 154); each is a 193-bit set whose bit is the world index (SPEC-0025, once-per-area sets; R-0046).
+
 A clover or Negg patch whose item was gained in the area is therefore missing from the next load of the area. Quirk (reproduce): the gate tests the slot of the world that is current at build time, not the slot of the world being built (Edge cases).
 
 ### 2. Placement (Medium-High)
@@ -165,7 +167,7 @@ With overrides (A or D nonzero), the four distances are:
 | Out band O | B |
 | Fade band W | C |
 
-Without overrides they come from the near model's LOD node (SPEC-0004). With no model, F = 4000.
+Without overrides they come from the near model's LOD node (SPEC-0004), as follows (High for the field reads, Medium for the clamp): the far distance F is the node's fade end (float at +0x64); the switch distance S is the node's float at +0x54; the fade band W is the node's fade length (float at +0x58); the out band O is S minus the float at +0x50. If the patch's build record has a zero flag word at +0xA4, W and O are both raised to the larger of the fade length and O, and S is lowered to F minus that value when that difference is below S. The cull value, the layer flags and the pass byte are not used for these four. With no model, F = 4000. Test vector: a node with S = 80, +0x50 = 30, fade length 12 and fade end 150 and flag word zero gives O = 50, W = 50, F = 150 and S = 80 (F minus 50 is 100, not below 80).
 
 **Per-patch distances (High).** Every family build passes an inner (logic) distance of 100 for every patch, and 0 for an inert bush patch; no record field changes it. The patch constructor first sets defaults (inner 100, far 500, switch 100, out band 30, fade band 30), but the patch set-up of every built patch replaces them with the values above (overrides, or the LOD node, or F = 4000). So the defaults are never seen in play. Without overrides and without a far object, the LOD values are adjusted (Medium): O becomes max(O, W), W becomes that same value, and S is lowered to F − O when it is larger.
 
@@ -353,6 +355,10 @@ Synthetic:
 
 ## Open questions
 
+- Resolved (R-0046, part 2, High): key-4 trees have no separate trunk model. The tree builder loads model 200 as the near model and no far model for key 4, and it adds the one collision cylinder (section 4). The "trunk" is only that cylinder; model 200 is the whole tree. Key 25 uses the same model 200 as its near model (far model 199) and has no cylinder, so model 200 draws a complete tree on its own. Draw each key-4 patch with model 200 only and keep the cylinder as its solid part.
+
+0. Resolved (R-0046, parts 1, 3 and 4): the LOD field mapping is in Behavior 3 (the far distance from the fade end, the fade band from the fade length, the switch from +0x54 and the out band from +0x50). The near and far draws differ in the model drawn and in the batch: a plant with a weight above zero is drawn with the patch's near model, while the far weight sends it to the shared far batch with the far model; the far entry's alpha byte is the plant's alpha times the far weight (Behavior 4; Medium, since no other difference was found). The once-per-area save words are the five sets in SPEC-0025 (the rows at 0x2EB2 to 0x2F16 slot offsets; Behavior 2).
+- Resolved (R-0046, part 2): there is no trunk model, registry id or placement beyond the collision cylinder (see the first line of this section).
 1. What the third models of the B, H and K families show, and what the S family's 8 parts and touched flag do.
 2. The exact hero bend formula for bushes and reeds. For weapon contact, the plant-side capsule is established as described in Behavior 6; the exact construction of the hero weapon segment from its pose remains open.
 3. Resolved: with b > 0 the plant is not drawn with a model of its own call; it is added to one of two shared far batches (1,000 entries for grass, 700 for the other families), emptied at the start of every frame and drawn once per frame (Behavior 4, Draw). When a batch is full (its room, or a 21st group of far model and material) the add is refused and that plant is not drawn on that frame, with no fallback (Behavior 4, Full batch). Still open: the render path of a batch (SPEC-0046). (Medium-High)

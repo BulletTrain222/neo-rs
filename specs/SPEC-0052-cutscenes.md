@@ -105,11 +105,11 @@ Alpha scale: 0 to 128, where 128 is fully opaque (the PS2 GS alpha scale, 128 = 
 | --- | --- | --- | --- |
 | 1 | 1 | free: normal control | High |
 | 0x21 | 33 | script hold: no input response, follows script orders | High |
-| 0x32 | 50 | walk (WalkHero waits on it) | High (value); see the state-code discrepancy |
-| 0x34 | 52 | walk and orient | Medium |
-| 0x33 | 51 | one-shot animation | Medium |
-| 0x37 | 55 | loop animation (set by LoopEntityAnim) | Medium |
-| 0x19 | 25 | unknown meaning; listed as a state the hero can be restored from | Low |
+| 0x32 | 50 | scripted walk or run to a point (WalkHero and RunHero wait on it) | High |
+| 0x34 | 52 | walk and orient (WalkHeroAndOrient) | High |
+| 0x33 | 51 | scripted one-shot animation (PlayHeroAnim): waits for the clip progress to pass 0.99, then goes to 1 when the hero's flag word at +0x3D0 is nonzero, otherwise to 0x21 | High |
+| 0x37 | 55 | scripted looped animation (LoopHeroAnim): a tick counter runs down, then the state goes to 0x21 when the flag word is zero, otherwise to 1 | High |
+| 0x19 | 25 | talking: entered by SetConversationTarget and by LevelMsg on a hero that is not busy; the dialogue emotes play only in this state (SPEC-0022, SPEC-0040) | High |
 
 ## Behavior
 
@@ -316,7 +316,7 @@ Rule for the clean side: do not add a cutscene skip based on this spec. If one i
 
 ## State-code discrepancy with SPEC-0033
 
-SPEC-0033 names the walk state "state 32". The walk state value read from the boot code is 0x32, which is 50 in decimal. Decimal 32 is 0x20, a different value. Either SPEC-0033 wrote the hex digits without the prefix and meant 0x32, or it uses a different numbering. SPEC-0033 also uses "state 33" in other rows, and whether that means 0x33 (decimal 51) is also unconfirmed. Until the owner of SPEC-0033 confirms, use the hex values in this spec for these states, and do not rely on the decimal interpretation of either spec.
+Resolved: there is no discrepancy. SPEC-0033, SPEC-0040 and SPEC-0022 number hero states in decimal. The scripted walk this spec calls 0x32 is state 50 there (SPEC-0033, Behavior 4A.4), the walk and orient 0x34 is 52, the script hold 0x21 is 33, the one-shot animation 0x33 is 51, the looped animation 0x37 is 55 and the talking state 0x19 is 25. SPEC-0033's "state 32" is a different state: the stick walk and run locomotion state (decimal 32, hex 0x20), which scripts never wait on. A rewrite should store one numeric value per state and convert only when it reads these two specs.
 
 ## Edge cases and error handling
 
@@ -380,7 +380,7 @@ Numbers of removed questions are not reused.
 4. Resolved: the update runs once per main-loop pass, after the HUD (Screen effect: per-pass update and draw).
 5. The per-tick use of the locator tether on the target.
 7. Meaning of the locator record bytes other than the position, the meaning of the w component, and the array B flag.
-8. Meaning of control states 0x19, 0x33 and 0x37, and the state-code discrepancy with SPEC-0033 above.
+8. Resolved: 0x19 is the talking state, 0x33 the scripted one-shot animation and 0x37 the scripted looped animation (Control states, above). The state-code discrepancy with SPEC-0033 does not exist; SPEC-0033 uses decimal numbers (High). Test vector: PlayHeroAnim sets state 51 (0x33); at progress 0.995 with the flag word +0x3D0 equal to 0 the state becomes 33 (0x21); with the flag word 2 it becomes 1. LoopHeroAnim with a counter of 3 sets state 55 (0x37); after three ticks the state becomes 33 (flag zero) or 1.
 9. Resolved (Medium-High): module 985 does not use RestorePlayerControl; the end of track 29 sets the hero to state 1 (Worked example: resource 985).
 10. PlayEntityAnim after its wait: whether the second animation set means an end pose or a restart.
 11. LoopEntityAnim with 0 and with negative seconds: the exact tick budget rule.

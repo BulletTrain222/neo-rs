@@ -1,6 +1,6 @@
 # SPEC-0037: Level scripts (set A)
 
-- Answers: proactive (level script behavior; extends SPEC-0030 and SPEC-0032)
+- Answers: R-0061, proactive (level script behavior; extends SPEC-0030 and SPEC-0032)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per module (see the Confidence line in each section and the table below). Host call names, argument values and the order of calls: High unless marked. Slot ids: High for the stored-slot rule (the slot a load uses is the SlotCreate result that the module stores); the call path does not remap -1 (High); a load through a slot word that no code stores does nothing (High for 837; the slot word of 906 is stored by Init, so its load uses the stored slot). Branch conditions: Medium. Values not established: marked unknown and listed under Open questions.
@@ -378,15 +378,16 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 
 - Family: Interior. Exit is not exported.
 - Init: RegisterEntityProximityCallback(W, entity 0, P, true); RegisterTeleportCallback(index 0, T, kind 13, W); RegisterActivateWorldCallback(A, W).
-- Proximity P (entity):
-  - If flag 68 is set: SetConversationTarget; LevelMsg(line 0); EndConversation. Else: LevelMsg(line 2) with the bracket.
-  - Separately, WhichHeroIsActive() == 1 selects line 14 (with the bracket); otherwise the line depends on flag 68 as: flag 68 set -> line 8; flag 68 clear -> line 11.
-  Order of the two tests is as recorded (Medium).
+- Proximity P (entity): one routine; every line is shown with the conversation bracket (SetConversationTarget(entity, true); LevelMsg; EndConversation). Order (High):
+  1. WhichHeroIsActive() is read first. If it is 1, Random(1, 3) is drawn, and the cycle of step 2 is taken only when the draw is 1. Otherwise go to step 3.
+  2. Cycle (hero 1 and draw 1): lines 14, 15 and 16 in turn, from a position counter that starts at 0. Counter 0 shows line 14 and sets the counter to 1; counter 1 shows line 15 and sets it to 2; any other value shows line 16 and sets it to 0. Step 3 is skipped.
+  3. Flag branch: flag 68 set -> line 8; flag 68 clear -> line 11. The position counter is set to 1 on this path.
+  The routine shows exactly one line per visit. No test of this module shows line 0 or line 2 (see the dormant routines below).
 - Teleport index 0 (T): diagnostic line; AddBlackboardMessage(type 2, value 10, eW 31); if the trigger index is 0: StartLeaveInterior(eW 44, -1, -1, no colour); Wait(3.0 s).
 - Activate-world A: diagnostic line; v = GetBlackboardMessageValue(type 2, eW 31); if v is 10: MoveHero(locator 1, true, CONTROL 1); SetToNormalCamera(5.0, 0.0, true); AddBlackboardMessage(type 2, value -1, eW 31).
-- Dormant routine: flag 68 set -> SetConversationTarget; LevelMsg(line 0); EndConversation. Else LevelMsg(line 2).
+- Dormant routines: two routines that nothing registers or starts. One shows line 4 or line 5, the other line 6 or line 7, each chosen by the result of a query without arguments (both with the conversation bracket) (High).
 - Update: empty.
-- Confidence: High for the calls; Medium for the proximity order.
+- Confidence: High for the calls and the proximity order.
 
 ### 858: Interior, two threads and a proximity routine with item checks
 
@@ -536,6 +537,7 @@ Exit is missing in 788, 789, 783, 784, 776 (Interior) and 1152 (Exterior). Updat
 
 ## Test vectors
 
+- 776, proximity routine with WhichHeroIsActive() 2 and flag 68 clear: LevelMsg(line 11) with the conversation bracket. With hero 1 and the draw 1 on the first visit: LevelMsg(line 14); the next such visit shows line 15, then line 16, then line 14 again.
 - 1427, the first trigger callback in a tick is index 0 and the override is 187; a second index 2 callback in the same tick does nothing.
 - 1152, activate-world with blackboard value 110 -> MoveHero(locator 1, true, CONTROL 1), then SetToNormalCamera(10.0, 0.0, true). Value 90 -> locator 0.
 - 1253, activate-world with value 20 -> MoveHero(locator 1, false, CONTROL 1), FadeScreenIn(0.5 s), StartHeroLongFall, PlayTrackHeroCamera(track 6, 1.0 s), Wait(1.5 s), ReturnToNormalCamera.

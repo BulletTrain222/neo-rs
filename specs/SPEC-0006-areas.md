@@ -1,6 +1,6 @@
 # SPEC-0006: Areas, world packs and what they place
 
-- Answers: R-0006
+- Answers: R-0006, R-0009 (in part), R-0012, R-0032 (in part)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Area object lifecycle (constructor, reset, unload; Behavior section): Medium. Entry (locator) records, the world spawn vector, the teleport plane list, the new-game spawn and the placement rule of each arrival (loading step 6, "Hero placement"): High. Area table, world-pack header, region adjacency, character, checkpoint and item records: High. Zone ids: High for the lookup, Medium for the meaning. Type-1001 pack record words (map area id, sound selector) and the default record: High. Region choice per area: Medium (decided by the level script; see Open questions). Grid header: Low. Binary grids (type 35, zone-visibility matrices): High for the layout, the zone manager, the query and the off-by-one quirk. Tagged tables (type 15): High for layout, lengths and walk; Medium-High for the entity-id and placement-id readers; Medium for the region-slot mapping. Box records (type 16): layout High (header-relative, counted on all 75 chunks); the field that selects the build routine Medium; purpose Medium-Low. Effect lists (region record kind 16) and zone records (chunk types 40 and 41): layouts High; their run-time behaviour Medium-Low (range consumer Medium-High). Chunks marked Low below: layout only. Save-point (checkpoint) records and their per-tick step (glow, sound, "Save Game" prompt, save screen): High (code); Medium for what the glow looks like. Loader handling of each chunk type, the required chunk order and the finalize steps: High for dispatch and order; Medium for the pointer kinds in the grid finalize and the meaning of the pool step's arguments. Region slots: High for the slot path, Medium for the wait details; High for the computed-argument rule, the Random range and the asset-swap table rule. Interior entry steps (fade, loader wait, arrival, ground snap): High for the arrival (a teleport plane or an entry record) and the snap; Medium for the wait details. World kinds, world buffers, the buffer records, the pending step, the world swap, the neighbour-world test (both fixed sets and the pair list decoded), the driver loads and the door rule: High (code); Medium for the fade of an exterior driver request; Medium-High for reading the cell value as a neighbour tag; High for the door prompt and the confirm rule. Character activation, streaming and kill memory: High for the steps, the constants, the cell flag, the dead test and the activation filter store; High for the kill-memory store points; Medium-High for the loss of kills in worlds released without a store (until confirmed at run time). Area numbering, conversions and reach (174 of 191 packs, Medium-High): see "Area numbering" for its own confidence labels.
@@ -109,7 +109,7 @@ What runs for the second world (High):
 - Its world draw and its characters' draw run when it is loaded and the test passes.
 So while interior 1008 is current, the exterior E's world and characters are drawn beside it, but not E's placed objects.
 
-**Doors (High for the rule, the prompt and the confirm).** A door is a static rectangle collision volume (header kind 7; SPEC-0028) with flag bit 1 (0x0002) set in its 0x20-byte record header and a class (header +0x1E) other than 500 and 501; a bit-1 record of class 500 or 501 is a same-world pad, not a door (Teleport plane list). Its door number is the header u16 at +0x1C. At load the loader writes that word with the door's ordinal among the world's non-class bit-1 plane records, which is its index in the world's teleport plane list (Entry records and teleport planes), so a door number is a plane index; on the disc the written value equals the disc value for all 169 doors (High). Its gate mask (header +0x1A) is 0 on every door; a nonzero mask would have to share a bit with the world's gate word. On disc there are 169 doors in 102 packs (one in 77 packs, two in 12, three in 6, four, five and six in one pack each, eight in 3, eleven in 1), all with flags exactly 0x0002, mode 0, gate mask 0 and switch value 0.0 (High). When a character touches a door (inside the volume's proximity test, SPEC-0028), the door step checks, in this order (High for the order):
+**Doors (High for the rule, the prompt and the confirm).** A door is a static rectangle collision volume (header kind 7; SPEC-0028) with flag bit 1 (0x0002) set in its 0x20-byte record header and a class (header +0x1E) other than 500 and 501; a bit-1 record of class 500 or 501 is a same-world pad, not a door (Teleport plane list). Its door number is the header u16 at +0x1C. At load the loader writes that word with the door's ordinal among the world's non-class bit-1 plane records, which is its index in the world's teleport plane list (Entry records and teleport planes), so a door number is a plane index; on the disc the written value equals the disc value for all 169 doors (High). Its gate mask (header +0x1A) is 0 on every door; a nonzero mask would have to share a bit with the world's gate word. On disc there are 169 doors in 102 packs (one in 77 packs, two in 12, three in 6, four, five and six in one pack each, eight in 3, eleven in 1), all with flags exactly 0x0002, mode 0, gate mask 0 and switch value 0.0 (High). When a character touches a door (inside the volume's proximity test, SPEC-0028), the touch test is the plane test of the primitive contact routine with margin 1.5 and the owner's radius times 3 (High for the limits): the character's feet point (its motion-record position) touches when its distance to the door plane is at most 3 times its radius (3.525 for a hero), its position along the plane lies within the door's width extended by that distance on each side, and its height lies between 1.5 below the door's base and the door's height. The body centre and the probe point are not tested. The door step then checks, in this order (High for the order):
 1. the game-state code is 0 (no game over is running);
 2. no screen fade is running;
 3. the toucher is the selected hero;
@@ -236,11 +236,25 @@ Which region a slot load names (High):
 
 Asset-swap tables (High; used by several scripts):
 - A script's data can hold an asset-swap table. It is made of sets, and each set is a group of zones. A story-flag chain in the script picks the active set; one script always uses set 0.
-- The zone comes from the trigger that fires (each zone has its own trigger).
+- The zone comes from the trigger that fires. Each script keeps a registration list of entries, 12 bytes each, made of a key, a zone index and a mode. Mode 0 means the key is a script trigger number; mode 1 means the key is the member id of an instance trigger in script group 0. When a trigger fires, the zone of the entry whose key matches is used; when none matches, zone 0 is used (High):
+  - Module 758: seven entries at byte offset 32392. Trigger 11 gives zone 4 and trigger 12 gives zone 5. Member 0 gives zone 1, member 1 gives zone 0, member 2 gives zone 2, member 3 gives zone 3 (the cycle zone) and member 4 gives zone 6.
+  - Module 991: three entries at byte offset 23752. Trigger 4 gives zone 0, trigger 5 gives zone 1 and member 0 gives zone 2.
+  - Module 1023: eight entries at byte offset 71552. Triggers 27 to 34 give zones 0 to 7 in order.
+- Firing rule (High): the zone trigger acts only when the trigger (or its member) is in state 1 and is active. Other states do nothing. Then the set is chosen: 758 always uses set 0; 1023 uses set 1 when flag 10 or flag 11 is set; 991 uses the flag ladder above.
+- Zone load (High for the order; Medium for the cycle repetition). The trigger starts a zone thread with the zone index. A zone whose normal value is -1 loads nothing. A plain zone (cycle mark 0) loads at once in that thread. A cycle zone starts a second thread, which first waits, one tick at a time, while a world or character load is in progress.
+  - Slot rule (High): slot 0 when its record is free; otherwise slot 1 when slot 1 is free and enabled; otherwise the thread waits one tick and tries again. Slot 1 is enabled in 758 always, in 1023 only in set 0, and never in 991 (991's set choice clears the enable word on every trigger, before the zone thread runs).
+  - Plain load steps: the record takes the zone index, the normal value and the trigger key; the slot is reset (SPEC-0030 row 208), which releases the region it held; the region is the normal value, or the replacement when the replacement test passes (the first flag set or absent and the second clear or absent); the slot is loaded with keep 1 and activate 1 (SPEC-0030 row 205, which releases the slot's previous content again); the record is then cleared and the slot is marked free. So a zone load always unloads the previous region of the slot it picks, and never touches the other slot.
+  - Cycle load (758; 1023 follows the same steps): one candidate is drawn with Random(0, 2) when the thread starts; a candidate out of range or empty becomes candidate 0. The slot is reset and loaded with that candidate, keep 0 and activate 1. A busy word stops two cycle zones from loading at once. The thread then stays while the trigger member keeps a nonzero state and stays active. Later passes draw nothing: each later reload uses the next candidate index after the drawn one (2 wraps to 0), and an index that is out of range or names an empty candidate is set to 0 first (Medium-High for 1023, Medium for 758). A later pass whose busy word is zero waits one tick and does not reload. On each pass that reloads, the thread reads the character range of the loaded set, activates each of its characters that is not present, and then waits one tick (Medium).
+  - No fade is part of these zone loads. 991 has no cycle zone, so its cycle path is never reached from a trigger.
 - A zone row holds a normal j, a replacement j, a third value (unused, -1, in plain zones), two story-flag ids and a cycle mark.
 - Plain zone: the replacement is used when the first flag is set (or absent) and the second is clear (or absent); otherwise the normal j is used. An empty zone (normal j of -1) loads nothing.
-- Cycle zone: the first three values are three candidate j values. Each pass picks value Random(0, 2) and uses value 0 when the picked value is empty (-1). So a cycle zone shows its candidates in turn at random.
+- Cycle zone: the first three values are three candidate j values. The pick is drawn with Random(0, 2) when the cycle thread starts (Medium for later passes; see the zone-load bullets above), and a picked candidate that is empty uses the first candidate.
 - The region loaded is P + 1 + j for the chosen j.
+- Where the tables are (High for the layout, Medium-High for the set and zone counts). Each table is an array of 32-bit signed whole numbers inside the script module's image, at the byte offsets given here (decimal, counted from the first byte of the module image). A zone row is six numbers (24 bytes): normal j, replacement j, third value, flag id A, flag id B, cycle mark. A plain zone uses the first number only; a cycle zone uses the first three as candidates (an empty candidate is -1) and has cycle mark 1. An absent flag id is -1.
+  - Module 758: one set of seven zones at byte offset 32224. The seven-entry trigger list follows at byte offset 32392.
+  - Module 991: three sets of three zones at byte offset 23536. Set 0 holds plain zones with normal j 4, 6 and 7; set 1 holds 5, 6 and 7; set 2 holds 9 and 10 and one empty zone.
+  - Module 1023: two sets of eight zones at byte offset 70144 (set 1 begins 192 bytes later). Set 0 holds plain zones 11, 20, 15 (replacement 16) and 7, then cycle zones (12, 13, 14), (21, 22, 23), (17, 18, 19) and (8, 9, 10). Set 1 holds five empty zones, cycle zones (25, 26, 27), plain zone 28 and cycle zone (29, 30).
+  - The trigger-to-zone mapping, the slot rule and the load steps are given above .
 
 | Type | Role | Spec | Confidence |
 | --- | --- | --- | --- |
@@ -248,13 +262,13 @@ Asset-swap tables (High; used by several scripts):
 | 2 | Shader list (materials) | SPEC-0003 | High |
 | 4 | Texture chunks for that shader list | SPEC-0003 | High |
 | 3 | Level display tree, world space | SPEC-0004 | High |
-| 8 | Mesh containers for objects, registered by role id | SPEC-0004 | High |
+| 8 | Mesh containers for objects. Each child's role id is a global model registry id (the common-object registry: ranges 0 to 97, 98 to 190, 191 to 282 and 283 to 322, index = id minus the range start). Pickups, flowers and effect-model particles look their model up by that id. Role ids on disc run from 0 to 401; the world pack's own children register the ids its objects use | SPEC-0004 (layout); SPEC-0021, SPEC-0028 and SPEC-0034 (the registry and its users) | High |
 | 29 | Placed objects with matrices and part records | SPEC-0028 (and SPEC-0004) | High |
 | 20 | Instanced meshes (at most two type-20 chunks are accepted per load; see Edge cases) | SPEC-0004 | High |
 | 19 | Spatial grid (below); cell records in SPEC-0018 | this spec, SPEC-0018 | High (layout) |
 | 1001 | Zone id (below) | this spec | High (lookup) |
 | 32 | Embedded character region: the level's own characters, spawns, save points (checkpoints) and items (below) | this spec, SPEC-0005 | High |
-| 37 | Level script module ("SNR2" container with a code module); 173 packs have one | later spec | — |
+| 37 | Level script module ("SNR2" container with a code module); 173 packs have one | SPEC-0030 (container and host interface) | High (container) |
 | 15 | Tagged tables (below): lookup and range tables, the entity-id table (0x12) and the placement-id table (0x13) | this spec | High (layout); Medium-High (use) |
 | 16 | Box records (below): foliage patches | this spec; SPEC-0060 | High |
 | 35 | Zone-visibility matrices (binary grids, below) | this spec, SPEC-0028 | High |
@@ -262,7 +276,7 @@ Asset-swap tables (High; used by several scripts):
 | 28, 30 | Point records and light sets (SPEC-0028) | SPEC-0028 | High (layout); role Low |
 | 10 | Ladders and climb panels (below; SPEC-0033 Behaviors 22 and 22A) | this spec, SPEC-0033 | High |
 | 11 | Object header counts (SPEC-0028); entry (locator) records and teleport planes (below); the movable-block table (below; SPEC-0048) | SPEC-0028, this spec, SPEC-0048 | High |
-| 34 | Effect group, 4 packs | later spec | Low (identity only) |
+| 34 | Effect definition group (the shared definition table lives in the type-34 chunk of resource 9; a few world packs hold small groups of their own) | SPEC-0034 | High (resource 9); Low (the small world-pack groups) |
 | 38 | Present in 1 pack; the loader logs it and skips it | — | — |
 | 40, 41 | Switch-keyed entries and zone records (below); SPEC-0028 section 11 | this spec, SPEC-0028 | High (layout); Medium (load steps); Medium-Low (run-time use) |
 | 21 | Navigation meshes | SPEC-0018 | see that spec |
@@ -279,7 +293,7 @@ Asset-swap tables (High; used by several scripts):
 | 0x1C | 4 | u32 offset of the cell table: cells-x × cells-z u32 values, 0 = empty cell |
 | 0x24 | 4 | u32 offset of a second table (meaning open) |
 
-Each non-zero cell-table entry is an offset from the grid payload to a **cell record**. Cell records are decoded in SPEC-0018. On disc there are 1,562,362 cells over the 191 grids, and 108,573 are non-empty. Every cell table fits in its chunk.
+Each non-zero cell-table entry is an offset from the grid payload to a **cell record**. Cell records are decoded in SPEC-0018. On disc there are 1,562,362 cells over the 191 grids, and 108,573 are non-empty. Every cell table fits in its chunk. The table is x-major: the entry for cell (cx, cz) is at index cx + cz × cells-x (High; disc test in SPEC-0018, Cell-table order).
 
 The grid bounds are the level's extent: placements fall inside them (see the checks below).
 
@@ -302,7 +316,7 @@ The type-11 chunk (object header, SPEC-0028) holds two lists that place the hero
 | --- | --- | --- | --- |
 | +0x00 | 16 | — | Zero (all 4,964 records) |
 | +0x10 | 2 | u8, u8 | Common primitive header: kind 1 and mode 0 in every record |
-| +0x12 | 2 | u16 | Flags: 0x0020 in 4,924 records and 0x0021 in 40 (in 16 packs). No reader of bit 0 is known |
+| +0x12 | 2 | u16 | Kind mask of the shared primitive header (the word that the load-time class tests read on plane and box records). Entry records are never tested against it, and no code reads this word on an entry record (Medium-High). 0x0020 in 4,924 records and 0x0021 in 40 (in 16 packs); bit 0 has no effect |
 | +0x14 | 4 | u32 | Editor serial: unique within each pack. Not a locator id; not used by placement or lookup |
 | +0x18 | 2 | u16 | Index; equals i in every record. Placement uses the list position i, not this word |
 | +0x1A | 2 | u16 | 0, except 4 and 8 in two records of pack 699 (which is why the 32-bit word at +0x18 differs from i twice there) |
@@ -378,14 +392,20 @@ Any other kind ends the walk. All 575 region tables and all 165 embedded tables 
 | --- | --- | --- |
 | 0x00 | 16 | Position: x, y, z, then w. w is 1.0 in 2,856 of the 3,036 records. In the other 180 records the whole position (x, y, z, w) is zero. All 180 are summon-reserved records (byte 0xB6), whose position and facing are supplied by the summoner when they are spawned (Character activation, streaming and kill memory) |
 | 0x10 | 16 | Facing: unit vector x, y, z, then w = 0 |
-| 0x20 | 0x28 | Character name, ASCII, NUL-terminated (may be empty). The field ends at 0x47; on disc a name has at most 29 characters (30 bytes with the NUL), so every name ends before 0x48. This is the name an enemy shows (SPEC-0023) |
-| 0x48 | 60 | 15 colour words w0 to w14, present in all 3,036 records. Each word packs byte 0 in bits 0 to 7, byte 1 in bits 8 to 15 and byte 2 in bits 16 to 23 (red, green, blue: Medium); byte 3 is 0x80 or 0x00 and is not used. w0 is 0x80FFFFFF in every record; 1,653 records have all 15 words at 0x80FFFFFF, and there are 275 distinct sets. w1 to w14 are the two skin, two shirt, two pants, hair, hat, two eye, belt, shoe and two spare colours (Medium). The character runtime pushes them to the model's colour slots (SPEC-0040, Behavior 26). High |
+| 0x20 | 0x20 | Character name, ASCII, NUL-terminated (may be empty). On disc a name has at most 29 characters (30 bytes with the NUL), so every name ends before 0x3E. This is the name an enemy shows (SPEC-0023). Do not read the name as a 40-byte field: the bytes after it are the two words below |
+| 0x40 | 4 | Talk colour word: bytes 0, 1 and 2 are red, green and blue; byte 3 is 0x80 and is not used. When the hero talks to this character the dialogue box shows the character's own name and this colour (SPEC-0022). 0x80FFFFFF (white) in 2,389 of 3,036 records; named characters have their own colour, for example 0x8040A0FF (255, 160, 64) for Bridge Builder Brendel |
+| 0x44 | 4 | Draw mask. −1 (all bits) in all 3,036 records. A model part whose type-4 layer flags share no bit with the mask is left out (SPEC-0004, Drawing a node tree). If the word is neither 0 nor −1, the character is drawn with the region's mask word ORed with it; with −1 or 0 the region's mask word alone is used. The Draik enemy overwrites the word at run time with its damage stage v (1 to 5): the word is 0, then bit 2 (value v = 1 sets bits 2, 4, 8, 16 and 32; each higher v drops the lowest bit, so v = 5 sets bit 32 only) |
+| 0x48 | 60 | 15 colour words w0 to w14, present in all 3,036 records. Each word packs byte 0 in bits 0 to 7, byte 1 in bits 8 to 15 and byte 2 in bits 16 to 23 (red, green, blue: High, because the push stores byte 0 in the first, red, lane of the colour scale); byte 3 is 0x80 or 0x00 and is not used (use alpha 1.0). w0 is 0x80FFFFFF in every record; 1,653 records have all 15 words at 0x80FFFFFF, and there are 275 distinct sets. w1 to w14 are the two skin, two shirt, two pants, hair, hat, two eye, belt, shoe and two spare colours (Medium). The character runtime pushes word j to colour slot j of the character's render object, and a model part takes the colour of the slot named by its material group (group byte 0x27, SPEC-0003). That is the only source of the hue of an NPC's skin, hair and clothes: 1,268 of the 2,402 region records use a slot above 0, and 1,148 of those 2,402 use only slots whose word is white. A client that ignores the words draws the NPC white (SPEC-0040, Behavior 26, item 9). High |
 | 0x84 | 2 | u16 default AI mode word. The shared enemy and townsfolk behaviour copies it into the AI mode word (object +0xA34) when the character returns to its default behaviour (one class only tests it for the value 8). On disc: 0 in 628 records, 5 in 760, 6 in 347, 7 in 392, 8 in 883, 9 in 17, 10 in 7 and 12 in 2 (all 3,036). Mode 7 decides the release rule (Release and rebind) |
 | 0x86 | 2 | s16 main-skeleton index (SPEC-0005); −1 = none; −5, −6 and −7 select global objects |
 | 0x88 | 2 | s16 subskeleton index; −1 = none |
 | 0x8A | 2 | s16 face-skeleton index; −1 = none |
+| 0x8C | 2 | s16 main-set companion word: read once when the character is built and stored in the animation player as the main set's index word (the loader writes 0 there). No later reader is known (Medium). Disc: 0 in 2,005 records, 1 in 415, 2 in 154, 5 and 6 in 50 each, 25 in 46; 20 distinct values |
+| 0x8E, 0x90 | 2 each | s16 companions of the sub and face words. Never read. −1 exactly when 0x88 (respectively 0x8A) is −1, otherwise 0, in all 3,036 records |
+| 0x92, 0x94, 0x96 | 2 each | s16 second copies of the three skeleton indices 0x86, 0x88 and 0x8A: equal to them in 3,029 of 3,036 records. Never read |
+| 0x98, 0x9A, 0x9C | 2 each | s16 main, sub and face animation words. Read once at character build and kept in the animation object; the only later test is whether the word is −1, meaning the part has no animation set (the main, sub and face clip-start helpers then play nothing). 0x98 is never −1 on disc (0 in 2,590 records, 7 in 135, 14 in 127, 6 in 66, 16 in 54, 2 in 49, 12 in 10, 9 in 3, 8 in 2); 0x9A is −1 exactly when 0x88 is −1 (1,889), and 0x9C exactly when 0x8A is −1 (1,746), otherwise 0 or a small value. The value itself is never used (High) |
 | 0x9E | 6 | three s16 animation-table indices: main, sub, face (SPEC-0005) |
-| 0xA4 | 2 | s16 model-set index, 0 to 7 |
+| 0xA4 | 2 | s16 model-set index, 0 to 7: the position of the model-set wrapper among the region's top-level type-18 chunks (SPEC-0004, Character regions keep their materials inside the model sets). The wrapper holds the model's shader list and textures |
 | 0xAC | 2 | s16 key: a character kind key (for example 619 Flower Monster, 2844 Minion Grunt, 2864 Minion Warrior). A spawn-by-key request (SPEC-0029) looks for it, and a record whose key equals the active petpet's key is not streamed |
 | 0xB0 | 2 | s16 drop placement ordinal. −1 = none. A value of 0 or more is the index, in walk order, of a kind-8 placement of the same region (SPEC-0021). On disc: −1 in 1,801 of 3,036 records, 0 in 139 and positive in 1,096. Every value of 0 or more is in range. Read only when the enemy dies |
 | 0xB2 | 2 | u16 variant. The monster row used is first[type] + variant (SPEC-0029 section 4). All 3,036 placements on disc have a variant below the row count of their type |
@@ -415,10 +435,10 @@ Confidence: High (code); Medium (what the glow looks like).
 | 0x00 | 16 | Position: x, y, z, then w = 1.0 (all 3,421 records) |
 | 0x10 | 16 | Unit facing: x, y, z, then w (all records unit length) |
 | 0x20 | 1 | Flags, values 0 to 4 on disc. Two item-code tests read it: one is true for values above 1, the other only for 4 (what they gate is in SPEC-0021) |
-| 0x21 | 1 | 1 in 3,029 records and 0 in 392; no reader known (Medium) |
+| 0x21 | 1 | **Snap to ground** (High). Non-zero: when the placement is spawned, its height is replaced by G + 0.5, where G is the ground height (SPEC-0018 ground probe) at the placement's x and z in the world that owns the placement, probed with the ceiling set to the stored y + 4.0. Zero: the stored y is used unchanged. Both spawn routes use it: the region-load spawn (flag byte 0 or 1) and the scripted add by placement number (SPEC-0021, Spawn routes). When the probe finds no ground it returns 0.0, so y becomes 0.5. The editor default is 1. Disc: 1 in 3,029 records and 0 in 392. By flag byte: flag 0 has 336 ones and 176 zeros, flag 1 (shop stock) 4 ones and 197 zeros, flag 2 1,236 ones and 5 zeros, flag 3 1,233 ones and 8 zeros, flag 4 220 ones and 6 zeros. Test vector: placement at (10, 7, −3) with the byte set and a floor at y = 2.0 under (10, −3): the probe ceiling is 11.0 and the item spawns at (10, 2.5, −3); with the byte clear it spawns at (10, 7, −3) |
 | 0x22 | 2 | Drop-group index. −1 in 1,423 records (no group); otherwise 0 to 6 on disc. It is not a second item id |
 | 0x24 | 2 | Primary key. −1 (none) in 2,360 records. A key of 0 or more spawns that item id directly; negative values take a separate roll rule (SPEC-0021) |
-| 0x26 | 2 | Second key. −1 exactly when the primary key is −1. Otherwise a per-item constant: 110 of 111 item ids map to one value (item 147 has two, 525 and 526); for example 56 → 1584, 150 → 992, and items 50 to 59 → 1580 to 1589. It is in the same editor id space as the kind-3 key (data +0xAC). No reader known (Medium) |
+| 0x26 | 2 | Second key. −1 exactly when the primary key is −1. Otherwise a per-item constant: 110 of 111 item ids map to one value (item 147 has two, 525 and 526); for example 56 → 1584, 150 → 992, and items 50 to 59 → 1580 to 1589. It is in the same editor id space as the kind-3 key (data +0xAC). Read only by a debug report printed when a block already holds 120 item placements and a 121st is refused (Blocks); no play reader (High). The copy kept in the world item record is never read |
 | 0x28 | 2 | Luck gate. Nonzero enables the luck test (1 in 171 records; 0 in 3,250) |
 | 0x2A | 2 | Fixed count (coins or amount when no money roll applies). 0 in 2,679 records |
 | 0x2C | 1 | Treasure-map byte: for a treasure map (item 175) the map number is this byte plus 1 (SPEC-0021, Treasure maps; SPEC-0050). The byte is copied into the world-item record with the rest of the placement data |
@@ -432,38 +452,40 @@ The data starts with a 16-byte list header, followed by n entries of 0x50 bytes 
 
 | Offset | Size | Meaning |
 | --- | --- | --- |
-| 0x00 | 4 | List id (mostly 2022 to 2065; no reader found) |
+| 0x00 | 4 | List id (105 distinct values, mostly 2022 to 2065). Never read: the clip walk picks a list by an index held in the character's clip table, not by this id (High for no reader) |
 | 0x04 | 4 | Entry count n, 1 to 5 on disc (1 in 1,260 lists) |
-| 0x08 | 4 | Constant 1 (all 1,663 lists) |
-| 0x0C | 4 | Constant 2 (all 1,663 lists) |
+| 0x08 | 4 | 1 in all 1,663 lists. Never read |
+| 0x0C | 4 | 2 in all 1,663 lists. Never read |
 
 Entry, at data + 0x10 + 0x50 i (offsets from the entry start):
 
 | Offset | Size | Meaning |
 | --- | --- | --- |
-| 0x00 | f32 | Scalar weight in the start transform (mostly 0; Low) |
-| 0x04, 0x08 | f32 | Unknown |
-| 0x0C | u32 | Flag (0 in nearly all entries) |
-| 0x10 | 4 x f32 | Local offset x, y, z, then w |
+| 0x00 | 16 | Point 1: offset x, y, z in attach slot A's frame (w is taken as 1; the stored w is 0 except in 2 entries), the effect position and first trail edge. The first float is 0 in 2,097 entries and −0.2 in 57 (SPEC-0034, section 1.1) |
+| 0x10 | 16 | Point 2: offset x, y, z in attach slot B's frame, the second trail edge (SPEC-0034, section 1.1) |
 | 0x20 | u32 | Attach slot A: 0x40000000 plus a slot number 0 to 7 (this top nibble holds in all 2,154 entries) |
 | 0x24 | u32 | Attach slot B, same encoding. 0x4FFFFFFF = none |
 | 0x28 | f32 | Window start, as a fraction of the clip duration (0 to 0.97) |
 | 0x2C | f32 | Window end, as a fraction of the clip duration (0.17 to 1.0) |
 | 0x30 | s32 | Effect definition id; −1 = none (−1 in 386 of 2,154 entries; maximum 4040) |
-| 0x34 | u32 | Parameter passed to the sound and attenuation helper (0x3ECCCCCD, which is 0.4, is common; Low) |
-| 0x38 | f32 | Maximum intensity (volume) for modes 0 to 5 (1.0 typical) |
-| 0x3C, 0x3D | u8, u8 | Branch flags (Low) |
-| 0x3E | u8 | Mode: 255 = none; 0 to 5 = attenuation mode |
-| 0x3F | u8 | Always 0 |
+| 0x34 | f32 | Rumble duration in seconds for positional mode 0 (0.4 is common); not passed to the sound setup |
+| 0x38 | f32 | Maximum intensity (volume) for the positional path (1.0 typical) |
+| 0x3C, 0x3D | u8, u8 | Ground-snap flags of point 1 (rule in SPEC-0034, section 1.1). 0x3C is 1 in 674 entries and 0x3D is 1 in 67 |
+| 0x3E | u8 | Positional mode: 255 = none (1,973 entries), 0 (179), 1 (2); the positional path is SPEC-0034, section 5.3 |
+| 0x3F | u8 | Rumble gate of the positional path: the value 0xFE (254) suppresses the rumble request, any other value lets it run. 0 in all 2,154 entries, so the rumble always runs for entries with a positional mode (High) |
 | 0x40 | f32 | Inner radius (10.0 typical) |
 | 0x44 | f32 | Outer radius (50.0 typical) |
-| 0x48 to 0x4F | 8 | Unknown |
+| 0x48 | u8 | Trail flag: 0 starts a swing trail, any other value none (SPEC-0034, section 3.8) |
+| 0x49 | u8 | Full-frame flag: non-zero passes slot A's whole matrix to the effect (SPEC-0034) |
+| 0x4A, 0x4B | 2 | Zero in all entries; never read |
+| 0x4C | u16 | 0xFFFF in 1,966 entries and 0 in 188; never read (High) |
+| 0x4E, 0x4F | 2 | Zero in all entries; never read |
 
-Behavior (Medium): while an object plays a clip, each entry whose window (its start and end, as fractions of the clip duration) contains the current clip time starts its effect definition, and the effect stops when the window ends. Start and stop use a pool of 10 effect slots. Effect behavior is in SPEC-0034. The list id and the constants have no known reader so far (Open questions).
+Behavior (Medium): while an object plays a clip, each entry whose window (its start and end, as fractions of the clip duration) contains the current clip time starts its effect definition, and the effect stops when the window ends. Start and stop use a pool of 10 effect slots. Effect behavior is in SPEC-0034. The list id, the header constants and the unread entry bytes above have no reader (High).
 
 Span check: n = 1 gives a record of 0x70 bytes; n = 2 gives 0xC0 bytes.
 
-Test vector (region 679, record at offset 0x2890 in the resource): list id 2302, n = 1, constants 1 and 2. Entry 0: local offset (0, 0, 5.5), attach slots A and B both 0x40000000, window 0.0 to 1.0, effect id −1 (none), intensity 1.0, mode 255, radii 10.0 and 50.0.
+Test vector (region 679, record at offset 0x2890 in the resource): list id 2302, n = 1, constants 1 and 2. Entry 0: point 2 offset (0, 0, 5.5), attach slots A and B both 0x40000000, window 0.0 to 1.0, effect id −1 (none), intensity 1.0, mode 255, radii 10.0 and 50.0.
 
 ### Kind 17, zero-filled reservation
 
@@ -588,7 +610,7 @@ Block (324 blocks in 120 chunks on disc):
 
 **Zone manager (High).** One global zone manager holds a grid G, a row R, a key K and an active block. On every pass the camera's mode update (SPEC-0027) re-sets it: G = the type-35 chunk of the camera's world (the world of the camera's ground entry, or the current world), K = that world's id, and R = the zone of the camera's own ground entry; in camera mode 0 with a follow target, the target's ground entry is used instead. R is stored only when the active block exists, z is below that block's H and z is below 255; otherwise R keeps its old value. The camera reset and make current (World buffers and transitions) also set R. The main loop sets the active block to block 0 for the current world's passes, and to the block keyed by the second world's id while it draws the second world's placed objects.
 
-**Query (High).** A query gives a column c and a key k. It returns 1 when G is absent. If k equals K, block 0 is used. If k is -1 (the placed-object draw gate; the column is the object's zone key, SPEC-0028), the active block is used (block 0 when there is none). Otherwise the block whose key is k is used, and the query returns 1 when there is no such block. With the block's width W and cell count N = W × H, the index is i = R × W + c. When i < 0 or i > N the query returns 1; otherwise the byte at index i decides (nonzero returns 1). Quirk (reproduce): i = N is not treated as outside, so it reads the byte just after the block's cells. A mode flag that would make the query "R equals c" is never set on this build. Fourteen routines make these queries, among them the character cell flag (Character activation, streaming and kill memory) and the object draw gate.
+**Query (High).** A query gives a column c and a key k. It returns 1 when G is absent. If k equals K, block 0 is used. If k is -1 (the draw gates of placed objects, type-3 display-tree nodes and type-20 instances; the column is the object's stored zone column, SPEC-0028 and SPEC-0004), the active block is used (block 0 when there is none). Otherwise the block whose key is k is used, and the query returns 1 when there is no such block. With the block's width W and cell count N = W × H, the index is i = R × W + c. When i < 0 or i > N the query returns 1; otherwise the byte at index i decides (nonzero returns 1). Quirk (reproduce): i = N is not treated as outside, so it reads the byte just after the block's cells. A mode flag that would make the query "R equals c" is never set on this build. Fourteen routines make these queries, among them the character cell flag (Character activation, streaming and kill memory) and the object draw gate.
 
 ### Switch-keyed entries (chunk type 40)
 
@@ -628,12 +650,12 @@ Record (offsets from the record start):
 
 | Offset | Size | Meaning |
 | --- | --- | --- |
-| 0x00 | 4 x f32 | Vector A |
-| 0x10 | 4 x f32 | Vector B |
-| 0x20 | f32 | Large value: 100000.0 in 92 records, 1048576.0 in 29, others elsewhere (Medium) |
-| 0x24 | u32 | Gate key: 0 = ungated; 1 to 13 on disc |
-| 0x30 | 4 x f32 | Rectangle x0, z0, x1, z1 (zero in some records) |
-| 0x3C | f32 | Scale (1.0 in 163 records) |
+| 0x00 | 4 x f32 | Vector A: RGBA colour for the screen post pass (no visible effect on disc); see SPEC-0028 section 11 |
+| 0x10 | 4 x f32 | Vector B: screen overlay colour, RGB plus alpha (gated records get alpha 28 at load); see SPEC-0028 section 11 |
+| 0x20 | f32 | Depth-range maximum (the depth-buffer scale of the view-screen mapping, not a draw distance; see SPEC-0028 section 11): 100000.0 in 92 records, 1048576.0 in 29, others elsewhere (Medium) |
+| 0x24 | u32 | Gate key: 0 = ungated; 1 to 13 on disc (ids in the table below) |
+| 0x30 | 4 x f32 | Bounding circle of a polygon zone: centre x, y, z (y unused); the fourth lane at +0x3C is its radius (SPEC-0028 section 11). Zero in some records |
+| 0x3C | f32 | Bounding circle radius (1.0 in 163 records) |
 | 0x40 | u32 | Link count M (0 in 163 records; 4, 5, 7 or 9 in the others) |
 | 0x44 | u32 | Offset of the M link entries, payload-relative (rebased at load when M is nonzero). Each link entry is taken as a point |
 
@@ -666,7 +688,7 @@ Constants (read from the boot program at data addresses): 50.0 at 0x2DB4CC and 2
 
 Type 41 records are per-frame zone selectors. They are not trigger volumes: trigger volumes use other records (SPEC-0028). The focus point and the camera's use of zone output are described in SPEC-0027.
 
-Test vector (pack 678, N = 1, record 0): gate key 1, rectangle (0, 0, 0, 1), scale 1.0, large value 100000.0, link count 0.
+Test vector (pack 678, N = 1, record 0): gate key 1, bounding circle centre (0, 0, 0) and radius 1.0, depth-range maximum 100000.0, link count 0.
 
 Confidence: layout High (counted on disc); the 50.0 and 25.0 thresholds High (values), Medium (use); per-frame selection Medium-Low.
 
@@ -858,7 +880,7 @@ If no entry matches, it returns 0. Because entries 23 and 24 are zero pairs, the
 ## Edge cases and error handling
 
 - **Duplicate slots**: two packs each occupy two consecutive table slots. Treat a slot as an alias, not a different level.
-- **Front-end pack (532)**: it has no level mesh or grid (chunks 4, 31 and 38 only) and isn't in the slot table. It is loaded by the front end (later spec).
+- **Front-end pack (532)**: it has no level mesh or grid (chunks 4, 31 and 38 only) and isn't in the slot table. It is loaded by the front end (SPEC-0035).
 - **Kind-3 records with an empty name** (246 of the 2,402 top-level records): still bind the character the indices describe; no name panel shows for it (SPEC-0023).
 - **Kind-3 records with a zero position** (180 records): all are summon-reserved (nonzero summon byte). They are never streamed in; a spawn-by-key request binds them at the point and facing it supplies (Character activation, streaming and kill memory).
 - **More than 40 kind-3 records in a block**: the extra records are refused with an error. On disc the largest block (pack 1080) has exactly 40. A block with more than 15 records still has only 15 objects (15 embedded and 20 region blocks on disc).
@@ -1025,6 +1047,9 @@ Kill block, loading and slots (synthetic unless marked):
 
 ## Open questions
 
+- Resolved: the trigger-to-zone mapping for modules 758, 991 and 1023, the slot rule, the firing rule (state 1 only) and the plain load steps are given under Asset-swap tables. A zone load resets its slot first, so it unloads the region that slot held.
+- Resolved (R-0032): the later passes of the cycle thread draw nothing and step the candidate index, as stated under Cycle load. The 1023 Meerca slot helper takes one argument: 0 frees a slot and loads region 1025 (a direct load of index 1, keep 1, activate 1; not an asset-swap zone), and 1 restores the slot's saved index or clears the slot (SPEC-0045, Open question 27). The free-slot finder of 1023 that the helper uses (slot 0 when its record word is nonzero; else slot 1 when its record word and the set-0 enable word are nonzero; else none) has no other caller in module 1023 (High).
+
 Numbers of removed questions are not reused.
 
 - **Which regions an area loads**: Resolved for the fresh New Game start in pack 909: its activation thread loads region resources 910, 914, 920 and 926 into the fourth, P, Q and R slots, respectively. Region 910 is selected while flag 110 is clear; the other three are the no-stage family placements (pack 909 in SPEC-0045, Activation thread). **[High]** The remaining per-area region sets belong to the respective level-script specs (Region slots); do not assume that every resource in a contiguous run is loaded.
@@ -1077,9 +1102,9 @@ Numbers of removed questions are not reused.
 - Resolved: **Current area id word.** The pair test compares pack numbers: the current world's pack and the target pack. **[High]**
 - **Save-point flag writer.** Every save-point flag is zero on disc. A nonzero flag would only stop Square from recording the restart point (see Kind 4). Whether any run-time code sets the flag, and whether a save keeps it, is not identified.
 - Resolved: **Kind 17 arena.** The block is a per-region run-time arena for character pose buffers. Its size is the sum of the main, sub and face skeleton allocation costs of the region's kind-3 records, and its pose and matrix areas are initialized to identity. It is written at run time, not loaded from another disc location. The formula matches all 565 regions with a type-36 chunk and kind-17 record (Kind 17, High).
-- **Kind 3 fields.** Still open: the fields at 0x84, 0x8C, 0x98, 0x9A and 0x9C, and the other values from 0xB7 to 0xDF; the role of the float word at 0xC0 (perhaps the start of a second hold range with 0xC4); which enemy kinds use the selector, the range and the percent readings of 0xC8. Answered: the word at 0xAE is -1 in every record on disc, so the skeleton set it selects is unused.
-- **Kind 8 fields.** Still open: what reads the byte at 0x21 and the second key at 0x26 (no direct reader is known; a block copy may carry them), and the bit meanings of the flags beyond the two item-code tests.
-- **Kind 16 fields.** The list id, the constants at list offsets 0x08 and 0x0C, entry offsets 0x00, 0x04, 0x08 and 0x48 to 0x4F, and the purpose of the branch flags are not decoded. Kind 2: the 4 or 12 tail bytes after its entries are not always zero (minor).
+- **Kind 3 fields.** Resolved: the fields at 0x8C to 0x9C (table above: 0x8C is stored only, 0x8E to 0x96 are never read, 0x98 to 0x9C are tested only against −1) and 0x84 (default AI mode word). Still open: the other values from 0xB7 to 0xDF; the role of the float word at 0xC0 (perhaps the start of a second hold range with 0xC4); which enemy kinds use the selector, the range and the percent readings of 0xC8. Answered: the word at 0xAE is -1 in every record on disc, so the skeleton set it selects is unused.
+- **Kind 8 fields.** Resolved: the byte at 0x21 is the snap-to-ground flag (read when the item is spawned), and the second key at 0x26 has no play reader (table above). Still open: the bit meanings of the flags beyond the two item-code tests.
+- Resolved: **Kind 16 fields.** The list id and the constants at list offsets 0x08 and 0x0C are never read; entry offsets 0x00 to 0x0F are point 1, 0x3C and 0x3D are the ground-snap flags, 0x3F is the rumble gate, and entry bytes 0x4A to 0x4F are never read (table above). **[High]** Kind 2: the 4 or 12 tail bytes after its entries are not always zero (minor).
 - Type 16 base and field names. Resolved: every offset in the chunk is relative to the chunk header; the pools are packed, and none overlaps another or runs past the chunk end (Box records; High).
 - Resolved: **Type 16 build selector and purpose.** The build switches on the key at +0x18, which picks one of six foliage families with fixed models; each record is one foliage patch (Box records; SPEC-0060 for the families). **[High]**
 - Type 16 fields: the 0xCDCD fill at +0x38 and the 0xFFFFFFFF word at +0x3C have no known reader (Box records).
@@ -1102,6 +1127,8 @@ Numbers of removed questions are not reused.
 - Resolved: **Kill block last byte.** It is a spare byte. The set, clear and test routines accept only bit indices 0 to 255, and no other code reads or writes the byte. It is only zeroed (constructor, reset, new game) and copied (world load, store, save and load of a game), so it is always 0 unless a save file supplies another value, and then it has no effect. **[High]**
 - Resolved: **AI mode 7 release.** Mode 7 is set only from the record's default AI mode word (kind-3 data +0x84) when it is 7: 392 records in 134 resources (Release and rebind). **[Medium-High]**
 - Resolved: **Fade gate for an exterior driver request.** While E is loaded, the request starts the screen fade at six frames toward alpha 128 and arms a separate elapsed-time gate. The loader takes the request when that gate reaches 0.1 seconds, independent of a fade-complete signal. **[Medium]**
+- Open (R-0009): the clean side's pack 909 probe figures (18 percent of vertices matched with x-major; spawn height 40.5) were not reproduced here. The cell order itself is settled (High).
+- Resolved (R-0012): the door step's own code (its state, fade, pending-job and cell tests, then the facing test that picks the side of entry) adds no width or height margin; the limits are those of the plane test in the Doors paragraph (High). Test vector (synthetic): for a hero (radius 1.175, so the distance limit is 3.525), a door whose plane is 2.67 from the feet point touches; a feet point 3.6 beyond the door's end along the plane does not touch, and one 3.5 beyond does. The height range is from 1.5 below the door's base to the door's height, inclusive at the top.
 
 
 

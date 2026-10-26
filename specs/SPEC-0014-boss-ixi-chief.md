@@ -1,6 +1,6 @@
 # SPEC-0014: Boss behavior: Ixi Chief
 
-- Answers: proactive, none requested (boss AI)
+- Answers: proactive, none requested (boss AI); R-0067 (the locomotion slot values, clips and root travel of modes 0, 1, 3, 5 and 6, and the charge walk clip)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Tuning values and addresses: High (the defaults are words of the boot program data). Fight mode and stage/HP rules: High. Mode-2 flag source (game state 358, set by the final fight's script pack): High; whether mode 2 is reached in play: Medium. Stage and fight mode as separate values: High. Lava quirk (mechanism): High. Level-flag interaction: High for the flags, Medium for which level script reacts to them. Attack choice and cooldowns: High. Charge sub-steps and exits: High for order and exits, Medium for the navigation check. Push: High for the formula, Medium for which hits use it. Incoming-hit rules: High for the control flow. Missile contact: Medium-High (per-bone spheres with radius above zero; the sphere geometry is Medium; the projectile path length of 120 ticks is Medium). Orbit: High for the mode numbers and the 30-tick flip; the 3.0-unit offset and its side sign are High. Buck kick hit: High (monster weapons 4 and 5). Movement-blocking flag: Low-Medium. Knockback lanes: High (the knocked state's own effect belongs to the hero, SPEC-0036). Attack shapes, windows, damage path and block rule (Hit shapes and windows): High. Sounds (animation cues, the unused counter-attack cue) and the incoming-hit flash 222: High; the flash point: Medium.
@@ -225,7 +225,25 @@ The 8.0 and 13.0 limits are fixed in the behavior, not tuning values. The gaps (
 
 ### Orbit
 
-Orbit moves the boss toward a point 3.0 units to one side of its own position. Let d be the horizontal unit direction from the boss to the hero and s = normalize(d x up) = (−d.z, 0, d.x), with up = (0, 1, 0). Direction 0 targets the boss's position + 3.0 x s and uses locomotion mode 5; direction 1 targets the boss's position − 3.0 x s and uses locomotion mode 6. With the handedness of SPEC-0004 (facing +Z, the right side is −X), s is the boss's right-hand side while it faces the hero, so direction 0 steps to its right and direction 1 to its left. If the target is not a valid place to stand (the navigation check), the target becomes the boss's own position. The 30-tick timer restarts when it runs out, and at that moment the direction flips (High).
+Orbit moves the boss toward a point 3.0 units to one side of its own position. Let d be the horizontal unit direction from the boss to the hero and s = normalize(d x up) = (−d.z, 0, d.x), with up = (0, 1, 0). Direction 0 targets the boss's position + 3.0 x s and uses locomotion mode 5; direction 1 targets the boss's position − 3.0 x s and uses locomotion mode 6. With the handedness of SPEC-0004 (facing +Z, the right side is −X), s is the boss's right-hand side while it faces the hero, so direction 0's target point lies on its right and direction 1's on its left (the steps themselves follow the clip root travel, Locomotion clips, which goes the other way). If the target is not a valid place to stand (the navigation check), the target becomes the boss's own position. The 30-tick timer restarts when it runs out, and at that moment the direction flips (High).
+
+### Locomotion clips
+
+The boss moves only by the root travel of the clip that its current locomotion mode plays (SPEC-0005, Playback; SPEC-0040). Its controller fills the boss's seven locomotion slots with the shared slot setter (SPEC-0029, Behavior 2) at the start of the fight and again before every state handler, with the values (9, 10, 30, 14, 15, 17, 16). In the setter's order these are the slots of modes 0, 1, 2, 3 and 4, then mode 6, then mode 5. Each value is an entry number of the boss's main animation table (SPEC-0005), and the entry names a clip of the boss's model clip bank (40 clips, counted from 0). The Ixi Chief's fight regions (806, 869 and 1275) carry identical entries for these numbers (High).
+
+All of these clips have speed byte 2, so at play rate 1.0 a clip advances a quarter of a key per tick: 4 ticks per key and a cycle of 4 x keys ticks. Every clip below has a constant root record, so travel per tick is the root value x 0.000977 / 4 (High for the values; Medium-High for the travel, which rests on the shared root-travel rule).
+
+| Mode | Used for | Table entry | Clip | Keys (ticks) | Root value per key | Travel |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | Rush forward | 9 | 21 | 14 (56) | forward 387 | 0.0945 per tick, 5.67 units/s forward |
+| 1 | Strafe close | 10 | 26 | 7 (28) | forward 1365 | 0.3334 per tick, 20.0 units/s forward |
+| 3 | Strafe back | 14 | 29 | 11 (44) | forward -652 | -0.1592 per tick, 9.56 units/s backward, with a small vertical bob (at most 48 per key) |
+| 5 | Orbit, direction 0 | 16 | 27 | 11 (44) | sideways +387 | 0.0945 per tick, 5.67 units/s sideways |
+| 6 | Orbit, direction 1 | 17 | 28 | 11 (44) | sideways -387 | 0.0945 per tick the other way, 5.67 units/s |
+
+Mode 2 uses entry 30 (clip 9) and mode 4 uses entry 15 (clip 12), but no controller state requests either mode. All five clips loop. The two orbit clips are separate clips, not one clip mirrored. The sign of the sideways value is relative to the boss's own frame; the steering side for modes 5 and 6 is given in SPEC-0029, Behavior 2.
+
+Charge clips (the charge's own slot writes, High). Charge sub-step 1 ("walk toward the target") writes only slot 0 with entry 30 (clip 9: 7 keys, 28 ticks, forward 1365 per key, 20.0 units/s forward) and selects mode 0, so the walk to the charge point runs at 20.0 units/s. Sub-steps 4 and 5 write only slot 0 with entry 22 (clip 15: 15 keys, 60 ticks, forward 1365 per key, 20.0 units/s) and select mode 0. The next pass of the controller loop restores the seven standard values.
 
 ### Turning
 
@@ -277,7 +295,7 @@ Confidence: High for the branches, the roll range, the clip-end test and the lat
 Sub-step 0 is entered when the charge starts.
 
 0. **Find a position**: try three candidate points around the hero, in order: the hero's position plus the retreat distance along the hero's forward direction, then along the hero's side axis, then along the opposite side. The side axis is the first row of the hero's orientation frame, normalize(up x f) = (f.z, 0, −f.x) for the hero's forward direction f; with the handedness of SPEC-0004 this is the hero's left-hand side, so the second candidate is to the hero's left and the third to its right (High). The first candidate that is a valid place to stand (a navigation check) becomes the charge target. If none is valid, set the charge cooldown to a random tick count (1.0 to 3.0 s) and go idle.
-1. **Start**: walk toward the target. Move on to sub-step 2 when the boss is within 1.0 horizontal units of the target.
+1. **Start**: walk toward the target, playing table entry 30 (clip 9, 20.0 units/s; see Locomotion clips). Move on to sub-step 2 when the boss is within 1.0 horizontal units of the target.
 2. **Turn and face**: play animation 7 if it is not already playing. Turn toward the hero at rate 0.1 per tick. When the animation ends: sub-step 3.
 3. **Pre-twirl**: play animation 0x15. Turn toward the hero at rate 1.0 per tick. When the animation ends: sub-step 4.
 4. **Charge to**: the target is the hero's current position, re-read every tick. If that point is not valid for navigation, set the charge cooldown and go idle. Otherwise move toward it, playing animation 0x16. When the horizontal distance to the hero is below 6.0, roll the charge-slam chance (40): if the roll is below 40, go to sub-step 6 (stop-and-slam). Otherwise go to sub-step 5 (run past) and clear the hit latch.
@@ -388,6 +406,7 @@ Synthetic checks on the rules, not disc data.
 - Forward swipe at scale 0.25: trunc(50 x 0.25) = 12. Wide swipe at 0.25: trunc(35 x 0.25) = 8. Whirl at 0.25: 25. Stop-and-slam at 0.25: 25. Buck kick at 0.25: 6.
 - Cooldown ticks: charge 1.0 to 3.0 s gives an inclusive range of 60 to 180 ticks. Whirl 2.0 to 4.0 s gives 120 to 240. Missile defense 0.5 to 1.0 s gives 30 to 60.
 - Movement: D = 16 -> rush forward (locomotion mode 0). D = 12 -> strafe close (mode 1). D = 4 -> strafe back (mode 3). D = 14 -> no change. D = 9 with the boss idle -> orbit (mode 5 or 6, by the drawn direction).
+- Locomotion clips: the slot values are (9, 10, 30, 14, 15, 17, 16), so mode 5 plays table entry 16 (clip 27) and mode 6 plays entry 17 (clip 28). Mode 1 over one 28-tick cycle moves 28 x 0.3334 = 9.34 units forward; mode 0 over its 56-tick cycle moves 5.29 units. Charge sub-step 1 over 28 ticks moves 9.34 units.
 - Orbit timer: a boss in direction 0 is still in direction 0 after 29 ticks, and direction 1 from tick 30 on (the timer restarts at 30).
 - Charge sub-step 4 with the horizontal distance at 5.9: the roll of 39 (below 40) goes to stop-and-slam; a roll of 40 goes to run past.
 - Run past: hero at 7.6 horizontal units -> the run past ends. At 7.5 it does not.
@@ -401,6 +420,8 @@ Synthetic checks on the rules, not disc data.
 - Get hit to forward swipe: the boss's last whirl hit set the hit latch to 1; it is then hit and plays animation 6. At progress 0.99 the roll is 24: the latch becomes 0 and the forward swipe starts, so its hit can land. Roll 25: idle, latch unchanged (the next attack start clears it). At progress 0.98 no roll is made.
 
 ## Open questions
+
+- Resolved (R-0067, side of root x): in modes 5 and 6 the shared steering turns the boss's move direction toward the hero (SPEC-0029, Behavior 2: with d the direction to the side target, mode 5 steers to up x d and mode 6 to d x up, which is the direction to the hero), and the root step of a clip is applied along the record's side axis, up x forward (SPEC-0040, Behavior 14C), a positive root x going along it. The table entries of these clips carry no mirror flag. With the boss facing +Z that axis is +X, which is the boss's left (SPEC-0004: the right side is -X). So the mode 5 clip, whose sideways root is positive, moves the boss to its left of the line to the hero, and the mode 6 clip, whose sideways root is negative, to its right. This is the opposite of the side point that the target names; that point only feeds the steering (High for the rule; Medium-High for what shows on screen). Test vector: boss at (0, 0, 0) and hero at (0, 0, 10): mode 5 moves toward +X and mode 6 toward -X, while the mode 5 target point is (-3, 0, 0) and the mode 6 target point is (3, 0, 0). Ixi Chief: direction 0 (mode 5, +387 per key, 0.0945 per tick) circles to its left, direction 1 (mode 6, -387) to its right; the orbit timer is as given.
 
 - **Resolved: mode-2 whirl.** The attack chooser gates whirl selection on fight mode exactly 1. Mode 2 can use its 50 % wide-swipe chance, but cannot select the whirl. The wide-swipe row covers modes 1 and 2 (High).
 - **Mode 2 start**: whether any Ixi Chief starts its controller in the final-fight world, so whether mode 2 is reached in play (Medium). The clean side must not guess. Answered: no known level script runs the fight in mode 0, and mode 2's flag 0x166 (game state 358) is set only by the init of script pack 1432, the final fight (High).

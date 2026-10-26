@@ -1,6 +1,6 @@
 # SPEC-0048: World interactables: breakables, lock chests, switch groups and movable-block control
 
-- Answers: proactive (world interactables; no request identified)
+- Answers: proactive (world interactables; no request identified); R-0040 (in part; open items under Open questions), R-0048 (in part: set-up poses by kind; the writers of object states 5 and 6 open in SPEC-0030), R-0063 (movable blocks: direction words, push-start tests, box axes and home, character collision and trigger-volume tests)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Breakable entry layout and break and state rules: High for order and offsets, Medium-High for state names. The state word at +0x40 holds the value 1 in every entry on disc (2,073 of 2,073; states 0 to 3 occur at run time), under the table-relative offset reading (Where it lives). Break effect pieces: Medium; persistent broken bit and the start-mode gate: High. Attack contact routes (script hook, element gate, 0.25 push, hit cue by material): High; the +0x5A-gated route being unreachable: Medium. Switch group step: High for the code rules, Medium for meaning. Lock table, lock add and lookup: High. Button masks: High for all 16 codes and for the button names (code 0 is Square; SPEC-0033 Controller map). Second-argument word (held or newly pressed, pad slot 0): High. Press rule: High for the gates, the prompt, the key rule and the open effects; Medium for the press height units and the busy counter's meaning. Movable-block list and setters: High for offsets and writes, Medium for meaning; mover per-tick motion, push start and placement probe: Medium-High; push tick count n: High. Plate manager (three plates and one sinking object): Medium; High for its per-tick constants (0.1, -50, 1.5, 0.5); High that it is never populated in play. Element-sealed chest and breakable chain: High for the gates, hooks and waits; Medium for the start of effect 791 and the exact drop point. Breakable start mode on disc data: High. Doors: pointer to SPEC-0006 (High). Script groups (kinds and set-up): High. Proximity fuse: Medium for the rules, High for the thresholds and the hero-state gate. Reaction object: High. Movable-block disc source (the type-11 n1 list and the flag bit 1 rule): High.
@@ -33,11 +33,13 @@ Offsets are relative to the entry. The second list is a table of 4-byte offsets,
 
 | Offset | Size | Type | Field | Confidence |
 | --- | --- | --- | --- | --- |
-| +0x00 to +0x2F | 3 x 16 bytes | float blocks | Vectors used by the effects. Not described. | Low |
-| +0x30 | 16 bytes | float vector | Break position. Passed to the drop and effect calls. | Medium-High |
+| +0x00 to +0x2F | 3 x 16 bytes | float blocks | The three axis columns of the entry's draw matrix (column-major 4 x 4 with the translation at +0x30, as for placed objects). On disc the axes are a turn about the vertical axis (for example the columns (-0.755, 0, 0.656), (0, 1, 0), (-0.656, 0, -0.755) in the first entry of pack 732) with 0 in the fourth lane. | High |
+| +0x30 | 16 bytes | float vector | Translation column of the draw matrix (fourth lane 1.0 on disc in all 2,073 entries) and the break position. Passed to the drop and effect calls. | High |
 | +0x40 | s32 | state word | Breakable state (section Behavior). SPEC-0028 section 10 reads the same word as the second-list kind and draws kinds 1 and 3. | High (offset and use); Medium-High (state meanings); value 0 to 3 in every entry on disc |
+| +0x44 | pointer | inline mesh | The mesh the entry draws (Breakable draw below). The disc value is an offset from the entry's first byte to an inline mesh chunk (type 12 or 13) stored inside the entry's own data; the load replaces it with the address of that chunk's payload and prepares the mesh as it does for a placed object's inline mesh. 0 means none at load. Nonzero in 1,980 of 2,073 entries on disc (all offsets multiples of 16, all pointing at a type-12 chunk), 0 in the other 93. | High |
+| +0x48 | s32 | instanced mesh index | Index of a record of the world's first instanced-mesh chunk (type 20, SPEC-0004). -1 in the 1,980 entries that carry an inline mesh; 0 or more in the 93 that do not (all in packs that hold one type-20 chunk; every value is below that chunk's record count: pack 816 has 2 records, and its entries use index 0). | High |
 | +0x4C | s32 | piece count | Number of piece records. | High |
-| +0x50 | pointer | piece array | Piece records of 0x70 bytes each, rebased at load. | Medium |
+| +0x50 | pointer | piece array | Piece records of 0x70 bytes each. The disc value is an offset from the entry's first byte; the load adds the entry's address (0 means none). | High (base); Medium (record use) |
 | +0x54 | s16 | spawn key | Character kind key of a world-level spawn by key at the break (SPEC-0029 Behavior 31); -1 for none. It is not a character activation. 0 or more in 20 of 2,073 entries on disc; for example key 1960 in pack 732, which matches the two summon-reserved Sludgy records of that pack. | High |
 | +0x56 | s16 | drop placement id | Placement ordinal for the drop; -1 for none. A plain field of the disc entry: 0 or more in 1,239 of 2,073 entries on disc. | High |
 | +0x58 | s16 | script index | Key of the script breakable hook (RegisterScriptBreakable; Break routes, step 1) and of the persistent broken bit (Break effect, step 6). It is not a sound index. Unique within a pack; below 128 in 2,069 of 2,073 entries on disc. | High |
@@ -45,7 +47,7 @@ Offsets are relative to the entry. The second list is a table of 4-byte offsets,
 | +0x5C | s16 | contact material | Selects the hit cue of the attack contact routines: 2 -> cue 143, 3 -> cue 145, 4 -> cue 146, any other value -> cue 144 (SPEC-0031, Breakable contact cues). On disc (2,073 entries in 79 world packs): 0 in 1,557, 1 in 294, 3 in 19, 4 in 203, 2 in none. | High |
 | +0x5E | u8 | element class (alignment) | 0 = any attack may act on the entry; 1 to 6 = the Mote kind an attack must have to act on it (see Break routes, step 2, and Element gate on hits); 7 is not used on disc. Returned by the alignment query. On disc (2,073 entries in 79 world packs; 121 packs have a type-29 chunk): 0 in 2,033 entries, 1 in 9, 2 in 6, 3 in 6, 4 in 6, 5 in 7, 6 in 6, 7 in none. | High (offset and counts); Medium (meaning of 1 to 6 as attack kinds) |
 | +0x5F | u8 | start mode | 0 means the default mode, which is 0. Mode 1 and mode 2 have their own effects; any other value gives state 1 (section Behavior). Applied at world load only to an entry whose broken bit is set. On disc: 0 in 1,974 entries, 10 in 13, 20 in 3, 30 in 83; 1 and 2 in none | High |
-| +0x60 | pointer | sub-record | Optional record: the breakable's type-11 volume (present in 2,030 of 2,073 entries on disc). Its type byte is at +0x10 (u8) and its volume flags word is the s16 at +0x12, which a break sets to 0. | High |
+| +0x60 | pointer | sub-record | Optional record: the breakable's type-11 volume (present in 2,030 of 2,073 entries on disc). Its type byte is at +0x10 (u8) and its volume flags word is the s16 at +0x12, which a break sets to 0. The disc value is an offset from the entry's first byte; the load adds the entry's address (0 means none) and then sets the flags word to 9, or to 33 when the type byte is 4. | High |
 
 Word 0x16 of the entry, counted in 32-bit words (0x16 x 4 = 0x58), is the script index; it is not a break cue (High). The break effect itself plays no cue; the hit cue comes from the contact routines and +0x5C.
 
@@ -79,21 +81,27 @@ The group object that drives a switch group carries an entry index at its +0x30 
 
 | Offset | Size | Field | Confidence |
 | --- | --- | --- | --- |
-| +0x00 | vec4 | home position (the block's position when it was placed) | Medium-High |
-| +0x10 | vec4 | axis A (push directions 0 and 2) | Medium-High |
-| +0x30 | vec4 | axis B (push directions 1 and 3) | Medium-High |
-| +0x40 | vec4 | current position | Medium-High |
-| +0x50 | vec4 | position minus home | Medium-High |
-| +0x68 | pointer | the block's entry (91 entries on disc): its +0x10 value sets the step length, its +0x18 word is −1 in all 91 entries (this selects the default sizes), and it links the transform record the mover reads | Medium |
-| +0x6C, +0x70 | float | mover parameters | Low |
-| +0x74 | s32 | active word, written by the activate call; the per-tick step runs only while it is non-zero | High |
-| +0x78 to +0x84 | 4 x s32 | direction-allowed words, one per push direction 0 to 3 | Medium-High |
-| +0x88 | s32 | moving flag | Medium-High |
-| +0x8C | f32 | step length L of one push | Medium-High |
-| +0x90 | u8 | tick counter i of the current push | Medium-High |
-| +0x91 | u8 | tick count n of the current push | Medium-High |
-| +0x94 | s32 | push direction D: 0 = +A, 1 = +B, 2 = −A, 3 = −B | Medium-High |
-| +0x98 | pointer | world reference | Medium |
+| +0x00 | vec4 | home position: the block's centre at its last placement (equal to the position then; w = 1) | High |
+| +0x10 | vec4 | axis A (push directions 0 and 2): the box record's first axis vector (the vector at record +0x40), w = 0 | High |
+| +0x20 | vec4 | vertical axis: the box record's third axis vector (record +0x60), w = 0 | High |
+| +0x30 | vec4 | axis B (push directions 1 and 3): the box record's second axis vector (record +0x50), w = 0 | High |
+| +0x40 | vec4 | current position: the box corner plus half the size along A and along B (the centre of the footprint at the ground height found at placement; w = 1) | High |
+| +0x50 | vec4 | position minus home (w = 0); zero after a placement | High |
+| +0x60 | pointer | the volume the block last fired (0 = none; Trigger volumes below) | High |
+| +0x64 | pointer | display model: the entry's inline mesh, or the registry model named by the entry's +0x18 word when the entry has no inline mesh | High |
+| +0x68 | pointer | the block's entry (91 entries on disc): +0x10 size S, +0x14 height H, +0x18 word, +0x1C inline mesh, +0x20 the box record | High |
+| +0x6C | s32 | a value handed in at placement and kept for the next placement (role Low) | Low |
+| +0x70 | pointer | the world record the block belongs to (a trigger fire needs it to be non-null) | High |
+| +0x74 | s32 | active word: 1 after a placement; written by the activate call; the per-tick step runs only while it is non-zero | High |
+| +0x78 to +0x84 | 4 x s32 | direction-allowed words, one per push direction 0 to 3: set to 1 by every placement and written by nothing else, so all four directions are always allowed | High |
+| +0x88 | s32 | moving flag | High |
+| +0x8C | f32 | step length L of one push = 0.5 S | High |
+| +0x90 | u8 | tick counter i of the current push | High |
+| +0x91 | u8 | tick count n of the current push (signed byte) | High |
+| +0x94 | s32 | push direction D: 0 = +A, 1 = +B, 2 = −A, 3 = −B; −1 after a placement | High |
+| +0x98 | s32 | the block's number (its index in the list; the fire step passes it as the trigger's last argument) | High |
+| +0x9C | pointer | footprint word: when non-zero it points at a ground patch entry whose outline records give the footprint list test of SPEC-0018. No code writes it, so it is zero for every block (Medium: it relies on the block memory being zero at load) | Medium |
+| +0xA0, +0xA4 | s32, pointer | attached-effect list: a count of 5 and the pointer to 5 entries of 32 bytes (an effect handle in the first word, an offset vector at +0x10); set up by the attach-effect call | High |
 
 Index checks: every call tests the index against the list count.
 
@@ -133,6 +141,18 @@ Transitions:
 - The group arm step sets state 1 directly (see Switch groups).
 
 Queries: intact is true in states 1 and 3. Invulnerable is true in every state other than 1. The alignment query returns the byte at +0x5E, or 0 for an invalid index. Confidence: High for the code; Medium-High for the names.
+
+### Breakable draw
+
+Confidence: High.
+
+Once per world draw, right after the placed objects of SPEC-0028 section 10 are drawn, every second-list entry in state 1 or 3 is drawn; entries in state 0 or 2 are skipped, so a broken entry (state 2) is hidden by its state alone and nothing else needs to change. There is no distance test, zone-grid query or draw-gate byte on this path.
+
+- Mesh. The entry draws the one mesh named by its own +0x44 pointer. At world set-up (after all chunks are loaded), when the pack has a type-20 chunk and the entry's +0x48 index is 0 or more and below that chunk's record count, the entry's +0x44 is replaced by the near-mesh pointer of that record of the first type-20 chunk (the same mesh the instanced scenery of SPEC-0004 uses). With no type-20 chunk, or an index of -1 or out of range, +0x44 keeps its inline-mesh value. An entry whose +0x44 is still 0 draws nothing.
+- Transform. The entry's first 64 bytes, used as stored, are the draw matrix: three axis columns, then the translation at +0x30. The mesh is not scaled by the entry. The "scale 1.0" that SPEC-0028 mentions is the intensity argument of the draw call (1.0, Medium); the entry carries no colour of its own.
+- The piece records (+0x50) are not drawn here; they are the effect placements that a break spawns (Break effect, step 4).
+
+Test vector: pack 732, entry 0 (state 1, +0x44 = 192 bytes from the entry start, +0x48 = -1, 10 pieces): drawn with its inline type-12 mesh at translation (3834.924, 6.345, 343.157), turned about the vertical axis by the matrix above. Pack 816, entries 0 to 7 (state 1, +0x44 = 0, +0x48 = 0, 8 pieces, a pack with a 2-record type-20 chunk): each draws record 0's near mesh at its own translation. After a break (state 2) neither is drawn.
 
 ### Break routes (script call and attacks)
 
@@ -187,6 +207,19 @@ Broken pieces are not stored. Within a level the state stays until the level is 
 Confidence: High, except where marked.
 
 Every type-40 list entry is a script group. Its layout, the kinds found on disc and their counts are in SPEC-0028 section 11 (field table and kinds table); they are not repeated here.
+
+#### Set-up poses by kind (at each world load)
+
+Confidence: High for the poses and flags; Medium for the object roles. Object states used here: 9 seeks to a time, 8 is finished at the end of a seek, 4 is finished after deactivation and 10 is stopped. Object flags are the bytes at +0x1B6 and +0x1B7 of the object record. Setting a pose at time 0 is "start pose"; at the clip's last frame it is "end pose".
+
+- Lock chest (kind 1): object 0 is set to state 9 at time 0 (start pose) when its collected row is clear. When the row is set, object 0 is at its last frame in state 8 (end pose). Both set its flag +0x1B6.
+- Break chest (kind 2): object A is set to state 9 at time 0 and object B to state 10 at time 0. When the chest is collected, both of its breakables have their word at +0x40 cleared and a flag set, and object B is set to state 4 (finished, end pose). Object A stays at its start pose.
+- Proximity fuse (kind 3): writes no pose. Each stage object below the trigger threshold gets its flag +0x1B7 set and its flag +0x1B6 cleared, and the breakable's word at +0x40 is cleared.
+- Breakable chain (kind 4): the first member is left alone. Each later member has its word at +0x40 cleared. No pose is written.
+- Reaction object (kind 5): object 0 is set to state 9 at time 0 (start pose), with flags +0x1B6 and +0x1B7 set.
+- Dig site (kind 6): when its collected row is clear, object A is set to state 9 at time 0. When the row is set, object A is set to state 9 at time 0 and object B is at its last frame in state 8 (end pose).
+
+Test vectors: a lock chest whose row is clear at load starts in state 9 at time 0; the same chest with the row set loads in state 8 at its last frame. A break chest collected at load has object B in state 4 and object A in state 9 at time 0. The word at +0x40 that kinds 2 to 4 clear is read as a breakable's active word (Medium).
 
 - Set-up. At each world load every entry is set up by its kind word. The script call ReActivateScriptGroup(index) runs the same set-up again for one entry, and GetScriptGroupInstance(index) returns the entry; both find the entry by its position in the list (the group index), not by its key.
 - Triggers. A group's script triggers are registered as script-instance triggers: each starts a callback thread keyed by the trigger index, and the trigger record carries the group index at its +0x30.
@@ -363,29 +396,56 @@ Spawn parameters for the direct item and the group item: 0.25 and 1.0 are code c
 
 ### Movable blocks
 
-Confidence: Medium-High for placement, push start and the per-tick motion; High for the push tick count n.
+Confidence: High for placement, the direction words, the push start, the second clearance test and the per-tick motion; High for the push tick count n; Medium-High for the character contact; Medium for the trigger-volume shapes.
 
 A movable block moves only in whole pushes. Each push moves it by its step length L along one of four directions, spread evenly over n ticks. The 3.0 value is not a speed: it is the ceiling offset of the ground probe used when the block is placed.
 
 **Source (High).** At world load each n1 entry of the type-11 chunk whose box primitive (entry +0x20) has flag bit 1 (0x0002) set becomes one 0xB0-byte block record, in entry order; entries without a box, or whose box has bit 1 clear, build nothing (Where it lives).
 
-**Placement (init, move to locator, reacquire).** The block's home and current position are set from its transform record, and its height is probed with the ground probe of SPEC-0018 with ceiling = its height + 3.0. The step length is L = 0.5 × the entry's +0x10 value, read before the defaults are applied. When the entry's +0x18 word is negative (−1 in all 91 entries on disc), the defaults are then written into the entry: size 3.5, extents 5.0, 3.5 and 3.5. The first placement therefore uses the disc value, and a block that is placed again later reads 3.5 and gets L = 1.75 (quirk, Edge cases).
+**Placement (init, move to locator, reacquire; High).** The block's geometry is its box record (the n1 entry's primitive, SPEC-0028 section 6.1): a reference corner (record +0x30), a first axis (record +0x40), a second axis (record +0x50), a vertical axis (record +0x60) and three extents (vertical at +0x24, along the second axis at +0x28, along the first axis at +0x2C). A placement does this, in order:
+1. Probes the ground at the corner's x and z with a ceiling of the corner height + 3.0 (ground probe of SPEC-0018) and writes the found height into the corner.
+2. Copies the three axes into the block record (A = the first axis, B = the second axis, vertical = the third), each with w = 0.
+3. Sets the position and the home to corner + 0.5 S A + 0.5 S B, where S is the entry's size (+0x10); the displacement (position minus home) is zero.
+4. Rewrites the w lane of each of the box record's three axes to minus the dot product of that axis with the new corner, so the plane constants of the box follow the placement.
+5. Sets all four direction-allowed words to 1, the moving flag to 0, both counters to 0, the stored direction to -1 and the active word to 1. The step length is L = 0.5 S.
 
-**Push start.** A push starts only when the block is not moving and the push direction D is allowed (its direction-allowed word is non-zero). With D the unit vector of the direction (+A, +B, −A or −B):
-1. Block front F = position + D × (L + 0.5 × box size + 0.1). Hero target H = hero position + D × (L + 0.75) × 1.1.
-2. When the block has an area test, both points must pass it. Otherwise the ground heights at the two points (ground probe with ceiling + 8.0) must differ by no more than the step limit 0.75 (ELF data word 0x2EB2C0, the step limit of SPEC-0018's move check).
-3. A second clearance test must also pass.
-4. Then moving = 1, i = 0, the direction is stored, and n = (key count of the hero's current clip − the whole part of the clip cursor − 2), kept as a signed byte. Only for the push clip (action 42) is the count divided by the half-rate word 0x368FA4 (0.5), so a push lasts twice as many ticks. Pull and side moves (actions 41, 144 and 145) are not doubled, so they finish in about half the clip's remaining time (quirk; reproduce). The count is taken when the hero's block state starts the move, once per clip cycle (SPEC-0033, Behavior 4A.2).
+The 3.0 value is the probe ceiling, not a speed. Entry defaults (a rule that never applies on disc): when the entry has no inline mesh (its +0x1C word is 0) and its +0x18 word is negative, the entry first receives size 3.5, height 5.0 and the box extents 5.0 (vertical), 3.5 and 3.5, and its +0x18 word becomes the registry model id 206; L is then taken from the size read before that overwrite, while steps 3 and 4 use the new size 3.5. All 90 built blocks have an inline mesh (only the unbuilt entry of pack 1344 has none), so on disc S, H and the extents are always the stored values and a second placement gives the same L (High).
 
-**Per tick.** The movable-block list is walked by the world tick, after the object animations of SPEC-0028 and before any character update (SPEC-0018, Movable-block list). For a block whose active word (+0x74) is non-zero: if it is moving and i < n, position += D × (L / n), the position-minus-home vector is updated and i += 1; if it is moving and i ≥ n, moving = 0 with no motion (so the flag clears on the tick after the n-th step). Effects attached to the block follow it. Per-tick speed is L / n; a push covers L in n ticks.
+On disc A is the world +Z unit vector and B the world +X unit vector in 89 of the 90 blocks. The block of pack 1176 has A = (0, 0, -1) and B = (-1, 0, 0). The vertical axis is (0, 1, 0) in all of them. The box record's extents equal S and H in nearly all blocks (for example pack 1381 block 1 has 5.0 along its first axis against S = 5.5).
+
+**Direction-allowed words (High).** Nothing but the placement writes them, and the placement sets all four to 1. No script call, hero state or other routine changes them, so every push direction is always allowed. The test in the push start is kept for completeness.
+
+**Push start.** The hero's block state (SPEC-0033, Behavior 4A.2) asks for a push with the block, a direction D (0 = +A, 1 = +B, 2 = -A, 3 = -B), the face index f of the face the hero holds (0 to 3 in the order A, B, -A, -B; SPEC-0033 Behavior 15A) and the tick count n. The hero's actions give D from f: the push (action 42) uses D = f; the pull (action 41) uses D = (f + 2) mod 4; the side move of action 144 uses D = (f + 1) mod 4; the side move of action 145 uses D = (f + 3) mod 4. An invalid face (f = -1) gives D = -1 and nothing runs. The request repeats on each tick of the clip window in which SPEC-0033 allows the move, until a push is accepted; a refusal leaves the block and the hero's clip unchanged. A push is accepted when all of these hold, in order:
+1. The block is not moving, and the direction-allowed word of D is non-zero (always true; see above).
+2. Footprint step. This step runs only when the block's footprint word (+0x9C) is non-zero, which is never the case on disc, so on disc it passes without any test (Medium). When it runs: with D the unit vector of the direction (+A, +B, -A or -B), the block front F = position + D x (L + 0.5 S + 0.1) must pass the footprint list test (the candidate list test of SPEC-0018, on x and z). The hero target H = hero position + D x (L + 0.75) x 1.1 passes when it passes the same list test; if it fails the list test, the ground heights (ground probe, each point's own height + 8.0 as ceiling) at the block's position and at H must differ by no more than the step limit 0.75 (ELF data word 0x2EB2C0). Otherwise the push is refused. This is the footprint variant of SPEC-0018 (Move check) and SPEC-0040 Behavior 11.
+3. Second clearance test (below): no other block may be in the way.
+4. Then the moving flag is set to 1, i to 0, the direction D is stored and n is stored as a signed byte. n comes from the caller: n = (key count of the hero's current clip - the whole part of the clip cursor - 2), kept as a signed byte. Only for the push clip (action 42) is the count divided by the half-rate word 0x368FA4 (0.5), so a push lasts twice as many ticks. Pull and side moves (actions 41, 144 and 145) are not doubled, so they finish in about half the clip's remaining time (quirk; reproduce). The count is taken when the hero's block state starts the move, once per clip cycle (SPEC-0033, Behavior 4A.2).
+
+**Second clearance test (High for the rule; Medium-High for the intended meaning).** The test scans every other block in the world's list (active or not; the pushed block is skipped) and refuses the push as soon as one block is in the way. It works on the world x and z of the block positions and assumes that A points along world +Z and B along world +X, as they do for 89 of the 90 disc blocks; the block of pack 1176, whose axes are reversed, still gets the +Z and +X tests (quirk; reproduce). Four relations are used. Each takes a first block, a second block and a flag w (0 or 1); r is the size S of the first block, dx = x(second) - x(first) and dz = z(second) - z(first):
+- Forward-Z: true when dz >= 0, |dx| < r - 0.05 and dz <= r + 0.5 (w = 0) or dz <= 1.5 x (r + 0.5) (w = 1).
+- Forward-X: the same with the roles of x and z exchanged (dx >= 0, |dz| < r - 0.05, dx <= r + 0.5 or 1.5 x (r + 0.5)).
+- Side-Z: true when dz >= 0, dz <= r + 0.5 and the x window overlaps the open interval (-(r - 0.05), r - 0.05): with w = 0 the window is [dx, dx + r], with w = 1 it is [dx - r, dx].
+- Side-X: the same with x and z exchanged.
+With P the pushed block and Q another block, the relation chosen by D and f is:
+
+| D | f = 0 | f = 1 | f = 2 | f = 3 |
+| --- | --- | --- | --- | --- |
+| 0 (+A) | Forward-Z(P, Q, 0) | Side-Z(P, Q, 0) | Forward-Z(P, Q, 1) | Side-Z(P, Q, 1) |
+| 1 (+B) | Side-X(P, Q, 0) | Forward-X(P, Q, 0) | Side-X(P, Q, 1) | Forward-X(P, Q, 1) |
+| 2 (-A) | Forward-Z(Q, P, 1) | Side-Z(Q, P, 1) | Forward-Z(Q, P, 0) | Side-Z(Q, P, 0) |
+| 3 (-B) | Side-X(Q, P, 1) | Forward-X(Q, P, 1) | Side-X(Q, P, 0) | Forward-X(Q, P, 0) |
+
+For D = 2 and 3 the roles are exchanged, so r is the size of Q. The push (f = D, w = 0) looks for a block within r + 0.5 ahead; the pull (D opposite to f, w = 1) looks 1.5 x (r + 0.5) ahead, which leaves room for the hero; the side moves look ahead by r + 0.5 over a side window that extends towards the hero's side by one block size. Any other pair (D or f outside 0 to 3) tests nothing and passes. The scan returns "blocked" at the first block for which the relation is true.
+
+**Per tick.** The movable-block list is walked by the world tick, after the object animations of SPEC-0028 and before any character update (SPEC-0018, Movable-block list). For a block whose active word (+0x74) is non-zero: if it is moving and i < n, position += D × (L / n), the position-minus-home vector is updated and i += 1; if it is moving and i ≥ n, moving = 0 with no motion (so the flag clears on the tick after the n-th step). Effects attached to the block follow it. Per-tick speed is L / n; a push covers L in n ticks. With n of 0 or below the block does not move: the first tick finds i at or above n and clears the moving flag.
 
 **Climb onto a block.** The hero's climb onto a block (state 58) is gated by the climb-onto-block fit test of SPEC-0033 (Behavior 15): the hero walking at a block face, the block top 0.2 to 3.5 above the hero's feet, the facing toward the face and the stick pushed into the block. The block top it reads is the box as loaded; a push does not update it.
 
 **Activate.** Writes the int argument to the block's +0x74 word, for a valid index.
 
-**Move to locator.** For a valid block index and a valid locator index, centres the block on the locator position X (+0x30 of the locator record): the transform record's position becomes X − 0.5 × s × U − 0.5 × s × V, where U and V are the two horizontal axis vectors of the block's transform record (its vectors at +0x50 and +0x40) and s is the entry's size (+0x10; 3.5 once the defaults have been applied). Then the block is placed again (Placement).
+**Move to locator.** For a valid block index and a valid locator index, centres the block on the locator position X (+0x30 of the locator record): the box record's reference corner becomes X - 0.5 S x (the vector at record +0x50) - 0.5 S x (the vector at record +0x40), where S is the entry's size (+0x10). Then the block is placed again (Placement), which re-probes the ground and sets home and position to X at the new ground height.
 
-**Reacquire height patch.** Places the block again (Placement): the home, the position and the ground height are taken anew from its transform record.
+**Reacquire height patch (High).** Centres the block on its own current position and places it again: it runs the move-to-locator rule with X = the block's current position (so the corner becomes position - 0.5 S A - 0.5 S B), then the placement. The result is that the ground height under the block is probed again (ceiling = the position height + 3.0), the home becomes the new position and the displacement from home is zero. The horizontal position does not change.
 
 **Sound index.** Stores the int argument at world +0x2CCC. A later sound call reads that word as the movable-block sound index (Medium).
 
@@ -394,6 +454,24 @@ A movable block moves only in whole pushes. Each push moves it by its step lengt
 **Attach effect (High).** AttachEffectToMovableBlock(world, block, effect, a, b, c) attaches placed effect "effect" to block "block" at an offset. The block index is checked against the movable-block count and the effect index against the world's placed-effect count; an index out of range does nothing. The offset vector is (b, c, a, 0): the three floats are taken in the order second, third, first.
 
 **Hero state query.** IsHeroMovingBlock is named. Its meaning belongs to the hero spec (SPEC-0036).
+
+**Solid for characters (High for the geometry; Medium-High for the cue and latch details).** A block is a solid oriented box that moves with it. Its shape is the block's own box record (the same record as in the entry), with its stored extents. Because the record's axis plane constants were written at the last placement (Placement, step 4) and the contact test adds the block's displacement from home to the reference point, the box sits at the placement corner plus (position minus home): it follows the block exactly, with its base at the placement ground height. The box is not re-probed while the block moves.
+Each tick, for every motion record whose owner calls the block contact pass (heroes and region characters; SPEC-0040 Behavior 14A), unless the owner is in state 18 or 19 (the hero's own push and grab states), the pass:
+1. Lists the active blocks (active word non-zero) whose centre is within 10 units horizontally of the character (squared horizontal distance below 100), at most 100 of them, and sorts them nearest first. In the same scan it keeps, as the character's current block, the nearest active block whose top (position height + H) is more than 0.1 above the character's feet, with its horizontal distance (SPEC-0018).
+2. Runs the contact for each listed block in that order. The contact is skipped for an owner in state 30, 41 or 58.
+3. Contact. The character's reference point (its position) with radius 0.75 is tested against the box (the point-plus-radius box test of SPEC-0018: each horizontal coordinate in the box frame must lie strictly between -0.75 and the extent plus 0.75, and the vertical coordinate between -0.75 and the vertical extent minus 0.1). On a hit with a side normal (the vertical part of the contact normal below 0.1 in magnitude) the block-slide cue plays at the block and, when the block top is more than 1.0 and less than 5.0 above the character's position, the owner's side-touch method runs (for a hero it sets the side-touch latch of SPEC-0033 Behavior 15A). The shared contact response then moves the character out along the normal by the depth, removes the velocity and force components into the face, and sets the floor flag for a normal with a vertical part above 0.9.
+4. If the first test misses, a second test uses the character's predicted position: position + (velocity + force / weight x k) x k, with k = 1/30, plus half the tick's displacement when that displacement is longer than 0.1, and the vertical bound raised by the radius. On a hit the cue and the latch rule above run; a hit on a top face (normal vertical part above 0.1) runs only the velocity, force and floor part of the response, with no position push.
+So a block stops a character on every side, a character may stand on top, and the push of the hero itself is not a contact (state 18 skips the pass).
+
+**Trigger volumes (High for the dispatch and the timing; Medium for the shapes).** A moving block fires script trigger volumes. The test runs inside the block's own tick, only while the block is moving and on the tick on which its moving flag clears (n + 1 ticks per push, counting the final tick at the end position). Each moving tick starts by clearing the block's last-fired word (+0x60) and every hit sets it again. While the block is idle and that word is non-zero, the block fires the stored volume again on every tick, so a block that comes to rest inside a volume keeps firing the volume it last hit until the next push starts. The volumes tested are the volume records of the selected hero's cell list A (not the block's own cell). The block's shape is a vertical finite cylinder with its base at the block position, radius S and height H (the entry's +0x10 and +0x14). By volume kind:
+- kind 1 (sphere): needs flag bit 3 (0x0008); finite cylinder against sphere (centre at record +0x30, radius at +0x3C).
+- kind 2: no action.
+- kind 3 (cylinder): needs flag bit 3; finite cylinder against finite cylinder (base +0x30, axis +0x40, length +0x24, radius +0x3C).
+- kind 4 with the switch value (+0x2C) zero or below: needs flag bit 8 (0x0100); the cylinder against the static rectangle test.
+- kind 4 with the switch value above zero: needs flag bit 5 (0x0020); the same five-sub-volume moving-rectangle test as for characters, with the block cylinder's radius set to 0.6 S.
+- kind 7 and every other kind: no action.
+A hit fires the volume with no actor, object 0 and the block's number as the last argument (+0x28 of the collision block; SPEC-0030 Layout section 3), provided the block's world pointer is set, and stores the volume in the last-fired word. A block can fire several volumes in one tick (each hit fires at once); the last one fired is the one repeated while idle.
+
 
 ### Plate manager
 
@@ -438,8 +516,10 @@ Doors are not world interactables of this spec. They are the kind-7 door volumes
 - **Element mismatch on a seal hit or a hero melee contact.** Tor recoils with material 4 (Element recoil: attack sub-state 13, cue 13, rumble), with no break and no breakable cue; Roberta has no reaction. The same recoil is the only effect of any hit on a chest body (breakable 0 of a lock chest or of an element-sealed chest). The Mote-family contact handlers and Roberta's shot skip silently on a mismatch (Break routes, step 2).
 - **Unreachable +0x5A route.** The break route gated on +0x5A (push 0, no cue) is never reached; a clean implementation that breaks entries from attacks follows Break routes and ignores +0x5A as a gate (Medium).
 - **Nova at a seal.** The seal hook passes Nova, but the prompt thread shows the mismatch prompt 29 to a hero with Nova when E_t is 1 to 6. Reproduce both rules as stated (High).
-- **Block placed a second time (quirk).** The step length is taken from the entry's +0x10 value before the defaults overwrite it with 3.5. A block that is placed again (move to locator, reacquire, or a later init) therefore gets L = 0.5 × 3.5 = 1.75, whatever its disc value. Reproduce (Medium-High).
-- **Push while moving.** A push request while the moving flag is set, or in a direction whose allowed word is zero, does nothing.
+- **Entry defaults never apply on disc.** The size 3.5 / height 5.0 defaults are written only for an entry that has no inline mesh and a negative +0x18 word. Every built block has an inline mesh, so L is always 0.5 times the stored size, also for a block that is placed again (move to locator, reacquire). The earlier statement that a re-placed block gets L = 1.75 is wrong for disc data (High).
+- **Push while moving.** A push request while the moving flag is set does nothing. The direction-allowed word is never zero, so it never refuses.
+- **Idle block in a volume.** A block that finished a push inside a trigger volume fires that volume on every following tick until it is pushed again (Trigger volumes).
+- **Pack 1176 block.** Its axes are reversed (A = -Z, B = -X) but the second clearance test still looks towards +Z and +X (Second clearance test).
 - **Push tick count.** n is stored as a signed byte, so a count of 128 or more wraps. With n = 0 or negative the block does not move: the first step finds i ≥ n and clears the moving flag (Medium; Open questions).
 - **Inactive block.** A block whose active word is zero is not stepped, so a push started on it does not advance until it is activated again.
 - **Plate pressed from below (quirk).** The plate height test has no lower bound: a hero any distance below a plate, within r + 1.5 horizontally, presses it. Reproduce (Medium).
@@ -538,10 +618,18 @@ Reaction object:
 - Trigger 0 fires: object 0 hidden, object 1 plays once, then object 0 loops again. A second fire after that: the same again.
 
 Movable blocks:
-- Disc example (pack 1394, three blocks with entry value 5.45): L = 0.5 × 5.45 = 2.725 per push. With n = 20 the block moves 0.13625 per tick for 20 ticks (2.725 in total), and the moving flag clears on tick 21.
+- Disc example (pack 1394, three blocks with entry value 5.4517): L = 0.5 × 5.4517 = 2.7259 per push. With n = 20 the block moves 0.1363 per tick for 20 ticks (2.7259 in total), and the moving flag clears on tick 21.
 - Synthetic: entry value 4.0, axis A = (1, 0, 0), direction 2 (−A), n = 8, start position (10, 0, 0): L = 2.0, 0.25 per tick; after 8 ticks the position is (8, 0, 0).
-- Push length (synthetic clip values): push clip with key count 22 and clip cursor 1.5 at the move: n = (22 − 1 − 2) / 0.5 = 38 ticks; a pack 1394 block (L = 2.725) then moves about 0.0717 per tick. A pull with key count 26 and cursor 1.5: n = 23, not doubled.
-- Re-placement quirk (synthetic): the same block placed again (reacquire) gets L = 1.75, so the next push with n = 8 moves 0.21875 per tick.
+- Push length (synthetic clip values): push clip with key count 22 and clip cursor 1.5 at the move: n = (22 − 1 − 2) / 0.5 = 38 ticks; a pack 1394 block (L = 2.7259) then moves about 0.0717 per tick. A pull with key count 26 and cursor 1.5: n = 23, not doubled.
+- Placement (disc, pack 1056): size S = 5.452, box corner (-2.726, 0.0, -2.726), A = (0, 0, 1), B = (1, 0, 0). With the ground probe finding height 0.0 at the corner, home = position = (0.0, 0.0, 0.0), L = 2.726 and all four direction words are 1; placing the block again gives the same L.
+- Second clearance, push (synthetic, S = 5.452 for both blocks, P at (0, 0, 0), D = 0, f = 0): Q at (0, 0, 5.9) blocks the push (dz = 5.9 is not above r + 0.5 = 5.952); Q at (0, 0, 5.96) does not; Q at (5.5, 0, 3) does not (|dx| = 5.5 is not below r - 0.05 = 5.402).
+- Second clearance, pull (D = 0, f = 2, same blocks): the limit is 1.5 x 5.952 = 8.928, so Q at (0, 0, 8.9) blocks and Q at (0, 0, 8.95) does not.
+- Second clearance, side move (D = 0, f = 1, w = 0): Q at (-10, 0, 3) blocks (the window [dx, dx + r] = [-10, -4.548] overlaps (-5.402, 5.402)); Q at (-11, 0, 3) does not (its window ends at -5.548). With f = 3 (w = 1) the window is [dx - r, dx]: Q at (10, 0, 3) blocks and Q at (-5.5, 0, 3) does not.
+- Second clearance, backwards push (D = 2, f = 2): P at (0, 0, 0), Q at (0, 0, -5.9): the relation is Forward-Z(Q, P, 0) with dz = z(P) - z(Q) = 5.9, so it blocks.
+- Direction from the hero's action (S = any): face f = 1 gives D = 1 for the push, 3 for the pull, 2 for the side move of action 144 and 0 for the side move of action 145.
+- Footprint step on disc: footprint word 0, so a push is refused only by the second clearance test, never by ground heights.
+- Character contact (synthetic, pack 1056 block at home, S = H = 5.452): a character point at (3.0, 1.0, 0.0) is 0.274 outside the +X face, inside the 0.75 band, so the contact hits; at (3.6, 1.0, 0.0) it is 0.874 outside and misses (the second test only hits if the predicted position enters the band). After a push of 2.726 along +Z the box spans z from 0 to 5.452: a point at (0.0, 1.0, -0.5) hits and one at (0.0, 1.0, -1.0) misses.
+- Trigger volumes (synthetic): a push with n = 20 runs the volume test on 21 ticks (20 steps and the final tick). With the block resting inside a sphere volume afterwards, that volume fires again on each following tick until the next push starts.
 - Step limit (synthetic): ground heights 2.0 and 2.75 at the two points: allowed (difference 0.75 is not above 0.75). Heights 2.0 and 2.76: blocked.
 - Move to locator (synthetic): locator X = (20, 0, 20), U = (1, 0, 0), V = (0, 0, 1), s = 3.5: the transform position becomes (18.25, 0, 18.25).
 
@@ -555,7 +643,11 @@ Plate manager (synthetic; plate at P = (0, 0, 0) with r = 1.0, not pressed):
 
 ## Open questions
 
+- Resolved (R-0048, part 3, High for the program, Medium-High for the level scripts): nothing writes animation state 5 or 6 of a placed object. Every write of the state word stores 0 (loop), 2 (play once), 4 (finished and hidden), 8 (finished at the end), 9 (stopped at the start or at a set time) or 10 (stopped), through the script calls of SPEC-0030 category 1, the set-up routines by kind (Set-up poses by kind) and the end-of-clip step. The two values that the disc stores are 3 and 7 (3,491 and 4 objects). No script call takes a state number as an argument, and the level scripts do not write object records. So states 5 and 6 never occur: IsObjAnimating is true only in states 0 and 2, IsObjAnimFinished only in states 4 and 8, and the per-tick object step runs only for states 0 and 2 (the code that also handles 5 and 6 is never reached). A rewrite may leave them out.
+
 Numbers of removed questions are not reused.
+
+- Open (R-0040, in part): (1) Resolved: the disc values of the piece array (+0x50) and the volume link (+0x60) are offsets from the entry's own first byte. The load adds the entry's address to each nonzero value (a value of 0 means none). Test vector: an entry at position E with +0x60 = 0x80 has its volume record at E + 0x80. At load the volume's flags word (+0x12) is set to 9, or to 33 when the volume's type byte (+0x10) is 4. (2) Resolved (Medium-High; SPEC-0036 Hit detection step 6): the hero's melee walk runs on every tick that the character scan runs, with static tests per volume kind (kind 1 sphere against the swing triangle's edges; kinds 4 and 7 rectangle; kind 3 cylinder; kind 2 never). The swing shape is the reach of SPEC-0036 Hit detection step 2, not a radius 1.0 cylinder from attach point 0 alone; the third vertex is the previous-tick tip (SPEC-0036 Hit detection step 6; Medium-High) and the kind 3 and 4/7 internals remain Medium. (3) Resolved (High): a second-list entry in state 1 or 3 draws its own inline mesh (+0x44, a type-12 chunk stored in the entry) or, when it has none, the near mesh of record +0x48 of the pack's first type-20 chunk, with the entry's own 4 x 4 matrix; a broken entry (state 2) is simply not drawn. See Breakable draw and its test vector.
 
 1. Resolved: **pad bit names.** Code 0 is Square (0x0080), with packet byte 2 in the high byte of the button word (High; SPEC-0033 Controller map).
 2. Resolved: **second pad word.** True reads pad slot 0's newly-pressed word and false its held word; the chest press uses the newly-pressed word (High; SPEC-0033 Controller map).
@@ -566,7 +658,7 @@ Numbers of removed questions are not reused.
 7. Resolved: **attach effect argument order.** AttachEffectToMovableBlock(world, block, effect, a, b, c) builds the offset (b, c, a, 0) (Movable blocks, Attach effect; High).
 8. Resolved: attacks break entries through the contact routines (Break routes); the +0x5A-gated route has no caller and is dormant (Medium).
 9. **Draik part slots.** The boss uses nine breakable slots (SPEC-0030 row 78). The slot hit routine and its caller are not fully described, and the boss owner spec for these parts was not identified. The reset (slot flags to 0, parts to state 0) is High.
-10. Resolved: **Mover update.** A block moves L / n per tick for n ticks, with L = 0.5 × the entry's +0x10 value and n as in 33; a block placed a second time gets L = 1.75 (quirk) (Movable blocks, Per tick).
+10. Resolved: **Mover update.** A block moves L / n per tick for n ticks, with L = 0.5 × the entry's +0x10 value and n as in 33 (Movable blocks, Per tick).
 11. **Break float.** The meaning of the break float at +0x5A (timed value, duration or intensity). Answered for the cue: word 0x16 of the entry is the script index +0x58, not a break cue; the hit cue comes from +0x5C.
 12. **Second-list table base.** Answered: the offsets are measured from the start of the offset table, which gives state 1 in every disc entry; measuring them from the payload start is wrong (Layout, Breakable entry).
 13. **Piece record fields.** The use of the fields in the 0x70 piece records is Low.
@@ -589,8 +681,8 @@ Numbers of removed questions are not reused.
 31. **Piece push unit.** Whether the 0.25 push handed to the piece spawns is a speed or a distance is not established (SPEC-0034).
 32. Resolved: **Shot cue float.** The two floats are the hearing radius R and the full-volume radius r0 (SPEC-0031 Open question 50); Roberta's shot passes a non-zero r0.
 33. Resolved: **Push tick count n.** n = key count of the hero's current clip − whole part of the clip cursor − 2, doubled only for the push clip (Push start, step 4).
-34. **Block area test and second clearance test.** Which blocks have an area test, and the rule of the second clearance test at push start, are not described here (Medium).
-35. **Re-placement quirk in play.** Whether any level places a block a second time (move to locator or reacquire after the first init), so that the 1.75 step length is seen in play, is not established.
+34. Resolved: **block footprint test and second clearance test.** No block has a footprint word (it is never written), so the footprint step passes without any test; the second clearance test is the table of Second clearance test (High for the rule; the footprint word being zero is Medium because the block memory is not cleared by the allocator).
+35. Resolved: **re-placement quirk.** There is none on disc data: the size defaults never apply to a block with an inline mesh, so L is always half the stored size (Placement).
 36. Resolved: **plate manager use.** Nothing fills the plate manager's slots, so the sinking flag is never set in play (Plate manager; High).
 37. Resolved: **plate completion.** It never runs in play; plates in play are scripted trigger volumes (Plate manager; High).
 38. Resolved: **plate solid word.** Its contact rule never runs in play (Plate manager; High).

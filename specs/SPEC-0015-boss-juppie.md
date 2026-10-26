@@ -79,7 +79,7 @@ Registered tuning values that the behavior does not use are listed under Edge ca
 
 ### Variant: the spit flag
 
-At fight start the spit flag is set when story progress flag 0x53 is set (the Act 3 marker). No later writer is known, so the flag is fixed for the fight. With the flag: spit attacks are possible, and a landed slam leads to the dazed loop. Without it: no spit, and a landed slam leads to the stun loop.
+At fight start the spit flag is set when story progress flag 0x53 is set (the Act 3 marker), or when the third word of the stun self-damage table (0x2DAFF0, value 0 on disc, never written) is nonzero. The table is indexed by the flag (0 or 1), so its third entry is otherwise never read as a multiplier. No later writer is known, so the flag is fixed for the fight. With the flag: spit attacks are possible, and a landed slam leads to the dazed loop. Without it: no spit, and a landed slam leads to the stun loop.
 
 ### Stages
 
@@ -127,15 +127,19 @@ A locator is used only when its flag is clear. The test is called only from the 
 
 The decision runs only while the boss's top-level state is 0 or 1 (the free states), and only while the stage is active (stage 1 to 3; stage 0 never starts a decision). The cadence:
 
-1. When the decision cooldown is above 0, count it down by one tick and stop. The cooldown is counted down only while the boss is free.
-2. When the cooldown reaches 0 and the stage is active, draw a new cooldown from the stage's range: stage 1 (or stage 0) 1.5 to 3.5 s, stage 2 0.75 to 2.0 s, stage 3 0.25 to 1.0 s.
+1. The chooser runs once on every pass of the boss's loop, whatever the top-level state is, and every pass on which the decision cooldown is above 0 and no attack is entered lowers it by one tick. The cooldown therefore keeps running during a head slam, a spit, the stun and dazed loops and the hub, and it can already be 0 when the boss becomes free again. Only the decision itself (steps 2 to 5) needs the free state and an active stage. When the boss is not free, or the stage is not active, or the cooldown is above 0, the pass only lowers the cooldown (not below 0) and stops (High).
+2. On a free pass with an active stage and the cooldown at 0, draw a new cooldown from the stage's range: stage 1 (or stage 0) 1.5 to 3.5 s, stage 2 0.75 to 2.0 s, stage 3 0.25 to 1.0 s.
 3. In the same tick, check the head slam:
    - Let D be the horizontal distance to the hero. If D is greater than 10.0 and less than 50.0, roll the head-slam chance (50). If the roll is below 50, enter the head slam (sub-step 0).
 4. If no head slam was chosen, check the spit (only if the spit flag is set):
    - If D is less than 100.0, roll the spit chance (50). If the roll is below 50, enter the spit state and draw the spit count (3 to 5, inclusive).
-5. Otherwise nothing happens; the next decision comes when the new cooldown runs out.
+5. Otherwise nothing happens, except that the same pass then lowers the new cooldown by one tick (a draw of 100 ticks leaves 99); the next decision comes when it runs out. When an attack is entered, the drawn value is kept unchanged on that pass and then runs down during the attack.
 
 The cooldown is drawn at the start of each decision cycle only. The head-slam roll only happens if the distance check passes; the spit roll only happens if the spit flag is set and the distance is under 100.
+
+### Start of the fight
+
+When the boss's controller starts (the moment the Juppie's character is activated in its region), it sets the boss's top-level state to the hub (2) and the stage to 0, and requests animation 7 once before its first tick (High; the request is the same animation request that every later animation change uses). The hub's animation rule is: if the current animation is 7, do nothing; otherwise, if it is not 6, request 6; if it is 6 and 6 has finished (progress at least 0.99), request 7. So at the start of a fight the boss is already in animation 7 and the hub's animation 6 never plays; animation 6 plays only when the boss returns to the hub from another animation (after a set-back, for example). No other animation request before the controller's own is known: the class switch only starts the controller, and the spawn record carries no animation field (Medium); the level script's own animation calls during the intro (SPEC-0045) end with 6 and then 7 before the boss is released, which agrees with this rule (Medium-High for the sequence with the intro, High for the controller's own request).
 
 ### States
 
@@ -143,7 +147,7 @@ The cooldown is drawn at the start of each decision cycle only. The head-slam ro
 | --- | --- | --- | --- |
 | Free (decision) | 7 | Runs the cadence above | Attack chosen |
 | Free, facing | 2 | Turns toward the hero at rate 1.0 | Choice |
-| Hub | 6 once, then 7 | Waits for stage flags | Stage flag sets the next stage |
+| Hub | 6 once, then 7 (only when the current animation is neither; see Start of the fight) | Waits for stage flags | Stage flag sets the next stage |
 | Head slam | sub-steps below | Slam onto a point near the hero | See sub-steps |
 | Spit | sub-steps below | Throws the spit projectiles | See sub-steps |
 | Stage start | 5 | Turns toward the hero at rate 1.0 | Animation ends: free |
@@ -271,6 +275,8 @@ Consequences in play:
 
 ## Edge cases and error handling
 
+- Start of the fight with the intro skipped: the boss is released with animation 7 already current, so the hub requests nothing and animation 7 plays from the first tick.
+
 - **Spit flag**: the spit is only chosen when the spit flag is set. A boss with the flag clear never spits, and a landed slam goes to the stun loop instead of the dazed loop.
 - **Stun re-entry**: returning from the count check to the stun loop does not draw a new stun wait. The stun counter resumes with the time it had left, so a stun interrupted by counted hits lasts one drawn wait in total (High).
 - **Counted-hit counter**: it is cleared at the start of each slam (sub-step 0), not at the stun end. It counts hits within one slam only.
@@ -295,6 +301,7 @@ Synthetic checks on the rules, except the last item, which is read from the disc
 - Head slam with distance 50.0: not eligible. Distance 49.9 with roll 0: slam.
 - Spit with distance 99.9 and the spit flag set, roll 49: spit. Distance 100.0: no spit. Spit flag clear, distance 50: no spit.
 - Cooldown ticks: stage 1 -> 90 to 210 inclusive. Stage 2 -> 45 to 120. Stage 3 -> 15 to 60.
+- Cooldown timing: free boss, stage 1, cooldown 0, distance 5 and the spit flag clear (no slam or spit possible): the draw is 100, and the pass ends with 99; after 99 more passes it is 0 and the next pass draws again. Same start with distance 20 and roll 10: the slam starts with the cooldown at 100; the slam lasts N passes, and the cooldown is max(0, 100 - N) when the boss is free again (0 for a slam longer than 100 ticks, so the first free pass decides at once).
 - Stun wait ticks: 120 to 300 inclusive.
 - **Stun re-entry timing**: the slam ends with the once-per-slam latch set and the stun wait drawn as 150 ticks. The stun counter runs 40 ticks in sub-step 2 (110 ticks left). One counted hit, with the HP fraction still above the stage threshold, moves the boss to sub-step 3 (counted-hit counter 1). Sub-step 3 plays animation 9 and does not count the stun down. The check returns to sub-step 2 (1 < 3) with 110 ticks still left, and no new wait is drawn. The stun then runs exactly 110 more ticks in sub-step 2 and the boss goes to recover. Total time counted down in sub-step 2: 150 ticks (2.5 s), not 150 plus a second draw.
 - **Stun re-entry, two returns**: from the vector above, a second counted hit (counter 2, still below 3) returns to sub-step 2 again with the remaining time unchanged. A third counted hit (counter 3, not below 3) goes to sub-step 4 (recover) instead.
@@ -321,6 +328,7 @@ Synthetic checks on the rules, except the last item, which is read from the disc
 
 ## Open questions
 
+- **Starting animation (R-0036 4)**: Resolved: animation 7, requested once by the controller when it starts, with the hub's animation 6 skipped (see Start of the fight; High). Test vector: a new fight enters the hub with the current animation 7; the hub requests nothing; after a set-back from animation 17 the hub requests 6, and when 6 reaches 0.99 it requests 7.
 - **Stage events and the spawn**: Resolved. Pack 1217 turns stage-locator flags into Tentacle hit and close scenes; the boss thresholds start two additional groups, bringing the Tentacle count from one to two and then three. See SPEC-0045, pack 1217, Stage spawns and Fight monitor (High).
 - **Spit flag meaning**: the spit flag comes from the Act 3 story flag. Its meaning as "spit allowed" is the observed behavior; no other writer is known.
 - **Stage numbering semantics**: the set-back branches for stage 1, 2 and 3 re-stage the fight. Their purpose in the story is not established. The clean side must implement the transitions as written but should not add meaning to them.
