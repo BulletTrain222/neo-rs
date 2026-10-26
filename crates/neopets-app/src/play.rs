@@ -426,6 +426,8 @@ enum Wait {
     HeroOneShot,
     /// While the current world's trigger record stays non-zero.
     Inside(u16),
+    /// Until a module word of a pack is 0.
+    Word(u32, u8),
 }
 
 pub struct Play {
@@ -1471,6 +1473,7 @@ impl Play {
             Wait::WheelSpin => self.wheel_spin.is_none(),
             Wait::HeroOneShot => self.loco.state != neopets_sim::hero::ONE_SHOT,
             Wait::Inside(i) => self.world.records.get(&i).is_none_or(|r| r.state == 0),
+            Wait::Word(pack, w) => self.state.word_of(pack, w) == 0,
             Wait::Cage(i) => self.state.burrows.as_ref().and_then(|b| b.cages.get(i)).is_none_or(|c| c.state != 4),
             Wait::ObjAnim(pack, i) => [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.object_anims.get(i)).is_none_or(|a| a.state != 2),
         }
@@ -1878,6 +1881,7 @@ impl Play {
                     self.apply(&[Action::SetObjTime { obj, seconds: (r as f64 / 100.0) as f32 }]);
                 }
                 Action::WaitInside { index } => return Some(Wait::Inside(index)),
+                Action::WaitWord { word } => return Some(Wait::Word(pack, word)),
                 Action::RegisterInstance { routine, trigger, group } => {
                     let triggers: Vec<u16> = match self.world.groups.get(group) {
                         Some(g) if g.kind == 7 => g.triggers.iter().filter_map(|&t| u16::try_from(t).ok()).collect(),

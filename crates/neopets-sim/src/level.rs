@@ -214,6 +214,8 @@ pub enum Action {
     /// RegisterScriptInstanceTrigger(W, routine, t, i) (SPEC-0030 row 261): for a kind-7 entry i
     /// every member trigger is registered (t ignored); otherwise trigger t.
     RegisterInstance { routine: u8, trigger: u16, group: usize },
+    /// Wait until a module word of the thread's pack is 0.
+    WaitWord { word: u8 },
     SleepRandom { lo: u32, hi: u32 },
 }
 
@@ -526,7 +528,7 @@ impl GameState {
 /// The registered teleport callback of a pack's door: its prompt context (13 "Enter", 26
 /// "Exit"; 0 starts on contact), or None when no handler is described.
 pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
-    if (pack, door) == (880, 0) {
+    if (pack, door) == (880, 0) || (pack == 991 && door <= 7) {
         return Some(13);
     }
     match (pack, door) {
@@ -555,6 +557,23 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0045 991 teleports 0 to 7: a type-2 value for eW 81 (10 to 80 by index), the
+        // transition (interiors eW 84 to 87 and 89; exterior loads to eW 88, also posting the
+        // value for eW 88, and to eW 63), then 3 s.
+        (991, 0..=7) => {
+            let v = 10 * (door as i32 + 1);
+            state.blackboard.insert((2, 81), v);
+            let go = match door {
+                0..=3 => Action::EnterInterior { slot: 84 + door },
+                4 | 5 => {
+                    state.blackboard.insert((2, 88), v);
+                    Action::ReplaceExterior { slot: 88, plane: -1 }
+                }
+                6 => Action::EnterInterior { slot: 89 },
+                _ => Action::ReplaceExterior { slot: 63, plane: -1 },
+            };
+            vec![go, wait(3.0)]
+        }
         // SPEC-0039 880 teleport 0 (handler 6): shut with line 20 until 296 (AI 21 to 23 dead);
         // then value 80 for eW 81 (type 2) and the replacement to eW 81 (pack 991); 3 s.
         (880, 0) if !state.flag(296) => vec![Action::Message { line: 20 }, Action::Sleep { ticks: 30 }, wait(3.0)],
@@ -699,6 +718,19 @@ pub fn objects_scripted(pack: u32) -> bool {
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0045 991 Init: flag 85; trigger routine A (8) on triggers 4 and 5 and on the
+        // kind-7 group 0's instance trigger (the crowd zones); thread 2 loads slot 0 with set 3
+        // (region 995) under flag 86, else set 8 (1000). The teleports (kind 13) and the
+        // proximity routines are fixed rules (teleport_context, proximity_routine).
+        991 => {
+            state.set(85, true);
+            vec![
+                reg(4, 8),
+                reg(5, 8),
+                Action::RegisterInstance { routine: 8, trigger: 0, group: 0 },
+                Action::LoadRegion { slot: 0, region: Some(if state.flag(86) { 995 } else { 1000 }) },
+            ]
+        }
         // SPEC-0039 886 Init: handler 1 on trigger 5, 2 on 2, 4 on 0; object 3 off while 250 is
         // clear; 249 set when 248 is set, 249 clear and movie 30 not played (movies are not
         // built, so it counts as not played); thread 3 loads slot 0 with set 3, 2, 1 or 0 by
@@ -1109,6 +1141,85 @@ fn slots_1230(state: &GameState) -> Option<Action> {
     Some(Action::LoadRegion { slot: 0, region: Some(1231 + set) })
 }
 
+/// SPEC-0045 991 proximity routines (routine = the entity, or the first of a shared group).
+fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let key = (991, routine);
+    let mut rot = s.rotations.get(&key).copied().unwrap_or_default();
+    let hero = s.hero.selected.min(1) as u16;
+    // Three lines in turn for the active hero: Tor's from t, Roberta's from r.
+    let pair = |rot: &mut Rotation, t: u16, r: u16| rot.pick(hero, &cycle(&[0, 1, 2].map(|k| if hero == 1 { r + k } else { t + k })));
+    let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
+    let out = match routine {
+        8 => talk(pair(&mut rot, 11, 14)),
+        5 => talk(pair(&mut rot, 17, 20)),
+        4 => talk(pair(&mut rot, 23, 26)),
+        7 => talk(pair(&mut rot, 29, 32)),
+        6 => talk(pair(&mut rot, 35, 38)),
+        19 => talk(pair(&mut rot, 41, 44)),
+        10 => talk(pair(&mut rot, 47, 50)),
+        20 => talk(pair(&mut rot, 104, 107)),
+        11 => talk(pair(&mut rot, 119, 122)),
+        18 => talk(pair(&mut rot, 143, 146)),
+        9 if s.flag(86) => talk(pair(&mut rot, 56, 59)),
+        9 => talk(rot.pick(2, &cycle(&[53, 54, 55]))),
+        16 if s.flag(86) => talk(pair(&mut rot, 83, 86)),
+        16 => talk(rot.pick(2, &cycle(&[80, 81, 82]))),
+        15 if s.flag(86) => talk(pair(&mut rot, 113, 116)),
+        15 => talk(rot.pick(2, &cycle(&[110, 111, 112]))),
+        // Entity 14: 417 set line 6; 416 clear sets it, line 10; with item 12 one is taken, 417
+        // set, line 7; else 8 and 9 in turn.
+        14 if s.flag(417) => talk(Some(6)),
+        14 if !s.flag(416) => {
+            s.set(416, true);
+            talk(Some(10))
+        }
+        14 if s.has_item(12) => {
+            s.take(12, 1);
+            s.set(417, true);
+            talk(Some(7))
+        }
+        14 => talk(rot.pick(3, &cycle(&[8, 9]))),
+        // Entities 2, 1 and 3 (667 clear): their three lines in turn, then the prompt.
+        2 | 1 | 3 => {
+            let (first, prompt) = match routine {
+                2 => (74, 77),
+                1 => (137, 140),
+                _ => (161, 164),
+            };
+            let mut v = talk(rot.pick(0, &cycle(&[first, first + 1, first + 2])));
+            v.push(Action::Prompt { line: prompt, routine });
+            v
+        }
+        // Entity 17, the map seller: offers for held maps are skipped (C 1 with map 21, 2 with
+        // 17, 3 with 35); C 0 line 89 and C = 1; C 1 to 3 prompts 90 to 92; C 4 line 93, C = 1.
+        17 => {
+            let mut c = s.word(991, 1);
+            for (k, map) in [(1, 21), (2, 17), (3, 35)] {
+                if c == k && s.maps.contains(&map) {
+                    c = k + 1;
+                }
+            }
+            match c {
+                0 => {
+                    s.set_word(991, 1, 1);
+                    talk(Some(89))
+                }
+                1..=3 => {
+                    s.set_word(991, 1, c);
+                    vec![Action::Prompt { line: 89 + c as u16, routine: 17 }]
+                }
+                _ => {
+                    s.set_word(991, 1, 1);
+                    talk(Some(93))
+                }
+            }
+        }
+        _ => Vec::new(),
+    };
+    s.rotations.insert(key, rot);
+    out
+}
+
 /// The flag-67 line rotation of SPEC-0039 880 and 1230: lines 0 to 2 with flag 67 set, 3 to 5
 /// clear, one counter (word 2) restarted the first time 67 is seen set (word 3).
 fn rotation_67(pack: u32, state: &mut GameState) -> u16 {
@@ -1140,6 +1251,37 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
     let mut out = TriggerOut::default();
     let first = call.state == 1 && call.object;
     match (pack, routine) {
+        // SPEC-0045 991 trigger routine A (crowd zones 0 to 2: triggers 4, 5 and the group's
+        // trigger), on an entering fire: the crowd set (2 with 86 clear; 1 with 86, 299 and 414
+        // set and 417 clear; else 0) and the zone's region; none ends it. Thread 4: wait until
+        // the crowd record (word 30) is free, mark it, reset slot 1 and load the region, wait
+        // until the hero leaves the zone's trigger, reset the slot and free the record.
+        (991, 8) if call.state == 1 && call.object => {
+            let set = if !state.flag(86) {
+                2
+            } else if state.flag(299) && state.flag(414) && !state.flag(417) {
+                1
+            } else {
+                0
+            };
+            let zone = match call.index {
+                5 => 1,
+                4 => 0,
+                _ => 2,
+            };
+            let j: [[Option<u32>; 3]; 3] = [[Some(4), Some(6), Some(7)], [Some(5), Some(6), Some(7)], [Some(9), Some(10), None]];
+            if let Some(j) = j[set][zone] {
+                out.actions.extend([
+                    Action::WaitWord { word: 30 },
+                    Action::Bits { word: 30, set: 1, clear: 0 },
+                    Action::LoadRegion { slot: 1, region: None },
+                    Action::LoadRegion { slot: 1, region: Some(992 + j) },
+                    Action::WaitInside { index: call.index },
+                    Action::LoadRegion { slot: 1, region: None },
+                    Action::Bits { word: 30, set: 0, clear: 1 },
+                ]);
+            }
+        }
         // SPEC-0039 886 handler 1 (trigger 5), entered with 250 clear: line 6; handler 2
         // (trigger 2): the Square context 3, a press shows line 7; handler 4 (trigger 0),
         // entered with 252 clear: line 8.
@@ -1806,6 +1948,20 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 /// Run a pack's activate-world routine when its world becomes current.
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0045 991 activate-world: the type-2 value for eW 81 places the hero at the return
+        // locator of the teleport used (10 -> 3 ... 80 -> 10); any value but -1 returns the
+        // normal camera; the value is reset.
+        991 => {
+            let v = state.take_message(2, 81);
+            let mut out = Vec::new();
+            if (10..=80).contains(&v) && v % 10 == 0 {
+                out.push(Action::MoveHero { locator: (v / 10 + 2) as usize });
+            }
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0039 880 activate-world (handler 8): the type-2 value for eW 81; 80 places the
         // hero at locator 2; any value but -1 returns the normal camera; the value is reset.
         880 => {
@@ -3056,6 +3212,36 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
     match (pack, routine, yes) {
         // SPEC-0039 880 map shop answers: declined line 16; too few Neopoints line 15; else the
         // map given (item 175 with the map number), the price taken and line 14.
+        // SPEC-0045 991 entity 17 (the map seller): offer k = C - 1 (word 1); no shows 100 + k;
+        // yes with too few Neopoints 103; yes gives map 21, 17 or 35 for 300, 350 or 400 with
+        // line 97 + k; C then goes up by 1.
+        (991, 17, yes) => {
+            let c = s.word(pack, 1).clamp(1, 3);
+            let k = (c - 1) as usize;
+            let (map, price) = [(21, 300), (17, 350), (35, 400)][k];
+            s.set_word(pack, 1, c + 1);
+            if !yes {
+                vec![Action::Talk { line: 100 + k as u16 }]
+            } else if s.neopoints < price {
+                vec![Action::Talk { line: 103 }]
+            } else {
+                s.neopoints -= price;
+                vec![Action::GiveItem { item: TREASURE_MAP, count: map }, Action::Talk { line: 97 + k as u16 }]
+            }
+        }
+        // 991 entities 1, 2 and 3 (flag 667 has no setter, so the clear halves): the yes and no
+        // lines; a yes sets the entity's module word (read by nothing).
+        (991, 1..=3, yes) => {
+            let (y, n) = match routine {
+                1 => (141, 142),
+                2 => (78, 79),
+                _ => (165, 166),
+            };
+            if yes {
+                s.set_word(pack, 10 + routine, 1);
+            }
+            vec![Action::Talk { line: if yes { y } else { n } }]
+        }
         (880, 7, false) | (1230, 4, false) => vec![Action::Talk { line: 16 }],
         (880, 7, true) | (1230, 4, true) => {
             let shop = map_shop(pack);
@@ -3279,6 +3465,12 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (678 | 686 | 691, 9) => Some(0),
         // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
         (1148, 0..=3) => Some(entity as u8),
+        // SPEC-0045 991: one routine per entity, with 9/12/40, 10/13, 15/42 and 16/41 shared.
+        (991, 9 | 12 | 40) => Some(9),
+        (991, 10 | 13) => Some(10),
+        (991, 15 | 42) => Some(15),
+        (991, 16 | 41) => Some(16),
+        (991, 1..=8 | 11 | 14 | 17..=20) => Some(entity as u8),
         // SPEC-0039 880: the map shop (handler 7) on entities 3 and 7; 1230: handler 4 on 46
         // and 84.
         (880, 3 | 7) => Some(7),
@@ -3321,6 +3513,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
         let r = state.word(pack, 5).rem_euclid(3);
         state.set_word(pack, 5, r + 1);
         return vec![Action::Talk { line: 11 + r as u16 }];
+    }
+    if pack == 991 {
+        return lakeside_talk(routine, state);
     }
     let key = (pack, routine);
     let mut rot = state.rotations.get(&key).copied().unwrap_or_default();
@@ -3575,6 +3770,37 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_991_crowds_seller_and_teleports() {
+        let mut s = GameState { neopoints: 1000, ..Default::default() };
+        for f in [86, 299, 414] {
+            s.set(f, true);
+        }
+        // SPEC-0045 vector: set 1, trigger 5 loads 998 into the crowd slot, guarded by word 30.
+        let enter = TriggerCall { index: 5, state: 1, object: true, square: false };
+        let a = on_trigger(991, 8, enter, &mut s).actions;
+        assert_eq!((a[0], a[3], a[4]), (Action::WaitWord { word: 30 }, Action::LoadRegion { slot: 1, region: Some(998) }, Action::WaitInside { index: 5 }));
+        assert!(on_trigger(991, 8, TriggerCall { index: 4, ..enter }, &mut s).actions.contains(&Action::LoadRegion { slot: 1, region: Some(997) }));
+        // Set 2 has no region for zone 2 (the group trigger).
+        s.set(86, false);
+        assert!(on_trigger(991, 8, TriggerCall { index: 10, ..enter }, &mut s).actions.is_empty());
+        // The map seller: line 89, then prompt 90 (map 21 for 300); held map 17 skips prompt 91.
+        assert_eq!(on_talk(991, 17, &mut s), vec![Action::Talk { line: 89 }]);
+        assert_eq!(on_talk(991, 17, &mut s), vec![Action::Prompt { line: 90, routine: 17 }]);
+        assert_eq!(on_answer(991, 17, true, &mut s), vec![Action::GiveItem { item: TREASURE_MAP, count: 21 }, Action::Talk { line: 97 }]);
+        s.maps.extend([21, 17]);
+        assert_eq!(on_talk(991, 17, &mut s), vec![Action::Prompt { line: 92, routine: 17 }]);
+        // Teleport 4: values 50 for eW 81 and 88, the replacement to eW 88; back: locator 7.
+        assert_eq!(on_teleport(991, 4, &mut s)[0], Action::ReplaceExterior { slot: 88, plane: -1 });
+        assert_eq!(s.blackboard.get(&(2, 88)), Some(&50));
+        assert_eq!(on_activate(991, &mut s)[0], Action::MoveHero { locator: 7 });
+        // Entity 14: line 10 first, then the item-12 hand-in with line 7.
+        assert_eq!(on_talk(991, 14, &mut s), vec![Action::Talk { line: 10 }]);
+        s.give(12, 1);
+        assert_eq!(on_talk(991, 14, &mut s), vec![Action::Talk { line: 7 }]);
+        assert!(s.flag(417) && !s.has_item(12));
     }
 
     #[test]
