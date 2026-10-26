@@ -369,6 +369,9 @@ pub struct GameState {
     pub talk_roll: i32,
     /// A Random(1, 6) draw the host makes before each proximity routine (the fame rule's d).
     pub talk_d: i32,
+    /// A Random(1, 5) draw the host makes before a proximity routine of pack 1139 (its one-time
+    /// sale's pick; drawn only there so that other packs' random streams are unchanged).
+    pub talk_five: i32,
     /// The hero is in a conversation (a box is up), for the routines that wait on it.
     pub talking: bool,
     /// What the host reports of the hero before each Update (the lesson rules of SPEC-0044
@@ -540,6 +543,9 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
+    if pack == 1139 && door <= 1 {
+        return Some(13);
+    }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
         return Some(13);
     }
@@ -569,6 +575,15 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0039 1139 teleports: index 0 replaces the exterior with eW 90 (pack 1023); index 1
+        // with flag 35 posts 10 for eW 109 and replaces it with eW 109 (pack 1129), else line 0;
+        // then 3 s. (Index 1's context is 3 while flag 35 is clear; 13 is shown here.)
+        (1139, 0) => vec![Action::ReplaceExterior { slot: 90, plane: -1 }, wait(3.0)],
+        (1139, 1) if state.flag(35) => {
+            state.blackboard.insert((2, 109), 10);
+            vec![Action::ReplaceExterior { slot: 109, plane: -1 }, wait(3.0)]
+        }
+        (1139, 1) => vec![Action::Message { line: 0 }, wait(3.0)],
         // SPEC-0041 1414 teleports 0 and 1 (kind 13): value 50 or 10 for eW 159 and the exterior
         // replacement to eW 159 (pack 1358).
         (1414, 0 | 1) => {
@@ -813,6 +828,35 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0039 1139 Init: object 0 at its end (flag 35) or start; with 304 clear, 304 and 13
+        // set; value 10 for eW 109. The proximity routines, the teleports (index 1's context by
+        // flag 35) and the arrival are fixed rules.
+        1139 => {
+            if !state.flag(304) {
+                state.set(304, true);
+                state.set(13, true);
+            }
+            state.blackboard.insert((2, 109), 10);
+            vec![Action::InitObjOn { obj: 0, end: state.flag(35) }]
+        }
+        // SPEC-0039 732 Init: handler 1 on the triggers of the kind-0 group 2 (0, 1 and 2); thread
+        // 4 loads slot 0 with set 0 (region 733) when 561 is set and 562 clear, or set 1 (734)
+        // when both are set; its watch of AI 0 is in Update.
+        732 => {
+            let mut v = vec![reg(0, 1), reg(1, 1), reg(2, 1)];
+            match (state.flag(561), state.flag(562)) {
+                (true, false) => v.push(Action::LoadRegion { slot: 0, region: Some(733) }),
+                (true, true) => v.push(Action::LoadRegion { slot: 0, region: Some(734) }),
+                _ => {}
+            }
+            v
+        }
+        // SPEC-0039 793 Init: thread 3 loads slot 0 with set 0 (region 794) under 417, else set 1
+        // (795).
+        793 => vec![Action::LoadRegion { slot: 0, region: Some(if state.flag(417) { 794 } else { 795 }) }],
+        // SPEC-0039 874 Init: thread 3 (Medium in the spec) is taken as set 1 (region 876) under
+        // flag 58, else set 0 (875); the further loads by 291 and 290 are not reproduced.
+        874 => vec![Action::LoadRegion { slot: 0, region: Some(if state.flag(58) { 876 } else { 875 }) }],
         // SPEC-0041 742 Init: thread A loads slot 0 with set 0 (region 743), and with 76, 561 set
         // and 562 clear slot 1 with set 1 (744); thread B's watch of entity 6 is in Update; P7 is
         // a fixed rule.
@@ -1485,6 +1529,100 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     out
 }
 
+/// SPEC-0039 1139, 732, 793 and 874 proximity routines.
+fn town_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
+    let key = (pack, routine);
+    let mut rot = s.rotations.get(&key).copied().unwrap_or_default();
+    let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
+    let triple = |a: u16| cycle(&[a, a + 1, a + 2]);
+    // 1139's three-way rotation by flags 319 and 305 (branches 0 and 1), else `rest`.
+    let by_flags = |s: &GameState, rot: &mut Rotation, a: u16, b: u16| -> Option<Option<u16>> {
+        if s.flag(319) {
+            Some(rot.pick(0, &triple(a)))
+        } else if s.flag(305) {
+            Some(rot.pick(1, &triple(b)))
+        } else {
+            None
+        }
+    };
+    let out = match (pack, routine) {
+        (1139, 4) => talk(by_flags(s, &mut rot, 7, 4).unwrap_or_else(|| rot.pick(2, &triple(1)))),
+        (1139, 5) => talk(by_flags(s, &mut rot, 43, 40).unwrap_or_else(|| rot.pick(2, &triple(37)))),
+        (1139, 2) => talk(by_flags(s, &mut rot, 52, 49).unwrap_or_else(|| if s.flag(678) { rot.pick(2, &triple(46)) } else { Some(55) })),
+        // Entity 0: with 678 clear it is set with line 36; with item 23 every one is taken, value
+        // 10 for eW 109 and movie 49, whose return world is eW 109 (pack 1129): the movie is not
+        // built, so the replacement load is made directly; else lines 27 to 29.
+        (1139, 1) => match by_flags(s, &mut rot, 33, 30) {
+            Some(l) => talk(l),
+            None if !s.flag(678) => {
+                s.set(678, true);
+                talk(Some(36))
+            }
+            None if s.has_item(23) => {
+                s.remove_all(23);
+                s.blackboard.insert((2, 109), 10);
+                vec![Action::ReplaceExterior { slot: 109, plane: -1 }]
+            }
+            None => talk(rot.pick(2, &triple(27))),
+        },
+        // Entity 2: the one-time sale (word 0 holds the offered item + 1; 0 is none): Random(1,
+        // 5) picks item 50, 152, 54, 55 or 56 with prompt 10 to 14; afterwards the rotation.
+        (1139, 3) if s.word(pack, 0) == 0 => {
+            let k = (s.talk_five.clamp(1, 5) - 1) as usize;
+            let item = [50, 152, 54, 55, 56][k];
+            s.set_word(pack, 0, item as i32 + 1);
+            vec![Action::Prompt { line: 10 + k as u16, routine: 3 }]
+        }
+        (1139, 3) => talk(by_flags(s, &mut rot, 24, 21).unwrap_or_else(|| rot.pick(2, &triple(18)))),
+        // 732 entity 1: lines 0 to 2 in turn with 562, else line 4.
+        (732, 3) if s.flag(562) => talk(rot.pick(0, &triple(0))),
+        (732, 3) => talk(Some(4)),
+        // 793 entity 0: line 16 with 417. Entities 1 and 2: 0 (417), 3 (416), 6 (414), 9 (412),
+        // 12 (410; item 13 taken and 412 set first), else 13.
+        (793, 1) if s.flag(417) => talk(Some(16)),
+        (793, 2) => {
+            let line = if s.flag(417) {
+                0
+            } else if s.flag(416) {
+                3
+            } else if s.flag(414) {
+                6
+            } else if s.flag(412) {
+                9
+            } else if s.flag(410) {
+                s.take(13, 1);
+                s.set(412, true);
+                12
+            } else {
+                13
+            };
+            talk(Some(line))
+        }
+        // 874 entities 6 and 7: the line, a camera, the entity's animation 30 (wait) and walk away,
+        // a fade out, flag 291 or 290, the slot reset, the normal camera and a fade in.
+        (874, 1 | 2) => {
+            let (entity, line, track, locator, flag) = if routine == 1 { (6, 1, 5, 3, 291) } else { (7, 0, 4, 1, 290) };
+            let mut v = vec![Action::Converse { entity, line }, Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }];
+            if routine == 2 {
+                v.push(Action::MoveHero { locator: 2 });
+            }
+            v.extend([
+                Action::EntityAnim { entity, anim: 30, looped: false, wait: true },
+                Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 },
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::SetFlag { flag, on: true },
+                Action::LoadRegion { slot: 0, region: None },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::FadeIn { seconds: 0.7, wait: false },
+            ]);
+            v
+        }
+        _ => Vec::new(),
+    };
+    s.rotations.insert(key, rot);
+    out
+}
+
 /// SPEC-0041 1409, 1421 and 1423 proximity callbacks (each line in the conversation frame).
 fn palace_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     let talk = |line| vec![Action::Talk { line }];
@@ -1931,6 +2069,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
             }
+        }
+        // SPEC-0039 732 handler 1 (triggers 0 to 2, every fire with the body): value 70, 60 or 40
+        // for eW 22, a 0.5 s fade out (wait) and the hero to locator 0 (no button needed). Word 0
+        // keeps the exit from repeating while it runs.
+        (732, 1) if call.object && state.word(pack, 0) == 0 => {
+            state.set_word(pack, 0, 1);
+            state.blackboard.insert((2, 22), match call.index { 0 => 70, 1 => 60, _ => 40 });
+            out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::MoveHero { locator: 0 }, Action::Bits { word: 0, set: 0, clear: 1 }]);
         }
         // SPEC-0037 947 S2 (trigger 2, the body) arms word 0; S0 (trigger 0, entering with the
         // body) with the word armed and 375 clear shows line 0 and disarms it; S1 (trigger 1,
@@ -2489,6 +2635,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 0 });
             }
         }
+        // SPEC-0039 732 thread 4: AI 0 dead (after the set-0 load) sets 562.
+        732 => {
+            if state.flag(561) && !state.flag(562) && state.ai_dead.contains(&0) {
+                state.set(562, true);
+            }
+        }
         // SPEC-0041 742 thread B: entity 6 (the Giant Slorg) dead sets 562.
         742 => {
             if !state.flag(562) && state.ai_dead.contains(&6) {
@@ -2705,6 +2857,38 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0039 1139 activate-world: the value for eW 114; 10 places the hero at locator 1,
+        // 20 at 0; the normal camera.
+        1139 => {
+            let mut out = match state.take_message(2, 114) {
+                10 => vec![Action::MoveHero { locator: 1 }],
+                20 => vec![Action::MoveHero { locator: 0 }],
+                _ => Vec::new(),
+            };
+            out.push(Action::ReturnCamera { preset: -1, release: true });
+            out
+        }
+        // SPEC-0039 732 activate-world: the value for eW 21 (10, 20, 30, 40, 60 give locators 1
+        // to 5 and tracks 8, 7, 6, 5, 4): the hero to the locator, a 0.5 s fade in, the track
+        // (PlayTrackHeroCamera, played as a track; StartHeroLongFall is not built) and 1.5 s;
+        // in every case the value reset, the fade in and the normal camera.
+        732 => {
+            let pick = match state.take_message(2, 21) {
+                10 => Some((1, 8)),
+                20 => Some((2, 7)),
+                30 => Some((3, 6)),
+                40 => Some((4, 5)),
+                60 => Some((5, 4)),
+                _ => None,
+            };
+            let mut out: Vec<Action> = pick.map(|(locator, _)| Action::MoveHero { locator }).into_iter().collect();
+            out.push(Action::FadeIn { seconds: 0.5, wait: false });
+            if let Some((_, track)) = pick {
+                out.extend([Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }, wait(1.5)]);
+            }
+            out.push(Action::ReturnCamera { preset: -1, release: true });
+            out
+        }
         // SPEC-0041 1414 activate-world: the value for eW 180; 50 places the hero at locator 13
         // with the normal camera, 10 at locator 12; the value is reset on every path.
         1414 => match state.take_message(2, 180) {
@@ -4085,6 +4269,15 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             }
             vec![Action::Talk { line: if yes { y } else { n } }]
         }
+        // SPEC-0039 1139 entity 2's sale: declined 16; below 500 Neopoints 17; else the item,
+        // 500 taken, line 15.
+        (1139, 3, false) => vec![Action::Talk { line: 16 }],
+        (1139, 3, true) if s.neopoints < 500 => vec![Action::Talk { line: 17 }],
+        (1139, 3, true) => {
+            s.neopoints -= 500;
+            let item = (s.word(pack, 0) - 1).max(0) as u16;
+            vec![Action::GiveItem { item, count: 1 }, Action::Talk { line: 15 }]
+        }
         (880, 7, false) | (1230, 4, false) => vec![Action::Talk { line: 16 }],
         (880, 7, true) | (1230, 4, true) => {
             let shop = map_shop(pack);
@@ -4311,6 +4504,14 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0039 1139: handlers 1 to 5 on entities 0 to 4; 732: handler 3 on entity 1; 793:
+        // handler 1 on entity 0, handler 2 on 1 and 2; 874: handlers 1 and 2 on entities 6 and 7.
+        (1139, 0..=4) => Some(entity as u8 + 1),
+        (732, 1) => Some(3),
+        (793, 0) => Some(1),
+        (793, 1 | 2) => Some(2),
+        (874, 6) => Some(1),
+        (874, 7) => Some(2),
         // SPEC-0041 742: P7 on entity 7; 1414: callbacks 1 to 4 on entities 6, 9, 8 and 7.
         (742, 7) => Some(7),
         (1414, 6..=9) => Some(entity as u8),
@@ -4386,6 +4587,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 750 {
         return talk_750(routine, state);
+    }
+    if matches!(pack, 1139 | 732 | 793 | 874) {
+        return town_talk(pack, routine, state);
     }
     if matches!(pack, 742 | 1409 | 1414 | 1421 | 1423) {
         return palace_talk(pack, routine, state);
@@ -4658,6 +4862,33 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_1139_732_793_874() {
+        let mut s = GameState { neopoints: 600, talk_five: 3, ..Default::default() };
+        // 1139 entity 2: a one-time offer (draw 3: item 54, prompt 12), then its rotation.
+        assert_eq!(on_talk(1139, 3, &mut s), vec![Action::Prompt { line: 12, routine: 3 }]);
+        assert_eq!(on_answer(1139, 3, true, &mut s), vec![Action::GiveItem { item: 54, count: 1 }, Action::Talk { line: 15 }]);
+        assert_eq!((s.neopoints, on_talk(1139, 3, &mut s)), (100, vec![Action::Talk { line: 18 }]));
+        // Entity 0: 678 then line 36; with item 23 the way to pack 1129.
+        assert_eq!(on_talk(1139, 1, &mut s), vec![Action::Talk { line: 36 }]);
+        s.give(23, 1);
+        assert_eq!(on_talk(1139, 1, &mut s), vec![Action::ReplaceExterior { slot: 109, plane: -1 }]);
+        // Entity 1 with 678 set: 46, 47, 48 in turn; with 305: 49.
+        assert_eq!(on_talk(1139, 2, &mut s), vec![Action::Talk { line: 46 }]);
+        s.set(305, true);
+        assert_eq!(on_talk(1139, 2, &mut s), vec![Action::Talk { line: 49 }]);
+        // 732: arrival 30 -> locator 3 and track 6.
+        s.blackboard.insert((2, 21), 30);
+        let a = on_activate(732, &mut s);
+        assert_eq!((a[0], a[2]), (Action::MoveHero { locator: 3 }, Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 }));
+        // 793 entities 1 and 2: 410 takes item 13 and sets 412 with line 12, then line 9.
+        s.set(410, true);
+        s.give(13, 1);
+        assert_eq!(on_talk(793, 2, &mut s), vec![Action::Talk { line: 12 }]);
+        assert_eq!(on_talk(793, 2, &mut s), vec![Action::Talk { line: 9 }]);
+        assert!(on_talk(874, 1, &mut s).contains(&Action::SetFlag { flag: 291, on: true }));
     }
 
     #[test]

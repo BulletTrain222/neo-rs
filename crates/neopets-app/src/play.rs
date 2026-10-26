@@ -2222,6 +2222,9 @@ impl Play {
                 self.hero_emotes.clear();
                 self.characters[i].emotes.clear();
                 self.state.talk_d = self.rng.range(1, 6);
+                if pack == 1139 {
+                    self.state.talk_five = self.rng.range(1, 5);
+                }
                 self.state.talk_roll = self.rng.range(1, 3);
                 let actions = level::on_talk(pack, routine, &mut self.state);
                 self.apply(&actions);
