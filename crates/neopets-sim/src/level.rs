@@ -9956,7 +9956,7 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 /// The setup helper of a module's shared entity-control table (SPEC-0043, Shared entity-control
 /// routine, Records per module), run at its Init: the table is reset and its records added
 /// under their gates. Returns the adds' idle-loop requests. Modules whose records follow story
-/// stages or are parked during their cutscenes (909, 951, 1098, 1163) are not set up here.
+/// stages or are parked during their cutscenes (909, 1098) are not set up here.
 pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::Command> {
     use crate::entityctl::{Point, Table};
     let mut t = Table::default();
@@ -9985,6 +9985,19 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
             add(&mut t, 3, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[(4, true, true), (5, true, true)]);
         }
         1020 => add(&mut t, 1, 0, (5.0, 8.0), dwell, &[(95, 2.5), (96, 2.5), (41, 2.5)], &[(1, true, true), (2, true, true), (3, true, true)]),
+        // SPEC-0041 951: the thread's last step in every case adds entity 4 (idle 83; 5 to 7 s;
+        // animations 80 and 74), here at Init (the thread's earlier steps take no ticks here).
+        951 => add(&mut t, 4, 83, (5.0, 7.0), dwell, &[(80, 2.5), (74, 2.5)], &[]),
+        // SPEC-0043 records of 1163 (Init, no gate): entities 15, 6, 8, 13 and 14 (idle 65;
+        // animations 67 and 68; their animation draws) and entity 7 (idle 0; 40 and 96); no
+        // waypoints. The Harlag cutscene's parking of entity 15 is not built (its cutscene runs as
+        // its lines only).
+        1163 => {
+            for (e, a) in [(15, (4.0, 7.0)), (6, (3.0, 7.0)), (8, (6.0, 8.0)), (13, (6.0, 8.0)), (14, (5.0, 9.0))] {
+                add(&mut t, e, 65, a, dwell, &[(67, 2.5), (68, 2.5)], &[]);
+            }
+            add(&mut t, 7, 0, (5.0, 9.0), dwell, &[(40, 2.5), (96, 2.5)], &[]);
+        }
         // SPEC-0042 1150 Init step 1 to 3: entities 1 and 2 (base 65; 68 and 67 for 2.5 s), entity
         // 3 (base 0; 64, 13, 12 and 81 for 1.5 s; its walk-and-orient waypoints 1 (flag 9 clear),
         // 2 and 3, each redrawing the walk interval), entity 4 with flag 9 clear (base 65; 68 and
@@ -13914,6 +13927,15 @@ mod tests {
         let t = &s.entity_tables[&1150];
         assert_eq!(t.records.iter().map(|r| r.entity).collect::<Vec<_>>(), vec![1, 2, 3, 4, 0]);
         assert_eq!(t.records[2].points.iter().map(|p| p.locator).collect::<Vec<_>>(), vec![1, 2, 3]);
+        // 951: entity 4 with idle 83.
+        let mut u = GameState::default();
+        entity_setup(951, &mut u);
+        assert_eq!(u.entity_tables[&951].records.iter().map(|r| (r.entity, r.idle)).collect::<Vec<_>>(), vec![(4, 83)]);
+        // 1163: six records, entity 7 last with idle 0.
+        let mut u = GameState::default();
+        entity_setup(1163, &mut u);
+        let t = &u.entity_tables[&1163];
+        assert_eq!(t.records.iter().map(|r| (r.entity, r.idle)).collect::<Vec<_>>(), vec![(15, 65), (6, 65), (8, 65), (13, 65), (14, 65), (7, 0)]);
         // Flag 9 set: no entity 4, entity 3 walks 2 and 3.
         let mut s = GameState::default();
         s.set(9, true);
