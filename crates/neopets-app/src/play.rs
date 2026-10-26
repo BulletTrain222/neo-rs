@@ -396,6 +396,8 @@ enum Wait {
     ObjAnim(u32, usize),
     /// A wheel spin until it stops.
     WheelSpin,
+    /// While a 1217 cage record is in state 4.
+    Cage(usize),
 }
 
 pub struct Play {
@@ -1383,6 +1385,7 @@ impl Play {
             Wait::Dialog => !self.dialogue_open,
             Wait::Loads => self.region_wanted.is_empty() && self.loads_out == 0,
             Wait::WheelSpin => self.wheel_spin.is_none(),
+            Wait::Cage(i) => self.state.burrows.as_ref().and_then(|b| b.cages.get(i)).is_none_or(|c| c.state != 4),
             Wait::ObjAnim(pack, i) => [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.object_anims.get(i)).is_none_or(|a| a.state != 2),
         }
     }
@@ -1561,6 +1564,10 @@ impl Play {
                     self.last_fx = format!("wheel stopped at {:.1} on cell {}: {} on tick {}", w.angle, w.cell(), if won { "win" } else { "loss" }, self.ticks);
                 }
                 Action::WheelRound => {}
+                Action::BurrowsRequest { .. } | Action::BurrowsClose { .. } => level::burrows_request(&mut self.state, a),
+                Action::BurrowsStagger => self.apply(&level::burrows_stagger()),
+                Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
+                Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
                 Action::StopEffect { slot } => {
                     let table = self.effect_table.clone();
                     if let Some(&h) = self.placed_fx.get(&(pack, slot)) {
@@ -3905,6 +3912,17 @@ impl Play {
             self.apply(&actions);
         }
         self.run_threads();
+        // SPEC-0045 1217: the record thread steps the object records every pass.
+        if self.world.pack == 1217 {
+            if let Some(mut b) = self.state.burrows.take() {
+                let anims = &self.world.object_anims;
+                let actions = b.step(&|o| anims.get(o).is_some_and(|a| a.animating()), self.ticks);
+                self.state.burrows = Some(b);
+                for a in actions {
+                    self.execute(a, 1217);
+                }
+            }
+        }
         // The wheel's spin (SPEC-0059 section 2): the stop prompt (context 4) at full rate and
         // the Square press; the spin ends after the tick the press was seen.
         if let Some((pack, mut spin)) = self.wheel_spin.take() {
@@ -4908,7 +4926,8 @@ impl Play {
         // An object a type-40 group names (chests and the other group kinds, whose setup is not
         // built) is also drawn at rest until a script touches it.
         let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)));
-        if !a.scripted && (!level::objects_scripted(pack) || grouped) {
+        let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i));
+        if !a.scripted && (!gated || grouped) {
             return Some(obj.rest);
         }
         // SPEC-0059 Layout: the 1023 wheel is object 0 turned to A about its depth axis.

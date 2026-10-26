@@ -176,6 +176,16 @@ pub enum Action {
     WheelSpin,
     WheelResult,
     WheelRound,
+    /// The 1217 object records (SPEC-0045 1217): a request to a main record (kind 0, with an
+    /// inner request unless -1), a gate (1) or a cage (2); the close of main record `index`
+    /// (request 4 unless in state 5, inner request 4 unless in 5 or 7); thread routine 2 (the
+    /// staggered request 1 of the eleven main records); a wait while a cage is in state 4; a
+    /// sleep of Random(lo, hi) ticks.
+    BurrowsRequest { kind: u8, index: u8, request: i8, inner: i8 },
+    BurrowsClose { index: u8 },
+    BurrowsStagger,
+    WaitCage { index: u8 },
+    SleepRandom { lo: u32, hi: u32 },
 }
 
 /// The prize wheel's module words in pack 1023: G, r, the angle A (f32 bits) and the lit cells.
@@ -319,6 +329,49 @@ pub struct GameState {
     /// What the host reports of the hero before each Update (the lesson rules of SPEC-0044
     /// 1056 read it).
     pub hero: HeroView,
+    /// The object records of pack 1217 while its fight is due (module data).
+    pub burrows: Option<crate::burrows::Burrows>,
+}
+
+/// Carry out a 1217 record request or close on the records (the host calls it in thread order).
+pub fn burrows_request(s: &mut GameState, a: Action) {
+    let Some(b) = s.burrows.as_mut() else { return };
+    match a {
+        Action::BurrowsRequest { kind: 0, index, request, inner } => {
+            if let Some(m) = b.mains.get_mut(index as usize) {
+                m.request = request as i32;
+                if inner >= 0 {
+                    m.inner.request = inner as i32;
+                }
+            }
+        }
+        Action::BurrowsRequest { kind: 1, index, request, .. } => {
+            if let Some(g) = b.gates.get_mut(index as usize) {
+                g.request = request as i32;
+            }
+        }
+        Action::BurrowsRequest { index, request, .. } => {
+            if let Some(c) = b.cages.get_mut(index as usize) {
+                c.request = request as i32;
+            }
+        }
+        Action::BurrowsClose { index } => {
+            if let Some(m) = b.mains.get_mut(index as usize) {
+                if m.state != 5 {
+                    m.request = 4;
+                }
+                if !matches!(m.inner.state, 5 | 7) {
+                    m.inner.request = 4;
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Thread routine 2: request 1 to the eleven main records, Random(10, 20) ticks apart.
+pub fn burrows_stagger() -> Vec<Action> {
+    (0..11u8).flat_map(|index| [Action::BurrowsRequest { kind: 0, index, request: 1, inner: -1 }, Action::SleepRandom { lo: 10, hi: 20 }]).collect()
 }
 
 /// The hero as the lesson Update reads it this tick.
@@ -2414,8 +2467,8 @@ const BUSY: i32 = 1 << 15;
 /// on the fight-due branch script trigger 0, thread routine 1 (region 1218 into the slot),
 /// thread routine 12 (entity 3 loops animation 94) and the streaming filter of callback 6
 /// (only embedded ordinal 3, Lucy, binds; the others wait for their explicit activation).
-/// Callback 5 (not due) refuses every ordinal. The Act 3 branch, the gate, cage and main object
-/// records and the effects are not built.
+/// Callback 5 (not due) refuses every ordinal. On the fight-due branch the object records are
+/// filled (`crate::burrows`). The Act 3 branch is not built.
 fn burrows_init(state: &mut GameState) -> Vec<Action> {
     state.set(81, true);
     if state.flag(248) {
@@ -2426,11 +2479,18 @@ fn burrows_init(state: &mut GameState) -> Vec<Action> {
     let off = |e| Action::DeactivateEntity { entity: e };
     let mut out = Vec::new();
     if due && !act3 {
+        // The records (the main records, the gates and the Act 1 cage) and thread routine 12's
+        // request 2 on the cage.
+        let (mut b, fill) = crate::burrows::Burrows::act1();
+        b.cages[0].request = 2;
+        state.burrows = Some(b);
+        out.extend(fill);
         out.push(Action::RegisterTrigger { index: 0, routine: 1 });
         out.extend([0, 1, 2, 4, 5, 6].map(off));
         out.push(Action::LoadRegion { slot: 0, region: Some(1218) });
         out.push(Action::EntityAnim { entity: 3, anim: 94, looped: true, wait: false });
     } else {
+        state.burrows = None;
         out.extend((0..7).map(off));
     }
     out
@@ -2480,8 +2540,10 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
     // 1. The intro (A).
     if !bit(1) && bit(0) {
         busy(state);
-        let mut v = vec![HoldHero, FadeOut { seconds: 0.5, wait: true }, WaitLoads, ActivateEntity { entity: 7 }, LetterBox { on: true, seconds: 1.0, wait: false }];
-        v.extend([MoveHero { locator: 88 }, Equip { on: false }, FadeIn { seconds: 0.5, wait: false }, camera(4), WalkHero { locator: 89, wait: true, orient: true }]);
+        let req = |kind, index, request| BurrowsRequest { kind, index, request, inner: -1 };
+        let mut v = vec![req(1, 0, 1), req(1, 1, 1), req(2, 0, 2)];
+        v.extend([HoldHero, FadeOut { seconds: 0.5, wait: true }, WaitLoads, ActivateEntity { entity: 7 }, LetterBox { on: true, seconds: 1.0, wait: false }]);
+        v.extend([MoveHero { locator: 88 }, Equip { on: false }, FadeIn { seconds: 0.5, wait: false }, camera(4), BurrowsStagger, WalkHero { locator: 89, wait: true, orient: true }]);
         v.extend([Sleep { ticks: 30 }, cam_wait(7)]);
         v.extend(cut(10));
         v.extend([wait(3.0), cam_wait(8), Sleep { ticks: 60 }]);
@@ -2506,7 +2568,11 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
         state.set(147, true);
         let mut v = vec![HoldHero, FadeOut { seconds: 1.0, wait: true }, LetterBox { on: true, seconds: 1.0, wait: false }, camera(14), MoveHero { locator: 93 }];
         v.extend([FadeIn { seconds: 0.5, wait: false }, wait(0.5), anim(0, true), LevelState { flag: 18, on: true }, Sleep { ticks: 20 }, camera(10)]);
-        v.extend([Sleep { ticks: 15 * 11 }, wait(2.0), DeactivateEntity { entity: 7 }, camera(15), WalkHero { locator: 94, wait: true, orient: false }, wait(2.0)]);
+        // The eleven main records closed one at a time; gate 1 and the cage are closed after
+        // them (their place in the outro is not given; Medium).
+        v.extend((0..11u8).flat_map(|index| [BurrowsClose { index }, Sleep { ticks: 15 }]));
+        v.extend([BurrowsRequest { kind: 1, index: 1, request: 4, inner: -1 }, BurrowsRequest { kind: 2, index: 0, request: 4, inner: -1 }, Sleep { ticks: 1 }, WaitCage { index: 0 }]);
+        v.extend([wait(2.0), DeactivateEntity { entity: 7 }, camera(15), WalkHero { locator: 94, wait: true, orient: false }, wait(2.0)]);
         v.extend(cut(17));
         v.extend([MoveHero { locator: 92 }, MoveEntity { entity: 3, locator: 91, face: true }, Converse { entity: 3, line: 10 }, camera(16)]);
         v.extend([Converse { entity: 3, line: 11 }, camera(17), Converse { entity: 3, line: 12 }, Converse { entity: 3, line: 13 }]);
@@ -2543,31 +2609,81 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
     if state.level(14) {
         set(state, 2);
     }
-    for (f, spawn, clears) in [(15u16, 1u8, &[2u16][..]), (16, 2, &[6, 7]), (17, 3, &[11, 12, 13])] {
+    for (f, spawn, clears, records) in [(15u16, 1u8, &[2u16][..], &[0usize][..]), (16, 2, &[6, 7], &[1, 2]), (17, 3, &[11, 12, 13], &[3, 4, 5])] {
         if state.level(f) {
             state.set_level(f, false);
             for &c in clears {
                 state.set_level(c, false);
             }
             v.extend(burrows_spawn(spawn));
+            if let Some(b) = state.burrows.as_mut() {
+                for &r in records {
+                    b.mains[r].inner.request = 1;
+                }
+            }
         }
     }
-    if !state.level(1) {
-        if bit(10) && state.entity_dead(0) {
+    // The records: close (level 4 record 0; level 9 records 1 and 2), slam (the stage-locator
+    // flags 2, 6, 7, 11, 12 and 13, and 8 for records 1 and 2) and, for the stage that runs,
+    // the hit (request 3 in state 2) and the death step (inner request 4 unless 4 or 6).
+    let stage = if !state.level(1) { 1 } else if !state.level(5) { 2 } else if !state.level(10) { 3 } else { 0 };
+    let records: &[(usize, usize)] = match stage {
+        1 => &[(0, 0)],
+        2 => &[(1, 0), (2, 1)],
+        3 => &[(3, 0), (4, 1), (5, 2)],
+        _ => &[],
+    };
+    let hits = state.hero.hits.clone();
+    let dead: Vec<bool> = (0..3).map(|e| state.entity_dead(e)).collect();
+    let levels: Vec<bool> = (0..=13).map(|f| state.level(f)).collect();
+    if let Some(b) = state.burrows.as_mut() {
+        for (flag, rs) in [(4usize, &[0usize][..]), (9, &[1, 2])] {
+            if levels.get(flag).copied().unwrap_or(false) {
+                for &r in rs {
+                    if !matches!(b.mains[r].state, 4 | 5) {
+                        b.mains[r].request = 4;
+                    }
+                }
+            }
+        }
+        for (flag, r) in [(2usize, 0usize), (6, 1), (7, 2), (11, 3), (12, 4), (13, 5), (8, 1), (8, 2)] {
+            if levels[flag] && !matches!(b.mains[r].inner.state, 5 | 7) {
+                b.mains[r].inner.request = 7;
+            }
+        }
+        if bit(1) {
+            for &(r, e) in records {
+                if hits.contains(&e) && b.mains[r].state == 2 {
+                    b.mains[r].request = 3;
+                }
+                if dead[e] && !matches!(b.mains[r].inner.state, 4 | 6) {
+                    b.mains[r].inner.request = 4;
+                }
+            }
+        }
+    }
+    // A stage is complete when its records are all in inner state 6 (without records, when its
+    // entities are dead).
+    let complete = |state: &GameState, rs: &[(usize, usize)]| match state.burrows.as_ref() {
+        Some(b) => rs.iter().all(|&(r, _)| b.mains[r].inner.state == 6),
+        None => rs.iter().all(|&(_, e)| state.entity_dead(e)),
+    };
+    if stage == 1 {
+        if bit(10) && complete(state, records) {
             set(state, if bit(4) { 11 } else { 4 });
         }
-    } else if !state.level(5) {
+    } else if stage == 2 {
         if state.level(3) && !state.level(4) {
             state.set_level(4, true);
             v.extend(burrows_spawn(2));
-        } else if state.level(4) && state.entity_dead(0) && state.entity_dead(1) {
+        } else if state.level(4) && complete(state, records) {
             set(state, if bit(6) { 12 } else { 6 });
         }
-    } else if !state.level(10) {
+    } else if stage == 3 {
         if state.level(8) && !state.level(9) {
             state.set_level(9, true);
             v.extend(burrows_spawn(3));
-        } else if state.level(9) && (0..3).all(|e| state.entity_dead(e)) {
+        } else if state.level(9) && complete(state, records) {
             set(state, if bit(8) { 13 } else { 8 });
         }
     }
@@ -3515,9 +3631,17 @@ mod tests {
                 s.set_word(1217, word, (w | set) & !clear);
             }
         }
-        // Entity 0 dead before stage 1: the scene request (bit 4), then its scene (line 7 and
-        // level state 1).
+        // Entity 0 dead before stage 1: the death step (record 0's inner request 4, stepped by
+        // the host's record thread to inner state 6), the scene request (bit 4), then its scene
+        // (line 7 and level state 1).
         s.entity_hp.insert(0, 0);
+        assert!(on_update(1217, &mut s, false).is_empty());
+        let mut b = s.burrows.take().unwrap();
+        for t in [0, 1, 40] {
+            b.step(&|_| false, t);
+        }
+        assert_eq!(b.mains[0].inner.state, 6);
+        s.burrows = Some(b);
         assert!(on_update(1217, &mut s, false).is_empty());
         let scene = on_update(1217, &mut s, false);
         assert!(scene.contains(&Action::Message { line: 7 }) && scene.contains(&Action::LevelState { flag: 1, on: true }));
