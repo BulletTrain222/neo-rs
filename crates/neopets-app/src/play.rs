@@ -44,6 +44,8 @@ pub struct World {
     pub object_anims: Vec<neopets_sim::object::ObjAnim>,
     /// The foliage patches (type 16) and the registry ids of the pack's type-8 children.
     pub patches: Vec<neopets_data::foliage::Patch>,
+    /// The area's character light sets (type 30, SPEC-0028 section 2), in table order.
+    pub lights: Vec<neopets_sim::charlight::Record>,
     pub children: Vec<u16>,
     ground: Option<Ground>,
     /// Rectangle primitives that push characters out (SPEC-0018 box push; new-game mask 0).
@@ -130,6 +132,7 @@ impl World {
             buffer,
             placed_effects: neopets_data::effect::placed(&bytes, &chain.chunks),
             patches: neopets_data::foliage::patches(&bytes, &chain.chunks),
+            lights: neopets_data::light::light_sets(&bytes, &chain.chunks).iter().map(light_record).collect(),
             objects: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
@@ -611,6 +614,9 @@ pub struct Play {
     /// Roberta's hold effect and leap glow (SPEC-0036): their timers and effect objects.
     r_displays: neopets_sim::roberta::Displays,
     r_fx: [Option<usize>; 2],
+    /// Character light states (SPEC-0046 Character lights): the hero's (key None) and each
+    /// region character's, by id.
+    char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
     /// The prize wheel's running spin (its pack) and each world's display mask word
     /// (SetWorldDisplayMask; the display word stores 2M).
     wheel_spin: Option<(u32, neopets_sim::wheel::Spin)>,
@@ -939,6 +945,7 @@ impl Play {
             placed_fx: HashMap::new(),
             r_displays: Default::default(),
             r_fx: [None; 2],
+            char_lights: HashMap::new(),
             wheel_spin: None,
             display_mask: HashMap::new(),
             displays: HashMap::new(),
@@ -4043,6 +4050,7 @@ impl Play {
         self.placed_release_step();
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
+        self.light_step();
         // Dead characters disappear when their countdown ends.
         for c in &mut self.characters {
             if let Some(t) = c.dying.as_mut() {
@@ -5099,6 +5107,53 @@ impl Play {
             }
             self.displays.insert(id, (d, h, active));
         }
+    }
+
+    /// SPEC-0046 Character lights, once per pass after the effect pools: for the hero and each
+    /// region character, the walk over the current area's light set and its colour fill. The
+    /// zone query passes (no zone grids are built) and no dynamic point lights are published
+    /// (light emitters publish none yet); states of released characters are dropped.
+    fn light_step(&mut self) {
+        let records = std::mem::take(&mut self.world.lights);
+        let all = |_: u8| true;
+        let walk = |key: Option<u64>, at: [f32; 3], lights: &mut HashMap<Option<u64>, neopets_sim::charlight::State>| {
+            let s = lights.entry(key).or_default();
+            s.walk(&records, &[], at, &all);
+            s.fill();
+        };
+        walk(None, self.loco.position(), &mut self.char_lights);
+        for c in &self.characters {
+            walk(Some(c.id), c.position, &mut self.char_lights);
+        }
+        self.world.lights = records;
+        let live: std::collections::HashSet<u64> = self.characters.iter().map(|c| c.id).collect();
+        self.char_lights.retain(|k, _| k.is_none_or(|id| live.contains(&id)));
+    }
+
+    /// The light block of the hero (None) or a character for a model at `at`: its light state
+    /// (SPEC-0046 Light slots and the lit draw), or the scene default lights before its first
+    /// walk. Directions are toward the light (the negated travel direction).
+    pub fn lights(&self, id: Option<u64>, at: [f32; 3]) -> neopets_data::light::Lights {
+        let Some(s) = self.char_lights.get(&id) else { return neopets_data::light::Lights::scene_default() };
+        let (ambient, block) = s.block(at);
+        let toward = |d: [f32; 3]| {
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if l > 0.0 { d.map(|c| -c / l) } else { [0.0; 3] }
+        };
+        neopets_data::light::Lights { ambient, directional: block.map(|(d, c)| (toward(d), c)) }
+    }
+
+    /// Diagnostic: the hero's light slots (entry type, flag, weight and stored colour).
+    pub fn light_summary(&self) -> String {
+        let Some(s) = self.char_lights.get(&None) else { return "none".into() };
+        s.slots
+            .iter()
+            .map(|x| match x.entry {
+                Some(e) => format!("[t{} f{} w{:.3} ({:.1}, {:.1}, {:.1})]", e.kind, e.flag, x.weight, x.stored[0], x.stored[1], x.stored[2]),
+                None => "[-]".into(),
+            })
+            .collect::<Vec<_>>()
+            .join(" ")
     }
 
     /// The steady status tint of the hero (None) or a character (SPEC-0034 5.4).
@@ -6251,4 +6306,20 @@ fn boot_string(boot: &[u8], va: u32) -> Vec<u8> {
     let words = neopets_data::archive::boot_u32_table(boot, va, 16).unwrap_or_default();
     let bytes: Vec<u8> = words.iter().flat_map(|w| w.to_le_bytes()).collect();
     bytes.into_iter().take_while(|&b| b != 0).collect()
+}
+
+/// A light-set record of the disc as the sim's record (SPEC-0028 section 2).
+fn light_record(r: &neopets_data::light::LightRecord) -> neopets_sim::charlight::Record {
+    let e = |x: &neopets_data::light::LightEntry| neopets_sim::charlight::Entry {
+        position: x.position,
+        direction: x.direction,
+        colour: x.colour,
+        kind: x.kind,
+        strength: x.strength,
+        flag: x.flag,
+        radius: x.radius,
+        radius_sq: x.radius_sq,
+        zone: x.zone,
+    };
+    neopets_sim::charlight::Record { gate: r.gate != 0, a: r.a.iter().map(e).collect(), b: r.b.iter().map(e).collect(), c: r.c.iter().map(e).collect() }
 }

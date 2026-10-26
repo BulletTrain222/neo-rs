@@ -1836,10 +1836,11 @@ fn sync_characters(
         }
         let matrices = c.anim.skin_matrices();
         let tint = p.status_tint(Some(c.id));
+        let lights = p.lights(Some(c.id), c.position);
         for (handle, i) in &skinned[&c.id] {
             let part = &c.model.parts[*i];
             let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-            let colours = tinted(part, relight(part, &nrm, rotation), tint);
+            let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint);
             if let Some(mut mesh) = meshes.get_mut(handle) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
@@ -1909,16 +1910,15 @@ fn tinted(part: &neopets_data::model::MeshPart, lit: Option<Vec<[f32; 4]>>, tint
     Some(base.into_iter().map(|c| [c[0] * t[0], c[1] * t[1], c[2] * t[2], c[3]]).collect())
 }
 
-/// Relight a lit part from its skinned normals turned into world space by `rotation`, with the
-/// scene default lights (SPEC-0046), as linear vertex colours. None for unlit parts.
-fn relight(part: &neopets_data::model::MeshPart, normals: &[[f32; 3]], rotation: Quat) -> Option<Vec<[f32; 4]>> {
+/// Relight a lit part from its skinned normals turned into world space by `rotation`, with a
+/// light block in world space (SPEC-0046), as linear vertex colours. None for unlit parts.
+fn relight(part: &neopets_data::model::MeshPart, normals: &[[f32; 3]], rotation: Quat, lights: &neopets_data::light::Lights) -> Option<Vec<[f32; 4]>> {
     if !part.lit {
         return None;
     }
     let world: Vec<[f32; 3]> = normals.iter().map(|n| (rotation * Vec3::from(*n)).to_array()).collect();
-    let lights = neopets_data::light::Lights::scene_default();
     Some(
-        neopets_data::model::lit_colours(&part.raw_colors, &world, &lights)
+        neopets_data::model::lit_colours(&part.raw_colors, &world, lights)
             .into_iter()
             .map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)])
             .collect(),
@@ -1945,7 +1945,7 @@ fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
     for (handle, i) in &models.skinned {
         let part = &data.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-        let colours = relight(part, &nrm, Quat::IDENTITY);
+        let colours = relight(part, &nrm, Quat::IDENTITY, &neopets_data::light::Lights::scene_default());
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
@@ -2311,6 +2311,7 @@ fn play_trace(
             let list: Vec<String> = w.object_anims.iter().enumerate().filter(|(_, o)| o.scripted).map(|(i, o)| format!("{i}:{}{}", o.state, if play.object_matrix(w.pack, i).is_some() { "" } else { " hidden" })).collect();
             let shown = (0..w.objects.len()).filter(|&i| play.object_matrix(w.pack, i).is_some()).count();
             println!("      objects of {} ({} in all, {shown} drawn) on tick {}: scripted [{}]", w.pack, w.objects.len(), play.ticks, list.join(", "));
+            println!("      hero lights ({} light-set records): {}", w.lights.len(), play.light_summary());
         }
         if !play.last_fx.is_empty() && play.last_fx != last_fx {
             last_fx = play.last_fx.clone();
@@ -2587,10 +2588,11 @@ fn play_frame(
     }
     let matrices = state.play.hero.skin_matrices();
     let tint = state.play.status_tint(None);
+    let lights = state.play.lights(None, p);
     for (handle, i) in &state.skinned {
         let part = &state.play.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-        let colours = tinted(part, relight(part, &nrm, rotation), tint);
+        let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint);
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);

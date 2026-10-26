@@ -9,7 +9,7 @@ use neopets_data::{Disc, fingerprint, iso_path, png};
 use std::collections::BTreeMap;
 
 const USAGE: &str = "usage: neopets-data [--iso <path>] [--sha256 <disc file>]... \
-                     [--resources] [--resource <n>]... [--texture <n>]... [--materials] [--meshes] [--clips] [--ground] [--areas] [--scene <n>]... [--coverage]";
+                     [--resources] [--resource <n>]... [--texture <n>]... [--materials] [--meshes] [--clips] [--ground] [--areas] [--scene <n>]... [--coverage] [--lights]";
 
 fn main() {
     if let Err(e) = run() {
@@ -35,6 +35,7 @@ fn run() -> Result<(), String> {
     let mut textures = Vec::new();
     let mut scenes = Vec::new();
     let mut registries = Vec::new();
+    let mut lights = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -47,6 +48,7 @@ fn run() -> Result<(), String> {
             "--ground" => ground = true,
             "--areas" => areas = true,
             "--effects" => effects = true,
+            "--lights" => lights = true,
             "--registry" => {
                 let n = args.next().ok_or("--registry needs a resource number")?;
                 registries.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -82,7 +84,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -101,6 +103,9 @@ fn run() -> Result<(), String> {
     }
     if effects {
         effect_census(&mut disc, &index)?;
+    }
+    if lights {
+        light_census(&mut disc, &index)?;
     }
     for &n in &registries {
         // SPEC-0060 / SPEC-0004: the trees of a resource with their kind, depth and the u16 at
@@ -154,6 +159,61 @@ fn run() -> Result<(), String> {
 
 /// SPEC-0034 Layout section 2: where the resource-9 effect table is, and the blend of the shader
 /// list's groups (the records are read by the sim's parser; the app's `--effects` checks them).
+/// SPEC-0028 section 2: the type-30 light sets of every chunk file, with the spec's counts and
+/// resource 685's records 0 and 1.
+fn light_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    use neopets_data::light;
+    let (mut packs, mut records, mut gated, mut counts, mut exact) = (0u32, 0usize, 0usize, [0usize; 3], 0u32);
+    for n in 0..index.len() as u32 {
+        let bytes = index.read(disc, n)?;
+        let family = resource::classify(&bytes);
+        if !matches!(family, Family::ChunkFile(_)) {
+            continue;
+        }
+        let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+        let Some(c) = chain.chunks.iter().find(|c| c.kind == light::LIGHT_CHUNK) else { continue };
+        let sets = light::light_sets(&bytes, &chain.chunks);
+        // The chain ends exactly at the payload end when every record is read.
+        let p = &bytes[c.payload.clone()];
+        let n_words = u32::from_le_bytes(p[0..4].try_into().unwrap()) as usize;
+        let mut at = (u32::from_le_bytes(p[4..8].try_into().unwrap()) as usize + 4 * n_words).next_multiple_of(16);
+        for s in &sets {
+            at = (at + 0x20 + 0x50 * (s.a.len() + s.b.len() + s.c.len())).next_multiple_of(16);
+        }
+        if sets.len() == n_words && at == p.len() {
+            exact += 1;
+        }
+        packs += 1;
+        records += sets.len();
+        gated += sets.iter().filter(|s| s.gate != 0).count();
+        for s in &sets {
+            counts[0] += s.a.len();
+            counts[1] += s.b.len();
+            counts[2] += s.c.len();
+        }
+        if n == 685 {
+            println!("  685: {} records", sets.len());
+            for (i, s) in sets.iter().take(2).enumerate() {
+                println!("    record {i}: gate {} counts ({}, {}, {})", s.gate, s.a.len(), s.b.len(), s.c.len());
+                for e in s.a.iter().chain(&s.c) {
+                    println!(
+                        "      type {} flag {} strength {} position {:?} direction {:?} colour {:?} radius {} zone {}",
+                        e.kind, e.flag, e.strength, e.position, e.direction, e.colour, e.radius, e.zone
+                    );
+                }
+            }
+        }
+    }
+    println!(
+        "Light sets: {packs} packs ({exact} end exactly), {records} records ({gated} gated), entries A {} B {} C {} (total {})",
+        counts[0],
+        counts[1],
+        counts[2],
+        counts.iter().sum::<usize>()
+    );
+    Ok(())
+}
+
 fn effect_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     use neopets_data::effect;
     let bytes = index.read(disc, effect::RESOURCE)?;
