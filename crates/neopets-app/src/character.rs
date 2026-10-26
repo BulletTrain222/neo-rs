@@ -29,6 +29,10 @@ pub struct HeroAnim {
     face: Option<u32>,
     /// The region's kind-16 effect lists (SPEC-0034 Layout section 1), shared by its characters.
     effect_lists: std::sync::Arc<Vec<Vec<neopets_data::region::EffectEntry>>>,
+    /// The pendulum chains on the sub-part joints (SPEC-0040 Behavior 25, modes 1 and 2), and
+    /// the owner's position on the last chain step.
+    chains: Vec<neopets_sim::chain::Chain>,
+    last_owner: Option<[f32; 3]>,
 }
 
 /// Action ids valid for the hero tables (SPEC-0005: ids 0 to 192).
@@ -62,7 +66,7 @@ impl HeroAnim {
                 state
             })
             .collect();
-        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default() };
+        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None };
         hero.play(3);
         hero
     }
@@ -177,6 +181,61 @@ impl HeroAnim {
             );
         }
         root
+    }
+
+    /// Set the chain mode's chains. A link whose joint does not hang from its link joint in the
+    /// sub-part skeleton is left out; returns how many were left out.
+    pub fn set_chains(&mut self, chains: Vec<neopets_sim::chain::Chain>) -> usize {
+        let Some(sub) = self.families.get(1) else {
+            self.chains.clear();
+            return chains.iter().map(Vec::len).sum();
+        };
+        let n_main = self.families[0].data.def.len() as u32;
+        let parents = &sub.data.def.parents;
+        let mut dropped = 0;
+        self.chains = chains
+            .into_iter()
+            .map(|c| {
+                c.into_iter()
+                    .filter(|l| {
+                        let ok = parents.get(l.joint).copied().flatten() == Some(n_main + l.hangs_from as u32);
+                        dropped += usize::from(!ok);
+                        ok
+                    })
+                    .collect()
+            })
+            .collect();
+        self.last_owner = None;
+        dropped
+    }
+
+    /// The chain step after the pose (SPEC-0040 Behavior 25, Per-tick step): the links of each
+    /// chain in order, each from its link joint's world frame as the pose (with the links
+    /// already stepped) gives it, with the owner placed at `position` facing `facing`. Each
+    /// link's joint takes its yaw and pitch as local rotation and (0, 0, -a) as translation.
+    pub fn chain_step(&mut self, position: [f32; 3], facing: [f32; 3]) {
+        use neopets_sim::chain::{Frame, link_rotation, motion_unit, step_link};
+        if self.chains.is_empty() || self.families.len() < 2 {
+            return;
+        }
+        let moved = self.last_owner.map_or([0.0; 3], |l| std::array::from_fn(|i| position[i] - l[i]));
+        let u = motion_unit(moved);
+        self.last_owner = Some(position);
+        // Characters face +Z in model space: the owner's frame turns +Z onto the facing.
+        let (s, c) = facing[0].atan2(facing[2]).sin_cos();
+        let root = Affine { cols: [[c, 0.0, -s], [0.0, 1.0, 0.0], [s, 0.0, c]], t: position };
+        let base = self.families[1].skin_base;
+        let mut chains = std::mem::take(&mut self.chains);
+        for link in chains.iter_mut().flatten() {
+            let Some(w) = self.bone_frames().get(base + link.hangs_from).copied() else { continue };
+            let m = root.mul(&w);
+            let f = Frame { x: m.cols[0], y: m.cols[1], z: m.cols[2], p: m.t };
+            let (theta, phi) = step_link(link, &f, u);
+            if let Some(j) = self.families[1].joints.get_mut(link.joint) {
+                *j = Some((link_rotation(theta, phi), [0.0, 0.0, -link.k.a]));
+            }
+        }
+        self.chains = chains;
     }
 
     /// The bone table the animation poses.

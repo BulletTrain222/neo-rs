@@ -5035,6 +5035,8 @@ impl Play {
         }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
+        let (at, facing) = (self.loco.position(), self.loco.facing);
+        self.hero.chain_step(at, facing);
         self.sound_step();
         self.clip_effects_step();
         // SPEC-0028 7.1: the resident worlds' animated objects step before the hero update.

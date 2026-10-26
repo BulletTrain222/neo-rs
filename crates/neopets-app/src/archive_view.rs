@@ -257,7 +257,13 @@ pub fn hero(
             FamilyData::parse(&index.read(disc, h)?, &index.read(disc, b)?, &index.read(disc, t)?)
         })
         .collect::<Result<Vec<_>, String>>()?;
-    Ok(Some(crate::character::HeroAnim::new(bones, families)))
+    let mut anim = crate::character::HeroAnim::new(bones, families);
+    // Tor's spawn sets chain mode 1 (his tail), Roberta's mode 2 (two head chains).
+    let dropped = anim.set_chains(if hero == 0 { neopets_sim::chain::tor() } else { neopets_sim::chain::roberta() });
+    if dropped > 0 {
+        bevy::log::warn!("Outfit {n}: {dropped} chain links do not hang from their link joints; left out");
+    }
+    Ok(Some(anim))
 }
 
 #[cfg(test)]
