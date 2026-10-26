@@ -807,6 +807,15 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0043 750 Init: the control thread loads slot 0 with set 0 (region 751) while flag
+        // 76 is clear and returns the normal camera. Its blackboard message's values are not
+        // given; the proximity and on-enter routines are fixed rules. The shared entity-control
+        // routine (Update) is not reproduced.
+        750 => {
+            let mut v: Vec<Action> = (!state.flag(76)).then_some(Action::LoadRegion { slot: 0, region: Some(751) }).into_iter().collect();
+            v.push(Action::ReturnCamera { preset: -1, release: true });
+            v
+        }
         // SPEC-0037 1225 and 1220 Init: thread A loads slot 0 with set 3, 2, 1 or 0 by the first
         // set flag of 84, 83, 82, 81 (region P + 1 + set), nothing otherwise; 1220 also
         // registers S0 on trigger 0.
@@ -1427,6 +1436,39 @@ fn lakeside_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     out
+}
+
+/// SPEC-0043 750's line cycling for routine r (1 to 4; 0 is the on-enter routine): one position
+/// counter per routine (word 10 + r) shared by its cases, set back to the first line once, the
+/// first time the top case is taken (word 20 + r).
+fn cycle_750(s: &mut GameState, r: u8, top: bool, lines: &[u16]) -> Vec<Action> {
+    if top && s.word(750, 20 + r) == 0 {
+        s.set_word(750, 20 + r, 1);
+        s.set_word(750, 10 + r, 0);
+    }
+    let c = s.word(750, 10 + r).max(0) as usize;
+    s.set_word(750, 10 + r, c as i32 + 1);
+    vec![Action::Talk { line: lines[c % lines.len()] }]
+}
+
+/// SPEC-0043 750 routines 1 to 4 (entities 3, 1, 0, 2).
+fn talk_750(r: u8, s: &mut GameState) -> Vec<Action> {
+    let (f420, f76) = (s.flag(420), s.flag(76));
+    let three = |a: u16| [a, a + 1, a + 2];
+    match r {
+        1..=3 => {
+            let base = 9 * (r as u16 - 1);
+            let lines = if f420 { three(base) } else if f76 { three(base + 3) } else { three(base + 6) };
+            cycle_750(s, r, f420, &lines)
+        }
+        4 if f420 => cycle_750(s, 4, true, &three(35)),
+        4 if s.flag(419) => {
+            s.set(420, true);
+            vec![Action::Talk { line: 38 }]
+        }
+        4 => cycle_750(s, 4, false, &if f76 { three(39) } else { three(42) }),
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC-0037 interiors of eW 44 (783, 786, 787, 788, 789): the type-2 value their teleport 0
@@ -2534,6 +2576,13 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
         // frame; else line 2 (202), 4 (150) or 6.
         984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
         984 => vec![Action::Message { line: if state.flag(202) { 2 } else if state.flag(150) { 4 } else { 6 } }],
+        // SPEC-0043 750 on-enter (Medium): two lines in turn per case, 27/28 (421), 29/30 (420),
+        // 31/32 (76) or 33/34, with the routine's shared counter.
+        750 => {
+            let (f421, f420, f76) = (state.flag(421), state.flag(420), state.flag(76));
+            let lines = if f421 { [27, 28] } else if f420 { [29, 30] } else if f76 { [31, 32] } else { [33, 34] };
+            cycle_750(state, 0, f421, &lines)
+        }
         // SPEC-0037 1251 on-enter E: 460: 18 (273) or 19; 457: 20 (item 49) or 21; else 22
         // (item 49) or 23; in entity 0's conversation frame.
         1251 => {
@@ -4154,6 +4203,11 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0043 750: routines 1 to 4 on entities 3, 1, 0 and 2.
+        (750, 3) => Some(1),
+        (750, 1) => Some(2),
+        (750, 0) => Some(3),
+        (750, 2) => Some(4),
         // SPEC-0039 984: handler 1 on entity 0.
         (984, 0) => Some(1),
         // SPEC-0044 1017: set D on entities 0 and 4, C on 1 and 5, A on 2 and 6, B on 3 and 7.
@@ -4215,6 +4269,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1017 {
         return guild_talk(routine, state);
+    }
+    if pack == 750 {
+        return talk_750(routine, state);
     }
     if eastside_interior(pack).is_some() && routine == 0 {
         return eastside_talk(pack, state);
@@ -4484,6 +4541,26 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn module_750_cycles() {
+        let mut s = GameState::default();
+        // Entity 3 (routine 1): lines 6, 7, 8 in turn; with 76 the shared counter goes on (5).
+        let a: Vec<_> = (0..2).map(|_| on_talk(750, 1, &mut s)).collect();
+        assert_eq!(a.concat(), vec![Action::Talk { line: 6 }, Action::Talk { line: 7 }]);
+        s.set(76, true);
+        assert_eq!(on_talk(750, 1, &mut s), vec![Action::Talk { line: 5 }]);
+        // The first top case (420) restarts it at line 0.
+        s.set(420, true);
+        assert_eq!(on_talk(750, 1, &mut s), vec![Action::Talk { line: 0 }]);
+        assert_eq!(on_talk(750, 1, &mut s), vec![Action::Talk { line: 1 }]);
+        // Routine 4: with 419 set and 420 clear, 420 is set with line 38.
+        let mut t = GameState::default();
+        t.set(419, true);
+        assert_eq!(on_talk(750, 4, &mut t), vec![Action::Talk { line: 38 }]);
+        assert_eq!(on_talk(750, 4, &mut t), vec![Action::Talk { line: 35 }]);
+        assert_eq!(proximity_routine(750, 2), Some(4));
     }
 
     #[test]
