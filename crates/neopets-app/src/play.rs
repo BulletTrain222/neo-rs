@@ -56,6 +56,10 @@ pub struct World {
     /// collision mask, and all of them with their gate masks.
     boxes: Vec<BoxShape>,
     all_boxes: Vec<(u16, BoxShape)>,
+    /// The pushing collision spheres (SPEC-0018 Sphere contact): those whose mask passes, and
+    /// all of them with their masks.
+    push_spheres: Vec<([f32; 3], f32)>,
+    all_spheres: Vec<(u16, [f32; 3], f32)>,
     /// SetWorldCollisMask's gate word (0 at load).
     collis_mask: u16,
     neighbours: Neighbours,
@@ -121,6 +125,7 @@ impl World {
         self.volumes = self.all_volumes.iter().filter(|v| v.fires_on_contact(mask)).copied().collect();
         self.shot_volumes = self.all_volumes.iter().filter(|v| v.fires_on_shot(mask)).copied().collect();
         self.boxes = self.all_boxes.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
+        self.push_spheres = self.all_spheres.iter().filter(|(m, ..)| *m == 0 || m & mask != 0).map(|&(_, c, r)| (c, r)).collect();
     }
 
     /// The script volumes' trigger indices and a point inside each (diagnostic).
@@ -174,6 +179,8 @@ impl World {
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
             boxes: Vec::new(),
+            push_spheres: Vec::new(),
+            all_spheres: Vec::new(),
             all_boxes: ground::rectangles(&bytes, &chain.chunks)
                 .into_iter()
                 .filter(|r| r.pushes(0xFFFF))
@@ -251,6 +258,14 @@ impl World {
             })
             .collect();
         world.books = all.iter().filter(|(v, _)| neopets_sim::book::is_station(v.kind, v.flags)).copied().collect();
+        world.all_spheres = all
+            .iter()
+            .filter(|(v, _)| v.kind == 1 && neopets_sim::contact::sphere_pushes(v.flags))
+            .filter_map(|(v, _)| match v.shape {
+                neopets_sim::trigger::Shape::Sphere { centre, radius } => Some((v.mask, centre, radius)),
+                _ => None,
+            })
+            .collect();
         world.volumes = all.into_iter().map(|(v, _)| v).filter(|v| v.fires_on_contact(0xFFFF) || v.fires_on_shot(0xFFFF)).collect();
         world.all_volumes = world.volumes.clone();
         world.set_collis_mask(0);
@@ -3945,7 +3960,7 @@ impl Play {
             pl.facing = facing;
             let parts = (r.model.clone(), r.anim.clone(), r.row, r.tuning);
             let region = r.region;
-            let drop = drop.map(|id| neopets_data::region::ItemPoint { position: at, facing, flags: 0, group: -1, key: id as i16, luck: 0, count: 0, map: 0 });
+            let drop = drop.map(|id| neopets_data::region::ItemPoint { position: at, facing, flags: 0, group: -1, key: id as i16, luck: 0, count: 0, map: 0, snap: false });
             let id = self.bind_character(pack, s, region, pl, parts, drop);
             self.reserves[i].bound = Some(id);
             let hero = self.loco.position();
@@ -4892,6 +4907,8 @@ impl Play {
                     contact::resolve_walls(p, &walls, contact::HERO_RADIUS);
                 }
                 contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
+                // SPEC-0018 Sphere contact: out of the pushing spheres to r + 1.25.
+                contact::resolve_spheres(p, &world.push_spheres);
             },
         );
         // SPEC-0055 8A: the deadly-ground kill (kind 2, gap 0.085 or less; no health change),
@@ -5713,9 +5730,16 @@ impl Play {
                 continue;
             }
             let id = p.key as u16;
+            // SPEC-0006 Kind 8 +0x21: a snapping placement spawns at the ground (probed from its
+            // y + 4.0; 0.0 with no ground) + 0.5.
+            let mut point = p.position;
+            if p.snap {
+                let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+                point[1] = w.and_then(|w| w.ground_at(point[0], point[2], point[1] + 4.0)).unwrap_or(0.0) + 0.5;
+            }
             let spawn = neopets_sim::items::Spawn {
                 id,
-                point: p.position,
+                point,
                 placed: true,
                 charm: self.item_kind(id) == 17,
                 s0: 1.0,

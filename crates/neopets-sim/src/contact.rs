@@ -65,6 +65,31 @@ pub fn push(p: Vec3, b: &BoxShape, r: f32) -> Option<(u8, Vec3, f32)> {
     Some((best.0, best.1, dist))
 }
 
+/// The sphere contact radius (SPEC-0018 Sphere contact; boot word 0x2DB400).
+pub const SPHERE_CONTACT: f32 = 1.25;
+
+/// A collision sphere pushes characters out when its id word has class 0 or class 1 and not
+/// class 2 (SPEC-0018 Primitive class bits; Sphere contact).
+pub fn sphere_pushes(id: u16) -> bool {
+    id & 3 != 0 && id & 4 == 0
+}
+
+/// Sphere contact: a point closer than r + 1.25 to a sphere's centre moves along the unit vector
+/// from the centre to it, onto the sphere of radius r + 1.25. Returns whether any pushed.
+pub fn resolve_spheres(p: &mut Vec3, spheres: &[(Vec3, f32)]) -> bool {
+    let mut any = false;
+    for &(c, r) in spheres {
+        let d = [p[0] - c[0], p[1] - c[1], p[2] - c[2]];
+        let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let reach = r + SPHERE_CONTACT;
+        if len < reach && len > 0.0 {
+            *p = std::array::from_fn(|k| c[k] + d[k] / len * reach);
+            any = true;
+        }
+    }
+    any
+}
+
 /// Push a point out of every box it is inside, in order, and report whether any pushed.
 pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
     let mut hit = false;
@@ -144,6 +169,21 @@ pub fn resolve_walls(p: &mut Vec3, walls: &[WallEdge], r: f32) -> bool {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn sphere_contact() {
+        // Class 0 or 1 push; class 2 or only class 3 or 4 does not.
+        assert!(sphere_pushes(1) && sphere_pushes(2) && sphere_pushes(3));
+        assert!(!sphere_pushes(5) && !sphere_pushes(8) && !sphere_pushes(16) && !sphere_pushes(0));
+        // A sphere of radius 2 at the origin: a point 1.0 away on +x ends 3.25 away; one at 4.0
+        // stays.
+        let mut p = [1.0, 0.0, 0.0];
+        assert!(resolve_spheres(&mut p, &[([0.0; 3], 2.0)]));
+        assert!((p[0] - 3.25).abs() < 1e-6 && p[1] == 0.0);
+        let mut q = [4.0, 0.0, 0.0];
+        assert!(!resolve_spheres(&mut q, &[([0.0; 3], 2.0)]));
+    }
+
     use super::*;
 
     /// SPEC-0028's synthetic box: reference (10, 0, -5), extents V 6, A 4, B 2, axes Y, X, Z.

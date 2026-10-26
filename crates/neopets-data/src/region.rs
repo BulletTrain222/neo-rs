@@ -71,6 +71,8 @@ pub struct ItemPoint {
     pub luck: i16,
     pub count: i16,
     pub map: u8,
+    /// Snap to ground (+0x21; SPEC-0006 Kind 8): spawned at the ground height + 0.5.
+    pub snap: bool,
 }
 
 /// A kind-4 save point (SPEC-0006 Kind 4; SPEC-0025 Save points): position (+0x00), facing
@@ -226,6 +228,7 @@ pub fn records(p: &[u8]) -> Records {
                     luck: s(0x28),
                     count: s(0x2A),
                     map: p.get(data + 0x2C).copied().unwrap_or(0),
+                    snap: p.get(data + 0x21).is_some_and(|&b| b != 0),
                 });
             }
             4 => {
