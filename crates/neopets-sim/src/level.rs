@@ -589,21 +589,23 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 1133 | 1148 | 1150 | 1172 | 1184 | 1056 | 1163)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 1023 | 1133 | 1148 | 1150 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
-        // SPEC-0039 1244 Init: SetGameState(271, 1); with 273 clear (objects 5, 0, 1 and 4 are
-        // not reproduced) handlers 1 to 5 on triggers 0, 1, 2, 4 and 3.
+        // SPEC-0039 1244 Init: SetGameState(271, 1); with 273 clear objects 5, 0, 1 and 4 off and
+        // handlers 1 to 5 on triggers 0, 1, 2, 4 and 3.
         1244 => {
             state.set(271, true);
             if state.flag(273) {
                 Vec::new()
             } else {
-                vec![reg(0, 1), reg(1, 2), reg(2, 3), reg(4, 4), reg(3, 5)]
+                let mut v: Vec<Action> = [5, 0, 1, 4].into_iter().map(|obj| Action::InitObjOn { obj, end: false }).collect();
+                v.extend([reg(0, 1), reg(1, 2), reg(2, 3), reg(4, 4), reg(3, 5)]);
+                v
             }
         }
         // SPEC-0045 909 Init: SetWhinnyPenmesh first (inner 0, entrance 5, locator 8); script
@@ -778,13 +780,16 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     v.extend([cam(13), anim(0, 49, true), anim(0, 41, true)]);
     v.extend(cut(14));
     v.extend([MoveHero { locator: 492 }, WalkHero { locator: 493, wait: true, orient: true }, walk(1, 495), wait(1.0), cam(15), wait(0.3), cam(16)]);
-    v.extend([MoveEntity { entity: 1, locator: 496, face: true }, PlaySound { cue: 12, locator: None }, MoveHero { locator: 493 }]);
+    // Object 4 is activated and played (speed 0.45, wait); its reset to time 0 at locator 498
+    // (a MoveObj call) is not built.
+    v.extend([MoveEntity { entity: 1, locator: 496, face: true }, InitObjOn { obj: 4, end: false }, PlayAnim { obj: 4, speed: 0.45, wait: true }]);
+    v.extend([PlaySound { cue: 12, locator: None }, MoveHero { locator: 493 }]);
     v.extend(cut(17));
     v.push(wait(1.0));
     v.extend(cut(19));
     v.extend([Message { line: 25 }, cam(20), Converse { entity: 1, line: 26 }]);
     v.extend(cut(18));
-    v.extend([MoveEntity { entity: 0, locator: 499, face: true }, wait(0.2), walk(0, 500), wait(0.6), cam(21), Converse { entity: 1, line: 27 }]);
+    v.extend([MoveEntity { entity: 0, locator: 499, face: true }, wait(0.2), walk(0, 500), wait(0.6), DeactivateObj { obj: 4 }, cam(21), Converse { entity: 1, line: 27 }]);
     v.extend([walk(1, 499), wait(1.0), cam(22), MoveEntity { entity: 0, locator: 501, face: true }, walk(0, 502), wait(1.5)]);
     v.extend([FadeOut { seconds: 2.0, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, MoveEntity { entity: 0, locator: 477, face: true }]);
     v.extend([EntityAnim { entity: 0, anim: 48, looped: true, wait: false }, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
@@ -936,10 +941,10 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 release_camera(),
             ]);
         }
-        // Trigger 3 (handler 5), the first fire with 272 clear: the break scene (objects 5, 4, 1
-        // and 6, their animations, the shake and Break of breakables 17 to 24 are not
-        // reproduced: R-0040), then the story switch back to Tor at locator 12 in mode 0, and
-        // 272, which ends the module's triggers for good.
+        // Trigger 3 (handler 5), the first fire with 272 clear: the break scene (object 5 played
+        // with wait, objects 5, 4 and 1 off, object 6 on and played; the shake and Break of
+        // breakables 17 to 24 are not reproduced: R-0040), then the story switch back to Tor at
+        // locator 12 in mode 0, and 272, which ends the module's triggers for good.
         (1244, 5) if first && !state.flag(272) => {
             out.actions.extend([
                 Action::LetterBox { on: true, seconds: 0.0, wait: false },
@@ -950,6 +955,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::PlayCamera { track: 14, wait: true, end: 1, speed: 1.0 },
                 camera(16),
                 Action::PlaySound { cue: 7, locator: None },
+                Action::PlayAnim { obj: 5, speed: 1.0, wait: true },
                 Action::KillSound { cue: 7, locator: None },
                 Action::PlaySound { cue: 8, locator: None },
                 Action::Sleep { ticks: 20 },
@@ -960,7 +966,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 camera(16),
                 Action::PlayHeroSound { hero: -1, cue: 1, locator: None, do_not_restart: false },
                 Action::Message { line: 18 },
+                Action::DeactivateObj { obj: 5 },
+                Action::DeactivateObj { obj: 4 },
+                Action::DeactivateObj { obj: 1 },
+                Action::InitObjOn { obj: 6, end: false },
                 Action::PlaySound { cue: 9, locator: None },
+                Action::PlayAnim { obj: 6, speed: 1.0, wait: true },
                 Action::KillSound { cue: 9, locator: None },
                 camera(16),
                 Action::Message { line: 19 },
@@ -3350,7 +3361,7 @@ mod tests {
         let mut s = GameState::default();
         let init = on_init(1244, &mut s);
         assert!(s.flag(271));
-        assert_eq!(init.len(), 5);
+        assert_eq!(init.len(), 9, "four objects off, five registrations");
         let call = TriggerCall { index: 0, state: 1, object: true, square: false };
         // Not in swap mode 2: no scene.
         s.hero.swap_mode = 1;
