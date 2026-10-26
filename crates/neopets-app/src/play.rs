@@ -5068,6 +5068,8 @@ impl Play {
                 self.once.insert((it.id, pack));
             }
             self.last_pickup = format!("picked up item {} (held {}) on tick {}", it.id, self.state.items[&it.id], self.ticks);
+            let hook = level::on_pickup(pack, it.id, &mut self.state);
+            self.apply(&hook);
         }
     }
 

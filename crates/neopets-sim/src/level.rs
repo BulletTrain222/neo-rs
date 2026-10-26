@@ -528,7 +528,10 @@ impl GameState {
 /// The registered teleport callback of a pack's door: its prompt context (13 "Enter", 26
 /// "Exit"; 0 starts on contact), or None when no handler is described.
 pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
-    if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1152 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
+    if (pack, door) == (947, 0) {
+        return Some(0);
+    }
+    if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
         return Some(13);
     }
     match (pack, door) {
@@ -557,6 +560,18 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0037 1299 teleports: with 248 set, value 80 for eW 154 (index 0) or 155 (index 1)
+        // and the replacement to it; with 248 clear index 0 shows line 0, and index 1 sets 243 and
+        // goes to eW 154 as well.
+        (1299, 0) if !state.flag(248) => vec![Action::Message { line: 0 }],
+        (1299, 0 | 1) => {
+            let w = if door == 1 && state.flag(248) { 155 } else { 154 };
+            if door == 1 && !state.flag(248) {
+                state.set(243, true);
+            }
+            state.blackboard.insert((2, w), 80);
+            vec![Action::ReplaceExterior { slot: w, plane: -1 }]
+        }
         // SPEC-0037 1152 teleports 1 and 0 (kind 13): value 90 for eW 106 or 126 and the exterior
         // replacement to that world.
         (1152, 0 | 1) => {
@@ -743,6 +758,38 @@ pub fn objects_scripted(pack: u32) -> bool {
 pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     match pack {
+        // SPEC-0037 1238 Init and thread T1: with flag 50 slot 0 (table A) loads set 3 and slot 1
+        // (table B) set 1 (567 set, 568 clear) or set 2; without it slot 0 loads set 0; then with
+        // 578 set and 579 clear slot 2 (table C) loads set 4 (region 1239 + set). Thread T2 is in
+        // Update; the pickup callback is on_pickup.
+        1238 => {
+            let load = |slot: u8, set: u32| Action::LoadRegion { slot, region: Some(1239 + set) };
+            let mut v = if state.flag(50) {
+                vec![load(0, 3), load(1, if state.flag(567) && !state.flag(568) { 1 } else { 2 })]
+            } else {
+                vec![load(0, 0)]
+            };
+            if state.flag(578) && !state.flag(579) {
+                v.push(load(2, 4));
+            }
+            v
+        }
+        // SPEC-0037 947 Init: thread G loads slot 0 with set 0 (region 948) while 375 is clear
+        // (its AI-3 watch is in Update); S0, S1 and S2 on triggers 0 to 2; teleport 0 (kind 0)
+        // does nothing. Thread H (flag 1: line 3 below 20 % hit points) and
+        // RegisterMovableBlockSoundIndex are not reproduced.
+        947 => {
+            let mut v = vec![reg(0, 0), reg(1, 1), reg(2, 2)];
+            if !state.flag(375) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(948) });
+            }
+            v
+        }
+        // SPEC-0037 1299 Init: S0 on trigger 0; the teleports and the arrival are fixed rules.
+        1299 => vec![reg(0, 0)],
+        // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
+        // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
+        809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
         // SPEC-0037 1225 and 1220 Init: thread A loads slot 0 with set 3, 2, 1 or 0 by the first
         // set flag of 84, 83, 82, 81 (region P + 1 + set), nothing otherwise; 1220 also
         // registers S0 on trigger 0.
@@ -1684,6 +1731,17 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
             out.actions.extend([Action::WaitInside { index: call.index }, Action::LoadRegion { slot: 1, region: None }, slots_880(state)]);
         }
+        // SPEC-0037 947 S2 (trigger 2, the body) arms word 0; S0 (trigger 0, entering with the
+        // body) with the word armed and 375 clear shows line 0 and disarms it; S1 (trigger 1,
+        // entering) replaces the exterior with eW 69 (plane 0).
+        (947, 2) if call.object => state.set_word(pack, 0, 1),
+        (947, 0) if call.object && call.state == 1 && state.word(pack, 0) != 0 && !state.flag(375) => {
+            state.set_word(pack, 0, 0);
+            out.actions.push(Action::Message { line: 0 });
+        }
+        (947, 1) if call.object && call.state == 1 => out.actions.push(Action::ReplaceExterior { slot: 69, plane: 0 }),
+        // SPEC-0037 1299 S0 (trigger 0, entering with the body): sting stream 18 at 1.0.
+        (1299, 0) if call.object && call.state == 1 => out.actions.push(Action::PlayStinger { id: 18, volume: 1.0 }),
         // SPEC-0037 1220 S0 (trigger 0, entering with the body): camera 5, the walk to locator
         // 26, a 1 s fade out (wait), the hero to locator 29 and value 1 (type 3) for eW 129.
         (1220, 0) if call.object && call.state == 1 => {
@@ -2210,6 +2268,20 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0037 1238 thread T2 (flag 50, while 567 is set): four or more of item 82 with 568
+        // clear set 568.
+        1238 => {
+            if state.flag(50) && state.flag(567) && !state.flag(568) && state.items.get(&82).copied().unwrap_or(0) >= 4 {
+                state.set(568, true);
+            }
+        }
+        // SPEC-0037 947 thread G: while 375 is clear, AI 3 dead sets 375 and shows lines 1 and 2.
+        947 => {
+            if !state.flag(375) && state.ai_dead.contains(&3) {
+                state.set(375, true);
+                out.extend([Action::Message { line: 1 }, Action::Message { line: 2 }]);
+            }
+        }
         // SPEC-0039 1230 Update: object 0 off unless 64 is set and 248 clear.
         1230 => {
             if !(state.flag(64) && !state.flag(248)) {
@@ -2377,6 +2449,15 @@ pub fn chest_press(locks: &[(i32, i32, i32)], id: i32, state: &mut GameState) ->
 }
 
 /// Run a pack's activate-world routine when its world becomes current.
+/// The hero pickup callback (RegisterHeroPickupItemCallback) of a pack, for a picked-up item.
+pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
+    // SPEC-0037 1238 pickup P: item 83 (Pink Posies) sets flag 579 once.
+    if (pack, item) == (1238, 83) && !state.flag(579) {
+        state.set(579, true);
+    }
+    Vec::new()
+}
+
 /// The on-enter callback (RegisterOnEnterCallback, SPEC-0030 row 255), started each time the
 /// world becomes current, right after the activate-world callback.
 pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
@@ -2406,6 +2487,11 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0037 1299 activate-world: the value for eW 150 is read and reset; any value but -1
+        // returns the normal camera.
+        1299 => {
+            if state.take_message(2, 150) != -1 { vec![Action::ReturnCamera { preset: -1, release: true }] } else { Vec::new() }
+        }
         // SPEC-0037 1220 activate-world A2 (Medium order): with value 1 (type 3) for eW 131 a
         // cut to black, 1 s, a 0.5 s fade in, the hero to locator 25, camera 4 (wait), 0.5 s and
         // the normal camera; value -1 for eW 132 (as the spec gives). StartHeroLongFall is not
@@ -4330,6 +4416,34 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_1238_947_1299_809() {
+        // SPEC-0037 vector: 1238 with 567 set and 568 clear, four of item 82 set 568.
+        let mut s = GameState::default();
+        s.set(50, true);
+        s.set(567, true);
+        assert_eq!(on_init(1238, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(1242) }, Action::LoadRegion { slot: 1, region: Some(1240) }]);
+        s.give(82, 4);
+        on_update(1238, &mut s, false);
+        assert!(s.flag(568));
+        on_pickup(1238, 83, &mut s);
+        assert!(s.flag(579));
+        // 947: line 0 once per pass of trigger 2 then 0; AI 3 dead sets 375 with lines 1, 2.
+        let call = |index| TriggerCall { index, state: 1, object: true, square: false };
+        assert!(on_trigger(947, 0, call(0), &mut s).actions.is_empty());
+        on_trigger(947, 2, call(2), &mut s);
+        assert_eq!(on_trigger(947, 0, call(0), &mut s).actions, vec![Action::Message { line: 0 }]);
+        s.ai_dead.insert(3);
+        assert_eq!(on_update(947, &mut s, false).len(), 2);
+        // 1299: index 1 with 248 clear sets 243 and goes to eW 154.
+        assert_eq!(on_teleport(1299, 1, &mut s), vec![Action::ReplaceExterior { slot: 154, plane: -1 }]);
+        assert!(s.flag(243));
+        // 809: flag 56 (with 54) loads set 2.
+        s.set(54, true);
+        s.set(56, true);
+        assert_eq!(on_init(809, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(812) }]);
     }
 
     #[test]
