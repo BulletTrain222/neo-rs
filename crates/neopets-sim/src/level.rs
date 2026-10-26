@@ -1441,6 +1441,33 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0042 714 Init: P on trigger 0; with 220 set and 301 clear F on 2; with 301 and 284
+        // clear effects 9 to 15 stopped; thread A: set 0 (394 and 395 clear) or 1 (394 only),
+        // region 715 + set.
+        714 => {
+            let f = |n| state.flag(n);
+            let mut v = vec![reg(0, 0)];
+            if f(220) && !f(301) {
+                v.push(reg(2, 2));
+            }
+            if !f(301) && !f(284) {
+                v.extend((9..=15).map(|slot| Action::StopEffect { slot }));
+            }
+            if !f(395) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(715 + f(394) as u32) });
+            }
+            v
+        }
+        // SPEC-0042 772 Init: X on trigger 0; with 543 object 0 at its start and looped, else
+        // object 1. The item-pad handler E (triggers 3 to 28) is not registered: the record
+        // fields it tests are not defined in the spec.
+        772 => {
+            if state.flag(543) {
+                vec![reg(0, 0), Action::InitObjOn { obj: 0, end: false }, Action::LoopAnim { obj: 0, speed: 1.0 }]
+            } else {
+                vec![reg(0, 0), Action::InitObjOn { obj: 1, end: false }]
+            }
+        }
         // SPEC-0037 908 Init: objects 4, 0, 1 and 2 at their start. Its world-swap callback is
         // run only by StartTransitionScene, which has no live call (SPEC-0030 rows 268 and 283).
         908 => [4, 0, 1, 2].map(|obj| Action::InitObjOn { obj, end: false }).to_vec(),
@@ -2231,6 +2258,53 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// SPEC-0042 772's proximity routines: C (entity 2, the line chain; words 1 the rule and 2 the
+/// counter) and D (entity 14, the walk-off scene).
+fn talk_772(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let step = |s: &mut GameState, rule: i32, lines: &[u16]| {
+        let mut c = s.word(772, 2);
+        if s.word(772, 1) != rule {
+            s.set_word(772, 1, rule);
+            c = 0;
+        }
+        s.set_word(772, 2, (c + 1) % lines.len() as i32);
+        lines[c as usize % lines.len()]
+    };
+    match routine {
+        1 => {
+            let line = if s.flag(590) && !s.flag(591) {
+                9
+            } else if s.flag(591) && !s.flag(592) {
+                10
+            } else if s.flag(544) {
+                step(s, 3, &[11, 12, 13])
+            } else if s.flag(543) {
+                s.set(544, true);
+                14
+            } else if s.flag(542) {
+                step(s, 5, &[15, 16])
+            } else {
+                s.set(542, true);
+                17
+            };
+            vec![Action::Talk { line }]
+        }
+        // D: 592; line 18; set 1 (region 774) into slot 0; entities 9 to 13 walk off (thread B:
+        // to points 2, 3, 8, 6 and 4, waiting for 11); line 19; the fade; slot 1 emptied;
+        // entities 9 to 13 released and made aggressive.
+        2 => {
+            s.set(592, true);
+            let walk = |entity, locator, wait| Action::WalkEntity { entity, locator, wait, orient: false, stop: 1.1 };
+            let mut v = vec![Action::Talk { line: 18 }, Action::LoadRegion { slot: 0, region: Some(774) }, walk(9, 2, false), walk(10, 3, false), walk(13, 8, false), walk(12, 6, false), walk(11, 4, true), Action::Talk { line: 19 }, Action::FadeOut { seconds: 0.7, wait: true }, Action::LoadRegion { slot: 1, region: None }];
+            v.extend((9..=13).map(|entity| Action::ReleaseEntity { entity }));
+            v.extend((9..=13).map(|entity| Action::Agro { entity }));
+            v.push(Action::FadeIn { seconds: 0.7, wait: true });
+            v
+        }
+        _ => Vec::new(),
+    }
 }
 
 /// SPEC-0042 1350's round-result step for r (1 won): a win sets the next round flag (600 to 597
@@ -3743,6 +3817,23 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0042 714 F (trigger 2, entering, 301 clear): 301 set, (movie 48 is not played)
+        // 30 ticks, line 1, and with flag 5 clear 30 ticks and line 2.
+        (714, 2) if call.object && call.state == 1 && !state.flag(301) => {
+            state.set(301, true);
+            out.actions.extend([Action::Sleep { ticks: 30 }, Action::Message { line: 1 }]);
+            if !state.flag(5) {
+                out.actions.extend([Action::Sleep { ticks: 30 }, Action::Message { line: 2 }]);
+            }
+        }
+        // P (trigger 0) and SPEC-0042 772 X (trigger 0): context 3; with the button line 0 or 46.
+        (714 | 772, 0) if call.object && call.state != 0 => {
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: if pack == 714 { 0 } else { 46 } });
+            } else {
+                out.prompt = Some(3);
             }
         }
         // SPEC-0037 906 trigger 2: context 6; with the button the load of eW 65.
@@ -5399,6 +5490,19 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0042 714 Update: with 220 set and 284 clear the masks 4 (collision) and 15
+        // (display), each tick.
+        714 => {
+            if state.flag(220) && !state.flag(284) {
+                out.extend([Action::CollisMask { mask: 4 }, Action::DisplayMask { mask: 15 }]);
+            }
+        }
+        // SPEC-0042 772 Update: with 543 object 0 set up and looped again each tick.
+        772 => {
+            if state.flag(543) {
+                out.extend([Action::InitObjOn { obj: 0, end: false }, Action::LoopAnim { obj: 0, speed: 1.0 }]);
+            }
+        }
         // SPEC-0037 1427 Update: the once-word cleared.
         1427 => state.set_word(pack, 1, 0),
         // SPEC-0043 1066 Update: with flag 2 object 0 off (once; the button swaps never run).
@@ -6021,6 +6125,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             out
         }
+        // SPEC-0042 772 A: with 591 set and 592 clear set 2 (region 775) into slot 1.
+        772 if state.flag(591) && !state.flag(592) => vec![Action::LoadRegion { slot: 1, region: Some(775) }],
         // SPEC-0042 1350 A: value 10, 30, 40, 50 or 60 for eW 157 moves the hero to locator 4, 1,
         // 2, 3 or 5; 20 (back from an arena round) moves it to locator 6, stores the round result
         // (type 1) in word 1, waits for the loads and runs the round-result step; the values are
@@ -7918,6 +8024,9 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0041 1409: callbacks 1 and 2 on entities 0 and 1; 1421 and 1423: CB2 on entity 0.
         (1409, 0 | 1) => Some(entity as u8 + 1),
         (1421 | 1423, 0) => Some(2),
+        // SPEC-0042 772: C on entity 2, D on entity 14.
+        (772, 2) => Some(1),
+        (772, 14) => Some(2),
         // SPEC-0042 1350: P24 to P31 on entities 24 to 31.
         (1350, 24..=31) => Some(entity as u8),
         // SPEC-0043 1066: C1 on entities 17 and 18, C2 on 16, C3 on 19.
@@ -8001,6 +8110,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1350 {
         return talk_1350(routine, state);
+    }
+    if pack == 772 {
+        return talk_772(routine, state);
     }
     // SPEC-0043 749 proximity: with 76 line 4 in the frame; else line 6 in the frame and line 9.
     if pack == 749 {
@@ -8357,6 +8469,24 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn modules_714_772() {
+        let mut s = GameState::default();
+        s.set(220, true);
+        let v = on_init(714, &mut s);
+        assert!(v.contains(&Action::RegisterTrigger { index: 2, routine: 2 }) && v.contains(&Action::LoadRegion { slot: 0, region: Some(715) }));
+        let enter = TriggerCall { index: 2, state: 1, object: true, square: false };
+        assert_eq!(on_trigger(714, 2, enter, &mut s).actions.len(), 4);
+        assert!(s.flag(301) && on_trigger(714, 2, enter, &mut s).actions.is_empty());
+        assert!(on_update(714, &mut s, false).contains(&Action::CollisMask { mask: 4 }));
+        // 772's vector: 543 set: 544 and line 14, then 11, 12, 13.
+        let mut s = GameState::default();
+        s.set(543, true);
+        let got: Vec<_> = (0..4).map(|_| on_talk(772, 1, &mut s)).collect();
+        assert_eq!(got, [14, 11, 12, 13].map(|line| vec![Action::Talk { line }]).to_vec());
+        assert!(on_talk(772, 2, &mut s).contains(&Action::Agro { entity: 13 }) && s.flag(592));
     }
 
     #[test]
