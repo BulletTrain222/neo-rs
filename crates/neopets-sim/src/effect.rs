@@ -71,7 +71,7 @@ pub struct Node {
     pub ring_fill: u8,
     pub child_gate: u8,
     pub ring: f32,
-    /// Sprite half-extent factors per axis.
+    /// Sprite half-extent factors per lane (x, y, z), read from +0x6C, +0x6E and +0x6A.
     pub factors: [f32; 3],
 }
 
@@ -221,7 +221,8 @@ impl EffectTable {
                     ring_fill: r[0x66],
                     child_gate: r[0x67],
                     ring: fixed_at(r, 0x68).unwrap_or(0.0),
-                    factors: [0x6A, 0x6C, 0x6E].map(|at| fixed_at(r, at).unwrap_or(0.0)),
+                    // SPEC-0034 2.3: lane x takes +0x6C, lane y +0x6E and lane z +0x6A.
+                    factors: [0x6C, 0x6E, 0x6A].map(|at| fixed_at(r, at).unwrap_or(0.0)),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -1099,7 +1100,9 @@ mod tests {
             let at = node_at + n * NODE_SIZE;
             put(&mut p, at + 0x4C, &(-1i32).to_le_bytes());
             put(&mut p, at + 0x5C, &(if n == 0 { 18i32 } else { -1 }).to_le_bytes());
-            put(&mut p, at + 0x6A, &128i16.to_le_bytes());
+            // SPEC-0034 4.1 step 7 example: 144, 289 and 0 at +0x6A, +0x6C and +0x6E.
+            put(&mut p, at + 0x6A, &144i16.to_le_bytes());
+            put(&mut p, at + 0x6C, &289i16.to_le_bytes());
         }
         for d in 0..2 {
             let at = defs_at + d * DEF_SIZE;
@@ -1115,7 +1118,8 @@ mod tests {
         assert_eq!(t.find(101), Some(1));
         assert_eq!(t.find(162), None);
         assert_eq!(t.definitions[0].nodes, vec![0, 1]);
-        assert_eq!((t.nodes[0].material, t.nodes[1].material, t.nodes[0].factors[0]), (Some(18), None, 0.5));
+        assert_eq!((t.nodes[0].material, t.nodes[1].material), (Some(18), None));
+        assert_eq!(t.nodes[0].factors, [289.0 / 256.0, 0.0, 144.0 / 256.0]);
         let a = &t.a[0];
         assert_eq!((a.per_burst, a.period, a.life, a.looped), (3, -1.0, 2.0, true));
         assert_eq!((t.b[0].rows[0][3], t.b[0].rgb_keys[0]), (1.0, 0.5));

@@ -66,7 +66,9 @@ pub fn sync_effects(
             let centre = Vec3::from(p.position);
             let base = positions.len() as u32;
             for (u, v) in [(-1.0f32, -1.0f32), (1.0, -1.0), (1.0, 1.0), (-1.0, 1.0)] {
-                let (x, y) = (u * p.half[0], v * p.half[1]);
+                // SPEC-0034 16.4: lane z is the half-width; lane x reaches up to the top edge
+                // and lane y down to the bottom edge.
+                let (x, y) = (u * p.half[2], if v > 0.0 { p.half[0] } else { -p.half[1] });
                 positions.push((centre + right * (x * c - y * s) + up * (x * s + y * c)).to_array());
                 uvs.push([(u + 1.0) * 0.5, (1.0 - v) * 0.5]);
                 // The GS scale: a byte of 128 is 1.0; Bevy blends vertex colour in linear space.
