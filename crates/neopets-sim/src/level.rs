@@ -250,6 +250,9 @@ pub enum Action {
     LongFall,
     /// SetGameOver(n) (SPEC-0030 row 154; SPEC-0055): flag E set (the argument is unused).
     GameOver,
+    /// BossFightTweakHero(instance, 0) (SPEC-0030 row 165; stage 1 has no effect): the refill of
+    /// the first hero (instances 0 to 3) or of both, the inactive one revived first.
+    BossFight { instance: u8 },
     /// A target play (SPEC-0027; PlayTrackHeroCamera and PlayLookAtPlayerCamera, rows 37 and
     /// 39, target the hero): as PlayCamera, the view turned to the target.
     PlayTarget { track: usize, wait: bool, end: u8, speed: f32, target: CameraTarget },
@@ -3451,8 +3454,7 @@ fn nav_pass(state: &GameState, pack: u32, n: usize) -> Vec<Action> {
 /// finale), rule 3 (flag 2 with 3 clear: the timeout ending), rule 4 (flag 0 with 1 clear: the
 /// entry sequence), rule 5 (level state 11: the director) and rule 6 (11 clear, 9 set, 10 clear:
 /// the fight start step). The sequences hold the thread (word 2) until their last step. Movies 78,
-/// 85 and 80 are counted as played; the finale loads eW 151 in place of movie 85; the boss-fight
-/// tweaks, the hero move of the fight start step (no locator is given) and control
+/// 85 and 80 are counted as played; the finale loads eW 151 in place of movie 85; the hero move of the fight start step (no locator is given) and control
 /// thread B (the Minion Grunts) are not built.
 fn fight_1432(state: &mut GameState) -> Vec<Action> {
     const P: u32 = 1432;
@@ -3569,6 +3571,7 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
         return vec![
             Action::LetterBox { on: true, seconds: 0.0, wait: false },
             Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
+            Action::BossFight { instance: 13 },
             Action::FadeIn { seconds: 0.5, wait: true },
             Action::StartEffect { slot: 3, camera: false },
             Action::StartEffect { slot: 4, camera: false },
@@ -3595,7 +3598,7 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
     let mut v = Vec::new();
     if has(0) && !has(1) {
         set(s, 1);
-        v.extend([Action::FadeOut { seconds: FADE, wait: true }, Action::WaitLoads, Action::Equip { on: true }, Action::FadeIn { seconds: 0.5, wait: true }, Action::ReturnCamera { preset: -1, release: true }]);
+        v.extend([Action::FadeOut { seconds: FADE, wait: true }, Action::WaitLoads, Action::BossFight { instance: 3 }, Action::Equip { on: true }, Action::FadeIn { seconds: 0.5, wait: true }, Action::ReturnCamera { preset: -1, release: true }]);
         return v;
     }
     if !has(2) && !has(3) && !has(4) {
@@ -6737,8 +6740,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // SPEC-0039 1246 handler 1 (trigger 1, the entrance; entering, level state 0 clear):
         // level state 0, the walk to locator 10, the fade, the hero at locator 11 and movie 41 the
-        // first time (counted as played; not shown). BossFightTweakHero and SetHeroStartPos are
-        // not built.
+        // first time (counted as played; not shown), with the boss-fight refill (instance 14).
+        // SetHeroStartPos is not built.
         (1246, 1) if call.state == 1 && !state.level(0) => {
             state.set_level(0, true);
             state.movies.insert(41);
@@ -6748,6 +6751,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::FadeOut { seconds: 1.0, wait: true },
                 Action::MoveHero { locator: 11 },
                 Action::Sleep { ticks: 1 },
+                Action::BossFight { instance: 14 },
             ]);
         }
         // Handler 2 (trigger 0, the arena; any fire, not while it runs: word 1).
@@ -8854,9 +8858,9 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // SPEC-0044 864 the stage thread: level states 1 and 2 mark bits 5 and 6; bit 0 (the
         // fight start: cameras 8, 10, 11 and 7, line 6, level state 3 cleared; bits 1 and 2); bit
         // 3 (the fight end: camera 10, entity 44 off, camera 15, 668; bit 4, bit 2 cleared; 293);
-        // with bit 2 and level state 0 (the boss's event) bit 3 and 293. The boss-fight tweaks,
-        // the camera shakes (their values are not given), the second thread's cameras and the
-        // 32-object loop are not built.
+        // with bit 2 and level state 0 (the boss's event) bit 3 and 293; the fight start's
+        // boss-fight refill (instance 8). The camera shakes (their values are not given), the
+        // second thread's cameras and the 32-object loop are not built.
         864 => {
             let b = state.word(pack, 1);
             let has = |n: u32| b & (1 << n) != 0;
@@ -8874,6 +8878,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     state.set_word(pack, 6, 1);
                     state.set_level(3, false);
                     out.extend([
+                        Action::BossFight { instance: 8 },
                         Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 },
                         Action::Message { line: 6 },
                         Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
@@ -9064,11 +9069,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // SPEC-0041 989 thread B: level states 2 and 3 clear-then-set: movie 46 counted, 3 and 4;
         // then (H1) 5 and 1; 6 once 1 and 0 (the boss's defeat) are set; with 5 and 6 the post-
         // fight block once (value 2 for eW 78, entity 0 off, 51, 298 and 86, and the load of eW
-        // 78 in place of movie 47). The boss-fight tweaks are not built.
+        // 78 in place of movie 47); the pre-fight step's boss-fight refill (instance 7).
         989 => {
             let l = |n| state.level(n);
             if l(2) && !l(3) {
                 state.movies.insert(46);
+                out.push(Action::BossFight { instance: 7 });
                 state.set_level(3, true);
                 state.set_level(4, true);
             } else if l(3) && l(4) && !l(5) {
@@ -9119,7 +9125,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // 1), and the boss end after level state 2 (321, 93, 322; value 50 for eW 151 and the
         // load of eW 151, pack 1300, in place of movie 54); between the entry and movie 53 the
         // hero-down check (hero 1 down without item 50: swap mode 1 as Roberta, else
-        // SetGameOver). The boss-fight refills are not built.
+        // SetGameOver); the entry's boss-fight refill (instance 11).
         1122 => {
             // The fixed navmesh table each tick (Medium): entities 0 to 3 mesh 0, 4 and 9 mesh 4,
             // 5 and 8 mesh 3, 6 and 7 mesh 2, 11 to 18 mesh 1.
@@ -9169,7 +9175,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     state.set_word(pack, 4, 1);
                     state.movies.insert(52);
                     state.set_level(4, false);
-                    out.extend([Action::HoldHero, Action::FadeOut { seconds: 0.1, wait: true }, Action::MoveHero { locator: 26 }, Action::ReturnCamera { preset: -1, release: true }]);
+                    out.extend([Action::HoldHero, Action::FadeOut { seconds: 0.1, wait: true }, Action::BossFight { instance: 11 }, Action::MoveHero { locator: 26 }, Action::ReturnCamera { preset: -1, release: true }]);
                     out.extend((4..=18).map(|entity| Action::DeactivateEntity { entity }));
                     out.extend([Action::InitObjOn { obj: 3, end: false }, Action::Equip { on: true }, Action::FadeIn { seconds: 0.5, wait: true }, wait(0.5), Action::Bits { word: 4, set: 0, clear: 1 }]);
                 } else if b & 4 != 0 && b & 8 == 0 {
@@ -9346,7 +9352,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // kept); 11 and not 12: the victory (263, 75, 50, 70; movie 38 counted; objects 0 and 13;
         // camera 4 and line 2; level state 12; the post-fight word cleared); 9: the monitor (AI 73
         // dead: level state 11; else line 3 once, 5 s after AI 73 is seen unhurt while the hero is
-        // hurt). The boss-fight tweaks and breakable 0 are not built.
+        // hurt). The intro's boss-fight refill (instance 10) follows camera 22; breakable 0 is not
+        // built.
         735 => {
             if !state.flag(263) && state.word(pack, 1) == 0 {
                 if state.level(8) && !state.level(9) {
@@ -9363,6 +9370,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                         Action::WaitLoads,
                         Action::LetterBox { on: true, seconds: 1.0, wait: false },
                         Action::PlayCamera { track: 22, wait: false, end: 1, speed: 1.0 },
+                        Action::BossFight { instance: 10 },
                         Action::FadeIn { seconds: 0.5, wait: true },
                         wait(2.0),
                         Action::MoveEntity { entity: 73, locator: 28, face: true },
@@ -10370,7 +10378,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.movies.insert(51);
             let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1097) }];
             v.extend((0..=5).map(|obj| Action::InitObjOn { obj, end: false }));
-            v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::FadeIn { seconds: FADE, wait: false }]);
+            v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::BossFight { instance: 6 }, Action::FadeIn { seconds: FADE, wait: false }]);
             v
         }
         // SPEC-0044 1174 arrival: effects 15 to 21 stopped, the normal camera, the hero at locator
@@ -11922,7 +11930,7 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
         let mut v: Vec<Action> = (0..11u8).map(|index| BurrowsRequest { kind: 0, index, request: 2, inner: 2 }).collect();
         v.extend([BurrowsRequest { kind: 1, index: 0, request: 2, inner: -1 }, BurrowsRequest { kind: 1, index: 1, request: 2, inner: -1 }]);
         v.extend([HoldHero, FadeOut { seconds: 0.5, wait: true }, WaitLoads, ActivateEntity { entity: 8 }, wait(0.5), EntityAnim { entity: 8, anim: 2, looped: true, wait: false }]);
-        v.extend([Sleep { ticks: 3 }, camera(18), LetterBox { on: true, seconds: 1.0, wait: false }, MoveHero { locator: 1 }, LongFall, FadeIn { seconds: 0.5, wait: false }]);
+        v.extend([Sleep { ticks: 3 }, camera(18), LetterBox { on: true, seconds: 1.0, wait: false }, BossFight { instance: 9 }, MoveHero { locator: 1 }, LongFall, FadeIn { seconds: 0.5, wait: false }]);
         v.extend([PlayTarget { track: 8, wait: true, end: 1, speed: 1.0, target: CameraTarget::Hero }, wait(0.5), camera(18)]);
         v.extend([EntityAnim { entity: 8, anim: 21, looped: false, wait: true }, Equip { on: true }, EntityAnim { entity: 8, anim: 6, looped: false, wait: true }]);
         v.extend([EntityAnim { entity: 8, anim: 7, looped: false, wait: false }, ReleaseEntity { entity: 8 }, Sleep { ticks: 60 }]);
@@ -11936,7 +11944,7 @@ fn burrows_fight(state: &mut GameState, dialog: bool) -> Vec<Action> {
         busy(state);
         let req = |kind, index, request| BurrowsRequest { kind, index, request, inner: -1 };
         let mut v = vec![req(1, 0, 1), req(1, 1, 1), req(2, 0, 2)];
-        v.extend([HoldHero, FadeOut { seconds: 0.5, wait: true }, WaitLoads, ActivateEntity { entity: 7 }, LetterBox { on: true, seconds: 1.0, wait: false }]);
+        v.extend([HoldHero, FadeOut { seconds: 0.5, wait: true }, BossFight { instance: 0 }, WaitLoads, ActivateEntity { entity: 7 }, LetterBox { on: true, seconds: 1.0, wait: false }]);
         v.extend([MoveHero { locator: 88 }, Equip { on: false }, FadeIn { seconds: 0.5, wait: false }, camera(4), BurrowsStagger, WalkHero { locator: 89, wait: true, orient: true }]);
         v.extend([Sleep { ticks: 30 }, cam_wait(7)]);
         v.extend(cut(10));

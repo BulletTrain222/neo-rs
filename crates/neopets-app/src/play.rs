@@ -2198,6 +2198,27 @@ impl Play {
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
                 Action::GameOver => self.death.flag_e = true,
+                Action::BossFight { instance } => {
+                    // The first hero is hero slot 0 (Tor); the inactive hero is the parked one.
+                    let refill_parked = |p: &mut Parked| {
+                        p.hp = p.hp_max;
+                        p.mp = p.mp_max;
+                    };
+                    if instance <= 3 {
+                        if self.hero_index == 0 {
+                            self.hero_hp = self.hero_max;
+                            self.hero_mp = self.hero_mp_max;
+                        } else if let Some(p) = self.parked.as_mut() {
+                            refill_parked(p);
+                        }
+                    } else {
+                        if let Some(p) = self.parked.as_mut() {
+                            refill_parked(p);
+                        }
+                        self.hero_hp = self.hero_max;
+                        self.hero_mp = self.hero_mp_max;
+                    }
+                }
                 Action::LongFall => {
                     self.attack = None;
                     self.loco.long_fall_start();
