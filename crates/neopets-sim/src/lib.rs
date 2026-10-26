@@ -16,6 +16,7 @@ pub mod cues;
 pub mod death;
 pub mod emote;
 pub mod gesture;
+pub mod draik;
 pub mod enemy;
 pub mod entityctl;
 pub mod foliage;

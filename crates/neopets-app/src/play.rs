@@ -398,6 +398,8 @@ pub struct Character {
     /// hit on her this tick (damage, and whether it was a shot).
     pub sister: Option<neopets_sim::sisters::Sister>,
     pub sister_hit: Option<(i32, bool)>,
+    /// The Undead Draik controller (behaviour class 12; SPEC-0029 Behavior 6).
+    pub draik: Option<neopets_sim::draik::Draik>,
 }
 
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
@@ -591,6 +593,7 @@ pub struct Play {
     /// The Faerie Sisters' tuning words (overwritten by alternate loop A) and their shared group.
     sister_words: neopets_sim::sisters::Words,
     sister_group: neopets_sim::sisters::Group,
+    draik_words: neopets_sim::draik::Words,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
@@ -981,6 +984,7 @@ impl Play {
             }
         };
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
+        let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
         let (effect_table, effect_images) = {
             let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
             let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
@@ -1171,6 +1175,7 @@ impl Play {
             king_words,
             sister_words,
             sister_group: Default::default(),
+            draik_words,
             boss_hits: Vec::new(),
             last_boss: String::new(),
             petpet: None,
@@ -3297,6 +3302,10 @@ impl Play {
             c.sister_hit = Some((damage, by.contains("shot")));
             return;
         }
+        // SPEC-0029 Behavior 6.4: the Undead Draik registers hits on its own bone groups.
+        if self.characters.get(i).is_some_and(|c| c.draik.is_some()) {
+            return;
+        }
         // SPEC-0020: Gnarfas takes a hit through its own flinch (the damage lands when it ends).
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.gnarfas.is_some()) {
             c.pending_hit = Some(damage);
@@ -3534,7 +3543,7 @@ impl Play {
             .iter()
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -3606,7 +3615,9 @@ impl Play {
         } else {
             Vec::new()
         };
-        let loaded: Vec<_> = if slot == REBIND_SLOT { loaded.into_iter().filter(|(pl, ..)| wanted.contains(&pl.ordinal)).collect() } else { loaded };
+        // A record whose entity the embedded region has bound since the request is not bound twice.
+        let bound = |o: usize| self.entity_of(pack, pack, o).is_some_and(|e| self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e)));
+        let loaded: Vec<_> = if slot == REBIND_SLOT { loaded.into_iter().filter(|(pl, ..)| wanted.contains(&pl.ordinal) && !bound(pl.ordinal)).collect() } else { loaded };
         let (slot, region) = if slot == REBIND_SLOT {
             self.slot_regions.remove(&(pack, REBIND_SLOT));
             (EMBEDDED_SLOT, pack)
@@ -3631,7 +3642,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 14 | 21 | 32)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 12 | 14 | 21 | 32)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -3658,6 +3669,7 @@ impl Play {
                 king: row.filter(|r| r.class == Some(32)).map(|_| neopets_sim::werelupe::King::new(position)),
                 sister: row.and_then(|r| r.class).filter(|c| matches!(c, 13 | 15 | 16)).map(|c| neopets_sim::sisters::Sister::new(c as u8)),
                 sister_hit: None,
+                draik: row.filter(|r| r.class == Some(12)).map(|_| neopets_sim::draik::Draik::new(&self.draik_words, &mut self.rng)),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3712,6 +3724,7 @@ impl Play {
             king: None,
             sister: None,
             sister_hit: None,
+            draik: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4765,6 +4778,7 @@ impl Play {
         self.gnarfas_step();
         self.king_step();
         self.sisters_step();
+        self.draik_step();
         self.mice_step();
         self.enemies_step();
         self.items_step();
@@ -5912,6 +5926,168 @@ impl Play {
             }
             if let Some(setup) = act.launch {
                 self.shots.submit(setup);
+            }
+        }
+    }
+
+    /// SPEC-0029 Behavior 6 per tick for the Undead Draik (class 12) in the current world: the
+    /// host's measurements and the controller's requests. The mouth is the head part's bone (7)
+    /// and the chest the chest part's bone (1); the hit groups are the broken-part bones (the
+    /// left and right legs 25 and 26, the wings 38 and 5, the arms 9 and 17, the body 1 with
+    /// radius 2.0, the head 7), each a 1.0 by 3.0 cylinder along the bone's Y axis from half its
+    /// length; the beam touches the hero when its segment comes within the hero's radius of a
+    /// 3.5-tall hero axis; the claw and bite use the monster weapon test of the strike.
+    fn draik_step(&mut self) {
+        use neopets_sim::combat::Cylinder;
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.draik.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        let hplace = placement(hero, hf);
+        let hframes = self.hero.bone_frames();
+        let caps: Vec<Cylinder> = self
+            .hero
+            .bones()
+            .hurt
+            .iter()
+            .zip(&hframes)
+            .filter(|(h, _)| h.1 > 0.0)
+            .map(|(&(base, length, radius), f)| {
+                let w = hplace.mul(f);
+                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+            })
+            .collect();
+        let swing = self.weapon_segment();
+        let guarding = self.loco.state == hero_states::GUARD;
+        let mote = self.equipment.motes[0][1];
+        let reflects = [
+            mote.is_some_and(|m| matches!(m, 160..=161 | 172..=173)),
+            mote.is_some_and(|m| matches!(m, 162..=163 | 172..=173)),
+        ];
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let c = &mut self.characters[i];
+            let Some(stage) = c.draik.as_ref().map(|k| k.stage) else { continue };
+            let place = placement(c.position, c.facing);
+            let frames = c.anim.bone_frames();
+            let bone = |b: usize| frames.get(b).map(|f| place.mul(f));
+            let pos0 = c.position;
+            let point = |b: usize| bone(b).map_or([pos0[0], pos0[1] + 2.0, pos0[2]], |m| m.t);
+            let groups: &[usize] = match stage {
+                1 => &[25, 26, 38, 5, 9, 17, 1, 7],
+                3 => &[38, 5, 9, 17, 1, 7],
+                _ => &[7],
+            };
+            let melee_group = swing.as_ref().is_some_and(|s| {
+                groups.iter().any(|&b| {
+                    bone(b).is_some_and(|m| {
+                        let axis = unit(m.cols[1]);
+                        let cyl = Cylinder { center: add(m.t, scale(axis, 1.5)), axis, radius: if b == 1 { 2.0 } else { 1.0 }, length: 3.0 };
+                        neopets_sim::combat::overlap(s, &cyl)
+                    })
+                })
+            });
+            let near_shot = |p: [f32; 3], r: f32| groups.iter().any(|&b| { let q = sub_v(p, point(b)); (q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt() } < 5.0 + r);
+            let shot_group = self.hero_shots.iter().any(|s| near_shot(s.position, s.radius));
+            let bits = c.anim.frame_bits();
+            let contact = (0..5).any(|n| {
+                if bits & (1 << n) == 0 {
+                    return false;
+                }
+                let Some(&(Some(b), angles, offset)) = c.anim.bones().attach.get(n) else { return false };
+                let Some(bw) = frames.get(b) else { return false };
+                let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+                let (radius, length) = c.weapons[n];
+                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+            });
+            let mouth = point(7);
+            let touches = |a: [f32; 3], b: [f32; 3]| neopets_sim::gnarfas::segment_distance(a, b, hero, add(hero, [0.0, 3.5, 0.0])) <= contact::HERO_RADIUS;
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::draik::View {
+                position: c.position,
+                facing: c.facing,
+                hero,
+                hp: c.hp,
+                max_hp: c.row.map_or(1, |r| r.hit_points as i32),
+                mouth,
+                chest: point(1),
+                melee: swing.is_some(),
+                shots: !self.hero_shots.is_empty(),
+                melee_group,
+                shot_group,
+                weapon_contact: contact,
+                beam_touches: &touches,
+                hero_facing: hf,
+                reflects: reflects.map(|r| r && guarding),
+                clip: (clip.action, clip.progress >= 0.99),
+                frame_bits: bits,
+                level: &level,
+            };
+            let Some(k) = c.draik.as_mut() else { continue };
+            let before = k.state;
+            let act = k.tick(&v, &self.draik_words, id, &mut self.rng);
+            let (after, stage_now) = (k.state, k.stage);
+            if let Some(n) = act.anim {
+                if clip.action != n || (clip.progress >= 0.99 && std::mem::discriminant(&before) != std::mem::discriminant(&after)) {
+                    c.anim.play(n);
+                }
+            }
+            let world = &self.world;
+            let walk = |c: &mut Character| {
+                let ground = &world.ground;
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.facing = c.facing;
+                    wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                    c.position = wk.position();
+                }
+            };
+            match act.travel {
+                neopets_sim::draik::Move::Toward(p, w) => {
+                    c.facing = neopets_sim::hero::steer(c.facing, [p[0] - c.position[0], 0.0, p[2] - c.position[2]], w);
+                    walk(c);
+                }
+                neopets_sim::draik::Move::Turn(w) => {
+                    c.facing = neopets_sim::hero::steer(c.facing, [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]], w);
+                    walk(c);
+                }
+                neopets_sim::draik::Move::Still => {}
+            }
+            c.hp -= act.hp_loss;
+            if std::mem::discriminant(&before) != std::mem::discriminant(&after) || act.hp_loss != 0 {
+                self.last_boss = format!("Undead Draik stage {} {:?} -> {:?} (hp {}) on tick {}", stage_now, before, after, c.hp, self.ticks);
+            }
+            let parts: Vec<[f32; 3]> = act.breaks.iter().map(|&p| point(neopets_sim::draik::PART_BONES[p])).collect();
+            let from = c.position;
+            if act.consume_shot {
+                self.hero_shots.retain(|s| !near_shot(s.position, s.radius));
+            }
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            let table = self.effect_table.clone();
+            for p in parts {
+                self.effects.one_shot(&table, neopets_sim::draik::BREAK_EFFECT, p, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            if let Some(setup) = act.launch {
+                self.shots.submit(setup);
+            }
+            let d = {
+                let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                [dx / l, 0.0, dz / l]
+            };
+            for (damage, throw) in act.hero_damage {
+                self.hero_hit(damage as f32, 0.0, false, d, "the Undead Draik".into());
+                if let Some((u, speed)) = throw {
+                    self.attack = None;
+                    self.loco.knock(scale(unit([u[0], 12.0, u[2]]), speed));
+                }
             }
         }
     }
