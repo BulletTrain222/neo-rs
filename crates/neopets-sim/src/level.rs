@@ -1575,6 +1575,32 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0041 822 Init: object 7; objects by 55; objects 18 to 21 looped; the nine triggers;
+        // step 8 (621 set and 57 clear: objects 5 and 4 with the loops; 57: effects 55 to 60
+        // stopped; both clear: the loops at speed 0 and the effects stopped); the slot loader.
+        // Words: 2 the zone (-1 at load), 3 the last zone, 4 the scene-done word, 5 the exit open.
+        822 => {
+            let mut v = vec![Action::InitObjOn { obj: 7, end: false }];
+            let objs: [usize; 5] = if state.flag(55) { [18, 1, 2, 3, 14] } else { [18, 19, 20, 21, 14] };
+            v.extend(objs.map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
+            v.extend([reg(2, 3), reg(3, 4), reg(8, 5), reg(4, 7), reg(1, 8), reg(5, 9), reg(6, 9), reg(7, 9)]);
+            if state.flag(621) && !state.flag(57) {
+                state.set_word(pack, 1, 1);
+                v.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
+                v.extend([Action::InitObjOn { obj: 5, end: false }, Action::InitObjOn { obj: 4, end: false }]);
+            } else if state.flag(57) {
+                v.extend((55..=60).map(|slot| Action::StopEffect { slot }));
+            } else {
+                state.set_word(pack, 1, 0);
+                v.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 0.0 }));
+                v.extend((55..=60).map(|slot| Action::StopEffect { slot }));
+            }
+            state.set_word(pack, 2, -1);
+            state.set_word(pack, 3, -1);
+            v.extend(loader_822(state));
+            v
+        }
         // SPEC-0044 864 Init: 287; 60 when clear; level state 3; with 58 clear triggers 1 (the
         // fight start) and 22 (the story exit); trigger 24 (the plain exit); the slot-load thread
         // (58: set 0, else set 1; region 865 + set) into store A (slot 0). The hazard triggers 4
@@ -3122,6 +3148,23 @@ fn thread3_956(s: &GameState) -> Vec<Action> {
         _ => 7,
     };
     vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(957 + set) }]
+}
+
+/// SPEC-0041 822 CB1, the slot loader: 58 (13 with 531 set and 532 clear, else 12); 57, 56, 55
+/// or none by the zone (2: 3, 2, 1, 0; 1: 7, 6, 5, 4; else 11, 10, 9, 8); region 823 + set.
+fn loader_822(s: &GameState) -> Vec<Action> {
+    let zone = s.word(822, 2);
+    let set = if s.flag(58) {
+        if s.flag(531) && !s.flag(532) { 13 } else { 12 }
+    } else {
+        let k = if s.flag(57) { 3 } else if s.flag(56) { 2 } else if s.flag(55) { 1 } else { 0 };
+        match zone {
+            2 => k,
+            1 => 4 + k,
+            _ => 8 + k,
+        }
+    };
+    vec![Action::LoadRegion { slot: 0, region: Some(823 + set) }]
 }
 
 /// SPEC-0041 985's threads: CB3 (the Gnarfas fight; 281 clear at load) and CB6 (the glade fight's
@@ -5571,6 +5614,73 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::ReturnCamera { preset: -1, release: true },
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
+            }
+        }
+        // SPEC-0041 822 CB3 (trigger 2, entering, after the first arrival): object 7, value 50 for
+        // eW 60 and the load of eW 60 (pack 864).
+        (822, 3) if call.object && call.state == 1 && state.word(pack, 5) != 0 => {
+            state.blackboard.insert((2, 60), 50);
+            out.actions.extend([Action::InitObjOn { obj: 7, end: false }, Action::ReplaceExterior { slot: 60, plane: -1 }]);
+        }
+        // CB5 (trigger 8; partly described: the record field tests are not given): with 55 set
+        // line 8 on the button, else context 4; with 55 and 621 clear the button runs the lever
+        // (point 242, hero animation 140, object 14, 621, the loops, cameras 6 and 7, sound 14).
+        (822, 5) if call.object && call.state != 0 && (state.flag(55) || !state.flag(621)) => {
+            if !(call.square && !state.talking) {
+                out.prompt = Some(4);
+            } else if state.flag(55) {
+                out.actions.push(Action::Message { line: 8 });
+            } else {
+                state.set(621, true);
+                out.actions.extend([Action::HoldHero, Action::WalkHero { locator: 242, wait: true, orient: false }, Action::HeroAnim { anim: 140, wait: false }, Action::PlayAnim { obj: 14, speed: 1.0, wait: false }, Action::Sleep { ticks: 30 }]);
+                out.actions.extend((18..=21).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
+                out.actions.extend([
+                    Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
+                    Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
+                    Action::PlaySound { cue: 14, locator: None },
+                    Action::KillSound { cue: 14, locator: None },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+        }
+        // CB7 (trigger 4, entering; 57 set, 58 clear, the scene not done): entities 24 and 25's
+        // conversation (lines 6 and 7, cameras 8 to 10), their walk to points 11 and 12, agro.
+        (822, 7) if call.object && call.state == 1 && state.flag(57) && !state.flag(58) && state.word(pack, 4) == 0 => {
+            state.set_word(pack, 4, 1);
+            out.actions.extend([
+                Action::LetterBox { on: true, seconds: 1.0, wait: false },
+                Action::HoldHero,
+                Action::PlayCamera { track: 8, wait: true, end: 1, speed: 1.0 },
+                Action::PlayCamera { track: 9, wait: false, end: 1, speed: 1.0 },
+                Action::Converse { entity: 24, line: 6 },
+                Action::Converse { entity: 25, line: 7 },
+                Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                Action::EntityAnim { entity: 24, anim: 10, looped: false, wait: false },
+                Action::EntityAnim { entity: 25, anim: 10, looped: false, wait: true },
+                Action::WalkEntity { entity: 24, locator: 11, wait: false, orient: false, stop: 1.1 },
+                Action::WalkEntity { entity: 25, locator: 12, wait: false, orient: false, stop: 1.1 },
+                Action::Agro { entity: 24 },
+                Action::Agro { entity: 25 },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::LetterBox { on: false, seconds: 1.0, wait: false },
+            ]);
+        }
+        // CB8 (trigger 1): context 3; line 9 on the button.
+        (822, 8) if call.object && call.state != 0 => {
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: 9 });
+            } else {
+                out.prompt = Some(3);
+            }
+        }
+        // CB9 (5 to 7): the zone (2, 1, 0); a change restarts the slot loader.
+        (822, 9) if call.object && call.state != 0 => {
+            let zone = 7 - call.index as i32;
+            state.set_word(pack, 2, zone);
+            if zone != state.word(pack, 3) {
+                state.set_word(pack, 3, zone);
+                out.actions.push(Action::LoadRegion { slot: 0, region: None });
+                out.actions.extend(loader_822(state));
             }
         }
         // SPEC-0044 864 trigger 1 (the hero inside): stage bit 0, the fight start.
@@ -9625,6 +9735,22 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             out
         }
+        // SPEC-0041 822 CB2: value 1 for eW 60 puts the hero at locator 2 with the camera; else 50
+        // for eW 50 puts it at locator 6 walking to point 8 (each marks the scene done); both
+        // values reset; the exit opened.
+        822 => {
+            let (v60, v50) = (state.take_message(2, 60), state.take_message(2, 50));
+            state.set_word(822, 5, 1);
+            if v60 == 1 {
+                state.set_word(822, 4, 1);
+                vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]
+            } else if v50 == 50 {
+                state.set_word(822, 4, 1);
+                vec![Action::MoveHero { locator: 6 }, Action::WalkHero { locator: 8, wait: false, orient: false }]
+            } else {
+                Vec::new()
+            }
+        }
         // SPEC-0044 864 arrival: the value for eW 60 is read and reset; the plain exit is armed.
         864 => {
             state.take_message(2, 60);
@@ -12833,6 +12959,30 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_822_village() {
+        // No story flag, the zone still -1: set 8 (region 831); zone trigger 5 (zone 2) reloads
+        // set 0 (region 823); with 57 set it would be set 3.
+        let mut s = GameState::default();
+        assert!(on_init(822, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(831) }));
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: true };
+        assert!(on_trigger(822, 9, enter(5), &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(823) }));
+        assert!(on_trigger(822, 9, enter(5), &mut s).actions.is_empty());
+        s.set(57, true);
+        assert_eq!(loader_822(&s), vec![Action::LoadRegion { slot: 0, region: Some(826) }]);
+        // The exit opens after the first arrival; the arrival from 864 (50 for eW 50) walks the
+        // hero and marks the scene done, so CB7 does not run.
+        assert!(on_trigger(822, 3, enter(2), &mut s).actions.is_empty());
+        s.blackboard.insert((2, 50), 50);
+        assert_eq!(on_activate(822, &mut s)[0], Action::MoveHero { locator: 6 });
+        assert!(on_trigger(822, 3, enter(2), &mut s).actions.contains(&Action::ReplaceExterior { slot: 60, plane: -1 }));
+        assert!(on_trigger(822, 7, enter(4), &mut s).actions.is_empty());
+        // CB5 with 55 and 621 clear: the lever sets 621.
+        let mut s = GameState::default();
+        on_init(822, &mut s);
+        assert!(on_trigger(822, 5, enter(8), &mut s).actions.contains(&Action::WalkHero { locator: 242, wait: true, orient: false }) && s.flag(621));
     }
 
     #[test]
