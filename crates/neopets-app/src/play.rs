@@ -3779,6 +3779,11 @@ impl Play {
         Some(([c.position[0], c.position[2]], d < if self.hero_index == 1 { 16.0 } else { 4.5 }))
     }
 
+    /// The Undead Draik's live spit records (drawn with the shot markers).
+    pub fn spit_points(&self) -> Vec<[f32; 3]> {
+        self.characters.iter().filter(|c| c.pack == self.world.pack).filter_map(|c| c.draik.as_ref()).flat_map(|k| k.spits.iter().flatten().map(|s| s.position)).collect()
+    }
+
     /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
     /// side from the pen point.
     pub fn herd_goal(&self) -> Option<[f32; 2]> {
@@ -6311,6 +6316,7 @@ impl Play {
                 hit: c.sister_hit.take(),
                 missiles_near: near,
                 clip: (clip.action, clip.progress >= 0.99),
+                progress: clip.progress,
                 frame_bits: c.anim.frame_bits(),
                 blocked: false,
                 level: &level,
@@ -6448,16 +6454,19 @@ impl Play {
             let bone = |b: usize| frames.get(b).map(|f| place.mul(f));
             let pos0 = c.position;
             let point = |b: usize| bone(b).map_or([pos0[0], pos0[1] + 2.0, pos0[2]], |m| m.t);
+            // The hit groups' bones (R-0066): left leg 25, 27, 28; right leg 26, 32, 33; wings 37,
+            // 47 to 51; left arm 9 to 11; right arm 17 to 19; body 1 to 4, 7, 54, 57; head 54, 57.
+            // Stage 1 tests all seven, stage 3 all but the legs, stage 5 the head.
             let groups: &[usize] = match stage {
-                1 => &[25, 26, 38, 5, 9, 17, 1, 7],
-                3 => &[38, 5, 9, 17, 1, 7],
-                _ => &[7],
+                1 => &[25, 27, 28, 26, 32, 33, 37, 47, 48, 49, 50, 51, 9, 10, 11, 17, 18, 19, 1, 2, 3, 4, 7, 54, 57],
+                3 => &[37, 47, 48, 49, 50, 51, 9, 10, 11, 17, 18, 19, 1, 2, 3, 4, 7, 54, 57],
+                _ => &[54, 57],
             };
             let melee_group = swing.as_ref().is_some_and(|s| {
                 groups.iter().any(|&b| {
                     bone(b).is_some_and(|m| {
                         let axis = unit(m.cols[1]);
-                        let cyl = Cylinder { center: add(m.t, scale(axis, 1.5)), axis, radius: if b == 1 { 2.0 } else { 1.0 }, length: 3.0 };
+                        let cyl = Cylinder { center: add(m.t, scale(axis, 1.5)), axis, radius: if b == 7 { 2.0 } else { 1.0 }, length: 3.0 };
                         neopets_sim::combat::overlap(s, &cyl)
                     })
                 })
@@ -6476,8 +6485,11 @@ impl Play {
                 let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
                 caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
             });
-            let mouth = point(7);
-            let touches = |a: [f32; 3], b: [f32; 3]| neopets_sim::gnarfas::segment_distance(a, b, hero, add(hero, [0.0, 3.5, 0.0])) <= contact::HERO_RADIUS;
+            // The mouth is bone 52; the beam test is the segment from it to the moving end point
+            // against a vertical cylinder around the hero raised 1.5 (height 1.75, radius 5.0).
+            let mouth = point(52);
+            let beam_cyl = Cylinder { center: add(hero, [0.0, 1.5, 0.0]), axis: UP, radius: 5.0, length: 1.75 };
+            let touches = |a: [f32; 3], b: [f32; 3]| neopets_sim::combat::segment_meets(a, b, &beam_cyl);
             let clip = c.anim.clip_state();
             let v = neopets_sim::draik::View {
                 position: c.position,
@@ -6547,16 +6559,27 @@ impl Play {
             if let Some(setup) = act.launch {
                 self.shots.submit(setup);
             }
+            // The spit records: a 0.5 sphere against the hero's body capsules, the ground from 8
+            // above.
+            let spit_hits = {
+                let ground = |p: [f32; 3]| world.ground_at(p[0], p[2], p[1] + 8.0);
+                let hits = |p: [f32; 3], r: f32| caps.iter().any(|cap| neopets_sim::combat::overlap(&Cylinder { center: p, axis: UP, radius: r, length: 0.0 }, cap));
+                c.draik.as_mut().map_or(Vec::new(), |k| k.spit_step(&self.draik_words, &hits, &ground))
+            };
             let d = {
                 let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
                 let l = dx.hypot(dz).max(1e-6);
                 [dx / l, 0.0, dz / l]
             };
+            for damage in spit_hits {
+                self.hero_hit(damage as f32, 0.0, false, d, "the Undead Draik's spit".into());
+            }
             for (damage, throw) in act.hero_damage {
                 self.hero_hit(damage as f32, 0.0, false, d, "the Undead Draik".into());
                 if let Some((u, speed)) = throw {
+                    // R-0066: the throw is speed x unit((0, 12, 0) + 9 u).
                     self.attack = None;
-                    self.loco.knock(scale(unit([u[0], 12.0, u[2]]), speed));
+                    self.loco.knock(scale(unit([9.0 * u[0], 12.0, 9.0 * u[2]]), speed));
                 }
             }
         }

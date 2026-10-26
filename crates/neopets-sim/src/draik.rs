@@ -66,6 +66,11 @@ pub struct Words {
     pub wind_delay: (f32, f32),
     pub hazard_life: (f32, f32),
     pub hazard_throw: f32,
+    /// The spit records' speed (fire 0x2DA9E8, ice 0x2DA9F8; units per tick), damage (0x2DA9F4,
+    /// 0x2DAA04) and sphere radius (0x2DAA6C).
+    pub spit_speed: [f32; 2],
+    pub spit_damage: [i32; 2],
+    pub spit_radius: f32,
     pub hazard_damage: i32,
     pub bite_damage: i32,
     pub hazard_slide: f32,
@@ -113,6 +118,9 @@ impl Words {
             wind_delay: pair(0x002D_AA34),
             hazard_life: pair(0x002D_AA3C),
             hazard_throw: f(0x002D_AA44),
+            spit_speed: [f(0x002D_A9E8), f(0x002D_A9F8)],
+            spit_damage: [i(0x002D_A9F4), i(0x002D_AA04)],
+            spit_radius: f(0x002D_AA6C),
             hazard_damage: i(0x002D_AA48),
             bite_damage: i(0x002D_AA68),
             hazard_slide: f(0x002D_AA70),
@@ -164,6 +172,16 @@ pub struct Hazard {
 }
 
 pub const HAZARDS: usize = 4;
+
+/// A spit record (R-0066): the Draik keeps one for fire and one for ice, outside the enemy
+/// pool. It moves at its speed each tick, hurts the hero on a sphere contact and ends there or
+/// at the ground; it has no lifetime.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Spit {
+    pub position: Vec3,
+    pub velocity: Vec3,
+    pub damage: i32,
+}
 
 /// What the Draik sees this tick.
 pub struct View<'a> {
@@ -234,6 +252,8 @@ pub struct Draik {
     pub broken: [bool; 9],
     pub hazards: Vec<Hazard>,
     latch: bool,
+    /// The fire and ice spit records.
+    pub spits: [Option<Spit>; 2],
 }
 
 fn ticks(s: f32) -> i32 {
@@ -277,10 +297,30 @@ fn open(band: (f32, f32), d: f32) -> bool {
 }
 
 impl Draik {
+    /// The spit records' tick: each moves by its velocity, then hurts the hero and ends when its
+    /// sphere touches the hero (`hits`), or ends when its height reaches the ground under it
+    /// (`ground`, the probe from 8 above). Returns the damage dealt.
+    pub fn spit_step(&mut self, w: &Words, hits: &dyn Fn(Vec3, f32) -> bool, ground: &dyn Fn(Vec3) -> Option<f32>) -> Vec<i32> {
+        let mut out = Vec::new();
+        for slot in &mut self.spits {
+            let Some(mut sp) = *slot else { continue };
+            sp.position = [sp.position[0] + sp.velocity[0], sp.position[1] + sp.velocity[1], sp.position[2] + sp.velocity[2]];
+            *slot = if hits(sp.position, w.spit_radius) {
+                out.push(sp.damage);
+                None
+            } else if ground(sp.position).is_some_and(|g| sp.position[1] <= g) {
+                None
+            } else {
+                Some(sp)
+            };
+        }
+        out
+    }
+
     /// Setup: stage 1, every cooldown drawn from the stage-1 range.
     pub fn new(w: &Words, rng: &mut Rng) -> Self {
         let cooldown = std::array::from_fn(|k| draw(rng, w.cooldown[k][0]));
-        Self { stage: 1, state: State::Idle, cooldown, broken: [false; 9], hazards: Vec::new(), latch: false }
+        Self { stage: 1, state: State::Idle, cooldown, broken: [false; 9], hazards: Vec::new(), latch: false, spits: [None; 2] }
     }
 
     fn s(&self) -> usize {
@@ -358,7 +398,7 @@ impl Draik {
     }
 
     /// One tick.
-    pub fn tick(&mut self, v: &View, w: &Words, owner: u64, rng: &mut Rng) -> Act {
+    pub fn tick(&mut self, v: &View, w: &Words, _owner: u64, rng: &mut Rng) -> Act {
         let mut a = Act::default();
         let d = hdist(v.position, v.hero);
         let to = [v.hero[0] - v.position[0], 0.0, v.hero[2] - v.position[2]];
@@ -438,9 +478,13 @@ impl Draik {
                             a.travel = Move::Toward(v.hero, 0.25);
                             step
                         } else if d < lo {
-                            // Back off 5 units from the hero's side.
+                            // Back off (R-0066): each tick toward the point 5 units behind its own
+                            // position, along the horizontal direction from the hero, at its own
+                            // height; recomputed every tick until d reaches the low bound.
                             let u = if d > 1e-6 { [-to[0] / d, 0.0, -to[2] / d] } else { [0.0; 3] };
-                            Breath::Standoff(Some([v.position[0] + 5.0 * u[0], v.position[1], v.position[2] + 5.0 * u[2]]))
+                            a.anim = Some(self.by_stage([2, 27, 50]));
+                            a.travel = Move::Toward([v.position[0] + 5.0 * u[0], v.position[1], v.position[2] + 5.0 * u[2]], 1.0);
+                            step
                         } else {
                             Breath::Windup
                         }
@@ -511,28 +555,14 @@ impl Draik {
                 let n = self.by_stage([6, 31, 52]);
                 a.anim = Some(n);
                 a.travel = Move::Turn(0.25);
-                if v.clip.0 == n && v.frame_bits != 0 && !fired {
+                // Released on the first tick event bit 0x20 is active, once, at the mouth (bone
+                // 52), toward the hero raised 2 (R-0066).
+                if v.clip.0 == n && v.frame_bits & 0x20 != 0 && !fired {
                     let aim = [v.hero[0], v.hero[1] + 2.0, v.hero[2]];
                     let dir = sub(aim, v.mouth);
                     let l = len(dir).max(1e-6);
-                    a.launch = Some(Setup {
-                        kind: 0,
-                        visual: 0,
-                        element: 0,
-                        owner: Some(owner),
-                        start: v.mouth,
-                        velocity: dir.map(|x| x / l),
-                        lifetime: 1000,
-                        damage: 10.0,
-                        radius: 0.5,
-                        spin: 0.0,
-                        area_radius: 0.0,
-                        area_duration: 0,
-                        key: 0,
-                        ignore_world: false,
-                        status: (-1, 0, 0),
-                        effects: [-1; 6],
-                    });
+                    let k = ice as usize;
+                    self.spits[k] = Some(Spit { position: v.mouth, velocity: dir.map(|x| x / l * w.spit_speed[k]), damage: w.spit_damage[k] });
                     self.state = State::Spit { ice, fired: true };
                 }
                 if ended(n) {
@@ -762,6 +792,24 @@ mod tests {
             frame_bits: 0,
             level,
         }
+    }
+
+    #[test]
+    fn spit_records_move_hit_and_end_at_the_ground() {
+        let w = Words::read(&block()).unwrap();
+        let mut rng = Rng::seeded(1);
+        let mut k = Draik::new(&w, &mut rng);
+        k.spits[0] = Some(Spit { position: [0.0, 5.0, 0.0], velocity: [0.0, -1.0, 0.0], damage: 10 });
+        let never = |_: Vec3, _: f32| false;
+        let ground = |_: Vec3| Some(3.0);
+        assert!(k.spit_step(&w, &never, &ground).is_empty());
+        assert_eq!(k.spits[0].map(|s| s.position[1]), Some(4.0));
+        k.spit_step(&w, &never, &ground);
+        assert!(k.spits[0].is_none(), "at the ground height it ends");
+        k.spits[1] = Some(Spit { position: [0.0, 9.0, 0.0], velocity: [1.0, 0.0, 0.0], damage: 10 });
+        let always = |_: Vec3, _: f32| true;
+        assert_eq!(k.spit_step(&w, &always, &ground), vec![10]);
+        assert!(k.spits[1].is_none());
     }
 
     #[test]

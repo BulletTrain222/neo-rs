@@ -1962,15 +1962,21 @@ fn sync_shots(
         *made = true;
         let mesh = meshes.add(Cuboid::new(0.4, 0.4, 0.4));
         let material = materials.add(StandardMaterial { base_color: Color::srgb(1.0, 0.85, 0.2), unlit: true, ..default() });
-        for i in 0..neopets_sim::projectile::SLOTS {
+        // The pool's slots, then 8 for the Undead Draik's spit records.
+        for i in 0..neopets_sim::projectile::SLOTS + 8 {
             commands.spawn((ShotMarker(i), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden));
         }
         return;
     }
+    let spits = state.play.spit_points();
     for (m, mut t, mut vis) in &mut markers {
-        match state.play.shots.slots.get(m.0).copied().flatten() {
-            Some(s) => {
-                t.translation = Vec3::from(s.position);
+        let at = match m.0.checked_sub(neopets_sim::projectile::SLOTS) {
+            Some(k) => spits.get(k).copied(),
+            None => state.play.shots.slots.get(m.0).copied().flatten().map(|s| s.position),
+        };
+        match at {
+            Some(p) => {
+                t.translation = Vec3::from(p);
                 *vis = Visibility::Visible;
             }
             None => *vis = Visibility::Hidden,

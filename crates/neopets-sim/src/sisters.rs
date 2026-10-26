@@ -31,6 +31,8 @@ pub struct Words {
     pub energy: [(f32, f32); 3],
     pub status: [(f32, f32); 3],
     pub special: [(f32, f32); 3],
+    /// The group-attack interval (0x2DAB28 to 0x2DAB3C), drawn only at a sister's start.
+    pub group: [(f32, f32); 3],
     pub projectile_speed: [f32; 3],
     pub min_distance: f32,
     pub max_distance: f32,
@@ -61,6 +63,7 @@ impl Words {
             energy: pairs(0x002D_AAE0),
             status: pairs(0x002D_AAF8),
             special: pairs(0x002D_AB10),
+            group: pairs(0x002D_AB28),
             projectile_speed: [0, 1, 2].map(|k| f(0x002D_AB94 + 4 * k)),
             min_distance: f(0x002D_AB48),
             max_distance: f(0x002D_AB4C),
@@ -91,6 +94,16 @@ fn by_alive(alive: i32) -> usize {
 
 fn label(alive: i32) -> usize {
     (3 - alive.clamp(1, 3)) as usize
+}
+
+/// The main-loop projectile speed label (R-0065): 0.9 with 1 alive, 0.75 with 2, and the 3-alive
+/// word otherwise (3 alive, and the boot value -1 and 0).
+fn speed_label(alive: i32) -> usize {
+    match alive {
+        1 => 2,
+        2 => 1,
+        _ => 0,
+    }
 }
 
 /// The path step's speed in units per tick: 12.5 with 1 alive, 10.0 with 2, else the word.
@@ -156,6 +169,8 @@ pub struct View<'a> {
     pub missiles_near: usize,
     /// The playing clip: action and whether it has ended; the frame's event bits.
     pub clip: (u32, bool),
+    /// The playing clip's progress (0 to 1).
+    pub progress: f32,
     pub frame_bits: u32,
     /// The body contact or navmesh blocked flag.
     pub blocked: bool,
@@ -207,6 +222,10 @@ pub struct Sister {
     /// The damage-taken sum (read only by the unreachable dome start).
     pub taken: i32,
     pub alternate: bool,
+    /// The controller start has run, and the group-attack interval it drew (the dome never
+    /// starts, so nothing reads it).
+    started: bool,
+    group: i32,
 }
 
 fn ticks(s: f32) -> i32 {
@@ -268,7 +287,21 @@ impl Sister {
             16 => 2,
             _ => 0,
         };
-        Self { class, kind, state: State::Idle, energy: 0, status: 0, special: 0, dodge: 0, radius: None, dir: 1.0, taken: 0, alternate: false }
+        Self { class, kind, state: State::Idle, energy: 0, status: 0, special: 0, dodge: 0, radius: None, dir: 1.0, taken: 0, alternate: false, started: false, group: 0 }
+    }
+
+    /// The controller start (R-0065): energy, status, group and special drawn in that order by
+    /// the alive word, the dodge cooldown 0. Energy treats alive -1 like 3 alive; status, group
+    /// and special are 0 for alive -1 and 0; alive 0 gives 0 for all four.
+    fn start(&mut self, alive: i32, w: &Words, rng: &mut Rng) {
+        self.started = true;
+        self.dodge = 0;
+        let zero = (0.0, 0.0);
+        let by = |pairs: &[(f32, f32); 3]| if alive >= 1 { pairs[label(alive)] } else { zero };
+        self.energy = draw(rng, if alive == 0 { zero } else { w.energy[label(if alive < 0 { 3 } else { alive })] });
+        self.status = draw(rng, by(&w.status));
+        self.group = draw(rng, by(&w.group));
+        self.special = draw(rng, by(&w.special));
     }
 
     pub fn dead(&self) -> bool {
@@ -284,6 +317,9 @@ impl Sister {
             return self.alternate_tick(v, g, w, owner, rng, a);
         }
         let alive = g.alive;
+        if !self.started {
+            self.start(alive, w, rng);
+        }
         // Taking damage (not in the dodges, the flinch or death).
         let immune = matches!(self.state, State::DodgeMissile(_) | State::DodgeMelee(_) | State::Flinch(_) | State::Dead);
         if let (Some((d, is_shot)), false) = (v.hit, immune) {
@@ -346,7 +382,8 @@ impl Sister {
             self.state = next;
         }
         let ended = |anim: u32| v.clip.0 == anim && v.clip.1;
-        let release = |anim: u32| v.clip.0 == anim && v.frame_bits & 0x20 != 0;
+        // The release: the event bit 0x20 or progress above 0.5, whichever comes first (R-0065).
+        let release = |anim: u32| v.clip.0 == anim && (v.frame_bits & 0x20 != 0 || v.progress > 0.5);
         a.face = Some(0.25);
         match self.state {
             State::Idle => a.anim = Some(1),
@@ -364,7 +401,7 @@ impl Sister {
             State::Ball { fired } => {
                 a.anim = Some(17);
                 if release(17) && !fired {
-                    a.launch = Some(shot(10, 16, 0, w.ball_damage, (-1, 0), 1000, 460, w.projectile_speed[label(alive)], owner, v));
+                    a.launch = Some(shot(10, 16, -1, w.ball_damage, (-1, 0), 1000, 460, w.projectile_speed[speed_label(alive)], owner, v));
                     self.state = State::Ball { fired: true };
                 }
                 if ended(17) {
@@ -377,7 +414,7 @@ impl Sister {
                 if release(18) && !fired {
                     let k = self.kind as usize;
                     let (kind, visual, status) = [(12, 18, 2), (13, 19, 1), (11, 17, 3)][k];
-                    a.launch = Some(shot(kind, visual, 0, w.status_damage[k], (status, w.status_chance[k]), 1000, -1, w.projectile_speed[label(alive)], owner, v));
+                    a.launch = Some(shot(kind, visual, -1, w.status_damage[k], (status, w.status_chance[k]), 1000, -1, w.projectile_speed[speed_label(alive)], owner, v));
                     self.state = State::Status { fired: true };
                 }
                 if ended(18) {
@@ -390,7 +427,7 @@ impl Sister {
                 if release(19) && !fired {
                     let k = self.kind as usize;
                     let (kind, visual) = [(16, 22), (15, 21), (14, 20)][k];
-                    a.launch = Some(shot(kind, visual, 0, w.special_damage[k], (-1, 0), 1000, -1, w.projectile_speed[label(alive)], owner, v));
+                    a.launch = Some(shot(kind, visual, -1, w.special_damage[k], (-1, 0), 1000, -1, w.projectile_speed[speed_label(alive)], owner, v));
                     self.state = State::Special { fired: true };
                 }
                 if ended(19) {
@@ -618,7 +655,7 @@ mod tests {
     }
 
     fn view(level: &dyn Fn(u16) -> bool, hp: i32) -> View<'_> {
-        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), frame_bits: 0, blocked: false, level }
+        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), progress: 0.0, frame_bits: 0, blocked: false, level }
     }
 
     #[test]
@@ -645,6 +682,27 @@ mod tests {
     }
 
     #[test]
+    fn start_draws_by_the_alive_word() {
+        let w = Words::read(&block(), 50).unwrap();
+        let mut rng = Rng::seeded(4);
+        // The boot value -1: energy 150 to 300 ticks (like 3 alive), the others 0.
+        let mut s = Sister::new(13);
+        s.start(-1, &w, &mut rng);
+        assert!((150..=300).contains(&s.energy), "{}", s.energy);
+        assert_eq!((s.status, s.group, s.special, s.dodge), (0, 0, 0, 0));
+        // Alive 0: all four 0.
+        let mut s = Sister::new(13);
+        s.start(0, &w, &mut rng);
+        assert_eq!((s.energy, s.status, s.group, s.special), (0, 0, 0, 0));
+        // Three alive: status 105 to 240, special 75 to 180.
+        let mut s = Sister::new(13);
+        s.start(3, &w, &mut rng);
+        assert!((105..=240).contains(&s.status) && (75..=180).contains(&s.special));
+        // The main-loop speed: 0.5 for -1, 0 and 3 alive.
+        assert_eq!([-1, 0, 3, 2, 1].map(|n| w.projectile_speed[speed_label(n)]), [0.5, 0.5, 0.5, 0.75, 0.9]);
+    }
+
+    #[test]
     fn chooser_bands() {
         let mut w = Words::read(&block(), 50).unwrap();
         let mut rng = Rng::seeded(1);
@@ -656,26 +714,26 @@ mod tests {
             s.state
         };
         // f 0.5 with the status cooldown at 0 (it reaches -1 this tick): status missile.
-        let mut s = Sister::new(13);
+        let mut s = Sister { started: true, ..Sister::new(13) };
         (s.energy, s.special) = (100, 100);
         assert_eq!(pick(&mut s, 50, &mut w, &mut g, &mut rng), State::Status { fired: false });
         // f 0.8 with the energy cooldown at 30: move.
-        let mut s = Sister::new(13);
+        let mut s = Sister { started: true, ..Sister::new(13) };
         s.energy = 30;
         assert_eq!(pick(&mut s, 80, &mut w, &mut g, &mut rng), State::Move);
         // f 0.30: special at 0; special 5 and status 0: status; all above 0: move.
-        let mut s = Sister::new(13);
+        let mut s = Sister { started: true, ..Sister::new(13) };
         s.energy = 100;
         assert_eq!(pick(&mut s, 30, &mut w, &mut g, &mut rng), State::Special { fired: false });
-        let mut s = Sister::new(13);
+        let mut s = Sister { started: true, ..Sister::new(13) };
         (s.special, s.energy) = (6, 100);
         assert_eq!(pick(&mut s, 30, &mut w, &mut g, &mut rng), State::Status { fired: false });
-        let mut s = Sister::new(13);
+        let mut s = Sister { started: true, ..Sister::new(13) };
         (s.special, s.status, s.energy) = (6, 6, 6);
         assert_eq!(pick(&mut s, 30, &mut w, &mut g, &mut rng), State::Move);
         // Level state 4 holds the cooldowns.
         let four = |f: u16| f == 4;
-        let mut s = Sister::new(13);
+        let mut s = Sister { started: true, ..Sister::new(13) };
         s.energy = 1;
         s.tick(&view(&four, 100), &mut g, &mut w, 1, &mut rng);
         assert_eq!((s.energy, s.state), (1, State::Move));

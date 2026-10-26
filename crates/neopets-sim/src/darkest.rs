@@ -402,13 +402,21 @@ impl Faerie {
                     }
                 }
             }
+            // The shove (R-0069): animation 9 not current: request it and nothing else; current
+            // before its gate: the push on the first such tick; at the gate: code 0 and animation
+            // 6 in the same tick. A cycle is K + 1 ticks (153 for her 39-key clip).
             2 => {
-                a.anim = Some(9);
-                if first {
-                    a.push = Some(shove(v.position, v.hero, v.radius + v.hero_radius, w.dive_speed));
-                }
-                if ended(9) && !first {
+                if v.clip.0 != 9 {
+                    a.anim = Some(9);
+                } else if !v.clip.1 {
+                    a.anim = Some(9);
+                    if !self.fired {
+                        self.fired = true;
+                        a.push = Some(shove(v.position, v.hero, v.radius + v.hero_radius, w.dive_speed));
+                    }
+                } else {
                     self.enter(0);
+                    a.anim = Some(6);
                 }
             }
             3 => {
@@ -645,11 +653,21 @@ mod tests {
         v.hero_guard = true;
         f.tick(&v, &w, &mut rng);
         assert_eq!(f.code, 4);
-        // The shove pushes on its first tick only.
+        // The shove (SPEC-0054 test vector, R-0069): tick 0 requests animation 9 with no push;
+        // tick 1 (9 current) pushes; later ticks do not; the gate tick sets code 0 with
+        // animation 6; the next tick chooses the shove again and requests 9.
         let mut f = Faerie::default();
         let a = f.tick(&view(&no, &[], 5.0), &w, &mut rng);
-        assert!(a.push.is_some());
-        assert!(f.tick(&view(&no, &[], 5.0), &w, &mut rng).push.is_none());
+        assert_eq!((f.code, a.anim, a.push.is_some()), (2, Some(9), false));
+        let mut v9 = view(&no, &[], 5.0);
+        v9.clip = (9, false);
+        assert!(f.tick(&v9, &w, &mut rng).push.is_some());
+        assert!(f.tick(&v9, &w, &mut rng).push.is_none());
+        v9.clip = (9, true);
+        let a = f.tick(&v9, &w, &mut rng);
+        assert_eq!((f.code, a.anim), (0, Some(6)));
+        let a = f.tick(&view(&no, &[], 5.0), &w, &mut rng);
+        assert_eq!((f.code, a.anim, a.push.is_some()), (2, Some(9), false));
         // The stun code is not cut short by a near hero.
         let mut f = Faerie::default();
         f.code = 5;
