@@ -1575,6 +1575,34 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0042 1077 (run as pack 1129) Init: 35; by 38 objects 24 and 46 (and 12), by 36
+        // objects 27, 28 and 44, by 306 objects 34, 25 and 26; Z0, L2, L21 and L22 on triggers 0,
+        // 2, 21 and 22. The spec leaves the registrations' branch tests open (Low); they are made
+        // on every load here. Threads A to D, the object moves to locator 24 and the helper's
+        // object range are not built.
+        1077 | 1129 => {
+            state.set(35, true);
+            let f = |n| state.flag(n);
+            let on = |obj, end| Action::InitObjOn { obj, end };
+            let mut v = Vec::new();
+            if !f(38) {
+                v.extend([on(24, true), on(46, false), on(12, false)]);
+            } else {
+                v.extend([on(24, false), on(46, true)]);
+                if !f(36) {
+                    v.extend([on(27, false), on(28, false), on(44, false)]);
+                } else {
+                    v.extend([on(28, true), on(44, true)]);
+                    if f(306) {
+                        v.extend([on(34, true), on(25, true)]);
+                    } else {
+                        v.extend([on(34, false), on(25, false), on(26, false)]);
+                    }
+                }
+            }
+            v.extend([reg(0, 0), reg(2, 2), reg(21, 21), reg(22, 22)]);
+            v
+        }
         // SPEC-0042 986 Init: flags 87 to 89 kept at load (words 11 to 13); the triggers; the
         // objects and world masks by those flags; the slot-load thread (86 clear: set 0, region
         // 987). Breakable 0's SetBreakableActive, the navmesh table and the debug registrar are
@@ -5659,6 +5687,77 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::Bits { word: 0, set: 0, clear: 1 },
                 ]);
             }
+        }
+        // SPEC-0042 1077 Z0 (trigger 0): the load of eW 90 (pack 1023), 3 s.
+        (1077 | 1129, 0) if state.word(pack, 1) == 0 => {
+            state.set_word(pack, 1, 1);
+            out.actions.extend([Action::ReplaceExterior { slot: 90, plane: -1 }, wait(3.0)]);
+        }
+        // L2 (306 clear; context 4): 306, the walk to locator 22, hero animation 140, objects 34
+        // and 25, camera 5, object 26 off.
+        (1077 | 1129, 2) if call.object && !state.flag(306) => {
+            if call.square && !state.talking {
+                state.set(306, true);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: 22, wait: true, orient: true },
+                    Action::HeroAnim { anim: 140, wait: false },
+                    Action::PlayAnim { obj: 34, speed: 1.0, wait: true },
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::FadeIn { seconds: 0.5, wait: true },
+                    Action::PlayAnim { obj: 25, speed: 1.0, wait: false },
+                    Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 },
+                    Action::DeactivateObj { obj: 26 },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            } else {
+                out.prompt = Some(4);
+            }
+        }
+        // L21 (307 clear; the button): 36 and 307, the walk to locator 27, object 44 with sound 7,
+        // object 27 off, object 28 with sound 11 and camera 6.
+        (1077 | 1129, 21) if call.object && !state.flag(307) && call.square && !state.talking => {
+            state.set(36, true);
+            state.set(307, true);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::WalkHero { locator: 27, wait: true, orient: true },
+                Action::HeroAnim { anim: 140, wait: false },
+                Action::PlayAnim { obj: 44, speed: 1.0, wait: false },
+                Action::PlaySound { cue: 7, locator: None },
+                Action::FadeOut { seconds: 0.5, wait: true },
+                Action::FadeIn { seconds: 0.5, wait: true },
+                Action::DeactivateObj { obj: 27 },
+                Action::PlayAnim { obj: 28, speed: 1.0, wait: false },
+                Action::PlaySound { cue: 11, locator: None },
+                Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
+                Action::KillSound { cue: 11, locator: None },
+                wait(1.0),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        // L22 (the button; here once, 308 clear): 38 and 308, object 24 stopped, the walk to
+        // locator 28, object 46 with sound 7, object 24 set to its end and played, sound 13 and
+        // camera 7.
+        (1077 | 1129, 22) if call.object && !state.flag(308) && call.square && !state.talking => {
+            state.set(38, true);
+            state.set(308, true);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::StopAnim { obj: 24 },
+                Action::WalkHero { locator: 28, wait: true, orient: true },
+                Action::HeroAnim { anim: 140, wait: false },
+                Action::PlayAnim { obj: 46, speed: 1.0, wait: false },
+                Action::PlaySound { cue: 7, locator: None },
+                Action::FadeOut { seconds: 0.5, wait: true },
+                Action::FadeIn { seconds: 0.5, wait: true },
+                Action::InitObjOn { obj: 24, end: true },
+                Action::PlayAnim { obj: 24, speed: 1.0, wait: false },
+                Action::PlaySound { cue: 13, locator: None },
+                Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
+                Action::KillSound { cue: 13, locator: None },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
         }
         // SPEC-0042 986 T0 (context 13): with the button the load of eW 79 (pack 989) while 298
         // is clear, else line 1. T4 (context 6): with 298 the load of eW 80 (pack 990), else line 0.
@@ -9914,6 +10013,25 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             out
         }
+        // SPEC-0042 1077 A (eW 109): any value but -1 returns the camera; 20 moves the hero to
+        // locator 0; 10 to locator 1 and sets 305 (StartHeroLongFall and the hero-tracking camera 4
+        // are not built); the value is reset.
+        1077 | 1129 => {
+            let v = state.take_message(2, 109);
+            let mut out = Vec::new();
+            match v {
+                20 => out.push(Action::MoveHero { locator: 0 }),
+                10 => {
+                    state.set(305, true);
+                    out.push(Action::MoveHero { locator: 1 });
+                }
+                _ => {}
+            }
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0042 986 A (eW 78): value 2 puts the hero at locator 10; any value but -1 returns
         // the camera; the value is reset.
         986 => {
@@ -13151,6 +13269,26 @@ mod tests {
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1384) }));
         assert!(on_trigger(1382, 6, enter(9), &mut s).actions.is_empty());
         assert!(on_trigger(1382, 6, enter(14), &mut s).actions.contains(&Action::LoadRegion { slot: 2, region: Some(1389) }));
+    }
+
+    #[test]
+    fn module_1129_levers() {
+        let mut s = GameState::default();
+        let v = on_init(1129, &mut s);
+        assert!(s.flag(35) && v.contains(&Action::InitObjOn { obj: 24, end: true }));
+        // The arrival from 1023's value 10: locator 1 and 305.
+        s.blackboard.insert((2, 109), 10);
+        assert!(on_activate(1129, &mut s).contains(&Action::MoveHero { locator: 1 }) && s.flag(305));
+        // The levers: L22 sets 38 and 308; L21 sets 36 and 307; L2 sets 306.
+        let press = |i| TriggerCall { index: i, state: 2, object: true, square: true };
+        assert!(on_trigger(1129, 22, press(22), &mut s).actions.contains(&Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }));
+        assert!(s.flag(38) && on_trigger(1129, 22, press(22), &mut s).actions.is_empty());
+        on_trigger(1129, 21, press(21), &mut s);
+        assert!(s.flag(36) && s.flag(307));
+        on_trigger(1129, 2, press(2), &mut s);
+        assert!(s.flag(306));
+        // Z0 loads eW 90 (pack 1023).
+        assert_eq!(on_trigger(1129, 0, press(0), &mut s).actions[0], Action::ReplaceExterior { slot: 90, plane: -1 });
     }
 
     #[test]
