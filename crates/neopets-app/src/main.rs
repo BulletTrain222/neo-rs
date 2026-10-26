@@ -841,7 +841,7 @@ fn main() {
                 (dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items).chain(), sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -2233,6 +2233,72 @@ fn sync_items(
                     commands.spawn((root, Mesh3d(mesh.clone()), MeshMaterial3d(mats[k].clone())));
                 }
             }
+        }
+    }
+}
+
+/// A focus-hero item's drawn root, by its resource.
+#[derive(Component)]
+struct HeroItemRoot(u32);
+
+/// SPEC-0046 Held items, focus hero: the shield and weapon models (SPEC-0021 display slots,
+/// resources 544 to 563) at the frames `Play::hero_items` gives, with the stowed rescales. The
+/// box minimum and size are the model's vertex bounds (they match the root-node box, SPEC-0004
+/// Bounds against vertices).
+#[allow(clippy::too_many_arguments)]
+fn sync_hero_items(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    archive: Option<ResMut<Archive>>,
+    mut roots: Query<(Entity, &HeroItemRoot, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut models: Local<std::collections::HashMap<u32, Option<([f32; 3], [f32; 3])>>>,
+) {
+    let Some(state) = state else { return };
+    let items = state.play.hero_items();
+    let mut archive = archive;
+    let mut shown = std::collections::HashSet::new();
+    for (res, frame, scale) in &items {
+        if !models.contains_key(res) {
+            let built = match archive.as_deref_mut() {
+                Some(Archive { disc, index }) => archive_view::model(disc, index, *res).unwrap_or_else(|e| {
+                    error!("hero item model {res}: {e}");
+                    None
+                }),
+                None => None,
+            };
+            let bounds = built.as_ref().map(|m| (m.min, m.max));
+            if let Some(m) = built {
+                let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                commands.spawn((HeroItemRoot(*res), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
+                    for (_, mesh, material) in parts {
+                        c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                    }
+                });
+            }
+            models.insert(*res, bounds);
+        }
+        let Some(Some((min, max))) = models.get(res).copied() else { continue };
+        let f = match scale {
+            play::HeroItemScale::None => 1.0,
+            play::HeroItemScale::Shield => 1.6 / (min[0] - (max[0] - min[0])).abs().max(1e-6),
+            play::HeroItemScale::Weapon => (2.6 / (min[2] - (max[2] - min[2])).abs().max(1e-6)).min(0.6),
+        };
+        let c = |k: usize| Vec4::new(frame.cols[k][0] * f, frame.cols[k][1] * f, frame.cols[k][2] * f, 0.0);
+        let m = Mat4::from_cols(c(0), c(1), c(2), Vec4::new(frame.t[0], frame.t[1], frame.t[2], 1.0));
+        shown.insert(*res);
+        for (_, root, mut t, mut vis) in &mut roots {
+            if root.0 == *res {
+                *t = Transform::from_matrix(m);
+                *vis = Visibility::Visible;
+            }
+        }
+    }
+    for (_, root, _, mut vis) in &mut roots {
+        if !shown.contains(&root.0) {
+            *vis = Visibility::Hidden;
         }
     }
 }

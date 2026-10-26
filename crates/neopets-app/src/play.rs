@@ -655,6 +655,10 @@ pub struct Play {
     pub equipment: neopets_sim::inventory::Equipment,
     /// The Tattered Cloak is worn (the cloak swap; SPEC-0021 Tattered Cloak, partly).
     pub cloak_worn: bool,
+    /// The party's weapon-drawn and shield-raised flags (SPEC-0040 Behavior 29), shared by both
+    /// heroes.
+    pub weapon_drawn: bool,
+    pub shield_raised: bool,
     pub weapon: Option<u16>,
     /// The equipped shield (item id; Tor's shields are type 5, SPEC-0036).
     pub shield: Option<u16>,
@@ -1319,6 +1323,8 @@ impl Play {
             foliage: HashMap::new(),
             attack: None,
             attack_latch: false,
+            weapon_drawn: false,
+            shield_raised: false,
             weapon: None,
             shield: None,
             items,
@@ -2892,6 +2898,7 @@ impl Play {
         use neopets_sim::roberta::*;
         if self.r_attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.r_attack = Some(RobertaAttack::start_with(self.gesture.mode));
+            self.draw_items(true);
         }
         let mote = self.equipment.motes[1][2];
         let Some(mut a) = self.r_attack.take() else { return };
@@ -3357,6 +3364,7 @@ impl Play {
         std::mem::swap(&mut self.hero_mp_max, &mut p.mp_max);
         self.parked = Some(p);
         self.hero_index = 1 - self.hero_index;
+        self.draw_items(false);
         self.statuses.clear_all();
         self.attack = None;
         self.hero_colour = self.design.hero_colour(self.hero_index).unwrap_or([128; 3]);
@@ -3861,6 +3869,71 @@ impl Play {
     pub fn hero_in_cage(&self) -> bool {
         let (h, f) = (self.held_point(), self.loco.facing);
         neopets_sim::miamouse::Catch::in_mesh(&self.world.navmeshes, self.catch.cage, [h[0] + f[0], h[1], h[2] + f[2]])
+    }
+
+    /// SPEC-0040 Behavior 29: set or clear both flags.
+    fn draw_items(&mut self, on: bool) {
+        self.weapon_drawn = on;
+        self.shield_raised = on;
+    }
+
+    /// SPEC-0040 Behavior 29 per tick: the L1 guard with a shield sets both flags; states 25 and
+    /// 28 and a talk clear them.
+    fn items_flags_step(&mut self) {
+        if self.loco.state == hero_states::GUARD && self.shield.is_some() {
+            self.draw_items(true);
+        }
+        if matches!(self.loco.state, 25 | 28) || self.dialogue_open {
+            self.draw_items(false);
+        }
+    }
+
+    /// The hero's attach point k as a world frame (SPEC-0005 Attach points).
+    fn hero_attach(&self, k: usize) -> Option<neopets_data::anim::Affine> {
+        let (p, f) = (self.loco.position(), self.loco.facing);
+        let frames = self.hero.bone_frames();
+        let &(bone, angles, offset) = self.hero.bones().attach.get(k)?;
+        Some(placement(p, f).mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)))
+    }
+
+    /// SPEC-0046 Held items, focus hero, steps 1 and 2: the shield (resource 560 + s; on the arm
+    /// at W5 while raised, else stowed on the back with axes (-X8, Z8, Y8) at T8, Tor only) and
+    /// the weapon (resource 544 + w; in the hand at W0 while drawn, else sheathed with axes (Y6,
+    /// Z6, X6) at T6, which only Tor has). Nothing while the cloak is worn or the hero is not
+    /// drawn. Each entry: the resource, the frame and the rescale rule of the stowed forms.
+    pub fn hero_items(&self) -> Vec<(u32, neopets_data::anim::Affine, HeroItemScale)> {
+        let mut out = Vec::new();
+        if self.equipment.entries[2][self.hero_index] == Some(126) || self.loco.state == hero_states::DEAD {
+            return out;
+        }
+        let neg = |v: [f32; 3]| v.map(|c| -c);
+        if let (Some(id), 0) = (self.shield, self.hero_index) {
+            let s = id as i32 - 106;
+            if (0..=4).contains(&s) {
+                let frame = if self.shield_raised {
+                    self.hero_attach(5).map(|w| (w, HeroItemScale::None))
+                } else {
+                    self.hero_attach(8).map(|w| (neopets_data::anim::Affine { cols: [neg(w.cols[0]), w.cols[2], w.cols[1]], t: w.t }, HeroItemScale::Shield))
+                };
+                if let Some((w, scale)) = frame {
+                    out.push((560 + s as u32, w, scale));
+                }
+            }
+        }
+        if let Some(id) = self.weapon.filter(|_| self.hero_index == 0 || self.weapon_drawn) {
+            let w = if id <= 110 { id as i32 - 98 } else { id as i32 - 103 };
+            if (0..=15).contains(&w) {
+                let frame = if self.weapon_drawn {
+                    self.hero_attach(0).map(|a| (a, HeroItemScale::None))
+                } else {
+                    self.hero_attach(6).map(|a| (neopets_data::anim::Affine { cols: [a.cols[1], a.cols[2], a.cols[0]], t: a.t }, HeroItemScale::Weapon))
+                };
+                if let Some((a, scale)) = frame {
+                    out.push((544 + w as u32, a, scale));
+                }
+            }
+        }
+        out
     }
 
     /// The point a carried Miamouse is held at: the hero's attach point 0 (SPEC-0005 Attach
@@ -5531,8 +5604,10 @@ impl Play {
         }
         self.roberta_displays_step();
         self.attack_fx_step();
+        self.items_flags_step();
         if self.hero_index == 0 && self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
+            self.draw_items(true);
         }
         let mut force = false;
         if let Some(a) = self.attack.as_mut() {
@@ -5708,9 +5783,14 @@ impl Play {
                     self.cue(0xAF);
                 }
             }
-            // The chooser's last fallback: Square with no target enters the sneak.
+            // The chooser's last fallback (SPEC-0040 Behavior 29 item 3): Square with no target
+            // enters the sneak while the weapon is sheathed, and sheathes it while drawn.
             if self.square_now && !self.book_prompt && self.door_prompt.is_none() && self.prompt_shown.is_none() {
-                self.loco.sneak();
+                if self.weapon_drawn {
+                    self.draw_items(false);
+                } else {
+                    self.loco.sneak();
+                }
             }
         }
         if self.job.is_none() {
@@ -6706,6 +6786,12 @@ impl Play {
             return false;
         }
         let damage = damage.max(0.0).trunc() as i32;
+        // SPEC-0040 Behavior 29 item 2: a hit (not a poison tick, attacker -2) with the weapon
+        // sheathed draws Tor's weapon when he has one and raises the hero's shield.
+        if !self.weapon_drawn && what != "poison" {
+            self.weapon_drawn = self.equipment.entries[0][0].is_some();
+            self.shield_raised = self.shield.is_some();
+        }
         // A hit on a living hero ends an active stun.
         self.statuses.clear(neopets_sim::status::STUN);
         let busy = self.attack.as_ref().is_some_and(|a| matches!(a.sub, 1 | 10));
@@ -9455,6 +9541,16 @@ fn scale(a: [f32; 3], s: f32) -> [f32; 3] {
 fn unit(a: [f32; 3]) -> [f32; 3] {
     let l = (a[0] * a[0] + a[1] * a[1] + a[2] * a[2]).sqrt();
     if l > 0.0 { scale(a, 1.0 / l) } else { a }
+}
+
+/// The rescale of a stowed hero item (SPEC-0046 Held items): the shield's axes by 1.6 / |bx -
+/// sx| and the sheathed weapon's by min(2.6 / |bz - sz|, 0.6), from the model's box minimum and
+/// size along X or Z.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum HeroItemScale {
+    None,
+    Shield,
+    Weapon,
 }
 
 /// A character's placement: translation to its position, turned so +Z is its facing.
