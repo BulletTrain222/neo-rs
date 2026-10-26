@@ -3871,6 +3871,46 @@ impl Play {
         neopets_sim::miamouse::Catch::in_mesh(&self.world.navmeshes, self.catch.cage, [h[0] + f[0], h[1], h[2] + f[2]])
     }
 
+    /// Attach point k of a character as a world frame (SPEC-0005 Attach points).
+    fn character_attach(c: &Character, k: usize) -> Option<neopets_data::anim::Affine> {
+        let frames = c.anim.bone_frames();
+        let &(bone, angles, offset) = c.anim.bones().attach.get(k)?;
+        Some(placement(c.position, c.facing).mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)))
+    }
+
+    /// SPEC-0046 Second walk and attachment slots: for each drawn, active, living character, its
+    /// slot 0 model in the hand (axes Z0, Y0, -X0 at T0), its slot 6 model at W5, and its slot 1
+    /// model while the clip's event bit 0x1000 is on and its selected attack's projectile type is
+    /// below 5, at W0 to W4 by the clip's event bits 1, 2, 4, 8 and 0x10. Each entry: the
+    /// character id, the slot and the frame. The thrown-model word (a flying weapon drawn in
+    /// place of the hand model) is not reproduced.
+    pub fn character_attachments(&self) -> Vec<(u64, u8, neopets_data::anim::Affine)> {
+        let mut out = Vec::new();
+        for c in self.characters.iter().filter(|c| !c.inactive && self.pack_drawn(c.pack) && c.enemy.as_ref().is_none_or(|e| !e.dead)) {
+            for &(slot, _) in &c.model.attachments {
+                let frame = match slot {
+                    0 => Self::character_attach(c, 0).map(|w| neopets_data::anim::Affine { cols: [w.cols[2], w.cols[1], w.cols[0].map(|v| -v)], t: w.t }),
+                    6 => Self::character_attach(c, 5),
+                    1 => {
+                        let bits = c.anim.frame_bits();
+                        let kind = c.enemy.as_ref().and_then(|e| e.selected.and_then(|k| e.p.slots.get(k))).map(|s| s.missile.visual);
+                        if bits & 0x1000 != 0 && kind.is_some_and(|v| v < 5) {
+                            let k = [1, 2, 4, 8, 0x10].iter().position(|&b| bits & b != 0).unwrap_or(0);
+                            Self::character_attach(c, k)
+                        } else {
+                            None
+                        }
+                    }
+                    _ => None,
+                };
+                if let Some(f) = frame {
+                    out.push((c.id, slot, f));
+                }
+            }
+        }
+        out
+    }
+
     /// SPEC-0040 Behavior 29: set or clear both flags.
     fn draw_items(&mut self, on: bool) {
         self.weapon_drawn = on;

@@ -206,7 +206,20 @@ pub fn region_character(
         .collect();
     // SPEC-0004 3a: a region character draws with the region's mask, bit 30 (the colour
     // override that selects bit 31 needs the world's variant key, whose writer is open).
-    let model = model::build_masked(bytes, &chain, None, None, Some(model::REGION_MASK))?;
+    // SPEC-0046 Second walk and attachment slots: a child with role 10 + k is the set's
+    // attachment model k, drawn at its own attach point, not part of the body.
+    let (trees, _) = model::find_trees(bytes, &chain);
+    let mut roles: Vec<u16> = trees.iter().map(|t| t.role_id).collect();
+    roles.sort_unstable();
+    roles.dedup();
+    let body: Vec<u16> = roles.iter().copied().filter(|r| !(10..=20).contains(r)).collect();
+    let mut model = model::build_masked(bytes, &chain, None, Some(&body), Some(model::REGION_MASK))?;
+    for r in roles.iter().copied().filter(|r| (10..=20).contains(r)) {
+        let m = model::build_masked(bytes, &chain, None, Some(&[r]), Some(model::REGION_MASK))?;
+        if !m.parts.is_empty() {
+            model.attachments.push(((r - 10) as u8, m));
+        }
+    }
     let nested = resource::walk_chunks(&bytes[set.payload.clone()], None)?;
     let flat = nested
         .chunks

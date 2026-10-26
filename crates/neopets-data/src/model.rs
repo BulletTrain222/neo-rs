@@ -151,6 +151,9 @@ pub struct ModelData {
     pub unresolved_placements: usize,
     /// Built from a world pack's static scene (world space).
     pub world: bool,
+    /// A character model set's attachment models by slot (children with role 10 + k; SPEC-0046
+    /// Second walk and attachment slots), kept out of the body.
+    pub attachments: Vec<(u8, ModelData)>,
 }
 
 impl ModelData {

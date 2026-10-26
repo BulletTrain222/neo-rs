@@ -841,7 +841,7 @@ fn main() {
                 (dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items).chain(), sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items).chain(), (sync_characters, sync_attachments).chain(), sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -2306,6 +2306,55 @@ fn sync_hero_items(
 /// A region character's drawn root, by character id.
 #[derive(Component)]
 struct CharacterRoot(u64);
+
+/// A character's attachment model root, by character id and slot.
+#[derive(Component)]
+struct AttachmentRoot(u64, u8);
+
+/// SPEC-0046 Second walk and attachment slots: each character's attachment models at the frames
+/// `Play::character_attachments` gives; hidden otherwise, despawned with their character.
+fn sync_attachments(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    mut roots: Query<(Entity, &AttachmentRoot, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut spawned: Local<std::collections::HashSet<(u64, u8)>>,
+) {
+    let Some(state) = state else { return };
+    let p = &state.play;
+    let frames: std::collections::HashMap<(u64, u8), neopets_data::anim::Affine> = p.character_attachments().into_iter().map(|(id, slot, f)| ((id, slot), f)).collect();
+    let live: std::collections::HashSet<u64> = p.characters.iter().map(|c| c.id).collect();
+    for (e, root, mut t, mut vis) in &mut roots {
+        if !live.contains(&root.0) {
+            commands.entity(e).despawn();
+            spawned.remove(&(root.0, root.1));
+            continue;
+        }
+        match frames.get(&(root.0, root.1)) {
+            Some(f) => {
+                let c = |k: usize| Vec4::new(f.cols[k][0], f.cols[k][1], f.cols[k][2], 0.0);
+                *t = Transform::from_matrix(Mat4::from_cols(c(0), c(1), c(2), Vec4::new(f.t[0], f.t[1], f.t[2], 1.0)));
+                *vis = Visibility::Visible;
+            }
+            None => *vis = Visibility::Hidden,
+        }
+    }
+    for c in &p.characters {
+        for (slot, m) in &c.model.attachments {
+            if !spawned.insert((c.id, *slot)) {
+                continue;
+            }
+            let parts = part_assets(m, &mut meshes, &mut materials, &mut images);
+            commands.spawn((AttachmentRoot(c.id, *slot), Transform::IDENTITY, Visibility::Hidden)).with_children(|ch| {
+                for (_, mesh, material) in parts {
+                    ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                }
+            });
+        }
+    }
+}
 
 /// Spawn, place, skin and relight the region characters of drawn worlds; despawn the rest.
 #[allow(clippy::too_many_arguments)]
