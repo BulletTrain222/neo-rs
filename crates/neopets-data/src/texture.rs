@@ -86,7 +86,7 @@ impl Segment {
         Ok(Self {
             tbp: w0 & 0x3fff,
             bw: width / 64,
-            stored_bw_field: (w0 >> 14) & 0x3f,
+            stored_bw_field: (w0 >> 16) & 0x3f,
             width,
             height: (w1 >> 12) & 0xfff,
         })
@@ -342,11 +342,13 @@ mod tests {
             b[4..].copy_from_slice(&(256u32 | 64 << 12).to_le_bytes());
             Segment::parse(&b).unwrap()
         };
-        assert_eq!((seg(0x0001_0000).tbp, seg(0x0001_0000).bw), (0, 4));
-        assert_eq!((seg(0x0001_2A00).tbp, seg(0x0001_2A00).bw), (0x2A00, 4));
+        // SPEC-0003 vectors: word 0 = 0x0004_0000 is TBP 0 and width field 4 (bits 16 to 21);
+        // 0x0004_2A00 is TBP 0x2A00, field 4; 0x0001_2A00 would be field 1 (a 64-wide segment).
+        assert_eq!((seg(0x0004_0000).tbp, seg(0x0004_0000).bw, seg(0x0004_0000).stored_bw_field), (0, 4, 4));
+        assert_eq!((seg(0x0004_2A00).tbp, seg(0x0004_2A00).stored_bw_field), (0x2A00, 4));
         // The buffer width comes from the segment width, whatever the stored field says.
-        let odd = seg(0x0004_2A00);
-        assert_eq!((odd.bw, odd.stored_bw_field), (4, 16));
+        let odd = seg(0x0001_2A00);
+        assert_eq!((odd.bw, odd.stored_bw_field), (4, 1));
         // SPEC-0003: TBP 0x3C, TBW 4, 32 × 17, PSMT8.
         let mut e = [0u8; ENTRY_SIZE];
         e[0..2].copy_from_slice(&0x3Cu16.to_le_bytes());
@@ -397,7 +399,7 @@ mod tests {
         let mut table = vec![0u8; ENTRIES_AT];
         table[0..4].copy_from_slice(&1u32.to_le_bytes());
         table[8..12].copy_from_slice(&4u32.to_le_bytes());
-        table[0x10..0x14].copy_from_slice(&(seg_tbp | 1 << 14).to_le_bytes());
+        table[0x10..0x14].copy_from_slice(&(seg_tbp | 1 << 16).to_le_bytes());
         table[0x14..0x18].copy_from_slice(&(sw | sh << 12).to_le_bytes());
         table.extend(entry(seg_tbp, 2, 24, 20, PSMT8));
         table.extend(entry(seg_tbp + 0x40, 2, 24, 20, PSMT4));

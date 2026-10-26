@@ -2027,6 +2027,9 @@ fn sync_characters(
                     for (i, mesh, material) in parts {
                         if !c.model.parts[i].weights.is_empty() {
                             list.push((mesh.clone(), i));
+                        } else if let (Some(col), Some(mut m)) = (tinted(&c.model.parts[i], None, None, Some(&c.slots)), meshes.get_mut(&mesh)) {
+                            // A rigid part keeps its build colours: the slot colour once.
+                            m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
                         }
                         ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
                     }
@@ -2042,7 +2045,7 @@ fn sync_characters(
         for (handle, i) in &skinned[&c.id] {
             let part = &c.model.parts[*i];
             let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-            let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint);
+            let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, Some(&c.slots));
             if let Some(mut mesh) = meshes.get_mut(handle) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);
@@ -2106,9 +2109,14 @@ pub(crate) fn part_assets(
 /// The status tint (SPEC-0034 5.4) on a part's linear vertex colours: the lit colours, or the
 /// unlit part's own colours, multiplied per channel. With no tint the lit colours pass and an
 /// unlit part gets its own colours back (so a cleared tint is undone).
-fn tinted(part: &neopets_data::model::MeshPart, lit: Option<Vec<[f32; 4]>>, tint: Option<[f32; 3]>) -> Option<Vec<[f32; 4]>> {
+/// A part's linear vertex colours: lit (or stored), times the status tint and, for a region
+/// character, times the colour of the part's slot (SPEC-0040 Behavior 26 item 9; the scale
+/// applies in the GS's gamma space, so it is raised to 2.2 like the colours).
+fn tinted(part: &neopets_data::model::MeshPart, lit: Option<Vec<[f32; 4]>>, tint: Option<[f32; 3]>, slots: Option<&[[f32; 3]; 15]>) -> Option<Vec<[f32; 4]>> {
     let base = lit.unwrap_or_else(|| part.colors.iter().map(|c| [c[0].powf(2.2), c[1].powf(2.2), c[2].powf(2.2), c[3].min(1.0)]).collect());
-    let t = tint.unwrap_or([1.0; 3]).map(|c| c.max(0.0).powf(2.2));
+    let s = slots.map_or([1.0; 3], |s| s[part.colour_slot.min(14) as usize]);
+    let t = tint.unwrap_or([1.0; 3]);
+    let t = [t[0] * s[0], t[1] * s[1], t[2] * s[2]].map(|c| c.max(0.0).powf(2.2));
     Some(base.into_iter().map(|c| [c[0] * t[0], c[1] * t[1], c[2] * t[2], c[3]]).collect())
 }
 
@@ -2893,7 +2901,7 @@ fn play_frame(
     for (handle, i) in &state.skinned {
         let part = &state.play.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
-        let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint);
+        let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, None);
         if let Some(mut mesh) = meshes.get_mut(handle) {
             mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);

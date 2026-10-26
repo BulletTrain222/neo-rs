@@ -375,6 +375,9 @@ pub struct Character {
     weapons: [(f32, f32); 5],
     /// The placement's colour bytes (the talk partner's frame colour).
     colour: [u8; 3],
+    /// The 15 colour slots (SPEC-0040 Behavior 26): (red, green, blue) / 255 of the record's
+    /// colour words; a part draws with the slot of its material group.
+    pub slots: [[f32; 3]; 15],
     /// The kind-8 record its drop placement ordinal names (SPEC-0038 Behavior 34, part B).
     drop: Option<neopets_data::region::ItemPoint>,
     root_step: [f32; 3],
@@ -3865,6 +3868,7 @@ impl Play {
                 weapons: tuning.map_or([(0.0, 0.0); 5], |t| t.weapons),
                 drop,
                 colour: pl.colour,
+                slots: slot_colours(&pl.colours),
                 root_step: [0.0; 3],
                 script_walk: None,
                 held: false,
@@ -3979,6 +3983,7 @@ impl Play {
             weapons: [(0.0, 0.0); 5],
             drop: None,
             colour: pl.colour,
+            slots: slot_colours(&pl.colours),
             root_step: [0.0; 3],
             script_walk: None,
             held: false,
@@ -8465,6 +8470,11 @@ fn boot_string(boot: &[u8], va: u32) -> Vec<u8> {
     bytes.into_iter().take_while(|&b| b != 0).collect()
 }
 
+/// The colour slot vectors of a record's 15 colour words: (byte 0, byte 1, byte 2) / 255.
+pub fn slot_colours(words: &[u32; 15]) -> [[f32; 3]; 15] {
+    words.map(|w| [(w & 0xFF) as f32 / 255.0, ((w >> 8) & 0xFF) as f32 / 255.0, ((w >> 16) & 0xFF) as f32 / 255.0])
+}
+
 /// A light-set record of the disc as the sim's record (SPEC-0028 section 2).
 fn light_record(r: &neopets_data::light::LightRecord) -> neopets_sim::charlight::Record {
     let e = |x: &neopets_data::light::LightEntry| neopets_sim::charlight::Entry {
@@ -8493,4 +8503,22 @@ pub struct Cheats {
     pub god: bool,
     pub magic: bool,
     pub charge: bool,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn slot_colour_vector() {
+        // SPEC-0004 Colour test vector: colour word 1 bytes (255, 152, 83), vertex byte 20 (1.25)
+        // lit at 128 per channel: (160, 95, 52), an orange part; with no slot colour (160, 160,
+        // 160).
+        let mut words = [0x80FF_FFFFu32; 15];
+        words[1] = 255 | (152 << 8) | (83 << 16);
+        let s = slot_colours(&words);
+        let out = s[1].map(|c| (128.0 * 1.25 * c) as u32);
+        assert_eq!(out, [160, 95, 52]);
+        assert_eq!(s[0].map(|c| (128.0 * 1.25 * c) as u32), [160, 160, 160]);
+    }
 }

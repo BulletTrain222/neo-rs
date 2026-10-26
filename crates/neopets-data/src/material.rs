@@ -32,6 +32,9 @@ pub struct Group {
     pub mode: u8,
     /// Which of the list's texture chunks (0..B) the addresses refer to.
     pub texture_chunk: u8,
+    /// The character colour slot (group byte 0x27, 0 to 14; SPEC-0003): a character part of
+    /// this group is drawn with colour word j of the character's record (SPEC-0040 Behavior 26).
+    pub colour_slot: u8,
     /// TEX0 of the first register set (render pass 0), when the state block is well formed.
     pub tex0: Option<Tex0>,
     /// TEX0 of the second register set (render pass 1, mode 2 only).
@@ -132,6 +135,7 @@ impl ShaderList {
                 Ok(Group {
                     mode,
                     texture_chunk: group[0x28],
+                    colour_slot: group[0x27].min(14),
                     tex0: regs.tex0,
                     tex0_pass1: regs.tex0_pass1,
                     clamp: regs.clamp,

@@ -111,6 +111,8 @@ pub struct MeshPart {
     pub layout: Layout,
     pub group: Option<u16>,
     pub program: Option<u32>,
+    /// The group's character colour slot (0 for no group).
+    pub colour_slot: u8,
     pub positions: Vec<[f32; 3]>,
     /// Layout B has no normals; its parts get +Y placeholders (it is drawn unlit).
     pub normals: Vec<[f32; 3]>,
@@ -324,6 +326,7 @@ impl Builder {
                 layout: first.layout,
                 group: group.map(|_| leaf.material_group),
                 program: group.map(|g| g.program),
+                colour_slot: group.map_or(0, |g| g.colour_slot),
                 positions: Vec::new(),
                 normals: Vec::new(),
                 uvs: Vec::new(),

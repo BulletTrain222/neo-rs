@@ -53,6 +53,9 @@ pub struct Placement {
     pub drop: i16,
     /// The character's colour bytes (+0x40; the talk partner's frame colour, SPEC-0022).
     pub colour: [u8; 3],
+    /// The 15 colour words (+0x48 + 4 i; SPEC-0040 Behavior 26): bytes 0 to 2 are red, green
+    /// and blue; a part draws with the word of its group's colour slot.
+    pub colours: [u32; 15],
 }
 
 /// A kind-8 item point (SPEC-0006 Kind 8; SPEC-0021 placements).
@@ -208,6 +211,7 @@ pub fn records(p: &[u8]) -> Records {
                     selector: u32_at(p, data + 0xC8).unwrap_or(0),
                     drop: i16_at(p, data + 0xB0).unwrap_or(-1),
                     colour: [p.get(data + 0x40).copied().unwrap_or(0), p.get(data + 0x41).copied().unwrap_or(0), p.get(data + 0x42).copied().unwrap_or(0)],
+                    colours: std::array::from_fn(|i| p.get(data + 0x48 + 4 * i..data + 0x4C + 4 * i).map_or(0x80FF_FFFF, |b| u32::from_le_bytes(b.try_into().unwrap()))),
                 });
             }
             8 => {
