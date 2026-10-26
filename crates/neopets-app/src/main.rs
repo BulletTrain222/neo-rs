@@ -2038,6 +2038,8 @@ fn play_trace(
     println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
     let trees: Vec<String> = play.world.patches.iter().filter(|p| p.key == 4).take(3).map(|p| format!("({:.1},{:.1})", (p.area[0] + p.area[1]) / 2.0, (p.area[2] + p.area[3]) / 2.0)).collect();
     println!("Foliage of {}: {} patches; key-4 tree patches at {}", play.world.pack, play.world.patches.len(), trees.join(" "));
+    let kinds: Vec<String> = play.world.groups.iter().enumerate().map(|(i, g)| format!("{i}:k{} t{:?} o{:?}", g.kind, g.triggers.first(), g.objects.iter().take(2).collect::<Vec<_>>())).collect();
+    println!("Script groups of {}: {}", play.world.pack, kinds.join(" "));
     println!("Script volumes of {} (index, a point inside): {:?}", play.world.pack, play.world.volume_points());
     if to.is_some_and(|t| t[0].is_nan()) {
         let goal = match to.map(|t| t[1]) {

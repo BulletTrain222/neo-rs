@@ -84,7 +84,7 @@ pub struct World {
     volumes: Vec<neopets_sim::trigger::Volume>,
     routines: HashMap<u16, u8>,
     records: HashMap<u16, neopets_sim::trigger::Record>,
-    groups: Vec<neopets_data::trigger::ScriptGroup>,
+    pub groups: Vec<neopets_data::trigger::ScriptGroup>,
     placements: Vec<(u8, u8)>,
     item_points: Vec<neopets_data::region::ItemPoint>,
     locks: Vec<(i32, i32, i32)>,
@@ -1288,12 +1288,17 @@ impl Play {
     /// object 0 is drawn at its start (state 9), or at its last frame (finished) when its
     /// collected entry is set.
     fn group_setup(&self) -> Vec<Action> {
-        self.world
-            .groups
-            .iter()
-            .filter(|g| g.kind == 1)
-            .filter_map(|g| Some(Action::InitObjOn { obj: usize::try_from(*g.objects.first()?).ok()?, end: self.state.collected.contains(&g.key) }))
-            .collect()
+        let mut out = Vec::new();
+        for g in &self.world.groups {
+            let Some(obj) = g.objects.first().and_then(|&o| usize::try_from(o).ok()) else { continue };
+            match g.kind {
+                1 => out.push(Action::InitObjOn { obj, end: self.state.collected.contains(&g.key) }),
+                // Kind 5 (a reaction object): object 0 on and looped at 1.0.
+                5 => out.extend([Action::InitObjOn { obj, end: false }, Action::LoopAnim { obj, speed: 1.0 }]),
+                _ => {}
+            }
+        }
+        out
     }
 
     /// A newly loaded other world runs its Init (its actions apply to that world).
@@ -3485,6 +3490,27 @@ impl Play {
             let rec = self.world.records.get(&i).copied().unwrap_or_default();
             if let Some(g) = self.world.groups.iter().position(|g| g.kind == 1 && g.triggers.first() == Some(&(i as i32))) {
                 self.chest_step(g, rec, square);
+                continue;
+            }
+            // SPEC-0048 Reaction object (kind 5): on a fire of trigger 0 while no run is going on,
+            // object 0 hidden, object 1 shown, played once and waited for, set to time 0 and
+            // hidden, then object 0 shown and looped again.
+            if let Some(g) = self.world.groups.iter().find(|g| g.kind == 5 && g.triggers.first() == Some(&(i as i32))) {
+                let objs: Vec<usize> = g.objects.iter().filter_map(|&o| usize::try_from(o).ok()).collect();
+                if let (1, [a, b, ..]) = (rec.state, objs.as_slice()) {
+                    if self.world.object_anims.get(*b).is_some_and(|o| !o.drawn) {
+                        let (a, b) = (*a, *b);
+                        self.apply(&[
+                            Action::DeactivateObj { obj: a },
+                            Action::InitObjOn { obj: b, end: false },
+                            Action::PlayAnim { obj: b, speed: 1.0, wait: true },
+                            Action::InitObjOn { obj: b, end: false },
+                            Action::DeactivateObj { obj: b },
+                            Action::InitObjOn { obj: a, end: false },
+                            Action::LoopAnim { obj: a, speed: 1.0 },
+                        ]);
+                    }
+                }
                 continue;
             }
             let Some(&routine) = self.world.routines.get(&i) else { continue };
