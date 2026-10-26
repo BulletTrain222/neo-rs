@@ -392,6 +392,8 @@ pub struct Character {
     /// tick, which the boss takes through its own flinch.
     pub gnarfas: Option<neopets_sim::gnarfas::Gnarfas>,
     pub pending_hit: Option<i32>,
+    /// The Werelupe King controller (behaviour class 32; SPEC-0019).
+    pub king: Option<neopets_sim::werelupe::King>,
 }
 
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
@@ -581,6 +583,7 @@ pub struct Play {
     /// The Juppie tuning words and the boss hits of this tick's swing (character id, damage).
     juppie_words: neopets_sim::juppie::Words,
     gnarfas_words: neopets_sim::gnarfas::Words,
+    king_words: neopets_sim::werelupe::Words,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
@@ -919,6 +922,57 @@ impl Play {
                 run_walk: float(RUN_WALK)?,
             }
         };
+        let king_words = {
+            use neopets_sim::werelupe::*;
+            let i = |at: u32, n: usize| words(at, n).map(|v| v.iter().map(|&x| x as i32).collect::<Vec<_>>());
+            let f = |at: u32, n: usize| words(at, n).map(|v| v.iter().map(|&x| f32::from_bits(x)).collect::<Vec<_>>());
+            let three = |at: u32| i(at, 3).map(|v| [v[0], v[1], v[2]]);
+            let (sw, lu, co, mv, dm, sh) = (words(SWING, 5)?, words(LUNGE, 5)?, words(COMBO, 5)?, words(MOVEMENT, 4)?, words(DAMAGES, 8)?, f(SHARED, 5)?);
+            let fl = |v: u32| f32::from_bits(v);
+            Words {
+                block_chance: three(BLOCK_CHANCE)?,
+                jump_distance: float(JUMP_DISTANCE)?,
+                jump_chance: { let v = i(JUMP_CHANCE, 2)?; (v[0], v[1]) },
+                roll_chance: i(ROLL_CHANCE, 1)?[0],
+                roll_counter_distance: f(ROLL_COUNTER, 1)?[0],
+                roll_counter_chance: i(ROLL_COUNTER + 4, 1)?[0],
+                overhead_distance: f(OVERHEAD, 1)?[0],
+                overhead_chance: i(OVERHEAD + 4, 1)?[0],
+                boomerang_range: { let v = f(BOOMERANG_RANGE, 2)?; (v[0], v[1]) },
+                boomerang_cooldown: i(BOOMERANG_COOLDOWN, 1)?[0],
+                boomerang_chance: three(BOOMERANG_CHANCE)?,
+                boomerang_speed: float(BOOMERANG_SPEED)?,
+                boomerang_damage: dm[1] as i32,
+                flame_range: { let v = f(FLAME_RANGE, 2)?; (v[0], v[1]) },
+                flame_cooldown: i(FLAME_COOLDOWN, 1)?[0],
+                flame_chance: three(FLAME_CHANCE)?,
+                flame_wait: { let v = i(FLAME_WAIT, 2)?; (v[0], v[1]) },
+                flame_damage: dm[2] as i32,
+                swing_distance: fl(sw[0]),
+                swing_cooldown: sw[1] as i32,
+                swing_chance: [sw[2] as i32, sw[3] as i32, sw[4] as i32],
+                swing_damage: dm[0] as i32,
+                lunge_distance: fl(lu[0]),
+                lunge_cooldown: lu[1] as i32,
+                lunge_chance: [lu[2] as i32, lu[3] as i32, lu[4] as i32],
+                lunge_damage: dm[3] as i32,
+                combo_distance: fl(co[0]),
+                combo_cooldown: co[1] as i32,
+                combo_chance: [co[2] as i32, co[3] as i32, co[4] as i32],
+                combo_damage: [dm[4] as i32, dm[5] as i32, dm[6] as i32],
+                walk_distance: fl(mv[0]),
+                orbit_distance: fl(mv[1]),
+                hop_distance: fl(mv[2]),
+                hop_chance: mv[3] as i32,
+                overhead_damage: dm[7] as i32,
+                phase2: i(PHASES, 1)?[0],
+                phase3: i(PHASES + 4, 1)?[0],
+                tick_rate: sh[0],
+                jump_step: sh[1],
+                boomerang_timeout: sh[2],
+                far_weight: sh[4],
+            }
+        };
         let (effect_table, effect_images) = {
             let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
             let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
@@ -1106,6 +1160,7 @@ impl Play {
             pending_off: Default::default(),
             juppie_words,
             gnarfas_words,
+            king_words,
             boss_hits: Vec::new(),
             last_boss: String::new(),
             petpet: None,
@@ -3219,6 +3274,13 @@ impl Play {
         let hero_at = from;
         // The script's undamageable entities (SPEC-0044 1056 Update) take no damage.
         let pack = self.world.pack;
+        // SPEC-0019: the Werelupe King takes the damage at once and flinches on its next tick; its
+        // own controller handles its death.
+        if let Some(c) = self.characters.get_mut(i).filter(|c| c.king.is_some()) {
+            c.hp -= damage.max(0);
+            c.pending_hit = Some(damage);
+            return;
+        }
         // SPEC-0020: Gnarfas takes a hit through its own flinch (the damage lands when it ends).
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.gnarfas.is_some()) {
             c.pending_hit = Some(damage);
@@ -3456,7 +3518,7 @@ impl Play {
             .iter()
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -3553,7 +3615,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 14 | 21)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 14 | 21 | 32)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -3577,6 +3639,7 @@ impl Play {
                 miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
                 gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
                 pending_hit: None,
+                king: row.filter(|r| r.class == Some(32)).map(|_| neopets_sim::werelupe::King::new(position)),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3628,6 +3691,7 @@ impl Play {
             miamouse: None,
             gnarfas: None,
             pending_hit: None,
+            king: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4679,6 +4743,7 @@ impl Play {
         self.pet_step();
         self.boss_step();
         self.gnarfas_step();
+        self.king_step();
         self.mice_step();
         self.enemies_step();
         self.items_step();
@@ -5616,6 +5681,124 @@ impl Play {
                 let k = unit([9.0 * d[0], 12.0, 9.0 * d[2]]);
                 self.attack = None;
                 self.loco.knock(scale(k, self.gnarfas_words.push * s));
+            }
+        }
+    }
+
+    /// SPEC-0019 per tick for the Werelupe King (class 32) in the current world: the host's
+    /// measurements (the hit, the reach test, the hand point, the ground), the controller tick and
+    /// its requests (the clip, the steering and travel, the hits, the rings, the phase events and
+    /// flag 273). The reach test's weapon cylinder (radius 2.5, length 7.0, from 1.5 behind the
+    /// anchor) is taken from a chest-high anchor along the facing, since the anchor is not given;
+    /// the hero's body records are taken as one 1.0 by 3.5 upright cylinder.
+    fn king_step(&mut self) {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.king.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let world = &self.world;
+            let ground = |x: f32, z: f32| world.ground_at(x, z, 1.0e6).unwrap_or(0.0);
+            let st = self.loco.state;
+            let attacking = self.attack.is_some();
+            let c = &mut self.characters[i];
+            let fwd = unit([c.facing[0], 0.0, c.facing[2]]);
+            let anchor = add(c.position, [0.0, 2.0, 0.0]);
+            let p0 = add(anchor, scale(fwd, -1.5));
+            let e1 = add(p0, scale(fwd, 7.0));
+            let dist3 = (0..3).map(|k| (hero[k] - c.position[k]).powi(2)).sum::<f32>().sqrt();
+            let reach = dist3 <= 65.0 && neopets_sim::gnarfas::segment_distance(p0, e1, hero, add(hero, [0.0, 3.5, 0.0])) <= 2.5 + 1.0;
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::werelupe::View {
+                position: c.position,
+                facing: c.facing,
+                hero,
+                hero_facing: hf,
+                hero_guarding: st == 20,
+                hero_down: st == hero_states::DEAD || matches!(st, 7..=11 | 0x2B..=0x2E),
+                hero_attacking: attacking,
+                hero_attack_state: st == 13,
+                was_hit: c.pending_hit.take().is_some(),
+                reach,
+                frame_bits: c.anim.frame_bits(),
+                clip: (clip.action, clip.progress, clip.progress >= 0.99),
+                hp: c.hp,
+                max_hp: c.row.map_or(1, |r| r.hit_points as i32),
+                hand: add(add(c.position, [0.0, 3.0, 0.0]), scale(fwd, 1.1)),
+                ground: &ground,
+            };
+            let Some(k) = c.king.as_mut() else { continue };
+            let before = k.state;
+            let act = k.tick(&v, &self.king_words, &mut self.rng);
+            let after = k.state;
+            if let Some(a) = act.anim {
+                if clip.action != a || (clip.progress >= 0.99 && std::mem::discriminant(&before) != std::mem::discriminant(&after)) {
+                    c.anim.play(a);
+                }
+            }
+            if let Some(rate) = act.face {
+                let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
+                c.facing = neopets_sim::hero::steer(c.facing, to, rate);
+            }
+            match act.travel {
+                neopets_sim::werelupe::Move::Fly(vel) => {
+                    c.position = add(c.position, vel);
+                    if vel[0] != 0.0 || vel[2] != 0.0 {
+                        c.facing = neopets_sim::hero::steer(c.facing, [vel[0], 0.0, vel[2]], 0.2);
+                    }
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.body.position = c.position;
+                        wk.facing = c.facing;
+                    }
+                }
+                neopets_sim::werelupe::Move::Still => {}
+                neopets_sim::werelupe::Move::Steer { mode, target, weight } => {
+                    let m = [target[0] - c.position[0], 0.0, target[2] - c.position[2]];
+                    if mode != 255 && (m[0] != 0.0 || m[2] != 0.0) {
+                        let (dir, w) = match mode {
+                            5 | 6 => {
+                                let p = if mode == 5 { [m[2], 0.0, -m[0]] } else { [-m[2], 0.0, m[0]] };
+                                let l = p[0].hypot(p[2]).max(1e-6);
+                                (p, if (c.facing[0] * p[0] + c.facing[2] * p[2]) / l > 0.9 { 1.0 } else { 0.1 })
+                            }
+                            _ => (m, weight),
+                        };
+                        c.facing = neopets_sim::hero::steer(c.facing, dir, w);
+                    }
+                    let ground = &world.ground;
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.facing = c.facing;
+                        wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                        c.position = wk.position();
+                    }
+                }
+            }
+            if std::mem::discriminant(&before) != std::mem::discriminant(&after) {
+                self.last_boss = format!("Werelupe King {:?} -> {:?} (hp {}, phase {}) on tick {}", before, after, c.hp, k.phase + 1, self.ticks);
+            }
+            let from = c.position;
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            for &f in &act.set_flag {
+                self.state.set(f, true);
+            }
+            let d = {
+                let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                [dx / l, 0.0, dz / l]
+            };
+            for centre in &act.rings {
+                // The ring effect 415 at the boss's position.
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, 415, *centre, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            if let Some((damage, blocked)) = act.hero_damage {
+                self.hero_hit(damage as f32, 0.0, blocked, d, "the Werelupe King".into());
+            }
+            for &damage in &act.raw_damage {
+                self.hero_hit(damage as f32, 0.0, false, d, "the Werelupe King's flame or boomerang".into());
             }
         }
     }

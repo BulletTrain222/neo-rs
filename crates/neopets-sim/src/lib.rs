@@ -25,6 +25,7 @@ pub mod inventory;
 pub mod items;
 pub mod gnarfas;
 pub mod juppie;
+pub mod werelupe;
 pub mod miamouse;
 pub mod level;
 pub mod mote;

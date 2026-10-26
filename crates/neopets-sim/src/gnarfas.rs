@@ -251,8 +251,10 @@ fn hdist(a: Vec3, b: Vec3) -> f32 {
     ((a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2)).sqrt()
 }
 
+/// A roll less than the chance: the roll is 0 to 100 inclusive (101 values; SPEC-0019 Roll and coin
+/// rules, which SPEC-0020 does not restate).
 fn roll(rng: &mut Rng, chance: i32) -> bool {
-    rng.range(0, 99) < chance
+    rng.range(0, 100) < chance
 }
 
 impl Gnarfas {
