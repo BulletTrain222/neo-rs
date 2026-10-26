@@ -1,6 +1,7 @@
 mod archive_view;
 mod character;
 mod controls;
+mod dev_menu;
 mod effect_view;
 mod foliage_view;
 mod orbit;
@@ -172,6 +173,7 @@ fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::
     // The hero and the characters are drawn again from the new game (its hero may be the
     // other one, and its character ids start again).
     play.generation = old.generation + 1;
+    play.cheats = old.cheats;
     play.snapshot = Some(slot.clone());
     play.apply_slot(slot);
     Ok(play)
@@ -185,6 +187,7 @@ fn new_game(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play) -> Result<p
     let mut play = play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT)?;
     play.generation = old.generation + 1;
     play.options = old.options;
+    play.cheats = old.cheats;
     Ok(play)
 }
 
@@ -789,15 +792,16 @@ fn main() {
             }),
             ..default()
         }))
-        .add_systems(Startup, (setup_viewer, setup_hud, setup_play))
+        .init_resource::<dev_menu::DevMenu>()
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel))
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
             Update,
             (
-                (read_input, step_sim, stream_worlds).chain(),
+                (dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, play_frame, sync_characters, sync_shots, effect_view::sync_effects, foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel).chain(),
             )
                 .chain(),
         );
@@ -1020,6 +1024,7 @@ fn step_sim(
     art: Option<Res<hud_view::HudArt>>,
     mut archive: Option<ResMut<Archive>>,
     mut commands: Commands,
+    dev: Res<dev_menu::DevMenu>,
 ) {
     let elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     let SimDriver {
@@ -1134,6 +1139,17 @@ fn step_sim(
         let (mut edge, mut buttons) = menu_view::menu_words(&keys, &gamepads);
         let held = menu_view::menu_held(&keys, &gamepads);
         // A slot to apply after this frame's ticks (a load, or Continue with the snapshot).
+        // The developer menu or free camera holds the hero's and the game menus' input.
+        if dev.blocks_input() {
+            input = neopets_sim::hero::HeroInput::default();
+            right = Vec2::ZERO;
+            edge = 0;
+            buttons = 0;
+            let p = &mut play.play;
+            (p.jump_latch, p.square_latch, p.attack_latch, p.l1_latch, p.r1_latch, p.r3_latch, p.l3_latch) = (false, false, false, false, false, false, false);
+            p.panel_latch = Default::default();
+        }
+        let r3_held = r3_held && !dev.blocks_input();
         let mut pending: Option<neopets_sim::save::Slot> = None;
         // Quit's world teardown, run after this frame's ticks.
         let mut quit = false;
@@ -2143,6 +2159,10 @@ fn play_trace(
     }
     // NEOPETS_TRACE_TARGET=<name>: the fight trace fights only characters with that name.
     play.fight_target = std::env::var("NEOPETS_TRACE_TARGET").ok().filter(|n| !n.is_empty());
+    // NEOPETS_TRACE_CHEATS="god,magic,charge": the developer menu's cheats from the start.
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_CHEATS") {
+        play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge") };
+    }
     // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic); a value above the
     // maximum raises the maximum too, so the boss-fight refills keep it.
     if let Some(hp) = std::env::var("NEOPETS_TRACE_HP").ok().and_then(|v| v.parse::<i32>().ok()) {

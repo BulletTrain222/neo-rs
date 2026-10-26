@@ -798,6 +798,8 @@ pub struct Play {
     last_area: Option<i32>,
     pub snapshot: Option<neopets_sim::save::Slot>,
     pub reload_wanted: bool,
+    /// The developer menu's cheats (a test tool of this build; no spec).
+    pub cheats: Cheats,
     /// The book words (SPEC-0035 section 6.1) and whether the chooser shows "Read Book".
     pub books: neopets_sim::book::Books,
     book_prompt: bool,
@@ -1318,6 +1320,7 @@ impl Play {
             last_area: None,
             snapshot: None,
             reload_wanted: false,
+            cheats: Cheats::default(),
             books: Default::default(),
             book_prompt: false,
             music: Default::default(),
@@ -3573,7 +3576,7 @@ impl Play {
 
     /// Spending more magic than the hero has sets it to 0 (SPEC-0036 Magic).
     fn pay_mp(&mut self, cost: i32) {
-        if cost > 0 {
+        if cost > 0 && !self.cheats.magic {
             self.hero_mp = (self.hero_mp - cost).max(0);
         }
     }
@@ -3581,7 +3584,7 @@ impl Play {
     /// SPEC-0036 Mote charge use: a use of n below the remaining charge subtracts n; otherwise
     /// the Mote leaves the inventory and every equipment word holding it is cleared.
     fn spend_charge(&mut self, word: usize, id: u16, n: i32) {
-        if n <= 0 {
+        if n <= 0 || self.cheats.charge {
             return;
         }
         // SPEC-0023 section 4: the use re-arms the panel of the word it spends from.
@@ -4573,6 +4576,13 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.ticks += 1;
+        // Developer cheats: full health and magic every tick.
+        if self.cheats.god {
+            self.hero_hp = self.hero_max;
+        }
+        if self.cheats.magic {
+            self.hero_mp = self.hero_mp_max;
+        }
         self.equipment_step();
         // SPEC-0053: while a swap runs (game-state code 5) the hero takes no input.
         let swapping = self.swap_step(input);
@@ -5851,7 +5861,7 @@ impl Play {
     /// discards hits; a dead hero takes none; Tor's charge sub-states 1 and 10 are busy), the
     /// deduct and the default death, and the knockback. Returns whether the hero died.
     fn hero_hit(&mut self, damage: f32, knockback: f32, blocked: bool, attacker_facing: [f32; 3], what: String) -> bool {
-        if self.dialogue_open || self.loco.state == hero_states::DEAD {
+        if self.dialogue_open || self.loco.state == hero_states::DEAD || self.cheats.god {
             return false;
         }
         let damage = damage.max(0.0).trunc() as i32;
@@ -7920,6 +7930,21 @@ impl Play {
 
     /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is
     /// equipped; every item is also counted as held.
+    /// Developer menu: both heroes to full health and magic.
+    pub fn dev_heal(&mut self) {
+        self.hero_hp = self.hero_max;
+        self.hero_mp = self.hero_mp_max;
+        if let Some(p) = self.parked.as_mut() {
+            p.hp = p.hp_max;
+            p.mp = p.mp_max;
+        }
+    }
+
+    /// Developer menu: an item's name from the item table, or "(no name)".
+    pub fn item_label(&self, id: u16) -> String {
+        self.design.item_name(id).map_or_else(|| "(no name)".to_string(), |n| String::from_utf8_lossy(&n).into_owned())
+    }
+
     pub fn give(&mut self, id: u16) {
         // The add puts equipment into its family entry (equipment_step); a Mote adds its
         // charge of 100 (SPEC-0021 Inventory).
@@ -8431,4 +8456,13 @@ fn light_record(r: &neopets_data::light::LightRecord) -> neopets_sim::charlight:
 /// The world id of `pack` in the area table (SPEC-0006), or -1.
 fn world_id(boot: &BootTravel, pack: u32) -> i32 {
     boot.areas.packs.iter().position(|&p| p == pack).and_then(|s| boot.areas.world_ids.get(s)).map_or(-1, |&w| w as i32)
+}
+
+/// The developer menu's cheats: no damage (and full health each tick), no magic cost (and full
+/// magic each tick), no Mote charge use.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Cheats {
+    pub god: bool,
+    pub magic: bool,
+    pub charge: bool,
 }
