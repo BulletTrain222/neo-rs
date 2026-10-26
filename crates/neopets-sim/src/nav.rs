@@ -12,6 +12,23 @@ pub struct NavMesh {
     pub table: Vec<u8>,
 }
 
+/// GetClosestNavMeshId (SPEC-0030 row 122): among the meshes of the kind (2 for a flyer, else 1),
+/// each holding the point's (x, z) in some triangle, the one whose first holding triangle's
+/// vertex-0 height is nearest the point's height (a later mesh only when strictly nearer); -1
+/// when none holds it.
+pub fn closest(meshes: &[NavMesh], p: Vec3, kind: u32) -> i32 {
+    let mut best: Option<(usize, f32)> = None;
+    for (i, m) in meshes.iter().enumerate().filter(|(_, m)| m.kind == kind) {
+        if let Some(t) = m.first_holding(p) {
+            let d = (m.triangles[t][0][1] - p[1]).abs();
+            if best.is_none_or(|(_, b)| d < b) {
+                best = Some((i, d));
+            }
+        }
+    }
+    best.map_or(-1, |(i, _)| i as i32)
+}
+
 fn cross2(a: Vec3, b: Vec3, p: Vec3) -> f32 {
     (b[0] - a[0]) * (p[2] - a[2]) - (b[2] - a[2]) * (p[0] - a[0])
 }
@@ -84,6 +101,11 @@ impl NavMesh {
     /// A full-scan locate: the first triangle containing p.
     pub fn locate_full(&self, p: Vec3) -> Option<usize> {
         (0..self.len()).find(|&t| self.contains(t, p))
+    }
+
+    /// The first triangle in array order holding (x, z), edges inside (GetClosestNavMeshId).
+    pub fn first_holding(&self, p: Vec3) -> Option<usize> {
+        self.locate_full(p)
     }
 
     pub fn centroid(&self, t: usize) -> Vec3 {
@@ -162,6 +184,26 @@ impl NavMesh {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn closest_mesh() {
+        // SPEC-0030's vector: meshes 0 and 1 (kind 1) both hold (0.2, 5.0, 0.2); heights 4.0 and
+        // 6.5 give 0; at 6.0 the tie keeps 0; a flyer tests kind 2 only and gets -1.
+        let p = [0.2, 5.0, 0.2];
+        let wind = |y: f32, order: bool| {
+            let t = if order { [[0.0, y, 0.0], [0.0, y, 1.0], [1.0, y, 0.0]] } else { [[0.0, y, 0.0], [1.0, y, 0.0], [0.0, y, 1.0]] };
+            NavMesh { kind: 1, triangles: vec![t], neighbours: vec![[-1; 3]], table: Vec::new() }
+        };
+        let order = wind(4.0, true).contains(0, p);
+        let mk = |y: f32| wind(y, order);
+        assert!(mk(4.0).contains(0, p));
+        assert_eq!(closest(&[mk(4.0), mk(6.5)], p, 1), 0);
+        assert_eq!(closest(&[mk(4.0), mk(6.0)], p, 1), 0);
+        assert_eq!(closest(&[mk(6.5), mk(4.0)], p, 1), 1);
+        assert_eq!(closest(&[mk(4.0), mk(6.5)], p, 2), -1);
+        assert_eq!(closest(&[mk(4.0)], [3.0, 5.0, 3.0], 1), -1);
+    }
+
     use super::*;
 
     /// Two triangles forming the square x, z in [0, 10] (positive winding), sharing the diagonal.

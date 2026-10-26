@@ -251,6 +251,12 @@ pub enum Action {
     InitMortog { target: i32, centre: usize, edge: usize, hold: (f32, f32) },
     /// ChangeMortogTimes(hmin, hmax) (SPEC-0030 row 83).
     MortogTimes { hold: (f32, f32) },
+    /// CharacterNavmeshAssign(entity, mesh) (SPEC-0030 row 210): the mesh set (a negative id
+    /// leaves the character off-mesh).
+    NavmeshAssign { entity: usize, mesh: i32 },
+    /// GetClosestNavMeshId(W, entity) (SPEC-0030 row 122), answered by the host into a module
+    /// word of the thread's pack as the id plus 1 (0: none yet).
+    QueryNavmesh { entity: usize, word: u8 },
     /// SetAnimObjPositionOffset's vertical part (ResetAnimObjOffsets is y = 0).
     ObjOffset { obj: usize, y: f32 },
     /// SPEC-0059 section 5, the 758 finish gate's freeze: T = the timer value, kept in word 3 as
@@ -1625,8 +1631,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0042 986 Init: flags 87 to 89 kept at load (words 11 to 13); the triggers; the
         // objects and world masks by those flags; the slot-load thread (86 clear: set 0, region
-        // 987). Breakable 0's SetBreakableActive, the navmesh table and the debug registrar are
-        // not built.
+        // 987). Breakable 0's SetBreakableActive and the debug registrar are not built; the
+        // navmesh table runs in Update.
         986 => {
             let (f87, f88, f89) = (state.flag(87), state.flag(88), state.flag(89));
             state.set_word(pack, 11, f87 as i32);
@@ -1835,8 +1841,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0043 1122 Init: trigger 5 (the waves); objects by 31 and 320; the slot thread (31:
         // set 0, 30: 1, else 2; region 1123 + set) into slot 0; with 31 trigger 6 (the arena
-        // entry). Triggers 0 to 3 (ActivateTransitionAssets, RegisterTransitionMap) and the
-        // navmesh assignments are not built.
+        // entry). Triggers 0 to 3 (ActivateTransitionAssets, RegisterTransitionMap) are not
+        // built; the navmesh table runs in Update.
         1122 => {
             let mut v = vec![reg(5, 5)];
             if state.flag(31) {
@@ -2144,7 +2150,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0043 1335 Init: 235; the triggers (0 to 3 shared, 5 to 9; 4 does nothing); object
         // 1 (241 clear) or 0; the slot chooser (94: none; 93: set 2; 92: set 1 or 0 by 241, into
         // slot 0; else set 7 into slot 1; region 1336 + set). The walk thread (entity 36 along
-        // group 0's points) and the navmesh assignment are not built; the line-37 thread waits
+        // group 0's points) is not built (the navmesh assignment runs in Update); the line-37 thread waits
         // for movie 22, which is not played.
         1335 => {
             state.set(235, true);
@@ -2283,8 +2289,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // run only by StartTransitionScene, which has no live call (SPEC-0030 rows 268 and 283).
         908 => [4, 0, 1, 2].map(|obj| Action::InitObjOn { obj, end: false }).to_vec(),
         // SPEC-0037 906 Init: the button routine on trigger 2, L0 and L1 on 0 and 1, and thread
-        // T's load of set 0 (region 907). The per-tick navmesh pass (GetClosestNavMeshId,
-        // CharacterNavmeshAssign, DisableVillagerSocialize) is not built.
+        // T's load of set 0 (region 907). The per-tick navmesh pass runs in Update
+        // (DisableVillagerSocialize is not built).
         906 => vec![reg(2, 2), reg(0, 0), reg(1, 1), Action::LoadRegion { slot: 0, region: Some(907) }],
         // SPEC-0037 837 Init: with 636 clear object 0 at its start and masks 1, else masks 2
         // (breakable 3's SetBreakableActive is not built: R-0040).
@@ -3403,6 +3409,26 @@ fn barrier_1174(s: &mut GameState, g: usize, up: bool) -> Vec<Action> {
     if g < 6 {
         s.set_word(1174, 10 + g as u8, up as i32);
         v.push(reg_at(30 + g as u16, if up { 30 } else { 31 }));
+    }
+    v
+}
+
+/// The first module word of a per-tick navigation table (an entry holds the mesh id plus 1, so 0
+/// is the table's reset value -1).
+const NAV_TABLE: usize = 150;
+
+/// The per-tick navigation pass of 906, 956 and 986 (SPEC-0037 906; SPEC-0043 956; SPEC-0042
+/// 986): each of the first n entities whose table entry is unassigned asks for its closest mesh
+/// (the host's answer lands for the next tick), and each assigned one is assigned that mesh
+/// every tick. DisableVillagerSocialize is not built.
+fn nav_pass(state: &GameState, pack: u32, n: usize) -> Vec<Action> {
+    let mut v = Vec::new();
+    for e in 0..n {
+        let word = (NAV_TABLE + e) as u8;
+        match state.word(pack, word) {
+            0 => v.push(Action::QueryNavmesh { entity: e, word }),
+            id => v.push(Action::NavmeshAssign { entity: e, mesh: id - 1 }),
+        }
     }
     v
 }
@@ -9062,6 +9088,13 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0054 1432 the fight control thread (the first rule that applies takes the tick).
         1432 => out.extend(fight_1432(state)),
+        // SPEC-0037 906 Update: the navigation pass over entities 0 to 17.
+        906 => out.extend(nav_pass(state, pack, 18)),
+        // SPEC-0042 986 Update: the navigation pass over 28 entities.
+        986 => out.extend(nav_pass(state, pack, 28)),
+        // SPEC-0043 1335 Update: CharacterNavmeshAssign(36, 4) each tick (SetAI_MovementType is
+        // not built).
+        1335 => out.push(Action::NavmeshAssign { entity: 36, mesh: 4 }),
         // SPEC-0043 1122 Update: the waves (word 2: 1 to 3) advance once every character of slot
         // 1 is dead (3 s, the next set: 4 then 5, their AIs aggressive), and after the third the
         // end (320, the hero to locator 24, the objects back). With 31 and 320 the arena thread:
@@ -9071,6 +9104,11 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // load of eW 151, pack 1300, in place of movie 54). The boss-fight refills and the
         // hero-down game over are not built.
         1122 => {
+            // The fixed navmesh table each tick (Medium): entities 0 to 3 mesh 0, 4 and 9 mesh 4,
+            // 5 and 8 mesh 3, 6 and 7 mesh 2, 11 to 18 mesh 1.
+            for (entity, mesh) in [(0, 0), (1, 0), (2, 0), (3, 0), (4, 4), (9, 4), (5, 3), (8, 3), (6, 2), (7, 2)].into_iter().chain((11..=18).map(|e| (e, 1))) {
+                out.push(Action::NavmeshAssign { entity, mesh });
+            }
             let w = state.word(pack, 2);
             if (1..=3).contains(&w) && state.slot_alive.get(&1) == Some(&0) {
                 state.set_word(pack, 2, 0);
@@ -9142,6 +9180,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // with 214 set and 216 clear the aftermath scene runs once (flags 216, 10, 18, 30, 47 and
         // 64, movie 14 counted, 217, thread 3, then the scene with entity 28, lines 63 and 72).
         956 => {
+            out.extend(nav_pass(state, pack, 52));
             state.set_word(pack, 1, 0);
             if state.flag(214) && !state.flag(216) {
                 for f in [216, 10, 18, 30, 47, 64] {
@@ -13849,6 +13888,22 @@ mod tests {
     }
 
     #[test]
+    fn navigation_pass() {
+        // 906: an unassigned entry asks for the closest mesh; an answered one (id + 1) is
+        // assigned each tick; 1335 assigns entity 36 mesh 4; 1122 its fixed table.
+        let mut s = GameState::default();
+        let v = on_update(906, &mut s, false);
+        assert_eq!(v.len(), 18);
+        assert_eq!(v[0], Action::QueryNavmesh { entity: 0, word: 150 });
+        s.set_word(906, 150, 3);
+        assert_eq!(on_update(906, &mut s, false)[0], Action::NavmeshAssign { entity: 0, mesh: 2 });
+        assert!(on_update(1335, &mut s, false).contains(&Action::NavmeshAssign { entity: 36, mesh: 4 }));
+        let v = on_update(1122, &mut s, false);
+        assert!(v.contains(&Action::NavmeshAssign { entity: 9, mesh: 4 }) && v.contains(&Action::NavmeshAssign { entity: 18, mesh: 1 }));
+        assert!(!v.iter().any(|a| matches!(a, Action::NavmeshAssign { entity: 10, .. })));
+    }
+
+    #[test]
     fn module_1432_final_fight() {
         // The thread's own writes (Bits, LevelState, SetFlag, the timer) as the host applies them.
         fn run(v: Vec<Action>, s: &mut GameState) -> Vec<Action> {
@@ -13940,7 +13995,7 @@ mod tests {
         s.set(214, true);
         let out = on_update(956, &mut s, false);
         assert!(out.contains(&Action::LoadRegion { slot: 0, region: Some(965) }) && out.contains(&Action::Message { line: 72 }));
-        assert!(s.flag(216) && s.flag(64) && on_update(956, &mut s, false).is_empty());
+        assert!(s.flag(216) && s.flag(64) && on_update(956, &mut s, false).iter().all(|a| matches!(a, Action::QueryNavmesh { .. } | Action::NavmeshAssign { .. })));
         // The door: line 71 with 64 set and 67 clear.
         assert_eq!(on_teleport(956, 0, &mut s), vec![Action::Message { line: 71 }]);
     }

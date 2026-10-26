@@ -2194,6 +2194,23 @@ impl Play {
                         self.state.mortogs_on_target = 0;
                     }
                 }
+                Action::NavmeshAssign { entity, mesh } => {
+                    let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+                    let meshes = &world.navmeshes;
+                    if let Some(c) = self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(entity)) {
+                        if let Some(w) = c.walker.as_mut() {
+                            w.assign_mesh(usize::try_from(mesh).ok().filter(|&m| m < meshes.len()), meshes);
+                        }
+                    }
+                }
+                Action::QueryNavmesh { entity, word } => {
+                    let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+                    if let Some(c) = self.characters.iter().find(|c| c.pack == pack && c.entity == Some(entity)) {
+                        let kind = if c.row.is_some_and(|r| r.can_fly != 0) { 2 } else { 1 };
+                        let id = neopets_sim::nav::closest(&world.navmeshes, c.position, kind);
+                        self.state.set_word(pack, word, id + 1);
+                    }
+                }
                 Action::MortogTimes { hold } => {
                     if let Some((_, z, _)) = self.mortog_zone.as_mut() {
                         z.hold = hold;
