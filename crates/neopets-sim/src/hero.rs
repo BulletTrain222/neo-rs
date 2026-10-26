@@ -41,6 +41,8 @@ pub const BLOCK: u8 = 18;
 /// 58; their ticks are `block::Hang` and `block::Climb`).
 pub const HANG: u8 = 19;
 pub const CLIMB: u8 = 58;
+/// The ladder (SPEC-0033 Behavior 13; its tick is `ladder::Ladder`).
+pub const LADDER: u8 = 41;
 /// Sneak idle, sneak reverse walk (39) and sneak walk (SPEC-0033 Behavior 4A.1 and 5.1).
 pub const SNEAK: u8 = 22;
 pub const SNEAK_WALK: u8 = 40;
@@ -497,6 +499,16 @@ impl Locomotion {
         self.request = 40;
     }
 
+    /// The ladder's jump off (Behavior 13): a jump state falling with the given velocity.
+    pub fn jump_off(&mut self, velocity: Vec3) {
+        self.enter_air(JUMP);
+        self.phase = 2;
+        self.request = ANIM_JUMP_STILL;
+        self.body.velocity = velocity;
+        self.body.no_gravity = false;
+        self.body.gain = GAIN_FALL;
+    }
+
     /// Enter a block state (19 or 58) with its first request.
     pub fn enter_state(&mut self, state: u8, request: u32) {
         self.state = state;
@@ -525,7 +537,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK | HANG | CLIMB => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK | HANG | CLIMB | LADDER => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -570,7 +582,7 @@ impl Locomotion {
             SCRIPTED => return,
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
-            BLOCK | HANG | CLIMB => return,
+            BLOCK | HANG | CLIMB | LADDER => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -814,7 +826,7 @@ impl Locomotion {
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
         // In the edge states the clips' root motion lifts the hero (the pull-up 59 rises 3.7 and
         // the climb 134 1.2), so it is not flattened onto the ground there.
-        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB) {
+        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB | LADDER) {
             let n = self.body.normal;
             let dn = dot(d, n);
             d = std::array::from_fn(|k| d[k] - dn * n[k]);

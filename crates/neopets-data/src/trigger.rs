@@ -142,6 +142,63 @@ pub fn movable_blocks(bytes: &[u8], top: &[Chunk]) -> Vec<BlockSource> {
         .collect()
 }
 
+/// The type-10 chunk: ladders and climb panels.
+pub const PANELS: u16 = 10;
+
+/// A ladder or climb-panel record of a type-10 group (SPEC-0006 Type 10): its origin, the
+/// face plane (unit normal n, offset in the fourth lane), the side axis U and up axis V (each
+/// with its offset, so the plane value is the position along it), the lengths along U and V
+/// and the type (-3 ladder, -2 climb panel).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Panel {
+    pub origin: [f32; 3],
+    pub normal: [f32; 4],
+    pub u: [f32; 4],
+    pub v: [f32; 4],
+    pub lu: f32,
+    pub lv: f32,
+    pub kind: i8,
+}
+
+/// Every record of the first type-10 chunk, group by group. The chunk's offsets count from the
+/// chunk's own first byte, 16 before the payload (SPEC-0006: chunk-relative).
+pub fn panels(bytes: &[u8], top: &[Chunk]) -> Vec<Panel> {
+    let Some(c) = top.iter().find(|c| c.kind == PANELS) else { return Vec::new() };
+    let Some(p) = bytes.get(c.payload.clone()) else { return Vec::new() };
+    let v4 = |at: usize| Some([f32_at(p, at)?, f32_at(p, at + 4)?, f32_at(p, at + 8)?, f32_at(p, at + 12)?]);
+    let groups = u32_at(p, 0).unwrap_or(0).min(1 << 10) as usize;
+    let Some(table) = u32_at(p, 4).and_then(|v| (v as usize).checked_sub(16)) else { return Vec::new() };
+    let mut out = Vec::new();
+    for g in 0..groups {
+        let at = table + 0x20 * g;
+        let (Some(n), Some(list)) = (u32_at(p, at + 0x10), u32_at(p, at + 0x14)) else { break };
+        for k in 0..(n as usize).min(1 << 10) {
+            let Some(r) = (list as usize).checked_sub(16).map(|l| l + 0x60 * k) else { break };
+            let rec = (|| {
+                let o = v4(r)?;
+                Some(Panel { origin: [o[0], o[1], o[2]], normal: v4(r + 0x10)?, u: v4(r + 0x20)?, v: v4(r + 0x30)?, lu: f32_at(p, r + 0x40)?, lv: f32_at(p, r + 0x44)?, kind: *p.get(r + 0x4C)? as i8 })
+            })();
+            let Some(rec) = rec else { break };
+            out.push(rec);
+        }
+    }
+    out
+}
+
+/// The type-10 groups' centres and squared radii (for the census check).
+pub fn panel_groups(bytes: &[u8], top: &[Chunk]) -> Vec<([f32; 3], f32, usize)> {
+    let Some(c) = top.iter().find(|c| c.kind == PANELS) else { return Vec::new() };
+    let Some(p) = bytes.get(c.payload.clone()) else { return Vec::new() };
+    let groups = u32_at(p, 0).unwrap_or(0).min(1 << 10) as usize;
+    let Some(table) = u32_at(p, 4).and_then(|v| (v as usize).checked_sub(16)) else { return Vec::new() };
+    (0..groups)
+        .map_while(|g| {
+            let at = table + 0x20 * g;
+            Some(([f32_at(p, at)?, f32_at(p, at + 4)?, f32_at(p, at + 8)?], f32_at(p, at + 0x0C)?, u32_at(p, at + 0x10)? as usize))
+        })
+        .collect()
+}
+
 /// A type-40 script group entry.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ScriptGroup {

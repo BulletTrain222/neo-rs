@@ -28,6 +28,7 @@ pub mod hero;
 pub mod hud;
 pub mod inventory;
 pub mod items;
+pub mod ladder;
 pub mod ixi;
 pub mod fyora;
 pub mod gnarfas;

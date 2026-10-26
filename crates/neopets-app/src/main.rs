@@ -2823,9 +2823,13 @@ fn play_trace(
             side = m * (dx * l[0] + dz * l[2]) / len;
         }
         // NEOPETS_TRACE_PUSH="x,z": the stick points straight at the point (no route search),
-        // except while climbing.
+        // except while climbing onto a block (centred) and on a ladder (pushed up).
         if let Some((x, z)) = std::env::var("NEOPETS_TRACE_PUSH").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<f32>().ok()?, b.trim().parse::<f32>().ok()?)) }) {
-            (forward, side) = if play.loco.state == 58 { (0.0, 0.0) } else { play.stick_toward(x, z) };
+            (forward, side) = match play.loco.state {
+                58 => (0.0, 0.0),
+                41 => (1.0, 0.0),
+                _ => play.stick_toward(x, z),
+            };
         }
         // NEOPETS_TRACE_BLOCK: in the block state the stick points into the held face (centred
         // during the approach), so the hero pushes; the Square prompts are pressed as usual.
@@ -2843,9 +2847,9 @@ fn play_trace(
             // With NEOPETS_TRACE_MICE the drop prompt is pressed only inside the cage, and a
             // stalk starts the sneak with one press.
             square_held: stalk.is_some(),
-            // NEOPETS_TRACE_CLIMB: the grab-block prompt (10) is not pressed, so the hero keeps
+            // NEOPETS_TRACE_CLIMB: the grab-block (10) and stop-climbing (18) prompts are not pressed, so the hero keeps
             // walking into the block.
-            square: (play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(play.prompt_shown == Some(10) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()))
+            square: (play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()))
                 || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),

@@ -47,6 +47,8 @@ pub struct World {
     /// The poses of the drawn placed objects that own ground patches, for the probe's owner
     /// placement (SPEC-0018 Ground probe steps 2 and 4), refreshed each tick.
     pub owner_poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose>,
+    /// The ladders of the type-10 groups (SPEC-0006 Type 10, records of type -3).
+    pub rails: Vec<neopets_sim::ladder::Rail>,
     pub block_meshes: Vec<Option<std::ops::Range<usize>>>,
     pub motions: Vec<neopets_sim::object::Motion>,
     pub object_anims: Vec<neopets_sim::object::ObjAnim>,
@@ -185,6 +187,7 @@ impl World {
             breakables: Vec::new(),
             blocks: Vec::new(),
             owner_poses: Default::default(),
+            rails: Vec::new(),
             block_meshes: Vec::new(),
             motions: Vec::new(),
             object_anims: Vec::new(),
@@ -248,6 +251,11 @@ impl World {
         // modes 1 and 2 apply only to an entry whose broken bit is set, and no disc entry has
         // them, so nothing changes here.
         world.breakables = neopets_data::world::breakables(&bytes, &chain.chunks);
+        world.rails = neopets_data::trigger::panels(&bytes, &chain.chunks)
+            .into_iter()
+            .filter(|p| p.kind == -3)
+            .map(|p| neopets_sim::ladder::Rail { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv })
+            .collect();
         // SPEC-0018 Patch-id table: each placed object's inline model set is registered under
         // its patch id.
         if let Some(g) = world.ground.as_mut() {
@@ -668,6 +676,9 @@ pub struct Play {
     /// push-into-face counter (Behavior 15).
     hang: Option<neopets_sim::block::Hang>,
     climb: Option<neopets_sim::block::Climb>,
+    /// State 41 and the grab cooldown (Behavior 20) the jump off sets.
+    ladder: Option<neopets_sim::ladder::Ladder>,
+    grab_cooldown: u32,
     side_touch: bool,
     face_count: u32,
     stick_centred: bool,
@@ -1328,6 +1339,8 @@ impl Play {
             hold: None,
             hang: None,
             climb: None,
+            ladder: None,
+            grab_cooldown: 0,
             side_touch: false,
             face_count: 0,
             stick_centred: true,
@@ -3391,6 +3404,14 @@ impl Play {
     /// (label 10) while the face finder finds a face of the hero's current block, whose press
     /// enters state 18 (SPEC-0033 Behaviors 4A.2 and 15A).
     fn block_step(&mut self) -> bool {
+        // SPEC-0022: on the ladder "Stop Climbing" (label 18); Square returns to state 1.
+        if self.loco.state == hero_states::LADDER {
+            self.door_prompt = Some(18);
+            if self.square_now {
+                self.leave_ladder();
+            }
+            return true;
+        }
         if self.loco.state == hero_states::HANG {
             if self.hero.clip_state().action == 73 {
                 self.door_prompt = Some(20);
@@ -3475,6 +3496,18 @@ impl Play {
             v.push(format!("object patch sets (id, object): {:?}; drawn owners {:?}", g.object_sets(), self.world.owner_poses.keys().collect::<Vec<_>>()));
         }
         v.push(format!("probe at (-19.082, 11.697) ceiling 36.076: {}", self.world.probe(-19.082, 11.697, 36.076).height));
+        // The ladders whose up axis is vertical: the foot point in front of the face, its
+        // ground and the ladder's base and top heights.
+        for (k, r) in self.world.rails.iter().enumerate().filter(|(_, r)| r.v[1] > 0.99) {
+            let base = -r.v[3];
+            let (n, u) = ([r.normal[0], r.normal[1], r.normal[2]], [r.u[0], r.u[1], r.u[2]]);
+            // A point on the face plane at the U start and the base height, then 1.0 out and
+            // 0.8 along U.
+            let o = [-(r.normal[3]) * n[0] - (r.u[3]) * u[0], base, -(r.normal[3]) * n[2] - (r.u[3]) * u[2]];
+            let foot = [o[0] + n[0] + 0.8 * u[0], base, o[2] + n[2] + 0.8 * u[2]];
+            let g = self.world.probe(foot[0], foot[2], base + 3.0).height;
+            v.push(format!("ladder {k}: foot ({:.2}, {:.2}) ground {:.2} base {:.2} top {:.2} into {:?}", foot[0], foot[2], g, base, base + r.lv, n.map(|c| -c)));
+        }
         v.extend(self.world.all_volumes.iter().filter(|x| x.fires_on_block(self.world.collis_mask)).map(|x| format!("block volume {}: kind {} flags {:#x} routine {:?} {:?}", x.index, x.kind, x.flags, self.world.routines.get(&x.index), x.shape)));
         v
     }
@@ -3548,6 +3581,10 @@ impl Play {
     /// (the side-touch latch and a face, on Cross from the ground or in air phases 0 to 5)
     /// enters state 19, and the push-into-face counter with the fit test enters state 58.
     fn edge_step(&mut self, input: &HeroInput) {
+        self.ladder_step(input);
+        if self.loco.state == hero_states::LADDER {
+            return;
+        }
         let hero = self.loco.position();
         let c = self.hero.clip_state();
         let clip = neopets_sim::block::EdgeClip { action: c.action, progress: c.progress };
@@ -3605,6 +3642,72 @@ impl Play {
         if let Some((state, push)) = step.exit {
             self.leave_edge(state, push);
             self.trace_edge("leave", state as usize, 0);
+        }
+    }
+
+    /// Leave the ladder to state 1 with gravity back on.
+    fn leave_ladder(&mut self) {
+        self.ladder = None;
+        self.loco.body.no_gravity = false;
+        self.loco.enter_state(hero_states::STANCE, 0);
+    }
+
+    /// SPEC-0033 Behaviors 13 and 22: the ladder grab test from the ground and while jumping
+    /// (the cooldown 0), and state 41 each tick: facing the ladder, motion cleared, no gravity,
+    /// the mount move, the rung clips, the climb off the top, stepping off, and the jump off.
+    fn ladder_step(&mut self, input: &HeroInput) {
+        self.grab_cooldown = self.grab_cooldown.saturating_sub(1);
+        let hero = self.loco.position();
+        let v = neopets_sim::hero::speed_value(input);
+        if self.loco.state != hero_states::LADDER {
+            self.ladder = None;
+            let ground = (1..=6).contains(&self.loco.state);
+            let jumping = (7..=10).contains(&self.loco.state) || (43..=46).contains(&self.loco.state);
+            if self.grab_cooldown > 0 || !(ground || jumping) || self.world.rails.is_empty() {
+                return;
+            }
+            let stick = self.loco.target;
+            if let Some(k) = neopets_sim::ladder::grab(&self.world.rails, hero, self.loco.facing, stick, v, false) {
+                self.ladder = Some(neopets_sim::ladder::Ladder::new(k));
+                self.loco.enter_state(hero_states::LADDER, 93);
+                self.trace_edge("ladder", k, 0);
+            } else {
+                return;
+            }
+        }
+        let Some(mut l) = self.ladder else {
+            self.leave_ladder();
+            return;
+        };
+        let c = self.hero.clip_state();
+        let step = l.tick(&self.world.rails, hero, input.forward, input.jump, self.loco.body.gap, (c.action, c.progress));
+        self.ladder = Some(l);
+        self.loco.body.no_gravity = true;
+        self.loco.body.velocity = [0.0; 3];
+        self.loco.steer_toward(step.facing, 1.0);
+        if let Some(p) = step.place {
+            self.loco.body.position = p;
+        }
+        if let Some(r) = step.request {
+            self.loco.block_request(r);
+        }
+        if step.cue {
+            self.cue(140);
+        }
+        match step.leave {
+            Some(true) => {
+                // The jump off: -0.5 times the facing, +2.0 up, and the 30-tick cooldown.
+                let f = self.loco.facing;
+                self.ladder = None;
+                self.grab_cooldown = neopets_sim::ladder::COOLDOWN;
+                self.loco.jump_off([-neopets_sim::ladder::JUMP_BACK * f[0], neopets_sim::ladder::JUMP_UP, -neopets_sim::ladder::JUMP_BACK * f[2]]);
+                self.trace_edge("ladder jump", l.rail, 0);
+            }
+            Some(false) => {
+                self.leave_ladder();
+                self.trace_edge("ladder off", l.rail, 0);
+            }
+            None => {}
         }
     }
 
@@ -5364,6 +5467,7 @@ impl Play {
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
         let block_contact = !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
+        let wall_contact = !matches!(self.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
         let side_touch = Cell::new(false);
         let swap = Cell::new(false);
         self.loco.record_tick(
@@ -5386,7 +5490,7 @@ impl Play {
                 // (walls), then the box primitives, each with the hero radius. Not implemented:
                 // cell lists A and B as such, cylinders, spheres, the ledge tests, the shared
                 // contact response (pushes move the position only) and recovery.
-                if let Some(g) = &world.ground {
+                if let (Some(g), true) = (&world.ground, wall_contact) {
                     let walls: Vec<WallEdge> = g
                         .frames_at(p[0], p[2])
                         .into_iter()

@@ -37,6 +37,7 @@ fn run() -> Result<(), String> {
     let mut registries = Vec::new();
     let mut lights = false;
     let mut blocks = false;
+    let mut panels = false;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -51,6 +52,7 @@ fn run() -> Result<(), String> {
             "--effects" => effects = true,
             "--lights" => lights = true,
             "--blocks" => blocks = true,
+            "--panels" => panels = true,
             "--registry" => {
                 let n = args.next().ok_or("--registry needs a resource number")?;
                 registries.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -86,7 +88,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(blocks || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(panels || blocks || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -149,6 +151,9 @@ fn run() -> Result<(), String> {
     }
     if blocks {
         block_census(&mut disc, &index)?;
+    }
+    if panels {
+        panel_census(&mut disc, &index)?;
     }
     if survey || coverage {
         let report = survey_all(&mut disc, &index)?;
@@ -507,6 +512,49 @@ fn material_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> 
         let why = if *well_formed { "no matching entry" } else { "malformed state block" };
         println!("  resource {n} group {g}: {why}");
     }
+    Ok(())
+}
+
+/// SPEC-0006 Type 10: the ladders and climb panels of every chunk file, with the check that
+/// each record's origin lies inside its group's radius.
+fn panel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    let (mut packs, mut ladders, mut panels, mut outside) = (0u32, 0usize, 0usize, 0usize);
+    for n in 0..index.len() as u32 {
+        let bytes = index.read(disc, n)?;
+        let family = resource::classify(&bytes);
+        if !matches!(family, Family::ChunkFile(_)) {
+            continue;
+        }
+        let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+        let recs = neopets_data::trigger::panels(&bytes, &chain.chunks);
+        if recs.is_empty() {
+            continue;
+        }
+        packs += 1;
+        let here = recs.iter().filter(|r| r.kind == -3).count();
+        if here > 0 {
+            print!("{n}:{here} ");
+        }
+        ladders += here;
+        panels += recs.iter().filter(|r| r.kind == -2).count();
+        let groups = neopets_data::trigger::panel_groups(&bytes, &chain.chunks);
+        let mut k = 0;
+        for (c, r2, count) in groups {
+            for rec in recs.iter().skip(k).take(count) {
+                let d2: f32 = (0..3).map(|i| (rec.origin[i] - c[i]).powi(2)).sum();
+                if d2 > r2 * 1.0001 + 1e-3 {
+                    outside += 1;
+                }
+            }
+            k += count;
+        }
+        if std::env::var("NEOPETS_PANELS_PACK").ok().and_then(|v| v.parse::<u32>().ok()) == Some(n) {
+            for r in recs.iter().filter(|r| r.kind == -3) {
+                println!("  ladder origin {:?} n {:?} u {:?} v {:?} lu {} lv {}", r.origin, r.normal, r.u, r.v, r.lu, r.lv);
+            }
+        }
+    }
+    println!("type 10: {ladders} ladders and {panels} climb panels in {packs} packs; {outside} records outside their group radius");
     Ok(())
 }
 
