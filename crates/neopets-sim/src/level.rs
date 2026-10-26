@@ -553,7 +553,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
+    if (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -585,6 +585,8 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
 /// Run a pack's teleport callback for a door.
 pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action> {
     match (pack, door) {
+        // SPEC-0039 1248 teleport 0 (context 13): the replacement to eW 147 (pack 1257).
+        (1248, 0) => vec![Action::ReplaceExterior { slot: 147, plane: -1 }],
         // SPEC-0039 706 teleport 0 (context 13): with 67 clear and 64 set line 1; else the entry
         // into eW 76 (pack 984), 3 s.
         (706, 0) if !state.flag(67) && state.flag(64) => vec![Action::Message { line: 1 }],
@@ -835,7 +837,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
 /// until a script initialises them; SPEC-0028 section 10). Other packs draw their objects at
 /// rest until their calls are built.
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1173 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -882,6 +884,45 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0037 809 Init (play mode: the debug writes do not run): thread D loads slot 0 with
         // set 4 to 0 by the first set flag of 58, 57, 56, 55, 54 (region 810 + set).
         809 => [(58, 4), (57, 3), (56, 2), (55, 1), (54, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| Action::LoadRegion { slot: 0, region: Some(810 + j) }).into_iter().collect(),
+        // SPEC-0039 1344 Init: triggers 0 to 4 (handlers 2, 3, 6, 4, 5), objects 2, 3, 4, 5, 1 and 0
+        // off; thread 7 loads slot 0 with set 0, 1 or 2 by flags 94, 93, 92 (only when flag 92
+        // was set, as that create stores the word they read) or, with 239 and 240, set 3 (only
+        // when 92 was clear); region 1345 + set. The toggles of triggers 3 and 4 (Medium) are
+        // not reproduced.
+        1344 => {
+            let mut v = vec![reg(0, 2), reg(1, 3), reg(2, 6)];
+            v.extend([2, 3, 4, 5, 1, 0].map(|obj| Action::InitObjOn { obj, end: false }));
+            let made = state.flag(92);
+            let set = if state.flag(94) {
+                Some(0)
+            } else if state.flag(93) {
+                Some(1)
+            } else if state.flag(92) {
+                Some(2)
+            } else if state.flag(239) && state.flag(240) {
+                Some(3)
+            } else {
+                None
+            };
+            if let Some(j) = set.filter(|&j| (j < 3) == made) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1345 + j) });
+            }
+            v
+        }
+        // SPEC-0039 1248 Init: with 79 clear objects 3, 4, 5, 2, 0 and 1 off; objects 30, 29, 28,
+        // 27, 43, 45, 41, 37, 33, 25 and 26 off and 30 to 27 looped; triggers 16 to 18 (handlers
+        // 5, 4, 3), 0 (7) and 1 to 3 (6); teleport 0 and the arrival are fixed rules. Triggers 4
+        // and 27 (Low to Medium) and AddAnimObjSound are not reproduced.
+        1248 => {
+            let mut v = Vec::new();
+            if !state.flag(79) {
+                v.extend([3, 4, 5, 2, 0, 1].map(|obj| Action::InitObjOn { obj, end: false }));
+            }
+            v.extend([30, 29, 28, 27, 43, 45, 41, 37, 33, 25, 26].map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend([30, 29, 28, 27].map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
+            v.extend([reg(16, 5), reg(17, 4), reg(18, 3), reg(0, 7), reg(1, 6), reg(2, 6), reg(3, 6)]);
+            v
+        }
         // SPEC-0039 706 Init: triggers 1 (handler 1) and 2 (handler 3); flag 62 when none of 62 to
         // 67 is set; with 248 set and no item 14, object 0 off and trigger 0 (handler 4); the
         // display mask 2 (flag 205) or 1; thread 2 loads slot 0 with set 5 to 1 by the first set
@@ -2469,6 +2510,49 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0039 1344 trigger 0 (entering with the body): with 237 set and 238 clear, 238 (movie
+        // 22 is not built), 30 ticks and line 10. Trigger 1: with 239 set and 240 clear, 240
+        // (movie 24 not built). Trigger 2 (entering with the body): lines 3 and 4 with 236 set and
+        // 239 clear.
+        (1344, 2) if call.state == 1 && call.object && state.flag(237) && !state.flag(238) => {
+            state.set(238, true);
+            out.actions.extend([Action::Sleep { ticks: 30 }, Action::Message { line: 10 }]);
+        }
+        (1344, 3) if call.state != 0 && state.flag(239) && !state.flag(240) => state.set(240, true),
+        (1344, 6) if call.state == 1 && call.object && state.flag(236) && !state.flag(239) => out.actions.extend([Action::Message { line: 3 }, Action::Message { line: 4 }]),
+        // SPEC-0039 1248 triggers 16 to 18 (handlers 5, 4, 3; the body): a camera sequence that
+        // plays two levers and removes two of objects 0 to 5 (PlayLookAtAnimObjCamera is played
+        // as its camera track; Medium for the roles). Words 3 to 5 keep each from repeating
+        // while it runs. Handler 7 (trigger 0): line 0 once while the module stays loaded, with
+        // 269 clear and objects 6 and 12 finished (their finish is taken as given). Handler 6
+        // (triggers 1 to 3) sets the hold-off word 6 to 5.
+        (1248, 3..=5) if call.object && state.word(pack, routine) == 0 => {
+            state.set_word(pack, routine, 1);
+            let (c1, a, b, c2, o1, c3, o2) = match routine {
+                5 => (8, 31, 33, 7, 5, 5, 1),
+                3 => (9, 39, 41, 7, 4, 6, 2),
+                _ => (10, 35, 37, 12, 3, 4, 0),
+            };
+            let cam = |track| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+            out.actions.extend([
+                Action::HoldHero,
+                cam(c1),
+                Action::PlayAnim { obj: a, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: b, speed: 1.0, wait: true },
+                cam(c2),
+                Action::PlayAnim { obj: o1, speed: 1.0, wait: true },
+                Action::DeactivateObj { obj: o1 },
+                cam(c3),
+                Action::PlayAnim { obj: o2, speed: 1.0, wait: true },
+                Action::DeactivateObj { obj: o2 },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        (1248, 7) if call.state == 1 && call.object && state.word(pack, 1) == 0 && !state.flag(269) => {
+            state.set_word(pack, 1, 1);
+            out.actions.push(Action::Message { line: 0 });
+        }
+        (1248, 6) if call.state != 0 && call.object => state.set_word(pack, 6, 5),
         // SPEC-0039 706 handler 1 (trigger 1, entering): flag 207. Handler 4 (trigger 0, entering
         // with the body): lines 2 and 3. Handler 3 (trigger 2, the body): the Square context 3; a
         // press shows line 0.
@@ -3218,6 +3302,13 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set(562, true);
             }
         }
+        // SPEC-0039 1248 Update: the hold-off word counts down.
+        1248 => {
+            let n = state.word(pack, 6);
+            if n > 0 {
+                state.set_word(pack, 6, n - 1);
+            }
+        }
         // SPEC-0039 753 event thread (with the event gate at load): with 258 clear and level state
         // 1: level state 0 runs the event end; else level state 2 is cleared if set, or level
         // state 0 set and the end run. The end (movie 37 not built): effects 15 to 48 stopped and
@@ -3501,6 +3592,15 @@ pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
     Vec::new()
 }
 
+/// A module's Exit (the old current world's leave step when the current world changes; SPEC-0006
+/// Make current), with IsObjActive for that world's objects.
+pub fn on_exit(pack: u32, state: &mut GameState, active: &dyn Fn(usize) -> bool) {
+    // SPEC-0039 1248 Exit: objects 0 and 2 inactive with 1 active set flag 79.
+    if pack == 1248 && !active(0) && !active(2) && active(1) {
+        state.set(79, true);
+    }
+}
+
 /// The on-enter callback (RegisterOnEnterCallback, SPEC-0030 row 255), started each time the
 /// world becomes current, right after the activate-world callback.
 pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
@@ -3566,6 +3666,19 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        // SPEC-0039 1248 activate-world: value 20 for eW 147 places the hero at locator 5; any
+        // value but -1 returns the camera.
+        1248 => {
+            let v = state.take_message(2, 147);
+            let mut out = Vec::new();
+            if v == 20 {
+                out.push(Action::MoveHero { locator: 5 });
+            }
+            if v != -1 {
+                out.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            out
+        }
         // SPEC-0039 753 activate-world: value 80 for eW 31: the hero to locator 0, 30 ticks, and
         // with 660 clear lines 34 and 35 and 660; any value but -1 returns the camera.
         753 => {
@@ -5298,6 +5411,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
+        // SPEC-0039 1344: handler 1 on entity 27 (line 0).
+        (1344, 27) => Some(1),
         // SPEC-0039 706: handler 5 on entity 0; 753: handlers 4 and 5 on entities 5 and 6.
         (706, 0) => Some(5),
         (753, 5 | 6) => Some(entity as u8),
@@ -5401,6 +5516,9 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if pack == 1353 {
         return shrine_talk(routine, state);
+    }
+    if (pack, routine) == (1344, 1) {
+        return vec![Action::Talk { line: 0 }];
     }
     if matches!(pack, 706 | 753) {
         return glade_talk(pack, routine, state);
@@ -5691,6 +5809,28 @@ mod tests {
                 _ => None,
             })
             .collect()
+    }
+
+    #[test]
+    fn modules_1344_1248() {
+        let mut s = GameState::default();
+        // 1344 vector: 236 set and 239 clear: each entry shows lines 3 then 4.
+        s.set(236, true);
+        let enter = TriggerCall { index: 2, state: 1, object: true, square: false };
+        assert_eq!(on_trigger(1344, 6, enter, &mut s).actions, vec![Action::Message { line: 3 }, Action::Message { line: 4 }]);
+        s.set(239, true);
+        assert!(on_trigger(1344, 6, enter, &mut s).actions.is_empty());
+        // Thread 7: flag 92 set with 94: set 0; flag 92 clear with 239 and 240: set 3.
+        s.set(92, true);
+        s.set(94, true);
+        assert!(on_init(1344, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1345) }));
+        let mut t = GameState::default();
+        t.set(239, true);
+        t.set(240, true);
+        assert!(on_init(1344, &mut t).contains(&Action::LoadRegion { slot: 0, region: Some(1348) }));
+        // 1248 Exit: 0 and 2 inactive, 1 active sets 79.
+        on_exit(1248, &mut t, &|o| o == 1);
+        assert!(t.flag(79));
     }
 
     #[test]

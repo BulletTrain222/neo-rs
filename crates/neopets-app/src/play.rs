@@ -1432,6 +1432,12 @@ impl Play {
             self.region_wanted.push((pack, EMBEDDED_SLOT, pack));
         }
         if self.seen_pack != self.world.pack {
+            // The old current world's Exit (its leave step), when it is still resident.
+            let old = self.seen_pack;
+            if let Some(w) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == old) {
+                let anims = w.object_anims.clone();
+                level::on_exit(old, &mut self.state, &|o| anims.get(o).is_some_and(|a| a.drawn && a.state != 4));
+            }
             self.state.last_pack = Some(self.seen_pack).filter(|&p| p != 0);
             self.seen_pack = self.world.pack;
         }
