@@ -841,6 +841,7 @@ fn main() {
         );
     app.add_systems(Update, sync_breakables.after(sync_objects));
     app.add_systems(Update, sync_blocks.after(sync_objects));
+    app.add_systems(Update, send_rumble);
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
@@ -1785,6 +1786,22 @@ enum WorldPart {
 struct ObjectRoot(u32, usize);
 
 /// Each frame: a placed object's root takes its drawn transform from the play, or hides.
+/// SPEC-0033 Behavior 1C step 4: the motor send of the last tick goes to pad 0's large motor
+/// (the first connected controller's strong motor) for its countdown, replacing what it played.
+fn send_rumble(state: Option<ResMut<PlayState>>, gamepads: Query<Entity, With<Gamepad>>, mut out: MessageWriter<bevy::input::gamepad::GamepadRumbleRequest>) {
+    let Some(mut state) = state else { return };
+    let Some(send) = state.play.motor.take() else { return };
+    let Some(gamepad) = gamepads.iter().min() else { return };
+    out.write(bevy::input::gamepad::GamepadRumbleRequest::Stop { gamepad });
+    if send.level > 0 && send.count > 0 {
+        out.write(bevy::input::gamepad::GamepadRumbleRequest::Add {
+            gamepad,
+            duration: std::time::Duration::from_secs_f32(send.count as f32 / 60.0),
+            intensity: bevy::input::gamepad::GamepadRumbleIntensity::strong_motor(send.level as f32 / 255.0),
+        });
+    }
+}
+
 /// A drawn movable block, by (pack, block index).
 #[derive(Component)]
 struct BlockRoot(u32, usize);

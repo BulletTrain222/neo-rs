@@ -8,11 +8,26 @@ pub fn axis(negative: bool, positive: bool) -> f32 {
     positive as i32 as f32 - negative as i32 as f32
 }
 
-/// Movement from the keyboard direction and any gamepad sticks: the strongest source wins,
-/// scaled to the full i16 range. Buttons stay unmapped.
+/// One stick axis through the PS2 pad's byte and the left-stick scaling (SPEC-0033 Behavior
+/// 2): the byte 127.5 + 127.5 v, then (r - 167.5) / 87.5 above the dead zone, (r - 87.5) / 87.5
+/// below it, and 0 for the bytes 88 to 167.
+pub fn ps2_axis(v: f32) -> f32 {
+    let r = (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round();
+    if r > 167.5 {
+        (r - 167.5) / 87.5
+    } else if r < 87.5 {
+        (r - 87.5) / 87.5
+    } else {
+        0.0
+    }
+}
+
+/// Movement from the keyboard direction and any gamepad sticks (each through the PS2 dead zone
+/// and scale): the strongest source wins, scaled to the full i16 range. Buttons stay unmapped.
 pub fn movement(keyboard: Vec2, sticks: impl IntoIterator<Item = Vec2>) -> PlayerInput {
     let mut best = keyboard;
     for stick in sticks {
+        let stick = Vec2::new(ps2_axis(stick.x), ps2_axis(stick.y));
         if stick.length() > best.length() {
             best = stick;
         }
@@ -83,9 +98,20 @@ mod tests {
     }
 
     #[test]
+    fn ps2_stick_scaling() {
+        // SPEC-0033 Behavior 2's bytes: 255 gives 1.0, 200 0.3714, 168 0.0057, 167 and 88 0,
+        // 87 -0.0057, 40 -0.5429, 0 -1.0.
+        let at = |r: f32| ps2_axis((r - 127.5) / 127.5);
+        for (r, want) in [(255.0, 1.0), (200.0, 0.3714), (168.0, 0.0057), (167.0, 0.0), (88.0, 0.0), (87.0, -0.0057), (40.0, -0.5429), (0.0, -1.0)] {
+            assert!((at(r) - want).abs() < 1e-4, "{r}: {}", at(r));
+        }
+    }
+
+    #[test]
     fn strongest_stick_wins_and_is_clamped() {
+        // A small push (0.2, byte 153) is inside the PS2 dead zone; -0.5 is byte 64.
         let input = movement(Vec2::ZERO, [Vec2::new(0.2, 0.0), Vec2::new(0.0, -0.5)]);
-        assert_eq!((input.move_x, input.move_y), (0, (-0.5 * i16::MAX as f32) as i16));
+        assert_eq!((input.move_x, input.move_y), (0, ((64.0 - 87.5) / 87.5 * i16::MAX as f32) as i16));
         let input = movement(Vec2::new(0.0, 1.0), [Vec2::new(0.3, 0.3)]);
         assert_eq!(input.move_y, i16::MAX);
         let input = movement(Vec2::ZERO, [Vec2::new(4.0, -4.0)]);

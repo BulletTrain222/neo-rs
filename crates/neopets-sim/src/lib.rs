@@ -51,6 +51,7 @@ pub mod object;
 pub mod options;
 pub mod petpet;
 pub mod rng;
+pub mod rumble;
 pub mod roberta;
 pub mod save;
 pub mod scene;

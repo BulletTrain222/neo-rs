@@ -848,6 +848,13 @@ pub struct Play {
     pub generation: u32,
     /// A front-end page other than play is up (the world is frozen and the HUD hidden).
     pub menu_open: bool,
+    /// SPEC-0033 Behavior 1C: the rumble manager, its presets and Tor's leap-landing request
+    /// (preset, seconds, magnitude) from the boot program, and the motor send of this tick for
+    /// the window to pass to the first controller's large motor.
+    rumble: neopets_sim::rumble::Rumble,
+    rumble_presets: Vec<neopets_sim::rumble::Preset>,
+    landing_rumble: (usize, f32, f32),
+    pub motor: Option<neopets_sim::rumble::Send>,
     /// The save game (SPEC-0025): the world key table (keys, saved ids), the growth words, the
     /// item text and location tables, the save-point state, whether the "Save Game" prompt
     /// shows this tick, a save-screen opening for the front end, the hero's restart point, the
@@ -1385,6 +1392,10 @@ impl Play {
             spawned: false,
             generation: 0,
             menu_open: false,
+            rumble: Default::default(),
+            rumble_presets: Vec::new(),
+            landing_rumble: (5, 0.0, 0.0),
+            motor: None,
             world_keys,
             growth,
             design,
@@ -3086,10 +3097,20 @@ impl Play {
             }
             let (Some((_, entries)), Some((t, d, l))) = (list, window) else { continue };
             for (j, e) in entries.iter().enumerate() {
+                // SPEC-0033 Behavior 1C source 2: a positional-mode-0 entry's start requests
+                // preset 0 for its duration with the intensity by the camera's distance.
+                let s = if e.start * d == 0.0 { l } else { e.start * d };
+                if e.positional == 0 && t >= s && t < s + l {
+                    let (c, eye) = (self.characters[i].position, self.camera.eye);
+                    let d2 = (0..3).map(|k| (c[k] - eye[k]) * (c[k] - eye[k])).sum::<f32>();
+                    let m = neopets_sim::rumble::falloff(e.intensity, e.inner, e.outer, d2);
+                    if m > 0.0 {
+                        self.rumble.request(&self.rumble_presets, 0, e.rumble_seconds, m);
+                    }
+                }
                 if e.id == -1 || e.trail {
                     continue;
                 }
-                let s = if e.start * d == 0.0 { l } else { e.start * d };
                 let end = if e.end * d >= d { d - 1.0 } else { e.end * d };
                 let handle = self.clip_fx.get(&id).and_then(|x| x.1.get(j).copied().flatten());
                 let (point, frame) = self.clip_point(i, e);
@@ -5296,6 +5317,12 @@ impl Play {
             for &(slot, cue) in plays {
                 self.sound.play(slot, cue, Cue::default());
             }
+            // SPEC-0036 sub-state 13 (the leap landing): a rumble request while the current
+            // action is not 26.
+            if sub == 13 && self.hero.clip_state().action != 26 {
+                let (p, t, m) = self.landing_rumble;
+                self.rumble.request(&self.rumble_presets, p, t, m);
+            }
         }
         let hits = self.hit_list.len();
         self.hero_swing();
@@ -5492,6 +5519,17 @@ impl Play {
         self.hero.chain_step(at, facing);
         self.sound_step();
         self.clip_effects_step();
+        // SPEC-0033 Behavior 1C per pass (not while the menu is up, game status 9): entries run
+        // down with Vibration off, but nothing is sent then.
+        let send = self.rumble.tick(self.menu_open);
+        if self.options.block.vibration != 0 {
+            if let Some(s) = send {
+                self.motor = Some(s);
+            }
+        }
+        if let (Some(s), true) = (send, std::env::var_os("NEOPETS_TRACE_RUMBLE").is_some()) {
+            println!("      rumble on tick {}: level {} for {} ticks", self.ticks, s.level, s.count);
+        }
         // SPEC-0028 7.1: the resident worlds' animated objects step before the hero update.
         for w in [&mut self.world].into_iter().chain(self.other.as_mut()) {
             for (o, m) in w.object_anims.iter_mut().zip(&w.motions) {
@@ -7517,6 +7555,15 @@ impl Play {
 
     /// Read the attack-family tables (SPEC-0034 Where it lives; 14 ids each, index m - 160).
     pub fn load_attack_tables(&mut self, boot: &[u8]) {
+        use neopets_sim::rumble as r;
+        self.rumble_presets = neopets_data::archive::boot_u32_table(boot, r::PRESETS, 40).map(|w| r::Preset::table(&w)).unwrap_or_default();
+        let word = |at: u32| neopets_data::archive::boot_u32_table(boot, at, 1).ok().and_then(|w| w.first().copied());
+        if let (Some(p), Some(t), Some(m)) = (word(r::LANDING_PRESET), word(r::LANDING_SECONDS), word(r::LANDING_MAGNITUDE)) {
+            self.landing_rumble = (p as usize, f32::from_bits(t), f32::from_bits(m));
+        }
+        if std::env::var_os("NEOPETS_TRACE_RUMBLE").is_some() {
+            println!("      rumble presets {:?}, landing {:?}", self.rumble_presets, self.landing_rumble);
+        }
         let t = |at: u32| neopets_data::archive::boot_u32_table(boot, at, 14).map(|w| std::array::from_fn(|k| w[k] as i32)).unwrap_or([-1; 14]);
         self.attack_fx.tables = AttackTables {
             line: t(0x0031_5280),
