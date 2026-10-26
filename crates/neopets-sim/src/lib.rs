@@ -23,6 +23,7 @@ pub mod hero;
 pub mod hud;
 pub mod inventory;
 pub mod items;
+pub mod gnarfas;
 pub mod juppie;
 pub mod miamouse;
 pub mod level;

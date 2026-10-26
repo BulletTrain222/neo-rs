@@ -388,6 +388,10 @@ pub struct Character {
     pub boss: Option<neopets_sim::juppie::Juppie>,
     /// The Miamouse routine (class 21, SPEC-0029 Behavior 28).
     pub miamouse: Option<neopets_sim::miamouse::Miamouse>,
+    /// The Gnarfas boss controller (behaviour class 14; SPEC-0020) and the hero's hit on it this
+    /// tick, which the boss takes through its own flinch.
+    pub gnarfas: Option<neopets_sim::gnarfas::Gnarfas>,
+    pub pending_hit: Option<i32>,
 }
 
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
@@ -576,6 +580,7 @@ pub struct Play {
     pending_off: std::collections::HashSet<(u32, usize)>,
     /// The Juppie tuning words and the boss hits of this tick's swing (character id, damage).
     juppie_words: neopets_sim::juppie::Words,
+    gnarfas_words: neopets_sim::gnarfas::Words,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
@@ -877,6 +882,43 @@ impl Play {
                 stun_table: std::array::from_fn(|k| table[k] as i32),
             }
         };
+        let gnarfas_words = {
+            use neopets_sim::gnarfas::*;
+            let int = |at: u32| words(at, 1).map(|v| v[0] as i32);
+            let pair = |at: u32| words(at, 2).map(|v| (f32::from_bits(v[0]), f32::from_bits(v[1])));
+            let ints = |at: u32| words(at, 2).map(|v| [v[0] as i32, v[1] as i32]);
+            Words {
+                laugh_chance: int(LAUGH_CHANCE)?,
+                rage_percent: int(RAGE_PERCENT)?,
+                block_chance: ints(BLOCK_CHANCE)?,
+                dodge_chance: int(DODGE_CHANCE)?,
+                reaction: pair(REACTION)?,
+                missile_jump_chance: int(MISSILE_JUMP_CHANCE)?,
+                melee_dodge_chance: int(MELEE_DODGE_CHANCE)?,
+                whip_cooldown: pair(WHIP_COOLDOWN)?,
+                whip_range: float(WHIP_RANGE)?,
+                whip_damage: int(WHIP_DAMAGE)?,
+                rapid_cooldown: pair(RAPID_COOLDOWN)?,
+                rapid_range: float(RAPID_RANGE)?,
+                rapid_damage: int(RAPID_DAMAGE)?,
+                rapid_exhaust_chance: int(RAPID_EXHAUST)?,
+                power_range: float(POWER_RANGE)?,
+                power_cooldown: pair(POWER_COOLDOWN)?,
+                power_chance: ints(POWER_CHANCE)?,
+                power_damage: int(POWER_DAMAGE)?,
+                jump_hero_chance: int(JUMP_HERO_CHANCE)?,
+                slam_damage: int(SLAM_DAMAGE)?,
+                butt_range: float(BUTT_RANGE)?,
+                butt_cooldown: pair(BUTT_COOLDOWN)?,
+                butt_chance: ints(BUTT_CHANCE)?,
+                approach_range: float(APPROACH_RANGE)?,
+                jump_time: float(JUMP_TIME)?,
+                exhaust: [pair(EXHAUST)?, pair(EXHAUST + 8)?],
+                push: float(PUSH)?,
+                gravity: float(GRAVITY)?,
+                run_walk: float(RUN_WALK)?,
+            }
+        };
         let (effect_table, effect_images) = {
             let bytes = index.read(disc, neopets_data::effect::RESOURCE)?;
             let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
@@ -1063,6 +1105,7 @@ impl Play {
             gesture_words,
             pending_off: Default::default(),
             juppie_words,
+            gnarfas_words,
             boss_hits: Vec::new(),
             last_boss: String::new(),
             petpet: None,
@@ -3176,6 +3219,11 @@ impl Play {
         let hero_at = from;
         // The script's undamageable entities (SPEC-0044 1056 Update) take no damage.
         let pack = self.world.pack;
+        // SPEC-0020: Gnarfas takes a hit through its own flinch (the damage lands when it ends).
+        if let Some(c) = self.characters.get_mut(i).filter(|c| c.gnarfas.is_some()) {
+            c.pending_hit = Some(damage);
+            return;
+        }
         let entity = self.characters.get(i).and_then(|c| c.entity);
         if let Some(e) = entity.filter(|_| self.characters[i].pack == pack) {
             self.state.hit_now.insert(e);
@@ -3408,7 +3456,7 @@ impl Play {
             .iter()
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -3505,7 +3553,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 21)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 14 | 21)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -3527,6 +3575,8 @@ impl Play {
                 deactivated: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 boss: row.filter(|r| r.class == Some(18)).map(|_| neopets_sim::juppie::Juppie::default()),
                 miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
+                gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
+                pending_hit: None,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3576,6 +3626,8 @@ impl Play {
             deactivated: false,
             boss: None,
             miamouse: None,
+            gnarfas: None,
+            pending_hit: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4626,6 +4678,7 @@ impl Play {
         }
         self.pet_step();
         self.boss_step();
+        self.gnarfas_step();
         self.mice_step();
         self.enemies_step();
         self.items_step();
@@ -5410,6 +5463,161 @@ impl Play {
             }
         }
         self.default_death();
+    }
+
+    /// SPEC-0020 per tick for Gnarfas (class 14) in the current world: the host's measurements
+    /// (the hero's hit, the missile paths against the body cylinder, the bone-chain test of the
+    /// frame's event bits, the tree points, the ground gap), the controller tick and its
+    /// requests (the clip, the steering and travel, the hits and knockback on the hero, the
+    /// level events, the phase 2 heal).
+    fn gnarfas_step(&mut self) {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.gnarfas.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let world = &self.world;
+            let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
+            let trees = neopets_sim::gnarfas::TREES.map(locator);
+            let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
+            let busy = neopets_sim::hero::busy_state(self.loco.state) || self.held;
+            let st = self.loco.state;
+            let c = &mut self.characters[i];
+            let body = c.row.map_or(1.0, |r| r.radius);
+            // A missile path (its point to point + n x velocity) against the body cylinder (radius
+            // r, 5.0 tall); the spec tests the bone cylinders.
+            let near = |n: f32| shots.iter().any(|&(p, v, r)| {
+                let end = add(p, scale(v, n));
+                let (a, b) = (c.position, add(c.position, [0.0, 5.0, 0.0]));
+                neopets_sim::gnarfas::segment_distance(p, end, a, b) <= body + r
+            });
+            let (near10, near120) = (near(10.0), near(120.0));
+            let clip = c.anim.clip_state();
+            let bits = c.anim.frame_bits();
+            let to_boss = [c.position[0] - hero[0], 0.0, c.position[2] - hero[2]];
+            let tl = to_boss[0].hypot(to_boss[2]).max(1e-6);
+            let faces = (hf[0] * to_boss[0] + hf[2] * to_boss[2]) / tl > 0.5;
+            let attacking = c.gnarfas.as_ref().is_some_and(|g| matches!(g.state, neopets_sim::gnarfas::State::Whip { .. } | neopets_sim::gnarfas::State::Rapid { .. } | neopets_sim::gnarfas::State::Power { .. }));
+            let chain_hit = if attacking {
+                let place = placement(c.position, c.facing);
+                let frames = c.anim.bone_frames();
+                neopets_sim::gnarfas::RUNS.iter().filter(|r| bits & r.0 != 0).find_map(|&(_, first, last)| {
+                    (first..=last).find(|&b| frames.get(b).is_some_and(|f| {
+                        let m = place.mul(f);
+                        neopets_sim::gnarfas::bone_hits(m.t, unit(m.cols[1]), hero)
+                    })).map(|_| last)
+                })
+            } else {
+                None
+            };
+            let gap = world.ground_at(c.position[0], c.position[2], c.position[1] + 2.5).map_or(0.0, |g| c.position[1] - g);
+            let v = neopets_sim::gnarfas::View {
+                position: c.position,
+                facing: c.facing,
+                hero,
+                hero_hp: self.hero_hp,
+                hero_max: self.hero_max,
+                hero_busy: busy,
+                hero_blocks: st == 20 && faces,
+                hero_down: matches!(st, 7..=11 | 0x2B..=0x2E),
+                hero_attack_start: self.state.hero.fire,
+                hit: c.pending_hit.take(),
+                missile_near: near10,
+                missile_ahead: near120,
+                chain_hit,
+                frame_bits: bits,
+                clip: (clip.action, clip.progress, clip.progress >= 0.99),
+                hp: c.hp,
+                max_hp: c.row.map_or(1, |r| r.hit_points as i32),
+                level: &level,
+                trees,
+                ground_gap: gap,
+            };
+            let Some(g) = c.gnarfas.as_mut() else { continue };
+            let before = g.state;
+            let act = g.tick(&v, &self.gnarfas_words, &mut self.rng);
+            let after = g.state;
+            if let Some(a) = act.anim {
+                if clip.action != a || (clip.progress >= 0.99 && std::mem::discriminant(&before) != std::mem::discriminant(&after)) {
+                    c.anim.play(a);
+                }
+            }
+            if let Some(rate) = act.face {
+                let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
+                c.facing = neopets_sim::hero::steer(c.facing, to, rate);
+            }
+            match act.travel {
+                neopets_sim::gnarfas::Move::Fly(vel) => {
+                    c.position = add(c.position, vel);
+                    if vel[0] != 0.0 || vel[2] != 0.0 {
+                        c.facing = neopets_sim::hero::steer(c.facing, [vel[0], 0.0, vel[2]], 0.2);
+                    }
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.body.position = c.position;
+                        wk.facing = c.facing;
+                    }
+                }
+                neopets_sim::gnarfas::Move::Still => {}
+                neopets_sim::gnarfas::Move::Steer { mode, target, weight } => {
+                    let m = [target[0] - c.position[0], 0.0, target[2] - c.position[2]];
+                    if mode != 255 && (m[0] != 0.0 || m[2] != 0.0) {
+                        // The shared steering rule: modes 5 and 6 face across the move.
+                        let (dir, w) = match mode {
+                            5 => {
+                                let p = [m[2], 0.0, -m[0]];
+                                let l = p[0].hypot(p[2]).max(1e-6);
+                                (p, if (c.facing[0] * p[0] + c.facing[2] * p[2]) / l > 0.9 { 1.0 } else { 0.1 })
+                            }
+                            6 => {
+                                let p = [-m[2], 0.0, m[0]];
+                                let l = p[0].hypot(p[2]).max(1e-6);
+                                (p, if (c.facing[0] * p[0] + c.facing[2] * p[2]) / l > 0.9 { 1.0 } else { 0.1 })
+                            }
+                            _ => (m, weight),
+                        };
+                        c.facing = neopets_sim::hero::steer(c.facing, dir, w);
+                    }
+                    let ground = &world.ground;
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.facing = c.facing;
+                        wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                        c.position = wk.position();
+                    }
+                }
+            }
+            c.hp -= act.hp_loss;
+            if before != after && std::mem::discriminant(&before) != std::mem::discriminant(&after) {
+                self.last_boss = format!("Gnarfas {:?} -> {:?} (hp {}, strikes {}) on tick {}", before, after, c.hp, g.strikes, self.ticks);
+            }
+            let tip = act.spark.and_then(|b| c.anim.bone_frames().get(b).map(|f| placement(c.position, c.facing).mul(f).t));
+            let from = c.position;
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            if act.heal_hero {
+                self.hero_hp = self.hero_max;
+            }
+            let d = {
+                let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                [dx / l, 0.0, dz / l]
+            };
+            if let Some(p) = tip {
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, 710, p, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            if let Some((damage, blocked, s)) = act.hero_damage {
+                self.hero_hit(damage as f32, self.gnarfas_words.push * s, blocked, d, "Gnarfas".into());
+            }
+            if let Some(s) = act.knockback {
+                let k = unit([9.0 * d[0], 12.0, 9.0 * d[2]]);
+                self.attack = None;
+                self.loco.knock(scale(k, self.gnarfas_words.push * s));
+            }
+        }
     }
 
     /// SPEC-0036 Health and death, step 3: state 16, the melee hit list cleared.
