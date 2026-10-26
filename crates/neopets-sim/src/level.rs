@@ -391,6 +391,8 @@ pub struct GameState {
     /// (GetAssetGroupCharacterRange with IsAI_Dead over it), filled by the host each tick; a slot
     /// that is empty or still loading has no entry.
     pub slot_alive: std::collections::BTreeMap<u8, usize>,
+    /// NumMiamiceInCage (SPEC-0029 Behavior 28), filled by the host.
+    pub miamice_caged: u32,
     /// NumMortogsOnTarget (SPEC-0041 1363). The host has no Mortog behaviour yet, so it stays 0.
     pub mortogs_on_target: u8,
     /// The current world's objects that are animating (IsObjAnimating), filled by the host.
@@ -492,6 +494,8 @@ pub struct HeroView {
     pub swapping: bool,
     /// The hero's attack window (SPEC-0036, frame bit 0x1) opened this tick: a strike.
     pub strike: bool,
+    /// GetHitPoints(-1): the current hero's hit points.
+    pub hp: i32,
 }
 
 impl GameState {
@@ -593,7 +597,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
     if (pack, door) == (947, 0) {
         return Some(0);
     }
-    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) {
+    if (pack == 758 && door <= 7) || (pack, door) == (934, 0) || (pack == 1139 && door <= 1) || (pack, door) == (1173, 0) || (pack, door) == (706, 0) || (pack, door) == (753, 0) || (pack, door) == (1248, 0) || (pack, door) == (1247, 0) || (pack, door) == (1249, 0) || (pack == 1358 && door <= 5) || (pack, door) == (1353, 0) || (pack, door) == (1371, 0) || (pack == 1363 && door <= 2) || (pack, door) == (776, 0) || (pack == 1257 && door <= 2) || (pack == 1350 && door <= 2) || (pack, door) == (1398, 0) {
         return Some(13);
     }
     if (pack, door) == (880, 0) || (pack, door) == (1429, 0) || (pack == 1414 && door <= 1) || (pack == 1152 && door <= 1) || (pack == 1299 && door <= 1) || (pack == 991 && door <= 7) || (pack == 1017 && door <= 1) || (door == 0 && eastside_interior(pack).is_some()) {
@@ -701,6 +705,11 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             vec![Action::EnterInterior { slot }]
         }
         (1363, 0..=2) => vec![Action::Message { line: 0 }],
+        // SPEC-0043 1398 door 0 (kind 13): value 20 for eW 160 and the load of eW 160 (1363).
+        (1398, 0) => {
+            state.blackboard.insert((2, 160), 20);
+            vec![Action::ReplaceExterior { slot: 160, plane: -1 }]
+        }
         // SPEC-0042 1350 X0 to X2 (context 13): X0 and X1 with flag 100 value 30 or 50 for eW 157
         // and the entry into eW 176 or 182, else line 0; X2 value 60 and the load of eW 163.
         (1350, 0 | 1) if !state.flag(100) => vec![Action::Message { line: 0 }],
@@ -1441,6 +1450,40 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
+        // SPEC-0043 1398 Init: routines 1 to 5 on triggers 34, 38, 33, 35 and 37; flag 355; the
+        // four Whinny pens; with 106 clear objects 0, 1, 2 and 5, effect 15 stopped, the done words
+        // (21 to 25) from flags 720 to 724 (723 also arms stage 4, word 30) and thread 6 for the
+        // first unfinished stage (720: 0; 721: 3; 722: 1 with the Miamice; 724: 2); with 106 set
+        // every stage done. Then set 5 (region 1404) into slot 1 and the normal camera. The
+        // per-flag object setups of both branches are not given in the spec.
+        1398 => {
+            let mut v = vec![reg(34, 1), reg(38, 2), reg(33, 3), reg(35, 4), reg(37, 5)];
+            state.set(355, true);
+            v.extend((0..4).map(|i| Action::WhinnyPen { inner: 7 + i, entrance: 11 + i, locator: 61 + i }));
+            if state.flag(106) {
+                for w in 21..=25 {
+                    state.set_word(pack, w, 1);
+                }
+            } else {
+                v.extend([0, 1, 2, 5].map(|obj| Action::InitObjOn { obj, end: false }));
+                v.push(Action::StopEffect { slot: 15 });
+                for (k, f) in (720..=724).enumerate() {
+                    state.set_word(pack, 21 + k as u8, state.flag(f) as i32);
+                }
+                if state.flag(723) {
+                    state.set_word(pack, 30, 1);
+                }
+                let arg = [(720, 0), (721, 3), (722, 1), (724, 2)].into_iter().find(|&(f, _)| !state.flag(f)).map(|(_, a)| a);
+                if arg == Some(1) {
+                    v.push(Action::MiamouseInit { field: 15, cage: 16 });
+                }
+                if let Some(j) = arg {
+                    v.extend(thread6_1398(j));
+                }
+            }
+            v.extend([Action::LoadRegion { slot: 1, region: Some(1404) }, Action::ReturnCamera { preset: -1, release: true }]);
+            v
+        }
         // SPEC-0042 714 Init: P on trigger 0; with 220 set and 301 clear F on 2; with 301 and 284
         // clear effects 9 to 15 stopped; thread A: set 0 (394 and 395 clear) or 1 (394 only),
         // region 715 + set.
@@ -2258,6 +2301,11 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     };
     s.rotations.insert(key, rot);
     line.map(|line| vec![Action::Talk { line }]).unwrap_or_default()
+}
+
+/// SPEC-0043 1398 thread 6: slot 0 emptied and loaded with set j (region 1399 + j).
+fn thread6_1398(j: u32) -> [Action; 2] {
+    [Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1399 + j) }]
 }
 
 /// SPEC-0042 772's proximity routines: C (entity 2, the line chain; words 1 the rule and 2 the
@@ -3819,6 +3867,55 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        // SPEC-0043 1398 routine 2 (trigger 38), the stage 1 trap: armed (word 31) with the hero's
+        // hit points kept (word 32), objects 11 off and 10 played, 3 and 4 off, 1 and 2 on and
+        // played on camera 4. Update trips it.
+        (1398, 2) if call.state == 1 && state.word(pack, 21) == 0 && state.word(pack, 31) == 0 => {
+            state.set_word(pack, 31, 1);
+            state.set_word(pack, 32, state.hero.hp);
+            out.actions.extend([
+                Action::DeactivateObj { obj: 11 },
+                Action::InitObjOn { obj: 10, end: false },
+                Action::PlayAnim { obj: 10, speed: 1.0, wait: false },
+                Action::DeactivateObj { obj: 3 },
+                Action::DeactivateObj { obj: 4 },
+                Action::InitObjOn { obj: 1, end: false },
+                Action::InitObjOn { obj: 2, end: false },
+                Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: 2, speed: 1.0, wait: true },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        // Routine 3 (trigger 33): stage 1 done, 720, thread 6 with argument 3.
+        (1398, 3) if state.word(pack, 21) == 0 => {
+            state.set_word(pack, 21, 1);
+            state.set(720, true);
+            out.actions.extend(thread6_1398(3));
+        }
+        // Routine 4 (trigger 35, entering): stage 4 armed: camera 10, object 8 played to its
+        // end, 1 s, the camera back, thread 7 (thread 6 with argument 4). The shake's values and
+        // the avoidance points are not given or not built.
+        (1398, 4) if call.state == 1 && state.word(pack, 30) == 0 => {
+            state.set_word(pack, 30, 1);
+            out.actions.extend([
+                Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                Action::PlayAnim { obj: 8, speed: 1.0, wait: false },
+                wait(0.3),
+                Action::WaitObj { obj: 8 },
+                wait(1.0),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+            out.actions.extend(thread6_1398(4));
+        }
+        // Routine 5 (trigger 37, here on entry): with 356 the fade to locator 34 and effect 16.
+        (1398, 5) if call.state == 1 && state.flag(356) => out.actions.extend([
+            Action::FadeOut { seconds: 0.5, wait: true },
+            Action::MoveHero { locator: 34 },
+            Action::FadeIn { seconds: 0.5, wait: true },
+            Action::StartEffect { slot: 16, camera: false },
+            Action::ReturnCamera { preset: -1, release: true },
+        ]),
         // SPEC-0042 714 F (trigger 2, entering, 301 clear): 301 set, (movie 48 is not played)
         // 30 ticks, line 1, and with flag 5 clear 30 ticks and line 2.
         (714, 2) if call.object && call.state == 1 && !state.flag(301) => {
@@ -5490,6 +5587,55 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
+        // SPEC-0043 1398 Update: the stage 1 trap (a hit-point drop since the last tick trips
+        // it; the five entities' hit reactions are not listed in the spec), stage 2 (AI 13 to 15
+        // dead on the tick before), stage 3 (four Miamice caged), and entities 16 to 18 at full
+        // hit points while stage 4 is armed and not done.
+        1398 => {
+            let hp = state.hero.hp;
+            if state.word(pack, 31) != 0 && state.word(pack, 21) == 0 && hp < state.word(pack, 32) {
+                state.set_word(pack, 31, 0);
+                out.extend([
+                    Action::DeactivateObj { obj: 1 },
+                    Action::DeactivateObj { obj: 2 },
+                    Action::InitObjOn { obj: 3, end: false },
+                    Action::InitObjOn { obj: 4, end: false },
+                    Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                    Action::PlayAnim { obj: 3, speed: 1.0, wait: false },
+                    Action::PlayAnim { obj: 4, speed: 1.0, wait: true },
+                    wait(1.0),
+                    Action::ReturnCamera { preset: -1, release: true },
+                    Action::DeactivateObj { obj: 10 },
+                    Action::InitObjOn { obj: 11, end: false },
+                    Action::PlayAnim { obj: 11, speed: 1.0, wait: true },
+                ]);
+            }
+            state.set_word(pack, 32, hp);
+            if state.word(pack, 22) == 0 {
+                if state.word(pack, 33) == 3 {
+                    state.set_word(pack, 22, 1);
+                    state.set(721, true);
+                    out.extend([Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 }, Action::PlayAnim { obj: 5, speed: 1.0, wait: false }, Action::PlayAnim { obj: 6, speed: 1.0, wait: true }]);
+                    out.extend(thread6_1398(1));
+                    out.extend([wait(1.0), Action::ReturnCamera { preset: -1, release: true }, Action::MiamouseInit { field: 15, cage: 16 }]);
+                }
+                state.set_word(pack, 33, [13, 14, 15].iter().filter(|e| state.ai_dead.contains(e)).count() as i32);
+            }
+            if state.word(pack, 23) == 0 && state.miamice_caged == 4 {
+                state.set_word(pack, 23, 1);
+                state.set(722, true);
+                out.extend([
+                    Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
+                    Action::DeactivateObj { obj: 8 },
+                    Action::PlayAnim { obj: 7, speed: 1.0, wait: true },
+                    wait(1.0),
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+            if state.word(pack, 30) != 0 && state.word(pack, 24) == 0 {
+                out.extend((16..=18).map(|entity| Action::HitPointsPercent { entity, percent: 100.0 }));
+            }
+        }
         // SPEC-0042 714 Update: with 220 set and 284 clear the masks 4 (collision) and 15
         // (display), each tick.
         714 => {
@@ -6880,6 +7026,8 @@ fn yard_activate(state: &mut GameState) -> Vec<Action> {
 pub fn undamageable(pack: u32) -> &'static [usize] {
     match pack {
         1056 => &[4, 7, 8, 9, 20, 21, 14],
+        // SPEC-0043 1398 Update: entities 0 to 4 and 16 to 21.
+        1398 => &[0, 1, 2, 3, 4, 16, 17, 18, 19, 20, 21],
         // SPEC-0037 784 thread K's SetEntityUndamageable(entity 0) (taken for every load).
         784 => &[0],
         _ => &[],
@@ -8469,6 +8617,42 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1398_stages() {
+        let mut s = GameState::default();
+        let v = on_init(1398, &mut s);
+        // The pen vector: pen 2 has inner area 9, entrance 13 and locator 63; stage 1's set 0.
+        assert!(v.contains(&Action::WhinnyPen { inner: 9, entrance: 13, locator: 63 }) && v.contains(&Action::LoadRegion { slot: 0, region: Some(1399) }));
+        assert!(s.flag(355));
+        // Stage 1: the trap arms, a hit-point drop trips it, and it can arm again.
+        s.hero.hp = 20;
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false };
+        assert!(!on_trigger(1398, 2, enter(38), &mut s).actions.is_empty());
+        assert!(on_trigger(1398, 2, enter(38), &mut s).actions.is_empty());
+        assert!(on_update(1398, &mut s, false).is_empty());
+        s.hero.hp = 18;
+        assert!(on_update(1398, &mut s, false).contains(&Action::PlayAnim { obj: 11, speed: 1.0, wait: true }));
+        assert!(!on_trigger(1398, 2, enter(38), &mut s).actions.is_empty());
+        // Routine 3 ends stage 1 (720) and loads set 3 (region 1402).
+        assert!(on_trigger(1398, 3, enter(33), &mut s).actions.contains(&Action::LoadRegion { slot: 0, region: Some(1402) }));
+        assert!(s.flag(720));
+        // Stage 2: three dead are seen on one tick and acted on the next.
+        s.ai_dead.extend([13, 14, 15]);
+        assert!(on_update(1398, &mut s, false).is_empty());
+        assert!(on_update(1398, &mut s, false).contains(&Action::MiamouseInit { field: 15, cage: 16 }));
+        assert!(s.flag(721));
+        // Stage 3: four caged.
+        s.miamice_caged = 4;
+        assert!(on_update(1398, &mut s, false).contains(&Action::DeactivateObj { obj: 8 }));
+        assert!(s.flag(722));
+        // With 720 to 722 set a reload starts at stage 5's set (argument 2, region 1401).
+        let mut t = GameState::default();
+        for f in [720, 721, 722] {
+            t.set(f, true);
+        }
+        assert!(on_init(1398, &mut t).contains(&Action::LoadRegion { slot: 0, region: Some(1401) }));
     }
 
     #[test]

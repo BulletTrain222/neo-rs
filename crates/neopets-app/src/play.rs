@@ -4451,6 +4451,8 @@ impl Play {
             self.state.hero.sub = self.attack.as_ref().map_or(0, |a| a.sub);
             self.state.hero.occupied = neopets_sim::hero::busy_state(self.loco.state) && self.loco.state != hero_states::ATTACK || self.held;
             self.state.hero.attack_mote = self.equipment.motes[0][2];
+            self.state.hero.hp = self.hero_hp;
+            self.state.miamice_caged = self.catch.count;
             self.state.hero.shield_mote = self.equipment.motes[0][1];
             self.state.hero.tick = self.ticks;
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
