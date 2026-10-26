@@ -33,6 +33,7 @@ pub mod summon;
 pub mod werelupe;
 pub mod miamouse;
 pub mod level;
+pub mod mortog;
 pub mod mote;
 pub mod motion;
 pub mod music;

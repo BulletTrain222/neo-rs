@@ -246,6 +246,11 @@ pub enum Action {
     WaitObj { obj: usize },
     /// StopTimer (running off; SPEC-0030 row 248).
     StopTimer,
+    /// InitMortogBehavior(W, t, i, j, hmin, hmax) (SPEC-0030 row 84): the zone centre at locator
+    /// i, the squared radius from locators i and j, the hold range, the zone count 0.
+    InitMortog { target: i32, centre: usize, edge: usize, hold: (f32, f32) },
+    /// ChangeMortogTimes(hmin, hmax) (SPEC-0030 row 83).
+    MortogTimes { hold: (f32, f32) },
     /// SetAnimObjPositionOffset's vertical part (ResetAnimObjOffsets is y = 0).
     ObjOffset { obj: usize, y: f32 },
     /// SPEC-0059 section 5, the 758 finish gate's freeze: T = the timer value, kept in word 3 as
@@ -416,7 +421,7 @@ pub struct GameState {
     pub shot_hits: BTreeSet<u16>,
     /// NumMiamiceInCage (SPEC-0029 Behavior 28), filled by the host.
     pub miamice_caged: u32,
-    /// NumMortogsOnTarget (SPEC-0041 1363). The host has no Mortog behaviour yet, so it stays 0.
+    /// NumMortogsOnTarget (SPEC-0041 1363): the Mortog zone count (SPEC-0029 Behavior 3).
     pub mortogs_on_target: u8,
     /// The current world's objects that are animating (IsObjAnimating), filled by the host.
     pub animating: BTreeSet<usize>,
@@ -1142,8 +1147,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // the puzzle done), triggers 0 to 8, the Mortog hold times 25 and 30, and thread M's
         // first step: with flag 106 clear set 0 (region 1364) into the slot. Words: 1 done, 2 the
         // camera latch, 3 the puzzle level (ease step), 4 the shake count, 5 the rise count, 6 the
-        // last count, 7 thread M's busy ticks, 8 and 9 the hold times. InitMortogBehavior is not
-        // built.
+        // last count, 7 thread M's busy ticks, 8 and 9 the hold times. InitMortogBehavior(W, 3, 6,
+        // 7, 25, 30).
         1363 => {
             let f693 = state.flag(693);
             let f692 = state.flag(692);
@@ -1153,6 +1158,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend((0..=8).map(|i| reg(i, i as u8)));
             state.set_word(pack, 8, 25);
             state.set_word(pack, 9, 30);
+            state.mortogs_on_target = 0;
+            v.push(Action::InitMortog { target: 3, centre: 6, edge: 7, hold: (25.0, 30.0) });
             if !state.flag(106) {
                 v.push(Action::LoadRegion { slot: 0, region: Some(1364) });
             }
@@ -9540,6 +9547,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     state.set_word(pack, 8, 0);
                     state.set_word(pack, 9, 0);
                     out.extend([
+                        Action::MortogTimes { hold: (0.0, 0.0) },
                         Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
                         Action::DeactivateObj { obj: 1 },
                         Action::InitObjOn { obj: 0, end: false },
@@ -9555,6 +9563,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     if rises % 2 == 1 {
                         state.set_word(pack, 8, state.word(pack, 8) + 5);
                         state.set_word(pack, 9, state.word(pack, 9) + 5);
+                        out.push(Action::MortogTimes { hold: (state.word(pack, 8) as f32, state.word(pack, 9) as f32) });
                     }
                     let to = (level + 10).min(40);
                     state.set_word(pack, 3, to);

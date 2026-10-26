@@ -409,6 +409,8 @@ pub struct Character {
     /// The Plague Serpent controller (behaviour class 2; SPEC-0016) and the hero's hit on it.
     pub serpent: Option<neopets_sim::serpent::Serpent>,
     pub serpent_hit: Option<(i32, bool)>,
+    /// The Mortog controller (behaviour class 39; SPEC-0029 Behavior 3).
+    pub mortog: Option<neopets_sim::mortog::Mortog>,
 }
 
 /// A summon-reserved record of a character block (SPEC-0029 Behavior 31), with the character it
@@ -623,6 +625,9 @@ pub struct Play {
     duel: neopets_sim::fyora::Slots,
     duel_words: neopets_sim::fyora::Words,
     serpent_words: neopets_sim::serpent::Words,
+    mortog_words: neopets_sim::mortog::Words,
+    /// The Mortog zone of a world (InitMortogBehavior): the pack, the zone and the target index.
+    mortog_zone: Option<(u32, neopets_sim::mortog::Zone, i32)>,
     duel_summons: Vec<u64>,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
@@ -1017,6 +1022,7 @@ impl Play {
         };
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
+        let mortog_words = neopets_sim::mortog::Words::read(&words(neopets_sim::mortog::BASE, neopets_sim::mortog::WORDS)?).ok_or("The Mortog words are short")?;
         let serpent_words = neopets_sim::serpent::Words::read(&words(neopets_sim::serpent::BASE, neopets_sim::serpent::WORDS)?).ok_or("The Plague Serpent's tuning block is short")?;
         let duel_words = neopets_sim::fyora::Words::read(&words(neopets_sim::fyora::WORDS, 2)?).ok_or("The duel words are short")?;
         let faerie_words = {
@@ -1219,6 +1225,8 @@ impl Play {
             duel: [None; 4],
             duel_words,
             serpent_words,
+            mortog_words,
+            mortog_zone: None,
             duel_summons: Vec::new(),
             boss_hits: Vec::new(),
             last_boss: String::new(),
@@ -2178,6 +2186,19 @@ impl Play {
                 Action::ActivateTimer { start, limit, up } => self.state.timer.activate(start, limit, up),
                 Action::DeactivateTimer => self.state.timer.deactivate(),
                 Action::StopTimer => self.state.timer.running = false,
+                Action::InitMortog { target, centre, edge, hold } => {
+                    // SPEC-0030 row 84: both locators must exist; the zone count starts at 0.
+                    if let (Some((a, _)), Some((b, _))) = (self.locator(pack, centre), self.locator(pack, edge)) {
+                        let l = (a[0] - b[0]).powi(2) + (a[2] - b[2]).powi(2);
+                        self.mortog_zone = Some((pack, neopets_sim::mortog::Zone { centre: a, l, hold }, target));
+                        self.state.mortogs_on_target = 0;
+                    }
+                }
+                Action::MortogTimes { hold } => {
+                    if let Some((_, z, _)) = self.mortog_zone.as_mut() {
+                        z.hold = hold;
+                    }
+                }
                 Action::WaitObj { obj } => return Some(Wait::ObjAnim(pack, obj)),
                 Action::GroupEffects { group } => {
                     let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
@@ -3722,7 +3743,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 12 | 14 | 21 | 32)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 12 | 14 | 21 | 32 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -3755,6 +3776,7 @@ impl Play {
                 fyora: row.filter(|r| r.class == Some(38)).map(|_| neopets_sim::fyora::Fyora::default()),
                 serpent: row.filter(|r| r.class == Some(2)).map(|_| neopets_sim::serpent::Serpent::default()),
                 serpent_hit: None,
+                mortog: row.filter(|r| r.class == Some(39)).map(|_| neopets_sim::mortog::Mortog::default()),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -3868,6 +3890,7 @@ impl Play {
             fyora: None,
             serpent: None,
             serpent_hit: None,
+            mortog: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4913,6 +4936,25 @@ impl Play {
             wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| {
                 ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl))
             });
+            c.position = wk.position();
+            c.facing = wk.facing;
+        }
+        // Mortogs (SPEC-0029 Behavior 3): the routine against the world's zone (none: the data
+        // defaults, L = 0), the shared zone count, the motion-record tick.
+        let zone = match self.mortog_zone {
+            Some((p, z, _)) if p == world.pack => z,
+            _ => neopets_sim::mortog::Zone { centre: [0.0; 3], l: 0.0, hold: self.mortog_words.hold },
+        };
+        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
+            let (Some(wk), Some(m)) = (c.walker.as_mut(), c.mortog.as_mut()) else { continue };
+            let before = m.state;
+            let id = m.tick(wk, &world.navmeshes, &zone, &self.mortog_words, &mut self.state.mortogs_on_target, hero, &mut self.rng);
+            if m.state != before {
+                self.last_boss = format!("Mortog {} {:?} -> {:?} (zone count {}) on tick {}", c.id, before, m.state, self.state.mortogs_on_target, self.ticks);
+            }
+            c.anim.play(id);
+            let ground = &world.ground;
+            wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
             c.position = wk.position();
             c.facing = wk.facing;
         }
