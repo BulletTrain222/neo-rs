@@ -1061,6 +1061,14 @@ fn step_sim(
                 play.play.diagnostic_effect(id);
             }
         }
+        // NEOPETS_TRACE_TIMER="start": a diagnostic countdown timer from `start` seconds (limit 0),
+        // shown at play tick 60.
+        if let Some(start) = std::env::var("NEOPETS_TRACE_TIMER").ok().and_then(|v| v.trim().parse::<f32>().ok()) {
+            static TIMER_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if play.play.ticks >= 60 && !TIMER_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                play.play.state.timer.activate(start, 0.0, false);
+            }
+        }
         // NEOPETS_TRACE_STATUS="code,seconds": a diagnostic status on the hero once, at play
         // tick 60.
         if let Some((code, secs)) = std::env::var("NEOPETS_TRACE_STATUS").ok().and_then(|v| {

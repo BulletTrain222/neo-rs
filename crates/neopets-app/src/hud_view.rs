@@ -285,7 +285,8 @@ pub fn sync_hud(
         commands.entity(root).add_child(text);
         let caption = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudCaption)).id();
         commands.entity(root).add_child(caption);
-        for line in 0..2 {
+        // Lines 0 and 1 are the price caption; 2 is the countdown timer text (element 0xD8).
+        for line in 0..3 {
             let price = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudPrice(line))).id();
             commands.entity(root).add_child(price);
         }
@@ -478,6 +479,38 @@ pub fn sync_hud(
     // else the nine-cell number in (160, 160, 90) or (128, 60, 90) above the balance; line 2 the
     // balance in (128, 128, 128).
     for (line, mut node, mut image, mut vis) in &mut prices {
+        // SPEC-0023 section 13: element 0xD8 shows the countdown timer as M:SS:CC while it is
+        // visible, right-aligned at x 436 with its baseline at y 77, in the element's value-text
+        // font (font 0 when it has none) and the timer's default colour.
+        if line.0 == 2 {
+            if !p.state.timer.visible {
+                *vis = Visibility::Hidden;
+                continue;
+            }
+            let text = neopets_sim::timer::text(p.state.timer.value).into_bytes();
+            let rec = f.key(0xD8).and_then(|n| f.values.get(&f.nodes[n].data).copied());
+            let (font, spacing) = rec.map_or((0, 0), |v| (v.font.max(0) as usize, v.spacing as i32));
+            let colour = [128, 128, 128, 128];
+            let key = (9002, String::from_utf8_lossy(&text).into_owned());
+            if !value_images.contains_key(&key) {
+                if let Some((img, base)) = f.text_image(mem, font, &text, spacing, colour) {
+                    let (w, h) = (img.width, img.height);
+                    value_images.insert(key.clone(), (images.add(crate::rgba_image(w, h, img.rgba)), w, h, base));
+                }
+            }
+            match value_images.get(&key) {
+                Some((handle, w, h, base)) => {
+                    node.left = Val::Px((436.0 - *w as f32) * s);
+                    node.top = Val::Px((77 - base) as f32 * s);
+                    node.width = Val::Px(*w as f32 * s);
+                    node.height = Val::Px(*h as f32 * s);
+                    image.image = handle.clone();
+                    *vis = Visibility::Inherited;
+                }
+                None => *vis = Visibility::Hidden,
+            }
+            continue;
+        }
         let (value, counter) = p.price_lines[line.0];
         if counter == 0 || p.quick.open {
             *vis = Visibility::Hidden;

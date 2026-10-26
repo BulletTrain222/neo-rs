@@ -50,9 +50,25 @@ impl Timer {
     }
 }
 
+/// The 0xD8 text of a value (SPEC-0023 section 13): hundredths h = round half away from zero
+/// (value x 100), unsigned and clamped to 59 999, shown as M:SS:CC.
+pub fn text(value: f32) -> String {
+    let r = (value * 100.0).round() as i64;
+    let h = if r < 0 { 59_999 } else { (r as u64).min(59_999) };
+    format!("{}:{:02}:{:02}", h / 6000, (h / 100) % 60, h % 100)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn display_text() {
+        assert_eq!(text(65.5), "1:05:50");
+        assert_eq!(text(0.25), "0:00:25");
+        assert_eq!(text(-1.0), "9:59:99");
+        assert_eq!(text(1000.0), "9:59:99");
+    }
 
     #[test]
     fn limits_and_gates() {
