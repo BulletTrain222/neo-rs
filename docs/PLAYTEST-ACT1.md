@@ -5,7 +5,7 @@ What to expect, step by step, from the new-game start to handing in the package 
 ## Running it
 
 - `Run.cmd --play --title` (or `target\release\neopets-app.exe --play --title` after a release build). Pick New Game.
-- Developer menu (this build's own tool): **F1** opens it (cheats such as god mode, warp to another area, game speed); **F2** toggles a free camera; **F4** pauses and **F5** steps one tick.
+- Developer menu (this build's own tool): **F1** opens it (cheats such as god mode, Neopoints, warp to another area, game speed, healing both heroes); **F2** toggles a free camera, and the menu can then move the hero to where the free camera is (useful to skip a climb that fails); **F4** pauses and **F5** steps one tick.
 - To jump to a step without replaying the earlier ones, start the app with the flags of the steps before it, for example `--play --pack 909 --flag 107 --flag 108 --flag 109 --flag 110`.
 
 ## The farm (pack 909, the house 951)
@@ -28,6 +28,8 @@ What to expect, step by step, from the new-game start to handing in the package 
 13. **The package is stolen** (row 14, flag 127): entering the spot by the village gate (trigger 17) starts a long scene with Heermedjet and the thief. Control returns after it (about 38 seconds in the trace).
 14. **Chase the thief** (flags 128 to 135, then 136): the thief runs through eight waypoints and waits for you each time; stay within about 30 units. The whole chase took about 2.5 minutes in the trace. At the end the package is returned (row 15 starts).
 15. **Hand in the package** at the Recruitment Centre (row 15, flag 137): Officer Kendrick takes it and sends you to find a shield (the next mission).
+16. **Get a shield** (row 19, flag 138): the only Wooden Shield you can reach is for sale in Armourer Inga's shop (pack 1131, a door off the village) for **400 Neopoints**. Buying it works in the trace, as does Kendrick accepting it. You will need to collect coins first (from enemies and breakables); if that takes too long, the developer menu's Neopoints entry tops up the wallet. (A second Wooden Shield sits in pack 1259, a cut map New Game cannot reach.)
+17. **Next** (not traced yet): Master Torak in the tavern (pack 1150) agrees to sponsor you (flag 139) once you hold the shield. Then come the sword pieces and the jail thief (flags 644 and 142), the signed paper back to Kendrick (143), and your parents' permission at the farm (148 and 150).
 
 ## Known gaps that may show in these missions
 
