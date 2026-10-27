@@ -135,6 +135,22 @@ pub struct MeshPart {
     /// Layout A only: three skin weights and three skin bone indices (slot byte / 3) per vertex.
     pub weights: Vec<[f32; 3]>,
     pub bones: Vec<[u16; 3]>,
+    /// The second render pass of a two-pass group (SPEC-0003 How a pass is drawn; SPEC-0004
+    /// Two-pass batches): the same positions, colours and normals with its own texture and UVs.
+    pub pass1: Option<Pass1>,
+}
+
+/// A part's render pass 1.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Pass1 {
+    pub texture: usize,
+    /// The pass-1 UVs (the second half of each batch's UV array).
+    pub uvs: Vec<[f32; 2]>,
+    /// UV mode: 0 none, 1 environment map, 2 scroll, 3 flipbook.
+    pub uv_mode: u32,
+    pub scroll: [f32; 2],
+    /// The second register set's ALPHA (fields A, B, C, D in bits 0 to 7, FIX in 32 to 39).
+    pub alpha: Option<u64>,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -310,7 +326,30 @@ impl Builder {
                 .and_then(|m| m.list.groups.get(leaf.material_group as usize).copied());
             let unit = group.map_or(128.0, |g| g.colour_unit());
             let mut texture = None;
+            let mut texture1 = None;
             if let (Some(m), Some(g)) = (mats, group) {
+                // Render pass 1's texture, cached apart from pass 0's (its wrap may differ).
+                if g.two_pass() {
+                    if let (Some(r), Some(t1)) = (material::resolve_pass1(&g, &m.chunks), g.tex0_pass1) {
+                        let k = (key | 1 << 60, r, t1.tw, t1.th);
+                        texture1 = match self.cache.get(&k) {
+                            Some(&i) => Some(i),
+                            None => {
+                                let mem = m.memories[r.chunk].get_or_insert_with(|| m.chunks[r.chunk].gs_memory());
+                                let (w, h) = (1u32 << t1.tw.min(10), 1u32 << t1.th.min(10));
+                                match m.chunks[r.chunk].decode_region(mem, r.texture, r.palette, w, h) {
+                                    Ok(image) => {
+                                        let (repeat_u, repeat_v) = g.repeats_pass1();
+                                        self.out.textures.push(ModelTexture { image, repeat_u, repeat_v });
+                                        self.cache.insert(k, self.out.textures.len() - 1);
+                                        Some(self.out.textures.len() - 1)
+                                    }
+                                    Err(_) => None,
+                                }
+                            }
+                        };
+                    }
+                }
                 if let (Some(r), Some(t0)) = (material::resolve(&g, &m.chunks), g.tex0) {
                     let k = (key, r, t0.tw, t0.th);
                     texture = match self.cache.get(&k) {
@@ -346,6 +385,7 @@ impl Builder {
                 texture,
                 weights: Vec::new(),
                 bones: Vec::new(),
+                pass1: None,
                 raw_colors: Vec::new(),
                 lit: group.is_some_and(|g| matches!(g.program, 1 | 2 | 6)),
             };
@@ -364,6 +404,18 @@ impl Builder {
                     part.normals.extend(std::iter::repeat_n([0.0, 1.0, 0.0], b.positions.len()));
                 } else {
                     part.normals.extend_from_slice(&b.normals);
+                }
+            }
+            // Pass 1 when every batch carries its half of the UV array.
+            if let (Some(t), Some(g)) = (texture1, group) {
+                if batches.iter().all(|b| b.uvs_pass1.len() == b.positions.len()) {
+                    part.pass1 = Some(Pass1 {
+                        texture: t,
+                        uvs: batches.iter().flat_map(|b| b.uvs_pass1.iter().copied()).collect(),
+                        uv_mode: g.uv_mode_pass1,
+                        scroll: g.uv_speed_pass1(),
+                        alpha: g.alpha_pass1,
+                    });
                 }
             }
             if let Some(m) = matrix {

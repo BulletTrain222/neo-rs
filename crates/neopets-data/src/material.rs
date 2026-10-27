@@ -10,8 +10,10 @@ const STATE_BLOCK_LEN: usize = 0xD0;
 /// GS register numbers of TEX0 for drawing contexts 1 and 2.
 const TEX0_1: u8 = 0x06;
 const TEX0_2: u8 = 0x07;
-/// GS register number of CLAMP for drawing context 2 (the first register set).
+/// GS register numbers of CLAMP for drawing context 2 (the first register set) and context 1
+/// (the second set, render pass 1).
 const CLAMP_2: u8 = 0x09;
+const CLAMP_1: u8 = 0x08;
 /// GS register numbers of ALPHA for drawing contexts 1 and 2 (public GS documentation).
 const ALPHA_1: u8 = 0x42;
 const ALPHA_2: u8 = 0x43;
@@ -52,6 +54,14 @@ pub struct Group {
     /// Pass-0 vertex program (material record, group offset 0x44): 0 and 4 are unlit, 1, 2 and
     /// 6 are lit, 3 is the billboard program; it also sets the vertex colour scale.
     pub program: u32,
+    /// Render pass 1 (SPEC-0003 Material record; mode 2 groups only): its vertex program
+    /// (group offset 0x54, 0xFFFF for none), UV mode (0x5C) and UV-mode data's scroll speeds
+    /// (0x70, 0x74), and the second register set's CLAMP and ALPHA.
+    pub program_pass1: u32,
+    pub uv_mode_pass1: u32,
+    pub uv_speed_pass1_bits: [u32; 2],
+    pub clamp_pass1: Option<u64>,
+    pub alpha_pass1: Option<u64>,
 }
 
 /// The UV scroll offset of one axis (SPEC-0003 UV modes, mode 2): s x N - trunc(s x N), with N
@@ -83,6 +93,23 @@ impl Group {
         let c = self.clamp.unwrap_or(0);
         (c & 3 == 0, (c >> 2) & 3 == 0)
     }
+
+    /// Whether the group draws a second pass: mode 2, a pass-1 TEX0 and a pass-1 program
+    /// other than 0xFFFF (SPEC-0003 How a pass is drawn).
+    pub fn two_pass(&self) -> bool {
+        self.mode == 2 && self.tex0_pass1.is_some() && self.program_pass1 != 0xFFFF
+    }
+
+    /// Pass 1's scroll speeds (su, sv).
+    pub fn uv_speed_pass1(&self) -> [f32; 2] {
+        self.uv_speed_pass1_bits.map(f32::from_bits)
+    }
+
+    /// Pass 1's U and V repeat (true) or clamp (false).
+    pub fn repeats_pass1(&self) -> (bool, bool) {
+        let c = self.clamp_pass1.unwrap_or(0);
+        (c & 3 == 0, (c >> 2) & 3 == 0)
+    }
 }
 
 /// The registers this crate reads from a state block.
@@ -92,6 +119,8 @@ struct StateRegs {
     tex0_pass1: Option<Tex0>,
     clamp: Option<u64>,
     alpha: Option<u64>,
+    clamp_pass1: Option<u64>,
+    alpha_pass1: Option<u64>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -118,8 +147,12 @@ fn state_registers(block: &[u8]) -> Option<StateRegs> {
             TEX0_2 => regs.tex0 = Some(Tex0::decode(value)),
             TEX0_1 => regs.tex0_pass1 = Some(Tex0::decode(value)),
             CLAMP_2 => regs.clamp = Some(value),
+            CLAMP_1 => regs.clamp_pass1 = Some(value),
             ALPHA_2 => regs.alpha = Some(value),
-            ALPHA_1 => regs.alpha = regs.alpha.or(Some(value)),
+            ALPHA_1 => {
+                regs.alpha = regs.alpha.or(Some(value));
+                regs.alpha_pass1 = Some(value);
+            }
             _ => {}
         }
     }
@@ -160,6 +193,11 @@ impl ShaderList {
                     clamp: regs.clamp,
                     alpha: regs.alpha,
                     program: u32_at(group, 0x44).unwrap_or(0),
+                    program_pass1: u32_at(group, 0x54).unwrap_or(0xFFFF),
+                    uv_mode_pass1: u32_at(group, 0x5C).unwrap_or(0),
+                    uv_speed_pass1_bits: [u32_at(group, 0x70).unwrap_or(0), u32_at(group, 0x74).unwrap_or(0)],
+                    clamp_pass1: regs.clamp_pass1,
+                    alpha_pass1: if mode == 2 { regs.alpha_pass1 } else { None },
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -183,7 +221,15 @@ pub struct TextureRef {
 /// the texture is the entry in chunk k whose TBP and PSM equal TEX0's, and the palette is the
 /// PSMCT32 entry whose TBP equals CBP. Searching by address alone across chunks is ambiguous.
 pub fn resolve(group: &Group, chunks: &[TextureChunk]) -> Option<TextureRef> {
-    let t = group.tex0?;
+    resolve_tex0(group, group.tex0?, chunks)
+}
+
+/// Resolve the pass-1 texture (the second register set's TEX0) the same way.
+pub fn resolve_pass1(group: &Group, chunks: &[TextureChunk]) -> Option<TextureRef> {
+    resolve_tex0(group, group.tex0_pass1?, chunks)
+}
+
+fn resolve_tex0(group: &Group, t: Tex0, chunks: &[TextureChunk]) -> Option<TextureRef> {
     let k = group.texture_chunk as usize;
     let chunk = chunks.get(k)?;
     let texture = chunk

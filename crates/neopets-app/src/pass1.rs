@@ -1,0 +1,164 @@
+//! Render pass 1 of two-pass materials (SPEC-0003 How a pass is drawn, UV modes; SPEC-0004
+//! Two-pass batches): the same positions, colours and normals drawn a second time with the
+//! pass's own texture and UVs, blended by its ALPHA register. An environment-map pass (UV mode
+//! 1) takes its UVs from the reflected view direction in world space (level geometry: M the
+//! identity, E the camera position): D = P - E, R = D - 2 (D . N) N, u = 0.5 (1 - R^z),
+//! v = 0.5 (1 + R^y), worked out per pixel here. A scroll pass (mode 2) adds frac(s x N) to its
+//! UVs each frame. The blend follows the GS rule (A - B) x C + D: with B zero and D the
+//! destination it adds the source times its alpha (C = As), the FIX value (C = FIX) or, in this
+//! build, the source alpha again for C = Ad (the destination alpha is not kept); any other
+//! setting blends by alpha.
+
+use bevy::mesh::MeshVertexBufferLayoutRef;
+use bevy::pbr::{Material, MaterialPipeline, MaterialPipelineKey};
+use bevy::prelude::*;
+use bevy::render::render_resource::{AsBindGroup, RenderPipelineDescriptor, ShaderType, SpecializedMeshPipelineError};
+use bevy::shader::ShaderRef;
+use std::sync::OnceLock;
+
+static SHADER: OnceLock<Handle<Shader>> = OnceLock::new();
+
+pub struct Pass1Plugin;
+
+impl Plugin for Pass1Plugin {
+    fn build(&self, app: &mut App) {
+        let handle = app.world_mut().resource_mut::<Assets<Shader>>().add(Shader::from_wgsl(WGSL, "neopets/pass1.wgsl"));
+        let _ = SHADER.set(handle);
+        app.add_plugins(MaterialPlugin::<Pass1Material>::default()).add_systems(Update, scroll_pass1);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, ShaderType)]
+pub struct Pass1Params {
+    /// x: 1 for an environment map; y: 0 add by source alpha, 1 add by FIX, 2 alpha blend;
+    /// z: FIX / 128.
+    pub mode: Vec4,
+    /// The scroll offset (u, v).
+    pub offset: Vec4,
+}
+
+#[derive(Asset, TypePath, AsBindGroup, Clone, Debug)]
+pub struct Pass1Material {
+    #[uniform(0)]
+    pub params: Pass1Params,
+    #[texture(1)]
+    #[sampler(2)]
+    pub texture: Handle<Image>,
+    /// Alpha blend instead of the additive blend.
+    pub blend: bool,
+}
+
+impl Material for Pass1Material {
+    fn fragment_shader() -> ShaderRef {
+        SHADER.get().map_or(ShaderRef::Default, |h| ShaderRef::Handle(h.clone()))
+    }
+
+    fn alpha_mode(&self) -> AlphaMode {
+        if self.blend { AlphaMode::Blend } else { AlphaMode::Add }
+    }
+
+    fn enable_prepass() -> bool {
+        false
+    }
+
+    fn enable_shadows() -> bool {
+        false
+    }
+
+    fn specialize(_: &MaterialPipeline, descriptor: &mut RenderPipelineDescriptor, _: &MeshVertexBufferLayoutRef, _: MaterialPipelineKey<Self>) -> Result<(), SpecializedMeshPipelineError> {
+        // The disc's materials draw both faces.
+        descriptor.primitive.cull_mode = None;
+        Ok(())
+    }
+}
+
+/// The blend kind and FIX scale of an ALPHA register value (fields A, B, C, D in bits 0 to 7,
+/// FIX in bits 32 to 39): (kind, fix) with kind 0 add by source alpha, 1 add by FIX, 2 blend.
+pub fn blend_of(alpha: Option<u64>) -> (u32, f32) {
+    let Some(a) = alpha else { return (2, 1.0) };
+    let (fa, fb, fc, fd) = (a & 3, (a >> 2) & 3, (a >> 4) & 3, (a >> 6) & 3);
+    let fix = ((a >> 32) & 0xFF) as f32 / 128.0;
+    if fa == 0 && fb == 2 && fd == 1 {
+        match fc {
+            2 => (1, fix),
+            _ => (0, 1.0),
+        }
+    } else {
+        (2, 1.0)
+    }
+}
+
+/// A pass-1 part's scroll speeds per pass (UV mode 2).
+#[derive(Component, Clone, Copy)]
+pub struct Pass1Scroll(pub [f32; 2]);
+
+/// Each frame: a scrolling pass-1 part's offset is frac(s x N) per axis, N the 16-bit pass
+/// counter (the play tick, else the frame count).
+fn scroll_pass1(state: Option<Res<crate::PlayState>>, mut frames: Local<u32>, parts: Query<(&Pass1Scroll, &MeshMaterial3d<Pass1Material>)>, mut materials: ResMut<Assets<Pass1Material>>) {
+    *frames = frames.wrapping_add(1);
+    let n = state.map_or(*frames as u16, |s| s.play.ticks as u16);
+    for (s, m) in &parts {
+        if let Some(mut mat) = materials.get_mut(&m.0) {
+            mat.params.offset = Vec4::new(neopets_data::material::scroll_offset(s.0[0], n), neopets_data::material::scroll_offset(s.0[1], n), 0.0, 0.0);
+        }
+    }
+}
+
+const WGSL: &str = r#"
+#import bevy_pbr::forward_io::VertexOutput
+#import bevy_pbr::mesh_view_bindings::view
+
+struct Pass1 {
+    mode: vec4<f32>,
+    offset: vec4<f32>,
+}
+
+@group(#{MATERIAL_BIND_GROUP}) @binding(0) var<uniform> pass1: Pass1;
+@group(#{MATERIAL_BIND_GROUP}) @binding(1) var pass1_texture: texture_2d<f32>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(2) var pass1_sampler: sampler;
+
+@fragment
+fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
+#ifdef VERTEX_UVS_A
+    var uv = in.uv + pass1.offset.xy;
+#else
+    var uv = pass1.offset.xy;
+#endif
+    if pass1.mode.x > 0.5 {
+        let d = in.world_position.xyz - view.world_position;
+        let n = normalize(in.world_normal);
+        let r = normalize(d - 2.0 * dot(d, n) * n);
+        uv = vec2<f32>(0.5 * (1.0 - r.z), 0.5 * (1.0 + r.y));
+    }
+    let t = textureSample(pass1_texture, pass1_sampler, uv);
+    var c = t.rgb;
+    var a = t.a;
+#ifdef VERTEX_COLORS
+    c = c * in.color.rgb;
+    a = a * in.color.a;
+#endif
+    if pass1.mode.y < 0.5 {
+        return vec4<f32>(c * a, 0.0);
+    }
+    if pass1.mode.y < 1.5 {
+        return vec4<f32>(c * pass1.mode.z, 0.0);
+    }
+    return vec4<f32>(c, a);
+}
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn alpha_register_kinds() {
+        // 0x48: Cs x As + Cd; 0x68 with FIX 64: Cs x 0.5 + Cd; 0x58: Cs x Ad + Cd (As here);
+        // 0x44: (Cs - Cd) x As + Cd, the alpha blend.
+        assert_eq!(blend_of(Some(0x48)), (0, 1.0));
+        assert_eq!(blend_of(Some(0x68 | (64 << 32))), (1, 0.5));
+        assert_eq!(blend_of(Some(0x58)), (0, 1.0));
+        assert_eq!(blend_of(Some(0x44)), (2, 1.0));
+        assert_eq!(blend_of(None), (2, 1.0));
+    }
+}

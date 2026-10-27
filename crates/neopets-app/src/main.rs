@@ -9,6 +9,7 @@ mod perf;
 mod effect_view;
 mod foliage_view;
 mod graphics;
+mod pass1;
 mod orbit;
 mod pattern;
 mod audio_view;
@@ -847,6 +848,7 @@ fn main() {
         .init_resource::<perf::PerfOverlay>()
         .insert_resource(display::DisplaySettings::load())
         .add_plugins(graphics::GraphicsPlugin)
+        .add_plugins(pass1::Pass1Plugin)
         .init_resource::<display::SceneTarget>()
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
@@ -1886,6 +1888,7 @@ fn sync_worlds(
     parts: Query<(Entity, &WorldPart)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut shown: Local<Vec<WorldPart>>,
 ) {
@@ -2034,6 +2037,20 @@ fn sync_worlds(
                     }
                     if let Some(speed) = m.parts[i].scroll.filter(|_| m.parts[i].texture.is_some()) {
                         e.insert(UvScroll(speed));
+                    }
+                }
+                // Render pass 1 of the two-pass parts (pass1.rs), gated like their pass 0; its
+                // signature is kept apart so the duplicate test never hides it as pass 0's twin.
+                for (i, mesh, material, scroll) in pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images) {
+                    let mut e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part));
+                    if let (WorldPart::Scene(pack, _), Some(z)) = (*part, m.parts[i].zone) {
+                        e.insert(ZoneGate(pack, z));
+                    }
+                    if let WorldPart::Scene(pack, _) = *part {
+                        e.insert(PartSig(pack, part_signature(&m.parts[i]) ^ 0x9E37_79B9_7F4A_7C15));
+                    }
+                    if let Some(speed) = scroll {
+                        e.insert(pass1::Pass1Scroll(speed));
                     }
                 }
             }
@@ -2592,6 +2609,51 @@ pub(crate) fn part_assets(
             (i, meshes.add(mesh), material)
         })
         .collect()
+}
+
+/// Render pass 1 of a model's two-pass parts (SPEC-0003 How a pass is drawn): per part, a
+/// mesh with pass 0's positions, normals and colours and the pass-1 UVs, its material and,
+/// for a scroll pass, the speeds.
+pub(crate) fn pass1_assets(
+    m: &neopets_data::model::ModelData,
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<pass1::Pass1Material>,
+    images: &mut Assets<Image>,
+) -> Vec<(usize, Handle<Mesh>, Handle<pass1::Pass1Material>, Option<[f32; 2]>)> {
+    use bevy::mesh::{Indices, PrimitiveTopology};
+    let mut textures: std::collections::HashMap<usize, Handle<Image>> = std::collections::HashMap::new();
+    let mut out = Vec::new();
+    // NEOPETS_NO_PASS1: pass 1 is not drawn (diagnostic, for before-and-after comparisons).
+    if std::env::var_os("NEOPETS_NO_PASS1").is_some() {
+        return out;
+    }
+    for (i, part) in m.parts.iter().enumerate() {
+        let Some(p1) = part.pass1.as_ref() else { continue };
+        let Some(t) = m.textures.get(p1.texture) else { continue };
+        let image = textures.entry(p1.texture).or_insert_with(|| images.add(model_texture(t))).clone();
+        let (kind, fix) = pass1::blend_of(p1.alpha);
+        let material = materials.add(pass1::Pass1Material {
+            params: pass1::Pass1Params { mode: Vec4::new(if p1.uv_mode == 1 { 1.0 } else { 0.0 }, kind as f32, fix, 0.0), offset: Vec4::ZERO },
+            texture: image,
+            blend: kind == 2,
+        });
+        let g = gs_unit(part);
+        let colors: Vec<[f32; 4]> = part.colors.iter().map(|c| [(c[0] * g).powf(2.2), (c[1] * g).powf(2.2), (c[2] * g).powf(2.2), c[3].min(1.0)]).collect();
+        let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, part.positions.clone());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, p1.uvs.clone());
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
+        mesh.insert_indices(Indices::U32(part.indices.clone()));
+        // NEOPETS_TRACE_PASS1: each pass-1 part's middle, UV mode and blend (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() {
+            let n = part.positions.len().max(1) as f32;
+            let c = part.positions.iter().fold([0.0f32; 3], |a, q| [a[0] + q[0] / n, a[1] + q[1] / n, a[2] + q[2] / n]);
+            println!("pass1 part {i}: middle ({:.0}, {:.0}, {:.0}), {} vertices, uv mode {}, blend {:?}", c[0], c[1], c[2], part.positions.len(), p1.uv_mode, p1.alpha.map(|a| a & 0xFF));
+        }
+        out.push((i, meshes.add(mesh), material, (p1.uv_mode == 2).then_some(p1.scroll)));
+    }
+    out
 }
 
 /// The vertex colours are kept as GS output / 128, the unit a texture is modulated by (128
