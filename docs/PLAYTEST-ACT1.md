@@ -1,6 +1,6 @@
 # Playtest guide: the first Act 1 missions
 
-What to expect, step by step, from the new-game start to handing in the package in Meridell. Steps are named in our own words. The quest rows are the journal's rows (SPEC-0049), and the flags are the story flags the step sets. Every step below has been run in an automated trace on this build, except where it says **not traced**. Nothing has been played by hand yet, so anything that looks, sounds or feels wrong is worth noting.
+What to expect, step by step, from the new-game start through the Meridell enlistment errands. Steps are named in our own words. The quest rows are the journal's rows (SPEC-0049), and the flags are the story flags the step sets. Every step below has been run in an automated trace on this build, except where it says **not traced**. Nothing has been played by hand yet, so anything that looks, sounds or feels wrong is worth noting.
 
 ## Running it
 
@@ -29,7 +29,12 @@ What to expect, step by step, from the new-game start to handing in the package 
 14. **Chase the thief** (flags 128 to 135, then 136): the thief runs through eight waypoints and waits for you each time; stay within about 30 units. The whole chase took about 2.5 minutes in the trace. At the end the package is returned (row 15 starts).
 15. **Hand in the package** at the Recruitment Centre (row 15, flag 137): Officer Kendrick takes it and sends you to find a shield (the next mission).
 16. **Get a shield** (row 19, flag 138): the only Wooden Shield you can reach is for sale in Armourer Inga's shop (pack 1131, a door off the village) for **400 Neopoints**. Buying it works in the trace, as does Kendrick accepting it. You will need to collect coins first (from enemies and breakables); if that takes too long, the developer menu's Neopoints entry tops up the wallet. (A second Wooden Shield sits in pack 1259, a cut map New Game cannot reach.)
-17. **Next** (not traced yet): Master Torak in the tavern (pack 1150) agrees to sponsor you (flag 139) once you hold the shield. Then come the sword pieces and the jail thief (flags 644 and 142), the signed paper back to Kendrick (143), and your parents' permission at the farm (148 and 150).
+17. **Ask Master Torak to sponsor you** in the tavern (pack 1150, flag 139): he needs his broken sword replaced.
+18. **Collect the sword pieces** (flags 140 and 644): three lie in the village (items 40, 41 and 43). The hilt (item 42) is sold by the thief in the Recruitment Centre jail, Tark, for 100 Neopoints. **Fixed today:** Tark used to give only his three idle lines, so the hilt could not be bought.
+19. **Have the smith reforge it** (pack 1133, Rognus, flag 141): he turns the four pieces into Torak's sword.
+20. **Give Torak the sword** (flag 142): he gives the signed sponsorship paper.
+21. **Hand the paper to Kendrick** (flag 143): he gives the permission form, and the farm moves to its next stage.
+22. **Next** (not traced yet): back at the farm Lucy is missing (flag 145, set on arrival); find her in Shadowglen Woods and the burrows (flags 661 and 147), then your parents sign the form (148) and you take it back to Kendrick (150).
 
 ## Known gaps that may show in these missions
 
