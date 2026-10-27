@@ -8,6 +8,7 @@ mod display;
 mod perf;
 mod effect_view;
 mod foliage_view;
+mod graphics;
 mod orbit;
 mod pattern;
 mod audio_view;
@@ -839,6 +840,7 @@ fn main() {
         .init_resource::<controls_page::ControlsPage>()
         .init_resource::<perf::PerfOverlay>()
         .insert_resource(display::DisplaySettings::load())
+        .add_plugins(graphics::GraphicsPlugin)
         .init_resource::<display::SceneTarget>()
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
@@ -1723,12 +1725,13 @@ fn toggle_view(
 
 fn model_texture(t: &neopets_data::model::ModelTexture) -> Image {
     use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
-    let mut image = rgba_image(t.image.width, t.image.height, t.image.rgba.clone());
+    // With mipmaps for the Display page's distant-texture option (graphics.rs).
+    let mut image = graphics::with_mipmaps(rgba_image(t.image.width, t.image.height, t.image.rgba.clone()));
     let wrap = |repeat: bool| {
         if repeat { ImageAddressMode::Repeat } else { ImageAddressMode::ClampToEdge }
     };
     // Materials on disc magnify bilinearly (TEX1 MMAG = 1, SPEC-0003).
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
+    image.sampler = graphics::world_sampler(ImageSamplerDescriptor {
         address_mode_u: wrap(t.repeat_u),
         address_mode_v: wrap(t.repeat_v),
         mag_filter: ImageFilterMode::Linear,

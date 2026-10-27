@@ -24,7 +24,7 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 5;
+pub const ROWS: usize = 10;
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct DisplaySettings {
@@ -38,11 +38,18 @@ pub struct DisplaySettings {
     pub scale: usize,
     /// Smooth (linear) or sharp (nearest) upscaling.
     pub smooth: bool,
+    /// Graphics options (graphics.rs): anti-aliasing (index into graphics::AA), sharper
+    /// textures at a distance, bloom and colour grade (indices), ambient occlusion.
+    pub aa: usize,
+    pub sharp_textures: bool,
+    pub bloom: usize,
+    pub colour: usize,
+    pub ao: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true }
     }
 }
 
@@ -67,6 +74,11 @@ impl DisplaySettings {
                     }
                 }
                 "filter" => s.smooth = v != "sharp",
+                "antialiasing" => s.aa = v.parse().unwrap_or(s.aa).min(crate::graphics::AA.len() - 1),
+                "sharp textures" => s.sharp_textures = v == "true",
+                "bloom" => s.bloom = v.parse().unwrap_or(s.bloom).min(crate::graphics::BLOOM.len() - 1),
+                "colour" => s.colour = v.parse().unwrap_or(s.colour).min(crate::graphics::COLOUR.len() - 1),
+                "ambient occlusion" => s.ao = v == "true",
                 _ => {}
             }
         }
@@ -75,18 +87,32 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
             self.aspect,
             SCALES[self.scale],
-            if self.smooth { "smooth" } else { "sharp" }
+            if self.smooth { "smooth" } else { "sharp" },
+            self.aa,
+            self.sharp_textures,
+            self.bloom,
+            self.colour,
+            self.ao
         )
     }
 
     pub fn load() -> Self {
-        std::fs::read_to_string(SETTINGS_FILE).map(|t| Self::parse(&t)).unwrap_or_default()
+        let mut s = std::fs::read_to_string(SETTINGS_FILE).map(|t| Self::parse(&t)).unwrap_or_default();
+        // NEOPETS_GFX="aa,textures,bloom,colour,ao" (0/1 for the switches): the graphics options
+        // for this run (diagnostic, for screenshot comparisons; not saved unless changed).
+        if let Some(v) = std::env::var("NEOPETS_GFX").ok() {
+            let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+            if let [aa, tex, bloom, colour, ao] = n[..] {
+                (s.aa, s.sharp_textures, s.bloom, s.colour, s.ao) = (aa.min(3), tex != 0, bloom.min(2), colour.min(2), ao != 0);
+            }
+        }
+        s
     }
 
     pub fn save(&self) {
@@ -106,6 +132,11 @@ impl DisplaySettings {
             ("Aspect ratio".into(), ASPECTS[self.aspect].0.into()),
             ("Render scale".into(), format!("{}%", SCALES[self.scale])),
             ("Upscale filter".into(), if self.smooth { "Smooth".into() } else { "Sharp".into() }),
+            ("Anti-aliasing".into(), crate::graphics::AA[self.aa].into()),
+            ("Distant textures".into(), if self.sharp_textures { "Sharp".into() } else { "Original".into() }),
+            ("Bloom".into(), crate::graphics::BLOOM[self.bloom].into()),
+            ("Colour".into(), crate::graphics::COLOUR[self.colour].into()),
+            ("Ambient occlusion".into(), if self.ao { "On".into() } else { "Off".into() }),
         ]
     }
 
@@ -128,6 +159,11 @@ impl DisplaySettings {
             2 => self.aspect = step(self.aspect, ASPECTS.len()),
             3 => self.scale = (self.scale as i32 + delta).clamp(0, SCALES.len() as i32 - 1) as usize,
             4 => self.smooth = !self.smooth,
+            5 => self.aa = step(self.aa, crate::graphics::AA.len()),
+            6 => self.sharp_textures = !self.sharp_textures,
+            7 => self.bloom = step(self.bloom, crate::graphics::BLOOM.len()),
+            8 => self.colour = step(self.colour, crate::graphics::COLOUR.len()),
+            9 => self.ao = !self.ao,
             _ => {}
         }
     }
@@ -165,7 +201,7 @@ pub struct SceneView;
 pub struct WindowCamera;
 
 /// Spawn the window camera (the default UI camera) and the scene view node behind every UI.
-pub fn setup(mut commands: Commands) {
+pub fn setup(mut commands: Commands, mut grades: ResMut<Assets<crate::graphics::SceneGrade>>) {
     commands.spawn((
         Camera2d,
         Camera { order: 1, clear_color: ClearColorConfig::Custom(Color::BLACK), ..default() },
@@ -173,12 +209,9 @@ pub fn setup(mut commands: Commands) {
         IsDefaultUiCamera,
         WindowCamera,
     ));
-    commands.spawn((
-        Node { position_type: PositionType::Absolute, ..default() },
-        ImageNode::default(),
-        GlobalZIndex(i32::MIN + 1),
-        SceneView,
-    ));
+    // The 3D picture, drawn with the colour grade (graphics.rs).
+    let grade = grades.add(crate::graphics::SceneGrade { grade: Default::default(), image: Handle::default() });
+    commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, bevy::ui_render::prelude::MaterialNode(grade), GlobalZIndex(i32::MIN + 1), SceneView));
 }
 
 /// The resolutions on offer: the primary monitor's video mode sizes (largest first, at least
@@ -267,7 +300,8 @@ pub fn sync_scene(
     settings: Res<DisplaySettings>,
     windows: Query<&Window, With<PrimaryWindow>>,
     cameras: Query<Entity, With<Camera3d>>,
-    mut views: Query<(&mut Node, &mut ImageNode), With<SceneView>>,
+    mut views: Query<(&mut Node, &bevy::ui_render::prelude::MaterialNode<crate::graphics::SceneGrade>), With<SceneView>>,
+    mut grades: ResMut<Assets<crate::graphics::SceneGrade>>,
     mut images: ResMut<Assets<Image>>,
     mut target: ResMut<SceneTarget>,
 ) {
@@ -291,8 +325,10 @@ pub fn sync_scene(
         for e in &cameras {
             commands.entity(e).insert(RenderTarget::from(handle.clone()));
         }
-        for (_, mut img) in &mut views {
-            img.image = handle.clone();
+        for (_, m) in &views {
+            if let Some(mut g) = grades.get_mut(&m.0) {
+                g.image = handle.clone();
+            }
         }
     }
     // The node is in logical pixels.
@@ -339,6 +375,11 @@ const HELP: [&str; ROWS + 1] = [
     "The shape of the game picture; bars fill the rest of the window.",
     "How sharp the 3D world is drawn. Higher looks better and costs speed.",
     "How the world picture is scaled to the window: Sharp keeps pixels crisp, Smooth blends them.",
+    "Smooths jagged edges. SMAA also smooths leaves and fences; MSAA turns to SMAA while ambient occlusion is on.",
+    "Keeps ground and walls crisp at a distance and at an angle, without shimmer.",
+    "A soft glow around bright light, magic and sky.",
+    "Vivid and Rich lift colour and contrast a little; Original is the game's own colour.",
+    "Soft shade where walls meet floors and in corners.",
     "Back to Options.",
 ];
 
@@ -352,7 +393,7 @@ pub fn spawn_window(mut commands: Commands) {
             Node {
                 position_type: PositionType::Absolute,
                 left: percent(50),
-                top: percent(18),
+                top: px(16),
                 margin: UiRect::left(px(-300)),
                 width: px(600),
                 flex_direction: FlexDirection::Column,
@@ -367,12 +408,12 @@ pub fn spawn_window(mut commands: Commands) {
         ))
         .with_children(|ui| {
             ui.spawn((Text::new("Display"), font(22.0), TextColor(GOLD)));
-            ui.spawn((Text::new("Up and down pick, left and right (or a click on < >) change. Esc, Backspace or B go back."), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }));
+            ui.spawn((Text::new("Up and down pick, left and right or a click change. Esc or B go back."), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }));
             for k in 0..=ROWS {
                 let back = k == ROWS;
                 ui.spawn((
                     Button,
-                    Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(3)), min_height: px(28), margin: UiRect::top(px(if back { 10.0 } else { 0.0 })), ..default() },
+                    Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(3)), min_height: px(25), margin: UiRect::top(px(if back { 8.0 } else { 0.0 })), ..default() },
                     BackgroundColor(ROW),
                     DispRow(k),
                 ))
