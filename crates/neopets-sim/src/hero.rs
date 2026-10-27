@@ -300,7 +300,10 @@ impl HeightFollow {
         } else {
             self.v += 0.04 * q;
         }
-        self.shown += g.signum() * self.v;
+        // A safety clamp (no spec): the step never passes the world height. It only acts for
+        // gaps above about 500 units (0.002 g² > |g|), where the formula diverges, as after a
+        // fall far below the world.
+        self.shown += g.signum() * self.v.min(g.abs());
     }
 }
 
@@ -832,11 +835,15 @@ impl Locomotion {
     ) {
         let start = self.body.position;
         self.body.measure(probe);
+        // SPEC-0033 Floor-contact flag: a record more than 0.05 inside a floor resolves a
+        // contact against it, which sets the flag (here for the probed ground as well as the
+        // contact surfaces; Medium).
+        let inside = self.body.gap < -0.05 && self.body.normal[1] > 0.9;
         self.travel(root_step);
         self.body.constrain();
         self.body.gravity();
         // The driver clears the floor-contact flag, then a floor contact sets it.
-        self.body.floor = false;
+        self.body.floor = inside;
         if contacts(&mut self.body.position) {
             self.body.floor_contact();
         }
@@ -1075,5 +1082,19 @@ mod tests {
         let (g, f, (d, y)) = (gate.unwrap(), five.unwrap(), decision.unwrap());
         assert_eq!((f - g, d - f), (10, 20));
         assert!((y - 0.0409).abs() < 2e-3, "{y}");
+    }
+
+    #[test]
+    fn height_follow_clamps_a_huge_gap() {
+        // A 2,700-unit jump in one tick: the displayed height reaches the world height and stays
+        // finite; a 10-unit gap closes as before (0.2 the first tick).
+        let mut f = HeightFollow::at(-1175.0);
+        for _ in 0..10 {
+            f.tick(1536.0, STANCE);
+        }
+        assert!(f.shown.is_finite() && (f.shown - 1536.0).abs() < 0.05, "{}", f.shown);
+        let mut f = HeightFollow::at(0.0);
+        f.tick(10.0, STANCE);
+        assert!((f.shown - 0.2).abs() < 1e-5, "{}", f.shown);
     }
 }

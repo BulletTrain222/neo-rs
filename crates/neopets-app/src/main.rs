@@ -2678,6 +2678,7 @@ fn play_trace(
     }
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
     println!("Book stations of {} (value, trigger index): {:?}", play.world.pack, play.book_stations());
+    println!("Script triggers of {} (index, kind, middle): {:?}", play.world.pack, play.trigger_points());
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
     let placed: Vec<String> = play.world.placed_effects.iter().take(12).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
     println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
@@ -2979,6 +2980,21 @@ fn play_trace(
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
             (forward, side) = play.block_trace_stick().unwrap_or((0.0, 0.0));
         }
+        // NEOPETS_TRACE_STICK="tick:f,s;tick:f,s;...": from each tick on, the raw stick values
+        // (forward, side) replace the route's, until the next entry; "tick:-" returns to the
+        // route. NEOPETS_TRACE_SQUARE="a,b,...": Square press edges on these ticks.
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_STICK") {
+            let mut set: Option<(f32, f32)> = None;
+            for e in v.split(';') {
+                let Some((k, fs)) = e.trim().split_once(':') else { continue };
+                if k.parse::<u64>().is_ok_and(|k| k <= play.ticks) {
+                    set = fs.split_once(',').and_then(|(f, s)| Some((f.trim().parse().ok()?, s.trim().parse().ok()?)));
+                }
+            }
+            if let Some(fs) = set {
+                (forward, side) = fs;
+            }
+        }
         // Around a diagnostic switch the stick rests (the chord needs a standing hero).
         if switch_at.iter().any(|&k| play.ticks + 30 >= k && play.ticks <= k + 60) {
             (forward, side) = (0.0, 0.0);
@@ -3007,6 +3023,10 @@ fn play_trace(
             jump: (jump && play.ticks % 240 == 0 && play.ticks > 0) || (play.death.page.is_some() && play.ticks % 60 == 0) || cross_at.contains(&play.ticks),
             ..Default::default()
         };
+        let mut input = input;
+        if std::env::var("NEOPETS_TRACE_SQUARE").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
+            input.square = true;
+        }
         // In a fight below half health the trace drinks: it opens the quick panel, selects the
         // first entry it owns and presses Cross (or closes the panel with Triangle).
         let mut input = input;
@@ -3147,6 +3167,10 @@ fn play_trace(
             play.ticks, p[0], p[1], p[2], play.loco.state, play.loco.phase, play.loco.action(), b.gap, b.velocity[1],
             b.normal[0], b.normal[1], b.normal[2]
         );
+        // NEOPETS_TRACE_FACING: the facing, the stick target and the body velocity too.
+        if std::env::var_os("NEOPETS_TRACE_FACING").is_some() {
+            println!("      facing {:?} target {:?} velocity {:?} root {:?} camera rows {:?}", play.loco.facing, play.loco.target, b.velocity, play.root_step, play.camera.rows()); println!("      eye {:?} focus {:?}", play.camera.eye, play.camera.focus);
+        }
         if play.ticks % 60 == 0 {
             println!("      {}", play.status_camera());
             println!("      {}", play.status_worlds());

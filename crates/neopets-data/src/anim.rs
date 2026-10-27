@@ -428,7 +428,9 @@ pub fn combine(joint: &mut Option<Joint>, sample: Joint, replace: bool, phi: f32
 
 /// Sample a clip at key `k`, next key `k2` and fraction `t`, and combine each animated joint
 /// into the joint list: mask bit b drives element b − `base` (0 for main clips, N_main for
-/// sub-part and face clips).
+/// sub-part and face clips). With `mirror` (the joints' mirror partners; Mirrored clips) the
+/// sample of joint i goes to joint partner(i), its rotation (x, y, z, w) as (x, −y, −z, w) and
+/// its translation (x, y, z) as (−x, y, z).
 #[allow(clippy::too_many_arguments)]
 pub fn sample_into(
     clip: &Clip,
@@ -440,6 +442,7 @@ pub fn sample_into(
     replace: bool,
     phi: f32,
     scale: &dyn Fn(usize) -> f32,
+    mirror: Option<&[u32]>,
 ) {
     if k >= clip.frames || k2 >= clip.frames {
         return;
@@ -450,17 +453,28 @@ pub fn sample_into(
         };
         // Both keys' translations are scaled before the blend (Per-bone translation scale).
         let f = scale(j);
-        let sample = blend_key(
+        let (mut q, mut tr) = blend_key(
             clip.rotation(k, i),
             clip.rotation(k2, i),
             clip.translation(k, i).map(|v| v * f),
             clip.translation(k2, i).map(|v| v * f),
             t,
         );
-        let slot = &mut joints[j];
-        combine(slot, sample, replace, phi);
+        let mut out = j;
+        if let Some(partners) = mirror {
+            match partners.get(j).map(|&p| p as usize).filter(|&p| p < joints.len()) {
+                Some(p) => out = p,
+                None => continue,
+            }
+            q = [q[0], -q[1], -q[2], q[3]];
+            tr = [-tr[0], tr[1], tr[2]];
+        }
+        combine(&mut joints[out], (q, tr), replace, phi);
     }
 }
+
+/// Word A bit 12: the entry's clip plays mirrored (Mirrored clips).
+pub const MIRROR_BIT: u32 = 1 << 12;
 
 /// One animation family of a hero (SPEC-0005, Hero animation data): its skeleton header, its
 /// clip bank decoded in chain order, and word A of each action-table entry.
@@ -728,5 +742,30 @@ mod tests {
         let s = skin_matrices(&bones, &Family { def: &def, skin_base: 0, joints: &joints }, &[]);
         let p = s[1].apply([1.0, 3.0, 0.0]);
         assert!((p[0]).abs() < 1e-6 && (p[1] - 3.0).abs() < 1e-6 && (p[2] + 1.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn mirrored_sample_goes_to_the_partner() {
+        // SPEC-0005 Mirrored clips: joint 1's sample lands on its partner 2, rotation (x, -y,
+        // -z, w) and translation (-x, y, z); without the flag it stays on joint 1.
+        let clip = Clip {
+            frames: 1,
+            looping: false,
+            speed_byte: 0,
+            fade_in: 0,
+            compressed: false,
+            mode: 0,
+            bones: vec![1],
+            rotations: vec![[0.1, 0.2, 0.3, 0.9]],
+            translations: vec![[1.0, 2.0, 3.0]],
+            root: vec![[0.0; 3]],
+            frame_bits: vec![0],
+        };
+        let mut joints = vec![None; 3];
+        sample_into(&clip, 0, 0, 0.0, 0, &mut joints, true, 1.0, &|_| 1.0, Some(&[0, 2, 1]));
+        assert_eq!((joints[1], joints[2]), (None, Some(([0.1, -0.2, -0.3, 0.9], [-1.0, 2.0, 3.0]))));
+        let mut joints = vec![None; 3];
+        sample_into(&clip, 0, 0, 0.0, 0, &mut joints, true, 1.0, &|_| 1.0, None);
+        assert_eq!(joints[1], Some(([0.1, 0.2, 0.3, 0.9], [1.0, 2.0, 3.0])));
     }
 }

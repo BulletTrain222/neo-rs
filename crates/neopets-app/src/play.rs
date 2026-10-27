@@ -610,7 +610,7 @@ pub struct Play {
     /// loaded: serviced by the app between ticks (`stream`).
     pub wanted: Option<u32>,
     kinds: HashMap<u32, Kind>,
-    root_step: [f32; 3],
+    pub root_step: [f32; 3],
     /// A Cross press waiting for the next tick.
     pub jump_latch: bool,
     /// An R3 press waiting for the next tick.
@@ -10083,6 +10083,23 @@ impl Play {
 
     /// The item screen's view of the party (SPEC-0035 section 14.1) for the grid ids.
     /// Diagnostic: the current world's book stations (value, trigger index).
+    /// The current world's script triggers: (index, kind, a middle point) for traces.
+    pub fn trigger_points(&self) -> Vec<(u16, u8, [i32; 3])> {
+        use neopets_sim::trigger::Shape;
+        self.world
+            .all_volumes
+            .iter()
+            .map(|v| {
+                let c = match v.shape {
+                    Shape::Sphere { centre, .. } => centre,
+                    Shape::Cylinder { base, axis, length, .. } => [base[0] + 0.5 * length * axis[0], base[1] + 0.5 * length * axis[1], base[2] + 0.5 * length * axis[2]],
+                    Shape::Rectangle { origin, axes, extents } => std::array::from_fn(|k| origin[k] + 0.5 * (extents[0] * axes[0][k] + extents[1] * axes[1][k])),
+                };
+                (v.index, v.kind, c.map(|x| x.round() as i32))
+            })
+            .collect()
+    }
+
     pub fn book_stations(&self) -> Vec<(u16, u16)> {
         self.world.books.iter().map(|(v, value)| (*value, v.index)).collect()
     }

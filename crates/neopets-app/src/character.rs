@@ -15,6 +15,8 @@ struct FamilyState {
     /// Skin bone of the family's first joint.
     skin_base: usize,
     current: Option<usize>,
+    /// The playing clip is mirrored (SPEC-0005 Mirrored clips; main family only).
+    mirror: bool,
     /// The family's role: 0 main, 1 sub-part, 2 face (region characters may lack some).
     role: u8,
 }
@@ -62,6 +64,7 @@ impl HeroAnim {
                     data,
                     record: PlaybackRecord::default(),
                     current: None,
+                    mirror: false,
                     role,
                 };
                 skin_base += n;
@@ -127,7 +130,10 @@ impl HeroAnim {
     pub fn root_sum(&self, action: u32) -> Option<(usize, [f32; 3])> {
         let f = self.families.first()?;
         let c = &f.data.clips[f.data.clip_for(action)?];
-        let sum = c.root.iter().fold([0.0f32; 3], |a, r| [a[0] + r[0], a[1] + r[1], a[2] + r[2]]);
+        let mut sum = c.root.iter().fold([0.0f32; 3], |a, r| [a[0] + r[0], a[1] + r[1], a[2] + r[2]]);
+        if f.data.actions.get(action as usize).is_some_and(|&a| a & anim::MIRROR_BIT != 0) {
+            sum[0] = -sum[0];
+        }
         Some((c.root.len(), sum))
     }
 
@@ -143,11 +149,14 @@ impl HeroAnim {
     }
 
     /// Request an action, restarting its clip even when it is current when `force` is set (the
-    /// forced start of SPEC-0040, used by chained attack repeats).
+    /// forced start of SPEC-0040, used by chained attack repeats). The main clip starts unless
+    /// its layer holds the same clip with the same mirror flag (word A bit 12; SPEC-0005 Clip
+    /// start, Mirrored clips). Sub-part and face clips are never mirrored (none is on disc).
     pub fn request(&mut self, action: u32, force: bool) {
         self.action = action;
         let main = self.families.first().and_then(|f| f.data.clip_for(action));
-        let restart = main.is_some() && (force || main != self.families[0].current);
+        let mirror = self.families.first().and_then(|f| f.data.actions.get(action as usize)).is_some_and(|&a| a & anim::MIRROR_BIT != 0);
+        let restart = main.is_some() && (force || main != self.families[0].current || mirror != self.families[0].mirror);
         if !restart {
             return;
         }
@@ -167,6 +176,7 @@ impl HeroAnim {
                 1.0,
             );
             f.current = Some(c);
+            f.mirror = f.role == 0 && mirror;
         }
     }
 
@@ -191,6 +201,10 @@ impl HeroAnim {
                 let scale = f.record.speed() * if f.record.finished() { 2.0 } else { 1.0 };
                 if let Some(r) = clip.root.get(s.key as usize) {
                     root = r.map(|v| v * scale);
+                    // A mirrored clip's root step has its x negated (Playback 5).
+                    if f.mirror {
+                        root[0] = -root[0];
+                    }
                 }
             }
             anim::sample_into(
@@ -204,6 +218,7 @@ impl HeroAnim {
                 s.blend,
                 // Only main-family samples are scaled.
                 &|j| if i == 0 { f.data.def.translation_scale(j, sel) } else { 1.0 },
+                f.mirror.then_some(f.data.def.partners.as_slice()),
             );
         }
         root
