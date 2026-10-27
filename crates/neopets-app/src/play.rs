@@ -86,9 +86,9 @@ pub struct World {
     /// Teleport planes (doors), the arrival-door list (tag 0x0E) and the entry records.
     pub planes: Vec<TeleportPlane>,
     arrivals: Neighbours,
-    entries: Vec<([f32; 3], [f32; 3])>,
+    pub entries: Vec<([f32; 3], [f32; 3])>,
     /// The entry records' locator tags (u16 +0x1E), by list position.
-    tags: Vec<u16>,
+    pub tags: Vec<u16>,
     /// The module imports RegisterTeleportCallback: its doors are script doors, which need the
     /// level-script runtime (not implemented), so they do nothing here.
     pub scripted_doors: bool,
@@ -510,6 +510,11 @@ pub struct Character {
     pub class20: Option<neopets_sim::petpet::Class20>,
     /// The Black Knight's per-fight record (behaviour class 8; SPEC-0012).
     pub knight: Option<neopets_sim::knight::Knight>,
+    /// The Gelert Assassin (behaviour class 1; SPEC-0013), its clone slot (block ordinal) and
+    /// the hit waiting for its controller (damage, from a shot).
+    pub gelert: Option<neopets_sim::gelert::Gelert>,
+    pub gelert_slot: usize,
+    pub gelert_hit: Option<(i32, bool)>,
 }
 
 impl Character {
@@ -787,6 +792,8 @@ pub struct Play {
     class20_waits: (i32, i32),
     /// The Black Knight's tuning block (SPEC-0012, 0x2DA3E8).
     knight_words: Option<neopets_sim::knight::Words>,
+    /// The Gelert Assassin's tuning words and data constants (SPEC-0013).
+    gelert_words: Option<neopets_sim::gelert::Words>,
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     /// The Undead Draik's spit flight effects (fire, ice).
     spit_fx: [Option<usize>; 2],
@@ -1082,6 +1089,7 @@ impl Play {
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
         let knight_words = words(neopets_sim::knight::BASE, neopets_sim::knight::WORDS).ok().and_then(|w| neopets_sim::knight::Words::read(&w));
+        let gelert_words = words(neopets_sim::gelert::BASE, neopets_sim::gelert::WORDS).ok().and_then(|w| neopets_sim::gelert::Words::read(&w, &|at| words(at, 1).ok().map(|v| v[0])));
         let class20_waits = {
             let w = words(neopets_sim::petpet::CLASS20_WAIT_AT, 2)?;
             ((f32::from_bits(w[0]) * 60.0) as i32, (f32::from_bits(w[1]) * 60.0) as i32)
@@ -1457,6 +1465,7 @@ impl Play {
             feeding: None,
             class20_waits,
             knight_words,
+            gelert_words,
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -4411,6 +4420,12 @@ impl Play {
             c.serpent_hit = Some((damage, by.contains("shot")));
             return;
         }
+        // SPEC-0013: the Gelert Assassin's controller takes a hit only in its hittable states.
+        if let Some(c) = self.characters.get_mut(i).filter(|c| c.gelert.is_some()) {
+            let (d, shot) = c.gelert_hit.unwrap_or((0, false));
+            c.gelert_hit = Some((d + damage.max(0), shot || by.contains("shot")));
+            return;
+        }
         // SPEC-0011: a Faerie Sister's own controller applies the hit (the shield, the flinch and
         // death); a hero shot is told apart from the swing and the Mote objects.
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.sister.is_some()) {
@@ -4670,7 +4685,7 @@ impl Play {
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
             .filter(|c| self.fight_target.as_ref().is_none_or(|n| *n == c.name))
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.knight.as_ref().is_some_and(|k| !k.defeated()) || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.ixi.as_ref().is_some_and(|k| k.state != neopets_sim::ixi::State::Death) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.knight.as_ref().is_some_and(|k| !k.defeated()) || c.gelert.as_ref().is_some_and(|g| g.state != neopets_sim::gelert::State::Death && g.state != neopets_sim::gelert::State::CloneWait) || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.ixi.as_ref().is_some_and(|k| k.state != neopets_sim::ixi::State::Death) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -4809,7 +4824,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(1 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -4851,6 +4866,9 @@ impl Play {
                 pet_type: pl.key as i32,
                 class20: row.filter(|r| r.class == Some(20)).map(|_| neopets_sim::petpet::Class20::new(position)),
                 knight: row.filter(|r| r.class == Some(8)).and_then(|_| self.knight_words.as_ref()).map(neopets_sim::knight::Knight::new),
+                gelert: row.filter(|r| r.class == Some(1)).and_then(|_| self.gelert_words.as_ref()).map(|w| neopets_sim::gelert::Gelert::new(w, self.state.flag(258), pl.ordinal > 0, &mut self.rng)),
+                gelert_slot: pl.ordinal,
+                gelert_hit: None,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -4973,6 +4991,9 @@ impl Play {
             pet_type: pl.key as i32,
             class20: None,
             knight: None,
+            gelert: None,
+            gelert_slot: 0,
+            gelert_hit: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4997,6 +5018,14 @@ impl Play {
         let pack = self.world.pack;
         self.slot_regions.insert((pack, PET_SLOT), region);
         self.region_wanted.push((pack, PET_SLOT, region));
+    }
+
+    /// Diagnostic: the Gelert Assassin's HP (trace only).
+    pub fn diag_gelert_hp(&mut self, hp: i32) {
+        let pack = self.world.pack;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.gelert.as_ref().is_some_and(|g| !g.clone)) {
+            c.hp = hp;
+        }
     }
 
     /// Diagnostic: load a region into a slot of the current world (trace only).
@@ -6550,6 +6579,7 @@ impl Play {
         self.gnarfas_step();
         self.king_step();
         self.knight_step();
+        self.gelert_step();
         self.ixi_step();
         self.sisters_step();
         self.draik_step();
@@ -8068,6 +8098,266 @@ impl Play {
                     }
                 }
             }
+        }
+    }
+
+    /// SPEC-0013 per tick for the Gelert Assassins of the current world (the boss and its
+    /// clones): the measurements (weapon 1 of attach point 0 against the hero's hurt capsules
+    /// while event bit 0x1 is on; the melee reaction's reach and facing, as the common enemies'
+    /// defence, 8.0 and 0.5; a hero shot whose 180-tick path passes within the body; a shot
+    /// within 10; the hits waiting from the hero's swing and shots; the walker's navmesh
+    /// blocked flag; a landing point's walkability on the boss's mesh; locators 200 to 207),
+    /// the controller tick, then its clip and rate, turn, travel (approach and the sideways
+    /// modes on the walker), the straight rainbow step, the placement, unreduced hits on the
+    /// hero, the dagger launches into the enemy projectile pool, the level states, the flinch
+    /// flash 222, the heal and its aura 428, the light arc's missile wall, the clone wake and
+    /// a hit clone's reset (effect 559). Interpretations (R-0098): the missile-reaction and hit
+    /// tests use the body cylinder for the bone cylinders; the clones are the block's records
+    /// after the first; a hidden clone is inactive.
+    fn gelert_step(&mut self) {
+        use neopets_sim::combat::Cylinder;
+        use neopets_sim::gelert as ge;
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let Some(words) = self.gelert_words.clone() else { return };
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.gelert.is_some() && !c.held).map(|c| c.id).collect();
+        if ids.is_empty() {
+            return;
+        }
+        if std::env::var_os("NEOPETS_TRACE_GELERT").is_some() && self.ticks % 120 == 0 {
+            let all: Vec<String> = self.characters.iter().filter(|c| c.pack == pack && c.gelert.is_some()).map(|c| format!("[id {} entity {:?} slot {} inactive {} held {} {:?} anim {}]", c.id, c.entity, c.gelert_slot, c.inactive, c.held, c.gelert.as_ref().map(|g| g.state), c.anim.action())).collect();
+            println!("      gelerts on tick {}: {}", self.ticks, all.join(" "));
+        }
+        let hplace = placement(hero, hf);
+        let hframes = self.hero.bone_frames();
+        let caps: Vec<Cylinder> = self
+            .hero
+            .bones()
+            .hurt
+            .iter()
+            .zip(&hframes)
+            .filter(|(h, _)| h.1 > 0.0)
+            .map(|(&(base, length, radius), f)| {
+                let w = hplace.mul(f);
+                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+            })
+            .collect();
+        let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
+        let attacking = self.attack.is_some();
+        let guarding = self.loco.state == hero_states::GUARD;
+        let hero_anim = self.hero.clip_state().action;
+        let ratio = self.hero_hp as f32 / self.hero_max.max(1) as f32;
+        let clones_alive = self.characters.iter().filter(|c| c.pack == pack && c.gelert.as_ref().is_some_and(|g| g.clone && g.state != ge::State::CloneWait)).count();
+        let level_flags = self.state.level_flags.clone();
+        let level = |f: u16| level_flags.contains(&f);
+        let world = &self.world;
+        let rainbow: [Option<[f32; 3]>; 8] = std::array::from_fn(|k| world.tags.iter().position(|&t| t as usize == 200 + k).and_then(|i| world.entries.get(i)).map(|e| e.0));
+        let mut wake = None;
+        let mut new_shots: Vec<neopets_sim::projectile::Setup> = Vec::new();
+        let mut hero_hits: Vec<(i32, [f32; 3])> = Vec::new();
+        let mut walls: Vec<([f32; 3], [f32; 3])> = Vec::new();
+        let mut effects: Vec<(u32, [f32; 3])> = Vec::new();
+        let mut levels: Vec<u16> = Vec::new();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let c = &mut self.characters[i];
+            let place = placement(c.position, c.facing);
+            let frames = c.anim.bone_frames();
+            let bits = c.anim.frame_bits();
+            let weapon_touch = bits & 1 != 0
+                && c.anim.bones().attach.first().and_then(|&(bone, angles, offset)| Some(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)))).is_some_and(|w| {
+                    let (radius, length) = c.weapons[0];
+                    let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                    caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+                });
+            let off = [c.position[0] - hero[0], 0.0, c.position[2] - hero[2]];
+            let dist = off[0].hypot(off[2]);
+            let melee_reach = dist < neopets_sim::enemy::DEFENCE_REACH && (hf[0] * off[0] + hf[2] * off[2]) / dist.max(1e-6) > neopets_sim::enemy::DEFENCE_ARC;
+            let r = c.row.map_or(1.5, |r| r.radius);
+            let height = c.row.map_or(5.0, |r| r.height);
+            let (b0, b1) = (c.position, add(c.position, [0.0, height, 0.0]));
+            let missile_threat = shots.iter().any(|&(p, v, sr)| neopets_sim::gnarfas::segment_distance(p, add(p, scale(v, 180.0)), b0, b1) <= r + sr);
+            let missile_near = shots.iter().any(|&(p, _, _)| (0..3).map(|k| (p[k] - c.position[k]).powi(2)).sum::<f32>().sqrt() < 10.0);
+            let pending = c.gelert_hit.take();
+            let own_mesh = neopets_sim::nav::closest(&world.navmeshes, c.position, 1);
+            let walkable = |p: [f32; 3]| own_mesh >= 0 && world.navmeshes.get(own_mesh as usize).is_some_and(|m| m.first_holding(p).is_some());
+            let blocked = c.walker.as_ref().is_some_and(|w| w.blocked);
+            let clip = c.anim.clip_state();
+            let frame = c.anim.layer0().map_or(0, |(_, f)| f.max(0) as u32);
+            let max_hp = c.row.map_or(800, |r| r.hit_points as i32);
+            let v = ge::View {
+                position: c.position,
+                facing: c.facing,
+                hero,
+                hero_facing: hf,
+                hero_guard: guarding,
+                hero_attacking: attacking,
+                hero_anim,
+                hero_hp_ratio: ratio,
+                hero_radius: 1.0,
+                hero_height: 3.5,
+                hp: c.hp,
+                max_hp,
+                clip: (clip.action, clip.progress, clip.progress >= 0.99),
+                frame,
+                bits,
+                weapon_touch,
+                melee_reach,
+                missile_threat,
+                missile_near,
+                hit_melee: pending.is_some_and(|(_, shot)| !shot),
+                hit_missiles: pending.is_some_and(|(_, shot)| shot) as u32,
+                nav_blocked: blocked,
+                level: &level,
+                walkable: &walkable,
+                rainbow,
+                clones_alive,
+            };
+            let Some(g) = c.gelert.as_mut() else { continue };
+            let before = g.state;
+            if let Some((damage, _)) = pending.filter(|_| g.state.hittable() && !g.clone) {
+                c.hp -= damage;
+            }
+            let act = g.tick(&v, &words, &mut self.rng);
+            let after = g.state;
+            let is_clone = g.clone;
+            c.anim.set_rate(act.rate);
+            if let Some(a) = act.anim {
+                if clip.action != a || (clip.progress >= 0.99 && before != after) {
+                    c.anim.play(a);
+                }
+            }
+            if let Some(rate) = act.face {
+                let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
+                c.facing = neopets_sim::hero::steer(c.facing, to, rate);
+            }
+            if let Some(p) = act.place {
+                c.position = p;
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.body.position = p;
+                }
+            }
+            if let Some(s) = act.step {
+                c.position = add(c.position, s);
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.body.position = c.position;
+                }
+            }
+            if let Some((mode, target)) = act.travel {
+                let m = [target[0] - c.position[0], 0.0, target[2] - c.position[2]];
+                if m[0] != 0.0 || m[2] != 0.0 {
+                    let dir = match mode {
+                        5 => [m[2], 0.0, -m[0]],
+                        6 => [-m[2], 0.0, m[0]],
+                        _ => m,
+                    };
+                    c.facing = neopets_sim::hero::steer(c.facing, dir, 0.1);
+                }
+                if let Some(a) = neopets_sim::enemy::slot_entry(&ge::SLOTS, mode) {
+                    if clip.action != a {
+                        c.anim.play(a);
+                    }
+                }
+            }
+            let ground = &world.ground;
+            if act.place.is_none() && act.step.is_none() {
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.facing = c.facing;
+                    wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                    c.position = wk.position();
+                }
+            }
+            c.hp = (c.hp + act.heal).min(max_hp);
+            // A clone waiting in base state 42 is not drawn.
+            c.inactive = g.state == ge::State::CloneWait;
+            if act.clone_reset {
+                c.inactive = true;
+                effects.push((559, c.position));
+            }
+            if before != after {
+                self.last_boss = format!("Gelert Assassin{} {:?} -> {:?} (hp {}, pattern {}) on tick {}", if is_clone { " clone" } else { "" }, before, after, c.hp, g.pattern, self.ticks);
+            }
+            for &e in &act.effects {
+                effects.push((e, c.position));
+            }
+            if let Some(on) = act.aura {
+                effects.push((if on { 428 } else { 0 }, c.position));
+            }
+            levels.extend(act.set_level.iter().copied());
+            if let Some(d) = act.hero_damage {
+                hero_hits.push((d, c.position));
+            }
+            if let Some(ab) = act.arc {
+                walls.push(ab);
+            }
+            if act.wake_clones {
+                wake = Some((c.position, c.facing));
+            }
+            // Daggers from attach point 1 (or the body middle).
+            if !act.daggers.is_empty() {
+                let origin = c.anim.bones().attach.get(1).and_then(|&(bone, angles, offset)| Some(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)).t)).unwrap_or([c.position[0], c.position[1] + 3.0, c.position[2]]);
+                for d in &act.daggers {
+                    let to = sub_v(d.aim, origin);
+                    let dist = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                    new_shots.push(neopets_sim::projectile::Setup {
+                        kind: 0,
+                        visual: 0,
+                        element: 0,
+                        owner: Some(id),
+                        start: origin,
+                        velocity: scale(unit(to), d.speed),
+                        lifetime: ((dist + 10.0) / d.speed) as i32,
+                        damage: d.damage,
+                        radius: d.radius,
+                        spin: 0.0,
+                        area_radius: 0.0,
+                        area_duration: 0,
+                        key: -1,
+                        ignore_world: false,
+                        status: (-1, 0, 0),
+                        effects: [-1; 6],
+                    });
+                }
+            }
+        }
+        // The clone wake: each hidden clone placed at its slot offset and woken.
+        if let Some((boss, facing)) = wake {
+            for c in self.characters.iter_mut().filter(|c| c.pack == pack) {
+                let slot = c.gelert_slot;
+                if let Some(g) = c.gelert.as_mut().filter(|g| g.clone && g.state == ge::State::CloneWait) {
+                    g.wake();
+                    c.inactive = false;
+                    c.position = ge::clone_place(boss, facing, slot.saturating_sub(1));
+                    c.facing = facing;
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.body.position = c.position;
+                    }
+                }
+            }
+        }
+        for f in levels {
+            self.state.set_level(f, true);
+        }
+        for s in new_shots {
+            self.shots.submit(s);
+        }
+        for (a, b) in walls {
+            self.hero_shots.retain(|s| !ge::wall_stops(a, b, s.position, scale(s.dir, s.speed)));
+        }
+        let table = self.effect_table.clone();
+        for (e, p) in effects {
+            if e != 0 {
+                self.effects.one_shot(&table, e as i32, p, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+        }
+        for (damage, from) in hero_hits {
+            let d = {
+                let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                [dx / l, 0.0, dz / l]
+            };
+            self.hero_hit(damage as f32, 0.0, false, d, "the Gelert Assassin".into());
         }
     }
 
@@ -10201,6 +10491,12 @@ impl Play {
         for &i in &targets {
             self.character_take_hit(i, 1_000_000, hero, "the developer menu ");
         }
+        // The Gelert Assassin (not a clone): HP to 0 (its death runs on its next free tick).
+        let mut gelerts = 0;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.gelert.as_ref().is_some_and(|g| !g.clone)) {
+            c.hp = 0;
+            gelerts += 1;
+        }
         // The Black Knight: its six weak points to 0 (its defeat test then runs).
         let mut knights = 0;
         for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
@@ -10209,7 +10505,7 @@ impl Play {
                 knights += 1;
             }
         }
-        targets.len() + knights
+        targets.len() + knights + gelerts
     }
 
     /// Developer menu: the current world's start points, and a move to start point k.

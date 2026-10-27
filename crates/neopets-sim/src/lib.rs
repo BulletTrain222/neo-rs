@@ -34,6 +34,7 @@ pub mod ixi;
 pub mod fyora;
 pub mod gnarfas;
 pub mod juppie;
+pub mod gelert;
 pub mod knight;
 pub mod sisters;
 pub mod summon;

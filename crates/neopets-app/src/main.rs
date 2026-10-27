@@ -2683,6 +2683,11 @@ fn play_trace(
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
     println!("Book stations of {} (value, trigger index): {:?}", play.world.pack, play.book_stations());
     println!("Script triggers of {} (index, kind, middle): {:?}", play.world.pack, play.trigger_points());
+    if std::env::var_os("NEOPETS_TRACE_LOCATORS").is_some() {
+        for (k, e) in play.world.entries.iter().enumerate() {
+            println!("      locator {k}: tag {:?} at {:?}", play.world.tags.get(k), e.0.map(|x| x.round() as i32));
+        }
+    }
     if std::env::var_os("NEOPETS_TRACE_TRIGGERS").is_some() {
         for v in &play.world.all_volumes {
             println!("      trigger {} kind {} flags {:#x} mask {:#x} {:?}", v.index, v.kind, v.flags, v.mask, v.shape);
@@ -3022,6 +3027,18 @@ fn play_trace(
                 let n: Vec<f32> = r.split(',').filter_map(|t| t.trim().parse().ok()).collect();
                 if k.parse::<u64>().ok() == Some(play.ticks) && n.len() >= 2 {
                     play.place_at(n[0], n[1], n.get(2).copied().unwrap_or(1.0e4));
+                }
+            }
+        }
+        // NEOPETS_TRACE_BOSSHP="tick:hp;...": the Gelert Assassin's HP set on that tick.
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_BOSSHP") {
+            for e in v.split(';') {
+                if let Some((k, h)) = e.trim().split_once(':') {
+                    if k.parse::<u64>().ok() == Some(play.ticks) {
+                        if let Ok(h) = h.parse::<i32>() {
+                            play.diag_gelert_hp(h);
+                        }
+                    }
                 }
             }
         }
