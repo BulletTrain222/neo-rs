@@ -696,8 +696,10 @@ pub struct HeroView {
     pub swapping: bool,
     /// The hero's attack window (SPEC-0036, frame bit 0x1) opened this tick: a strike.
     pub strike: bool,
-    /// GetHitPoints(-1): the current hero's hit points.
+    /// GetHitPoints(-1): the current hero's hit points, and its maximum (GetHitPointsPercentage
+    /// is hp / hp_max).
     pub hp: i32,
+    pub hp_max: i32,
     /// The attack button (R2 or Circle): its press edge this tick, and held.
     pub fire: bool,
     pub fire_held: bool,
@@ -11225,6 +11227,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // entity 9 back to locator 11, the hero to locator 14, the replay prompt 59); the clock is
         // hidden on the first tick with no game after a game (word 12).
         934 => {
+            // Thread 21 (flags 5, 4 and 3 clear at load; word 41 once per load): the first time
+            // the active hero's hit points are below 0.2 of their maximum, line 214.
+            if !state.flag(5) && !state.flag(4) && !state.flag(3) && state.word(pack, 41) == 0 && state.hero.hp_max > 0 && (state.hero.hp as f32) < 0.2 * state.hero.hp_max as f32 {
+                state.set_word(pack, 13, 1);
+                out.push(Action::Message { line: 214 });
+            }
             // Threads 13 and 14: one tick after the last character of a wave dies, its slot is
             // reset and its flag set (372 for set 6 in slot 4, 378 for set 4 in slot 5).
             for (slot, flag) in [(4u8, 372u16), (5, 378)] {

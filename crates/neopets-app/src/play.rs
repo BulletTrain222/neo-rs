@@ -3958,7 +3958,7 @@ impl Play {
         if self.loco.state == hero_states::LADDER {
             return;
         }
-        self.line_step();
+        self.line_step(input);
         if self.loco.state == hero_states::LINE {
             return;
         }
@@ -4082,7 +4082,7 @@ impl Play {
     /// the cooldown expired, the first line of the world whose gate passes and whose reach
     /// passes; then state 28 each tick: no gravity, facing along the line, the attach, the
     /// slide and the let-go (Square shows the let-go label 20).
-    fn line_step(&mut self) {
+    fn line_step(&mut self, input: &HeroInput) {
         use neopets_sim::grab;
         self.line_cooldown = self.line_cooldown.saturating_sub(1);
         let hero = self.loco.position();
@@ -4103,7 +4103,19 @@ impl Play {
             return;
         };
         let square = std::mem::take(&mut self.square_now);
-        let step = h.tick(&self.world.grab_lines, hero, self.loco.body.gap, square);
+        // The search: Cross held with the side stick outside the dead band (40 of 127.5);
+        // pushed right seeks on the -B1 side (side word 0), left on the +B1 side (1).
+        let mut launch = None;
+        if input.cross_held && input.side.abs() > 40.0 / 127.5 {
+            let f = self.loco.facing;
+            let b1 = neopets_sim::hero::basis(f)[0];
+            let side = if input.side > 0.0 { 1 } else { 0 };
+            launch = h.seek(&self.world.grab_lines, hero, f, b1, side);
+        }
+        let mut step = h.tick(&self.world.grab_lines, hero, self.loco.body.gap, square);
+        if let Some(r) = launch {
+            step.request = r;
+        }
         self.line_hang = Some(h);
         let Some(line) = self.world.grab_lines.get(h.line).copied() else { return };
         if step.let_go {
@@ -6990,6 +7002,7 @@ impl Play {
             self.state.hero.occupied = neopets_sim::hero::busy_state(self.loco.state) && self.loco.state != hero_states::ATTACK || self.held;
             self.state.hero.attack_mote = self.equipment.motes[0][2];
             self.state.hero.hp = self.hero_hp;
+            self.state.hero.hp_max = self.hero_max;
             self.state.miamice_caged = self.catch.count;
             self.state.hero.shield_mote = self.equipment.motes[0][1];
             self.state.hero.tick = self.ticks;

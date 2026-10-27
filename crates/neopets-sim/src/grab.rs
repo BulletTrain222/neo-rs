@@ -9,8 +9,8 @@
 //! first half, plus 0.5, counts), is ahead of A along the flattened axis, within 1.5 of the hero
 //! sideways, and inside the height band for that side offset (1.5 to 4.0 above the hero up to
 //! 1.0 sideways, 1.0 to 4.5 up to 1.25, -0.5 to 6.0 up to 1.5). Not built: the exact-plane case
-//! (side offset below 0.001), the leap to a parallel line (modes 2 and 3; Cross with the side
-//! stick), request 113 with Cross held, cue 141, and the touched-flag exit to state 48.
+//! (side offset below 0.001), request 113 with Cross held, cue 141, and the touched-flag exit to
+//! state 48. The leap to a parallel line (modes 2 and 3) is built.
 
 use crate::hero::Vec3;
 
@@ -90,22 +90,103 @@ pub struct Step {
     pub let_go: bool,
 }
 
-/// The hang on line `line` (mode 0 attach, 1 slide).
+/// The hang on line `line` (mode 0 attach, 1 slide, 2 launch, 3 flight).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Hang {
     pub line: usize,
     pub mode: u8,
+    /// The leap's target line, side word (0 the -B1 side, 1 the +B1 side), side velocity per
+    /// tick and vertical velocity per tick.
+    pub target: Option<usize>,
+    pub side: u8,
+    side_vel: Vec3,
+    vy: f32,
+}
+
+/// The leap search (Behavior 9, Search): the nearest other line by side distance whose axis is
+/// within 0.75 (dot) of the current one's, on the chosen side of the hero (side 0: -B1, 1: +B1),
+/// whose end B' is ahead along the facing `f`, whose span holds the hero, within 20.0 sideways
+/// and 8.0 in height of its start.
+pub fn search(lines: &[Line], current: usize, p: Vec3, f: Vec3, b1: Vec3, side: u8) -> Option<usize> {
+    let c = lines.get(current)?;
+    let mut best: Option<(usize, f32)> = None;
+    for (k, l) in lines.iter().enumerate() {
+        if k == current || dot(l.u, c.u) <= 0.75 {
+            continue;
+        }
+        let off = [l.a[0] - p[0], 0.0, l.a[2] - p[2]];
+        let s = dot(off, b1);
+        if (side == 0 && s >= 0.0) || (side == 1 && s <= 0.0) {
+            continue;
+        }
+        let b = l.b();
+        if dot([b[0] - p[0], b[1] - p[1], b[2] - p[2]], f) <= 0.0 {
+            continue;
+        }
+        let t = dot([p[0] - l.a[0], p[1] - l.a[1], p[2] - l.a[2]], l.u);
+        if !(t > 0.0 && t < l.length) || s.abs() >= 20.0 || (l.a[1] - p[1]).abs() >= 8.0 {
+            continue;
+        }
+        if best.is_none_or(|(_, d)| s.abs() < d) {
+            best = Some((k, s.abs()));
+        }
+    }
+    best.map(|b| b.0)
 }
 
 impl Hang {
     pub fn new(line: usize) -> Self {
-        Self { line, mode: 0 }
+        Self { line, mode: 0, target: None, side: 0, side_vel: [0.0; 3], vy: 0.0 }
+    }
+
+    /// The search in mode 1 (Cross held with the side stick): a found line becomes the pending
+    /// target and the launch (mode 2) runs this tick. Returns the launch request (114 or 116).
+    pub fn seek(&mut self, lines: &[Line], p: Vec3, f: Vec3, b1: Vec3, side: u8) -> Option<u32> {
+        if self.mode != 1 {
+            return None;
+        }
+        let k = search(lines, self.line, p, f, b1, side)?;
+        let a = lines[k].a;
+        let s = dot([a[0] - p[0], 0.0, a[2] - p[2]], b1);
+        self.target = Some(k);
+        self.side = side;
+        self.side_vel = b1.map(|c| c * s / 40.0);
+        // 40 x 40 x 0.5 x 0.02 / 40.
+        self.vy = 0.4;
+        self.mode = 2;
+        Some(if side == 0 { 114 } else { 116 })
     }
 
     /// One tick at hero position `p` with the ground gap `gap` and the Square press `square`.
     pub fn tick(&mut self, lines: &[Line], p: Vec3, gap: f32, square: bool) -> Step {
         let Some(l) = lines.get(self.line) else { return Step { let_go: true, ..Step::default() } };
         let hang = DROP + l.radius;
+        let fall = if self.side == 0 { 115 } else { 117 };
+        match self.mode {
+            2 => {
+                // The launch: one slide step; the flight starts next tick.
+                self.mode = 3;
+                return Step { place: Some(std::array::from_fn(|k| p[k] + STEP * l.u[k])), request: if self.side == 0 { 114 } else { 116 }, let_go: false };
+            }
+            3 => {
+                let Some(t) = self.target.and_then(|t| lines.get(t)) else { return Step { let_go: true, ..Step::default() } };
+                let mut q: Vec3 = std::array::from_fn(|k| p[k] + STEP * l.u[k] + self.side_vel[k]);
+                q[1] += self.vy;
+                self.vy -= 0.02;
+                // The side offset still to close, along the side axis of the leap.
+                let b1 = self.side_vel;
+                let bl = dot(b1, b1).sqrt().max(1e-6);
+                let gapside = dot([t.a[0] - q[0], 0.0, t.a[2] - q[2]], b1.map(|c| c / bl));
+                let request = if self.vy < -0.25 { fall } else if self.side == 0 { 114 } else { 116 };
+                if gapside.abs() <= 0.1 || gapside < 0.0 {
+                    self.line = self.target.take().unwrap_or(self.line);
+                    self.mode = 0;
+                    return Step { place: Some(q), request: fall, let_go: false };
+                }
+                return Step { place: Some(q), request, let_go: false };
+            }
+            _ => {}
+        }
         match self.mode {
             0 => {
                 let mut q = l.foot(p);
@@ -164,5 +245,29 @@ mod tests {
         assert!(h.tick(&ls, p, 5.0, true).let_go);
         assert!(h.tick(&ls, p, 0.0, false).let_go);
         assert!(h.tick(&ls, [99.8, -0.45, 0.0], 5.0, false).let_go);
+    }
+
+    #[test]
+    fn leap_to_a_parallel_line() {
+        // Two level lines along +x, 15 apart in z; the hero on line 0 facing +x (B1 = +z... the
+        // side axis up x f = (0, 0, -1) for f = +x), seeking on the +B1 side finds nothing, on
+        // the -B1 side (z > 0) the second line.
+        let ls = [line(), Line { a: [0.0, 3.0, 15.0], ..line() }];
+        let mut h = Hang::new(0);
+        let p0 = h.tick(&ls, [10.0, 0.0, 0.0], 5.0, false).place.unwrap();
+        let (f, b1) = ([1.0, 0.0, 0.0], [0.0, 0.0, -1.0]);
+        assert_eq!(search(&ls, 0, p0, f, b1, 1), None);
+        assert_eq!(h.seek(&ls, p0, f, b1, 0), Some(114));
+        // The launch tick, then 40 flight ticks close the 15-unit gap; the hero then attaches.
+        let mut p = h.tick(&ls, p0, 5.0, false).place.unwrap();
+        let mut n = 0;
+        while h.mode == 3 && n < 60 {
+            p = h.tick(&ls, p, 5.0, false).place.unwrap();
+            n += 1;
+        }
+        assert_eq!((h.line, h.mode), (1, 0));
+        assert!((38..=41).contains(&n), "{n}");
+        let q = h.tick(&ls, p, 5.0, false).place.unwrap();
+        assert!((q[2] - 15.0).abs() < 1e-4 && (q[1] - (3.0 - 3.45)).abs() < 1e-4);
     }
 }
