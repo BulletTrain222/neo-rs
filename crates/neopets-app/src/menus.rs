@@ -182,6 +182,18 @@ pub enum Draw {
     /// The map's hero marker (SPEC-0051 section 7): sprite node `node`'s whole 32 x 32 art as a
     /// quad centred on (x, y), turned by `angle` and squashed to 6/7 of its width, tinted.
     Marker { node: usize, x: f32, y: f32, angle: f32, colour: [u8; 4] },
+    /// A drawn shape of this build's own pages (no disc art): a rounded panel, a highlight bar
+    /// fading out to both ends, or a left or right arrow, filling the canvas rect, tinted
+    /// (128 = full).
+    Shape { shape: Shape, x: f32, y: f32, w: f32, h: f32, colour: [u8; 4] },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Shape {
+    Panel,
+    Bar,
+    Left,
+    Right,
 }
 
 /// The map and journal's tables and words, read once: the quest rows (table 1), the treasure
@@ -1510,16 +1522,79 @@ pub fn display_draws(fe: &Frontend, flow: &Flow, rows: &[(String, String)]) -> V
         let keys = drawable(&["Keyboard & Gamepad".to_string(), "Keyboard and Gamepad".to_string()]);
         return vec![text("Display", ly + pitch, colour(n)), text(&keys, ly + pitch * 2.0, colour(n + 1))];
     }
+    // The Display page: the Options page without its item labels, under a dark rounded panel
+    // with a "Display" heading; each row a name on the left and its value on the right, the
+    // focused row on a fading highlight bar with arrows round its value, and a line under the
+    // rows about the focused setting in the footer labels' smaller font.
     let mut out: Vec<Draw> = draw_list(fe, OPTIONS, usize::MAX, pc).into_iter().filter(|d| !matches!(d, Draw::Label { node, .. } if under_item(fe, *node))).collect();
-    let step = pitch * 0.8;
+    let _ = first;
+    let small = off_labels_font(fe, pc).unwrap_or((font, plain.spacing as i32, plain.colour));
+    let measure = |f: usize, t: &[u8], sp: i32| fe.fonts.get(f).map_or(0, |ft| ft.measure(t, sp)) as f32;
+    let keep = |f: usize, t: &str| -> Vec<u8> { t.bytes().filter(|&c| c == b' ' || fe.fonts.get(f).is_some_and(|ft| ft.glyph(c).is_some())).collect() };
+    let step = (pitch * 0.72).round();
+    let (x0, w) = (72.0, 368.0);
+    // Everything sits a little lower than the item list, clear of the logo.
+    let fy = fy + (step * 0.6).round();
+    let top = fy - step * 0.95;
+    let rows_bottom = fy + step * (rows.len() as f32 - 1.0) + step * 0.3;
+    let help_y = rows_bottom + step * 0.75;
+    let bottom = help_y + step * 0.35;
+    let panel = |shape: Shape, x: f32, y: f32, w: f32, h: f32, colour: [u8; 4]| Draw::Shape { shape, x, y, w, h, colour };
+    let mut shapes = vec![panel(Shape::Panel, x0, top - step * 0.95, w, bottom - top + step * 0.95, [5, 8, 30, 96])];
+    // The heading.
+    let heading = keep(font, "Display");
+    out.push(Draw::Text { font, text: heading.clone(), spacing: plain.spacing as i32, x: (x0 + w / 2.0 - measure(font, &heading, plain.spacing as i32) / 2.0).round(), y: top - step * 0.12, colour: focused });
+    shapes.push(panel(Shape::Panel, x0 + 24.0, top + step * 0.08, w - 48.0, 1.5, [150, 160, 255, 50]));
+    let sp = plain.spacing as i32;
+    let (pad, arrow) = (16.0, 9.0);
     for (k, (name, value)) in rows.iter().enumerate() {
         let f = k == flow.display_focus;
+        let y = fy + step * k as f32;
+        if f {
+            shapes.push(panel(Shape::Bar, x0 + 6.0, y - step * 0.72, w - 12.0, step * 0.86, [70, 40, 110, 96]));
+        }
         // A percent value falls back to the word.
-        let value = drawable(&[value.clone(), value.replace('%', " percent")]);
-        let line = if f { drawable(&[format!("{name}: < {value} >"), format!("{name}: ( {value} )"), format!("{name}: {value}")]) } else { format!("{name}: {value}") };
-        out.push(text(&line, fy + step * k as f32, if f { focused } else { plain.colour }));
+        let value = keep(font, &drawable(&[value.clone(), value.replace('%', " percent")]));
+        let name = keep(font, name);
+        let c = if f { focused } else { plain.colour };
+        out.push(Draw::Text { font, text: name, spacing: sp, x: x0 + pad, y, colour: c });
+        let vw = measure(font, &value, sp);
+        let vx = (x0 + w - pad - arrow - 6.0 - vw).round();
+        out.push(Draw::Text { font, text: value, spacing: sp, x: vx, y, colour: c });
+        if f {
+            let ah = step * 0.36;
+            let ay = y - step * 0.5;
+            shapes.push(panel(Shape::Left, vx - arrow - 6.0, ay, arrow, ah, [255, 220, 150, 128]));
+            shapes.push(panel(Shape::Right, x0 + w - pad - arrow, ay, arrow, ah, [255, 220, 150, 128]));
+        }
     }
-    out
+    // The focused setting's line.
+    const HELP: [&str; 5] = [
+        "Windowed, borderless or full screen",
+        "The window size, or the screen mode in full screen",
+        "The shape of the picture; bars fill the rest",
+        "How sharp the world is drawn; higher is slower",
+        "Sharp keeps pixels crisp, Smooth blends them",
+    ];
+    if let Some(h) = HELP.get(flow.display_focus) {
+        let (sf, ssp, sc) = small;
+        let t = keep(sf, h);
+        out.push(Draw::Text { font: sf, text: t.clone(), spacing: ssp, x: (x0 + w / 2.0 - measure(sf, &t, ssp) / 2.0).round(), y: help_y, colour: [sc[0], sc[1], sc[2], (sc[3] as u32 * 3 / 4) as u8] });
+    }
+    // The page's art, then the shapes, then the text over them.
+    let (texts, mut all): (Vec<Draw>, Vec<Draw>) = out.into_iter().partition(|d| matches!(d, Draw::Text { .. }));
+    all.extend(shapes);
+    all.extend(texts);
+    all
+}
+
+/// The font, spacing and colour of the Options page's footer labels (the smaller white font
+/// of "Select" and "Back"): the first label drawn there that is not under an item.
+fn off_labels_font(fe: &Frontend, pc: Pc) -> Option<(usize, i32, [u8; 4])> {
+    draw_list(fe, OPTIONS, usize::MAX, pc).into_iter().find_map(|d| match d {
+        Draw::Label { node, .. } if !under_item(fe, node) => fe.label(node).filter(|l| l.font >= 0 && l.text.len() > 2).map(|l| (l.font as usize, l.spacing as i32, l.colour)),
+        _ => None,
+    })
 }
 
 /// The credits rows of this pass: centred at x 256 in font 0 (the spec names no font; R-0023),

@@ -119,6 +119,44 @@ fn picture(archive: &mut crate::Archive, resource: u32) -> Option<neopets_data::
     tex.decode(&mem, t, pal).ok()
 }
 
+/// A drawn shape's pixels: white, the alpha its coverage (an edge one pixel soft). A panel has
+/// corners of radius 7 canvas units (28 pixels); a bar is fully rounded and fades out over the
+/// last fifth at each end; the arrows are triangles pointing left or right.
+fn shape_pixels(shape: menus::Shape, w: u32, h: u32) -> Vec<u8> {
+    use menus::Shape;
+    let (fw, fh) = (w as f32, h as f32);
+    let mut out = Vec::with_capacity((w * h * 4) as usize);
+    for y in 0..h {
+        for x in 0..w {
+            let (px, py) = (x as f32 + 0.5, y as f32 + 0.5);
+            let a = match shape {
+                Shape::Panel | Shape::Bar => {
+                    let r = if shape == Shape::Panel { 28.0f32.min(fh / 2.0).min(fw / 2.0) } else { fh / 2.0 };
+                    let dx = (r - px).max(px - (fw - r)).max(0.0);
+                    let dy = (r - py).max(py - (fh - r)).max(0.0);
+                    let d = (dx * dx + dy * dy).sqrt() - r;
+                    let cover = (0.5 - d).clamp(0.0, 1.0);
+                    if shape == Shape::Bar {
+                        let u = px / fw;
+                        cover * (u / 0.2).min((1.0 - u) / 0.2).clamp(0.0, 1.0)
+                    } else {
+                        cover
+                    }
+                }
+                Shape::Left | Shape::Right => {
+                    let u = if shape == Shape::Right { px } else { fw - px };
+                    // Inside when the distance from the centre line is under the half height
+                    // scaled down toward the tip.
+                    let half = fh / 2.0 * (1.0 - u / fw);
+                    ((half - (py - fh / 2.0).abs()) + 0.5).clamp(0.0, 1.0)
+                }
+            };
+            out.extend_from_slice(&[255, 255, 255, (a * 255.0).round() as u8]);
+        }
+    }
+    out
+}
+
 #[derive(Default)]
 pub struct MenuCache {
     sprites: HashMap<(usize, u32, u32), Handle<Image>>,
@@ -127,6 +165,8 @@ pub struct MenuCache {
     pictures: HashMap<u32, Option<neopets_data::texture::Image>>,
     /// The map marker's image, redrawn each frame at the marker's angle.
     marker: Option<Handle<Image>>,
+    /// Drawn shapes (this build's pages) by shape and pixel size.
+    shapes: HashMap<(menus::Shape, u32, u32), Handle<Image>>,
     /// The open book's flat page image, by book index.
     book: Option<(usize, Handle<Image>)>,
 }
@@ -332,6 +372,13 @@ pub fn sync_menu(
                 };
                 let k = |v: u8| v as f32 / 128.0;
                 Some((handle, (x - N as f32 / 2.0).round(), (y - N as f32 / 2.0).round(), N as f32, N as f32, Color::srgba(k(colour[0]), k(colour[1]), k(colour[2]), k(colour[3]).min(1.0))))
+            }
+            Draw::Shape { shape, x, y, w, h, colour } => {
+                // Four image pixels per canvas unit, white with the shape's coverage as alpha.
+                let (pw, ph) = ((w * 4.0).round().max(1.0) as u32, (h * 4.0).round().max(1.0) as u32);
+                let handle = cache.shapes.entry((shape, pw, ph)).or_insert_with(|| images.add(crate::rgba_image(pw, ph, shape_pixels(shape, pw, ph)))).clone();
+                let c = |v: u8| v as f32 / 128.0;
+                Some((handle, x, y, w, h, Color::srgba(c(colour[0]).min(1.0), c(colour[1]).min(1.0), c(colour[2]).min(1.0), c(colour[3]).min(1.0))))
             }
             Draw::Text { font, text, spacing, x, y, colour } => {
                 // The alpha is applied to the drawn image, so a fading row reuses its image.
