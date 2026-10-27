@@ -8612,7 +8612,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // mode 2) after the 2 s wait.
         (1382, 4) if call.object && state.word(pack, 4) == 0 && state.word(pack, 3) != 0 => {
             state.set_word(pack, 4, 1);
-            out.actions.extend([Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }, Action::DeactivateObj { obj: 2 }, wait(2.0), Action::PlayTarget { track: 5, wait: false, end: 2, speed: 1.0, target: CameraTarget::Hero }, Action::InitObjOn { obj: 27, end: false }]);
+            out.actions.extend([Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }, Action::DeactivateObj { obj: 2 }, wait(2.0), Action::PlayTarget { track: 5, wait: false, end: 2, speed: 1.0, target: CameraTarget::Hero }, Action::InitObjOn { obj: 27, end: true }]);
             out.actions.extend((21..=26).map(|obj| Action::DeactivateObj { obj }));
             out.actions.push(Action::PlaySound { cue: 6, locator: None });
             out.actions.extend((15..=20).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));

@@ -3054,6 +3054,20 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_FACE="tick:x,z;...": the hero turned to face (x, z) on that tick
+        // (diagnostic).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_FACE") {
+            for e in v.split(';') {
+                let Some((t, p)) = e.split_once(':') else { continue };
+                let n: Vec<f32> = p.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                if t.trim().parse::<u64>().ok() == Some(play.ticks) && n.len() >= 2 {
+                    let h = play.loco.position();
+                    let (dx, dz) = (n[0] - h[0], n[1] - h[2]);
+                    let l = dx.hypot(dz).max(1e-6);
+                    play.loco.facing = [dx / l, 0.0, dz / l];
+                }
+            }
+        }
         // NEOPETS_TRACE_MOTE_AT="tick:word:id;...": a held Mote equipped into Tor's equipment
         // word on that tick (diagnostic).
         if let Ok(v) = std::env::var("NEOPETS_TRACE_MOTE_AT") {
