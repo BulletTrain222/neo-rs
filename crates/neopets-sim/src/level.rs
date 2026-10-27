@@ -231,6 +231,9 @@ pub enum Action {
     /// the item placements of the region loaded in slot `slot`, added as a scripted add
     /// (SPEC-0021 Drop routes 3) with the two bools, the default lifetime and no overrides.
     ItemActivate { slot: u8, ordinal: usize, snap: bool, placed: bool },
+    /// SetHeroStatus(code, seconds) (SPEC-0030; -1 the default duration): the hero's status
+    /// apply (SPEC-0036 Status effects).
+    HeroStatus { code: i32, seconds: i32 },
     /// Break(id) (SPEC-0030 row 46): a breakable of the current world in state 1 breaks (its
     /// drop, its sound); any other state does nothing.
     Break { id: usize },
@@ -2088,6 +2091,16 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // registered on every path. Not built: trigger 0's line, object 0, the prompt trigger 9,
         // triggers 1 to 3 and the effect stops.
         696 => vec![reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)],
+        // SPEC-0044 1091 Init: the animated hazards (objects 3 to 10, each its own group's record
+        // 0, routines 13 to 20), the plate triggers 41 to 48 (routine 41) and the button trigger
+        // 51. The object setups, slots, navmesh table and target flags (Low or not listed) are
+        // not reproduced.
+        1091 => {
+            let mut v: Vec<Action> = (3..=10).map(|host| Action::RegisterAnimTrigger { host, index: 0, routine: 10 + host as u8 }).collect();
+            v.extend((41..=48).map(|i| reg(i, 41)));
+            v.push(reg(51, 51));
+            v
+        }
         // SPEC-0032 1055 Init: object 0 on. Its world-swap callback (and those of 797 and 1254)
         // runs only from StartTransitionScene, which has no live call (SPEC-0030 rows 268 and
         // 283), so those modules do nothing more in play.
@@ -6853,6 +6866,72 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         (1381, 4) if call.object => out.actions.extend(hub_return_1381(state)),
+        // SPEC-0057 pattern A (1091 animated hazards, routines 13 to 20 for objects 3 to 10): a
+        // run at a time per object (word 10 + object): objects 7 and 8 kill (KillCurrentHero, 1 s,
+        // the hero to locator 6); the others damage 2 then wait 0.5 s (the mode-0 slot flags stay
+        // 0 in play).
+        (1091, 13..=20) if call.object && call.state != 0 => {
+            let obj = (routine - 10) as u8;
+            if state.word(pack, 10 + obj) == 0 {
+                state.set_word(pack, 10 + obj, 1);
+                if matches!(obj, 7 | 8) {
+                    out.actions.extend([Action::KillHero, wait(1.0), Action::MoveHero { locator: 6 }]);
+                } else {
+                    out.actions.extend([Action::DamageHero { amount: 2 }, wait(0.5)]);
+                }
+                out.actions.push(Action::Bits { word: 10 + obj, set: 0, clear: 1 });
+            }
+        }
+        // SPEC-0057 pattern B (1091 triggers 43 to 48, routine 41): one run at a time per trigger
+        // (word 30 + index - 40): inside, the plate object scrubbed 0 to 10/30 s a tick at a time;
+        // the sweep ids played at 5.0 with 0.02 s between; 2 damage and poison (default); wait
+        // until the hero leaves; the plate scrubbed 13/30 to 25/30 s. Triggers 41 and 42 (the
+        // sequencers, no damage) are not reproduced.
+        (1091, 41) if call.object && (43..=48).contains(&call.index) => {
+            let w = 30 + (call.index - 40) as u8;
+            if state.word(pack, w) == 0 {
+                state.set_word(pack, w, 1);
+                let (ids, plate) = match call.index {
+                    43 => (36..=40, 16),
+                    44 => (33..=35, 15),
+                    45 => (28..=32, 14),
+                    46 => (23..=27, 13),
+                    47 => (21..=22, 12),
+                    _ => (18..=20, 11),
+                };
+                if call.state == 1 {
+                    for t in 0..=10 {
+                        out.actions.extend([Action::SetObjTime { obj: plate, seconds: t as f32 / 30.0 }, Action::Sleep { ticks: 1 }]);
+                    }
+                }
+                for obj in ids {
+                    out.actions.extend([Action::PlayAnim { obj, speed: 5.0, wait: false }, wait(0.02)]);
+                }
+                out.actions.extend([Action::DamageHero { amount: 2 }, Action::HeroStatus { code: crate::status::POISON as i32, seconds: -1 }, Action::WaitInside { index: call.index }]);
+                for t in 13..=25 {
+                    out.actions.extend([Action::SetObjTime { obj: plate, seconds: t as f32 / 30.0 }, Action::Sleep { ticks: 1 }]);
+                }
+                out.actions.push(Action::Bits { word: w, set: 0, clear: 1 });
+            }
+        }
+        // SPEC-0044 1091 trigger 51 (Medium): with object 41 not animating, context 4; a press
+        // walks the hero to locator 9 (oriented), plays object 41, hero animation 140 and objects
+        // 0 and 1.
+        (1091, 51) if call.object && call.state != 0 && !state.animating.contains(&41) => {
+            if call.square && !state.talking {
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::WalkHero { locator: 9, wait: true, orient: true },
+                    Action::PlayAnim { obj: 41, speed: 1.0, wait: false },
+                    Action::HeroAnim { anim: 140, wait: true },
+                    Action::PlayAnim { obj: 0, speed: 1.0, wait: false },
+                    Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            } else {
+                out.prompt = Some(4);
+            }
+        }
         // SPEC-0032 1170 S0 (entering): value 20 for eW 106, leave to eW 107.
         (1170, 1) if call.object && call.state == 1 => {
             state.blackboard.insert((2, 106), 20);
@@ -16136,6 +16215,25 @@ mod tests {
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
         assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+    }
+
+    #[test]
+    fn module_1091_hazards() {
+        let mut s = GameState::default();
+        let init = on_init(1091, &mut s);
+        assert!(init.contains(&Action::RegisterAnimTrigger { host: 7, index: 0, routine: 17 }) && init.contains(&Action::RegisterTrigger { index: 43, routine: 41 }));
+        let touch = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
+        // TV-A1: object 6 damages 2, then 0.5 s; a run at a time.
+        assert_eq!(on_trigger(1091, 16, touch(0), &mut s).actions, vec![Action::DamageHero { amount: 2 }, wait(0.5), Action::Bits { word: 16, set: 0, clear: 1 }]);
+        assert!(on_trigger(1091, 16, touch(0), &mut s).actions.is_empty());
+        // Object 7 kills: the hero then moves to locator 6.
+        assert_eq!(&on_trigger(1091, 17, touch(0), &mut s).actions[..3], &[Action::KillHero, wait(1.0), Action::MoveHero { locator: 6 }]);
+        // TV-B1: trigger 43 sweeps 36 to 40 at 5.0, then 2 damage and poison, once per visit.
+        let out = on_trigger(1091, 41, touch(43), &mut s).actions;
+        let swept: Vec<usize> = out.iter().filter_map(|a| if let Action::PlayAnim { obj, speed, .. } = a { (*speed == 5.0).then_some(*obj) } else { None }).collect();
+        assert_eq!(swept, vec![36, 37, 38, 39, 40]);
+        assert!(out.contains(&Action::DamageHero { amount: 2 }) && out.contains(&Action::HeroStatus { code: 2, seconds: -1 }) && out.contains(&Action::SetObjTime { obj: 16, seconds: 10.0 / 30.0 }));
+        assert!(on_trigger(1091, 41, touch(43), &mut s).actions.is_empty());
     }
 
     #[test]

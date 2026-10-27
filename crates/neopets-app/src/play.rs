@@ -60,7 +60,8 @@ pub struct World {
     /// MoveObjToAnimatedLocator links: object to (host, locator).
     pub obj_links: std::collections::HashMap<usize, (usize, usize)>,
     /// RegisterScriptAnimatedTrigger: record index to (host object, routine).
-    pub anim_routines: std::collections::BTreeMap<u16, (usize, u8)>,
+    /// RegisterScriptAnimatedTrigger records by (host object, record index): the routine.
+    pub anim_routines: std::collections::BTreeMap<(usize, u16), u8>,
     /// The foliage patches (type 16) and the registry ids of the pack's type-8 children.
     pub patches: Vec<neopets_data::foliage::Patch>,
     /// The area's character light sets (type 30, SPEC-0028 section 2), in table order.
@@ -2188,7 +2189,7 @@ impl Play {
                 }
                 Action::RegisterAnimTrigger { host, index, routine } => {
                     if pack == self.world.pack && self.world.headers.get(host).and_then(|h| h.as_ref()).is_some_and(|h| h.volumes.iter().any(|v| v.index == index)) {
-                        self.world.anim_routines.insert(index, (host, routine));
+                        self.world.anim_routines.insert((host, index), routine);
                     }
                 }
                 Action::MoveEffect { slot, locator } => {
@@ -2531,6 +2532,9 @@ impl Play {
                             (s, _) => s,
                         };
                     }
+                }
+                Action::HeroStatus { code, seconds } => {
+                    self.statuses.apply(code, seconds);
                 }
                 Action::ItemActivate { slot, ordinal, snap, placed } => {
                     if let Some(p) = self.slot_items.get(&(pack, slot)).and_then(|v| v.get(ordinal)).copied() {
@@ -5303,7 +5307,7 @@ impl Play {
     fn anim_trigger_step(&mut self, frame: i64, p: [f32; 3], square: bool) {
         const BASE: u16 = 0x8000;
         let pack = self.world.pack;
-        let list: Vec<(u16, usize, u8)> = self.world.anim_routines.iter().map(|(&k, &(h, r))| (k, h, r)).collect();
+        let list: Vec<(u16, usize, u8)> = self.world.anim_routines.iter().map(|(&(h, k), &r)| (k, h, r)).collect();
         for (k, h, routine) in list {
             let Some(v) = self.world.headers.get(h).and_then(|x| x.as_ref()).and_then(|x| x.volumes.iter().find(|v| v.index == k)).map(sim_volume) else { continue };
             let (Some(m), Some(rest)) = (self.object_pose(pack, h, 0), self.world.objects.get(h).and_then(|o| o.as_ref()).map(|o| o.rest)) else { continue };
@@ -5314,7 +5318,8 @@ impl Play {
             if !v.touches(local) {
                 continue;
             }
-            let rec = self.world.records.entry(BASE + k).or_default();
+            // Each host's records keep their own state (host x 64 + record).
+            let rec = self.world.records.entry(BASE + (h as u16) * 64 + k).or_default();
             rec.fire(frame, true, -1);
             let rec = *rec;
             let call = level::TriggerCall { index: k, state: rec.state, object: rec.object, square, block: -1 };
