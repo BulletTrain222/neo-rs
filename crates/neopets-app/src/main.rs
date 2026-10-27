@@ -1876,7 +1876,12 @@ fn sync_worlds(
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
     let p = &state.play;
     let mask = |pack: u32| p.display_mask.get(&pack).copied().unwrap_or(0);
-    let layers = |pack: u32| mask(pack) | p.story_layers();
+    // NEOPETS_SCENE_MASK=n: the world layer mask forced (diagnostic).
+    let forced = std::env::var("NEOPETS_SCENE_MASK").ok().and_then(|v| v.parse::<u32>().ok());
+    let layers = |pack: u32| forced.unwrap_or(mask(pack) | p.story_layers());
+    if std::env::var_os("NEOPETS_SCENE_MASK_LOG").is_some() {
+        info!("scene layers of {}: display {} story {:#x}", p.world.pack, mask(p.world.pack), p.story_layers());
+    }
     let mut want = vec![WorldPart::Scene(p.world.pack, layers(p.world.pack)), WorldPart::Objects(p.world.pack, mask(p.world.pack))];
     if p.foliage.contains_key(&p.world.pack) {
         want.push(WorldPart::Foliage(p.world.pack));
@@ -2905,6 +2910,16 @@ fn play_trace(
             for line in play.ledge_survey() {
                 println!("      {line}");
             }
+            for (k, l) in play.world.grab_lines.iter().enumerate() {
+                println!("      grab line {k}: A {:?} B {:?} L {} r {} mask {}", l.a, l.b(), l.length, l.radius, l.mask);
+                let hs: Vec<String> = (0..=30).step_by(3).map(|s| {
+                    let q: [f32; 3] = std::array::from_fn(|i| l.a[i] + s as f32 * l.u[i]);
+                    let off = [-l.u[2], 0.0, l.u[0]];
+                    let g = |d: f32| play.world.ground_at(q[0] + d * off[0], q[2] + d * off[2], q[1]).map_or("-".to_string(), |h| format!("{:.1}", q[1] - h));
+                    format!("s{s}:{}/{}/{}", g(-3.0), g(0.0), g(3.0))
+                }).collect();
+                println!("        line height above ground (left/under/right): {}", hs.join(" "));
+            }
             for (k, r) in play.world.rails.iter().enumerate() {
                 println!("      rail {k}: normal {:?} u {:?} v {:?} lu {} lv {}", r.normal, r.u, r.v, r.lu, r.lv);
             }
@@ -3121,6 +3136,12 @@ fn play_trace(
         }) {
             if k == play.ticks {
                 play.diag_showcase(id);
+            }
+        }
+        // NEOPETS_TRACE_CHARS=tick: each character's name, position and activity (diagnostic).
+        if std::env::var("NEOPETS_TRACE_CHARS").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) {
+            for c in &play.characters {
+                println!("      char {} {:?} entity {:?} at ({:.1}, {:.1}, {:.1}) inactive {} deactivated {} enemy {}", c.name, c.pack, c.entity, c.position[0], c.position[1], c.position[2], c.inactive, c.deactivated, c.enemy.is_some());
             }
         }
         // NEOPETS_TRACE_BLOCKERS=tick: what pushes the hero on that tick (diagnostic).
@@ -3711,8 +3732,9 @@ fn play_frame(
             });
         }
     }
+    let off = state.play.hero_draw_offset();
     for mut t in &mut heroes {
-        t.translation = Vec3::from(p);
+        t.translation = Vec3::from(p) + Vec3::from(off);
         t.rotation = rotation;
     }
     let matrices = state.play.hero.skin_matrices();

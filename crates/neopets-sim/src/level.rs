@@ -91,6 +91,8 @@ pub enum Action {
     /// WalkEntity or WalkEntityAndOrient (rows 106 and 108): stop 0 or less arrives within 1.0
     /// (classes 23 and 25), a positive stop within that radius (24 and 26).
     WalkEntity { entity: usize, locator: usize, wait: bool, orient: bool, stop: f32 },
+    /// SetAI_MovementType (row 117): 0 walk, 1 run, 2 fast run, 3 and 4 idle.
+    MoveType { entity: usize, kind: u8 },
     /// SetConversationTarget(entity), LevelMsg(line, WAIT 1), EndConversation(entity).
     Converse { entity: usize, line: u16 },
     /// Sleep(n ticks).
@@ -1541,6 +1543,17 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if !(!state.flag(5) && state.flag(4)) {
                 v.extend([reg(0, 30), reg(1, 31), reg(2, 32)]);
                 v.push(Action::LoadRegion { slot: 1, region: Some(if state.flag(248) { 946 } else { 940 }) });
+            }
+            // Threads 13 and 14, the two ambush waves (flags 5, 4 and 3 clear): set 6 into its own
+            // slot (4 here) while 372 is clear, set 4 into slot 5 while 378 is clear; Update
+            // resets each slot and sets its flag once all of its characters are dead.
+            if !state.flag(5) && !state.flag(4) && !state.flag(3) {
+                if !state.flag(372) {
+                    v.push(Action::LoadRegion { slot: 4, region: Some(935 + 6) });
+                }
+                if !state.flag(378) {
+                    v.push(Action::LoadRegion { slot: 5, region: Some(935 + 4) });
+                }
             }
             v
         }
@@ -3143,16 +3156,19 @@ fn village_init(state: &mut GameState) -> Vec<Action> {
         out.extend([1, 2, 3].map(|obj| Action::InitObjOn { obj, end: false }));
     }
     out.push(Action::WheelPattern);
+    // The load thread's first and second slots are slots 2 and 3 here: slots 0 and 1 belong to
+    // the asset-swap zone loader (SPEC-0006 Asset-swap tables), whose loads would otherwise evict
+    // these sets at the first zone trigger.
     if !state.flag(11) {
         if state.flag(10) {
-            out.push(Action::LoadRegion { slot: 1, region: Some(1023 + 1 + 6) });
+            out.push(Action::LoadRegion { slot: 3, region: Some(1023 + 1 + 6) });
         } else if state.flag(127) && !state.flag(136) {
             // The chase resumes: set 0, the Meerca at the first waypoint whose flag is clear.
             let k = (0..8).find(|&k| !state.flag(128 + k)).unwrap_or(8) as usize;
-            out.extend([Action::LoadRegion { slot: 0, region: Some(1024) }, Action::WaitLoads, Action::MoveEntity { entity: 0, locator: 477 + k, face: true }]);
+            out.extend([Action::LoadRegion { slot: 2, region: Some(1024) }, Action::WaitLoads, Action::MoveEntity { entity: 0, locator: 477 + k, face: true }]);
             out.extend(chase(state));
         } else {
-            out.push(Action::LoadRegion { slot: 0, region: Some(1023 + 1 + 2) });
+            out.push(Action::LoadRegion { slot: 2, region: Some(1023 + 1 + 2) });
         }
     }
     out
@@ -3174,7 +3190,7 @@ fn chase(state: &GameState) -> Vec<Action> {
         if k < 8 {
             v.extend([SetFlag { flag: 128 + k, on: true }, EntityAnim { entity: 0, anim: 44, looped: false, wait: false }, wait(0.2)]);
         } else {
-            v.extend([SetFlag { flag: 136, on: true }, HoldHero, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 0, region: Some(1023 + 1 + 2) }]);
+            v.extend([SetFlag { flag: 136, on: true }, HoldHero, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 2, region: Some(1023 + 1 + 2) }]);
             v.extend([GiveItem { item: 32, count: 1 }, WaitLoads, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
         }
     }
@@ -3194,6 +3210,9 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     // The thief (entity 0, region 1024 record 0 per SPEC-0058 step 6) and Heermedjet (entity 1,
     // region 1025) for the scene; which set the slot-swap thread loads is R-0028.
     let mut v = vec![HoldHero, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 1, region: Some(1023 + 1 + 1) }, LoadRegion { slot: 2, region: Some(1024) }, WaitLoads];
+    // SetAI_MovementType: entity 1 runs fast for its walk to 495, entity 0 for its walk to 500,
+    // and walks again for 502 (the scene's calls), then step 2 sets entity 0 to fast run for the
+    // chase.
     v.extend([MoveHero { locator: 488 }, FadeIn { seconds: 1.0, wait: false }, cam(8), WalkHero { locator: 489, wait: false, orient: false }, wait(2.8)]);
     v.extend(cut(9));
     v.extend([MoveHero { locator: 490 }, WalkHero { locator: 491, wait: true, orient: true }]);
@@ -3201,7 +3220,7 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     v.extend([wait(2.5), cam(11), anim(1, 41, true), anim(1, 49, true), PlayCamera { track: 12, wait: true, end: 1, speed: 1.0 }, wait(1.0)]);
     v.extend([cam(13), anim(0, 49, true), anim(0, 41, true)]);
     v.extend(cut(14));
-    v.extend([MoveHero { locator: 492 }, WalkHero { locator: 493, wait: true, orient: true }, walk(1, 495), wait(1.0), cam(15), wait(0.3), cam(16)]);
+    v.extend([MoveHero { locator: 492 }, WalkHero { locator: 493, wait: true, orient: true }, MoveType { entity: 1, kind: 2 }, walk(1, 495), wait(1.0), cam(15), wait(0.3), cam(16)]);
     // Object 4 is activated and played (speed 0.45, wait); its reset to time 0 at locator 498
     // (a MoveObj call) is not built.
     v.extend([MoveEntity { entity: 1, locator: 496, face: true }, InitObjOn { obj: 4, end: false }, PlayAnim { obj: 4, speed: 0.45, wait: true }]);
@@ -3211,11 +3230,12 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     v.extend(cut(19));
     v.extend([Message { line: 25 }, cam(20), Converse { entity: 1, line: 26 }]);
     v.extend(cut(18));
-    v.extend([MoveEntity { entity: 0, locator: 499, face: true }, wait(0.2), walk(0, 500), wait(0.6), DeactivateObj { obj: 4 }, cam(21), Converse { entity: 1, line: 27 }]);
-    v.extend([walk(1, 499), wait(1.0), cam(22), MoveEntity { entity: 0, locator: 501, face: true }, walk(0, 502), wait(1.5)]);
+    v.extend([MoveEntity { entity: 0, locator: 499, face: true }, MoveType { entity: 0, kind: 2 }, wait(0.2), walk(0, 500), wait(0.6), DeactivateObj { obj: 4 }, cam(21), Converse { entity: 1, line: 27 }]);
+    v.extend([walk(1, 499), wait(1.0), cam(22), MoveEntity { entity: 0, locator: 501, face: true }, MoveType { entity: 0, kind: 0 }, walk(0, 502), wait(1.5)]);
     v.extend([FadeOut { seconds: 2.0, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, MoveEntity { entity: 0, locator: 477, face: true }]);
     v.extend([EntityAnim { entity: 0, anim: 48, looped: true, wait: false }, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
-    // Step 2: the parcel is taken and the chase starts.
+    // Step 2: SetAI_MovementType(0, 2), the parcel is taken and the chase starts.
+    v.push(MoveType { entity: 0, kind: 2 });
     state.remove_all(32);
     state.set(127, true);
     v.extend(chase(state));
@@ -11205,6 +11225,14 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // entity 9 back to locator 11, the hero to locator 14, the replay prompt 59); the clock is
         // hidden on the first tick with no game after a game (word 12).
         934 => {
+            // Threads 13 and 14: one tick after the last character of a wave dies, its slot is
+            // reset and its flag set (372 for set 6 in slot 4, 378 for set 4 in slot 5).
+            for (slot, flag) in [(4u8, 372u16), (5, 378)] {
+                if !state.flag(flag) && state.slot_alive.get(&slot) == Some(&0) {
+                    state.set(flag, true);
+                    out.push(Action::LoadRegion { slot, region: None });
+                }
+            }
             let running = state.flag(470);
             out.push(if running { Action::InitObjOn { obj: 0, end: false } } else { Action::DeactivateObj { obj: 0 } });
             if running {
@@ -17697,7 +17725,7 @@ mod tests {
         s.give(32, 1);
         let init = on_init(1023, &mut s);
         assert!(init.contains(&Action::RegisterTrigger { index: 17, routine: 6 }));
-        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1026) }));
+        assert!(init.contains(&Action::LoadRegion { slot: 2, region: Some(1026) }));
         let start = on_trigger(1023, 6, TriggerCall { index: 17, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(s.flag(7) && s.flag(127) && !s.has_item(32));
         let flags: Vec<u16> = start.actions.iter().filter_map(|a| match a {
@@ -17713,7 +17741,7 @@ mod tests {
         }
         let init = on_init(1023, &mut s);
         assert!(init.contains(&Action::MoveEntity { entity: 0, locator: 480, face: true }));
-        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(1024) }));
+        assert!(init.contains(&Action::LoadRegion { slot: 2, region: Some(1024) }));
         // The shops stay shut until the catch.
         assert_eq!(on_teleport(1023, 5, &mut s), vec![Action::Message { line: 5 }]);
         s.set(136, true);

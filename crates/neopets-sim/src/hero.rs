@@ -51,6 +51,8 @@ pub const LEDGE: u8 = crate::ledge::HANG;
 pub const LEDGE_UP: u8 = crate::ledge::CLIMB_FALL;
 pub const LEDGE_RISE: u8 = crate::ledge::CLIMB_RISE;
 pub const LEDGE_DROP: u8 = crate::ledge::DROP;
+/// State 28, the hang from a grab line (SPEC-0033 Behavior 9).
+pub const LINE: u8 = crate::grab::STATE;
 /// The ladder (SPEC-0033 Behavior 13; its tick is `ladder::Ladder`).
 pub const LADDER: u8 = 41;
 /// The climb on a climb panel (SPEC-0033 Behavior 51; its tick is `climb::Climb`).
@@ -403,6 +405,10 @@ impl Locomotion {
         self.body.position = position;
         self.body.velocity = [0.0; 3];
         self.body.gain = 1.0;
+        // A teleport out of a traversal state (a ladder, a hang) leaves its no-gravity and
+        // no-snap flags behind.
+        self.body.no_gravity = false;
+        self.body.no_snap = false;
         if dot(f, f) > 0.0 {
             self.facing = f;
             self.target = f;
@@ -519,6 +525,13 @@ impl Locomotion {
         self.request = 40;
     }
 
+    /// The grab line's let-go (SPEC-0033 Behavior 9): state 7 in air phase 5 with request 67,
+    /// leaving with `velocity`.
+    pub fn line_let_go(&mut self, velocity: Vec3) {
+        self.drop_off();
+        self.body.velocity = velocity;
+    }
+
     /// The ladder's jump off (Behavior 13): a jump state falling with the given velocity.
     pub fn jump_off(&mut self, velocity: Vec3) {
         self.enter_air(JUMP);
@@ -568,7 +581,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -619,7 +632,7 @@ impl Locomotion {
             }
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
-            BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP => return,
+            BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -875,7 +888,7 @@ impl Locomotion {
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
         // In the edge states the clips' root motion lifts the hero (the pull-up 59 rises 3.7 and
         // the climb 134 1.2), so it is not flattened onto the ground there.
-        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE) {
+        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LINE) {
             let n = self.body.normal;
             let dn = dot(d, n);
             d = std::array::from_fn(|k| d[k] - dn * n[k]);

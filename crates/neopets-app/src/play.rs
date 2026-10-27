@@ -49,6 +49,8 @@ pub struct World {
     pub owner_poses: std::collections::HashMap<usize, neopets_data::ground::OwnerPose>,
     /// The ladders of the type-10 groups (SPEC-0006 Type 10, records of type -3).
     pub rails: Vec<neopets_sim::ladder::Rail>,
+    /// The grab lines (SPEC-0033 Behavior 9): bit-1 cylinders of the type-11 list.
+    pub grab_lines: Vec<neopets_sim::grab::Line>,
     /// Every type-10 record with its links (the climb panels are those of type -2).
     pub panels: Vec<neopets_sim::climb::Panel>,
     pub block_meshes: Vec<Option<std::ops::Range<usize>>>,
@@ -201,6 +203,7 @@ impl World {
             blocks: Vec::new(),
             owner_poses: Default::default(),
             rails: Vec::new(),
+            grab_lines: Vec::new(),
             panels: Vec::new(),
             block_meshes: Vec::new(),
             motions: Vec::new(),
@@ -301,6 +304,14 @@ impl World {
         world.spheres = spheres;
         let (capacity, volumes) = neopets_data::trigger::volumes(&bytes, &chain.chunks);
         world.capacity = capacity;
+        world.grab_lines = volumes
+            .iter()
+            .filter(|v| v.kind == 3 && v.flags & 0x0002 != 0)
+            .filter_map(|v| match v.shape {
+                neopets_data::trigger::Shape::Cylinder { base, axis, length, radius } => Some(neopets_sim::grab::Line { a: base, u: axis, length: length.abs(), radius, mask: v.mask }),
+                _ => None,
+            })
+            .collect();
         let all: Vec<(neopets_sim::trigger::Volume, u16)> = volumes
             .into_iter()
             .map(|v| (sim_volume(&v), v.class))
@@ -468,6 +479,8 @@ pub struct Character {
     /// A script walk to a point (SPEC-0030 rows 106 and 108; SPEC-0056 classes 23 and 25), with
     /// the final facing of the orienting form.
     script_walk: Option<([f32; 3], Option<[f32; 3]>, f32)>,
+    /// SetAI_MovementType: 0 walk, 1 run, 2 fast run, 3 and 4 idle (SPEC-0040 Behavior 14D).
+    move_type: u8,
     /// Under script control (PlayEntityAnim, LoopEntityAnim, script walks): its AI does not
     /// run until a release (SPEC-0030 section 4).
     pub held: bool,
@@ -725,6 +738,9 @@ pub struct Play {
     /// States 19 and 58 (SPEC-0033 Behavior 51), the side-touch latch (Behavior 15A) and the
     /// push-into-face counter (Behavior 15).
     hang: Option<neopets_sim::block::Hang>,
+    /// The grab-line hang (state 28) and its cooldown (SPEC-0033 Behavior 9).
+    line_hang: Option<neopets_sim::grab::Hang>,
+    line_cooldown: u32,
     /// The ledge state (30, 35 or 47) and its held edge (SPEC-0033 Behavior 51).
     ledge: Option<neopets_sim::ledge::Ledge>,
     climb: Option<neopets_sim::block::Climb>,
@@ -1455,6 +1471,8 @@ impl Play {
             hold: None,
             hang: None,
             ledge: None,
+            line_hang: None,
+            line_cooldown: 0,
             climb: None,
             ladder: None,
             grab_cooldown: 0,
@@ -1814,6 +1832,8 @@ impl Play {
     /// Move the hero to a landing in the current world and put the camera behind it.
     fn arrive(&mut self, (l, g): ([f32; 3], [f32; 3])) {
         self.loco.teleport(l, g);
+        // The traversal holds of the world left behind end with the arrival.
+        (self.ladder, self.ledge, self.hang, self.climb, self.panel, self.hold) = (None, None, None, None, None, None);
         let f = followed(&self.loco, &self.world);
         self.camera.place_behind(&f);
     }
@@ -2335,6 +2355,11 @@ impl Play {
                     c.script_walk = Some(([l[0], y, l[2]], face, if stop > 0.0 { stop } else { 1.0 }));
                     c.held = true;
                     return wait.then_some(Wait::EntityWalk(pack, entity));
+                }
+                Action::MoveType { entity, kind } => {
+                    if let Some(c) = self.entity_mut(pack, entity) {
+                        c.move_type = kind;
+                    }
                 }
                 Action::WaitWalks { entities } => return Some(Wait::EntityWalks(pack, entities)),
                 Action::SetFlag { flag, on } => self.state.set(flag, on),
@@ -3933,6 +3958,10 @@ impl Play {
         if self.loco.state == hero_states::LADDER {
             return;
         }
+        self.line_step();
+        if self.loco.state == hero_states::LINE {
+            return;
+        }
         let hero = self.loco.position();
         let c = self.hero.clip_state();
         let clip = neopets_sim::block::EdgeClip { action: c.action, progress: c.progress };
@@ -4049,6 +4078,51 @@ impl Play {
     }
 
     /// Leave the ladder to state 1 with gravity back on.
+    /// SPEC-0033 Behavior 9: the grab-line entry from the jump states (7 to 10, 43 to 46) with
+    /// the cooldown expired, the first line of the world whose gate passes and whose reach
+    /// passes; then state 28 each tick: no gravity, facing along the line, the attach, the
+    /// slide and the let-go (Square shows the let-go label 20).
+    fn line_step(&mut self) {
+        use neopets_sim::grab;
+        self.line_cooldown = self.line_cooldown.saturating_sub(1);
+        let hero = self.loco.position();
+        if self.loco.state != hero_states::LINE {
+            self.line_hang = None;
+            let jumping = (7..=10).contains(&self.loco.state) || (43..=46).contains(&self.loco.state);
+            if !jumping || self.line_cooldown > 0 {
+                return;
+            }
+            let mask = self.world.collis_mask;
+            let Some(k) = self.world.grab_lines.iter().position(|l| (l.mask == 0 || l.mask & mask != 0) && l.reaches(hero)) else { return };
+            self.line_hang = Some(grab::Hang::new(k));
+            self.loco.enter_state(hero_states::LINE, 112);
+            self.trace_edge("grab line", k, 0);
+        }
+        let Some(mut h) = self.line_hang else {
+            self.loco.drop_off();
+            return;
+        };
+        let square = std::mem::take(&mut self.square_now);
+        let step = h.tick(&self.world.grab_lines, hero, self.loco.body.gap, square);
+        self.line_hang = Some(h);
+        let Some(line) = self.world.grab_lines.get(h.line).copied() else { return };
+        if step.let_go {
+            self.line_hang = None;
+            self.line_cooldown = grab::COOLDOWN;
+            self.loco.line_let_go(line.u.map(|c| c * 15.0));
+            self.trace_edge("let go of line", h.line, 0);
+            return;
+        }
+        self.door_prompt = Some(20);
+        self.loco.body.no_gravity = true;
+        self.loco.body.velocity = [0.0; 3];
+        self.loco.steer_toward([line.u[0], 0.0, line.u[2]], 1.0);
+        if let Some(p) = step.place {
+            self.loco.body.position = p;
+        }
+        self.loco.block_request(step.request);
+    }
+
     fn leave_ladder(&mut self) {
         self.ladder = None;
         self.loco.body.no_gravity = false;
@@ -4243,6 +4317,20 @@ impl Play {
             return false;
         }
         false
+    }
+
+    /// The drawn hero's offset from its position while hanging from a ledge (state 30): 1.4
+    /// along the edge's outward normal, easing to 0 over the pull-up (clip 59). The spec's hang
+    /// point is 0.7 behind the face, which draws the body inside the wall (playtest); the
+    /// motion keeps the spec's point (the pull-up then lands well onto the top) and only the
+    /// drawing moves out (this build's choice; R-0108).
+    pub fn hero_draw_offset(&self) -> [f32; 3] {
+        let Some(l) = self.ledge.filter(|l| l.state == neopets_sim::ledge::HANG && self.loco.state == hero_states::LEDGE) else { return [0.0; 3] };
+        let n = l.edge.normal();
+        let len = n[0].hypot(n[2]).max(1e-6);
+        let c = self.hero.clip_state();
+        let w = if c.action == 59 { (1.0 - c.progress).clamp(0.0, 1.0) } else { 1.0 };
+        [1.4 * w * n[0] / len, 0.0, 1.4 * w * n[2] / len]
     }
 
     /// Diagnostic: frame records whose top is 1.75 to 6.5 above the ground 1.5 out from the
@@ -5312,6 +5400,7 @@ impl Play {
                 flash: 0,
                 root_step: [0.0; 3],
                 script_walk: None,
+                move_type: 0,
                 held: false,
                 inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 deactivated: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
@@ -5437,6 +5526,7 @@ impl Play {
             flash: 0,
             root_step: [0.0; 3],
             script_walk: None,
+            move_type: 0,
             held: false,
             inactive: false,
             deactivated: false,
@@ -7150,14 +7240,22 @@ impl Play {
             if let Some((t, face, stop)) = c.script_walk {
                 let (dx, dz) = (t[0] - c.position[0], t[2] - c.position[2]);
                 let d = dx.hypot(dz);
+                // SPEC-0040 Behavior 14D item 8: the townsfolk speeds and walk ids by movement
+                // type (walk 1 at 0.08337 a tick, run 6 at 0.22504, fast run 5 at 0.32160).
+                let (speed, clip) = match c.move_type {
+                    1 => (0.225_04, 6),
+                    2 => (0.321_60, 5),
+                    3 | 4 => (0.0, 3),
+                    _ => (0.083_37, 1),
+                };
                 if d >= stop {
                     c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
-                    let s = 0.083_37 / d;
+                    let s = speed / d;
                     let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
                     let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
                     c.position = [x, y.unwrap_or(c.position[1]), z];
-                    if c.anim.clip_state().action != 1 {
-                        c.anim.play(1);
+                    if c.anim.clip_state().action != clip {
+                        c.anim.play(clip);
                     }
                 } else if let Some(g) = face.filter(|g| c.facing[0] * g[0] + c.facing[2] * g[2] < 0.99) {
                     c.facing = neopets_sim::hero::steer(c.facing, g, 0.1);
@@ -10193,6 +10291,12 @@ impl Play {
         // drawn at rest until a script touches it. A lock chest's set-up poses only its object 0
         // (SPEC-0048 Set-up poses by kind), so its other objects keep the disc state 3 and are
         // not drawn (SPEC-0028 Draw gate) until a script turns them on.
+        // In every pack, an object of a group whose set-up is built (kinds 1, 5 and 6) that the
+        // set-up did not pose keeps the disc state 3 and is not drawn until a script turns it on
+        // (a lock chest's lid block, a dig site's dug pieces).
+        if !a.scripted && w.groups.iter().any(|g| matches!(g.kind, 1 | 5 | 6) && g.objects.contains(&(i as i32))) {
+            return None;
+        }
         let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)) && !(g.kind == 1 && g.objects.first() != Some(&(i as i32))));
         let gated = level::objects_scripted(pack) || (pack == 1217 && neopets_sim::burrows::named(i));
         // The 758 wheel turns even while no script has touched it (its pack's objects are drawn
