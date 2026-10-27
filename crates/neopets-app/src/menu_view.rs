@@ -58,72 +58,49 @@ pub struct MenuItem(usize);
 #[derive(Component)]
 pub struct MenuBackdrop;
 
-/// The held menu word: Left and Right (arrows or A/D, the D-pad) for the sliders; the stick's
-/// bits are added by the caller.
-pub fn menu_held(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> u16 {
-    let pad = |b: GamepadButton| gamepads.iter().any(|g| g.pressed(b));
+/// The held menu word: Left and Right (the bound D-pad and movement keys, the gamepad's D-pad)
+/// for the sliders; the stick's bits are added by the caller.
+pub fn menu_held(pad: &crate::bindings::Pad) -> u16 {
+    use crate::bindings as b;
+    let held = |a: usize| pad.held_no_mouse & (1 << a) != 0;
     let mut w = 0;
-    if keys.pressed(KeyCode::ArrowLeft) || keys.pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft) {
+    if held(b::LEFT) || held(b::MOVE_LEFT) {
         w |= menus::LEFT;
     }
-    if keys.pressed(KeyCode::ArrowRight) || keys.pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight) {
+    if held(b::RIGHT) || held(b::MOVE_RIGHT) {
         w |= menus::RIGHT;
     }
     w
 }
 
-/// The menu words of this frame: the rising-edge word (stick and D-pad directions included) and
-/// the button-only word (SPEC-0035 section 4).
-pub fn menu_words(keys: &ButtonInput<KeyCode>, gamepads: &Query<&Gamepad>) -> (u16, u16) {
-    let pad = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
+/// The menu words of this frame from the virtual pad (bindings.rs; mouse buttons are left out
+/// of the menus): the rising-edge word (D-pad and movement directions included) and the
+/// button-only word (SPEC-0035 section 4).
+pub fn menu_words(pad: &crate::bindings::Pad) -> (u16, u16) {
+    use crate::bindings as b;
+    let pressed = |a: usize| pad.pressed_no_mouse & (1 << a) != 0;
     let mut buttons = 0u16;
-    if keys.just_pressed(KeyCode::Space) || keys.just_pressed(KeyCode::Enter) || pad(GamepadButton::South) {
-        buttons |= menus::CROSS;
-    }
-    if keys.just_pressed(KeyCode::KeyT) || keys.just_pressed(KeyCode::Backspace) || pad(GamepadButton::North) {
-        buttons |= menus::TRIANGLE;
-    }
-    if keys.just_pressed(KeyCode::Escape) || pad(GamepadButton::Select) {
-        buttons |= menus::SELECT;
-    }
-    // Circle (Y or F, the east face button) and Square (E, the west face button) answer and
-    // page the card boxes.
-    if keys.just_pressed(KeyCode::KeyY) || keys.just_pressed(KeyCode::KeyF) || pad(GamepadButton::East) {
-        buttons |= menus::CIRCLE;
-    }
-    if keys.just_pressed(KeyCode::KeyE) || pad(GamepadButton::West) {
-        buttons |= menus::SQUARE;
-    }
-    // Start (Tab or the Start button) opens the item screen; L1 and R1 (Z and C, or the
-    // shoulder buttons) change its tab.
-    if keys.just_pressed(KeyCode::Tab) || pad(GamepadButton::Start) {
-        buttons |= menus::START;
-    }
-    if keys.just_pressed(KeyCode::KeyZ) || pad(GamepadButton::LeftTrigger) {
-        buttons |= menus::L1;
-    }
-    if keys.just_pressed(KeyCode::KeyC) || pad(GamepadButton::RightTrigger) {
-        buttons |= menus::R1;
-    }
-    // L2 and R2 (V and B, or the lower triggers) turn the item screen, map and journal ring.
-    if keys.just_pressed(KeyCode::KeyV) || pad(GamepadButton::LeftTrigger2) {
-        buttons |= menus::L2;
-    }
-    if keys.just_pressed(KeyCode::KeyB) || pad(GamepadButton::RightTrigger2) {
-        buttons |= menus::R2;
+    for (a, bit) in [
+        (b::CROSS, menus::CROSS),
+        (b::TRIANGLE, menus::TRIANGLE),
+        (b::SELECT, menus::SELECT),
+        (b::CIRCLE, menus::CIRCLE),
+        (b::SQUARE, menus::SQUARE),
+        (b::START, menus::START),
+        (b::L1, menus::L1),
+        (b::R1, menus::R1),
+        (b::L2, menus::L2),
+        (b::R2, menus::R2),
+    ] {
+        if pressed(a) {
+            buttons |= bit;
+        }
     }
     let mut edge = buttons;
-    if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp) {
-        edge |= menus::UP;
-    }
-    if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) || pad(GamepadButton::DPadDown) {
-        edge |= menus::DOWN;
-    }
-    if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft) {
-        edge |= menus::LEFT;
-    }
-    if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight) {
-        edge |= menus::RIGHT;
+    for (a, c, bit) in [(b::UP, b::MOVE_UP, menus::UP), (b::DOWN, b::MOVE_DOWN, menus::DOWN), (b::LEFT, b::MOVE_LEFT, menus::LEFT), (b::RIGHT, b::MOVE_RIGHT, menus::RIGHT)] {
+        if pressed(a) || pressed(c) {
+            edge |= bit;
+        }
     }
     (edge, buttons)
 }

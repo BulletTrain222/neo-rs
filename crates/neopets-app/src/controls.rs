@@ -3,11 +3,6 @@
 use bevy::prelude::*;
 use neopets_sim::PlayerInput;
 
-/// -1, 0, or 1 from a pair of opposing keys.
-pub fn axis(negative: bool, positive: bool) -> f32 {
-    positive as i32 as f32 - negative as i32 as f32
-}
-
 /// One stick axis through the PS2 pad's byte and the left-stick scaling (SPEC-0033 Behavior
 /// 2): the byte 127.5 + 127.5 v, then (r - 167.5) / 87.5 above the dead zone, (r - 87.5) / 87.5
 /// below it, and 0 for the bytes 88 to 167.
@@ -90,9 +85,7 @@ mod tests {
 
     #[test]
     fn keyboard_axes_cancel_and_scale() {
-        assert_eq!(axis(true, true), 0.0);
-        assert_eq!(axis(false, true), 1.0);
-        let input = movement(Vec2::new(axis(true, false), 1.0), []);
+        let input = movement(Vec2::new(-1.0, 1.0), []);
         assert_eq!((input.move_x, input.move_y), (-i16::MAX, i16::MAX));
         assert_eq!(input.buttons, 0);
     }

@@ -324,6 +324,9 @@ pub struct Flow {
     /// the (row, step) changes for the host to apply.
     pub display_focus: usize,
     pub display_requests: Vec<(usize, i32)>,
+    /// The Options page's "Keyboard & Gamepad" row was chosen: the host opens the bindings page
+    /// (this build; controls_page.rs).
+    pub controls_request: bool,
 }
 
 /// What the predicates read: the pass count, the option words of slots 66 to 68 (Vibration,
@@ -384,7 +387,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -605,6 +608,10 @@ impl Flow {
         let ctx = Ctx::default();
         if page == "options" {
             self.enter(fe, OPTIONS, &ctx);
+        } else if page == "keys" || page == "pad" {
+            self.enter(fe, OPTIONS, &ctx);
+            self.focus = items(fe, OPTIONS).len() + 1;
+            self.controls_request = true;
         } else if page == "display" {
             self.enter(fe, OPTIONS, &ctx);
             self.open_display();
@@ -1170,30 +1177,39 @@ impl Flow {
         }
         // The focused item: refocus to the first passing item when it fails; its focus state.
         let list = items(fe, self.current);
-        // The Options page's added Display row sits after its items (index = item count).
-        let on_display_row = self.current == OPTIONS && self.focus == list.len();
+        // The Options page's added rows sit after its items: Display (index = item count), then
+        // Keyboard & Gamepad (item count + 1).
+        let on_display_row = self.current == OPTIONS && self.focus >= list.len();
         if !on_display_row && list.get(self.focus).is_none_or(|&i| !item_ok(fe, i, self.current, ctx, self)) {
             self.focus = list.iter().position(|&i| item_ok(fe, i, self.current, ctx, self)).unwrap_or(0);
         }
-        // Moves into, out of and on the Display row (this build).
+        // Moves into, out of and between the added rows (this build).
         let mut moved = false;
         if result.is_none() && generic && self.pass >= 2 && self.current == OPTIONS {
             let passing: Vec<usize> = (0..list.len()).filter(|&k| item_ok(fe, list[k], self.current, ctx, self)).collect();
             let (first, last) = (passing.first().copied(), passing.last().copied());
+            let (display_row, keys_row) = (list.len(), list.len() + 1);
             if on_display_row {
                 if edge & CROSS != 0 {
                     self.sounds.push(0x98);
-                    self.open_display();
+                    if self.focus == display_row {
+                        self.open_display();
+                    } else {
+                        self.controls_request = true;
+                    }
                     return command;
                 } else if edge & DOWN != 0 {
-                    self.focus = first.unwrap_or(0);
+                    self.focus = if self.focus == display_row { keys_row } else { first.unwrap_or(0) };
                     moved = true;
                 } else if edge & UP != 0 {
-                    self.focus = last.unwrap_or(0);
+                    self.focus = if self.focus == keys_row { display_row } else { last.unwrap_or(0) };
                     moved = true;
                 }
-            } else if (edge & DOWN != 0 && Some(self.focus) == last) || (edge & UP != 0 && Some(self.focus) == first) {
-                self.focus = list.len();
+            } else if edge & DOWN != 0 && Some(self.focus) == last {
+                self.focus = display_row;
+                moved = true;
+            } else if edge & UP != 0 && Some(self.focus) == first {
+                self.focus = keys_row;
                 moved = true;
             }
             if moved {
@@ -1489,8 +1505,10 @@ pub fn display_draws(fe: &Frontend, flow: &Flow, rows: &[(String, String)]) -> V
         Draw::Text { font, text: bytes, spacing: plain.spacing as i32, x: (cx - w as f32 / 2.0).round(), y, colour }
     };
     if flow.current == OPTIONS {
-        let is_focused = flow.focus == items(fe, OPTIONS).len();
-        return vec![text("Display", ly + pitch, if is_focused { focused } else { plain.colour })];
+        let n = items(fe, OPTIONS).len();
+        let colour = |k: usize| if flow.focus == k { focused } else { plain.colour };
+        let keys = drawable(&["Keyboard & Gamepad".to_string(), "Keyboard and Gamepad".to_string()]);
+        return vec![text("Display", ly + pitch, colour(n)), text(&keys, ly + pitch * 2.0, colour(n + 1))];
     }
     let mut out: Vec<Draw> = draw_list(fe, OPTIONS, usize::MAX, pc).into_iter().filter(|d| !matches!(d, Draw::Label { node, .. } if under_item(fe, *node))).collect();
     let step = pitch * 0.8;

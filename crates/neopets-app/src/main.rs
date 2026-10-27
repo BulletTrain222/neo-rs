@@ -1,4 +1,6 @@
 mod archive_view;
+mod bindings;
+mod controls_page;
 mod character;
 mod controls;
 mod dev_menu;
@@ -19,7 +21,7 @@ use bevy::image::ImageSampler;
 use bevy::input::mouse::{AccumulatedMouseMotion, AccumulatedMouseScroll, MouseScrollUnit};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
-use controls::{Browser, axis, movement};
+use controls::{Browser, movement};
 use neopets_data::archive::ArchiveIndex;
 use neopets_data::{Disc, iso_path};
 use neopets_sim::{FixedStep, PlayerInput, Simulation};
@@ -830,16 +832,21 @@ fn main() {
             ..default()
         }))
         .init_resource::<dev_menu::DevMenu>()
+        .insert_resource(bindings::Bindings::load())
+        .init_resource::<bindings::Pad>()
+        .init_resource::<bindings::PadMute>()
+        .init_resource::<bindings::MouseLook>()
+        .init_resource::<controls_page::ControlsPage>()
         .init_resource::<perf::PerfOverlay>()
         .insert_resource(display::DisplaySettings::load())
         .init_resource::<display::SceneTarget>()
-        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, perf::spawn_panel, display::setup))
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup))
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
             Update,
             (
-                (dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
+                (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items).chain(), (sync_characters, sync_attachments).chain(), sync_shots, (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
@@ -849,6 +856,7 @@ fn main() {
     app.add_systems(Update, sync_breakables.after(sync_objects));
     app.add_systems(Update, sync_blocks.after(sync_objects));
     app.add_systems(Update, send_rumble);
+    app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
@@ -1037,28 +1045,20 @@ fn setup_hud(mut commands: Commands, status: Res<DiscStatus>, hidden: Res<HudHid
 }
 
 fn read_input(
-    keys: Res<ButtonInput<KeyCode>>,
+    pad: Res<bindings::Pad>,
+    mute: Res<bindings::PadMute>,
     gamepads: Query<&Gamepad>,
     mut driver: ResMut<SimDriver>,
 ) {
-    let held = |pair: [KeyCode; 2]| keys.any_pressed(pair);
-    let keyboard = Vec2::new(
-        axis(
-            held([KeyCode::KeyA, KeyCode::ArrowLeft]),
-            held([KeyCode::KeyD, KeyCode::ArrowRight]),
-        ),
-        axis(
-            held([KeyCode::KeyS, KeyCode::ArrowDown]),
-            held([KeyCode::KeyW, KeyCode::ArrowUp]),
-        ),
-    );
-    driver.input = movement(keyboard, gamepads.iter().map(|pad| pad.left_stick()));
+    // The bound movement keys, and the gamepads' left sticks (not while the bindings page is up).
+    let sticks: Vec<Vec2> = if mute.0 { Vec::new() } else { gamepads.iter().map(|g| g.left_stick()).collect() };
+    driver.input = movement(pad.movement, sticks);
 }
 
 fn step_sim(
     time: Res<Time>,
-    keys: Res<ButtonInput<KeyCode>>,
-    mouse: Res<ButtonInput<MouseButton>>,
+    vpad: Res<bindings::Pad>,
+    mute: Res<bindings::PadMute>,
     gamepads: Query<&Gamepad>,
     mut driver: ResMut<SimDriver>,
     mut models: ResMut<ModelView>,
@@ -1094,34 +1094,29 @@ fn step_sim(
         let mut input = neopets_sim::hero::HeroInput {
             side: -(i.move_x as f32) / i16::MAX as f32,
             forward: i.move_y as f32 / i16::MAX as f32,
-            run: keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight])
-                || gamepads.iter().any(|g| g.pressed(GamepadButton::RightTrigger)),
+            // The virtual pad (bindings.rs): R1 runs, L1 holds the shield guard, Circle or R2
+            // attacks.
+            run: vpad.held(bindings::R1),
             jump: false,
             square: false,
-            square_held: keys.pressed(KeyCode::KeyE) || gamepads.iter().any(|g| g.pressed(GamepadButton::West)),
-            cross_held: keys.pressed(KeyCode::Space) || gamepads.iter().any(|g| g.pressed(GamepadButton::South)),
-            // L1 (Q or the left bumper) holds the shield guard.
-            guard: keys.pressed(KeyCode::KeyQ) || gamepads.iter().any(|g| g.pressed(GamepadButton::LeftTrigger)),
-            attack_held: keys.pressed(KeyCode::KeyF)
-                || mouse.pressed(MouseButton::Left)
-                || gamepads.iter().any(|g| g.pressed(GamepadButton::East) || g.pressed(GamepadButton::RightTrigger2)),
+            square_held: vpad.held(bindings::SQUARE),
+            cross_held: vpad.held(bindings::CROSS),
+            guard: vpad.held(bindings::L1),
+            attack_held: vpad.held(bindings::CIRCLE) || vpad.held(bindings::R2),
             attack: false,
         };
-        // The attack button (F, left mouse, Circle or R2): its press edge, kept for the next tick
-        // when this frame runs none.
-        play.play.attack_latch |= keys.just_pressed(KeyCode::KeyF)
-            || mouse.just_pressed(MouseButton::Left)
-            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::East) || g.just_pressed(GamepadButton::RightTrigger2));
-        // The quick-item panel (SPEC-0021): the D-pad or numpad 8/4/6/2 for its directions, T or
-        // the north face button for Triangle; Cross and Circle are the jump and attack edges.
+        // The attack button (Circle or R2): its press edge, kept for the next tick when this
+        // frame runs none.
+        play.play.attack_latch |= vpad.pressed(bindings::CIRCLE) || vpad.pressed(bindings::R2);
+        // The quick-item panel (SPEC-0021): the D-pad for its directions and Triangle; Cross
+        // and Circle are the jump and attack edges.
         {
-            let pad = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
             let l = &mut play.play.panel_latch;
-            l.up |= keys.just_pressed(KeyCode::Numpad8) || pad(GamepadButton::DPadUp);
-            l.left |= keys.just_pressed(KeyCode::Numpad4) || pad(GamepadButton::DPadLeft);
-            l.right |= keys.just_pressed(KeyCode::Numpad6) || pad(GamepadButton::DPadRight);
-            l.down |= keys.just_pressed(KeyCode::Numpad2) || pad(GamepadButton::DPadDown);
-            l.triangle |= keys.just_pressed(KeyCode::KeyT) || pad(GamepadButton::North);
+            l.up |= vpad.pressed(bindings::UP);
+            l.left |= vpad.pressed(bindings::LEFT);
+            l.right |= vpad.pressed(bindings::RIGHT);
+            l.down |= vpad.pressed(bindings::DOWN);
+            l.triangle |= vpad.pressed(bindings::TRIANGLE);
         }
         // NEOPETS_TRACE_EFFECT="id": a diagnostic one-shot of that effect 3 units in front of
         // the hero every 120 play ticks.
@@ -1158,43 +1153,36 @@ fn step_sim(
         }
         // The hero switch chord's press edges: L1 (Q or the left bumper) and R1 (Shift or the
         // right bumper), kept for the next tick (SPEC-0053 3.8 c).
-        play.play.l1_latch |= keys.just_pressed(KeyCode::KeyQ) || gamepads.iter().any(|g| g.just_pressed(GamepadButton::LeftTrigger));
-        play.play.r1_latch |= keys.any_just_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) || gamepads.iter().any(|g| g.just_pressed(GamepadButton::RightTrigger));
-        // Square (E or the west face button) confirms a prompt; a press edge like Cross.
-        play.play.square_latch |= keys.just_pressed(KeyCode::KeyE)
-            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::West));
-        // Cross (Space or the south face button) is a press edge; keep it for the next tick
-        // when this frame runs none.
-        play.play.jump_latch |= keys.just_pressed(KeyCode::Space)
-            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::South));
+        play.play.l1_latch |= vpad.pressed(bindings::L1);
+        play.play.r1_latch |= vpad.pressed(bindings::R1);
+        // Square confirms a prompt; a press edge like Cross.
+        play.play.square_latch |= vpad.pressed(bindings::SQUARE);
+        // Cross is a press edge; keep it for the next tick when this frame runs none.
+        play.play.jump_latch |= vpad.pressed(bindings::CROSS);
         if let Some(auto) = autowalk.as_deref() {
             input.forward = 0.7;
             if auto.jump && ticks > 0 && play.play.ticks % 120 == 0 {
                 play.play.jump_latch = true;
             }
         }
-        // The right stick as PS2 pad bytes (X right 255, Y up 0); J/L and I/K stand in for it
-        // on the keyboard, R for R3.
-        let mut right = gamepads.iter().map(|g| g.right_stick()).find(|v| v.length() > 0.2).unwrap_or(Vec2::ZERO);
-        let key = |k: KeyCode| keys.pressed(k) as i32 as f32;
-        right.x += key(KeyCode::KeyL) - key(KeyCode::KeyJ);
-        right.y += key(KeyCode::KeyI) - key(KeyCode::KeyK);
+        // The right stick as PS2 pad bytes (X right 255, Y up 0); the bound camera keys and the
+        // mouse (bindings.rs) add to it.
+        let mut right = if mute.0 { Vec2::ZERO } else { gamepads.iter().map(|g| g.right_stick()).find(|v| v.length() > 0.2).unwrap_or(Vec2::ZERO) };
+        right += vpad.look;
         let byte = |v: f32| (127.5 + 127.5 * v.clamp(-1.0, 1.0)).round() as u8;
-        let r3_held = keys.pressed(KeyCode::KeyR) || gamepads.iter().any(|g| g.pressed(GamepadButton::RightThumb));
-        play.play.r3_latch |= keys.just_pressed(KeyCode::KeyR)
-            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::RightThumb));
-        // L3 (X or the left stick button) shows every HUD group again.
-        play.play.l3_latch |= keys.just_pressed(KeyCode::KeyX)
-            || gamepads.iter().any(|g| g.just_pressed(GamepadButton::LeftThumb));
+        let r3_held = vpad.held(bindings::R3);
+        play.play.r3_latch |= vpad.pressed(bindings::R3);
+        // L3 shows every HUD group again.
+        play.play.l3_latch |= vpad.pressed(bindings::L3);
         // SPEC-0035: the front end runs once per tick; outside play and the game-over page the
         // world is frozen and the hero's buttons are dropped.
-        let (mut edge, mut buttons) = menu_view::menu_words(&keys, &gamepads);
-        let mut held = menu_view::menu_held(&keys, &gamepads);
+        let (mut edge, mut buttons) = menu_view::menu_words(&vpad);
+        let mut held = menu_view::menu_held(&vpad);
         // The left stick's direction bits join the rising-edge and held words (never the
         // button-only word). Edges seen on a frame that runs no tick are kept for the next
         // tick, so no press is lost when the frame rate is above the 60 Hz tick rate.
         if let Some(m) = menu.as_deref_mut() {
-            let stick = menu_view::stick_bits(&gamepads);
+            let stick = if mute.0 { 0 } else { menu_view::stick_bits(&gamepads) };
             edge |= stick & !m.stick;
             held |= stick;
             m.stick = stick;
