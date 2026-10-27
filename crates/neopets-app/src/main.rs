@@ -2848,6 +2848,13 @@ fn play_trace(
             println!("      block 0 moved onto character {:?} on tick {}", play.block_onto_npc(), play.ticks);
         }
         // NEOPETS_TRACE_BLOCK on tick 5: the current world's blocks and the volumes blocks fire.
+        // NEOPETS_TRACE_LEDGES: on tick 5 the jump-to-ledge candidates of the world, and each
+        // ledge-state tick (diagnostic).
+        if play.ticks == 5 && std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
+            for line in play.ledge_survey() {
+                println!("      {line}");
+            }
+        }
         if play.ticks == 5 && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
             for line in play.block_survey() {
                 println!("      {line}");

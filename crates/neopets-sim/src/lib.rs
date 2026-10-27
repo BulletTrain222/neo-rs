@@ -6,6 +6,7 @@ pub mod attack;
 pub mod camera;
 pub mod chain;
 pub mod climb;
+pub mod ledge;
 pub mod block;
 pub mod book;
 pub mod burrows;

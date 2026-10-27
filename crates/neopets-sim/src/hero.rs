@@ -45,6 +45,11 @@ pub const BLOCK: u8 = 18;
 /// 58; their ticks are `block::Hang` and `block::Climb`).
 pub const HANG: u8 = 19;
 pub const CLIMB: u8 = 58;
+/// The ledge states (SPEC-0033 Behavior 51): hang from a ledge, climb up from a fall, climb up
+/// while rising.
+pub const LEDGE: u8 = crate::ledge::HANG;
+pub const LEDGE_UP: u8 = crate::ledge::CLIMB_FALL;
+pub const LEDGE_RISE: u8 = crate::ledge::CLIMB_RISE;
 /// The ladder (SPEC-0033 Behavior 13; its tick is `ladder::Ladder`).
 pub const LADDER: u8 = 41;
 /// The climb on a climb panel (SPEC-0033 Behavior 51; its tick is `climb::Climb`).
@@ -562,7 +567,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -613,7 +618,7 @@ impl Locomotion {
             }
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
-            BLOCK | HANG | CLIMB | LADDER | PANEL => return,
+            BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -863,7 +868,7 @@ impl Locomotion {
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
         // In the edge states the clips' root motion lifts the hero (the pull-up 59 rises 3.7 and
         // the climb 134 1.2), so it is not flattened onto the ground there.
-        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB | LADDER | PANEL) {
+        if self.body.gap < 1.0 && !matches!(self.state, HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE) {
             let n = self.body.normal;
             let dn = dot(d, n);
             d = std::array::from_fn(|k| d[k] - dn * n[k]);

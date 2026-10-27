@@ -720,6 +720,8 @@ pub struct Play {
     /// States 19 and 58 (SPEC-0033 Behavior 51), the side-touch latch (Behavior 15A) and the
     /// push-into-face counter (Behavior 15).
     hang: Option<neopets_sim::block::Hang>,
+    /// The ledge state (30, 35 or 47) and its held edge (SPEC-0033 Behavior 51).
+    ledge: Option<neopets_sim::ledge::Ledge>,
     climb: Option<neopets_sim::block::Climb>,
     /// State 41 and the grab cooldown (Behavior 20) the jump off sets.
     ladder: Option<neopets_sim::ladder::Ladder>,
@@ -1434,6 +1436,7 @@ impl Play {
             carried: None,
             hold: None,
             hang: None,
+            ledge: None,
             climb: None,
             ladder: None,
             grab_cooldown: 0,
@@ -3618,6 +3621,19 @@ impl Play {
         if self.loco.state == hero_states::CLIMB {
             return true;
         }
+        // State 30's let go: Square with label 20 while hanging (Behavior 44), to state 1.
+        if self.loco.state == hero_states::LEDGE {
+            if self.hero.clip_state().action == 73 {
+                self.door_prompt = Some(20);
+                if self.square_now {
+                    self.leave_ledge(hero_states::STANCE);
+                }
+            }
+            return true;
+        }
+        if matches!(self.loco.state, hero_states::LEDGE_UP | hero_states::LEDGE_RISE) {
+            return true;
+        }
         if self.loco.state == hero_states::BLOCK {
             if self.hero.clip_state().action == neopets_sim::block::ANIM_STILL && self.stick_centred {
                 self.door_prompt = Some(20);
@@ -3808,6 +3824,9 @@ impl Play {
         let side_axis = neopets_sim::hero::basis(f)[0];
         let (a, b) = (stick[0] * f[0] + stick[2] * f[2], stick[0] * side_axis[0] + stick[2] * side_axis[2]);
         let forward = a > 0.0 && a.abs() > b.abs();
+        if self.ledge_step(input.side, forward) {
+            return;
+        }
         let step = match self.loco.state {
             hero_states::HANG => self.hang.as_mut().map(|h| h.tick(&self.world.blocks, hero, input.side, forward, self.loco.body.gap, clip)),
             hero_states::CLIMB => self.climb.as_mut().map(|h| h.tick(&self.world.blocks, hero, forward, clip)),
@@ -3974,6 +3993,104 @@ impl Play {
             }
             None => {}
         }
+    }
+
+    /// SPEC-0033 Behaviors 32, 37 and 51: in the jump states' air phases 0 to 5 the in-air ledge
+    /// chooser reads the edge contact (the nearby frame records the acceptance test passes, the
+    /// one facing the hero most) and enters state 30, 35 or 47; in those states their step (no
+    /// gravity, the motion cleared). Reports whether a ledge state owns the tick.
+    fn ledge_step(&mut self, side: f32, forward: bool) -> bool {
+        use neopets_sim::ledge::{self, Class, Edge, Ledge};
+        let hero = self.loco.position();
+        if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE) {
+            self.ledge = None;
+            if !(self.loco.airborne() && (0..=5).contains(&self.loco.phase)) {
+                return false;
+            }
+            let Some(g) = &self.world.ground else { return false };
+            let (f, v) = (self.loco.facing, self.loco.body.velocity);
+            let toward = |e: &Edge| -(e.face[0] * f[0] + e.face[2] * f[2]);
+            let edge = g
+                .frames_at(hero[0], hero[2])
+                .into_iter()
+                .map(|r| Edge { face: r.face, run: r.run, top: r.top, length: r.length, height: r.height, kind: r.kind })
+                .filter(|e| e.accepts(hero, f, v, contact::HERO_RADIUS, self.loco.state))
+                .max_by(|a, b| toward(a).total_cmp(&toward(b)));
+            let Some(edge) = edge else { return false };
+            let ground = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0).unwrap_or(ground::MISS);
+            let Some(class) = ledge::choose(edge.h(hero), hero[1], ground, self.loco.body.normal[1], true) else { return false };
+            let (state, request) = match class {
+                Class::Hang => (ledge::HANG, 72),
+                Class::Climb if v[1] > 0.0 => (ledge::CLIMB_RISE, 134),
+                Class::Climb => (ledge::CLIMB_FALL, 75),
+            };
+            self.ledge = Some(Ledge::new(state, edge));
+            self.loco.enter_state(state, request);
+            self.trace_edge("ledge", state as usize, 0);
+        }
+        let c = self.hero.clip_state();
+        let Some(step) = self.ledge.as_mut().map(|l| l.tick(hero, side, forward, self.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })) else {
+            self.leave_ledge(hero_states::STANCE);
+            return true;
+        };
+        if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
+            println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?}", self.ticks, self.ledge.map(|l| l.sub), c.action, c.progress, self.loco.body.gap, step.place);
+        }
+        self.loco.body.no_gravity = true;
+        self.loco.body.velocity = [0.0; 3];
+        if let Some(d) = step.facing {
+            self.loco.steer_toward(d, 0.5);
+        }
+        if let Some(p) = step.place {
+            self.loco.body.position = p;
+        }
+        if let Some(r) = step.request {
+            self.loco.block_request(r);
+        }
+        if let Some(s) = step.exit {
+            self.leave_ledge(s);
+            self.trace_edge("leave", s as usize, 0);
+        }
+        true
+    }
+
+    /// Diagnostic: frame records whose top is 1.75 to 6.5 above the ground 1.5 out from the
+    /// middle of their face, with that stand point (the jump-to-ledge candidates).
+    pub fn ledge_survey(&self) -> Vec<String> {
+        let Some(g) = &self.world.ground else { return Vec::new() };
+        let [x0, z0, x1, z1] = g.bounds();
+        let mut seen: Vec<[i32; 3]> = Vec::new();
+        let mut out = Vec::new();
+        let (mut x, step) = (x0, 2.0);
+        while x <= x1 && out.len() < 40 {
+            let mut z = z0;
+            while z <= z1 && out.len() < 40 {
+                for r in g.frames_at(x, z) {
+                    let key = r.start.map(|v| (v * 10.0) as i32);
+                    if seen.contains(&key) || r.face[1].abs() > 0.2 || r.kind == 3 || r.kind == 6 || r.length < 2.0 {
+                        continue;
+                    }
+                    seen.push(key);
+                    let n = [r.face[0], 0.0, r.face[2]];
+                    let mid: [f32; 3] = std::array::from_fn(|k| r.start[k] + r.run[k] * 0.5 * r.length + n[k] * 1.5);
+                    let top = r.start[1];
+                    let Some(gy) = self.world.ground_at(mid[0], mid[2], top) else { continue };
+                    let d = top - 0.25 - gy;
+                    if (1.75..6.5).contains(&d) {
+                        out.push(format!("ledge kind {} drop {d:.2} stand {:.1},{:.1} y {gy:.2} face {:.2},{:.2} L {:.1}", r.kind, mid[0], mid[2], -n[0], -n[2], r.length));
+                    }
+                }
+                z += step;
+            }
+            x += step;
+        }
+        out
+    }
+
+    fn leave_ledge(&mut self, state: u8) {
+        self.ledge = None;
+        self.loco.body.no_gravity = false;
+        self.loco.enter_state(state, if state == hero_states::RUN { 4 } else { 0 });
     }
 
     fn trace_edge(&self, what: &str, a: usize, b: u8) {

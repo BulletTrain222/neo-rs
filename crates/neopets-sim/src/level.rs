@@ -586,12 +586,23 @@ fn update_1089(state: &mut GameState) -> Vec<Action> {
     for &(_, f, g) in &RECORDS_1089 {
         out.push(Action::GroupEffectsToObjLocators { group: g, host: 0, locator: f + 6 });
     }
-    // 2. On the first tick the five objects of every record are activated. (The later ticks'
-    // time-sync helper is not reproduced: its calls are listed without their rule.)
+    // 2. On the first tick the five objects of every record are activated. On later ticks the
+    // hold helper (R-0083): B to time 0; with B+1 idle, B+1 and B+2 each held at its own current
+    // time; with B+3 idle, B+3 and B+4; with B+5 idle, B+5.
     if state.word(pack, 4) != 0 {
         state.set_word(pack, 4, 0);
         for &(b, _, _) in &RECORDS_1089 {
             out.extend((1..=5).map(|k| Action::InitObjOn { obj: b + k, end: false }));
+        }
+    } else {
+        let hold = |o: usize| Action::SetObjTime { obj: o, seconds: state.obj_times.get(&o).copied().unwrap_or(0.0) };
+        for &(b, _, _) in &RECORDS_1089 {
+            out.push(Action::SetObjTime { obj: b, seconds: 0.0 });
+            for unit in [&[1usize, 2][..], &[3, 4], &[5]] {
+                if !state.animating.contains(&(b + unit[0])) {
+                    out.extend(unit.iter().map(|&k| hold(b + k)));
+                }
+            }
         }
     }
     // 3. Object 0's time passing 18.4 clears the hazard word, and with 4 presses starts the
@@ -3565,6 +3576,92 @@ fn pass_1398(firer: usize, s: &mut GameState) -> Vec<Action> {
         ]);
         v.extend(thread6_1398(2));
         v.push(Action::ReturnCamera { preset: -1, release: true });
+    }
+    v
+}
+
+/// SPEC-0044 1091's two hazard sequencers (R-0089), one pass at a time (word 52 busy, word
+/// 51 the running mode, word 54 the mode wanted next, word 50 the shared word, word 53 the
+/// first pass of mode 1). Mode 2 swings object 3 (0.6 forward, 1 s, -0.6 back, 1 s) while the
+/// word is 0; mode 1 swings object 6 forward at 1.6 once, then the nine steps while the word is
+/// 1, and when cancelled reverses 6 and 9 at -0.4. Forward swings of the flag objects (4, 5, 9,
+/// 10) set their hazard flag (word 40 + object) and backward swings clear it.
+fn sequencer_1091(s: &mut GameState) -> Vec<Action> {
+    let p = 1091;
+    if s.word(p, 52) != 0 {
+        return Vec::new();
+    }
+    let mode = s.word(p, 51);
+    let word = s.word(p, 50);
+    let flagged = |o: usize| matches!(o, 4 | 5 | 9 | 10);
+    let fwd = |o: usize, v: &mut Vec<Action>| {
+        if flagged(o) {
+            v.push(Action::Bits { word: 40 + o as u8, set: 1, clear: 0 });
+        }
+        v.push(Action::PlayAnim { obj: o, speed: 1.6, wait: true });
+    };
+    let back = |o: usize, v: &mut Vec<Action>| {
+        if flagged(o) {
+            v.push(Action::Bits { word: 40 + o as u8, set: 0, clear: 1 });
+        }
+        v.push(Action::PlayAnim { obj: o, speed: -0.4, wait: true });
+    };
+    let mut v = Vec::new();
+    match mode {
+        2 if word == 0 => {
+            v.extend([Action::PlayAnim { obj: 3, speed: 0.6, wait: true }, wait(1.0), Action::PlayAnim { obj: 3, speed: -0.6, wait: true }, wait(1.0)]);
+        }
+        1 if word != 0 => {
+            if s.word(p, 53) != 0 {
+                s.set_word(p, 53, 0);
+                fwd(6, &mut v);
+            }
+            fwd(10, &mut v);
+            v.push(wait(1.0));
+            back(10, &mut v);
+            fwd(5, &mut v);
+            fwd(4, &mut v);
+            back(9, &mut v);
+            v.push(wait(1.0));
+            back(5, &mut v);
+            back(4, &mut v);
+            fwd(5, &mut v);
+            fwd(4, &mut v);
+            v.push(wait(1.0));
+            back(5, &mut v);
+            back(4, &mut v);
+            fwd(10, &mut v);
+            v.push(wait(0.5));
+            fwd(9, &mut v);
+            back(10, &mut v);
+            back(9, &mut v);
+            v.push(wait(0.8));
+            fwd(8, &mut v);
+            fwd(5, &mut v);
+            v.push(wait(0.5));
+            back(8, &mut v);
+            v.push(wait(1.0));
+            fwd(7, &mut v);
+            v.push(wait(0.5));
+            back(7, &mut v);
+            back(5, &mut v);
+            fwd(9, &mut v);
+        }
+        1 => {
+            // Cancelled by mode 2: objects 6 and 9 back, then the wanted mode takes over.
+            back(6, &mut v);
+            back(9, &mut v);
+            s.set_word(p, 51, s.word(p, 54));
+        }
+        2 => {
+            s.set_word(p, 51, s.word(p, 54));
+            s.set_word(p, 53, (s.word(p, 54) == 1) as i32);
+        }
+        _ => return v,
+    }
+    if !v.is_empty() {
+        s.set_word(p, 52, 1);
+        v.push(Action::Bits { word: 52, set: 0, clear: 1 });
     }
     v
 }
@@ -7201,13 +7298,15 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // SPEC-0057 pattern A (1091 animated hazards, routines 13 to 20 for objects 3 to 10): a
         // run at a time per object (word 10 + object): objects 7 and 8 kill (KillCurrentHero, 1 s,
-        // the hero to locator 6); the others damage 2 then wait 0.5 s (the mode-0 slot flags stay
-        // 0 in play).
+        // the hero to locator 6); 3 and 6 damage 2 then wait 0.5 s; 4, 5, 9 and 10 kill while
+        // their hazard flag (word 40 + object, set by the sequencer while the object swings
+        // forward; R-0089) is set and damage otherwise.
         (1091, 13..=20) if call.object && call.state != 0 => {
             let obj = (routine - 10) as u8;
             if state.word(pack, 10 + obj) == 0 {
                 state.set_word(pack, 10 + obj, 1);
-                if matches!(obj, 7 | 8) {
+                let flag = matches!(obj, 4 | 5 | 9 | 10) && state.word(pack, 40 + obj) != 0;
+                if matches!(obj, 7 | 8) || flag {
                     out.actions.extend([Action::KillHero, wait(1.0), Action::MoveHero { locator: 6 }]);
                 } else {
                     out.actions.extend([Action::DamageHero { amount: 2 }, wait(0.5)]);
@@ -7220,6 +7319,23 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // the sweep ids played at 5.0 with 0.02 s between; 2 damage and poison (default); wait
         // until the hero leaves; the plate scrubbed 13/30 to 25/30 s. Triggers 41 and 42 (the
         // sequencers, no damage) are not reproduced.
+        // Triggers 41 and 42 (R-0089): object 2 (41) or 17 (42) scrubbed 0 to 10/30 s and 13/30 to
+        // 25/30 s a tick at a time, then mode 2 (41: the shared word 0) or mode 1 (42: the word
+        // 1); the modes cancel each other. Update runs the sequencer passes.
+        (1091, 41) if call.object && call.state == 1 && matches!(call.index, 41 | 42) => {
+            let obj = if call.index == 41 { 2 } else { 17 };
+            for t in (0..=10).chain(13..=25) {
+                out.actions.extend([Action::SetObjTime { obj, seconds: t as f32 / 30.0 }, Action::Sleep { ticks: 1 }]);
+            }
+            let mode = if call.index == 41 { 2 } else { 1 };
+            // The shared word; a running other mode stops at its next check and hands over.
+            state.set_word(pack, 50, (mode == 1) as i32);
+            state.set_word(pack, 54, mode);
+            if state.word(pack, 51) == 0 {
+                state.set_word(pack, 51, mode);
+                state.set_word(pack, 53, (mode == 1) as i32);
+            }
+        }
         (1091, 41) if call.object && (43..=48).contains(&call.index) => {
             let w = 30 + (call.index - 40) as u8;
             if state.word(pack, w) == 0 {
@@ -9764,41 +9880,39 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
         }
-        // SPEC-0045 909 trigger routine 11 (index 5), the pump: word 3 is set by the exchange
-        // (and cleared by the flag-117 cutscene). The objects, effects, camera 27, fades and
-        // sounds of the exchange are not reproduced.
+        // SPEC-0045 909 trigger routine 11 (index 5), the pump (R-0092 answered): word 3 is set by
+        // the exchange (and cleared by the flag-117 cutscene). The exchange (flag 111 set, 112
+        // clear, item 6 held, Square): item 6 removed first; the fade, the hero to locator 29,
+        // object 9 on, camera 27, the fade in, 1 s, sound 9; objects 18 and 20 played without
+        // waiting and 17 waited for; object 20 stopped and off; object 19 played; effects 3 and 4,
+        // sound 10, the camera shake (preset 0, 1 s, strength 1); line 166; item 7 given; 0.5 s;
+        // object 9 off; line 162; flag 112; the normal camera. Without the bucket: line 165 with
+        // 112 set, else 163 with item 7 held, else 164.
         (909, 11) => {
             if !call.square {
                 out.prompt = Some(4);
             } else if state.word(pack, 3) != 0 {
                 out.actions.push(Action::Message { line: 167 });
             } else if state.flag(111) && !state.flag(112) && state.has_item(6) {
-                // Fade out, hero to locator 29, object 9 activated, camera 27, fade in, sound 9,
-                // objects 18, 20 and 17 played, object 20 stopped and deactivated, object 19
-                // played, effects 3 and 4 started, sound 10, line 166, object 9 deactivated,
-                // line 162, camera returned (the shake is not reproduced). The spec gives the 1 s
-                // wait after the fade in (High) but not the plays' waits (Medium): the 13 s clips of
-                // objects 18 and 17 run on while the 0.33 s object 20 is waited for (waiting for
-                // each in turn held the hero for 28 s; R-0092).
+                state.remove_all(6);
+                state.set_word(pack, 3, 1);
                 out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 29 }, Action::InitObjOn { obj: 9, end: false }, camera(27), fade_in(), wait(1.0)]);
                 out.actions.push(Action::PlaySound { cue: 9, locator: None });
-                out.actions.extend([Action::PlayAnim { obj: 18, speed: 1.0, wait: false }, Action::PlayAnim { obj: 20, speed: 1.0, wait: true }, Action::PlayAnim { obj: 17, speed: 1.0, wait: false }]);
-                out.actions.extend([Action::StopAnim { obj: 20 }, Action::DeactivateObj { obj: 20 }, Action::PlayAnim { obj: 19, speed: 1.0, wait: true }]);
+                out.actions.extend([Action::PlayAnim { obj: 18, speed: 1.0, wait: false }, Action::PlayAnim { obj: 20, speed: 1.0, wait: false }, Action::PlayAnim { obj: 17, speed: 1.0, wait: true }]);
+                out.actions.extend([Action::StopAnim { obj: 20 }, Action::DeactivateObj { obj: 20 }, Action::PlayAnim { obj: 19, speed: 1.0, wait: false }]);
                 out.actions.extend([Action::StartEffect { slot: 3, camera: false }, Action::StartEffect { slot: 4, camera: false }]);
-                out.actions.push(Action::PlaySound { cue: 10, locator: None });
-                state.remove_all(6);
-                out.actions.push(Action::Message { line: 166 });
-                state.give(7, 1);
-                out.actions.push(Action::DeactivateObj { obj: 9 });
-                out.actions.push(Action::Message { line: 162 });
-                out.actions.push(release_camera());
-                state.set(112, true);
-                state.set_word(pack, 3, 1);
+                out.actions.extend([Action::PlaySound { cue: 10, locator: None }, Action::CameraShakeMode { kind: 0, duration: 1.0, strength: 1.0 }]);
+                out.actions.extend([
+                    Action::Message { line: 166 },
+                    Action::GiveItem { item: 7, count: 1 },
+                    wait(0.5),
+                    Action::DeactivateObj { obj: 9 },
+                    Action::Message { line: 162 },
+                    Action::SetFlag { flag: 112, on: true },
+                    release_camera(),
+                ]);
             } else {
-                // The spec names lines 163 to 165 by flags 111 and 112 and items 6 and 7 without
-                // the mapping (R-0024); provisional: 163 before the task, 164 without the bucket,
-                // 165 once the water is drawn.
-                let line = if !state.flag(111) { 163 } else if !state.flag(112) { 164 } else { 165 };
+                let line = if state.flag(112) { 165 } else if state.has_item(7) { 163 } else { 164 };
                 out.actions.push(Action::Message { line });
             }
         }
@@ -9870,6 +9984,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
 pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> {
     let mut out = Vec::new();
     match pack {
+        1091 => out = sequencer_1091(state),
         // SPEC-0045 1023 Update, the tattered-cloak check: flag 11 and the cloak worn set 303.
         // (The cloak watcher's scenes, lines 20 and 21 with the cloak slots, are not built.)
         1023 => {
@@ -16848,6 +16963,30 @@ mod tests {
     }
 
     #[test]
+    fn module_1091_sequencers() {
+        // Trigger 42 starts mode 1 (object 6 first, then the steps); trigger 41 cancels it (6
+        // and 9 back) and mode 2 swings object 3.
+        let mut s = GameState::default();
+        let enter = |index| TriggerCall { index, state: 1, object: true, square: false, block: -1 };
+        on_trigger(1091, 41, enter(42), &mut s);
+        let a = on_update(1091, &mut s, false);
+        assert_eq!(a[0], Action::PlayAnim { obj: 6, speed: 1.6, wait: true });
+        assert!(a.contains(&Action::Bits { word: 50, set: 1, clear: 0 }) && on_update(1091, &mut s, false).is_empty(), "one pass at a time");
+        s.set_word(1091, 52, 0);
+        on_trigger(1091, 41, enter(41), &mut s);
+        let a = on_update(1091, &mut s, false);
+        assert_eq!(a[0], Action::PlayAnim { obj: 6, speed: -0.4, wait: true });
+        s.set_word(1091, 52, 0);
+        assert_eq!(on_update(1091, &mut s, false)[0], Action::PlayAnim { obj: 3, speed: 0.6, wait: true });
+        // A flag object kills while its flag is set.
+        s.set_word(1091, 50, 1);
+        let mut t = GameState::default();
+        t.set_word(1091, 45, 1);
+        let touch = TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 };
+        assert!(on_trigger(1091, 15, touch, &mut t).actions.contains(&Action::KillHero));
+    }
+
+    #[test]
     fn module_1091_hazards() {
         let mut s = GameState::default();
         let init = on_init(1091, &mut s);
@@ -17171,7 +17310,10 @@ mod tests {
         assert_eq!(lines, vec![&Action::MoveHero { locator: 29 }, &Action::Message { line: 166 }, &Action::Message { line: 162 }]);
         assert_eq!(out.actions.first(), Some(&Action::HoldHero));
         assert_eq!(out.actions.last(), Some(&Action::ReturnCamera { preset: -1, release: true }));
-        assert!(s.flag(112) && s.has_item(7) && !s.has_item(6));
+        // Item 6 is removed at once; item 7 and flag 112 come by the exchange's actions.
+        assert!(!s.has_item(6) && out.actions.contains(&Action::GiveItem { item: 7, count: 1 }) && out.actions.contains(&Action::SetFlag { flag: 112, on: true }));
+        s.give(7, 1);
+        s.set(112, true);
         assert_eq!(fire(&mut s, 11, 5, true).actions, vec![Action::Message { line: 167 }]);
         // Mum's talk (routine A) takes the water; Hubert's sends Tor for the pliers.
         assert_eq!(talks(909, 0, &mut s, 1), vec![45]);
