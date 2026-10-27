@@ -1342,6 +1342,12 @@ fn step_sim(
             if std::mem::take(&mut play.play.reload_wanted) {
                 pending = play.play.snapshot.clone();
             }
+            // SPEC-0026 Credits: the gate on story bit 368 opens record 14 with the pending flag.
+            if std::mem::take(&mut play.play.credits_wanted) {
+                if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                    m.flow.open_credits_from_play(&a.f);
+                }
+            }
             // The game-over exit with nothing pending: the teardown and record 0.
             if std::mem::take(&mut play.play.teardown_wanted) {
                 quit = true;
@@ -2768,6 +2774,7 @@ fn play_trace(
     // releases a power attack).
     let hold: u64 = std::env::var("NEOPETS_TRACE_HOLD").ok().and_then(|v| v.parse().ok()).unwrap_or(10).min(240);
     let mice = std::env::var_os("NEOPETS_TRACE_MICE").is_some();
+    let mut faerie_code = 0u8;
     // NEOPETS_TRACE_PRESSES="a,b,...": attack press edges at these offsets of every 120 ticks
     // (the first held 10 ticks), for combos.
     let presses: Vec<u64> = std::env::var("NEOPETS_TRACE_PRESSES").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
@@ -3054,6 +3061,40 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_FACE_NAME="name@n": from tick n the hero is turned each tick to face the
+        // nearest character of that name in the current world (diagnostic).
+        if let Some(name) = std::env::var("NEOPETS_TRACE_FACE_NAME").ok().and_then(|v| {
+            let (name, from) = v.rsplit_once('@').unwrap_or((v.as_str(), "0"));
+            (from.trim().parse::<u64>().ok()? <= play.ticks).then(|| name.to_string())
+        }) {
+            let h = play.loco.position();
+            let pack = play.world.pack;
+            if let Some(c) = play.characters.iter().filter(|c| c.pack == pack && c.name == name && !c.inactive).min_by(|a, b| {
+                let d = |c: &&play::Character| (c.position[0] - h[0]).hypot(c.position[2] - h[2]);
+                d(a).total_cmp(&d(b))
+            }) {
+                let (dx, dz) = (c.position[0] - h[0], c.position[2] - h[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                play.loco.facing = [dx / l, 0.0, dz / l];
+            }
+        }
+        // NEOPETS_TRACE_FAERIE_DRIVE: when the Darkest Faerie's absorb window starts (code 7) the
+        // hero is put 10 units west of her, and when she has landed (code 10) on her spot
+        // (diagnostic; once per entry of each code).
+        if std::env::var_os("NEOPETS_TRACE_FAERIE_DRIVE").is_some() {
+            let pack = play.world.pack;
+            let f = play.characters.iter().find(|c| c.pack == pack && c.faerie.is_some()).map(|c| (c.position, c.faerie.as_ref().map_or(0, |f| f.code)));
+            if let Some((at, code)) = f {
+                if code != faerie_code {
+                    match code {
+                        7 => play.place_at(at[0] - 10.0, at[2], at[1] + 6.0),
+                        10 => play.place_at(at[0], at[2] + 2.0, at[1] + 6.0),
+                        _ => {}
+                    }
+                    faerie_code = code;
+                }
+            }
+        }
         // NEOPETS_TRACE_FACE="tick:x,z;...": the hero turned to face (x, z) on that tick
         // (diagnostic).
         if let Ok(v) = std::env::var("NEOPETS_TRACE_FACE") {
@@ -3137,7 +3178,15 @@ fn play_trace(
             square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()))
                 || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
-            guard: guard && fight.is_some_and(|f| f.1),
+            // NEOPETS_TRACE_GUARD=n: the guard is held on every tick from tick n (diagnostic).
+            // NEOPETS_TRACE_GUARD_ORB: the guard is held while one of the Darkest Faerie's
+            // projectiles is within 30 units of the hero.
+            guard: (guard && fight.is_some_and(|f| f.1))
+                || std::env::var("NEOPETS_TRACE_GUARD").ok().and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|n| play.ticks >= n)
+                || (std::env::var_os("NEOPETS_TRACE_GUARD_ORB").is_some() && {
+                    let h = play.loco.position();
+                    play.characters.iter().filter_map(|c| c.faerie.as_ref()).flat_map(|f| f.slots.iter().flatten()).any(|s| (0..3).map(|k| (s.position[k] - h[k]).powi(2)).sum::<f32>() < 900.0)
+                }),
             // With `--autojump` the trace also presses attack every 120 ticks for 10 ticks.
             attack_held: ((jump || fight.is_some_and(|f| f.1)) && (30..30 + hold).contains(&(play.ticks % 120)))
                 || presses.first().is_some_and(|&p| (p..p + 10).contains(&(play.ticks % 120))),

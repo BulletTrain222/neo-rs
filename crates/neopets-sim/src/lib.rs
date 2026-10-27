@@ -26,6 +26,7 @@ pub mod enemy;
 pub mod entityctl;
 pub mod foliage;
 pub mod hero;
+pub mod lock;
 pub mod hud;
 pub mod inventory;
 pub mod items;

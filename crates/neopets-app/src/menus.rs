@@ -308,6 +308,9 @@ pub struct Flow {
     pub credit_words: Option<neopets_sim::credits::Words>,
     pub roll: Option<neopets_sim::credits::Roll>,
     pub credits_shown: Vec<neopets_sim::credits::Shown>,
+    /// The credits-pending flag (SPEC-0026 Credits): the roll was opened from play by story bit
+    /// 368; Cross and Triangle are ignored and its end tears the world down to record 0.
+    pub credits_pending: bool,
     /// The item screen (SPEC-0035 section 14.1): the tab (kept for the session), the Items-tab
     /// cursor (kept between visits), the Charms-tab and Quest-tab cursors, the grid ids (boot
     /// 0x2DCF28) and the last item view the host gave.
@@ -381,7 +384,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new() };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new() };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -654,6 +657,13 @@ impl Flow {
             }
         }
         self.pass = (self.pass + 1).min(9999);
+    }
+
+    /// The credits from play (SPEC-0026 Credits, SPEC-0035 section 6): the pending flag set and
+    /// record 14 entered.
+    pub fn open_credits_from_play(&mut self, fe: &Frontend) {
+        self.credits_pending = true;
+        self.set(fe, CREDITS);
     }
 
     /// Open the pause page's quit box (record 26 of the system message table).
@@ -995,6 +1005,9 @@ impl Flow {
             // the generic back rule from pass 2.
             18 => {
                 self.bank_override = Some(8);
+                if self.credits_pending {
+                    generic = false;
+                }
                 if self.pass == 0 {
                     self.roll = self.credit_words.map(|w| neopets_sim::credits::Roll::new(448, &w));
                 }
@@ -1005,6 +1018,10 @@ impl Flow {
                         if roll.ended(styles.len()) {
                             self.credits_shown.clear();
                             self.roll = None;
+                            if std::mem::take(&mut self.credits_pending) {
+                                self.set(fe, CARD);
+                                return Some(Command::Quit);
+                            }
                             self.back(fe, ctx);
                             return command;
                         }
@@ -1901,6 +1918,29 @@ mod tests {
         f.targets.insert(3, Target { target: -3, state: -1 });
         f.targets.insert(4, Target { target: 11, state: -1 });
         f
+    }
+
+    #[test]
+    fn credits_from_play_end_in_the_teardown() {
+        // SPEC-0026 Credits from play: Cross and Triangle are ignored; the roll's end returns
+        // the teardown and record 0 (CARD).
+        let mut f = fe();
+        f.screens[CREDITS] = Screen { node: Some(0), back: -1, state: 18 };
+        let mut flow = Flow::new(&f);
+        flow.credit_rows = vec![(Some(b"A".to_vec()), 0, 0), (None, 0, 0)];
+        flow.credit_words = Some(neopets_sim::credits::Words { pitch: 24.0, slow: 1.0, fast: 1.5, ramp: 1.0 / 512.0, fade_top: 32, fade_bottom: 32, drop: -20, offset: 1 });
+        flow.open_credits_from_play(&f);
+        let ctx = Ctx::default();
+        let mut out = None;
+        for k in 0..2000 {
+            let edge = if k % 50 == 10 { TRIANGLE | CIRCLE } else { 0 };
+            out = flow.tick(&f, edge, edge, &ctx);
+            if out.is_some() {
+                break;
+            }
+            assert_eq!(flow.current, CREDITS, "pass {k}");
+        }
+        assert_eq!((out, flow.current, flow.credits_pending), (Some(Command::Quit), CARD, false));
     }
 
     #[test]

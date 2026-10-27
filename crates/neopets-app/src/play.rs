@@ -740,6 +740,9 @@ pub struct Play {
     /// Roberta's attack step, her six shot slots and the shot rows (SPEC-0036).
     r_attack: Option<neopets_sim::roberta::RobertaAttack>,
     pub hero_shots: Vec<neopets_sim::roberta::Shot>,
+    /// The hero's candidate list and its lock (SPEC-0040 Behavior 20).
+    pub candidates: neopets_sim::lock::Candidates,
+    pub lock: Option<u64>,
     /// Diagnostic: the fight trace's target by character name (NEOPETS_TRACE_TARGET).
     pub fight_target: Option<String>,
     shot_rows: neopets_sim::roberta::Rows,
@@ -860,6 +863,9 @@ pub struct Play {
     /// The game-over page's exit with no save or load pending: the host tears the world down
     /// and the front end goes to record 0 (SPEC-0026 Game over flag; SPEC-0035 state 26).
     pub teardown_wanted: bool,
+    /// The in-play gate on story bit 368 fired (SPEC-0026 Credits): the host opens the credits.
+    pub credits_wanted: bool,
+    credits_fired: bool,
     /// The game's random generator (SPEC-0008): one stream, seeded once.
     pub rng: neopets_sim::rng::Rng,
     /// Effects (SPEC-0034): the resource-9 definition table, its material images, the shared
@@ -1410,6 +1416,8 @@ impl Play {
             rebind: Vec::new(),
             r_attack: None,
             hero_shots: Vec::new(),
+            candidates: Default::default(),
+            lock: None,
             fight_target: None,
             shot_rows,
             hero_index: 0,
@@ -1502,6 +1510,8 @@ impl Play {
             death: neopets_sim::death::DeathFlow::new(),
             penalty_due: false,
             teardown_wanted: false,
+            credits_wanted: false,
+            credits_fired: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
             slot_items: HashMap::new(),
@@ -3071,7 +3081,12 @@ impl Play {
         let p = self.loco.position();
         let f = self.loco.facing;
         let anchor = anchor(p, f);
-        let dir = launch_dir(anchor, default_aim(p, f));
+        // Step 1 and 2 (SPEC-0036 Roberta shot launch): modes 0 and 1 aim at the lock, modes 2
+        // to 5 at a random visible character within 60 (the fan of step 4 is not built); else
+        // the default point 20 ahead and 2 up.
+        let target = if row.homing <= 1 { self.lock } else { self.shot_target() };
+        let aim = target.and_then(|id| self.aim_point(id)).unwrap_or_else(|| default_aim(p, f));
+        let dir = launch_dir(anchor, aim);
         // S = A x D x B x G x E; T is 1, or the attack power table value for a full release.
         let weapon_a = self.weapon.and_then(|i| self.items.get(i)).map_or(0.0, |i| i.stats[0] as f32);
         let b = mote.and_then(|id| self.items.get(id)).map_or(1.0, |i| neopets_sim::mote::one_plus_percent(i.stats[5] as f32));
@@ -6392,6 +6407,16 @@ impl Play {
             let window = self.attack.is_some() && self.hero.frame_bits() & 1 != 0;
             self.state.hero.strike = window && !self.window_was;
             self.window_was = window;
+            // SPEC-0026 Credits: on the play pass after story bit 368 is set, the credits open
+            // (once; the teardown at their end clears every flag).
+            if self.state.flag(368) && !self.credits_fired {
+                self.credits_fired = true;
+                self.credits_wanted = true;
+                self.last_door = format!("the credits gate (flag 368) on tick {}", self.ticks);
+                if std::env::var_os("NEOPETS_TRACE_CREDITS").is_some() {
+                    println!("      credits opened from play (flag 368) on tick {}", self.ticks);
+                }
+            }
             self.trigger_step();
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
@@ -6618,6 +6643,7 @@ impl Play {
         self.serpent_step();
         self.mice_step();
         self.enemies_step();
+        self.lock_step();
         self.npc_block_step();
         self.items_step();
         // SPEC-0023: the in-play HUD steps only while the in-play state runs, so not while a
@@ -6689,6 +6715,54 @@ impl Play {
     /// The common enemies of the current world (SPEC-0038): their view of the hero, the think
     /// loop, movement by the walker (navigation and root-step travel), and their strikes on the
     /// hero (SPEC-0036 Enemy attack damage to a hero, Taking a hit, Knockback, Health and death).
+    /// SPEC-0040 Behavior 20 items 1 to 5 each tick: the candidates are the current world's
+    /// living characters the hero's attacks can hit (not townsfolk, not petpet types; the
+    /// spawn-record foe test is read as this), engaged by an attack (state 13) while facing them.
+    fn lock_step(&mut self) {
+        let pack = self.world.pack;
+        let chars: Vec<(u64, [f32; 3])> = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like())
+            .map(|c| (c.id, c.position))
+            .collect();
+        let attacking = self.loco.state == hero_states::ATTACK;
+        self.lock = self.candidates.tick(&chars, self.loco.position(), self.loco.facing, attacking);
+    }
+
+    /// The aim point of a character (its target-point method is not given: the body's middle,
+    /// half the row height up; R-0102).
+    fn aim_point(&self, id: u64) -> Option<[f32; 3]> {
+        let c = self.characters.iter().find(|c| c.id == id)?;
+        Some(add(c.position, [0.0, 0.5 * c.row.map_or(3.0, |r| r.height), 0.0]))
+    }
+
+    /// SPEC-0036 Roberta shot launch step 1 for homing modes 2 to 5: the first ten hittable
+    /// characters within 60 horizontally whose aim point is visible along three parallel rays
+    /// (from the hero + 1.5 up, and 1.0 to each side), one chosen uniformly.
+    fn shot_target(&mut self) -> Option<u64> {
+        let pack = self.world.pack;
+        let h = self.loco.position();
+        let eye = add(h, [0.0, 1.5, 0.0]);
+        let mut found = Vec::new();
+        for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like()) {
+            if found.len() >= 10 {
+                break;
+            }
+            if (c.position[0] - h[0]).hypot(c.position[2] - h[2]) >= 60.0 {
+                continue;
+            }
+            let at = add(c.position, [0.0, 0.5 * c.row.map_or(3.0, |r| r.height), 0.0]);
+            let d = unit([at[0] - eye[0], 0.0, at[2] - eye[2]]);
+            let side = [d[2], 0.0, -d[0]];
+            let clear = |o: f32| self.world.ground.as_ref().is_none_or(|g| g.segment_clear(add(eye, scale(side, o)), add(at, scale(side, o)), true));
+            if clear(0.0) && clear(1.0) && clear(-1.0) {
+                found.push(c.id);
+            }
+        }
+        (!found.is_empty()).then(|| found[self.rng.index(found.len() as u32) as usize])
+    }
+
     fn enemies_step(&mut self) {
         let hero = self.loco.position();
         let hero_facing = self.loco.facing;
@@ -8791,6 +8865,17 @@ impl Play {
             let near = (hero[0] - c.position[0]).hypot(hero[2] - c.position[2]) < 65.0;
             let body = neopets_sim::combat::Cylinder::from_base(c.position, UP, radius, height);
             let reaches = near && swing.as_ref().is_some_and(|s| neopets_sim::combat::overlap(s, &body));
+            // NEOPETS_TRACE_FAERIE: in the absorb window, her height and the nearest hero shot
+            // (diagnostic).
+            if std::env::var_os("NEOPETS_TRACE_FAERIE").is_some() && c.faerie.as_ref().is_some_and(|f| f.code == 7) && self.ticks % 30 == 0 {
+                let near = shots.iter().map(|&(p, _)| ((p[0] - c.position[0]).powi(2) + (p[1] - c.position[1] - 0.5 * height).powi(2) + (p[2] - c.position[2]).powi(2)).sqrt()).fold(f32::MAX, f32::min);
+                println!("      faerie window: at {:?} (h {height}, r {radius}), hero {:?}, {} shots, nearest {near:.1} on tick {}", c.position, hero, shots.len(), self.ticks);
+            }
+            // NEOPETS_TRACE_FAERIE: the stun-time measurements (diagnostic).
+            if std::env::var_os("NEOPETS_TRACE_FAERIE").is_some() && c.faerie.as_ref().is_some_and(|f| f.code == 5) && attacking {
+                let sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.r_attack.as_ref().map(|a| a.sub) };
+                println!("      faerie stun: attacking sub {sub:?} form2 {form2} swing {} reaches {reaches} on tick {}", swing.is_some(), self.ticks);
+            }
             let clip = c.anim.clip_state();
             let ground = self.world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0);
             let v = neopets_sim::darkest::View {
