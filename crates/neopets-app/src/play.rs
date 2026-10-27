@@ -508,6 +508,8 @@ pub struct Character {
     pub pet_type: i32,
     /// The second petpet behaviour (class 20; SPEC-0047).
     pub class20: Option<neopets_sim::petpet::Class20>,
+    /// The Black Knight's per-fight record (behaviour class 8; SPEC-0012).
+    pub knight: Option<neopets_sim::knight::Knight>,
 }
 
 impl Character {
@@ -783,6 +785,8 @@ pub struct Play {
     feeding: Option<u16>,
     /// The class 20 waits (4 to 5 s) in ticks.
     class20_waits: (i32, i32),
+    /// The Black Knight's tuning block (SPEC-0012, 0x2DA3E8).
+    knight_words: Option<neopets_sim::knight::Words>,
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     /// The Undead Draik's spit flight effects (fire, ice).
     spit_fx: [Option<usize>; 2],
@@ -1077,6 +1081,7 @@ impl Play {
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
+        let knight_words = words(neopets_sim::knight::BASE, neopets_sim::knight::WORDS).ok().and_then(|w| neopets_sim::knight::Words::read(&w));
         let class20_waits = {
             let w = words(neopets_sim::petpet::CLASS20_WAIT_AT, 2)?;
             ((f32::from_bits(w[0]) * 60.0) as i32, (f32::from_bits(w[1]) * 60.0) as i32)
@@ -1451,6 +1456,7 @@ impl Play {
             pet_reserve: Default::default(),
             feeding: None,
             class20_waits,
+            knight_words,
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -2035,6 +2041,7 @@ impl Play {
                     let interior = std::mem::replace(&mut self.world, o);
                     drop(interior);
                     self.interior_t = None;
+                    self.state.reset_levels();
                     self.arrive(landing);
                     if let Some(&pack) = self.boot.areas.packs.get(slot) {
                         self.job = Some(Job::ReloadTransition(pack));
@@ -2816,6 +2823,7 @@ impl Play {
                 // Leave-interior job: E becomes current, the upright landing on plane e (always
                 // probed), facing F; then T is reloaded with the pack it held.
                 if self.land_in_other(e, false, true) {
+                    self.state.reset_levels();
                     if let Some(t) = self.interior_t.take() {
                         self.job = Some(Job::ReloadTransition(t));
                     }
@@ -4662,7 +4670,7 @@ impl Play {
             .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
             .filter(|c| self.fight_target.as_ref().is_none_or(|n| *n == c.name))
-            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.ixi.as_ref().is_some_and(|k| k.state != neopets_sim::ixi::State::Death) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
+            .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.knight.as_ref().is_some_and(|k| !k.defeated()) || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.ixi.as_ref().is_some_and(|k| k.state != neopets_sim::ixi::State::Death) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
             .min_by(|a, b| {
                 let d = |c: &Character| if c.boss.is_some() { 0.0 } else { (c.position[0] - p[0]).hypot(c.position[2] - p[2]) };
                 d(a).total_cmp(&d(b))
@@ -4801,7 +4809,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -4842,6 +4850,7 @@ impl Play {
                 wild: row.filter(|r| r.class == Some(33)).map(|_| neopets_sim::petpet::Wild::default()),
                 pet_type: pl.key as i32,
                 class20: row.filter(|r| r.class == Some(20)).map(|_| neopets_sim::petpet::Class20::new(position)),
+                knight: row.filter(|r| r.class == Some(8)).and_then(|_| self.knight_words.as_ref()).map(neopets_sim::knight::Knight::new),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -4963,6 +4972,7 @@ impl Play {
             wild: None,
             pet_type: pl.key as i32,
             class20: None,
+            knight: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -5468,6 +5478,7 @@ impl Play {
                 }
                 let exterior = std::mem::replace(&mut self.world, world);
                 self.other = Some(exterior);
+                self.state.reset_levels();
                 self.run_init();
                 let (l, g) = self.world.entries.first().copied().unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
                 let l = self.world.snap(l, 6.0);
@@ -5478,6 +5489,7 @@ impl Play {
             Job::Replace(_, plane) => {
                 self.world = world;
                 self.other = None;
+                self.state.reset_levels();
                 self.run_init();
                 let landing = self.world.landing(plane, false, false).or_else(|| {
                     let (l, g) = self.world.entries.first().copied()?;
@@ -6537,6 +6549,7 @@ impl Play {
         self.boss_step();
         self.gnarfas_step();
         self.king_step();
+        self.knight_step();
         self.ixi_step();
         self.sisters_step();
         self.draik_step();
@@ -7876,6 +7889,184 @@ impl Play {
             }
             for &damage in &act.raw_damage {
                 self.hero_hit(damage as f32, 0.0, false, d, "the Werelupe King's flame or boomerang".into());
+            }
+        }
+    }
+
+    /// SPEC-0012 per tick for the Black Knight of the current world: the measurements (the
+    /// monster weapon tests of attach points 1 to 5 against the hero's hurt capsules, the hero's
+    /// body and shots against the six weak-point cylinders, the shots near the body, the hero on
+    /// the knight's ground mesh, body contact, the ground), the controller tick, then its clip,
+    /// turn, travel (mode 0 toward the target, modes 5 and 6 sideways, on the walker), hits on
+    /// the hero with the knock-back, level states, the spark at a hit part and the health
+    /// display (350 at most, the part sum with its quirk). Interpretations (Medium-Low, R-0097):
+    /// a part's frame kind is taken as the bone with that index, its cylinder along the bone's
+    /// up axis; the walk-mesh edge contact is not measured (false); the hand is 1.1 ahead of the
+    /// body at 3.0 up and the sword's return point the body at 3.0 up.
+    fn knight_step(&mut self) {
+        use neopets_sim::combat::Cylinder;
+        use neopets_sim::knight as kn;
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let hf = self.loco.facing;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.knight.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        let Some(words) = self.knight_words else { return };
+        if ids.is_empty() {
+            return;
+        }
+        let hplace = placement(hero, hf);
+        let hframes = self.hero.bone_frames();
+        let caps: Vec<Cylinder> = self
+            .hero
+            .bones()
+            .hurt
+            .iter()
+            .zip(&hframes)
+            .filter(|(h, _)| h.1 > 0.0)
+            .map(|(&(base, length, radius), f)| {
+                let w = hplace.mul(f);
+                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+            })
+            .collect();
+        let body = Cylinder { center: add(hero, [0.0, 1.75, 0.0]), axis: UP, radius: 1.0, length: 3.5 };
+        let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
+        // The hero's damage query for the knight (argument 1.0), rounded down.
+        let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(1, |i| i.stats[0]);
+        let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
+        let hero_damage = neopets_sim::mote::melee(1.0, stat_a as f32, None, -1, 1.0, e_factor, 0.0, self.statuses.damage_scale()).0;
+        let hero_mesh = neopets_sim::nav::closest(&self.world.navmeshes, hero, 1);
+        let (hero_index, attacking, guarding) = (self.hero_index as u8, self.loco.state == hero_states::ATTACK, self.loco.state == hero_states::GUARD);
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let level_flags = self.state.level_flags.clone();
+            let level = |f: u16| level_flags.contains(&f);
+            let world = &self.world;
+            let c = &mut self.characters[i];
+            let place = placement(c.position, c.facing);
+            let frames = c.anim.bone_frames();
+            let bits = c.anim.frame_bits();
+            let weapons: [bool; 5] = std::array::from_fn(|n| {
+                if bits & (1 << n) == 0 {
+                    return false;
+                }
+                let Some(&(Some(b), angles, offset)) = c.anim.bones().attach.get(n) else { return false };
+                let Some(bw) = frames.get(b) else { return false };
+                let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+                let (radius, length) = c.weapons[n];
+                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+            });
+            // The weak points: (bone, radius, length) by part.
+            let part_shape = |k: usize| -> Option<Cylinder> {
+                let (bone, radius, length) = match k {
+                    kn::LEFT_KNEE => (0x22, 1.5, 2.0),
+                    kn::RIGHT_KNEE => (0x25, 1.5, 2.0),
+                    kn::LEFT_ARM => (0x09, 2.0, 2.5),
+                    kn::RIGHT_ARM => (0x18, 2.0, 2.5),
+                    kn::BACK => (0x04, 1.5, 2.0),
+                    _ => (0x07, 2.5, 2.0),
+                };
+                let m = place.mul(frames.get(bone)?);
+                Some(Cylinder::from_base(m.t, unit(m.cols[1]), radius, length))
+            };
+            let part_hit = |k: usize| {
+                part_shape(k).is_some_and(|cyl| {
+                    neopets_sim::combat::overlap(&body, &cyl) || shots.iter().any(|&(p, r)| (0..3).map(|j| (p[j] - cyl.center[j]).powi(2)).sum::<f32>().sqrt() < 5.0 + r)
+                })
+            };
+            let r = c.row.map_or(1.5, |r| r.radius);
+            let height = c.row.map_or(6.0, |r| r.height);
+            let shot_overlap = shots.first().is_some_and(|&(p, sr)| neopets_sim::gnarfas::segment_distance(c.position, add(c.position, [0.0, height, 0.0]), p, p) <= r + sr);
+            let hd = (hero[0] - c.position[0]).hypot(hero[2] - c.position[2]);
+            let fwd = unit([c.facing[0], 0.0, c.facing[2]]);
+            let sword_hit = |p: [f32; 3]| neopets_sim::gnarfas::segment_distance(hero, add(hero, [0.0, 3.5, 0.0]), p, p) <= 2.0;
+            let own_mesh = neopets_sim::nav::closest(&world.navmeshes, c.position, 1);
+            let clip = c.anim.clip_state();
+            let v = kn::View {
+                position: c.position,
+                facing: c.facing,
+                hero,
+                hero_facing: hf,
+                hero_index,
+                hero_attack: attacking,
+                hero_guard: guarding,
+                shots: !shots.is_empty(),
+                shot_overlap,
+                weapons,
+                frame_bits: bits,
+                clip: (clip.action, clip.progress >= 0.99),
+                hero_on_mesh: hero_mesh >= 0 && hero_mesh == own_mesh,
+                hero_on_mesh_full: hero_mesh >= 0 && hero_mesh == own_mesh,
+                contact: hd < r + 1.0,
+                edge: false,
+                part_hit: &part_hit,
+                hero_damage,
+                second_measure: hd,
+                ground: world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0),
+                hand: add(add(c.position, [0.0, 3.0, 0.0]), scale(fwd, 1.1)),
+                return_point: add(c.position, [0.0, 3.0, 0.0]),
+                sword_hit: &sword_hit,
+                level: &level,
+            };
+            let Some(k) = c.knight.as_mut() else { continue };
+            let before = k.state;
+            let act = k.tick(&v, &words, &mut self.rng);
+            let after = k.state;
+            if let Some(a) = act.anim {
+                if clip.action != a || (clip.progress >= 0.99 && before != after) {
+                    c.anim.play(a);
+                }
+            }
+            if let Some(rate) = act.face {
+                let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
+                let to = if rate < 0.0 { [-to[0], 0.0, -to[2]] } else { to };
+                c.facing = neopets_sim::hero::steer(c.facing, to, rate.abs());
+            }
+            if let Some((mode, target)) = act.travel {
+                let m = [target[0] - c.position[0], 0.0, target[2] - c.position[2]];
+                if m[0] != 0.0 || m[2] != 0.0 {
+                    let dir = match mode {
+                        5 => [m[2], 0.0, -m[0]],
+                        6 => [-m[2], 0.0, m[0]],
+                        _ => m,
+                    };
+                    c.facing = neopets_sim::hero::steer(c.facing, dir, 0.1);
+                }
+            }
+            let ground = &world.ground;
+            if let Some(wk) = c.walker.as_mut() {
+                wk.facing = c.facing;
+                wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                c.position = wk.position();
+            }
+            c.hp = kn::display_hp(&k.parts);
+            if before != after {
+                let centres: Vec<[i32; 3]> = (0..6).filter_map(|p| part_shape(p)).map(|c| c.center.map(|x| x.round() as i32)).collect();
+                self.last_boss = format!("Black Knight {:?} -> {:?} (parts {:?}, part centres {:?}, hero at {:?}) on tick {}", before, after, k.parts, centres, hero.map(|x| x.round() as i32), self.ticks);
+            }
+            let spark = act.part_effect.and_then(|p| part_shape(p)).map(|cyl| cyl.center);
+            let from = c.position;
+            for &f in &act.set_level {
+                self.state.set_level(f, true);
+            }
+            if act.consume_shot && !self.hero_shots.is_empty() {
+                self.hero_shots.remove(0);
+            }
+            if let Some(p) = spark {
+                let table = self.effect_table.clone();
+                self.effects.one_shot(&table, 305, p, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            if let Some((damage, knock)) = act.hero_damage {
+                let d = {
+                    let (dx, dz) = (hero[0] - from[0], hero[2] - from[2]);
+                    let l = dx.hypot(dz).max(1e-6);
+                    [dx / l, 0.0, dz / l]
+                };
+                if self.hero_hit(damage as f32, 0.0, false, d, "the Black Knight".into()) {
+                    if let Some(kv) = knock {
+                        self.loco.body.velocity = kv;
+                    }
+                }
             }
         }
     }
@@ -10010,7 +10201,15 @@ impl Play {
         for &i in &targets {
             self.character_take_hit(i, 1_000_000, hero, "the developer menu ");
         }
-        targets.len()
+        // The Black Knight: its six weak points to 0 (its defeat test then runs).
+        let mut knights = 0;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
+            if let Some(k) = c.knight.as_mut().filter(|k| !k.defeated()) {
+                k.parts = [0; 6];
+                knights += 1;
+            }
+        }
+        targets.len() + knights
     }
 
     /// Developer menu: the current world's start points, and a move to start point k.

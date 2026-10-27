@@ -721,10 +721,16 @@ impl GameState {
         self.blackboard.remove(&(kind, slot)).unwrap_or(-1)
     }
 
-    /// A pack was loaded again: its module data words return to their file values.
+    /// A pack was loaded again: its module data words return to their file values. The level
+    /// states belong to the current world and are left alone here (a streamed neighbour's load
+    /// must not clear them); `reset_levels` clears them when a new world becomes current.
     pub fn reload_module(&mut self, pack: u32) {
         self.rotations.retain(|(p, _), _| *p != pack);
         self.words.retain(|(p, _), _| *p != pack);
+    }
+
+    /// A new current world: the level states start clear.
+    pub fn reset_levels(&mut self) {
         self.level_flags.clear();
     }
 
