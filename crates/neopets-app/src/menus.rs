@@ -610,6 +610,8 @@ impl Flow {
         let ctx = Ctx::default();
         if page == "options" {
             self.enter(fe, OPTIONS, &ctx);
+        } else if page == "save" {
+            self.open_save(fe);
         } else if page == "keys" || page == "pad" {
             self.enter(fe, OPTIONS, &ctx);
             self.focus = items(fe, OPTIONS).len() + 1;

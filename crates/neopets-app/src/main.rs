@@ -108,6 +108,12 @@ fn read_save(path: &str) -> Option<neopets_sim::save::SaveFile> {
     std::fs::read(path).ok().and_then(|b| neopets_sim::save::SaveFile::parse(&b).ok())
 }
 
+/// The save file's path: SAVE_FILE, or NEOPETS_SAVE_FILE (diagnostic, so a test file can be
+/// used without touching the player's saves).
+fn save_file() -> String {
+    std::env::var("NEOPETS_SAVE_FILE").unwrap_or_else(|_| SAVE_FILE.to_string())
+}
+
 fn write_save(path: &str, file: &neopets_sim::save::SaveFile) -> Result<(), String> {
     if let Some(dir) = std::path::Path::new(path).parent() {
         std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
@@ -1236,7 +1242,14 @@ fn step_sim(
                 // SPEC-0025 Clean-side mapping of the card jobs: the scans read the save file,
                 // the write job writes the whole file at once.
                 match m.flow.tick(&a.f, std::mem::take(&mut edge), std::mem::take(&mut buttons), &ctx) {
-                    Some(menus::Command::Scan) => m.flow.scanned(read_save(SAVE_FILE)),
+                    Some(menus::Command::Scan) => {
+                        m.flow.scanned(read_save(&save_file()));
+                        // NEOPETS_TRACE_PICKER_CURSOR=k: the picker's cursor on slot k after the
+                        // scan (diagnostic, for a screenshot of the scrolled list).
+                        if let Some(k) = std::env::var("NEOPETS_TRACE_PICKER_CURSOR").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+                            m.flow.picker.cursor = k.min(neopets_sim::save::SLOTS - 1);
+                        }
+                    }
                     Some(menus::Command::Rebuild(k)) => {
                         play.play.write_slot(&mut m.flow.picker.file.slots[k], &save_date());
                         // The snapshot and the pending flag are set at the confirm, before the
@@ -1244,7 +1257,7 @@ fn step_sim(
                         play.play.snapshot = Some(m.flow.picker.file.slots[k].clone());
                     }
                     Some(menus::Command::Write) => {
-                        let ok = write_save(SAVE_FILE, &m.flow.picker.file);
+                        let ok = write_save(&save_file(), &m.flow.picker.file);
                         if let Err(e) = &ok {
                             error!("Save failed: {e}");
                         }
@@ -3573,7 +3586,10 @@ fn play_trace(
     if save_test {
         let path = "private/saves/trace.bin";
         let mut file = read_save(path).unwrap_or_default();
-        play.write_slot(&mut file.slots[0], &save_date());
+        // NEOPETS_TRACE_SAVE_SLOT=k: write slot k of the trace file instead of slot 0.
+        let k = std::env::var("NEOPETS_TRACE_SAVE_SLOT").ok().and_then(|v| v.trim().parse::<usize>().ok()).unwrap_or(0).min(neopets_sim::save::SLOTS - 1);
+        play.write_slot(&mut file.slots[k], &save_date());
+        file.slots.swap(0, k);
         let s = &file.slots[0];
         println!(
             "Saved slot 0: keys {:?}, location {:?}, date {:?}, tier {}, wallet {}, pools {:?}, maxima {:?}, entries {:?}",
@@ -3586,11 +3602,15 @@ fn play_trace(
             s.maximum_words(0),
             s.adds().iter().map(|a| (a.0, a.1, a.3, a.4)).collect::<Vec<_>>()
         );
+        file.slots.swap(0, k);
         if let Err(e) = write_save(path, &file) {
             eprintln!("Save failed: {e}");
             std::process::exit(1);
         }
-        let back = read_save(path).expect("the file just written reads back");
+        let mut back = read_save(path).expect("the file just written reads back");
+        assert_eq!(back, file);
+        back.slots.swap(0, k);
+        file.slots.swap(0, k);
         assert_eq!(back, file);
         println!("Before: {}", play.status());
         match load_game(archive, &play, &back.slots[0]) {
