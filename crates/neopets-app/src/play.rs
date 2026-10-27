@@ -876,6 +876,10 @@ pub struct Play {
     pub effect_table: std::sync::Arc<neopets_sim::effect::EffectTable>,
     pub effect_images: std::sync::Arc<Vec<neopets_data::effect::GroupImage>>,
     pub effects: neopets_sim::effect::Effects,
+    /// The swing-trail manager (SPEC-0034 3.8), the hero's held-weapon trail and each enemy's.
+    pub trails: neopets_sim::trail::Trails,
+    hero_trail: Option<usize>,
+    enemy_trails: HashMap<u64, usize>,
     dust_ids: Vec<i32>,
     /// The flight effect objects (ids 0 and 1) of each projectile slot, with the shot's start
     /// point that tells a new shot in the same slot.
@@ -1377,6 +1381,9 @@ impl Play {
             effect_table,
             effect_images,
             effects: neopets_sim::effect::Effects::new(),
+            trails: Default::default(),
+            hero_trail: None,
+            enemy_trails: HashMap::new(),
             dust_ids,
             shot_fx: vec![None; neopets_sim::projectile::SLOTS],
             clip_fx: HashMap::new(),
@@ -4470,6 +4477,44 @@ impl Play {
 
     /// The weapon reach W (SPEC-0021): Tor's table value for swords 98 to 108, Roberta's for
     /// 111 to 118, 1.5 with no valid weapon.
+    /// SPEC-0034 3.8, held-weapon trails: on every tick with the hero's attack-active bit (event
+    /// bit 0x1) its trail is kept going with the held-weapon record, from attach point 0 (base
+    /// B, direction D its third axis) with L = 0.6 W; an enemy's on every tick with any of event
+    /// bits 0x1 to 0x10, with L = 1.5. Then every trail ages once. Not covered: the clip-list
+    /// trails of +0x48 = 0 entries (element-coloured) and the Black Knight's own trail.
+    fn trail_step(&mut self) {
+        use neopets_sim::trail;
+        if self.hero.frame_bits() & 1 != 0 {
+            let place = placement(self.loco.position(), self.loco.facing);
+            let frames = self.hero.bone_frames();
+            if let Some(&(Some(bone), angles, offset)) = self.hero.bones().attach.first() {
+                if let Some(bw) = frames.get(bone) {
+                    let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+                    let (p1, p2) = trail::held_points(w.t, unit(w.cols[2]), 0.6 * self.weapon_reach());
+                    self.hero_trail = self.trails.hold(self.hero_trail, trail::HELD, p1, p2);
+                }
+            }
+        }
+        let pack = self.world.pack;
+        for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.enemy.is_some() && c.anim.frame_bits() & 0x1F != 0) {
+            let Some(&(Some(bone), angles, offset)) = c.anim.bones().attach.first() else { continue };
+            let frames = c.anim.bone_frames();
+            let Some(f) = frames.get(bone) else { continue };
+            let w = placement(c.position, c.facing).mul(f).mul(&attach_rotation(offset, angles));
+            let (p1, p2) = trail::held_points(w.t, unit(w.cols[2]), 1.5);
+            match self.trails.hold(self.enemy_trails.get(&c.id).copied(), trail::HELD, p1, p2) {
+                Some(h) => self.enemy_trails.insert(c.id, h),
+                None => self.enemy_trails.remove(&c.id),
+            };
+        }
+        self.trails.tick();
+        // NEOPETS_TRACE_TRAILS: the live trails and their live samples (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_TRAILS").is_some() && self.trails.iter().next().is_some() {
+            let t: Vec<String> = self.trails.iter().map(|t| format!("{}/{}", t.segments().count(), t.samples.len())).collect();
+            println!("      trails on tick {}: {}", self.ticks, t.join(" "));
+        }
+    }
+
     fn weapon_reach(&self) -> f32 {
         self.weapon
             .and_then(|id| match id {
@@ -6474,6 +6519,7 @@ impl Play {
         }
         let hits = self.hit_list.len();
         self.hero_swing();
+        self.trail_step();
         self.mote_objects_step();
         self.shots_step();
         // A swing hit: power cue 2 in sub-state 10, else weapon cue 14 (no material impact).

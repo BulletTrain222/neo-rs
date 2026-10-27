@@ -12,6 +12,81 @@ use std::collections::HashMap;
 #[derive(Component)]
 pub struct EffectBatch(pub usize);
 
+#[derive(Component)]
+pub struct TrailBatch;
+
+/// The material group of common object 297 (SPEC-0034 2.9 and 3.8): additive, the trails'.
+const TRAIL_GROUP: usize = 11;
+
+/// The swing trails (SPEC-0034 3.8 Draw): quads between consecutive live samples, from point 1
+/// to point 2 of each, with the sample colours (GS scale) and texture u from the sample u, in
+/// the additive material of group 11. One mesh for all trails.
+#[allow(clippy::too_many_arguments)]
+pub fn sync_trails(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    mut batch: Query<&mut Visibility, With<TrailBatch>>,
+    mut made: Local<Option<(Handle<Mesh>, Option<Handle<StandardMaterial>>)>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+) {
+    let Some(state) = state else { return };
+    let play = &state.play;
+    let (mut positions, mut uvs, mut colours, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    let k = |x: f32| (x / 128.0).clamp(0.0, 1.0);
+    for t in play.trails.iter() {
+        for (a, b) in t.segments() {
+            let base = positions.len() as u32;
+            for (s, v) in [(a, 0.0f32), (a, 1.0), (b, 1.0), (b, 0.0)] {
+                positions.push(if v == 0.0 { s.p1 } else { s.p2 });
+                uvs.push([s.u, v]);
+                let c = s.colour;
+                colours.push([k(c[0]).powf(2.2), k(c[1]).powf(2.2), k(c[2]).powf(2.2), k(c[3])]);
+            }
+            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3]);
+        }
+    }
+    let empty = indices.is_empty();
+    let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
+    mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, uvs);
+    mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+    mesh.insert_indices(Indices::U32(indices));
+    match made.as_ref() {
+        Some((h, _)) => {
+            if let Some(mut m) = meshes.get_mut(h) {
+                *m = mesh;
+            }
+        }
+        None => {
+            if empty {
+                return;
+            }
+            let material = play.effect_images.get(TRAIL_GROUP).and_then(|g| {
+                let image = g.image.as_ref()?;
+                let mut texture = crate::rgba_image(image.width, image.height, image.rgba.clone());
+                texture.sampler = bevy::image::ImageSampler::linear();
+                Some(materials.add(StandardMaterial {
+                    base_color_texture: Some(images.add(texture)),
+                    unlit: true,
+                    alpha_mode: if g.additive { AlphaMode::Add } else { AlphaMode::Blend },
+                    cull_mode: None,
+                    ..default()
+                }))
+            });
+            let h = meshes.add(mesh);
+            if let Some(m) = &material {
+                commands.spawn((TrailBatch, Mesh3d(h.clone()), MeshMaterial3d(m.clone()), Transform::default(), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling));
+            }
+            *made = Some((h, material));
+        }
+    }
+    for mut vis in &mut batch {
+        *vis = if empty { Visibility::Hidden } else { Visibility::Visible };
+    }
+}
+
 /// The materials made so far, by group, and each batch's mesh.
 #[derive(Default)]
 pub struct Batches {

@@ -72,6 +72,7 @@ mod step;
 pub mod textbox;
 pub mod timer;
 pub mod travel;
+pub mod trail;
 pub mod trigger;
 pub mod walker;
 pub mod wheel;
