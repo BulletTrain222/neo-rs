@@ -375,6 +375,12 @@ pub fn drop_roll(group: Option<&Group>, subs: &[Vec<(u16, i16)>], count: i16, in
     if amount > 0 {
         return Drop::Coins(amount);
     }
+    item_roll(group, subs, index)
+}
+
+/// SPEC-0021 Drop and money flow steps 4 and 5, the item roll alone (a scripted add of a
+/// negative-key placement rolls only this: no money roll, no coins).
+pub fn item_roll(group: Option<&Group>, subs: &[Vec<(u16, i16)>], index: &mut dyn FnMut(u32) -> u32) -> Drop {
     let Some(g) = group else { return Drop::Nothing };
     let span = 100 - g.chance;
     if span <= 0 {

@@ -875,6 +875,8 @@ pub struct Play {
     /// slot loads waiting for the region loader.
     pub characters: Vec<Character>,
     slot_regions: HashMap<(u32, u8), u32>,
+    /// The item placements (kind 8) of the region loaded in each slot, for ItemActivate.
+    slot_items: HashMap<(u32, u8), Vec<neopets_data::region::ItemPoint>>,
     /// Script slots whose last load has arrived (for the slot's living count).
     slot_arrived: std::collections::HashSet<(u32, u8)>,
     /// The attack window was open on the last tick (for the strike edge).
@@ -1435,6 +1437,7 @@ impl Play {
             teardown_wanted: false,
             characters: Vec::new(),
             slot_regions: HashMap::new(),
+            slot_items: HashMap::new(),
             slot_arrived: Default::default(),
             window_was: false,
             pending_slot: None,
@@ -2495,6 +2498,11 @@ impl Play {
                     if (0..193).contains(&slot) && pack == self.world.pack {
                         self.pending_slot = Some(slot as u32);
                         self.last_door = format!("pending slot {slot} on tick {}", self.ticks);
+                    }
+                }
+                Action::ItemActivate { slot, ordinal, snap, placed } => {
+                    if let Some(p) = self.slot_items.get(&(pack, slot)).and_then(|v| v.get(ordinal)).copied() {
+                        self.scripted_add(pack, p, snap, placed);
                     }
                 }
                 Action::AddItem { locator, item } => {
@@ -4640,6 +4648,7 @@ impl Play {
             self.slot_arrived.insert((pack, slot));
         }
         if slot != REBIND_SLOT {
+            self.slot_items.insert((pack, slot), items.clone());
             self.region_items(pack, &items);
             self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
         }
@@ -5971,6 +5980,10 @@ impl Play {
                 .iter()
                 .map(|&h| (h, (0..self.world.headers.get(h).and_then(|x| x.as_ref()).map_or(0, |x| x.locators.len())).filter_map(|k| self.anim_locator(pack, h, k, 0)).collect()))
                 .collect();
+            // The 1096 dispensers' draw (the module's random-draw routine is not given).
+            if pack == 1096 {
+                self.state.trigger_raw = self.rng.next_u32();
+            }
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
             // NEOPETS_TRACE_WORDS: the current module's words, object 0's time and the hero
             // every 30 ticks.
@@ -6781,6 +6794,59 @@ impl Play {
             };
             self.spawn_item(pack, spawn);
         }
+    }
+
+    /// SPEC-0021 Drop routes 3, a scripted add of a placement: the luck gate, then for keys 0 or
+    /// more the vetoes and the item itself; a negative key takes the group's item roll only (no
+    /// money). The point follows the region-load rule (byte +0x21: the ground + 0.5); snap then
+    /// puts it on the ground (SPEC-0030 note on rows 201 and 364); placed items never expire.
+    fn scripted_add(&mut self, pack: u32, p: neopets_data::region::ItemPoint, snap: bool, placed: bool) {
+        if p.luck != 0 {
+            let r = self.rng.range(0, 100);
+            if !neopets_sim::items::luck_passes(self.luck, r) {
+                return;
+            }
+        }
+        let id = if p.key >= 0 {
+            if self.vetoed(p.key as u16, pack) {
+                return;
+            }
+            p.key as u16
+        } else {
+            let group = usize::try_from(p.group).ok().and_then(|g| self.items.groups.get(g)).map(|g| neopets_sim::items::Group { chance: g.chance as i32, min: g.min as i32, max: g.max as i32, entries: g.entries.clone() });
+            let rng = std::cell::RefCell::new(&mut self.rng);
+            let mut index = |n: u32| rng.borrow_mut().index(n);
+            match neopets_sim::items::item_roll(group.as_ref(), &self.items.sub_tables, &mut index) {
+                neopets_sim::items::Drop::Item(id) => id,
+                _ => return,
+            }
+        };
+        let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+        let mut point = p.position;
+        if p.snap {
+            point[1] = w.and_then(|w| w.ground_at(point[0], point[2], point[1] + 4.0)).unwrap_or(0.0) + 0.5;
+        }
+        if snap {
+            point[1] = w.and_then(|w| w.ground_at(point[0], point[2], point[1] + 4.0)).unwrap_or(point[1]);
+        }
+        let spawn = neopets_sim::items::Spawn {
+            id,
+            point,
+            placed,
+            charm: self.item_kind(id) == 17,
+            s0: 1.0,
+            s1: 1.0,
+            delay: 0.0,
+            larg: -1.0,
+            direction: Some(p.facing),
+            flag: p.flags,
+            map: p.map,
+            price: p.count,
+        };
+        self.spawn_item(pack, spawn);
+        let line = format!("item {id} activated from placement {:?} on tick {}", p.position, self.ticks);
+        // Two activations on one tick are both kept in the trace line.
+        self.last_fx = if self.last_fx.contains("activated from") && self.last_fx.ends_with(&format!("tick {}", self.ticks)) { format!("{}; {line}", self.last_fx) } else { line };
     }
 
     /// The equipment veto (types 1 to 6; Tor's entries for 4 to 6) and the quest-style vetoes

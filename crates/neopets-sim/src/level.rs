@@ -227,6 +227,10 @@ pub enum Action {
     /// AddItemToWorld, the locator form (SPEC-0030 row 364): the item at the locator, snapped,
     /// placed and never expiring.
     AddItem { locator: usize, item: u16 },
+    /// ItemActivate, the world form (SPEC-0030 row 198): the placement with this ordinal among
+    /// the item placements of the region loaded in slot `slot`, added as a scripted add
+    /// (SPEC-0021 Drop routes 3) with the two bools, the default lifetime and no overrides.
+    ItemActivate { slot: u8, ordinal: usize, snap: bool, placed: bool },
     /// SetWorldLoadOverRide(slot) (SPEC-0030 row 217; SPEC-0006 Pending slot writer): the
     /// current world's pending slot, used by the next pending step in place of the cell's exit
     /// value; an argument of 193 or more (or negative) is ignored.
@@ -4060,6 +4064,44 @@ fn solved_1324(_s: &mut GameState) -> Vec<Action> {
         v.extend([Action::PlaySound { cue: 4, locator: None }, Action::PlaySound { cue: 5, locator: None }, Action::Sleep { ticks: 15 }]);
     }
     v
+}
+
+/// SPEC-0041 1096's item dispensers: (item, first ordinal, placement count) in the boss slot's
+/// region (slot 0).
+const DISPENSERS_1096: [(u16, usize, usize); 2] = [(163, 0, 6), (161, 6, 7)];
+
+/// SPEC-0041 1096 Item dispensers, one step (once the boss slot has arrived): a dispenser with
+/// nothing placed puts its item at a
+/// placement other than the last one used when the hero holds none of it, or 30 s (1800 ticks)
+/// after the last pickup. Words 41 + k the last ordinal, 43 + k placed, 45 + k the pickup tick.
+/// The spec's random-draw routine is not given: the draw is the host's raw value (`trigger_raw`)
+/// modulo the other placements.
+fn dispensers_1096(s: &mut GameState) -> Vec<Action> {
+    let mut out = Vec::new();
+    for (k, &(item, first, n)) in DISPENSERS_1096.iter().enumerate() {
+        let k = k as u8;
+        if s.word(1096, 43 + k) != 0 {
+            continue;
+        }
+        let picked = s.word(1096, 45 + k);
+        let held = s.items.get(&item).copied().unwrap_or(0);
+        if held != 0 && !(picked >= 0 && s.hero.tick as i32 - picked >= 1800) {
+            continue;
+        }
+        let last = s.word(1096, 41 + k);
+        let raw = s.trigger_raw.wrapping_add(k as u32 * 7919);
+        let j = if (0..n as i32).contains(&(last - first as i32)) {
+            let r = (raw % (n as u32 - 1)) as usize;
+            if r >= (last as usize - first) { r + 1 } else { r }
+        } else {
+            (raw % n as u32) as usize
+        };
+        let ordinal = first + j;
+        s.set_word(1096, 41 + k, ordinal as i32);
+        s.set_word(1096, 43 + k, 1);
+        out.push(Action::ItemActivate { slot: 0, ordinal, snap: true, placed: true });
+    }
+    out
 }
 
 /// SPEC-0042 1381's stations 0 to 5: the pad, area and target trigger indices.
@@ -9391,8 +9433,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // 8, 10 and 11, and the finale on 12: camera 5, the shake, entity 0 and object 0 off,
         // sound 7, objects 2 to 5, 45 and 316, level state 14); with 45 set, 15 set and 16 clear
         // the camera step (cameras 4, 6 and 7, object 1, level state 16 and flag 317). The item
-        // dispensers (ItemActivate in the boss slot's region) and SetTargetActive are not built.
+        // dispensers run first while they are enabled (word 40, set by the arrival); SetTargetActive
+        // is not built.
         1096 => {
+            if !state.flag(45) && state.word(pack, 40) != 0 && state.slot_alive.contains_key(&0) {
+                out.extend(dispensers_1096(state));
+            }
             let l = |n| state.level(n);
             if !state.flag(45) && state.word(pack, 3) == 0 {
                 if l(0) && !l(2) {
@@ -10603,6 +10649,15 @@ pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
     if (pack, item) == (1096, 117) {
         state.set_level(15, true);
     }
+    // The 1096 dispensers: a pickup of a dispensed item starts its 30 s.
+    if pack == 1096 {
+        for (k, &(it, ..)) in DISPENSERS_1096.iter().enumerate() {
+            if it == item && state.word(1096, 43 + k as u8) != 0 {
+                state.set_word(1096, 43 + k as u8, 0);
+                state.set_word(1096, 45 + k as u8, state.hero.tick as i32);
+            }
+        }
+    }
     // SPEC-0044 893: item 77 sets 525 and loads set 6 (region 900) into slot 1.
     if (pack, item) == (893, 77) {
         state.set(525, true);
@@ -10820,7 +10875,15 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.movies.insert(51);
             let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1097) }];
             v.extend((0..=5).map(|obj| Action::InitObjOn { obj, end: false }));
-            v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::BossFight { instance: 6 }, Action::FadeIn { seconds: FADE, wait: false }]);
+            v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::BossFight { instance: 6 }]);
+            // The two item dispensers of CB7 enabled: nothing placed or picked yet.
+            state.set_word(1096, 40, 1);
+            for k in 0..2u8 {
+                state.set_word(1096, 41 + k, -1);
+                state.set_word(1096, 43 + k, 0);
+                state.set_word(1096, 45 + k, -1);
+            }
+            v.push(Action::FadeIn { seconds: FADE, wait: false });
             v
         }
         // SPEC-0044 1174 arrival: effects 15 to 21 stopped, the normal camera, the hero at locator
@@ -14440,6 +14503,38 @@ mod tests {
         s.hero.tick = 1000;
         assert_eq!(on_trigger(1381, 6, inside(13), &mut s).actions, vec![Action::DamageHero { amount: 5 }]);
         assert!(on_trigger(1381, 6, inside(13), &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1096_dispensers() {
+        let mut s = GameState::default();
+        on_init(1096, &mut s);
+        on_activate(1096, &mut s);
+        // Nothing until the boss slot has arrived.
+        assert!(on_update(1096, &mut s, false).iter().all(|a| !matches!(a, Action::ItemActivate { .. })));
+        s.slot_alive.insert(0, 0);
+        let placed = |a: &[Action]| a.iter().filter_map(|a| if let Action::ItemActivate { ordinal, .. } = a { Some(*ordinal) } else { None }).collect::<Vec<_>>();
+        // Enabled by the arrival: both items placed, 163 at 0 to 5 and 161 at 6 to 12.
+        let first = placed(&on_update(1096, &mut s, false));
+        assert!(first.len() == 2 && first[0] < 6 && (6..13).contains(&first[1]));
+        assert!(placed(&on_update(1096, &mut s, false)).is_empty());
+        // Item 163 picked up and still held: placed again after 30 s, elsewhere.
+        s.hero.tick = 100;
+        s.items.insert(163, 1);
+        on_pickup(1096, 163, &mut s);
+        s.hero.tick = 1899;
+        assert!(placed(&on_update(1096, &mut s, false)).is_empty());
+        s.hero.tick = 1900;
+        for raw in [0, 1, 2, 3, 4, 5] {
+            let mut t = s.clone();
+            t.trigger_raw = raw;
+            let again = placed(&on_update(1096, &mut t, false));
+            assert!(again.len() == 1 && again[0] < 6 && again[0] != first[0], "{again:?}");
+        }
+        // Used up (none held): placed again at once.
+        s.hero.tick = 200;
+        s.items.insert(163, 0);
+        assert_eq!(placed(&on_update(1096, &mut s, false)).len(), 1);
     }
 
     #[test]
