@@ -34,6 +34,8 @@ pub struct DevMenu {
     start: usize,
     pub free: Option<FreeCam>,
     note: String,
+    /// The weapon list's cursor.
+    weapon_at: usize,
 }
 
 /// The game speeds: paused, a quarter, a half, normal, double, four times.
@@ -42,7 +44,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new() }
+        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0 }
     }
 }
 
@@ -104,10 +106,13 @@ enum Entry {
     Start,
     ToCamera,
     Maps,
+    Weapon,
+    Noclip,
 }
 
-const ENTRIES: [Entry; 17] = [
+const ENTRIES: [Entry; 19] = [
     Entry::God,
+    Entry::Noclip,
     Entry::Magic,
     Entry::Charge,
     Entry::Speed,
@@ -120,11 +125,17 @@ const ENTRIES: [Entry; 17] = [
     Entry::Heal,
     Entry::Motes,
     Entry::Maps,
+    Entry::Weapon,
     Entry::Item,
     Entry::Drop,
     Entry::Hero,
     Entry::Flag,
 ];
+
+/// The weapons of the item table (types 3, Tor's, and 6, Roberta's), by id.
+fn weapons(p: &crate::play::Play) -> Vec<u16> {
+    p.items.items.iter().filter(|i| i.is_weapon()).map(|i| i.id).collect()
+}
 
 /// The warp list: the save's world keys (nonzero, sorted, each once).
 fn worlds(p: &crate::play::Play) -> Vec<u32> {
@@ -234,7 +245,11 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
     if delta != 0 {
         match entry {
             Entry::Neopoints => dev.amount = (dev.amount as i32 + delta.signum()).clamp(0, AMOUNTS.len() as i32 - 1) as usize,
-            Entry::Item => dev.item = (dev.item as i32 + delta).clamp(0, 180) as u16,
+            Entry::Item => dev.item = (dev.item as i32 + delta).clamp(0, play.play.items.items.len().saturating_sub(1) as i32) as u16,
+            Entry::Weapon => {
+                let n = weapons(&play.play).len().max(1) as i32;
+                dev.weapon_at = (dev.weapon_at as i32 + delta).rem_euclid(n) as usize;
+            }
             Entry::Flag => dev.flag = (dev.flag as i32 + delta).clamp(0, u16::MAX as i32) as u16,
             Entry::Warp => {
                 let n = worlds(&play.play).len().max(1) as i32;
@@ -285,6 +300,17 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
             }
             "Gave every Mote (charge 100 each)".into()
         }
+        Entry::Noclip => {
+            p.cheats.noclip = !p.cheats.noclip;
+            format!("No clip {}", on(p.cheats.noclip))
+        }
+        Entry::Weapon => match weapons(p).get(dev.weapon_at).copied() {
+            Some(id) => {
+                p.give(id);
+                format!("Gave weapon {id} ({}); a higher id already held stays equipped", p.item_label(id))
+            }
+            None => "No weapons in the item table".into(),
+        },
         Entry::Item => {
             p.give(dev.item);
             format!("Gave item {} ({})", dev.item, p.item_label(dev.item))
@@ -399,7 +425,15 @@ pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Q
                 Entry::Neopoints => format!("Add Neopoints: < {} >  (have {})", AMOUNTS[dev.amount], p.state.neopoints),
                 Entry::Heal => format!("Full heal  (hp {}/{}, mp {}/{})", p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max),
                 Entry::Motes => "Give every Mote".to_string(),
-                Entry::Item => format!("Give item: < {} > {}", dev.item, p.item_label(dev.item)),
+                Entry::Noclip => format!("No clip (walk through walls): {}", on(p.cheats.noclip)),
+                Entry::Weapon => {
+                    let w = weapons(p);
+                    match w.get(dev.weapon_at) {
+                        Some(&id) => format!("Give weapon: < {} > {} ({}; {} of {})", id, p.item_label(id), if p.items.get(id).is_some_and(|i| i.kind == 3) { "Tor" } else { "Roberta" }, dev.weapon_at + 1, w.len()),
+                        None => "Give weapon: none".to_string(),
+                    }
+                }
+                Entry::Item => format!("Give item: < {} > {}  (Shift: steps of 10)", dev.item, p.item_label(dev.item)),
                 Entry::Hero => format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }),
                 Entry::Flag => format!("Toggle story flag: < {} > ({})", dev.flag, if p.state.flag(dev.flag) { "set" } else { "clear" }),
                 Entry::Speed => format!("Game speed: < {} >  (F4 pause, F5 step)", speed_label(dev.speed)),

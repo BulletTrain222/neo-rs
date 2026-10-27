@@ -330,7 +330,7 @@ impl Streamer {
                         && world.kind != neopets_data::travel::Kind::Interior;
                     let scene = if streams || job {
                         let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
-                        archive_view::world_scene(&mut disc, &index, pack, &bytes, &chain.chunks, false)?
+                        archive_view::world_scene(&mut disc, &index, pack, &bytes, &chain.chunks, false, 0)?
                     } else {
                         None
                     };
@@ -1785,7 +1785,8 @@ fn apply_model(
 /// A drawn piece of a resident world in play mode: a world pack's scene or a sky dome.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum WorldPart {
-    Scene(u32),
+    /// The world's static scene with its world layer mask (SPEC-0046 Culling).
+    Scene(u32, u32),
     Dome(u32),
     /// The world's foliage patches (SPEC-0060).
     Foliage(u32),
@@ -1875,12 +1876,13 @@ fn sync_worlds(
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
     let p = &state.play;
     let mask = |pack: u32| p.display_mask.get(&pack).copied().unwrap_or(0);
-    let mut want = vec![WorldPart::Scene(p.world.pack), WorldPart::Objects(p.world.pack, mask(p.world.pack))];
+    let layers = |pack: u32| mask(pack) | p.story_layers();
+    let mut want = vec![WorldPart::Scene(p.world.pack, layers(p.world.pack)), WorldPart::Objects(p.world.pack, mask(p.world.pack))];
     if p.foliage.contains_key(&p.world.pack) {
         want.push(WorldPart::Foliage(p.world.pack));
     }
     if let (true, Some(o)) = (p.other_drawn(), &p.other) {
-        want.push(WorldPart::Scene(o.pack));
+        want.push(WorldPart::Scene(o.pack, layers(o.pack)));
         want.push(WorldPart::Objects(o.pack, mask(o.pack)));
         if p.foliage.contains_key(&o.pack) {
             want.push(WorldPart::Foliage(o.pack));
@@ -1982,16 +1984,17 @@ fn sync_worlds(
             continue;
         }
         let streamed = match (*part, streamer.as_deref_mut()) {
-            (WorldPart::Scene(pack), Some(s)) => s.scenes.remove(&pack),
+            // The streamed scene is built with mask 0.
+            (WorldPart::Scene(pack, 0), Some(s)) => s.scenes.remove(&pack),
             _ => None,
         };
         let model = match *part {
-            WorldPart::Scene(_) if streamed.is_some() => Ok(streamed),
-            WorldPart::Scene(pack) => index
+            WorldPart::Scene(..) if streamed.is_some() => Ok(streamed),
+            WorldPart::Scene(pack, layers) => index
                 .read(disc, pack)
                 .and_then(|bytes| {
                     let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
-                    archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false)
+                    archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false, layers)
                 }),
             WorldPart::Dome(d) => archive_view::dome(disc, index, d),
             WorldPart::Foliage(_) | WorldPart::Objects(..) => Ok(None),
@@ -2002,7 +2005,7 @@ fn sync_worlds(
                     let mut e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part));
                     // A part under a type-3 node, or of an instance or placed object, draws only
                     // while its zone column passes.
-                    if let (WorldPart::Scene(pack), Some(z)) = (*part, m.parts[i].zone) {
+                    if let (WorldPart::Scene(pack, _), Some(z)) = (*part, m.parts[i].zone) {
                         e.insert(ZoneGate(pack, z));
                     }
                     if let Some(speed) = m.parts[i].scroll.filter(|_| m.parts[i].texture.is_some()) {
@@ -2147,7 +2150,8 @@ fn sync_items(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
     archive: Option<ResMut<Archive>>,
-    mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility, Option<&Children>)>,
+    mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility, Option<&Children>), Without<ShowcaseMarker>>,
+    mut showcases: Query<(Entity, &ShowcaseMarker, &mut Transform, &mut Visibility), Without<ItemMarker>>,
     parts: Query<&MeshMaterial3d<StandardMaterial>, With<ItemPart>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -2194,6 +2198,42 @@ fn sync_items(
         }
     }
     let mut archive = archive;
+    // SPEC-0021 Item showcase, mode 4: the item model floating above the hero.
+    let show = p.showcase_item();
+    for (e, s, mut t, mut vis) in &mut showcases {
+        match show {
+            Some((id, _, at, angle)) if id == s.0 => {
+                t.translation = Vec3::from(at);
+                t.rotation = Quat::from_rotation_y(angle);
+                *vis = Visibility::Visible;
+            }
+            _ => commands.entity(e).despawn(),
+        }
+    }
+    if let Some((id, pack, at, _)) = show.filter(|(id, ..)| !showcases.iter().any(|(_, s, ..)| s.0 == *id)) {
+        let id = id as u32;
+        let key = (id, if matches!(id, 50..=59 | 98..=190) { 0 } else { pack });
+        if !models.contains_key(&key) {
+            let built = match archive.as_deref_mut() {
+                Some(Archive { disc, index }) => item_model(disc, index, &mut boot, id, pack).unwrap_or(None),
+                None => None,
+            };
+            let list = built.map(|m| {
+                part_assets(&m, &mut meshes, &mut materials, &mut images)
+                    .into_iter()
+                    .map(|(_, mesh, mat)| (mesh, materials.get(&mat).cloned().unwrap_or_default()))
+                    .collect::<Vec<_>>()
+            });
+            models.insert(key, list);
+        }
+        if let Some(list) = &models[&key] {
+            commands.spawn((ShowcaseMarker(id as u16), Transform::from_translation(Vec3::from(at)), Visibility::Visible)).with_children(|c| {
+                for (mesh, mat) in list {
+                    c.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
+                }
+            });
+        }
+    }
     for (&pack, pool) in &p.pools {
         for (i, it) in pool.slots.iter().enumerate() {
             let Some(it) = it else { continue };
@@ -2242,6 +2282,10 @@ fn sync_items(
         }
     }
 }
+
+/// The floating item of the full showcase (SPEC-0021 Item showcase), by item id.
+#[derive(Component)]
+struct ShowcaseMarker(u16);
 
 /// A focus-hero item's drawn root, by its resource.
 #[derive(Component)]
@@ -2649,7 +2693,7 @@ fn play_trace(
     play.fight_target = std::env::var("NEOPETS_TRACE_TARGET").ok().filter(|n| !n.is_empty());
     // NEOPETS_TRACE_CHEATS="god,magic,charge": the developer menu's cheats from the start.
     if let Ok(v) = std::env::var("NEOPETS_TRACE_CHEATS") {
-        play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge") };
+        play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip") };
     }
     // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic); a value above the
     // maximum raises the maximum too, so the boss-fight refills keep it.
@@ -2671,6 +2715,7 @@ fn play_trace(
             std::process::exit(1)
         }
     };
+    println!("Location: {}", String::from_utf8_lossy(&play.location_name()));
     println!("Grid bounds: {:?}; nearest swap point {:?}", play.bounds(), play.nearest_swap_point());
     for q in [[-1840.4f32, 48.8, 1125.2], [-1854.0, 49.0, 1144.0], [-1845.75, 49.7, 1143.8]] {
         let inside: Vec<usize> = (0..play.world.navmeshes.len()).filter(|&i| play.world.navmeshes[i].locate_full(q).is_some()).collect();
@@ -2697,6 +2742,12 @@ fn play_trace(
         for (i, b) in play.world.breakables.iter().enumerate() {
             let p = b.position();
             println!("      breakable {i}: at ({:.1}, {:.1}, {:.1}) state {} drop {} script {}", p[0], p[1], p[2], b.state, b.drop, b.script);
+        }
+    }
+    // NEOPETS_TRACE_PATCHES: the world's foliage patches (key, family, box) (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_PATCHES").is_some() {
+        for (i, p) in play.world.patches.iter().enumerate() {
+            println!("      patch {i}: key {} {:?} box {:?}", p.key, neopets_sim::foliage::kind(p.key).map(|k| k.family), p.area);
         }
     }
     println!("Book stations of {} (value, trigger index): {:?}", play.world.pack, play.book_stations());
@@ -2853,6 +2904,9 @@ fn play_trace(
         if play.ticks == 5 && std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
             for line in play.ledge_survey() {
                 println!("      {line}");
+            }
+            for (k, r) in play.world.rails.iter().enumerate() {
+                println!("      rail {k}: normal {:?} u {:?} v {:?} lu {} lv {}", r.normal, r.u, r.v, r.lu, r.lv);
             }
         }
         if play.ticks == 5 && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
@@ -3044,6 +3098,44 @@ fn play_trace(
         // during the approach), so the hero pushes; the Square prompts are pressed as usual.
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
             (forward, side) = play.block_trace_stick().unwrap_or((0.0, 0.0));
+        }
+        // NEOPETS_TRACE_BLOCK_AT="tick:x,z": block 0 moved to (x, z) (diagnostic).
+        if let Some((k, x, z)) = std::env::var("NEOPETS_TRACE_BLOCK_AT").ok().and_then(|v| {
+            let (k, r) = v.split_once(':')?;
+            let (x, z) = r.split_once(',')?;
+            Some((k.parse::<u64>().ok()?, x.parse::<f32>().ok()?, z.parse::<f32>().ok()?))
+        }) {
+            if k == play.ticks {
+                println!("      block 0 moved to ({x}, {z}), top {:?}", play.diag_block_at(x, z));
+            }
+        }
+        if play.ticks == 2 && std::env::var_os("NEOPETS_TRACE_GATED").is_some() {
+            for line in play.gated_walls() {
+                println!("      gated wall: {line}");
+            }
+        }
+        // NEOPETS_TRACE_SHOWCASE="tick:id": the item showcase started (diagnostic).
+        if let Some((k, id)) = std::env::var("NEOPETS_TRACE_SHOWCASE").ok().and_then(|v| {
+            let (k, id) = v.split_once(':')?;
+            Some((k.parse::<u64>().ok()?, id.parse::<u16>().ok()?))
+        }) {
+            if k == play.ticks {
+                play.diag_showcase(id);
+            }
+        }
+        // NEOPETS_TRACE_BLOCKERS=tick: what pushes the hero on that tick (diagnostic).
+        if std::env::var("NEOPETS_TRACE_BLOCKERS").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) {
+            for line in play.blockers() {
+                println!("      blocker: {line}");
+            }
+        }
+        // NEOPETS_TRACE_LADDER="tick:k:up": the hero put on ladder k, `up` above its base
+        // (diagnostic).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_LADDER") {
+            let f: Vec<&str> = v.split(':').collect();
+            if f.len() == 3 && f[0].parse::<u64>().ok() == Some(play.ticks) {
+                play.diag_ladder(f[1].parse().unwrap_or(0), f[2].parse().unwrap_or(0.0));
+            }
         }
         // NEOPETS_TRACE_PLACE="tick:x,z[,probe];...": the hero placed there on that tick
         // (diagnostic).
@@ -3290,7 +3382,7 @@ fn play_trace(
             let on: Vec<usize> = play.foliage.get(&w.pack).map(|p| p.iter().map(|q| usize::from(q.on)).collect()).unwrap_or_default();
             println!("      placed records on: [{}]", play.placed_summary());
             let off = play.characters.iter().filter(|c| c.inactive && !c.deactivated).count();
-            println!("      zones: grid {} row {} key {}; patches on {} of {}; characters {} ({off} cell-off)", w.zones.as_ref().map_or(0, |g| g.blocks.len()), play.zones.row, play.zones.key, on.iter().sum::<usize>(), on.len(), play.characters.len());
+            println!("      zones: grid {} row {} key {}; patches on {} of {}; characters {} ({off} cell-off), enemies {:?}", w.zones.as_ref().map_or(0, |g| g.blocks.len()), play.zones.row, play.zones.key, on.iter().sum::<usize>(), on.len(), play.characters.len(), play.characters.iter().filter(|c| c.enemy.is_some()).map(|c| (c.pack, c.name.as_str(), c.inactive)).collect::<Vec<_>>());
         }
         if play.state.timer.visible && play.ticks % 120 == 0 {
             println!("      timer on tick {}: {:.3} s ({}, limit {})", play.ticks, play.state.timer.value, if play.state.timer.up { "up" } else { "down" }, play.state.timer.limit);

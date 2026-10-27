@@ -131,7 +131,7 @@ pub fn model(disc: &mut Disc, index: &ArchiveIndex, n: u32) -> Result<Option<Mod
     };
     // A world pack (first chunk type 31, SPEC-0006) draws as its placed static scene.
     if chunks.first().is_some_and(|c| c.kind == WORLD_HEADER) {
-        return world_scene(disc, index, n, &bytes, &chunks, true);
+        return world_scene(disc, index, n, &bytes, &chunks, true, 0);
     }
     let shared = if (544..=575).contains(&n) { chunk_file(disc, 7)? } else { None };
     let data = model::build(&bytes, &chunks, shared.as_ref().map(|(b, c)| (b.as_slice(), c.as_slice())))?;
@@ -152,8 +152,9 @@ pub fn dome(disc: &mut Disc, index: &ArchiveIndex, d: u32) -> Result<Option<Mode
     Ok((!data.parts.is_empty()).then_some(data))
 }
 
-/// A world pack's placed static scene (mask 0, no story layer; SPEC-0046), with its sky dome's
-/// layer A when `dome` is set (only the current world's dome is drawn in play).
+/// A world pack's placed static scene with the world layer mask `layers` (SPEC-0046 Culling: the
+/// display word and the visible story layers' bits), with its sky dome's layer A when `dome`
+/// is set (only the current world's dome is drawn in play).
 pub fn world_scene(
     disc: &mut Disc,
     index: &ArchiveIndex,
@@ -161,8 +162,9 @@ pub fn world_scene(
     bytes: &[u8],
     chunks: &[resource::Chunk],
     dome: bool,
+    layers: u32,
 ) -> Result<Option<ModelData>, String> {
-    let mut world = model::build_world_parts(bytes, chunks, 0, false)?;
+    let mut world = model::build_world_parts(bytes, chunks, layers, false)?;
     if dome {
         // The world's sky dome by its area slot; only layer A (role 1) draws without an
         // atmosphere zone (SPEC-0046 Sky domes).

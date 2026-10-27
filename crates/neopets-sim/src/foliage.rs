@@ -5,8 +5,11 @@
 //! spring-back and hero bend) and the drop rules (Behavior 7).
 //!
 //! Not covered: the zone gate, the near/far fade weights and the far batches (the LOD-node
-//! distances are not identified), grass sway and fade, the debris pieces, tree trunks, reed bending, cutting and the cut-piece fall,
-//! and the once-per-area build gates.
+//! distances are not identified), grass sway and fade, the debris pieces, tree trunks and the
+//! once-per-area build gates.
+//!
+//! Reeds (Behavior 9): the bend away from the hero within 5 units, the cut, the three-state
+//! fall of the cut piece and the drop roll.
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Family {
@@ -355,8 +358,133 @@ pub fn place(kind: &Kind, area: [f32; 4], height: f32, row: f32, offset: f32, j:
     Some(Placed { position: [x, y, z], yaw, scale, colour })
 }
 
+/// A reed (Behavior 9): state 0 standing, 1 cut and falling, 2 gone (not drawn, never regrown
+/// until the patch is built again).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Reed {
+    pub state: u8,
+    /// The up axis it is drawn along.
+    pub up: [f32; 3],
+    /// The cut piece's displacement from its anchor (the reed's base).
+    pub offset: [f32; 3],
+    velocity: [f32; 3],
+    fall: u8,
+}
+
+impl Default for Reed {
+    fn default() -> Self {
+        Self { state: 0, up: UP, offset: [0.0; 3], velocity: [0.0; 3], fall: 0 }
+    }
+}
+
+impl Reed {
+    /// The bend (state 0): within 5 units the reed tilts away from the hero, taken as the bush
+    /// bend's target 0.76 U + 0.24 `away` (the horizontal direction from the hero to the reed)
+    /// and its 0.98 step; farther, or with no direction, it springs back as a bush does.
+    pub fn bend_step(&mut self, distance: f32, away: [f32; 3]) {
+        if self.state != 0 {
+            return;
+        }
+        if distance < 5.0 && away != [0.0; 3] {
+            let t: [f32; 3] = std::array::from_fn(|i| 0.76 * UP[i] + 0.24 * away[i]);
+            if t[1] < 0.994 {
+                self.up = normalize(std::array::from_fn(|i| 0.02 * UP[i] + 0.98 * t[i]));
+            }
+        } else {
+            let u = self.up;
+            self.up = normalize(std::array::from_fn(|i| 0.925 * u[i] + 0.075 * UP[i]));
+        }
+    }
+
+    /// The cut by a weapon hit: state 1 and the fall's sub-state 0, the piece launched along
+    /// `velocity` (the blade direction). False when the reed is not standing.
+    pub fn cut(&mut self, velocity: [f32; 3]) -> bool {
+        if self.state != 0 {
+            return false;
+        }
+        self.state = 1;
+        self.fall = 0;
+        self.velocity = velocity;
+        true
+    }
+
+    /// One fall tick (state 1). `ground` is the ground probe result under the piece with ceiling
+    /// y + 8.0 and `base_y` the anchor's height. Sub-state 0: offset += 0.05 v until the piece is
+    /// more than 0.5 from its anchor; 1: y -= 0.07 until below the ground less 1.25; 2: up =
+    /// normalize(0.965 up + 0.035 v) until |up.y| is 0.001 or less, then state 2.
+    pub fn fall_step(&mut self, base_y: f32, ground: Option<f32>) {
+        if self.state != 1 {
+            return;
+        }
+        match self.fall {
+            0 => {
+                for k in 0..3 {
+                    self.offset[k] += 0.05 * self.velocity[k];
+                }
+                if self.offset.iter().map(|c| c * c).sum::<f32>().sqrt() > 0.5 {
+                    self.fall = 1;
+                }
+            }
+            1 => {
+                self.offset[1] -= 0.07;
+                if ground.is_none_or(|g| base_y + self.offset[1] < g - 1.25) {
+                    self.fall = 2;
+                }
+            }
+            _ => {
+                let (u, v) = (self.up, self.velocity);
+                self.up = normalize(std::array::from_fn(|i| 0.965 * u[i] + 0.035 * v[i]));
+                if self.up[1].abs() <= 0.001 || v == [0.0; 3] {
+                    self.state = 2;
+                }
+            }
+        }
+    }
+}
+
+/// The reed drop (Behavior 9): r uniform in 0 to 100; 0 gives item 138 (25 NP), 1 to 5 item 136
+/// (5 NP), 6 to 19 item 135 (1 NP), else nothing. Luck plays no part.
+pub fn reed_drop(r: i32) -> Option<u16> {
+    match r {
+        0 => Some(138),
+        1..=5 => Some(136),
+        6..=19 => Some(135),
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reed_bend_cut_fall_drop() {
+        use super::*;
+        let mut r = Reed::default();
+        // Within 5 units it tilts away from the hero (+x); farther it springs back.
+        r.bend_step(3.0, [1.0, 0.0, 0.0]);
+        assert!(r.up[0] > 0.2 && r.up[1] < 0.99);
+        let tilted = r.up;
+        r.bend_step(6.0, [1.0, 0.0, 0.0]);
+        assert!(r.up[0] < tilted[0]);
+        // A cut launches the piece; it moves 0.05 v a tick until 0.5 out (11 ticks at |v| 1).
+        assert!(r.cut([1.0, 0.0, 0.0]));
+        assert!(!r.cut([1.0, 0.0, 0.0]));
+        for _ in 0..11 {
+            r.fall_step(0.0, Some(0.0));
+        }
+        assert_eq!(r.fall, 1);
+        // It sinks 0.07 a tick until below the ground less 1.25, then turns over and is gone.
+        for _ in 0..19 {
+            r.fall_step(0.0, Some(0.0));
+        }
+        assert_eq!(r.fall, 2);
+        for _ in 0..400 {
+            r.fall_step(0.0, Some(0.0));
+        }
+        assert_eq!(r.state, 2);
+        // The drop roll.
+        assert_eq!((reed_drop(0), reed_drop(5), reed_drop(19), reed_drop(20), reed_drop(100)), (Some(138), Some(136), Some(135), None, None));
+    }
+
     use super::*;
 
     #[test]

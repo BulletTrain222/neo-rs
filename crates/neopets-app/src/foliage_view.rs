@@ -66,9 +66,9 @@ pub fn spawn<C: Component + Copy>(
     let mut tinted: HashMap<(AssetId<StandardMaterial>, [u8; 4]), Handle<StandardMaterial>> = HashMap::new();
     let mut count = 0;
     for (pi, p) in patches.iter().enumerate() {
-        let bush = !p.bushes.is_empty();
+        let bush = !p.bushes.is_empty() || !p.reeds.is_empty();
         let mut drawn: Vec<(u16, bool)> = vec![(p.model, false)];
-        if let Some(c) = neopets_sim::foliage::cut_model(p.model).filter(|_| bush) {
+        if let Some(c) = neopets_sim::foliage::cut_model(p.model).filter(|_| !p.bushes.is_empty()) {
             drawn.push((c, true));
         }
         // A family with no near model draws its far sprite (grass).
@@ -126,6 +126,17 @@ pub fn sync_bushes(state: Option<Res<crate::PlayState>>, mut parts: Query<(&Patc
             None => on,
             Some(b) => {
                 let Some(patch) = state.play.foliage.get(&b.pack).and_then(|p| p.get(b.patch)) else { continue };
+                // A reed (SPEC-0060 Behavior 9): drawn along its up axis, its cut piece at the
+                // fall's offset, hidden once gone.
+                if let (Some(r), Some(q)) = (patch.reeds.get(b.plant), patch.plants.get(b.plant)) {
+                    t.translation = Vec3::from(q.position) + Vec3::from(r.offset);
+                    t.rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::from(r.up)) * Quat::from_rotation_y(q.yaw);
+                    let want = if on && r.state != 2 { Visibility::Visible } else { Visibility::Hidden };
+                    if *vis != want {
+                        *vis = want;
+                    }
+                    continue;
+                }
                 let (Some(bush), Some(q)) = (patch.bushes.get(b.plant), patch.plants.get(b.plant)) else { continue };
                 t.scale = Vec3::splat(bush.scale().max(0.0));
                 // The bush is drawn along its up axis (the hero bend and spring-back).

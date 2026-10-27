@@ -109,6 +109,23 @@ impl DesignTables {
         self.tables.first()?.string(ptr).map(<[u8]>::to_vec).filter(|n| !n.is_empty())
     }
 
+    /// Table 0, row id: the showcase text of a pickup (SPEC-0021 Item text database; SPEC-0033
+    /// Behavior 42): the selector's pointer, +0x24 for a first pickup and +0x28 for a later one
+    /// (this build's reading of "one text for a first pickup and one for later pickups"); when
+    /// it is absent and the progress flag id at +0x1C is not negative, +0x2C while that flag is
+    /// clear and +0x30 while it is set.
+    pub fn item_showcase_text(&self, id: u16, first: bool, flag: impl Fn(u16) -> bool) -> Option<Vec<u8>> {
+        let table = self.tables.first()?;
+        let text = |at: usize| self.word(0, id as usize, at).filter(|&p| p != 0).and_then(|p| table.string(p)).map(<[u8]>::to_vec).filter(|t| !t.is_empty());
+        text(if first { 0x24 } else { 0x28 }).or_else(|| {
+            let progress = self.word(0, id as usize, 0x1C)? as u16 as i16;
+            if progress < 0 {
+                return None;
+            }
+            text(if flag(progress as u16) { 0x30 } else { 0x2C })
+        })
+    }
+
     /// Table 0, row id: the important flag (u8 +0x1F; SPEC-0021): quest items and equipment.
     pub fn item_important(&self, id: u16) -> bool {
         self.word(0, id as usize, 0x1C).is_some_and(|w| w >> 24 == 1)

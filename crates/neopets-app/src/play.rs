@@ -142,6 +142,9 @@ impl World {
     /// SetWorldCollisMask: the trigger volumes and push boxes whose gate mask is 0 or meets it.
     pub fn set_collis_mask(&mut self, mask: u16) {
         self.collis_mask = mask;
+        if let Some(g) = self.ground.as_mut() {
+            g.mask = mask;
+        }
         self.volumes = self.all_volumes.iter().filter(|v| v.fires_on_contact(mask)).copied().collect();
         self.shot_volumes = self.all_volumes.iter().filter(|v| v.fires_on_shot(mask)).copied().collect();
         self.boxes = self.all_boxes.iter().filter(|(m, _)| *m == 0 || m & mask != 0).map(|(_, b)| *b).collect();
@@ -559,6 +562,8 @@ pub struct LivePatch {
     pub centre: [f32; 3],
     pub plants: Vec<neopets_sim::foliage::Placed>,
     pub bushes: Vec<neopets_sim::foliage::Bush>,
+    /// The reeds of a reed patch (Behavior 9), one per plant.
+    pub reeds: Vec<neopets_sim::foliage::Reed>,
     /// The zone number (+0x20, low byte) and whether this pass's zone query passed.
     pub zone: u8,
     pub on: bool,
@@ -876,6 +881,10 @@ pub struct Play {
     pub effect_table: std::sync::Arc<neopets_sim::effect::EffectTable>,
     pub effect_images: std::sync::Arc<Vec<neopets_data::effect::GroupImage>>,
     pub effects: neopets_sim::effect::Effects,
+    /// The item showcase in its full mode (SPEC-0021 Item showcase; SPEC-0033 Behavior 42).
+    pub showcase: Option<Showcase>,
+    /// The ids picked up before, for the first-pickup text.
+    showcased: std::collections::HashSet<u16>,
     /// The swing-trail manager (SPEC-0034 3.8), the hero's held-weapon trail and each enemy's.
     pub trails: neopets_sim::trail::Trails,
     hero_trail: Option<usize>,
@@ -1382,6 +1391,8 @@ impl Play {
             effect_images,
             effects: neopets_sim::effect::Effects::new(),
             trails: Default::default(),
+            showcase: None,
+            showcased: Default::default(),
             hero_trail: None,
             enemy_trails: HashMap::new(),
             dust_ids,
@@ -3767,6 +3778,106 @@ impl Play {
 
     /// Diagnostic: the stick (forward, side) that points into the held block face once the grab
     /// has latched (the camera-relative form of the scripted walk).
+    /// SPEC-0046 Culling, the story layers: bit 20 + i for a visible layer i of 1 to 8 and
+    /// 17 + (i - 8) for 9 to 12 (layers 1 and 12 share bit 21), from the story flags.
+    pub fn story_layers(&self) -> u32 {
+        let f = |n: u16| self.state.flag(n);
+        let on = |a: u16, b: u16| f(a) && !f(b);
+        let layers = [on(83, 5), on(10, 322), on(64, 283), on(57, 58), on(74, 263), on(85, 298), on(92, 94), f(248), on(332, 100), on(332, 102), on(332, 104), on(332, 106)];
+        layers.iter().enumerate().filter(|(_, v)| **v).fold(0, |m, (k, _)| {
+            let i = k as u32 + 1;
+            m | 1 << if i <= 8 { 20 + i } else { 17 + (i - 8) }
+        })
+    }
+
+    /// Diagnostic: the frame records of gated model-set entries (gate, start, length), on an
+    /// 8-unit lattice over the grid.
+    pub fn gated_walls(&mut self) -> Vec<String> {
+        let Some(g) = self.world.ground.as_mut() else { return Vec::new() };
+        let before = g.mask;
+        g.mask = 0xFFFF;
+        let g = &*g;
+        let [x0, z0, x1, z1] = g.bounds();
+        let mut seen = Vec::new();
+        let mut out = Vec::new();
+        let mut x = x0;
+        while x < x1 {
+            let mut z = z0;
+            while z < z1 {
+                for f in g.frames_at(x, z).into_iter().filter(|f| f.gate != 0) {
+                    let key = f.start.map(|v| v as i32);
+                    if !seen.contains(&key) {
+                        seen.push(key);
+                        out.push(format!("gate {} kind {} start ({:.1}, {:.1}, {:.1}) L {:.1} H {:.1}", f.gate, f.kind, f.start[0], f.start[1], f.start[2], f.length, f.height));
+                    }
+                }
+                z += 8.0;
+            }
+            x += 8.0;
+        }
+        if let Some(g) = self.world.ground.as_mut() {
+            g.mask = before;
+        }
+        out
+    }
+
+    /// Diagnostic: what pushes the hero where it stands: the push boxes and spheres that move a
+    /// point 1.0 around it, and the frame records whose wall push does.
+    pub fn blockers(&self) -> Vec<String> {
+        let p = self.loco.position();
+        let mut out = Vec::new();
+        for (k, (m, b)) in self.world.all_boxes.iter().enumerate() {
+            let mut q = p;
+            contact::resolve(&mut q, std::slice::from_ref(b), contact::HERO_RADIUS + 0.3);
+            if q != p {
+                out.push(format!("box {k} mask {m} active {} origin {:?} extents {:?}", self.world.boxes.contains(b), b.origin, b.extents));
+            }
+        }
+        if let Some(g) = &self.world.ground {
+            for f in g.frames_at(p[0], p[2]) {
+                let w = WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height };
+                if w.push(p, contact::HERO_RADIUS + 0.3).is_some() {
+                    out.push(format!("frame gate {} entry-mask {} kind {} start {:?} face {:?} L {} H {}", f.gate, g.mask, f.kind, f.start, f.face, f.length, f.height));
+                }
+            }
+        }
+        for (m, c, r) in &self.world.all_spheres {
+            let d = ((p[0] - c[0]).powi(2) + (p[1] - c[1]).powi(2) + (p[2] - c[2]).powi(2)).sqrt();
+            if d < r + 2.0 {
+                out.push(format!("sphere mask {m} centre {c:?} radius {r}"));
+            }
+        }
+        out
+    }
+
+    /// Diagnostic: block 0 of the current world centred on (x, z), placed on the ground there;
+    /// returns its top.
+    pub fn diag_block_at(&mut self, x: f32, z: f32) -> Option<f32> {
+        let w = &mut self.world;
+        let mut b = w.blocks.first()?.clone();
+        b.move_to([x, b.position[1], z], |px, pz, cl| {
+            let h = w.probe(px, pz, cl);
+            h.found.then_some(h.height)
+        });
+        w.blocks[0] = b;
+        Some(w.blocks[0].top())
+    }
+
+    /// Diagnostic: the hero put on ladder `k` (state 41, the mount), 0.9 out from its face and
+    /// `up` above its base.
+    pub fn diag_ladder(&mut self, k: usize, up: f32) {
+        let Some(r) = self.world.rails.get(k).copied() else { return };
+        let n = [r.normal[0], r.normal[1], r.normal[2]];
+        let (u, v) = ([r.u[0], r.u[1], r.u[2]], [r.v[0], r.v[1], r.v[2]]);
+        let p = self.loco.position();
+        let plane = |q: [f32; 4], p: [f32; 3]| q[0] * p[0] + q[1] * p[1] + q[2] * p[2] + q[3];
+        let (a, b, c) = (0.9 - plane(r.normal, p), 0.8 - plane(r.u, p), up - plane(r.v, p));
+        self.loco.body.position = std::array::from_fn(|i| p[i] + a * n[i] + b * u[i] + c * v[i]);
+        self.loco.facing = [-n[0], 0.0, -n[2]];
+        self.ladder = Some(neopets_sim::ladder::Ladder::new(k));
+        self.loco.enter_state(hero_states::LADDER, 93);
+    }
+
     pub fn block_trace_stick(&self) -> Option<(f32, f32)> {
         let h = self.hold.filter(|h| h.latched)?;
         let n = self.world.blocks.get(h.block)?.direction(h.face as i32)?;
@@ -3972,6 +4083,11 @@ impl Play {
         };
         let c = self.hero.clip_state();
         let step = l.tick(&self.world.rails, hero, input.forward, input.jump, self.loco.body.gap, (c.action, c.progress));
+        if std::env::var_os("NEOPETS_TRACE_CLIMB").is_some() {
+            let r = self.world.rails[l.rail];
+            let pl = |q: [f32; 4]| q[0] * hero[0] + q[1] * hero[1] + q[2] * hero[2] + q[3];
+            println!("      ladder tick {} sub {} clip {} {:.2} gap {:.2} forward {} y {:.2} step {:?} d {:.3} x {:.3} v {:.3} place {:?}", self.ticks, l.sub, c.action, c.progress, self.loco.body.gap, input.forward, hero[1], step.request, pl(r.normal), pl(r.u), pl(r.v), step.place);
+        }
         self.ladder = Some(l);
         self.loco.body.no_gravity = true;
         self.loco.body.velocity = [0.0; 3];
@@ -4057,7 +4173,7 @@ impl Play {
             return true;
         };
         if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
-            println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?}", self.ticks, self.ledge.map(|l| l.sub), c.action, c.progress, self.loco.body.gap, step.place);
+            println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?} bone0 {:?} facing {:?}", self.ticks, self.ledge.map(|l| l.sub), c.action, c.progress, self.loco.body.gap, step.place, self.hero.main_translations().first(), self.loco.facing);
         }
         self.loco.body.no_gravity = true;
         self.loco.body.velocity = [0.0; 3];
@@ -4477,6 +4593,83 @@ impl Play {
 
     /// The weapon reach W (SPEC-0021): Tor's table value for swords 98 to 108, Roberta's for
     /// 111 to 118, 1.5 with no valid weapon.
+    /// SPEC-0021 Item showcase, start with quiet 0: when the item has showcase text and the
+    /// hero is not busy, the full showcase (mode 4) and its pose task begin. Not built: the
+    /// screen-corner showcase of modes 1 to 3 (items without text, and quiet starts), the
+    /// showcase effect, the camera call (0.9425, 10.0) and the dropped stinger request 42 / 66.
+    /// Diagnostic: the showcase started for item `id` in the current world.
+    pub fn diag_showcase(&mut self, id: u16) {
+        let pack = self.world.pack;
+        self.start_showcase(id, pack);
+        println!("      showcase {id}: {:?}", self.showcase.as_ref().map(|s| (s.pose, s.floating, String::from_utf8_lossy(&s.text).into_owned())));
+    }
+
+    fn start_showcase(&mut self, id: u16, pack: u32) {
+        if self.showcase.is_some() || neopets_sim::hero::busy_state(self.loco.state) || self.dialogue_open {
+            return;
+        }
+        let first = self.showcased.insert(id);
+        let flags = &self.state;
+        let Some(text) = self.design.item_showcase_text(id, first, |f| flags.flag(f)) else { return };
+        // SPEC-0033 Behavior 42: the pose code and stinger by hero and item id.
+        let tor = self.hero_index == 0;
+        let (pose, stinger, floating) = match id {
+            98..=105 if tor => (0xA4, Some(8), false),
+            111..=118 if !tor => (0xA4, Some(8), false),
+            106..=110 if tor => (0xA6, None, false),
+            119..=125 if tor => (0xA5, Some(6), false),
+            127..=134 if !tor => (0xA5, Some(6), false),
+            _ => (0xA3, Some(7), true),
+        };
+        // Swords, wands and shields: both drawn flags set (they stay set after the showcase).
+        if pose == 0xA4 || pose == 0xA6 {
+            self.set_weapon_drawn(true);
+        }
+        if let Some(k) = stinger {
+            self.stinger(k);
+        }
+        self.loco.play_one_shot(pose, true);
+        self.hero.request(pose, true);
+        self.showcase = Some(Showcase { id, pack, pose, floating, text, ticks: 0, opened: None, angle: 0.0 });
+    }
+
+    /// The full-showcase task, each tick: the pose re-requested (code 0xA3 with text holds 1.0 s
+    /// before the text box opens; the other codes open it at once), the text box with the item
+    /// text titled with the hero's name, and the end once 2.0 s have passed since the box opened
+    /// and it is closed: the hero back to state 1.
+    fn showcase_step(&mut self) {
+        let Some(mut s) = self.showcase.take() else { return };
+        s.ticks += 1;
+        // The angle advances 2 pi / 5 rad per second and wraps.
+        s.angle = (s.angle + 1.2566372 / 60.0) % std::f32::consts::TAU;
+        let hold = if s.pose == 0xA3 { 60 } else { 0 };
+        if s.opened.is_none() && s.ticks > hold {
+            let name = self.hero_name();
+            self.open_text(name, &s.text);
+            s.opened = Some(s.ticks);
+        }
+        let done = s.opened.is_some_and(|t| s.ticks >= t + 120) && !self.dialogue_open;
+        if done {
+            if self.loco.state == neopets_sim::hero::ONE_SHOT {
+                self.loco.state = hero_states::STANCE;
+            }
+            return;
+        }
+        if self.loco.state != neopets_sim::hero::ONE_SHOT {
+            self.loco.play_one_shot(s.pose, true);
+        }
+        self.hero.request(s.pose, false);
+        self.showcase = Some(s);
+    }
+
+    /// The floating showcase item (mode 4): its id, world and transform (2.8 up and 1.1 ahead of
+    /// the hero, turned by the showcase angle), unless the pose hides it.
+    pub fn showcase_item(&self) -> Option<(u16, u32, [f32; 3], f32)> {
+        let s = self.showcase.as_ref().filter(|s| s.floating)?;
+        let (p, f) = (self.loco.position(), self.loco.facing);
+        Some((s.id, s.pack, [p[0] + 1.1 * f[0], p[1] + 2.8, p[2] + 1.1 * f[2]], s.angle))
+    }
+
     /// SPEC-0034 3.8, held-weapon trails: on every tick with the hero's attack-active bit (event
     /// bit 0x1) its trail is kept going with the held-weapon record, from attach point 0 (base
     /// B, direction D its third axis) with L = 0.6 W; an enemy's on every tick with any of event
@@ -4614,6 +4807,11 @@ impl Play {
                 landed += 1;
             }
             // A boss takes its hits through its own controller (SPEC-0015 counted hits).
+            // SPEC-0036 Unarmed melee: with no weapon-family item (A = 0) a swing calls no
+            // take-hit.
+            if stat_a == 0 {
+                continue;
+            }
             if c.boss.is_some() {
                 self.boss_hits.push((c.id, damage));
                 continue;
@@ -6520,6 +6718,7 @@ impl Play {
         let hits = self.hit_list.len();
         self.hero_swing();
         self.trail_step();
+        self.showcase_step();
         self.mote_objects_step();
         self.shots_step();
         // A swing hit: power cue 2 in sub-state 10, else weapon cue 14 (no material impact).
@@ -6540,8 +6739,10 @@ impl Play {
         self.hero.set_rate(self.loco.rate);
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
-        let block_contact = !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
-        let wall_contact = !matches!(self.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
+        let noclip = self.cheats.noclip;
+        let hero_state = self.loco.state;
+        let block_contact = !noclip && !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
+        let wall_contact = !noclip && !matches!(self.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
         let side_touch = Cell::new(false);
         let swap = Cell::new(false);
         self.loco.record_tick(
@@ -6572,13 +6773,21 @@ impl Play {
                         .collect();
                     contact::resolve_walls(p, &walls, contact::HERO_RADIUS);
                 }
-                contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
+                // On a ladder (state 41) the box primitives are skipped too: the mount's point 0.9
+                // out from a ladder on a wall lies inside the wall's box by the hero radius, so
+                // the push would stop the mount from ever aligning (this build's choice; the
+                // spec skips only the walls and blocks there; R-0108).
+                if !noclip && hero_state != hero_states::LADDER {
+                    contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
+                }
                 // SPEC-0048 Solid for characters: the movable blocks' boxes; a top face sets the
                 // floor-contact flag and a side face of a block 1 to 5 taller the side-touch latch.
                 let c = if block_contact { neopets_sim::block::contact(&world.blocks, p) } else { Default::default() };
                 side_touch.set(c.side_touch);
                 // SPEC-0018 Sphere contact: out of the pushing spheres to r + 1.25.
-                contact::resolve_spheres(p, &world.push_spheres);
+                if !noclip {
+                    contact::resolve_spheres(p, &world.push_spheres);
+                }
                 c.floor
             },
         );
@@ -7831,6 +8040,8 @@ impl Play {
             self.last_pickup = format!("picked up item {} (held {}) on tick {}", it.id, self.state.items[&it.id], self.ticks);
             let hook = level::on_pickup(pack, it.id, &mut self.state);
             self.apply(&hook);
+            // The world-item pickup starts the showcase with quiet 0.
+            self.start_showcase(it.id, pack);
         }
     }
 
@@ -9502,7 +9713,8 @@ impl Play {
                     .collect();
                 let bushes = if kind.family == neopets_sim::foliage::Family::Bush { plants.iter().map(|q| neopets_sim::foliage::Bush::new(q.scale, &mut rng)).collect() } else { Vec::new() };
                 let centre = [(p.area[0] + p.area[1]) / 2.0, p.height, (p.area[2] + p.area[3]) / 2.0];
-                built.push(LivePatch { kind, model, centre, plants, bushes, zone: p.zone as u8, on: true });
+                let reeds = if kind.family == neopets_sim::foliage::Family::Reed { vec![Default::default(); plants.len()] } else { Vec::new() };
+                built.push(LivePatch { kind, model, centre, plants, bushes, reeds, zone: p.zone as u8, on: true });
             }
             self.foliage.insert(pack, built);
         }
@@ -9569,6 +9781,53 @@ impl Play {
         }
         for at in sparkles {
             self.effects.one_shot(&table, 139, at, neopets_sim::effect::IDENTITY, &mut self.rng);
+        }
+        // Behavior 9, reeds within 100 units of the eye: the bend away from the hero within 5
+        // units, the cut by a weapon hit in the attack window (cue 22 for Tor, 28 for Roberta;
+        // the piece launched along the blade; the weapon test is taken as the bush capsule's, a
+        // radius 0.5 and length 6.0 up from the base), the cut piece's fall and the drop roll.
+        let mut reed_cuts = 0;
+        let worlds = [&self.world].into_iter().chain(self.other.as_ref());
+        let worlds: Vec<_> = worlds.collect();
+        for (&pack, patches) in self.foliage.iter_mut() {
+            let Some(world) = worlds.iter().find(|w| w.pack == pack) else { continue };
+            for p in patches.iter_mut().filter(|p| !p.reeds.is_empty() && p.on) {
+                let d = [p.centre[0] - eye[0], p.centre[1] - eye[1], p.centre[2] - eye[2]];
+                if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= 100.0 * 100.0 {
+                    continue;
+                }
+                for (q, r) in p.plants.iter().zip(p.reeds.iter_mut()) {
+                    match r.state {
+                        0 => {
+                            let (dx, dz) = (q.position[0] - hero[0], q.position[2] - hero[2]);
+                            let distance = dx.hypot(dz);
+                            let away = if distance > 1e-4 { [dx / distance, 0.0, dz / distance] } else { [0.0; 3] };
+                            r.bend_step(distance, away);
+                            let near = (q.position[0] - hero[0]).powi(2) + (q.position[1] - hero[1]).powi(2) + (q.position[2] - hero[2]).powi(2) < 25.0;
+                            if let (true, Some(w)) = (near, weapon.as_ref()) {
+                                let reed = neopets_sim::combat::Cylinder::from_base(q.position, [0.0, 1.0, 0.0], 0.5, 6.0);
+                                if neopets_sim::combat::overlap(w, &reed) && r.cut(w.axis) {
+                                    reed_cuts += 1;
+                                    if let Some(id) = neopets_sim::foliage::reed_drop(self.rng.range(0, 100)) {
+                                        drops.push((pack, q.position, vec![id]));
+                                    }
+                                }
+                            }
+                        }
+                        1 => {
+                            let at = [q.position[0] + r.offset[0], q.position[1] + r.offset[1], q.position[2] + r.offset[2]];
+                            r.fall_step(q.position[1], world.ground_at(at[0], at[2], at[1] + 8.0));
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+        if reed_cuts > 0 && std::env::var_os("NEOPETS_TRACE_PATCHES").is_some() {
+            println!("      {reed_cuts} reed(s) cut on tick {}", self.ticks);
+        }
+        for _ in 0..reed_cuts {
+            self.cue(if self.hero_index == 0 { 22 } else { 28 });
         }
         // Behavior 8: a key-4 patch within 100 units of the eye moves its solid cylinder (height
         // 25, radius 5.5 x the tree's scale) to each tree in turn and tests the hero against it;
@@ -11619,6 +11878,23 @@ pub struct Cheats {
     pub god: bool,
     pub magic: bool,
     pub charge: bool,
+    /// The developer menu's no clip: the hero's wall, box, block and sphere contacts are off.
+    pub noclip: bool,
+}
+
+/// The full item showcase in progress (SPEC-0021 Item showcase).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Showcase {
+    pub id: u16,
+    pub pack: u32,
+    pub pose: u32,
+    /// The item model floats above the hero (code 0xA3).
+    pub floating: bool,
+    pub text: Vec<u8>,
+    pub ticks: u32,
+    /// The tick the text box opened.
+    pub opened: Option<u32>,
+    pub angle: f32,
 }
 
 /// A disc trigger volume as the trigger step tests it.

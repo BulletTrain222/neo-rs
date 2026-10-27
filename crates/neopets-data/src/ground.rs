@@ -124,6 +124,16 @@ pub struct Ground {
     pub order: CellOrder,
     patches: Vec<Option<Patch>>,
     owned: Vec<OwnedSet>,
+    /// The world collision mask (+0x56B4, written by SetWorldCollisMask; 0 at load) that the
+    /// model-set entry gate (+0x42) is tested against (SPEC-0018).
+    pub mask: u16,
+}
+
+/// SPEC-0018 model-set entry gate: the entry's u16 at +0x42 passes when it is 0 or shares a bit
+/// with the world mask.
+fn gate_passes(set: &[u8], entry: usize, mask: u16) -> bool {
+    let gate = set.get(entry + 0x42..entry + 0x44).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+    gate == 0 || gate & mask != 0
 }
 
 impl Ground {
@@ -149,6 +159,7 @@ impl Ground {
             order,
             patches,
             owned: Vec::new(),
+            mask: 0,
         })
     }
 }
@@ -195,7 +206,8 @@ impl Ground {
     /// Ground probe with ceiling `c`: the highest sampled height above the best so far and at
     /// most `c`; if none qualifies, the last rejected height; MISS when nothing was sampled; 0.0
     /// when the grid has no cell or entries here (SPEC-0018, Ground probe). Placed objects'
-    /// patches are skipped here (see `probe_owned`); the mask and count gates are not applied.
+    /// patches are skipped here (see `probe_owned`); the entry gate is applied against `mask`, the
+    /// count gate is not.
     pub fn probe(&self, x: f32, z: f32, c: f32) -> f32 {
         self.probe_normal(x, z, c).0
     }
@@ -287,6 +299,11 @@ impl Ground {
                 (&o.set[..], &o.patches, Some(pose))
             };
             let Some(Some(p)) = patches.get(index as usize) else { continue };
+            // Ground probe step 2: a height patch is a candidate only when its entry's gate
+            // passes.
+            if !gate_passes(set, p.at, self.mask) {
+                continue;
+            }
             let (sx, sz, raise) = pose.map_or((x, z, 0.0), |q| q.map(x, z));
             // SPEC-0018 Ground probe step 3: with two or more entries in the cell, the patch must
             // pass its outline list test.
@@ -773,6 +790,8 @@ pub struct ProbeHit {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct FrameRecord {
     pub kind: i8,
+    /// The model-set entry's gate (+0x42) the record belongs to.
+    pub gate: u16,
     pub start: [f32; 3],
     pub face: [f32; 4],
     pub run: [f32; 4],
@@ -829,6 +848,11 @@ impl Ground {
                 continue;
             };
             let Some(entry) = u32_at(&self.set, table + 4 * index as usize).map(|v| v as usize) else { continue };
+            // An entry whose gate fails has all its frame records skipped (SPEC-0018).
+            if !gate_passes(&self.set, entry, self.mask) {
+                continue;
+            }
+            let gate = self.set.get(entry + 0x42..entry + 0x44).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
             let n = i32_at(&self.grid, at + 0x0C).unwrap_or(0).clamp(0, 1 << 12) as usize;
             let items = entries + u32_at(&self.grid, at + 0x10).unwrap_or(0) as usize;
             for k in 0..n {
@@ -846,7 +870,7 @@ impl Ground {
                     f32_at(&self.set, r + 0x44),
                     self.set.get(r + 0x4C).copied(),
                 ) {
-                    out.push(FrameRecord { kind: kind as i8, start: [start[0], start[1], start[2]], face, run, top, length, height });
+                    out.push(FrameRecord { kind: kind as i8, gate, start: [start[0], start[1], start[2]], face, run, top, length, height });
                 }
             }
         }
@@ -863,6 +887,7 @@ mod frame_tests {
     fn wall(kind: i8) -> FrameRecord {
         FrameRecord {
             kind,
+            gate: 0,
             start: [0.0, 5.0, 0.0],
             face: [1.0, 0.0, 0.0, 0.0],
             run: [0.0, 0.0, 1.0, 0.0],
