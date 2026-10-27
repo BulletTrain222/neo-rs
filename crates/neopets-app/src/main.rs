@@ -2626,6 +2626,10 @@ fn play_trace(
             println!("      quest {i}: kind {} start {} done {} stage {} at ({:.0}, {:.0}) {:?}: {:?}", q.kind, q.start, q.done, q.stage, q.x, q.z, String::from_utf8_lossy(&q.title), String::from_utf8_lossy(&q.objective));
         }
     }
+    // NEOPETS_TRACE_REGION="slot,region": a diagnostic region load into a slot at the start.
+    if let Some((sl, r)) = std::env::var("NEOPETS_TRACE_REGION").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<u8>().ok()?, b.trim().parse::<u32>().ok()?)) }) {
+        play.diag_load_region(sl, r);
+    }
     // NEOPETS_TRACE_ROBERTA=1: the trace starts as Roberta (diagnostic; her attack fires shots).
     if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
         play.trace_select_hero(1);
@@ -2927,14 +2931,14 @@ fn play_trace(
         } {
             route.remove(0);
         }
-        // NEOPETS_TRACE_FOLLOW=<name>: keep within 6 units of the character with that name.
+        // NEOPETS_TRACE_FOLLOW=<name>: keep within 4.5 units of the character with that name.
         if let Ok(name) = std::env::var("NEOPETS_TRACE_FOLLOW") {
             // The name "wild" follows the first wild petpet, to within 3 units.
             let wild = name == "wild";
             if let Some(c) = play.characters.iter().find(|c| (c.name == name || wild && c.wild.is_some()) && c.pack == play.world.pack) {
                 let p = play.loco.position();
                 let t = [c.position[0], c.position[2]];
-                if (t[0] - p[0]).hypot(t[1] - p[2]) <= if wild { 3.0 } else { 6.0 } {
+                if (t[0] - p[0]).hypot(t[1] - p[2]) <= if wild { 3.0 } else { 4.5 } {
                     route.clear();
                 } else if route.last().is_none_or(|r| (r[0] - t[0]).hypot(r[1] - t[1]) > 4.0) {
                     // A searched route to the character, refreshed when it has moved on.
@@ -3009,6 +3013,17 @@ fn play_trace(
         // during the approach), so the hero pushes; the Square prompts are pressed as usual.
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
             (forward, side) = play.block_trace_stick().unwrap_or((0.0, 0.0));
+        }
+        // NEOPETS_TRACE_PLACE="tick:x,z[,probe];...": the hero placed there on that tick
+        // (diagnostic).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_PLACE") {
+            for e in v.split(';') {
+                let Some((k, r)) = e.trim().split_once(':') else { continue };
+                let n: Vec<f32> = r.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                if k.parse::<u64>().ok() == Some(play.ticks) && n.len() >= 2 {
+                    play.place_at(n[0], n[1], n.get(2).copied().unwrap_or(1.0e4));
+                }
+            }
         }
         // NEOPETS_TRACE_SLIDE="tick:k:x,z;...": from that tick, block k slides to (x, z) at 0.2
         // units a tick, firing the volumes it touches (diagnostic).

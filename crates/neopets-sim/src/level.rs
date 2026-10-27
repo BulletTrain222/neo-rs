@@ -2404,6 +2404,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.push(Action::StopEffect { slot: 1 });
             state.set(262, true);
             v.extend([(14, 0.1), (15, 0.2), (16, 0.1)].map(|(obj, speed)| Action::LoopAnim { obj, speed }));
+            // The breaker groups' falling objects 59 to 65 on (initial flag false).
+            v.extend(BREAKER_735.iter().map(|g| Action::InitObjOn { obj: g.2, end: false }));
             let f = |n| state.flag(n);
             let ritual = f(530) && !f(531);
             let set = if f(76) { ritual as u32 } else if f(75) { 0 } else if ritual { 3 } else { 2 };
@@ -4201,6 +4203,34 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
 /// RegisterScriptTrigger outside Init.
 fn reg_at(index: u16, routine: u8) -> Action {
     Action::RegisterTrigger { index, routine }
+}
+
+/// SPEC-0044 735's breaker groups 1 to 7: (first breakable, count, falling object, platform
+/// object).
+const BREAKER_735: [(usize, usize, usize, usize); 7] = [(4, 3, 59, 5), (7, 2, 60, 6), (9, 4, 61, 7), (13, 4, 62, 8), (17, 5, 63, 9), (22, 6, 64, 10), (28, 4, 65, 11)];
+
+/// SPEC-0044 735 break scene of group k: the look-at camera of track 21 (played as its track),
+/// the group's breakables made breakable and broken, sound 10, the falling object's animation
+/// (waited) and the object off, effect 0, the platform object on and animated at 0.7, 30 ticks,
+/// effect 0 off and the normal camera.
+fn break_scene_735(k: usize) -> Vec<Action> {
+    let Some(&(first, n, fall, plat)) = BREAKER_735.get(k.wrapping_sub(1)) else { return Vec::new() };
+    let mut v = vec![Action::PlayCamera { track: 21, wait: false, end: 1, speed: 1.0 }];
+    for id in first..first + n {
+        v.extend([Action::MakeBreakable { id, on: true }, Action::Break { id }]);
+    }
+    v.extend([
+        Action::PlaySound { cue: 10, locator: None },
+        Action::PlayAnim { obj: fall, speed: 1.0, wait: true },
+        Action::DeactivateObj { obj: fall },
+        Action::StartEffect { slot: 0, camera: false },
+        Action::InitObjOn { obj: plat, end: false },
+        Action::PlayAnim { obj: plat, speed: 0.7, wait: false },
+        Action::Sleep { ticks: 30 },
+        Action::StopEffect { slot: 0 },
+        Action::ReturnCamera { preset: -1, release: false },
+    ]);
+    v
 }
 
 /// SPEC-0041 1324's stage-2 plate handler (plate 1: block 3 to locator 2, camera 1, hero to
@@ -10405,6 +10435,14 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // hurt). The intro's boss-fight refill (instance 10) follows camera 22; breakable 0 is not
         // built.
         735 => {
+            // The breaker thread: each set level state 1 to 7 plays its group's break scene, in
+            // order, and is cleared (state 0's group is empty and not posted in play).
+            for k in 1..=7u16 {
+                if state.level(k) {
+                    state.set_level(k, false);
+                    out.extend(break_scene_735(k as usize));
+                }
+            }
             if !state.flag(263) && state.word(pack, 1) == 0 {
                 if state.level(8) && !state.level(9) {
                     state.set_level(13, true);

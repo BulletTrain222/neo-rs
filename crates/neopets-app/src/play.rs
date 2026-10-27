@@ -4989,6 +4989,13 @@ impl Play {
         self.region_wanted.push((pack, PET_SLOT, region));
     }
 
+    /// Diagnostic: load a region into a slot of the current world (trace only).
+    pub fn diag_load_region(&mut self, slot: u8, region: u32) {
+        let pack = self.world.pack;
+        self.slot_regions.insert((pack, slot), region);
+        self.region_wanted.push((pack, slot, region));
+    }
+
     /// Deactivate: the petpet and its character are removed.
     pub fn deactivate_pet(&mut self) {
         self.petpet = None;
