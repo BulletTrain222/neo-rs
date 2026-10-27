@@ -2679,6 +2679,11 @@ fn play_trace(
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
     println!("Book stations of {} (value, trigger index): {:?}", play.world.pack, play.book_stations());
     println!("Script triggers of {} (index, kind, middle): {:?}", play.world.pack, play.trigger_points());
+    if std::env::var_os("NEOPETS_TRACE_TRIGGERS").is_some() {
+        for v in &play.world.all_volumes {
+            println!("      trigger {} kind {} flags {:#x} mask {:#x} {:?}", v.index, v.kind, v.flags, v.mask, v.shape);
+        }
+    }
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
     let placed: Vec<String> = play.world.placed_effects.iter().take(12).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
     println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
@@ -2704,10 +2709,20 @@ fn play_trace(
     }
     // NEOPETS_TRACE_PATH="x,z;x,z;...": waypoints walked in turn along searched routes; each is
     // left once the hero has stood within 2 units of it for 30 ticks with no dialogue box up.
-    let mut legs: Vec<[f32; 2]> = std::env::var("NEOPETS_TRACE_PATH")
+    // A leg may carry a third value, the height of its floor (stacked floors).
+    let leg_list: Vec<([f32; 2], Option<f32>)> = std::env::var("NEOPETS_TRACE_PATH")
         .ok()
-        .map(|v| v.split(';').filter_map(|w| w.trim().split_once(',').and_then(|(x, z)| Some([x.parse().ok()?, z.parse().ok()?]))).collect())
+        .map(|v| {
+            v.split(';')
+                .filter_map(|w| {
+                    let n: Vec<f32> = w.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                    (n.len() >= 2).then(|| ([n[0], n[1]], n.get(2).copied()))
+                })
+                .collect()
+        })
         .unwrap_or_default();
+    let mut legs: Vec<[f32; 2]> = leg_list.iter().map(|l| l.0).collect();
+    let mut leg_y: Vec<Option<f32>> = leg_list.iter().map(|l| l.1).collect();
     let walk_path = !legs.is_empty();
     // NEOPETS_NEOPOINTS=n: a diagnostic starting wallet.
     if let Some(n) = std::env::var("NEOPETS_NEOPOINTS").ok().and_then(|v| v.parse().ok()) {
@@ -2872,13 +2887,20 @@ fn play_trace(
                 leg_pack = play.world.pack;
                 if legs.len() > 1 {
                     legs.remove(0);
+                    if !leg_y.is_empty() {
+                        leg_y.remove(0);
+                    }
                 }
                 route.clear();
                 println!("      waypoint left with the world on tick {}; {} left", play.ticks, legs.len() - 1);
             }
             let p = play.loco.position();
             if route.is_empty() && legs.len() > 1 {
-                route = play.route_to(200_000, play::Goal::Point(legs[0])).unwrap_or_default();
+                route = match leg_y.first().copied().flatten() {
+                    Some(y) => play.route_to(200_000, play::Goal::PointAt([legs[0][0], legs[0][1], y])),
+                    None => play.route_to(200_000, play::Goal::Point(legs[0])),
+                }
+                .unwrap_or_default();
                 route.push(legs[0]);
             }
             while route.len() > 1 && (route[0][0] - p[0]).powi(2) + (route[0][1] - p[2]).powi(2) < 4.0 {
@@ -2889,6 +2911,9 @@ fn play_trace(
             if dwell >= 30 && legs.len() > 1 {
                 dwell = 0;
                 legs.remove(0);
+                if !leg_y.is_empty() {
+                    leg_y.remove(0);
+                }
                 route.clear();
                 println!("      waypoint reached on tick {}; {} left", play.ticks, legs.len() - 1);
             }
@@ -2913,7 +2938,12 @@ fn play_trace(
                     route.clear();
                 } else if route.last().is_none_or(|r| (r[0] - t[0]).hypot(r[1] - t[1]) > 4.0) {
                     // A searched route to the character, refreshed when it has moved on.
-                    route = play.route_to(200_000, play::Goal::Point(t)).unwrap_or_default();
+                    // NEOPETS_TRACE_Y=y: the target is on the floor near that height.
+                    let goal = match std::env::var("NEOPETS_TRACE_Y").ok().and_then(|v| v.parse::<f32>().ok()) {
+                        Some(y) => play::Goal::PointAt([t[0], t[1], y]),
+                        None => play::Goal::Point(t),
+                    };
+                    route = play.route_to(200_000, goal).unwrap_or_default();
                     println!("      following {name} at {:?}: {} route steps", c.position, route.len());
                     route.push(t);
                 }
@@ -2979,6 +3009,22 @@ fn play_trace(
         // during the approach), so the hero pushes; the Square prompts are pressed as usual.
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
             (forward, side) = play.block_trace_stick().unwrap_or((0.0, 0.0));
+        }
+        // NEOPETS_TRACE_SLIDE="tick:k:x,z;...": from that tick, block k slides to (x, z) at 0.2
+        // units a tick, firing the volumes it touches (diagnostic).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_SLIDE") {
+            for e in v.split(';') {
+                let parts: Vec<&str> = e.trim().split(':').collect();
+                if let [t, k, xz] = parts[..] {
+                    if t.parse::<u64>().ok() == Some(play.ticks) {
+                        if let (Ok(k), Some((x, z))) = (k.parse::<usize>(), xz.split_once(',')) {
+                            if let (Ok(x), Ok(z)) = (x.trim().parse::<f32>(), z.trim().parse::<f32>()) {
+                                play.diag_slides.push((k, [x, z]));
+                            }
+                        }
+                    }
+                }
+            }
         }
         // NEOPETS_TRACE_STICK="tick:f,s;tick:f,s;...": from each tick on, the raw stick values
         // (forward, side) replace the route's, until the next entry; "tick:-" returns to the

@@ -1,4 +1,4 @@
-# Playtest guide: the first Act 1 missions
+# Playtest guide: the first Act 1 missions and Act 2
 
 What to expect, step by step, from the new-game start through the Meridell enlistment errands. Steps are named in our own words. The quest rows are the journal's rows (SPEC-0049), and the flags are the story flags the step sets. Every step below has been run in an automated trace on this build, except where it says **not traced**. Nothing has been played by hand yet, so anything that looks, sounds or feels wrong is worth noting.
 
@@ -37,6 +37,25 @@ What to expect, step by step, from the new-game start through the Meridell enlis
 22. **Find Lucy** (flag 145 is set when you reach the farm at this stage): she is in Shadowglen Woods and the burrows beyond (pack 1217; entering sets 661).
 23. **The Juppie fight** (pack 1217; winning sets 147): lure its head slam onto the marked spots so it gets stuck, then hit the head. Traced: the intro, stage 1 (the stun and the hits) and the start of stage 2. **Not traced:** a stage-2 or stage-3 hit. The automated hero got stuck instead of moving to the next spot, so this fight is worth a careful look: does each stage end, and does the win scene play?
 24. **Next** (not traced yet): your parents sign the form (148) and you take it back to Kendrick (150).
+
+## Act 2: Roberta in Faerieland (traced in pieces)
+
+Act 2 starts at the end of the castle escape in pack 1174 (Act 1's last step, not traced yet). To try it directly: `Run.cmd --play --pack 1300 --flag 218 --flag 219 --flag 220`. In windowed play this start shows Tor, because the act start that switches to Roberta runs in 1174; the traces used Roberta. Each step below ran in a trace, but some traces started near the step (noted), so the walking between steps has not been tested.
+
+1. **Fyora's Palace Gardens (1300), report to the council** (flag 222): walk up the stairs to Kekou at the top (near (0, -213)). A long scene with Kekou, Seradar and the Old Lady plays (about 24 seconds), then control returns. Traced (started at the top of the stairs).
+2. **Collect the three wand parts** (flags 225, 226, 227):
+   - The amplifier (item 10) lies on the ground near (40, -16). Traced.
+   - The infuser: talk to Painter Howell (near (-51, -83)); he asks for faerie dust and gives you a jar (item 61). Walk into the spot by the east garden (trigger 0, near (86, -123)) and the dust replaces the jar (item 62). Traced. You get two jars, the same double give as Dad's package (asked as R-0095).
+   - The handle (item 11) is up in the tree near (-108, 1561, -65), where the Old Lady's "Harris" is. Climb the tree trunk at about (-120, -50): face the trunk squarely and push into it to grab, climb to the top, move sideways round the trunk until Roberta stops on the face pointing at the branch, then press Square (Stop Climbing) to drop onto the branch, and walk to the handle. Traced. **Changed today:** sideways climbing used to slide off the panels into thin air; it now goes round the trunk and stops at the edge.
+3. **Fyora's Library (1327), magic training** (flags 224, 228 to 235): enter the library through the gardens' door. Talk to Seradar (he takes the parts and gives the wand), then follow his steps: shoot once, hit the enchanted book, hold the attack to charge a shot (about half a second), fire three quick shots, then destroy the book (35 hit points). He gives you an outfit, Kekou calls you to Fyora, and you return to the gardens. Traced (started next to Seradar). You get 101 Motes of item 160 (one more than the script gives; R-0095).
+4. **Fyora's Palace (1335), night** (flags 236, 92, 402, 403, 237): enter by the gardens' door near (-138, -129). Press Square at the bed (near (-212, -175)) to sleep; walk past the two spots near (-118, -184) and (-126, -207); then the call for help plays near the middle of the palace (0, 0). Traced in pieces. Seradar repeats a line if you keep talking to him.
+5. **Draw off the Dark Faerie** (flag 238): through the side passage into pack 1344, reach the landing at the top of the stairs near (-38, -128) (a Minion Warrior guards the passage near (-7, -109); grunts and archers are around). Traced from the landing.
+6. **The bell puzzle (1324)** (flag 239): through the palace's clocktower door. Push the three bells south onto the three plates in front of them, then push the two big blocks onto their plates. The scripts were traced with the blocks moved by a test tool (each bell plate, stage 1, both big plates and the solved scene); pushing was traced only for the first bell. **Fixed today:** finishing with a big block left Roberta frozen; control now returns (asked as R-0095).
+7. **Rescue the Aisha** (flag 240): back in 1344, walk into the room near (-11, -109). Traced. **Get to the West Staircase** (241): the spot near (-386, 265) in the palace. Traced.
+8. **The Endless Staircase (1299)** (flags 242, 243): the palace door near (311, 231) takes you there. **Not traced:** finding the way down. The trace could not find a walkable route from the top (y 62) to the exit door at the bottom (y 8, near (-111, -79)); it dropped to a floor at y 24 and stopped. **Please try this one.** The exit door itself works: it sets 243 and takes you to the library.
+9. **Escape with Solarin** (Act 3 starts): the library's door near (-72, 124). The act start runs (Tor and Roberta both playable, Tor selected) and Brightvale (886) loads with the first Act 3 tutorial line. Traced.
+
+Not built in Act 2: all movies (16, 18, 19, 20 to 26), the entity path walks in the gardens and palace, and Roberta's health refill during the practice. A flower bed near (-73, -125) in the gardens has no ground data behind it: walking into the crystal plants there drops you through the world (if that happens, F1 can warp you).
 
 ## Petpets (new, can be tried any time)
 

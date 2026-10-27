@@ -120,7 +120,7 @@ pub struct World {
     books: Vec<(neopets_sim::trigger::Volume, u16)>,
     /// Every volume that fires on contact or from a hero shot under some collision mask, and those
     /// a hero shot fires under the current mask.
-    all_volumes: Vec<neopets_sim::trigger::Volume>,
+    pub all_volumes: Vec<neopets_sim::trigger::Volume>,
     shot_volumes: Vec<neopets_sim::trigger::Volume>,
     routines: HashMap<u16, u8>,
     /// Script-group type registrations: trigger index to its owner group (SPEC-0048 Script
@@ -400,6 +400,8 @@ pub enum Goal {
     Door,
     /// Within 3 units of a point (x, z) of the current world.
     Point([f32; 2]),
+    /// The same, on the floor within 2.5 of height y (stacked floors): (x, z, y).
+    PointAt([f32; 3]),
 }
 
 /// A world load that a door started (SPEC-0006 default door rule), serviced by the loader.
@@ -611,6 +613,8 @@ pub struct Play {
     pub wanted: Option<u32>,
     kinds: HashMap<u32, Kind>,
     pub root_step: [f32; 3],
+    /// Diagnostic block slides (block, target x and z) for traces.
+    pub diag_slides: Vec<(usize, [f32; 2])>,
     /// A Cross press waiting for the next tick.
     pub jump_latch: bool,
     /// An R3 press waiting for the next tick.
@@ -1309,6 +1313,7 @@ impl Play {
             wanted: None,
             kinds,
             root_step: [0.0; 3],
+            diag_slides: Vec::new(),
             jump_latch: false,
             r3_latch: false,
             l3_latch: false,
@@ -1584,7 +1589,8 @@ impl Play {
         let o = self.other.as_ref();
         let p = self.loco.position();
         let step = 4.0;
-        let key = |x: f32, z: f32| ((x / step).round() as i32, (z / step).round() as i32);
+        // Cells are keyed by height too (2-unit bands), so stacked floors are separate nodes.
+        let key = |x: f32, z: f32, y: f32| ((x / step).round() as i32, (z / step).round() as i32, (y / 2.0).round() as i32);
         let ground = |x: f32, z: f32, y: f32| {
             let h = self.world.probe(x, z, y + 2.5);
             if h.found {
@@ -1594,7 +1600,7 @@ impl Play {
             h.found.then_some((h.height, true))
 
         };
-        let start = key(p[0], p[2]);
+        let start = key(p[0], p[2], p[1]);
         let mut came = HashMap::new();
         let mut queue = std::collections::VecDeque::new();
         came.insert(start, (start, p[1]));
@@ -1607,13 +1613,13 @@ impl Play {
             let (_, y) = came[&k];
             let (x, z) = (k.0 as f32 * step, k.1 as f32 * step);
             for (dx, dz) in [(1, 0), (-1, 0), (0, 1), (0, -1)] {
-                let n = (k.0 + dx, k.1 + dz);
-                if came.contains_key(&n) {
-                    continue;
-                }
-                let (nx, nz) = (n.0 as f32 * step, n.1 as f32 * step);
+                let (nx, nz) = ((k.0 + dx) as f32 * step, (k.1 + dz) as f32 * step);
                 let Some((h, other)) = ground(nx, nz, y) else { continue };
                 if h > y + 1.5 {
+                    continue;
+                }
+                let n = key(nx, nz, h);
+                if came.contains_key(&n) {
                     continue;
                 }
                 let a = [x, y + 1.5, z];
@@ -1630,6 +1636,7 @@ impl Play {
                     Goal::Swap => other,
                     Goal::Door => !other && !self.world.scripted_doors && self.world.door_within([nx, h, nz], 3.0).is_some(),
                     Goal::Point(t) => !other && (t[0] - nx).hypot(t[1] - nz) <= 3.0,
+                    Goal::PointAt(t) => !other && (t[0] - nx).hypot(t[1] - nz) <= 3.0 && (h - t[2]).abs() < 2.5,
                 };
                 if reached {
                     let mut route = vec![[nx, nz]];
@@ -6401,6 +6408,22 @@ impl Play {
                 b.tick();
             }
         }
+        // Diagnostic (trace only): blocks slid toward a point at 0.2 units a tick, firing the
+        // volumes they touch as a push does.
+        let pack = self.world.pack;
+        self.diag_slides.retain(|&(k, t)| {
+            let Some(b) = self.world.blocks.get_mut(k) else { return false };
+            let d = [t[0] - b.position[0], t[1] - b.position[2]];
+            let l = d[0].hypot(d[1]);
+            let step = l.min(0.2);
+            if l > 0.0 {
+                b.position[0] += d[0] / l * step;
+                b.position[2] += d[1] / l * step;
+            }
+            b.testing = true;
+            let _ = pack;
+            l > 0.2
+        });
         self.owner_pose_step();
         self.status_display_step();
         self.shake_now = self.shake.step();

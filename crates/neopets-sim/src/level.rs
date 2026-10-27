@@ -4215,6 +4215,9 @@ fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
     v.extend([Action::HeroAnim { anim: 0, wait: false }, Action::FadeIn { seconds: 0.5, wait: false }, Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 }, wait(1.0)]);
     if s.word(1324, 8) != 0 && s.word(1324, 9) != 0 && s.word(1324, 10) != 0 {
         v.extend(solved_1324(s));
+        // The spec's callback-1 path ends with the solved scene and returns no camera; the hold
+        // above is released here so the hero is not left frozen (R-0095).
+        v.push(Action::ReturnCamera { preset: -1, release: true });
     } else {
         v.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 0.5, wait: false }]);
     }
