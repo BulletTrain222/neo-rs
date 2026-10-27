@@ -120,11 +120,18 @@ pub type Draw<'a> = &'a mut dyn FnMut(f32, f32) -> f32;
 pub struct ItemPool {
     pub slots: Vec<Option<WorldItem>>,
     counter: u32,
+    /// Per slot: the id of a dropped item that expired with its config record still attached
+    /// (SPEC-0021 Important-item give: the expiry gives but leaves the record, so the slot's
+    /// reuse gives again).
+    attached: Vec<Option<u16>>,
+    /// The ids the slot resets gave since the host last drained them (a dropped item taken, an
+    /// attached slot reused, the pool released); the host gives the important ones.
+    pub gives: Vec<u16>,
 }
 
 impl Default for ItemPool {
     fn default() -> Self {
-        Self { slots: vec![None; SLOTS], counter: 1 }
+        Self { slots: vec![None; SLOTS], counter: 1, attached: vec![None; SLOTS], gives: Vec::new() }
     }
 }
 
@@ -139,7 +146,12 @@ impl ItemPool {
         if s.id > 322 {
             return false;
         }
-        let Some(slot) = self.slots.iter_mut().find(|x| x.is_none()) else { return false };
+        let Some(at) = self.slots.iter().position(|x| x.is_none()) else { return false };
+        // The reuse resets the slot: an expired drop's attached record gives again.
+        if let Some(id) = self.attached[at].take() {
+            self.gives.push(id);
+        }
+        let slot = &mut self.slots[at];
         self.counter += 1;
         let token = self.counter;
         let p = s.point;
@@ -208,7 +220,7 @@ impl ItemPool {
     /// the important-item give (SPEC-0021 Important-item give).
     pub fn tick(&mut self, coins: &CoinWords, ground: &dyn Fn(f32, f32, f32) -> Option<f32>, draw: Draw) -> Vec<u16> {
         let mut expired = Vec::new();
-        for slot in &mut self.slots {
+        for (k, slot) in self.slots.iter_mut().enumerate() {
             let Some(it) = slot.as_mut() else { continue };
             if it.state == 1 {
                 continue;
@@ -218,6 +230,7 @@ impl ItemPool {
                 if it.life < 0.0 {
                     if it.lifetime.is_finite() {
                         expired.push(it.id);
+                        self.attached[k] = Some(it.id);
                     }
                     *slot = None;
                     continue;
@@ -264,8 +277,33 @@ impl ItemPool {
         (it.flag != 1 && d < 25.0 && (d < base + radius || range)).then_some(i)
     }
 
+    /// The take: the slot is freed and reset; a dropped item (finite lifetime) gives its id
+    /// through the reset (SPEC-0021 Important-item give), before the pickup's own add.
     pub fn take(&mut self, i: usize) -> Option<WorldItem> {
-        self.slots.get_mut(i)?.take()
+        let it = self.slots.get_mut(i)?.take()?;
+        if let Some(a) = self.attached.get_mut(i) {
+            *a = None;
+        }
+        if it.lifetime.is_finite() {
+            self.gives.push(it.id);
+        }
+        Some(it)
+    }
+
+    /// The release of the world's buffer: every slot is reset, so each dropped item still
+    /// lying and each expired drop's attached record give their ids (returned with any not yet
+    /// drained); the pool is then empty.
+    pub fn release(&mut self) -> Vec<u16> {
+        let mut out = std::mem::take(&mut self.gives);
+        for (slot, a) in self.slots.iter_mut().zip(self.attached.iter_mut()) {
+            if let Some(it) = slot.take().filter(|it| it.lifetime.is_finite()) {
+                out.push(it.id);
+            }
+            if let Some(id) = a.take() {
+                out.push(id);
+            }
+        }
+        out
     }
 }
 
@@ -596,6 +634,29 @@ mod tests {
             expired.extend(pool.tick(&COINS, &flat, &mut d));
         }
         assert_eq!(expired, vec![18]);
+        // The expiry leaves the record attached: reusing the slot gives again.
+        assert!(pool.gives.is_empty());
+        let s = Spawn { id: 146, point: [0.0, 1.0, 0.0], placed: false, charm: false, s0: 0.25, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };
+        assert!(pool.spawn(s, &flat, &mut d));
+        assert_eq!(std::mem::take(&mut pool.gives), vec![18]);
+    }
+
+    #[test]
+    fn slot_resets_give_dropped_items() {
+        // SPEC-0021 Important-item give: the take of a dropped item gives through the reset; a
+        // placed item (infinite lifetime) does not; the release gives what still lies.
+        let (mut pool, _) = spawn_one(78, false, None, 0.0, &[0.3, 0.4]);
+        assert!(pool.take(0).is_some());
+        assert_eq!(std::mem::take(&mut pool.gives), vec![78]);
+        let mut d = |_: f32, _: f32| 0.5;
+        let placed = Spawn { id: 19, point: [0.0, 1.0, 0.0], placed: true, charm: false, s0: 0.25, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };
+        assert!(pool.spawn(placed, &flat, &mut d));
+        let dropped = Spawn { id: 80, placed: false, ..placed };
+        assert!(pool.spawn(dropped, &flat, &mut d));
+        assert!(pool.take(0).is_some());
+        assert!(pool.gives.is_empty());
+        assert_eq!(pool.release(), vec![80]);
+        assert_eq!(pool.live(), 0);
     }
 
     #[test]

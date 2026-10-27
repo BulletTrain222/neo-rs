@@ -7200,7 +7200,18 @@ impl Play {
         let pet = self.pet_char;
         self.characters.retain(|c| resident.contains(&c.pack) || Some(c.id) == pet);
         self.pending_off.retain(|(p, _)| resident.contains(p));
-        self.pools.retain(|pack, _| resident.contains(pack));
+        // A released world's pool resets every slot: its important dropped items go to the
+        // party (SPEC-0021 Pool lifetime and Important-item give).
+        let released: Vec<u32> = self.pools.keys().copied().filter(|p| !resident.contains(p)).collect();
+        for pack in released {
+            if let Some(mut pool) = self.pools.remove(&pack) {
+                for id in pool.release() {
+                    if self.design.item_important(id) {
+                        self.state.give(id, 1);
+                    }
+                }
+            }
+        }
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
         let hero = self.loco.position();
         let talking = if self.dialogue_open { self.talk_with } else { None };
@@ -8121,6 +8132,17 @@ impl Play {
         }
     }
 
+    /// SPEC-0021 Important-item give: the important ids among a pool's slot-reset gives go to
+    /// the party, count 1 each (capped at the carry limit).
+    fn reset_gives(&mut self, pack: u32) {
+        let gives = self.pools.get_mut(&pack).map(|p| std::mem::take(&mut p.gives)).unwrap_or_default();
+        for id in gives {
+            if self.design.item_important(id) {
+                self.state.give(id, 1);
+            }
+        }
+    }
+
     /// The world items' per-tick step for the resident worlds' pools, the enemy payouts due,
     /// and the hero's pickup in the current world (SPEC-0021 Pickup, Auto-collect, Coin pickups).
     fn items_step(&mut self) {
@@ -8143,6 +8165,8 @@ impl Play {
                     self.last_pickup = format!("important item {id} given at its expiry on tick {}", self.ticks);
                 }
             }
+            // The slot resets since the last tick (an expired drop's slot reused).
+            self.reset_gives(pack);
         }
         let p = self.loco.position();
         let pack = self.world.pack;
@@ -8164,6 +8188,9 @@ impl Play {
         if let Some(pool) = self.pools.get_mut(&pack) {
             pool.take(i);
         }
+        // The take's slot reset gives an important dropped item first (SPEC-0021 Important-item
+        // give); the pickup's own add follows, so such a pickup adds 2 (capped).
+        self.reset_gives(pack);
         if coin {
             let value = self.coins.1.iter().position(|&c| c == it.id).map_or(0, |k| self.coins.0[k]);
             if value > 0 {
@@ -8184,7 +8211,8 @@ impl Play {
                 return;
             }
             let count = if it.charm { 100 } else { 1 };
-            *self.state.items.entry(it.id).or_insert(0) += count;
+            // The normal add, capped at the carry limit.
+            self.state.give(it.id, count);
             if matches!(it.id, 19 | 20 | 151 | 154 | 174) {
                 self.once.insert((it.id, pack));
             }
