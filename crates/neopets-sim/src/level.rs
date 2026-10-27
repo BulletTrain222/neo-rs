@@ -483,6 +483,12 @@ pub struct GameState {
     pub shot_hits: BTreeSet<u16>,
     /// NumMiamiceInCage (SPEC-0029 Behavior 28), filled by the host.
     pub miamice_caged: u32,
+    /// The entity whose CollideEntityWithTriggers fired the trigger being run (SPEC-0030 row
+    /// 276; set by the host for each callback, None for the hero's own fires).
+    pub trigger_firer: Option<usize>,
+    /// The current navmesh of each current-world entity with a walker (GetEntityCurrentNavmeshID;
+    /// filled by the host before each Update).
+    pub entity_mesh: HashMap<usize, i32>,
     /// NumMortogsOnTarget (SPEC-0041 1363): the Mortog zone count (SPEC-0029 Behavior 3).
     pub mortogs_on_target: u8,
     /// The current world's objects that are animating (IsObjAnimating), filled by the host.
@@ -3487,6 +3493,57 @@ fn glade_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
 }
 
 /// SPEC-0043 1398 thread 6: slot 0 emptied and loaded with set j (region 1399 + j).
+/// SPEC-0030 row 276 (CollideEntityWithTriggers) as each module's Update calls it: the entities
+/// whose bodies fire the current world's triggers each tick (with object 0).
+pub fn collide_entities(pack: u32) -> &'static [usize] {
+    match pack {
+        // SPEC-0043 1398 Update step 1: entities 16 to 21 and 9 to 12.
+        1398 => &[16, 17, 18, 19, 20, 21, 9, 10, 11, 12],
+        _ => &[],
+    }
+}
+
+/// SPEC-0043 1398 routine 1 (trigger 34), one stage-4 pass by a non-hero firer: the pass count
+/// (word 36) goes up, a 0.2 s fade, the firer deactivated, camera 7, the fade in, camera 9 for
+/// counts 1 to 3 and 8 for 4 to 7, 5 s, a fade out and in and the normal camera; at a count of 6
+/// the stage ends (word 24): camera 11, object 8 off, objects 7 and 9 played, 723, thread 6
+/// with argument 2. Not built: the six entities' SetAI_Behavior 0 and 5 and their moves to random
+/// points of group instance 1, the one-entry slot's activation, entity 23 at the firer's
+/// position, the effects along group instance 2's points, entity 22's walk from point 46 +
+/// count to 52 + count.
+fn pass_1398(firer: usize, s: &mut GameState) -> Vec<Action> {
+    let p = 1398;
+    let count = s.word(p, 36) + 1;
+    s.set_word(p, 36, count);
+    s.set_word(p, 35, 1);
+    let mut v = vec![
+        Action::FadeOut { seconds: 0.2, wait: true },
+        Action::DeactivateEntity { entity: firer },
+        Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
+        Action::FadeIn { seconds: 0.2, wait: true },
+        wait(1.0),
+        Action::PlayCamera { track: if count <= 3 { 9 } else { 8 }, wait: false, end: 1, speed: 1.0 },
+        wait(5.0),
+        Action::FadeOut { seconds: 0.2, wait: true },
+        Action::FadeIn { seconds: 0.2, wait: true },
+        Action::ReturnCamera { preset: -1, release: true },
+        Action::Bits { word: 35, set: 0, clear: 1 },
+    ];
+    if count == 6 {
+        s.set_word(p, 24, 1);
+        s.set(723, true);
+        v.extend([
+            Action::PlayCamera { track: 11, wait: false, end: 1, speed: 1.0 },
+            Action::DeactivateObj { obj: 8 },
+            Action::PlayAnim { obj: 7, speed: 1.0, wait: false },
+            Action::PlayAnim { obj: 9, speed: 1.0, wait: true },
+        ]);
+        v.extend(thread6_1398(2));
+        v.push(Action::ReturnCamera { preset: -1, release: true });
+    }
+    v
+}
+
 fn thread6_1398(j: u32) -> [Action; 2] {
     [Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1399 + j) }]
 }
@@ -8129,6 +8186,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::ReturnCamera { preset: -1, release: true },
             ]);
         }
+        // Routine 1 (trigger 34): a stage-4 pass when stage 4 is armed and not done, no pass runs
+        // and the firer is not the hero (object, shot and attack words all 0).
+        (1398, 1) if call.state == 1 && !call.object && state.word(pack, 30) != 0 && state.word(pack, 24) == 0 && state.word(pack, 35) == 0 => {
+            if let Some(e) = state.trigger_firer {
+                out.actions = pass_1398(e, state);
+            }
+        }
         // Routine 3 (trigger 33): stage 1 done, 720, thread 6 with argument 3.
         (1398, 3) if state.word(pack, 21) == 0 => {
             state.set_word(pack, 21, 1);
@@ -10650,6 +10714,18 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
             if state.word(pack, 30) != 0 && state.word(pack, 24) == 0 {
                 out.extend((16..=18).map(|entity| Action::HitPointsPercent { entity, percent: 100.0 }));
+            }
+            // Step 3b, stage 5: when four listed entities stand on navmesh 7, 8, 9 or 10 (the pen
+            // inner areas): 724, movie 67 counted, object 0 off, effect 15, 356 and 106. The list
+            // is taken as entities 9 to 12 (the stage-5 region's four characters, the ones Update
+            // collides; R-0100).
+            if state.word(pack, 24) != 0 && state.word(pack, 25) == 0 && (9..=12).all(|e| state.entity_mesh.get(&e).is_some_and(|m| (7..=10).contains(m))) {
+                state.set_word(pack, 25, 1);
+                for f in [724, 356, 106] {
+                    state.set(f, true);
+                }
+                state.movies.insert(67);
+                out.extend([Action::DeactivateObj { obj: 0 }, Action::StartEffect { slot: 15, camera: false }]);
             }
         }
         // SPEC-0042 1397 Update and its threads: step 1 once per load (block 0 placed again with
@@ -14732,6 +14808,38 @@ mod tests {
         let mut s = GameState::default();
         entity_setup(1411, &mut s);
         assert_eq!(s.entity_tables[&1411].records.len(), 9);
+    }
+
+    #[test]
+    fn module_1398_stage4_passes_and_stage5() {
+        // Stage 4 armed: six passes by non-hero firers end it (723, region 1401); a hero fire
+        // or a pass in progress starts none.
+        let mut s = GameState::default();
+        for f in [720, 721, 722] {
+            s.set(f, true);
+        }
+        on_init(1398, &mut s);
+        s.set_word(1398, 30, 1);
+        let call = |object| TriggerCall { index: 34, state: 1, object, square: false, block: -1 };
+        assert!(on_trigger(1398, 1, call(true), &mut s).actions.is_empty());
+        for (k, e) in (16..=21).enumerate() {
+            s.trigger_firer = Some(e);
+            let a = on_trigger(1398, 1, call(false), &mut s).actions;
+            assert!(a.contains(&Action::DeactivateEntity { entity: e }));
+            assert!(on_trigger(1398, 1, call(false), &mut s).actions.is_empty(), "a pass runs");
+            s.set_word(1398, 35, 0);
+            assert_eq!(s.flag(723), k == 5);
+            if k == 5 {
+                assert!(a.contains(&Action::LoadRegion { slot: 0, region: Some(1401) }));
+            }
+        }
+        // Stage 5: entities 9 to 12 on the pen meshes 7 to 10 set 724, 356 and 106.
+        s.entity_mesh = [(9, 7), (10, 8), (11, 9), (12, 3)].into_iter().collect();
+        on_update(1398, &mut s, false);
+        assert!(!s.flag(106));
+        s.entity_mesh.insert(12, 10);
+        on_update(1398, &mut s, false);
+        assert!(s.flag(724) && s.flag(356) && s.flag(106));
     }
 
     #[test]

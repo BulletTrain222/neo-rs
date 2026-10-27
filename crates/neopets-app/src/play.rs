@@ -2680,7 +2680,8 @@ impl Play {
                 }
                 Action::WhinnyPen { inner, entrance, locator } => {
                     let point = self.world.entries.get(locator).map_or([0.0; 3], |e| e.0);
-                    self.world.pens = vec![neopets_sim::whinny::Pen { inner, entrance, point, occupied: false }];
+                    // SetWhinnySwitches lists several pens (1398: four), each call one entry.
+                    self.world.pens.push(neopets_sim::whinny::Pen { inner, entrance, point, occupied: false });
                     // NEOPETS_TRACE_PEN: the pen's meshes as SetWhinnyPenmesh sets them (diagnostic).
                     if std::env::var_os("NEOPETS_TRACE_PEN").is_some() {
                         let m = &self.world.navmeshes;
@@ -4708,7 +4709,6 @@ impl Play {
     /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
     /// side from the pen point.
     pub fn herd_goal(&self) -> Option<[f32; 2]> {
-        let pen = self.world.pens.first()?.point;
         let p = self.loco.position();
         let w = self
             .characters
@@ -4718,6 +4718,9 @@ impl Play {
                 let d = |c: &Character| (c.position[0] - p[0]).hypot(c.position[2] - p[2]);
                 d(a).total_cmp(&d(b))
             })?;
+        // The free pen nearest that Whinny (the first pen when all are taken).
+        let hd = |q: [f32; 3]| (w.position[0] - q[0]).hypot(w.position[2] - q[2]);
+        let pen = self.world.pens.iter().filter(|pn| !pn.occupied).min_by(|a, b| hd(a.point).total_cmp(&hd(b.point))).or(self.world.pens.first())?.point;
         let (dx, dz) = (w.position[0] - pen[0], w.position[2] - pen[2]);
         let len = dx.hypot(dz).max(1e-6);
         Some([w.position[0] + 3.5 * dx / len, w.position[2] + 3.5 * dz / len])
@@ -5595,6 +5598,21 @@ impl Play {
                 fired.push(i);
             }
         }
+        // SPEC-0030 row 276, CollideEntityWithTriggers for the entities the module's Update names:
+        // each fires the volumes its position touches with object 0; the firer is kept for the
+        // callback.
+        let mut firers: HashMap<u16, usize> = HashMap::new();
+        let pack = self.world.pack;
+        for &e in level::collide_entities(pack) {
+            let Some(c) = self.characters.iter().find(|c| c.pack == pack && c.entity == Some(e) && !c.inactive && c.dying.is_none()) else { continue };
+            for v in self.world.volumes.iter().filter(|v| v.touches(c.position)) {
+                self.world.records.entry(v.index).or_default().fire(frame, false, -1);
+                firers.entry(v.index).or_insert(e);
+                if !fired.contains(&v.index) {
+                    fired.push(v.index);
+                }
+            }
+        }
         // A record a block fired that is decaying (the block left) still runs its callback, so
         // the scripts see the leaving state 3.
         let leaving: Vec<u16> = self.world.records.iter().filter(|(i, r)| r.state == 3 && r.block >= 0 && !fired.contains(i)).map(|(i, _)| *i).collect();
@@ -5656,7 +5674,9 @@ impl Play {
             if self.world.pack == 1066 {
                 self.state.trigger_raw = self.rng.next_u32();
             }
+            self.state.trigger_firer = firers.get(&i).copied();
             let out = level::on_trigger(self.world.pack, routine, call, &mut self.state);
+            self.state.trigger_firer = None;
             if out.prompt.is_some() && self.door_prompt.is_none() && !self.talk_prompt {
                 self.door_prompt = out.prompt;
             }
@@ -6504,6 +6524,7 @@ impl Play {
         }
         let pack = self.world.pack;
         self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
+        self.state.entity_mesh = self.characters.iter().filter(|c| c.pack == pack && !c.inactive).filter_map(|c| Some((c.entity?, c.walker.as_ref()?.mesh.map_or(-1, |m| m as i32)))).collect();
         self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0));
         self.slot_arrived.retain(|(p, _)| *p == pack || self.other.as_ref().is_some_and(|o| o.pack == *p));
         // The switch-group stages whose 0.4 s has passed become breakable.
