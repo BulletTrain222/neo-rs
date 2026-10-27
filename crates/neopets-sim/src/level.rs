@@ -1943,8 +1943,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // fight start) and 22 (the story exit); trigger 24 (the plain exit); the slot-load thread
         // (58: set 0, else set 1; region 865 + set) into store A (slot 0). The hazard triggers 4
         // to 9, the animated triggers, the other control threads, the object setups and the
-        // per-tick animation sequence (Medium-Low) are not reproduced. Words: 1 the stage bits,
-        // 5 the plain exit armed (by the arrival), 6 busy.
+        // per-tick animation sequence (Medium-Low) are not reproduced. The four instance-trigger
+        // registrations (groups 4, 2, 5 and 3) each start the instance-load worker (routines 34,
+        // 32, 35 and 33 here, one per group). Words: 1 the stage bits, 5 the plain exit armed (by
+        // the arrival), 6 busy, 10 and 11 the sets last loaded into stores A and C (-1 none).
         864 => {
             state.set(287, true);
             state.set(60, true);
@@ -1954,7 +1956,11 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([reg(1, 1), reg(22, 22)]);
             }
             v.push(reg(24, 24));
-            v.push(Action::LoadRegion { slot: 0, region: Some(865 + !state.flag(58) as u32) });
+            v.extend([(4, 34), (2, 32), (5, 35), (3, 33)].map(|(group, routine)| Action::RegisterGroupTriggers { group, routine }));
+            let set = !state.flag(58) as i32;
+            state.set_word(pack, 10, set);
+            state.set_word(pack, 11, -1);
+            v.push(Action::LoadRegion { slot: 0, region: Some(865 + set as u32) });
             v
         }
         // SPEC-0041 985 Init: by flag 281 (at load: word 9) CB2 or CB5 on trigger 4; the
@@ -6734,6 +6740,30 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.set_word(pack, 3, zone);
                 out.actions.push(Action::LoadRegion { slot: 0, region: None });
                 out.actions.extend(loader_822(state));
+            }
+        }
+        // SPEC-0044 864 instance-load worker (the shared instance callback of groups 2 to 5, by
+        // their main triggers 15, 18, 10 and 16): store A (slot 0) and store C (slot 2) take the
+        // group's sets (a gate that names no C set resets C's load); store B is never created,
+        // so its requests (sets 2 and 6) do nothing. A store already holding the set is left.
+        (864, 32..=35) if call.state == 1 && call.object => {
+            let (a, c) = match routine {
+                32 => (1, (!state.flag(288)).then_some(5)),
+                33 => (1, (!state.flag(292)).then_some(8)),
+                34 => (4, (!state.flag(58)).then_some(3)),
+                _ => (1, (!state.flag(289)).then_some(7)),
+            };
+            if state.word(pack, 10) != a {
+                state.set_word(pack, 10, a);
+                out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(865 + a as u32) }]);
+            }
+            let c = c.map_or(-1, |c| c as i32);
+            if state.word(pack, 11) != c {
+                state.set_word(pack, 11, c);
+                out.actions.push(Action::LoadRegion { slot: 2, region: None });
+                if c >= 0 {
+                    out.actions.push(Action::LoadRegion { slot: 2, region: Some(865 + c as u32) });
+                }
             }
         }
         // SPEC-0044 864 trigger 1 (the hero inside): stage bit 0, the fight start.
@@ -15259,6 +15289,14 @@ mod tests {
     fn module_864_chieftain_area() {
         let mut s = GameState::default();
         assert!(on_init(864, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(866) }));
+        // The instance worker: group 4 (main trigger 10) loads set 4 (the Chieftain, region 869)
+        // into A and set 3 into C; again, nothing; group 3 back to set 1 and set 8.
+        let member = |index| TriggerCall { index, state: 1, object: true, square: false, block: -1 };
+        let w = on_trigger(864, 34, member(10), &mut s).actions;
+        assert!(w.contains(&Action::LoadRegion { slot: 0, region: Some(869) }) && w.contains(&Action::LoadRegion { slot: 2, region: Some(868) }));
+        assert!(on_trigger(864, 34, member(10), &mut s).actions.is_empty());
+        let w = on_trigger(864, 33, member(18), &mut s).actions;
+        assert!(w.contains(&Action::LoadRegion { slot: 0, region: Some(866) }) && w.contains(&Action::LoadRegion { slot: 2, region: Some(873) }));
         assert!(s.flag(287) && s.level(3));
         let inside = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
         // The plain exit needs an arrival first.
