@@ -1586,7 +1586,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0039 706 Init: triggers 1 (handler 1) and 2 (handler 3); flag 62 when none of 62 to
         // 67 is set; with 248 set and no item 14, object 0 off and trigger 0 (handler 4); the
-        // display mask 2 (flag 205) or 1; thread 2 loads slot 0 with set 5 to 1 by the first set
+        // collision and display masks 2 (flag 205) or 1; thread 2 loads slot 0 with set 5 to 1 by the first set
         // flag of 67 to 63, else set 0 (region 707 + set).
         706 => {
             let mut v = vec![reg(1, 1), reg(2, 3)];
@@ -1596,12 +1596,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if state.flag(248) && !state.has_item(14) {
                 v.extend([Action::InitObjOn { obj: 0, end: false }, reg(0, 4)]);
             }
-            v.push(Action::DisplayMask { mask: if state.flag(205) { 2 } else { 1 } });
+            let m = if state.flag(205) { 2 } else { 1 };
+            v.extend([Action::CollisMask { mask: m }, Action::DisplayMask { mask: m }]);
             let set = [(67, 5), (66, 4), (65, 3), (64, 2), (63, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, j)| j);
             v.push(Action::LoadRegion { slot: 0, region: Some(707 + set) });
             v
         }
-        // SPEC-0039 753 Init: effects 15 to 48 stopped; with flag 252 clear trigger 0 (handler 8);
+        // SPEC-0039 753 Init: effects 15 to 48 stopped; with flag 252 clear trigger 0 (handler 8)
+        // and collision mask 1;
         // with 256 set and 258 clear (the event gate) trigger 1 (handler 3); the slot thread: with
         // the gate slot 1 loads set 1 (region 755); slot 0 loads set 2 (756) with 427 set and 428
         // clear, else set 0 (754). The movies 36, 37 and 33 are not built; the event runs
@@ -1609,7 +1611,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         753 => {
             let mut v: Vec<Action> = (15..=48).map(|slot| Action::StopEffect { slot }).collect();
             if !state.flag(252) {
-                v.push(reg(0, 8));
+                v.extend([reg(0, 8), Action::CollisMask { mask: 1 }]);
             }
             if state.flag(256) && !state.flag(258) {
                 v.extend([reg(1, 3), Action::LoadRegion { slot: 1, region: Some(755) }]);
@@ -2075,6 +2077,26 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // registered on every path. Not built: trigger 0's line, object 0, the prompt trigger 9,
         // triggers 1 to 3 and the effect stops.
         696 => vec![reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)],
+        // SPEC-0032 699 Init: display mask 2 (265 set; 266 set) or 1; the collision mask is that
+        // base with bit 4 (220 clear) or 8; S0 and S1 on triggers 0 and 1.
+        699 => {
+            let base = if state.flag(265) {
+                state.set(266, true);
+                2
+            } else {
+                1
+            };
+            let bit = if state.flag(220) { 8 } else { 4 };
+            vec![Action::DisplayMask { mask: base }, Action::CollisMask { mask: base | bit }, reg(0, 1), reg(1, 2)]
+        }
+        // SPEC-0032 702 Init: B1 on trigger 1; with 252 clear M0 on trigger 0 and collision mask 1.
+        702 => {
+            let mut v = vec![reg(1, 1)];
+            if !state.flag(252) {
+                v.extend([reg(0, 2), Action::CollisMask { mask: 1 }]);
+            }
+            v
+        }
         1122 => {
             let mut v = vec![reg(5, 5), reg(1, 1), reg(2, 2), reg(3, 3)];
             if state.flag(31) {
@@ -2758,7 +2780,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // clear; 249 set when 248 is set, 249 clear and movie 30 not played (movies are not
         // built, so it counts as not played); thread 3 loads slot 0 with set 3, 2, 1 or 0 by
         // the first set flag of 52, 51, 50 and 49 (region 887 + set), and nothing otherwise.
-        // SetWorldCollisMask is not built.
+        // With 252 clear, collision mask 1.
         886 => {
             let mut v = vec![reg(5, 1), reg(2, 2)];
             if !state.flag(250) {
@@ -2771,11 +2793,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.push(Action::LoadRegion { slot: 0, region: Some(887 + set) });
             }
             v.push(reg(0, 4));
+            if !state.flag(252) {
+                v.push(Action::CollisMask { mask: 1 });
+            }
             v
         }
         // SPEC-0039 1230 Init: slot 0 and thread 1; handler 2 on triggers 0, 2 and 1, handler 3
         // on 5; with flag 20 or 19 handlers 5 and 6 on 3 and 4; object 0 off with 64 set and 248
-        // clear. SetWorldCollisMask and SetWorldDisplayMask under 248 are not built.
+        // clear; with 248 set the collision and display masks 1.
         1230 => {
             let mut v = vec![reg(0, 2), reg(2, 2), reg(1, 2), reg(5, 3)];
             if state.flag(20) || state.flag(19) {
@@ -2784,6 +2809,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if state.flag(64) && !state.flag(248) {
                 v.push(Action::InitObjOn { obj: 0, end: false });
             }
+            if state.flag(248) {
+                v.extend([Action::CollisMask { mask: 1 }, Action::DisplayMask { mask: 1 }]);
+            }
             v.extend(slots_1230(state));
             v
         }
@@ -2791,12 +2819,15 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 5 to 7 handler 1, 0 handler 2, 1 handler 3, 2 handler 9; thread 4 (the flag-chosen
         // set); the instance trigger of group 2 (handler 5); teleport 0 (context 13) and the
         // map shop on entities 3 and 7 are fixed rules here (teleport_context,
-        // proximity_routine). SetWorldCollisMask(1) is not built.
+        // proximity_routine); with 252 clear, collision mask 1.
         880 => {
             let mut v = vec![Action::InitObjOn { obj: 0, end: false }, Action::InitObjOn { obj: 1, end: false }];
             v.extend([reg(5, 1), reg(6, 1), reg(7, 1), reg(0, 2), reg(1, 3), reg(2, 9)]);
             v.push(Action::RegisterInstance { routine: 5, trigger: 0, group: 2 });
             v.push(slots_880(state));
+            if !state.flag(252) {
+                v.push(Action::CollisMask { mask: 1 });
+            }
             v
         }
         // SPEC-0042 1171 Init: objects 0, 1, 2, 11, 13, 15, 17, 20, 23 and 26 off; the levers on
@@ -6765,6 +6796,28 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         (1381, 4) if call.object => out.actions.extend(hub_return_1381(state)),
+        // SPEC-0032 699 S0 (entering): 259 once; with 220 set and 258 clear line 6.
+        (699, 1) if call.object && call.state == 1 => {
+            state.set(259, true);
+            if state.flag(220) && !state.flag(258) {
+                out.actions.push(Action::Message { line: 6 });
+            }
+        }
+        // 699 S1 (entering, 659 clear): line 5 and 659.
+        (699, 2) if call.object && call.state == 1 && !state.flag(659) => {
+            out.actions.push(Action::Message { line: 5 });
+            state.set(659, true);
+        }
+        // SPEC-0032 702 B1 (inside): context 3; a press shows line 3.
+        (702, 1) if call.object && call.state != 0 => {
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: 3 });
+            } else {
+                out.prompt = Some(3);
+            }
+        }
+        // 702 M0 (entering, 252 still clear): line 5, every entry.
+        (702, 2) if call.object && call.state == 1 && !state.flag(252) => out.actions.push(Action::Message { line: 5 }),
         // The arm routine: only block k's own arm index; the armed word follows "touching now"
         // (state 1 or 2).
         (1381, 8) if (0..6).contains(&call.block) => {
@@ -10169,9 +10222,9 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend((16..=18).map(|entity| Action::HitPointsPercent { entity, percent: 100.0 }));
             }
         }
-        // SPEC-0042 714 Update: with 220 set and 284 clear the masks 4 (collision) and 15
+        // SPEC-0042 696 and 714 Update: with 220 set and 284 clear the masks 4 (collision) and 15
         // (display), each tick.
-        714 => {
+        696 | 714 => {
             if state.flag(220) && !state.flag(284) {
                 out.extend([Action::CollisMask { mask: 4 }, Action::DisplayMask { mask: 15 }]);
             }
@@ -15957,6 +16010,34 @@ mod tests {
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
         assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+    }
+
+    #[test]
+    fn pilot_699_702_masks() {
+        let mut s = GameState::default();
+        assert_eq!(&on_init(699, &mut s)[..2], &[Action::DisplayMask { mask: 1 }, Action::CollisMask { mask: 5 }]);
+        s.set(265, true);
+        s.set(220, true);
+        assert_eq!(&on_init(699, &mut s)[..2], &[Action::DisplayMask { mask: 2 }, Action::CollisMask { mask: 10 }]);
+        assert!(s.flag(266));
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
+        assert_eq!(on_trigger(699, 1, enter(0), &mut s).actions, vec![Action::Message { line: 6 }]);
+        assert!(s.flag(259));
+        assert_eq!(on_trigger(699, 2, enter(1), &mut s).actions, vec![Action::Message { line: 5 }]);
+        assert!(on_trigger(699, 2, enter(1), &mut s).actions.is_empty());
+        let mut s = GameState::default();
+        assert!(on_init(702, &mut s).contains(&Action::CollisMask { mask: 1 }));
+        assert_eq!(on_trigger(702, 1, enter(1), &mut s).prompt, Some(3));
+        let press = TriggerCall { square: true, ..enter(1) };
+        assert_eq!(on_trigger(702, 1, press, &mut s).actions, vec![Action::Message { line: 3 }]);
+        assert_eq!(on_trigger(702, 2, enter(0), &mut s).actions, vec![Action::Message { line: 5 }]);
+        // 880, 886 and 1230 masks.
+        let mut s = GameState::default();
+        assert!(on_init(880, &mut s).contains(&Action::CollisMask { mask: 1 }) && on_init(886, &mut s).contains(&Action::CollisMask { mask: 1 }));
+        s.set(248, true);
+        assert!(on_init(1230, &mut s).contains(&Action::DisplayMask { mask: 1 }));
+        s.set(220, true);
+        assert_eq!(on_update(696, &mut s, false), vec![Action::CollisMask { mask: 4 }, Action::DisplayMask { mask: 15 }]);
     }
 
     #[test]
