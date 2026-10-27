@@ -741,6 +741,8 @@ pub struct Play {
     /// The grab-line hang (state 28) and its cooldown (SPEC-0033 Behavior 9).
     line_hang: Option<neopets_sim::grab::Hang>,
     line_cooldown: u32,
+    /// The hero's touched flag from the last motion step (see `record_tick`'s contact pass).
+    touched: bool,
     /// The ledge state (30, 35 or 47) and its held edge (SPEC-0033 Behavior 51).
     ledge: Option<neopets_sim::ledge::Ledge>,
     climb: Option<neopets_sim::block::Climb>,
@@ -1473,6 +1475,7 @@ impl Play {
             ledge: None,
             line_hang: None,
             line_cooldown: 0,
+            touched: false,
             climb: None,
             ladder: None,
             grab_cooldown: 0,
@@ -4114,6 +4117,18 @@ impl Play {
         }
         h.cross = input.cross_held;
         h.playing = self.hero.clip_state().action;
+        // Test 4: the touched flag in the slide with the cooldown expired lets go, then the
+        // long-fall landing (state 48); the attach's 60-tick cooldown keeps it off at first.
+        if launch.is_none() && h.mode == 1 && self.touched && self.line_cooldown < 1 {
+            if let Some(line) = self.world.grab_lines.get(h.line).copied() {
+                self.line_hang = None;
+                self.line_cooldown = grab::COOLDOWN;
+                self.loco.line_let_go(line.u.map(|c| c * 15.0));
+                self.loco.long_fall_start();
+                self.trace_edge("line touched: long fall", h.line, 0);
+                return;
+            }
+        }
         let mut step = h.tick(&self.world.grab_lines, hero, self.loco.body.gap, square);
         if let Some(r) = launch {
             step.request = r;
@@ -6853,6 +6868,10 @@ impl Play {
         let block_contact = !noclip && !matches!(self.loco.state, 18 | 19 | 30 | 41 | 58);
         let wall_contact = !noclip && !matches!(self.loco.state, 21 | 23 | 30 | 35 | 37 | 38 | 41 | 47);
         let side_touch = Cell::new(false);
+        // The motion record's touched flag (+0x238; SPEC-0018 Slide response step 6): cleared
+        // by the hero branch each step and set by any contact that writes a normal; here any
+        // push out of a wall, box, block or sphere, or a block top's floor contact.
+        let touched = Cell::new(false);
         let swap = Cell::new(false);
         self.loco.record_tick(
             self.root_step,
@@ -6886,6 +6905,7 @@ impl Play {
                 // out from a ladder on a wall lies inside the wall's box by the hero radius, so
                 // the push would stop the mount from ever aligning (this build's choice; the
                 // spec skips only the walls and blocks there; R-0108).
+                let before = *p;
                 if !noclip && hero_state != hero_states::LADDER {
                     contact::resolve(p, &world.boxes, contact::HERO_RADIUS);
                 }
@@ -6897,9 +6917,14 @@ impl Play {
                 if !noclip {
                     contact::resolve_spheres(p, &world.push_spheres);
                 }
+                let moved = (0..3).any(|k| (p[k] - before[k]).abs() > 1e-5);
+                if moved || c.floor || c.side_touch {
+                    touched.set(true);
+                }
                 c.floor
             },
         );
+        self.touched = touched.get();
         // The side-touch latch the next hero update reads (SPEC-0033 Behavior 15A).
         self.side_touch = side_touch.get();
         // SPEC-0055 8A: the deadly-ground kill (kind 2, gap 0.085 or less; no health change),

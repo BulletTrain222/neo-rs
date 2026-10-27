@@ -9,9 +9,9 @@
 //! first half, plus 0.5, counts), is ahead of A along the flattened axis, within 1.5 of the hero
 //! sideways, and inside the height band for that side offset (1.5 to 4.0 above the hero up to
 //! 1.0 sideways, 1.0 to 4.5 up to 1.25, -0.5 to 6.0 up to 1.5). Not built: the exact-plane case
-//! (side offset below 0.001), the +0x270 lift while 113 plays (its role is not established) and
-//! the touched-flag exit to state 48 (the motion record has no touched flag here). The leap to a
-//! parallel line (modes 2 and 3), request 113 with Cross held and cue 141 (the host's) are built.
+//! (side offset below 0.001) and the +0x270 lift while 113 plays (its role is not established).
+//! The leap to a parallel line (modes 2 and 3), request 113 with Cross held, and (in the host)
+//! cue 141 and the touched-flag exit to state 48 are built.
 
 use crate::hero::Vec3;
 
