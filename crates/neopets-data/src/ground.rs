@@ -408,6 +408,31 @@ mod tests {
     use super::OwnerPose;
 
     #[test]
+    fn aim_target_entries() {
+        // A type-11 payload: n2 = 2 at +0x20, the table at 0x60, records at 0x80 and 0xD0.
+        let mut p = vec![0u8; 0x120];
+        p[0x20..0x24].copy_from_slice(&2i32.to_le_bytes());
+        p[0x48..0x4C].copy_from_slice(&0x60u32.to_le_bytes());
+        for (i, (model, rec, pt)) in [(-1i32, 0x80u32, [1.0f32, 2.0, 3.0]), (7, 0xD0, [-4.0, 5.5, 6.0])].into_iter().enumerate() {
+            let e = 0x60 + 0x0C * i;
+            p[e..e + 4].copy_from_slice(&model.to_le_bytes());
+            p[e + 8..e + 12].copy_from_slice(&rec.to_le_bytes());
+            for (k, v) in pt.iter().enumerate() {
+                let at = rec as usize + 0x30 + 4 * k;
+                p[at..at + 4].copy_from_slice(&v.to_le_bytes());
+            }
+        }
+        let top = [crate::resource::Chunk { offset: 0, tag: *b"IDM", kind: super::OBJECT_HEADER, extra: 0, size: 0, role_id: 0, payload: 0..p.len() }];
+        let t = super::aim_targets(&p, &top);
+        assert_eq!(t.len(), 2);
+        assert_eq!((t[0].model, t[0].mesh, t[0].point), (-1, 0, [1.0, 2.0, 3.0]));
+        assert_eq!((t[1].model, t[1].point), (7, [-4.0, 5.5, 6.0]));
+        // A record past the payload ends the list.
+        p[0x6C + 8..0x6C + 12].copy_from_slice(&0x200u32.to_le_bytes());
+        assert_eq!(super::aim_targets(&p, &top).len(), 1);
+    }
+
+    #[test]
     fn owner_mapping() {
         // SPEC-0018 step 4's vector: O = (10, 5, 20) with identity axes, p = (12, 23), T =
         // (100, 2, 200), A = (0, 0, 1), B = (-1, 0, 0): p' = (97, 202), raised by 3.
@@ -600,6 +625,35 @@ pub fn entry_record(bytes: &[u8], top: &[Chunk], i: usize) -> Option<([f32; 3], 
     let e = u32_at(p, 0x4C)? as usize + 0x50 * i;
     let v = |at: usize| Some([f32_at(p, at)?, f32_at(p, at + 4)?, f32_at(p, at + 8)?]);
     Some((v(e + 0x30)?, v(e + 0x40)?))
+}
+
+/// A rope-gun aim target (SPEC-0028 section 6, n2 entries; SPEC-0030 row 126): the registry
+/// model id, the inline marker mesh offset (0 for none) and the target point (the locator-like
+/// record's +0x30).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct AimTarget {
+    pub model: i32,
+    pub mesh: u32,
+    pub point: [f32; 3],
+}
+
+/// The pack's aim-target list: the n2 entries (count +0x20, 0x0C-byte entries at the table
+/// +0x48). The entry's +0x08 is read as a payload-relative offset like the header's tables; an
+/// entry whose record falls outside the payload ends the list.
+pub fn aim_targets(bytes: &[u8], top: &[Chunk]) -> Vec<AimTarget> {
+    let Some(c) = top.iter().find(|c| c.kind == OBJECT_HEADER) else { return Vec::new() };
+    let p = &bytes[c.payload.clone()];
+    let n = i32_at(p, 0x20).unwrap_or(0).clamp(0, 1 << 12) as usize;
+    let Some(table) = u32_at(p, 0x48).map(|v| v as usize) else { return Vec::new() };
+    let mut out = Vec::new();
+    for i in 0..n {
+        let e = table + 0x0C * i;
+        let (Some(model), Some(mesh), Some(rec)) = (i32_at(p, e), u32_at(p, e + 4), u32_at(p, e + 8)) else { break };
+        let at = rec as usize + 0x30;
+        let (Some(x), Some(y), Some(z)) = (f32_at(p, at), f32_at(p, at + 4), f32_at(p, at + 8)) else { break };
+        out.push(AimTarget { model, mesh, point: [x, y, z] });
+    }
+    out
 }
 
 /// The locator tag of entry record i (u16 at +0x1E; 0 for none; SPEC-0006 Locator lookup).

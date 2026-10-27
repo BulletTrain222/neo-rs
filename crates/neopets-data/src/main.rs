@@ -37,6 +37,7 @@ fn run() -> Result<(), String> {
     let mut registries = Vec::new();
     let mut lights = false;
     let mut blocks = false;
+    let mut aim = false;
     let mut panels = false;
     let mut object_headers = false;
     while let Some(arg) = args.next() {
@@ -53,6 +54,7 @@ fn run() -> Result<(), String> {
             "--effects" => effects = true,
             "--lights" => lights = true,
             "--blocks" => blocks = true,
+            "--aim-targets" => aim = true,
             "--panels" => panels = true,
             "--object-headers" => object_headers = true,
             "--registry" => {
@@ -90,7 +92,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(object_headers || panels || blocks || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -153,6 +155,9 @@ fn run() -> Result<(), String> {
     }
     if blocks {
         block_census(&mut disc, &index)?;
+    }
+    if aim {
+        aim_census(&mut disc, &index)?;
     }
     if panels {
         panel_census(&mut disc, &index)?;
@@ -613,6 +618,29 @@ fn panel_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
 }
 
 /// SPEC-0048 Source: the movable blocks of every chunk file (the spec counts 90 in 17 packs).
+/// SPEC-0028 section 6, n2 entries: the rope-gun aim targets of every chunk file.
+fn aim_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
+    let (mut packs, mut total) = (0u32, 0usize);
+    for n in 0..index.len() as u32 {
+        let bytes = index.read(disc, n)?;
+        let family = resource::classify(&bytes);
+        if !matches!(family, Family::ChunkFile(_)) {
+            continue;
+        }
+        let chain = resource::walk_chunks(&bytes, resource::chunk_limit(n, family))?;
+        let t = neopets_data::ground::aim_targets(&bytes, &chain.chunks);
+        if t.is_empty() {
+            continue;
+        }
+        packs += 1;
+        total += t.len();
+        let pts: Vec<String> = t.iter().map(|a| format!("({:.1}, {:.1}, {:.1}) m{} {}", a.point[0], a.point[1], a.point[2], a.model, a.mesh)).collect();
+        println!("pack {n}: {} aim targets: {}", t.len(), pts.join("; "));
+    }
+    println!("aim targets: {total} in {packs} packs");
+    Ok(())
+}
+
 fn block_census(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     let (mut packs, mut total, mut meshes) = (0u32, 0usize, 0usize);
     for n in 0..index.len() as u32 {
