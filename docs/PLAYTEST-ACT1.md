@@ -1,4 +1,4 @@
-# Playtest guide: the first Act 1 missions and Act 2
+# Playtest guide: Act 1, Act 2 and the start of Act 3
 
 What to expect, step by step, from the new-game start through the Meridell enlistment errands. Steps are named in our own words. The quest rows are the journal's rows (SPEC-0049), and the flags are the story flags the step sets. Every step below has been run in an automated trace on this build, except where it says **not traced**. Nothing has been played by hand yet, so anything that looks, sounds or feels wrong is worth noting.
 
@@ -56,6 +56,22 @@ Act 2 starts at the end of the castle escape in pack 1174 (Act 1's last step, no
 9. **Escape with Solarin** (Act 3 starts): the library's door near (-72, 124). The act start runs (Tor and Roberta both playable, Tor selected) and Brightvale (886) loads with the first Act 3 tutorial line. Traced.
 
 Not built in Act 2: all movies (16, 18, 19, 20 to 26), the entity path walks in the gardens and palace, and Roberta's health refill during the practice. A flower bed near (-73, -125) in the gardens has no ground data behind it: walking into the crystal plants there drops you through the world (if that happens, F1 can warp you).
+
+## Act 3: both heroes (started; traced in pieces)
+
+From the Act 3 start both heroes are playable (L1 + R1 switches). The traces below started near each step with the earlier flags set, so the walking between areas has not been tested. To jump in: `Run.cmd --play --pack 886` with the Act 3 flags (ask me for the list if you want to start here).
+
+1. **Brightvale arrival (886)** (249): a hint tells you to switch to Roberta and shoot the flying minions. **Known gap:** the three enemies whose defeat ends this scene are never loaded (asked as R-0096). The story does not need it: only a line and one object in 886 depend on it.
+2. **Brightvale Castle (758)** (68, 251): arriving there is enough.
+3. **King Hagan and the library (777)** (252, 69, then 253 to 256): enter the audience area twice (the second visit plays the scene), then the library: climb the ladders to the gallery (y 50) and press Square at each of the four books. Do the book on the middle pedestal (near (-138, -56)) **last**, because it ends the search. Traced (from the gallery).
+4. **Back through 753** (258): a Gelert Assassin ambush appears as you enter; leave the area to end it. Traced the start.
+5. **Bogshot Village (699)** (259), **the apothecary (745)** (260, then 264 and 76 when you bring the three bogberries, items 3 to 5, after the serpent), **the bridge builder (752)** (265) and the mended bridge (266 on the next visit to 699). Traced.
+6. **The Plague Serpent (735)** (75 and others): **not traced to a win.** Its arena changes during the fight: each phase change breaks a group of breakables and raises a platform (**built today**). The serpent only bites when you are above y 115 and within 20 units; standing in the water kills both heroes. The swamp's stepping stones are not built (R-0096), so crossing to the arena may not work. **Please try this.**
+7. **Market Town (880)** (296): entering the square near (1432, -572) springs an ambush of three Dark Knights; beating them opens the way on. Traced (the knights killed with the developer menu).
+8. **The Black Knight (989)** (298): **built in play today** (he used to stand still). He swings, laughs, parries, gets angry and, if you block or dodge his angry swing, enraged; his enraged attacks leave weak points open for 10 seconds (knees after the charge, under-arms after the high swing, back after the floor strike, neck after the sword spin). Touch or shoot an open weak point to damage it. Traced up to the stun windows, and the win (via the developer menu) correctly ends the fight. **Not traced: winning by hand.** The under-arms may be out of reach without a jump (R-0097). **Fixed today:** a streamed neighbour's load used to wipe the arena's state, so even a win would never have ended the fight.
+9. **The Trader's Guild (1017)**: the guildmaster's reward (line 98) after the knight. **Tor's farm (934, 1184)** (276, 277): traced. **The Act 3 Juppie fight (1217)**: not traced.
+
+Not built yet, and needed later in Act 3: the **Gelert Assassin** boss (Illusen's glade, step 39) has no controller at all. Steps 37 to 43 (the Cogham mines, the Werelupe woods, Illusen, the cloud wall, the dungeons, freeing King Skarl) have not been traced.
 
 ## Petpets (new, can be tried any time)
 
