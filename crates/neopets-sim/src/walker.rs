@@ -43,6 +43,9 @@ pub struct Walker {
     /// The class kind query returns 1 (SPEC-0040 Behavior 14E): the edge guard applies. On for
     /// every walker (no hero walks with one).
     pub edge_guard: bool,
+    /// A can-fly 1 enemy in flight (SPEC-0040 Behavior 14D item 7): the no-gravity flag, which
+    /// also skips the ground projection; its height comes from the caller's height keeper.
+    pub float: bool,
     /// Locomotion modes 3, 4 and 8 steer toward minus the direction (SPEC-0029 Behavior 2,
     /// Steering by mode); set by the caller for the step.
     pub reverse: bool,
@@ -76,6 +79,7 @@ impl Walker {
             blocked_timer: 0,
             lock: false,
             edge_guard: true,
+            float: false,
             reverse: false,
             saved: position,
             id,
@@ -240,12 +244,16 @@ impl Walker {
         // SPEC-0040 Behavior 14E: with the lock word clear and the ground gap above 2.0 in
         // magnitude, this tick's root step is reversed (P' = P0 - D) and the rest of the pre-step
         // (the ground constraint) is skipped.
-        if self.edge_guard && !self.lock && self.body.gap.abs() > 2.0 {
+        if self.float {
+            // No ground projection and no gravity while flying.
+        } else if self.edge_guard && !self.lock && self.body.gap.abs() > 2.0 {
             self.body.position = std::array::from_fn(|k| p0[k] - d[k]);
         } else {
             self.body.constrain();
         }
-        self.body.gravity();
+        if !self.float {
+            self.body.gravity();
+        }
         self.confine(meshes, d);
         self.body.integrate();
         self.lock = false;

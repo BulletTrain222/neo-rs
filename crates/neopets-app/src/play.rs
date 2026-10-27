@@ -4464,7 +4464,7 @@ impl Play {
                 c.hp -= applied;
                 if c.hp <= 0 && !e.dead {
                     c.hp = 0;
-                    e.die();
+                    e.die(&mut self.rng);
                     self.payouts.push((c.pack, c.position, c.drop));
                 }
             } else if damage > 0 && c.townsfolk.is_none() {
@@ -4829,12 +4829,12 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(1 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(1 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
                 enemy: match (row, tuning) {
-                    (Some(r), Some(t)) if r.class == Some(17) && r.can_fly == 0 => Some(Enemy::new(
+                    (Some(r), Some(t)) if r.class == Some(17) => Some(Enemy::new(
                         params(&r, &t),
                         enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector },
                         &mut self.rng,
@@ -5452,7 +5452,7 @@ impl Play {
                     if let Some(e) = o.enemy.as_mut() {
                         if !e.dead {
                             o.hp = 0;
-                            e.die();
+                            e.die(&mut self.rng);
                         }
                     } else if o.boss.is_none() && o.whinny.is_none() && o.row.is_some() {
                         o.hp -= 10000;
@@ -6719,9 +6719,13 @@ impl Play {
                 *position = wk.position();
                 continue;
             }
-            // The navmesh pick: the first ground mesh holding the enemy (SPEC-0038 Behavior 6).
-            if wk.mesh.and_then(|i| world.navmeshes.get(i)).is_none_or(|m| m.locate_full(p).is_none()) {
-                let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.locate_full(p).is_some());
+            // The navmesh pick: the first mesh holding the enemy, of kind 2 (flying) when the
+            // row can fly, else 1 (SPEC-0038 Behavior 6); a flyer with no flying mesh under it
+            // takes a ground mesh. A grounding or the retarget step picks again.
+            let fly_kind = if row.can_fly != 0 { 2 } else { 1 };
+            if e.take_repick() || wk.mesh.and_then(|i| world.navmeshes.get(i)).is_none_or(|m| m.locate_full(p).is_none()) {
+                let find = |kind: u32| world.navmeshes.iter().position(|m| m.kind == kind && m.locate_full(p).is_some());
+                let pick = find(fly_kind).or_else(|| find(1));
                 if pick.is_some() {
                     wk.assign_mesh(pick, &world.navmeshes);
                 }
@@ -6774,6 +6778,8 @@ impl Play {
             v.missile_threat = shot_paths.iter().any(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body));
             let outer_before = e.outer;
             let act = e.tick(&v, &mut self.rng);
+            // The flyer's goal height (SPEC-0040 Behavior 21), with the ground under it.
+            let fly_y = e.airborne().then(|| e.fly_target(&v, world.ground_at(p[0], p[2], p[1] + 8.0)));
             // NEOPETS_TRACE_DEFENCE: a defence starting (outers 5 to 8).
             if e.outer != outer_before && (5..=8).contains(&e.outer) && std::env::var_os("NEOPETS_TRACE_DEFENCE").is_some() {
                 println!("      defence: {name} enters outer {} (swing class {:?}) on tick {}", e.outer, v.hero_swing, self.ticks);
@@ -6812,8 +6818,22 @@ impl Play {
             if let Some((t, w)) = act.face {
                 wk.steer_to(t, w.clamp(0.0, 1.0));
             }
-            let step = if act.stop { [0.0; 3] } else { *root_step };
+            let mut step = if act.stop { [0.0; 3] } else { *root_step };
             let ground = &world.ground;
+            // SPEC-0040 Behavior 14D item 7: a flyer adds the row speed along its class axis and
+            // its height keeper moves y 0.1 a tick toward the goal height (set at once within
+            // 0.1); a can-fly 1 flyer has no gravity and no ground projection.
+            let airborne = e.airborne();
+            wk.float = airborne && row.can_fly == 1;
+            if airborne {
+                if let Some(f) = act.fly {
+                    step = add(step, f);
+                }
+                if let Some(target) = fly_y {
+                    let dy = target - wk.position()[1];
+                    wk.body.position[1] += if dy.abs() > 0.1 { 0.1 * dy.signum() } else { dy };
+                }
+            }
             wk.motion_tick(step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
             *position = wk.position();
             *facing = wk.facing;
@@ -6884,7 +6904,7 @@ impl Play {
                             c.hp -= applied;
                             if c.hp <= 0 && !e.dead {
                                 c.hp = 0;
-                                e.die();
+                                e.die(&mut self.rng);
                                 self.payouts.push((c.pack, c.position, c.drop));
                             }
                             self.last_hit = format!("reflected shot hit {} for {applied} (hp {})", c.name, c.hp);
@@ -7383,14 +7403,20 @@ impl Play {
             let ground = |x: f32, z: f32, c: f32| world.and_then(|w| w.ground_at(x, z, c));
             let rng = &mut self.rng;
             let mut draw = |lo: f32, hi: f32| rng.frange(lo, hi);
-            if let Some(pool) = self.pools.get_mut(&pack) {
-                pool.tick(&coins, &ground, &mut draw);
+            let expired = self.pools.get_mut(&pack).map(|pool| pool.tick(&coins, &ground, &mut draw)).unwrap_or_default();
+            // SPEC-0021 Important-item give: an important dropped item that fades out goes to
+            // the party (count 1).
+            for id in expired {
+                if self.design.item_important(id) {
+                    self.state.give(id, 1);
+                    self.last_pickup = format!("important item {id} given at its expiry on tick {}", self.ticks);
+                }
             }
         }
         let p = self.loco.position();
         let pack = self.world.pack;
         let base = self.items.get(146).map_or(1.5, |i| i.pickup_base);
-        let Some(i) = self.pools.get(&pack).and_then(|pool| pool.collectable(p, base, contact::HERO_RADIUS)) else { return };
+        let Some(i) = self.pools.get(&pack).and_then(|pool| pool.collectable(p, base, contact::HERO_RADIUS, &|id| self.design.item_important(id))) else { return };
         let Some(it) = self.pools.get(&pack).and_then(|pool| pool.slots[i]) else { return };
         let coin = neopets_sim::items::is_coin(it.id);
         let mote = (160..=173).contains(&it.id);
@@ -11037,6 +11063,12 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         hostile: r.hostile,
         display_default: t.display_default,
         can_fly: r.can_fly,
+        fly_turn: t.fly_turn,
+        fly_idle: t.fly_idle,
+        fly_agro: t.fly_agro,
+        ground_max: t.ground_max,
+        ground_min: t.ground_min,
+        max_fly: t.max_fly,
         search_max: t.search_max,
         search_min: t.search_min,
         attack_timer_max: t.attack_timer_max,

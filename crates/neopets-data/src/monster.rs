@@ -119,6 +119,14 @@ pub struct Tuning {
     pub approach_timer_max: f32,
     pub approach_timer_min: f32,
     pub turn: f32,
+    /// Flying turn speed (0x88), Flying Idle and Agro Velocity (0x8C, 0x90), the ground timer
+    /// max and min (0x98, 0x9C) and Max Fly Height (0xB4) (SPEC-0038 Layout 2; SPEC-0040 14D).
+    pub fly_turn: f32,
+    pub fly_idle: f32,
+    pub fly_agro: f32,
+    pub ground_max: f32,
+    pub ground_min: f32,
+    pub max_fly: f32,
     /// Distance hide flag (u16 +0xA0).
     pub distance_hide: bool,
     pub flying_hit: i32,
@@ -248,6 +256,12 @@ impl MonsterTable {
             approach_timer_max: f(0x6C),
             approach_timer_min: f(0x70),
             turn: f(0x84),
+            fly_turn: f(0x88),
+            fly_idle: f(0x8C),
+            fly_agro: f(0x90),
+            ground_max: f(0x98),
+            ground_min: f(0x9C),
+            max_fly: f(0xB4),
             distance_hide: u(0xA0) != 0,
             flying_hit: w(0xAC) as i32,
             anger: w(0x134) != 0,

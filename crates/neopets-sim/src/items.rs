@@ -5,8 +5,9 @@
 //! ready item and the collect distance, the money and item rolls of a drop group, the greedy
 //! coin split, and the luck gate.
 //!
-//! Not covered: the item text database (carry limits, the important-item give and the range
-//! collect), the game-state code (items never mature in play, as the spec notes), the shop,
+//! Not covered: the item text database (carry limits; the important-item give at expiry and the
+//! range collect are run with the host's important test, the double give is not), the
+//! game-state code (items never mature in play, as the spec notes), the shop,
 //! the petpet reservation, the pickup hook and popup, the quick-item auto-select, cues, item
 //! display models, clover patches, and the region-load point move of byte +0x21.
 
@@ -203,7 +204,10 @@ impl ItemPool {
     }
 
     /// SPEC-0021 Per-tick step (game-state code 0: items never mature).
-    pub fn tick(&mut self, coins: &CoinWords, ground: &dyn Fn(f32, f32, f32) -> Option<f32>, draw: Draw) {
+    /// Returns the ids of the dropped items (finite lifetime) whose fade ended this tick, for
+    /// the important-item give (SPEC-0021 Important-item give).
+    pub fn tick(&mut self, coins: &CoinWords, ground: &dyn Fn(f32, f32, f32) -> Option<f32>, draw: Draw) -> Vec<u16> {
+        let mut expired = Vec::new();
         for slot in &mut self.slots {
             let Some(it) = slot.as_mut() else { continue };
             if it.state == 1 {
@@ -212,6 +216,9 @@ impl ItemPool {
             if it.age > it.lifetime {
                 it.life -= 2.12 * DT;
                 if it.life < 0.0 {
+                    if it.lifetime.is_finite() {
+                        expired.push(it.id);
+                    }
                     *slot = None;
                     continue;
                 }
@@ -233,12 +240,13 @@ impl ItemPool {
                 it.scale = if it.age > 0.5 { it.s1 } else { it.s0 + 2.0 * (it.s1 - it.s0) * it.age };
             }
         }
+        expired
     }
 
-    /// SPEC-0021 Pickup, steps 1, 3 and 5 (no ask-about hook, no range collect): the nearest
-    /// ready item (flag byte not 1) within 25.0, collected when d < base + radius. Returns its
-    /// slot.
-    pub fn collectable(&self, p: Vec3, base: f32, radius: f32) -> Option<usize> {
+    /// Pickup steps 1, 3 and 5: the nearest ready item, collected within base + radius, or an
+    /// important item (by `important`) at any distance below 25 once its age is above 0.4 x L
+    /// (the range collect).
+    pub fn collectable(&self, p: Vec3, base: f32, radius: f32, important: &dyn Fn(u16) -> bool) -> Option<usize> {
         let mut best: Option<(usize, f32)> = None;
         for (i, it) in self.slots.iter().enumerate() {
             let Some(it) = it else { continue };
@@ -252,7 +260,8 @@ impl ItemPool {
         }
         let (i, d) = best?;
         let it = self.slots[i].as_ref()?;
-        (it.flag != 1 && d < 25.0 && d < base + radius).then_some(i)
+        let range = important(it.id) && it.age > 0.4 * it.lifetime;
+        (it.flag != 1 && d < 25.0 && (d < base + radius || range)).then_some(i)
     }
 
     pub fn take(&mut self, i: usize) -> Option<WorldItem> {
@@ -563,6 +572,33 @@ mod tests {
     }
 
     #[test]
+    fn important_range_collect_and_expiry() {
+        // An important dropped item (L 11.2 s) 10 units away: collected only once its age is
+        // above 0.4 x L; its fade's end reports it for the give.
+        let (mut pool, _) = spawn_one(18, false, None, 0.0, &[0.3, 0.4]);
+        let l = pool.slots[0].unwrap().lifetime;
+        {
+            let it = pool.slots[0].as_mut().unwrap();
+            it.state = 3;
+            it.age = 0.4 * l;
+            it.position = [10.0, 0.0, 0.0];
+        }
+        let imp = |id: u16| id == 18;
+        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175, &imp), None);
+        pool.slots[0].as_mut().unwrap().age = 0.4 * l + 0.1;
+        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175, &imp), Some(0));
+        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175, &|_| false), None);
+        let mut d = |_: f32, _: f32| 0.5;
+        let flat = |_: f32, _: f32, _: f32| Some(0.0);
+        pool.slots[0].as_mut().unwrap().age = l + 1.0;
+        let mut expired = Vec::new();
+        for _ in 0..40 {
+            expired.extend(pool.tick(&COINS, &flat, &mut d));
+        }
+        assert_eq!(expired, vec![18]);
+    }
+
+    #[test]
     fn pickup_gate_and_collect_distance() {
         let (mut pool, _) = spawn_one(146, false, None, 0.0, &[0.3, 0.4]);
         {
@@ -571,12 +607,12 @@ mod tests {
             it.age = 0.81;
             it.position = [2.0, 1.7, 0.0];
         }
-        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175), Some(0), "d = 2.625 < 2.675");
+        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175, &|_| false), Some(0), "d = 2.625 < 2.675");
         pool.slots[0].as_mut().unwrap().position = [2.0, 1.8, 0.0];
-        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175), None, "d = 2.691");
+        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175, &|_| false), None, "d = 2.691");
         pool.slots[0].as_mut().unwrap().age = 0.8;
         pool.slots[0].as_mut().unwrap().position = [1.0, 0.0, 0.0];
-        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175), None, "age 0.8 is not ready");
+        assert_eq!(pool.collectable([0.0; 3], 1.5, 1.175, &|_| false), None, "age 0.8 is not ready");
         let mut full = ItemPool::default();
         let mut d = |_: f32, _: f32| 0.5;
         let s = Spawn { id: 146, point: [0.0; 3], placed: true, charm: false, s0: 1.0, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };

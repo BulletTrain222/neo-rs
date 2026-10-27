@@ -109,6 +109,11 @@ impl DesignTables {
         self.tables.first()?.string(ptr).map(<[u8]>::to_vec).filter(|n| !n.is_empty())
     }
 
+    /// Table 0, row id: the important flag (u8 +0x1F; SPEC-0021): quest items and equipment.
+    pub fn item_important(&self, id: u16) -> bool {
+        self.word(0, id as usize, 0x1C).is_some_and(|w| w >> 24 == 1)
+    }
+
     /// Table 0, row id: the carry limit Q (+0x08; 0 = no limit).
     pub fn carry_limit(&self, id: u16) -> Option<u32> {
         self.word(0, id as usize, 8)

@@ -15,9 +15,13 @@
 //! the counter-attack choice (Behavior 14), the
 //! confused outer 11, the attack manager and the wait in line (outer 12), projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
-//! ghosts, reanimation (state 16 of rows 224, 226, 227), drops and coins, and flyers (the AI is
-//! not run for rows that can fly). The alerted search (state 2) only aims at the last-seen point
-//! until its countdown ends (R-0015).
+//! ghosts, reanimation (state 16 of rows 224, 226, 227) and drops and coins. The alerted search
+//! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
+//!
+//! Flyers (SPEC-0038 "Flyer", Behaviors 2 step 4, 34 step 2, 37 step 7, 41, 44 and 48; SPEC-0040
+//! Behavior 14D item 7 and Behavior 21): the airborne test, the retarget countdown with the
+//! re-launch (state 22), grounding on death and on hit kind 0, the flying animation ids, the
+//! flying row speed along the movement class axis and the goal height the host's keeper follows.
 //!
 //! Statuses (SPEC-0029 Behavior 27): the apply with its element immunity and defaults, the
 //! stunned state 4, poison and fire hits, the slow and speed scales and the outgoing curse and
@@ -85,6 +89,14 @@ pub struct Params {
     pub approach_timer_max: f32,
     pub approach_timer_min: f32,
     pub turn: f32,
+    /// The flyer words: turn (0x88), idle and agro velocity (0x8C, 0x90), ground timer max and
+    /// min (0x98, 0x9C) and Max Fly Height (0xB4).
+    pub fly_turn: f32,
+    pub fly_idle: f32,
+    pub fly_agro: f32,
+    pub ground_max: f32,
+    pub ground_min: f32,
+    pub max_fly: f32,
     pub distance_hide: bool,
     pub flying_hit: i32,
     pub anger: bool,
@@ -262,6 +274,89 @@ pub struct Act {
     pub sink: f32,
     /// This tick's poison and fire hits (Behavior 27.2 steps 3 and 8), each a take-hit.
     pub status_hits: [Option<i32>; 2],
+    /// A flyer's row-speed step F in the character's own basis (x side B1, z forward B3), per
+    /// tick (SPEC-0040 Behavior 14D item 7).
+    pub fly: Option<Vec3>,
+}
+
+/// SPEC-0040 Behavior 21, the flyer goal height. `ambush` is the ambush word (+0xBC0); while it
+/// is 0 the home height is used. Can Fly 1: hero y + min(H, 0.2 x the horizontal distance), at
+/// least the ground + 2.0, then the home height while ambush is 0. Can Fly 2: hero y (or the home
+/// height), at most ground + H. `ground` is the ground under the goal (None: no clamp).
+pub fn fly_goal(can_fly: i32, max_fly: f32, hero: Vec3, at: Vec3, home: Vec3, ambush: i32, ground: Option<f32>) -> f32 {
+    match can_fly {
+        1 => {
+            let mut y = hero[1] + max_fly.min(0.2 * hdist(at, hero));
+            if let Some(g) = ground {
+                y = y.max(g + 2.0);
+            }
+            if ambush == 0 {
+                y = home[1];
+            }
+            y
+        }
+        2 => {
+            let y = if ambush == 0 { home[1] } else { hero[1] };
+            match ground {
+                Some(g) if y - g > max_fly => g + max_fly,
+                _ => y,
+            }
+        }
+        _ => at[1],
+    }
+}
+
+/// The flying form of an animation id (SPEC-0038 Behaviors 8, 44 and 48; SPEC-0040 Behavior 6
+/// mode entries and the idle pick): locomotion (2 wander 98, 4 patrol 99, 11 state 9 100, 20 state
+/// 1 154, rush 21/23 as 101/102, keep distance 24/26 as 107/108, strafe 28/32/29/30 as 103 to 106
+/// for movement classes 7 to 10), the holds (22 155, 25 156, 31 132), the defences (55 140, 56
+/// 150, 126 151, 53 138, 54 139), the reactions (60 158, 61 159, 62 160, 64 161), victory 73 163,
+/// the base idle 0 as 97 and the fidgets 115 to 119 as 142. The flying strafe order (29 as 105,
+/// 30 as 106) follows the class numbers of the gait swap (Medium-Low).
+pub fn fly_anim(id: u32) -> u32 {
+    match id {
+        0 => 97,
+        2 => 98,
+        4 => 99,
+        11 => 100,
+        20 => 154,
+        21 => 101,
+        23 => 102,
+        24 => 107,
+        26 => 108,
+        28 => 103,
+        32 => 104,
+        29 => 105,
+        30 => 106,
+        22 => 155,
+        25 => 156,
+        31 => 132,
+        55 => 140,
+        56 => 150,
+        126 => 151,
+        53 => 138,
+        54 => 139,
+        60 => 158,
+        61 => 159,
+        62 => 160,
+        64 => 161,
+        73 => 163,
+        115..=119 => 142,
+        n => n,
+    }
+}
+
+/// The movement-class axis of a flying locomotion id in the character's basis: forward (+B3)
+/// for 98 to 101, 103, 107 and 154; backward (-B3) for 102, 104 and 108; +B1 for 105 and -B1 for
+/// 106 (SPEC-0040 Behavior 14D item 7).
+fn fly_axis(id: u32) -> Option<Vec3> {
+    match id {
+        98..=101 | 103 | 107 | 154 => Some([0.0, 0.0, 1.0]),
+        102 | 104 | 108 => Some([0.0, 0.0, -1.0]),
+        105 => Some([1.0, 0.0, 0.0]),
+        106 => Some([-1.0, 0.0, 0.0]),
+        _ => None,
+    }
 }
 
 fn sub(a: Vec3, b: Vec3) -> Vec3 {
@@ -389,6 +484,12 @@ pub struct Enemy {
     pub blocking: bool,
     /// The pending block-hit flag: the melee block plays 126 once.
     pub block_hit: bool,
+    /// The retarget (grounded) countdown (0xBF4): -1 idle; a grounding sets it positive.
+    pub retarget: i32,
+    /// The ambush word (+0xBC0; SPEC-0040 Behavior 21): 0 keeps a flyer at its home height.
+    pub ambush: i32,
+    /// A navmesh re-pick is pending (passed out through the next act).
+    repick: bool,
 }
 
 impl Enemy {
@@ -452,6 +553,9 @@ impl Enemy {
             through: None,
             through_seen: false,
             force: false,
+            retarget: -1,
+            ambush: 0,
+            repick: false,
         };
         e.draw_distances(rng);
         e.idle_timer = rng.range(120, 600);
@@ -714,7 +818,7 @@ impl Enemy {
         }
         // Behavior 37 step 7: no hit reaction while stunned (status 0).
         if !self.status(0) && !(self.outer == 10 && self.react == 2 && self.stun_type == 1) {
-            let kind = if self.p.can_fly != 0 {
+            let kind = if self.p.can_fly != 0 && self.retarget < 1 {
                 match self.p.flying_hit {
                     1 => Some(7),
                     0 | 2 => Some(6),
@@ -723,6 +827,11 @@ impl Enemy {
             } else {
                 Some(0)
             };
+            // Behavior 44 kind 0: a flyer's grounded countdown starts (the navmesh pick follows
+            // through the host on the next tick).
+            if kind == Some(0) && self.p.can_fly != 0 {
+                self.ground(rng);
+            }
             if let Some(kind) = kind {
                 if let (2, 14, Some(k)) = (self.outer, self.seq, self.selected) {
                     self.end_path(k, rng);
@@ -781,11 +890,32 @@ impl Enemy {
         }
     }
 
-    pub fn die(&mut self) {
+    /// Behavior 34 step 2 with the death countdown: a can-fly 1 enemy that dies airborne is
+    /// grounded (the countdown from the ground timer, max not reached).
+    pub fn die(&mut self, rng: &mut Rng) {
         if !self.dead {
+            if self.p.can_fly == 1 && self.retarget <= 0 {
+                self.ground(rng);
+            }
             self.dead = true;
             self.disappear = self.p.disappear;
         }
+    }
+
+    /// The grounded countdown: trunc(float[ground min, ground max)).
+    fn ground(&mut self, rng: &mut Rng) {
+        self.retarget = rng.frange(self.p.ground_min, self.p.ground_max) as i32;
+        self.repick = true;
+    }
+
+    /// A navmesh re-pick requested since the last call (grounding, retarget).
+    pub fn take_repick(&mut self) -> bool {
+        std::mem::take(&mut self.repick)
+    }
+
+    /// The flyer test: can-fly 1 with the retarget countdown at most 0, or can-fly 2.
+    pub fn airborne(&self) -> bool {
+        (self.p.can_fly == 1 && self.retarget <= 0) || self.p.can_fly == 2
     }
 
     /// A strike left the hero at 0 HP: the victory pose (state 10).
@@ -913,7 +1043,7 @@ impl Enemy {
     /// 0.95, the sink of 1/180 per tick, release below 0).
     fn dead_tick(&mut self, v: &View) -> Act {
         let mut a = Act { anim: Some(58), ..Act::default() };
-        let flying = self.p.can_fly == 2;
+        let flying = self.airborne();
         if flying {
             a.anim = Some(153);
         }
@@ -937,11 +1067,45 @@ impl Enemy {
         let dots = self.status_tick();
         let mut a = self.think(v, rng);
         a.status_hits = dots;
+        if self.airborne() {
+            self.fly_step(&mut a);
+        }
         let s = self.status_scale(&a);
         if s != 1.0 {
             a.rate = Some(a.rate.unwrap_or(1.0) * s);
         }
         a
+    }
+
+    /// The flying forms and the row speed (SPEC-0040 Behavior 14D item 7): the animation's flying
+    /// id (141 for the agro idle), then F = v / 30 along the movement class axis while a flying
+    /// locomotion id plays (v the agro velocity in state 19, else the idle velocity); the
+    /// sequencer's states 7, 8, 9 and 12 push forward whatever the animation; the dodges 53, 54,
+    /// 138 and 139 stop it.
+    fn fly_step(&self, a: &mut Act) {
+        if let Some(id) = a.anim {
+            a.anim = Some(if self.state == 19 && matches!(id, 0 | 1) { 141 } else { fly_anim(id) });
+        }
+        let v = if self.state == 19 { self.p.fly_agro } else { self.p.fly_idle } / 30.0;
+        let axis = if self.state == 19 && self.outer == 2 && matches!(self.seq, 7..=9 | 12) {
+            Some([0.0, 0.0, 1.0])
+        } else {
+            a.anim.and_then(fly_axis)
+        };
+        a.fly = match a.anim {
+            Some(53 | 54 | 138 | 139) => None,
+            _ => axis.map(|d| d.map(|c| c * v)),
+        };
+    }
+
+    /// The goal height for the host's height keeper (SPEC-0040 Behavior 14D item 7): can-fly 1
+    /// in sequencer states 7 to 9 and 12 aims at the hero's height + 2.0, otherwise the goal of
+    /// Behavior 21 (the move goal is taken as the enemy's own position).
+    pub fn fly_target(&self, v: &View, ground: Option<f32>) -> f32 {
+        if self.p.can_fly == 1 && self.state == 19 && self.outer == 2 && matches!(self.seq, 7..=9 | 12) {
+            return v.hero[1] + 2.0;
+        }
+        fly_goal(self.p.can_fly, self.p.max_fly, v.hero, v.position, self.spawn.home, self.ambush, ground)
     }
 
     fn think(&mut self, v: &View, rng: &mut Rng) -> Act {
@@ -955,6 +1119,18 @@ impl Enemy {
         if std::mem::take(&mut self.alert) && ![19, 1, 4, 16].contains(&self.state) {
             let s = if self.p.hostile { 19 } else { 1 };
             self.set(s, v, rng, &mut a);
+        }
+        // Step 4, the retarget countdown: at 0, unless the Action-19 gate blocks (state 19 with
+        // the sequencer in states 0 to 3), the navmesh is picked again and the state becomes 22
+        // directly; then the countdown goes down (at -1 nothing happens).
+        if self.retarget == 0 && !(self.state == 19 && self.outer == 2 && self.seq <= 3) {
+            self.repick = true;
+            self.previous = self.state;
+            self.state = 22;
+            self.through = None;
+        }
+        if self.retarget >= 0 {
+            self.retarget -= 1;
         }
         match self.state {
             0 => self.set(self.default_state as u32, v, rng, &mut a),
@@ -1056,9 +1232,11 @@ impl Enemy {
             if s.flags & 0x02 != 0 && s.spawn_cap == 0 {
                 continue;
             }
-            // Trigger special 1 (airborne only) never passes: flyers are not covered.
-            if s.special as i32 == 1 {
-                continue;
+            // Trigger special: 1 only while airborne, 2 only while not.
+            match s.special as i32 {
+                1 if !self.airborne() => continue,
+                2 if self.airborne() => continue,
+                _ => {}
             }
             let ok = if s.charge == -1 { v.route || (s.kind == MELEE && d < 10.0) || s.kind == MISSILE } else { v.route };
             if !ok {
@@ -2042,11 +2220,56 @@ mod tests {
     }
 
     #[test]
+    fn flyer_goal_heights() {
+        // SPEC-0040 vector 37 (Can Fly 1, H 10, ground 3, ambush 1).
+        let h = |hero: Vec3, ambush| fly_goal(1, 10.0, hero, [0.0, 40.0, 0.0], [0.0, 1.0, 0.0], ambush, Some(3.0));
+        assert_eq!(h([30.0, 0.0, 0.0], 1), 6.0);
+        assert_eq!(h([10.0, 0.0, 0.0], 1), 5.0);
+        assert_eq!(h([30.0, 0.0, 0.0], 0), 1.0);
+        // Vector 156 (Can Fly 2, H 4, ground 10, ambush 1).
+        assert_eq!(fly_goal(2, 4.0, [0.0, 20.0, 0.0], [0.0; 3], [0.0; 3], 1, Some(10.0)), 14.0);
+        assert_eq!(fly_goal(2, 4.0, [0.0, 8.0, 0.0], [0.0; 3], [0.0; 3], 1, Some(10.0)), 8.0);
+    }
+
+    #[test]
+    fn flyer_grounding_and_relaunch() {
+        let has = |_| true;
+        let mut rng = Rng::seeded(5);
+        let mut p = skeleton();
+        (p.can_fly, p.ground_min, p.ground_max, p.fly_idle, p.flying_hit) = (1, 60.0, 120.0, 6.0, 1);
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        assert!(e.airborne());
+        // Airborne idle: the flying base idle 97; wander id 2 flies as 98 at 6 / 30 per tick.
+        let v = view([50.0, 0.0, 0.0], &has);
+        let a = e.tick(&v, &mut rng);
+        assert_eq!(a.anim, Some(97));
+        let mut a = Act { anim: Some(2), ..Act::default() };
+        e.fly_step(&mut a);
+        assert_eq!((a.anim, a.fly), (Some(98), Some([0.0, 0.0, 0.2])));
+        // A hit while airborne: flying hit 1 gives kind 7 and no grounding.
+        e.take_hit(1, [0.0; 3], &mut rng);
+        assert_eq!((e.outer, e.react, e.retarget), (10, 7, -1));
+        // Grounded (as by a death or kind 0): not airborne, and on reaching 0 the re-launch.
+        e.ground(&mut rng);
+        assert!((60..120).contains(&e.retarget) && !e.airborne());
+        assert!(e.take_repick());
+        e.state = 0;
+        e.retarget = 1;
+        e.tick(&v, &mut rng);
+        e.tick(&v, &mut rng);
+        assert_eq!((e.state, e.retarget, e.take_repick()), (22, -1, true));
+        // Death while airborne grounds a can-fly 1 enemy.
+        let mut f = Enemy::new(p, Spawn::default(), &mut rng);
+        f.die(&mut rng);
+        assert!(f.retarget >= 60 && !f.airborne());
+    }
+
+    #[test]
     fn corpse_countdown_and_sink() {
         let has = |_| true;
         let mut rng = Rng::seeded(5);
         let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
-        e.die();
+        e.die(&mut rng);
         let mut v = view([9.0, 0.0, 0.0], &has);
         v.clip = Clip { action: 58, progress: 0.96, finished: false };
         let mut sunk = 0.0;
