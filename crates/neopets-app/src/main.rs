@@ -2616,6 +2616,12 @@ fn play_trace(
     for n in std::env::var("NEOPETS_TRACE_MAPS").unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u32>().ok()) {
         play.map_held(n);
     }
+    // NEOPETS_TRACE_QUESTS=1: the quest rows (SPEC-0049 table 1) with their flags and texts.
+    if std::env::var_os("NEOPETS_TRACE_QUESTS").is_some() {
+        for (i, q) in play.map_tables().0.iter().enumerate() {
+            println!("      quest {i}: kind {} start {} done {} stage {} at ({:.0}, {:.0}) {:?}: {:?}", q.kind, q.start, q.done, q.stage, q.x, q.z, String::from_utf8_lossy(&q.title), String::from_utf8_lossy(&q.objective));
+        }
+    }
     // NEOPETS_TRACE_ROBERTA=1: the trace starts as Roberta (diagnostic; her attack fires shots).
     if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
         play.trace_select_hero(1);

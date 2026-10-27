@@ -9955,7 +9955,7 @@ impl Play {
             names.push(format!("enemy shots {}", self.shots.live()));
         }
         if let Some(pool) = self.pools.get(&self.world.pack).filter(|p| p.live() > 0) {
-            let ids: Vec<u16> = pool.slots.iter().flatten().map(|i| i.id).collect();
+            let ids: Vec<String> = pool.slots.iter().flatten().map(|i| format!("{} at {:.0},{:.1},{:.0}", i.id, i.position[0], i.position[1], i.position[2])).collect();
             names.push(format!("world items {ids:?}"));
         }
         if let (Some(p), Some(c)) = (self.petpet.as_ref(), self.pet_char.and_then(|id| self.characters.iter().find(|c| c.id == id))) {

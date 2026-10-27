@@ -9614,13 +9614,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 // Fade out, hero to locator 29, object 9 activated, camera 27, fade in, sound 9,
                 // objects 18, 20 and 17 played, object 20 stopped and deactivated, object 19
                 // played, effects 3 and 4 started, sound 10, line 166, object 9 deactivated,
-                // line 162, camera returned (the shake is not reproduced; the plays wait in turn,
-                // Medium in the spec).
-                out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 29 }, Action::InitObjOn { obj: 9, end: false }, camera(27), fade_in()]);
+                // line 162, camera returned (the shake is not reproduced). The spec gives the 1 s
+                // wait after the fade in (High) but not the plays' waits (Medium): the 13 s clips of
+                // objects 18 and 17 run on while the 0.33 s object 20 is waited for (waiting for
+                // each in turn held the hero for 28 s; R-0092).
+                out.actions.extend([Action::HoldHero, fade_out(), Action::MoveHero { locator: 29 }, Action::InitObjOn { obj: 9, end: false }, camera(27), fade_in(), wait(1.0)]);
                 out.actions.push(Action::PlaySound { cue: 9, locator: None });
-                for obj in [18, 20, 17] {
-                    out.actions.push(Action::PlayAnim { obj, speed: 1.0, wait: true });
-                }
+                out.actions.extend([Action::PlayAnim { obj: 18, speed: 1.0, wait: false }, Action::PlayAnim { obj: 20, speed: 1.0, wait: true }, Action::PlayAnim { obj: 17, speed: 1.0, wait: false }]);
                 out.actions.extend([Action::StopAnim { obj: 20 }, Action::DeactivateObj { obj: 20 }, Action::PlayAnim { obj: 19, speed: 1.0, wait: true }]);
                 out.actions.extend([Action::StartEffect { slot: 3, camera: false }, Action::StartEffect { slot: 4, camera: false }]);
                 out.actions.push(Action::PlaySound { cue: 10, locator: None });
