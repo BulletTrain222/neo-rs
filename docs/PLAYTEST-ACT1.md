@@ -38,6 +38,13 @@ What to expect, step by step, from the new-game start through the Meridell enlis
 23. **The Juppie fight** (pack 1217; winning sets 147): lure its head slam onto the marked spots so it gets stuck, then hit the head. Traced: the intro, stage 1 (the stun and the hits) and the start of stage 2. **Not traced:** a stage-2 or stage-3 hit. The automated hero got stuck instead of moving to the next spot, so this fight is worth a careful look: does each stage end, and does the win scene play?
 24. **Next** (not traced yet): your parents sign the form (148) and you take it back to Kendrick (150).
 
+## Petpets (new, can be tried any time)
+
+- The first wild petpet is in Meridell Outskirts (pack 1066), near (-763, 553). You need a petpet food (item ids 145 to 157; for example a Chokato, 146) chosen as your selected quick item (open the quick panel, pick the food and close it).
+- Walk up to the petpet and face it: the Square prompt reads "Feed petpet". Square drops the food in front of you; the petpet walks over, eats it and becomes yours. It then follows you, its meter shows next to its portrait at the top left of the HUD, and it gives its bonus (this one, kind 0, adds 25 % to your hits). It leaves when its time runs out (7.5 minutes for a Chokato). Feed it again to top it up.
+- Traced: the feed, the eat and the join. Not tested by hand: how it looks and feels. Wild petpets wander toward you when you are more than 10 units away; that follows the spec as written but is asked about (R-0094).
+- Without a food selected, Square at the prompt plays the "can't" sound.
+
 ## Known gaps that may show in these missions
 
 - Movies are not played; the game marks them as seen and carries on (the opening movies, for example).
