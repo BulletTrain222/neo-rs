@@ -3054,6 +3054,18 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_MOTE_AT="tick:word:id;...": a held Mote equipped into Tor's equipment
+        // word on that tick (diagnostic).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_MOTE_AT") {
+            for e in v.split(';') {
+                let n: Vec<u64> = e.split(':').filter_map(|t| t.trim().parse().ok()).collect();
+                if let [t, word, id] = n[..] {
+                    if t == play.ticks {
+                        play.item_command(&menus::Command::EquipMote { word: word as usize, id: id as u16 });
+                    }
+                }
+            }
+        }
         // NEOPETS_TRACE_SMASH="tick:k;...": breakable k of the current world broken on that tick
         // (its drop runs; diagnostic).
         if let Ok(v) = std::env::var("NEOPETS_TRACE_SMASH") {
