@@ -1497,6 +1497,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             let mut v: Vec<Action> = [32, 33, 34, 35, 6, 7, 8, 9, 10, 0].map(|i| reg(i, 34)).to_vec();
             v.extend([2, 6, 3].map(|obj| Action::InitObjOn { obj, end: false }));
             v.extend([reg(15, 15), reg(14, 14)]);
+            // Triggers 16 to 19: the breakable routine (27).
+            v.extend((16..=19).map(|i| reg(i, 27)));
             v.extend([reg(3, 56), Action::LoadRegion { slot: 0, region: Some(759) }, Action::LoadRegion { slot: 1, region: Some(771) }, Action::WheelPattern]);
             v
         }
@@ -8421,9 +8423,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::ReturnCamera { preset: -1, release: true },
                 Action::InitObjOn { obj: 6, end: false },
                 Action::InitObjOn { obj: 3, end: false },
-                Action::DeactivateTimer,
             ]);
+            out.actions.extend((17..=20).map(|id| Action::SetBreakableActive { id, on: true }));
+            out.actions.push(Action::DeactivateTimer);
         }
+        // SPEC-0045 758 breakable routine 27 (triggers 16 to 19): breakable 19 broken while it is
+        // intact (every index names 19).
+        (758, 27) if call.state != 0 && breakable_intact(state, 19) => out.actions.push(Action::Break { id: 19 }),
         // SPEC-0045 758 routine 34, the signs: the Square context 3 while inside; a press shows the
         // index's line.
         (758, 34) if call.state != 0 => {
@@ -9500,6 +9506,11 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
         985 => out.extend(thread_985(state)),
+        // SPEC-0041 1130 Update: message 4 once per load (word 30) when breakable 0 is broken.
+        1130 if state.word(pack, 30) == 0 && state.breakables.contains_key(&0) && !breakable_intact(state, 0) => {
+            state.set_word(pack, 30, 1);
+            out.push(Action::Message { line: 4 });
+        }
         // SPEC-0042 1171 Update: the arm pass (each watched last drain stage, 25, 28, 31, 34 and
         // 37, seen intact: its watch word 40 + i set) and the break pass (armed and no longer
         // intact: the word cleared, flag 637 + i, the clog count with its flags 163 to 167, 33 at
@@ -12875,6 +12886,10 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
                 Action::FadeOut { seconds: 0.5, wait: true },
                 Action::InitObjOn { obj: 6, end: false },
                 Action::InitObjOn { obj: 3, end: false },
+                Action::SetBreakableActive { id: 17, on: true },
+                Action::SetBreakableActive { id: 18, on: true },
+                Action::SetBreakableActive { id: 19, on: true },
+                Action::SetBreakableActive { id: 20, on: true },
                 Action::MoveHero { locator: 150 },
                 Action::ReturnCamera { preset: -1, release: true },
                 Action::FadeIn { seconds: 0.5, wait: true },
@@ -15942,6 +15957,26 @@ mod tests {
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
         assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+    }
+
+    #[test]
+    fn breakable_watch_1130_758() {
+        // 1130: message 4 once, on the first tick breakable 0 reads broken.
+        let mut s = GameState::default();
+        assert!(on_update(1130, &mut s, false).is_empty());
+        s.breakables.insert(0, 1);
+        assert!(on_update(1130, &mut s, false).is_empty());
+        s.breakables.insert(0, 2);
+        assert_eq!(on_update(1130, &mut s, false), vec![Action::Message { line: 4 }]);
+        assert!(on_update(1130, &mut s, false).is_empty());
+        // 758: triggers 16 to 19 break breakable 19 while it is intact.
+        let mut s = GameState::default();
+        assert!(on_init(758, &mut s).contains(&Action::RegisterTrigger { index: 17, routine: 27 }));
+        let fire = TriggerCall { index: 17, state: 1, object: true, square: false, block: -1 };
+        s.breakables.insert(19, 1);
+        assert_eq!(on_trigger(758, 27, fire, &mut s).actions, vec![Action::Break { id: 19 }]);
+        s.breakables.insert(19, 2);
+        assert!(on_trigger(758, 27, fire, &mut s).actions.is_empty());
     }
 
     #[test]
