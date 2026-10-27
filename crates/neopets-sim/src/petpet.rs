@@ -5,8 +5,11 @@
 //! (state choice, idle-hero follow, moving follow with its three gaits, eating in place, the
 //! low-time one-shot and the leave).
 //!
-//! Not covered: class 20, the bumped recovery of class 34 state 3 (it holds animation 0) and the
-//! nearby-character response of state 1 (its filter is open).
+//! Class 20 (the second petpet behaviour) has its idle, approach-and-consume and wander states.
+//!
+//! Not covered: class 20's state 1 (its item test is open), the bumped recovery of class 34
+//! state 3 (it holds animation 0) and the nearby-character response of state 1 (its filter is
+//! open).
 
 use crate::rng::Rng;
 
@@ -614,6 +617,132 @@ impl Wild {
     }
 }
 
+/// The class 20 wait words: 4.0 and 5.0 seconds (0x2DB2AC, 0x2DB2B0).
+pub const CLASS20_WAIT_AT: u32 = 0x002D_B2AC;
+
+/// What a class 20 creature sees: the nearest world item other than the anchor within 25 units
+/// (position, token).
+#[derive(Clone, Copy, Debug)]
+pub struct Class20View {
+    pub position: Vec3,
+    pub object: Option<(Vec3, u32)>,
+    pub clip_action: u32,
+    pub clip_done: bool,
+}
+
+/// What class 20 asks for this tick.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Class20Act {
+    pub anim: Option<u32>,
+    pub toward: Option<Vec3>,
+    /// The object it latched this tick (its token): it is removed from the world.
+    pub consume: Option<u32>,
+    /// It is seeking an object (the reservation's slow flag).
+    pub seeking: bool,
+}
+
+/// Class 20 (SPEC-0047, Class 20): states 0 (idle), 2 (approach and consume) and 3 (wander).
+/// State 1 needs the item test, which is open, so it is never chosen.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Class20 {
+    pub state: u8,
+    sub: u8,
+    wait: i32,
+    point: Option<Vec3>,
+    latched: bool,
+    target: Option<Vec3>,
+    /// The reference object's point (the spawn point; Medium).
+    home: Vec3,
+}
+
+impl Class20 {
+    pub fn new(home: Vec3) -> Self {
+        Self { state: 0, sub: 0, wait: 0, point: None, latched: false, target: None, home }
+    }
+
+    /// One tick. `waits` is the 4 to 5 s range in ticks.
+    pub fn tick(&mut self, v: &Class20View, waits: (i32, i32), rng: &mut Rng) -> Class20Act {
+        if self.state != 2 {
+            if v.object.is_some() {
+                self.state = 2;
+                self.latched = false;
+                self.target = None;
+            } else if self.state != 3 {
+                self.state = 3;
+                self.sub = 1;
+            }
+        }
+        let mut a = Class20Act::default();
+        match self.state {
+            2 => {
+                if self.latched {
+                    a.anim = Some(4);
+                    if v.clip_action == 4 && v.clip_done {
+                        self.state = 3;
+                        self.sub = 0;
+                        self.wait = rng.range(waits.0, waits.1);
+                    }
+                    return a;
+                }
+                let moved = |p: Vec3| self.target.is_some_and(|t| hdist(t, p) > 2.0);
+                match v.object {
+                    Some((p, _)) if moved(p) => self.to_wander(waits, rng, &mut a),
+                    None => self.to_wander(waits, rng, &mut a),
+                    Some((p, token)) => {
+                        self.target = Some(p);
+                        a.seeking = true;
+                        if hdist(p, v.position) >= 2.5 {
+                            a.toward = Some(p);
+                            a.anim = Some(2);
+                        } else {
+                            self.latched = true;
+                            a.consume = Some(token);
+                            a.anim = Some(4);
+                        }
+                    }
+                }
+            }
+            3 => self.wander(v, waits, rng, &mut a),
+            _ => a.anim = Some(0),
+        }
+        a
+    }
+
+    fn to_wander(&mut self, waits: (i32, i32), rng: &mut Rng, a: &mut Class20Act) {
+        self.state = 3;
+        self.sub = 0;
+        self.wait = rng.range(waits.0, waits.1);
+        a.anim = Some(0);
+    }
+
+    /// State 3: sub-step 0 counts the wait down with animation 0, then picks a point within 40
+    /// units of the reference object; sub-step 1 walks to it and within 5.0 draws a new wait.
+    fn wander(&mut self, v: &Class20View, waits: (i32, i32), rng: &mut Rng, a: &mut Class20Act) {
+        if self.sub == 0 {
+            a.anim = Some(0);
+            self.wait -= 1;
+            if self.wait <= 0 {
+                let ang = rng.frange(0.0, std::f32::consts::TAU);
+                let r = rng.frange(0.0, 40.0);
+                self.point = Some([self.home[0] + r * ang.cos(), self.home[1], self.home[2] + r * ang.sin()]);
+                self.sub = 1;
+            }
+            return;
+        }
+        // A wander entered at sub-step 1 walks to the stored point; with none stored the
+        // reference point is used (open question 21).
+        let p = *self.point.get_or_insert(self.home);
+        if hdist(v.position, p) < 5.0 {
+            self.sub = 0;
+            self.wait = rng.range(waits.0, waits.1);
+            a.anim = Some(0);
+        } else {
+            a.toward = Some(p);
+            a.anim = Some(2);
+        }
+    }
+}
+
 /// The moving follow's gait rule: (animation, next gait) for the current gait and distance.
 pub fn gait(g: u8, d: f32) -> (u32, u8) {
     match g {
@@ -861,6 +990,34 @@ mod tests {
         assert_eq!((p.state, a.anim, a.toward, a.reserve), (4, Some(4), None, Some(9)));
         let a = p.tick(&View { clip_action: 4, clip_done: true, ..v }, 1800, &mut rng);
         assert_eq!((a.eat, p.state), (Some((9, 146)), 1));
+    }
+
+    #[test]
+    fn class_20() {
+        // Vector 25: 2.5 away moves toward the object; 2.4 latches and consumes it; the next
+        // tick plays animation 4; when it ends, state 3 sub-step 0 with a 240 to 300 wait.
+        let mut rng = Rng::seeded(2);
+        let w = (240, 300);
+        let v = Class20View { position: [0.0; 3], object: Some(([2.5, 0.0, 0.0], 4)), clip_action: 0, clip_done: false };
+        let mut c = Class20::new([0.0; 3]);
+        let a = c.tick(&v, w, &mut rng);
+        assert_eq!((c.state, a.toward, a.consume), (2, Some([2.5, 0.0, 0.0]), None));
+        let a = c.tick(&Class20View { object: Some(([2.4, 0.0, 0.0], 4)), ..v }, w, &mut rng);
+        assert_eq!((c.state, a.consume, c.latched), (2, Some(4), true));
+        let a = c.tick(&Class20View { object: None, ..v }, w, &mut rng);
+        assert_eq!((c.state, a.anim), (2, Some(4)));
+        c.tick(&Class20View { object: None, clip_action: 4, clip_done: true, ..v }, w, &mut rng);
+        assert!(c.state == 3 && c.sub == 0 && (240..=300).contains(&c.wait));
+        // Vector 26: in sub-step 1, 6.0 from the point keeps walking; 4.0 draws a new wait.
+        let mut c = Class20::new([0.0; 3]);
+        c.state = 3;
+        c.sub = 1;
+        c.point = Some([6.0, 0.0, 0.0]);
+        let a = c.tick(&Class20View { object: None, ..v }, w, &mut rng);
+        assert_eq!((c.sub, a.toward), (1, Some([6.0, 0.0, 0.0])));
+        c.point = Some([4.0, 0.0, 0.0]);
+        c.tick(&Class20View { object: None, ..v }, w, &mut rng);
+        assert_eq!(c.sub, 0);
     }
 
     #[test]

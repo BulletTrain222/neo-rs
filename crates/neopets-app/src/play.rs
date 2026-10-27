@@ -504,6 +504,8 @@ pub struct Character {
     /// The wild petpet loop (class 33; SPEC-0047) and the record's pet type id (+0xAC).
     pub wild: Option<neopets_sim::petpet::Wild>,
     pub pet_type: i32,
+    /// The second petpet behaviour (class 20; SPEC-0047).
+    pub class20: Option<neopets_sim::petpet::Class20>,
 }
 
 impl Character {
@@ -775,6 +777,8 @@ pub struct Play {
     pet_food: neopets_sim::petpet::Food,
     pet_reserve: neopets_sim::petpet::Reservation,
     feeding: Option<u16>,
+    /// The class 20 waits (4 to 5 s) in ticks.
+    class20_waits: (i32, i32),
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     /// The Undead Draik's spit flight effects (fire, ice).
     spit_fx: [Option<usize>; 2],
@@ -1069,6 +1073,10 @@ impl Play {
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
+        let class20_waits = {
+            let w = words(neopets_sim::petpet::CLASS20_WAIT_AT, 2)?;
+            ((f32::from_bits(w[0]) * 60.0) as i32, (f32::from_bits(w[1]) * 60.0) as i32)
+        };
         let pet_food = {
             use neopets_sim::petpet::*;
             let set = |at: u32| words(at, 8).map(|w| w.iter().map(|&v| v as i32).collect::<Vec<i32>>());
@@ -1437,6 +1445,7 @@ impl Play {
             pet_food,
             pet_reserve: Default::default(),
             feeding: None,
+            class20_waits,
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -4785,7 +4794,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 11 | 12 | 14 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -4825,6 +4834,7 @@ impl Play {
                 mortog: row.filter(|r| r.class == Some(39)).map(|_| neopets_sim::mortog::Mortog::default()),
                 wild: row.filter(|r| r.class == Some(33)).map(|_| neopets_sim::petpet::Wild::default()),
                 pet_type: pl.key as i32,
+                class20: row.filter(|r| r.class == Some(20)).map(|_| neopets_sim::petpet::Class20::new(position)),
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -4945,6 +4955,7 @@ impl Play {
             mortog: None,
             wild: None,
             pet_type: pl.key as i32,
+            class20: None,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -5103,7 +5114,7 @@ impl Play {
             l <= r && (l == 0.0 || (d[0] * f[0] + d[1] * f[2]) / l > 0.5)
         };
         let pet = self.pet_char;
-        let near = self.characters.iter().any(|c| c.pack == pack && !c.inactive && ((Some(c.id) == pet && front(c.position, 2.5)) || (c.wild.is_some() && front(c.position, 4.5))));
+        let near = self.characters.iter().any(|c| c.pack == pack && !c.inactive && ((Some(c.id) == pet && front(c.position, 2.5)) || (c.wild.is_some() && front(c.position, 4.5)) || (c.class20.is_some() && front(c.position, 25.0))));
         if !near {
             return;
         }
@@ -5183,6 +5194,56 @@ impl Play {
         }
         self.quick.used(food as i32, left);
         self.last_pet = format!("fed item {food} on tick {}: target {:?}", self.ticks, best);
+    }
+
+    /// SPEC-0047 class 20 for each such creature of the current world: the nearest world item
+    /// other than the anchor within 25 units is approached and consumed (removed); the seek
+    /// sets the reservation's slow flag; otherwise it wanders about its spawn point.
+    fn class20_step(&mut self) {
+        let pack = self.world.pack;
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.class20.is_some() && !c.inactive && !c.held).map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let at = self.characters[i].position;
+            let object = self.pools.get(&pack).and_then(|pool| {
+                pool.slots
+                    .iter()
+                    .flatten()
+                    .filter(|it| it.id != neopets_sim::petpet::BAGGUSS)
+                    .map(|it| (it.position, it.token, (it.position[0] - at[0]).hypot(it.position[2] - at[2])))
+                    .filter(|o| o.2 <= 25.0)
+                    .min_by(|a, b| a.2.total_cmp(&b.2))
+                    .map(|(p, t, _)| (p, t))
+            });
+            let world = &self.world;
+            let c = &mut self.characters[i];
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::petpet::Class20View { position: c.position, object, clip_action: clip.action, clip_done: clip.progress >= 0.99 };
+            let Some(k) = c.class20.as_mut() else { continue };
+            let act = k.tick(&v, self.class20_waits, &mut self.rng);
+            if let Some(a) = act.anim {
+                if clip.action != a {
+                    c.anim.play(a);
+                }
+            }
+            if let Some(wk) = c.walker.as_mut() {
+                if let Some(t) = act.toward {
+                    wk.steer_to(t, 0.1);
+                }
+                let ground = &world.ground;
+                wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                c.position = wk.position();
+                c.facing = wk.facing;
+            }
+            if act.seeking && self.pet_reserve.food.is_some() {
+                self.pet_reserve.slow = true;
+            }
+            if let Some(token) = act.consume {
+                if let Some(item) = self.remove_food(token) {
+                    self.last_pet = format!("class 20 creature {id} consumed item {item} on tick {}", self.ticks);
+                }
+            }
+        }
     }
 
     /// SPEC-0047 class 33 for each wild petpet of the current world: the loop, its animation,
@@ -6440,6 +6501,7 @@ impl Play {
         }
         self.feed_finish();
         self.wild_step();
+        self.class20_step();
         self.pet_step();
         self.food_fallback();
         self.boss_step();
@@ -10190,7 +10252,7 @@ impl Play {
                         r.class.unwrap_or(-1),
                         c.hp,
                         r.hit_points,
-                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)) + &c.wild.as_ref().map_or(String::new(), |w| format!(" wild type {} state {} fed {} anim {}", c.pet_type, w.state, w.fed, c.anim.action())),
+                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)) + &c.wild.as_ref().map_or(String::new(), |w| format!(" wild type {} state {} fed {} anim {}", c.pet_type, w.state, w.fed, c.anim.action())) + &c.class20.as_ref().map_or(String::new(), |k| format!(" class20 state {} anim {}", k.state, c.anim.action())),
                         c.position[0],
                         c.position[1],
                         c.position[2],
