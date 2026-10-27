@@ -44,6 +44,9 @@ pub struct DevMenu {
     click_step: i32,
     /// The input that closed the menu is kept from the game for this frame.
     swallow: bool,
+    /// The warp list's area names by world pack (the pack's map area named by design table 5,
+    /// "" when the pack has none), read from the disc by the host as the cursor reaches them.
+    pub warp_names: std::collections::HashMap<u32, String>,
 }
 
 /// The game speeds: paused, a quarter, a half, normal, double, four times.
@@ -52,7 +55,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false }
+        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default() }
     }
 }
 
@@ -172,6 +175,19 @@ fn weapons(p: &crate::play::Play) -> Vec<u16> {
 }
 
 /// The warp list: the save's world keys (nonzero, sorted, each once).
+/// The world packs whose area names the open menu shows (the warp cursor's and the current
+/// world's) and that the host has not read yet.
+pub fn warp_names_wanted(dev: &DevMenu, p: &crate::play::Play) -> Vec<u32> {
+    if !dev.open {
+        return Vec::new();
+    }
+    [worlds(p).get(dev.warp_at).copied(), Some(p.world.pack)].into_iter().flatten().filter(|k| !dev.warp_names.contains_key(k)).collect()
+}
+
+fn area(dev: &DevMenu, pack: u32) -> Option<&str> {
+    dev.warp_names.get(&pack).map(String::as_str).filter(|n| !n.is_empty())
+}
+
 fn worlds(p: &crate::play::Play) -> Vec<u32> {
     let mut v: Vec<u32> = p.world_keys.0.iter().copied().filter(|&k| k > 0).collect();
     v.sort_unstable();
@@ -524,7 +540,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
         Entry::Warp => match worlds(p).get(dev.warp_at).copied() {
             Some(pack) => {
                 dev.warp = Some(pack);
-                format!("Warping to world pack {pack}")
+                match area(&dev, pack) {
+                    Some(n) => format!("Warping to {n} (world pack {pack})"),
+                    None => format!("Warping to world pack {pack}"),
+                }
             }
             None => "No world list".into(),
         },
@@ -586,7 +605,12 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::ToCamera => ("Hero to the free camera".into(), String::new()),
         Entry::Warp => {
             let w = worlds(p);
-            (format!("Warp (now in {})", p.world.pack), w.get(dev.warp_at).map_or("-".to_string(), |k| k.to_string()))
+            let target = w.get(dev.warp_at).copied();
+            let label = match target.and_then(|k| area(dev, k)) {
+                Some(n) => format!("Warp to {n}"),
+                None => "Warp".to_string(),
+            };
+            (label, target.map_or("-".to_string(), |k| k.to_string()))
         }
         Entry::Start => (format!("Start point ({} here)", p.dev_start_points()), dev.start.to_string()),
         Entry::Heal => ("Full heal".into(), format!("{}/{} HP", p.hero_hp, p.hero_max)),

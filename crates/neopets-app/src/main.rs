@@ -1395,6 +1395,16 @@ fn step_sim(
                 }
             }
         }
+        // The developer menu's warp list names: each world pack's map area (design table 5).
+        if let Some(archive) = archive.as_deref_mut() {
+            for pack in dev_menu::warp_names_wanted(&dev, &play.play) {
+                let area = archive.index.read(&mut archive.disc, pack).ok().and_then(|b| {
+                    let chain = neopets_data::resource::walk_chunks(&b, None).ok()?;
+                    neopets_data::travel::map_area(&b, &chain.chunks)
+                });
+                dev.warp_names.insert(pack, area.and_then(|m| play.play.area_name(m)).unwrap_or_default());
+            }
+        }
         if let (Some(pack), Some(archive)) = (dev.warp.take(), archive.as_deref_mut()) {
             match warp(&mut archive.disc, &archive.index, &play.play, pack) {
                 Ok(new) => {

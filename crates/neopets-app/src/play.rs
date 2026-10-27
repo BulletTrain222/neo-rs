@@ -11047,6 +11047,12 @@ impl Play {
             .unwrap_or_else(|| b"Unknown Location".to_vec())
     }
 
+    /// Map area m's name (design table 5), for the developer menu's warp list.
+    pub fn area_name(&self, m: i32) -> Option<String> {
+        let m = usize::try_from(m).ok()?;
+        self.design.location_name(m).map(|n| String::from_utf8_lossy(&n).into_owned())
+    }
+
     fn world_index(&self, pack: u32) -> usize {
         neopets_sim::save::world_index(&self.world_keys.0, &self.world_keys.1, pack as i32)
     }
