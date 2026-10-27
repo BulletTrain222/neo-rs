@@ -264,6 +264,14 @@ impl World {
         // modes 1 and 2 apply only to an entry whose broken bit is set, and no disc entry has
         // them, so nothing changes here.
         world.breakables = neopets_data::world::breakables(&bytes, &chain.chunks);
+        // SPEC-0048 Switch groups, set-up: in each kind-4 entry members 1 to n-1 are disabled.
+        for g in world.groups.iter().filter(|g| g.kind == 4) {
+            for &m in g.breakables.iter().skip(1) {
+                if let Some(b) = usize::try_from(m).ok().and_then(|m| world.breakables.get_mut(m)) {
+                    b.state = 0;
+                }
+            }
+        }
         let records = neopets_data::trigger::panels(&bytes, &chain.chunks);
         world.rails = records.iter().filter(|p| p.kind == -3).map(|p| neopets_sim::ladder::Rail { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv }).collect();
         world.panels = records.iter().map(|p| neopets_sim::climb::Panel { normal: p.normal, u: p.u, v: p.v, lu: p.lu, lv: p.lv, kind: p.kind, links: p.links }).collect();
@@ -778,6 +786,9 @@ pub struct Play {
     pub luck: i32,
     coins: (Vec<i32>, Vec<u16>, Option<neopets_sim::items::CoinWords>),
     payouts: Vec<(u32, [f32; 3], Option<neopets_data::region::ItemPoint>)>,
+    /// Switch-group stages shown in state 3 that become breakable (state 1) on a tick (SPEC-0048
+    /// Switch groups, step 3): (pack, breakable, tick).
+    chain_arms: Vec<(u32, usize, u64)>,
     pub last_pickup: String,
     /// The quick-item panel (SPEC-0021), its candidate rows and the heal tables; the hero's
     /// magic (pool B); the panel's button edges waiting for the next tick.
@@ -1413,6 +1424,7 @@ impl Play {
             luck: 0,
             coins,
             payouts: Vec::new(),
+            chain_arms: Vec::new(),
             last_pickup: String::new(),
             quick: Default::default(),
             quick_rows,
@@ -6101,6 +6113,15 @@ impl Play {
         self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
         self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0));
         self.slot_arrived.retain(|(p, _)| *p == pack || self.other.as_ref().is_some_and(|o| o.pack == *p));
+        // The switch-group stages whose 0.4 s has passed become breakable.
+        let (now, cur) = (self.ticks, self.world.pack);
+        let due: Vec<usize> = self.chain_arms.iter().filter(|a| a.0 == cur && a.2 <= now).map(|a| a.1).collect();
+        self.chain_arms.retain(|a| a.0 == cur && a.2 > now);
+        for i in due {
+            if let Some(b) = self.world.breakables.get_mut(i).filter(|b| b.state == 3) {
+                b.state = 1;
+            }
+        }
         self.state.breakables = self.world.breakables.iter().enumerate().map(|(i, b)| (i, b.state)).collect();
         self.state.slot_alive = self
             .slot_arrived
@@ -8526,7 +8547,17 @@ impl Play {
         let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
         let edges = [(p0, tip), (p0, prev), (tip, prev)];
         let mut broken = Vec::new();
+        let mut chained = Vec::new();
         let mut cues = Vec::new();
+        // The chain hook: members 0 to n-2 of a kind-4 group (the group's index with it).
+        let hooked: Vec<(usize, usize)> = self
+            .world
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| g.kind == 4)
+            .flat_map(|(gi, g)| g.breakables.iter().take(g.breakables.len().saturating_sub(1)).filter_map(move |&m| usize::try_from(m).ok().map(|m| (m, gi))))
+            .collect();
         for (i, b) in self.world.breakables.iter_mut().enumerate() {
             let Some(v) = b.volume else { continue };
             if !matches!(b.state, 1 | 3) {
@@ -8548,11 +8579,21 @@ impl Play {
             if !(e == 0 || e == 7 || e == kind) {
                 continue;
             }
+            if let Some(&(_, gi)) = hooked.iter().find(|h| h.0 == i) {
+                // The hook replaces the contact route: no cue, no push.
+                if !chained.contains(&gi) {
+                    chained.push(gi);
+                }
+                continue;
+            }
             if b.state == 1 {
                 broken.push(i);
             } else {
                 cues.push(break_cue(b.material));
             }
+        }
+        for gi in chained {
+            self.chain_hook(gi);
         }
         for i in broken {
             self.break_one(i);
@@ -8562,9 +8603,32 @@ impl Play {
         }
     }
 
+    /// SPEC-0048 Switch groups, the chain hook of kind-4 entry `gi`: the first member in state 1
+    /// or 3 breaks when it is in state 1 (no cue), and the next member is shown in state 3 and
+    /// becomes breakable 24 ticks later.
+    fn chain_hook(&mut self, gi: usize) {
+        let Some(members) = self.world.groups.get(gi).map(|g| g.breakables.clone()) else { return };
+        let members: Vec<usize> = members.into_iter().filter_map(|m| usize::try_from(m).ok()).collect();
+        let Some(k) = members.iter().position(|&m| self.world.breakables.get(m).is_some_and(|b| matches!(b.state, 1 | 3))) else { return };
+        if self.world.breakables[members[k]].state == 3 {
+            return;
+        }
+        self.break_one_with(members[k], false);
+        if let Some(&next) = members.get(k + 1) {
+            if let Some(b) = self.world.breakables.get_mut(next) {
+                b.state = 3;
+                self.chain_arms.push((self.world.pack, next, self.ticks + 24));
+            }
+        }
+    }
+
     /// The break of breakable i of the current world from state 1 (SPEC-0048 Break effect): state
     /// 2, the drop action for its placement (no luck gate) and the contact cue by material.
     fn break_one(&mut self, i: usize) {
+        self.break_one_with(i, true);
+    }
+
+    fn break_one_with(&mut self, i: usize, with_cue: bool) {
         let pack = self.world.pack;
         let Some(b) = self.world.breakables.get_mut(i) else { return };
         b.state = 2;
@@ -8577,7 +8641,9 @@ impl Play {
         if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
             println!("      breakable {i} of {pack} broken at {at:?} on tick {} (drop {drop})", self.ticks);
         }
-        self.cue(cue);
+        if with_cue {
+            self.cue(cue);
+        }
     }
 
     pub fn object_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {

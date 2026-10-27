@@ -9500,6 +9500,28 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
         985 => out.extend(thread_985(state)),
+        // SPEC-0042 1171 Update: the arm pass (each watched last drain stage, 25, 28, 31, 34 and
+        // 37, seen intact: its watch word 40 + i set) and the break pass (armed and no longer
+        // intact: the word cleared, flag 637 + i, the clog count with its flags 163 to 167, 33 at
+        // five, and line count + 4).
+        1171 => {
+            for (i, id) in [25usize, 28, 31, 34, 37].into_iter().enumerate() {
+                if state.word(pack, 40 + i as u8) == 0 && breakable_intact(state, id) {
+                    state.set_word(pack, 40 + i as u8, 1);
+                }
+            }
+            for (i, id) in [25usize, 28, 31, 34, 37].into_iter().enumerate() {
+                if state.word(pack, 40 + i as u8) == 1 && !breakable_intact(state, id) {
+                    state.set_word(pack, 40 + i as u8, 0);
+                    state.set(637 + i as u16, true);
+                    let n = clogs_1171(state);
+                    if n == 5 {
+                        state.set(33, true);
+                    }
+                    out.push(Action::Message { line: n + 4 });
+                }
+            }
+        }
         // SPEC-0037 837 Update (636 clear): the armed word (1) is set once breakable 2 is seen
         // intact; armed, breakable 2 no longer intact runs the break routine and sets 636.
         837 if !state.flag(636) => {
@@ -15920,6 +15942,36 @@ mod tests {
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
         assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+    }
+
+    #[test]
+    fn module_1171_drains() {
+        // Breakable 28 seen intact, then broken, with 637 to 641 clear: 638, 163, line 5, no 33.
+        let mut s = GameState::default();
+        s.breakables.insert(28, 0);
+        assert!(on_update(1171, &mut s, false).is_empty());
+        s.breakables.insert(28, 1);
+        assert!(on_update(1171, &mut s, false).is_empty());
+        s.breakables.insert(28, 2);
+        assert_eq!(on_update(1171, &mut s, false), vec![Action::Message { line: 5 }]);
+        assert!(s.flag(638) && s.flag(163) && !s.flag(33));
+        assert!(on_update(1171, &mut s, false).is_empty());
+        // The fifth drain sets 33 and shows line 9.
+        for f in [637, 639, 640] {
+            s.set(f, true);
+        }
+        s.breakables.insert(37, 1);
+        on_update(1171, &mut s, false);
+        s.breakables.insert(37, 2);
+        assert_eq!(on_update(1171, &mut s, false), vec![Action::Message { line: 9 }]);
+        assert!(s.flag(33) && s.flag(167));
+        // Init: 637 and 639 set disable breakables 23 and 29.
+        let mut s = GameState::default();
+        s.set(637, true);
+        s.set(639, true);
+        let init = on_init(1171, &mut s);
+        assert!(init.contains(&Action::SetBreakableActive { id: 23, on: false }) && init.contains(&Action::SetBreakableActive { id: 29, on: false }));
+        assert!(!init.contains(&Action::SetBreakableActive { id: 26, on: false }));
     }
 
     #[test]

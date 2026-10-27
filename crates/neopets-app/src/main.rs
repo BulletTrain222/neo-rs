@@ -2788,7 +2788,7 @@ fn play_trace(
             }
         }
         // NEOPETS_TRACE_BREAK: on tick 60 the current world's breakables (count, kinds of
-        // volume, the nearest three).
+        // volume, the nearest three) and its switch groups.
         // NEOPETS_TRACE_NPCBLOCK=n: on tick n block 0 is moved onto the first walking character.
         if std::env::var("NEOPETS_TRACE_NPCBLOCK").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
             println!("      block 0 moved onto character {:?} on tick {}", play.block_onto_npc(), play.ticks);
@@ -2812,6 +2812,11 @@ fn play_trace(
             let mut near: Vec<(f32, usize, [f32; 3], Option<u8>, i32)> = play.world.breakables.iter().enumerate().map(|(i, b)| { let p = b.position(); (((p[0] - hero[0]).powi(2) + (p[2] - hero[2]).powi(2)).sqrt(), i, p, b.volume.map(|v| v.kind), b.state) }).collect();
             near.sort_by(|a, b| a.0.total_cmp(&b.0));
             println!("      breakables {} (meshes {}), nearest {:?}", play.world.breakables.len(), play.world.breakables.iter().filter(|b| b.mesh.is_some()).count(), &near[..near.len().min(3)]);
+            // The switch groups (kind 4): each member with its position and state.
+            for (gi, g) in play.world.groups.iter().enumerate().filter(|(_, g)| g.kind == 4) {
+                let members: Vec<(i32, [f32; 3], i32)> = g.breakables.iter().map(|&m| (m, usize::try_from(m).ok().and_then(|m| play.world.breakables.get(m)).map_or([0.0; 3], |b| b.position()), usize::try_from(m).ok().and_then(|m| play.world.breakables.get(m)).map_or(-1, |b| b.state))).collect();
+                println!("      switch group {gi}: {members:?}");
+            }
         }
         // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
         if std::env::var("NEOPETS_TRACE_DROP").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
