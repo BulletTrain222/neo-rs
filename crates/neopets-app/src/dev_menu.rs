@@ -47,6 +47,9 @@ pub struct DevMenu {
     /// The warp list's area names by world pack (the pack's map area named by design table 5,
     /// "" when the pack has none), read from the disc by the host as the cursor reaches them.
     pub warp_names: std::collections::HashMap<u32, String>,
+    /// The quest rows (design table 1: title, start flag, done flag), read once when the menu
+    /// first opens, to name the story flags.
+    quests: Option<Vec<neopets_sim::mappage::Quest>>,
 }
 
 /// The game speeds: paused, a quarter, a half, normal, double, four times.
@@ -55,7 +58,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default() }
+        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -184,6 +187,39 @@ pub fn warp_names_wanted(dev: &DevMenu, p: &crate::play::Play) -> Vec<u32> {
     [worlds(p).get(dev.warp_at).copied(), Some(p.world.pack)].into_iter().flatten().filter(|k| !dev.warp_names.contains_key(k)).collect()
 }
 
+/// The quest steps whose start flag (true) or done flag (false) is n: (start, title, objective).
+fn flag_quests(dev: &DevMenu, n: u16) -> Vec<(bool, String, String)> {
+    let text = |b: &[u8]| String::from_utf8_lossy(b).split_whitespace().collect::<Vec<_>>().join(" ");
+    let mut v = Vec::new();
+    for q in dev.quests.iter().flatten() {
+        if q.start == n as i32 {
+            v.push((true, text(&q.title), text(&q.objective)));
+        }
+        if q.done == n as i32 {
+            v.push((false, text(&q.title), text(&q.objective)));
+        }
+    }
+    v
+}
+
+/// The story flag row's detail: the flag's state and its quest steps.
+fn detail(dev: &DevMenu, p: &crate::play::Play) -> String {
+    {
+        {
+            let n = dev.flag;
+            let state = if p.state.flag(n) { "set" } else { "clear" };
+            let q = flag_quests(dev, n);
+            let starts: Vec<&(bool, String, String)> = q.iter().filter(|e| e.0).collect();
+            // A step that ends here without a following step of the same quest ends that quest.
+            let ends: Vec<&(bool, String, String)> = q.iter().filter(|e| !e.0 && !starts.iter().any(|s| s.1 == e.1)).collect();
+            let mut parts: Vec<String> = starts.iter().map(|(_, t, o)| if o.is_empty() { format!("{t} begins") } else { format!("{t}: {o}") }).collect();
+            parts.extend(ends.iter().map(|(_, t, _)| format!("{t} is finished")));
+            let s = if parts.is_empty() { format!("Flag {n} is {state}; no quest step uses it") } else { format!("Flag {n} is {state}. {}", parts.join(" | ")) };
+            if s.chars().count() > 190 { format!("{}...", s.chars().take(187).collect::<String>()) } else { s }
+        }
+    }
+}
+
 fn area(dev: &DevMenu, pack: u32) -> Option<&str> {
     dev.warp_names.get(&pack).map(String::as_str).filter(|n| !n.is_empty())
 }
@@ -211,6 +247,12 @@ pub struct DevValue(usize);
 pub struct DevStep(usize, i32);
 #[derive(Component)]
 pub struct DevNote;
+/// The story flag's detail under its row (its state and quest steps).
+#[derive(Component)]
+pub struct DevDetail;
+/// A section title; the travel title also says where the hero is.
+#[derive(Component)]
+pub struct DevHeader(usize);
 
 const PANEL: Color = Color::srgba(0.05, 0.06, 0.10, 0.96);
 const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
@@ -262,7 +304,14 @@ pub fn spawn_panel(mut commands: Commands) {
         ))
         .with_children(|ui| {
             ui.spawn((Text::new("Developer menu"), font(22.0), TextColor(GOLD)));
-            ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM), Node { margin: UiRect::bottom(px(6)), ..default() }));
+            ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM)));
+            ui.spawn((
+                Text::new("Keys: arrows pick and change (Shift x10), Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
+Pad: D-pad pick and change (LB/RB x10), A apply, B or Select close | Mouse: click rows and < >"),
+                font(12.0),
+                TextColor(DIM),
+                Node { margin: UiRect { top: px(4), bottom: px(4), ..default() }, ..default() },
+            ));
             // Two columns: the first three sections on the left, the rest on the right.
             let mut k = 0;
             ui.spawn(Node { flex_direction: FlexDirection::Row, column_gap: px(16), ..default() }).with_children(|cols| {
@@ -270,13 +319,14 @@ pub fn spawn_panel(mut commands: Commands) {
                cols.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), width: px(408), ..default() }).with_children(|ui| {
                 for (title, entries) in half {
                 let entries: &[Entry] = entries;
-                ui.spawn((Text::new(*title), font(12.0), TextColor(GOLD), Node { margin: UiRect { top: px(6), bottom: px(1), ..default() }, ..default() }));
+                let section = SECTIONS.iter().position(|s| s.0 == *title).unwrap_or(0);
+                ui.spawn((Text::new(*title), font(12.0), TextColor(GOLD), Node { margin: UiRect { top: px(4), bottom: px(1), ..default() }, ..default() }, DevHeader(section)));
                 for &e in entries {
                     debug_assert!(ENTRIES[k] == e);
                     let choice = kind(e) == Kind::Choice;
                     ui.spawn((
                         Button,
-                        Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(4)), min_height: px(26), ..default() },
+                        Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(4)), min_height: px(24), ..default() },
                         BackgroundColor(ROW),
                         DevRow(k),
                     ))
@@ -297,18 +347,15 @@ pub fn spawn_panel(mut commands: Commands) {
                     });
                     k += 1;
                 }
+                // Under the story flag row: the flag's quest steps (design table 1).
+                if entries.contains(&Entry::Flag) {
+                    ui.spawn((Text::default(), font(13.0), TextColor(TEXT), Node { max_width: px(400), margin: UiRect::left(px(4)), ..default() }, DevDetail));
+                }
                 }
                });
               }
             });
-            ui.spawn((Text::default(), font(14.0), TextColor(ON), Node { margin: UiRect::top(px(10)), ..default() }, DevNote));
-            ui.spawn((
-                Text::new("Keys: arrows pick and change (Shift x10), Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
-Pad: D-pad pick and change (LB/RB x10), A apply, B or Select close | Mouse: click rows and < >"),
-                font(12.0),
-                TextColor(DIM),
-                Node { margin: UiRect::top(px(6)), ..default() },
-            ));
+            ui.spawn((Text::default(), font(14.0), TextColor(ON), Node { margin: UiRect::top(px(8)), ..default() }, DevNote));
         });
 }
 
@@ -339,6 +386,15 @@ pub fn dev_mouse(mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), 
 /// The menu's keys and actions, before the game reads its input.
 pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
     let Some(mut play) = play else { return };
+    if dev.open && dev.quests.is_none() {
+        dev.quests = Some(play.play.map_tables().0);
+        // NEOPETS_DEV containing "quests": list each quest's start and done flags (diagnostic).
+        if std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("quests")) {
+            for q in dev.quests.iter().flatten() {
+                println!("quest start {} done {} {}", q.start, q.done, String::from_utf8_lossy(&q.title));
+            }
+        }
+    }
     let toggle_free = |dev: &mut DevMenu| {
         dev.free = match dev.free {
             Some(_) => None,
@@ -354,6 +410,13 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
         dev.open |= v.contains("menu");
         perf.on |= v.contains("perf");
         dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
+        // "row=K" and "flag=N": the menu cursor on row K and the story flag row at N (screenshots).
+        if let Some(k) = v.split(',').find_map(|t| t.trim().strip_prefix("row=")?.parse::<usize>().ok()) {
+            dev.cursor = k.min(ENTRIES.len() - 1);
+        }
+        if let Some(n) = v.split(',').find_map(|t| t.trim().strip_prefix("flag=")?.parse::<u16>().ok()) {
+            dev.flag = n;
+        }
         if let Some(k) = v.split(',').find_map(|t| t.trim().strip_prefix("speed=")?.parse::<usize>().ok()) {
             dev.speed = k.min(SPEEDS.len() - 1);
         }
@@ -628,7 +691,14 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Motes => ("Give every Mote".into(), String::new()),
         Entry::Maps => ("Give every treasure map".into(), String::new()),
         Entry::Neopoints => (format!("Add Neopoints ({} now)", p.state.neopoints), format!("+{}", AMOUNTS[dev.amount])),
-        Entry::Flag => (format!("Story flag ({})", if p.state.flag(dev.flag) { "set" } else { "clear" }), dev.flag.to_string()),
+        Entry::Flag => {
+            let q = flag_quests(dev, dev.flag);
+            let label = match q.iter().find(|e| e.0).or(q.first()) {
+                Some((_, t, _)) => format!("Flag: {t}"),
+                None => "Story flag".to_string(),
+            };
+            (label, format!("{} {}", dev.flag, if p.state.flag(dev.flag) { "set" } else { "clear" }))
+        }
     }
 }
 
@@ -649,6 +719,8 @@ pub fn show_panel(
     mut labels: Query<(&mut Text, &DevLabel), (Without<DevValue>, Without<DevNote>)>,
     mut values: Query<(&mut Text, &mut TextColor, &DevValue), (Without<DevLabel>, Without<DevNote>)>,
     mut notes: Query<&mut Text, (With<DevNote>, Without<DevLabel>, Without<DevValue>)>,
+    mut details: Query<&mut Text, (With<DevDetail>, Without<DevNote>, Without<DevLabel>, Without<DevValue>, Without<DevText>)>,
+    mut headers: Query<(&mut Text, &DevHeader), (Without<DevDetail>, Without<DevNote>, Without<DevLabel>, Without<DevValue>, Without<DevText>)>,
     mut rows: Query<(&Interaction, &DevRow, &mut BackgroundColor), Without<DevStep>>,
     mut arrows: Query<(&Interaction, &mut BackgroundColor), (With<DevStep>, Without<DevRow>)>,
 ) {
@@ -694,6 +766,26 @@ pub fn show_panel(
         for mut t in &mut notes {
             if t.0 != dev.note {
                 t.0 = dev.note.clone();
+            }
+        }
+        let d = detail(&dev, p);
+        for mut t in &mut details {
+            if t.0 != d {
+                t.0 = d.clone();
+            }
+        }
+        for (mut t, h) in &mut headers {
+            let title = SECTIONS[h.0].0;
+            let s = if title == "TRAVEL" {
+                match area(&dev, p.world.pack) {
+                    Some(n) => format!("TRAVEL  (now in {n}, {})", p.world.pack),
+                    None => format!("TRAVEL  (now in world pack {})", p.world.pack),
+                }
+            } else {
+                title.to_string()
+            };
+            if t.0 != s {
+                t.0 = s;
             }
         }
     }
