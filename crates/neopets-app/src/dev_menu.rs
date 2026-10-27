@@ -1,9 +1,12 @@
 //! The developer menu: cheats and a free camera for testing. It is a tool of this build, not
 //! part of the original game, and follows no spec.
 //!
-//! F1 opens and closes the menu; F4 pauses or resumes the game and F5 steps one tick while it is
-//! paused; Up and Down pick an entry, Left and Right change its value (Shift
-//! for steps of 10), Enter or Space applies it. F2 toggles the free camera: WASD or the arrows
+//! F1 (or the controller's Select / Back button) opens and closes the menu; F4 pauses or resumes
+//! the game and F5 steps one tick while it is paused. In the menu: Up and Down (the D-pad) pick an
+//! entry, Left and Right change its value (Shift, or LB / RB, for steps of 10), Enter, Space or
+//! the south button (Cross / A) applies it, and Escape or the east button (Circle / B) closes the
+//! menu. The mouse works too: hovering picks a row, clicking applies it, and the < and > buttons
+//! change its value. F2 toggles the free camera: WASD or the arrows
 //! move, E and Q rise and sink, J/L and I/K or a right-button drag look around, Shift is fast.
 //! On a controller both stick clicks together (L3 + R3) toggle it; the left stick moves, the
 //! right stick looks, the right and left triggers (R2, L2) rise and sink, and holding the south
@@ -36,6 +39,11 @@ pub struct DevMenu {
     note: String,
     /// The weapon list's cursor.
     weapon_at: usize,
+    /// A mouse click this frame: apply the cursor's entry, or step its value.
+    clicked: bool,
+    click_step: i32,
+    /// The input that closed the menu is kept from the game for this frame.
+    swallow: bool,
 }
 
 /// The game speeds: paused, a quarter, a half, normal, double, four times.
@@ -44,7 +52,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0 }
+        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false }
     }
 }
 
@@ -56,7 +64,7 @@ impl DevMenu {
 
     /// The hero and the game menus get no input this frame.
     pub fn blocks_input(&self) -> bool {
-        self.open || self.free.is_some()
+        self.open || self.free.is_some() || self.swallow
     }
 }
 
@@ -110,6 +118,16 @@ enum Entry {
     Noclip,
 }
 
+/// The menu's sections and their entries, in display order.
+const SECTIONS: [(&str, &[Entry]); 6] = [
+    ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Magic, Entry::Charge]),
+    ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
+    ("TRAVEL", &[Entry::Warp, Entry::Start]),
+    ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill]),
+    ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
+    ("STORY", &[Entry::Flag]),
+];
+
 const ENTRIES: [Entry; 19] = [
     Entry::God,
     Entry::Noclip,
@@ -120,17 +138,33 @@ const ENTRIES: [Entry; 19] = [
     Entry::ToCamera,
     Entry::Warp,
     Entry::Start,
-    Entry::Kill,
-    Entry::Neopoints,
     Entry::Heal,
-    Entry::Motes,
-    Entry::Maps,
+    Entry::Hero,
+    Entry::Kill,
     Entry::Weapon,
     Entry::Item,
     Entry::Drop,
-    Entry::Hero,
+    Entry::Motes,
+    Entry::Maps,
+    Entry::Neopoints,
     Entry::Flag,
 ];
+
+/// How a row behaves: an on/off switch, a value changed with < and >, or a one-shot action.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Kind {
+    Toggle,
+    Choice,
+    Action,
+}
+
+fn kind(e: Entry) -> Kind {
+    match e {
+        Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam => Kind::Toggle,
+        Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag => Kind::Choice,
+        _ => Kind::Action,
+    }
+}
 
 /// The weapons of the item table (types 3, Tor's, and 6, Roberta's), by id.
 fn weapons(p: &crate::play::Play) -> Vec<u16> {
@@ -145,17 +179,145 @@ fn worlds(p: &crate::play::Play) -> Vec<u32> {
     v
 }
 
+/// The menu window (its rows are buttons) and the small status box shown while the menu is
+/// closed (the game speed and the free camera).
+#[derive(Component)]
+pub struct DevWindow;
+
+/// A row of the menu by its entry index; its label, value and < > buttons.
+#[derive(Component)]
+pub struct DevRow(usize);
+#[derive(Component)]
+pub struct DevLabel(usize);
+#[derive(Component)]
+pub struct DevValue(usize);
+#[derive(Component)]
+pub struct DevStep(usize, i32);
+#[derive(Component)]
+pub struct DevNote;
+
+const PANEL: Color = Color::srgba(0.05, 0.06, 0.10, 0.96);
+const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
+const ROW_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.10);
+const ROW_CURSOR: Color = Color::srgba(0.95, 0.75, 0.25, 0.28);
+const ARROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.12);
+const ARROW_HOVER: Color = Color::srgba(0.95, 0.75, 0.25, 0.55);
+const GOLD: Color = Color::srgb(0.98, 0.80, 0.35);
+const TEXT: Color = Color::srgb(0.92, 0.93, 0.96);
+const DIM: Color = Color::srgb(0.60, 0.63, 0.70);
+const ON: Color = Color::srgb(0.45, 0.90, 0.50);
+const OFF: Color = Color::srgb(0.85, 0.45, 0.45);
+
+fn font(size: f32) -> TextFont {
+    TextFont { font_size: bevy::text::FontSize::Px(size), ..default() }
+}
+
 pub fn spawn_panel(mut commands: Commands) {
+    // The status box (menu closed).
     commands
         .spawn((
-            Node { position_type: PositionType::Absolute, left: px(12), top: px(12), max_width: percent(60), padding: UiRect::all(px(12)), display: Display::None, ..default() },
-            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.92)),
+            Node { position_type: PositionType::Absolute, left: px(12), top: px(12), max_width: percent(60), padding: UiRect::all(px(10)), display: Display::None, ..default() },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.85)),
             GlobalZIndex(5000),
             DevPanel,
         ))
         .with_children(|ui| {
-            ui.spawn((Text::default(), TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() }, TextColor(Color::srgb(0.9, 0.95, 0.75)), DevText));
+            ui.spawn((Text::default(), font(15.0), TextColor(Color::srgb(0.9, 0.95, 0.75)), DevText));
         });
+    // The menu window.
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: px(16),
+                top: px(16),
+                width: px(860),
+                max_height: percent(94),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(14)),
+                row_gap: px(3),
+                overflow: Overflow::clip_y(),
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(PANEL),
+            GlobalZIndex(5002),
+            DevWindow,
+        ))
+        .with_children(|ui| {
+            ui.spawn((Text::new("Developer menu"), font(22.0), TextColor(GOLD)));
+            ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM), Node { margin: UiRect::bottom(px(6)), ..default() }));
+            // Two columns: the first three sections on the left, the rest on the right.
+            let mut k = 0;
+            ui.spawn(Node { flex_direction: FlexDirection::Row, column_gap: px(16), ..default() }).with_children(|cols| {
+              for half in [&SECTIONS[..3], &SECTIONS[3..]] {
+               cols.spawn(Node { flex_direction: FlexDirection::Column, row_gap: px(3), width: px(408), ..default() }).with_children(|ui| {
+                for (title, entries) in half {
+                let entries: &[Entry] = entries;
+                ui.spawn((Text::new(*title), font(12.0), TextColor(GOLD), Node { margin: UiRect { top: px(6), bottom: px(1), ..default() }, ..default() }));
+                for &e in entries {
+                    debug_assert!(ENTRIES[k] == e);
+                    let choice = kind(e) == Kind::Choice;
+                    ui.spawn((
+                        Button,
+                        Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(4)), min_height: px(26), ..default() },
+                        BackgroundColor(ROW),
+                        DevRow(k),
+                    ))
+                    .with_children(|row| {
+                        row.spawn((Text::default(), font(14.0), TextColor(TEXT), Node { max_width: px(270), ..default() }, TextLayout::no_wrap(), DevLabel(k)));
+                        row.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|right| {
+                            let arrow = |right: &mut ChildSpawnerCommands, d: i32| {
+                                right
+                                    .spawn((Button, Node { width: px(22), height: px(20), justify_content: JustifyContent::Center, align_items: AlignItems::Center, display: if choice { Display::Flex } else { Display::None }, ..default() }, BackgroundColor(ARROW), DevStep(k, d)))
+                                    .with_children(|b| {
+                                        b.spawn((Text::new(if d < 0 { "<" } else { ">" }), font(14.0), TextColor(TEXT)));
+                                    });
+                            };
+                            arrow(right, -1);
+                            right.spawn((Text::default(), font(14.0), TextColor(GOLD), Node { min_width: px(44), justify_content: JustifyContent::Center, ..default() }, TextLayout::justify(Justify::Center).with_no_wrap(), DevValue(k)));
+                            arrow(right, 1);
+                        });
+                    });
+                    k += 1;
+                }
+                }
+               });
+              }
+            });
+            ui.spawn((Text::default(), font(14.0), TextColor(ON), Node { margin: UiRect::top(px(10)), ..default() }, DevNote));
+            ui.spawn((
+                Text::new("Keys: arrows pick and change (Shift x10), Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
+Pad: D-pad pick and change (LB/RB x10), A apply, B or Select close | Mouse: click rows and < >"),
+                font(12.0),
+                TextColor(DIM),
+                Node { margin: UiRect::top(px(6)), ..default() },
+            ));
+        });
+}
+
+/// The mouse on the menu: hovering a row moves the cursor to it; a click applies it, and a
+/// click on < or > steps its value. Runs before `dev_input`, which acts on the click.
+pub fn dev_mouse(mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), Changed<Interaction>>, steps: Query<(&Interaction, &DevStep), Changed<Interaction>>) {
+    if !dev.open {
+        return;
+    }
+    for (i, r) in &rows {
+        match i {
+            Interaction::Hovered => dev.cursor = r.0,
+            Interaction::Pressed => {
+                dev.cursor = r.0;
+                dev.clicked = true;
+            }
+            Interaction::None => {}
+        }
+    }
+    for (i, s) in &steps {
+        if *i == Interaction::Pressed {
+            dev.cursor = s.0;
+            dev.click_step = s.1;
+        }
+    }
 }
 
 /// The menu's keys and actions, before the game reads its input.
@@ -206,8 +368,17 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
     if *frames == 90 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drop")) {
         info!("Developer drop: {} world items", play.play.dev_drop(160));
     }
-    if keys.just_pressed(KeyCode::F1) {
+    dev.swallow = false;
+    let pad = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
+    let pad_held = |b: GamepadButton| gamepads.iter().any(|g| g.pressed(b));
+    if keys.just_pressed(KeyCode::F1) || pad(GamepadButton::Select) {
         dev.open = !dev.open;
+        dev.swallow = true;
+    }
+    if dev.open && (keys.just_pressed(KeyCode::Escape) || pad(GamepadButton::East)) {
+        dev.open = false;
+        dev.swallow = true;
+        return;
     }
     // L3 + R3 together on a controller: one stick click pressed while the other is held.
     let chord = gamepads.iter().any(|g| {
@@ -227,19 +398,20 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
         return;
     }
     let n = ENTRIES.len();
-    if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) {
+    if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) || pad(GamepadButton::DPadDown) {
         dev.cursor = (dev.cursor + 1) % n;
     }
-    if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) {
+    if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp) {
         dev.cursor = (dev.cursor + n - 1) % n;
     }
-    let step: i32 = if keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) { 10 } else { 1 };
-    let delta = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) {
+    let tens = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) || pad_held(GamepadButton::LeftTrigger) || pad_held(GamepadButton::RightTrigger);
+    let step: i32 = if tens { 10 } else { 1 };
+    let delta = if keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight) {
         step
-    } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) {
+    } else if keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft) {
         -step
     } else {
-        0
+        std::mem::take(&mut dev.click_step) * step
     };
     let entry = ENTRIES[dev.cursor];
     if delta != 0 {
@@ -263,7 +435,8 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
             _ => {}
         }
     }
-    if !(keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter) || keys.just_pressed(KeyCode::Space)) {
+    let clicked = std::mem::take(&mut dev.clicked);
+    if !(keys.just_pressed(KeyCode::Enter) || keys.just_pressed(KeyCode::NumpadEnter) || keys.just_pressed(KeyCode::Space) || pad(GamepadButton::South) || clicked) {
         return;
     }
     let p = &mut play.play;
@@ -400,73 +573,122 @@ pub fn free_camera(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mouse: Res<
     }
 }
 
-/// The panel's text: the entries with their values, the last result and the free camera's
-/// keys.
-pub fn show_panel(dev: Res<DevMenu>, play: Option<Res<PlayState>>, mut panels: Query<&mut Node, With<DevPanel>>, mut texts: Query<&mut Text, With<DevText>>) {
-    let visible = dev.open || dev.free.is_some() || dev.speed != NORMAL;
-    for mut n in &mut panels {
-        n.display = if visible { Display::Flex } else { Display::None };
+/// The label and value of a row.
+fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) {
+    let on = |b: bool| if b { "ON".to_string() } else { "OFF".to_string() };
+    match e {
+        Entry::God => ("God mode".into(), on(p.cheats.god)),
+        Entry::Noclip => ("No clip (walk through walls)".into(), on(p.cheats.noclip)),
+        Entry::Magic => ("Infinite magic".into(), on(p.cheats.magic)),
+        Entry::Charge => ("Infinite Mote charge".into(), on(p.cheats.charge)),
+        Entry::FreeCam => ("Free camera (F2)".into(), on(dev.free.is_some())),
+        Entry::Speed => ("Game speed (apply: 1x)".into(), speed_label(dev.speed)),
+        Entry::ToCamera => ("Hero to the free camera".into(), String::new()),
+        Entry::Warp => {
+            let w = worlds(p);
+            (format!("Warp (now in {})", p.world.pack), w.get(dev.warp_at).map_or("-".to_string(), |k| k.to_string()))
+        }
+        Entry::Start => (format!("Start point ({} here)", p.dev_start_points()), dev.start.to_string()),
+        Entry::Heal => ("Full heal".into(), format!("{}/{} HP", p.hero_hp, p.hero_max)),
+        Entry::Hero => (format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }), String::new()),
+        Entry::Kill => ("Defeat every enemy here".into(), String::new()),
+        Entry::Weapon => {
+            let w = weapons(p);
+            match w.get(dev.weapon_at) {
+                Some(&id) => (format!("Weapon: {}", p.item_label(id)), format!("{} {}", if p.items.get(id).is_some_and(|i| i.kind == 3) { "Tor" } else { "Rob" }, dev.weapon_at + 1)),
+                None => ("Give weapon".into(), "-".into()),
+            }
+        }
+        Entry::Item => (format!("Item: {}", p.item_label(dev.item)), dev.item.to_string()),
+        Entry::Drop => ("Drop coins + that item here".into(), String::new()),
+        Entry::Motes => ("Give every Mote".into(), String::new()),
+        Entry::Maps => ("Give every treasure map".into(), String::new()),
+        Entry::Neopoints => (format!("Add Neopoints ({} now)", p.state.neopoints), format!("+{}", AMOUNTS[dev.amount])),
+        Entry::Flag => (format!("Story flag ({})", if p.state.flag(dev.flag) { "set" } else { "clear" }), dev.flag.to_string()),
     }
-    if !visible {
-        return;
+}
+
+/// A label cut to one row's width (28 characters).
+fn fit(s: String) -> String {
+    if s.chars().count() <= 28 { s } else { format!("{}...", s.chars().take(25).collect::<String>()) }
+}
+
+/// The menu window's rows (labels, values, cursor and hover colours), the last result, and the
+/// status box while the menu is closed.
+#[allow(clippy::type_complexity)]
+pub fn show_panel(
+    dev: Res<DevMenu>,
+    play: Option<Res<PlayState>>,
+    mut boxes: Query<&mut Node, (With<DevPanel>, Without<DevWindow>)>,
+    mut windows: Query<&mut Node, (With<DevWindow>, Without<DevPanel>)>,
+    mut texts: Query<&mut Text, (With<DevText>, Without<DevLabel>, Without<DevValue>, Without<DevNote>)>,
+    mut labels: Query<(&mut Text, &DevLabel), (Without<DevValue>, Without<DevNote>)>,
+    mut values: Query<(&mut Text, &mut TextColor, &DevValue), (Without<DevLabel>, Without<DevNote>)>,
+    mut notes: Query<&mut Text, (With<DevNote>, Without<DevLabel>, Without<DevValue>)>,
+    mut rows: Query<(&Interaction, &DevRow, &mut BackgroundColor), Without<DevStep>>,
+    mut arrows: Query<(&Interaction, &mut BackgroundColor), (With<DevStep>, Without<DevRow>)>,
+) {
+    for mut n in &mut windows {
+        n.display = if dev.open { Display::Flex } else { Display::None };
+    }
+    let status = !dev.open && (dev.free.is_some() || dev.speed != NORMAL);
+    for mut n in &mut boxes {
+        n.display = if status { Display::Flex } else { Display::None };
     }
     let Some(play) = play else { return };
     let p = &play.play;
-    let on = |b: bool| if b { "ON" } else { "off" };
-    let mut s = String::new();
     if dev.open {
-        s.push_str("DEV MENU (F1 closes) - a test tool of this build, not part of the game\n\n");
-        for (k, e) in ENTRIES.iter().enumerate() {
-            let line = match e {
-                Entry::God => format!("God mode: {}", on(p.cheats.god)),
-                Entry::Magic => format!("Infinite magic: {}", on(p.cheats.magic)),
-                Entry::Charge => format!("Infinite Mote charge: {}", on(p.cheats.charge)),
-                Entry::FreeCam => format!("Free camera (F2): {}", on(dev.free.is_some())),
-                Entry::Neopoints => format!("Add Neopoints: < {} >  (have {})", AMOUNTS[dev.amount], p.state.neopoints),
-                Entry::Heal => format!("Full heal  (hp {}/{}, mp {}/{})", p.hero_hp, p.hero_max, p.hero_mp, p.hero_mp_max),
-                Entry::Motes => "Give every Mote".to_string(),
-                Entry::Noclip => format!("No clip (walk through walls): {}", on(p.cheats.noclip)),
-                Entry::Weapon => {
-                    let w = weapons(p);
-                    match w.get(dev.weapon_at) {
-                        Some(&id) => format!("Give weapon: < {} > {} ({}; {} of {})", id, p.item_label(id), if p.items.get(id).is_some_and(|i| i.kind == 3) { "Tor" } else { "Roberta" }, dev.weapon_at + 1, w.len()),
-                        None => "Give weapon: none".to_string(),
-                    }
-                }
-                Entry::Item => format!("Give item: < {} > {}  (Shift: steps of 10)", dev.item, p.item_label(dev.item)),
-                Entry::Hero => format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }),
-                Entry::Flag => format!("Toggle story flag: < {} > ({})", dev.flag, if p.state.flag(dev.flag) { "set" } else { "clear" }),
-                Entry::Speed => format!("Game speed: < {} >  (F4 pause, F5 step)", speed_label(dev.speed)),
-                Entry::Kill => "Defeat every enemy in this world".to_string(),
-                Entry::Drop => format!("Drop coins and item {} here", dev.item),
-                Entry::Start => format!("Go to start point: < {} > of {}", dev.start, p.dev_start_points()),
-                Entry::ToCamera => "Move the hero under the free camera".to_string(),
-                Entry::Maps => "Give every treasure map".to_string(),
-                Entry::Warp => {
-                    let w = worlds(p);
-                    format!("Warp to world: < {} > ({} of {}; here: {} {})", w.get(dev.warp_at).map_or("-".to_string(), |k| k.to_string()), dev.warp_at + 1, w.len(), p.world.pack, String::from_utf8_lossy(&p.location_name()))
-                }
+        for (mut t, l) in &mut labels {
+            let s = fit(row_text(ENTRIES[l.0], &dev, p).0);
+            if t.0 != s {
+                t.0 = s;
+            }
+        }
+        for (mut t, mut c, v) in &mut values {
+            let s = row_text(ENTRIES[v.0], &dev, p).1;
+            c.0 = match s.as_str() {
+                "ON" => ON,
+                "OFF" => OFF,
+                _ => GOLD,
             };
-            s.push_str(if k == dev.cursor { "> " } else { "  " });
-            s.push_str(&line);
-            s.push('\n');
+            if t.0 != s {
+                t.0 = s;
+            }
         }
-        s.push_str("\nUp/Down pick, Left/Right change (Shift: x10), Enter apply\n");
-        if !dev.note.is_empty() {
-            s.push_str(&format!("{}\n", dev.note));
+        for (i, r, mut bg) in &mut rows {
+            bg.0 = if r.0 == dev.cursor {
+                ROW_CURSOR
+            } else if *i == Interaction::Hovered {
+                ROW_HOVER
+            } else {
+                ROW
+            };
+        }
+        for (i, mut bg) in &mut arrows {
+            bg.0 = if *i == Interaction::None { ARROW } else { ARROW_HOVER };
+        }
+        for mut t in &mut notes {
+            if t.0 != dev.note {
+                t.0 = dev.note.clone();
+            }
         }
     }
-    if !dev.open && dev.speed != NORMAL {
-        s.push_str(&format!("GAME SPEED {} (F4 pause/resume, F5 step)\n", speed_label(dev.speed)));
-    }
-    if let Some(fc) = dev.free {
-        s.push_str(&format!(
-            "FREE CAMERA (F2 or L3+R3 ends) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast",
-            fc.pos.x, fc.pos.y, fc.pos.z
-        ));
-    }
-    for mut t in &mut texts {
-        *t = Text::new(s.clone());
+    if status {
+        let mut s = String::new();
+        if dev.speed != NORMAL {
+            s.push_str(&format!("GAME SPEED {} (F4 pause/resume, F5 step)\n", speed_label(dev.speed)));
+        }
+        if let Some(fc) = dev.free {
+            s.push_str(&format!(
+                "FREE CAMERA (F2 or L3+R3 ends) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast",
+                fc.pos.x, fc.pos.y, fc.pos.z
+            ));
+        }
+        for mut t in &mut texts {
+            if t.0 != s {
+                t.0 = s.clone();
+            }
+        }
     }
 }
 

@@ -11405,6 +11405,11 @@ impl Play {
     }
 
     /// Developer menu: an item's name from the item table, or "(no name)".
+    /// Diagnostic: each named item's id, name, text category and carry limit.
+    pub fn item_limits(&self) -> Vec<String> {
+        (0..181u16).filter_map(|id| Some(format!("item {id} {} cat {:?} limit {:?}", String::from_utf8_lossy(&self.design.item_name(id)?), self.design.item_category(id), self.design.carry_limit(id)))).collect()
+    }
+
     pub fn item_label(&self, id: u16) -> String {
         self.design.item_name(id).map_or_else(|| "(no name)".to_string(), |n| String::from_utf8_lossy(&n).into_owned())
     }

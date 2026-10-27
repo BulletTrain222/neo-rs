@@ -31,10 +31,11 @@ const PLAY_PACK: u32 = 909;
 const PLAY_OUTFIT: u32 = 504;
 
 /// The clean side's own save file (SPEC-0025 Summary and Clean-side mapping of the card jobs):
-/// one 0xC400-byte file of four slots, kept under private/ (never committed).
+/// one file of eight 0x3100-byte slots (the original has four; a four-slot 0xC400-byte file
+/// still loads), kept under private/ (never committed).
 const SAVE_FILE: &str = "private/saves/savegame.bin";
 
-/// The save scan's read: the file when it exists and is exactly 0xC400 bytes.
+/// The save scan's read: the file when it exists and is the eight- or four-slot size.
 /// SPEC-0034 test vectors 70 to 72: one node of a definition run alone with every draw at its
 /// midpoint, at the origin with an identity frame.
 fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
@@ -838,7 +839,7 @@ fn main() {
         .add_systems(
             Update,
             (
-                (dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
+                (dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
                 (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items).chain(), (sync_characters, sync_attachments).chain(), sync_shots, (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
@@ -2780,6 +2781,12 @@ fn play_trace(
             println!("      patch {i}: key {} {:?} box {:?}", p.key, neopets_sim::foliage::kind(p.key).map(|k| k.family), p.area);
         }
     }
+    // NEOPETS_TRACE_LIMITS: each named item's text category and carry limit (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_LIMITS").is_some() {
+        for line in play.item_limits() {
+            println!("      {line}");
+        }
+    }
     println!("Book stations of {} (value, trigger index): {:?}", play.world.pack, play.book_stations());
     println!("Script triggers of {} (index, kind, middle): {:?}", play.world.pack, play.trigger_points());
     if std::env::var_os("NEOPETS_TRACE_LOCATORS").is_some() {
@@ -2974,8 +2981,14 @@ fn play_trace(
             }
         }
         // NEOPETS_TRACE_DROP=n: the developer menu's coin drop (with item 160) on tick n.
-        if std::env::var("NEOPETS_TRACE_DROP").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
-            let n = play.dev_drop(160);
+        if std::env::var_os("NEOPETS_TRACE_POOL").is_some() && play.ticks % 20 == 0 {
+            let live: Vec<String> = play.pools.get(&play.world.pack).map(|p| p.slots.iter().flatten().map(|it| format!("{}:{:.1}/{:.1}", it.id, it.age, it.lifetime)).collect()).unwrap_or_default();
+            println!("      pool on tick {} (hero state {} dialogue {}): {}", play.ticks, play.loco.state, play.dialogue_open, live.join(" "));
+        }
+        // NEOPETS_TRACE_DROP_ITEM=id picks the item; NEOPETS_TRACE_DROP takes a list of ticks.
+        if std::env::var("NEOPETS_TRACE_DROP").unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| k == play.ticks) {
+            let id = std::env::var("NEOPETS_TRACE_DROP_ITEM").ok().and_then(|v| v.parse().ok()).unwrap_or(160);
+            let n = play.dev_drop(id);
             println!("      developer drop on tick {}: {n} world items", play.ticks);
         }
         if quit_at.is_some_and(|k| k == play.ticks) || std::mem::take(&mut play.teardown_wanted) {

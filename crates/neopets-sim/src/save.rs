@@ -1,4 +1,4 @@
-//! The save file (SPEC-0025): four 0x3100-byte slots in a 0xC400-byte file, the slot field map
+//! The save file (SPEC-0025): 0x3100-byte slots (eight here; four in the original 0xC400-byte file), the slot field map
 //! with its empty template and validity rules, the world-key lookups, the progress tier, the
 //! date text, the hero maxima rules of a load, the status-timer conversions, the picker cursor
 //! of SPEC-0035 section 7.1 and the per-tick save-point step.
@@ -7,8 +7,13 @@
 //! sets, so bytes nothing writes keep their old values, as in the original.
 
 pub const SLOT_SIZE: usize = 0x3100;
-pub const FILE_SIZE: usize = 0xC400;
-pub const SLOTS: usize = 4;
+/// Eight slots, by the player's request: the original file holds four (0xC400 bytes); this build
+/// writes eight slots of the same layout back to back and still reads a four-slot file (its last
+/// four slots then read as empty).
+pub const SLOTS: usize = 8;
+pub const FILE_SIZE: usize = SLOTS * SLOT_SIZE;
+/// The original four-slot file size.
+pub const ORIGINAL_FILE_SIZE: usize = 0xC400;
 /// Progress flags 0 to 742 are valid; a flag at or above this reads as clear.
 pub const FLAGS: u16 = 743;
 /// Rows of the per-world tables and bits of the once-per-area sets.
@@ -414,12 +419,14 @@ impl SaveFile {
         Self { slots: std::array::from_fn(|_| Slot::empty()) }
     }
 
-    /// A read must give exactly 0xC400 bytes (Validity rules; record 14 otherwise).
+    /// A read must give exactly the eight-slot size or the original 0xC400 bytes (Validity
+    /// rules; record 14 otherwise); a four-slot file's other slots are empty.
     pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        if bytes.len() != FILE_SIZE {
-            return Err(format!("Save file is {} bytes, not {FILE_SIZE}", bytes.len()));
+        if bytes.len() != FILE_SIZE && bytes.len() != ORIGINAL_FILE_SIZE {
+            return Err(format!("Save file is {} bytes, not {FILE_SIZE} or {ORIGINAL_FILE_SIZE}", bytes.len()));
         }
-        Ok(Self { slots: std::array::from_fn(|k| Slot(bytes[k * SLOT_SIZE..(k + 1) * SLOT_SIZE].to_vec())) })
+        let n = bytes.len() / SLOT_SIZE;
+        Ok(Self { slots: std::array::from_fn(|k| if k < n { Slot(bytes[k * SLOT_SIZE..(k + 1) * SLOT_SIZE].to_vec()) } else { Slot::empty() }) })
     }
 
     pub fn to_bytes(&self) -> Vec<u8> {
@@ -532,12 +539,12 @@ pub fn restore_luck(saved: i32) -> i32 {
     saved.clamp(0, 24)
 }
 
-/// The load screen's starting cursor (SPEC-0035 section 7.2): the first filled slot, or 4.
+/// The load screen's starting cursor (SPEC-0035 section 7.2): the first filled slot, or SLOTS (4 in the original).
 pub fn load_start(filled: [bool; SLOTS]) -> usize {
     filled.iter().position(|&f| f).unwrap_or(SLOTS)
 }
 
-/// One cursor move (section 7.1). Save mode moves by one within 0 to 3; load mode skips empty
+/// One cursor move (section 7.1). Save mode moves by one within 0 to SLOTS - 1 (0 to 3 in the original); load mode skips empty
 /// slots and stays put when no filled slot lies that way.
 pub fn cursor_step(cursor: usize, down: bool, load: bool, filled: [bool; SLOTS]) -> usize {
     let next = |c: usize| if down { c.checked_add(1).filter(|&n| n < SLOTS) } else { c.checked_sub(1) };
@@ -654,7 +661,11 @@ mod tests {
     fn layout_and_template() {
         let f = SaveFile::empty();
         let b = f.to_bytes();
-        assert_eq!(b.len(), 0xC400);
+        assert_eq!(b.len(), 8 * 0x3100);
+        // A four-slot file of the original size still reads; its other slots are empty.
+        let old = SaveFile::parse(&b[..0xC400]).unwrap();
+        assert!(old.slots[7].is_empty());
+        assert!(SaveFile::parse(&b[..0xC401]).is_err());
         assert_eq!(&b[0x024..0x030], &[0xFF; 12]);
         assert_eq!(&b[0x2F6F..0x2F75], b"Empty\0");
         assert_eq!(b[0x2FAB], 0x20);
@@ -664,14 +675,14 @@ mod tests {
         assert_eq!(at::MOTES + 12 + 8, 0x30B8);
         assert_eq!(f.slots[0].i32(at::PET_TYPE), -1);
         assert!(f.slots.iter().all(|s| s.is_empty() && !s.present()));
-        // Slot offsets, and a slot index of 4 or more has no slot.
+        // Slot offsets, and a slot index of SLOTS (8 here, 4 in the original) or more has no slot.
         let mut g = f.clone();
         g.slots[2].set_key(0, 11);
         let gb = g.to_bytes();
         assert_eq!(gb[0x6200 + 0x24], 11);
         assert_eq!(&gb[..0x6200], &b[..0x6200]);
         assert_eq!(&gb[0x9300..], &b[0x9300..]);
-        assert!(g.slot(3).is_some() && g.slot(4).is_none());
+        assert!(g.slot(7).is_some() && g.slot(8).is_none());
         // Size check.
         assert!(SaveFile::parse(&gb).is_ok());
         assert!(SaveFile::parse(&gb[..50_175]).is_err());
@@ -792,18 +803,22 @@ mod tests {
 
     #[test]
     fn picker_cursor() {
-        let filled = [true, false, false, true];
+        let filled = [true, false, false, true, false, false, false, false];
         assert_eq!(load_start(filled), 0);
-        assert_eq!(load_start([false, false, true, true]), 2);
-        assert_eq!(load_start([false; 4]), 4);
+        assert_eq!(load_start([false, false, true, true, false, false, false, false]), 2);
+        assert_eq!(load_start([false; SLOTS]), SLOTS);
         // Load mode skips empty slots; with none that way the cursor stays.
         assert_eq!(cursor_step(0, true, true, filled), 3);
         assert_eq!(cursor_step(3, true, true, filled), 3);
+        let mut late = filled;
+        late[6] = true;
+        assert_eq!(cursor_step(3, true, true, late), 6);
         assert_eq!(cursor_step(3, false, true, filled), 0);
         assert_eq!(cursor_step(0, false, true, filled), 0);
         // Save mode moves by one, bounded.
         assert_eq!(cursor_step(0, true, false, filled), 1);
-        assert_eq!(cursor_step(3, true, false, filled), 3);
+        assert_eq!(cursor_step(3, true, false, filled), 4);
+        assert_eq!(cursor_step(7, true, false, filled), 7);
         assert_eq!(cursor_step(0, false, false, filled), 0);
     }
 

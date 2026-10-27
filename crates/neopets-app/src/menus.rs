@@ -548,7 +548,7 @@ impl Flow {
         self.picker.cursor = 0;
     }
 
-    /// The scan's result: the file read (`None`: missing, unreadable or not 0xC400 bytes). The
+    /// The scan's result: the file read (`None`: missing, unreadable or not the eight- or four-slot size). The
     /// save scan does not check its read, so it goes on with four empty slots.
     pub fn scanned(&mut self, file: Option<SaveFile>) {
         self.picker.failed = file.is_none();
@@ -1774,8 +1774,10 @@ pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
             colour: colour.unwrap_or_else(|| fe.sprite(n).map_or([128; 4], |s| s.colour)),
         }
     };
-    let mut p = 0.0f32;
-    for (k, slot) in flow.picker.file.slots.iter().enumerate() {
+    // A row's text and the page offset after it, from the offset before it.
+    let slots = &flow.picker.file.slots;
+    let row = |k: usize, p: f32| {
+        let slot = &slots[k];
         let (kind, line1, line2): (usize, &[u8], &[u8]) = if slot.is_empty() {
             (7, b"Empty", b"")
         } else {
@@ -1785,6 +1787,25 @@ pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
         let limit = ((360.0 - (128.0 + p)) / line as f32).trunc() as i32 + 2;
         let shown = lines.len().min(limit.max(0) as usize);
         let next = p + 79f32.max(75.0 + line as f32 * shown as f32);
+        (kind, line1, line2, lines, limit, shown, next)
+    };
+    // The page fits about four rows; with eight slots (this build, not the original's four) the
+    // list starts at the earliest row that still keeps the cursor's row on the page.
+    let cursor = flow.picker.cursor.min(save::SLOTS - 1);
+    let fits = |first: usize| {
+        let mut p = 0.0f32;
+        for k in first..=cursor {
+            p = row(k, p).6;
+            if p >= 360.0 {
+                return false;
+            }
+        }
+        true
+    };
+    let first = (0..=cursor).find(|&f| fits(f)).unwrap_or(cursor);
+    let mut p = 0.0f32;
+    for k in first..save::SLOTS {
+        let (kind, line1, line2, lines, limit, shown, next) = row(k, p);
         if next >= 360.0 {
             break;
         }
