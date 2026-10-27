@@ -11920,6 +11920,7 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
         s.set_level(3, false);
     }
     let hit = |s: &GameState, e: usize| s.hero.hits.contains(&e);
+    let mut activate_item = false;
     let mut talk_now = false;
     let mut remark = 0;
     if !s.flag(191) {
@@ -11937,6 +11938,12 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
             } else if !s.flag(169) {
                 talk_now = true;
             } else {
+                // The lesson slot's item placement 0 activated once per module load (snap false,
+                // placed true), once the slot has arrived.
+                if w(s, 10) == 0 && s.slot_alive.contains_key(&0) {
+                    s.set_word(1056, 10, 1);
+                    activate_item = true;
+                }
                 if !s.flag(170) && s.has_item(160) {
                     s.set(170, true);
                     talk_now = true;
@@ -12028,6 +12035,9 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
         talk_now = true;
     }
     let mut out = Vec::new();
+    if activate_item {
+        out.push(Action::ItemActivate { slot: 0, ordinal: 0, snap: false, placed: true });
+    }
     let trainer = w(s, 11) - 1;
     // The stage's talk zone: chain 10, spin 11, mote 12, shield 14.
     let zone = if s.flag(26) {
@@ -12042,7 +12052,7 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
     let free = !dialog && !s.hero.occupied && !s.talking;
     if talk_now && trainer >= 0 && free && inside(zone) {
         let mut rot = s.rotations.get(&(1056, 0)).copied().unwrap_or_default();
-        out = trainer_talk(s, &mut rot);
+        out.extend(trainer_talk(s, &mut rot));
         s.rotations.insert((1056, 0), rot);
     } else if talk_now {
         // Not in the talk zone yet: the talk waits.
@@ -12050,7 +12060,7 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
     }
     // A pending remark is spoken on the first tick with no melee attack active.
     let pending = w(s, 3);
-    if out.is_empty() && pending > 0 && sub == 0 && trainer >= 0 && free {
+    if out.iter().all(|a| matches!(a, Action::ItemActivate { .. })) && pending > 0 && sub == 0 && trainer >= 0 && free {
         s.set_word(1056, 3, 0);
         let mut rot = s.rotations.get(&(1056, 60)).copied().unwrap_or_default();
         let lines = REMARKS[(pending - 1) as usize];
@@ -16173,6 +16183,12 @@ mod tests {
             s.set(f, true);
         }
         on_init(1056, &mut s);
+        // The lesson slot's placement 0, once per load after the slot arrives.
+        let item = Action::ItemActivate { slot: 0, ordinal: 0, snap: false, placed: true };
+        assert!(!on_update(1056, &mut s, false).contains(&item));
+        s.slot_alive.insert(0, 0);
+        assert!(on_update(1056, &mut s, false).contains(&item));
+        assert!(!on_update(1056, &mut s, false).contains(&item));
         s.give(160, 100);
         on_update(1056, &mut s, false);
         assert!(s.flag(170));
