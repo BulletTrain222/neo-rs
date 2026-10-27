@@ -5020,11 +5020,14 @@ impl Play {
         self.region_wanted.push((pack, PET_SLOT, region));
     }
 
-    /// Diagnostic: the Gelert Assassin's HP (trace only).
+    /// Diagnostic: the bosses' HP (trace only).
     pub fn diag_gelert_hp(&mut self, hp: i32) {
         let pack = self.world.pack;
-        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.gelert.as_ref().is_some_and(|g| !g.clone)) {
-            c.hp = hp;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
+            let boss = c.gelert.as_ref().is_some_and(|g| !g.clone) || c.ixi.is_some() || c.king.is_some() || c.serpent.is_some() || c.gnarfas.is_some() || c.draik.is_some() || c.boss.is_some() || c.sister.is_some();
+            if boss {
+                c.hp = hp;
+            }
         }
     }
 
@@ -6381,9 +6384,10 @@ impl Play {
                 .map(|&h| (h, (0..self.world.headers.get(h).and_then(|x| x.as_ref()).map_or(0, |x| x.locators.len())).filter_map(|k| self.anim_locator(pack, h, k, 0)).collect()))
                 .collect();
             // The 1096 dispensers' draw (the module's random-draw routine is not given).
-            if matches!(pack, 1096 | 1397) {
+            if matches!(pack, 1096 | 1397 | 1023) {
                 self.state.trigger_raw = self.rng.next_u32();
             }
+            self.state.cloak_worn = self.cloak_worn;
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
             // NEOPETS_TRACE_WORDS: the current module's words, object 0's time and the hero
             // every 30 ticks.
@@ -10505,7 +10509,25 @@ impl Play {
                 knights += 1;
             }
         }
-        targets.len() + knights + gelerts
+        // The Undead Draik: straight to its death state (the death animation, then level
+        // event 12).
+        let mut bosses = 0;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
+            if let Some(d) = c.draik.as_mut().filter(|d| d.stage < 6 && d.state != neopets_sim::draik::State::Dead) {
+                d.state = neopets_sim::draik::State::Dead;
+                c.hp = 0;
+                bosses += 1;
+            }
+        }
+        // The Faerie Sisters: each to its death state (the group's end then runs).
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
+            if let Some(sis) = c.sister.as_mut().filter(|s| s.state != neopets_sim::sisters::State::Dead) {
+                sis.state = neopets_sim::sisters::State::Dead;
+                c.hp = 0;
+                bosses += 1;
+            }
+        }
+        targets.len() + knights + gelerts + bosses
     }
 
     /// Developer menu: the current world's start points, and a move to start point k.
@@ -10714,7 +10736,10 @@ impl Play {
                     self.hud.rearm_word(word);
                 }
             }
-            Command::Cloak => self.cloak_worn = !self.cloak_worn,
+            Command::Cloak => {
+                self.cloak_worn = !self.cloak_worn;
+                self.state.cloak_worn = self.cloak_worn;
+            }
             _ => {}
         }
     }

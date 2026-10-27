@@ -492,6 +492,8 @@ pub struct GameState {
     pub entity_hp: HashMap<usize, i32>,
     /// The wallet (GetNeopoints, RemoveNeopoints).
     pub neopoints: i32,
+    /// The hero wears the Tattered Cloak (filled by the host before each Update and talk).
+    pub cloak_worn: bool,
     /// The pack that was current before this one (the "last active world" an activate-world
     /// routine reads).
     pub last_pack: Option<u32>,
@@ -3074,12 +3076,13 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
 
 /// SPEC-0045 1023 Init: the trigger registrations (routines: 1 the signs, 2 the square-message
 /// routine of 0 to 2, 6 the chase start) and the load thread's first-slot load (slot 0; region
-/// 1023 + 1 + j). The zone loaders (27 to 34), the greetings and the prize wheel, the cloak
-/// slots and the villager talk are not built.
+/// 1023 + 1 + j) and the zone loaders (27 to 34, routine 4; `village_zone`). The cloak slots
+/// are not built.
 fn village_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     let mut out: Vec<Action> = [6u16, 7, 8, 9, 10, 11, 12, 13, 4, 3, 14, 15, 16].into_iter().map(|i| reg(i, 1)).collect();
     out.extend([reg(1, 2), reg(2, 2), reg(0, 2), reg(17, 6)]);
+    out.extend((27..=34).map(|i| reg(i, 4)));
     // The prize wheel (routine 56) when flags 64 and 11 are clear (the walk-up greetings 37 to
     // 40 are not built).
     if !state.flag(64) && !state.flag(11) {
@@ -3309,6 +3312,8 @@ fn map_shop(pack: u32) -> &'static [(u32, u16, i32)] {
     match pack {
         880 => &[(1, 6, 250), (8, 7, 250), (30, 8, 250), (27, 9, 300), (18, 10, 400), (3, 17, 300), (6, 18, 300), (11, 19, 400)],
         1230 => &[(1, 6, 250), (8, 7, 250), (30, 8, 250), (27, 9, 300), (18, 10, 500), (10, 17, 300)],
+        // SPEC-0045 1023 entities 72, 75 and 94.
+        1023 => &[(13, 890, 200), (14, 891, 200), (24, 892, 200), (28, 893, 200), (46, 894, 200), (16, 895, 300)],
         _ => &[],
     }
 }
@@ -9710,6 +9715,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1023, 2) if first && state.flag(64) && !state.flag(248) => out.actions.push(Action::Message { line: 22 }),
         // Trigger 17: the chase start, while flag 127 is clear.
         (1023, 6) if first && !state.flag(127) => out.actions = chase_start(state),
+        // Triggers 27 to 34: the zone loads.
+        (1023, 4) if first => out.actions = village_zone(call.index, state),
         // SPEC-0042 678 T0 (index 0): line 23 once per module load (word 0).
         (678 | 686 | 691, 0) if first && state.word(pack, 0) == 0 => {
             state.set_word(pack, 0, 1);
@@ -9745,6 +9752,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
 pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> {
     let mut out = Vec::new();
     match pack {
+        // SPEC-0045 1023 Update, the tattered-cloak check: flag 11 and the cloak worn set 303.
+        // (The cloak watcher's scenes, lines 20 and 21 with the cloak slots, are not built.)
+        1023 => {
+            if state.flag(11) && state.cloak_worn {
+                state.set(303, true);
+            }
+        }
         // SPEC-0042 1184 thread B: while 512 is set and 513 clear, holding item 73 sets 513.
         1184 => {
             if state.flag(512) && !state.flag(513) && state.has_item(73) {
@@ -12143,6 +12157,63 @@ fn village_talk(k: u8, s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
     }
 }
 
+/// A zone of an asset-swap set (SPEC-0006 Asset-swap tables): a plain zone (normal j, the
+/// replacement j and its two flags, absent as 0) or a cycle zone's three candidates (-1 empty).
+#[derive(Clone, Copy)]
+enum Zone {
+    Empty,
+    Plain(i32, i32, u16, u16),
+    Cycle([i32; 3]),
+}
+
+/// SPEC-0006 and SPEC-0045 1023's asset-swap table (two sets of eight zones; triggers 27 to 34
+/// give zones 0 to 7). Set 0: plain 11, 20, 15 (16 when flag 136 is set and 137 clear) and 7,
+/// then cycles (12, 13, 14), (21, 22, 23), (17, 18, 19), (8, 9, 10). Set 1: five empty zones,
+/// cycle (25, 26, 27), plain 28 and cycle (29, 30).
+const VILLAGE_ZONES: [[Zone; 8]; 2] = {
+    use Zone::*;
+    [
+        [Plain(11, -1, 0, 0), Plain(20, -1, 0, 0), Plain(15, 16, 136, 137), Plain(7, -1, 0, 0), Cycle([12, 13, 14]), Cycle([21, 22, 23]), Cycle([17, 18, 19]), Cycle([8, 9, 10])],
+        [Empty, Empty, Empty, Empty, Empty, Cycle([25, 26, 27]), Plain(28, -1, 0, 0), Cycle([29, 30, -1])],
+    ]
+};
+
+/// SPEC-0006 zone load for 1023 trigger `index` (27 to 34) in state 1: set 1 with flag 10 or
+/// 11, else set 0. The slot: 0 when its record (word 30) is free, else 1 when it is free (word
+/// 31) and enabled (set 0 only), else the thread waits for slot 0. A plain zone resets the slot
+/// and loads its region (the replacement when its first flag is set and its second clear),
+/// freeing the record at once. A cycle zone draws a candidate (Random(0, 2), the host's raw
+/// draw; an empty one becomes the first), holds the record and loads it, and frees the record
+/// when the hero leaves the trigger. The later passes of a cycle (the next candidate reloaded
+/// while the trigger stays active) are not built. The region is 1023 + 1 + j.
+fn village_zone(index: u16, s: &GameState) -> Vec<Action> {
+    let set = (s.flag(10) || s.flag(11)) as usize;
+    let Some(&zone) = index.checked_sub(27).and_then(|z| VILLAGE_ZONES[set].get(z as usize)) else { return Vec::new() };
+    let (j, cycle) = match zone {
+        Zone::Empty => return Vec::new(),
+        Zone::Plain(n, r, a, b) => (if r >= 0 && (a == 0 || s.flag(a)) && (b == 0 || !s.flag(b)) { r } else { n }, false),
+        Zone::Cycle(c) => (Some(c[(s.trigger_raw % 3) as usize]).filter(|&j| j >= 0).unwrap_or(c[0]), true),
+    };
+    let mut v = Vec::new();
+    let slot = if s.word(1023, 30) == 0 {
+        0
+    } else if set == 0 && s.word(1023, 31) == 0 {
+        1
+    } else {
+        v.push(Action::WaitWord { word: 30 });
+        0
+    };
+    let region = Some(1024 + j as u32);
+    if cycle {
+        v.push(Action::Bits { word: 30 + slot, set: 1, clear: 0 });
+    }
+    v.extend([Action::LoadRegion { slot, region: None }, Action::LoadRegion { slot, region }]);
+    if cycle {
+        v.extend([Action::WaitInside { index }, Action::Bits { word: 30 + slot, set: 0, clear: 1 }]);
+    }
+    v
+}
+
 /// SPEC-0045 1023 entity 90: the story lines, the 136-clear line and the one prompt by flags
 /// 485 to 488 (its answer is stored in word 20 and read by nothing else).
 fn village_90(s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
@@ -13487,6 +13558,27 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             s.blackboard.insert((2, 157), 20);
             vec![Action::Message { line: 22 + k }, Action::ReplaceExterior { slot: 163, plane: 0 }]
         }
+        // SPEC-0045 1023 the cloak seller's answers: yes with 1000 Neopoints takes them, sets
+        // flag 13 (teleport 9) and shows 884; yes with less 885; no 886.
+        (1023, 72, false) => vec![Action::Talk { line: 886 }],
+        (1023, 72, true) if s.neopoints < 1000 => vec![Action::Talk { line: 885 }],
+        (1023, 72, true) => {
+            s.neopoints -= 1000;
+            s.set(13, true);
+            vec![Action::Talk { line: 884 }]
+        }
+        // Its map shop: no 899; too few Neopoints 898; else the map, the price and 897.
+        (1023, 73, false) => vec![Action::Talk { line: 899 }],
+        (1023, 73, true) => {
+            let shop = map_shop(pack);
+            let (map, _, price) = shop[(s.word(pack, 4).clamp(0, shop.len() as i32 - 1)) as usize];
+            if s.neopoints < price {
+                vec![Action::Talk { line: 898 }]
+            } else {
+                s.neopoints -= price;
+                vec![Action::GiveItem { item: TREASURE_MAP, count: map }, Action::Talk { line: 897 }]
+            }
+        }
         (880, 7, false) | (1230, 4, false) => vec![Action::Talk { line: 16 }],
         (880, 7, true) | (1230, 4, true) => {
             let shop = map_shop(pack);
@@ -13840,6 +13932,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0039 1133: entity 1 with flag 10 set, else entity 0.
         (1133, 0 | 1) => Some(0),
         (1023, 90) => Some(90),
+        // SPEC-0045 1023 the tattered-cloak seller and map seller (entities 72, 75 and 94).
+        (1023, 72 | 75 | 94) => Some(72),
         (1098, e) => castle_routine(e),
         // SPEC-0045 1163: the Miamice keeper (entities 0 and 10), entity 7 and Sir Harlag (15).
         (1163, 0 | 10) => Some(0),
@@ -13864,6 +13958,30 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     // SPEC-0039 880 handler 7 and 1230 handler 4, the map shop: the first map not held is
     // offered with its prompt (its index kept in word 4 for the answer); with every map held,
     // lines 11, 12 and 13 in rotation (word 5).
+    // SPEC-0045 1023 routine 72: with the cloak worn and 304 clear, prompts 881 to 883 in
+    // turn (word 21); else with 216 lines 887 to 889 in turn (word 22); else the map shop
+    // (prompts 890 to 895 for the first map not held, kept in word 4; line 896 when all are
+    // held), answered as routine 73.
+    if (pack, routine) == (1023, 72) {
+        if state.cloak_worn && !state.flag(304) {
+            let r = state.word(pack, 21).rem_euclid(3);
+            state.set_word(pack, 21, r + 1);
+            return vec![Action::Prompt { line: 881 + r as u16, routine: 72 }];
+        }
+        if state.flag(216) {
+            let r = state.word(pack, 22).rem_euclid(3);
+            state.set_word(pack, 22, r + 1);
+            return vec![Action::Talk { line: 887 + r as u16 }];
+        }
+        let shop = map_shop(pack);
+        return match shop.iter().position(|m| !state.maps.contains(&m.0)) {
+            Some(k) => {
+                state.set_word(pack, 4, k as i32);
+                vec![Action::Prompt { line: shop[k].1, routine: 73 }]
+            }
+            None => vec![Action::Talk { line: 896 }],
+        };
+    }
     if matches!((pack, routine), (880, 7) | (1230, 4)) {
         let shop = map_shop(pack);
         if let Some(k) = shop.iter().position(|m| !state.maps.contains(&m.0)) {
@@ -17333,6 +17451,44 @@ mod tests {
         assert_eq!(traded[0], Action::Message { line: 47 });
         assert!(traded.contains(&Action::GiveWordItem { word: 1, default: 99 }));
         assert!(!s.has_item(98) && s.has_item(42) && s.word(1148, 1) == 98);
+    }
+
+    #[test]
+    fn village_zones() {
+        let call = |index| TriggerCall { index, state: 1, object: true, square: false, block: -1 };
+        let mut s = GameState::default();
+        let init = on_init(1023, &mut s);
+        assert!(init.contains(&Action::RegisterTrigger { index: 33, routine: 4 }));
+        let load = |s: &mut GameState, i| on_trigger(1023, 4, call(i), s).actions;
+        assert_eq!(load(&mut s, 29), vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1039) }]);
+        s.set(136, true);
+        assert_eq!(load(&mut s, 29)[1], Action::LoadRegion { slot: 0, region: Some(1040) });
+        s.trigger_raw = 4;
+        assert_eq!(load(&mut s, 31)[2], Action::LoadRegion { slot: 0, region: Some(1024 + 13) });
+        s.set(11, true);
+        assert!(load(&mut s, 27).is_empty());
+        assert_eq!(load(&mut s, 33), vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1052) }]);
+        s.trigger_raw = 2;
+        assert_eq!(load(&mut s, 34)[2], Action::LoadRegion { slot: 0, region: Some(1053) });
+    }
+
+    #[test]
+    fn cloak_seller_opens_teleport_9() {
+        let mut s = GameState { neopoints: 1200, cloak_worn: true, ..Default::default() };
+        s.set(11, true);
+        on_update(1023, &mut s, false);
+        assert!(s.flag(303));
+        let r = proximity_routine(1023, 72).unwrap();
+        assert_eq!(proximity_routine(1023, 94), Some(r));
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 881, routine: 72 }]);
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 882, routine: 72 }]);
+        assert_eq!(on_answer(1023, 72, true, &mut s), vec![Action::Talk { line: 884 }]);
+        assert!(s.flag(13) && s.neopoints == 200);
+        assert_eq!(on_teleport(1023, 9, &mut s)[0], Action::ReplaceExterior { slot: 114, plane: -1 });
+        s.cloak_worn = false;
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 890, routine: 73 }]);
+        assert_eq!(on_answer(1023, 73, true, &mut s), vec![Action::GiveItem { item: TREASURE_MAP, count: 13 }, Action::Talk { line: 897 }]);
+        assert_eq!(on_answer(1023, 73, true, &mut s), vec![Action::Talk { line: 898 }]);
     }
 
     #[test]

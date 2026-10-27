@@ -2600,6 +2600,11 @@ fn play_trace(
     if let Some(id) = std::env::var("NEOPETS_TRACE_QUICK").ok().and_then(|v| v.parse::<i32>().ok()) {
         play.quick.marker = id;
     }
+    // NEOPETS_TRACE_CLOAK: the hero starts wearing the Tattered Cloak (trace only).
+    if std::env::var_os("NEOPETS_TRACE_CLOAK").is_some() {
+        play.cloak_worn = true;
+        play.state.cloak_worn = true;
+    }
     // NEOPETS_TRACE_ROOTS="a,b,...": each hero clip's key count and summed root records.
     if let Ok(v) = std::env::var("NEOPETS_TRACE_ROOTS") {
         for id in v.split(',').filter_map(|t| t.trim().parse::<u32>().ok()) {
@@ -2780,8 +2785,8 @@ fn play_trace(
     for _ in 0..ticks {
         // Once: the new game's tick count starts again. A game-over exit with nothing pending
         // tears the world down the same way.
-        // NEOPETS_TRACE_KILL=n: the developer menu's enemy defeat on tick n.
-        if std::env::var("NEOPETS_TRACE_KILL").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
+        // NEOPETS_TRACE_KILL="n[,n...]": the developer menu's enemy defeat on those ticks.
+        if std::env::var("NEOPETS_TRACE_KILL").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
             let pk = play.world.pack;
             let alive: Vec<(String, bool)> = play.characters.iter().filter(|c| c.pack == pk && c.enemy.as_ref().is_some_and(|e| !e.dead)).map(|c| (c.name.clone(), c.inactive)).collect();
             println!("      enemies before (name, inactive): {alive:?}");
@@ -3086,7 +3091,8 @@ fn play_trace(
             square_held: stalk.is_some(),
             // NEOPETS_TRACE_CLIMB: the grab-block (10) and stop-climbing (18) prompts are not pressed, so the hero keeps
             // walking into the block.
-            square: (play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()))
+            // NEOPETS_TRACE_NOAUTO: prompts are not pressed (only NEOPETS_TRACE_SQUARE presses).
+            square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()))
                 || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             guard: guard && fight.is_some_and(|f| f.1),
