@@ -501,6 +501,17 @@ pub struct Character {
     pub serpent_hit: Option<(i32, bool)>,
     /// The Mortog controller (behaviour class 39; SPEC-0029 Behavior 3).
     pub mortog: Option<neopets_sim::mortog::Mortog>,
+    /// The wild petpet loop (class 33; SPEC-0047) and the record's pet type id (+0xAC).
+    pub wild: Option<neopets_sim::petpet::Wild>,
+    pub pet_type: i32,
+}
+
+impl Character {
+    /// SPEC-0047 Layout / SPEC-0036 Hittable predicate tests 4 and 5: a character whose pet type
+    /// id has a kind in either table is skipped by hero swings, shots and the Mote walks.
+    pub fn pet_like(&self) -> bool {
+        neopets_sim::petpet::kind(self.pet_type).is_some() || neopets_sim::petpet::second_kind(self.pet_type).is_some()
+    }
 }
 
 /// A summon-reserved record of a character block (SPEC-0029 Behavior 31), with the character it
@@ -759,6 +770,11 @@ pub struct Play {
     pet_bonus: neopets_sim::petpet::Bonus,
     pet_low: i32,
     pub last_pet: String,
+    /// SPEC-0047 food: the base words and sets, the shared reservation and the food the hero is
+    /// feeding (hero state 49).
+    pet_food: neopets_sim::petpet::Food,
+    pet_reserve: neopets_sim::petpet::Reservation,
+    feeding: Option<u16>,
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     /// The Undead Draik's spit flight effects (fire, ice).
     spit_fx: [Option<usize>; 2],
@@ -1053,6 +1069,12 @@ impl Play {
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
         let pet_bonus = neopets_sim::petpet::Bonus { damage: f32::from_bits(bw[0]), intake: f32::from_bits(bw[1]), hp: f32::from_bits(bw[2]), mp: f32::from_bits(bw[3]) };
         let pet_low = (float(neopets_sim::petpet::LOW_TIME_WORD)? * 3600.0) as i32;
+        let pet_food = {
+            use neopets_sim::petpet::*;
+            let set = |at: u32| words(at, 8).map(|w| w.iter().map(|&v| v as i32).collect::<Vec<i32>>());
+            let base = words(BASE_AT, 9)?;
+            Food { base: std::array::from_fn(|k| f32::from_bits(base[k])), sets: Sets { a: set(SET_A)?, b: set(SET_B)?, c: set(SET_C)? } }
+        };
         let shot_rows = neopets_sim::roberta::Rows::from_words(&words(neopets_sim::roberta::ROWS_AT, 55)?);
         let gesture_words = {
             use neopets_sim::gesture::*;
@@ -1412,6 +1434,9 @@ impl Play {
             pet_bonus,
             pet_low,
             last_pet: String::new(),
+            pet_food,
+            pet_reserve: Default::default(),
+            feeding: None,
             hit_list: Vec::new(),
             last_axis: None,
             last_hit: String::new(),
@@ -3110,7 +3135,7 @@ impl Play {
                 continue;
             }
             // The first character whose bone capsule meets the shot sphere.
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some()).find_map(|(i, c)| {
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like()).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
@@ -4241,7 +4266,7 @@ impl Play {
         // Factor E: the live petpet of kind 0 or 7 (SPEC-0047 Passive bonuses).
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let mut hits = Vec::new();
-        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.pet_like()) {
             if self.hit_list.contains(&c.id) {
                 continue;
             }
@@ -4445,7 +4470,7 @@ impl Play {
             let p = neopets_sim::mote::power_index(0, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
             let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
             let mut hits = Vec::new();
-            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.pet_like()) {
                 let Some(r) = c.row else { continue };
                 if !o.touches(c.position, r.radius, r.height) || !o.list(c.id) {
                     continue;
@@ -4714,7 +4739,12 @@ impl Play {
         if !rebind {
             self.reserves.retain(|r| !(r.pack == pack && r.slot == slot));
         }
+        let live_type = self.petpet.as_ref().map(|p| p.type_id);
         for (pl, model, anim, row, tuning) in loaded {
+            // SPEC-0047 Acquisition: while a petpet of type t is live, no record of type t binds.
+            if live_type == Some(pl.key as i32) {
+                continue;
+            }
             if pl.summon {
                 if !rebind {
                     self.reserves.push(Reserve { pack, slot, region, pl, model, anim, row, tuning, bound: None });
@@ -4755,7 +4785,7 @@ impl Play {
                 position,
                 facing: pl.facing,
                 townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
-                walker: row.filter(|r| matches!(r.class, Some(7 | 11 | 12 | 14 | 21 | 32 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(7 | 11 | 12 | 14 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && r.can_fly == 0 && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -4793,6 +4823,8 @@ impl Play {
                 serpent: row.filter(|r| r.class == Some(2)).map(|_| neopets_sim::serpent::Serpent::default()),
                 serpent_hit: None,
                 mortog: row.filter(|r| r.class == Some(39)).map(|_| neopets_sim::mortog::Mortog::default()),
+                wild: row.filter(|r| r.class == Some(33)).map(|_| neopets_sim::petpet::Wild::default()),
+                pet_type: pl.key as i32,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -4911,6 +4943,8 @@ impl Play {
             serpent: None,
             serpent_hit: None,
             mortog: None,
+            wild: None,
+            pet_type: pl.key as i32,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -4957,6 +4991,7 @@ impl Play {
     /// away (a new world), placed 7 units ahead of the hero (unverified; R-0035).
     fn pet_step(&mut self) {
         let Some(id) = self.pet_char else { return };
+        let food = self.characters.iter().find(|c| c.id == id).and_then(|c| self.nearest_food(c.position, false));
         let hero = self.loco.position();
         let hf = self.loco.facing;
         let idle = matches!(self.loco.state, hero_states::STANCE);
@@ -4981,9 +5016,14 @@ impl Play {
             hero_idle: idle,
             counting,
             contact: false,
+            clip_action: clip.action,
             clip_done: clip.progress >= 0.99,
+            food,
         };
         let act = live.tick(&v, self.pet_low, &mut self.rng);
+        if let Some(t) = act.reserve {
+            self.pet_reserve.reserve(t);
+        }
         if let Some(a) = act.anim {
             if clip.action != a {
                 c.anim.play(a);
@@ -4999,9 +5039,211 @@ impl Play {
             c.position = wk.position();
             c.facing = wk.facing;
         }
+        if let Some((token, food)) = act.eat {
+            self.remove_food(token);
+            self.pet_reserve.clear();
+            if let Some(p) = self.petpet.as_mut() {
+                p.eat(self.pet_food.value(p.kind, food));
+                self.last_pet = format!("petpet ate item {food} on tick {}: T {} F {}", self.ticks, p.t, p.f);
+            }
+        }
         if act.leave {
             self.last_pet = format!("petpet left on tick {}", self.ticks);
             self.deactivate_pet();
+        }
+    }
+
+    /// The nearest world item of category 12 in the current world (position, id, token); with
+    /// `anchor`, the nearest Bagguss (145) only.
+    fn nearest_food(&self, at: [f32; 3], anchor: bool) -> Option<([f32; 3], u16, u32)> {
+        let pool = self.pools.get(&self.world.pack)?;
+        let items = &self.items;
+        pool.slots
+            .iter()
+            .flatten()
+            .filter(|it| items.get(it.id).is_some_and(|i| i.kind == 12) && (!anchor || it.id == neopets_sim::petpet::BAGGUSS))
+            .map(|it| (it.position, it.id, it.token, (it.position[0] - at[0]).hypot(it.position[2] - at[2])))
+            .min_by(|a, b| a.3.total_cmp(&b.3))
+            .map(|(p, id, t, _)| (p, id, t))
+    }
+
+    /// Remove the world item with this token from the current world; returns its id.
+    fn remove_food(&mut self, token: u32) -> Option<u16> {
+        let pool = self.pools.get_mut(&self.world.pack)?;
+        let i = pool.slots.iter().position(|s| s.as_ref().is_some_and(|it| it.token == token))?;
+        pool.take(i).map(|it| it.id)
+    }
+
+    /// SPEC-0047 Strike step 5: the reservation's fallback, once per tick: past 5 s the food is
+    /// removed and the live petpet (T at least 1) gets its value.
+    fn food_fallback(&mut self) {
+        let Some(token) = self.pet_reserve.tick() else { return };
+        let Some(id) = self.remove_food(token) else { return };
+        if let Some(p) = self.petpet.as_mut().filter(|p| p.t >= 1) {
+            p.eat(self.pet_food.value(p.kind, id));
+            self.last_pet = format!("petpet fed item {id} by the fallback on tick {}: T {}", self.ticks, p.t);
+        }
+    }
+
+    /// SPEC-0022 idle list "Feed petpet" (label 14) and SPEC-0047 Feeding a petpet: the prompt
+    /// while the hero's own petpet is within 2.5 units or a wild petpet within 4.5, in front of
+    /// the hero (horizontal dot above 0.5); Square with a food item selected enters state 49,
+    /// without one plays cue 0xA2. The food is the selected quick item (which item the feed
+    /// takes is not given; R-0094). The 4.5 own-petpet range while a timer is below 45 s and
+    /// the class-20 creatures (25 units) are not built.
+    fn feed_step(&mut self) {
+        if neopets_sim::hero::busy_state(self.loco.state) || !(1..=6).contains(&self.loco.state) {
+            return;
+        }
+        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let pack = self.world.pack;
+        let front = |p: [f32; 3], r: f32| {
+            let d = [p[0] - hero[0], p[2] - hero[2]];
+            let l = d[0].hypot(d[1]);
+            l <= r && (l == 0.0 || (d[0] * f[0] + d[1] * f[2]) / l > 0.5)
+        };
+        let pet = self.pet_char;
+        let near = self.characters.iter().any(|c| c.pack == pack && !c.inactive && ((Some(c.id) == pet && front(c.position, 2.5)) || (c.wild.is_some() && front(c.position, 4.5))));
+        if !near {
+            return;
+        }
+        self.door_prompt = Some(14);
+        if !self.square_now {
+            return;
+        }
+        let items = &self.state.items;
+        let food = self.quick.effective(&|id| u16::try_from(id).ok().and_then(|id| items.get(&id)).is_some_and(|&n| n > 0));
+        match u16::try_from(food).ok().filter(|&id| neopets_sim::petpet::feedable(id) && self.items.get(id).is_some_and(|i| i.kind == 12)) {
+            Some(id) => {
+                self.loco.feed();
+                self.feeding = Some(id);
+            }
+            None => self.cue(0xA2),
+        }
+    }
+
+    /// SPEC-0047 Feeding, at progress 0.99 of clip 138: the fed flag goes to the nearest of the
+    /// own petpet and the wild petpets within 10.5 (a wild one also sends the live petpet away,
+    /// T = -1); one of the food is dropped 2.8 units in front of the hero at model scale 0.45,
+    /// reserved and not collectable, and one is removed from the inventory.
+    fn feed_finish(&mut self) {
+        let Some(food) = self.feeding else { return };
+        let clip = self.hero.clip_state();
+        let done = clip.action == neopets_sim::hero::ANIM_FEED && clip.progress >= 0.99 || self.loco.state == hero_states::STANCE;
+        if !done {
+            if self.loco.state != neopets_sim::hero::FEED {
+                self.feeding = None;
+            }
+            return;
+        }
+        self.feeding = None;
+        let (hero, f) = (self.loco.position(), self.loco.facing);
+        let pack = self.world.pack;
+        let pet = self.pet_char;
+        let best = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == pack && !c.inactive && (Some(c.id) == pet || c.wild.is_some()))
+            .map(|c| (c.id, (c.position[0] - hero[0]).hypot(c.position[2] - hero[2])))
+            .filter(|&(_, d)| d <= 10.5)
+            .min_by(|a, b| a.1.total_cmp(&b.1))
+            .map(|(id, _)| id);
+        match best {
+            Some(id) if Some(id) == pet => {
+                if let Some(p) = self.petpet.as_mut() {
+                    p.pending_event = true;
+                }
+            }
+            Some(id) => {
+                if let Some(w) = self.characters.iter_mut().find(|c| c.id == id).and_then(|c| c.wild.as_mut()) {
+                    w.fed = true;
+                }
+                if let Some(p) = self.petpet.as_mut() {
+                    p.t = -1;
+                }
+            }
+            None => {}
+        }
+        let at = [hero[0] + 2.8 * f[0], hero[1], hero[2] + 2.8 * f[2]];
+        let y = self.world.ground_at(at[0], at[2], at[1] + 8.0).unwrap_or(hero[1]);
+        let spawn = neopets_sim::items::Spawn { id: food, point: [at[0], y, at[2]], placed: true, charm: false, s0: 0.45, s1: 0.45, delay: 0.0, larg: -1.0, direction: Some([0.0; 3]), flag: 0, map: 0, price: 0 };
+        if self.spawn_item(pack, spawn) {
+            if let Some(it) = self.pools.get_mut(&pack).and_then(|pl| pl.slots.iter_mut().flatten().max_by_key(|it| it.token)) {
+                it.reserved = true;
+                self.pet_reserve.reserve(it.token);
+            }
+        }
+        let left = {
+            let n = self.state.items.entry(food).or_insert(0);
+            *n = n.saturating_sub(1);
+            *n
+        };
+        if left == 0 {
+            self.state.items.remove(&food);
+        }
+        self.quick.used(food as i32, left);
+        self.last_pet = format!("fed item {food} on tick {}: target {:?}", self.ticks, best);
+    }
+
+    /// SPEC-0047 class 33 for each wild petpet of the current world: the loop, its animation,
+    /// walk and turn, the food reservation, and on eating the join (Activation by id): its
+    /// meal's time becomes the live petpet's T and F, it is removed from the world, and the
+    /// live petpet spawns at its place. Whether the food can be reached is not tested (every
+    /// food counts as reachable).
+    fn wild_step(&mut self) {
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.wild.is_some() && !c.inactive && !c.held).map(|c| c.id).collect();
+        for id in ids {
+            let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
+            let at = self.characters[i].position;
+            let (food, anchor) = (self.nearest_food(at, false), self.nearest_food(at, true).map(|f| f.0));
+            let world = &self.world;
+            let c = &mut self.characters[i];
+            let clip = c.anim.clip_state();
+            let v = neopets_sim::petpet::WildView { position: c.position, facing: c.facing, hero, food, reachable: true, anchor, clip_action: clip.action, clip_done: clip.progress >= 0.99 };
+            let Some(w) = c.wild.as_mut() else { continue };
+            let act = w.tick(&v, &mut self.rng);
+            if let Some(a) = act.anim {
+                if clip.action != a {
+                    c.anim.play(a);
+                }
+            }
+            if let Some((t, rate)) = act.turn {
+                c.facing = neopets_sim::hero::steer(c.facing, [t[0] - c.position[0], 0.0, t[2] - c.position[2]], rate);
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.facing = c.facing;
+                }
+            }
+            if let Some(wk) = c.walker.as_mut() {
+                if let Some((t, rate)) = act.toward {
+                    wk.steer_to(t, rate);
+                }
+                let ground = &world.ground;
+                wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                c.position = wk.position();
+                c.facing = wk.facing;
+            }
+            if let Some(t) = act.reserve {
+                self.pet_reserve.reserve(t);
+            }
+            if let Some((token, fid)) = act.eat {
+                let c = &mut self.characters[i];
+                let (ty, pos) = (c.pet_type, c.position);
+                let Some(kind) = neopets_sim::petpet::kind(ty) else { continue };
+                let Some(w) = c.wild.as_mut() else { continue };
+                w.eat(self.pet_food.value(kind, fid));
+                let t = w.t;
+                self.remove_food(token);
+                self.pet_reserve.clear();
+                if t < 1 {
+                    continue;
+                }
+                self.characters.remove(i);
+                self.activate_pet(ty, t, t);
+                self.pet_spawn = Some(pos);
+                self.last_pet = format!("wild petpet {ty} ate item {fid} on tick {} and joins with T {t}", self.ticks);
+            }
         }
     }
 
@@ -5971,6 +6213,11 @@ impl Play {
         self.book_prompt = false;
         if !self.dialogue_open && !self.buy_step() && !self.talk_step() && !self.catch_step() && !self.block_step() {
             self.door_step();
+            // SPEC-0022 the idle list's Feed petpet (after the door prompt; a caption set
+            // earlier in the pass stops it).
+            if self.door_prompt.is_none() && !self.save_prompt {
+                self.feed_step();
+            }
             // SPEC-0022 the idle list's Read Book (after the door prompt; a caption set earlier
             // in the pass stops it): the prompt, the pending index cleared, a Square edge takes
             // the book (cue 0xAF).
@@ -6191,7 +6438,10 @@ impl Play {
             c.position = wk.position();
             c.facing = wk.facing;
         }
+        self.feed_finish();
+        self.wild_step();
         self.pet_step();
+        self.food_fallback();
         self.boss_step();
         self.gnarfas_step();
         self.king_step();
@@ -9940,7 +10190,7 @@ impl Play {
                         r.class.unwrap_or(-1),
                         c.hp,
                         r.hit_points,
-                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)),
+                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)) + &c.wild.as_ref().map_or(String::new(), |w| format!(" wild type {} state {} fed {} anim {}", c.pet_type, w.state, w.fed, c.anim.action())),
                         c.position[0],
                         c.position[1],
                         c.position[2],

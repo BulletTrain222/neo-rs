@@ -1,11 +1,12 @@
 //! Petpets (SPEC-0047): the pet type to kind tables, the kind multipliers and the meal time
-//! update, the passive bonuses to the hero, the pending save values and the summoned petpet's
-//! class 34 controller (state choice, idle-hero follow, moving follow with its three gaits, the
+//! update, the food values and the shared food reservation with its fallback, the passive
+//! bonuses to the hero, the pending save values, the wild petpet's class 33 loop (state choice,
+//! idle, roam, strike with the eat test, hover) and the summoned petpet's class 34 controller
+//! (state choice, idle-hero follow, moving follow with its three gaits, eating in place, the
 //! low-time one-shot and the leave).
 //!
-//! Not covered: the class 33 wild petpet loop, class 20, the feeding interaction and the food
-//! reservation (fed food, strike and fallback), the bumped recovery of class 34 state 3 (it
-//! holds animation 0) and the nearby-character response of state 1 (its filter is open).
+//! Not covered: class 20, the bumped recovery of class 34 state 3 (it holds animation 0) and the
+//! nearby-character response of state 1 (its filter is open).
 
 use crate::rng::Rng;
 
@@ -78,6 +79,80 @@ impl Sets {
 /// A meal's time in ticks: trunc(v x 60 x 60) for a value v in minutes.
 pub fn meal_ticks(v: f32) -> i32 {
     (v * 3600.0) as i32
+}
+
+/// The Bagguss (145): the anchor, fed but never eaten.
+pub const BAGGUSS: u16 = 145;
+
+/// The food ids the hero can feed (145 to 157 but 148, 151 and 154).
+pub fn feedable(id: u16) -> bool {
+    (145..=157).contains(&id) && !matches!(id, 148 | 151 | 154)
+}
+
+/// The nine base-value words (0x2DB1DC to 0x2DB1FC).
+pub const BASE_AT: u32 = 0x002D_B1DC;
+
+/// The base-value word a food id reads (Layout, Base hit value by target type code: which word
+/// belongs to which id is open, open question 4; this picks a word of the spec's value).
+fn base_word(id: u16) -> Option<usize> {
+    match id {
+        150 => Some(0),
+        146 | 149 | 157 => Some(1),
+        147 | 153 | 156 => Some(2),
+        155 => Some(7),
+        152 => Some(8),
+        _ => None,
+    }
+}
+
+/// The food values: the base words and the membership sets.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Food {
+    pub base: [f32; 9],
+    pub sets: Sets,
+}
+
+impl Food {
+    /// The hit value of food `id` for a petpet of kind `k`, in minutes (0 for the anchor and
+    /// the ids without a value).
+    pub fn value(&self, kind: u8, id: u16) -> f32 {
+        match base_word(id) {
+            Some(w) => self.base[w] * self.sets.multiplier(kind, id as i32),
+            None => 0.0,
+        }
+    }
+}
+
+/// The shared food reservation (Strike): the reserved food (a world item's token), the timer in
+/// seconds and the slow flag.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Reservation {
+    pub food: Option<u32>,
+    pub timer: f32,
+    pub slow: bool,
+}
+
+impl Reservation {
+    pub fn reserve(&mut self, food: u32) {
+        *self = Self { food: Some(food), timer: 0.0, slow: false };
+    }
+
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// The fallback, once per tick while a food is reserved: the timer grows by 1/60 s (1/180 s
+    /// while slow); past 5.0 s the reservation clears and the food is returned, to be removed and
+    /// given to the live petpet.
+    pub fn tick(&mut self) -> Option<u32> {
+        let food = self.food?;
+        self.timer += if self.slow { 1.0 / 180.0 } else { 1.0 / 60.0 };
+        if self.timer > 5.0 {
+            self.clear();
+            return Some(food);
+        }
+        None
+    }
 }
 
 /// The words of the passive bonuses (0x2DD8DC to 0x2DD8E8).
@@ -163,8 +238,11 @@ pub struct View {
     /// The game-state code is 0 (T counts down).
     pub counting: bool,
     pub contact: bool,
-    /// The playing clip has ended.
+    /// The playing clip and whether it has ended.
+    pub clip_action: u32,
     pub clip_done: bool,
+    /// The nearest world item of category 12 (position, item id, token).
+    pub food: Option<(Vec3, u16, u32)>,
 }
 
 /// What the controller asks for this tick.
@@ -175,6 +253,12 @@ pub struct Act {
     pub toward: Option<(Vec3, f32)>,
     /// The petpet leaves (it is removed).
     pub leave: bool,
+    /// Reserve this food (its token) this tick.
+    pub reserve: Option<u32>,
+    /// The food eaten this tick (token, item id): its value is applied and it is removed.
+    pub eat: Option<(u32, u16)>,
+    /// Turn toward a point with a rate (no walk).
+    pub turn: Option<(Vec3, f32)>,
 }
 
 /// The summoned petpet (class 34).
@@ -264,11 +348,25 @@ impl Live {
             1 => self.follow_idle(v, low_mark, rng, &mut a),
             2 => self.follow_moving(v, &mut a),
             3 => a.anim = Some(0),
-            4 => {
-                // Eating in place; no food is reserved here, so the state ends at once.
-                a.anim = Some(4);
-                self.state = 1;
-            }
+            4 => match v.food {
+                // Strike step 3: the timer is read before this tick's reservation, so the test
+                // passes and the petpet eats where it stands; when the clip ends the food is
+                // applied and the reservation cleared.
+                Some((_, id, token)) if id != BAGGUSS => {
+                    a.reserve = Some(token);
+                    a.anim = Some(4);
+                    if v.clip_action == 4 && v.clip_done {
+                        a.eat = Some((token, id));
+                        self.state = 1;
+                    }
+                }
+                // No food: nothing happens in the step; the petpet returns to following
+                // (the exit is not given; Medium).
+                _ => {
+                    a.anim = Some(0);
+                    self.state = 1;
+                }
+            },
             5 => {
                 let to = [v.hero[0] - v.position[0], 0.0, v.hero[2] - v.position[2]];
                 let l = (to[0] * to[0] + to[2] * to[2]).sqrt().max(1e-6);
@@ -351,6 +449,168 @@ impl Live {
         if gait != 0 {
             a.toward = Some((t, 0.1));
         }
+    }
+}
+
+/// What a wild petpet (class 33) sees this tick.
+#[derive(Clone, Copy, Debug)]
+pub struct WildView {
+    pub position: Vec3,
+    pub facing: Vec3,
+    pub hero: Vec3,
+    /// The nearest world item of category 12 (position, item id, token) and whether the
+    /// petpet can reach it.
+    pub food: Option<(Vec3, u16, u32)>,
+    pub reachable: bool,
+    /// The nearest anchor (a Bagguss on the ground).
+    pub anchor: Option<Vec3>,
+    pub clip_action: u32,
+    pub clip_done: bool,
+}
+
+/// A wild petpet's class 33 loop (State selection, States, Strike).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Wild {
+    pub state: u8,
+    /// Set by the hero's feed (hero state 49).
+    pub fed: bool,
+    /// The remaining time its meal gave (ticks), carried into the live petpet when it joins.
+    pub t: i32,
+    point: Option<Vec3>,
+    wait: Option<i32>,
+    eating: bool,
+    one_shot: bool,
+}
+
+impl Wild {
+    /// One tick: the state choice, then the state body.
+    pub fn tick(&mut self, v: &WildView, rng: &mut Rng) -> Act {
+        let near_food = v.food.filter(|&(p, id, _)| id != BAGGUSS && self.fed && v.reachable && hdist(p, v.position) <= 10.0);
+        if hdist(v.position, v.hero) >= 10.0 {
+            // Rule 1 (the test for state 2 on this branch always fails).
+            if !matches!(self.state, 4 | 5) {
+                self.state = 3;
+            }
+        } else if near_food.is_some() {
+            self.state = 4;
+        } else if v.anchor.is_some_and(|p| hdist(p, v.position) <= 5.0) {
+            self.state = 5;
+        } else if !matches!(self.state, 1 | 4) {
+            self.state = 1;
+            self.one_shot = true;
+        }
+        let mut a = Act::default();
+        match self.state {
+            1 => {
+                // Animation 9 once, then idle.
+                if self.one_shot {
+                    a.anim = Some(9);
+                    if v.clip_action == 9 && v.clip_done {
+                        self.one_shot = false;
+                    }
+                } else {
+                    a.anim = Some(0);
+                }
+            }
+            3 => self.roam(v, rng, &mut a),
+            4 => self.strike(v, &mut a),
+            5 => {
+                // Hold about 10 units from the anchor (the point after arrival is not
+                // recorded).
+                let Some(c) = v.anchor else {
+                    self.state = 1;
+                    a.anim = Some(0);
+                    return a;
+                };
+                let d = [v.position[0] - c[0], 0.0, v.position[2] - c[2]];
+                let l = (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-6);
+                let p = [c[0] + 10.0 * d[0] / l, v.position[1], c[2] + 10.0 * d[2] / l];
+                if hdist(p, v.position) >= 1.0 {
+                    a.toward = Some((p, 0.1));
+                    a.anim = Some(2);
+                } else {
+                    a.anim = Some(0);
+                }
+            }
+            _ => a.anim = Some(0),
+        }
+        a
+    }
+
+    /// State 3: a point within 40 units of the hero and a wait; idle while the wait runs, then
+    /// walk to the point; on arrival a new point and wait (the wait's range is open; 180 to 600
+    /// ticks is used, as class 34's).
+    fn roam(&mut self, v: &WildView, rng: &mut Rng, a: &mut Act) {
+        let point = match self.point {
+            Some(p) => p,
+            None => {
+                let ang = rng.frange(0.0, std::f32::consts::TAU);
+                let r = rng.frange(0.0, 40.0);
+                let p = [v.hero[0] + r * ang.cos(), v.hero[1], v.hero[2] + r * ang.sin()];
+                self.point = Some(p);
+                self.wait = Some(rng.range(180, 600));
+                p
+            }
+        };
+        if let Some(w) = self.wait.filter(|&w| w > 0) {
+            self.wait = Some(w - 1);
+            a.anim = Some(0);
+            return;
+        }
+        if hdist(v.position, point) < 1.0 {
+            self.point = None;
+            a.anim = Some(0);
+            return;
+        }
+        a.toward = Some((point, 0.1));
+        a.anim = Some(2);
+    }
+
+    /// State 4 (Strike, steps 1, 2 and 4): reserve the nearest food each tick; eat when facing
+    /// it (dot above 0.8) less than 2.0 away, else walk toward it (2.0 or more away, when it can
+    /// be reached) or turn toward it (rate 0.1). The eat clip is animation 4; at its end the
+    /// food is eaten and the petpet joins.
+    fn strike(&mut self, v: &WildView, a: &mut Act) {
+        let Some((p, id, token)) = v.food.filter(|&(_, id, _)| id != BAGGUSS) else {
+            // No food: nothing happens in the step; the petpet goes back to idle (the exit is
+            // not given; Medium).
+            self.eating = false;
+            self.state = 1;
+            a.anim = Some(0);
+            return;
+        };
+        a.reserve = Some(token);
+        if self.eating {
+            a.anim = Some(4);
+            if v.clip_action == 4 && v.clip_done {
+                self.eating = false;
+                self.fed = false;
+                a.eat = Some((token, id));
+            }
+            return;
+        }
+        let to = [p[0] - v.position[0], 0.0, p[2] - v.position[2]];
+        let d = (to[0] * to[0] + to[2] * to[2]).sqrt();
+        let dot = if d > 0.0 { (v.facing[0] * to[0] + v.facing[2] * to[2]) / d } else { 1.0 };
+        if dot > 0.8 && d < 2.0 {
+            self.eating = true;
+            a.anim = Some(4);
+        } else if d >= 2.0 {
+            if v.reachable {
+                a.toward = Some((p, 0.1));
+                a.anim = Some(2);
+            } else {
+                a.anim = Some(0);
+            }
+        } else {
+            a.turn = Some((p, 0.1));
+            a.anim = Some(0);
+        }
+    }
+
+    /// The meal of value v minutes: the time it gives when larger than the current one.
+    pub fn eat(&mut self, v: f32) {
+        self.t = self.t.max(meal_ticks(v));
     }
 }
 
@@ -498,7 +758,9 @@ mod tests {
             hero_idle: true,
             counting: true,
             contact: false,
+            clip_action: 0,
             clip_done: false,
+            food: None,
         };
         // Vector 34: T = 1 keeps following; the next counting tick T = 0 and the pet leaves.
         let mut p = Live::new(450, 1, 27000).unwrap();
@@ -523,6 +785,82 @@ mod tests {
         let t = p.t;
         p.tick(&View { counting: false, ..v }, 1800, &mut rng);
         assert_eq!(p.t, t);
+    }
+
+    #[test]
+    fn food_values_and_reservation() {
+        // Vectors 6 to 16 with the base words as on the disc's values.
+        let f = Food { base: [2.0, 5.0, 10.0, 2.0, 5.0, 10.0, 10.0, 30.0, 60.0], sets: sets() };
+        let ticks = |k: u8, id: u16| meal_ticks(f.value(k, id));
+        assert_eq!([ticks(0, 146), ticks(1, 146), ticks(7, 146), ticks(3, 147), ticks(3, 150), ticks(6, 150), ticks(6, 152), ticks(7, 155), ticks(8, 152)], [27000, 18000, 9000, 54000, 5400, 10800, 324000, 54000, 216000]);
+        assert_eq!((f.value(0, BAGGUSS), f.value(0, 148)), (0.0, 0.0));
+        assert!(feedable(145) && feedable(157) && !feedable(148) && !feedable(144));
+        // Vector 24: the fallback passes 5.0 s on about the 301st tick; a reserve resets it.
+        let mut r = Reservation::default();
+        r.reserve(7);
+        let n = (1..=400).find(|_| r.tick().is_some());
+        assert!(matches!(n, Some(300..=302)), "{n:?}");
+        for _ in 0..1000 {
+            r.reserve(7);
+            assert_eq!(r.tick(), None);
+        }
+    }
+
+    #[test]
+    fn class_33_wild_petpet() {
+        let mut rng = Rng::seeded(5);
+        let v = WildView { position: [0.0; 3], facing: [0.0, 0.0, 1.0], hero: [0.0, 0.0, 8.0], food: None, reachable: true, anchor: None, clip_action: 0, clip_done: false };
+        // Vector 21: 10.0 from the hero roams; 9.9 idles; a fed petpet with food 9 away strikes.
+        let mut w = Wild::default();
+        w.tick(&WildView { hero: [0.0, 0.0, 10.0], ..v }, &mut rng);
+        assert_eq!(w.state, 3);
+        let mut w = Wild::default();
+        w.tick(&WildView { hero: [0.0, 0.0, 9.9], ..v }, &mut rng);
+        assert_eq!(w.state, 1);
+        let food = Some(([0.0, 0.0, 9.0], 146, 3));
+        let mut w = Wild { fed: true, ..Wild::default() };
+        w.tick(&WildView { food, ..v }, &mut rng);
+        assert_eq!(w.state, 4);
+        // Not fed: no strike.
+        let mut w = Wild::default();
+        w.tick(&WildView { food, ..v }, &mut rng);
+        assert_eq!(w.state, 1);
+        // Vector 22: an anchor 4 away hovers.
+        let mut w = Wild::default();
+        w.tick(&WildView { anchor: Some([4.0, 0.0, 0.0]), ..v }, &mut rng);
+        assert_eq!(w.state, 5);
+        // Vector 42: 1.5 away facing (dot 0.9) eats; dot 0.7 turns; 3.0 away walks.
+        let at = |x: f32, z: f32| Some(([x, 0.0, z], 146u16, 3u32));
+        let mut w = Wild { fed: true, ..Wild::default() };
+        let a = w.tick(&WildView { food: at(0.6538, 1.35), ..v }, &mut rng);
+        assert_eq!((a.anim, a.reserve, w.eating), (Some(4), Some(3), true));
+        let a = w.tick(&WildView { food: at(0.6538, 1.35), clip_action: 4, clip_done: true, ..v }, &mut rng);
+        assert_eq!(a.eat, Some((3, 146)));
+        let mut w = Wild { fed: true, ..Wild::default() };
+        let a = w.tick(&WildView { food: at(1.071, 1.05), ..v }, &mut rng);
+        assert!(a.turn.is_some() && a.eat.is_none() && !w.eating);
+        let mut w = Wild { fed: true, ..Wild::default() };
+        let a = w.tick(&WildView { food: at(0.0, 3.0), ..v }, &mut rng);
+        assert!(a.toward.is_some() && !w.eating);
+        // Vector 37: a kind 0 petpet fed a Chokato gets 27000 ticks.
+        let f = Food { base: [2.0, 5.0, 10.0, 2.0, 5.0, 10.0, 10.0, 30.0, 60.0], sets: sets() };
+        let mut w = Wild::default();
+        w.eat(f.value(0, 146));
+        assert_eq!(w.t, 27000);
+    }
+
+    #[test]
+    fn class_34_eats_in_place() {
+        // Vector 41: a pending event with food 8.0 away: animation 4 without moving; at the
+        // clip's end the food is eaten.
+        let mut rng = Rng::seeded(1);
+        let v = View { position: [0.0; 3], facing: [0.0, 0.0, 1.0], hero: [0.0, 0.0, 3.0], hero_facing: [0.0, 0.0, 1.0], hero_right: [1.0, 0.0, 0.0], hero_idle: true, counting: true, contact: false, clip_action: 0, clip_done: false, food: Some(([8.0, 0.0, 0.0], 146, 9)) };
+        let mut p = Live::new(450, 5000, 27000).unwrap();
+        p.pending_event = true;
+        let a = p.tick(&v, 1800, &mut rng);
+        assert_eq!((p.state, a.anim, a.toward, a.reserve), (4, Some(4), None, Some(9)));
+        let a = p.tick(&View { clip_action: 4, clip_done: true, ..v }, 1800, &mut rng);
+        assert_eq!((a.eat, p.state), (Some((9, 146)), 1));
     }
 
     #[test]

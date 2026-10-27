@@ -2,8 +2,8 @@
 //! Section J node transform, Sprite drawing, Predicate table): the bars group 0x31 of the HUD
 //! page, laid out on the 512 x 448 canvas scaled to the window, with the bar widths, the right
 //! caps, the fade alpha and the health frame's tint from `neopets_sim::hud`.
-//! Only the bars group is drawn so far; its predicates are slots 42 to 48 (other slots read as
-//! false), and value texts and labels are not drawn.
+//! Drawn: the bars group (predicate slots 42 to 48), the monster bar, the button prompts, the
+//! quick-item panels and the petpet panel (slot 38 and the meter fill; SPEC-0023 section 7).
 
 use crate::PlayState;
 use bevy::prelude::*;
@@ -37,6 +37,10 @@ const ITEM_PANEL: u32 = 0x30;
 const EQUIP: [u32; 3] = [0x1C, 0x1D, 0x1E];
 const CROSS_RIGHT: u32 = 0x9C;
 const ITEM_ICONS: [u32; 6] = [0x9C, 0x9B, 0x9E, 0x9D, 0xA0, 0xA1];
+/// SPEC-0023 sections 2 and 7: the petpet panel (the predicate-38 group above the portrait
+/// 0x3C's group) and its meter fill 0x12.
+const PET_PORTRAIT: u32 = 0x3C;
+const PET_FILL: u32 = 0x12;
 
 #[derive(Resource)]
 pub struct HudArt {
@@ -129,6 +133,10 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
         42 => (node.arg as i32) < p.health_dividers,
         45 => (node.arg as i32) < p.pool_dividers,
         41 => p.monster,
+        // Slot 38 with the petpet panel's arguments 255, 6, 3, 1, 0 and 7: SPEC-0023 section 7
+        // shows the group whose argument is the active petpet's kind (255 any kind); SPEC-0035
+        // names the slot's value a music index instead (R-0094).
+        38 => p.pet.is_some_and(|k| node.arg == 255 || node.arg == k),
         25 => p.square,
         // SPEC-0035 9c and SPEC-0023 section 4: the quick-item cross and the panels.
         32 => p.quick_open,
@@ -212,6 +220,8 @@ struct Inputs {
     g: [i32; 3],
     weapon: bool,
     shield: bool,
+    /// The live petpet's kind while present (T at least 1).
+    pet: Option<u8>,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -260,12 +270,16 @@ pub fn sync_hud(
     let item_panel = f.key(ITEM_PANEL);
     let equip = f.key(EQUIP[0]).and_then(|n| f.nodes[n].parent);
     let panels: Vec<usize> = [cross, item_panel, equip].into_iter().flatten().collect();
+    let pet_panel = f.key(PET_PORTRAIT).and_then(|n| f.nodes[n].parent).and_then(|n| f.nodes[n].parent);
     let mut nodes = Vec::new();
     subtree(f, bars, &mut nodes);
     if let Some(m) = monster {
         subtree(f, m, &mut nodes);
     }
     if let Some(g) = prompts {
+        subtree(f, g, &mut nodes);
+    }
+    if let Some(g) = pet_panel {
         subtree(f, g, &mut nodes);
     }
     let mut panel_nodes = Vec::new();
@@ -322,6 +336,7 @@ pub fn sync_hud(
         g: hud.g,
         weapon: p.weapon.is_some(),
         shield: p.shield.is_some(),
+        pet: p.pet_kind(),
     };
     let key = |k: u32| f.key(k).unwrap_or(usize::MAX);
     let node_x = |k: u32| f.key(k).map_or(0, |n| f.nodes[n].x as i32);
@@ -333,6 +348,8 @@ pub fn sync_hud(
         (key(MONSTER_MIDDLE), mb.frame),
         (key(PLATE_CENTRE), mb.name_width),
         (key(MONSTER_FILL), mb.fill),
+        // SPEC-0023 section 7: W = round(A x 60 / B); below 1 the fill is hidden.
+        (key(PET_FILL), p.petpet.as_ref().map_or(0, |pp| pp.meter())),
     ]
     .into_iter()
     .collect();
@@ -390,8 +407,20 @@ pub fn sync_hud(
             false
         };
         let panel = panel_root(f, n, &panels);
+        let in_pet = |n: usize| {
+            let mut at = Some(n);
+            while let Some(i) = at {
+                if Some(i) == pet_panel {
+                    return true;
+                }
+                at = f.nodes[i].parent;
+            }
+            false
+        };
         let top = if in_monster(n) {
             monster.unwrap_or(bars)
+        } else if in_pet(n) {
+            pet_panel.unwrap_or(bars)
         } else if in_prompts(n) {
             prompts.unwrap_or(bars)
         } else {
@@ -429,7 +458,7 @@ pub fn sync_hud(
         let c = |v: u8| v as f32 / 128.0;
         let a = if in_monster(n) {
             neopets_sim::hud::alpha(mb.t)
-        } else if in_prompts(n) {
+        } else if in_prompts(n) || in_pet(n) {
             128
         } else if panel.is_some() {
             group_alpha(f, n, &hud.panel_alpha)

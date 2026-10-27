@@ -31,6 +31,10 @@ pub const ARRIVAL: u8 = 59;
 /// script-control state it can end in (0x21).
 pub const ONE_SHOT: u8 = 51;
 pub const SCRIPTED: u8 = 33;
+/// SPEC-0047 Feeding a petpet: state 49 with clip 138 (0x8A); at progress 0.99 (word
+/// 0x2DD854) the hero returns to state 1.
+pub const FEED: u8 = 49;
+pub const ANIM_FEED: u32 = 138;
 /// SPEC-0033 Behavior 4A.3: the shield guard.
 pub const GUARD: u8 = 20;
 /// Carry a Miamouse (SPEC-0033 Behavior 18).
@@ -405,6 +409,11 @@ impl Locomotion {
     }
 
     /// PlayHeroAnim (SPEC-0030 row 157): the one-shot state 51 with the animation and CTL.
+    pub fn feed(&mut self) {
+        self.state = FEED;
+        self.request = ANIM_FEED;
+    }
+
     pub fn play_one_shot(&mut self, anim: u32, control: bool) {
         self.state = ONE_SHOT;
         self.request = anim;
@@ -550,7 +559,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | BLOCK | HANG | CLIMB | LADDER | PANEL => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -593,6 +602,12 @@ impl Locomotion {
                 return;
             }
             SCRIPTED => return,
+            FEED => {
+                if clip.action == self.request && clip.progress >= 0.99 {
+                    self.state = STANCE;
+                }
+                return;
+            }
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
             BLOCK | HANG | CLIMB | LADDER | PANEL => return,

@@ -92,6 +92,8 @@ pub struct WorldItem {
     pub charm: bool,
     /// The buy price (record +0x8A; SPEC-0050).
     pub price: i16,
+    /// Food the hero dropped for a petpet (SPEC-0047 Feeding): reserved, never collected.
+    pub reserved: bool,
 }
 
 impl WorldItem {
@@ -195,6 +197,7 @@ impl ItemPool {
             price: s.price,
             map: s.map,
             charm: s.charm,
+            reserved: false,
         });
         true
     }
@@ -239,7 +242,7 @@ impl ItemPool {
         let mut best: Option<(usize, f32)> = None;
         for (i, it) in self.slots.iter().enumerate() {
             let Some(it) = it else { continue };
-            if !it.ready() || it.token == 0 {
+            if !it.ready() || it.token == 0 || it.reserved {
                 continue;
             }
             let d = ((it.position[0] - p[0]).powi(2) + (it.position[1] - p[1]).powi(2) + (it.position[2] - p[2]).powi(2)).sqrt();

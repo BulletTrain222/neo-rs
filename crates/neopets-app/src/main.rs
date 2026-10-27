@@ -2596,6 +2596,10 @@ fn play_trace(
     for &id in give {
         play.give(id);
     }
+    // NEOPETS_TRACE_QUICK=id: that item is the selected quick item (trace only).
+    if let Some(id) = std::env::var("NEOPETS_TRACE_QUICK").ok().and_then(|v| v.parse::<i32>().ok()) {
+        play.quick.marker = id;
+    }
     // NEOPETS_TRACE_ROOTS="a,b,...": each hero clip's key count and summed root records.
     if let Ok(v) = std::env::var("NEOPETS_TRACE_ROOTS") {
         for id in v.split(',').filter_map(|t| t.trim().parse::<u32>().ok()) {
@@ -2899,10 +2903,12 @@ fn play_trace(
         }
         // NEOPETS_TRACE_FOLLOW=<name>: keep within 6 units of the character with that name.
         if let Ok(name) = std::env::var("NEOPETS_TRACE_FOLLOW") {
-            if let Some(c) = play.characters.iter().find(|c| c.name == name && c.pack == play.world.pack) {
+            // The name "wild" follows the first wild petpet, to within 3 units.
+            let wild = name == "wild";
+            if let Some(c) = play.characters.iter().find(|c| (c.name == name || wild && c.wild.is_some()) && c.pack == play.world.pack) {
                 let p = play.loco.position();
                 let t = [c.position[0], c.position[2]];
-                if (t[0] - p[0]).hypot(t[1] - p[2]) <= 6.0 {
+                if (t[0] - p[0]).hypot(t[1] - p[2]) <= if wild { 3.0 } else { 6.0 } {
                     route.clear();
                 } else if route.last().is_none_or(|r| (r[0] - t[0]).hypot(r[1] - t[1]) > 4.0) {
                     // A searched route to the character, refreshed when it has moved on.
@@ -3246,6 +3252,16 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
             // `--give N`: diagnostic equipment (no inventory yet).
             for &id in &request.2 {
                 play.give(id);
+            }
+            // NEOPETS_TRACE_PET="type,T" and NEOPETS_TRACE_QUICK=id as in the trace (diagnostic).
+            if let Ok(v) = std::env::var("NEOPETS_TRACE_PET") {
+                let mut it = v.split(',').filter_map(|t| t.trim().parse::<i32>().ok());
+                if let (Some(ty), Some(t)) = (it.next(), it.next()) {
+                    play.activate_pet(ty, t, t);
+                }
+            }
+            if let Some(id) = std::env::var("NEOPETS_TRACE_QUICK").ok().and_then(|v| v.parse::<i32>().ok()) {
+                play.quick.marker = id;
             }
             // The HUD's art: the front-end database and texture sheet of resource 532.
             match index.read(disc, neopets_data::frontend::RESOURCE).and_then(|b| neopets_data::frontend::Frontend::parse(&b)) {
