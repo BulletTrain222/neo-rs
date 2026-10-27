@@ -406,6 +406,31 @@ mod tests {
     }
 
     #[test]
+    fn menu_words_follow_the_bindings_and_skip_the_mouse() {
+        use crate::menus;
+        // Cross pressed by a key, Circle only by the mouse, the movement key for up.
+        let bit = |a: usize| 1u32 << a;
+        let pad = Pad { pressed: bit(CROSS) | bit(CIRCLE) | bit(MOVE_UP), pressed_no_mouse: bit(CROSS) | bit(MOVE_UP), held_no_mouse: bit(LEFT), ..Default::default() };
+        let (edge, buttons) = crate::menu_view::menu_words(&pad);
+        assert_eq!(buttons, menus::CROSS);
+        assert_eq!(edge, menus::CROSS | menus::UP);
+        assert_eq!(crate::menu_view::menu_held(&pad), menus::LEFT);
+    }
+
+    #[test]
+    fn every_button_has_a_default_and_no_key_is_bound_twice() {
+        let b = Bindings::default();
+        for a in 0..ACTIONS {
+            assert!(b.keys[a][0].is_some(), "{} has no key", NAMES[a]);
+        }
+        let all: Vec<Input> = b.keys.iter().flatten().flatten().copied().collect();
+        for (i, x) in all.iter().enumerate() {
+            assert!(!all[i + 1..].contains(x), "{} bound twice", x.name());
+        }
+        assert!(b.pad.iter().all(Option::is_some));
+    }
+
+    #[test]
     fn mouse_stick_lifts_past_the_dead_zone() {
         assert_eq!(mouse_stick(0.0, 6), 0.0);
         assert!(mouse_stick(1.0, 6) > 0.32);

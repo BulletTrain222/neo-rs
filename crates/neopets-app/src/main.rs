@@ -2674,6 +2674,21 @@ fn play_trace(
     if let Some(n) = seed {
         play.rng = neopets_sim::rng::Rng::seeded(n);
     }
+    // NEOPETS_TRACE_ENTRY=k: start at the pack's entry record k (diagnostic, for sweeps from
+    // the places a player arrives); the count is printed either way.
+    println!("Start points: {}", play.dev_start_points());
+    if let Some(k) = std::env::var("NEOPETS_TRACE_ENTRY").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+        play.dev_go_start(k);
+    }
+    // NEOPETS_LIST_WORLDS: print the world packs of the save's world-key list and stop
+    // (diagnostic, for sweeps over every area).
+    if std::env::var_os("NEOPETS_LIST_WORLDS").is_some() {
+        let mut v: Vec<i32> = play.world_keys.0.iter().copied().filter(|&k| k > 0).map(|k| k as i32).collect();
+        v.sort_unstable();
+        v.dedup();
+        println!("WORLDS {}", v.iter().map(|k| k.to_string()).collect::<Vec<_>>().join(" "));
+        return;
+    }
     // `--give N` (repeatable): a diagnostic weapon or shield equipped at the start; `--start
     // x,z` places the hero.
     for &id in give {
