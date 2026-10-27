@@ -840,7 +840,7 @@ fn main() {
         .init_resource::<perf::PerfOverlay>()
         .insert_resource(display::DisplaySettings::load())
         .init_resource::<display::SceneTarget>()
-        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup))
+        .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
         .add_systems(Update, (audio_view::sync_music, audio_view::sync_bank, audio_view::sync_effects, audio_view::sync_stingers).after(step_sim))
         .add_systems(
@@ -856,6 +856,7 @@ fn main() {
     app.add_systems(Update, sync_breakables.after(sync_objects));
     app.add_systems(Update, sync_blocks.after(sync_objects));
     app.add_systems(Update, send_rumble);
+    app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     audio_view::register(&mut app);
     if smoke_test {

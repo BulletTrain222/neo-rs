@@ -305,6 +305,181 @@ pub fn sync_scene(
     }
 }
 
+/// The Display page's window (this build), in the bindings page's look: a row per setting with
+/// its value between < and > buttons, a Back row, and a line about the focused setting. The
+/// front end's Display page (menus.rs) keeps the cursor and the changes; the window shows them
+/// and takes the mouse.
+#[derive(Component)]
+pub struct DispWindow;
+#[derive(Component)]
+pub struct DispRow(usize);
+#[derive(Component)]
+pub struct DispLabel(usize);
+#[derive(Component)]
+pub struct DispValue(usize);
+#[derive(Component)]
+pub struct DispStep(usize, i32);
+#[derive(Component)]
+pub struct DispHelp;
+
+const PANEL: Color = Color::srgb(0.05, 0.06, 0.10);
+const ROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.04);
+const ROW_HOVER: Color = Color::srgba(1.0, 1.0, 1.0, 0.10);
+const ROW_CURSOR: Color = Color::srgba(0.95, 0.75, 0.25, 0.22);
+const ARROW: Color = Color::srgba(1.0, 1.0, 1.0, 0.08);
+const ARROW_HOVER: Color = Color::srgba(0.95, 0.75, 0.25, 0.65);
+const GOLD: Color = Color::srgb(0.98, 0.80, 0.35);
+const TEXT: Color = Color::srgb(0.92, 0.93, 0.96);
+const DIM: Color = Color::srgb(0.60, 0.63, 0.70);
+
+/// What each setting does, shown under the rows.
+const HELP: [&str; ROWS + 1] = [
+    "Windowed, borderless or full screen.",
+    "The window size, or the screen mode in full screen.",
+    "The shape of the game picture; bars fill the rest of the window.",
+    "How sharp the 3D world is drawn. Higher looks better and costs speed.",
+    "How the world picture is scaled to the window: Sharp keeps pixels crisp, Smooth blends them.",
+    "Back to Options.",
+];
+
+fn font(size: f32) -> TextFont {
+    TextFont { font_size: bevy::text::FontSize::Px(size), ..default() }
+}
+
+pub fn spawn_window(mut commands: Commands) {
+    commands
+        .spawn((
+            Node {
+                position_type: PositionType::Absolute,
+                left: percent(50),
+                top: percent(18),
+                margin: UiRect::left(px(-300)),
+                width: px(600),
+                flex_direction: FlexDirection::Column,
+                padding: UiRect::all(px(14)),
+                row_gap: px(3),
+                display: Display::None,
+                ..default()
+            },
+            BackgroundColor(PANEL),
+            GlobalZIndex(5003),
+            DispWindow,
+        ))
+        .with_children(|ui| {
+            ui.spawn((Text::new("Display"), font(22.0), TextColor(GOLD)));
+            ui.spawn((Text::new("Up and down pick, left and right (or a click on < >) change. Esc, Backspace or B go back."), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }));
+            for k in 0..=ROWS {
+                let back = k == ROWS;
+                ui.spawn((
+                    Button,
+                    Node { flex_direction: FlexDirection::Row, justify_content: JustifyContent::SpaceBetween, align_items: AlignItems::Center, padding: UiRect::axes(px(10), px(3)), min_height: px(28), margin: UiRect::top(px(if back { 10.0 } else { 0.0 })), ..default() },
+                    BackgroundColor(ROW),
+                    DispRow(k),
+                ))
+                .with_children(|row| {
+                    row.spawn((Text::new(if back { "Back" } else { "" }), font(15.0), TextColor(TEXT), TextLayout::no_wrap(), DispLabel(k)));
+                    if back {
+                        return;
+                    }
+                    row.spawn(Node { flex_direction: FlexDirection::Row, align_items: AlignItems::Center, column_gap: px(6), ..default() }).with_children(|r| {
+                        let arrow = |r: &mut ChildSpawnerCommands, d: i32| {
+                            r.spawn((Button, Node { width: px(24), height: px(22), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(ARROW), DispStep(k, d))).with_children(|b| {
+                                b.spawn((Text::new(if d < 0 { "<" } else { ">" }), font(15.0), TextColor(TEXT)));
+                            });
+                        };
+                        arrow(r, -1);
+                        r.spawn(Node { width: px(170), justify_content: JustifyContent::Center, ..default() }).with_children(|v| {
+                            v.spawn((Text::default(), font(15.0), TextColor(GOLD), TextLayout::no_wrap(), DispValue(k)));
+                        });
+                        arrow(r, 1);
+                    });
+                });
+            }
+            ui.spawn((Text::default(), font(13.0), TextColor(TEXT), Node { margin: UiRect::top(px(10)), min_height: px(18), ..default() }, DispHelp));
+        });
+}
+
+/// The mouse on the Display window: hovering a row focuses it, a click on < or > changes it (a
+/// click on the row steps it forward), and Back returns to Options.
+pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&Interaction, &DispRow), Changed<Interaction>>, steps: Query<(&Interaction, &DispStep), Changed<Interaction>>) {
+    let Some(mut menu) = menu else { return };
+    let flow = &mut menu.flow;
+    if flow.current != crate::menus::DISPLAY {
+        return;
+    }
+    let mut stepped = false;
+    for (i, s) in &steps {
+        if *i == Interaction::Pressed {
+            flow.display_focus = s.0;
+            flow.display_requests.push((s.0, s.1));
+            stepped = true;
+        }
+    }
+    for (i, r) in &rows {
+        match i {
+            Interaction::Hovered => flow.display_focus = r.0,
+            Interaction::Pressed if !stepped => {
+                flow.display_focus = r.0;
+                if r.0 == ROWS {
+                    flow.display_back = true;
+                } else {
+                    flow.display_requests.push((r.0, 1));
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Show the Display window while the front end is on the Display page.
+#[allow(clippy::type_complexity)]
+pub fn show_window(
+    menu: Option<Res<crate::menu_view::Menu>>,
+    settings: Res<DisplaySettings>,
+    mut windows: Query<&mut Node, With<DispWindow>>,
+    mut rows: Query<(&Interaction, &DispRow, &mut BackgroundColor), Without<DispStep>>,
+    mut steps: Query<(&Interaction, &mut BackgroundColor), (With<DispStep>, Without<DispRow>)>,
+    mut labels: Query<(&DispLabel, &mut Text, &mut TextColor), (Without<DispValue>, Without<DispHelp>)>,
+    mut values: Query<(&DispValue, &mut Text), (Without<DispLabel>, Without<DispHelp>)>,
+    mut help: Query<&mut Text, (With<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
+) {
+    let flow = menu.as_ref().map(|m| &m.flow);
+    let open = flow.is_some_and(|f| f.current == crate::menus::DISPLAY);
+    for mut n in &mut windows {
+        let d = if open { Display::Flex } else { Display::None };
+        if n.display != d {
+            n.display = d;
+        }
+    }
+    let Some(flow) = flow.filter(|_| open) else { return };
+    let focus = flow.display_focus.min(ROWS);
+    let shown = settings.rows();
+    for (i, r, mut bg) in &mut rows {
+        bg.0 = if r.0 == focus { ROW_CURSOR } else if *i == Interaction::Hovered { ROW_HOVER } else { ROW };
+    }
+    for (i, mut bg) in &mut steps {
+        bg.0 = if *i == Interaction::None { ARROW } else { ARROW_HOVER };
+    }
+    for (l, mut t, mut c) in &mut labels {
+        let s = shown.get(l.0).map_or("Back".to_string(), |r| r.0.clone());
+        if t.0 != s {
+            t.0 = s;
+        }
+        c.0 = if l.0 == focus { GOLD } else { TEXT };
+    }
+    for (v, mut t) in &mut values {
+        let s = shown.get(v.0).map_or(String::new(), |r| r.1.clone());
+        if t.0 != s {
+            t.0 = s;
+        }
+    }
+    for mut t in &mut help {
+        if t.0 != HELP[focus] {
+            t.0 = HELP[focus].to_string();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

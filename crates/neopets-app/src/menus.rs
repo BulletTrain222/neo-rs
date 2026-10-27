@@ -182,18 +182,6 @@ pub enum Draw {
     /// The map's hero marker (SPEC-0051 section 7): sprite node `node`'s whole 32 x 32 art as a
     /// quad centred on (x, y), turned by `angle` and squashed to 6/7 of its width, tinted.
     Marker { node: usize, x: f32, y: f32, angle: f32, colour: [u8; 4] },
-    /// A drawn shape of this build's own pages (no disc art): a rounded panel, a highlight bar
-    /// fading out to both ends, or a left or right arrow, filling the canvas rect, tinted
-    /// (128 = full).
-    Shape { shape: Shape, x: f32, y: f32, w: f32, h: f32, colour: [u8; 4] },
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum Shape {
-    Panel,
-    Bar,
-    Left,
-    Right,
 }
 
 /// The map and journal's tables and words, read once: the quest rows (table 1), the treasure
@@ -339,6 +327,8 @@ pub struct Flow {
     /// The Options page's "Keyboard & Gamepad" row was chosen: the host opens the bindings page
     /// (this build; controls_page.rs).
     pub controls_request: bool,
+    /// The Display window's Back was clicked (this build; display.rs).
+    pub display_back: bool,
 }
 
 /// What the predicates read: the pass count, the option words of slots 66 to 68 (Vibration,
@@ -399,7 +389,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false };
+        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -650,9 +640,11 @@ impl Flow {
     /// Cross, as Right) change the focused row, Triangle returns to the Options page's Display
     /// row. Changes are silent, as the option rows' are (SPEC-0035 Behavior 3).
     fn display_tick(&mut self, fe: &Frontend, edge: u16, ctx: &Ctx) {
-        let n = crate::display::ROWS;
+        // The settings rows, then Back.
+        let n = crate::display::ROWS + 1;
         if self.pass >= 2 {
-            if edge & TRIANGLE != 0 {
+            let on_back = self.display_focus == crate::display::ROWS;
+            if std::mem::take(&mut self.display_back) || edge & (TRIANGLE | SELECT | CIRCLE) != 0 || (on_back && edge & CROSS != 0) {
                 self.sounds.push(0x99);
                 if self.stack.last() == Some(&DISPLAY) {
                     self.stack.pop();
@@ -669,6 +661,7 @@ impl Flow {
             } else if edge & UP != 0 {
                 self.display_focus = (self.display_focus + n - 1) % n;
                 self.sounds.push(0x9A);
+            } else if on_back {
             } else if edge & LEFT != 0 {
                 self.display_requests.push((self.display_focus, -1));
             } else if edge & (RIGHT | CROSS) != 0 {
@@ -1480,7 +1473,7 @@ fn under_item(fe: &Frontend, mut n: usize) -> bool {
 /// Options page a "Display" row one row pitch under the last item, in the focused colour when
 /// focused; on the Display page the Options page without its item labels, and the rows
 /// "name: value" from the first item's place (with "< >" around the focused value).
-pub fn display_draws(fe: &Frontend, flow: &Flow, rows: &[(String, String)]) -> Vec<Draw> {
+pub fn display_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
     if !matches!(flow.current, OPTIONS | DISPLAY) {
         return Vec::new();
     }
@@ -1496,7 +1489,7 @@ pub fn display_draws(fe: &Frontend, flow: &Flow, rows: &[(String, String)]) -> V
             .collect()
     };
     let (on, off) = (item_labels(0), item_labels(usize::MAX));
-    let (Some(&(first, fx, fy)), Some(&(last, lx, ly))) = (off.first(), off.last()) else { return Vec::new() };
+    let (Some(&(first, fx, _)), Some(&(last, lx, ly))) = (off.first(), off.last()) else { return Vec::new() };
     let pitch = if off.len() >= 2 { ly - off[off.len() - 2].2 } else { 40.0 };
     let label = |n: usize| fe.label(n);
     let Some(plain) = label(last) else { return Vec::new() };
@@ -1522,79 +1515,9 @@ pub fn display_draws(fe: &Frontend, flow: &Flow, rows: &[(String, String)]) -> V
         let keys = drawable(&["Keyboard & Gamepad".to_string(), "Keyboard and Gamepad".to_string()]);
         return vec![text("Display", ly + pitch, colour(n)), text(&keys, ly + pitch * 2.0, colour(n + 1))];
     }
-    // The Display page: the Options page without its item labels, under a dark rounded panel
-    // with a "Display" heading; each row a name on the left and its value on the right, the
-    // focused row on a fading highlight bar with arrows round its value, and a line under the
-    // rows about the focused setting in the footer labels' smaller font.
-    let mut out: Vec<Draw> = draw_list(fe, OPTIONS, usize::MAX, pc).into_iter().filter(|d| !matches!(d, Draw::Label { node, .. } if under_item(fe, *node))).collect();
-    let _ = first;
-    let small = off_labels_font(fe, pc).unwrap_or((font, plain.spacing as i32, plain.colour));
-    let measure = |f: usize, t: &[u8], sp: i32| fe.fonts.get(f).map_or(0, |ft| ft.measure(t, sp)) as f32;
-    let keep = |f: usize, t: &str| -> Vec<u8> { t.bytes().filter(|&c| c == b' ' || fe.fonts.get(f).is_some_and(|ft| ft.glyph(c).is_some())).collect() };
-    let step = (pitch * 0.72).round();
-    let (x0, w) = (72.0, 368.0);
-    // Everything sits a little lower than the item list, clear of the logo.
-    let fy = fy + (step * 0.6).round();
-    let top = fy - step * 0.95;
-    let rows_bottom = fy + step * (rows.len() as f32 - 1.0) + step * 0.3;
-    let help_y = rows_bottom + step * 0.75;
-    let bottom = help_y + step * 0.35;
-    let panel = |shape: Shape, x: f32, y: f32, w: f32, h: f32, colour: [u8; 4]| Draw::Shape { shape, x, y, w, h, colour };
-    let mut shapes = vec![panel(Shape::Panel, x0, top - step * 0.95, w, bottom - top + step * 0.95, [5, 8, 30, 96])];
-    // The heading.
-    let heading = keep(font, "Display");
-    out.push(Draw::Text { font, text: heading.clone(), spacing: plain.spacing as i32, x: (x0 + w / 2.0 - measure(font, &heading, plain.spacing as i32) / 2.0).round(), y: top - step * 0.12, colour: focused });
-    shapes.push(panel(Shape::Panel, x0 + 24.0, top + step * 0.08, w - 48.0, 1.5, [150, 160, 255, 50]));
-    let sp = plain.spacing as i32;
-    let (pad, arrow) = (16.0, 9.0);
-    for (k, (name, value)) in rows.iter().enumerate() {
-        let f = k == flow.display_focus;
-        let y = fy + step * k as f32;
-        if f {
-            shapes.push(panel(Shape::Bar, x0 + 6.0, y - step * 0.72, w - 12.0, step * 0.86, [70, 40, 110, 96]));
-        }
-        // A percent value falls back to the word.
-        let value = keep(font, &drawable(&[value.clone(), value.replace('%', " percent")]));
-        let name = keep(font, name);
-        let c = if f { focused } else { plain.colour };
-        out.push(Draw::Text { font, text: name, spacing: sp, x: x0 + pad, y, colour: c });
-        let vw = measure(font, &value, sp);
-        let vx = (x0 + w - pad - arrow - 6.0 - vw).round();
-        out.push(Draw::Text { font, text: value, spacing: sp, x: vx, y, colour: c });
-        if f {
-            let ah = step * 0.36;
-            let ay = y - step * 0.5;
-            shapes.push(panel(Shape::Left, vx - arrow - 6.0, ay, arrow, ah, [255, 220, 150, 128]));
-            shapes.push(panel(Shape::Right, x0 + w - pad - arrow, ay, arrow, ah, [255, 220, 150, 128]));
-        }
-    }
-    // The focused setting's line.
-    const HELP: [&str; 5] = [
-        "Windowed, borderless or full screen",
-        "The window size, or the screen mode in full screen",
-        "The shape of the picture; bars fill the rest",
-        "How sharp the world is drawn; higher is slower",
-        "Sharp keeps pixels crisp, Smooth blends them",
-    ];
-    if let Some(h) = HELP.get(flow.display_focus) {
-        let (sf, ssp, sc) = small;
-        let t = keep(sf, h);
-        out.push(Draw::Text { font: sf, text: t.clone(), spacing: ssp, x: (x0 + w / 2.0 - measure(sf, &t, ssp) / 2.0).round(), y: help_y, colour: [sc[0], sc[1], sc[2], (sc[3] as u32 * 3 / 4) as u8] });
-    }
-    // The page's art, then the shapes, then the text over them.
-    let (texts, mut all): (Vec<Draw>, Vec<Draw>) = out.into_iter().partition(|d| matches!(d, Draw::Text { .. }));
-    all.extend(shapes);
-    all.extend(texts);
-    all
-}
-
-/// The font, spacing and colour of the Options page's footer labels (the smaller white font
-/// of "Select" and "Back"): the first label drawn there that is not under an item.
-fn off_labels_font(fe: &Frontend, pc: Pc) -> Option<(usize, i32, [u8; 4])> {
-    draw_list(fe, OPTIONS, usize::MAX, pc).into_iter().find_map(|d| match d {
-        Draw::Label { node, .. } if !under_item(fe, node) => fe.label(node).filter(|l| l.font >= 0 && l.text.len() > 2).map(|l| (l.font as usize, l.spacing as i32, l.colour)),
-        _ => None,
-    })
+    // The Display page: the Options page without its item labels; the page's window is the
+    // host's (display.rs).
+    draw_list(fe, OPTIONS, usize::MAX, pc).into_iter().filter(|d| !matches!(d, Draw::Label { node, .. } if under_item(fe, *node))).collect()
 }
 
 /// The credits rows of this pass: centred at x 256 in font 0 (the spec names no font; R-0023),
