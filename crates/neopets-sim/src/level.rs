@@ -787,6 +787,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         (909, 0 | 1) => Some(13),
         (951, 0) => Some(26),
         (955, 0) => Some(13),
+        (1156 | 1159 | 1170, 0) => Some(13),
         // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
         // clear; taken as 13 here).
         (1023, 0..=10) => Some(13),
@@ -1232,6 +1233,16 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         }
         (1098, 6) if castle_stage(state) == 30 || state.word(1098, 0) != 0 => vec![Action::Message { line: 16 }],
         (1098, 6) => vec![Action::ReplaceExterior { slot: 90, plane: -1 }],
+        // SPEC-0032 1156, 1159 and 1170 teleport 0: value 70, 60 or 10 for eW 106, leave to eW
+        // 107.
+        (1156 | 1159 | 1170, 0) => {
+            state.blackboard.insert((2, 106), match pack {
+                1156 => 70,
+                1159 => 60,
+                _ => 10,
+            });
+            vec![Action::LeaveInterior { slot: 107 }]
+        }
         // SPEC-0032 955: message 40 for eW 68, leave to eW 5.
         (955, 0) => {
             state.blackboard.insert((2, 68), 40);
@@ -2077,6 +2088,38 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // registered on every path. Not built: trigger 0's line, object 0, the prompt trigger 9,
         // triggers 1 to 3 and the effect stops.
         696 => vec![reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)],
+        // SPEC-0032 1055 Init: object 0 on. Its world-swap callback (and those of 797 and 1254)
+        // runs only from StartTransitionScene, which has no live call (SPEC-0030 rows 268 and
+        // 283), so those modules do nothing more in play.
+        1055 => vec![Action::InitObjOn { obj: 0, end: false }],
+        // SPEC-0032 1156 Init, thread C: slot 0 loads set 1 (region 1158) with 31 set, else set 0
+        // (region 1157) with 30 set; then the normal camera. Teleport 0 is on_teleport.
+        1156 => {
+            let mut v = Vec::new();
+            if state.flag(31) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1158) });
+            } else if state.flag(30) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1157) });
+            }
+            v.push(Action::ReturnCamera { preset: -1, release: true });
+            v
+        }
+        // SPEC-0032 1159 Init, thread C: slot 0 loads set 2 (31), 1 (30) or 0 (with entity 0
+        // looping animation 97; regions 1160 + set); then the normal camera.
+        1159 => {
+            let mut v = Vec::new();
+            if state.flag(31) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1162) });
+            } else if state.flag(30) {
+                v.push(Action::LoadRegion { slot: 0, region: Some(1161) });
+            } else {
+                v.extend([Action::LoadRegion { slot: 0, region: Some(1160) }, Action::EntityAnim { entity: 0, anim: 97, looped: true, wait: false }]);
+            }
+            v.push(Action::ReturnCamera { preset: -1, release: true });
+            v
+        }
+        // SPEC-0032 1170 Init: S0 on trigger 0 (teleport 0 and the arrival are their callbacks).
+        1170 => vec![reg(0, 1)],
         // SPEC-0032 816 Init: breakable 11 disabled with 516 set and 517 clear, else breakable 12
         // (the pickup callback is on_pickup; thread X is empty).
         816 => vec![Action::SetBreakableActive { id: if state.flag(516) && !state.flag(517) { 11 } else { 12 }, on: false }],
@@ -6810,6 +6853,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         (1381, 4) if call.object => out.actions.extend(hub_return_1381(state)),
+        // SPEC-0032 1170 S0 (entering): value 20 for eW 106, leave to eW 107.
+        (1170, 1) if call.object && call.state == 1 => {
+            state.blackboard.insert((2, 106), 20);
+            out.actions.push(Action::LeaveInterior { slot: 107 });
+        }
         // SPEC-0032 1080 S2 (entering): 15 ticks, the look-at-player camera 4, hero animation 137,
         // the shake (0, 0.3, 0.3) and the normal camera (2); any other call returns the camera.
         (1080, 1) => {
@@ -11155,6 +11203,12 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             let mut v: Vec<Action> = (15..=21).map(|slot| Action::StopEffect { slot }).collect();
             v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
             v
+        }
+        // SPEC-0032 1170 A0: the value for eW 123 (20: the hero to locator 1, else 0) and the
+        // normal camera.
+        1170 => {
+            let v = state.blackboard.get(&(2, 123)).copied().unwrap_or(-1);
+            vec![Action::MoveHero { locator: if v == 20 { 1 } else { 0 } }, Action::ReturnCamera { preset: -1, release: true }]
         }
         // SPEC-0042 1381 activate-world restore: each solved station (708 + k; block k activated,
         // object 50 + k removed for k 1 to 5) and each block piece (714 + k; block k to locator
@@ -16082,6 +16136,28 @@ mod tests {
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
         assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+    }
+
+    #[test]
+    fn modules_1156_1159_1170() {
+        let mut s = GameState::default();
+        assert_eq!(on_init(1156, &mut s), vec![Action::ReturnCamera { preset: -1, release: true }]);
+        s.set(30, true);
+        assert!(on_init(1156, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1157) }));
+        assert!(on_init(1159, &mut s).contains(&Action::LoadRegion { slot: 0, region: Some(1161) }));
+        assert_eq!(teleport_context(1159, 0), Some(13));
+        assert_eq!(on_teleport(1159, 0, &mut s), vec![Action::LeaveInterior { slot: 107 }]);
+        assert_eq!(s.blackboard.get(&(2, 106)), Some(&60));
+        // 1170's test vectors: value 20 -> locator 1; 10 and 7 -> locator 0.
+        for (v, l) in [(20, 1), (10, 0), (7, 0)] {
+            s.blackboard.insert((2, 123), v);
+            assert_eq!(on_activate(1170, &mut s)[0], Action::MoveHero { locator: l });
+        }
+        on_init(1170, &mut s);
+        let enter = TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 };
+        assert_eq!(on_trigger(1170, 1, enter, &mut s).actions, vec![Action::LeaveInterior { slot: 107 }]);
+        assert_eq!(s.blackboard.get(&(2, 106)), Some(&20));
+        assert_eq!(on_init(1055, &mut s), vec![Action::InitObjOn { obj: 0, end: false }]);
     }
 
     #[test]
