@@ -165,6 +165,13 @@ pub fn world_scene(
     layers: u32,
 ) -> Result<Option<ModelData>, String> {
     let mut world = model::build_world_parts(bytes, chunks, layers, false)?;
+    // NEOPETS_TRACE_PARTS: each scene part's bounds, layout, program, group and texture.
+    if std::env::var_os("NEOPETS_TRACE_PARTS").is_some() {
+        for (i, part) in world.parts.iter().enumerate() {
+            let (lo, hi) = part.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
+            println!("part {n} {i} tree {} leaf {:#x} {:?} program {:?} group {:?} tex {:?} lit {} verts {} box {:?}..{:?}", part.tree, part.leaf_offset, part.layout, part.program, part.group, part.texture, part.lit, part.positions.len(), lo.map(|v| v.round()), hi.map(|v| v.round()));
+        }
+    }
     if dome {
         // The world's sky dome by its area slot; only layer A (role 1) draws without an
         // atmosphere zone (SPEC-0046 Sky domes).

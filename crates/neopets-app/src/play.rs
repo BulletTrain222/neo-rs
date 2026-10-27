@@ -7052,7 +7052,9 @@ impl Play {
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
         let (at, facing) = (self.loco.position(), self.loco.facing);
-        self.hero.chain_step(at, facing);
+        if std::env::var_os("NEOPETS_NO_CHAINS").is_none() {
+            self.hero.chain_step(at, facing);
+        }
         self.sound_step();
         self.clip_effects_step();
         // SPEC-0033 Behavior 1C per pass (not while the menu is up, game status 9): entries run

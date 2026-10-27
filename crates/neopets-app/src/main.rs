@@ -2013,6 +2013,9 @@ fn sync_worlds(
                     if let (WorldPart::Scene(pack, _), Some(z)) = (*part, m.parts[i].zone) {
                         e.insert(ZoneGate(pack, z));
                     }
+                    if let WorldPart::Scene(pack, _) = *part {
+                        e.insert(PartSig(pack, part_signature(&m.parts[i])));
+                    }
                     if let Some(speed) = m.parts[i].scroll.filter(|_| m.parts[i].texture.is_some()) {
                         e.insert(UvScroll(speed));
                     }
@@ -2046,11 +2049,33 @@ fn sync_uv_scroll(state: Option<Res<PlayState>>, parts: Query<(&UvScroll, &MeshM
 #[derive(Component, Clone, Copy)]
 struct ZoneGate(u32, u8);
 
-/// Each frame: a gated world part shows only while its zone query passes.
-fn sync_zones(state: Option<Res<PlayState>>, mut parts: Query<(&ZoneGate, &mut Visibility)>) {
+/// A world scene part's pack and geometry signature (its vertex count and its bounds).
+#[derive(Component, Clone, Copy)]
+struct PartSig(u32, u64);
+
+fn part_signature(p: &neopets_data::model::MeshPart) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let (lo, hi) = p.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    p.positions.len().hash(&mut h);
+    for v in lo.iter().chain(&hi) {
+        ((v * 10.0).round() as i64).hash(&mut h);
+    }
+    h.finish()
+}
+
+/// Each frame: a gated world part shows only while its zone query passes. A part of the other
+/// drawn world that repeats a part of the current world exactly (the same vertex count and
+/// bounds; 696 and 1023 share seven castle parts) is hidden: drawn twice in one place the two
+/// copies fight for depth and flicker (this build's draw rule, not a spec rule).
+fn sync_zones(state: Option<Res<PlayState>>, mut parts: Query<(Option<&ZoneGate>, Option<&PartSig>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>)>>) {
     let Some(state) = state else { return };
-    for (g, mut v) in &mut parts {
-        let want = if state.play.zone_visible(g.0, g.1) { Visibility::Inherited } else { Visibility::Hidden };
+    let current = state.play.world.pack;
+    let mine: std::collections::HashSet<u64> = parts.iter().filter_map(|(_, s, _)| s.filter(|s| s.0 == current).map(|s| s.1)).collect();
+    for (g, s, mut v) in &mut parts {
+        let zone_ok = g.is_none_or(|g| state.play.zone_visible(g.0, g.1));
+        let dup = s.is_some_and(|s| s.0 != current && mine.contains(&s.1));
+        let want = if zone_ok && !dup { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
             *v = want;
         }
@@ -3581,6 +3606,10 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
             }
             if let Some(id) = std::env::var("NEOPETS_TRACE_QUICK").ok().and_then(|v| v.parse::<i32>().ok()) {
                 play.quick.marker = id;
+            }
+            // NEOPETS_TRACE_ROBERTA=1: start as Roberta (diagnostic).
+            if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
+                play.trace_select_hero(1);
             }
             // The HUD's art: the front-end database and texture sheet of resource 532.
             match index.read(disc, neopets_data::frontend::RESOURCE).and_then(|b| neopets_data::frontend::Frontend::parse(&b)) {
