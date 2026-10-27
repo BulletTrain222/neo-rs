@@ -50,6 +50,7 @@ pub const CLIMB: u8 = 58;
 pub const LEDGE: u8 = crate::ledge::HANG;
 pub const LEDGE_UP: u8 = crate::ledge::CLIMB_FALL;
 pub const LEDGE_RISE: u8 = crate::ledge::CLIMB_RISE;
+pub const LEDGE_DROP: u8 = crate::ledge::DROP;
 /// The ladder (SPEC-0033 Behavior 13; its tick is `ladder::Ladder`).
 pub const LADDER: u8 = 41;
 /// The climb on a climb panel (SPEC-0033 Behavior 51; its tick is `climb::Climb`).
@@ -567,7 +568,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -618,7 +619,7 @@ impl Locomotion {
             }
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
-            BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE => return,
+            BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -707,6 +708,12 @@ impl Locomotion {
         } else {
             GAIN_DESCENT
         };
+    }
+
+    /// The ledge-drop hand-off's running jump (SPEC-0033 Behavior 49): state 10 from the hero's
+    /// position and facing.
+    pub fn edge_jump(&mut self) {
+        self.enter_air(JUMP_RUN);
     }
 
     /// The state setter's entry to the jump states: launch pending.

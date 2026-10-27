@@ -4002,18 +4002,24 @@ impl Play {
     fn ledge_step(&mut self, side: f32, forward: bool) -> bool {
         use neopets_sim::ledge::{self, Class, Edge, Ledge};
         let hero = self.loco.position();
-        if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE) {
+        if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
             self.ledge = None;
-            if !(self.loco.airborne() && (0..=5).contains(&self.loco.phase)) {
+            self.loco.body.no_snap = false;
+            if (1..=4).contains(&self.loco.state) && !self.drop_check() {
                 return false;
             }
+            if self.loco.state != ledge::DROP && !(self.loco.airborne() && (0..=5).contains(&self.loco.phase)) {
+                return false;
+            }
+        }
+        if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
             let Some(g) = &self.world.ground else { return false };
             let (f, v) = (self.loco.facing, self.loco.body.velocity);
             let toward = |e: &Edge| -(e.face[0] * f[0] + e.face[2] * f[2]);
             let edge = g
                 .frames_at(hero[0], hero[2])
                 .into_iter()
-                .map(|r| Edge { face: r.face, run: r.run, top: r.top, length: r.length, height: r.height, kind: r.kind })
+                .map(|r| Edge { start: r.start, face: r.face, run: r.run, top: r.top, length: r.length, height: r.height, kind: r.kind })
                 .filter(|e| e.accepts(hero, f, v, contact::HERO_RADIUS, self.loco.state))
                 .max_by(|a, b| toward(a).total_cmp(&toward(b)));
             let Some(edge) = edge else { return false };
@@ -4029,7 +4035,17 @@ impl Play {
             self.trace_edge("ledge", state as usize, 0);
         }
         let c = self.hero.clip_state();
-        let Some(step) = self.ledge.as_mut().map(|l| l.tick(hero, side, forward, self.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })) else {
+        // State 37's depth check: the ground 2.0 and 2.5 ahead more than 4.5 below (or none) at
+        // both points makes the edge deep.
+        let f = self.loco.facing;
+        let deep = [2.0, 2.5].iter().all(|&k| self.world.ground_at(hero[0] + f[0] * k, hero[2] + f[2] * k, hero[1] + 1.0).is_none_or(|g| hero[1] - g > 4.5));
+        let Some(step) = self.ledge.as_mut().map(|l| {
+            if l.state == ledge::DROP {
+                l.drop_tick(hero, f, deep)
+            } else {
+                l.tick(hero, side, forward, self.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })
+            }
+        }) else {
             self.leave_ledge(hero_states::STANCE);
             return true;
         };
@@ -4038,8 +4054,12 @@ impl Play {
         }
         self.loco.body.no_gravity = true;
         self.loco.body.velocity = [0.0; 3];
+        // While hanging the hero is below the top it holds, inside the step-up reach of the
+        // ground constraint; the no-snap flag keeps it there (this build's choice: the spec does
+        // not name the flag's writer; R-0106).
+        self.loco.body.no_snap = self.loco.state == ledge::HANG;
         if let Some(d) = step.facing {
-            self.loco.steer_toward(d, 0.5);
+            self.loco.steer_toward(d, step.rate.unwrap_or(0.5));
         }
         if let Some(p) = step.place {
             self.loco.body.position = p;
@@ -4047,11 +4067,59 @@ impl Play {
         if let Some(r) = step.request {
             self.loco.block_request(r);
         }
+        if step.hang {
+            if let Some(l) = self.ledge.as_mut() {
+                *l = Ledge::new(ledge::HANG, l.edge);
+            }
+            self.loco.enter_state(ledge::HANG, 72);
+            self.trace_edge("ledge", ledge::HANG as usize, 0);
+        }
         if let Some(s) = step.exit {
             self.leave_ledge(s);
             self.trace_edge("leave", s as usize, 0);
         }
         true
+    }
+
+    /// SPEC-0033 Behavior 49 in the ground states 1 to 4: the ledge-drop test on the frame
+    /// records of the hero's cell, in order; the first accepted record decides. Walking or
+    /// running (3, 4) toward its outward normal requests the running jump (state 10) unless its
+    /// type is 1 or 6; standing or slow walking toward it, or standing with the back to it, drops
+    /// into a hang (state 37) unless its type is 3 or 6. Reports whether state 37 was entered.
+    /// Not kept: the ground-object kind gates (the hero is taken as on no ground object), the
+    /// edge offer's boosted jump, the camera side-offset event and states 5 and 6 (not entered in
+    /// this build).
+    fn drop_check(&mut self) -> bool {
+        use neopets_sim::ledge::{self, Edge, Ledge};
+        let Some(g) = &self.world.ground else { return false };
+        let (hero, f, v, state) = (self.loco.position(), self.loco.facing, self.loco.body.velocity, self.loco.state);
+        for r in g.frames_at(hero[0], hero[2]) {
+            let e = Edge { start: r.start, face: r.face, run: r.run, top: r.top, length: r.length, height: r.height, kind: r.kind };
+            let Some(negative) = e.drop_gates(hero, v, f, contact::HERO_RADIUS, state) else { continue };
+            let accepted = negative || {
+                let g0 = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0).unwrap_or(ground::MISS);
+                let p = e.drop_probe();
+                let hit = self.world.probe(p[0], p[2], hero[1] + 6.0);
+                ledge::drop_rule(g0, hit.found.then_some((hit.height, hit.kind)))
+            };
+            if !accepted {
+                continue;
+            }
+            let toward = e.face[0] * f[0] + e.face[2] * f[2] > 0.0;
+            if toward && (3..=4).contains(&state) && !matches!(e.kind, 1 | 6) {
+                self.loco.edge_jump();
+                self.trace_edge("edge jump", state as usize, 0);
+                return false;
+            }
+            if (toward || state == 1) && !matches!(e.kind, 3 | 6) {
+                self.ledge = Some(Ledge::drop_from(e, state));
+                self.loco.enter_state(ledge::DROP, 0);
+                self.trace_edge("drop", state as usize, 0);
+                return true;
+            }
+            return false;
+        }
+        false
     }
 
     /// Diagnostic: frame records whose top is 1.75 to 6.5 above the ground 1.5 out from the
@@ -4076,8 +4144,12 @@ impl Play {
                     let top = r.start[1];
                     let Some(gy) = self.world.ground_at(mid[0], mid[2], top) else { continue };
                     let d = top - 0.25 - gy;
-                    if (1.75..6.5).contains(&d) {
-                        out.push(format!("ledge kind {} drop {d:.2} stand {:.1},{:.1} y {gy:.2} face {:.2},{:.2} L {:.1}", r.kind, mid[0], mid[2], -n[0], -n[2], r.length));
+                    // The ground just behind the face (on top when the record is a cliff edge).
+                    let back: [f32; 3] = std::array::from_fn(|k| mid[k] - n[k] * 2.1);
+                    let behind = self.world.ground_at(back[0], back[2], top + 1.0).map_or(f32::NAN, |b| b - top);
+                    let cliff = behind.abs() < 0.6;
+                    if (1.75..12.0).contains(&d) && (cliff || std::env::var("NEOPETS_TRACE_LEDGES").as_deref() != Ok("cliff")) {
+                        out.push(format!("ledge kind {} drop {d:.2} stand {:.1},{:.1} y {gy:.2} face {:.2},{:.2} L {:.1} top-behind {behind:.2}", r.kind, mid[0], mid[2], -n[0], -n[2], r.length));
                     }
                 }
                 z += step;
@@ -4090,6 +4162,7 @@ impl Play {
     fn leave_ledge(&mut self, state: u8) {
         self.ledge = None;
         self.loco.body.no_gravity = false;
+        self.loco.body.no_snap = false;
         self.loco.enter_state(state, if state == hero_states::RUN { 4 } else { 0 });
     }
 

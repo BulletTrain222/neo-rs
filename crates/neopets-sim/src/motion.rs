@@ -33,6 +33,9 @@ pub struct Body {
     /// Gravity gain G (1.0 after reset).
     pub gain: f32,
     pub no_gravity: bool,
+    /// The no-snap flag (+0x148, SPEC-0040 Behavior 14A item 5b): the ground constraint clears
+    /// the motion along the normal but does not move the record onto the ground.
+    pub no_snap: bool,
     /// Ground gap (+0x24) and ground normal (+0x10), measured at the start of the record tick.
     pub gap: f32,
     pub normal: Vec3,
@@ -51,6 +54,7 @@ impl Body {
             weight,
             gain: 1.0,
             no_gravity: false,
+            no_snap: false,
             gap: 0.0,
             normal: [0.0, 1.0, 0.0],
             floor: false,
@@ -96,6 +100,9 @@ impl Body {
         }
         if self.velocity[1] > 0.0 {
             self.velocity = [0.0; 3];
+        }
+        if self.no_snap {
+            return;
         }
         let d = self.gap * n[1];
         for k in 0..3 {
