@@ -2686,6 +2686,13 @@ fn play_trace(
         println!("Open at the start: LevelMsg line {line} on tick {at}: {text:?}");
     }
     println!("Save points of {}: {:?}", play.world.pack, play.world.save_points);
+    // NEOPETS_TRACE_BREAKABLES: each breakable's position, state and drop (placement ordinal).
+    if std::env::var_os("NEOPETS_TRACE_BREAKABLES").is_some() {
+        for (i, b) in play.world.breakables.iter().enumerate() {
+            let p = b.position();
+            println!("      breakable {i}: at ({:.1}, {:.1}, {:.1}) state {} drop {} script {}", p[0], p[1], p[2], b.state, b.drop, b.script);
+        }
+    }
     println!("Book stations of {} (value, trigger index): {:?}", play.world.pack, play.book_stations());
     println!("Script triggers of {} (index, kind, middle): {:?}", play.world.pack, play.trigger_points());
     if std::env::var_os("NEOPETS_TRACE_LOCATORS").is_some() {
@@ -3044,6 +3051,15 @@ fn play_trace(
                             play.diag_gelert_hp(h);
                         }
                     }
+                }
+            }
+        }
+        // NEOPETS_TRACE_SMASH="tick:k;...": breakable k of the current world broken on that tick
+        // (its drop runs; diagnostic).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_SMASH") {
+            for (t, k) in v.split(';').filter_map(|e| e.split_once(':')).filter_map(|(a, b)| Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?))) {
+                if t == play.ticks {
+                    play.diag_break(k);
                 }
             }
         }

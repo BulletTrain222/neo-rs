@@ -4470,8 +4470,13 @@ impl Play {
             } else if damage > 0 && c.townsfolk.is_none() {
             // SPEC-0056: the take-hit of a townsfolk character returns at once.
                 c.hp -= damage;
-                if c.hp <= 0 {
+                if c.hp <= 0 && c.dying.is_none() {
                     c.dying = Some(c.row.map_or(60, |r| r.disappear.max(1) as u32));
+                    // A class-17 flyer (its AI is not built) still pays its drop placement on
+                    // death (SPEC-0021 enemy drops).
+                    if c.row.is_some_and(|r| r.class == Some(17)) {
+                        self.payouts.push((c.pack, c.position, c.drop));
+                    }
                 }
             }
             self.last_hit = format!("{by}hit {} for {damage} (hp {})", if c.name.is_empty() { "(unnamed)" } else { &c.name }, c.hp.max(0));
@@ -9456,6 +9461,13 @@ impl Play {
 
     /// The break of breakable i of the current world from state 1 (SPEC-0048 Break effect): state
     /// 2, the drop action for its placement (no luck gate) and the contact cue by material.
+    /// Diagnostic: break breakable i of the current world when it is intact (trace only).
+    pub fn diag_break(&mut self, i: usize) {
+        if self.world.breakables.get(i).is_some_and(|b| b.state == 1) {
+            self.break_one(i);
+        }
+    }
+
     fn break_one(&mut self, i: usize) {
         self.break_one_with(i, true);
     }
@@ -9465,7 +9477,14 @@ impl Play {
         let Some(b) = self.world.breakables.get_mut(i) else { return };
         b.state = 2;
         let (at, drop, cue) = (b.position(), b.drop, break_cue(b.material));
-        let point = usize::try_from(drop).ok().and_then(|d| self.world.item_points.get(d).copied());
+        // The drop id is a placement id: entry p of the placement-id table (tag 0x13) names the
+        // block and the ordinal among its item records (SPEC-0006, SPEC-0048 Placed drops on
+        // break). Only the embedded block (0xFF) is resolved.
+        let point = usize::try_from(drop)
+            .ok()
+            .and_then(|d| self.world.placements.get(d))
+            .filter(|(region, _)| *region == 0xFF)
+            .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
         if point.is_some() {
             self.payouts.push((pack, at, point));
         }
@@ -10489,7 +10508,8 @@ impl Play {
         let targets: Vec<usize> = (0..self.characters.len())
             .filter(|&i| {
                 let c = &self.characters[i];
-                c.pack == pack && !c.inactive && c.dying.is_none() && c.enemy.as_ref().is_some_and(|e| !e.dead)
+                let flyer = c.enemy.is_none() && c.hp > 0 && c.row.is_some_and(|r| r.class == Some(17) && r.can_fly != 0);
+                c.pack == pack && !c.inactive && c.dying.is_none() && (c.enemy.as_ref().is_some_and(|e| !e.dead) || flyer)
             })
             .collect();
         for &i in &targets {
