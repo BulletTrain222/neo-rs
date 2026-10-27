@@ -3979,7 +3979,13 @@ impl Play {
         }
         let step = match self.loco.state {
             hero_states::HANG => self.hang.as_mut().map(|h| h.tick(&self.world.blocks, hero, input.side, forward, self.loco.body.gap, clip)),
-            hero_states::CLIMB => self.climb.as_mut().map(|h| h.tick(&self.world.blocks, hero, forward, clip)),
+            hero_states::CLIMB => {
+                let touched = self.touched;
+                self.climb.as_mut().map(|h| {
+                    h.touched = touched;
+                    h.tick(&self.world.blocks, hero, forward, clip)
+                })
+            }
             _ => {
                 self.hang = None;
                 self.climb = None;

@@ -439,11 +439,13 @@ pub struct Climb {
     pub block: usize,
     pub face: u8,
     pub sub: u8,
+    /// The motion record's touched flag from the last step, set by the host before each tick.
+    pub touched: bool,
 }
 
 impl Climb {
     pub fn new(block: usize, face: u8) -> Self {
-        Self { block, face, sub: 0 }
+        Self { block, face, sub: 0, touched: false }
     }
 
     pub fn tick(&mut self, blocks: &[Block], hero: Vec3, forward: bool, clip: EdgeClip) -> EdgeStep {
@@ -452,12 +454,12 @@ impl Climb {
         let mut step = EdgeStep { facing: Some(d), ..EdgeStep::default() };
         if self.sub == 0 {
             // The target: the block position plus the outward face vector times S / 2 + 0.75, at
-            // the top less 1.2; 0.2 a tick along the line to it, snapping within 0.2 (the touched
-            // flag's early snap is not kept).
+            // the top less 1.2; 0.2 a tick along the line to it, snapping within 0.2 or at once
+            // when the touched flag (a contact of the last step) is set.
             step.request = 70;
             let half = 0.5 * b.size + 0.75;
             let target = [b.position[0] - d[0] * half, b.top() - 1.2, b.position[2] - d[2] * half];
-            let (p, snapped) = approach(hero, target, 0.2, 0.2);
+            let (p, snapped) = if self.touched { (target, true) } else { approach(hero, target, 0.2, 0.2) };
             step.place = Some(p);
             if snapped {
                 self.sub = 2;
@@ -727,5 +729,11 @@ mod tests {
         let s = c.tick(&v, [0.0, 0.7, -1.75], false, EdgeClip::default());
         assert_eq!((c.sub, s.request), (2, 134));
         assert_eq!(c.tick(&v, [0.0, 2.0, 0.5], true, EdgeClip { action: 134, progress: 0.96 }).exit, Some((4, 0.0)));
+        // A contact on the last step (the touched flag) snaps the approach to the target at once.
+        let mut t = Climb::new(0, 0);
+        t.touched = true;
+        let s = t.tick(&v, [0.0, 0.0, -1.75], false, EdgeClip::default());
+        assert_eq!((t.sub, s.request), (2, 134));
+        assert_eq!(s.place.map(|p| (p[1] * 100.0).round()), Some(80.0));
     }
 }
