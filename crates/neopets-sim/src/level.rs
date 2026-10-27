@@ -231,6 +231,14 @@ pub enum Action {
     /// the item placements of the region loaded in slot `slot`, added as a scripted add
     /// (SPEC-0021 Drop routes 3) with the two bools, the default lifetime and no overrides.
     ItemActivate { slot: u8, ordinal: usize, snap: bool, placed: bool },
+    /// Break(id) (SPEC-0030 row 46): a breakable of the current world in state 1 breaks (its
+    /// drop, its sound); any other state does nothing.
+    Break { id: usize },
+    /// SetBreakableActive(id, on) (row 47): state 1 (intact, breakable) or 0 (disabled).
+    SetBreakableActive { id: usize, on: bool },
+    /// MakeBreakable(id, on) (row 55): false moves state 1 to 3 (intact, not breakable), true
+    /// moves 3 back to 1; other states are unchanged.
+    MakeBreakable { id: usize, on: bool },
     /// SetWorldLoadOverRide(slot) (SPEC-0030 row 217; SPEC-0006 Pending slot writer): the
     /// current world's pending slot, used by the next pending step in place of the cell's exit
     /// value; an argument of 193 or more (or negative) is ignored.
@@ -451,6 +459,9 @@ pub struct GameState {
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
     /// each tick: a bound character's dead test, else its kill memory of this load.
     pub ai_dead: BTreeSet<usize>,
+    /// The current world's breakable states by index (SPEC-0048: 0 disabled, 1 intact and
+    /// breakable, 2 broken, 3 intact and not breakable), filled by the host each tick.
+    pub breakables: std::collections::BTreeMap<usize, i32>,
     /// The living characters of each of the current world's slots whose last load has arrived
     /// (GetAssetGroupCharacterRange with IsAI_Dead over it), filled by the host each tick; a slot
     /// that is empty or still loading has no entry.
@@ -2100,9 +2111,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend((3..=6).map(|i| reg(i, 3)));
             for k in &KNIGHTS_956 {
                 if state.flag(211) {
-                    v.push(Action::InitObjOn { obj: k.cage_obj, end: true });
+                    v.extend([Action::InitObjOn { obj: k.cage_obj, end: true }, Action::Break { id: k.lock }]);
                 } else {
-                    v.extend([reg(k.cage, 21), Action::InitObjOn { obj: k.cage_obj, end: false }]);
+                    v.extend([reg(k.cage, 21), Action::InitObjOn { obj: k.cage_obj, end: false }, Action::MakeBreakable { id: k.lock, on: false }]);
                 }
             }
             let h = (62..=67).rev().find(|&fl| state.flag(fl));
@@ -3444,20 +3455,33 @@ fn talk_1350(routine: u8, s: &mut GameState) -> Vec<Action> {
     }
 }
 
-/// A SPEC-0043 956 knight record (the fields this build uses).
+/// A SPEC-0043 956 knight record (the fields this build uses; the zone trigger and region are
+/// in the zone routine).
 struct Knight956 {
+    knight: usize,
+    release_line: u16,
+    flag: u16,
     cage: u16,
     cage_obj: usize,
     guard: usize,
+    lock: usize,
+    hero_at: usize,
+    knight_at: usize,
+    camera: usize,
     lock_line: u16,
 }
 
 const KNIGHTS_956: [Knight956; 4] = [
-    Knight956 { cage: 21, cage_obj: 18, guard: 23, lock_line: 62 },
-    Knight956 { cage: 23, cage_obj: 20, guard: 24, lock_line: 78 },
-    Knight956 { cage: 22, cage_obj: 19, guard: 25, lock_line: 76 },
-    Knight956 { cage: 24, cage_obj: 21, guard: 26, lock_line: 74 },
+    Knight956 { knight: 5, release_line: 61, flag: 208, cage: 21, cage_obj: 18, guard: 23, lock: 3, hero_at: 54, knight_at: 55, camera: 26, lock_line: 62 },
+    Knight956 { knight: 4, release_line: 77, flag: 209, cage: 23, cage_obj: 20, guard: 24, lock: 5, hero_at: 58, knight_at: 59, camera: 27, lock_line: 78 },
+    Knight956 { knight: 3, release_line: 75, flag: 210, cage: 22, cage_obj: 19, guard: 25, lock: 4, hero_at: 56, knight_at: 57, camera: 28, lock_line: 76 },
+    Knight956 { knight: 2, release_line: 73, flag: 623, cage: 24, cage_obj: 21, guard: 26, lock: 6, hero_at: 60, knight_at: 61, camera: 25, lock_line: 74 },
 ];
+
+/// SPEC-0048 breakable states 1 and 3: intact (IsBreakableIntact).
+fn breakable_intact(s: &GameState, id: usize) -> bool {
+    matches!(s.breakables.get(&id), Some(1 | 3))
+}
 
 /// SPEC-0043 956's lift readiness: 64 clear and 211 set, or all four knights free (then 211).
 fn lift_ready_956(s: &mut GameState) -> bool {
@@ -6923,16 +6947,48 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
-        // The cage triggers (21 to 24): the guard alive: context 3; dead: the lock line once per
-        // load. Breaking the lock and the release (R-0040) are not built.
+        // The cage triggers (21 to 24): the guard alive: context 3 (a press does nothing); dead with
+        // the lock intact: the lock made breakable and its line, once per load (word 10 + k);
+        // the lock broken and the knight's flag clear: context 6, and Square runs the release
+        // (once: word 30 + k): the fade, the camera, the cage open, the hero and the knight
+        // placed, the release line, the zone slot reset (record 0: region 963 loaded into it),
+        // the knight's flag (211 once all four are free), the camera returned.
         (956, 21) if call.state != 0 && !state.flag(211) => {
             if let Some(k) = KNIGHTS_956.iter().position(|k| k.cage == call.index) {
                 let r = &KNIGHTS_956[k];
                 if !state.ai_dead.contains(&r.guard) {
                     out.prompt = Some(3);
-                } else if state.word(pack, 10 + k as u8) == 0 {
-                    state.set_word(pack, 10 + k as u8, 1);
-                    out.actions.push(Action::Message { line: r.lock_line });
+                } else if breakable_intact(state, r.lock) {
+                    if state.word(pack, 10 + k as u8) == 0 {
+                        state.set_word(pack, 10 + k as u8, 1);
+                        out.actions.extend([Action::MakeBreakable { id: r.lock, on: true }, Action::Message { line: r.lock_line }]);
+                    }
+                } else if !state.flag(r.flag) && state.word(pack, 30 + k as u8) == 0 {
+                    if call.square && !state.talking {
+                        state.set_word(pack, 30 + k as u8, 1);
+                        out.actions.extend([
+                            Action::FadeOut { seconds: 1.0, wait: true },
+                            Action::PlayCamera { track: r.camera, wait: false, end: 1, speed: 1.0 },
+                            Action::InitObjOn { obj: r.cage_obj, end: true },
+                            Action::MoveHero { locator: r.hero_at },
+                            Action::MoveEntity { entity: r.knight, locator: r.knight_at, face: true },
+                            Action::Sleep { ticks: 30 },
+                            Action::FadeIn { seconds: 1.0, wait: true },
+                            Action::Converse { entity: r.knight, line: r.release_line },
+                            Action::FadeOut { seconds: 0.5, wait: true },
+                            Action::LoadRegion { slot: 1, region: None },
+                        ]);
+                        if k == 0 {
+                            out.actions.push(Action::LoadRegion { slot: 1, region: Some(963) });
+                        }
+                        out.actions.push(Action::SetFlag { flag: r.flag, on: true });
+                        if KNIGHTS_956.iter().filter(|o| o.flag != r.flag).all(|o| state.flag(o.flag)) {
+                            out.actions.push(Action::SetFlag { flag: 211, on: true });
+                        }
+                        out.actions.extend([Action::Sleep { ticks: 30 }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 0.5, wait: true }]);
+                    } else {
+                        out.prompt = Some(6);
+                    }
                 }
             }
         }
@@ -14888,10 +14944,12 @@ mod tests {
         let v = on_init(956, &mut s);
         assert!(v.contains(&Action::LoadRegion { slot: 0, region: Some(964) }) && v.contains(&Action::StartEffect { slot: 9, camera: false }));
         assert!(v.contains(&Action::RegisterTrigger { index: 23, routine: 21 }));
-        // The spec's cage vector, first half: record 1's guard (AI 24) dead: line 78 once.
+        // The spec's cage vector, first half: record 1's guard (AI 24) dead, lock 5 intact: the
+        // lock made breakable and line 78, once (the full vector is in module_956_knights).
         s.ai_dead.insert(24);
+        s.breakables.insert(5, 3);
         let inside = TriggerCall { index: 23, state: 2, object: true, square: false, block: -1 };
-        assert_eq!(on_trigger(956, 21, inside, &mut s).actions, vec![Action::Message { line: 78 }]);
+        assert_eq!(on_trigger(956, 21, inside, &mut s).actions, vec![Action::MakeBreakable { id: 5, on: true }, Action::Message { line: 78 }]);
         assert!(on_trigger(956, 21, inside, &mut s).actions.is_empty());
         // Zone trigger 4 loads region 961 while the hero is inside.
         let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
@@ -14910,6 +14968,39 @@ mod tests {
         assert!(s.flag(216) && s.flag(64) && on_update(956, &mut s, false).iter().all(|a| matches!(a, Action::QueryNavmesh { .. } | Action::NavmeshAssign { .. })));
         // The door: line 71 with 64 set and 67 clear.
         assert_eq!(on_teleport(956, 0, &mut s), vec![Action::Message { line: 71 }]);
+    }
+
+    #[test]
+    fn module_956_knights() {
+        // The spec's vector: record 1, guard AI 24 dead, lock 5 intact, the hero in trigger 23.
+        let mut s = GameState::default();
+        let init = on_init(956, &mut s);
+        assert!(init.contains(&Action::MakeBreakable { id: 5, on: false }) && init.contains(&Action::RegisterTrigger { index: 23, routine: 21 }));
+        let at = |square| TriggerCall { index: 23, state: 2, object: true, square, block: -1 };
+        s.breakables.insert(5, 3);
+        assert_eq!(on_trigger(956, 21, at(false), &mut s).prompt, Some(3));
+        s.ai_dead.insert(24);
+        let out = on_trigger(956, 21, at(false), &mut s).actions;
+        assert_eq!(out, vec![Action::MakeBreakable { id: 5, on: true }, Action::Message { line: 78 }]);
+        assert!(on_trigger(956, 21, at(false), &mut s).actions.is_empty());
+        // The lock broken: context 6; Square: knight 4 to locator 59, line 77, flag 209.
+        s.breakables.insert(5, 2);
+        assert_eq!(on_trigger(956, 21, at(false), &mut s).prompt, Some(6));
+        let out = on_trigger(956, 21, at(true), &mut s).actions;
+        assert!(out.contains(&Action::MoveEntity { entity: 4, locator: 59, face: true }) && out.contains(&Action::Converse { entity: 4, line: 77 }));
+        assert!(out.contains(&Action::SetFlag { flag: 209, on: true }) && !out.contains(&Action::SetFlag { flag: 211, on: true }));
+        assert!(on_trigger(956, 21, at(true), &mut s).actions.is_empty());
+        // The last knight freed also sets 211; with 211 set at load the locks are broken.
+        let mut s = GameState::default();
+        for f in [208, 209, 210] {
+            s.set(f, true);
+        }
+        s.ai_dead.insert(26);
+        s.breakables.insert(6, 2);
+        let out = on_trigger(956, 21, TriggerCall { index: 24, state: 1, object: true, square: true, block: -1 }, &mut s).actions;
+        assert!(out.contains(&Action::SetFlag { flag: 623, on: true }) && out.contains(&Action::SetFlag { flag: 211, on: true }));
+        s.set(211, true);
+        assert!(on_init(956, &mut s).contains(&Action::Break { id: 3 }));
     }
 
     #[test]

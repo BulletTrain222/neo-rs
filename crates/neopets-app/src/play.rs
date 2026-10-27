@@ -2500,6 +2500,26 @@ impl Play {
                         self.last_door = format!("pending slot {slot} on tick {}", self.ticks);
                     }
                 }
+                // SPEC-0030 rows 46, 47 and 55 on the current world's breakables.
+                Action::Break { id } => {
+                    if self.world.breakables.get(id).is_some_and(|b| b.state == 1) {
+                        self.break_one(id);
+                    }
+                }
+                Action::SetBreakableActive { id, on } => {
+                    if let Some(b) = self.world.breakables.get_mut(id) {
+                        b.state = on as i32;
+                    }
+                }
+                Action::MakeBreakable { id, on } => {
+                    if let Some(b) = self.world.breakables.get_mut(id) {
+                        b.state = match (b.state, on) {
+                            (1, false) => 3,
+                            (3, true) => 1,
+                            (s, _) => s,
+                        };
+                    }
+                }
                 Action::ItemActivate { slot, ordinal, snap, placed } => {
                     if let Some(p) = self.slot_items.get(&(pack, slot)).and_then(|v| v.get(ordinal)).copied() {
                         self.scripted_add(pack, p, snap, placed);
@@ -6081,6 +6101,7 @@ impl Play {
         self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
         self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0));
         self.slot_arrived.retain(|(p, _)| *p == pack || self.other.as_ref().is_some_and(|o| o.pack == *p));
+        self.state.breakables = self.world.breakables.iter().enumerate().map(|(i, b)| (i, b.state)).collect();
         self.state.slot_alive = self
             .slot_arrived
             .iter()
@@ -8504,7 +8525,6 @@ impl Play {
         use neopets_sim::combat::{Cylinder, segment_distance, segment_meets};
         let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
         let edges = [(p0, tip), (p0, prev), (tip, prev)];
-        let pack = self.world.pack;
         let mut broken = Vec::new();
         let mut cues = Vec::new();
         for (i, b) in self.world.breakables.iter_mut().enumerate() {
@@ -8529,30 +8549,35 @@ impl Play {
                 continue;
             }
             if b.state == 1 {
-                b.state = 2;
-                broken.push((i, b.position(), b.drop));
+                broken.push(i);
+            } else {
+                cues.push(break_cue(b.material));
             }
-            cues.push(match b.material {
-                2 => 143,
-                3 => 145,
-                4 => 146,
-                _ => 144,
-            });
         }
-        for (i, at, drop) in broken {
-            // Break effect step 2: the drop action for the placement (no luck gate).
-            let point = usize::try_from(drop).ok().and_then(|d| self.world.item_points.get(d).copied());
-            if point.is_some() {
-                self.payouts.push((pack, at, point));
-            }
-            self.last_pickup = format!("breakable {i} of {pack} broken on tick {}", self.ticks);
-            if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
-                println!("      breakable {i} of {pack} broken at {at:?} on tick {} (drop {drop})", self.ticks);
-            }
+        for i in broken {
+            self.break_one(i);
         }
         for c in cues {
             self.cue(c);
         }
+    }
+
+    /// The break of breakable i of the current world from state 1 (SPEC-0048 Break effect): state
+    /// 2, the drop action for its placement (no luck gate) and the contact cue by material.
+    fn break_one(&mut self, i: usize) {
+        let pack = self.world.pack;
+        let Some(b) = self.world.breakables.get_mut(i) else { return };
+        b.state = 2;
+        let (at, drop, cue) = (b.position(), b.drop, break_cue(b.material));
+        let point = usize::try_from(drop).ok().and_then(|d| self.world.item_points.get(d).copied());
+        if point.is_some() {
+            self.payouts.push((pack, at, point));
+        }
+        self.last_pickup = format!("breakable {i} of {pack} broken on tick {}", self.ticks);
+        if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
+            println!("      breakable {i} of {pack} broken at {at:?} on tick {} (drop {drop})", self.ticks);
+        }
+        self.cue(cue);
     }
 
     pub fn object_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
@@ -10231,6 +10256,16 @@ fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
 
 /// A segment against an oriented box (origin, three axes, extents along them; the rectangle of
 /// SPEC-0018): the slab test in the box's frame.
+/// The breakable contact cue by material (SPEC-0036 Hit detection step 6).
+fn break_cue(material: i16) -> i32 {
+    match material {
+        2 => 143,
+        3 => 145,
+        4 => 146,
+        _ => 144,
+    }
+}
+
 fn segment_box(a: [f32; 3], b: [f32; 3], origin: [f32; 3], axes: [[f32; 3]; 3], ext: [f32; 3]) -> bool {
     let (mut t0, mut t1) = (0.0f32, 1.0f32);
     for k in 0..3 {
