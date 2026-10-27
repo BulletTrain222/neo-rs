@@ -9,8 +9,9 @@
 //! first half, plus 0.5, counts), is ahead of A along the flattened axis, within 1.5 of the hero
 //! sideways, and inside the height band for that side offset (1.5 to 4.0 above the hero up to
 //! 1.0 sideways, 1.0 to 4.5 up to 1.25, -0.5 to 6.0 up to 1.5). Not built: the exact-plane case
-//! (side offset below 0.001), request 113 with Cross held, cue 141, and the touched-flag exit to
-//! state 48. The leap to a parallel line (modes 2 and 3) is built.
+//! (side offset below 0.001), the +0x270 lift while 113 plays (its role is not established) and
+//! the touched-flag exit to state 48 (the motion record has no touched flag here). The leap to a
+//! parallel line (modes 2 and 3), request 113 with Cross held and cue 141 (the host's) are built.
 
 use crate::hero::Vec3;
 
@@ -101,6 +102,10 @@ pub struct Hang {
     pub side: u8,
     side_vel: Vec3,
     vy: f32,
+    /// Set by the host before each tick: Cross held (request 113 in the slide) and the hero's
+    /// current clip (the attach keeps a playing 115 or 117).
+    pub cross: bool,
+    pub playing: u32,
 }
 
 /// The leap search (Behavior 9, Search): the nearest other line by side distance whose axis is
@@ -136,7 +141,7 @@ pub fn search(lines: &[Line], current: usize, p: Vec3, f: Vec3, b1: Vec3, side: 
 
 impl Hang {
     pub fn new(line: usize) -> Self {
-        Self { line, mode: 0, target: None, side: 0, side_vel: [0.0; 3], vy: 0.0 }
+        Self { line, mode: 0, target: None, side: 0, side_vel: [0.0; 3], vy: 0.0, cross: false, playing: 0 }
     }
 
     /// The search in mode 1 (Cross held with the side stick): a found line becomes the pending
@@ -192,7 +197,9 @@ impl Hang {
                 let mut q = l.foot(p);
                 q[1] -= hang;
                 self.mode = 1;
-                Step { place: Some(q), request: 112, let_go: false }
+                // Request 112 unless a leap's falling clip (115 or 117) is playing.
+                let request = if matches!(self.playing, 115 | 117) { self.playing } else { 112 };
+                Step { place: Some(q), request, let_go: false }
             }
             _ => {
                 let q: Vec3 = std::array::from_fn(|k| p[k] + STEP * l.u[k]);
@@ -202,7 +209,7 @@ impl Hang {
                 if square || gap <= 0.0 || !within {
                     return Step { place: None, request: 0, let_go: true };
                 }
-                Step { place: Some(q), request: 112, let_go: false }
+                Step { place: Some(q), request: if self.cross { 113 } else { 112 }, let_go: false }
             }
         }
     }
@@ -241,6 +248,10 @@ mod tests {
         assert_eq!(h.mode, 1);
         let s = h.tick(&ls, p, 5.0, false);
         assert!((s.place.unwrap()[0] - 10.5).abs() < 1e-5);
+        // Cross held: request 113.
+        h.cross = true;
+        assert_eq!(h.tick(&ls, p, 5.0, false).request, 113);
+        h.cross = false;
         // Square, ground contact and the line end let go.
         assert!(h.tick(&ls, p, 5.0, true).let_go);
         assert!(h.tick(&ls, p, 0.0, false).let_go);

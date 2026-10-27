@@ -4112,6 +4112,8 @@ impl Play {
             let side = if input.side > 0.0 { 1 } else { 0 };
             launch = h.seek(&self.world.grab_lines, hero, f, b1, side);
         }
+        h.cross = input.cross_held;
+        h.playing = self.hero.clip_state().action;
         let mut step = h.tick(&self.world.grab_lines, hero, self.loco.body.gap, square);
         if let Some(r) = launch {
             step.request = r;
@@ -4126,6 +4128,11 @@ impl Play {
             return;
         }
         self.door_prompt = Some(20);
+        // Cue 141 is kept playing at the hero while Square is not pressed (started when it is
+        // not already playing).
+        if !square {
+            self.sound.play(neopets_sim::sound::MAIN, 141, neopets_sim::sound::Play { do_not_restart: true, ..Default::default() });
+        }
         self.loco.body.no_gravity = true;
         self.loco.body.velocity = [0.0; 3];
         self.loco.steer_toward([line.u[0], 0.0, line.u[2]], 1.0);
