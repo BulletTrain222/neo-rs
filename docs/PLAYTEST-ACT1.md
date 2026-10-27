@@ -34,7 +34,9 @@ What to expect, step by step, from the new-game start through the Meridell enlis
 19. **Have the smith reforge it** (pack 1133, Rognus, flag 141): he turns the four pieces into Torak's sword.
 20. **Give Torak the sword** (flag 142): he gives the signed sponsorship paper.
 21. **Hand the paper to Kendrick** (flag 143): he gives the permission form, and the farm moves to its next stage.
-22. **Next** (not traced yet): back at the farm Lucy is missing (flag 145, set on arrival); find her in Shadowglen Woods and the burrows (flags 661 and 147), then your parents sign the form (148) and you take it back to Kendrick (150).
+22. **Find Lucy** (flag 145 is set when you reach the farm at this stage): she is in Shadowglen Woods and the burrows beyond (pack 1217; entering sets 661).
+23. **The Juppie fight** (pack 1217; winning sets 147): lure its head slam onto the marked spots so it gets stuck, then hit the head. Traced: the intro, stage 1 (the stun and the hits) and the start of stage 2. **Not traced:** a stage-2 or stage-3 hit. The automated hero got stuck instead of moving to the next spot, so this fight is worth a careful look: does each stage end, and does the win scene play?
+24. **Next** (not traced yet): your parents sign the form (148) and you take it back to Kendrick (150).
 
 ## Known gaps that may show in these missions
 
