@@ -6018,7 +6018,7 @@ impl Play {
                 .map(|&h| (h, (0..self.world.headers.get(h).and_then(|x| x.as_ref()).map_or(0, |x| x.locators.len())).filter_map(|k| self.anim_locator(pack, h, k, 0)).collect()))
                 .collect();
             // The 1096 dispensers' draw (the module's random-draw routine is not given).
-            if pack == 1096 {
+            if matches!(pack, 1096 | 1397) {
                 self.state.trigger_raw = self.rng.next_u32();
             }
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);

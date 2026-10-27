@@ -791,6 +791,7 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         (951, 0) => Some(26),
         (955, 0) => Some(13),
         (1156 | 1159 | 1170, 0) => Some(13),
+        (1397, 0 | 1) => Some(13),
         // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
         // clear; taken as 13 here).
         (1023, 0..=10) => Some(13),
@@ -1236,6 +1237,15 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         }
         (1098, 6) if castle_stage(state) == 30 || state.word(1098, 0) != 0 => vec![Action::Message { line: 16 }],
         (1098, 6) => vec![Action::ReplaceExterior { slot: 90, plane: -1 }],
+        // SPEC-0042 1397 X0 and X1: value 40 or 60 (X1 also 695) for eW 159 and its replacement
+        // load.
+        (1397, 0 | 1) => {
+            if door == 1 {
+                state.set(695, true);
+            }
+            state.blackboard.insert((2, 159), if door == 0 { 40 } else { 60 });
+            vec![Action::ReplaceExterior { slot: 159, plane: -1 }]
+        }
         // SPEC-0032 1156, 1159 and 1170 teleport 0: value 70, 60 or 10 for eW 106, leave to eW
         // 107.
         (1156 | 1159 | 1170, 0) => {
@@ -2091,6 +2101,45 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // registered on every path. Not built: trigger 0's line, object 0, the prompt trigger 9,
         // triggers 1 to 3 and the effect stops.
         696 => vec![reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)],
+        // SPEC-0042 1397 Init: solved (687) objects 7 (start), 3, 0 and 2 (end) and trigger 0;
+        // unsolved: effects 0 to 12 stopped, blocks 1 to 3 activated, entities 0 to 4 off, 5 to 7
+        // at locators 77 to 79, trigger 0 (the solve), and each sub-puzzle while its flag is
+        // clear (698: 7 and 8; 699: the buttons 1 to 6; 700: the statues 17 to 21; 102: 12 and 9
+        // to 11), with 13 on both 102 paths. The teleports are on_teleport. The object-setup
+        // groups (given only by example) are not reproduced.
+        1397 => {
+            let mut v = Vec::new();
+            state.set_word(pack, 30, state.flag(102) as i32);
+            if state.flag(687) {
+                v.extend([Action::InitObjOn { obj: 7, end: false }, Action::InitObjOn { obj: 3, end: true }, Action::InitObjOn { obj: 0, end: true }, Action::InitObjOn { obj: 2, end: true }, reg(0, 50)]);
+                return v;
+            }
+            v.extend((0..=12).map(|slot| Action::StopEffect { slot }));
+            v.extend((1..=3).map(|block| Action::ActivateBlock { block, on: true }));
+            v.extend((0..=4).map(|entity| Action::DeactivateEntity { entity }));
+            v.extend((5..=7).map(|entity| Action::MoveEntity { entity, locator: 72 + entity, face: true }));
+            v.push(reg(0, 50));
+            if !state.flag(698) {
+                v.extend([reg(7, 7), reg(8, 8)]);
+            }
+            if !state.flag(699) {
+                v.extend((1..=6).map(|i| reg(i, 1)));
+            }
+            if !state.flag(700) {
+                v.extend((17..=21).map(|i| reg(i, i as u8)));
+                state.set_word(pack, 20, 1);
+                for (k, a) in STATUES_1397.iter().enumerate() {
+                    state.set_word(pack, 10 + k as u8, a.1);
+                    state.set_word(pack, 14 + k as u8, a.1);
+                    v.push(Action::ObjYaw { obj: a.0, degrees: a.1 as f32 });
+                }
+            }
+            if !state.flag(102) {
+                v.extend([reg(12, 12), reg(9, 9), reg(10, 9), reg(11, 9)]);
+            }
+            v.push(reg(13, 13));
+            v
+        }
         // SPEC-0044 1091 Init: the animated hazards (objects 3 to 10, each its own group's record
         // 0, routines 13 to 20), the plate triggers 41 to 48 (routine 41) and the button trigger
         // 51. The object setups, slots, navmesh table and target flags (Low or not listed) are
@@ -4199,6 +4248,9 @@ fn solved_1324(_s: &mut GameState) -> Vec<Action> {
     }
     v
 }
+
+/// SPEC-0042 1397's statues: (object, start angle in degrees).
+const STATUES_1397: [(usize, i32); 4] = [(59, 0), (58, 90), (57, -180), (56, 270)];
 
 /// SPEC-0041 1096's item dispensers: (item, first ordinal, placement count) in the boss slot's
 /// region (slot 0).
@@ -6866,6 +6918,134 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         (1381, 4) if call.object => out.actions.extend(hub_return_1381(state)),
+        // SPEC-0042 1397 T0 (trigger 0, a block's fire on its first tick, 687 clear): the solve.
+        (1397, 50) if call.block >= 0 && call.state == 1 && !state.flag(687) => {
+            state.set(687, true);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::FadeOut { seconds: 0.5, wait: true },
+                Action::ActivateBlock { block: call.block as usize, on: false },
+                Action::PlayCamera { track: 0, wait: false, end: 1, speed: 1.0 },
+                Action::DeactivateObj { obj: 1 },
+                Action::InitObjOn { obj: 2, end: false },
+                Action::FadeIn { seconds: 0.5, wait: false },
+                wait(1.0),
+                Action::LoopSound { cue: 72, locator: None },
+                Action::PlayAnim { obj: 3, speed: 0.5, wait: false },
+                Action::PlayAnim { obj: 0, speed: 0.5, wait: false },
+                Action::PlayAnim { obj: 2, speed: 0.5, wait: true },
+                Action::KillSound { cue: 72, locator: None },
+                Action::InitObjOn { obj: 7, end: false },
+                Action::DeactivateObj { obj: 6 },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        // 1397 buttons (triggers 1 to 6, once each per load; word 2 the used bits, 3 the raised
+        // marks, 4 the wrong presses): context 4; Square: the hero to locator 8 + i, button object
+        // 11 + 2i, hero animation 140, 0.6 s, sound 12, camera 1. Right (1, 3, 6) raises object 9,
+        // 10 or 11 (sound 13, 1 s); all three: object 8 played with sound 14 and removed, 699.
+        // Wrong: sound 7 and a guard (AI 0 at 19, then AI 1 at 18, then AI 2 at 17) made aggressive.
+        (1397, 1) if call.object && call.state != 0 && (1..=6).contains(&call.index) && state.word(pack, 2) & (1 << call.index) == 0 => {
+            if call.square && !state.talking {
+                let i = call.index as usize;
+                state.set_word(pack, 2, state.word(pack, 2) | (1 << i));
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::MoveHero { locator: 8 + i },
+                    Action::PlayAnim { obj: 11 + 2 * i, speed: 1.0, wait: false },
+                    Action::HeroAnim { anim: 140, wait: true },
+                    wait(0.6),
+                    Action::PlaySound { cue: 12, locator: None },
+                    camera(1),
+                ]);
+                if let Some(k) = [1, 3, 6].iter().position(|&b| b == i) {
+                    state.set_word(pack, 3, state.word(pack, 3) | (1 << k));
+                    out.actions.extend([Action::PlayAnim { obj: 9 + k, speed: 1.0, wait: false }, Action::PlaySound { cue: 13, locator: None }, wait(1.0)]);
+                    if state.word(pack, 3) == 7 {
+                        state.set(699, true);
+                        out.actions.extend([Action::PlayAnim { obj: 8, speed: 1.0, wait: false }, Action::PlaySound { cue: 14, locator: None }, wait(1.0), Action::KillSound { cue: 13, locator: None }, Action::KillSound { cue: 14, locator: None }, Action::DeactivateObj { obj: 8 }]);
+                    }
+                } else {
+                    let n = state.word(pack, 4);
+                    state.set_word(pack, 4, n + 1);
+                    let (ai, at) = [(0, 19), (1, 18), (2, 17)][n.min(2) as usize];
+                    out.actions.extend([Action::PlaySound { cue: 7, locator: None }, Action::MoveEntity { entity: ai, locator: at, face: true }, Action::ActivateEntity { entity: ai }, Action::Agro { entity: ai }]);
+                }
+                out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+            } else {
+                out.prompt = Some(4);
+            }
+        }
+        // 1397 statues (triggers 17 to 20, the puzzle open): context 4; Square adds 90 degrees to
+        // the statue's target (words 14 + k; the thread turns word 10 + k a degree a tick).
+        (1397, 17..=20) if call.object && call.state != 0 && state.word(pack, 20) != 0 => {
+            if call.square && !state.talking {
+                let k = (routine - 17) as u8;
+                state.set_word(pack, 14 + k, state.word(pack, 14 + k) + 90);
+            } else {
+                out.prompt = Some(4);
+            }
+        }
+        // 1397 K21 (entering, the puzzle open): the statues in order; each right one (a multiple
+        // of 360) lowers the lift to its depth; the first wrong one ends the check with the lift
+        // back to 0; all four: 700 set, the puzzle closed (the ambient bursts armed, word 21).
+        (1397, 21) if call.object && call.state == 1 && state.word(pack, 20) != 0 => {
+            let mut depth = 0.0;
+            let mut all = true;
+            for (k, d) in [-16.0f32, -21.0, -26.2, -31.6].into_iter().enumerate() {
+                if state.word(pack, 10 + k as u8).rem_euclid(360) == 0 {
+                    depth = d;
+                } else {
+                    all = false;
+                    depth = 0.0;
+                    break;
+                }
+            }
+            state.set_word(pack, 23, (depth * 100.0) as i32);
+            if all {
+                state.set(700, true);
+                state.set_word(pack, 20, 0);
+                state.set_word(pack, 21, 1);
+            }
+        }
+        // 1397 G (triggers 9 to 11): marks AI 5, 6 or 7 for the respawn thread (words 40 to 42);
+        // trigger 11 also places block 2 again on its height patch.
+        (1397, 9) if call.object && (9..=11).contains(&call.index) => {
+            state.set_word(pack, 40 + (call.index - 9) as u8, 1);
+            if call.index == 11 {
+                out.actions.push(Action::ReacquireBlock { block: 2 });
+            }
+        }
+        // 1397 E12 (entering): the movie-63 scene (counted), object 35 off, effect 12, 102 and
+        // 349, item 139 at locators 24 to 35, the fade in, control back; word 30 for X13.
+        (1397, 12) if call.object && call.state == 1 && !state.flag(102) => {
+            state.movies.insert(63);
+            state.set(102, true);
+            state.set(349, true);
+            state.set_word(pack, 30, 1);
+            out.actions.extend([Action::FadeOut { seconds: 0.4, wait: true }, Action::HoldHero, Action::MoveHero { locator: 22 }, Action::Sleep { ticks: 1 }, Action::DeactivateObj { obj: 35 }, Action::StartEffect { slot: 12, camera: true }]);
+            out.actions.extend((24..=35).map(|locator| Action::AddItem { locator, item: 139 }));
+            out.actions.extend([Action::FadeIn { seconds: 1.0, wait: true }, Action::ReturnCamera { preset: -1, release: true }]);
+        }
+        // 1397 B7 (once, 698 clear): objects 49 to 54 spin, item 139 at its 21 locators, 698. B8:
+        // the spin with lever object 27 swapped for 28 (Medium).
+        (1397, 7) if call.object && call.state == 1 && !state.flag(698) => {
+            state.set(698, true);
+            out.actions.extend((49..=54).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
+            out.actions.extend([36, 38, 40, 42, 43, 45, 47, 49, 51, 53, 55, 57, 59, 60, 62, 63, 64, 66, 68, 69, 71].map(|locator| Action::AddItem { locator, item: 139 }));
+        }
+        (1397, 8) if call.object && call.state == 1 => {
+            out.actions.extend([Action::DeactivateObj { obj: 27 }, Action::InitObjOn { obj: 28, end: false }]);
+            out.actions.extend((49..=54).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
+        }
+        // 1397 X13 (the word set: 102 at load or E12 run; the trigger state equal to it): the
+        // fade, control held, value 60 for eW 159 and the replacement load (its colour is module
+        // data, not reproduced).
+        (1397, 13) if call.object && state.word(pack, 30) == 1 && call.state == 1 => {
+            state.set_word(pack, 30, 2);
+            state.blackboard.insert((2, 159), 60);
+            out.actions.extend([Action::FadeOut { seconds: 0.5, wait: false }, Action::HoldHero, Action::Sleep { ticks: 1 }, Action::ReplaceExterior { slot: 159, plane: -1 }]);
+        }
         // SPEC-0057 pattern A (1091 animated hazards, routines 13 to 20 for objects 3 to 10): a
         // run at a time per object (word 10 + object): objects 7 and 8 kill (KillCurrentHero, 1 s,
         // the hero to locator 6); the others damage 2 then wait 0.5 s (the mode-0 slot flags stay
@@ -10411,6 +10591,75 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend((16..=18).map(|entity| Action::HitPointsPercent { entity, percent: 100.0 }));
             }
         }
+        // SPEC-0042 1397 Update and its threads: step 1 once per load (block 0 placed again with
+        // 687 clear; entities 0 to 4 off); step 2 with 700 set (objects 48 and 41 offset 10 and
+        // 25.1); step 3 the effects of groups 3, 2 and 1 to the locators of objects 29, 30 and 31.
+        // The statue thread (the puzzle open): each statue turned a degree a tick toward its
+        // target. Ambient thread A (once the statues are solved in this load): bursts of a random
+        // effect of 0 to 11 (0 twice in the 13-entry table) for 5 to 30 ticks, 1 to 3 s apart. The
+        // respawn thread every 10 ticks: a marked AI (5 to 7) that is dead is put back at locator
+        // 77 to 79 with animation 82, and AI 5 made aggressive (the spec's quirk). Not built: the
+        // lift and object 41's rise (the lift object is not named), the statues' camera shake,
+        // ambient thread B (its picks come from the groups' effect lists).
+        1397 => {
+            if state.word(pack, 1) == 0 {
+                state.set_word(pack, 1, 1);
+                if !state.flag(687) {
+                    out.push(Action::ReacquireBlock { block: 0 });
+                }
+                out.extend((0..=4).map(|entity| Action::DeactivateEntity { entity }));
+            }
+            if state.flag(700) {
+                out.extend([Action::ObjOffset { obj: 48, y: 10.0 }, Action::ObjOffset { obj: 41, y: 25.1 }]);
+            }
+            for (group, host) in [(3, 29), (2, 30), (1, 31)] {
+                out.push(Action::GroupEffectsToObjLocators { group, host, locator: 0 });
+            }
+            if state.word(pack, 20) != 0 {
+                for (k, &(obj, _)) in STATUES_1397.iter().enumerate() {
+                    let (cur, target) = (state.word(pack, 10 + k as u8), state.word(pack, 14 + k as u8));
+                    if cur < target {
+                        state.set_word(pack, 10 + k as u8, cur + 1);
+                        out.push(Action::ObjYaw { obj, degrees: ((cur + 1).rem_euclid(360)) as f32 });
+                    }
+                }
+            }
+            if state.word(pack, 21) != 0 {
+                let raw = state.trigger_raw;
+                let left = state.word(pack, 32);
+                if left > 0 {
+                    state.set_word(pack, 32, left - 1);
+                    if left == 1 {
+                        out.push(Action::StopEffect { slot: state.word(pack, 33) as usize });
+                        state.set_word(pack, 31, 60 * (1 + (raw / 338 % 3) as i32));
+                    }
+                } else if state.word(pack, 31) > 0 {
+                    state.set_word(pack, 31, state.word(pack, 31) - 1);
+                } else {
+                    let e = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0][(raw % 13) as usize];
+                    state.set_word(pack, 33, e);
+                    state.set_word(pack, 32, 5 + (raw / 13 % 26) as i32);
+                    out.push(Action::StartEffect { slot: e as usize, camera: true });
+                }
+            }
+            if state.hero.tick % 10 == 0 {
+                for (k, ai) in (5..=7usize).enumerate() {
+                    if state.word(pack, 40 + k as u8) != 0 && state.ai_dead.contains(&ai) && state.word(pack, 45 + k as u8) == 0 {
+                        state.set_word(pack, 45 + k as u8, 1);
+                        out.extend([
+                            Action::DeactivateEntity { entity: ai },
+                            Action::Sleep { ticks: 1 },
+                            Action::MoveEntity { entity: ai, locator: 72 + ai, face: true },
+                            Action::ActivateEntity { entity: ai },
+                            Action::EntityAnim { entity: ai, anim: 82, looped: false, wait: false },
+                            Action::Sleep { ticks: 1 },
+                            Action::Agro { entity: 5 },
+                            Action::Bits { word: 45 + k as u8, set: 0, clear: 1 },
+                        ]);
+                    }
+                }
+            }
+        }
         // SPEC-0032 1074 thread I: with 481 set and 482 clear, item 69 held sets 482.
         1074 => {
             if state.flag(481) && !state.flag(482) && state.has_item(69) {
@@ -11283,6 +11532,13 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
             v
         }
+        // SPEC-0042 1397 A: the value for eW 173, read and cleared: 60 the hero to locator 1, 40 to
+        // locator 0, else the normal camera.
+        1397 => match state.take_message(2, 173) {
+            60 => vec![Action::MoveHero { locator: 1 }],
+            40 => vec![Action::MoveHero { locator: 0 }],
+            _ => vec![Action::ReturnCamera { preset: -1, release: true }],
+        },
         // SPEC-0032 1170 A0: the value for eW 123 (20: the hero to locator 1, else 0) and the
         // normal camera.
         1170 => {
@@ -16215,6 +16471,42 @@ mod tests {
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
         assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+    }
+
+    #[test]
+    fn module_1397_room() {
+        let mut s = GameState::default();
+        let init = on_init(1397, &mut s);
+        assert!(init.contains(&Action::RegisterTrigger { index: 21, routine: 21 }) && init.contains(&Action::MoveEntity { entity: 6, locator: 78, face: true }));
+        let at = |i, square| TriggerCall { index: i, state: 1, object: true, square, block: -1 };
+        // The spec's button vector: 2, 1, 4, 3, 6: AI 0 at 19, AI 1 at 18; 699 after the 6.
+        let presses: Vec<Vec<Action>> = [2, 1, 4, 3, 6].into_iter().map(|i| on_trigger(1397, 1, at(i, true), &mut s).actions).collect();
+        assert!(presses[0].contains(&Action::MoveEntity { entity: 0, locator: 19, face: true }) && presses[2].contains(&Action::MoveEntity { entity: 1, locator: 18, face: true }));
+        assert!(s.flag(699) && presses[4].contains(&Action::DeactivateObj { obj: 8 }));
+        assert!(on_trigger(1397, 1, at(2, true), &mut s).actions.is_empty());
+        // Statues: presses 0, 3, 2 and 1 on triggers 17 to 20, turned by the thread, then K21.
+        for (k, n) in [0, 3, 2, 1].into_iter().enumerate() {
+            for _ in 0..n {
+                on_trigger(1397, 17 + k as u8, at(17 + k as u16, true), &mut s);
+            }
+        }
+        on_trigger(1397, 21, at(21, false), &mut s);
+        assert!(!s.flag(700));
+        for t in 0..300 {
+            s.hero.tick = t;
+            on_update(1397, &mut s, false);
+        }
+        on_trigger(1397, 21, at(21, false), &mut s);
+        assert!(s.flag(700) && s.word(1397, 23) == -3160);
+        assert!(on_update(1397, &mut s, false).contains(&Action::ObjOffset { obj: 41, y: 25.1 }));
+        // T0: a block's first fire solves the room once.
+        let block = TriggerCall { index: 0, state: 1, object: false, square: false, block: 1 };
+        assert!(on_trigger(1397, 50, block, &mut s).actions.contains(&Action::ActivateBlock { block: 1, on: false }));
+        assert!(s.flag(687) && on_trigger(1397, 50, block, &mut s).actions.is_empty());
+        // The arrival: 60 -> locator 1, read once.
+        s.blackboard.insert((2, 173), 60);
+        assert_eq!(on_activate(1397, &mut s), vec![Action::MoveHero { locator: 1 }]);
+        assert_eq!(on_activate(1397, &mut s), vec![Action::ReturnCamera { preset: -1, release: true }]);
     }
 
     #[test]
