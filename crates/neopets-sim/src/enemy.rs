@@ -913,6 +913,15 @@ impl Enemy {
         std::mem::take(&mut self.repick)
     }
 
+    /// SPEC-0040 Behavior 20 item 1, the class-state eligibility veto for the hero's candidate
+    /// list, the branch of rows whose Display in Default word is 0: vetoed in the configured
+    /// default state, or in state 21 unless animation 82 plays (`clip` the current action). The
+    /// active-hero actor-table exception and the Display-in-Default branch (+0xE3C, the ambush
+    /// word, +0xC4, +0xC8, state 14) are not built.
+    pub fn lock_vetoed(&self, clip: u32) -> bool {
+        !self.p.display_default && (self.state == self.default_state as u32 || (self.state == 21 && clip != 82))
+    }
+
     /// The flyer test: can-fly 1 with the retarget countdown at most 0, or can-fly 2.
     pub fn airborne(&self) -> bool {
         (self.p.can_fly == 1 && self.retarget <= 0) || self.p.can_fly == 2

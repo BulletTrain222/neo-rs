@@ -702,6 +702,7 @@ pub struct Play {
     pub shield: Option<u16>,
     pub items: neopets_data::item::ItemTable,
     reach_tor: Vec<f32>,
+    reach_roberta: Vec<f32>,
     /// The Magic table's cost and power words (SPEC-0036 Magic).
     magic: neopets_sim::mote::Magic,
     /// The last Mote charge or magic payment, for the status line.
@@ -1063,6 +1064,7 @@ impl Play {
             .into_iter()
             .map(f32::from_bits)
             .collect();
+        let reach_roberta = neopets_data::archive::boot_u32_table(&boot_bytes, neopets_data::item::REACH_ROBERTA, 8)?.into_iter().map(f32::from_bits).collect();
         let hero_max = neopets_data::archive::boot_u32_table(&boot_bytes, neopets_data::item::HEALTH_TOR, 1)?[0] as i32;
         let floats = |at: u32| -> Result<Vec<f32>, String> {
             Ok(neopets_data::archive::boot_u32_table(&boot_bytes, at, 7)?.into_iter().map(f32::from_bits).collect())
@@ -1406,6 +1408,7 @@ impl Play {
             shield: None,
             items,
             reach_tor,
+            reach_roberta,
             magic,
             last_mote: String::new(),
             spit_fx: [None; 2],
@@ -2088,15 +2091,18 @@ impl Play {
                         w.blocks[block] = b;
                     }
                 }
-                Action::ReacquireBlock { block } => {
+                Action::ReacquireBlock { block, ceiling } => {
                     self.owner_pose_step();
                     if block < self.world.blocks.len() {
                         let w = &mut self.world;
                         let mut b = w.blocks[block].clone();
-                        b.reacquire(|px, pz, c| {
-                            let h = w.probe(px, pz, c);
-                            h.found.then_some(h.height)
-                        });
+                        b.reacquire(
+                            |px, pz, c| {
+                                let h = w.probe(px, pz, c);
+                                h.found.then_some(h.height)
+                            },
+                            ceiling,
+                        );
                         w.blocks[block] = b;
                     }
                 }
@@ -4272,9 +4278,16 @@ impl Play {
         }
     }
 
-    /// The weapon reach W (SPEC-0021): Tor's table value for swords 98 to 108, 1.5 unarmed.
+    /// The weapon reach W (SPEC-0021): Tor's table value for swords 98 to 108, Roberta's for
+    /// 111 to 118, 1.5 with no valid weapon.
     fn weapon_reach(&self) -> f32 {
-        self.weapon.and_then(|id| self.reach_tor.get(id.checked_sub(98)? as usize).copied()).unwrap_or(1.5)
+        self.weapon
+            .and_then(|id| match id {
+                98..=108 => self.reach_tor.get((id - 98) as usize).copied(),
+                111..=118 => self.reach_roberta.get((id - 111) as usize).copied(),
+                _ => None,
+            })
+            .unwrap_or(1.5)
     }
 
     /// SPEC-0036 Hero swing, per tick while the attack window (bit 0x1) is on: the weapon
@@ -5151,7 +5164,7 @@ impl Play {
         pool.slots
             .iter()
             .flatten()
-            .filter(|it| items.get(it.id).is_some_and(|i| i.kind == 12) && (!anchor || it.id == neopets_sim::petpet::BAGGUSS))
+            .filter(|it| items.get(it.id).is_some_and(|i| i.kind == 12) && (it.id == neopets_sim::petpet::BAGGUSS) == anchor)
             .map(|it| (it.position, it.id, it.token, (it.position[0] - at[0]).hypot(it.position[2] - at[2])))
             .min_by(|a, b| a.3.total_cmp(&b.3))
             .map(|(p, id, t, _)| (p, id, t))
@@ -5193,7 +5206,11 @@ impl Play {
             l <= r && (l == 0.0 || (d[0] * f[0] + d[1] * f[2]) / l > 0.5)
         };
         let pet = self.pet_char;
-        let near = self.characters.iter().any(|c| c.pack == pack && !c.inactive && ((Some(c.id) == pet && front(c.position, 2.5)) || (c.wild.is_some() && front(c.position, 4.5)) || (c.class20.is_some() && front(c.position, 25.0))));
+        // The live petpet's range is 2.5, or 4.5 while its time T is below 45 s, with no food
+        // reserved; wild petpets 4.5 (SPEC-0047 Prompt and meter).
+        let own = if self.petpet.as_ref().is_some_and(|p| p.t < 2700) { 4.5 } else { 2.5 };
+        let reserved = self.pet_reserve.food.is_some();
+        let near = self.characters.iter().any(|c| c.pack == pack && !c.inactive && ((Some(c.id) == pet && !reserved && front(c.position, own)) || (c.wild.is_some() && front(c.position, 4.5)) || (c.class20.is_some() && front(c.position, 25.0))));
         if !near {
             return;
         }
@@ -5203,7 +5220,14 @@ impl Play {
         }
         let items = &self.state.items;
         let food = self.quick.effective(&|id| u16::try_from(id).ok().and_then(|id| items.get(&id)).is_some_and(|&n| n > 0));
-        match u16::try_from(food).ok().filter(|&id| neopets_sim::petpet::feedable(id) && self.items.get(id).is_some_and(|i| i.kind == 12)) {
+        // With no selected quick item the first category-12 item held (SPEC-0047 Feeding
+        // selection; the general list's order is taken as item id order).
+        let food = u16::try_from(food).ok().or_else(|| {
+            let mut held: Vec<u16> = items.iter().filter(|&(&id, &n)| n > 0 && self.items.get(id).is_some_and(|i| i.kind == 12) && id != neopets_sim::petpet::BAGGUSS).map(|(&id, _)| id).collect();
+            held.sort_unstable();
+            held.first().copied()
+        });
+        match food.filter(|&id| neopets_sim::petpet::feedable(id) && self.items.get(id).is_some_and(|i| i.kind == 12)) {
             Some(id) => {
                 self.loco.feed();
                 self.feeding = Some(id);
@@ -5341,7 +5365,11 @@ impl Play {
             let world = &self.world;
             let c = &mut self.characters[i];
             let clip = c.anim.clip_state();
-            let v = neopets_sim::petpet::WildView { position: c.position, facing: c.facing, hero, food, reachable: true, anchor, clip_action: clip.action, clip_done: clip.progress >= 0.99 };
+            // The food's reach (SPEC-0047 Food reach): its point located in the pet's current
+            // navmesh; no line of sight, and the next-nearest food is not tried.
+            let reachable = food.is_some_and(|f| c.walker.as_ref().and_then(|w| w.mesh).and_then(|m| world.navmeshes.get(m)).is_some_and(|m| m.first_holding(f.0).is_some()));
+            let home = *c.wild.as_mut().map(|w| w.home.get_or_insert(c.position)).unwrap_or(&mut c.position);
+            let v = neopets_sim::petpet::WildView { position: c.position, facing: c.facing, hero, centre: home, food, reachable, anchor, clip_action: clip.action, clip_done: clip.progress >= 0.99 };
             let Some(w) = c.wild.as_mut() else { continue };
             let act = w.tick(&v, &mut self.rng);
             if let Some(a) = act.anim {
@@ -6407,6 +6435,9 @@ impl Play {
             let window = self.attack.is_some() && self.hero.frame_bits() & 1 != 0;
             self.state.hero.strike = window && !self.window_was;
             self.window_was = window;
+            if self.state.carry.is_empty() {
+                self.state.carry = (0..=180u16).map(|id| self.design.carry_limit(id).unwrap_or(0)).collect();
+            }
             // SPEC-0026 Credits: on the play pass after story bit 368 is set, the credits open
             // (once; the teardown at their end clears every flag).
             if self.state.flag(368) && !self.credits_fired {
@@ -6723,18 +6754,27 @@ impl Play {
         let chars: Vec<(u64, [f32; 3])> = self
             .characters
             .iter()
-            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like())
+            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like())
             .map(|c| (c.id, c.position))
             .collect();
         let attacking = self.loco.state == hero_states::ATTACK;
         self.lock = self.candidates.tick(&chars, self.loco.position(), self.loco.facing, attacking);
     }
 
-    /// The aim point of a character (its target-point method is not given: the body's middle,
-    /// half the row height up; R-0102).
+    /// The target point of a character (SPEC-0040 Behavior 20 item 6, R-0102): the shared
+    /// non-hero default, render attachment point 7 posed on the character; a character without
+    /// that point gives its position (controller overrides are not known).
     fn aim_point(&self, id: u64) -> Option<[f32; 3]> {
         let c = self.characters.iter().find(|c| c.id == id)?;
-        Some(add(c.position, [0.0, 0.5 * c.row.map_or(3.0, |r| r.height), 0.0]))
+        Some(Self::attach_point(c, 7).unwrap_or(c.position))
+    }
+
+    /// Render attachment point n of a character in the world.
+    fn attach_point(c: &Character, n: usize) -> Option<[f32; 3]> {
+        let &(Some(bone), angles, offset) = c.anim.bones().attach.get(n)? else { return None };
+        let frames = c.anim.bone_frames();
+        let m = placement(c.position, c.facing).mul(frames.get(bone)?).mul(&attach_rotation(offset, angles));
+        Some(m.t)
     }
 
     /// SPEC-0036 Roberta shot launch step 1 for homing modes 2 to 5: the first ten hittable
@@ -6752,7 +6792,7 @@ impl Play {
             if (c.position[0] - h[0]).hypot(c.position[2] - h[2]) >= 60.0 {
                 continue;
             }
-            let at = add(c.position, [0.0, 0.5 * c.row.map_or(3.0, |r| r.height), 0.0]);
+            let at = Self::attach_point(c, 7).unwrap_or(c.position);
             let d = unit([at[0] - eye[0], 0.0, at[2] - eye[2]]);
             let side = [d[2], 0.0, -d[0]];
             let clear = |o: f32| self.world.ground.as_ref().is_none_or(|g| g.segment_clear(add(eye, scale(side, o)), add(at, scale(side, o)), true));
@@ -8088,7 +8128,10 @@ impl Play {
                 Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
             })
             .collect();
-        let body = Cylinder { center: add(hero, [0.0, 1.75, 0.0]), axis: UP, radius: 1.0, length: 3.5 };
+        // The hero body cylinder (SPEC-0012, R-0097): radius 1.0, length W + 2.0 by the weapon
+        // equipped (3.5 with none).
+        let body_len = self.weapon_reach() + 2.0;
+        let body = Cylinder { center: add(hero, [0.0, 0.5 * body_len, 0.0]), axis: UP, radius: 1.0, length: body_len };
         let shots: Vec<([f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, s.radius)).collect();
         // The hero's damage query for the knight (argument 1.0), rounded down.
         let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|i| i.is_weapon()).map_or(1, |i| i.stats[0]);
@@ -8163,8 +8206,10 @@ impl Play {
                 hero_damage,
                 second_measure: hd,
                 ground: world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0),
-                hand: add(add(c.position, [0.0, 3.0, 0.0]), scale(fwd, 1.1)),
-                return_point: add(c.position, [0.0, 3.0, 0.0]),
+                // Attachment point 0, the hand grip: the sword's attach and return point
+                // (SPEC-0012 Bone table and attachment points).
+                hand: Self::attach_point(c, 0).unwrap_or(add(add(c.position, [0.0, 3.0, 0.0]), scale(fwd, 1.1))),
+                return_point: Self::attach_point(c, 0).unwrap_or(add(c.position, [0.0, 3.0, 0.0])),
                 sword_hit: &sword_hit,
                 level: &level,
             };
@@ -8304,14 +8349,26 @@ impl Play {
             let off = [c.position[0] - hero[0], 0.0, c.position[2] - hero[2]];
             let dist = off[0].hypot(off[2]);
             let melee_reach = dist < neopets_sim::enemy::DEFENCE_REACH && (hf[0] * off[0] + hf[2] * off[2]) / dist.max(1e-6) > neopets_sim::enemy::DEFENCE_ARC;
-            let r = c.row.map_or(1.5, |r| r.radius);
-            let height = c.row.map_or(5.0, |r| r.height);
-            let (b0, b1) = (c.position, add(c.position, [0.0, height, 0.0]));
-            let missile_threat = shots.iter().any(|&(p, v, sr)| neopets_sim::gnarfas::segment_distance(p, add(p, scale(v, 180.0)), b0, b1) <= r + sr);
+            // SPEC-0013 4.13 missile reaction (R-0098): each hero missile's path (point to point +
+            // 180 x velocity) against every posed bone cylinder of positive radius (full length,
+            // along posed local Y, centred halfway from its base).
+            let bones: Vec<Cylinder> = c
+                .anim
+                .bones()
+                .hurt
+                .iter()
+                .zip(&frames)
+                .filter(|(h, _)| h.2 > 0.0)
+                .map(|(&(base, length, radius), f)| {
+                    let w = place.mul(f);
+                    Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                })
+                .collect();
+            let missile_threat = shots.iter().any(|&(p, v, _)| bones.iter().any(|b| neopets_sim::combat::segment_meets(p, add(p, scale(v, 180.0)), b)));
             let missile_near = shots.iter().any(|&(p, _, _)| (0..3).map(|k| (p[k] - c.position[k]).powi(2)).sum::<f32>().sqrt() < 10.0);
             let pending = c.gelert_hit.take();
-            let own_mesh = neopets_sim::nav::closest(&world.navmeshes, c.position, 1);
-            let walkable = |p: [f32; 3]| own_mesh >= 0 && world.navmeshes.get(own_mesh as usize).is_some_and(|m| m.first_holding(p).is_some());
+            // The landing search accepts a point on any navmesh of the region (SPEC-0013, R-0098).
+            let walkable = |p: [f32; 3]| world.navmeshes.iter().any(|m| m.first_holding(p).is_some());
             let blocked = c.walker.as_ref().is_some_and(|w| w.blocked);
             let clip = c.anim.clip_state();
             let frame = c.anim.layer0().map_or(0, |(_, f)| f.max(0) as u32);

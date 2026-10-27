@@ -461,8 +461,10 @@ pub struct WildView {
     pub position: Vec3,
     pub facing: Vec3,
     pub hero: Vec3,
+    /// The roam centre: the configured reference object (SPEC-0047, R-0094), not the hero.
+    pub centre: Vec3,
     /// The nearest world item of category 12 (position, item id, token) and whether the
-    /// petpet can reach it.
+    /// petpet can reach it (its point located in the pet's current navmesh neighbourhood).
     pub food: Option<(Vec3, u16, u32)>,
     pub reachable: bool,
     /// The nearest anchor (a Bagguss on the ground).
@@ -483,6 +485,9 @@ pub struct Wild {
     wait: Option<i32>,
     eating: bool,
     one_shot: bool,
+    /// The configured reference object's point the host gives as the roam centre (taken as
+    /// the wild petpet's spawn point; its identity is Medium in the spec).
+    pub home: Option<Vec3>,
 }
 
 impl Wild {
@@ -540,18 +545,18 @@ impl Wild {
         a
     }
 
-    /// State 3: a point within 40 units of the hero and a wait; idle while the wait runs, then
-    /// walk to the point; on arrival a new point and wait (the wait's range is open; 180 to 600
-    /// ticks is used, as class 34's).
+    /// State 3: a point within 40 units of the roam centre (the configured reference object)
+    /// and a wait of 1 to 5 s (60 to 300 ticks); idle while the wait runs, then walk to the
+    /// point; on arrival a new point and wait (SPEC-0047 Class 33 roaming).
     fn roam(&mut self, v: &WildView, rng: &mut Rng, a: &mut Act) {
         let point = match self.point {
             Some(p) => p,
             None => {
                 let ang = rng.frange(0.0, std::f32::consts::TAU);
                 let r = rng.frange(0.0, 40.0);
-                let p = [v.hero[0] + r * ang.cos(), v.hero[1], v.hero[2] + r * ang.sin()];
+                let p = [v.centre[0] + r * ang.cos(), v.centre[1], v.centre[2] + r * ang.sin()];
                 self.point = Some(p);
-                self.wait = Some(rng.range(180, 600));
+                self.wait = Some(rng.range(60, 300));
                 p
             }
         };
@@ -938,7 +943,7 @@ mod tests {
     #[test]
     fn class_33_wild_petpet() {
         let mut rng = Rng::seeded(5);
-        let v = WildView { position: [0.0; 3], facing: [0.0, 0.0, 1.0], hero: [0.0, 0.0, 8.0], food: None, reachable: true, anchor: None, clip_action: 0, clip_done: false };
+        let v = WildView { position: [0.0; 3], facing: [0.0, 0.0, 1.0], hero: [0.0, 0.0, 8.0], centre: [0.0; 3], food: None, reachable: true, anchor: None, clip_action: 0, clip_done: false };
         // Vector 21: 10.0 from the hero roams; 9.9 idles; a fed petpet with food 9 away strikes.
         let mut w = Wild::default();
         w.tick(&WildView { hero: [0.0, 0.0, 10.0], ..v }, &mut rng);

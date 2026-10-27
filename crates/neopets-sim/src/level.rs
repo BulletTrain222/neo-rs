@@ -308,7 +308,7 @@ pub enum Action {
     /// MoveMovableBlockToLocator(block, locator) (row 22): centred on the locator and placed.
     MoveBlock { block: usize, locator: usize },
     /// ReacquireMovableBlockHeightPatch(block) (row 63): placed again where it stands.
-    ReacquireBlock { block: usize },
+    ReacquireBlock { block: usize, ceiling: f32 },
     /// MoveObjToAnimatedLocator with follow (SPEC-0030 row 124): object `obj` follows the current
     /// position of locator `locator` of host object `host`'s inline list.
     AttachObj { obj: usize, host: usize, locator: usize },
@@ -498,6 +498,9 @@ pub struct GameState {
     pub entity_hp: HashMap<usize, i32>,
     /// The wallet (GetNeopoints, RemoveNeopoints).
     pub neopoints: i32,
+    /// The carry limit Q of each item id (SPEC-0021 text row +0x08; 0 no limit), filled by the
+    /// host; every give is capped by it.
+    pub carry: Vec<u32>,
     /// The hero wears the Tattered Cloak (filled by the host before each Update and talk).
     pub cloak_worn: bool,
     /// The pack that was current before this one (the "last active world" an activate-world
@@ -763,7 +766,14 @@ impl GameState {
             self.maps.insert(n);
             return;
         }
-        *self.items.entry(item).or_insert(0) += n;
+        let q = self.carry.get(item as usize).copied().unwrap_or(0);
+        let held = self.items.entry(item).or_insert(0);
+        *held += n;
+        // The carry limit (SPEC-0021 Inventory; SPEC-0022: a line's own give and a script's
+        // give of the same item both run, capped here).
+        if q > 0 {
+            *held = (*held).min(q);
+        }
     }
 
     /// RemoveAllOfItemFromHero(item).
@@ -2919,9 +2929,12 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0039 886 Init: handler 1 on trigger 5, 2 on 2, 4 on 0; object 3 off while 250 is
         // clear; 249 set when 248 is set, 249 clear and movie 30 not played (movies are not
-        // built, so it counts as not played); thread 3 loads slot 0 with set 3, 2, 1 or 0 by
-        // the first set flag of 52, 51, 50 and 49 (region 887 + set), and nothing otherwise.
-        // With 252 clear, collision mask 1.
+        // built, so it counts as not played); thread 3 (SPEC-0039, R-0096 answered) loads the
+        // first stored slot (0) with set 3, 2, 1 or 0 by the first set flag of 52, 51, 50 and 251
+        // (flag 49 is not read); with all four clear, flag 250 set loads set 4 into the third
+        // slot (2), and flag 250 clear set 5 into the second (1), then unhides entities 16 to 18
+        // (taken as ActivateEntity; the call is not named) and sets agro on 16 and 17. Region
+        // 887 + set. With 252 clear, collision mask 1.
         886 => {
             let mut v = vec![reg(5, 1), reg(2, 2)];
             if !state.flag(250) {
@@ -2930,8 +2943,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if state.flag(248) && !state.flag(249) {
                 state.set(249, true);
             }
-            if let Some(set) = [(52, 3), (51, 2), (50, 1), (49, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
+            if let Some(set) = [(52, 3), (51, 2), (50, 1), (251, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
                 v.push(Action::LoadRegion { slot: 0, region: Some(887 + set) });
+            } else if state.flag(250) {
+                v.push(Action::LoadRegion { slot: 2, region: Some(891) });
+            } else {
+                v.push(Action::LoadRegion { slot: 1, region: Some(892) });
+                v.extend((16..=18).map(|entity| Action::ActivateEntity { entity }));
+                v.extend([Action::Agro { entity: 16 }, Action::Agro { entity: 17 }]);
             }
             v.push(reg(0, 4));
             if !state.flag(252) {
@@ -4316,15 +4335,15 @@ fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
         v.push(Action::MoveHero { locator: hero });
     }
     s.set_word(1324, word, 1);
+    // Then (SPEC-0041, R-0095 answered) a fade out, the normal camera, a fade in without a wait
+    // and a second normal-camera return; the live path never reaches the FMV-23 scene.
     v.extend([Action::HeroAnim { anim: 0, wait: false }, Action::FadeIn { seconds: 0.5, wait: false }, Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 }, wait(1.0)]);
-    if s.word(1324, 8) != 0 && s.word(1324, 9) != 0 && s.word(1324, 10) != 0 {
-        v.extend(solved_1324(s));
-        // The spec's callback-1 path ends with the solved scene and returns no camera; the hold
-        // above is released here so the hero is not left frozen (R-0095).
-        v.push(Action::ReturnCamera { preset: -1, release: true });
-    } else {
-        v.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 0.5, wait: false }]);
-    }
+    v.extend([
+        Action::FadeOut { seconds: 0.5, wait: true },
+        Action::ReturnCamera { preset: -1, release: true },
+        Action::FadeIn { seconds: 0.5, wait: false },
+        Action::ReturnCamera { preset: -1, release: true },
+    ]);
     v
 }
 
@@ -4340,18 +4359,6 @@ fn beam_1324(s: &mut GameState, beam: usize, period: Option<f32>) -> Vec<Action>
         }
         None if beam == 14 => s.set_word(1324, 1, 0),
         None => {}
-    }
-    v
-}
-
-/// SPEC-0041 1324's solved scene: sound 5, 2 s, flag 239 and the scene-done word, a 2 s fade
-/// out, sounds 4 and 5 off, a 0.5 s fade in (movie 23 is not played), then ten chimes of
-/// sounds 4 and 5, 15 ticks apart.
-fn solved_1324(_s: &mut GameState) -> Vec<Action> {
-
-    let mut v = vec![Action::PlaySound { cue: 5, locator: None }, wait(2.0), Action::SetFlag { flag: 239, on: true }, Action::FadeOut { seconds: 2.0, wait: true }, Action::KillSound { cue: 4, locator: None }, Action::KillSound { cue: 5, locator: None }, Action::FadeIn { seconds: 0.5, wait: false }];
-    for _ in 0..10 {
-        v.extend([Action::PlaySound { cue: 4, locator: None }, Action::PlaySound { cue: 5, locator: None }, Action::Sleep { ticks: 15 }]);
     }
     v
 }
@@ -6972,7 +6979,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 _ => 28,
             };
             v.extend([Action::InitObjOn { obj: shown, end: false }, Action::DeactivateObj { obj: 21 }]);
-            v.extend((0..5u8).filter(|&b| state.word(pack, 14 + b) == 0).map(|b| Action::ReacquireBlock { block: b as usize }));
+            v.extend((0..5u8).filter(|&b| state.word(pack, 14 + b) == 0).map(|b| Action::ReacquireBlock { block: b as usize, ceiling: 3.0 }));
             let count = pressed.iter().filter(|&&x| x).count();
             if state.word(pack, 10) == 0 {
                 let (beam, period) = match count {
@@ -6990,9 +6997,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
                 state.set_word(pack, 10, 1);
                 out.actions.push(Action::PlayCamera { track: 8, wait: true, end: 1, speed: 0.5 });
-                if a && b {
-                    out.actions.extend(solved_1324(state));
-                } else if a || b {
+                // With both stage-2 marks set the callback still does not reach the dormant
+                // FMV-23 scene (SPEC-0041, R-0095); with one, that plate's handler runs again.
+                if a != b {
                     out.actions.extend(plate2_1324(if a { 1 } else { 0 }, state));
                 }
                 out.actions.push(Action::ReturnCamera { preset: -1, release: true });
@@ -7133,6 +7140,21 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
             state.set_word(pack, 23, (depth * 100.0) as i32);
+            // The passage of each correct statue (SPEC-0042, R-0091/R-0101): static camera 7 and
+            // 120 one-tick steps turning object 40 by 3 degrees x the step, negative, positive,
+            // negative, positive for statues 59, 58, 57 and 56. (The stored statue angles'
+            // +-3-degree swing, which ends where it began, is not reproduced.)
+            let right = (0..4u8).take_while(|&k| state.word(pack, 10 + k).rem_euclid(360) == 0).count();
+            if right > 0 {
+                out.actions.push(Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 });
+                for k in 0..right {
+                    let sign = if k % 2 == 0 { -1.0 } else { 1.0 };
+                    for step in 1..=120 {
+                        out.actions.extend([Action::ObjYaw { obj: 40, degrees: sign * 3.0 * step as f32 }, Action::Sleep { ticks: 1 }]);
+                    }
+                }
+                out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+            }
             if all {
                 state.set(700, true);
                 state.set_word(pack, 20, 0);
@@ -7144,7 +7166,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1397, 9) if call.object && (9..=11).contains(&call.index) => {
             state.set_word(pack, 40 + (call.index - 9) as u8, 1);
             if call.index == 11 {
-                out.actions.push(Action::ReacquireBlock { block: 2 });
+                out.actions.push(Action::ReacquireBlock { block: 2, ceiling: 1.0 });
             }
         }
         // 1397 E12 (entering): the movie-63 scene (counted), object 35 off, effect 12, 102 and
@@ -8647,7 +8669,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             out.actions.push(Action::PlaySound { cue: 6, locator: None });
             out.actions.extend((15..=20).map(|obj| Action::PlayAnim { obj, speed: 1.0, wait: false }));
             out.actions.extend([
-                Action::PlayAnim { obj: 27, speed: 1.0, wait: true },
+                // Object 27 at -0.7: from its end pose backward, so the lift descends and its
+                // ground carries the hero down (SPEC-0041 CB4, R-0101).
+                Action::PlayAnim { obj: 27, speed: -0.7, wait: true },
                 Action::DeactivateObj { obj: 1 },
                 Action::KillSound { cue: 6, locator: None },
                 Action::LoadRegion { slot: 1, region: Some(1390) },
@@ -10772,7 +10796,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             if state.word(pack, 1) == 0 {
                 state.set_word(pack, 1, 1);
                 if !state.flag(687) {
-                    out.push(Action::ReacquireBlock { block: 0 });
+                    out.push(Action::ReacquireBlock { block: 0, ceiling: 500.0 });
                 }
                 out.extend((0..=4).map(|entity| Action::DeactivateEntity { entity }));
             }
@@ -14585,13 +14609,13 @@ mod tests {
         }
         assert_eq!((s.word(1324, 1), s.word(1324, 6)), (14, 240));
         // Plates 3 and 4: with mark B only, the third press runs plate 0's handler again; mark A
-        // then solves it.
+        // then completes both marks, which reaches no FMV scene and sets no flag (SPEC-0041, R-0095).
         on_trigger(1324, 2, call(3, 1, 1), &mut s);
         let out = on_trigger(1324, 2, call(4, 1, 2), &mut s).actions;
         assert!(out.contains(&Action::InitObjOn { obj: 22, end: false }) && out.contains(&Action::MoveBlock { block: 4, locator: 1 }));
         assert!(!s.flag(239));
         let out = on_trigger(1324, 1, call(1, 1, 0), &mut s).actions;
-        assert!(out.contains(&Action::SetFlag { flag: 239, on: true }));
+        assert!(!out.contains(&Action::SetFlag { flag: 239, on: true }) && out.ends_with(&[Action::FadeIn { seconds: 0.5, wait: false }, Action::ReturnCamera { preset: -1, release: true }]));
         // Leaving plate 1 clears mark A; mark B left gives beam 11.
         on_trigger(1324, 1, call(1, 3, 0), &mut s);
         assert_eq!(s.word(1324, 8), 0);

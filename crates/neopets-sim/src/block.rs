@@ -106,7 +106,12 @@ impl Block {
     /// allowed, not moving, both counters 0, the direction -1, active 1 and L = 0.5 S. A probe
     /// that finds nothing keeps the corner's height.
     pub fn place(&mut self, probe: impl Fn(f32, f32, f32) -> Option<f32>) {
-        if let Some(y) = probe(self.corner[0], self.corner[2], self.corner[1] + PLACE_CEILING) {
+        self.place_with(probe, PLACE_CEILING);
+    }
+
+    /// The placement with the probe's ceiling `ceiling` above the block's height.
+    fn place_with(&mut self, probe: impl Fn(f32, f32, f32) -> Option<f32>, ceiling: f32) {
+        if let Some(y) = probe(self.corner[0], self.corner[2], self.corner[1] + ceiling) {
             self.corner[1] = y;
         }
         self.a = self.box_axes[0];
@@ -131,9 +136,13 @@ impl Block {
         self.place(probe);
     }
 
-    /// Reacquire height patch: move to the block's own position.
-    pub fn reacquire(&mut self, probe: impl Fn(f32, f32, f32) -> Option<f32>) {
-        self.move_to(self.position, probe);
+    /// Reacquire height patch (SPEC-0048): centred on its own position and placed again, the
+    /// ground probed from the block's height + `ceiling` (the script's float).
+    pub fn reacquire(&mut self, probe: impl Fn(f32, f32, f32) -> Option<f32>, ceiling: f32) {
+        let half = 0.5 * self.size;
+        let x = self.position;
+        self.corner = sub(sub(x, scale(self.box_axes[1], half)), scale(self.box_axes[0], half));
+        self.place_with(probe, ceiling);
     }
 
     /// The unit vector of push direction d: 0 +A, 1 +B, 2 -A, 3 -B.
