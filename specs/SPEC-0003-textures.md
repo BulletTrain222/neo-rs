@@ -39,7 +39,7 @@ The two upload packets are identical prebuilt GS transfer commands. At load the 
 | Offset | Size | Type | Meaning | Seen on disc |
 | --- | --- | --- | --- | --- |
 | 0x00 | 4 | u32 | Upload segment count *n* | 1 in all 686 |
-| 0x04 | 4 | u32 | Unknown | 1 in all 686 |
+| 0x04 | 4 | u32 | Additional 48-byte record count included before the pixel data in the packet-builder descriptor; value 1 on all 686 tables | 1 in all 686 |
 | 0x08 | 4 | u32 | Sub-texture entry count *m* | 2 … 291 |
 | 0x0C | 4 | — | Unused | |
 | 0x10 | 0x30 × *n* | | Upload segments, 48 bytes each | |
@@ -572,7 +572,7 @@ Start with free area f = 0 and no chunk uploaded. Select a group of chunk X: X u
 - Answered: material group choice by group index is specified in SPEC-0004.
 - Resolved: group bytes 0x00 to 0xCF. They are the two grid records, the animator bytes and the two parity copies of the material record; 0x44 and 0x48 are the pass-0 vertex program and attribute mask, not culling or blend flags (see "Material record").
 - Resolved boundary: the five mode-2 second-context groups listed in Edge cases match texture and palette entries in other chunks of their shader list, but the group selects one chunk slot for both GS contexts. No separate context-1 selection rule is established; the original runtime resolution remains open.
-- The texture-table word at offset 4 (always 1). Default if unresolved (a rewrite choice, not a fact from the code): read it and ignore it; no value other than 1 occurs on the disc, so no behaviour depends on it.
+- Resolved: the texture-table word at offset 4 contributes the additional 48-byte record count in the packet-builder input layout; value 1 includes one record in the source-data prefix. Every on-disc texture table stores 1. The only identified caller handles decompressed startup-image buffers; no alternate value occurs on disc.
 - How often the front end uploads the front-end pack (532) again over a picture (SPEC-0035). Answered: pack 532 uploads at 0x2A00 with absolute addresses and overlaps the picture area; the picture packs (577 to 677) are in "Texture contents of fixed resources".
 - Resource 576 is 88 consecutive 76-sector book records, each with its own six-chunk chain and type-0 terminator. The earlier apparent extra TEX0 copies came from scanning past record 0 into the later records; no exact texture-entry TEX0 copies were found in the bytes after any record terminator. Those 432-to-944 trailing bytes remain unexplained.
 - Resolved: **draw-order alpha**. The value compared with 128 is the character's fade level, not material alpha; no material sorts as translucent ("Translucency in the draw order"; SPEC-0046).

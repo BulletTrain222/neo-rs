@@ -1,6 +1,6 @@
 # SPEC-0030: Level script modules and host API
 
-- Answers: proactive (none requested); extends R-0006; R-0049 (thread end and hold exits answered; CTL sources open); R-0048 (object state writers 5 and 6 in part); R-0063 (movable block pass timing); R-0064 (activation filter of module 985)
+- Answers: proactive (none requested); extends R-0006; R-0049 (thread end and hold exits answered; CTL sources open); R-0048 (object state writers 5 and 6 in part); R-0063 (movable block pass timing); R-0064 (activation filter of module 985); R-0081 (switch-key boundary for pack 951)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). Module counts below are counted from the disc: 173 modules, 163 distinct payloads, 192 world packs in archive resources 532 to 1433.
 - Confidence: per section (High, Medium, Medium-Low or Low). Interface names are listed as written in the game's own calls.
@@ -802,7 +802,7 @@ This is the setter that a switch id goes through. It has no catalogue row of its
 Rules that follow from this:
 - Keys below 200 are never reached through this setter, and they need no other switch path. A type-40 entry's key is a row of the shared collected table (SPEC-0028, section 11; SPEC-0051): lock chests and element-sealed chests use rows 1 to 199 as their persistent "opened" mark, tested when the entry is set up and set to 1 when it opens (SPEC-0048, Lock chests). Dig sites use rows 201 to 247, which this setter reaches (one dig site has key 165). High.
 - Key 0 is never sought by this setter.
-- Calling the setter with an id whose key is not in either world's list changes the slot and starts or stops nothing.
+- Calling the setter with an id whose key is not in either world's list changes the slot and starts or stops nothing. Calling it cannot reach pack 951's lock-chest key 43: the setter searches keys 200 to 400, and that entry has no placed-effect index.
 
 A batch form takes a bit set and an id count (up to 255) and calls the setter once per id, with the value taken from the bit of that id. Row 89 (SetWhinnySwitches) does not use it: it is the Whinny pen-list setter and sets no switch (High).
 
@@ -861,7 +861,7 @@ Break source values: before a break, three world words are copied to three globa
   - kind 1: needs flag bit 3, then a volume test that uses the block's position, the radii in its block at 0x68 and the record's centre at 0x30. On a hit the fire step runs.
   - kind 2: no action.
   - kind 3: needs flag bit 3, then a test that uses the record's axis at 0x40 and its length at 0x24 with the block's radius. On a hit the fire step runs.
-  - kind 4: when the float at record offset 0x2C is 0 or less, needs flag bit 8 and a volume test on the record. When it is above 0, needs flag bit 5 and a test that uses 0.6 times the block's radius (code constant) at five sub-volumes. On a hit the fire step runs.
+  - kind 4: when the float at record offset 0x2C is 0 or less, needs flag bit 8 and a volume test on the record. When it is above 0, needs flag bit 5 and a test of five faces of the plate box (all but the top) with a test point of radius 0.6 S (S the block's size; fixed constant 0.6; SPEC-0048, The block's moving-rectangle test). On a hit the fire step runs.
   - other kinds, kind 7 included: no action.
   The fire step runs only when the block's manager pointer at offset 0x70 is not null. It fires with no actor, object 0 and the block's number (offset 0x98) as the last argument (+0x28). The block's word at offset 0x60 is then set to the record. The numbers 3, 5 and 8 that the tests name are flag bit numbers (0x0008, 0x0020 and 0x0100), not table numbers.
 - **Fire paths, by volume kind and flag bit (High; SPEC-0028, section 13 has the full table).** The fire step takes the trigger index from the volume's u16 at +0x1C and the actor, object and block words from the path that calls it.
@@ -978,7 +978,7 @@ Numeric and identifier arguments (flag ids, object ids, locator ids, entity ids,
 
 Coverage: from the sampled modules, roughly a quarter of the original logic is direct action lists, another quarter is state machines that need named variables, and the remaining share needs loops, wait polls or arithmetic. The per-level specs must describe those parts explicitly. The clean side must not infer behavior from the original code.
 
-Modules whose callbacks are not yet described (about 117 callback references in 86 modules point at code that has not been decoded) cannot be fully specified yet. Their levels will be marked incomplete until their handlers are written.
+All 117 callback and thread entry points in 86 modules that the function index of the level modules omits have been decoded; they were only missing from the index (see the section on callbacks that the index does not list). Each is described in its module's section.
 
 ### 8. Shared rule: debug-gated branches (Confidence: High)
 
@@ -1242,7 +1242,7 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 | 1077 | 0042 | Activate-world callback (blackboard value for world 109: 10 or 20 moves the hero, long fall, flag 305); thread B (hero height patch type 7: reads locator 24 and overrides the secondary height); trigger 22 (the lever scene that sets flags 38 and 308). |
 | 1080 | 0032 | Trigger 2: the hole fall (15-tick sleep, look-at camera, hero animation 137, camera shake). |
 | 1081 | 0042 | Breakable routine: empty. |
-| 1096 | 0041 | Trigger 6: posts value 130 for world 126 and starts the exterior load of world 126. Activate-world callback: object 1 on when flag 45 is set. Filter: refuses record ordinal 0, admits all others. |
+| 1096 | 0041 | Trigger 6: posts value 130 for world 126 and starts the exterior load of world 126. Activate-world callback (the one registered when flag 45 is set): initialises object 1 with the flag true. Filter: refuses record ordinal 0, admits all others. |
 | 1098 | 0045 | Entity 39 proximity: with flag 196 clear the long cutscene (lines 30 to 41, cameras 20 to 24) and flag 196 set (flag 206 first when 205 is on); later talks show lines 0 to 3. |
 | 1122 | 0043 | Trigger 0: activates the transition assets. |
 | 1131 | 0039 | On-enter callback 0 and thread: line chooser by flags 301, 216, 202, 150 and item 124. |
@@ -1285,6 +1285,8 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 
 ## Open questions
 
+- Default if unresolved (rewrite choice): preserve unnamed flag, object, locator and asset-group values as numeric identifiers scoped to their existing table or module; do not infer global names or roles.
+
 - Resolved: a script thread's end does not change the hero's state (the thread-free step writes no hero state; section 4, Control threads). A scene end does not either. The hold state is left only by the calls named in its row (High). Still open: the nine hero animation calls whose CTL value passes through a shared helper.
 
 1. **Wait multiplier.** Resolved: the multiplier is not in the file; it is written at start-up as 60 from the boot rate table at data address 0x30C598 (SPEC-0007, Rate selection).
@@ -1292,10 +1294,10 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 3. **Per-tick caller.** Resolved: Init is a plain call made once when the entries are bound; Update runs as a one-shot script thread that the world's per-tick script step creates whenever none is alive, and each tick that step runs, after the object updates, the special threads, the trigger callbacks with the trigger state decay, the other callbacks, the control threads in slot order and then the Update creation, in that order; steps 2 to 5 are skipped while the hero-swap in-progress flag (game-global word 0x35C980 + 0x44) is set, and the whole script step is skipped under code 9 (High); Exit is called at script-manager teardown before the module is unloaded (Behavior section 1, Per-tick script step; High).
 4. **Family slots.** Resolved: the family is chosen by the buffer: E (the exterior buffer) calls the Exterior entries, I (the interior buffer) the Interior entries and any other world (T) the Transition entries (Behavior section 1.1; High).
 5. **Enum values.** Resolved: the values used on the disc and how the host reads each (WAIT 0 or 1, tested nonzero, exactly 1 for PlayEntityAnim; CTL 0 or 1, compared with 1; CAMW 0, 1 or 2 as the play end mode; hero selector -1, 0, 1; shake type 0 to 2; axis selector 2 only; blackboard type 1 to 3; world identifiers 5 to 192) are in Layout section 2.1 (High).
-6. **Flag and id meanings.** Meanings of the flag ids, object ids, locator ids and eWorlds values used by the levels. These come from level data and are not yet mapped.
+6. **Flag and id meanings. Resolved in part:** eWorlds arguments are world-slot ids. For example, slot 68 selects pack 909 (Ellis Family Farm), slot 90 selects pack 1023 (Meridell Village), and slot 106 selects pack 1098, whose script registers map areas 48 and 49 (Meridell Castle 1st and 2nd Floor). A progress flag can be named when it matches a quest row’s start or done field: flag 107 starts Herding Whinnies; flag 110 completes Herding Whinnies and starts Talk to Mum; flag 174 completes Chores and starts Crokabek Nests (SPEC-0049). Other flags have no title in the quest table. Object and locator arguments are per-world indices, not global names: object wrappers address the current world’s object records (out-of-range indices do nothing), while locator arguments address its type-11 locator table and use the selected record’s position and, where applicable, facing vector. For example, pack 909’s Whinny pen setup uses locators 5 and 8; pack 1248’s Exit checks objects 0, 1 and 2. The operation and local record determine their roles; a name is not established for each index. [High for the lookup rules and listed mappings; Medium-High for the bounded caller examples.]
 7. **Bool arguments.** The meaning of the bool arguments in the rows marked M or L. Resolved for StartEffect (row 6: with the bool set, the camera block is passed as the start frame), PlayFMV (row 138: the bool is not used), GiveItemToHero (row 190: the plain pickup popup), PlaySound, PlayMainSound and LoopSound (rows 223, 233 and 228: do not restart), VisitLoopSound (row 232: no visible effect) and LaunchFireMote (row 76: true selects the active hero as target, false selects the end locator; a missing end locator forces hero targeting) (High).
 8. **Hero-class providers.** Established. The boot name table has a bound function for each of the nine hero-class names (rows 52, 53, 54, 171, 178, 182, 192, 193, 195). Their bodies were confirmed and their effects are stated in section 2. Row 178's return value remains Medium (question 19).
-9. **Asset group mapping.** Resolved in part: the body of GetAssetGroupCharacterRange is the run search (variant A) over the world's entity-id table, keyed by the slot byte (row 215; High). Still open: which group, by name, each key stands for in a given module.
+9. **Asset group mapping.** Resolved in part: GetAssetGroupCharacterRange selects the run of entity-id entries whose signed slot byte matches the key (row 215; SPEC-0006, Tag 0x12). The key is local to the current pack; membership is given by that pack’s entity-id table, not by a global group-name table. Examples from live callers and their pack data: in pack 934, key 4 contains three Crokabeks and key 6 contains eleven Flower/Spore Monsters; in pack 1300, key 17 contains Seradar, King Hagen, King Skarl, Lucy, Patricia, Hubert and Queen Fyora, while key 21 contains Old Knight, Master Torak, Servant Faun, Gord the Merchant, Old Lady, Kell the Beggar and Queen Fyora. Queen Fyora also occurs in key 17. Pack 777’s caller passes -1, selecting slot byte 0xFF; that pack’s table has no entries for that key, so the host follows its documented no-match output rule. Other callers use computed keys or other module-local memberships. These examples identify table membership, not designer-facing group names. The remaining group names are not established; retain the pack and numeric key when describing them. [High for the slot-key rule and listed memberships; Medium-High for the bounded caller set.]
 10. **Unindexed callbacks.** Resolved: the 117 callback and thread entry points in 86 modules that the function index omits are decoded. They are listed by module, with what each does in play, in the section on callbacks that the function index of the level modules does not list; each is described in its module section (High). One statement in a module section was wrong and is corrected there: the second activation filter of module 1096 admits every record ordinal except 0; it is not empty.
 11. **Negative animation time.** Resolved: PlayAnim's float is a speed factor, not a time; a negative value first moves the object to the end of its animation and then plays it backwards (row 2; High).
 12. **Header hooks.** The roles of the load and unload hook references at +0x18 and +0x1C, and of the words at +0x24 (Low).
@@ -1415,5 +1417,6 @@ Reading the table: "trigger n" is a script trigger with index n; "proximity" is 
 ## Appendix: Uncatalogued host names
 
 None. Every host name in the boot program's host table now has a catalogue row. The rows outside the first group are rows 286 to 294 (Category 15) and rows 295 to 388 (Categories 16 to 23). The nine family entry names (Init, Update and Exit) are records 397 to 405 of the host table, but they have no bound function and are not catalogue rows (Layout, section 1.2; Open question 48). Row 242 (memset) is host record 1 and is a host record like the others; it has no game-state effect.
+
 
 

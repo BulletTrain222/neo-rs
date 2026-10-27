@@ -1,6 +1,6 @@
 # SPEC-0056: NPC AI modes, walk-to-point routines and proximity items
 
-- Answers: none (new topic; the script calls that drive these routines are specified in SPEC-0030); R-0079 (the block contact pass for region characters: place in the tick and response)
+- Answers: none (new topic; the script calls that drive these routines are specified in SPEC-0030); R-0079 (the block contact pass for region characters: place in the tick and response); R-0088 (navigation containment and fresh-block arrival as used by the Ixi Chief)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (boot program and level modules; no fingerprint check is stated in this spec, see SPEC-0001)
 - Confidence: per section. Mode numbers: High. Mode names: labels only (the number-to-name map is not established). Townsfolk class, the mode-from-code rule and the per-character values: High. Walk and path arrival distances: High. All distances are horizontal (ground-plane) distances: High for the walk, hold, greeting and villager tests, Medium-High for the navigation arrival test. Steering weights and final orientation: High. Hold branch and greeting: High. Villager timer ranges: High in ticks and in seconds (60 ticks per second, set once at start-up; see SPEC-0007). Pairing rules: High, and no pair forms on disc. Base states and script control: High; the park-and-resume of a script walk and the script hold during a walk: Medium-High. Talk facing: High. Travel by root motion and facing: High. Place of the AI step in the tick and the one-tick delay from clip request to first root displacement: High. Townsfolk speeds at R = 1: High. Movement-type to animation mapping in the walk classes: Medium-High. Proximity items: High that some callbacks give items; Medium for their gates; High for the 5.8 firing distance and the Action press, Medium for which characters can be the hero's candidate. Wall collision of region characters (navmesh confinement, its edge-reach quirk and the off-mesh restore): High; the blocked flag's setter, clearers and readers: High. Route table: High for the layout and for the read by the navigation step, Medium-High for its meaning (the next edge on a shortest route). Route step through the chosen edge: Low. Spawn point search, its retry rule, its cursor quirk and its callers: High. Movable-block contact pass: High for the block selection, Medium-High for the push. Values marked "(confirmed on disc)" match the boot program's code and data.
@@ -13,7 +13,7 @@ Separately, a character runs one **behavior class** at a time. The walk calls of
 
 Level scripts also register proximity callbacks. Eleven callbacks in ten level modules can give the hero an item on approach, and most of them give it only when a story flag or a prompt answer passes.
 
-None of these routines moves the character itself. A walking NPC travels by the root motion of the locomotion animation it plays, exactly as the heroes do: the routines choose the animation and steer, and the motion record turns the animation's root step into a displacement each tick. Townsfolk walk at 5.00 units/s and run at 13.50 units/s.
+Apart from the arrival step of walk classes 23 and 25 (Behavior classes), none of these routines moves the character itself. A walking NPC travels by the root motion of the locomotion animation it plays, exactly as the heroes do: the routines choose the animation and steer, and the motion record turns the animation's root step into a displacement each tick. Townsfolk walk at 5.00 units/s and run at 13.50 units/s.
 
 A walking character on a navigation mesh finds its way by a route table that is stored with the mesh: for each pair of triangles it names the edge to leave by. There is no run-time route search.
 
@@ -128,13 +128,13 @@ Class 6 is the townsfolk class (see "Townsfolk class"). Class 17 is the common-e
 
 | Class | Set by | Gate (walk argument) | Arrival rule | After arrival |
 | --- | --- | --- | --- | --- |
-| 23 | WalkEntity | zero or less | distance below 1.0 | Play idle animation; end |
+| 23 | WalkEntity | zero or less | distance below 1.0 | Set the position to the walk target; play idle animation; end |
 | 24 | WalkEntity | above zero (the gate is the stop radius) | distance below the stop radius | Play idle animation; end |
-| 25 | WalkEntityAndOrient | zero or less | distance below 1.0 | Turn to the target orientation; then end step |
+| 25 | WalkEntityAndOrient | zero or less | distance below 1.0 | Set the position to the walk target; turn to the target orientation; then end step |
 | 26 | WalkEntityAndOrient | above zero (the gate is the stop radius) | distance below the stop radius | Turn to the target orientation; then end step |
 | 35 | WalkEntityAlongPath | (path index) | distance to the current path point below 0.5 | Advance to the next path point |
 
-The stop radius of classes 24 and 26 is the gate value of the walk call (SPEC-0030 rows 106 and 108).
+The stop radius of classes 24 and 26 is the gate value of the walk call (SPEC-0030 rows 106 and 108). On arrival, classes 23 and 25 put the character exactly on the walk target point (all three coordinates, so a jump of less than 1.0 horizontally and a change of height to the target's height); classes 24 and 26 leave it where it stopped (High).
 
 ## Behavior
 
@@ -238,7 +238,7 @@ Orientation (classes 25 and 26), after arrival: each tick, if the dot product of
 
 ### Navigation step (per tick, not yet arrived)
 
-Each tick the step works on these values (High). P is the character's position. c is the triangle that contains P: the stored current triangle is tested first, then its three neighbours in edge order, then the outward search of SPEC-0018 ("Locate with a last triangle"). G is this tick's goal point and t its triangle, both from the goal latch of SPEC-0029 Behavior 2b, which runs the steering look-ahead (SPEC-0029 Behavior 2a) on the walk target. The step keeps a stored current triangle C0, a stored target triangle T0 and a steering point K. All distances are horizontal.
+Each tick the step works on these values (High). P is the character's position. c is the triangle that contains P: the stored current triangle is tested first, then its three neighbours in edge order, then the outward search of SPEC-0018 ("Locate with a last triangle"). G is this tick's goal point and t its triangle, both from the goal latch of SPEC-0029 Behavior 2b, which runs the steering look-ahead (SPEC-0029 Behavior 2a) on the walk target. The step keeps a stored current triangle C0, a stored target triangle T0 and a steering point K. All distances are horizontal. Triangle containment tests the point's x-z projection against the triangle edges and does not compare its height with the triangle plane (R-0088, High).
 
 1. Off the mesh (c = -1): the nearest-triangle search of SPEC-0029 Behavior 2b runs from P. It also sets the current triangle. The character steers toward that triangle's centroid with weight 0.1 and plays the movement clip of its mode.
 2. No goal triangle (t = -1): the idle picker runs (its clip plays), and there is no steering.
@@ -586,6 +586,7 @@ Modules that register a proximity callback but give no item on approach:
 Synthetic values; they are not copied from the disc.
 
 - TV-0056-1 (class 23): distance 0.99 at a decision point: arrived. Distance 1.00: not arrived.
+- TV-0056-1a (class 23 arrival): character at (10.0, 2.0, 5.0), walk target (10.5, 2.0, 5.5): horizontal distance 0.707 is below 1.0, so the character is set to (10.5, 2.0, 5.5) and the class ends. The same walk with class 24 and stop radius 1.1 ends with the character still at (10.0, 2.0, 5.0).
 - TV-0056-2 (class 24, stop radius 1.1): distance 1.09: arrived. Distance 1.11: keeps walking.
 - TV-0056-3 (class 35): point distance 0.49: reached. Distance 0.50: not reached.
 - TV-0056-4 (steering on the mesh, w = 0.3): facing c = (0, 0, 1), direction t = (1, 0, 0). v = (0.3, 0, 0.7), so facing = (0.39392, 0, 0.91915).

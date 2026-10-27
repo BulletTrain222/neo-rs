@@ -1,6 +1,6 @@
 # SPEC-0022: Dialogue, text and progress flags
 
-- Answers: proactive; R-0018 (point 3, the prompt icon is centred on its anchor point; see SPEC-0023 Open question 74)
+- Answers: proactive; R-0018 (point 3, the prompt icon is centred on its anchor point; see SPEC-0023 Open question 74), R-0093, R-0094, R-0095
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). Line tables are read from world-pack resources in the archive; tuning words are read from the boot program's data by virtual address.
 - Confidence: per section. Line use: High for the counts, Medium for their meaning. Line table layout and control-code layout: High (true of every line table on the disc). Shared text engine (glyph records, break search, reveal arithmetic, rounding): High. Fonts (descriptors, glyph records, metrics, composite letters): High. Justification rule: High. Dialogue box layout: High for the formulas, Medium-High for the canvas units. Speaker and choice rules: High (partner block Medium). Memory-card and controller messages: High. Reveal rate, paging and release timing: High. Dialogue command kinds (flags, items, stage): High. Progress flag semantics: High for storage and set/clear/test, High for the stage table and the initial state, Medium for the event-to-flag list. Quest rows (journal entries, Quests below): Medium-High for the fields, Medium for their use, Low-Medium for the listing gate. Which script line is chosen: Medium (the boundary described in Open questions). Text window draw layout: High for the structure, Medium for the cue meanings. Interaction prompts (Square caption, prompt ids, gates, chooser order) and the talk candidate and talk entry: High; outcomes on disc of one press acting in several places: Medium-High. The leap branch tests no button: High. The Action button is Square (logical bit 0x0080, press edge): High. Conversation calls and level lines (LevelMsg, LevelPrompt): High; the hero state between two script lines: Medium. Dialogue control records (kinds, flag rule, counts): High for the layout, the kinds, the run-pass mask and the counts; kind 0x16 High (its label Medium-High); who each emote kind acts on High; the stale-emote quirk Medium; the item-notice setting of kind 0x13 Medium. No spoken dialogue and no run-time lip sync: High (the meaning of face id 0 Medium). Line alignment, the case-insensitive compare, the page stop search and substitution codes: High; the same-text reopen of the box: Medium.
@@ -366,6 +366,8 @@ No run-time lip sync (High; Medium-High for the meaning of face id 0, which is t
 
 Emote row lookup, the roll and the directory position are in SPEC-0009 (Emote clip lookup). Queueing and playback are in SPEC-0040 (Behavior 22).
 
+- Pack 951 line 59 contains a reveal-pass item-give control for item 32, quantity 1, reached when the text reveals the package phrase. Its callback grants the same item before opening the line, so two grants are requested; item 32 has category 7 and carry limit 1, leaving one package in inventory. A separate inventory notification for the reveal-time grant is unknown (High for record and timing).
+
 ### Text comparison and page stop search
 
 **Case-insensitive compare (High).**
@@ -710,7 +712,7 @@ Confidence: High for the caption rule, the prompt ids, the gates and the chooser
    - Grab Door (label 22); S enters state 29;
    - door prompt: when the hero's door prompt id is 0 or more, that label is shown, and S sets the door-confirm flag to 1 (SPEC-0006, Door prompt and confirm);
    - then, if a caption other than "Feed petpet" has already been set this pass (for example the door prompt, "Save Game" or "Grab Wall"), the chooser stops;
-   - Feed petpet (label 14); S enters state 49 when the pet has food, else plays cue 0xA2;
+   - Feed petpet (label 14); S enters state 49 when the pet has food, else plays cue 0xA2. The feed action uses the selected quick-item entry when available; with a negative selection marker it searches the general inventory for the first category-12 food (SPEC-0047, Acquisition).
    - Read Book (label 31) while a book is pending (SPEC-0028 book stations); S takes the book (cue 0xAF) and the pending index is cleared. The prompt draws as the Square caption: slot 4 at (327, 395), the default caption colour, with the Square icon drawn in the same pass. It is not drawn while a quick-item panel is open (SPEC-0035 section 6.1);
    - then, if the weapon was put away this tick, the chooser stops;
    - Square with no target (SPEC-0033): outside the stance states 22, 39 and 40, S enters state 22 unless the hero is in state 20, 32 or 43 to 46, or the script-prompt flag is set this tick. In states 22, 39 and 40, nothing changes while Square is held, and the hero returns to state 1 when it is not held (hold to stay).
@@ -925,6 +927,10 @@ The program also holds a second break routine that treats only NUL and space as 
 ### Edge cases: accents and breaks
 
 - Accent: a non-vowel with a valid accent code returns the input. A vowel with an unknown code returns the input.
+
+### Reward controls and script grants
+
+A dialogue line's reveal-pass item control runs when the reveal reaches that record, even if the caller separately grants the same item before or after showing the line. The line engine does not skip the control based on the script's item grant. Inventory category limits still apply to each request: Howell's duplicate Faerie Bottle request remains capped at one carried item, while the uncapped Fire Mote requests can add one during line 52 and 100 after it finishes (SPEC-0045 pack 1300; SPEC-0044 pack 1327). Separate reward-notice presentation is not established.
 
 ## Test vectors
 

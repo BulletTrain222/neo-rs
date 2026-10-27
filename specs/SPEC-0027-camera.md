@@ -1,5 +1,5 @@
 # SPEC-0027: Camera and projection
-- Answers: proactive (none requested) (camera and view)
+- Answers: proactive (none requested) (camera and view), R-0084 (the type-41 scalar's depth-mapping effect, in Zone record blend)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence for the later sections: update order High (the meaning of the play-active flag High). Camera profile record and its selection High. Polar convention High. Normal follow High (hero-state names High). Ground clearance Medium-High. Walls and stuck timers Medium-High for the flow, Medium for the push geometry. Recentre pass and R3 High for the trigger and the shrink, Medium for the candidate order. Placement after a load or restart High. Scripted, cutscene and boss cameras High. The type 41 atmosphere zones are specified in SPEC-0028 section 11; the camera only supplies the eye position. Look-at play start Medium-High (the row senses Medium); right-stick aim mode and the camera High; view object reset Medium (the sentinel writes High). Follow speed offset: not a camera routine (it is the class-2 surface test of SPEC-0018), High. Eye pass per-primitive routines High for the owner and for which routine handles which primitive, Medium for the entry steps.
@@ -742,7 +742,7 @@ The camera has no volume records. The kind-byte test over level primitives is th
 This helper is not a camera routine. It is the record blend of the type 41 atmosphere zones (SPEC-0028 section 11), and the zone pass is its only caller (two calls). It takes a blend value t and two 0x50-byte zone records X and Y, and writes a target record (both calls pass X as the target):- t at or below 0: the whole 0x50-byte record X is copied to the target.
 - 0 < t < 1: only three fields are blended, each as (1 - t) x X + t x Y: vector A (+0x00, four lanes), vector B (+0x10, four lanes) and the render scalar (+0x20). No lane is normalised. Every other field of the target (from +0x24 on: the gate key, the circle centre, the point count and list, and the bytes at +0x48 to +0x4F) is left as it was, so with X as the target they keep X's values.
 - t at or above 1: the whole record Y is copied to the target.
-It returns 1 - t when 0 < t < 1 and a meaningless value otherwise; both calls ignore it.
+It returns 1 - t when 0 < t < 1 and a meaningless value otherwise; both calls ignore it. The interpolated type-41 scalar is sent to the renderer as the view-screen depth-range maximum. When accepted by the renderer's limit, it changes the depth mapping and rebuilds the view-screen matrices; it does not change the camera eye or the world-space near and far clip distances. A modern renderer that preserves the original mapping must apply the scalar to its projection/depth conversion. It is not an opacity or fade input.
 The two calls: (1) the zone blend, t = 1 - (d - 1) / (50 - 1) for a zone at distance d from the eye, with X the working record and Y the zone; (2) the world-change crossfade, t = w = 1 - d / 50, with X the working record and Y the record kept at the world change (SPEC-0028 section 11).
 
 ### Per-frame anchor scan (see SPEC-0028; Medium-High)

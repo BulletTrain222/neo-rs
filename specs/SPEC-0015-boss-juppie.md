@@ -237,7 +237,7 @@ Spit projectile (formulas, pool kind and life argument unit High):
 
 ### Knockback
 
-- Head slam: the hero is pushed with K = 5.0 (0x2DAF5C) in the direction of the reverse of the hero's own facing, using the same push as other bosses (SPEC-0014): the hero's velocity becomes K x normalize(9 x d + (0, 12, 0)), where d is the reverse of the hero's forward direction, and the hero enters its knocked state.
+- Head slam: the hero is pushed with K = 5.0 (0x2DAF5C) opposite the boss's forward direction: the push vector is K x normalize(−9 x f + (0, 12, 0)), where f is the boss's horizontal forward unit vector. The hero enters its knocked state. This slam-specific direction is read from the boss's facing; it does not use the hero's facing or a boss-to-hero direction.
 
 ### Damage
 
@@ -308,6 +308,7 @@ Synthetic checks on the rules, except the last item, which is read from the disc
 - **Counted-hit reset**: a new slam starts with the counted-hit counter at 0 even if the previous slam ended with counter 3.
 - Spit pre-wait: 120 ticks. Spit count: each of 3, 4, 5 possible; never 2 or 6.
 - Slam impact at horizontal distance 6.9 from the hero: hit for 25. At 7.0: no hit (must be less than 7.0).
+- Juppie slam push: boss forward f = (1, 0, 0), K = 5.0 gives hero velocity (−3, 4, 0) before the knocked state; reversing the boss direction reverses only the horizontal component.
 - Locator: a locator at 5 units in front with dot 0.95 and the head bone 9.0 from it, flag clear: used (flag set, event posted, use counter goes up by one, one use reported to the slam). Dot 0.85: not used. Head bone 10.0 from it: not used (must be below 10.0). A locator whose flag is already set is never used again.
 - Stage 2 with locator 102 unusable and locator 103 usable and flag clear: 103 is used, and the call reports one use.
 - Stage 2 with HP fraction 0.5: flag 8 and back to the hub. HP fraction 0.51: stage goes back to 1, flag 0x10 set, flag 5 cleared, boss waits in the hub.

@@ -1,9 +1,9 @@
 # SPEC-0014: Boss behavior: Ixi Chief
 
-- Answers: proactive, none requested (boss AI); R-0067 (the locomotion slot values, clips and root travel of modes 0, 1, 3, 5 and 6, and the charge walk clip)
+- Answers: proactive, none requested (boss AI); R-0067 (the locomotion slot values, clips and root travel of modes 0, 1, 3, 5 and 6, and the charge walk clip); R-0088 (navigation steering, the charge start wait and charge-point validity)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
-- Confidence: per section. Tuning values and addresses: High (the defaults are words of the boot program data). Fight mode and stage/HP rules: High. Mode-2 flag source (game state 358, set by the final fight's script pack): High; whether mode 2 is reached in play: Medium. Stage and fight mode as separate values: High. Lava quirk (mechanism): High. Level-flag interaction: High for the flags, Medium for which level script reacts to them. Attack choice and cooldowns: High. Charge sub-steps and exits: High for order and exits, Medium for the navigation check. Push: High for the formula, Medium for which hits use it. Incoming-hit rules: High for the control flow. Missile contact: Medium-High (per-bone spheres with radius above zero; the sphere geometry is Medium; the projectile path length of 120 ticks is Medium). Orbit: High for the mode numbers and the 30-tick flip; the 3.0-unit offset and its side sign are High. Buck kick hit: High (monster weapons 4 and 5). Movement-blocking flag (lock word): High. Knockback lanes: High (the knocked state's own effect belongs to the hero, SPEC-0036). Attack shapes, windows, damage path and block rule (Hit shapes and windows): High. Sounds (animation cues, the unused counter-attack cue) and the incoming-hit flash 222: High; the flash point: Medium.
+- Confidence: per section. Tuning values and addresses: High (the defaults are words of the boot program data). Fight mode and stage/HP rules: High. Mode-2 flag source (game state 358, set by the final fight's script pack): High; whether mode 2 is reached in play: Medium. Stage and fight mode as separate values: High. Lava quirk (mechanism): High. Level-flag interaction: High for the flags, Medium for which level script reacts to them. Attack choice and cooldowns: High. Charge sub-steps, exits and navigation steering: High; charge-point containment ignores height (High); the pack-800 stuck scenario follows from static rules (Medium-High). Push: High for the formula, Medium for which hits use it. Incoming-hit rules: High for the control flow. Missile contact: Medium-High (per-bone spheres with radius above zero; the sphere geometry is Medium; the projectile path length of 120 ticks is Medium). Orbit: High for the mode numbers and the 30-tick flip; the 3.0-unit offset and its side sign are High. Buck kick hit: High (monster weapons 4 and 5). Movement-blocking flag (lock word): High. Knockback lanes: High (the knocked state's own effect belongs to the hero, SPEC-0036). Attack shapes, windows, damage path and block rule (Hit shapes and windows): High. Sounds (animation cues, the unused counter-attack cue) and the incoming-hit flash 222: High; the flash point: Medium.
 
 ## Summary
 
@@ -165,6 +165,13 @@ The stage value and the fight mode are separate values. The stage rules below re
 
 The stage-transition state (stage 1, mode 0) is never entered in modes 1 and 2.
 
+### Encounter flow (pack 864; High for state and call order)
+
+Init creates the character slot stores, raises progress flag 287, raises progress flag 60 if it is clear, and sets level state 3. The Chieftain is region set 4; its instance-trigger worker loads that set into store A through main trigger 10. Script trigger 1 separately marks the fight-start stage bit. When the stage thread sees that bit, it starts boss-fight instance 8 at stage 0, plays camera 8 and dialogue line 6, then cameras 10 and 11. Once camera 11 ends, it plays camera 7 and clears level state 3. That clear releases the boss's held state. Progress flag 60 selects normal fight mode 1, with full damage scale and the mode-1 lava and death rules.
+
+At zero HP, the instance-8 boss posts level state 0 in this mode. The stage thread sees that event, marks the fight-end bit and raises flag 293. On its next pass the end stage raises level state 3 to hold the boss, plays camera 10 and resets the camera shake, deactivates entity 44, clears level state 3, plays camera 15, and ends boss-fight instance 8 at stage 1. It also raises flag 668, starts the follow-up camera/object thread, and completes the configured 32-object sequence. The individual camera art, dialogue text and several progress-flag/locator meanings are specified with the level script data, not guessed from the boss controller.
+
+Test path: after trigger 1 marks fight start, instance 8 starts at stage 0; level state 3 clears only after camera 11 finishes. A lethal hit in mode 1 sets level state 0; the next stage-thread pass marks the end, and the following pass runs the end sequence and ends instance 8 at stage 1.
 ### Melee and missile reactions
 
 **Missile reaction** (runs only when the missile-defense cooldown is 0, and only when a missile contact is found among up to six active projectile slots):
@@ -214,8 +221,8 @@ When the chooser picks an attack, it also clears the hit latch.
 
 Using D (horizontal distance to the hero), checked in this order. The movement states use the shared locomotion mode numbers given in the States table:
 
-- D > 15.0: rush forward (locomotion mode 0).
-- 10.0 < D <= 15.0: strafe close (locomotion mode 1) if D < 13.0. For 13.0 <= D <= 15.0 the current movement is kept.
+- D > 15.0: rush forward (locomotion mode 1).
+- 10.0 < D <= 15.0: strafe close (locomotion mode 0) if D < 13.0. For 13.0 <= D <= 15.0 the current movement is kept.
 - D < 5.0: strafe back (locomotion mode 3).
 - 5.0 <= D <= 10.0: orbit (locomotion modes 5 and 6), unless the boss is already orbiting, or it is strafing close and D is above 8.0. Entering orbit draws the orbit direction from a coin flip and resets the orbit timer (the 30-tick timer in Per-fight state).
 
@@ -269,8 +276,8 @@ Animation numbers are entries of the boss's table. "Hit" means the boss applies 
 | Wide swipe | 0x1A | Turns toward the hero at rate 0.25 per tick while playing; one hit at most | Animation ends: idle; wide-swipe cooldown is set |
 | Whirl | 0x1B | One hit if the hero is within the whirl hit range (no guard test); pushes the hero (see Push) | Animation ends: idle; whirl cooldown is set (2 to 4 s) |
 | Buck kick | 0x1D | One hit at the first contact of weapon 4 or 5 (see Hit shapes and windows) | Animation ends: idle (no cooldown set) |
-| Rush forward | locomotion mode 0 | Moves toward the hero | Until the chooser changes state |
-| Strafe close | locomotion mode 1 | Moves toward the hero | Until the chooser changes state |
+| Rush forward | locomotion mode 1 | Moves toward the hero | Until the chooser changes state |
+| Strafe close | locomotion mode 0 | Moves toward the hero | Until the chooser changes state |
 | Strafe back | locomotion mode 3 | Moves away from the hero | Until the chooser changes state |
 | Orbit | locomotion mode 5 (direction 0) or 6 (direction 1) | Circles the hero; the direction flips every 30 ticks | Until the chooser changes state |
 | Get hit | 6 | No damage | Animation ends: 25 % (roll below 25 of 0 to 100) to forward swipe, otherwise idle |
@@ -303,6 +310,12 @@ Sub-step 0 is entered when the charge starts.
 6. **Stop and slam**: play animation 0x17. One hit at most, applied while the animation plays when the hit test passes (stop-and-slam damage x scale). When the animation ends, the boss always goes idle and the charge cooldown is drawn (whether or not it hit).
 
 The charge cooldown is set at the end of the stop-and-slam (hit or miss), on the run-past exit, and on navigation failure in sub-steps 0 and 4.
+
+**Navigation for the Ixi (R-0088).** Its charge walk and movement states call the shared navigation step of SPEC-0056. Sub-step 1 sets movement mode 0 and follows the stored charge point; sub-step 4 sets mode 0 and follows the hero's current position after checking that point on the assigned mesh. Rush-forward uses mode 1, strafe-close mode 0, and strafe-back mode 3. The shared step follows the mesh route table toward a clamped edge crossing while the goal is in another triangle, and steers toward the goal once both are in the same triangle. Its steering weight depends on that step's branch (0.1 for route crossings; 0.3 for the settled same-triangle approach, with the other 0.1 cases described in SPEC-0056). Modes 0 and 1 steer along the chosen direction; mode 3 steers against it (SPEC-0029, Behavior 2).
+
+The charge sub-step 1 advances only when the horizontal distance to its stored target is strictly below 1.0. It does not check the navigation blocked flag, navigation arrival flag or a timer. A fresh-block arrival in the shared navigation step can mark navigation complete and turn the character toward the hero, but does not change the Ixi's charge sub-step. If blocked farther than 1.0 from the target, the charge can remain in sub-step 1 indefinitely unless another event changes the Ixi state. At 3.3 horizontal units from the target, the exit gate fails.
+
+Charge candidates are accepted when their x-z projection lies inside a triangle of the Ixi's assigned mesh. The containment test does not compare candidate height with the triangle plane, so a point can pass below a raised surface at the same horizontal coordinates. At controller start, the Ixi keeps its assigned mesh if it has one; otherwise it searches the world's kind-1 ground meshes in list order and assigns the first that contains the boss. Fight mode 0 rechecks its mesh each tick; modes 1 and 2 do not.
 
 ### Push
 
@@ -405,7 +418,7 @@ Synthetic checks on the rules, not disc data.
 - Counter attack at scale 0.25: trunc(25 x 0.25) = 6. Scale 1.0: 25.
 - Forward swipe at scale 0.25: trunc(50 x 0.25) = 12. Wide swipe at 0.25: trunc(35 x 0.25) = 8. Whirl at 0.25: 25. Stop-and-slam at 0.25: 25. Buck kick at 0.25: 6.
 - Cooldown ticks: charge 1.0 to 3.0 s gives an inclusive range of 60 to 180 ticks. Whirl 2.0 to 4.0 s gives 120 to 240. Missile defense 0.5 to 1.0 s gives 30 to 60.
-- Movement: D = 16 -> rush forward (locomotion mode 0). D = 12 -> strafe close (mode 1). D = 4 -> strafe back (mode 3). D = 14 -> no change. D = 9 with the boss idle -> orbit (mode 5 or 6, by the drawn direction).
+- Movement: D = 16 -> rush forward (locomotion mode 1). D = 12 -> strafe close (mode 0). D = 4 -> strafe back (mode 3). D = 14 -> no change. D = 9 with the boss idle -> orbit (mode 5 or 6, by the drawn direction).
 - Locomotion clips: the slot values are (9, 10, 30, 14, 15, 17, 16), so mode 5 plays table entry 16 (clip 27) and mode 6 plays entry 17 (clip 28). Mode 1 over one 28-tick cycle moves 28 x 0.3334 = 9.34 units forward; mode 0 over its 56-tick cycle moves 5.29 units. Charge sub-step 1 over 28 ticks moves 9.34 units.
 - Orbit timer: a boss in direction 0 is still in direction 0 after 29 ticks, and direction 1 from tick 30 on (the timer restarts at 30).
 - Charge sub-step 4 with the horizontal distance at 5.9: the roll of 39 (below 40) goes to stop-and-slam; a roll of 40 goes to run past.
@@ -435,7 +448,7 @@ Synthetic checks on the rules, not disc data.
 - **Side (right) direction**: Resolved: the charge's candidates use the hero's frame side axis (up x forward, the hero's left), and the orbit uses normalize(d x up) from the boss toward the hero (the boss's right) for direction 0 (see Orbit and Charge; High).
 - **Charge arrival and run-past thresholds** (1.0, 6.0 and 7.5 units): Resolved (High). All three are horizontal distances: the vertical component of the offset is zeroed before the length is taken. The 1.0 test of sub-step 1 measures the boss's position against the stored charge target; the 6.0 test of sub-step 4 measures the boss against the hero's position of that tick; the 7.5 test of sub-step 5 measures the boss against the hero. Heights never enter. Test vector: in sub-step 5 a hero standing 30.0 units higher than the boss at a horizontal offset of (5.0, 5.0), a horizontal distance of 7.07, is within 7.5, so the run past continues; at a horizontal offset of (6.0, 5.0), 7.81, it ends.
 - **Random generator clock source**: Resolved: the first-use seed comes from the console's real-time clock, so the sequence differs from boot to boot (High).
-- **Intro and end cutscenes**: described only by their flag effects.
+- **Intro and end cutscenes.** Resolved: pack 864 script trigger 1 starts boss-fight instance 8 at stage 0 and the camera/dialogue sequence; clearing level state 3 releases the boss. In normal mode, its death event sets level state 0; the stage thread then raises flag 293 and, on the following pass, holds and deactivates the boss, plays the closing cameras, and ends instance 8 at stage 1. See Encounter flow (High for the level-state sequence; camera art and some flag labels remain unspecified).
 - **Movement-blocking flag**: Resolved (High). It is the motion record's lock word of SPEC-0040, set when the boss's height and the controlled hero's height differ by more than 1.0 (see Stages and modes, Height check). While set it switches off the edge guard and the navigation-mesh position restore.
 - **Hero path length 120**: Answered: a fixed value; whether its unit is one tick of travel is Medium (the spit's velocities are per tick, SPEC-0015).
 - Resolved: **Get-hit roll range.** This boss uses the inclusive 0 to 100 range, so a threshold of 25 passes for 25 of 101 possible draws. The 0 to 99 draws in SPEC-0021 are Index(100) drop and item bands; they are a separate helper and do not conflict (High).
@@ -443,4 +456,6 @@ Synthetic checks on the rules, not disc data.
 - **Get-hit counter**: Resolved: the word reset on the forward-swipe branch is the boss's once-per-attack hit latch, so the forward swipe that follows a get-hit can hit (see Get hit step; High).
 - **Sound step gates and the flash point**: the boss is taken to be a world character like every character spawned from a level's character records, so the world-character sound rule applies (Medium-High). Two further gates of the animation-sound step, a motion-block gate and a per-character mute word, are not named. The exact point of the incoming-hit flash is Medium.
 - **Pair codes (Low-Medium)**: what the two codes of the pair predicate are (kinds, states or group members), which caller routine uses the predicate, and what the three sub-steps do. The first-code range test takes its value through a helper whose input is not known, so the first code being the tested value is Medium.
+- Resolved (R-0088): the Ixi uses the shared route-table navigation step and the mode-specific steering in SPEC-0029 and SPEC-0056. Its charge sub-step 1 exits only below 1.0 horizontal distance from its stored target; a navigation arrival or fresh block does not advance the boss sub-step. Charge-point validity uses x-z triangle containment and ignores height. The pack-800 stuck case can persist without an external state change. High for the static rules; Medium-High for the stated pack scenario.
+
 
