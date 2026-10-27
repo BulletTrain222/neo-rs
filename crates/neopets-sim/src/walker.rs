@@ -43,6 +43,9 @@ pub struct Walker {
     /// The class kind query returns 1 (SPEC-0040 Behavior 14E): the edge guard applies. On for
     /// every walker (no hero walks with one).
     pub edge_guard: bool,
+    /// Locomotion modes 3, 4 and 8 steer toward minus the direction (SPEC-0029 Behavior 2,
+    /// Steering by mode); set by the caller for the step.
+    pub reverse: bool,
     saved: Vec3,
     id: u32,
 }
@@ -73,6 +76,7 @@ impl Walker {
             blocked_timer: 0,
             lock: false,
             edge_guard: true,
+            reverse: false,
             saved: position,
             id,
         }
@@ -116,7 +120,8 @@ impl Walker {
 
     /// Steering toward a point with a weight.
     pub fn steer_to(&mut self, target: Vec3, w: f32) {
-        self.facing = steer(self.facing, dir(self.position(), target), w);
+        let d = dir(self.position(), target);
+        self.facing = steer(self.facing, if self.reverse { d.map(|v| -v) } else { d }, w);
     }
 
     /// The goal latch (SPEC-0029 2b): the goal triangle and point for this tick.

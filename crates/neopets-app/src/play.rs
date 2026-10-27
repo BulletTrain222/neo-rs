@@ -7212,6 +7212,17 @@ impl Play {
                 let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius: r, length };
                 caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
             });
+            // The navmesh pick (SPEC-0029 Behavior 2): the first ground mesh holding the boss,
+            // again whenever the stored one no longer holds it.
+            if let Some(wk) = c.walker.as_mut() {
+                let p = wk.position();
+                if wk.mesh.and_then(|i| world.navmeshes.get(i)).is_none_or(|m| m.locate_full(p).is_none()) {
+                    let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.locate_full(p).is_some());
+                    if pick.is_some() {
+                        wk.assign_mesh(pick, &world.navmeshes);
+                    }
+                }
+            }
             let mesh = c.walker.as_ref().and_then(|wk| wk.mesh).and_then(|m| world.navmeshes.get(m));
             let valid = |p: [f32; 3]| mesh.is_none_or(|m| m.locate_full(p).is_some());
             let clip = c.anim.clip_state();
@@ -7251,16 +7262,20 @@ impl Play {
             }
             if let Some((mode, target)) = act.travel {
                 let m = [target[0] - c.position[0], 0.0, target[2] - c.position[2]];
-                if m[0] != 0.0 || m[2] != 0.0 {
-                    let (dir, w) = match mode {
-                        5 | 6 => {
-                            let p = if mode == 5 { [m[2], 0.0, -m[0]] } else { [-m[2], 0.0, m[0]] };
-                            let l = p[0].hypot(p[2]).max(1e-6);
-                            (p, if (c.facing[0] * p[0] + c.facing[2] * p[2]) / l > 0.9 { 1.0 } else { 0.1 })
-                        }
-                        _ => (m, 0.2),
-                    };
-                    c.facing = neopets_sim::hero::steer(c.facing, dir, w);
+                if matches!(mode, 5 | 6) && (m[0] != 0.0 || m[2] != 0.0) {
+                    let p = if mode == 5 { [m[2], 0.0, -m[0]] } else { [-m[2], 0.0, m[0]] };
+                    let l = p[0].hypot(p[2]).max(1e-6);
+                    let w = if (c.facing[0] * p[0] + c.facing[2] * p[2]) / l > 0.9 { 1.0 } else { 0.1 };
+                    c.facing = neopets_sim::hero::steer(c.facing, p, w);
+                } else if let Some(wk) = c.walker.as_mut() {
+                    // SPEC-0029 Behavior 2 Movement: the other modes run the navigation step of
+                    // SPEC-0056 toward the move point (its route and weights), modes 3 and 4
+                    // steering toward minus the direction.
+                    wk.facing = c.facing;
+                    wk.reverse = matches!(mode, 3 | 4);
+                    wk.nav_step(&world.navmeshes, target, hero);
+                    wk.reverse = false;
+                    c.facing = wk.facing;
                 }
             }
             // The boss moves only by its clip's root travel (SPEC-0014 Movement).
@@ -9757,7 +9772,18 @@ impl Play {
                     )
                 }
                 None => match c.row {
-                    Some(r) => format!("{} [class {} hp {}]", if c.name.is_empty() { "(unnamed)" } else { &c.name }, r.class.unwrap_or(-1), r.hit_points),
+                    Some(r) => format!(
+                        "{} [class {} hp {}/{}{} at {:.0},{:.1},{:.0}{}]",
+                        if c.name.is_empty() { "(unnamed)" } else { &c.name },
+                        r.class.unwrap_or(-1),
+                        c.hp,
+                        r.hit_points,
+                        c.ixi.as_ref().map_or(String::new(), |k| format!(" ixi {:?}", k.state)),
+                        c.position[0],
+                        c.position[1],
+                        c.position[2],
+                        if c.inactive { " inactive" } else if c.held { " held" } else { "" }
+                    ),
                     None => c.name.clone(),
                 },
             })
