@@ -1827,8 +1827,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0042 986 Init: flags 87 to 89 kept at load (words 11 to 13); the triggers; the
         // objects and world masks by those flags; the slot-load thread (86 clear: set 0, region
-        // 987). Breakable 0's SetBreakableActive and the debug registrar are not built; the
-        // navmesh table runs in Update.
+        // 987); with 88 set breakable 0 disabled. The debug registrar is not built; the navmesh
+        // table runs in Update.
         986 => {
             let (f87, f88, f89) = (state.flag(87), state.flag(88), state.flag(89));
             state.set_word(pack, 11, f87 as i32);
@@ -1842,6 +1842,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             if !f88 {
                 v.push(Action::InitObjOn { obj: 7, end: false });
+            } else {
+                v.push(Action::SetBreakableActive { id: 0, on: false });
             }
             if f87 {
                 v.extend([Action::InitObjOn { obj: 8, end: true }, Action::InitObjOn { obj: 3, end: true }, Action::InitObjOn { obj: 4, end: true }, Action::DeactivateObj { obj: 6 }]);
@@ -2529,13 +2531,13 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // T's load of set 0 (region 907). The per-tick navmesh pass runs in Update
         // (DisableVillagerSocialize is not built).
         906 => vec![reg(2, 2), reg(0, 0), reg(1, 1), Action::LoadRegion { slot: 0, region: Some(907) }],
-        // SPEC-0037 837 Init: with 636 clear object 0 at its start and masks 1, else masks 2
-        // (breakable 3's SetBreakableActive is not built: R-0040).
+        // SPEC-0037 837 Init: with 636 clear object 0 at its start, breakable 3 disabled and masks
+        // 1, else masks 2.
         837 => {
             let m = if state.flag(636) { 2 } else { 1 };
             let mut v = Vec::new();
             if m == 1 {
-                v.push(Action::InitObjOn { obj: 0, end: false });
+                v.extend([Action::InitObjOn { obj: 0, end: false }, Action::SetBreakableActive { id: 3, on: false }]);
             }
             v.extend([Action::CollisMask { mask: m }, Action::DisplayMask { mask: m }]);
             v
@@ -2797,12 +2799,17 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0042 1171 Init: objects 0, 1, 2, 11, 13, 15, 17, 20, 23 and 26 off; the levers on
         // triggers 5 to 7 (routines 5 to 7), T0 and T1 on 0 and 1 (routines 0 and 1); the
-        // switch handler on 29 to 32 (replaced below, never run); the drain-flag loop's
-        // SetBreakableActive calls are not reproduced (breakables, R-0040); then group type 12
-        // (which replaces triggers 29 to 32). AddAnimObjSound is not built.
+        // switch handler on 29 to 32 (replaced below, never run); the drain-flag loop (each set flag
+        // of 637 to 641 disables breakable 23, 26, 29, 32 or 35); then group type 12 (which
+        // replaces triggers 29 to 32). AddAnimObjSound is not built.
         1171 => {
             let mut v: Vec<Action> = [0, 1, 2, 11, 13, 15, 17, 20, 23, 26].into_iter().map(|obj| Action::InitObjOn { obj, end: false }).collect();
             v.extend([reg(5, 5), reg(6, 6), reg(7, 7), reg(29, 29), reg(30, 29), reg(31, 29), reg(32, 29), reg(0, 0), reg(1, 1)]);
+            for (flag, id) in (637..=641).zip([23, 26, 29, 32, 35]) {
+                if state.flag(flag) {
+                    v.push(Action::SetBreakableActive { id, on: false });
+                }
+            }
             v.push(Action::RegisterGroupType { kind: 12 });
             v
         }
@@ -6341,14 +6348,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             ]);
         }
         // T2 and T3 (any fire, not while running): camera 7; the first run with 88 clear removes
-        // object 7 (the floor; breakable 0's Break is not built) and sets 88; every run plays hero
+        // breakable 0 and object 7 (the floor) and sets 88; every run plays hero
         // animation 136, moves the hero to locator 11 and starts the long fall.
         (986, 2) if state.word(pack, 20) == 0 => {
             state.set_word(pack, 20, 1);
             out.actions.extend([Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 }, Action::Sleep { ticks: 10 }]);
             let first = state.word(pack, 12) == 0;
             if first {
-                out.actions.push(Action::DeactivateObj { obj: 7 });
+                out.actions.extend([Action::Break { id: 0 }, Action::DeactivateObj { obj: 7 }]);
             }
             out.actions.extend([Action::HeroAnim { anim: 136, wait: true }, wait(2.0), Action::MoveHero { locator: 11 }, Action::Sleep { ticks: 1 }, Action::LongFall, Action::ReturnCamera { preset: -1, release: true }]);
             if first {
@@ -8950,8 +8957,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             ]);
         }
         // Trigger 3 (handler 5), the first fire with 272 clear: the break scene (object 5 played
-        // with wait, objects 5, 4 and 1 off, object 6 on and played; the shake and Break of
-        // breakables 17 to 24 are not reproduced: R-0040), then the story switch back to Tor at
+        // with wait, breakables 17 to 24 broken, objects 5, 4 and 1 off, object 6 on and played;
+        // the shake's values are not given), then the story switch back to Tor at
         // locator 12 in mode 0, and 272, which ends the module's triggers for good.
         (1244, 5) if first && !state.flag(272) => {
             out.actions.extend([
@@ -8966,6 +8973,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::PlayAnim { obj: 5, speed: 1.0, wait: true },
                 Action::KillSound { cue: 7, locator: None },
                 Action::PlaySound { cue: 8, locator: None },
+                Action::Break { id: 17 },
+                Action::Break { id: 18 },
+                Action::Break { id: 19 },
+                Action::Break { id: 20 },
+                Action::Break { id: 21 },
+                Action::Break { id: 22 },
+                Action::Break { id: 23 },
+                Action::Break { id: 24 },
                 Action::Sleep { ticks: 20 },
                 camera(17),
                 Action::HeroAnim { anim: 125, wait: true },
@@ -9485,6 +9500,39 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
         985 => out.extend(thread_985(state)),
+        // SPEC-0037 837 Update (636 clear): the armed word (1) is set once breakable 2 is seen
+        // intact; armed, breakable 2 no longer intact runs the break routine and sets 636.
+        837 if !state.flag(636) => {
+            if state.word(pack, 1) == 0 {
+                if breakable_intact(state, 2) {
+                    state.set_word(pack, 1, 1);
+                }
+            } else if !breakable_intact(state, 2) {
+                state.set(636, true);
+                out.extend([
+                    Action::PlaySound { cue: 13, locator: None },
+                    Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                    Action::MoveHero { locator: 0 },
+                    Action::CameraShakeMode { kind: 2, duration: 1.0, strength: 1.0 },
+                    Action::Sleep { ticks: 30 },
+                    Action::PlayAnim { obj: 0, speed: 0.8, wait: false },
+                    Action::WalkHero { locator: 1, wait: false, orient: false },
+                    Action::Sleep { ticks: 180 },
+                    Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 },
+                    Action::Sleep { ticks: 40 },
+                    Action::CameraShakeMode { kind: 0, duration: 1.0, strength: 1.0 },
+                    Action::SetBreakableActive { id: 3, on: true },
+                    Action::Sleep { ticks: 1 },
+                    Action::Break { id: 3 },
+                    Action::CollisMask { mask: 2 },
+                    Action::DisplayMask { mask: 2 },
+                    wait(1.3),
+                    Action::CameraShakeMode { kind: 0, duration: 0.5, strength: 1.0 },
+                    wait(2.0),
+                    Action::ReturnCamera { preset: -1, release: true },
+                ]);
+            }
+        }
         // SPEC-0041 1096 Update: with 45 clear CB7 (the level-state pairs 1 and 2, 4 and 5, 7 and
         // 8, 10 and 11, and the finale on 12: camera 5, the shake, entity 0 and object 0 off,
         // sound 7, objects 2 to 5, 45 and 316, level state 14); with 45 set, 15 set and 16 clear
@@ -13658,6 +13706,16 @@ mod tests {
         assert!(s.flag(406));
         assert_eq!(on_activate(906, &mut s)[1], Action::MoveHero { locator: 0 });
         assert!(on_init(837, &mut s).contains(&Action::CollisMask { mask: 1 }));
+        // Update: armed once breakable 2 is seen intact; its break then runs the routine and 636.
+        assert!(on_update(837, &mut s, false).is_empty());
+        s.breakables.insert(2, 1);
+        assert!(on_update(837, &mut s, false).is_empty());
+        s.breakables.insert(2, 2);
+        let out = on_update(837, &mut s, false);
+        assert!(s.flag(636) && out.first() == Some(&Action::PlaySound { cue: 13, locator: None }));
+        assert!(out.ends_with(&[Action::Break { id: 3 }, Action::CollisMask { mask: 2 }, Action::DisplayMask { mask: 2 }, wait(1.3), Action::CameraShakeMode { kind: 0, duration: 0.5, strength: 1.0 }, wait(2.0), Action::ReturnCamera { preset: -1, release: true }]));
+        assert!(on_update(837, &mut s, false).is_empty());
+        s.set(636, false);
         s.set(636, true);
         assert_eq!(on_init(837, &mut s), vec![Action::CollisMask { mask: 2 }, Action::DisplayMask { mask: 2 }]);
     }
