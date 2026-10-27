@@ -2077,6 +2077,20 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // registered on every path. Not built: trigger 0's line, object 0, the prompt trigger 9,
         // triggers 1 to 3 and the effect stops.
         696 => vec![reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)],
+        // SPEC-0032 816 Init: breakable 11 disabled with 516 set and 517 clear, else breakable 12
+        // (the pickup callback is on_pickup; thread X is empty).
+        816 => vec![Action::SetBreakableActive { id: if state.flag(516) && !state.flag(517) { 11 } else { 12 }, on: false }],
+        // SPEC-0032 1080 Init: flag 39; S2 on trigger 2.
+        1080 => {
+            state.set(39, true);
+            vec![reg(2, 1)]
+        }
+        // SPEC-0032 1074 Init, thread L: slot 0 loads set 1 (region 1076) with 481 set and 482
+        // clear, else set 0 (region 1075). Thread I (the item 69 watch) runs in Update.
+        1074 => vec![Action::LoadRegion { slot: 0, region: Some(if state.flag(481) && !state.flag(482) { 1076 } else { 1075 }) }],
+        // SPEC-0042 1079 Init: handler T on triggers 0 and 1. The four object setups (their ids
+        // are not given), the debug helper and thread D (debug-only calls) make no call here.
+        1079 => vec![reg(0, 1), reg(1, 1)],
         // SPEC-0032 699 Init: display mask 2 (265 set; 266 set) or 1; the collision mask is that
         // base with bit 4 (220 clear) or 8; S0 and S1 on triggers 0 and 1.
         699 => {
@@ -6796,6 +6810,54 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         (1381, 4) if call.object => out.actions.extend(hub_return_1381(state)),
+        // SPEC-0032 1080 S2 (entering): 15 ticks, the look-at-player camera 4, hero animation 137,
+        // the shake (0, 0.3, 0.3) and the normal camera (2); any other call returns the camera.
+        (1080, 1) => {
+            if call.object && call.state == 1 {
+                out.actions.extend([
+                    Action::Sleep { ticks: 15 },
+                    Action::PlayTarget { track: 4, wait: false, end: 1, speed: 1.0, target: CameraTarget::Hero },
+                    Action::HeroAnim { anim: 137, wait: false },
+                    Action::CameraShakeMode { kind: 0, duration: 0.3, strength: 0.3 },
+                ]);
+            }
+            out.actions.push(Action::ReturnCamera { preset: 2, release: true });
+        }
+        // SPEC-0042 1079 handler T (triggers 0 and 1): no press: context 6; a press with item 18:
+        // the trigger's object sequence (index 0: objects 2, 1, 0; index 1: 7, 5, 4; word 1 busy);
+        // a press without it: line 0 and 311. The state-word poll (Low) and the group effects (ids
+        // not given) are not reproduced.
+        (1079, 1) if call.object => {
+            if !(call.square && !state.talking) {
+                out.prompt = Some(6);
+            } else if state.has_item(18) {
+                if state.word(pack, 1) == 0 {
+                    state.set_word(pack, 1, 1);
+                    let (a, b, c) = if call.index == 1 { (7, 5, 4) } else { (2, 1, 0) };
+                    out.actions.extend([
+                        Action::WaitObj { obj: a },
+                        Action::DeactivateObj { obj: a },
+                        Action::InitObjOn { obj: b, end: false },
+                        Action::PlayAnim { obj: b, speed: 1.0, wait: false },
+                        wait(1.5),
+                        Action::DeactivateObj { obj: c },
+                        Action::WaitObj { obj: b },
+                        Action::WaitInside { index: call.index },
+                        wait(1.5),
+                        Action::InitObjOn { obj: c, end: false },
+                        Action::DeactivateObj { obj: b },
+                        Action::InitObjOn { obj: a, end: false },
+                        Action::PlayAnim { obj: a, speed: 1.0, wait: false },
+                        wait(0.5),
+                        Action::CameraShakeMode { kind: 0, duration: 0.5, strength: 1.0 },
+                        Action::Bits { word: 1, set: 0, clear: 1 },
+                    ]);
+                }
+            } else {
+                state.set(311, true);
+                out.actions.push(Action::Message { line: 0 });
+            }
+        }
         // SPEC-0032 699 S0 (entering): 259 once; with 220 set and 258 clear line 6.
         (699, 1) if call.object && call.state == 1 => {
             state.set(259, true);
@@ -10222,6 +10284,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend((16..=18).map(|entity| Action::HitPointsPercent { entity, percent: 100.0 }));
             }
         }
+        // SPEC-0032 1074 thread I: with 481 set and 482 clear, item 69 held sets 482.
+        1074 => {
+            if state.flag(481) && !state.flag(482) && state.has_item(69) {
+                state.set(482, true);
+            }
+        }
         // SPEC-0042 696 and 714 Update: with 220 set and 284 clear the masks 4 (collision) and 15
         // (display), each tick.
         696 | 714 => {
@@ -10834,6 +10902,10 @@ pub fn on_pickup(pack: u32, item: u16, state: &mut GameState) -> Vec<Action> {
     // SPEC-0037 1238 pickup P: item 83 (Pink Posies) sets flag 579 once.
     if (pack, item) == (1238, 83) && !state.flag(579) {
         state.set(579, true);
+    }
+    // SPEC-0032 816 P0: item 76 sets 517.
+    if (pack, item) == (816, 76) {
+        state.set(517, true);
     }
     // SPEC-0041 1096 CB10: item 117 sets level state 15.
     if (pack, item) == (1096, 117) {
@@ -16010,6 +16082,39 @@ mod tests {
         assert!(s.flag(296));
         assert_eq!(on_teleport(880, 0, &mut s)[0], Action::ReplaceExterior { slot: 81, plane: -1 });
         assert_eq!(on_activate(880, &mut s), vec![Action::MoveHero { locator: 2 }, Action::ReturnCamera { preset: -1, release: true }]);
+    }
+
+    #[test]
+    fn modules_816_1080_1074_1079() {
+        let mut s = GameState::default();
+        assert_eq!(on_init(816, &mut s), vec![Action::SetBreakableActive { id: 12, on: false }]);
+        s.set(516, true);
+        assert_eq!(on_init(816, &mut s), vec![Action::SetBreakableActive { id: 11, on: false }]);
+        on_pickup(816, 76, &mut s);
+        assert!(s.flag(517));
+        on_init(1080, &mut s);
+        let enter = |i| TriggerCall { index: i, state: 1, object: true, square: false, block: -1 };
+        let out = on_trigger(1080, 1, enter(2), &mut s).actions;
+        assert!(s.flag(39) && out.contains(&Action::HeroAnim { anim: 137, wait: false }) && out.last() == Some(&Action::ReturnCamera { preset: 2, release: true }));
+        assert_eq!(on_trigger(1080, 1, TriggerCall { state: 2, ..enter(2) }, &mut s).actions, vec![Action::ReturnCamera { preset: 2, release: true }]);
+        let mut s = GameState::default();
+        s.set(481, true);
+        assert_eq!(on_init(1074, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(1076) }]);
+        s.give(69, 1);
+        on_update(1074, &mut s, false);
+        assert!(s.flag(482));
+        assert_eq!(on_init(1074, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(1075) }]);
+        // 1079: no press: context 6; a press without item 18: line 0 and 311; with it, index 1's
+        // sequence once.
+        let mut s = GameState::default();
+        assert_eq!(on_trigger(1079, 1, enter(1), &mut s).prompt, Some(6));
+        let press = |i| TriggerCall { square: true, ..enter(i) };
+        assert_eq!(on_trigger(1079, 1, press(1), &mut s).actions, vec![Action::Message { line: 0 }]);
+        assert!(s.flag(311));
+        s.give(18, 1);
+        let out = on_trigger(1079, 1, press(1), &mut s).actions;
+        assert_eq!(&out[..3], &[Action::WaitObj { obj: 7 }, Action::DeactivateObj { obj: 7 }, Action::InitObjOn { obj: 5, end: false }]);
+        assert!(on_trigger(1079, 1, press(0), &mut s).actions.is_empty());
     }
 
     #[test]
