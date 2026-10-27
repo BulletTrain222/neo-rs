@@ -13661,8 +13661,11 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (951, 2 | 5 | 6) => Some(2),
         // SPEC-0042 678 proximity P on entity 9 (registered with flag 126 set).
         (678 | 686 | 691, 9) => Some(0),
-        // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5.
-        (1148, 0..=3) => Some(entity as u8),
+        // SPEC-0039 1148: entity 0 handler 2, 1 handler 3, 3 handler 4, 2 handler 5 (routines
+        // 0 to 3 in handler order: entity 3, Tark, runs the shop step).
+        (1148, 0 | 1) => Some(entity as u8),
+        (1148, 3) => Some(2),
+        (1148, 2) => Some(3),
         // SPEC-0037 783, 786, 787, 788 and 789, 855 to 858, 1429, 1152, 1251 and 784: P on
         // entity 0.
         (783 | 786 | 787 | 788 | 789 | 855..=858 | 1429 | 1152 | 1251 | 784, 0) => Some(0),
@@ -17254,6 +17257,8 @@ mod tests {
         assert!(s.flag(137) && s.flag(138) && s.has_item(39) && !s.has_item(32));
         assert_eq!(on_talk(1150, 4, &mut s), vec![Action::Talk { line: 0 }]);
         assert!(s.flag(139));
+        // The shop is entity 3's routine (handler 4); entity 2 has the plain rotation.
+        assert_eq!((proximity_routine(1148, 3), proximity_routine(1148, 2)), (Some(2), Some(3)));
         let shop = on_talk(1148, 2, &mut s);
         assert_eq!(shop, vec![Action::Talk { line: 41 }, Action::Prompt { line: 43, routine: 0 }]);
         let bought = on_answer(1148, 0, true, &mut s);
