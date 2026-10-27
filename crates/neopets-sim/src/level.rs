@@ -1953,16 +1953,18 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0042 1381 Init: effect 0 stopped; the three known helper set-ups (objects 36, 72, 74;
         // 37, 76, 78; 32, 56, 58; the first of each looped at 0.4); the pads, areas, targets and
-        // the flat zone (34) registered. The fourth helper call's objects are not given; the block
-        // group (movable blocks) is not built. Routines: 1 pads, 2 areas, 3 targets, 4 return to
-        // the hub, 5 nothing, 6 the hazard damage.
+        // the flat zone (34) registered; per station the station objects (50 + k, 38 + k) on and
+        // movable block k inactive, and the pad, target, area, goal and arm routines. The fourth
+        // helper call's objects are not given. Routines: 1 pads, 2 areas, 3 targets, 4 return to
+        // the hub, 5 nothing, 6 the hazard damage, 7 the block group (goal), 8 the arm.
         1381 => {
             let mut v = vec![Action::StopEffect { slot: 0 }];
             for (a, b, c) in [(36, 72, 74), (37, 76, 78), (32, 56, 58)] {
                 v.extend([Action::InitObjOn { obj: a, end: false }, Action::InitObjOn { obj: b, end: false }, Action::InitObjOn { obj: c, end: false }, Action::LoopAnim { obj: a, speed: 0.4 }]);
             }
             for k in 0..6 {
-                v.extend([reg(PADS_1381[k], 1), reg(AREAS_1381[k], 2), reg(TARGETS_1381[k], 3)]);
+                v.extend([Action::InitObjOn { obj: 50 + k, end: false }, Action::InitObjOn { obj: 38 + k, end: false }, Action::ActivateBlock { block: k, on: false }]);
+                v.extend([reg(PADS_1381[k], 1), reg(TARGETS_1381[k], 3), reg(AREAS_1381[k], 2), reg(GOALS_1381[k], 7), reg(ARMS_1381[k], 8)]);
             }
             v.push(reg(34, 4));
             v
@@ -4064,6 +4066,19 @@ fn solved_1324(_s: &mut GameState) -> Vec<Action> {
 const PADS_1381: [u16; 6] = [65, 3, 20, 31, 37, 52];
 const AREAS_1381: [u16; 6] = [64, 4, 19, 32, 38, 53];
 const TARGETS_1381: [u16; 6] = [63, 5, 18, 33, 39, 54];
+/// The block group's goal and arm points (cylinders a block fires).
+const GOALS_1381: [u16; 6] = [61, 1, 21, 29, 35, 50];
+const ARMS_1381: [u16; 6] = [62, 2, 22, 30, 36, 51];
+/// Module words (the hazard thread holds 30 to 45): 60 + k block k's piece done, 70 + k block k
+/// armed, 80 the six-piece scene.
+const DONE_1381: u8 = 60;
+const ARMED_1381: u8 = 70;
+const SCENE_1381: u8 = 80;
+
+/// SPEC-0042 1381's block group finished (flags 714 to 719): the pads close.
+fn pieces_done_1381(s: &GameState) -> bool {
+    (714..=719).all(|f| s.flag(f))
+}
 /// The timed objects (on 2 s, off 4 s by the game clock, all in phase).
 const TIMED_1381: [usize; 19] = [84, 88, 91, 98, 101, 105, 108, 112, 113, 122, 126, 131, 140, 146, 153, 157, 158, 162, 166];
 
@@ -6630,7 +6645,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // locators 12 to 62. The sparkle effect is not built.
         (1381, 1) if call.object && call.state != 0 => {
             if let Some(k) = PADS_1381.iter().position(|&t| t == call.index) {
-                if !state.flag(708 + k as u16) {
+                if !state.flag(708 + k as u16) && !pieces_done_1381(state) {
                     if call.square && !state.talking {
                         out.actions.extend([Action::PlaySound { cue: 169, locator: None }, Action::HoldHero, Action::MoveHero { locator: [63, 7, 8, 9, 10, 11][k] }, wait(1.0), Action::ReturnCamera { preset: -1, release: true }]);
                         if call.index == 3 {
@@ -6675,6 +6690,39 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         (1381, 4) if call.object => out.actions.extend(hub_return_1381(state)),
+        // The arm routine: only block k's own arm index; the armed word follows "touching now"
+        // (state 1 or 2).
+        (1381, 8) if (0..6).contains(&call.block) => {
+            let k = call.block as usize;
+            if call.index == ARMS_1381[k] {
+                state.set_word(pack, ARMED_1381 + k as u8, matches!(call.state, 1 | 2) as i32);
+            }
+        }
+        // The block group (any goal point; only the block number is read): block k not done and
+        // armed sets its done word and 714 + k and plays the piece scene; the sixth piece also
+        // plays object 18 and removes 19, once. The scene's two waits are not given (one tick
+        // each here).
+        (1381, 7) if (0..6).contains(&call.block) && state.word(pack, SCENE_1381) == 0 => {
+            let k = call.block as usize;
+            if state.word(pack, DONE_1381 + k as u8) == 0 && state.word(pack, ARMED_1381 + k as u8) != 0 {
+                state.set_word(pack, DONE_1381 + k as u8, 1);
+                state.set(714 + k as u16, true);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::Sleep { ticks: 1 },
+                    Action::PlayCamera { track: 0, wait: true, end: 1, speed: 1.0 },
+                    Action::PlaySound { cue: 9, locator: None },
+                    Action::DeactivateObj { obj: 26 + k },
+                    Action::DeactivateObj { obj: 20 + k },
+                    Action::Sleep { ticks: 1 },
+                ]);
+                if pieces_done_1381(state) {
+                    state.set_word(pack, SCENE_1381, 1);
+                    out.actions.extend([Action::PlayAnim { obj: 18, speed: 1.0, wait: false }, Action::DeactivateObj { obj: 19 }]);
+                }
+                out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+        }
         // The hazard damage (bound while a hazard lands): DamageHero(5) and 2 s, while the pad-3
         // hazard word is set (word 20 + k the next tick it may hit).
         (1381, 6) if call.object && state.word(pack, 1) != 0 => {
@@ -10783,19 +10831,22 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
             v
         }
-        // SPEC-0042 1381 activate-world restore: each solved station (708 + k; block k activated
-        // for k 1 to 5) and each block piece (714 + k; block k to locator k + 1) put in its solved
-        // state; all six pieces with 337 clear: object 18 on, 19 off.
+        // SPEC-0042 1381 activate-world restore: each solved station (708 + k; block k activated,
+        // object 50 + k removed for k 1 to 5) and each block piece (714 + k; block k to locator
+        // k + 1, its done word set) put in its solved state; all six pieces with 337 clear:
+        // object 18 on, 19 off. Block 0's four effects are not given.
         1381 => {
             let mut out = Vec::new();
             for k in 0..6usize {
                 if state.flag(708 + k as u16) {
                     out.extend([Action::InitObjOn { obj: 170 + 3 * k, end: false }, Action::InitObjOn { obj: 171 + 3 * k, end: false }, Action::DeactivateObj { obj: 172 + 3 * k }, Action::InitObjOn { obj: 44 + k, end: false }, Action::DeactivateObj { obj: 38 + k }]);
                     if k != 0 {
-                        out.extend([Action::DeactivateObj { obj: 50 + k }, Action::ActivateBlock { block: k, on: true }]);
+                        out.push(Action::DeactivateObj { obj: 50 + k });
                     }
+                    out.push(Action::ActivateBlock { block: k, on: true });
                 }
                 if state.flag(714 + k as u16) {
+                    state.set_word(1381, DONE_1381 + k as u8, 1);
                     out.extend([Action::MoveBlock { block: k, locator: k + 1 }, Action::DeactivateObj { obj: 26 + k }, Action::DeactivateObj { obj: 20 + k }]);
                 }
             }
@@ -14389,6 +14440,49 @@ mod tests {
         s.hero.tick = 1000;
         assert_eq!(on_trigger(1381, 6, inside(13), &mut s).actions, vec![Action::DamageHero { amount: 5 }]);
         assert!(on_trigger(1381, 6, inside(13), &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1381_blocks() {
+        // Init, first visit: blocks 0 to 5 inactive; the goal and arm routines registered.
+        let mut s = GameState::default();
+        let init = on_init(1381, &mut s);
+        assert!((0..6).all(|block| init.contains(&Action::ActivateBlock { block, on: false })));
+        assert!(init.contains(&Action::RegisterTrigger { index: 21, routine: 7 }) && init.contains(&Action::RegisterTrigger { index: 2, routine: 8 }));
+        let fire = |index, state, block| TriggerCall { index, state, object: true, square: false, block };
+        // Station 0: after 6 pushes only the goal point is touched: nothing happens.
+        assert!(on_trigger(1381, 7, fire(61, 1, 0), &mut s).actions.is_empty() && !s.flag(714));
+        // Another block's arm point does not arm block 0; a hero fire does nothing.
+        on_trigger(1381, 8, fire(2, 1, 0), &mut s);
+        on_trigger(1381, 8, fire(62, 1, -1), &mut s);
+        assert_eq!(s.word(1381, ARMED_1381), 0);
+        // The 7th push: the arm point, then the goal (or the goal again on the final tick).
+        on_trigger(1381, 8, fire(62, 1, 0), &mut s);
+        let out = on_trigger(1381, 7, fire(61, 2, 0), &mut s).actions;
+        assert!(s.flag(714) && out.contains(&Action::PlaySound { cue: 9, locator: None }) && out.contains(&Action::DeactivateObj { obj: 26 }));
+        assert!(on_trigger(1381, 7, fire(61, 2, 0), &mut s).actions.is_empty());
+        // The block group vector: block 2 armed and not done touching a goal point.
+        s.set_word(1381, ARMED_1381 + 2, 1);
+        let out = on_trigger(1381, 7, fire(29, 1, 2), &mut s).actions;
+        assert!(s.flag(716) && out.contains(&Action::DeactivateObj { obj: 28 }) && out.contains(&Action::DeactivateObj { obj: 22 }));
+        // Leaving the arm point clears the word.
+        on_trigger(1381, 8, fire(22, 3, 2), &mut s);
+        assert_eq!(s.word(1381, ARMED_1381 + 2), 0);
+        // The sixth piece: object 18 played, 19 removed; the pads then close.
+        for k in [1, 3, 4, 5] {
+            s.set_word(1381, ARMED_1381 + k, 1);
+            let out = on_trigger(1381, 7, fire(61, 1, k as i32), &mut s).actions;
+            assert_eq!(out.contains(&Action::DeactivateObj { obj: 19 }), k == 5);
+        }
+        let press = TriggerCall { index: 65, state: 1, object: true, square: true, block: -1 };
+        assert!(on_trigger(1381, 1, press, &mut s).actions.is_empty());
+        // The restore: station 0 solved activates block 0; pieces move to locator k + 1.
+        let mut s = GameState::default();
+        s.set(708, true);
+        s.set(715, true);
+        let r = on_activate(1381, &mut s);
+        assert!(r.contains(&Action::ActivateBlock { block: 0, on: true }) && !r.contains(&Action::DeactivateObj { obj: 50 }));
+        assert!(r.contains(&Action::MoveBlock { block: 1, locator: 2 }) && s.word(1381, DONE_1381 + 1) == 1);
     }
 
     #[test]
