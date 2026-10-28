@@ -487,6 +487,10 @@ pub struct Character {
     pub flash: u8,
     /// The kind-8 record its drop placement ordinal names (SPEC-0038 Behavior 34, part B).
     drop: Option<neopets_data::region::ItemPoint>,
+    /// The carried Neopoints (SPEC-0038 Behavior 34 part D; enemy 0xC28) and the stolen item
+    /// with its carry timer in ticks (SPEC-0029 Behavior 11b).
+    carried_np: i32,
+    carried_item: Option<(u16, u32)>,
     root_step: [f32; 3],
     /// A script walk to a point (SPEC-0030 rows 106 and 108; SPEC-0056 classes 23 and 25), with
     /// the final facing of the orienting form.
@@ -927,7 +931,9 @@ pub struct Play {
     once: std::collections::HashSet<(u16, u32)>,
     pub luck: i32,
     coins: (Vec<i32>, Vec<u16>, Option<neopets_sim::items::CoinWords>),
-    payouts: Vec<(u32, [f32; 3], Option<neopets_data::region::ItemPoint>)>,
+    /// The enemy and breakable payouts due: the pack, the point, the drop placement and the
+    /// carried Neopoints (SPEC-0038 Behavior 34 parts A, B and D).
+    payouts: Vec<(u32, [f32; 3], Option<neopets_data::region::ItemPoint>, i32)>,
     /// Switch-group stages shown in state 3 that become breakable (state 1) on a tick (SPEC-0048
     /// Switch groups, step 3): (pack, breakable, tick).
     chain_arms: Vec<(u32, usize, u64)>,
@@ -5541,7 +5547,7 @@ impl Play {
                 if c.hp <= 0 && !e.is_dead() {
                     c.hp = 0;
                     e.die(&mut self.rng);
-                    self.payouts.push((c.pack, c.position, c.drop));
+                    self.payouts.push((c.pack, c.position, c.drop, std::mem::take(&mut c.carried_np)));
                 }
             } else if damage > 0 && c.townsfolk.is_none() {
             // SPEC-0056: the take-hit of a townsfolk character returns at once.
@@ -5551,7 +5557,7 @@ impl Play {
                     // A class-17 flyer (its AI is not built) still pays its drop placement on
                     // death (SPEC-0021 enemy drops).
                     if c.row.is_some_and(|r| r.class == Some(17)) {
-                        self.payouts.push((c.pack, c.position, c.drop));
+                        self.payouts.push((c.pack, c.position, c.drop, std::mem::take(&mut c.carried_np)));
                     }
                 }
             }
@@ -5921,6 +5927,8 @@ impl Play {
                 },
                 weapons: tuning.map_or([(0.0, 0.0); 5], |t| t.weapons),
                 drop,
+                carried_np: 0,
+                carried_item: None,
                 colour: pl.colour,
                 slots: slot_colours(&pl.colours),
                 flash: 0,
@@ -6049,6 +6057,8 @@ impl Play {
             enemy: None,
             weapons: [(0.0, 0.0); 5],
             drop: None,
+            carried_np: 0,
+            carried_item: None,
             colour: pl.colour,
             slots: slot_colours(&pl.colours),
             flash: 0,
@@ -8768,7 +8778,7 @@ impl Play {
                             if c.hp <= 0 && !e.is_dead() {
                                 c.hp = 0;
                                 e.die(&mut self.rng);
-                                self.payouts.push((c.pack, c.position, c.drop));
+                                self.payouts.push((c.pack, c.position, c.drop, std::mem::take(&mut c.carried_np)));
                             }
                             self.last_hit = format!("reflected shot hit {} for {applied} (hp {})", c.name, c.hp);
                         }
@@ -8826,7 +8836,7 @@ impl Play {
             // SPEC-0029 Behavior 11a: a landed hit of a slot with the steal bit (0x04) and
             // selector 0 may take Neopoints, dropped at once as coins at the hero (the Thief, the
             // Rogue and the Thug). A blocked hit is taken as failing the impact gate (Open
-            // question 157). The item branch (selectors 1 to 3, the Crokabeks) is not built.
+            // question 157).
             let slot = self.characters.iter().find(|c| c.id == at).and_then(|c| c.enemy.as_ref()).map(|e| e.p.slots[s.slot]);
             if let Some(sl) = slot.filter(|sl| !s.blocked && sl.flags & 0x04 != 0 && sl.steal_selector == 0) {
                 if let Some(taken) = neopets_sim::items::steal_amount(sl.steal_chance, sl.steal_min, sl.steal_max, self.state.neopoints, &mut self.rng).filter(|&t| t > 0) {
@@ -8838,6 +8848,26 @@ impl Play {
                         self.spawn_item(pack, spawn(id));
                     }
                     self.last_fx = format!("stole {taken} Neopoints (slot {}) on tick {}", s.slot, self.ticks);
+                }
+            }
+            // SPEC-0029 Behavior 11b: selectors 1 to 3 take one held item of the selector's pair
+            // instead; the enemy carries it for 180 ticks and its carried Neopoints grow by the
+            // item's catalogue price. Selectors outside 0 to 3 end with no effect.
+            if let Some(sl) = slot.filter(|sl| !s.blocked && sl.flags & 0x04 != 0 && sl.steal_selector != 0) {
+                let items = &self.state.items;
+                if let Some(id) = neopets_sim::items::steal_item(sl.steal_selector, |id| items.get(&id).is_some_and(|&n| n > 0), &mut self.rng) {
+                    let left = self.state.items.get(&id).copied().unwrap_or(0);
+                    if left > 1 {
+                        self.state.items.insert(id, left - 1);
+                    } else {
+                        self.state.items.remove(&id);
+                    }
+                    let price = self.design.catalogue_price(id).unwrap_or(0);
+                    if let Some(c) = self.characters.iter_mut().find(|c| c.id == at) {
+                        c.carried_item = Some((id, 180));
+                        c.carried_np += price;
+                    }
+                    self.last_fx = format!("stole item {id} (price {price}, slot {}) on tick {}", s.slot, self.ticks);
                 }
             }
             // SPEC-0038 Behavior 13 strike test: the status roll int[0, 100] strictly below the
@@ -9289,8 +9319,25 @@ impl Play {
     /// The world items' per-tick step for the resident worlds' pools, the enemy payouts due,
     /// and the hero's pickup in the current world (SPEC-0021 Pickup, Auto-collect, Coin pickups).
     fn items_step(&mut self) {
-        for (pack, at, drop) in std::mem::take(&mut self.payouts) {
+        for (pack, at, drop, carried) in std::mem::take(&mut self.payouts) {
             self.pay_out(pack, at, drop);
+            // Part D: the carried Neopoints split into coins at the enemy, with no spacing.
+            if carried > 0 {
+                let spawn = |id: u16| neopets_sim::items::Spawn { id, point: at, placed: false, charm: false, s0: 0.25, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };
+                for id in neopets_sim::items::coin_split(carried, &self.coins.0, &self.coins.1) {
+                    self.spawn_item(pack, spawn(id));
+                }
+            }
+        }
+        // SPEC-0029 Behavior 11b: a stolen item's carry timer runs down one tick at a time; below
+        // 1 the carried flag clears.
+        for c in &mut self.characters {
+            if let Some((_, t)) = c.carried_item.as_mut() {
+                *t = t.saturating_sub(1);
+                if *t < 1 {
+                    c.carried_item = None;
+                }
+            }
         }
         let Some(coins) = self.coins.2 else { return };
         let packs: Vec<u32> = self.pools.keys().copied().collect();
@@ -11903,7 +11950,7 @@ impl Play {
             .filter(|(region, _)| *region == 0xFF)
             .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
         if point.is_some() {
-            self.payouts.push((pack, at, point));
+            self.payouts.push((pack, at, point, 0));
         }
         // Step 3: a spawn key of 0 or more runs a world-level spawn by key at the break point
         // with the entry's facing, the arrival flag set (SPEC-0029 Behavior 31).

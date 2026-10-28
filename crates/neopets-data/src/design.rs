@@ -162,6 +162,11 @@ impl DesignTables {
         self.word(0, id as usize, 8)
     }
 
+    /// Table 0, row id: the catalogue price (+0x0C; SPEC-0050, SPEC-0029 Behavior 11b).
+    pub fn catalogue_price(&self, id: u16) -> Option<i32> {
+        self.word(0, id as usize, 0x0C).map(|w| w as i32)
+    }
+
     /// Table 16, record i: the attack power table's f32 (SPEC-0036 Layout, Attack power table).
     pub fn attack_power(&self, i: usize) -> Option<f32> {
         self.word(16, i, 0).map(f32::from_bits)

@@ -481,6 +481,24 @@ pub fn steal_amount(chance: f32, min: i32, max: i32, wallet: i32, rng: &mut crat
     Some(amount.min(wallet.max(0)).max(0))
 }
 
+/// SPEC-0029 Behavior 11b, the item steal of an enemy attack (selectors 1 to 3): the selector's
+/// two offered items (1: 150, 149; 2: 146, 157; 3: 156, 147), kept in that order when held, one
+/// of them chosen uniformly. None for any other selector or when neither is held.
+pub fn steal_item(selector: u32, held: impl Fn(u16) -> bool, rng: &mut crate::rng::Rng) -> Option<u16> {
+    let pair: [u16; 2] = match selector {
+        1 => [150, 149],
+        2 => [146, 157],
+        3 => [156, 147],
+        _ => return None,
+    };
+    let kept: Vec<u16> = pair.into_iter().filter(|&id| held(id)).collect();
+    match kept.len() {
+        0 => None,
+        1 => Some(kept[0]),
+        n => Some(kept[rng.range(0, n as i32 - 1) as usize]),
+    }
+}
+
 pub fn coin_split(amount: i32, denominations: &[i32], ids: &[u16]) -> Vec<u16> {
     let mut out = Vec::new();
     let mut left = amount.max(0);
@@ -503,6 +521,19 @@ pub fn luck_passes(luck: i32, r: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn item_steal_rules() {
+        let mut rng = crate::rng::Rng::seeded(7);
+        // Selector 1: only 150, only 149, both, neither.
+        assert_eq!(steal_item(1, |id| id == 150, &mut rng), Some(150));
+        assert_eq!(steal_item(1, |id| id == 149, &mut rng), Some(149));
+        let both: std::collections::HashSet<u16> = (0..40).filter_map(|_| steal_item(1, |id| id == 150 || id == 149, &mut rng)).collect();
+        assert_eq!(both, [150, 149].into_iter().collect());
+        assert_eq!(steal_item(1, |_| false, &mut rng), None);
+        assert_eq!(steal_item(3, |id| id == 147, &mut rng), Some(147));
+        assert_eq!(steal_item(4, |_| true, &mut rng), None);
+    }
+
     #[test]
     fn steal_rules() {
         let mut rng = crate::rng::Rng::seeded(7);
