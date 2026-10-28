@@ -776,6 +776,8 @@ pub struct Play {
     pub hero_index: usize,
     pub parked: Option<Parked>,
     pub swap_mode: u32,
+    /// The next switch request is the script's forced form (SPEC-0023 section 12).
+    forced_switch: bool,
     pub swap: Option<neopets_sim::swap::Task>,
     pub l1_latch: bool,
     pub r1_latch: bool,
@@ -1483,6 +1485,7 @@ impl Play {
             hero_index: 0,
             parked,
             swap_mode: neopets_sim::swap::rule_m(flags.contains(&220), flags.contains(&248)),
+            forced_switch: false,
             swap: None,
             l1_latch: false,
             r1_latch: false,
@@ -3514,6 +3517,16 @@ impl Play {
     /// (a parked hero with no hit points) or a running task. Returns whether it was accepted.
     pub fn request_switch(&mut self, extra: bool, effects: bool, flash: bool) -> bool {
         let Some(parked) = self.parked.as_ref() else { return false };
+        // SPEC-0023 section 12: every request starts the portrait swing (a forced, script request
+        // is always accepted and never blocked); the gate is the in-play controls gate.
+        let forced = std::mem::take(&mut self.forced_switch);
+        let accepted = forced || neopets_sim::swap::allowed(self.swap_mode, self.hero_index);
+        let blocked = !forced && parked.hp <= 0;
+        // The in-play controls gate (SPEC-0053 3.13), as far as this build tracks it: state not
+        // 0x19, no box (dialogue) or menu, and game-state code 0 (no swap or door job running).
+        // Group A (3.12) is not tested here.
+        let gate = self.loco.state != 25 && !self.dialogue_open && !self.menu_open && self.swap.is_none() && self.job.is_none();
+        self.hud.swing.start(if self.hero_index == 0 { 1 } else { 0 }, accepted, blocked, gate);
         if self.swap.is_some() || !neopets_sim::swap::allowed(self.swap_mode, self.hero_index) || parked.hp <= 0 {
             self.last_swap = format!("switch refused (mode {}) on tick {}", self.swap_mode, self.ticks);
             return false;
@@ -3530,6 +3543,7 @@ impl Play {
         if hero < 0 || hero as usize == self.hero_index {
             return;
         }
+        self.forced_switch = true;
         self.request_switch(false, effects, flash);
     }
 
@@ -7424,6 +7438,10 @@ impl Play {
             };
             self.hud.tick(v, self.quick.open, &self.hud_words);
             self.hud.tick_icons();
+            // Section 12: the swing ticks in the in-play state, not under a dialogue box.
+            if !self.dialogue_open {
+                self.hud.swing.tick();
+            }
             let target = self.monster_bar.target.and_then(|id| self.characters.iter().find(|c| c.id == id));
             let (hp, max) = target.map_or((0, 1), |c| (c.hp, c.row.map_or(1, |r| r.hit_points as i32)));
             self.monster_bar.tick(hp, max, &self.monster_words);

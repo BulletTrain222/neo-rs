@@ -41,6 +41,10 @@ pub struct Node {
     /// Scale, 4.12 fixed point.
     pub scale_x: i16,
     pub scale_y: i16,
+    /// The authoring pivot (+0x1C, +0x1E): not used for placement, except by the hero-switch
+    /// portrait swing (SPEC-0023 section 12).
+    pub pivot_x: i16,
+    pub pivot_y: i16,
     pub height: i16,
     pub width: i16,
     /// Predicate handler index (-1 none), search key (0xFFFF none), row spacing.
@@ -289,6 +293,8 @@ impl Frontend {
                 y: s(0x16)?,
                 scale_x: s(0x18)?,
                 scale_y: s(0x1A)?,
+                pivot_x: s(0x1C)?,
+                pivot_y: s(0x1E)?,
                 height: s(0x20)?,
                 width: s(0x22)?,
                 handler: s(0x24)?,

@@ -41,6 +41,8 @@ const ITEM_ICONS: [u32; 6] = [0x9C, 0x9B, 0x9E, 0x9D, 0xA0, 0xA1];
 /// 0x3C's group) and its meter fill 0x12.
 const PET_PORTRAIT: u32 = 0x3C;
 const JOURNAL_ICON: u32 = 0xDF;
+const PIVOT: u32 = 0x29;
+const PORTRAITS: [u32; 2] = [0x2A, 0x2B];
 const DPAD_HINT: u32 = 0xBB;
 const PET_FILL: u32 = 0x12;
 
@@ -164,6 +166,11 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
         // equipment word 2 (17), word 0 (19) or word 1 (20) is above 0.
         14 => p.hero == 0,
         52 => p.hero == 1,
+        // 60: the swing's HUD word is set and game-state word +0x08 (the swap mode) is 2.
+        60 => p.swing,
+        57 => p.available[0],
+        59 => p.available[1],
+        58 => p.dead.get(node.arg as usize).copied().unwrap_or(false),
         17 => p.words[2] > 0,
         19 => p.words[0] > 0,
         20 => p.words[1] > 0,
@@ -179,10 +186,10 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
 
 /// Canvas position and scale of a node (SPEC-0035 Node transform; row spacing over all
 /// siblings, alignment by the node's width), with x and width overrides.
-fn place(f: &Frontend, n: usize, xs: &HashMap<usize, i32>, ws: &HashMap<usize, i32>) -> (f32, f32, f32, f32) {
+fn place(f: &Frontend, n: usize, xs: &HashMap<usize, i32>, ws: &HashMap<usize, i32>, ov: &HashMap<usize, (i32, i32, f32)>) -> (f32, f32, f32, f32) {
     let node = f.nodes[n];
     let (px, py, psx, psy) = match node.parent {
-        Some(p) if !node.absolute => place(f, p, xs, ws),
+        Some(p) if !node.absolute => place(f, p, xs, ws, ov),
         _ => (0.0, 0.0, 1.0, 1.0),
     };
     let x = *xs.get(&n).unwrap_or(&(node.x as i32)) as f32;
@@ -192,7 +199,15 @@ fn place(f: &Frontend, n: usize, xs: &HashMap<usize, i32>, ws: &HashMap<usize, i
         let i = sib.iter().position(|&s| s == n).unwrap_or(0);
         y += f.nodes[p].spacing as f32 * i as f32;
     }
-    let (sx, sy) = (psx * node.scale_x as f32 / 4096.0, psy * node.scale_y as f32 / 4096.0);
+    let (mut sx, mut sy) = (psx * node.scale_x as f32 / 4096.0, psy * node.scale_y as f32 / 4096.0);
+    // A position and scale written at run time (the portrait swing; SPEC-0023 section 12).
+    let (x, y) = match ov.get(&n) {
+        Some(&(ox, oy, k)) => {
+            (sx, sy) = (psx * k, psy * k);
+            (ox as f32, oy as f32)
+        }
+        None => (x, y),
+    };
     let w = *ws.get(&n).unwrap_or(&(node.width as i32)) as f32;
     let shift = match node.align {
         1 => w * sx / 2.0,
@@ -232,6 +247,12 @@ struct Inputs {
     /// The owned counts of the Motes in the active hero's equipment words 0, 1 and 2
     /// (predicate slots 19, 20 and 17; SPEC-0023 section 5).
     words: [i32; 3],
+    /// The portrait swing is active and the swap mode is 2 (predicate slot 60), each hero's
+    /// available word (57 Tor, 59 Roberta: 0 draws the dimmed overlay) and dead test (58 with
+    /// the hero as argument: the dead icon).
+    swing: bool,
+    available: [bool; 2],
+    dead: [bool; 2],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -285,6 +306,11 @@ pub fn sync_hud(
     let (journal_icon, dpad_icon) = (f.key(JOURNAL_ICON), f.key(DPAD_HINT));
     let mut nodes = Vec::new();
     for g in [journal_icon, dpad_icon].into_iter().flatten() {
+        subtree(f, g, &mut nodes);
+    }
+    // SPEC-0023 section 12: the portrait swing's group (the pivot's parent).
+    let swing_root = f.key(PIVOT).and_then(|n| f.nodes[n].parent);
+    if let Some(g) = swing_root {
         subtree(f, g, &mut nodes);
     }
     subtree(f, bars, &mut nodes);
@@ -353,6 +379,9 @@ pub fn sync_hud(
         shield: p.shield.is_some(),
         pet: p.pet_kind(),
         hero: p.hero_index,
+        swing: hud.swing.active && p.swap_mode == 2,
+        available: hud.swing.available,
+        dead: p.state.hero.dead,
         words: std::array::from_fn(|w| p.equipment.motes[p.hero_index.min(1)][w].map_or(-1, i32::from)).map(count),
     };
     let key = |k: u32| f.key(k).unwrap_or(usize::MAX);
@@ -370,6 +399,17 @@ pub fn sync_hud(
     ]
     .into_iter()
     .collect();
+    // The swing's placements of the two portrait groups.
+    let mut ov: HashMap<usize, (i32, i32, f32)> = HashMap::new();
+    if let Some(pv) = f.key(PIVOT) {
+        let q = PORTRAITS.map(|k| f.key(k).map_or((0, 0), |n| (f.nodes[n].pivot_x as i32, f.nodes[n].pivot_y as i32)));
+        let placed = hud.swing.placement(f.nodes[pv].width as i32, (f.nodes[pv].pivot_x as i32, f.nodes[pv].pivot_y as i32), q);
+        for (k, &key) in PORTRAITS.iter().enumerate() {
+            if let Some(n) = f.key(key) {
+                ov.insert(n, placed[k]);
+            }
+        }
+    }
     let xs: HashMap<usize, i32> = [
         (key(HEALTH_CAP), hud.health.cap_x),
         (key(POOL_CAP), hud.pool.cap_x),
@@ -445,12 +485,19 @@ pub fn sync_hud(
             false
         };
         let (in_journal, in_dpad) = (under(journal_icon), under(dpad_icon));
+        let in_swing = under(swing_root);
+        // Section 12: drawn while the swing is active and the swap mode is 2.
+        if in_swing {
+            ok &= hud.swing.active && p.swap_mode == 2;
+        }
         // Both icons are hidden while the quick panel is open; the journal icon only shows while
         // its flag is set.
         if in_journal || in_dpad {
             ok &= !p.quick.open && (!in_journal || hud.journal);
         }
-        let top = if in_journal {
+        let top = if in_swing {
+            swing_root.unwrap_or(bars)
+        } else if in_journal {
             journal_icon.unwrap_or(bars)
         } else if in_dpad {
             dpad_icon.unwrap_or(bars)
@@ -481,7 +528,7 @@ pub fn sync_hud(
             continue;
         }
         let art = art.unwrap_or(n);
-        let (x, y, mut sx, sy) = place(f, n, &xs, &ws);
+        let (x, y, mut sx, sy) = place(f, n, &xs, &ws, &ov);
         if Some(n) == f.key(MONSTER_FILL) {
             // The fill is drawn with its x scale reset to 1.0.
             sx = 1.0;
@@ -493,7 +540,9 @@ pub fn sync_hud(
         let base = f.sprite(n).map_or([128; 4], |sp| sp.colour);
         let rgb = if tinted.contains(&n) { [hud.tint[0], hud.tint[1], hud.tint[2]] } else { [base[0], base[1], base[2]] };
         let c = |v: u8| v as f32 / 128.0;
-        let a = if in_journal {
+        let a = if in_swing {
+            128
+        } else if in_journal {
             hud.journal_alpha()
         } else if in_dpad {
             hud.dpad_alpha()
@@ -527,7 +576,7 @@ pub fn sync_hud(
                 }
             }
             if let Some((_, handle, w, h, base)) = name_image.as_ref() {
-                let (x, y, sx, sy) = place(f, nn, &xs, &ws);
+                let (x, y, sx, sy) = place(f, nn, &xs, &ws, &ov);
                 node.left = Val::Px(x * s);
                 node.top = Val::Px((y - *base as f32 * sy) * s);
                 node.width = Val::Px(*w as f32 * sx * s);
@@ -681,7 +730,7 @@ pub fn sync_hud(
             }
         }
         let Some((handle, w, h, base)) = value_images.get(&key) else { continue };
-        let (x, y, sx, sy) = place(f, n, &xs, &ws);
+        let (x, y, sx, sy) = place(f, n, &xs, &ws, &ov);
         node.left = Val::Px(x * s);
         node.top = Val::Px((y - *base as f32 * sy) * s);
         node.width = Val::Px(*w as f32 * sx * s);

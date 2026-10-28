@@ -10,7 +10,9 @@
 //! The D-pad hint's timer D and alpha (section 9) and the journal-notification icon's flag,
 //! phase and alpha (section 8).
 //!
-//! Not covered: the loss effects, the petpet meter, the portrait swing and the countdown texts.
+//! The hero-switch portrait swing (section 12): `Swing`.
+//!
+//! Not covered: the loss effects, the petpet meter and the countdown texts.
 
 /// Bar scale K (float32 0.6666667).
 pub const K: f32 = 0.666_666_7;
@@ -89,12 +91,91 @@ pub struct Hud {
     /// The journal-notification flag and its phase (element 0xDF; section 8).
     pub journal: bool,
     pub journal_phase: f32,
+    /// The hero-switch portrait swing (section 12).
+    pub swing: Swing,
 }
 
 impl Default for Hud {
     fn default() -> Self {
         // The full reset after a load: all timers 0, C = -1.
-        Self { c: -1, g0: 0, g1: 0, g: [0; 3], panel_alpha: [128; 4], watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default(), d: 0, journal: false, journal_phase: 0.0 }
+        Self { c: -1, g0: 0, g1: 0, g: [0; 3], panel_alpha: [128; 4], watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default(), d: 0, journal: false, journal_phase: 0.0, swing: Swing::default() }
+    }
+}
+
+/// SPEC-0023 section 12: the hero-switch portrait swing. Tor's portrait group 0x2A and
+/// Roberta's 0x2B move along an ellipse around the pivot 0x29.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Swing {
+    /// Drawn while set (and swap mode 2); cleared when the hold runs out.
+    pub active: bool,
+    pub a: f32,
+    pub end: f32,
+    pub step: f32,
+    pub b: f32,
+    pub b_step: f32,
+    pub hold: i32,
+    /// Each hero's available word (a 0 dims that portrait to 20, 20, 20).
+    pub available: [bool; 2],
+}
+
+impl Swing {
+    /// A hero-swap request: side s = 1 when Tor is selected (going to Roberta), 0 otherwise;
+    /// `accepted` (the swap-mode lock passed), `blocked` (the target hero is dead) and the in-play
+    /// controls gate. Accepted and not blocked: the swing from the side's start angle through
+    /// pi in 0.5 s, the blend from 0.5 rising (side 0) or 1.0 falling (side 1), a 2 s hold;
+    /// otherwise no new swing and a 4 s hold.
+    pub fn start(&mut self, s: usize, accepted: bool, blocked: bool, gate: bool) {
+        let s = s.min(1);
+        self.available[1 - s] = true;
+        self.available[s] = accepted && !blocked;
+        if gate {
+            self.active = true;
+        }
+        if accepted && !blocked {
+            self.a = [-0.5236, 2.617993][s];
+            self.end = self.a + 3.141593;
+            self.step = ((self.end - self.a) / 0.5) / 60.0;
+            self.b = if s == 0 { 0.5 } else { 1.0 };
+            let db = ((1.0 - 0.5) / 0.5) / 60.0;
+            self.b_step = if s == 0 { db } else { -db };
+            self.hold = 120;
+        } else {
+            self.hold = 240;
+        }
+    }
+
+    /// One tick. Returns whether the portraits are placed this tick (the step was not 0).
+    pub fn tick(&mut self) -> bool {
+        if self.step != 0.0 {
+            if self.a == self.end {
+                self.step = 0.0;
+            } else {
+                self.a = (self.a + self.step).min(self.end);
+                self.b = (self.b + self.b_step).min(1.0);
+            }
+            true
+        } else {
+            if self.hold > 0 {
+                self.hold -= 1;
+                if self.hold == 0 {
+                    self.active = false;
+                }
+            }
+            false
+        }
+    }
+
+    /// The two groups' positions and scale for a pivot of width w and authoring pivot (px,
+    /// py): Tor at angle a with scale b, Roberta at a + pi with scale 1.5 - b; each at
+    /// round(px + 0.8 R cos t - qx k), round(py + R sin t - qy k) with R = w / 2 (truncated),
+    /// (qx, qy) the group's own pivot, and the scale round(k x 4096) / 4096.
+    pub fn placement(&self, w: i32, pivot: (i32, i32), q: [(i32, i32); 2]) -> [(i32, i32, f32); 2] {
+        let r = (w / 2) as f32;
+        let one = |t: f32, k: f32, (qx, qy): (i32, i32)| {
+            let k = (k * 4096.0).round() / 4096.0;
+            (round_away(pivot.0 as f32 + 0.8 * r * t.cos() - qx as f32 * k), round_away(pivot.1 as f32 + r * t.sin() - qy as f32 * k), k)
+        };
+        [one(self.a, self.b, q[0]), one(self.a + 3.141593, 1.5 - self.b, q[1])]
     }
 }
 
@@ -318,6 +399,25 @@ impl MonsterBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn portrait_swing() {
+        // Section 12: side 1 (Tor to Roberta) ends with Tor at -30 degrees and scale near 0.48,
+        // Roberta at 150 degrees; then a 2 s hold.
+        let mut w = Swing::default();
+        w.start(1, true, false, true);
+        assert!(w.active && w.available == [true, true] && w.hold == 120);
+        let placed = (0..40).filter(|_| w.tick()).count();
+        assert!((31..=33).contains(&placed), "{placed}");
+        assert!((w.a - (2.617993 + 3.141593)).abs() < 1e-5 && (w.b - 0.4833).abs() < 0.01);
+        let p = w.placement(56, (28, 32), [(28, 29), (29, 32)]);
+        assert!(p[1].2 > 0.99 && p[0].0 > p[1].0);
+        // A refused request: no swing, the target dimmed, a 4 s hold.
+        let mut r = Swing::default();
+        r.start(0, false, false, true);
+        assert_eq!((r.step, r.available, r.hold), (0.0, [false, true], 240));
+        assert!((0..240).all(|_| !r.tick()) && !r.active);
+    }
 
     #[test]
     fn dpad_and_journal_icons() {
