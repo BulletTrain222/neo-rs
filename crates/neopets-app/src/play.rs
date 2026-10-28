@@ -2226,6 +2226,9 @@ impl Play {
                     }
                 }
                 Action::ActStart { stage } => self.act_start(stage),
+                Action::PlayFmv { movie } => {
+                    self.state.queue_movie(movie);
+                }
                 Action::StartEffect { slot, camera } => self.start_placed(pack, slot, camera),
                 Action::SwitchEffect { slot, on } => self.switch_placed(pack, slot, on),
                 Action::AddAnimObjSound { obj, cue, a, b } => {

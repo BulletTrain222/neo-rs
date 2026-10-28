@@ -164,6 +164,9 @@ pub enum Action {
     /// TriggerActStart(stage) (row 51; SPEC-0053 3.7). IsActStartDone is always true, so the
     /// scripts' wait after it ends at once.
     ActStart { stage: i32 },
+    /// PlayFMV(index) at its place in a sequence (SPEC-0030; SPEC-0026 Movies): queued, it plays
+    /// at the end of the pass, after the actions that follow it up to the next wait.
+    PlayFmv { movie: u16 },
     /// StartEffect(slot, W = 0, camera) and StopEffect(slot) on the thread's world's placed
     /// effects (SPEC-0030 rows 5 and 6).
     StartEffect { slot: usize, camera: bool },
@@ -914,10 +917,12 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         (706, 0) if !state.flag(67) && state.flag(64) => vec![Action::Message { line: 1 }],
         (706, 0) => vec![Action::EnterInterior { slot: 76 }, wait(3.0)],
         // SPEC-0039 753 teleport 0: value 80 for eW 31 (pack 758) and the replacement to it (with
-        // flag 68 clear the original plays movie 33 first, not built), 3 s.
+        // flag 68 clear movie 33 first), 3 s.
         (753, 0) => {
             state.blackboard.insert((2, 31), 80);
-            vec![Action::ReplaceExterior { slot: 31, plane: -1 }, wait(3.0)]
+            let mut v = if state.flag(68) { vec![] } else { vec![Action::PlayFmv { movie: 33 }] };
+            v.extend([Action::ReplaceExterior { slot: 31, plane: -1 }, wait(3.0)]);
+            v
         }
         // SPEC-0041 1353 teleport 0: with flag 104 value 10 for eW 158 and the entry into eW 175
         // (pack 1405), 3 s; else line 0.
@@ -948,8 +953,8 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         }
         // SPEC-0044 1327 teleports (context 13): 0 posts 30 for eW 151; with 240 set and 245 clear
         // the Act 3 start (245 to 247; 400, 223 and 397; act start 3; flags 74, 57, 49, 93, 85, 31,
-        // 19, 11, 83 and 4; movies 27, 29, 90 and 30 are not played, and their return world eW 64,
-        // pack 886, is loaded at once); else the load of eW 151 (pack 1300). 1: with 93 set and
+        // 19, 11, 83 and 4; movies 27, 29, 90 and 30, and their return world eW 64, pack 886,
+        // loaded at once); else the load of eW 151 (pack 1300). 1: with 93 set and
         // 94 clear value 80 for eW 150 and its load (pack 1299); else line 76.
         (1327, 0) => {
             state.blackboard.insert((2, 151), 30);
@@ -957,7 +962,10 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
                 for f in [245, 246, 247, 400, 223, 397, 74, 57, 49, 93, 85, 31, 19, 11, 83, 4] {
                     state.set(f, true);
                 }
-                vec![Action::ActStart { stage: 3 }, Action::ReplaceExterior { slot: 64, plane: -1 }]
+                let mut v = vec![Action::ActStart { stage: 3 }];
+                v.extend([27, 29, 90, 30].map(|movie| Action::PlayFmv { movie }));
+                v.push(Action::ReplaceExterior { slot: 64, plane: -1 });
+                v
             } else {
                 vec![Action::ReplaceExterior { slot: 151, plane: -1 }]
             }
@@ -1624,7 +1632,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // off and callbacks 1 to 7 on triggers 5, 6, 7, 4, 2, 1 and 0; with it set objects 29, 31,
         // 33, 27 and 1 at their end and 11, 14, 17 and 19 off, no triggers; in both states the
         // sounds of objects 11, 7, 8, 9, 10 (10) and 23, 24, 12 to 18, 20, 21, 22, 1, 2 (8), each
-        // 0.0 to 1.0. Movie 50 (trigger 0) is not built.
+        // 0.0 to 1.0. Callback 7 on trigger 0 (movie 50) with the others.
         1130 => {
             let mut v = if state.flag(675) {
                 let mut v: Vec<Action> = [29, 31, 33, 27, 1].map(|obj| Action::InitObjOn { obj, end: true }).to_vec();
@@ -1632,7 +1640,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v
             } else {
                 let mut v: Vec<Action> = [0, 29, 31, 33, 27, 1, 12, 15, 18, 11].map(|obj| Action::InitObjOn { obj, end: false }).to_vec();
-                v.extend([reg(5, 1), reg(6, 2), reg(7, 3), reg(4, 4), reg(2, 5), reg(1, 6)]);
+                v.extend([reg(5, 1), reg(6, 2), reg(7, 3), reg(4, 4), reg(2, 5), reg(1, 6), reg(0, 7)]);
                 v
             };
             v.extend([11, 7, 8, 9, 10].map(|obj| Action::AddAnimObjSound { obj, cue: 10, a: 0.0, b: 1.0 }));
@@ -1702,8 +1710,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // and collision mask 1;
         // with 256 set and 258 clear (the event gate) trigger 1 (handler 3); the slot thread: with
         // the gate slot 1 loads set 1 (region 755); slot 0 loads set 2 (756) with 427 set and 428
-        // clear, else set 0 (754). The movies 36, 37 and 33 are not built; the event runs
-        // without them.
+        // clear, else set 0 (754). Movies 36 and 37 are in the trigger and the event end.
         753 => {
             let mut v: Vec<Action> = (15..=48).map(|slot| Action::StopEffect { slot }).collect();
             if !state.flag(252) {
@@ -2612,8 +2619,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0043 1335 Init: 235; the triggers (0 to 3 shared, 5 to 9; 4 does nothing); object
         // 1 (241 clear) or 0; the slot chooser (94: none; 93: set 2; 92: set 1 or 0 by 241, into
         // slot 0; else set 7 into slot 1; region 1336 + set). The walk thread (entity 36 along
-        // group 0's points) is not built (the navmesh assignment runs in Update); the line-37 thread waits
-        // for movie 22, which is not played.
+        // group 0's points) is not built (the navmesh assignment runs in Update); the line-37
+        // thread runs in Update.
         1335 => {
             state.set(235, true);
             let mut v: Vec<Action> = (0..=3).map(|i| reg(i, 1)).collect();
@@ -2978,8 +2985,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             ]
         }
         // SPEC-0039 886 Init: handler 1 on trigger 5, 2 on 2, 4 on 0; object 3 off while 250 is
-        // clear; 249 set when 248 is set, 249 clear and movie 30 not played (movies are not
-        // built, so it counts as not played); thread 3 (SPEC-0039, R-0096 answered) loads the
+        // clear; 249 set when 248 is set, 249 clear and movie 30 not played; thread 3 (SPEC-0039, R-0096 answered) loads the
         // first stored slot (0) with set 3, 2, 1 or 0 by the first set flag of 52, 51, 50 and 251
         // (flag 49 is not read); with all four clear, flag 250 set loads set 4 into the third
         // slot (2), and flag 250 clear set 5 into the second (1), then unhides entities 16 to 18
@@ -2990,7 +2996,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if !state.flag(250) {
                 v.push(Action::InitObjOn { obj: 3, end: false });
             }
-            if state.flag(248) && !state.flag(249) {
+            if state.flag(248) && !state.flag(249) && !state.movies.contains(&30) {
                 state.set(249, true);
             }
             if let Some(set) = [(52, 3), (51, 2), (50, 1), (251, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
@@ -3346,7 +3352,8 @@ fn road_end(pack: u32) -> Vec<Action> {
     v.extend([FadeIn { seconds: FADE, wait: false }, Sleep { ticks: 30 }, anim(0, 3), Sleep { ticks: 30 }, cam(21), anim(0, 17)]);
     v.extend([Converse { entity: 0, line: 10 }, anim(0, 117), cam(22), Sleep { ticks: 20 }, walk(0, 4, true), FadeOut { seconds: FADE, wait: true }]);
     v.push(DeactivateEntity { entity: 0 });
-    // Movie 3 is not played. Slot reset and the post-fight set 3; entity 10 waits.
+    // Movie 3, the slot reset and the post-fight set 3; entity 10 waits.
+    v.push(PlayFmv { movie: 3 });
     v.extend([LoadRegion { slot: 0, region: Some(pack + 1 + 3) }, WaitLoads, DeactivateEntity { entity: 10 }]);
     v.extend([FadeIn { seconds: FADE, wait: false }, MoveHero { locator: 45 }, cam(38), WalkHero { locator: 46, wait: true, orient: false }]);
     v.extend([Sleep { ticks: 60 }, Converse { entity: 9, line: 1 }, FadeOut { seconds: FADE, wait: true }, FadeIn { seconds: FADE, wait: true }]);
@@ -5015,8 +5022,8 @@ fn practice_1327(s: &mut GameState) -> Vec<Action> {
                 ]);
                 out.extend(talk(s));
                 s.set(235, true);
-                // Movie 19 is not played; its return world eW 151 (pack 1300) is loaded at once.
-                out.push(Action::ReplaceExterior { slot: 151, plane: -1 });
+                // Movie 19; its return world eW 151 (pack 1300) is loaded at once.
+                out.extend([Action::PlayFmv { movie: 19 }, Action::ReplaceExterior { slot: 151, plane: -1 }]);
             }
         }
         _ => {}
@@ -6132,8 +6139,8 @@ fn town_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
         (1139, 5) => talk(by_flags(s, &mut rot, 43, 40).unwrap_or_else(|| rot.pick(2, &triple(37)))),
         (1139, 2) => talk(by_flags(s, &mut rot, 52, 49).unwrap_or_else(|| if s.flag(678) { rot.pick(2, &triple(46)) } else { Some(55) })),
         // Entity 0: with 678 clear it is set with line 36; with item 23 every one is taken, value
-        // 10 for eW 109 and movie 49, whose return world is eW 109 (pack 1129): the movie is not
-        // built, so the replacement load is made directly; else lines 27 to 29.
+        // 10 for eW 109 and movie 49, whose return world eW 109 (pack 1129) is loaded at once;
+        // else lines 27 to 29.
         (1139, 1) => match by_flags(s, &mut rot, 33, 30) {
             Some(l) => talk(l),
             None if !s.flag(678) => {
@@ -6143,7 +6150,7 @@ fn town_talk(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
             None if s.has_item(23) => {
                 s.remove_all(23);
                 s.blackboard.insert((2, 109), 10);
-                vec![Action::ReplaceExterior { slot: 109, plane: -1 }]
+                vec![Action::PlayFmv { movie: 49 }, Action::ReplaceExterior { slot: 109, plane: -1 }]
             }
             None => talk(rot.pick(2, &triple(27))),
         },
@@ -8078,8 +8085,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::LoadRegion { slot: 4, region: None },
             ]);
         }
-        // Routine 44 (trigger 2; 366 set, 367 clear): 367, the fade, set 21 into slot 0 (movie 79
-        // is not played), entity 76's loop 26, the fade in. SetEntityInvulnerable is not built.
+        // Routine 44 (trigger 2; 366 set, 367 clear): 367, the fade, set 21 into slot 0, movie
+        // 79, entity 76's loop 26, the fade in. SetEntityInvulnerable is not built.
         (1300, 44) if call.object && call.state == 1 && state.flag(366) && !state.flag(367) => {
             state.set(367, true);
             out.actions.extend([
@@ -8087,13 +8094,18 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::LoadRegion { slot: 0, region: None },
                 Action::LoadRegion { slot: 0, region: Some(1322) },
                 Action::WaitLoads,
+                Action::PlayFmv { movie: 79 },
                 Action::EntityAnim { entity: 76, anim: 26, looped: true, wait: false },
                 wait(0.5),
                 Action::FadeIn { seconds: 1.0, wait: true },
             ]);
         }
-        // Routine 45 (trigger 3; 367 set, 368 clear): 368 (movie 83 is not played).
-        (1300, 45) if call.object && call.state == 1 && state.flag(367) && !state.flag(368) => state.set(368, true),
+        // Routine 45 (trigger 3; 367 set, 368 clear): movie 83 and 368 (the credits follow the
+        // movie: it plays before the next tick). The fade out before it is not built.
+        (1300, 45) if call.object && call.state == 1 && state.flag(367) && !state.flag(368) => {
+            state.queue_movie(83);
+            state.set(368, true);
+        }
         // Routine 38 (triggers 6 to 9, entering, 94 set and 367 clear): 6: set 17; 7: 20; 8: 19
         // with 421; 9: 18 with 417 (region 1301 + j into slot 0).
         (1300, 38) if call.object && call.state == 1 && state.flag(94) && !state.flag(367) => {
@@ -8177,14 +8189,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         // Trigger 5 (context 32): the fade; with 235 set and 92 clear both slots emptied, set 0,
-        // 236 and 92 (movie 20 is not played); 1 s and the fade in.
+        // 236, 92 and movie 20; 1 s and the fade in.
         (1335, 5) => {
             if call.square && !state.talking {
                 out.actions.push(Action::FadeOut { seconds: FADE, wait: true });
                 if state.flag(235) && !state.flag(92) {
                     state.set(236, true);
                     state.set(92, true);
-                    out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 1, region: None }, Action::LoadRegion { slot: 0, region: Some(1336) }]);
+                    out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 1, region: None }, Action::LoadRegion { slot: 0, region: Some(1336) }, Action::PlayFmv { movie: 20 }]);
                 }
                 out.actions.extend([wait(1.0), Action::FadeIn { seconds: FADE, wait: true }]);
             } else {
@@ -8204,7 +8216,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             ]);
         }
         // Trigger 7 (entering; 240 set, 241 clear): 241, object 1 off and 0 on, set 1 into slot 0
-        // (movie 25 is not played; a fade in follows in its place).
+        // and movie 25, then the fade in.
         (1335, 7) if call.object && call.state == 1 && state.flag(240) && !state.flag(241) => {
             state.set(241, true);
             out.actions.extend([
@@ -8213,12 +8225,15 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::InitObjOn { obj: 0, end: false },
                 Action::LoadRegion { slot: 0, region: None },
                 Action::LoadRegion { slot: 0, region: Some(1337) },
+                Action::PlayFmv { movie: 25 },
                 Action::FadeIn { seconds: FADE, wait: true },
             ]);
         }
-        // Triggers 8 (402 set, 403 clear: 403; movie 21 is not played) and 9 (236 set, 402 clear:
-        // 402).
-        (1335, 8) if state.flag(402) && !state.flag(403) => state.set(403, true),
+        // Triggers 8 (402 set, 403 clear: 403 and movie 21) and 9 (236 set, 402 clear: 402).
+        (1335, 8) if state.flag(402) && !state.flag(403) => {
+            state.set(403, true);
+            state.queue_movie(21);
+        }
         (1335, 9) if state.flag(236) && !state.flag(402) => state.set(402, true),
         // SPEC-0045 842 trigger 1 (entering): with no stage 53 set and the opening camera 5; with
         // stage 54 line 201.
@@ -8312,12 +8327,15 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.prompt = Some(3);
             }
         }
-        // SPEC-0044 1411 trigger 0, the mosaic (entering): with 333 clear 333 set (movie 59 is not
-        // played; in play 333 is always set here); with 334 clear each held piece of 25, 26 and 27
+        // SPEC-0044 1411 trigger 0, the mosaic (entering): with 333 clear 333 set and movie 59 (in
+        // play 333 is always set here); with 334 clear each held piece of 25, 26 and 27
         // is placed (removed, object 2, 3 or 4 on, the count word 1 up) with camera 5; at 3 the
-        // mosaic completes (334, a fade, camera 4 with sound 6; movie 60 is not played); below 3
+        // mosaic completes (334, a fade, camera 4 with sound 6, movie 60); below 3
         // line 63.
         (1411, 0) if call.object && call.state == 1 => {
+            if !state.flag(333) {
+                state.queue_movie(59);
+            }
             state.set(333, true);
             if !state.flag(334) {
                 let pieces: Vec<(u16, usize)> = [(25, 2), (26, 3), (27, 4)].into_iter().filter(|&(i, _)| state.has_item(i)).collect();
@@ -8340,6 +8358,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                         Action::PlaySound { cue: 6, locator: None },
                         Action::Sleep { ticks: 60 },
                         Action::FadeOut { seconds: FADE, wait: true },
+                        Action::PlayFmv { movie: 60 },
                         Action::ReturnCamera { preset: -1, release: true },
                         Action::FadeIn { seconds: FADE, wait: true },
                     ]);
@@ -8348,17 +8367,20 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
         }
-        // Trigger 17 (335 set, 336 clear): 336 and 97, camera 13, line 66 (movie 69 is not played).
+        // Trigger 17 (335 set, 336 clear): 336 and 97, camera 13, line 66, movie 69.
         (1411, 17) if state.flag(335) && !state.flag(336) => {
             state.set(336, true);
             state.set(97, true);
-            out.actions.extend([Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::Message { line: 66 }, Action::ReturnCamera { preset: -1, release: true }]);
+            out.actions.extend([Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::Message { line: 66 }, Action::PlayFmv { movie: 69 }, Action::ReturnCamera { preset: -1, release: true }]);
         }
-        // Trigger 16 (337 set, 338 clear): 338 (movie 71 is not played).
-        (1411, 16) if state.flag(337) && !state.flag(338) => state.set(338, true),
+        // Trigger 16 (337 set, 338 clear): 338 and movie 71.
+        (1411, 16) if state.flag(337) && !state.flag(338) => {
+            state.set(338, true);
+            state.queue_movie(71);
+        }
         // Trigger 1 (entering, 338 set): the movie return world eW 191 (pack 1432) and movie 72;
-        // with no movie player the load of eW 191 follows at once.
-        (1411, 1) if call.state == 1 && state.flag(338) => out.actions.push(Action::ReplaceExterior { slot: 191, plane: -1 }),
+        // the load of eW 191 is made at once (no reload hand-off is built).
+        (1411, 1) if call.state == 1 && state.flag(338) => out.actions.extend([Action::PlayFmv { movie: 72 }, Action::ReplaceExterior { slot: 191, plane: -1 }]),
         // Trigger 18 (entering, 703 clear): cameras 6, 7 and 8 with lines 64 and 65, 703.
         (1411, 18) if call.object && call.state == 1 && !state.flag(703) => {
             state.set(703, true);
@@ -8437,11 +8459,10 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             Action::StartEffect { slot: 16, camera: false },
             Action::ReturnCamera { preset: -1, release: true },
         ]),
-        // SPEC-0042 714 F (trigger 2, entering, 301 clear): 301 set, (movie 48 is not played)
-        // 30 ticks, line 1, and with flag 5 clear 30 ticks and line 2.
+        // SPEC-0042 714 F (trigger 2, entering, 301 clear): 301 set, movie 48, 30 ticks, line 1, and with flag 5 clear 30 ticks and line 2.
         (714, 2) if call.object && call.state == 1 && !state.flag(301) => {
             state.set(301, true);
-            out.actions.extend([Action::Sleep { ticks: 30 }, Action::Message { line: 1 }]);
+            out.actions.extend([Action::PlayFmv { movie: 48 }, Action::Sleep { ticks: 30 }, Action::Message { line: 1 }]);
             if !state.flag(5) {
                 out.actions.extend([Action::Sleep { ticks: 30 }, Action::Message { line: 2 }]);
             }
@@ -8873,7 +8894,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             out.actions.push(Action::ReplaceExterior { slot: 157, plane: 0 });
         }
         // Z1: the three waves won, 100 and 345 clear: 345 and 100 set, the fade, object 8 off,
-        // effect 0, the fade in, the exit word set (movie 61 is not played).
+        // effect 0, movie 61, the fade in, the exit word set.
         (1371, 1) if call.state == 1 && call.object && !state.flag(100) && [342, 343, 344].iter().all(|&f| state.flag(f)) && !state.flag(345) => {
             state.set(345, true);
             state.set(100, true);
@@ -8882,6 +8903,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::FadeOut { seconds: 1.0, wait: true },
                 Action::DeactivateObj { obj: 8 },
                 Action::StartEffect { slot: 0, camera: false },
+                Action::PlayFmv { movie: 61 },
                 Action::FadeIn { seconds: 1.0, wait: true },
                 Action::Bits { word: 3, set: 1, clear: 0 },
             ]);
@@ -9267,6 +9289,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // (trigger 2, entering with the body): with 675 clear (and object 2 not yet shown, word
         // 21) the one-shot switch: 675, object 1 off, object 2 on and played, object 0 on, the
         // normal camera.
+        // Callback 7 (trigger 0, entering with the body): movie 50 once, when the hero is not
+        // occupied (else the callback runs again on the next trigger frame).
+        (1130, 7) if call.state == 1 && call.object && !state.movies.contains(&50) && !state.hero.occupied => {
+            out.actions.push(Action::PlayFmv { movie: 50 });
+        }
         (1130, 6) if state.word(pack, 20) == 0 => {
             state.set_word(pack, 20, 1);
             out.actions.push(Action::Message { line: 3 });
@@ -9296,15 +9323,18 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.push(Action::Bits { word: 22, set: 0, clear: 1 });
             }
         }
-        // SPEC-0039 1344 trigger 0 (entering with the body): with 237 set and 238 clear, 238 (movie
-        // 22 is not built), 30 ticks and line 10. Trigger 1: with 239 set and 240 clear, 240
-        // (movie 24 not built). Trigger 2 (entering with the body): lines 3 and 4 with 236 set and
+        // SPEC-0039 1344 trigger 0 (entering with the body): with 237 set and 238 clear, 238,
+        // movie 22, 30 ticks and line 10. Trigger 1: with 239 set and 240 clear, 240 and movie
+        // 24. Trigger 2 (entering with the body): lines 3 and 4 with 236 set and
         // 239 clear.
         (1344, 2) if call.state == 1 && call.object && state.flag(237) && !state.flag(238) => {
             state.set(238, true);
-            out.actions.extend([Action::Sleep { ticks: 30 }, Action::Message { line: 10 }]);
+            out.actions.extend([Action::PlayFmv { movie: 22 }, Action::Sleep { ticks: 30 }, Action::Message { line: 10 }]);
         }
-        (1344, 3) if call.state != 0 && state.flag(239) && !state.flag(240) => state.set(240, true),
+        (1344, 3) if call.state != 0 && state.flag(239) && !state.flag(240) => {
+            state.set(240, true);
+            out.actions.push(Action::PlayFmv { movie: 24 });
+        }
         (1344, 6) if call.state == 1 && call.object && state.flag(236) && !state.flag(239) => out.actions.extend([Action::Message { line: 3 }, Action::Message { line: 4 }]),
         // SPEC-0039 1248 triggers 16 to 18 (handlers 5, 4, 3; the body): a camera sequence that
         // plays two levers and removes two of objects 0 to 5 (PlayLookAtAnimObjCamera is played
@@ -9351,13 +9381,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         // SPEC-0039 753 handler 8 (trigger 0, entering with the body, 252 clear): line 36. Handler
-        // 3 (trigger 1, the body): the first time (word 0; in place of "movie 36 not played") the
-        // hero to locator 3, the normal camera, effects 15 to 48 started and level state 1; in
-        // every case level state 2.
+        // 3 (trigger 1, the body): while movie 36 has not played, movie 36, the hero to locator
+        // 3, the normal camera, effects 15 to 48 started and level state 1; in every case level
+        // state 2.
         (753, 8) if call.state == 1 && call.object && !state.flag(252) => out.actions.push(Action::Message { line: 36 }),
         (753, 3) if call.object => {
-            if state.word(pack, 0) == 0 {
-                state.set_word(pack, 0, 1);
+            if !state.movies.contains(&36) {
+                state.queue_movie(36);
                 out.actions.extend([Action::MoveHero { locator: 3 }, Action::ReturnCamera { preset: -1, release: true }]);
                 out.actions.extend((15..=48).map(|slot| Action::StartEffect { slot, camera: false }));
                 state.set_level(1, true);
@@ -9826,12 +9856,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             state.set(645, true);
             out.actions.push(Action::Message { line: 14 });
         }
-        // E7 (220 set, 277 clear): 277, the fade, movie 40 (not played), type 3 value 1 for eW
+        // E7 (220 set, 277 clear): 277, the fade, movie 40, type 3 value 1 for eW
         // 131, the hero to locator 44.
         (1184, 3) if first && !state.flag(277) => {
             state.set(277, true);
             state.blackboard.insert((3, 131), 1);
-            out.actions.extend([Action::FadeOut { seconds: 0.25, wait: true }, Action::MoveHero { locator: 44 }]);
+            out.actions.extend([Action::FadeOut { seconds: 0.25, wait: true }, Action::PlayFmv { movie: 40 }, Action::MoveHero { locator: 44 }]);
         }
         // E9 (220 set): type 3 value 1 for eW 130 and the replacement load without a fade.
         (1184, 5) if first => {
@@ -9870,7 +9900,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // the story (152 with 22 clear: movie 7, regions 1104 and 1103, camera 9, line 50,
         // flags 22, 642 and 153; 191 with 27 clear: line 376, flags 27 and 193; 204 with 29
         // clear: flags 29, 205 and 63 and movie 10). The hit-point percentage it sets is not
-        // given; the movies are not played.
+        // given.
         (1098, 1) if call.state != 0 && call.object => {
             out.prompt = Some(32);
             if call.square {
@@ -10047,7 +10077,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         1217 => out = burrows_fight(state, dialog),
         // SPEC-0039 886 Update. The end helper: with 250 clear and AI 16, 17 and 18 dead, object
-        // 3 off, 250, 6 s, a 1 s fade out (movie 32 is not built), 1 tick, a 1 s fade in. The
+        // 3 off, 250, 6 s, a 1 s fade out, movie 32, 1 tick, a 1 s fade in. The
         // hint helper, while 250 is clear: a 300-tick counter (word 0), then once line 1 unless
         // hero 1 is active (word 1), then once, with hero 1 active, AI 16 and 17 dead and 18
         // alive, 2 s and line 3 (word 2).
@@ -10055,7 +10085,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             let dead = |e: usize| state.ai_dead.contains(&e);
             if !state.flag(250) && dead(16) && dead(17) && dead(18) {
                 state.set(250, true);
-                out.extend([Action::DeactivateObj { obj: 3 }, wait(6.0), Action::FadeOut { seconds: 1.0, wait: true }, Action::Sleep { ticks: 1 }, Action::FadeIn { seconds: 1.0, wait: false }]);
+                out.extend([Action::DeactivateObj { obj: 3 }, wait(6.0), Action::FadeOut { seconds: 1.0, wait: true }, Action::PlayFmv { movie: 32 }, Action::Sleep { ticks: 1 }, Action::FadeIn { seconds: 1.0, wait: false }]);
             } else if !state.flag(250) {
                 let n = state.word(pack, 0);
                 if n < 300 {
@@ -10113,8 +10143,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0039 753 event thread (with the event gate at load): with 258 clear and level state
         // 1: level state 0 runs the event end; else level state 2 is cleared if set, or level
-        // state 0 set and the end run. The end (movie 37 not built): effects 15 to 48 stopped and
-        // flag 258.
+        // state 0 set and the end run. The end: movie 37, effects 15 to 48 stopped and flag 258.
         753 => {
             if !state.flag(258) && state.level(1) {
                 let end = if state.level(0) {
@@ -10127,6 +10156,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     true
                 };
                 if end {
+                    state.queue_movie(37);
                     state.set(258, true);
                     out.extend((15..=48).map(|slot| Action::StopEffect { slot }));
                 }
@@ -10495,8 +10525,21 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // SPEC-0042 986 Update: the navigation pass over 28 entities.
         986 => out.extend(nav_pass(state, pack, 28)),
         // SPEC-0043 1335 Update: CharacterNavmeshAssign(36, 4) each tick (SetAI_MovementType is
-        // not built).
-        1335 => out.push(Action::NavmeshAssign { entity: 36, mesh: 4 }),
+        // not built). The line-37 thread (Init starts it with 239 clear; it ends once 239 is
+        // set): once movie 22 has played, line 37 every 3608 ticks (3600, the line, then 4 and
+        // 4 more; word 30 counts).
+        1335 => {
+            out.push(Action::NavmeshAssign { entity: 36, mesh: 4 });
+            if !state.flag(239) && state.movies.contains(&22) {
+                let n = state.word(pack, 30) + 1;
+                state.set_word(pack, 30, n);
+                if n == 3600 {
+                    out.push(Action::Message { line: 37 });
+                } else if n >= 3608 {
+                    state.set_word(pack, 30, 0);
+                }
+            }
+        }
         // SPEC-0043 1122 Update: the waves (word 2: 1 to 3) advance once every character of slot
         // 1 is dead (3 s, the next set: 4 then 5, their AIs aggressive), and after the third the
         // end (320, the hero to locator 24, the objects back). With 31 and 320 the arena thread:
@@ -11124,8 +11167,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0041 1382 Update, the completion (six lit, once per load): the fade, 1.5 s, all
         // six put out and locked, entities 32 to 40, 43, 48 and 49 off, the fight slot emptied,
-        // flags 98 and 337, object 28 off, effect 1, the exit routine on trigger 28. Movie 70 is
-        // not played; a fade in follows in its place.
+        // flags 98 and 337, object 28 off, effect 1, the exit routine on trigger 28, movie 70
+        // and the fade in.
         1382 => {
             if state.word(pack, 1) == 6 && state.word(pack, 5) == 0 {
                 state.set_word(pack, 5, 1);
@@ -11142,6 +11185,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     Action::DeactivateObj { obj: 28 },
                     Action::StartEffect { slot: 1, camera: false },
                     Action::RegisterTrigger { index: 28, routine: 28 },
+                    Action::PlayFmv { movie: 70 },
                     Action::FadeIn { seconds: 1.0, wait: true },
                     Action::ReturnCamera { preset: -1, release: true },
                 ]);
@@ -11338,12 +11382,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // SPEC-0045 909 Update: the flag and item steps and the scenes.
         909 => {
             // The Act 1 start: 707 on and 1 off sets 1 and clears 706, fades out at once, makes
-            // the act-start 1 call (SPEC-0053 3.7) and moves entity 31 to locator 69 (movies 88
-            // and 1 are not played; camera 30 is left out: no return of it is described, R-0025).
+            // the act-start 1 call (SPEC-0053 3.7), queues movies 88 then 1 and moves entity 31 to
+            // locator 69 (camera 30 is left out: no return of it is described, R-0025).
             if state.flag(707) && !state.flag(1) {
                 state.set(1, true);
                 state.set(706, false);
-                out.extend([Action::FadeOut { seconds: 0.0, wait: false }, Action::ActStart { stage: 1 }, Action::MoveEntity { entity: 31, locator: 69, face: true }]);
+                out.extend([Action::FadeOut { seconds: 0.0, wait: false }, Action::PlayFmv { movie: 88 }, Action::PlayFmv { movie: 1 }, Action::ActStart { stage: 1 }, Action::MoveEntity { entity: 31, locator: 69, face: true }]);
             }
             // The talk thread (while 117 and 123 are clear): each round-up flag, the first time
             // it is seen set in this visit (words 10 to 13, cleared at each activation), plays a
@@ -13223,6 +13267,7 @@ fn castle_rest(state: &mut GameState) -> Vec<Action> {
         for f in [22, 642, 153] {
             state.set(f, true);
         }
+        v.push(Action::PlayFmv { movie: 7 });
         v.extend([Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 5) }, Action::LoadRegion { slot: 1, region: Some(1098 + 1 + 4) }, Action::WaitLoads]);
         v.extend([camera(9), Action::FadeIn { seconds: 1.0, wait: false }, Action::Message { line: 50 }, Action::FadeOut { seconds: 1.0, wait: true }, release_camera()]);
     } else if !state.flag(27) && state.flag(191) {
@@ -13234,6 +13279,7 @@ fn castle_rest(state: &mut GameState) -> Vec<Action> {
         for f in [29, 205, 63] {
             state.set(f, true);
         }
+        v.push(Action::PlayFmv { movie: 10 });
     }
     v.push(Action::FadeIn { seconds: 1.0, wait: true });
     v
@@ -15115,7 +15161,7 @@ mod tests {
         let v = on_init(714, &mut s);
         assert!(v.contains(&Action::RegisterTrigger { index: 2, routine: 2 }) && v.contains(&Action::LoadRegion { slot: 0, region: Some(715) }));
         let enter = TriggerCall { index: 2, state: 1, object: true, square: false, block: -1 };
-        assert_eq!(on_trigger(714, 2, enter, &mut s).actions.len(), 4);
+        assert_eq!(on_trigger(714, 2, enter, &mut s).actions.len(), 5);
         assert!(s.flag(301) && on_trigger(714, 2, enter, &mut s).actions.is_empty());
         assert!(on_update(714, &mut s, false).contains(&Action::CollisMask { mask: 4 }));
         // 772's vector: 543 set: 544 and line 14, then 11, 12, 13.
@@ -16624,7 +16670,7 @@ mod tests {
         // Entity 0: 678 then line 36; with item 23 the way to pack 1129.
         assert_eq!(on_talk(1139, 1, &mut s), vec![Action::Talk { line: 36 }]);
         s.give(23, 1);
-        assert_eq!(on_talk(1139, 1, &mut s), vec![Action::ReplaceExterior { slot: 109, plane: -1 }]);
+        assert_eq!(on_talk(1139, 1, &mut s), vec![Action::PlayFmv { movie: 49 }, Action::ReplaceExterior { slot: 109, plane: -1 }]);
         // Entity 1 with 678 set: 46, 47, 48 in turn; with 305: 49.
         assert_eq!(on_talk(1139, 2, &mut s), vec![Action::Talk { line: 46 }]);
         s.set(305, true);

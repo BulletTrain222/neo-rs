@@ -38,10 +38,6 @@ impl Movies {
         Ok(Self { table, ..Default::default() })
     }
 
-    /// Add the movies a level script queued this frame, in order.
-    pub fn take(&mut self, queued: &mut Vec<u16>) {
-        self.queue.extend(queued.drain(..));
-    }
 
     /// Advance by `elapsed_ns` with Cross or Start `held`. Returns true while a movie plays (the
     /// game loop is suspended for the whole frame).
@@ -79,7 +75,10 @@ impl Movies {
     }
 
     fn caption(&self) -> Option<String> {
-        let c = self.current.as_ref()?;
+        let Some(c) = self.current.as_ref() else {
+            // Queued this frame: the screen goes black at once; the movie starts next frame.
+            return (!self.queue.is_empty()).then(String::new);
+        };
         let (name, _) = self.table.get(c.index as usize)?.as_ref()?;
         let left = c.frames.saturating_sub(c.shown) as f64 * c.period_ns as f64 / 1e9;
         Some(format!(
@@ -88,6 +87,19 @@ impl Movies {
             name.trim_end_matches(".BIK").replace('\\', "/"),
             left.ceil()
         ))
+    }
+}
+
+/// After the frame's ticks: the movies the level scripts and the attract queued, in order, so
+/// the frame that queued them already shows the movie screen (SPEC-0026: the movie step runs
+/// at the end of the pass).
+pub fn collect(mut movies: Option<ResMut<Movies>>, mut play: Option<ResMut<crate::PlayState>>, mut menu: Option<ResMut<crate::menu_view::Menu>>) {
+    let Some(mv) = movies.as_deref_mut() else { return };
+    if let Some(m) = menu.as_deref_mut() {
+        mv.queue.extend(m.flow.movies.drain(..));
+    }
+    if let Some(p) = play.as_deref_mut() {
+        mv.queue.extend(p.play.state.movie_queue.drain(..));
     }
 }
 
