@@ -59,7 +59,7 @@ Act 2 starts at the end of the castle escape in pack 1174 (Act 1's last step, no
 8. **The Endless Staircase (1299)** (flags 242, 243): the palace door near (311, 231) takes you there. **Not traced:** finding the way down. The trace could not find a walkable route from the top (y 62) to the exit door at the bottom (y 8, near (-111, -79)); it dropped to a floor at y 24 and stopped. **Please try this one.** The exit door itself works: it sets 243 and takes you to the library.
 9. **Escape with Solarin** (Act 3 starts): the library's door near (-72, 124). The act start runs (Tor and Roberta both playable, Tor selected) and Brightvale (886) loads with the first Act 3 tutorial line. Traced.
 
-Not built in Act 2: all movies (16, 18, 19, 20 to 26), the entity path walks in the gardens and palace, and Roberta's health refill during the practice. A flower bed near (-73, -125) in the gardens has no ground data behind it: walking into the crystal plants there drops you through the world (if that happens, F1 can warp you).
+Not built in Act 2: the movie pictures and sound (each movie now plays as a timed black screen you can skip by holding Cross or Start) and the entity path walks in the gardens and palace. A flower bed near (-73, -125) in the gardens has no ground data behind it: walking into the crystal plants there drops you through the world (if that happens, F1 can warp you).
 
 ## Act 3: both heroes (started; traced in pieces)
 

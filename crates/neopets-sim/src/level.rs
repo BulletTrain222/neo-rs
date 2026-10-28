@@ -148,6 +148,8 @@ pub enum Action {
     ReplaceExterior { slot: usize, plane: i32 },
     /// The hero's magic refilled (the 1056 mote area).
     RefillMagic,
+    /// The hero's hit points refilled to the maximum (1327's practice steps 231 and 233).
+    RefillHealth,
     /// InitMiamouseBehavior(field mesh, cage mesh) and MiamiceCatchDisable (SPEC-0029
     /// Behavior 28).
     MiamouseInit { field: i32, cage: i32 },
@@ -4951,7 +4953,7 @@ fn talk_1327(routine: u8, s: &mut GameState) -> Vec<Action> {
 /// SPEC-0044 1327's target-practice thread (228 set, 234 clear; the step is the highest set of
 /// 229 to 233; the trainer's talk after each step). Words: 40 the target set loaded, 41 busy,
 /// 42 the step a wait belongs to, 43 the hold count, 44 the press count, 45 its 30-tick clock.
-/// Roberta's hit-point refill is not built.
+/// In steps 231 and 233 Roberta's hit points are refilled every tick (233: until AI 0 is dead).
 fn practice_1327(s: &mut GameState) -> Vec<Action> {
     let p = 1327;
     if !s.flag(228) || s.flag(234) || s.word(p, 41) != 0 {
@@ -4995,6 +4997,7 @@ fn practice_1327(s: &mut GameState) -> Vec<Action> {
                 s.set_word(p, 42, 231);
                 out.push(Action::ActivateEntity { entity: 0 });
             }
+            out.push(Action::RefillHealth);
             let held = if s.hero.fire_held { s.word(p, 43) + 1 } else { 0 };
             s.set_word(p, 43, held);
             if held >= 31 {
@@ -5028,6 +5031,9 @@ fn practice_1327(s: &mut GameState) -> Vec<Action> {
             if s.word(p, 42) != 233 {
                 s.set_word(p, 42, 233);
                 out.push(Action::ActivateEntity { entity: 0 });
+            }
+            if !s.ai_dead.contains(&0) {
+                out.push(Action::RefillHealth);
             }
             if s.ai_dead.contains(&0) {
                 s.set(234, true);

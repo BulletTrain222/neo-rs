@@ -2475,6 +2475,7 @@ impl Play {
                 }
                 Action::LevelState { flag, on } => self.state.set_level(flag, on),
                 Action::RefillMagic => self.hero_mp = self.hero_mp_max,
+                Action::RefillHealth => self.hero_hp = self.hero_max,
                 Action::MiamouseInit { field, cage } => self.catch.init(field, cage),
                 Action::MiamouseDisable => self.catch.on = false,
                 Action::Bits { word, set, clear } => {
