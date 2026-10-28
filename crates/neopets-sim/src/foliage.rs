@@ -455,7 +455,8 @@ impl Reed {
     }
 
     /// The cut by a weapon hit: state 1 and the fall's sub-state 0, the piece launched along
-    /// `velocity` (the blade direction). False when the reed is not standing.
+    /// `velocity` (unit: the normalized motion of a weapon point; SPEC-0060 Cut). False when
+    /// the reed is not standing.
     pub fn cut(&mut self, velocity: [f32; 3]) -> bool {
         if self.state != 0 {
             return false;
@@ -469,7 +470,8 @@ impl Reed {
     /// One fall tick (state 1). `ground` is the ground probe result under the piece with ceiling
     /// y + 8.0 and `base_y` the anchor's height. Sub-state 0: offset += 0.05 v until the piece is
     /// more than 0.5 from its anchor; 1: y -= 0.07 until below the ground less 1.25; 2: up =
-    /// normalize(0.965 up + 0.035 v) until |up.y| is 0.001 or less, then state 2.
+    /// normalize(0.965 v + 0.035 up) each tick while |v.y| is above 0.001 (the piece stays in
+    /// state 1 and drawn, the velocity fixed), else state 2 (gone) at once (SPEC-0060 Reed state).
     pub fn fall_step(&mut self, base_y: f32, ground: Option<f32>) {
         if self.state != 1 {
             return;
@@ -491,8 +493,9 @@ impl Reed {
             }
             _ => {
                 let (u, v) = (self.up, self.velocity);
-                self.up = normalize(std::array::from_fn(|i| 0.965 * u[i] + 0.035 * v[i]));
-                if self.up[1].abs() <= 0.001 || v == [0.0; 3] {
+                if v[1].abs() > 0.001 {
+                    self.up = normalize(std::array::from_fn(|i| 0.965 * v[i] + 0.035 * u[i]));
+                } else {
                     self.state = 2;
                 }
             }
@@ -654,5 +657,31 @@ mod tests {
         assert!(bush_drop(277, 50, 0, false).is_empty());
         assert_eq!(bush_drop(256, 0, 0, true), vec![152]);
         assert_eq!(cut_model(262), Some(263));
+    }
+
+    #[test]
+    fn reed_piece_launch_decides_its_end() {
+        // SPEC-0060 vectors: a unit launch moves 0.05 a tick, state 0 ends after 0.5; a launch
+        // with |y| above 0.001 keeps updating in the last fall state (still drawn); a level one
+        // is gone on its first update there.
+        let run = |v: [f32; 3]| {
+            let mut r = Reed::default();
+            r.cut(v);
+            let mut n = 0;
+            while r.fall == 0 {
+                r.fall_step(0.0, Some(0.0));
+                n += 1;
+            }
+            // The spec's vector gives 11 (0.5 exactly after 10 under the console's arithmetic);
+            // the plain f32 sum here passes 0.5 on tick 10.
+            assert!((10..=11).contains(&n));
+            for _ in 0..200 {
+                r.fall_step(0.0, Some(0.0));
+            }
+            r.state
+        };
+        assert_eq!(run([1.0, 0.0, 0.0]), 2);
+        let tilted = [0.6, 0.8, 0.0];
+        assert_eq!(run(tilted), 1);
     }
 }

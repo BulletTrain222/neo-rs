@@ -4533,6 +4533,27 @@ fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
     v
 }
 
+/// SPEC-0041 1324's solved-scene helper (see the stage-1 plate callback).
+/// The scene-done word is flag 239 itself here (Init and Update read the flag).
+fn solved_1324() -> Vec<Action> {
+    let pair = [Action::PlaySound { cue: 4, locator: None }, Action::PlaySound { cue: 5, locator: None }];
+    let mut v = pair.to_vec();
+    v.extend([
+        wait(2.0),
+        Action::SetFlag { flag: 239, on: true },
+        Action::FadeOut { seconds: 2.0, wait: true },
+        Action::KillSound { cue: 4, locator: None },
+        Action::KillSound { cue: 5, locator: None },
+        Action::PlayFmv { movie: 23 },
+        Action::FadeIn { seconds: 0.5, wait: false },
+    ]);
+    for _ in 0..10 {
+        v.extend(pair.clone());
+        v.push(Action::Sleep { ticks: 15 });
+    }
+    v
+}
+
 /// SPEC-0041 1324's beam helper: the other beam objects (9 to 14) hidden and `beam` looped; the
 /// rhythm period in seconds (None keeps the word and period; 14 with no period clears it).
 fn beam_1324(s: &mut GameState, beam: usize, period: Option<f32>) -> Vec<Action> {
@@ -7189,12 +7210,18 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
                 state.set_word(pack, 10, 1);
                 out.actions.push(Action::PlayCamera { track: 8, wait: true, end: 1, speed: 0.5 });
-                // With both stage-2 marks set the callback still does not reach the dormant
-                // FMV-23 scene (SPEC-0041, R-0095); with one, that plate's handler runs again.
+                // With one stage-2 mark, that plate's handler runs again; with both, after the
+                // camera's return, the solved-scene helper (SPEC-0041 1324, R-0103): the paired
+                // sounds, 2.0 s, flag 239 and the scene-done word, a 2.0 s fade out, sounds 4 and 5
+                // stopped, FMV 23, a 0.5 s fade in, then the paired sounds and a 15-tick sleep ten
+                // times.
                 if a != b {
                     out.actions.extend(plate2_1324(if a { 1 } else { 0 }, state));
                 }
                 out.actions.push(Action::ReturnCamera { preset: -1, release: true });
+                if a && b {
+                    out.actions.extend(solved_1324());
+                }
             }
         }
         // SPEC-0042 1381 pads (context 13; the station unsolved): sound 169 and the hero sent to
@@ -15058,6 +15085,31 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1324_solved_scene() {
+        // R-0103: with both stage-2 marks set, the last stage-1 plate reaches the solved scene:
+        // flag 239 is set before FMV 23.
+        let mut s = GameState::default();
+        on_init(1324, &mut s);
+        let call = |index: u16, state: u8, block: i32| TriggerCall { index, state, object: false, square: false, block };
+        s.set_word(1324, 8, 1);
+        s.set_word(1324, 9, 1);
+        on_trigger(1324, 2, call(2, 1, 0), &mut s);
+        on_trigger(1324, 2, call(3, 1, 1), &mut s);
+        let out = on_trigger(1324, 2, call(4, 1, 2), &mut s).actions;
+        let flag = out.iter().position(|a| *a == Action::SetFlag { flag: 239, on: true }).expect("flag 239");
+        let fmv = out.iter().position(|a| *a == Action::PlayFmv { movie: 23 }).expect("FMV 23");
+        assert!(flag < fmv);
+        assert_eq!(out.iter().filter(|a| **a == Action::Sleep { ticks: 15 }).count(), 10);
+        // With one mark only, no scene.
+        let mut s = GameState::default();
+        on_init(1324, &mut s);
+        s.set_word(1324, 8, 1);
+        on_trigger(1324, 2, call(2, 1, 0), &mut s);
+        on_trigger(1324, 2, call(3, 1, 1), &mut s);
+        assert!(!on_trigger(1324, 2, call(4, 1, 2), &mut s).actions.contains(&Action::PlayFmv { movie: 23 }));
     }
 
     #[test]

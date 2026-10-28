@@ -1,6 +1,6 @@
 # SPEC-0004: Static models and meshes
 
-- Answers: R-0004
+- Answers: R-0004; R-0109 (Roberta type-33 block and visible outfit geometry)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Container, node tree, packet and vertex layouts, strip rule, bounds and material binding: High. Load status of mesh resources: Medium (per line). Load-time handling of type-8 containers: High for the dispatch and the child codes below; Medium for what each code stores. World placement: High for the level mesh, Medium-High for placed objects. Vertex program choice, batch tag fields, two-pass batches, skinning arithmetic, the absence of back-face culling and multi-packet leaves: High. Vertex colour scale: High; unlit overflow: Medium-High; lighting: Medium-High (the light model is in SPEC-0046). Vertex pass size (128 positions per pass): Medium-Low. Coordinate handedness: Medium-High. Type-33 block: High for the header, unit, list and count rules, the radius rule and the load-time conversion; Medium for the sphere centre and the triangle index byte; Low for the bank index mapping. Packet pointer relocation at load time: Medium. Item model registry key and the disc id mapping: High. Attach-point table and per-frame attach matrices: High; attach-point roles: Medium-High.
@@ -300,6 +300,8 @@ World position of an object's vertex = matrix × (x, y, z, 1). Apply the matrix 
 ### Optional per-model block (type 33)
 
 A type-33 chunk is a flat chunk with no nested tree. It sits in two places: as the last chunk of the outfit chains in resources 504–519 (16 flat chunks, one per outfit), and as a child of a type-18 model-set wrapper (571 of the 1,339 wrappers that have IDM children). All 587 chunks parse exactly to their payload end.
+
+The type-33 block is shadow-volume input, not visible hair or cap geometry. Roberta's outfit also contains a visible type-8 model tree; its mesh leaves have no part labels in the asset, and the available mapping does not identify which leaf forms the head or whether a head piece is hidden by a runtime visibility choice. No separate head attachment has been established. The model records alone therefore do not explain a rendered gap at the head.
 
 The block describes shadow-casting geometry for pieces of a character that are attached to bones. Each unit holds one piece: a bounding sphere, a list of the piece's edges, a list of its triangles, and its hull points, plus a bone matrix bank index. The size of each list is a count byte in the unit, so the whole layout follows from the counts.
 

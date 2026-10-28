@@ -868,6 +868,8 @@ pub struct Play {
     hit_list: Vec<u64>,
     /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
     swing_serial: u32,
+    /// SPEC-0060 Cut: last tick's weapon point 2.5 along the blade's frame axis.
+    reed_point: Option<[f32; 3]>,
     /// SPEC-0040 Behavior 23A: the hero's stored look yaw and pitch.
     head_look: neopets_sim::look::Look,
     /// The Plague Serpent's neck joints (boot list 0x320F48; SPEC-0016 6A).
@@ -1606,6 +1608,7 @@ impl Play {
             gelert_words,
             hit_list: Vec::new(),
             swing_serial: 0,
+            reed_point: None,
             head_look: Default::default(),
             neck_joints,
             cloud_rows,
@@ -10940,9 +10943,19 @@ impl Play {
         }
         // Behavior 9, reeds within 100 units of the eye: the bend away from the hero within 5
         // units, the cut by a weapon hit in the attack window (cue 22 for Tor, 28 for Roberta;
-        // the piece launched along the blade; the weapon test is taken as the bush capsule's, a
+        // the piece launched along the weapon point's motion; the weapon test is taken as the bush capsule's, a
         // radius 0.5 and length 6.0 up from the base), the cut piece's fall and the drop roll.
         let mut reed_cuts = 0;
+        // SPEC-0060 Cut: the launch direction is the normalized change of the weapon point 2.5
+        // along its frame axis between two samples (here this tick and the last); with no change
+        // (not established) the blade axis.
+        let point = weapon.as_ref().map(|w| add(w.center, scale(w.axis, 2.5 - 0.5 * w.length - 0.25)));
+        let launch = weapon.as_ref().map(|w| {
+            let d = point.zip(self.reed_point).map(|(a, b)| sub_v(a, b)).unwrap_or([0.0; 3]);
+            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+            if l > 1e-6 { scale(d, 1.0 / l) } else { w.axis }
+        });
+        self.reed_point = point;
         let worlds = [&self.world].into_iter().chain(self.other.as_ref());
         let worlds: Vec<_> = worlds.collect();
         for (&pack, patches) in self.foliage.iter_mut() {
@@ -10962,7 +10975,7 @@ impl Play {
                             let near = (q.position[0] - hero[0]).powi(2) + (q.position[1] - hero[1]).powi(2) + (q.position[2] - hero[2]).powi(2) < 25.0;
                             if let (true, Some(w)) = (near, weapon.as_ref()) {
                                 let reed = neopets_sim::combat::Cylinder::from_base(q.position, [0.0, 1.0, 0.0], 0.5, 6.0);
-                                if neopets_sim::combat::overlap(w, &reed) && r.cut(w.axis) {
+                                if neopets_sim::combat::overlap(w, &reed) && r.cut(launch.unwrap_or(w.axis)) {
                                     reed_cuts += 1;
                                     if let Some(id) = neopets_sim::foliage::reed_drop(self.rng.range(0, 100)) {
                                         drops.push((pack, q.position, vec![id]));
