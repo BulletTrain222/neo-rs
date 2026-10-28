@@ -46,6 +46,8 @@ pub struct Pass1Material {
     pub texture: Handle<Image>,
     /// Alpha blend instead of the additive blend.
     pub blend: bool,
+    /// Drawn as an opaque pass 0 with the alpha mask at 0.5 (an environment-mapped pass 0).
+    pub mask: bool,
 }
 
 impl Material for Pass1Material {
@@ -54,7 +56,13 @@ impl Material for Pass1Material {
     }
 
     fn alpha_mode(&self) -> AlphaMode {
-        if self.blend { AlphaMode::Blend } else { AlphaMode::Add }
+        if self.mask {
+            AlphaMode::Mask(0.5)
+        } else if self.blend {
+            AlphaMode::Blend
+        } else {
+            AlphaMode::Add
+        }
     }
 
     fn enable_prepass() -> bool {
@@ -70,6 +78,13 @@ impl Material for Pass1Material {
         descriptor.primitive.cull_mode = None;
         Ok(())
     }
+}
+
+/// The material of an environment-mapped pass 0 (SPEC-0003 UV mode 1 on pass 0): the part's
+/// own texture with view-generated UVs, drawn opaque with the alpha mask at 0.5 like the other
+/// pass-0 materials.
+pub fn env_base(texture: Handle<Image>) -> Pass1Material {
+    Pass1Material { params: Pass1Params { mode: Vec4::new(1.0, 3.0, 1.0, 0.0), offset: Vec4::ZERO }, texture, blend: false, mask: true }
 }
 
 /// The blend kind and FIX scale of an ALPHA register value (fields A, B, C, D in bits 0 to 7,
@@ -142,6 +157,12 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
     }
     if pass1.mode.y < 1.5 {
         return vec4<f32>(c * pass1.mode.z, 0.0);
+    }
+    if pass1.mode.y > 2.5 {
+        if a < 0.5 {
+            discard;
+        }
+        return vec4<f32>(c, 1.0);
     }
     return vec4<f32>(c, a);
 }

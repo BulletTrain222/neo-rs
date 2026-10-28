@@ -118,6 +118,9 @@ pub struct MeshPart {
     pub zone: Option<u8>,
     /// Pass 0's UV scroll speeds (UV mode 2), when it scrolls.
     pub scroll: Option<[f32; 2]>,
+    /// Pass 0's UV mode is 1, the environment map (SPEC-0003 UV modes): its UVs are generated
+    /// from the view each frame, not the stored ones.
+    pub env_map: bool,
     pub positions: Vec<[f32; 3]>,
     /// Layout B has no normals; its parts get +Y placeholders (it is drawn unlit).
     pub normals: Vec<[f32; 3]>,
@@ -377,6 +380,7 @@ impl Builder {
                 colour_slot: group.map_or(0, |g| g.colour_slot),
                 zone: leaf.zone.or(zone),
                 scroll: group.filter(|g| g.uv_mode == 2 && g.uv_speed() != [0.0; 2]).map(|g| g.uv_speed()),
+                env_map: group.is_some_and(|g| g.uv_mode == 1),
                 positions: Vec::new(),
                 normals: Vec::new(),
                 uvs: Vec::new(),

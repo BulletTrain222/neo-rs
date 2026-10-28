@@ -1970,25 +1970,46 @@ fn sync_worlds(
                 Ok((list, breakables, blocks)) => {
                     for (i, m) in blocks {
                         let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
                         commands.spawn((Transform::IDENTITY, Visibility::Visible, BlockRoot(pack, i), *part)).with_children(|c| {
                             for (_, mesh, material) in parts {
                                 c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            }
+                            for (_, mesh, material, scroll) in second {
+                                let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                                if let Some(s) = scroll {
+                                    e.insert(pass1::Pass1Scroll(s));
+                                }
                             }
                         });
                     }
                     for (i, matrix, m) in breakables {
                         let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
                         commands.spawn((Transform::from_matrix(Mat4::from_cols_array(&matrix)), Visibility::Visible, BreakableRoot(pack, i), *part)).with_children(|c| {
                             for (_, mesh, material) in parts {
                                 c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            }
+                            for (_, mesh, material, scroll) in second {
+                                let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                                if let Some(s) = scroll {
+                                    e.insert(pass1::Pass1Scroll(s));
+                                }
                             }
                         });
                     }
                     for (i, m) in list {
                         let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
                         commands.spawn((Transform::IDENTITY, Visibility::Visible, ObjectRoot(pack, i), *part)).with_children(|c| {
                             for (_, mesh, material) in parts {
                                 c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            }
+                            for (_, mesh, material, scroll) in second {
+                                let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                                if let Some(s) = scroll {
+                                    e.insert(pass1::Pass1Scroll(s));
+                                }
                             }
                         });
                     }
@@ -2025,8 +2046,24 @@ fn sync_worlds(
         };
         match model {
             Ok(Some(m)) => {
+                // An environment-mapped pass 0 is drawn by the pass-1 shader with view-generated
+                // UVs (pass1.rs), its texture shared per model texture.
+                let mut env_textures: std::collections::HashMap<usize, Handle<Image>> = std::collections::HashMap::new();
                 for (i, mesh, material) in part_assets(&m, &mut meshes, &mut materials, &mut images) {
-                    let mut e = commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part));
+                    let env = m.parts[i].texture.filter(|_| m.parts[i].env_map && std::env::var_os("NEOPETS_NO_PASS1").is_none());
+                    let mut e = match env {
+                        Some(t) => {
+                            if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() {
+                                let q = &m.parts[i].positions;
+                                let n = q.len().max(1) as f32;
+                                let c = q.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n]);
+                                println!("env pass 0 part {i}: middle ({:.0}, {:.0}, {:.0}), {} vertices", c[0], c[1], c[2], q.len());
+                            }
+                            let image = env_textures.entry(t).or_insert_with(|| images.add(model_texture(&m.textures[t]))).clone();
+                            commands.spawn((Mesh3d(mesh), MeshMaterial3d(pass1_materials.add(pass1::env_base(image))), Transform::IDENTITY, *part))
+                        }
+                        None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part)),
+                    };
                     // A part under a type-3 node, or of an instance or placed object, draws only
                     // while its zone column passes.
                     if let (WorldPart::Scene(pack, _), Some(z)) = (*part, m.parts[i].zone) {
@@ -2636,6 +2673,7 @@ pub(crate) fn pass1_assets(
             params: pass1::Pass1Params { mode: Vec4::new(if p1.uv_mode == 1 { 1.0 } else { 0.0 }, kind as f32, fix, 0.0), offset: Vec4::ZERO },
             texture: image,
             blend: kind == 2,
+            mask: false,
         });
         let g = gs_unit(part);
         let colors: Vec<[f32; 4]> = part.colors.iter().map(|c| [(c[0] * g).powf(2.2), (c[1] * g).powf(2.2), (c[2] * g).powf(2.2), c[3].min(1.0)]).collect();
