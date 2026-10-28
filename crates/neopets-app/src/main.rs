@@ -78,7 +78,8 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         for t in 1..=120 {
             fx.tick(&table, &mut Midpoint);
             if matches!(t, 1 | 10 | 30 | 60 | 120) {
-                seen.push(format!("t{t}: {} spawners {} particles", fx.live_spawners(), fx.live_particles()));
+                let size = fx.particles.iter().flatten().map(|p| p.size[0]).fold(0.0f32, f32::max);
+                seen.push(format!("t{t}: {} spawners {} particles, largest size {size:.2}", fx.live_spawners(), fx.live_particles()));
             }
         }
         println!("  loss effect {id:#x} (definition {:?}): {}", table.find(id), seen.join(", "));
