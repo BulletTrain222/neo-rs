@@ -1360,7 +1360,7 @@ fn reset_1089(state: &mut GameState) -> Vec<Action> {
 }
 
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1392 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 990 | 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1392 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -3134,6 +3134,28 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         678 | 686 | 691 => road_init(pack, state),
         1023 => village_init(state),
+        // SPEC-0042 990 Init (Low for the module overall): blackboard value 2 for eW 78; objects
+        // 15, 13, 17, 19, 21 and 23 set up on (at their end) and 0, 1, 2, 7, 3, 4, 5, 11 and 9
+        // off (at their start); the fall handler on trigger 2 and the prompt handler on triggers
+        // 3 to 8. Words: 0 the lever word (-1 at load), 12, 14 and 16 whether objects 12, 14
+        // and 16 are active. Of the twelve record setups only their objects (39 to 50, off) are
+        // set up; their animated locators, handler S on triggers 16 to 87 (its body is open in
+        // the spec), the record thread, the animation-linked sounds and the debug log mode are
+        // not built.
+        990 => {
+            state.blackboard.insert((2, 78), 2);
+            state.set_word(990, 0, -1);
+            for w in [12, 14, 16] {
+                state.set_word(990, w, 0);
+            }
+            let mut v: Vec<Action> = [15, 13, 17, 19, 21, 23].map(|obj| Action::InitObjOn { obj, end: true }).to_vec();
+            v.extend([0, 1, 2, 7, 3, 4, 5, 11, 9].map(|obj| Action::InitObjOn { obj, end: false }));
+            // The record setups' own object setups: objects 39 to 50 off.
+            v.extend((39..=50).map(|obj| Action::InitObjOn { obj, end: false }));
+            v.push(reg(2, 2));
+            v.extend((3..=8).map(|i| reg(i, 3)));
+            v
+        }
         1184 => woods_init(state),
         1098 => castle_init(state),
         1056 => yard_init(state),
@@ -9295,6 +9317,50 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1130, 7) if call.state == 1 && call.object && !state.movies.contains(&50) && !state.hero.occupied => {
             out.actions.push(Action::PlayFmv { movie: 50 });
         }
+        // SPEC-0042 990 handler F (trigger 2, entering): camera 7 (no wait), the hero's long
+        // fall, 1 s and the normal camera (Medium).
+        (990, 2) if call.state == 1 => out.actions.extend([
+            Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
+            Action::LongFall,
+            wait(1.0),
+            Action::ReturnCamera { preset: -1, release: true },
+        ]),
+        // 990 handler P (triggers 3 to 8, while the object is present): 3 to 5 show context 1
+        // while object 12, 14 or 16 is inactive, and a press swaps the pair (12/13, 14/15 or
+        // 16/17) and plays camera 5, 4 or 6; 6 to 8 always show context 4, and a press negates
+        // the lever word, plays sounds 6 and 7 and object 0's animation at that speed. The
+        // press paths' hero walk and animations (139, 140) and their order are Low and left out.
+        (990, 3) if call.object && call.state != 0 => match call.index {
+            3..=5 => {
+                let k = (call.index - 3) as usize;
+                let even = [12, 14, 16][k];
+                if state.word(pack, even as u8) == 0 {
+                    out.prompt = Some(1);
+                    if call.square && !state.talking {
+                        state.set_word(pack, even as u8, 1);
+                        out.actions.extend([
+                            Action::DeactivateObj { obj: even + 1 },
+                            Action::InitObjOn { obj: even, end: false },
+                            Action::PlayCamera { track: [5, 4, 6][k], wait: true, end: 1, speed: 1.0 },
+                            Action::ReturnCamera { preset: -1, release: true },
+                        ]);
+                    }
+                }
+            }
+            6..=8 => {
+                out.prompt = Some(4);
+                if call.square && !state.talking {
+                    let l = -state.word(pack, 0);
+                    state.set_word(pack, 0, l);
+                    out.actions.extend([
+                        Action::PlaySound { cue: 6, locator: None },
+                        Action::PlaySound { cue: 7, locator: None },
+                        Action::PlayAnim { obj: 0, speed: l as f32, wait: false },
+                    ]);
+                }
+            }
+            _ => {}
+        },
         (1130, 6) if state.word(pack, 20) == 0 => {
             state.set_word(pack, 20, 1);
             out.actions.push(Action::Message { line: 3 });
@@ -17819,6 +17885,25 @@ mod tests {
         on_update(1056, &mut s, false);
         assert!(s.flag(171));
         assert_eq!(undamageable(1056), &[4, 7, 8, 9, 20, 21, 14]);
+    }
+
+    #[test]
+    fn module_990_prompts() {
+        // SPEC-0042 990 handler P test vector: object 12 inactive, the hero in trigger 3: context
+        // 1 and a press swaps 12/13 and plays track 5; afterwards nothing; trigger 7 shows
+        // context 4 every tick and a press turns the lever word from -1 to 1.
+        let mut s = GameState::default();
+        let v = on_init(990, &mut s);
+        assert!(v.contains(&Action::InitObjOn { obj: 13, end: true }) && v.contains(&Action::RegisterTrigger { index: 7, routine: 3 }));
+        let at = |index, square| TriggerCall { index, state: 2, object: true, square, block: -1 };
+        assert_eq!(on_trigger(990, 3, at(3, false), &mut s).prompt, Some(1));
+        let a = on_trigger(990, 3, at(3, true), &mut s).actions;
+        assert!(a.contains(&Action::InitObjOn { obj: 12, end: false }) && a.contains(&Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 }));
+        let after = on_trigger(990, 3, at(3, true), &mut s);
+        assert!(after.prompt.is_none() && after.actions.is_empty());
+        assert_eq!(on_trigger(990, 3, at(7, false), &mut s).prompt, Some(4));
+        let lever = on_trigger(990, 3, at(7, true), &mut s).actions;
+        assert!(lever.contains(&Action::PlayAnim { obj: 0, speed: 1.0, wait: false }));
     }
 
     #[test]
