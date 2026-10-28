@@ -2388,11 +2388,11 @@ fn sync_shots(
         let material = materials.add(StandardMaterial { base_color: Color::srgb(1.0, 0.85, 0.2), unlit: true, ..default() });
         // The pool's slots, then 8 for the Undead Draik's spit records.
         for i in 0..neopets_sim::projectile::SLOTS + 8 {
-            commands.spawn((ShotMarker(i), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden));
+            commands.spawn((ShotMarker(i), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden, bevy::light::NotShadowCaster));
         }
         let rope = meshes.add(Cylinder::new(0.06, 1.0));
         let gold = materials.add(StandardMaterial { base_color: Color::srgb(0.85, 0.68, 0.36), perceptual_roughness: 0.8, ..default() });
-        commands.spawn((RopeStrand, Mesh3d(rope), MeshMaterial3d(gold), Transform::default(), Visibility::Hidden));
+        commands.spawn((RopeStrand, Mesh3d(rope), MeshMaterial3d(gold), Transform::default(), Visibility::Hidden, bevy::light::NotShadowCaster));
         return;
     }
     for (mut t, mut vis) in &mut strand {
@@ -2789,7 +2789,7 @@ fn sync_hero_glows(
                 }
                 commands.spawn((GlowRoot(*id, handles), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
                     for (mesh, h) in children {
-                        c.spawn((Mesh3d(mesh), MeshMaterial3d(h), Transform::IDENTITY));
+                        c.spawn((Mesh3d(mesh), MeshMaterial3d(h), Transform::IDENTITY, bevy::light::NotShadowCaster));
                     }
                 });
             }
@@ -3026,7 +3026,7 @@ fn sync_cloud_fx(
                 10 => (ball.clone(), Color::srgba(0.55, 0.8, 1.0, 0.22)),
                 _ => (ball.clone(), Color::srgba(1.0, 0.95, 0.5, 0.8)),
             };
-            commands.spawn((CloudFx(k), Mesh3d(mesh), MeshMaterial3d(mat(&mut materials, colour)), Transform::IDENTITY, Visibility::Hidden));
+            commands.spawn((CloudFx(k), Mesh3d(mesh), MeshMaterial3d(mat(&mut materials, colour)), Transform::IDENTITY, Visibility::Hidden, bevy::light::NotShadowCaster));
         }
         return;
     }

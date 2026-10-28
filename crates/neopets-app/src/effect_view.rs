@@ -77,7 +77,7 @@ pub fn sync_trails(
             });
             let h = meshes.add(mesh);
             if let Some(m) = &material {
-                commands.spawn((TrailBatch, Mesh3d(h.clone()), MeshMaterial3d(m.clone()), Transform::default(), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling));
+                commands.spawn((TrailBatch, Mesh3d(h.clone()), MeshMaterial3d(m.clone()), Transform::default(), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
             }
             *made = Some((h, material));
         }
@@ -166,7 +166,7 @@ pub fn sync_effects(
             None => {
                 let h = meshes.add(mesh);
                 made.meshes.insert(*group, h.clone());
-                commands.spawn((EffectBatch(*group), Mesh3d(h), MeshMaterial3d(material), Transform::default(), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling));
+                commands.spawn((EffectBatch(*group), Mesh3d(h), MeshMaterial3d(material), Transform::default(), Visibility::Visible, bevy::camera::visibility::NoFrustumCulling, bevy::light::NotShadowCaster));
             }
         }
     }
