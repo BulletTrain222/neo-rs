@@ -111,6 +111,9 @@ pub enum Action {
     ReleaseEntity { entity: usize },
     /// SetAI_Agro (row 115).
     Agro { entity: usize },
+    /// TriggerBaggus(i) (row 64): break Bagguss record i of the current world's list (the kind-3
+    /// script groups in order; an out-of-range index does nothing).
+    TriggerBaggus { index: usize },
     /// SetAI_Behavior(entity, code, patrol data) (row 119). The data block's words are not
     /// recovered (SPEC-0044 1393: one shared, zeroed record); the host takes it as the end of
     /// script control and of any agro (the code change resets the mode word to 0).
@@ -8360,7 +8363,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // T1 (trigger 21, entering, 261 clear): sequence S1 (entity 74's scene, lines 0 and 1,
         // entities 12, 51 and 50 made aggressive). A fade in follows the hero's move (none is
-        // listed until the end); the character (de)activations and TriggerBaggus are not built.
+        // listed until the end); the character (de)activations are not built.
         (735, 1) if call.state == 1 && !state.flag(261) => {
             state.set(261, true);
             let cam = |track, wait| Action::PlayCamera { track, wait, end: 1, speed: 1.0 };
@@ -8386,6 +8389,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 anim(102, false, false),
                 wait(1.0),
                 cam(10, false),
+                Action::TriggerBaggus { index: 3 },
+                Action::TriggerBaggus { index: 4 },
+                Action::TriggerBaggus { index: 5 },
+                Action::TriggerBaggus { index: 6 },
+                Action::TriggerBaggus { index: 7 },
                 cam(8, false),
                 Action::Message { line: 1 },
                 anim(104, false, true),

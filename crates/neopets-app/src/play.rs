@@ -2552,6 +2552,45 @@ impl Play {
                         c.anim.play(id);
                     }
                 }
+                Action::TriggerBaggus { index } => {
+                    // SPEC-0030 row 64 (R-0116): one record per kind-3 group of the world's
+                    // type-40 list, in order; a group with a locator (+0x0C) places the next
+                    // record there, its height the ground below the locator's height + 4.0. The
+                    // list's shared model is present when a kind-3 group names a candidate
+                    // (+0x2C). Not built: the shared model's draw and move (the chunk-29
+                    // model-handle array is not specified; R-0119), the burst 2.0 above the
+                    // record (its effect is not named) and the breakable-object path. An
+                    // unplaced record (pack 735's sixth) spawns nothing here.
+                    let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
+                    let kind3: Vec<&neopets_data::trigger::ScriptGroup> = world.groups.iter().filter(|g| g.kind == 3).collect();
+                    if index >= kind3.len() {
+                        return None;
+                    }
+                    let model = kind3.iter().any(|g| !g.breakables.is_empty());
+                    let placed: Vec<i32> = kind3.iter().filter_map(|g| g.locators.first().copied()).collect();
+                    let l = placed.get(index).and_then(|&i| world.entries.get(usize::try_from(i).ok()?)).map(|e| e.0);
+                    if model {
+                        self.cue(178);
+                    }
+                    let Some(l) = l else { return None };
+                    let y = self.ground_in(pack, l[0], l[2], l[1] + 4.0).unwrap_or(l[1]);
+                    let spawn = neopets_sim::items::Spawn {
+                        id: 145,
+                        point: [l[0], y, l[2]],
+                        placed: false,
+                        charm: false,
+                        s0: 0.25,
+                        s1: 1.0,
+                        delay: 0.0,
+                        larg: -1.0,
+                        direction: None,
+                        flag: 0,
+                        map: 0,
+                        price: 0,
+                    };
+                    self.spawn_item(pack, spawn);
+                    self.last_fx = format!("bagguss {index} broken at {:.1},{:.1} on tick {}", l[0], l[2], self.ticks);
+                }
                 Action::AiBehavior { entity, code: _ } => {
                     let c = self.entity_mut(pack, entity)?;
                     c.held = false;

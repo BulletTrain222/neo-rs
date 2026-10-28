@@ -42,6 +42,7 @@ fn run() -> Result<(), String> {
     let mut boot_words: Option<(u32, usize)> = None;
     let mut panels = false;
     let mut object_headers = false;
+    let mut groups: Option<u32> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -59,6 +60,10 @@ fn run() -> Result<(), String> {
             "--aim-targets" => aim = true,
             "--panels" => panels = true,
             "--object-headers" => object_headers = true,
+            "--groups" => {
+                let n = args.next().ok_or("--groups needs a pack")?;
+                groups = Some(n.parse().map_err(|_| format!("Bad pack {n}"))?);
+            }
             "--registry" => {
                 let n = args.next().ok_or("--registry needs a resource number")?;
                 registries.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -111,7 +116,7 @@ fn run() -> Result<(), String> {
             println!("{:#08x}: {w:#010x} i32 {} f32 {}", a + 4 * k as u32, w as i32, f32::from_bits(w));
         }
     }
-    if !(monster_word.is_some() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(monster_word.is_some() || groups.is_some() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -197,6 +202,20 @@ fn run() -> Result<(), String> {
     }
     if object_headers {
         object_header_census(&mut disc, &index)?;
+    }
+    if let Some(pack) = groups {
+        // A pack's type-40 script groups and its top-level type-11 locators (SPEC-0030 row 64).
+        let bytes = index.read(&mut disc, pack)?;
+        let chain = resource::walk_chunks(&bytes, resource::chunk_limit(pack, resource::classify(&bytes)))?;
+        for (i, g) in neopets_data::trigger::script_groups(&bytes, &chain.chunks).iter().enumerate() {
+            println!("group {i}: kind {} key {} loc {:?} trig {:?} obj {:?} cam {:?} brk {:?} fx {:?} drop {:?}", g.kind, g.key, g.locators, g.triggers, g.objects, g.cameras, g.breakables, g.effects, g.drops);
+        }
+        if let Some(c) = chain.chunks.iter().find(|c| c.kind == neopets_data::ground::OBJECT_HEADER) {
+            let h = neopets_data::trigger::object_header(&bytes[c.payload.clone()]);
+            for (i, l) in h.locators.iter().enumerate() {
+                println!("locator {i}: {:?} {:?}", l.0, l.1);
+            }
+        }
     }
     if survey || coverage {
         let report = survey_all(&mut disc, &index)?;
