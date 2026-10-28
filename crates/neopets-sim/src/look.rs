@@ -22,6 +22,34 @@ fn flat(a: Vec3) -> Vec3 {
     unit([a[0], 0.0, a[2]])
 }
 
+/// The neck joint list of mode 1 (six s32 words, joints 6, 7, 8, 11, 14 and 17; SPEC-0016 6A).
+pub const NECK_JOINTS_AT: u32 = 0x0032_0F48;
+/// The neck's step per tick.
+pub const NECK_STEP: f32 = 0.01;
+
+/// Mode 1, the Plague Serpent's neck (SPEC-0040 Behavior 23A; SPEC-0016 6A): A = acos(h_t . h_b)
+/// with no clamp (a dot above 1 gives no number, and nothing moves), s = unit(h_b x up) . h_t,
+/// tau = -A/6 when s > 0, else +A/6; each angle snaps to tau within 0.01, otherwise it may only
+/// increase (s > 0) or only decrease (s <= 0) by 0.01 toward tau (the quirk: the allowed
+/// direction points away from tau, so from 0 the neck moves only by the snap).
+pub fn neck_step(angles: &mut [f32; 6], j6: Vec3, j17: Vec3, target: Vec3) {
+    let ht = flat([target[0] - j6[0], 0.0, target[2] - j6[2]]);
+    let hb = flat([j17[0] - j6[0], 0.0, j17[2] - j6[2]]);
+    let a = dot(ht, hb).acos();
+    let c = [hb[1] * UP[2] - hb[2] * UP[1], hb[2] * UP[0] - hb[0] * UP[2], hb[0] * UP[1] - hb[1] * UP[0]];
+    let s = dot(unit(c), ht);
+    let tau = if s > 0.0 { -a / 6.0 } else { a / 6.0 };
+    for x in angles.iter_mut() {
+        if (tau - *x).abs() <= NECK_STEP {
+            *x = tau;
+        } else if s > 0.0 && tau > *x {
+            *x += NECK_STEP;
+        } else if s <= 0.0 && tau < *x {
+            *x -= NECK_STEP;
+        }
+    }
+}
+
 /// The hero's stored angles (player +0xF30 and +0xF34), kept between looks.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Look {
@@ -87,6 +115,18 @@ mod tests {
             n += 1;
         }
         assert!(n >= 32);
+    }
+
+    #[test]
+    fn neck_snaps_or_freezes() {
+        // The hero nearly straight along the neck: A small, tau within 0.01, the snap.
+        let mut n = [0.0; 6];
+        neck_step(&mut n, [0.0; 3], [0.0, 0.0, 5.0], [0.3, 0.0, 10.0]);
+        assert!(n.iter().all(|&x| x != 0.0 && x.abs() <= NECK_STEP));
+        // Far to the side: tau more than 0.01 away and the allowed direction away from it.
+        let mut n = [0.0; 6];
+        neck_step(&mut n, [0.0; 3], [0.0, 0.0, 5.0], [10.0, 0.0, 0.0]);
+        assert_eq!(n, [0.0; 6]);
     }
 
     #[test]

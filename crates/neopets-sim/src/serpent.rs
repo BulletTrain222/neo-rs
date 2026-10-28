@@ -168,6 +168,8 @@ impl Default for Act {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Serpent {
     pub state: State,
+    /// The six neck angles (SPEC-0016 6A), stepped by the host in state 0, else 0.
+    pub neck: [f32; 6],
     pub phase: i32,
     pub slot: usize,
     flag: u8,
@@ -179,7 +181,7 @@ pub struct Serpent {
 
 impl Default for Serpent {
     fn default() -> Self {
-        Self { state: State::Idle, phase: 1, slot: 0, flag: 0, variant: 0, stored: [None, None], belch: 0, struck: false }
+        Self { state: State::Idle, neck: [0.0; 6], phase: 1, slot: 0, flag: 0, variant: 0, stored: [None, None], belch: 0, struck: false }
     }
 }
 

@@ -870,6 +870,8 @@ pub struct Play {
     swing_serial: u32,
     /// SPEC-0040 Behavior 23A: the hero's stored look yaw and pitch.
     head_look: neopets_sim::look::Look,
+    /// The Plague Serpent's neck joints (boot list 0x320F48; SPEC-0016 6A).
+    neck_joints: Vec<usize>,
     /// SPEC-0010 Test spawn: with NEOPETS_CLOUD_BEAST set, monster rows 1 (the Cloud Beast) and
     /// 2 (its companion), spawned in each world with the stand-in models (no model on disc).
     cloud_rows: Option<(neopets_data::monster::Row, neopets_data::monster::Row)>,
@@ -1338,6 +1340,7 @@ impl Play {
             _ => None,
         };
         let cloud_words = neopets_sim::cloudbeast::Words::read(&words(neopets_sim::cloudbeast::BASE, neopets_sim::cloudbeast::WORDS)?);
+        let neck_joints: Vec<usize> = words(neopets_sim::look::NECK_JOINTS_AT, 6)?.into_iter().map(|w| w as usize).collect();
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
         let ixi_words = neopets_sim::ixi::Words::read(&words(neopets_sim::ixi::BASE, neopets_sim::ixi::WORDS)?).ok_or("The Ixi Chief's tuning block is short")?;
@@ -1602,6 +1605,7 @@ impl Play {
             hit_list: Vec::new(),
             swing_serial: 0,
             head_look: Default::default(),
+            neck_joints,
             cloud_rows,
             cloud_on: std::env::var_os("NEOPETS_CLOUD_BEAST").is_some(),
             cloud_words,
@@ -10659,6 +10663,23 @@ impl Play {
             let before = sp.state;
             let act = sp.tick(&v, &self.serpent_words, &mut self.rng);
             let after = sp.state;
+            // SPEC-0016 6A: in state 0 the neck look at the active hero (joints 6 and 17 of the
+            // animated pose); on any other tick the six angles go back to 0.
+            c.anim.set_neck(None);
+            if after == neopets_sim::serpent::State::Idle {
+                let place = placement(c.position, c.facing);
+                let frames = c.anim.bone_frames();
+                if let (Some(a), Some(b)) = (self.neck_joints.first().and_then(|&j| frames.get(j)), self.neck_joints.last().and_then(|&j| frames.get(j))) {
+                    neopets_sim::look::neck_step(&mut sp.neck, place.apply(a.t), place.apply(b.t), hero);
+                }
+            } else {
+                sp.neck = [0.0; 6];
+            }
+            c.anim.set_neck(Some((self.neck_joints.clone(), sp.neck)));
+            // NEOPETS_TRACE_NECK: the serpent's neck angles once a second (trace only).
+            if std::env::var_os("NEOPETS_TRACE_NECK").is_some() && self.ticks % 60 == 0 {
+                println!("NECK tick {} state {:?} angles {:?}", self.ticks, sp.state, sp.neck);
+            }
             if let Some(n) = act.anim {
                 if clip.action != n || (clip.progress >= 0.99 && before != after) {
                     c.anim.play(n);

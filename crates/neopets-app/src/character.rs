@@ -40,6 +40,8 @@ pub struct HeroAnim {
     /// The hero's head-look point in model space for this tick (SPEC-0040 Behavior 23A head
     /// step on joint 6), cleared when no look is requested.
     look: Option<[f32; 3]>,
+    /// The neck look's joints and angles for this tick (SPEC-0040 Behavior 23A mode 1).
+    neck: Option<(Vec<usize>, [f32; 6])>,
 }
 
 /// The head joint of the hero's look (SPEC-0040 Behavior 23A, mode 0).
@@ -79,7 +81,7 @@ impl HeroAnim {
                 state
             })
             .collect();
-        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None, scale_set: 0, look: None };
+        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None, scale_set: 0, look: None, neck: None };
         hero.play(3);
         hero
     }
@@ -97,6 +99,34 @@ impl HeroAnim {
     /// animated pose).
     pub fn set_look(&mut self, point: Option<[f32; 3]>) {
         self.look = point;
+    }
+
+    /// The neck look for this tick: each listed joint turned about the up axis by its angle.
+    pub fn set_neck(&mut self, neck: Option<(Vec<usize>, [f32; 6])>) {
+        self.neck = neck;
+    }
+
+    /// Turn joint `j` and the joints below it about the up axis through the joint by `angle`.
+    fn turn_about_up(&self, m: &mut [Affine], parents: &[Option<usize>], j: usize, angle: f32) {
+        let Some(o) = m.get(j).map(|a| a.apply(self.bones.rest_position.get(j).copied().unwrap_or_default())) else { return };
+        let (s, c) = angle.sin_cos();
+        let rot = |v: [f32; 3]| [c * v[0] + s * v[2], v[1], -s * v[0] + c * v[2]];
+        let under = |mut i: usize| loop {
+            if i == j {
+                break true;
+            }
+            match parents.get(i).copied().flatten() {
+                Some(p) if p != i => i = p,
+                _ => break false,
+            }
+        };
+        for (i, a) in m.iter_mut().enumerate() {
+            if under(i) {
+                a.cols = a.cols.map(rot);
+                let d = rot([a.t[0] - o[0], a.t[1] - o[1], a.t[2] - o[2]]);
+                a.t = [o[0] + d[0], o[1] + d[1], o[2] + d[2]];
+            }
+        }
     }
 
     /// The parent of each skin index across the families (main joints, then each other
@@ -485,6 +515,14 @@ impl HeroAnim {
         let mut m = anim::skin_matrices(&self.bones, &family(main), &others);
         if let Some(p) = self.look {
             self.apply_look(&mut m, p);
+        }
+        if let Some((joints, angles)) = &self.neck {
+            let parents = self.skin_parents();
+            for (&j, &a) in joints.iter().zip(angles) {
+                if a != 0.0 {
+                    self.turn_about_up(&mut m, &parents, j, a);
+                }
+            }
         }
         m
     }
