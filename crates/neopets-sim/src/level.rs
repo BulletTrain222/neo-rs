@@ -155,6 +155,11 @@ pub enum Action {
     SetInvulnerable { entity: usize, on: bool },
     /// DisableInvisibility(entity) (SPEC-0030 row 121).
     DisableInvisibility { entity: usize },
+    /// A cue on the main slot with no position (built-in world routines, e.g. the sealed
+    /// chest's 182).
+    MainCue { cue: i32 },
+    /// A one-shot detached effect of the shared group at a point facing `dir` (SPEC-0034 3.16).
+    EffectAt { id: i32, at: [f32; 3], dir: [f32; 3] },
     /// InitMiamouseBehavior(field mesh, cage mesh) and MiamiceCatchDisable (SPEC-0029
     /// Behavior 28).
     MiamouseInit { field: i32, cage: i32 },

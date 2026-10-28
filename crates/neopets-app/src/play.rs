@@ -1936,6 +1936,20 @@ impl Play {
             let Some(obj) = g.objects.first().and_then(|&o| usize::try_from(o).ok()) else { return out };
             match g.kind {
                 1 => out.push(Action::InitObjOn { obj, end: self.state.collected.contains(&g.key) }),
+                // Kind 2 (the element-sealed chest, SPEC-0048 Element gate on hits, Set-up): object
+                // 0 drawn, object 1 drawn stopped; once opened (its key row set) both breakables
+                // disabled, object 1 hidden and effect 0 stopped.
+                2 => {
+                    out.push(Action::InitObjOn { obj, end: false });
+                    let o1 = g.objects.get(1).and_then(|&o| usize::try_from(o).ok());
+                    if self.state.collected.contains(&g.key) {
+                        out.extend(g.breakables.iter().take(2).filter_map(|&b| usize::try_from(b).ok()).map(|id| Action::SetBreakableActive { id, on: false }));
+                        out.extend(o1.map(|obj| Action::DeactivateObj { obj }));
+                        out.extend(g.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::StopEffect { slot }));
+                    } else {
+                        out.extend(o1.map(|obj| Action::InitObjOn { obj, end: false }));
+                    }
+                }
                 // Kind 5 (a reaction object): object 0 on and looped at 1.0.
                 5 => out.extend([Action::InitObjOn { obj, end: false }, Action::LoopAnim { obj, speed: 1.0 }]),
                 // Kind 6 (a dig site, SPEC-0051 section 10 Site set-up): undug, object 0 at its
@@ -2465,6 +2479,13 @@ impl Play {
                     if let Some(id) = c.enemy.as_mut().and_then(|e| e.agro_on(hero, rng)) {
                         c.anim.play(id);
                     }
+                }
+                Action::MainCue { cue } => self.cue(cue),
+                Action::EffectAt { id, at, dir } => {
+                    let f = unit([dir[0], 0.0, dir[2]]);
+                    let f = if f == [0.0; 3] { [0.0, 0.0, 1.0] } else { f };
+                    let table = self.effect_table.clone();
+                    self.effects.one_shot(&table, id, at, [[f[2], 0.0, -f[0]], [0.0, 1.0, 0.0], f], &mut self.rng);
                 }
                 Action::DisableInvisibility { entity } => {
                     if let Some(e) = self.entity_mut(pack, entity).and_then(|c| c.enemy.as_mut()) {
@@ -6428,6 +6449,19 @@ impl Play {
             }
             if let Some(g) = self.world.groups.iter().position(|g| g.kind == 6 && g.triggers.first() == Some(&(i as i32))) {
                 self.dig_step(g, rec);
+                continue;
+            }
+            // SPEC-0048 Element gate on hits, Prompt thread: on repeated fires of the sealed
+            // chest's trigger 0 while its body is intact, context prompt 29 while the seal's
+            // element and the slot-2 Mote's kind differ (Nova not exempt), else 30, until Square
+            // is held.
+            if let Some(g) = self.world.groups.iter().find(|g| g.kind == 2 && g.triggers.first() == Some(&(i as i32))).cloned() {
+                let body = g.breakables.first().and_then(|&b| usize::try_from(b).ok()).and_then(|b| self.world.breakables.get(b));
+                let e_t = g.breakables.get(1).and_then(|&b| usize::try_from(b).ok()).and_then(|b| self.world.breakables.get(b)).map_or(0, |b| b.element as i32);
+                if rec.state == 2 && body.is_some_and(|b| matches!(b.state, 1 | 3)) && !square && self.door_prompt.is_none() && !self.talk_prompt {
+                    let e_a = neopets_sim::mote::element(self.equipment.motes[0][2]);
+                    self.door_prompt = Some(if e_t != 0 && e_a != e_t { 29 } else { 30 });
+                }
                 continue;
             }
             // SPEC-0048 Reaction object (kind 5): on a fire of trigger 0 while no run is going on,
@@ -10627,6 +10661,16 @@ impl Play {
         let mut chained = Vec::new();
         let mut cues = Vec::new();
         let mut recoil = false;
+        let mut seals = Vec::new();
+        // The element-sealed chests (kind 2): (group, chest body breakable, seal breakable).
+        let sealed: Vec<(usize, usize, usize)> = self
+            .world
+            .groups
+            .iter()
+            .enumerate()
+            .filter(|(_, g)| g.kind == 2)
+            .filter_map(|(gi, g)| Some((gi, usize::try_from(*g.breakables.first()?).ok()?, usize::try_from(*g.breakables.get(1)?).ok()?)))
+            .collect();
         // The chain hook: members 0 to n-2 of a kind-4 group (the group's index with it).
         let hooked: Vec<(usize, usize)> = self
             .world
@@ -10653,6 +10697,20 @@ impl Play {
             if !hit {
                 continue;
             }
+            // SPEC-0048 Element gate on hits: the chest body's hook only recoils Tor; the seal's
+            // hook passes when its element is 0, matches the slot-2 Mote's kind, or the Mote is
+            // Nova (7), and opens the chest; otherwise Tor recoils.
+            if let Some(&(gi, body, seal)) = sealed.iter().find(|s| s.1 == i || s.2 == i) {
+                let e_t = b.element as i32;
+                if i == seal && (e_t == 0 || kind == e_t || kind == 7) {
+                    if b.state == 1 && !seals.contains(&gi) {
+                        seals.push(gi);
+                    }
+                } else if i == body || i == seal {
+                    recoil = true;
+                }
+                continue;
+            }
             let e = b.element as i32;
             if !(e == 0 || e == 7 || e == kind) {
                 // A mismatch: Tor recoils with material 4, with no break and no cue.
@@ -10675,6 +10733,9 @@ impl Play {
                 cues.push(break_cue(b.material));
             }
         }
+        for gi in seals {
+            self.seal_open(gi);
+        }
         if recoil && self.hero_index == 0 {
             if let Some(a) = self.attack.as_mut() {
                 a.recoil();
@@ -10689,6 +10750,50 @@ impl Play {
         for c in cues {
             self.cue(c);
         }
+    }
+
+    /// SPEC-0048 Element gate on hits, Open: the sealed chest's sequence as a script thread (the
+    /// waits in seconds as ticks): the body made active, the seal broken, effect 0 stopped, the
+    /// weapon put away; 0.3 s, camera 0 (waited for), cue 182; 1.3 s, object 0 hidden and object
+    /// 1 shown and looped; 2.0 s, the display mask stepped 0x10000, 0x20000, 0x40000 (0.8 s each)
+    /// and back to 0; effect 791 at X + 2.9 d, the body broken, object 1 hidden and object 0
+    /// shown, hero animation 192; 3.3 s, camera 1, hero animation 186; the reward (the drop of
+    /// pair 0, as a lock chest's) and the key row; 2.0 s and the normal camera. Not built: the
+    /// HUD reset, the reward's 2.2 d launch point (the lock chest's 2.4 d is used) and pair 1's
+    /// character.
+    fn seal_open(&mut self, gi: usize) {
+        let Some(g) = self.world.groups.get(gi).cloned() else { return };
+        let b = |k: usize| g.breakables.get(k).and_then(|&b| usize::try_from(b).ok());
+        let o = |k: usize| g.objects.get(k).and_then(|&o| usize::try_from(o).ok());
+        let camera = |k: usize| g.cameras.get(k).and_then(|&c| usize::try_from(c).ok());
+        let (x, d) = g.locators.first().and_then(|&k| usize::try_from(k).ok()).and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
+        let fx = [x[0] + 2.9 * d[0], x[1] + 2.9 * d[1], x[2] + 2.9 * d[2]];
+        let secs = |s: f32| Action::Sleep { ticks: (s * 60.0).round() as u32 };
+        let mut v: Vec<Action> = Vec::new();
+        v.extend(b(0).map(|id| Action::SetBreakableActive { id, on: true }));
+        v.extend(b(1).map(|id| Action::Break { id }));
+        v.extend(g.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::StopEffect { slot }));
+        v.extend([Action::Equip { on: false }, secs(0.3)]);
+        v.extend(camera(0).map(|track| Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 }));
+        v.extend([Action::MainCue { cue: 182 }, secs(1.3)]);
+        v.extend(o(0).map(|obj| Action::DeactivateObj { obj }));
+        v.extend(o(1).map(|obj| Action::InitObjOn { obj, end: false }));
+        v.extend(o(1).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
+        v.push(secs(2.0));
+        // SetWorldDisplayMask stores twice its argument; the raw masks are passed halved.
+        for m in [0x10000u32, 0x20000, 0x40000] {
+            v.extend([Action::DisplayMask { mask: m / 2 }, secs(0.8)]);
+        }
+        v.push(Action::DisplayMask { mask: 0 });
+        v.push(Action::EffectAt { id: 791, at: fx, dir: d });
+        v.extend(b(0).map(|id| Action::Break { id }));
+        v.extend(o(1).map(|obj| Action::DeactivateObj { obj }));
+        v.extend(o(0).map(|obj| Action::InitObjOn { obj, end: false }));
+        v.extend([Action::HeroAnim { anim: 192, wait: false }, secs(2.3), secs(1.0)]);
+        v.extend(camera(1).map(|track| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }));
+        v.extend([Action::HeroAnim { anim: 186, wait: false }, Action::ChestReward { group: gi as u16 }, secs(2.0), Action::ReturnCamera { preset: -1, release: true }]);
+        self.last_door = format!("sealed chest group {gi} opening on tick {}", self.ticks);
+        self.apply(&v);
     }
 
     /// SPEC-0048 Switch groups, the chain hook of kind-4 entry `gi`: the first member in state 1
@@ -10773,7 +10878,7 @@ impl Play {
         // In every pack, an object of a group whose set-up is built (kinds 1, 5 and 6) that the
         // set-up did not pose keeps the disc state 3 and is not drawn until a script turns it on
         // (a lock chest's lid block, a dig site's dug pieces).
-        if !a.scripted && w.groups.iter().any(|g| matches!(g.kind, 1 | 5 | 6) && g.objects.contains(&(i as i32))) {
+        if !a.scripted && w.groups.iter().any(|g| matches!(g.kind, 1 | 2 | 5 | 6) && g.objects.contains(&(i as i32))) {
             return None;
         }
         let grouped = w.groups.iter().any(|g| g.objects.contains(&(i as i32)) && !(g.kind == 1 && g.objects.first() != Some(&(i as i32))));
