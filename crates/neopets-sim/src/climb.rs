@@ -9,8 +9,7 @@
 //! sideways moves inside a stacked straddle and the vertical moves inside a side-by-side one.
 //! Interpretations (the spec gives these as Medium or leaves them open): the approach holds the
 //! hero on the panel and plays 121 to its end; a corner ends with the hero's position along the
-//! new panel clamped into [r, LU - r]; the top-edge hang reads the stick when either value is
-//! non-zero.
+//! new panel clamped into [r, LU - r].
 
 use crate::hero::Vec3;
 
@@ -41,7 +40,7 @@ pub struct Panel {
 }
 
 impl Panel {
-    fn n(&self) -> Vec3 {
+    pub fn n(&self) -> Vec3 {
         v3(self.normal)
     }
 }
@@ -325,7 +324,9 @@ impl Climb {
                 step.place = Some(q);
                 step.facing = Some((n.map(|c| -c), 1.0));
                 step.request = Some(73);
-                if f == 0.0 && s == 0.0 {
+                // The stick is read only when both panel-projected values are non-zero (Top-edge
+                // hang; test vector 148): the host passes the projections in this sub-mode.
+                if f == 0.0 || s == 0.0 {
                     return step;
                 }
                 if s.abs() < f.abs() {
@@ -423,7 +424,10 @@ mod tests {
         let q = s.place.unwrap();
         assert!((q[2] - (RADIUS - 0.7)).abs() < 1e-5 && (q[1] - (10.0 - 0.25 - HEIGHT + 0.1)).abs() < 1e-5, "{q:?}");
         // Forward climbs over with 59, then leaves at 0.95.
-        c.tick(&w, view(q, 1.0, 0.0, (73, 0.5)));
+        // Test vector 148: a zero side value blocks; f 0.5, s 0.1 climbs over (cooldown 0).
+        c.tick(&w, view(q, 0.5, 0.0, (73, 0.5)));
+        assert_eq!(c.sub, 17);
+        c.tick(&w, view(q, 0.5, 0.1, (73, 0.5)));
         assert_eq!(c.sub, 7);
         assert!(c.tick(&w, view(q, 0.0, 0.0, (59, 0.95))).leave);
     }

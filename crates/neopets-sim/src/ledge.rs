@@ -258,10 +258,12 @@ impl Ledge {
     /// depth check's result (the ground 2.0 and 2.5 ahead more than 4.5 below, or none).
     /// Phase 0: from a walk state 2 to 6 a shallow edge returns to the walk state; else the hero
     /// turns out over the edge at rate 0.1. Phase 1: walk request 2 until 0.15 past the face.
-    /// Phase 2: request 73 turning back until the facing is within 0.99 of the inward face
-    /// direction. Phase 3: state 30 (`Step::hang`). The outward walk is taken along the face
+    /// Phase 2: request 73 (action 1 instead, with no turn, while the ground gap `gap` is 0 or
+    /// below), the facing blended 0.25 toward the inward face direction each tick (the shared
+    /// steering blend), done when the updated facing is within 0.99 of it. Phase 3: state 30
+    /// (`Step::hang`). Phase 1 faces out at rate 1.0. The outward walk is taken along the face
     /// normal (the spec's run-plane direction and its neighbouring-edge walk are Medium).
-    pub fn drop_tick(&mut self, hero: Vec3, facing: Vec3, deep: bool) -> Step {
+    pub fn drop_tick(&mut self, hero: Vec3, facing: Vec3, deep: bool, gap: f32) -> Step {
         let n = self.edge.normal();
         let (out, inward) = ([n[0], 0.0, n[2]], [-n[0], 0.0, -n[2]]);
         let mut step = Step { rate: Some(0.1), ..Step::default() };
@@ -277,15 +279,21 @@ impl Ledge {
             }
             1 => {
                 step.facing = Some(out);
+                step.rate = Some(1.0);
                 step.request = Some(2);
                 if plane(self.edge.face, hero) > 0.15 {
                     self.sub = 2;
                 }
             }
             2 => {
+                if gap <= 0.0 {
+                    step.request = Some(1);
+                    return step;
+                }
                 step.facing = Some(inward);
+                step.rate = Some(0.25);
                 step.request = Some(73);
-                if dot(facing, inward) > 0.99 {
+                if dot(crate::hero::steer(facing, inward, 0.25), inward) > 0.99 {
                     self.sub = 3;
                 }
             }
@@ -500,14 +508,20 @@ mod tests {
         // State 37 from a slow walk: a shallow edge returns to the walk; a deep one goes out past
         // the face, turns back and hangs.
         let mut d = Ledge::drop_from(e, 2);
-        assert_eq!(d.drop_tick([-0.1, 9.8, 2.0], out, false).exit, Some(2));
+        assert_eq!(d.drop_tick([-0.1, 9.8, 2.0], out, false, 5.0).exit, Some(2));
         let mut d = Ledge::drop_from(e, 2);
-        d.drop_tick([-0.1, 9.8, 2.0], out, true);
-        assert_eq!(d.drop_tick([0.1, 9.8, 2.0], out, true).request, Some(2));
-        d.drop_tick([0.2, 9.8, 2.0], out, true);
+        d.drop_tick([-0.1, 9.8, 2.0], out, true, 5.0);
+        assert_eq!(d.drop_tick([0.1, 9.8, 2.0], out, true, 5.0).request, Some(2));
+        d.drop_tick([0.2, 9.8, 2.0], out, true, 5.0);
         assert_eq!(d.sub, 2);
-        d.drop_tick([0.2, 9.8, 2.0], [-1.0, 0.0, 0.0], true);
-        assert!(d.drop_tick([0.2, 9.8, 2.0], [-1.0, 0.0, 0.0], true).hang);
+        // Phase 2 on the ground: action 1, no turn. Facing out (opposite the target), the blend
+        // with the side push takes more than one tick to come within 0.99.
+        let s = d.drop_tick([0.2, 9.8, 2.0], out, true, 0.0);
+        assert_eq!((s.request, s.facing, d.sub), (Some(1), None, 2));
+        let s = d.drop_tick([0.2, 9.8, 2.0], out, true, 5.0);
+        assert_eq!((s.request, s.rate, d.sub), (Some(73), Some(0.25), 2));
+        d.drop_tick([0.2, 9.8, 2.0], [-1.0, 0.0, 0.0], true, 5.0);
+        assert!(d.drop_tick([0.2, 9.8, 2.0], [-1.0, 0.0, 0.0], true, 5.0).hang);
     }
 
     #[test]

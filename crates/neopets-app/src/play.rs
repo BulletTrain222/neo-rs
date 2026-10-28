@@ -4270,7 +4270,23 @@ impl Play {
             return;
         };
         let clip = self.hero.clip_state();
-        let view = neopets_sim::climb::View { hero, f: input.forward, s: input.side, gap: self.loco.body.gap, clip: (clip.action, clip.progress), cooldown: self.grab_cooldown };
+        // In the top-edge hang (sub-mode 17) the stick values are the camera-relative stick
+        // vector projected onto the panel: f into the wall, s along the hero's left (SPEC-0033
+        // Top-edge hang), so a pure-forward push is blocked only when the camera is square on.
+        let (mut f, mut s) = (input.forward, input.side);
+        if c.sub == 17 {
+            if let Some(t) = self.world.panels.get(c.target) {
+                let (cf, cl) = self.camera.rows();
+                let flat = |v: [f32; 3]| unit([v[0], 0.0, v[2]]);
+                let (cf, cl) = (flat(cf), flat(cl));
+                let w: [f32; 3] = std::array::from_fn(|k| input.forward * cf[k] + input.side * cl[k]);
+                let n = t.n();
+                let h = unit([-n[0], 0.0, -n[2]]);
+                f = w[0] * h[0] + w[2] * h[2];
+                s = w[0] * h[2] - w[2] * h[0];
+            }
+        }
+        let view = neopets_sim::climb::View { hero, f, s, gap: self.loco.body.gap, clip: (clip.action, clip.progress), cooldown: self.grab_cooldown };
         let sub = c.sub;
         let step = c.tick(&self.world.panels, view);
         self.panel = Some(c);
@@ -4491,7 +4507,7 @@ impl Play {
         let deep = [2.0, 2.5].iter().all(|&k| self.world.ground_at(hero[0] + f[0] * k, hero[2] + f[2] * k, hero[1] + 1.0).is_none_or(|g| hero[1] - g > 4.5));
         let Some(step) = self.ledge.as_mut().map(|l| {
             if l.state == ledge::DROP {
-                l.drop_tick(hero, f, deep)
+                l.drop_tick(hero, f, deep, self.loco.body.gap)
             } else {
                 l.tick(hero, side, forward, self.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })
             }
