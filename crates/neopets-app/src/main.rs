@@ -2471,6 +2471,7 @@ fn sync_hero_items(
     mut roots: Query<(Entity, &HeroItemRoot, &mut Transform, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut models: Local<std::collections::HashMap<u32, Option<([f32; 3], [f32; 3])>>>,
 ) {
@@ -2489,10 +2490,21 @@ fn sync_hero_items(
             };
             let bounds = built.as_ref().map(|m| (m.min, m.max));
             if let Some(m) = built {
+                if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() {
+                    println!("hero item model {res}: {} parts, {} two-pass, {} env pass 0, {} flipbook", m.parts.len(), m.parts.iter().filter(|p| p.pass1.is_some()).count(), m.parts.iter().filter(|p| p.env_map).count(), m.parts.iter().filter(|p| p.flipbook.is_some()).count());
+                }
                 let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                // The held model's render pass 1 (the blade and metal shine; pass1.rs).
+                let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
                 commands.spawn((HeroItemRoot(*res), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
                     for (_, mesh, material) in parts {
                         c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                    }
+                    for (_, mesh, material, scroll) in second {
+                        let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                        if let Some(s) = scroll {
+                            e.insert(pass1::Pass1Scroll(s));
+                        }
                     }
                 });
             }
@@ -2537,6 +2549,7 @@ fn sync_attachments(
     mut roots: Query<(Entity, &AttachmentRoot, &mut Transform, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut spawned: Local<std::collections::HashSet<(u64, u8)>>,
 ) {
@@ -2565,9 +2578,16 @@ fn sync_attachments(
                 continue;
             }
             let parts = part_assets(m, &mut meshes, &mut materials, &mut images);
+            let second = pass1_assets(m, &mut meshes, &mut pass1_materials, &mut images);
             commands.spawn((AttachmentRoot(c.id, *slot), Transform::IDENTITY, Visibility::Hidden)).with_children(|ch| {
                 for (_, mesh, material) in parts {
                     ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                }
+                for (_, mesh, material, scroll) in second {
+                    let mut e = ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                    if let Some(s) = scroll {
+                        e.insert(pass1::Pass1Scroll(s));
+                    }
                 }
             });
         }
