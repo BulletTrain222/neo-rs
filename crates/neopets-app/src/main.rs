@@ -1162,6 +1162,8 @@ fn step_sim(
             guard: vpad.held(bindings::L1),
             attack_held: vpad.held(bindings::CIRCLE) || vpad.held(bindings::R2),
             attack: false,
+            r2_held: vpad.held(bindings::R2),
+            circle_held: vpad.held(bindings::CIRCLE),
         };
         // The attack button (Circle or R2): its press edge, kept for the next tick when this
         // frame runs none.
@@ -2342,12 +2344,19 @@ fn sync_zones(
 #[derive(Component)]
 struct ShotMarker(usize);
 
+/// The Rope Gun's strand from the muzzle to the rope's endpoint (SPEC-0033 State 27). The disc
+/// draws repeated segments of resource 7's model key 159, whose draw size and joins the spec
+/// leaves open; this is this build's stand-in: one thin gold cylinder.
+#[derive(Component)]
+struct RopeStrand;
+
 /// Enemy projectiles are drawn as small plain markers at their positions: the flight effects
 /// of SPEC-0034 are not implemented, so this is a diagnostic stand-in, not the game's visual.
 fn sync_shots(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
-    mut markers: Query<(&ShotMarker, &mut Transform, &mut Visibility)>,
+    mut markers: Query<(&ShotMarker, &mut Transform, &mut Visibility), Without<RopeStrand>>,
+    mut strand: Query<(&mut Transform, &mut Visibility), (With<RopeStrand>, Without<ShotMarker>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut made: Local<bool>,
@@ -2361,7 +2370,26 @@ fn sync_shots(
         for i in 0..neopets_sim::projectile::SLOTS + 8 {
             commands.spawn((ShotMarker(i), Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), Transform::default(), Visibility::Hidden));
         }
+        let rope = meshes.add(Cylinder::new(0.06, 1.0));
+        let gold = materials.add(StandardMaterial { base_color: Color::srgb(0.85, 0.68, 0.36), perceptual_roughness: 0.8, ..default() });
+        commands.spawn((RopeStrand, Mesh3d(rope), MeshMaterial3d(gold), Transform::default(), Visibility::Hidden));
         return;
+    }
+    for (mut t, mut vis) in &mut strand {
+        match state.play.rope_line() {
+            Some((a, b)) => {
+                let (a, b) = (Vec3::from(a), Vec3::from(b));
+                let d = b - a;
+                let l = d.length();
+                if l < 1e-3 {
+                    *vis = Visibility::Hidden;
+                    continue;
+                }
+                *t = Transform::from_translation((a + b) * 0.5).with_rotation(Quat::from_rotation_arc(Vec3::Y, d / l)).with_scale(Vec3::new(1.0, l, 1.0));
+                *vis = Visibility::Visible;
+            }
+            None => *vis = Visibility::Hidden,
+        }
     }
     for (m, mut t, mut vis) in &mut markers {
         // A shot drawn by its flight effects, and the spits (drawn by their effects), have no
@@ -3948,7 +3976,22 @@ fn play_trace(
                 }
             }
         }
-        play.tick(&input, neopets_sim::camera::CameraPad::default());
+        // NEOPETS_TRACE_ROPE="k@t": from tick t the aim scan looks straight at aim target k, the
+        // right stick is pushed up on tick t (aim mode) and R2 is held from t + 5 to t + 15.
+        let mut pad = neopets_sim::camera::CameraPad::default();
+        if let Some((k, t)) = std::env::var("NEOPETS_TRACE_ROPE").ok().and_then(|v| {
+            let (k, t) = v.split_once('@')?;
+            Some((k.trim().parse::<usize>().ok()?, t.trim().parse::<u64>().ok()?))
+        }) {
+            if play.ticks >= t {
+                play.rope_aim = Some(k);
+            }
+            if play.ticks == t {
+                pad.right_y = 0;
+            }
+            input.r2_held = (t + 5..t + 15).contains(&play.ticks);
+        }
+        play.tick(&input, pad);
         // Loads go through the same background loader as the window; the trace does not wait.
         for line in streamer.pump(&mut play) {
             println!("      {line}");

@@ -53,6 +53,8 @@ pub const LEDGE_RISE: u8 = crate::ledge::CLIMB_RISE;
 pub const LEDGE_DROP: u8 = crate::ledge::DROP;
 /// State 28, the hang from a grab line (SPEC-0033 Behavior 9).
 pub const LINE: u8 = crate::grab::STATE;
+/// State 27, the Rope Gun (SPEC-0033 State 27; its tick is `rope::RopeHero`).
+pub const ROPE: u8 = crate::rope::STATE;
 /// The ladder (SPEC-0033 Behavior 13; its tick is `ladder::Ladder`).
 pub const LADDER: u8 = 41;
 /// The climb on a climb panel (SPEC-0033 Behavior 51; its tick is `climb::Climb`).
@@ -155,6 +157,9 @@ pub struct HeroInput {
     pub square_held: bool,
     /// L1 held (the shield guard).
     pub guard: bool,
+    /// R2 and Circle held apart (the aim mode's retained choice and the Rope Gun's entry).
+    pub r2_held: bool,
+    pub circle_held: bool,
     /// Cross held (the dialogue box's faster reveal).
     pub cross_held: bool,
 }
@@ -246,6 +251,9 @@ pub struct Locomotion {
     start_height: f32,
     /// Position change of the last record tick (+0x160).
     last_motion: Vec3,
+    /// A world-space displacement added to the next record tick's motion after the travel
+    /// step (the Rope Gun's pulls, SPEC-0033 State 27), then cleared.
+    pub extra: Vec3,
     request: u32,
     run_counter: u32,
     /// The hero holds a usable shield (the guard's entry gate).
@@ -328,6 +336,7 @@ impl Locomotion {
             phase: 0,
             start_height: position[1],
             last_motion: [0.0; 3],
+            extra: [0.0; 3],
             request: 0,
             run_counter: RUN_RESTART,
             shield: false,
@@ -581,7 +590,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => self.request,
             ARRIVAL => 175,
             SNEAK => 87,
             SNEAK_WALK => 85,
@@ -632,7 +641,7 @@ impl Locomotion {
             }
             CARRY => return self.carry_step(v > 0.0, clip),
             // State 18: the block hold decides the clip and the facing (after this update).
-            BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE => return,
+            BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => return,
             GUARD => return self.guard(input, v > 0.0, clip),
             ARRIVAL | RESPAWN => {
                 // At progress 0.99 of the state's clip: state 1.
@@ -865,6 +874,10 @@ impl Locomotion {
         // contact surfaces; Medium).
         let inside = self.body.gap < -0.05 && self.body.normal[1] > 0.9;
         self.travel(root_step);
+        for k in 0..3 {
+            self.body.position[k] += self.extra[k];
+        }
+        self.extra = [0.0; 3];
         self.body.constrain();
         self.body.gravity();
         // The driver clears the floor-contact flag, then a floor contact sets it.

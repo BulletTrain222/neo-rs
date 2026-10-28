@@ -132,6 +132,8 @@ pub struct World {
     disabled_triggers: std::collections::HashSet<u16>,
     records: HashMap<u16, neopets_sim::trigger::Record>,
     pub groups: Vec<neopets_data::trigger::ScriptGroup>,
+    /// The aim targets (type-11 n2 entries; SPEC-0030 row 126), each active at load.
+    pub aim_targets: Vec<neopets_sim::rope::Target>,
     placements: Vec<(u8, u8)>,
     item_points: Vec<neopets_data::region::ItemPoint>,
     locks: Vec<(i32, i32, i32)>,
@@ -253,6 +255,7 @@ impl World {
             disabled_triggers: Default::default(),
             records: HashMap::new(),
             groups: neopets_data::trigger::script_groups(&bytes, &chain.chunks),
+            aim_targets: neopets_data::ground::aim_targets(&bytes, &chain.chunks).iter().map(|t| neopets_sim::rope::Target { point: t.point, active: true }).collect(),
             placements: neopets_data::travel::placement_table(&bytes, &chain.chunks),
             item_points: neopets_data::region::embedded_records(&bytes, &chain.chunks).map(|r| r.items).unwrap_or_default(),
             locks: Vec::new(),
@@ -732,6 +735,16 @@ pub struct Play {
     pub attack: Option<neopets_sim::attack::TorAttack>,
     /// An attack press waiting for the next tick.
     pub attack_latch: bool,
+    /// The Rope Gun (SPEC-0036 Right-stick aim mode; SPEC-0033 State 27): the aim mode, the
+    /// world's rope manager, state 27's phases and the right stick's converted Y this tick.
+    pub aim: neopets_sim::rope::AimMode,
+    pub rope: neopets_sim::rope::Rope,
+    rope_hero: Option<neopets_sim::rope::RopeHero>,
+    rope_y: f32,
+    /// The world the rope manager belongs to (a world change resets it).
+    rope_pack: u32,
+    /// Diagnostic (NEOPETS_TRACE_ROPE): the scan's camera forward points at this aim target.
+    pub rope_aim: Option<usize>,
     /// The equipped weapon (item id), the item table, the hero's hit list and the weapon axis
     /// of the previous tick (D2 of the swept test).
     /// The heroes' family entries and Mote words (SPEC-0021 Party inventory lists, Equipment
@@ -1534,6 +1547,12 @@ impl Play {
             foliage: HashMap::new(),
             attack: None,
             attack_latch: false,
+            aim: Default::default(),
+            rope: Default::default(),
+            rope_hero: None,
+            rope_y: 0.0,
+            rope_pack: 0,
+            rope_aim: None,
             weapon_drawn: false,
             shield_raised: false,
             weapon: None,
@@ -2561,6 +2580,12 @@ impl Play {
                     c.held = false;
                     if let Some(id) = c.enemy.as_mut().and_then(|e| e.agro_on(hero, rng)) {
                         c.anim.play(id);
+                    }
+                }
+                Action::TargetActive { target, on } => {
+                    let world = if self.world.pack == pack { &mut self.world } else { self.other.as_mut().filter(|o| o.pack == pack)? };
+                    if let Some(t) = world.aim_targets.get_mut(target) {
+                        t.active = on;
                     }
                 }
                 Action::TriggerBaggus { index } => {
@@ -4268,6 +4293,9 @@ impl Play {
     fn edge_step(&mut self, input: &HeroInput) {
         // The grab cooldown (Behavior 20) the panel and ladder grabs share.
         self.grab_cooldown = self.grab_cooldown.saturating_sub(1);
+        if self.rope_step(input) {
+            return;
+        }
         self.panel_step(input);
         if self.loco.state == hero_states::PANEL {
             return;
@@ -7033,6 +7061,7 @@ impl Play {
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
         self.l1_held = input.guard;
+        self.rope_y = -neopets_sim::camera::converter_a(pad.right_y);
         self.ticks += 1;
         // The hit flashes run down one frame a tick (60 ticks a second).
         self.hero_flash = self.hero_flash.saturating_sub(1);
@@ -11172,6 +11201,137 @@ impl Play {
         }
     }
 
+    /// The Rope Gun's muzzle M = T + 0.37F - S of weapon attach frame 0 (SPEC-0033 State 27),
+    /// or the hero's position 1.2 up when the frame is missing.
+    fn rope_muzzle(&self) -> [f32; 3] {
+        let p = self.loco.position();
+        let frame = (|| {
+            let place = placement(p, self.loco.facing);
+            let frames = self.hero.bone_frames();
+            let &(Some(bone), angles, offset) = self.hero.bones().attach.first()? else { return None };
+            Some(place.mul(frames.get(bone)?).mul(&attach_rotation(offset, angles)))
+        })();
+        frame.map_or(add(p, [0.0, 1.2, 0.0]), |w| sub(add(w.t, scale(unit(w.cols[2]), 0.37)), unit(w.cols[0])))
+    }
+
+    /// The rope's drawn strand: the muzzle M and the endpoint Q while the manager is out or
+    /// attached (SPEC-0033 State 27).
+    pub fn rope_line(&self) -> Option<([f32; 3], [f32; 3])> {
+        (self.rope.state != neopets_sim::rope::RopeState::Idle && self.loco.state == neopets_sim::rope::STATE).then(|| (self.rope_muzzle(), self.rope.q))
+    }
+
+    /// SPEC-0036 Right-stick aim mode and SPEC-0033 State 27, after the hero update: the aim
+    /// mode and, while it is on with item 36 held, the anchor pass of the aim scan (from the
+    /// camera eye, the sight line from 1.5 below it, stopped 1.0 short of the target); R2 in
+    /// idle with an anchor selected enters state 27 (the spec's state-13 hop, taken at once);
+    /// then state 27's phases. Returns whether the hero is in state 27.
+    fn rope_step(&mut self, input: &HeroInput) -> bool {
+        use neopets_sim::rope as rp;
+        if self.rope_pack != self.world.pack {
+            self.rope_pack = self.world.pack;
+            self.rope.reset();
+            if self.rope_hero.take().is_some() && self.loco.state == rp::STATE {
+                self.loco.body.no_gravity = false;
+                self.loco.enter_state(hero_states::STANCE, 0);
+            }
+        }
+        let has = self.state.has_item(rp::ITEM);
+        let scan = self.aim.step(self.loco.state, None, self.rope_y, input.r2_held, input.circle_held);
+        if self.loco.state != rp::STATE {
+            self.rope_hero = None;
+            if scan && has {
+                let (eye, mut f, _, _) = self.view();
+                if let Some(t) = self.rope_aim.and_then(|k| self.world.aim_targets.get(k)) {
+                    f = unit(sub(t.point, eye));
+                }
+                let from = [eye[0], eye[1] - rp::SIGHT_DROP, eye[2]];
+                let targets = &self.world.aim_targets;
+                let ground = self.world.ground.as_ref();
+                // The sight sweep (this build's per-sample test; R-0121): the line from 1.5
+                // below the eye to the target, stopped 1.0 short, is tested against the frame
+                // records of the cell under each sample point (0, 5, 15, 30, 50, ...).
+                let sight = |to: [f32; 3]| {
+                    let d = sub(to, from);
+                    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+                    let end = add(from, scale(d, ((l - 1.0) / l).max(0.0)));
+                    ground.is_none_or(|g| rp::sight_samples(l - 1.0).iter().all(|&k| {
+                        let q = add(from, scale(d, k / l));
+                        !g.frames_at(q[0], q[2]).iter().any(|r| r.crossed_by(from, end))
+                    }))
+                };
+                let pick = rp::scan(targets, eye, f, |i| sight(targets[i].point));
+                for (i, t) in self.world.aim_targets.iter().enumerate() {
+                    if Some(i) == pick && self.rope.anchor != Some(i) {
+                        self.last_fx = format!("rope anchor {i} at {:.1},{:.1},{:.1} selected on tick {}", t.point[0], t.point[1], t.point[2], self.ticks);
+                    }
+                }
+                if self.rope_aim.is_some() && self.ticks % 30 == 0 {
+                    let near: Vec<String> = targets.iter().map(|t| {
+                        let d = sub(t.point, eye);
+                        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                        format!("{:.0}{}{}", l, if t.active { "" } else { " off" }, if sight(t.point) { "" } else { " blocked" })
+                    }).collect();
+                    println!("      rope scan tick {}: eye {:?} pick {pick:?} targets {near:?}", self.ticks, eye.map(|v| v.round()));
+                    if let (Some(g), Some(t)) = (ground, targets.first()) {
+                        let d = sub(t.point, from);
+                        let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                        let end = add(from, scale(d, (l - 1.0) / l));
+                        for &k in &rp::sight_samples(l - 1.0) {
+                            let q = add(from, scale(d, k / l));
+                            for r in g.frames_at(q[0], q[2]).iter().filter(|r| r.crossed_by(from, end)).take(2) {
+                                println!("        sample {k}: kind {} start {:?} face {:?} len {} h {}", r.kind, r.start.map(|v| v.round()), r.face.map(|v| (v * 100.0).round() / 100.0), r.length, r.height);
+                            }
+                        }
+                    }
+                }
+                self.rope.select(pick.map(|i| (i, self.world.aim_targets[i].point)));
+            } else {
+                self.rope.select(None);
+            }
+            if !(self.aim.on && has && self.rope.anchor.is_some() && input.r2_held && self.loco.state == hero_states::STANCE) {
+                return false;
+            }
+            self.rope_hero = Some(rp::RopeHero::default());
+            self.loco.enter_state(rp::STATE, rp::FIRE_CLIP);
+            self.trace_edge("rope", self.rope.anchor.unwrap_or(0), 0);
+        }
+        let Some(mut h) = self.rope_hero else {
+            self.loco.enter_state(hero_states::STANCE, 0);
+            return false;
+        };
+        let m = self.rope_muzzle();
+        self.rope.update(m);
+        let c = self.hero.clip_state();
+        let view = rp::View { p: self.loco.position(), m, clip: (c.action, c.progress), frame_bits: self.hero.frame_bits(), touched: self.touched, square: input.square };
+        let step = h.tick(view, &mut self.rope);
+        self.rope_hero = Some(h);
+        if step.holster {
+            self.set_weapon_drawn(false);
+        }
+        if let Some(r) = step.request {
+            self.loco.block_request(r);
+        }
+        if let Some((d, w)) = step.face {
+            self.loco.steer_toward(d, w);
+        }
+        if let Some(cue) = step.cue {
+            self.cue(cue);
+        }
+        self.loco.extra = step.push;
+        self.loco.body.no_gravity = step.no_gravity;
+        if step.no_gravity {
+            self.loco.body.velocity = [0.0; 3];
+        }
+        if step.exit {
+            self.rope_hero = None;
+            self.loco.body.no_gravity = false;
+            self.loco.enter_state(hero_states::STANCE, 0);
+            self.trace_edge("rope off", 0, 0);
+            return false;
+        }
+        true
+    }
+
     /// The hero's weapon segment as a thin cylinder while the attack window is open (frame bit
     /// 1; SPEC-0036), from the weapon attach point along its axis over the weapon reach.
     fn weapon_segment(&self) -> Option<neopets_sim::combat::Cylinder> {
@@ -13123,6 +13283,10 @@ fn add(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
 }
 
 fn sub_v(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
+}
+
+fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 

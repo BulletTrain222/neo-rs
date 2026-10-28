@@ -111,6 +111,9 @@ pub enum Action {
     ReleaseEntity { entity: usize },
     /// SetAI_Agro (row 115).
     Agro { entity: usize },
+    /// SetTargetActive(target, b) (row 126): the current world's aim target `target`'s active
+    /// word (an invalid index does nothing).
+    TargetActive { target: usize, on: bool },
     /// TriggerBaggus(i) (row 64): break Bagguss record i of the current world's list (the kind-3
     /// script groups in order; an out-of-range index does nothing).
     TriggerBaggus { index: usize },
@@ -2266,10 +2269,11 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0044 1091 Init: the animated hazards (objects 3 to 10, each its own group's record
         // 0, routines 13 to 20), the plate triggers 41 to 48 (routine 41) and the button trigger
-        // 51. The object setups, slots, navmesh table and target flags (Low or not listed) are
-        // not reproduced.
+        // 51, and aim targets 1 to 3 made inactive. The object setups, slots and navmesh table
+        // (Low or not listed) are not reproduced.
         1091 => {
             let mut v: Vec<Action> = (3..=10).map(|host| Action::RegisterAnimTrigger { host, index: 0, routine: 10 + host as u8 }).collect();
+            v.extend((1..=3).map(|target| Action::TargetActive { target, on: false }));
             v.extend((41..=48).map(|i| reg(i, 41)));
             v.push(reg(51, 51));
             v
@@ -8182,14 +8186,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             out.actions.extend((3..=5).map(|obj| Action::DeactivateObj { obj }));
         }
         // Trigger 10 (248 set, 281 clear): 281 and 66, object 9 off and 10 on, movie 43 counted.
-        // Its hero line without item 36 (64 or 65; which hero gets which is not resolved) and
-        // SetTargetActive for targets 0 to 2 (made active with or without the item; the Rope
-        // Gun's targets are not built) are not built.
+        // Then targets 0 to 2 are made active, with or without item 36. Its hero line without
+        // item 36 (64 or 65; which hero gets which is not resolved) is not built.
         (956, 10) if call.object && call.state == 1 && state.flag(248) && !state.flag(281) => {
             state.set(281, true);
             state.set(66, true);
             state.queue_movie(43);
             out.actions.extend([Action::DeactivateObj { obj: 9 }, Action::InitObjOn { obj: 10, end: false }]);
+            out.actions.extend((0..3).map(|target| Action::TargetActive { target, on: true }));
         }
         // Trigger 11 (281 set, 282 clear): 282.
         (956, 11) if call.object && call.state == 1 && state.flag(281) && !state.flag(282) => state.set(282, true),
@@ -11225,11 +11229,16 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 }
             }
         }
-        // SPEC-0043 956 Update: the first update clears its word (SetTargetActive is not built);
+        // SPEC-0043 956 Update: the first update clears its word and makes targets 0 to 2 active
+        // with flag 281 set, inactive with it clear;
         // with 214 set and 216 clear the aftermath scene runs once (flags 216, 10, 18, 30, 47 and
         // 64, movie 14 counted, 217, thread 3, then the scene with entity 28, lines 63 and 72).
         956 => {
             out.extend(nav_pass(state, pack, 52));
+            if state.word(pack, 1) != 0 {
+                let on = state.flag(281);
+                out.extend((0..3).map(|target| Action::TargetActive { target, on }));
+            }
             state.set_word(pack, 1, 0);
             if state.flag(214) && !state.flag(216) {
                 for f in [216, 10, 18, 30, 47, 64] {
