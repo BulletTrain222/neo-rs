@@ -122,6 +122,7 @@ enum Entry {
     Maps,
     Weapon,
     Noclip,
+    CloudBeast,
 }
 
 /// The menu's sections and their entries, in display order.
@@ -129,12 +130,12 @@ const SECTIONS: [(&str, &[Entry]); 6] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start]),
-    ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill]),
+    ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 19] = [
+const ENTRIES: [Entry; 20] = [
     Entry::God,
     Entry::Noclip,
     Entry::Magic,
@@ -147,6 +148,7 @@ const ENTRIES: [Entry; 19] = [
     Entry::Heal,
     Entry::Hero,
     Entry::Kill,
+    Entry::CloudBeast,
     Entry::Weapon,
     Entry::Item,
     Entry::Drop,
@@ -583,6 +585,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
             "Normal speed".into()
         }
         Entry::Kill => format!("Defeated {} enemies here", p.dev_kill_enemies()),
+        Entry::CloudBeast => p.dev_cloud_beast(),
         Entry::Drop => format!("Dropped {} world items", p.dev_drop(dev.item)),
         Entry::Start => {
             if p.dev_go_start(dev.start) { format!("To start point {}", dev.start) } else { "No start points here".into() }
@@ -679,6 +682,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Heal => ("Full heal".into(), format!("{}/{} HP", p.hero_hp, p.hero_max)),
         Entry::Hero => (format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }), String::new()),
         Entry::Kill => ("Defeat every enemy here".into(), String::new()),
+        Entry::CloudBeast => ("Spawn the Cloud Beast (cut boss)".into(), String::new()),
         Entry::Weapon => {
             let w = weapons(p);
             match w.get(dev.weapon_at) {

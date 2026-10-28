@@ -857,6 +857,8 @@ pub struct Play {
     /// SPEC-0010 Test spawn: with NEOPETS_CLOUD_BEAST set, monster rows 1 (the Cloud Beast) and
     /// 2 (its companion), spawned in each world with the stand-in models (no model on disc).
     cloud_rows: Option<(neopets_data::monster::Row, neopets_data::monster::Row)>,
+    /// The test spawn is on (NEOPETS_CLOUD_BEAST, or the developer menu).
+    cloud_on: bool,
     cloud_words: Option<neopets_sim::cloudbeast::Words>,
     /// The arena: the level's locators 101 to 106 when it has all six, else a stand-in ring of
     /// radius 16 around where the hero stood at the spawn, each point facing the centre.
@@ -1312,16 +1314,12 @@ impl Play {
         };
         let drain_words = neopets_sim::sisters::DrainWords::read(&words(neopets_sim::sisters::DRAIN_WORDS, 7)?, &words(neopets_sim::sisters::DRAIN_TABLE, 14)?).ok_or("The drain words are short")?;
         let thorn_radius = f32::from_bits(words(neopets_sim::thorn::RADIUS_WORD, 1)?[0]);
-        let cloud_rows = if std::env::var_os("NEOPETS_CLOUD_BEAST").is_some() {
-            let t = neopets_data::monster::MonsterTable::parse(&index.read(disc, 530)?, &index.read(disc, 531)?)?;
-            t.row(1, 0).zip(t.row(2, 0))
-        } else {
-            None
+        // The Cloud Beast's rows and tuning words, read always so the developer menu can spawn it.
+        let cloud_rows = match (index.read(disc, 530), index.read(disc, 531)) {
+            (Ok(a), Ok(b)) => neopets_data::monster::MonsterTable::parse(&a, &b).ok().and_then(|t| t.row(1, 0).zip(t.row(2, 0))),
+            _ => None,
         };
-        let cloud_words = match cloud_rows {
-            Some(_) => neopets_sim::cloudbeast::Words::read(&words(neopets_sim::cloudbeast::BASE, neopets_sim::cloudbeast::WORDS)?),
-            None => None,
-        };
+        let cloud_words = neopets_sim::cloudbeast::Words::read(&words(neopets_sim::cloudbeast::BASE, neopets_sim::cloudbeast::WORDS)?);
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
         let ixi_words = neopets_sim::ixi::Words::read(&words(neopets_sim::ixi::BASE, neopets_sim::ixi::WORDS)?).ok_or("The Ixi Chief's tuning block is short")?;
@@ -1586,6 +1584,7 @@ impl Play {
             hit_list: Vec::new(),
             swing_serial: 0,
             cloud_rows,
+            cloud_on: std::env::var_os("NEOPETS_CLOUD_BEAST").is_some(),
             cloud_words,
             cloud_arena: None,
             cloud_defeated: Default::default(),
@@ -7824,7 +7823,7 @@ impl Play {
     /// skeleton or clip bank for either) and no animation families. Respawned when missing from
     /// the current world. The class-9 controller is not built: the boss stays where it spawned.
     fn cloud_beast_step(&mut self) {
-        let Some((boss_row, companion_row)) = self.cloud_rows else { return };
+        let Some((boss_row, companion_row)) = self.cloud_rows.filter(|_| self.cloud_on) else { return };
         let pack = self.world.pack;
         let find = |s: &Self, class: i16| s.characters.iter().position(|c| c.pack == pack && c.slot == CLOUD_SLOT && c.row.is_some_and(|r| r.class == Some(class)));
         if self.cloud_defeated.contains(&pack) {
@@ -7884,6 +7883,8 @@ impl Play {
                 }
             }
             self.last_boss = format!("Cloud Beast stand-in spawned at {at:?} on tick {}", self.ticks);
+            // A boss fight's opening stinger (4, as the level scripts' fight starts use; a guess).
+            self.stinger(4);
         }
         self.cloud_fight(pack);
         // The companion rides on the boss.
@@ -7919,6 +7920,8 @@ impl Play {
                     self.characters[c].dying.get_or_insert(disappear);
                 }
                 self.last_boss = format!("Cloud Beast defeated on tick {}", self.ticks);
+                // Stinger 1, the Werelupe King's death stinger (SPEC-0019; a guess for this boss).
+                self.stinger(1);
                 if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() {
                     println!("CLOUD defeated on tick {}", self.ticks);
                 }
@@ -7967,6 +7970,7 @@ impl Play {
             wall: &wall,
         };
         let before = (cloud.state, cloud.stage);
+        let fired = cloud.beams[0].active;
         let act = cloud.tick(&v, &w, &mut self.rng);
         cloud.advance_clip();
         // NEOPETS_TRACE_CLOUD: the controller's state changes and hits (trace only).
@@ -7987,7 +7991,14 @@ impl Play {
             c.flash = HIT_FLASH;
             self.cloud_bursts.push((at, 20));
         }
+        // The controller makes no cue calls; these are guesses from cues this build already uses:
+        // the Mote-use cue 0xA2 when the shock starts and when a bolt first fires.
+        let shock_started = before.0 != neopets_sim::cloudbeast::State::Shock && cloud.state == neopets_sim::cloudbeast::State::Shock;
+        let bolt_started = !fired && cloud.beams[0].active;
         self.characters[b].cloud = Some(cloud);
+        if shock_started || bolt_started {
+            self.cue(0xA2);
+        }
         let facing = self.characters[b].facing;
         for h in act.hits {
             match h {
@@ -8049,6 +8060,20 @@ impl Play {
             23 => (bob, -0.2, 0.92 + 0.03 * (t * 12.0).sin()),
             _ => (bob, 0.0, 1.0),
         })
+    }
+
+    /// Developer menu: spawn the Cloud Beast in this world around the hero (removing one already
+    /// here, and clearing a defeat).
+    pub fn dev_cloud_beast(&mut self) -> String {
+        if self.cloud_rows.is_none() || self.cloud_words.is_none() {
+            return "The Cloud Beast's monster rows are not on this disc".into();
+        }
+        let pack = self.world.pack;
+        self.cloud_on = true;
+        self.cloud_defeated.remove(&pack);
+        self.characters.retain(|c| !(c.pack == pack && c.slot == CLOUD_SLOT));
+        let tags = (101..=106).all(|k| self.world.tags.contains(&k));
+        if tags { "Cloud Beast spawned on this arena's points 101 to 106".into() } else { "Cloud Beast spawned on a ring around the hero".into() }
     }
 
     fn enemies_step(&mut self) {

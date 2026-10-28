@@ -2783,6 +2783,7 @@ fn sync_characters(
     mut images: ResMut<Assets<Image>>,
     mut skinned: Local<std::collections::HashMap<u64, Vec<(Handle<Mesh>, usize)>>>,
     mut generation: Local<u32>,
+    mut rigid: Local<std::collections::HashMap<u64, (Vec<(Handle<Mesh>, usize)>, bool)>>,
 ) {
     let Some(state) = state else { return };
     let p = &state.play;
@@ -2791,6 +2792,7 @@ fn sync_characters(
     let rebuilt = std::mem::replace(&mut *generation, p.generation) != p.generation;
     if rebuilt {
         skinned.clear();
+        rigid.clear();
     }
     for (e, root, mut t, mut vis) in &mut roots {
         if rebuilt {
@@ -2817,6 +2819,7 @@ fn sync_characters(
         }
     }
     skinned.retain(|id, _| live.contains(id));
+    rigid.retain(|id, _| live.contains(id));
     for c in &p.characters {
         let rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
         if !skinned.contains_key(&c.id) {
@@ -2831,6 +2834,11 @@ fn sync_characters(
                         } else if let (Some(col), Some(mut m)) = (tinted(&c.model.parts[i], None, None, Some(&c.slots)), meshes.get_mut(&mesh)) {
                             // A rigid part keeps its build colours: the slot colour once.
                             m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+                            // The Cloud Beast stand-ins have no skinned parts; their rigid parts
+                            // take the hit flash instead.
+                            if p.cloud_pose(c).is_some() {
+                                rigid.entry(c.id).or_default().0.push((mesh.clone(), i));
+                            }
                         }
                         ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
                     }
@@ -2839,6 +2847,18 @@ fn sync_characters(
         }
         if !p.pack_drawn(c.pack) {
             continue;
+        }
+        if let Some((parts, was)) = rigid.get_mut(&c.id) {
+            let flashing = c.flash > 0;
+            if flashing != *was {
+                *was = flashing;
+                let slots = if flashing { &play::FLASH_COLOUR } else { &c.slots };
+                for (handle, i) in parts.iter() {
+                    if let (Some(col), Some(mut m)) = (tinted(&c.model.parts[*i], None, None, Some(slots)), meshes.get_mut(handle)) {
+                        m.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
+                    }
+                }
+            }
         }
         let matrices = c.anim.skin_matrices();
         let tint = p.status_tint(Some(c.id));
