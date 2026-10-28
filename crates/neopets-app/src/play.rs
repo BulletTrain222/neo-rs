@@ -2552,6 +2552,14 @@ impl Play {
                         c.anim.play(id);
                     }
                 }
+                Action::AiBehavior { entity, code: _ } => {
+                    let c = self.entity_mut(pack, entity)?;
+                    c.held = false;
+                    c.script_walk = None;
+                    if let Some(e) = c.enemy.as_mut() {
+                        e.calm();
+                    }
+                }
                 Action::MainCue { cue } => self.cue(cue),
                 Action::EffectAt { id, at, dir } => {
                     let f = unit([dir[0], 0.0, dir[2]]);
@@ -7607,6 +7615,7 @@ impl Play {
         self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
         self.state.entity_mesh = self.characters.iter().filter(|c| c.pack == pack && !c.inactive).filter_map(|c| Some((c.entity?, c.walker.as_ref()?.mesh.map_or(-1, |m| m as i32)))).collect();
         self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.is_dead()) && c.hp > 0));
+        self.state.aggressive = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.enemy.as_ref().is_some_and(|e| e.state == 19 && !e.is_dead())).filter_map(|c| c.entity).collect();
         self.slot_arrived.retain(|(p, _)| *p == pack || self.other.as_ref().is_some_and(|o| o.pack == *p));
         // The switch-group stages whose 0.4 s has passed become breakable.
         let (now, cur) = (self.ticks, self.world.pack);

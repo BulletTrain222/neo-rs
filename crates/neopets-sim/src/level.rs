@@ -111,6 +111,10 @@ pub enum Action {
     ReleaseEntity { entity: usize },
     /// SetAI_Agro (row 115).
     Agro { entity: usize },
+    /// SetAI_Behavior(entity, code, patrol data) (row 119). The data block's words are not
+    /// recovered (SPEC-0044 1393: one shared, zeroed record); the host takes it as the end of
+    /// script control and of any agro (the code change resets the mode word to 0).
+    AiBehavior { entity: usize, code: i16 },
     /// DeactivateEntity (row 114) and ActivateEntity (row 116).
     DeactivateEntity { entity: usize },
     ActivateEntity { entity: usize },
@@ -526,6 +530,9 @@ pub struct GameState {
     pub carry: Vec<u32>,
     /// The hero wears the Tattered Cloak (filled by the host before each Update and talk).
     pub cloak_worn: bool,
+    /// The current world's living, active entities in the agro state (19), filled by the host
+    /// before each Update (the room threads of SPEC-0044 1393 test their guards for it).
+    pub aggressive: BTreeSet<usize>,
     /// The pack that was current before this one (the "last active world" an activate-world
     /// routine reads).
     pub last_pack: Option<u32>,
@@ -1372,7 +1379,7 @@ fn reset_1089(state: &mut GameState) -> Vec<Action> {
 }
 
 pub fn objects_scripted(pack: u32) -> bool {
-    matches!(pack, 990 | 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1392 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244)
+    matches!(pack, 990 | 909 | 951 | 678 | 686 | 691 | 706 | 784 | 790 | 796 | 799 | 880 | 1130 | 1392 | 1394 | 1247 | 1249 | 1173 | 1248 | 1344 | 1353 | 886 | 1230 | 1369 | 1023 | 1133 | 1148 | 1150 | 1171 | 1172 | 1184 | 1056 | 1163 | 1244 | 1393)
 }
 
 /// Run a pack's Init (once per load of the pack): the calls with world effects described so far.
@@ -3022,6 +3029,21 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // entities 16 to 18 and agro on 16 and 17), trigger 0 (handler 4) and, with 252 clear,
         // collision mask 1. With 250 set no slot or thread is made (the set-4 branch is not
         // reached). Region 887 + set.
+        // SPEC-0044 1393 Init (R-0105): seven objects per room initialized with the end flag
+        // clear (the odd gate members, the levers, the open mechanism and the closed form, and
+        // the statue's +0x14), invisibility off for entities 0 to 7, triggers 0 to 5, 7 to 19 and
+        // 21 to 24 (each with its own index as the routine here). The constructor's door state
+        // 1 (closed) is the words' 0.
+        1393 => {
+            let mut v: Vec<Action> = ROOMS_1393
+                .iter()
+                .flat_map(|r| [r.statue.1, r.plate, r.entry, r.door.1, r.forms.1, r.gates[0].1, r.gates[1].1])
+                .map(|obj| Action::InitObjOn { obj, end: false })
+                .collect();
+            v.extend((0..8).map(|entity| Action::DisableInvisibility { entity }));
+            v.extend((0..=24u16).filter(|i| !matches!(i, 6 | 20)).map(|i| reg(i, i as u8)));
+            v
+        }
         886 => {
             let mut v = vec![reg(5, 1), reg(2, 2)];
             if !state.flag(250) {
@@ -4548,6 +4570,224 @@ fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
         Action::ReturnCamera { preset: -1, release: true },
     ]);
     v
+}
+
+/// SPEC-0044 1393 room records (R-0090, R-0105): the outer-gate pairs (even, odd), the statue
+/// pair (+0x10, +0x14), the door mechanisms (+0x18 close, +0x1C open), the levers (+0x20 plate,
+/// +0x24 entry), the forms (+0x28 open, +0x2C closed), the camera and the guards (entity, home
+/// locator).
+struct Room1393 {
+    gates: [(usize, usize); 2],
+    statue: (usize, usize),
+    door: (usize, usize),
+    plate: usize,
+    entry: usize,
+    forms: (usize, usize),
+    camera: usize,
+    guards: &'static [(usize, usize)],
+}
+
+const ROOMS_1393: [Room1393; 5] = [
+    Room1393 { gates: [(48, 49), (50, 51)], statue: (0, 1), door: (26, 27), plate: 10, entry: 12, forms: (28, 29), camera: 4, guards: &[(0, 13)] },
+    Room1393 { gates: [(52, 53), (54, 55)], statue: (2, 3), door: (30, 31), plate: 14, entry: 16, forms: (32, 33), camera: 5, guards: &[(1, 20)] },
+    Room1393 { gates: [(56, 57), (58, 59)], statue: (4, 5), door: (34, 35), plate: 18, entry: 20, forms: (36, 37), camera: 6, guards: &[(2, 35), (3, 46)] },
+    Room1393 { gates: [(60, 61), (62, 63)], statue: (6, 7), door: (38, 39), plate: 22, entry: 46, forms: (40, 41), camera: 7, guards: &[(4, 56), (5, 69), (6, 70), (7, 109)] },
+    Room1393 { gates: [(64, 65), (66, 67)], statue: (8, 9), door: (42, 43), plate: 24, entry: 46, forms: (44, 45), camera: 7, guards: &[] },
+];
+
+/// 1393's module words: the opening latch, the area-active word, and per room the guard door
+/// open (the constructor's state 1, closed, is 0 here), the plate latch, the gate-state word
+/// (the open arrangement set by an entry) and the first-alarm latch; then the thread counter.
+const W1393_LATCH: u8 = 0;
+const W1393_AREA: u8 = 1;
+const W1393_OPEN: u8 = 10;
+const W1393_PLATE: u8 = 20;
+const W1393_GATE: u8 = 30;
+const W1393_ALARMED: u8 = 40;
+const W1393_TICK: u8 = 50;
+
+/// The gate arrangement: `odd` activates the odd members (open), else the even ones; both
+/// selected animations play at +1.0 without wait.
+fn gates_1393(r: &Room1393, odd: bool) -> Vec<Action> {
+    let mut v = Vec::new();
+    for &(e, o) in &r.gates {
+        let (on, off) = if odd { (o, e) } else { (e, o) };
+        v.extend([Action::InitObjOn { obj: on, end: false }, Action::DeactivateObj { obj: off }]);
+    }
+    v.extend(r.gates.iter().map(|&(e, o)| Action::PlayAnim { obj: if odd { o } else { e }, speed: 1.0, wait: false }));
+    v
+}
+
+/// The guard-door close: +0x18 on, +0x28 and +0x1C off, (sound 7 on an entry), +0x18 played,
+/// +0x2C on; the door state becomes closed.
+fn close_1393(i: usize, s: &mut GameState, sound: bool) -> Vec<Action> {
+    let r = &ROOMS_1393[i];
+    s.set_word(1393, W1393_OPEN + i as u8, 0);
+    let mut v = vec![Action::InitObjOn { obj: r.door.0, end: false }, Action::DeactivateObj { obj: r.forms.0 }, Action::DeactivateObj { obj: r.door.1 }];
+    if sound {
+        v.push(Action::PlaySound { cue: 7, locator: None });
+    }
+    v.extend([Action::PlayAnim { obj: r.door.0, speed: 1.0, wait: false }, Action::InitObjOn { obj: r.forms.1, end: false }]);
+    v
+}
+
+/// A room entry (SPEC-0044 1393): the entry lever forward at +0.75 (wait) and back at -0.75,
+/// the plate lever reset at -0.6, the open gate arrangement, the door closed if open, every
+/// guard reset (animation 81, off, home, on, 82 with the cloak, behaviour 6); the plate unlatches.
+fn entry_1393(i: usize, s: &mut GameState) -> Vec<Action> {
+    let r = &ROOMS_1393[i];
+    let mut v = vec![
+        Action::PlayAnim { obj: r.entry, speed: 0.75, wait: true },
+        Action::PlayAnim { obj: r.entry, speed: -0.75, wait: false },
+        Action::PlayAnim { obj: r.plate, speed: -0.6, wait: false },
+    ];
+    v.extend(gates_1393(r, true));
+    if s.word(1393, W1393_OPEN + i as u8) != 0 {
+        v.extend(close_1393(i, s, true));
+    }
+    for &(entity, locator) in r.guards {
+        v.extend([
+            Action::EntityAnim { entity, anim: 81, looped: false, wait: false },
+            Action::DeactivateEntity { entity },
+            Action::MoveEntity { entity, locator, face: true },
+            Action::ActivateEntity { entity },
+        ]);
+        if s.cloak_worn {
+            v.push(Action::EntityAnim { entity, anim: 82, looped: false, wait: false });
+        }
+        v.push(Action::AiBehavior { entity, code: 6 });
+    }
+    s.set_word(1393, W1393_GATE + i as u8, 1);
+    s.set_word(1393, W1393_PLATE + i as u8, 0);
+    v
+}
+
+/// A plate (SPEC-0044 1393): with the gate open and the plate unlatched, the plate lever plays;
+/// a closed door opens (+0x1C on, +0x18 off, the room camera and door animation, 1 s, the open
+/// form on and the closed form off, 1 s, the normal camera). The plate latches.
+fn plate_1393(i: usize, s: &mut GameState) -> Vec<Action> {
+    let r = &ROOMS_1393[i];
+    if s.word(1393, W1393_GATE + i as u8) == 0 || s.word(1393, W1393_PLATE + i as u8) != 0 {
+        return Vec::new();
+    }
+    s.set_word(1393, W1393_PLATE + i as u8, 1);
+    let mut v = vec![Action::PlayAnim { obj: r.plate, speed: 1.0, wait: false }];
+    if s.word(1393, W1393_OPEN + i as u8) == 0 {
+        s.set_word(1393, W1393_OPEN + i as u8, 1);
+        v.extend([
+            Action::InitObjOn { obj: r.door.1, end: false },
+            Action::DeactivateObj { obj: r.door.0 },
+            camera(r.camera),
+            Action::PlayAnim { obj: r.door.1, speed: 1.0, wait: false },
+            wait(1.0),
+            Action::InitObjOn { obj: r.forms.0, end: false },
+            Action::DeactivateObj { obj: r.forms.1 },
+            wait(1.0),
+            release_camera(),
+        ]);
+    }
+    v
+}
+
+/// A room alarm (SPEC-0044 1393). "Under the room's gate-state conditions" is taken as the
+/// gate-state word set (an entry since the last alarm), which also stops the 10-tick thread
+/// from raising it again: sound 5, the guards aggressive and visible, the door closed if open,
+/// the gate-state word cleared, the even gate arrangement, the statue pair toggled (+0x10 on and
+/// played, +0x14 off) and, on the first alarm, the room camera for 2 s. Not built: the turn of
+/// +0x14 toward the hero (no object-alignment call in this build).
+fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
+    let r = &ROOMS_1393[i];
+    if s.word(1393, W1393_GATE + i as u8) == 0 {
+        return Vec::new();
+    }
+    let mut v = vec![Action::PlaySound { cue: 5, locator: None }];
+    for &(entity, _) in r.guards {
+        v.extend([Action::Agro { entity }, Action::DisableInvisibility { entity }]);
+    }
+    if s.word(1393, W1393_OPEN + i as u8) != 0 {
+        v.extend(close_1393(i, s, false));
+    }
+    s.set_word(1393, W1393_GATE + i as u8, 0);
+    v.extend(gates_1393(r, false));
+    v.extend([
+        Action::InitObjOn { obj: r.statue.0, end: false },
+        Action::PlayAnim { obj: r.statue.0, speed: 1.0, wait: false },
+        Action::DeactivateObj { obj: r.statue.1 },
+    ]);
+    if s.word(1393, W1393_ALARMED + i as u8) == 0 {
+        s.set_word(1393, W1393_ALARMED + i as u8, 1);
+        v.extend([camera(r.camera), wait(2.0), release_camera()]);
+    }
+    v
+}
+
+/// SPEC-0044 1393 trigger callbacks (registered with the trigger index as the routine).
+fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
+    let area = s.word(1393, W1393_AREA) != 0;
+    match call.index {
+        // Trigger 0, the opening (once per load, before the area is active). Not built: the
+        // guards' patrol data (the zeroed shared record).
+        0 if call.state == 1 && call.object && !area && s.word(1393, W1393_LATCH) == 0 => {
+            s.set_word(1393, W1393_LATCH, 1);
+            let cam = |track| Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 };
+            let mut v = vec![fade_out()];
+            for &(entity, locator) in ROOMS_1393[0].guards {
+                v.extend([Action::Agro { entity }, Action::AiBehavior { entity, code: 6 }, Action::MoveEntity { entity, locator, face: true }, Action::DeactivateEntity { entity }]);
+            }
+            v.extend([
+                Action::MoveHero { locator: 4 },
+                Action::PlayAnim { obj: 49, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: 51, speed: 1.0, wait: false },
+                fade_in(),
+                cam(8),
+                cam(10),
+                Action::WalkHero { locator: 5, wait: true, orient: true },
+                cam(ROOMS_1393[0].camera),
+                Action::InitObjOn { obj: 49, end: false },
+                Action::InitObjOn { obj: 51, end: false },
+                Action::DeactivateObj { obj: 48 },
+                Action::DeactivateObj { obj: 50 },
+                cam(9),
+                release_camera(),
+            ]);
+            for &(entity, _) in ROOMS_1393[0].guards {
+                v.push(Action::EntityAnim { entity, anim: 81, looped: false, wait: false });
+                if s.cloak_worn {
+                    v.push(Action::EntityAnim { entity, anim: 82, looped: false, wait: false });
+                }
+            }
+            v.push(Action::SetFlag { flag: 697, on: true });
+            v
+        }
+        12 if call.object => {
+            s.set_word(1393, W1393_AREA, 1);
+            Vec::new()
+        }
+        1 | 7 | 13 | 19 if call.state == 1 && call.object && area => match call.index {
+            1 => entry_1393(0, s),
+            7 => entry_1393(1, s),
+            13 => entry_1393(2, s),
+            _ => {
+                let mut v = entry_1393(3, s);
+                v.extend(entry_1393(4, s));
+                v
+            }
+        },
+        2 | 8 | 14 | 23 | 24 if call.state == 1 && call.object => plate_1393([2, 8, 14, 23, 24].iter().position(|&t| t == call.index).unwrap_or(0), s),
+        5 | 9 | 15 | 16 | 22 if call.state == 2 && call.object => match call.index {
+            5 => alarm_1393(0, s),
+            9 => alarm_1393(1, s),
+            15 | 16 => alarm_1393(2, s),
+            _ => {
+                let mut v = alarm_1393(3, s);
+                v.extend(alarm_1393(4, s));
+                v
+            }
+        },
+        // Statue triggers 4, 11, 18 and 21 turn +0x14 toward the hero (not built; see
+        // `alarm_1393`). Triggers 3, 10 and 17 are registered; their bodies are not described.
+        _ => Vec::new(),
+    }
 }
 
 /// AddAnimObjSound registrations over (start, 1.0) (SPEC-0031 Call-site arguments and gates,
@@ -6640,6 +6880,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 ]);
             }
         }
+        (1393, _) => out.actions = trigger_1393(call, state),
         // SPEC-0039 886 handler 1 (trigger 5), entered with 250 clear: line 6; handler 2
         // (trigger 2): the Square context 3, a press shows line 7; handler 4 (trigger 0),
         // entered with 252 clear: line 8.
@@ -10410,6 +10651,19 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
         }
         1217 => out = burrows_fight(state, dialog),
+        // SPEC-0044 1393's four room threads: every 10 ticks, a room (0 to 3) with a guard in
+        // agro raises its alarm.
+        1393 => {
+            let n = state.word(pack, W1393_TICK) + 1;
+            state.set_word(pack, W1393_TICK, n % 10);
+            if n % 10 == 0 {
+                for i in 0..4 {
+                    if ROOMS_1393[i].guards.iter().any(|g| state.aggressive.contains(&g.0)) {
+                        out.extend(alarm_1393(i, state));
+                    }
+                }
+            }
+        }
         // SPEC-0039 886 Update. The end helper: with 250 clear and AI 16, 17 and 18 dead, object
         // 3 off, 250, 6 s, a 1 s fade out, movie 32, 1 tick, a 1 s fade in. The
         // hint helper, while 250 is clear: a 300-tick counter (word 0), then once line 1 unless
@@ -15178,6 +15432,41 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_1393_rooms() {
+        let mut s = GameState::default();
+        let init = on_init(1393, &mut s);
+        assert_eq!(init.iter().filter(|a| matches!(a, Action::InitObjOn { .. })).count(), 35);
+        assert_eq!(init.iter().filter(|a| matches!(a, Action::RegisterTrigger { .. })).count(), 23);
+        assert_eq!(init.iter().filter(|a| matches!(a, Action::DisableInvisibility { .. })).count(), 8);
+        let fire = |index, state| TriggerCall { index, state, object: true, square: false, block: -1 };
+        // The opening runs once, before the area is active.
+        let a = on_trigger(1393, 0, fire(0, 1), &mut s).actions;
+        assert!(a.contains(&Action::MoveHero { locator: 4 }) && a.contains(&Action::SetFlag { flag: 697, on: true }));
+        assert!(on_trigger(1393, 0, fire(0, 1), &mut s).actions.is_empty());
+        // An entry needs the area word; then the plate opens the closed door once.
+        assert!(on_trigger(1393, 1, fire(1, 1), &mut s).actions.is_empty());
+        on_trigger(1393, 12, fire(12, 1), &mut s);
+        let a = on_trigger(1393, 1, fire(1, 1), &mut s).actions;
+        assert!(!a.contains(&Action::PlaySound { cue: 7, locator: None }), "the door starts closed");
+        assert!(a.contains(&Action::MoveEntity { entity: 0, locator: 13, face: true }));
+        let a = on_trigger(1393, 2, fire(2, 1), &mut s).actions;
+        assert!(a.contains(&Action::InitObjOn { obj: 28, end: false }) && a.contains(&Action::DeactivateObj { obj: 29 }));
+        assert!(on_trigger(1393, 2, fire(2, 1), &mut s).actions.is_empty(), "latched");
+        // A guard in agro: the thread raises the alarm within 10 ticks, once.
+        s.aggressive.insert(0);
+        let mut alarm = Vec::new();
+        for _ in 0..20 {
+            alarm.extend(on_update(1393, &mut s, false));
+        }
+        assert_eq!(alarm.iter().filter(|a| **a == Action::PlaySound { cue: 5, locator: None }).count(), 1);
+        assert!(alarm.contains(&Action::DeactivateObj { obj: 28 }) && alarm.contains(&Action::InitObjOn { obj: 48, end: false }));
+        // The next entry closes nothing (the alarm did) and re-arms the plate.
+        let a = on_trigger(1393, 1, fire(1, 1), &mut s).actions;
+        assert!(!a.contains(&Action::PlaySound { cue: 7, locator: None }));
+        assert!(!on_trigger(1393, 2, fire(2, 1), &mut s).actions.is_empty());
     }
 
     #[test]

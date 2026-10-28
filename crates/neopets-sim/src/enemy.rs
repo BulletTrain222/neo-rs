@@ -980,6 +980,20 @@ impl Enemy {
 
     /// Behavior 34 (no reanimation, no flyer grounding, no drops): base state 16 and the death
     /// disappear countdown.
+    /// SetAI_Behavior on an enemy (SPEC-0030 row 119): the code change sets the mode word to 0.
+    /// Taken here as the think loop's start (state 0, no search, no alert), the stand-in for the
+    /// unrecovered patrol data (SPEC-0044 1393's guard resets).
+    pub fn calm(&mut self) {
+        if self.dead {
+            return;
+        }
+        self.previous = self.state;
+        self.state = 0;
+        self.search = 0;
+        self.alert = false;
+        self.awareness = -1;
+    }
+
     /// SetAI_Agro (SPEC-0030 row 115): a living enemy goes to state 2, the alerted search (21
     /// when the row's Display in Default word is 0), with the search countdown drawn from the
     /// row's search range and the last-seen point at the hero. Returns the animation it
