@@ -1185,6 +1185,11 @@ fn step_sim(
                 play.play.statuses.apply(code as i32, secs);
             }
         }
+        // NEOPETS_TRACE_DOWN="tick,...": a D-pad Down edge on those play ticks (diagnostic; it
+        // opens the Mote panel).
+        if std::env::var("NEOPETS_TRACE_DOWN").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| k == play.play.ticks)) {
+            play.play.panel_latch.down = true;
+        }
         // NEOPETS_TRACE_SWITCH also works in the window: the chord on those play ticks.
         if std::env::var("NEOPETS_TRACE_SWITCH").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| (k..k + 3).contains(&(play.play.ticks + 1)))) {
             play.play.l1_latch = true;
