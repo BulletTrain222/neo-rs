@@ -331,6 +331,7 @@ pub fn sync_hud(
     }
     let state = state.into_inner();
     let Some(window) = windows.iter().next() else { return };
+    let mut fill_points = [None; 2];
     let p = &state.play;
     let s = (window.width() / 512.0).min(window.height() / 448.0);
     let (ox, oy) = ((window.width() - 512.0 * s) / 2.0, (window.height() - 448.0 * s) / 2.0);
@@ -628,6 +629,14 @@ pub fn sync_hud(
             // The fill is drawn with its x scale reset to 1.0.
             sx = 1.0;
         }
+        // The health and pool fills' right edge and vertical centre, for the loss effects
+        // (SPEC-0023 section 3), as fractions of the window.
+        if let Some(k) = [HEALTH_FILL, POOL_FILL].iter().position(|&key| f.key(key) == Some(n)) {
+            let (ww, wh) = (window.width().max(1.0), window.height().max(1.0));
+            let ex = ox + (x + w as f32 * sx) * s;
+            let ey = oy + (y + h as f32 * sy / 2.0) * s;
+            fill_points[k] = Some(([ex / ww, ey / wh], ww / wh));
+        }
         node.left = Val::Px(x * s);
         node.top = Val::Px(y * s);
         node.width = Val::Px(w as f32 * sx * s);
@@ -851,6 +860,7 @@ pub fn sync_hud(
             cache.insert((n, w, h), handle);
         }
     }
+    state.play.hud_fill_points = fill_points;
 }
 
 /// The parts of the dialogue box.

@@ -992,6 +992,14 @@ pub struct Play {
     /// Roberta's hold effect and leap glow (SPEC-0036): their timers and effect objects.
     r_displays: neopets_sim::roberta::Displays,
     r_fx: [Option<usize>; 2],
+    /// The health and pool bars' fill points as last drawn (SPEC-0023 section 3, Loss
+    /// response): the fill's right edge and vertical centre as fractions of the window, and the
+    /// window's aspect; written by the HUD view.
+    pub hud_fill_points: [Option<([f32; 2], f32)>; 2],
+    /// Each bar's loss effect (0xFA2 health, 0xFA3 pool; SPEC-0034 Fixed users of group 3):
+    /// its object and saved screen point, and the values of the previous tick.
+    hud_loss: [Option<(usize, [f32; 2], f32)>; 2],
+    hud_prev: [i32; 2],
     /// Character light states (SPEC-0046 Character lights): the hero's (key None) and each
     /// region character's, by id.
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
@@ -1504,6 +1512,9 @@ impl Play {
             placed_fx: HashMap::new(),
             r_displays: Default::default(),
             r_fx: [None; 2],
+            hud_fill_points: [None; 2],
+            hud_loss: [None; 2],
+            hud_prev: [i32::MAX; 2],
             char_lights: HashMap::new(),
             dig_drop: None,
             bend_last: None,
@@ -3024,6 +3035,54 @@ impl Play {
 
     /// The view the window draws: the camera play's pose (while it plays or holds its last
     /// pose) or the follow camera; eye, forward, up and focal length (SPEC-0027 Projection).
+    /// SPEC-0023 section 3, Loss response: the camera-relative world point of a saved screen
+    /// point (window fractions `n`, aspect `aspect`): E + 1.1D + (0.5 - x) w R + (0.5 - y) h U
+    /// with R the camera's left and U its up. The projection record's q and a terms are taken as
+    /// this view's own frustum at depth 1.1 (w and h its full width and height there), so the
+    /// point sits under the bar's fill end on screen (this build's reading of P).
+    fn hud_point(&self, n: [f32; 2], aspect: f32) -> [f32; 3] {
+        let (eye, f, up, focal) = self.view();
+        let h = 2.0 * 1.1 * (neopets_sim::camera::SCREEN.1 / 2.0) / focal.max(1.0);
+        let w = h * aspect;
+        let left = [up[1] * f[2] - up[2] * f[1], up[2] * f[0] - up[0] * f[2], up[0] * f[1] - up[1] * f[0]];
+        std::array::from_fn(|k| eye[k] + 1.1 * f[k] + (0.5 - n[0]) * w * left[k] + (0.5 - n[1]) * h * up[k])
+    }
+
+    /// The bars' loss effects (SPEC-0023 section 3; SPEC-0034 Fixed users of group 3): when a
+    /// bar's value falls and its slot is idle (no live spawner), its effect starts at the world
+    /// point of the fill end drawn on the previous tick; a live slot follows its saved screen
+    /// point each tick. A fall while the slot is busy keeps the old anchor.
+    fn hud_loss_step(&mut self) {
+        let values = [self.hero_hp, self.hero_mp];
+        let table = self.effect_table.clone();
+        for k in 0..2 {
+            if let Some((h, ..)) = self.hud_loss[k] {
+                let live = self.effects.objects.get(h).and_then(|o| o.as_ref()).is_some_and(|o| o.slots.iter().flatten().any(|&s| self.effects.spawners[s].as_ref().is_some_and(|sp| sp.owner == Some(h))));
+                if !live {
+                    self.effects.release(h);
+                    self.hud_loss[k] = None;
+                }
+            }
+            match self.hud_loss[k] {
+                Some((h, n, a)) => {
+                    let p = self.hud_point(n, a);
+                    self.effects.set_position(h, p);
+                }
+                None if values[k] < self.hud_prev[k] => {
+                    if let Some((n, a)) = self.hud_fill_points[k] {
+                        let id = if k == 0 { 0xFA2 } else { 0xFA3 };
+                        let p = self.hud_point(n, a);
+                        let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, p, neopets_sim::effect::IDENTITY));
+                        self.effects.update(&table, h, None, &mut self.rng);
+                        self.hud_loss[k] = Some((h, n, a));
+                    }
+                }
+                None => {}
+            }
+        }
+        self.hud_prev = values;
+    }
+
     pub fn view(&self) -> ([f32; 3], [f32; 3], [f32; 3], f32) {
         let (eye, forward, up, focal) = match self.cut.filter(|c| c.state != 0).and_then(|c| c.last) {
             Some(p) => match self.cut_target.and_then(|(pack, t)| self.target_anchor(pack, t)) {
@@ -3342,8 +3401,11 @@ impl Play {
         let t = if full { mote.and_then(|id| neopets_sim::mote::power_index(1, id)).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0) } else { 1.0 };
         let status = (full && row.reaction != -1)
             .then(|| mote.and_then(|id| neopets_sim::mote::status_request(1, id, |k| self.design.attack_power(k))).map(|r| [row.reaction, r[1], r[2], r[3]]).unwrap_or([row.reaction, -1, -1, -1]));
-        // The shot's visual record (SPEC-0034): kind = the launch class; the shot step is taken
-        // as 0 (its mapping to the sub-states is not given, R-0114).
+        // The shot's visual record (SPEC-0034): kind = the launch class. SPEC-0036 (R-0114): the
+        // step is the main clip's family-position field minus 111, and every shipped Roberta clip
+        // has 0 there, so the lookup fails and no table-backed flight or impact is attached.
+        // This build keeps step 0's ids as a stand-in so the shots are seen (without them a shot
+        // draws only the debug marker); what the original draws for them is asked in R-0120.
         let visual = self.attack_fx.shot_tables.ids(class, 0, mote);
         let mut launched = 0;
         for _ in 0..count {
@@ -7789,6 +7851,7 @@ impl Play {
                 poisoned: self.statuses.active(neopets_sim::status::POISON),
             };
             self.hud.tick(v, self.quick.open, &self.hud_words);
+            self.hud_loss_step();
             self.hud.tick_icons();
             // Section 12: the swing ticks in the in-play state, not under a dialogue box.
             if !self.dialogue_open {

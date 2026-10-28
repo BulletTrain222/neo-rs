@@ -8180,8 +8180,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             out.actions.extend((3..=5).map(|obj| Action::DeactivateObj { obj }));
         }
         // Trigger 10 (248 set, 281 clear): 281 and 66, object 9 off and 10 on, movie 43 counted.
-        // Its hero line (64 or 65, which hero gets which is not resolved) and SetTargetActive are
-        // not built.
+        // Its hero line without item 36 (64 or 65; which hero gets which is not resolved) and
+        // SetTargetActive for targets 0 to 2 (made active with or without the item; the Rope
+        // Gun's targets are not built) are not built.
         (956, 10) if call.object && call.state == 1 && state.flag(248) && !state.flag(281) => {
             state.set(281, true);
             state.set(66, true);
