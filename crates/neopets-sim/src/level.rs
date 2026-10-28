@@ -4599,8 +4599,10 @@ const ROOMS_1393: [Room1393; 5] = [
 ];
 
 /// 1393's module words: the opening latch, the area-active word, and per room the guard door
-/// open (the constructor's state 1, closed, is 0 here), the plate latch, the gate-state word
-/// (the open arrangement set by an entry) and the first-alarm latch; then the thread counter.
+/// open (the constructor's state 1, closed, is 0 here), the plate latch, the gate word (1 once
+/// an alarm has closed the gates, 0 at load and after an entry: the trigger-12 area word lies
+/// past rooms 0 and 1, so their entries do not run on a first pass and the gates must count as
+/// open from the load) and the first-alarm latch; then the thread counter.
 const W1393_LATCH: u8 = 0;
 const W1393_AREA: u8 = 1;
 const W1393_OPEN: u8 = 10;
@@ -4660,7 +4662,7 @@ fn entry_1393(i: usize, s: &mut GameState) -> Vec<Action> {
         }
         v.push(Action::AiBehavior { entity, code: 6 });
     }
-    s.set_word(1393, W1393_GATE + i as u8, 1);
+    s.set_word(1393, W1393_GATE + i as u8, 0);
     s.set_word(1393, W1393_PLATE + i as u8, 0);
     v
 }
@@ -4670,7 +4672,7 @@ fn entry_1393(i: usize, s: &mut GameState) -> Vec<Action> {
 /// form on and the closed form off, 1 s, the normal camera). The plate latches.
 fn plate_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     let r = &ROOMS_1393[i];
-    if s.word(1393, W1393_GATE + i as u8) == 0 || s.word(1393, W1393_PLATE + i as u8) != 0 {
+    if s.word(1393, W1393_GATE + i as u8) != 0 || s.word(1393, W1393_PLATE + i as u8) != 0 {
         return Vec::new();
     }
     s.set_word(1393, W1393_PLATE + i as u8, 1);
@@ -4693,14 +4695,14 @@ fn plate_1393(i: usize, s: &mut GameState) -> Vec<Action> {
 }
 
 /// A room alarm (SPEC-0044 1393). "Under the room's gate-state conditions" is taken as the
-/// gate-state word set (an entry since the last alarm), which also stops the 10-tick thread
-/// from raising it again: sound 5, the guards aggressive and visible, the door closed if open,
+/// gates not yet closed by an alarm (since the load or the room's last entry), which also stops
+/// the 10-tick thread from raising it again: sound 5, the guards aggressive and visible, the door closed if open,
 /// the gate-state word cleared, the even gate arrangement, the statue pair toggled (+0x10 on and
 /// played, +0x14 off) and, on the first alarm, the room camera for 2 s. Not built: the turn of
 /// +0x14 toward the hero (no object-alignment call in this build).
 fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     let r = &ROOMS_1393[i];
-    if s.word(1393, W1393_GATE + i as u8) == 0 {
+    if s.word(1393, W1393_GATE + i as u8) != 0 {
         return Vec::new();
     }
     let mut v = vec![Action::PlaySound { cue: 5, locator: None }];
@@ -4710,7 +4712,7 @@ fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     if s.word(1393, W1393_OPEN + i as u8) != 0 {
         v.extend(close_1393(i, s, false));
     }
-    s.set_word(1393, W1393_GATE + i as u8, 0);
+    s.set_word(1393, W1393_GATE + i as u8, 1);
     v.extend(gates_1393(r, false));
     v.extend([
         Action::InitObjOn { obj: r.statue.0, end: false },
@@ -15455,6 +15457,10 @@ mod tests {
         let a = on_trigger(1393, 0, fire(0, 1), &mut s).actions;
         assert!(a.contains(&Action::MoveHero { locator: 4 }) && a.contains(&Action::SetFlag { flag: 697, on: true }));
         assert!(on_trigger(1393, 0, fire(0, 1), &mut s).actions.is_empty());
+        // Room 1's plate works on a first pass, before any entry (its entry trigger needs the
+        // area word, set past the room).
+        let a = on_trigger(1393, 8, fire(8, 1), &mut s.clone()).actions;
+        assert!(a.contains(&Action::InitObjOn { obj: 32, end: false }));
         // An entry needs the area word; then the plate opens the closed door once.
         assert!(on_trigger(1393, 1, fire(1, 1), &mut s).actions.is_empty());
         on_trigger(1393, 12, fire(12, 1), &mut s);

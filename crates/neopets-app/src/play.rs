@@ -2599,8 +2599,9 @@ impl Play {
                         map: 0,
                         price: 0,
                     };
-                    self.spawn_item(pack, spawn);
-                    self.last_fx = format!("bagguss {index} broken at {:.1},{:.1} on tick {}", l[0], l[2], self.ticks);
+                    let spawned = self.spawn_item(pack, spawn);
+                    let line = format!("bagguss {index} broken at {:.1},{:.1},{:.1} (item 145 spawned: {spawned}) on tick {}", l[0], y, l[2], self.ticks);
+                    self.last_fx = if self.last_fx.starts_with("bagguss") { format!("{}; {line}", self.last_fx) } else { line };
                 }
                 Action::AiBehavior { entity, code: _ } => {
                     let c = self.entity_mut(pack, entity)?;

@@ -68,6 +68,21 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
         let first = l.first().map(|e| format!("colour ({:.1}, {:.1}, {:.1}) strength {:.3} radius {:.3}", e.colour[0], e.colour[1], e.colour[2], e.strength, e.radius));
         println!("  effect {id} after 60 ticks: {} listed lights, first {first:?}", l.len());
     }
+    // The bars' loss effects (SPEC-0023 section 3): started as the loss step starts them, the
+    // spawners and particles live after each tick count.
+    for id in [0xFA2, 0xFA3] {
+        let mut fx = Effects::new();
+        let h = fx.add_object(EffectObject::new(&table, id, [0.0; 3], IDENTITY));
+        fx.update(&table, h, None, &mut Midpoint);
+        let mut seen = Vec::new();
+        for t in 1..=120 {
+            fx.tick(&table, &mut Midpoint);
+            if matches!(t, 1 | 10 | 30 | 60 | 120) {
+                seen.push(format!("t{t}: {} spawners {} particles", fx.live_spawners(), fx.live_particles()));
+            }
+        }
+        println!("  loss effect {id:#x} (definition {:?}): {}", table.find(id), seen.join(", "));
+    }
     for (id, node, ticks) in [(1201, 414usize, 300u32), (159, 1371, 370), (400, 446, 70)] {
         let mut t = table.clone();
         let Some(d) = t.find(id) else { continue };
