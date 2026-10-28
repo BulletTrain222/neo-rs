@@ -6,13 +6,14 @@
 //! melee, charge and loop states), the agro tail with the leash (Behavior 23), the chase stop
 //! (Behavior 48.6), the take-hit hook (Behavior 37), the dead state (Behaviors 34 and 36) and the
 //! melee and missile defences (outers 5 to 8, with the defence hold and exit), and the
-//! counter-attack choice (Behavior 14).
+//! counter-attack choice (Behavior 14), the distance-hide gate (Behavior 24) and state 14,
+//! retreat home and hide (Behavior 38).
 //!
 //! Not covered: the alarm groups and the group alert (Behaviors 3 and 10), socialize, the global
 //! AI pause (state 20), the retarget countdown and flyer re-launch (state 22 is played but never
 //! entered), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target state 9 (it
 //! stands and notices), the alarm-group emerge of state 8, wandering in
-//! states 5 to 7 (they stand and notice), retreat home (state 14) and the distance-hide gate,
+//! states 5 to 7 (they stand and notice),
 //! the counter-attack choice's code 5 (R-0117), the
 //! confused outer 11, the attack manager and the wait in line (outer 12), projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
@@ -102,6 +103,8 @@ pub struct Params {
     pub ground_min: f32,
     pub max_fly: f32,
     pub distance_hide: bool,
+    pub hide_distance: f32,
+    pub hide_chance: f32,
     pub flying_hit: i32,
     pub anger: bool,
     pub view_angle: f32,
@@ -284,6 +287,8 @@ pub struct Act {
     /// A flyer's row-speed step F in the character's own basis (x side B1, z forward B3), per
     /// tick (SPEC-0040 Behavior 14D item 7).
     pub fly: Option<Vec3>,
+    /// Set the position to this point (state 14's hide at home).
+    pub snap: Option<Vec3>,
 }
 
 /// SPEC-0040 Behavior 21, the flyer goal height. `ambush` is the ambush word (+0xBC0); while it
@@ -453,6 +458,8 @@ pub struct Enemy {
     pub outer: u32,
     pub inner: u32,
     pub seq: u32,
+    /// State 14's phase word (+0xC04; Behavior 38).
+    pub hide_phase: u8,
     hold: i32,
     lock: i32,
     route: bool,
@@ -533,6 +540,7 @@ impl Enemy {
             outer: 0,
             inner: 0,
             seq: 0,
+            hide_phase: 0,
             hold: 0,
             lock: 0,
             route: true,
@@ -671,6 +679,41 @@ impl Enemy {
                 }
                 None => self.set(19, v, rng, a),
             },
+        }
+    }
+
+    /// Behavior 38, state 14 (retreat home and hide), by its phase word: 0 plays 81 through; 1
+    /// walks home with 125, hides (state 8, snapped home) with no route to the hero within 3.0
+    /// of home, and plays 82 (phase 2) with the hero within 5.0 and a route, or animation 0
+    /// current; 2 waits for 82 and then goes to agro with the hero within 20.0, else the default.
+    fn retreat_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let home = self.spawn.home;
+        let d = len(sub(v.hero, v.position));
+        match self.hide_phase {
+            0 => {
+                if self.through(81, v, a) {
+                    self.hide_phase = 1;
+                }
+            }
+            1 => {
+                if !v.route && hdist(v.position, home) <= 3.0 {
+                    a.snap = Some(home);
+                    self.set(8, v, rng, a);
+                } else if (d <= 5.0 && v.route) || v.clip.action == 0 {
+                    self.hide_phase = 2;
+                    self.through = None;
+                    self.through(82, v, a);
+                } else {
+                    a.anim = Some(125);
+                    a.go = Some(Go::Toward(home));
+                }
+            }
+            _ => {
+                if self.through(82, v, a) {
+                    let next = if d <= 20.0 { 19 } else { 0 };
+                    self.set(next, v, rng, a);
+                }
+            }
         }
     }
 
@@ -1168,6 +1211,7 @@ impl Enemy {
                 }
             }
             19 => self.agro(v, rng, &mut a),
+            14 => self.retreat_step(v, rng, &mut a),
             _ => {}
         }
         // State handlers.
@@ -1432,6 +1476,13 @@ impl Enemy {
         self.choose(v, rng);
         self.counter_choose(v, rng);
         let d = len(sub(v.hero, v.position));
+        // Behavior 24, the distance-hide gate: in the rush (outer 1), with the row's flag, beyond
+        // its hide distance and a roll int[0, 100] below its chance, state 14.
+        if self.outer == 1 && self.state != 14 && self.p.distance_hide && d > self.p.hide_distance && (rng.range(0, 100) as f32) < self.p.hide_chance {
+            self.hide_phase = 0;
+            self.set(14, v, rng, a);
+            return;
+        }
         let dir = unit(sub(v.hero, v.position));
         let near_waypoint = hdist(v.position, v.waypoint) <= 1.0;
         match self.outer {
@@ -2132,6 +2183,55 @@ mod tests {
         }
         assert!(chosen);
         assert_eq!(e.seq, 1, "within range on the mesh: wind-up at once");
+    }
+
+    #[test]
+    fn distance_hide_gate_and_retreat() {
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(5);
+        let mut p = skeleton();
+        for s in &mut p.slots {
+            s.kind = UNUSED;
+        }
+        (p.distance_hide, p.hide_distance, p.hide_chance) = (true, 5.0, 30.0);
+        let fresh = |rng: &mut Rng| {
+            let mut e = Enemy::new(p.clone(), Spawn { home: [-10.0, 0.0, 0.0], ..Spawn::default() }, rng);
+            (e.state, e.outer) = (19, 1);
+            e
+        };
+        // d = 4: never.
+        let v = view([4.0, 0.0, 0.0], &has);
+        let mut e = fresh(&mut rng);
+        for _ in 0..200 {
+            e.outer = 1;
+            e.agro(&v, &mut rng, &mut Act::default());
+        }
+        assert_eq!(e.state, 19);
+        // d = 8: state 14 within a few ticks; the same row in outer 4 never.
+        let v = view([8.0, 0.0, 0.0], &has);
+        let mut e = fresh(&mut rng);
+        e.outer = 4;
+        e.agro(&v, &mut rng, &mut Act::default());
+        assert_eq!(e.state, 19);
+        let mut e = fresh(&mut rng);
+        let n = (0..200).take_while(|_| {
+            e.outer = 1;
+            e.agro(&v, &mut rng, &mut Act::default());
+            e.state != 14
+        }).count();
+        assert!(n < 200 && e.state == 14 && e.hide_phase == 0);
+        // Phase 1 walks home with 125; within 3.0 of home with no route it hides there.
+        e.hide_phase = 1;
+        let mut v = view([8.0, 0.0, 0.0], &has);
+        v.clip.action = 125;
+        let mut a = Act::default();
+        e.retreat_step(&v, &mut rng, &mut a);
+        assert_eq!((a.anim, a.go), (Some(125), Some(Go::Toward([-10.0, 0.0, 0.0]))));
+        v.position = [-8.0, 0.0, 0.0];
+        v.route = false;
+        let mut a = Act::default();
+        e.retreat_step(&v, &mut rng, &mut a);
+        assert_eq!((e.state, a.snap), (8, Some([-10.0, 0.0, 0.0])));
     }
 
     #[test]

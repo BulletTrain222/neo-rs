@@ -133,6 +133,9 @@ pub struct Tuning {
     pub max_fly: f32,
     /// Distance hide flag (u16 +0xA0).
     pub distance_hide: bool,
+    /// Distance hide distance and chance (f32 +0xA4, +0xA8; SPEC-0038 Behavior 24).
+    pub hide_distance: f32,
+    pub hide_chance: f32,
     pub flying_hit: i32,
     pub anger: bool,
     pub view_angle: f32,
@@ -269,6 +272,8 @@ impl MonsterTable {
             ground_min: f(0x9C),
             max_fly: f(0xB4),
             distance_hide: u(0xA0) != 0,
+            hide_distance: f(0xA4),
+            hide_chance: f(0xA8),
             flying_hit: w(0xAC) as i32,
             anger: w(0x134) != 0,
             view_angle: f(0xC0),

@@ -7933,6 +7933,10 @@ impl Play {
                     wk.body.position[1] += if dy.abs() > 0.1 { 0.1 * dy.signum() } else { dy };
                 }
             }
+            if let Some(p) = act.snap {
+                wk.body.position = p;
+                step = [0.0; 3];
+            }
             wk.motion_tick(step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
             *position = wk.position();
             *facing = wk.facing;
@@ -12541,6 +12545,8 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         approach_timer_min: t.approach_timer_min,
         turn: t.turn,
         distance_hide: t.distance_hide,
+        hide_distance: t.hide_distance,
+        hide_chance: t.hide_chance,
         flying_hit: t.flying_hit,
         anger: t.anger,
         view_angle: t.view_angle,
