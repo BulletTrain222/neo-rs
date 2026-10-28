@@ -545,6 +545,20 @@ pub struct Character {
 }
 
 impl Character {
+    /// The Cloud Beast stand-in's body (it has no rig): a cylinder of the row's radius and
+    /// height around the floating cloud, the base raised by the hover. None for anyone else.
+    pub fn stand_in_body(&self) -> Option<neopets_sim::combat::Cylinder> {
+        self.cloud.as_ref()?;
+        let r = self.row.map_or(3.0, |r| r.radius);
+        let h = self.row.map_or(3.5, |r| r.height);
+        Some(neopets_sim::combat::Cylinder { center: add(self.position, [0.0, crate::placeholder::CLOUD_HOVER + 0.5 * h, 0.0]), axis: [0.0, 1.0, 0.0], radius: r, length: h })
+    }
+
+    /// The point shots aim at: the stand-in body's centre for the Cloud Beast, else 1.5 up.
+    pub fn shot_aim(&self) -> [f32; 3] {
+        self.stand_in_body().map_or([self.position[0], self.position[1] + 1.5, self.position[2]], |b| b.center)
+    }
+
     /// SPEC-0047 Layout / SPEC-0036 Hittable predicate tests 4 and 5: a character whose pet type
     /// id has a kind in either table is skipped by hero swings, shots and the Mote walks.
     pub fn pet_like(&self) -> bool {
@@ -3362,7 +3376,7 @@ impl Play {
         let mut shots = std::mem::take(&mut self.hero_shots);
         let mut keep = Vec::new();
         for mut s in shots.drain(..) {
-            let aim = s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| [c.position[0], c.position[1] + 1.5, c.position[2]]);
+            let aim = s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| c.shot_aim());
             let before = s.position;
             if !s.step(aim) {
                 continue;
@@ -3394,7 +3408,12 @@ impl Play {
                     let d = sub_v(s.position, q);
                     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= radius + s.radius
                 });
-                touches.then_some(i)
+                // The Cloud Beast stand-in: the shot sphere against its body cylinder.
+                let cloud = c.stand_in_body().is_some_and(|b| {
+                    let (lo, hi) = (b.center[1] - 0.5 * b.length, b.center[1] + 0.5 * b.length);
+                    (s.position[0] - b.center[0]).hypot(s.position[2] - b.center[2]) <= b.radius + s.radius && s.position[1] >= lo - s.radius && s.position[1] <= hi + s.radius
+                });
+                (touches || cloud).then_some(i)
             });
             let Some(i) = hit else {
                 // SPEC-0036 World contact: the first solid collider of the cell disarms the shot
@@ -5150,11 +5169,7 @@ impl Play {
             let cframes = c.anim.bone_frames();
             // The Cloud Beast stand-in has no rig: its body is a cylinder of the row's radius and
             // height around the floating cloud (stand-in hurt shape).
-            let cloud_body = c.cloud.is_some().then(|| {
-                let r = c.row.map_or(3.0, |r| r.radius);
-                let h = c.row.map_or(3.5, |r| r.height);
-                neopets_sim::combat::Cylinder { center: add(c.position, [0.0, crate::placeholder::CLOUD_HOVER + 0.5 * h, 0.0]), axis: [0.0, 1.0, 0.0], radius: r, length: h }
-            });
+            let cloud_body = c.stand_in_body();
             let hit = cloud_body.is_some_and(|b| neopets_sim::combat::overlap(&weapon, &b)) || c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
                 if length <= 0.0 {
                     return false;
@@ -5379,7 +5394,8 @@ impl Play {
             let mut hits = Vec::new();
             for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.unhittable()) {
                 let Some(r) = c.row else { continue };
-                if !o.touches(c.position, r.radius, r.height) || !o.list(c.id) {
+                let base = c.stand_in_body().map_or(c.position, |b| [b.center[0], b.center[1] - 0.5 * b.length, b.center[2]]);
+                if !o.touches(base, r.radius, r.height) || !o.list(c.id) {
                     continue;
                 }
                 let t = r.target_type as i32;
@@ -7806,7 +7822,7 @@ impl Play {
             if (c.position[0] - h[0]).hypot(c.position[2] - h[2]) >= 60.0 {
                 continue;
             }
-            let at = Self::attach_point(c, 7).unwrap_or(c.position);
+            let at = c.stand_in_body().map(|b| b.center).or_else(|| Self::attach_point(c, 7)).unwrap_or(c.position);
             let d = unit([at[0] - eye[0], 0.0, at[2] - eye[2]]);
             let side = [d[2], 0.0, -d[0]];
             let clear = |o: f32| self.world.ground.as_ref().is_none_or(|g| g.segment_clear(add(eye, scale(side, o)), add(at, scale(side, o)), true));
@@ -7889,9 +7905,14 @@ impl Play {
         self.cloud_fight(pack);
         // The companion rides on the boss.
         if let (Some(b), Some(c)) = (find(self, 9), find(self, 10)) {
-            let (p, f) = (self.characters[b].position, self.characters[b].facing);
-            self.characters[c].position = [p[0], p[1] + crate::placeholder::COMPANION_RIDE, p[2]];
-            self.characters[c].facing = f;
+            // SPEC-0010 Companion: pinned to the boss (bone 11 of the stand-in: above the cloud)
+            // and turned toward the hero with weight 0.1 along the horizontal direction.
+            let p = self.characters[b].position;
+            let hero = self.loco.position();
+            let k = &mut self.characters[c];
+            k.position = [p[0], p[1] + crate::placeholder::COMPANION_RIDE, p[2]];
+            let to = [hero[0] - k.position[0], 0.0, hero[2] - k.position[2]];
+            k.facing = neopets_sim::hero::steer(k.facing, to, 0.1);
         }
     }
 
