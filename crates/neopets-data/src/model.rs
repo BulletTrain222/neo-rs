@@ -144,6 +144,9 @@ pub struct MeshPart {
     /// The second render pass of a two-pass group (SPEC-0003 How a pass is drawn; SPEC-0004
     /// Two-pass batches): the same positions, colours and normals with its own texture and UVs.
     pub pass1: Option<Pass1>,
+    /// A type-20 instance's cull: its translation, draw distance D1 and fade length F
+    /// (SPEC-0046 Instanced meshes); None for every other part.
+    pub cull: Option<([f32; 3], f32, f32)>,
 }
 
 /// A part's render pass 1.
@@ -285,6 +288,8 @@ struct Builder {
     shared: Option<ChainMaterials>,
     cache: HashMap<(usize, TextureRef, u8, u8), usize>,
     out: ModelData,
+    /// The cull given to the parts of the tree being added.
+    cull: Option<([f32; 3], f32, f32)>,
 }
 
 impl Builder {
@@ -293,6 +298,7 @@ impl Builder {
             materials,
             shared,
             cache: HashMap::new(),
+            cull: None,
             out: ModelData {
                 min: [f32::INFINITY; 3],
                 max: [f32::NEG_INFINITY; 3],
@@ -403,6 +409,7 @@ impl Builder {
                 weights: Vec::new(),
                 bones: Vec::new(),
                 pass1: None,
+                cull: self.cull,
                 raw_colors: Vec::new(),
                 lit: group.is_some_and(|g| matches!(g.program, 1 | 2 | 6)),
             };
@@ -541,6 +548,7 @@ pub fn build_world_parts(bytes: &[u8], top: &[Chunk], layer_mask: u32, objects: 
     let materials = vec![ChainMaterials::of(bytes, top)?];
     let mut b = Builder::new(materials, None);
     for t in &scene.trees {
+        b.cull = t.cull.zip(t.matrix).map(|((d1, f), m)| ([m[12], m[13], m[14]], d1, f));
         if let Err(e) = b.add_tree(bytes, t.payload.clone(), 0, t.matrix.as_ref(), Some(layer_mask), t.zone) {
             b.out.skipped_leaves.push(format!("tree at {:#x}: {e}", t.payload.start));
         }

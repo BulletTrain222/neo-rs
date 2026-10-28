@@ -52,6 +52,8 @@ pub struct Placed {
     pub source: u16,
     /// A type-20 instance's zone column (+0x40; SPEC-0004 Instanced meshes).
     pub zone: Option<u8>,
+    /// A type-20 record's draw distance D1 (+0x1C) and fade length F (+0x18).
+    pub cull: Option<(f32, f32)>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -98,6 +100,7 @@ fn placed_objects(p: &[u8], base: usize, scene: &mut Scene) {
                 source: PLACED_OBJECTS,
                 // SPEC-0028 section 7: the object's zone column (0x1B8), read as stored.
                 zone: p.get(obj + 0x1B8).copied(),
+                cull: None,
             }),
             _ => scene.unresolved += 1,
         }
@@ -127,6 +130,7 @@ fn instances(p: &[u8], base: usize, scene: &mut Scene) {
                     matrix: Some(m),
                     source: INSTANCES,
                     zone: p.get(rec + at as usize + i * INSTANCE_SIZE + 0x40).copied(),
+                    cull: u32_at(p, rec + 0x1C).map(f32::from_bits).zip(u32_at(p, rec + 0x18).map(f32::from_bits)),
                 }),
                 None => scene.unresolved += 1,
             }
@@ -293,6 +297,7 @@ pub fn scene(bytes: &[u8], top: &[Chunk]) -> Scene {
                 matrix: None,
                 source: LEVEL_TREE,
                 zone: None,
+                cull: None,
             }),
             PLACED_OBJECTS => placed_objects(p, c.payload.start, &mut s),
             INSTANCES => instances(p, c.payload.start, &mut s),

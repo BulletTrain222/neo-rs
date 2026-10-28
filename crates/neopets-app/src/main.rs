@@ -2145,6 +2145,11 @@ fn sync_worlds(
                     if let WorldPart::Scene(pack, _) = *part {
                         e.insert(PartSig(pack, part_signature(&m.parts[i])));
                     }
+                    // SPEC-0046 Instanced meshes: an instance's parts draw only within the
+                    // record's draw distance D1 of the eye (F is 0 on disc: no fade).
+                    if let Some((at, d1, _)) = m.parts[i].cull {
+                        e.insert(DrawCull(Vec3::from(at), d1));
+                    }
                     if let Some(speed) = m.parts[i].scroll.filter(|_| m.parts[i].texture.is_some()) {
                         e.insert(UvScroll(speed));
                     }
@@ -2244,6 +2249,10 @@ fn sync_uv_scroll(state: Option<Res<PlayState>>, parts: Query<(&UvScroll, &MeshM
 #[derive(Component, Clone, Copy)]
 struct ZoneGate(u32, u8);
 
+/// A type-20 instance part's translation and draw distance D1 (SPEC-0046 Instanced meshes).
+#[derive(Component)]
+struct DrawCull(Vec3, f32);
+
 /// A world scene part's pack and geometry signature (its vertex count and its bounds).
 #[derive(Component, Clone, Copy)]
 struct PartSig(u32, u64);
@@ -2263,14 +2272,21 @@ fn part_signature(p: &neopets_data::model::MeshPart) -> u64 {
 /// drawn world that repeats a part of the current world exactly (the same vertex count and
 /// bounds; 696 and 1023 share seven castle parts) is hidden: drawn twice in one place the two
 /// copies fight for depth and flicker (this build's draw rule, not a spec rule).
-fn sync_zones(state: Option<Res<PlayState>>, mut parts: Query<(Option<&ZoneGate>, Option<&PartSig>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>)>>) {
+fn sync_zones(
+    state: Option<Res<PlayState>>,
+    mut parts: Query<(Option<&ZoneGate>, Option<&PartSig>, Option<&DrawCull>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>, With<DrawCull>)>>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
+) {
     let Some(state) = state else { return };
+    let eye = cameras.iter().next().map(|g| g.translation());
     let current = state.play.world.pack;
-    let mine: std::collections::HashSet<u64> = parts.iter().filter_map(|(_, s, _)| s.filter(|s| s.0 == current).map(|s| s.1)).collect();
-    for (g, s, mut v) in &mut parts {
+    let mine: std::collections::HashSet<u64> = parts.iter().filter_map(|(_, s, ..)| s.filter(|s| s.0 == current).map(|s| s.1)).collect();
+    for (g, s, cull, mut v) in &mut parts {
         let zone_ok = g.is_none_or(|g| state.play.zone_visible(g.0, g.1));
         let dup = s.is_some_and(|s| s.0 != current && mine.contains(&s.1));
-        let want = if zone_ok && !dup { Visibility::Inherited } else { Visibility::Hidden };
+        // Skipped at D1 or more (squared values compared).
+        let near = cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
+        let want = if zone_ok && !dup && near { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
             *v = want;
         }

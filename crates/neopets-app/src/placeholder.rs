@@ -38,6 +38,7 @@ fn part() -> MeshPart {
         weights: Vec::new(),
         bones: Vec::new(),
         pass1: None,
+        cull: None,
     }
 }
 
