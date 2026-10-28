@@ -271,10 +271,11 @@ impl World {
         // modes 1 and 2 apply only to an entry whose broken bit is set, and no disc entry has
         // them, so nothing changes here.
         world.breakables = neopets_data::world::breakables(&bytes, &chain.chunks);
-        // NEOPETS_TRACE_BREAK_KEYS: the entries whose break spawns a character by key.
+        // NEOPETS_TRACE_BREAK_KEYS: the entries whose break spawns a character by key, or that
+        // carry an element seal.
         if std::env::var_os("NEOPETS_TRACE_BREAK_KEYS").is_some() {
-            for (i, b) in world.breakables.iter().enumerate().filter(|(_, b)| b.spawn_key >= 0) {
-                println!("      break key: pack {} breakable {i} key {} at {:?}", world.pack, b.spawn_key, b.position());
+            for (i, b) in world.breakables.iter().enumerate().filter(|(_, b)| b.spawn_key >= 0 || !matches!(b.element, 0 | 7)) {
+                println!("      break key: pack {} breakable {i} key {} element {} state {} at {:?}", world.pack, b.spawn_key, b.element, b.state, b.position());
             }
         }
         // SPEC-0048 Switch groups, set-up: in each kind-4 entry members 1 to n-1 are disabled.
@@ -6895,9 +6896,11 @@ impl Play {
             for &(slot, cue) in plays {
                 self.sound.play(slot, cue, Cue::default());
             }
-            // SPEC-0036 sub-state 13 (the leap landing): a rumble request while the current
-            // action is not 26.
+            // SPEC-0036 Tor's sub-state 13 (the recoil): while the current action is not 26, the
+            // recoil voice cue (13 for material 4, the only material this build requests;
+            // SPEC-0048 Element recoil) and the rumble request.
             if sub == 13 && self.hero.clip_state().action != 26 {
+                self.sound.play(VOICE, 13, Cue::default());
                 let (p, t, m) = self.landing_rumble;
                 self.rumble.request(&self.rumble_presets, p, t, m);
             }
@@ -10380,8 +10383,9 @@ impl Play {
     /// the window, the swing triangle (P0 and the current and previous-tick tips) against every
     /// intact breakable's volume of the current world. A hit runs the element gate (the entry's
     /// class 0 or 7, or the slot-2 Mote's kind), the break effect from state 1 and the contact
-    /// cue by material. The break's spawn by key is in `break_one_with`. The script hook, Tor's
-    /// recoil on a mismatch, the piece spawns and the timed effect are not built.
+    /// cue by material; on an element mismatch Tor recoils (SPEC-0048 Element recoil: attack
+    /// sub-state 13 with material 4). The break's spawn by key is in `break_one_with`. The
+    /// script hook, the piece spawns and the timed effect are not built.
     fn breakable_walk(&mut self, p0: [f32; 3], tip: [f32; 3], prev: [f32; 3]) {
         use neopets_sim::combat::{Cylinder, segment_distance, segment_meets};
         let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
@@ -10389,6 +10393,7 @@ impl Play {
         let mut broken = Vec::new();
         let mut chained = Vec::new();
         let mut cues = Vec::new();
+        let mut recoil = false;
         // The chain hook: members 0 to n-2 of a kind-4 group (the group's index with it).
         let hooked: Vec<(usize, usize)> = self
             .world
@@ -10417,6 +10422,11 @@ impl Play {
             }
             let e = b.element as i32;
             if !(e == 0 || e == 7 || e == kind) {
+                // A mismatch: Tor recoils with material 4, with no break and no cue.
+                recoil = true;
+                if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
+                    println!("      breakable {i}: element {e} against Mote kind {kind}: recoil");
+                }
                 continue;
             }
             if let Some(&(_, gi)) = hooked.iter().find(|h| h.0 == i) {
@@ -10430,6 +10440,11 @@ impl Play {
                 broken.push(i);
             } else {
                 cues.push(break_cue(b.material));
+            }
+        }
+        if recoil && self.hero_index == 0 {
+            if let Some(a) = self.attack.as_mut() {
+                a.recoil();
             }
         }
         for gi in chained {

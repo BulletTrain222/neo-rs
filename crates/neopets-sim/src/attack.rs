@@ -18,6 +18,8 @@ pub const POWER_NO_MOTE: u32 = 0x1B;
 pub const CLOCKWISE: u32 = 19;
 pub const COUNTER_CLOCKWISE: u32 = 18;
 pub const LUNGE: u32 = 20;
+/// The sword bounce of sub-state 13 (SPEC-0036 Tor's arm table; SPEC-0048 Element recoil).
+pub const RECOIL: u32 = 26;
 const POWER_THRESHOLD: u32 = 50;
 
 /// The playing clip as the attack step reads it.
@@ -77,6 +79,16 @@ impl TorAttack {
         self.sub != 0
     }
 
+    /// The recoil request (SPEC-0048 Element recoil; SPEC-0028 Blade recoil): sub-state 13,
+    /// which requests the bounce (26) and ends with it. A request while already recoiling does
+    /// nothing.
+    pub fn recoil(&mut self) {
+        if self.sub != 13 {
+            self.go(13);
+            self.restart = true;
+        }
+    }
+
     /// One tick: `held` is the attack button held, `pressed` its press edge this tick; `clip`
     /// the playing main clip. Returns the request (None when the attack has just ended: the
     /// state returns to 1 and the idle is requested by the stance).
@@ -126,6 +138,11 @@ impl TorAttack {
                     self.go(0);
                 }
             }
+            13 => {
+                if done(self, RECOIL) {
+                    self.go(0);
+                }
+            }
             7 | 8 | 9 => {
                 let id = match self.sub {
                     7 => CLOCKWISE,
@@ -157,6 +174,7 @@ impl TorAttack {
             7 => CLOCKWISE,
             8 => COUNTER_CLOCKWISE,
             9 => LUNGE,
+            13 => RECOIL,
             _ => POWER_NO_MOTE,
         };
         Some(Request { action, restart: std::mem::take(&mut self.restart) })
@@ -166,6 +184,21 @@ impl TorAttack {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recoil_bounce() {
+        // A recoil mid-swing: sub-state 13 requests 26 (restarted), ends when it finishes, and a
+        // second request while recoiling changes nothing.
+        let mut a = TorAttack::start();
+        a.tick(false, false, Clip { action: HOLD_START, progress: 0.1 });
+        assert_eq!(a.sub, 2);
+        a.recoil();
+        let r = a.tick(false, false, Clip { action: SWING_1, progress: 0.3 }).unwrap();
+        assert_eq!((a.sub, r.action, r.restart), (13, RECOIL, true));
+        a.recoil();
+        assert_eq!(a.tick(false, false, Clip { action: RECOIL, progress: 0.5 }).unwrap(), Request { action: RECOIL, restart: false });
+        assert!(a.tick(false, false, Clip { action: RECOIL, progress: 1.0 }).is_none());
+    }
 
     /// Drive the step with a clip model: a request starts its clip (or restarts it), and the
     /// clip's progress advances by 1 / length per tick. Returns (tick, sub-state, request) at
