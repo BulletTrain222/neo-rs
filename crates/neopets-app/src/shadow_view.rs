@@ -19,9 +19,10 @@ use std::sync::OnceLock;
 
 static SHADER: OnceLock<Handle<Shader>> = OnceLock::new();
 
-/// The shadow factor of each strength (linear colour): Original is a drop of 8 of 255 at mid
-/// grey (128 to 120 in display values; SPEC-0046 step 8); Strong is this build's.
-const FACTORS: [f32; 3] = [1.0, 0.87, 0.6];
+/// The shadow factor of the volumes (linear colour): Original is a drop of 8 of 255 at mid grey
+/// (128 to 120 in display values; SPEC-0046 step 8). Detailed (2) draws no volumes: the sun's
+/// shadow map gives the characters' own shapes instead.
+const FACTORS: [f32; 3] = [1.0, 0.87, 1.0];
 
 pub struct ShadowPlugin;
 
@@ -146,10 +147,9 @@ pub fn sync_shadows(
     }
 }
 
-/// The world-shadow sun (this build's option): a directional light with shadow maps, on while
-/// World shadows is on. Its direction is the strongest directional light of the hero's light
-/// context (the area's own light, SPEC-0046 Character lights), held at least 0.4 downward,
-/// else a default slant.
+/// The sun (this build's option): a directional light with shadow maps, on while World shadows
+/// is on or Character shadows is Detailed, from the world's brightest directional light
+/// (`Play::sun_direction`).
 #[derive(Component)]
 pub struct Sun;
 
@@ -165,8 +165,8 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
         ));
         return;
     }
-    let on = settings.world_shadows && state.is_some();
-    let dir = state.as_ref().and_then(|s| s.play.sun_direction()).unwrap_or([0.35, -1.0, 0.25]);
+    let on = (settings.world_shadows || settings.char_shadows == 2) && state.is_some();
+    let dir = state.as_ref().map_or([0.35, -1.0, 0.25], |s| s.play.sun_direction());
     let d = Vec3::from(dir).normalize_or(Vec3::NEG_Y);
     for (mut t, mut vis) in &mut suns {
         let want = if on { Visibility::Visible } else { Visibility::Hidden };
@@ -176,6 +176,39 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
         let target = Transform::default().looking_to(d, if d.y.abs() > 0.99 { Vec3::Z } else { Vec3::Y });
         if t.rotation.dot(target.rotation).abs() < 0.99999 {
             t.rotation = target.rotation;
+        }
+    }
+}
+
+/// A mesh this module took out of the shadow casters (so the dome's own setting is left alone).
+#[derive(Component)]
+pub struct CasterOff;
+
+/// With Character shadows Detailed and World shadows off, only the characters (the hero, the
+/// world's characters, their items and attachments) cast: every other mesh is marked
+/// NotShadowCaster; with World shadows on the marks come off again.
+#[allow(clippy::type_complexity)]
+pub fn sync_casters(
+    mut commands: Commands,
+    settings: Res<crate::display::DisplaySettings>,
+    meshes: Query<(Entity, Has<CasterOff>, Has<bevy::light::NotShadowCaster>), With<Mesh3d>>,
+    added: Query<(), Added<Mesh3d>>,
+    parents: Query<&ChildOf>,
+    roots: Query<(), Or<(With<crate::HeroRoot>, With<crate::CharacterRoot>, With<crate::AttachmentRoot>, With<crate::HeroItemRoot>)>>,
+    mut last: Local<Option<bool>>,
+) {
+    let characters_only = !settings.world_shadows;
+    if *last == Some(characters_only) && added.is_empty() {
+        return;
+    }
+    *last = Some(characters_only);
+    for (e, managed, off) in &meshes {
+        let character = std::iter::successors(Some(e), |&x| parents.get(x).ok().map(|p| p.parent())).any(|x| roots.contains(x));
+        let want_off = characters_only && !character;
+        if want_off && !off {
+            commands.entity(e).insert((bevy::light::NotShadowCaster, CasterOff));
+        } else if !want_off && managed {
+            commands.entity(e).remove::<(bevy::light::NotShadowCaster, CasterOff)>();
         }
     }
 }

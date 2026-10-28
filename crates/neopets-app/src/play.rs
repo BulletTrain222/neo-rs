@@ -11228,17 +11228,21 @@ impl Play {
         }
     }
 
-    /// The direction of the strongest directional light of the hero's light context (the
-    /// world-shadow sun), held at least 0.4 downward; None without one.
-    pub fn sun_direction(&self) -> Option<[f32; 3]> {
-        let s = self.char_lights.get(&None)?;
-        let best = s.slots.iter().filter_map(|x| x.entry.filter(|e| e.kind == 2).map(|e| (x.weight, e.direction))).max_by(|a, b| a.0.total_cmp(&b.0))?;
-        let mut d = unit(best.1);
-        if d[1] > -0.4 {
-            d[1] = -0.4;
-            d = unit(d);
+    /// The world-shadow sun (this build's option): the brightest directional (type 2) light of
+    /// the current world's light set (SPEC-0028 section 2), by colour times strength, else the
+    /// scene default's main light (SPEC-0046: (0.666, -0.524, 0.531)); one that points level or
+    /// upward is passed over. The direction is the light's travel direction, held at least 0.5
+    /// downward so shadows stay a sensible length.
+    pub fn sun_direction(&self) -> [f32; 3] {
+        let brightness = |e: &neopets_sim::charlight::Entry| (e.colour[0] + e.colour[1] + e.colour[2]) * e.strength.abs().max(1e-3);
+        let best = self.world.lights.iter().flat_map(|r| r.a.iter().chain(&r.b).chain(&r.c)).filter(|e| e.kind == 2 && unit(e.direction)[1] < -0.2).max_by(|a, b| brightness(a).total_cmp(&brightness(b)));
+        let mut d = unit(best.map_or(neopets_sim::charlight::defaults()[1].direction, |e| e.direction));
+        if d[1] > -0.5 {
+            let h = (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-6);
+            let k = (1.0f32 - 0.25).sqrt() / h;
+            d = [d[0] * k, -0.5, d[2] * k];
         }
-        Some(d)
+        d
     }
 
     /// SPEC-0046 Character shadow volumes for this frame: the hero is the one caster (the

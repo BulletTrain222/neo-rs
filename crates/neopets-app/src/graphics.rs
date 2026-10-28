@@ -64,7 +64,12 @@ pub fn sun_illuminance() -> f32 {
 /// The ambient brightness while lit: the full matched one, less the sun's share with world
 /// shadows on.
 fn ambient(settings: &DisplaySettings) -> f32 {
-    matched_ambient() * if settings.world_shadows { 1.0 - SUN_SHARE } else { 1.0 }
+    matched_ambient() * if sun_on(settings) { 1.0 - SUN_SHARE } else { 1.0 }
+}
+
+/// Whether the shadow sun shines: World shadows, or Character shadows Detailed.
+pub fn sun_on(settings: &DisplaySettings) -> bool {
+    settings.world_shadows || settings.char_shadows == 2
 }
 
 pub struct GraphicsPlugin;
@@ -152,7 +157,7 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 
 /// The camera's anti-aliasing, bloom and ambient occlusion from the settings.
 fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool)>>) {
-    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows > 0, settings.world_shadows);
+    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings));
     if *last == Some(key) {
         return;
     }
@@ -176,7 +181,7 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
         if settings.bloom > 0 {
             let (intensity, threshold) = if settings.bloom == 2 { (0.22, 0.55) } else { (0.10, 0.7) };
             c.insert((Hdr, Bloom { intensity, prefilter: BloomPrefilter { threshold, threshold_softness: 0.4 }, composite_mode: BloomCompositeMode::Additive, ..Bloom::NATURAL }));
-        } else if settings.char_shadows > 0 {
+        } else if settings.char_shadows == 1 {
             // The shadow volumes multiply the picture up and down again (shadow_view.rs), which
             // needs the float picture.
             c.remove::<Bloom>();
@@ -191,7 +196,7 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
             c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
         } else if settings.ao {
             c.insert((ScreenSpaceAmbientOcclusion::default(), AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true }));
-        } else if settings.world_shadows {
+        } else if sun_on(&settings) {
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
             c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
         } else {
@@ -214,7 +219,7 @@ fn apply_materials(settings: Res<DisplaySettings>, mut materials: ResMut<Assets<
         m.double_sided = false;
     };
     let added: Vec<AssetId<StandardMaterial>> = events.read().filter_map(|e| if let AssetEvent::Added { id } = e { Some(*id) } else { None }).collect();
-    let on = settings.ao || settings.world_shadows;
+    let on = settings.ao || sun_on(&settings);
     if *last != Some(on) {
         *last = Some(on);
         if on {

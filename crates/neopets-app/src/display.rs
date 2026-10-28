@@ -25,9 +25,9 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
 pub const ROWS: usize = 13;
-/// Character shadow strengths: off, the original volumes as the game draws them (a drop of 8 of
-/// 255), and this build's stronger version of the same volumes.
-pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Strong"];
+/// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
+/// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
+pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Detailed"];
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct DisplaySettings {
@@ -419,7 +419,7 @@ const HELP: [&str; ROWS + 1] = [
     "Vivid and Rich lift colour and contrast a little; Original is the game's own colour.",
     "Soft shade where walls meet floors and in corners.",
     "Full keeps trees, bushes and props in 3D at any distance; Original turns far trees into sprites, fades distant plants out and hides props past their draw distance, as the PS2 game.",
-    "Shadows under the hero (and the Gnarfas): Original is the game's own faint shadow, Strong the same shape darker.",
+    "Original is the game's own faint, blocky hero shadow; Detailed casts every character's real shape from the area's main light.",
     "Shadows cast by everything, trees and buildings too, from the area's main light. Not in the original game.",
     "Back to Options.",
 ];

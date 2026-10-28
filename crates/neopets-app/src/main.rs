@@ -278,7 +278,7 @@ struct AutoWalk {
 
 /// The play-mode hero entity; its children are the outfit's meshes.
 #[derive(Component)]
-struct HeroRoot;
+pub(crate) struct HeroRoot;
 
 #[derive(Resource)]
 pub(crate) struct PlayState {
@@ -893,7 +893,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, shadow_view::sync_shadows, shadow_view::sync_sun), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -2642,7 +2642,7 @@ struct ShowcaseMarker(u16);
 
 /// A focus-hero item's drawn root, by its resource.
 #[derive(Component)]
-struct HeroItemRoot(u32);
+pub(crate) struct HeroItemRoot(u32);
 
 /// The focus hero's held items' drawn matrices this frame, by display resource (the saved
 /// weapon and shield transforms that the Mote glow takes; SPEC-0046 Hero-item effect matrices).
@@ -2822,11 +2822,11 @@ fn sync_hero_glows(
 
 /// A region character's drawn root, by character id.
 #[derive(Component)]
-struct CharacterRoot(u64);
+pub(crate) struct CharacterRoot(u64);
 
 /// A character's attachment model root, by character id and slot.
 #[derive(Component)]
-struct AttachmentRoot(u64, u8);
+pub(crate) struct AttachmentRoot(u64, u8);
 
 /// SPEC-0046 Second walk and attachment slots: each character's attachment models at the frames
 /// `Play::character_attachments` gives; hidden otherwise, despawned with their character.
