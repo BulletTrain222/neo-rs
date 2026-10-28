@@ -798,6 +798,9 @@ pub struct FrameRecord {
     pub top: [f32; 4],
     pub length: f32,
     pub height: f32,
+    /// The surface byte (+0x4D) a hero shot's world contact reads for its cue (SPEC-0036 World
+    /// contact, second list).
+    pub surface: u8,
 }
 
 impl FrameRecord {
@@ -870,7 +873,8 @@ impl Ground {
                     f32_at(&self.set, r + 0x44),
                     self.set.get(r + 0x4C).copied(),
                 ) {
-                    out.push(FrameRecord { kind: kind as i8, gate, start: [start[0], start[1], start[2]], face, run, top, length, height });
+                    let surface = self.set.get(r + 0x4D).copied().unwrap_or(0);
+                    out.push(FrameRecord { kind: kind as i8, gate, start: [start[0], start[1], start[2]], face, run, top, length, height, surface });
                 }
             }
         }
@@ -894,6 +898,7 @@ mod frame_tests {
             top: [0.0, 1.0, 0.0, 0.0],
             length: 10.0,
             height: 5.0,
+            surface: 0,
         }
     }
 

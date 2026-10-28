@@ -211,6 +211,42 @@ impl RobertaAttack {
     }
 }
 
+/// A hero shot's world-contact cue, first collider list, by the collider's surface byte
+/// (SPEC-0036 World contact): 2 gives 8; 4, 8, 11, 16, 18 give 7; 5 gives 15; 6 gives 14; 7
+/// gives 13; 9, 14 give 25; 12, 13 give 20; 15 gives 19; 17 gives 26; others give 6.
+pub fn collider_cue(surface: u8) -> i32 {
+    match surface {
+        2 => 8,
+        4 | 8 | 11 | 16 | 18 => 7,
+        5 => 15,
+        6 => 14,
+        7 => 13,
+        9 | 14 => 25,
+        12 | 13 => 20,
+        15 => 19,
+        17 => 26,
+        _ => 6,
+    }
+}
+
+/// A hero shot's world-contact cue by a surface record's byte +0x4D (second list), and the
+/// weapon-on-world cue by a collision face's material code (SPEC-0031 Weapon hits on the
+/// world; used here for the ground end too): 1, 13, 14, 15, 17 give 15; 2 gives 13; 3, 4 give
+/// 8; 5 gives 10; 7 gives 12; 8, 11 give 14; 9, 18, 19 give 7; 10 gives 11; others give 6.
+pub fn surface_cue(code: u32) -> i32 {
+    match code {
+        1 | 13 | 14 | 15 | 17 => 15,
+        2 => 13,
+        3 | 4 => 8,
+        5 => 10,
+        7 => 12,
+        8 | 11 => 14,
+        9 | 18 | 19 => 7,
+        10 => 11,
+        _ => 6,
+    }
+}
+
 /// One shot row: speed (units per second), radius, life (ticks), homing mode, reaction status.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Row {
@@ -385,6 +421,18 @@ impl Displays {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shot_world_cues() {
+        // SPEC-0036 World contact vectors: collider surface 2 plays 8; a record with +0x4D 5
+        // plays 10.
+        assert_eq!(collider_cue(2), 8);
+        assert_eq!(collider_cue(17), 26);
+        assert_eq!(collider_cue(3), 6);
+        assert_eq!(surface_cue(5), 10);
+        assert_eq!(surface_cue(19), 7);
+        assert_eq!(surface_cue(0), 6);
+    }
 
     fn rows() -> Rows {
         let mut w = Vec::new();

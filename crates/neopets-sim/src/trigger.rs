@@ -27,6 +27,8 @@ pub struct Volume {
     pub flags: u16,
     pub mask: u16,
     pub index: u16,
+    /// The surface byte (+0x11), for a hero shot's contact cue.
+    pub surface: u8,
     pub shape: Shape,
 }
 
@@ -66,6 +68,23 @@ impl Volume {
             (4 | 7, Shape::Rectangle { .. }) => bit(5),
             _ => false,
         }
+    }
+
+    /// A hero shot's world contact, first list (SPEC-0036 World contact): kinds 1 to 4 and 7
+    /// whose gate passes, without the kind's trigger bit (a trigger counts as no contact; the
+    /// shot pass fires it), with the solid class bit 0.
+    pub fn solid_for_shot(&self, world_mask: u16) -> bool {
+        if self.mask != 0 && self.mask & world_mask == 0 {
+            return false;
+        }
+        let bit = |n: u16| self.flags & (1 << n) != 0;
+        let trigger = match (self.kind, self.shape) {
+            (1..=3, _) => bit(3),
+            (4 | 7, Shape::Rectangle { extents, .. }) if extents[2] <= 0.0 => bit(8),
+            (4 | 7, Shape::Rectangle { .. }) => bit(5),
+            _ => return false,
+        };
+        !trigger && bit(0)
     }
 
     /// Whether a shot at point `p` with radius `r` touches the volume (the shot's test is not
@@ -269,13 +288,13 @@ mod tests {
     #[test]
     fn shot_gates_and_hits() {
         // The 0x0120 boxes of pack 1174 fire from shots only (bit 8 blocks the body's moving test).
-        let b = Volume { kind: 4, flags: 0x0120, mask: 0, index: 36, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], extents: [2.0, 2.0, 2.0] } };
+        let b = Volume { kind: 4, flags: 0x0120, mask: 0, index: 36, surface: 0, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], extents: [2.0, 2.0, 2.0] } };
         assert!(b.fires_on_shot(0) && !b.fires_on_contact(0));
         assert!(b.shot_hits([1.0, 1.0, 1.0], 0.5) && b.shot_hits([2.4, 1.0, 1.0], 0.5) && !b.shot_hits([3.0, 1.0, 1.0], 0.5));
         // A flags-0x0001 solid volume never fires.
-        let s = Volume { kind: 1, flags: 0x0001, mask: 0, index: 0, shape: Shape::Sphere { centre: [0.0; 3], radius: 1.0 } };
+        let s = Volume { kind: 1, flags: 0x0001, mask: 0, index: 0, surface: 0, shape: Shape::Sphere { centre: [0.0; 3], radius: 1.0 } };
         assert!(!s.fires_on_shot(0));
-        let c = Volume { kind: 3, flags: 0x0008, mask: 0, index: 1, shape: Shape::Cylinder { base: [0.0; 3], axis: [0.0, 1.0, 0.0], length: 3.0, radius: 6.0 } };
+        let c = Volume { kind: 3, flags: 0x0008, mask: 0, index: 1, surface: 0, shape: Shape::Cylinder { base: [0.0; 3], axis: [0.0, 1.0, 0.0], length: 3.0, radius: 6.0 } };
         assert!(c.fires_on_shot(0) && c.shot_hits([6.2, 1.0, 0.0], 0.5) && !c.shot_hits([7.0, 1.0, 0.0], 0.5));
     }
 
@@ -284,7 +303,7 @@ mod tests {
         // SPEC-0048's worked example: pack 1324's plate 2 and bell 0 (S 3.305, H 9.2) pushed
         // along -Z: nothing at z 3.608 (step 34 of the sixth push), a hit at z 3.565 (step 35);
         // with the bell on the ground at 0.0 nothing ever fires.
-        let plate = Volume { kind: 4, flags: 0x0020, mask: 0, index: 2, shape: Shape::Rectangle { origin: [-20.221, 31.162, 1.266], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [10.0, 5.553, 0.340] } };
+        let plate = Volume { kind: 4, flags: 0x0020, mask: 0, index: 2, surface: 0, shape: Shape::Rectangle { origin: [-20.221, 31.162, 1.266], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [10.0, 5.553, 0.340] } };
         assert!(plate.fires_on_block(0));
         assert!(!plate.block_hits([-17.429, 31.191, 3.608], 3.305, 9.2));
         assert!(plate.block_hits([-17.429, 31.191, 3.565], 3.305, 9.2));
@@ -295,9 +314,9 @@ mod tests {
     fn block_gates_hits_and_number() {
         // SPEC-0048 Trigger volumes: a bit-3 sphere fires for a block, a kind-7 box never; the
         // block's cylinder has radius S and height H from its position.
-        let s = Volume { kind: 1, flags: 0x0008, mask: 0, index: 2, shape: Shape::Sphere { centre: [0.0, 1.0, 0.0], radius: 1.0 } };
+        let s = Volume { kind: 1, flags: 0x0008, mask: 0, index: 2, surface: 0, shape: Shape::Sphere { centre: [0.0, 1.0, 0.0], radius: 1.0 } };
         assert!(s.fires_on_block(0) && s.block_hits([2.5, 0.0, 0.0], 2.0, 3.0) && !s.block_hits([3.5, 0.0, 0.0], 2.0, 3.0));
-        let r = Volume { kind: 7, flags: 0x0100, mask: 0, index: 3, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [2.0, 2.0, 0.0] } };
+        let r = Volume { kind: 7, flags: 0x0100, mask: 0, index: 3, surface: 0, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [2.0, 2.0, 0.0] } };
         assert!(!r.fires_on_block(0));
         // SPEC-0030 section 3: a block fire writes its number; a hero fire -1.
         let mut rec = Record::default();
@@ -352,7 +371,7 @@ mod tests {
     #[test]
     fn fire_gates_by_kind_and_flag_bit() {
         let cyl = Shape::Cylinder { base: [0.0; 3], axis: [0.0, 1.0, 0.0], length: 4.0, radius: 2.0 };
-        let v = |kind, flags, shape| Volume { kind, flags, mask: 0, index: 0, shape };
+        let v = |kind, flags, shape| Volume { kind, flags, mask: 0, index: 0, surface: 0, shape };
         assert!(v(3, 0x0008, cyl).fires_on_contact(0));
         assert!(!v(3, 0x0001, cyl).fires_on_contact(0), "a solid volume never fires");
         assert!(!v(3, 0x000A, cyl).fires_on_contact(0));
@@ -371,15 +390,15 @@ mod tests {
     #[test]
     fn body_contact_shapes() {
         // The 909 pump cylinder: base (-1949.41, 45.47, 1058.06), up, length 4.49, radius 2.66.
-        let pump = Volume { kind: 3, flags: 8, mask: 0, index: 5, shape: Shape::Cylinder { base: [-1949.41, 45.47, 1058.06], axis: [0.0, 1.0, 0.0], length: 4.49, radius: 2.66 } };
+        let pump = Volume { kind: 3, flags: 8, mask: 0, index: 5, surface: 0, shape: Shape::Cylinder { base: [-1949.41, 45.47, 1058.06], axis: [0.0, 1.0, 0.0], length: 4.49, radius: 2.66 } };
         assert!(pump.touches([-1949.41, 45.5, 1061.5]));
         assert!(!pump.touches([-1949.41, 45.5, 1062.0]), "3.94 away is past 2.66 + 1");
         assert!(!pump.touches([-1949.41, 40.0, 1058.06]), "5.5 below the base, the body's top is under it");
-        let ball = Volume { kind: 1, flags: 8, mask: 0, index: 0, shape: Shape::Sphere { centre: [0.0, 5.0, 0.0], radius: 2.0 } };
+        let ball = Volume { kind: 1, flags: 8, mask: 0, index: 0, surface: 0, shape: Shape::Sphere { centre: [0.0, 5.0, 0.0], radius: 2.0 } };
         assert!(ball.touches([2.9, 2.0, 0.0]) && !ball.touches([3.1, 2.0, 0.0]));
         // The 909 hint box (index 7): x 0 to 5.1, y 0 to 5.85, z 0 to 4.82 from its corner.
         let o = [-1941.45, 43.85, 1073.44];
-        let hint = Volume { kind: 4, flags: 0x20, mask: 0, index: 7, shape: Shape::Rectangle { origin: o, axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [5.85, 5.1, 4.82] } };
+        let hint = Volume { kind: 4, flags: 0x20, mask: 0, index: 7, surface: 0, shape: Shape::Rectangle { origin: o, axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [5.85, 5.1, 4.82] } };
         assert!(hint.touches([o[0] + 2.0, o[1], o[2] + 2.0]));
         assert!(hint.touches([o[0] - 0.9, o[1], o[2] + 2.0]), "the body radius reaches in");
         assert!(!hint.touches([o[0] - 1.1, o[1], o[2] + 2.0]));

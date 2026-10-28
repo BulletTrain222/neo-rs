@@ -3231,11 +3231,18 @@ impl Play {
         let mut keep = Vec::new();
         for mut s in shots.drain(..) {
             let aim = s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| [c.position[0], c.position[1] + 1.5, c.position[2]]);
+            let before = s.position;
             if !s.step(aim) {
                 continue;
             }
-            let g = self.world.ground_at(s.position[0], s.position[2], s.position[1] + 3.0);
-            if g.is_some_and(|h| s.position[1] < h) {
+            // The ground end: the shot's centre strictly below the probed height; the entry's
+            // surface code picks the cue, played once from the shooter's weapon bank.
+            let hit = self.world.probe(s.position[0], s.position[2], s.position[1] + 3.0);
+            if hit.found && s.position[1] < hit.height {
+                if let Some(code) = hit.surface {
+                    let cue = neopets_sim::roberta::surface_cue(code as u32);
+                    self.sound.play(neopets_sim::sound::WEAPON, cue, neopets_sim::sound::Play { emitter: Some(s.position), ..Default::default() });
+                }
                 continue;
             }
             // The first character whose bone capsule meets the shot sphere.
@@ -3258,7 +3265,29 @@ impl Play {
                 touches.then_some(i)
             });
             let Some(i) = hit else {
-                keep.push(s);
+                // SPEC-0036 World contact: the first solid collider of the cell disarms the shot
+                // (its surface byte picks the cue, at the collider); then the cell's surface
+                // records (byte +0x4C not 6) met by the shot's path, the last match's byte
+                // +0x4D picking the cue. The cue plays once from the weapon bank.
+                let mask = self.world.collis_mask;
+                let collider = self.world.all_volumes.iter().find(|v| v.solid_for_shot(mask) && v.shot_hits(s.position, s.radius)).map(|v| {
+                    let at = match v.shape {
+                        neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
+                        neopets_sim::trigger::Shape::Cylinder { base, .. } => base,
+                        neopets_sim::trigger::Shape::Rectangle { origin, .. } => origin,
+                    };
+                    (neopets_sim::roberta::collider_cue(v.surface), at)
+                });
+                let record = || {
+                    let g = self.world.ground.as_ref()?;
+                    g.frames_at(s.position[0], s.position[2]).into_iter().filter(|f| f.kind != 6 && f.crossed_by(before, s.position)).last().map(|f| (neopets_sim::roberta::surface_cue(f.surface as u32), s.position))
+                };
+                match collider.or_else(record) {
+                    Some((cue, at)) => {
+                        self.sound.play(neopets_sim::sound::WEAPON, cue, neopets_sim::sound::Play { emitter: Some(at), ..Default::default() });
+                    }
+                    None => keep.push(s),
+                }
                 continue;
             };
             let (t_type, defence) = self.characters[i].row.map_or((0, 0.0), |r| (r.target_type as i32, r.defence));
@@ -12102,7 +12131,7 @@ fn sim_volume(v: &neopets_data::trigger::Volume) -> neopets_sim::trigger::Volume
         D::Cylinder { base, axis, length, radius } => S::Cylinder { base, axis, length, radius },
         D::Rectangle { origin, axes, extents } => S::Rectangle { origin, axes, extents },
     };
-    neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, shape }
+    neopets_sim::trigger::Volume { kind: v.kind, flags: v.flags, mask: v.mask, index: v.index, surface: v.surface, shape }
 }
 
 #[cfg(test)]

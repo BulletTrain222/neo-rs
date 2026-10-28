@@ -56,6 +56,8 @@ pub struct Volume {
     /// The script trigger index (+0x1C); the door number on a door.
     pub index: u16,
     pub class: u16,
+    /// The surface byte (+0x11) a hero shot's world contact reads for its cue (SPEC-0036).
+    pub surface: u8,
     pub shape: Shape,
 }
 
@@ -106,7 +108,8 @@ fn volumes_in(p: &[u8]) -> (usize, Vec<Volume>) {
                 _ => (|| Some(Shape::Rectangle { origin: v3(p, r + 0x30)?, axes: [v3(p, r + 0x60)?, v3(p, r + 0x50)?, v3(p, r + 0x40)?], extents: v3(p, r + 0x24)? }))(),
             };
             let (Some(shape), Some(flags), Some(mask), Some(index), Some(class)) = (shape, u16_at(p, r + 0x12), u16_at(p, r + 0x1A), u16_at(p, r + 0x1C), u16_at(p, r + 0x1E)) else { break };
-            out.push(Volume { kind, flags, mask, index, class, shape });
+            let surface = p.get(r + 0x11).copied().unwrap_or(0);
+            out.push(Volume { kind, flags, mask, index, class, surface, shape });
         }
     }
     (capacity, out)
