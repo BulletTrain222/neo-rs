@@ -3285,6 +3285,10 @@ fn village_init(state: &mut GameState) -> Vec<Action> {
     // The load thread's first and second slots are slots 2 and 3 here: slots 0 and 1 belong to
     // the asset-swap zone loader (SPEC-0006 Asset-swap tables), whose loads would otherwise evict
     // these sets at the first zone trigger.
+    // With flag 11 the load thread runs the cloak watcher once (`cloak_watch_1023`).
+    if state.flag(11) {
+        state.set_word(1023, W1023_CLOAK_LOAD, 1);
+    }
     if !state.flag(11) {
         if state.flag(10) {
             out.push(Action::LoadRegion { slot: 3, region: Some(1023 + 1 + 6) });
@@ -3298,6 +3302,68 @@ fn village_init(state: &mut GameState) -> Vec<Action> {
         }
     }
     out
+}
+
+/// SPEC-0045 1023's cloak watcher words: the last cloak state acted on (0 off, 1 on; file value
+/// 0), the wait's ticks left (0 idle), the state the wait was started for, and the load
+/// thread's pending run.
+const W1023_CLOAK: u8 = 40;
+const W1023_CLOAK_WAIT: u8 = 41;
+const W1023_CLOAK_FOR: u8 = 42;
+const W1023_CLOAK_LOAD: u8 = 43;
+/// The two cloak slots (Init creates them when flag 11 is set; slots 0 to 3 are the zone
+/// loader's and the load thread's here).
+const CLOAK_SLOTS_1023: [u8; 2] = [4, 5];
+
+/// SPEC-0045 1023 cloak watcher (with flag 11 set): a change of the cloak from the state last
+/// acted on, or the load thread's one run, starts a 5 s wait; when it ends with the cloak still
+/// in that state the scene runs and the word keeps the state. Put on: fade out, both cloak
+/// slots reset, j 5 (region 1029, the Dark Knight) into the first with its character 0
+/// (entity 30) activated, camera 6, fade in, line 21, fade out, the slot reset, the camera
+/// returned, both slots reset, fade in. Taken off (or off at load): the same with line 20, then
+/// the cloak slots loaded with j 4 and j 3 (regions 1028 and 1027, the minion guards). The fade
+/// lengths are not given (this build's 0.5 s).
+fn cloak_watch_1023(s: &mut GameState) -> Vec<Action> {
+    if !s.flag(11) {
+        return Vec::new();
+    }
+    let worn = s.cloak_worn as i32;
+    let left = s.word(1023, W1023_CLOAK_WAIT);
+    if left == 0 {
+        if s.word(1023, W1023_CLOAK_LOAD) != 0 || worn != s.word(1023, W1023_CLOAK) {
+            s.set_word(1023, W1023_CLOAK_LOAD, 0);
+            s.set_word(1023, W1023_CLOAK_WAIT, 300);
+            s.set_word(1023, W1023_CLOAK_FOR, worn);
+        }
+        return Vec::new();
+    }
+    s.set_word(1023, W1023_CLOAK_WAIT, left - 1);
+    if left > 1 || worn != s.word(1023, W1023_CLOAK_FOR) {
+        return Vec::new();
+    }
+    s.set_word(1023, W1023_CLOAK, worn);
+    let [a, b] = CLOAK_SLOTS_1023;
+    let mut v = vec![
+        Action::FadeOut { seconds: FADE, wait: true },
+        Action::LoadRegion { slot: a, region: None },
+        Action::LoadRegion { slot: b, region: None },
+        Action::LoadRegion { slot: a, region: Some(1023 + 1 + 5) },
+        Action::WaitLoads,
+        Action::ActivateEntity { entity: 30 },
+        Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 },
+        Action::FadeIn { seconds: FADE, wait: true },
+        Action::Message { line: if worn == 1 { 21 } else { 20 } },
+        Action::FadeOut { seconds: FADE, wait: true },
+        Action::LoadRegion { slot: a, region: None },
+        Action::ReturnCamera { preset: -1, release: true },
+        Action::LoadRegion { slot: a, region: None },
+        Action::LoadRegion { slot: b, region: None },
+        Action::FadeIn { seconds: FADE, wait: true },
+    ];
+    if worn == 0 {
+        v.extend([Action::LoadRegion { slot: a, region: Some(1023 + 1 + 4) }, Action::LoadRegion { slot: b, region: Some(1023 + 1 + 3) }]);
+    }
+    v
 }
 
 /// SPEC-0045 1023 chase thread: from the first waypoint k (0 to 7) whose flag 128 + k is clear
@@ -10670,12 +10736,13 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
     let mut out = Vec::new();
     match pack {
         1091 => out = sequencer_1091(state),
-        // SPEC-0045 1023 Update, the tattered-cloak check: flag 11 and the cloak worn set 303.
-        // (The cloak watcher's scenes, lines 20 and 21 with the cloak slots, are not built.)
+        // SPEC-0045 1023 Update, the tattered-cloak check: flag 11 and the cloak worn set 303;
+        // then the cloak watcher.
         1023 => {
             if state.flag(11) && state.cloak_worn {
                 state.set(303, true);
             }
+            out = cloak_watch_1023(state);
         }
         // SPEC-0042 1184 thread B: while 512 is set and 513 clear, holding item 73 sets 513.
         1184 => {
@@ -17166,6 +17233,39 @@ mod tests {
         s.set_word(735, 250, 0);
         on_trigger(735, 2, enter(2), &mut s);
         assert!(on_hero_death(735, 0, &mut s).unwrap().1.contains(&Action::KillHero));
+    }
+
+    #[test]
+    fn cloak_watcher_1023() {
+        let mut s = GameState::default();
+        // No flag 11: nothing.
+        s.cloak_worn = true;
+        assert!(super::cloak_watch_1023(&mut s).is_empty() && s.word(1023, 41) == 0);
+        // Flag 11 and the cloak just put on (word 0): 300 ticks, then the scene with line 21.
+        s.set(11, true);
+        let mut seen = Vec::new();
+        for _ in 0..302 {
+            seen.extend(super::cloak_watch_1023(&mut s));
+        }
+        assert!(seen.contains(&Action::Message { line: 21 }) && !seen.contains(&Action::LoadRegion { slot: 5, region: Some(1027) }));
+        assert_eq!(s.word(1023, 40), 1);
+        // Taken off and put back on within the wait: no scene.
+        s.cloak_worn = false;
+        let mut seen = Vec::new();
+        for k in 0..400 {
+            if k == 100 {
+                s.cloak_worn = true;
+            }
+            seen.extend(super::cloak_watch_1023(&mut s));
+        }
+        assert!(seen.is_empty());
+        // Off and kept off: line 20 and the guards (regions 1028 and 1027).
+        s.cloak_worn = false;
+        let mut seen = Vec::new();
+        for _ in 0..302 {
+            seen.extend(super::cloak_watch_1023(&mut s));
+        }
+        assert!(seen.contains(&Action::Message { line: 20 }) && seen.contains(&Action::LoadRegion { slot: 5, region: Some(1027) }));
     }
 
     #[test]
