@@ -994,8 +994,8 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
         (1300, 0..=2) => vec![Action::Message { line: 176 }],
         // SPEC-0043 1335 teleports (kind 13): 0: with 236 set and 93 clear line 35, else value 20
         // for eW 151 and its load (pack 1300); 1: with 241 set and 242 clear 242, value 80 for eW
-        // 150 and 155 and movie 26 with eW 150 (pack 1299) as its return world (here the load of
-        // eW 150 at once), else line 34; 2: with 238 set and 239 clear value 70 for eW 153 and
+        // 150 and 155 and movie 26 with eW 150 (pack 1299) as its return world (loaded at once
+        // here), else line 34; 2: with 238 set and 239 clear value 70 for eW 153 and
         // 155 and the load of eW 153 (pack 1324), else line 33.
         (1335, 0) if state.flag(236) && !state.flag(93) => vec![Action::Message { line: 35 }],
         (1335, 0) => {
@@ -1006,7 +1006,7 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             state.set(242, true);
             state.blackboard.insert((2, 150), 80);
             state.blackboard.insert((2, 155), 80);
-            vec![Action::ReplaceExterior { slot: 150, plane: -1 }]
+            vec![Action::PlayFmv { movie: 26 }, Action::ReplaceExterior { slot: 150, plane: -1 }]
         }
         (1335, 1) => vec![Action::Message { line: 34 }],
         (1335, 2) if state.flag(238) && !state.flag(239) => {
@@ -3116,6 +3116,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             let mut out = vec![Action::LockChest { id: 0, key: 15, message: 124 }, Action::InitObjOn { obj: 0, end: state.flag(121) }];
             if state.flag(119) && !state.flag(120) {
                 state.set(120, true);
+                state.queue_movie(2);
                 state.give(15, 1);
             }
             // The first case that holds, unless 220 is set: 2 set and 147 clear does nothing.
@@ -3211,7 +3212,7 @@ fn village_init(state: &mut GameState) -> Vec<Action> {
 /// through the catch at k = 8: the Meerca walks to locator 477 + k (stop 1.1), then loops
 /// animation 28 or 48 until the hero is within 30 units; below 8 the waypoint's flag is set and
 /// it plays animation 44 and waits 0.2 s; at 8 flag 136, the fade, set 2 and item 32 return
-/// (movie 4 and the zone reload are not reproduced).
+/// and movie 4 (the zone reload is not reproduced).
 fn chase(state: &GameState) -> Vec<Action> {
     use Action::*;
     let first = (0..8).find(|&k| !state.flag(128 + k)).unwrap_or(8);
@@ -3224,7 +3225,7 @@ fn chase(state: &GameState) -> Vec<Action> {
             v.extend([SetFlag { flag: 128 + k, on: true }, EntityAnim { entity: 0, anim: 44, looped: false, wait: false }, wait(0.2)]);
         } else {
             v.extend([SetFlag { flag: 136, on: true }, HoldHero, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 2, region: Some(1023 + 1 + 2) }]);
-            v.extend([GiveItem { item: 32, count: 1 }, WaitLoads, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
+            v.extend([GiveItem { item: 32, count: 1 }, WaitLoads, PlayFmv { movie: 4 }, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
         }
     }
     v
@@ -12549,7 +12550,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 state.set(706, true);
                 actions.extend([Action::WaitLoads, Action::FadeIn { seconds: 1.0, wait: false }]);
             }
-            // Its stage events (movie 5 and the stage-6 scene are not covered).
+            // Its stage events (the stage-6 scene is not covered).
             match state.stage() {
                 // Stage 1 with 122 set and 123 clear: hero to locator 13, camera 10, entity 47
                 // says line 168 and entity 39 line 169, entities 47, 39 and 33 to locators 10,
@@ -12565,7 +12566,10 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                     }
                     actions.extend([camera(11), Action::WalkHero { locator: 14, wait: true, orient: false }, fade_out(), Action::InitObjOn { obj: 8, end: false }, release_camera(), fade_in()]);
                 }
-                Some(2) if !state.flag(147) && !state.flag(145) => state.set(145, true),
+                Some(2) if !state.flag(147) && !state.flag(145) => {
+                    state.set(145, true);
+                    state.queue_movie(5);
+                }
                 _ => {}
             }
             actions
