@@ -11192,7 +11192,7 @@ impl Play {
 
     /// Rebuild a slot from the live game (SPEC-0025 Saving, step 3). Only Tor is in this build:
     /// Roberta's words hold her start pools, her timers are inactive and her entries empty;
-    /// the stash, petpet, movies, per-world tables and count table have no live
+    /// the stash, petpet, per-world tables and count table have no live
     /// state yet and are written empty; the options block holds the start-up defaults.
     pub fn write_slot(&self, s: &mut neopets_sim::save::Slot, date: &[u8]) {
         use neopets_sim::save::{self as sv, Group, at};
@@ -11223,7 +11223,11 @@ impl Play {
         for &n in &self.state.flags {
             s.set_flag(n, true);
         }
+        // The played words: one u32 per movie index, 1 once the movie has played (SPEC-0026).
         s.0[at::MOVIES..at::MOVIES + 368].fill(0);
+        for &m in self.state.movies.iter().filter(|&&m| (m as usize) < 92) {
+            s.set_u32(at::MOVIES + 4 * m as usize, 1);
+        }
         s.set_i32(at::WALLET, self.state.neopoints);
         s.set_i32(at::STASH, self.state.stash_neopoints);
         s.set_i32(at::LUCK, self.luck);
@@ -11327,7 +11331,7 @@ impl Play {
     /// (carry limit on the general and quest lists), the cloak, the once-per-area sets, the
     /// status restore, luck, maxima and current pools, the restart point and the hero's
     /// placement at vectors A and B, and the options with their apply rule. Not applied:
-    /// Roberta, the stash, the petpet, movies, per-world tables, the count table, swap mode and
+    /// Roberta, the stash, the petpet, per-world tables, the count table, swap mode and
     /// Motes.
     pub fn apply_slot(&mut self, s: &neopets_sim::save::Slot) {
         use neopets_sim::save::{self as sv, Group, at};
@@ -11337,6 +11341,8 @@ impl Play {
                 self.state.flags.insert(n);
             }
         }
+        self.state.movies = (0..92u16).filter(|&m| s.u32(at::MOVIES + 4 * m as usize) != 0).collect();
+        self.state.movie_queue.clear();
         self.state.items.clear();
         self.weapon = None;
         self.shield = None;

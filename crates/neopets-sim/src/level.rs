@@ -480,9 +480,12 @@ pub struct GameState {
     /// SetEntityUndamageable as an Update sets it this tick (beside the fixed lists of
     /// `undamageable`), kept by the host until the next Update.
     pub undamageable_now: BTreeSet<usize>,
-    /// HasMoviePlayed: the movies a module asked to play. No movie is shown in this build, but
-    /// a PlayFMV the script makes counts as played.
+    /// The played words (SPEC-0026 Movie queue), read by HasMoviePlayed. A PlayFMV counts as
+    /// played when it is queued (the original sets the word as the movie starts, in the same
+    /// pass's movie step).
     pub movies: BTreeSet<u16>,
+    /// PlayFMV in queue order (append mode, SPEC-0026 Movies), taken by the host's movie step.
+    pub movie_queue: Vec<u16>,
     /// The trigger indices a hero shot fired this tick (SPEC-0028 Hero shot pass), filled by the
     /// host's trigger step.
     pub shot_hits: BTreeSet<u16>,
@@ -711,6 +714,12 @@ pub struct HeroView {
 }
 
 impl GameState {
+    /// PlayFMV(index): queue the movie (append) and count it as played.
+    pub fn queue_movie(&mut self, m: u16) -> bool {
+        self.movie_queue.push(m);
+        self.movies.insert(m)
+    }
+
     pub fn flag(&self, f: u16) -> bool {
         self.flags.contains(&f)
     }
@@ -3932,7 +3941,7 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
     if s.word(p, 9) == 1 {
         let a = s.word(p, 1);
         if l(s, 0) && !l(s, 1) {
-            s.movies.insert(12);
+            s.queue_movie(12);
             s.set(213, true);
             s.set_level(1, true);
             v.extend([Action::MoveHero { locator: 10 }, Action::MoveEntity { entity: 7, locator: 12, face: true }, Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 30 }, Action::Message { line: 14 }]);
@@ -3944,7 +3953,7 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
             v.extend([Action::DeactivateEntity { entity: 7 }, Action::DeactivateEntity { entity: 8 }]);
         } else if s.flag(214) {
             if a & 2 != 0 && !s.movies.contains(&13) {
-                s.movies.insert(13);
+                s.queue_movie(13);
                 v.extend([
                     Action::FadeOut { seconds: FADE, wait: true },
                     Action::MoveHero { locator: 26 },
@@ -3957,7 +3966,7 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
                 busy(s, &mut v);
             } else if a & 4 != 0 && !s.movies.contains(&14) {
                 // The setter of flag 64; movie 14's return world eW 74 (pack 956) loaded at once.
-                s.movies.insert(14);
+                s.queue_movie(14);
                 s.set(64, true);
                 v.push(Action::ReplaceExterior { slot: 74, plane: -1 });
                 busy(s, &mut v);
@@ -4028,7 +4037,7 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
             for f in [67, 283, 302] {
                 s.set(f, true);
             }
-            s.movies.insert(44);
+            s.queue_movie(44);
             v.extend([Action::GiveItem { item: 30, count: 1 }, Action::ReplaceExterior { slot: 74, plane: -1 }]);
             busy(s, &mut v);
         }
@@ -4101,7 +4110,7 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
         state.timer.deactivate();
         state.set(94, true);
         state.set(365, true);
-        state.movies.insert(85);
+        state.queue_movie(85);
         state.blackboard.insert((2, 151), 80);
         let mut v = vec![Action::DeactivateObj { obj: 1 }];
         v.extend([0, 5, 6, 7].map(|entity| Action::DeactivateEntity { entity }));
@@ -4111,7 +4120,7 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
     if f(2) && !f(3) {
         state.set_word(P, 2, 1);
         state.timer.deactivate();
-        state.movies.insert(80);
+        state.queue_movie(80);
         let mut v = vec![Action::FadeOut { seconds: FADE, wait: true }];
         v.extend([0, 5, 6, 7].map(|entity| Action::DeactivateEntity { entity }));
         v.extend((0..=2).map(|obj| Action::DeactivateObj { obj }));
@@ -4120,7 +4129,7 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
     }
     if f(0) && !f(1) {
         state.set_word(P, 2, 1);
-        state.movies.insert(78);
+        state.queue_movie(78);
         let mut v = vec![
             Action::FadeOut { seconds: FADE, wait: true },
             Action::FadeOut { seconds: 0.0, wait: true },
@@ -4361,7 +4370,7 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
         // pack 1411, loaded at once). BossFightTweakHero is not built.
         s.set_word(p, 1, (bits & !128) | 256);
         for m in [56, 91, 57, 58] {
-            s.movies.insert(m);
+            s.queue_movie(m);
         }
         s.set(333, true);
         out.extend([Action::ActStart { stage: 4 }, Action::ReplaceExterior { slot: 178, plane: -1 }]);
@@ -4392,7 +4401,7 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
         // normal camera, a fade in, object 3, effects 24 to 26. The entity and hero moves (their
         // locators are not given) and the boss-fight tweak are not built.
         s.set_word(p, 1, bits | 2);
-        s.movies.insert(55);
+        s.queue_movie(55);
         s.set(326, true);
         s.remove_all(117);
         out.extend([Action::ActivateEntity { entity: 1 }, Action::GiveItem { item: 116, count: 1 }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 1.0, wait: false }, Action::InitObjOn { obj: 3, end: false }]);
@@ -4762,7 +4771,7 @@ fn arena_1246(s: &mut GameState) -> Vec<Action> {
     } else if s.flag(273) {
         // The reward: movie 42 (counted as played), swap mode 2, the hero outside the arena,
         // item 14 and line 1.
-        s.movies.insert(42);
+        s.queue_movie(42);
         s.set_level(8, true);
         v.extend([Action::EntityAnim { entity: 16, anim: 27, looped: true, wait: false }, wait(1.3), Action::FadeOut { seconds: 1.0, wait: true }]);
         off(&mut v);
@@ -6996,7 +7005,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             state.set(220, true);
             state.set(221, true);
             for m in [16, 89, 18] {
-                state.movies.insert(m);
+                state.queue_movie(m);
             }
             out.actions.extend([Action::FadeOut { seconds: 0.3, wait: true }, Action::ActStart { stage: 2 }, Action::ReplaceExterior { slot: 151, plane: -1 }]);
         }
@@ -7307,7 +7316,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // 1397 E12 (entering): the movie-63 scene (counted), object 35 off, effect 12, 102 and
         // 349, item 139 at locators 24 to 35, the fade in, control back; word 30 for X13.
         (1397, 12) if call.object && call.state == 1 && !state.flag(102) => {
-            state.movies.insert(63);
+            state.queue_movie(63);
             state.set(102, true);
             state.set(349, true);
             state.set_word(pack, 30, 1);
@@ -7754,7 +7763,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // 985); else with 66 set and 283 clear the load between fades.
         (956, 15) if call.object && call.state == 1 => {
             if state.flag(212) && !state.flag(214) {
-                state.movies.insert(11);
+                state.queue_movie(11);
                 out.actions.push(Action::ReplaceExterior { slot: 77, plane: -1 });
             } else if state.flag(66) && !state.flag(283) {
                 out.actions.extend([Action::FadeOut { seconds: FADE, wait: true }, Action::ReplaceExterior { slot: 77, plane: -1 }, Action::FadeIn { seconds: FADE, wait: true }]);
@@ -7762,7 +7771,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // Trigger 14 (214 set, 216 clear): objects 3 to 5 off; movie 13 counted.
         (956, 14) if call.object && call.state == 1 && state.flag(214) && !state.flag(216) => {
-            state.movies.insert(13);
+            state.queue_movie(13);
             out.actions.extend((3..=5).map(|obj| Action::DeactivateObj { obj }));
         }
         // Trigger 10 (248 set, 281 clear): 281 and 66, object 9 off and 10 on, movie 43 counted.
@@ -7771,7 +7780,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (956, 10) if call.object && call.state == 1 && state.flag(248) && !state.flag(281) => {
             state.set(281, true);
             state.set(66, true);
-            state.movies.insert(43);
+            state.queue_movie(43);
             out.actions.extend([Action::DeactivateObj { obj: 9 }, Action::InitObjOn { obj: 10, end: false }]);
         }
         // Trigger 11 (281 set, 282 clear): 282.
@@ -7782,7 +7791,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             for f in [284, 67, 20, 302] {
                 state.set(f, true);
             }
-            state.movies.insert(44);
+            state.queue_movie(44);
             state.remove_all(14);
             out.actions.push(Action::GiveItem { item: 30, count: 1 });
         }
@@ -7805,7 +7814,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // not shown.
         (777, 13) if call.object && call.state == 1 && !state.flag(252) => {
             let first = state.word(pack, 3) == 0;
-            state.movies.insert(if first { 34 } else { 35 });
+            state.queue_movie(if first { 34 } else { 35 });
             if first {
                 state.set_word(pack, 3, 1);
             } else {
@@ -8020,7 +8029,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // SetHeroStartPos is not built.
         (1246, 1) if call.state == 1 && !state.level(0) => {
             state.set_level(0, true);
-            state.movies.insert(41);
+            state.queue_movie(41);
             out.actions.extend([
                 Action::HoldHero,
                 Action::WalkHero { locator: 10, wait: false, orient: false },
@@ -10444,7 +10453,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         989 => {
             let l = |n| state.level(n);
             if l(2) && !l(3) {
-                state.movies.insert(46);
+                state.queue_movie(46);
                 out.push(Action::BossFight { instance: 7 });
                 state.set_level(3, true);
                 state.set_level(4, true);
@@ -10460,7 +10469,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 for f in [51, 298, 86] {
                     state.set(f, true);
                 }
-                state.movies.insert(47);
+                state.queue_movie(47);
                 state.blackboard.insert((2, 78), 2);
                 out.extend([Action::FadeOut { seconds: 0.1, wait: true }, Action::DeactivateEntity { entity: 0 }, Action::ReplaceExterior { slot: 78, plane: -1 }]);
             }
@@ -10544,20 +10553,20 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 if b & 1 != 0 && b & 2 == 0 {
                     state.set_word(pack, 3, b | 2);
                     state.set_word(pack, 4, 1);
-                    state.movies.insert(52);
+                    state.queue_movie(52);
                     state.set_level(4, false);
                     out.extend([Action::HoldHero, Action::FadeOut { seconds: 0.1, wait: true }, Action::BossFight { instance: 11 }, Action::MoveHero { locator: 26 }, Action::ReturnCamera { preset: -1, release: true }]);
                     out.extend((4..=18).map(|entity| Action::DeactivateEntity { entity }));
                     out.extend([Action::InitObjOn { obj: 3, end: false }, Action::Equip { on: true }, Action::FadeIn { seconds: 0.5, wait: true }, wait(0.5), Action::Bits { word: 4, set: 0, clear: 1 }]);
                 } else if b & 4 != 0 && b & 8 == 0 {
                     state.set_word(pack, 3, b | 8);
-                    state.movies.insert(53);
+                    state.queue_movie(53);
                 } else if b & 16 != 0 && state.word(pack, 5) == 0 {
                     state.set_word(pack, 5, 1);
                     for f in [321, 93, 322] {
                         state.set(f, true);
                     }
-                    state.movies.insert(54);
+                    state.queue_movie(54);
                     state.blackboard.insert((2, 151), 50);
                     out.extend([Action::FadeOut { seconds: 0.3, wait: true }, Action::ReplaceExterior { slot: 151, plane: -1 }]);
                 } else {
@@ -10583,7 +10592,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 for f in [216, 10, 18, 30, 47, 64] {
                     state.set(f, true);
                 }
-                state.movies.insert(14);
+                state.queue_movie(14);
                 state.set(217, true);
                 out.extend(thread3_956(state));
                 let cam = |track, wait, speed| Action::PlayCamera { track, wait, end: 1, speed };
@@ -10769,7 +10778,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     for f in [263, 75, 50, 70] {
                         state.set(f, true);
                     }
-                    state.movies.insert(38);
+                    state.queue_movie(38);
                     state.set_level(12, true);
                     state.set_word(pack, 2, 1);
                     out.extend([
@@ -10931,7 +10940,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 for f in [724, 356, 106] {
                     state.set(f, true);
                 }
-                state.movies.insert(67);
+                state.queue_movie(67);
                 out.extend([Action::DeactivateObj { obj: 0 }, Action::StartEffect { slot: 15, camera: false }]);
             }
         }
@@ -11868,7 +11877,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         // not built.
         1096 if state.flag(45) => vec![Action::InitObjOn { obj: 1, end: false }],
         1096 => {
-            state.movies.insert(51);
+            state.queue_movie(51);
             let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1097) }];
             v.extend((0..=5).map(|obj| Action::InitObjOn { obj, end: false }));
             v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::BossFight { instance: 6 }]);

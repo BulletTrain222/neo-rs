@@ -16,6 +16,7 @@ mod audio_view;
 mod hud_view;
 mod menu_view;
 mod menus;
+mod movie_view;
 mod play;
 
 use bevy::asset::RenderAssetUsages;
@@ -867,6 +868,8 @@ fn main() {
     app.add_systems(Update, sync_blocks.after(sync_objects));
     app.add_systems(Update, send_rumble);
     app.add_systems(Update, sync_uv_flip);
+    app.add_systems(Startup, (setup_movies, movie_view::spawn_screen));
+    app.add_systems(Update, movie_view::sync_screen.after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     audio_view::register(&mut app);
@@ -1074,15 +1077,27 @@ fn step_sim(
     gamepads: Query<&Gamepad>,
     mut driver: ResMut<SimDriver>,
     mut models: ResMut<ModelView>,
-    play: Option<ResMut<PlayState>>,
+    mut play: Option<ResMut<PlayState>>,
     autowalk: Option<Res<AutoWalk>>,
     mut menu: Option<ResMut<menu_view::Menu>>,
     art: Option<Res<hud_view::HudArt>>,
     mut archive: Option<ResMut<Archive>>,
     mut commands: Commands,
     mut dev: ResMut<dev_menu::DevMenu>,
+    mut movies: Option<ResMut<movie_view::Movies>>,
 ) {
     let mut elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
+    // SPEC-0026 Movies: the movies queued last frame play now, and while one plays the whole
+    // game loop waits (no ticks, no input to the game).
+    if let Some(mv) = movies.as_deref_mut() {
+        if let Some(p) = play.as_deref_mut() {
+            mv.take(&mut p.play.state.movie_queue);
+        }
+        if mv.step(elapsed, vpad.held(bindings::CROSS) || vpad.held(bindings::START)) {
+            driver.last_ticks = 0;
+            return;
+        }
+    }
     // The developer menu's game speed: the elapsed time scaled (0 while paused); a step while
     // paused runs exactly one tick's time.
     if dev.speed() != 1.0 {
@@ -1145,6 +1160,15 @@ fn step_sim(
             static TIMER_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
             if play.play.ticks >= 60 && !TIMER_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
                 play.play.state.timer.activate(start, 0.0, false);
+            }
+        }
+        // NEOPETS_TRACE_MOVIE="index[,index...]": diagnostic PlayFMV calls at play tick 60.
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_MOVIE") {
+            static MOVIE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if play.play.ticks >= 60 && !MOVIE_DONE.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                for m in v.split(',').filter_map(|t| t.trim().parse::<u16>().ok()) {
+                    play.play.state.queue_movie(m);
+                }
             }
         }
         // NEOPETS_TRACE_STATUS="code,seconds": a diagnostic status on the hero once, at play
@@ -3815,6 +3839,15 @@ fn play_trace(
             }
             Err(e) => eprintln!("Load failed: {e}"),
         }
+    }
+}
+
+/// The movie table and headers (SPEC-0026, SPEC-0008), read once from the disc.
+fn setup_movies(mut commands: Commands, archive: Option<ResMut<Archive>>) {
+    let Some(mut archive) = archive else { return };
+    match movie_view::Movies::load(&mut archive.disc) {
+        Ok(m) => commands.insert_resource(m),
+        Err(e) => eprintln!("movies: {e}"),
     }
 }
 
