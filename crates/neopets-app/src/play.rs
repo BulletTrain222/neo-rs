@@ -9001,6 +9001,13 @@ impl Play {
         if self.loco.state == hero_states::DEAD {
             return;
         }
+        // SPEC-0021 Use-request gate item 2: a registered use hook diverts the use (the item is
+        // not used or removed) and starts the hook thread.
+        if let Some(actions) = level::on_hero_use_item(self.world.pack, &mut self.state) {
+            self.last_pickup = format!("use of item {id} diverted by the use hook of {} on tick {}", self.world.pack, self.ticks);
+            self.apply(&actions);
+            return;
+        }
         // SPEC-0053 3.8 b: the Potion of Revival (item 50), in mode 2 with the partner dead,
         // heals the partner to its maximum and requests a switch to it (extra flag set).
         if id == 50 {
@@ -13293,7 +13300,14 @@ impl Play {
         match *c {
             // A charm is never consumed: the use fails (0xA2); others take the consumable use.
             Command::UseItem(id) if (160..=173).contains(&id) => self.cue(0xA2),
-            Command::UseItem(id) => self.use_item(id),
+            Command::UseItem(id) => {
+                // SPEC-0021 Use-request gate item 3: the item screen plays the refusal cue for a
+                // diverted use.
+                if level::on_hero_use_item(self.world.pack, &mut self.state.clone()).is_some() {
+                    self.cue(0xA2);
+                }
+                self.use_item(id)
+            }
             Command::Marker(m) => {
                 self.quick.marker = m;
                 if m >= 0 {

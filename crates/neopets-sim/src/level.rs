@@ -2489,8 +2489,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // (region 1177), C (1178) and B (1179 + r); the opponent entity 12 + r (word 1); the
         // opening scene (cameras 6, 4, 5 and 7, the opponent's intro animation, line 53 - r,
         // entity 11's walk to locator 1 and loop 55), with spectators 0 to 10 each looping one
-        // of 40, 37, 38, 55, 26, 70 and 69 (Random(0, 6)) forever. SetMaxActiveAI and the
-        // use-item sound (CB4, main sound 142) are not built.
+        // of 40, 37, 38, 55, 26, 70 and 69 (Random(0, 6)) forever. SetMaxActiveAI is not
+        // built; the use-item hook (CB4) is `on_hero_use_item`.
         1176 => {
             let r = [(384, 4), (383, 3), (382, 2), (381, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, r)| r);
             let opp = 12 + r as usize;
@@ -12281,6 +12281,27 @@ pub fn admits(pack: u32, ordinal: usize, s: &GameState) -> Option<bool> {
     }
 }
 
+/// The hero use-item hook of a pack (RegisterHeroUseItemCallback, SPEC-0030 row 269; SPEC-0021
+/// Use-request gate, items 2 and 4a): Some while one is registered, and then the use is diverted
+/// (nothing is used or removed); the actions are the hook thread's, empty while an earlier hook
+/// thread still runs (word 251). Both hooks on disc pass handled 1, so no default dispatch
+/// follows. 1176 (registered by Init): main sound 142. 1371 in an arena round (word 4 = 1,
+/// branch A of Init): no host calls.
+pub fn on_hero_use_item(pack: u32, s: &mut GameState) -> Option<Vec<Action>> {
+    let v = match pack {
+        1176 => vec![Action::PlaySound { cue: 142, locator: None }],
+        1371 if s.word(pack, 4) == 1 => Vec::new(),
+        _ => return None,
+    };
+    if s.word(pack, 251) != 0 {
+        return Some(Vec::new());
+    }
+    s.set_word(pack, 251, 1);
+    let mut v = v;
+    v.push(Action::Bits { word: 251, set: 0, clear: 1 });
+    Some(v)
+}
+
 /// The hero-death callback of a pack (RegisterHeroDeathCallback; SPEC-0055 section 5) for a death
 /// of `hero` that the gate allows: its flag (true skips the default death) and the task's
 /// actions (empty while an earlier task of the area still runs). None: no callback is registered.
@@ -17145,6 +17166,21 @@ mod tests {
         s.set_word(735, 250, 0);
         on_trigger(735, 2, enter(2), &mut s);
         assert!(on_hero_death(735, 0, &mut s).unwrap().1.contains(&Action::KillHero));
+    }
+
+    #[test]
+    fn hero_use_item_hooks() {
+        let mut s = GameState::default();
+        // 1176: diverted, the hook thread plays main sound 142; a second use while it runs
+        // starts nothing.
+        let v = on_hero_use_item(1176, &mut s).expect("1176 registers a hook");
+        assert_eq!(v[0], Action::PlaySound { cue: 142, locator: None });
+        assert_eq!(on_hero_use_item(1176, &mut s), Some(Vec::new()));
+        // 1371 only in an arena round; other packs have none.
+        assert_eq!(on_hero_use_item(1371, &mut s), None);
+        s.set_word(1371, 4, 1);
+        assert!(on_hero_use_item(1371, &mut s).is_some());
+        assert_eq!(on_hero_use_item(1023, &mut s), None);
     }
 
     #[test]
