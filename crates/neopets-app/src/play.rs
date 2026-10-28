@@ -2576,6 +2576,12 @@ impl Play {
                     let item = if v > 0 { v as u16 } else { default };
                     self.state.give(item, 1);
                 }
+                Action::RandomLoop7 { entity, anims } => {
+                    let a = anims[self.rng.range(0, 6).clamp(0, 6) as usize];
+                    let c = self.entity_mut(pack, entity)?;
+                    c.held = true;
+                    c.anim.play(a);
+                }
                 Action::RandomLoop { entity, anims } => {
                     let a = anims[(self.rng.range(1, 2) - 1).clamp(0, 1) as usize];
                     let c = self.entity_mut(pack, entity)?;

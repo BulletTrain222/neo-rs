@@ -14,9 +14,9 @@
 //! - The road module 678 (SPEC-0042), which packs 678, 686 and 691 carry: Init's slot and trigger
 //!   setup by flags, trigger 0's line, the road-fight intro (trigger 1), the fight watch and end
 //!   scene, the line handler of triggers 2, 3, 5 and 6, trigger 7's prompt and proximity P.
-//! - 1023 (SPEC-0045) villager talk: the three line templates (story chains; the arena and
-//!   wheel talk need flags 381 to 385 and 480, which nothing sets yet, and their draws are not
-//!   taken), entities 74, 65 and 90, and the return locators of the activate-world routine.
+//! - 1023 (SPEC-0045) villager talk: the three line templates (story chains, and the fame rule
+//!   by arena flags 381 to 385, which the arena return sets, and wheel flag 480), entities 74,
+//!   65 and 90, and the return locators of the activate-world routine.
 //! - 1148, 1133 (SPEC-0039) and 1150 (SPEC-0042): the Recruitment Centre errands.
 //! - 1023 (SPEC-0045): the Meerca chase (trigger 17's chase-start scene, the chase thread and
 //!   the load thread's first-slot load and chase resume), the signs (triggers 3, 4 and 6 to 16),
@@ -138,6 +138,9 @@ pub enum Action {
     WaitHeroNear { locator: usize, distance: f32 },
     /// LoopEntityAnim with an animation drawn by Random(1, 2) from the pair.
     RandomLoop { entity: usize, anims: [u32; 2] },
+    /// GrabEntityControl and LoopEntityAnim forever with an animation drawn by Random(0, 6)
+    /// from the seven (1176's spectators).
+    RandomLoop7 { entity: usize, anims: [u32; 7] },
     /// LevelPrompt(line): a yes or no question; the answer runs `on_answer(pack, routine)` in
     /// the same thread.
     Prompt { line: u16, routine: u8 },
@@ -2485,8 +2488,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0041 1176 Init and CB1, the encounter thread: round r by flags 384 to 381; slots A
         // (region 1177), C (1178) and B (1179 + r); the opponent entity 12 + r (word 1); the
         // opening scene (cameras 6, 4, 5 and 7, the opponent's intro animation, line 53 - r,
-        // entity 11's walk to locator 1 and loop 55). SetMaxActiveAI, the spectators' random
-        // loops and the use-item sound are not built.
+        // entity 11's walk to locator 1 and loop 55), with spectators 0 to 10 each looping one
+        // of 40, 37, 38, 55, 26, 70 and 69 (Random(0, 6)) forever. SetMaxActiveAI and the
+        // use-item sound (CB4, main sound 142) are not built.
         1176 => {
             let r = [(384, 4), (383, 3), (382, 2), (381, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, r)| r);
             let opp = 12 + r as usize;
@@ -2500,12 +2504,15 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 Action::LoadRegion { slot: 2, region: Some(1178) },
                 Action::LoadRegion { slot: 1, region: Some(1179 + r as u32) },
                 Action::WaitLoads,
+            ];
+            v.extend((0..=10).map(|entity| Action::RandomLoop7 { entity, anims: [40, 37, 38, 55, 26, 70, 69] }));
+            v.extend([
                 Action::HoldHero,
                 Action::MoveHero { locator: 0 },
                 Action::MoveEntity { entity: 11, locator: 1, face: true },
                 Action::FadeIn { seconds: 0.7, wait: true },
                 cam(6, true),
-            ];
+            ]);
             v.extend(cut.clone());
             v.extend([Action::MoveEntity { entity: opp, locator: 2, face: true }, cam(4, false), Action::EntityAnim { entity: opp, anim: [70, 13, 70, 73, 68][r as usize], looped: false, wait: true }]);
             v.extend(cut.clone());
