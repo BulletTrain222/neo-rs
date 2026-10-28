@@ -3808,7 +3808,7 @@ fn play_trace(
         file.slots.swap(0, k);
         let s = &file.slots[0];
         println!(
-            "Saved slot 0: keys {:?}, location {:?}, date {:?}, tier {}, wallet {}, pools {:?}, maxima {:?}, entries {:?}",
+            "Saved slot 0: keys {:?}, location {:?}, date {:?}, tier {}, wallet {}, pools {:?}, maxima {:?}, motes {:?}, entries {:?}",
             [s.key(0), s.key(1), s.key(2)],
             String::from_utf8_lossy(s.location()),
             String::from_utf8_lossy(s.date()),
@@ -3816,6 +3816,7 @@ fn play_trace(
             s.i32(neopets_sim::save::at::WALLET),
             s.pools(0),
             s.maximum_words(0),
+            (0..2).map(|h| (0..3).map(|i| s.mote(h, i)).collect::<Vec<_>>()).collect::<Vec<_>>(),
             s.adds().iter().map(|a| (a.0, a.1, a.3, a.4)).collect::<Vec<_>>()
         );
         file.slots.swap(0, k);

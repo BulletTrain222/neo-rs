@@ -11288,10 +11288,10 @@ impl Play {
         neopets_sim::save::world_index(&self.world_keys.0, &self.world_keys.1, pack as i32)
     }
 
-    /// Rebuild a slot from the live game (SPEC-0025 Saving, step 3). Only Tor is in this build:
-    /// Roberta's words hold her start pools, her timers are inactive and her entries empty;
-    /// the stash, petpet, per-world tables and count table have no live
-    /// state yet and are written empty; the options block holds the start-up defaults.
+    /// Rebuild a slot from the live game (SPEC-0025 Saving, step 3): both heroes' pools and
+    /// maxima, the equipped Motes, the party and the stash, the petpet, the sets and the live
+    /// options. The parked hero's status timers are written inactive, the status words -1, and
+    /// the per-world tables and count table empty (no live state for them yet).
     pub fn write_slot(&self, s: &mut neopets_sim::save::Slot, date: &[u8]) {
         use neopets_sim::save::{self as sv, Group, at};
         let p = self.loco.position();
@@ -11396,8 +11396,9 @@ impl Play {
             for k in 0..4 {
                 s.set_status_word(h, k, -1);
             }
+            // SPEC-0025 Equipment Mote words: armour, shield and weapon Mote of hero h.
             for i in 0..3 {
-                s.set_mote(h, i, -1);
+                s.set_mote(h, i, self.equipment.motes[h][i].map_or(-1, i32::from));
             }
         }
         s.0[at::T1..at::ONCE].fill(0);
@@ -11428,9 +11429,9 @@ impl Play {
     /// the end-of-pass apply), for Tor: progress flags, wallet, the party's entries re-added
     /// (carry limit on the general and quest lists), the cloak, the once-per-area sets, the
     /// status restore, luck, maxima and current pools, the restart point and the hero's
-    /// placement at vectors A and B, and the options with their apply rule. Not applied:
-    /// Roberta, the stash, the petpet, per-world tables, the count table, swap mode and
-    /// Motes.
+    /// placement at vectors A and B, the options with their apply rule, the stash, the petpet,
+    /// both heroes' pools, the swap mode and the equipped Motes. Not applied: Roberta's status
+    /// timers and status words, the per-world tables and the count table.
     pub fn apply_slot(&mut self, s: &neopets_sim::save::Slot) {
         use neopets_sim::save::{self as sv, Group, at};
         self.state.flags.clear();
@@ -11522,6 +11523,20 @@ impl Play {
         self.swap = None;
         if s.u32(at::ACTIVE_HERO) == 1 {
             self.exchange_heroes();
+        }
+        // Loading step 12g: each hero's three Mote words through the equip setter with no cue;
+        // a changed word re-arms its equipment-panel timer (240) for the active hero. Tor's Mote
+        // follow-up (Medium) is not run.
+        for h in 0..2 {
+            for i in 0..3 {
+                let changed = match u16::try_from(s.mote(h, i)) {
+                    Ok(id) => self.equipment.set_mote(h, i, id),
+                    Err(_) => self.equipment.clear_mote(h, i),
+                };
+                if changed && h == self.hero_index {
+                    self.hud.rearm_word(i);
+                }
+            }
         }
         let (a, b) = (s.vec4(at::POSITION), s.vec4(at::FACING));
         let pose = ([a[0], a[1], a[2]], [b[0], b[1], b[2]]);
