@@ -24,7 +24,7 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 10;
+pub const ROWS: usize = 11;
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct DisplaySettings {
@@ -45,11 +45,14 @@ pub struct DisplaySettings {
     pub bloom: usize,
     pub colour: usize,
     pub ao: bool,
+    /// Distant foliage as the original draws it (SPEC-0060: far sprites, fades out by distance)
+    /// instead of full models at every distance (this build's default).
+    pub original_foliage: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false }
     }
 }
 
@@ -79,6 +82,7 @@ impl DisplaySettings {
                 "bloom" => s.bloom = v.parse().unwrap_or(s.bloom).min(crate::graphics::BLOOM.len() - 1),
                 "colour" => s.colour = v.parse().unwrap_or(s.colour).min(crate::graphics::COLOUR.len() - 1),
                 "ambient occlusion" => s.ao = v == "true",
+                "original foliage" => s.original_foliage = v == "true",
                 _ => {}
             }
         }
@@ -87,7 +91,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -98,18 +102,23 @@ impl DisplaySettings {
             self.sharp_textures,
             self.bloom,
             self.colour,
-            self.ao
+            self.ao,
+            self.original_foliage
         )
     }
 
     pub fn load() -> Self {
         let mut s = std::fs::read_to_string(SETTINGS_FILE).map(|t| Self::parse(&t)).unwrap_or_default();
-        // NEOPETS_GFX="aa,textures,bloom,colour,ao" (0/1 for the switches): the graphics options
+        // NEOPETS_GFX="aa,textures,bloom,colour,ao[,foliage]" (0/1 for the switches): the graphics options
         // for this run (diagnostic, for screenshot comparisons; not saved unless changed).
         if let Some(v) = std::env::var("NEOPETS_GFX").ok() {
             let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
-            if let [aa, tex, bloom, colour, ao] = n[..] {
+            if let [aa, tex, bloom, colour, ao, ref rest @ ..] = n[..] {
                 (s.aa, s.sharp_textures, s.bloom, s.colour, s.ao) = (aa.min(3), tex != 0, bloom.min(2), colour.min(2), ao != 0);
+                // An optional sixth value: 1 for the original distant foliage.
+                if let Some(&f) = rest.first() {
+                    s.original_foliage = f != 0;
+                }
             }
         }
         s
@@ -137,6 +146,7 @@ impl DisplaySettings {
             ("Bloom".into(), crate::graphics::BLOOM[self.bloom].into()),
             ("Colour".into(), crate::graphics::COLOUR[self.colour].into()),
             ("Ambient occlusion".into(), if self.ao { "On".into() } else { "Off".into() }),
+            ("Distant foliage".into(), if self.original_foliage { "Original".into() } else { "Full".into() }),
         ]
     }
 
@@ -164,6 +174,7 @@ impl DisplaySettings {
             7 => self.bloom = step(self.bloom, crate::graphics::BLOOM.len()),
             8 => self.colour = step(self.colour, crate::graphics::COLOUR.len()),
             9 => self.ao = !self.ao,
+            10 => self.original_foliage = !self.original_foliage,
             _ => {}
         }
     }
@@ -380,6 +391,7 @@ const HELP: [&str; ROWS + 1] = [
     "A soft glow around bright light, magic and sky.",
     "Vivid and Rich lift colour and contrast a little; Original is the game's own colour.",
     "Soft shade where walls meet floors and in corners.",
+    "Full keeps trees and bushes in 3D at any distance; Original turns far trees into sprites and fades distant plants out, as the PS2 game.",
     "Back to Options.",
 ];
 

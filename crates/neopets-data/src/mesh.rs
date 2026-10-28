@@ -64,6 +64,9 @@ pub struct NodeTree {
     /// Nodes visited (all types).
     pub nodes: usize,
     pub root_bounds: Bounds,
+    /// The first distance-cull (type-4) node's floats at +0x50, +0x54, +0x58 (fade length) and
+    /// +0x64 (fade end), for the foliage distances of SPEC-0060.
+    pub lod: Option<[f32; 4]>,
 }
 
 fn bounds_at(b: &[u8], at: usize) -> Option<Bounds> {
@@ -87,6 +90,7 @@ pub fn walk_tree(payload: &[u8]) -> Result<NodeTree, String> {
 pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeTree, String> {
     let root_bounds = bounds_at(payload, 0).ok_or("Node tree shorter than one node")?;
     let mut leaves = Vec::new();
+    let mut lod = None;
     let mut seen = HashSet::new();
     // Each entry carries the zone column of its nearest enclosing type-3 node.
     let mut stack: Vec<(usize, Option<u8>)> = vec![(0, None)];
@@ -108,6 +112,9 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
         };
         if at + size > payload.len() {
             return Err(bad());
+        }
+        if kind == NODE_LOD && lod.is_none() {
+            lod = Some([0x50, 0x54, 0x58, 0x64].map(|o| f32_at(payload, at + o).unwrap_or(0.0)));
         }
         let hidden = kind == NODE_LOD
             && layer_mask.is_some_and(|m| {
@@ -154,6 +161,7 @@ pub fn walk_tree_layers(payload: &[u8], layer_mask: Option<u32>) -> Result<NodeT
         leaves,
         nodes: seen.len(),
         root_bounds,
+        lod,
     })
 }
 

@@ -167,6 +167,8 @@ pub struct ModelData {
     pub max: [f32; 3],
     /// Leaves not drawn: other packet kinds (CPU-animated water) or decode errors.
     pub skipped_leaves: Vec<String>,
+    /// The first tree's first distance-cull node fields (+0x50, +0x54, +0x58, +0x64).
+    pub lod: Option<[f32; 4]>,
     /// Trees added (including ones whose leaves were all skipped).
     pub trees: usize,
     /// World placements whose references do not resolve (stale data on disc).
@@ -313,6 +315,9 @@ impl Builder {
         self.out.trees += 1;
         let payload = &bytes[payload];
         let tree = mesh::walk_tree_layers(payload, layer_mask)?;
+        if self.out.lod.is_none() {
+            self.out.lod = tree.lod;
+        }
         for leaf in &tree.leaves {
             let batches = match mesh::decode_packet(payload, leaf) {
                 Ok(b) => b,

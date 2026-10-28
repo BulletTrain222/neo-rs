@@ -580,6 +580,8 @@ pub struct LivePatch {
     /// The zone number (+0x20, low byte) and whether this pass's zone query passed.
     pub zone: u8,
     pub on: bool,
+    /// The draw-distance overrides A, B, C, D (SPEC-0060 section 3).
+    pub overrides: [f32; 4],
 }
 
 /// A script thread (SPEC-0030 section 4; SPEC-0052 Threads and waiting): the calls it has left
@@ -9958,7 +9960,7 @@ impl Play {
                 let bushes = if kind.family == neopets_sim::foliage::Family::Bush { plants.iter().map(|q| neopets_sim::foliage::Bush::new(q.scale, &mut rng)).collect() } else { Vec::new() };
                 let centre = [(p.area[0] + p.area[1]) / 2.0, p.height, (p.area[2] + p.area[3]) / 2.0];
                 let reeds = if kind.family == neopets_sim::foliage::Family::Reed { vec![Default::default(); plants.len()] } else { Vec::new() };
-                built.push(LivePatch { kind, model, centre, plants, bushes, reeds, zone: p.zone as u8, on: true });
+                built.push(LivePatch { kind, model, centre, plants, bushes, reeds, zone: p.zone as u8, on: true, overrides: p.overrides });
             }
             self.foliage.insert(pack, built);
         }

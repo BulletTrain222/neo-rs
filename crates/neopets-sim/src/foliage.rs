@@ -4,8 +4,8 @@
 //! The bush state machine (Behavior 6: cut, shrink, regrow, sparkle wait, the up axis's
 //! spring-back and hero bend) and the drop rules (Behavior 7).
 //!
-//! Not covered: the zone gate, the near/far fade weights and the far batches (the LOD-node
-//! distances are not identified), grass sway and fade, the debris pieces, tree trunks and the
+//! The near/far distances and weights of section 3 (`Distances`). Not covered: the zone gate,
+//! grass sway and fade, the debris pieces, tree trunks and the
 //! once-per-area build gates.
 //!
 //! Reeds (Behavior 9): the bend away from the hero within 5 units, the cut, the three-state
@@ -74,6 +74,64 @@ pub fn kind(key: u32) -> Option<Kind> {
         27 => k(Bed, Some(239), None, 0.85),
         35 => k(Bed, Some(268), None, 0.85),
         _ => None,
+    }
+}
+
+/// A patch's draw distances (SPEC-0060 section 3): far F, switch S, out band O, fade band W.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Distances {
+    pub far: f32,
+    pub switch: f32,
+    pub out: f32,
+    pub fade: f32,
+}
+
+impl Distances {
+    /// With the overrides (A or D nonzero): F = D, S = B + A, O = B, W = C. Else from the near
+    /// model's distance-cull node (`lod` = +0x50, +0x54, +0x58, +0x64): F the fade end, S the
+    /// +0x54 float, W the fade length, O = S - the +0x50 float; without a far object O and W
+    /// are both raised to max(O, W) and S lowered to F - O when larger. With no model F = 4000.
+    pub fn of(overrides: [f32; 4], lod: Option<[f32; 4]>, has_far: bool) -> Self {
+        let [a, b, c, d] = overrides;
+        if a != 0.0 || d != 0.0 {
+            return Self { far: d, switch: b + a, out: b, fade: c };
+        }
+        let Some([p50, p54, fade, end]) = lod else { return Self { far: 4000.0, switch: 4000.0, out: 0.0, fade: 0.0 } };
+        let mut x = Self { far: end, switch: p54, out: p54 - p50, fade };
+        if !has_far {
+            let m = x.out.max(x.fade);
+            x.out = m;
+            x.fade = m;
+            if x.far - m < x.switch {
+                x.switch = x.far - m;
+            }
+        }
+        x
+    }
+
+    /// The near and far weights (a, b) of a plant at distance d (SPEC-0060 section 3).
+    pub fn weights(&self, d: f32, near: bool, far: bool) -> (f32, f32) {
+        match (near, far) {
+            (true, false) => {
+                let start = self.far - self.fade;
+                let a = if d <= start { 1.0 } else if self.fade > 0.0 { (1.0 - (d - start) / self.fade).max(0.0) } else { 0.0 };
+                (a, 0.0)
+            }
+            (false, true) => (0.0, 1.0),
+            (true, true) => {
+                let (s, o, w) = (self.switch, self.out, self.fade);
+                if d < s - o {
+                    (1.0, 0.0)
+                } else if d < s {
+                    (1.0, if o > 0.0 { (d - (s - o)) / o } else { 1.0 })
+                } else if d <= s + w {
+                    (if w > 0.0 { (s + w - d) / w } else { 0.0 }, 1.0)
+                } else {
+                    (0.0, 1.0)
+                }
+            }
+            (false, false) => (1.0, 1.0),
+        }
     }
 }
 
@@ -455,6 +513,30 @@ pub fn reed_drop(r: i32) -> Option<u16> {
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn foliage_distances_and_weights() {
+        use super::Distances;
+        // SPEC-0060 section 3 vector: S 80, +0x50 30, fade length 12, fade end 150, no far
+        // object: O 50, W 50, F 150, S 80.
+        let x = Distances::of([0.0; 4], Some([30.0, 80.0, 12.0, 150.0]), false);
+        assert_eq!((x.out, x.fade, x.far, x.switch), (50.0, 50.0, 150.0, 80.0));
+        // Overrides (200, 32, 50, 150): F 150, S 232, O 32, W 50.
+        let o = Distances::of([200.0, 32.0, 50.0, 150.0], None, true);
+        assert_eq!((o.far, o.switch, o.out, o.fade), (150.0, 232.0, 32.0, 50.0));
+        // Near only: full to F - W = 100, half at 125, none at 150.
+        assert_eq!(x.weights(90.0, true, false), (1.0, 0.0));
+        assert_eq!(x.weights(125.0, true, false), (0.5, 0.0));
+        assert_eq!(x.weights(160.0, true, false), (0.0, 0.0));
+        // Both models with S 80, O 50, W 50: near only below 30, the far fading in to 80, the
+        // near fading out to 130.
+        let both = Distances { far: 150.0, switch: 80.0, out: 50.0, fade: 50.0 };
+        assert_eq!(both.weights(20.0, true, true), (1.0, 0.0));
+        assert_eq!(both.weights(55.0, true, true), (1.0, 0.5));
+        assert_eq!(both.weights(105.0, true, true), (0.5, 1.0));
+        assert_eq!(both.weights(140.0, true, true), (0.0, 1.0));
+        assert_eq!(both.weights(10.0, false, true), (0.0, 1.0));
+    }
     #[test]
     fn reed_bend_cut_fall_drop() {
         use super::*;
