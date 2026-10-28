@@ -2278,6 +2278,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.push(reg(51, 51));
             v
         }
+        // SPEC-0032 950 Init: thread F (in Update) and S0 on trigger 0.
+        950 => vec![reg(0, 0)],
         // SPEC-0032 1055 Init: object 0 on. Its world-swap callback (and those of 797 and 1254)
         // runs only from StartTransitionScene, which has no live call (SPEC-0030 rows 268 and
         // 283), so those modules do nothing more in play.
@@ -6890,6 +6892,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         (1393, _) => out.actions = trigger_1393(call, state),
+        // SPEC-0032 950 S0 (trigger 0, the top of the climb), entered: a 0.5 s fade to black,
+        // value 30 for eW 68 and the leave to eW 5.
+        (950, 0) if call.object && call.state == 1 => {
+            state.blackboard.insert((2, 68), 30);
+            out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::LeaveInterior { slot: 5 }]);
+        }
         // SPEC-0039 886 handler 1 (trigger 5), entered with 250 clear: line 6; handler 2
         // (trigger 2): the Square context 3, a press shows line 7; handler 4 (trigger 0),
         // entered with 252 clear: line 8.
@@ -11861,6 +11869,14 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set_word(pack, 1, -1);
             }
         }
+        // SPEC-0032 950 thread F (once per load): the long fall, camera 4 (wait), 0.5 s, the
+        // normal camera (preset 10). ReturnHeroAnimToIdle is not reproduced.
+        950 => {
+            if state.word(pack, 1) == 0 {
+                state.set_word(pack, 1, 1);
+                out.extend([Action::LongFall, Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }, wait(0.5), Action::ReturnCamera { preset: 10, release: true }]);
+            }
+        }
         // SPEC-0041 1392 Update, the fall-in (once per load while 696 is clear): the hero to
         // locator 0, the long fall, the hero-tracking camera 10 (wait), 3 s, the camera back.
         1392 => {
@@ -15452,6 +15468,20 @@ mod tests {
         let on = TriggerCall { index: 1, state: 2, object: true, square: false, block: -1 };
         assert_eq!(on_trigger(1391, 1, on, &mut s).actions, vec![Action::LoadOverride { slot: 165 }]);
         assert!(on_trigger(1391, 0, on, &mut s).actions.is_empty());
+    }
+
+    #[test]
+    fn module_950_climb_out() {
+        let mut s = GameState::default();
+        assert_eq!(on_init(950, &mut s), vec![Action::RegisterTrigger { index: 0, routine: 0 }]);
+        // The fall-in runs once per load.
+        assert_eq!(on_update(950, &mut s, false)[0], Action::LongFall);
+        assert!(on_update(950, &mut s, false).is_empty());
+        // Reaching the top: the fade, value 30 for eW 68 and the leave to eW 5.
+        let call = TriggerCall { index: 0, state: 1, object: true, square: false, block: -1 };
+        let a = on_trigger(950, 0, call, &mut s).actions;
+        assert_eq!(a, vec![Action::FadeOut { seconds: 0.5, wait: true }, Action::LeaveInterior { slot: 5 }]);
+        assert_eq!(s.blackboard.get(&(2, 68)), Some(&30));
     }
 
     #[test]
