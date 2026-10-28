@@ -438,6 +438,16 @@ pub fn fan_draw(rng: &mut Rng) -> f32 {
     rng.frange(-1.0, 1.0)
 }
 
+/// The fan of homing modes 2 to 5 (SPEC-0036 Roberta shot projectile, Launch step 4): with
+/// s = unit(d x up), d1 = r1 s + (1 - |r1|) d and d2 = r2 up + (1 - |r2|) d1, not renormalised
+/// (so a fanned shot that is not steered flies slower than its row speed).
+pub fn fan(d: Vec3, r1: f32, r2: f32) -> Vec3 {
+    let s = unit([-d[2], 0.0, d[0]]);
+    let d1: Vec3 = std::array::from_fn(|k| r1 * s[k] + (1.0 - r1.abs()) * d[k]);
+    let up = [0.0, 1.0, 0.0];
+    std::array::from_fn(|k| r2 * up[k] + (1.0 - r2.abs()) * d1[k])
+}
+
 /// The attack-family driver's two timed displays of Roberta (SPEC-0036 Roberta charge-up hold
 /// effect and Timed glow): each accumulates the tick length by a truncating add while its
 /// gate holds and is reset to 0 when it fails.
@@ -475,6 +485,18 @@ impl Displays {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shot_fan_vectors() {
+        // SPEC-0036 launch test vectors: mode 2 with no target, d = (0, 0.02563, 0.99967).
+        let d = [0.0, 0.02563, 0.99967];
+        let close = |a: Vec3, b: Vec3| a.iter().zip(b).all(|(x, y)| (x - y).abs() < 1e-4);
+        let a = fan(d, 0.5, 0.5);
+        assert!(close(a, [-0.25, 0.50641, 0.24992]), "{a:?}");
+        assert!((a.iter().map(|c| c * c).sum::<f32>().sqrt() - 0.6176).abs() < 1e-3);
+        assert!(close(fan(d, -0.5, -0.5), [0.25, -0.49359, 0.24992]));
+        assert!(close(fan(d, 0.0, 0.0), d));
+    }
 
     #[test]
     fn shot_visual_ids() {

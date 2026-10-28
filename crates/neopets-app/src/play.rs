@@ -3155,12 +3155,9 @@ impl Play {
         let p = self.loco.position();
         let f = self.loco.facing;
         let anchor = anchor(p, f);
-        // Step 1 and 2 (SPEC-0036 Roberta shot launch): modes 0 and 1 aim at the lock, modes 2
-        // to 5 at a random visible character within 60 (the fan of step 4 is not built); else
-        // the default point 20 ahead and 2 up.
-        let target = if row.homing <= 1 { self.lock } else { self.shot_target() };
-        let aim = target.and_then(|id| self.aim_point(id)).unwrap_or_else(|| default_aim(p, f));
-        let dir = launch_dir(anchor, aim);
+        // Steps 1 to 4 (SPEC-0036 Roberta shot launch), per shot: modes 0 and 1 aim at the
+        // lock, modes 2 to 5 at a random visible character within 60 and fan the direction;
+        // else the default point 20 ahead and 2 up. The target is the shot's homing target.
         // S = A x D x B x G x E; T is 1, or the attack power table value for a full release.
         let weapon_a = self.weapon.and_then(|i| self.items.get(i)).map_or(0.0, |i| i.stats[0] as f32);
         let b = mote.and_then(|id| self.items.get(id)).map_or(1.0, |i| neopets_sim::mote::one_plus_percent(i.stats[5] as f32));
@@ -3186,6 +3183,13 @@ impl Play {
                 }
                 self.pay_mp(cost);
             }
+            let target = if row.homing <= 1 { self.lock } else { self.shot_target() };
+            let aim = target.and_then(|id| self.aim_point(id)).unwrap_or_else(|| default_aim(p, f));
+            let mut dir = launch_dir(anchor, aim);
+            if (2..=5).contains(&row.homing) {
+                let (r1, r2) = (fan_draw(&mut self.rng), fan_draw(&mut self.rng));
+                dir = fan(dir, r1, r2);
+            }
             self.hero_shots.push(Shot {
                 position: anchor,
                 dir,
@@ -3193,7 +3197,7 @@ impl Play {
                 radius: row.radius,
                 life: row.life,
                 homing: row.homing,
-                target: None,
+                target,
                 element: neopets_sim::mote::element(mote),
                 scale,
                 t,
