@@ -12,15 +12,12 @@
 //!
 //! The alarm groups (Behavior 3: the notice gate and the alarm-group check).
 //!
-//! Not covered: the group alert (Behavior 10), socialize, the global
-//! AI pause (state 20), the retarget countdown and flyer re-launch (state 22 is played but never
-//! entered), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target state 9 (it
-//! stands and notices), the alarm emerge's camera and cue, wandering in
-//! states 5 to 7 (they stand and notice),
-//! the counter-attack choice's code 5 (R-0117), the
-//! projectiles (missile
-//! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
-//! ghosts and drops and coins (reanimation, state 16 of rows 224, 226 and 227, is built). The alerted search
+//! Not covered: the group alert (Behavior 10), socialize, the global AI pause (state 20; its
+//! word has no known writer), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target
+//! state 9 (it stands and notices), the alarm emerge's camera and cue, wandering in states 5 to
+//! 7 (they stand and notice), the counter-attack choice's code 5 (R-0117), the grab-and-throw,
+//! theft and Mote drain, ghosts and the carried Neopoints of a theft (the drops are the host's
+//! pay_out; reanimation, state 16 of rows 224, 226 and 227, is built). The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
 //!
 //! Flyers (SPEC-0038 "Flyer", Behaviors 2 step 4, 34 step 2, 37 step 7, 41, 44 and 48; SPEC-0040
