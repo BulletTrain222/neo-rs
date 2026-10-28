@@ -554,11 +554,6 @@ impl Character {
         Some(neopets_sim::combat::Cylinder { center: add(self.position, [0.0, crate::placeholder::CLOUD_HOVER + 0.5 * h, 0.0]), axis: [0.0, 1.0, 0.0], radius: r, length: h })
     }
 
-    /// The point shots aim at: the stand-in body's centre for the Cloud Beast, else 1.5 up.
-    pub fn shot_aim(&self) -> [f32; 3] {
-        self.stand_in_body().map_or([self.position[0], self.position[1] + 1.5, self.position[2]], |b| b.center)
-    }
-
     /// SPEC-0047 Layout / SPEC-0036 Hittable predicate tests 4 and 5: a character whose pet type
     /// id has a kind in either table is skipped by hero swings, shots and the Mote walks.
     pub fn pet_like(&self) -> bool {
@@ -3392,7 +3387,7 @@ impl Play {
         let mut shots = std::mem::take(&mut self.hero_shots);
         let mut keep = Vec::new();
         for mut s in shots.drain(..) {
-            let aim = s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| c.shot_aim());
+            let aim = s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| c.id).and_then(|id| self.aim_point(id));
             let before = s.position;
             if !s.step(aim) {
                 continue;
@@ -7813,10 +7808,15 @@ impl Play {
     }
 
     /// The target point of a character (SPEC-0040 Behavior 20 item 6, R-0102): the shared
-    /// non-hero default, render attachment point 7 posed on the character; a character without
-    /// that point gives its position (controller overrides are not known).
+    /// non-hero default, render attachment point 7 posed on the character; the Cloud Beast's
+    /// override, its companion's pose point 1 (the stand-in's orb); a character without point 7
+    /// gives its position (the spec's default: no aim point from body height).
     fn aim_point(&self, id: u64) -> Option<[f32; 3]> {
         let c = self.characters.iter().find(|c| c.id == id)?;
+        if c.cloud.is_some() {
+            let orb = self.characters.iter().find(|o| o.pack == c.pack && o.slot == CLOUD_SLOT && o.cloud.is_none() && o.row.is_some_and(|r| r.class == Some(10)));
+            return Some(orb.map_or(c.position, |o| add(o.position, [0.0, 0.6, 0.0])));
+        }
         Some(Self::attach_point(c, 7).unwrap_or(c.position))
     }
 
@@ -8252,7 +8252,7 @@ impl Play {
                 .min_by(|a, b| a.2.total_cmp(&b.2))
                 .map(|(c, ..)| add(c.position, [0.0, 1.5, 0.0]))
         };
-        let target = partner.or(locked).map(|c| c.shot_aim()).or_else(ahead).unwrap_or(add(head, scale(fwd, 5.0)));
+        let target = partner.or(locked).and_then(|c| self.aim_point(c.id)).or_else(ahead).unwrap_or(add(head, scale(fwd, 5.0)));
         // NEOPETS_TRACE_LOOK_SIDE: the target 5 units to the side and 2 up (trace only).
         let target = if std::env::var_os("NEOPETS_TRACE_LOOK_SIDE").is_some() { add(add(head, scale(side, 5.0)), [0.0, 2.0, 0.0]) } else { target };
         let point = self.head_look.step(head, target, fwd, side, false);
