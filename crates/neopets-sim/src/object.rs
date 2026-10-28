@@ -88,11 +88,18 @@ pub struct ObjAnim {
     pub drawn: bool,
     /// A script call has touched the object (this build draws untouched objects at rest).
     pub scripted: bool,
+    /// The 3 animated-object sound slots (SPEC-0031 Animated-object sounds): cue, start and end
+    /// time in seconds; all empty at world setup.
+    pub sounds: [Option<(i32, f32, f32)>; 3],
+    /// The slots' cue to start and cue to stop from the last advance or set time, for the host
+    /// to play on the area slot at the object.
+    pub sound_start: Option<i32>,
+    pub sound_stop: Option<i32>,
 }
 
 impl Default for ObjAnim {
     fn default() -> Self {
-        Self { state: 3, time: 0.0, speed: 0.0, drawn: false, scripted: false }
+        Self { state: 3, time: 0.0, speed: 0.0, drawn: false, scripted: false, sounds: [None; 3], sound_start: None, sound_stop: None }
     }
 }
 
@@ -128,10 +135,12 @@ impl ObjAnim {
     }
 
     /// SetObjToTime: the time clamped to 0 .. duration; at or past the end the object is
-    /// finished (8, time = duration), below it stopped (10) at that time.
+    /// finished (8, time = duration), below it stopped (10) at that time. The sound slots are
+    /// checked between the old and the new time.
     pub fn set_time(&mut self, m: &Motion, t: f32) {
         self.scripted = true;
         let d = m.duration();
+        let before = self.time;
         if t >= d {
             self.time = d;
             self.state = 8;
@@ -139,6 +148,25 @@ impl ObjAnim {
             self.time = t.max(0.0);
             self.state = 10;
         }
+        self.sound_check(before, self.time);
+    }
+
+    /// AddAnimObjSound (SPEC-0031 Animated-object sounds): the first empty slot takes the cue,
+    /// start max(a, 0.00001) x D and end min(b, 0.99999) x D; with all 3 in use nothing
+    /// happens.
+    pub fn add_sound(&mut self, m: &Motion, cue: i32, a: f32, b: f32) {
+        let d = m.duration();
+        if let Some(slot) = self.sounds.iter_mut().find(|s| s.is_none()) {
+            *slot = Some((cue, a.max(0.00001) * d, b.min(0.99999) * d));
+        }
+    }
+
+    /// The slot check between times p and q: the first slot with lo <= start < hi starts its
+    /// cue, the first with lo <= end <= hi stops its cue (at most one of each).
+    fn sound_check(&mut self, p: f32, q: f32) {
+        let (lo, hi) = (p.min(q), p.max(q));
+        self.sound_start = self.sounds.iter().flatten().find(|s| lo <= s.1 && s.1 < hi).map(|s| s.0);
+        self.sound_stop = self.sounds.iter().flatten().find(|s| lo <= s.2 && s.2 <= hi).map(|s| s.0);
     }
 
     /// StopAnim: state 10 unless finished (8).
@@ -158,10 +186,13 @@ impl ObjAnim {
 
     /// The per-tick update (steps 1 to 3) for states 0, 2, 5 and 6.
     pub fn tick(&mut self, m: &Motion) {
+        self.sound_start = None;
+        self.sound_stop = None;
         if !matches!(self.state, 0 | 2 | 5 | 6) {
             return;
         }
         let d = m.duration();
+        let before = self.time;
         self.time += self.speed / 60.0;
         let mut end = false;
         if self.time < 0.0 {
@@ -185,6 +216,8 @@ impl ObjAnim {
                 _ => {}
             }
         }
+        // After the end clamp and the loop wrap (SPEC-0031 Animated-object sounds).
+        self.sound_check(before, self.time);
     }
 
     /// IsObjAnimating (play-once or loop) and IsObjAnimFinished.
@@ -216,6 +249,34 @@ pub fn rotation(q: [f32; 4]) -> [[f32; 3]; 3] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn animated_object_sound_vectors() {
+        // SPEC-0031 vectors: F = 31 keys (D = 2.0 s); slot (cue 5, 0.25, 1.0): start 0.5, end
+        // 1.99998.
+        let m = Motion { keys: 31, channels: Default::default() };
+        let mut o = ObjAnim::default();
+        o.add_sound(&m, 5, 0.25, 1.0);
+        let (cue, start, end) = o.sounds[0].unwrap();
+        assert_eq!(cue, 5);
+        assert!((start - 0.5).abs() < 1e-6 && (end - 1.99998).abs() < 1e-5);
+        o.sound_check(0.49, 0.51);
+        assert_eq!((o.sound_start, o.sound_stop), (Some(5), None));
+        o.sound_check(1.99, 2.0);
+        assert_eq!((o.sound_start, o.sound_stop), (None, Some(5)));
+        // The loop wrap: lo 0.0067, hi 1.99 holds the start again.
+        o.sound_check(1.99, 0.0067);
+        assert_eq!(o.sound_start, Some(5));
+        // a = 0 starts on the first tick from 0; a = 1.0 never plays.
+        let mut z = ObjAnim::default();
+        z.add_sound(&m, 7, 0.0, 1.0);
+        z.sound_check(0.0, 0.01667);
+        assert_eq!(z.sound_start, Some(7));
+        let mut never = ObjAnim::default();
+        never.add_sound(&m, 0, 1.0, 1.0);
+        never.sound_check(1.9, 2.0);
+        assert_eq!(never.sound_start, None);
+    }
 
     /// A 16-key lift: rotation constant (0, 0, 0, 1), y rising 0.5 per key after key 0, scale 1.
     fn lift() -> Motion {

@@ -58,6 +58,9 @@ pub enum Action {
     /// keep-alive start), VisitLoopSound (a refresh, starting nothing) and KillSound (stop the
     /// first matching voice) on the area slot, at an entry record (locator) or with no position.
     PlaySound { cue: i32, locator: Option<usize> },
+    /// AddAnimObjSound (SPEC-0030 row 224; SPEC-0031 Animated-object sounds): a sound slot of
+    /// animated object `obj` with `cue`, start fraction `a` and end fraction `b`.
+    AddAnimObjSound { obj: usize, cue: i32, a: f32, b: f32 },
     LoopSound { cue: i32, locator: Option<usize> },
     VisitLoopSound { cue: i32, locator: Option<usize> },
     KillSound { cue: i32, locator: Option<usize> },
@@ -1504,8 +1507,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0041 1392 Init: triggers 0 to 23 and 25 to 36 on their own routines, the objects,
         // and flag 696: the gate levers at their end (20, 22, 24) with the gates 11, 13 and 15
-        // at their start, else the levers at their start and effects 13 to 18 stopped. The
-        // AddAnimObjSound calls are not reproduced.
+        // at their start, else the levers at their start and effects 13 to 18 stopped; in both
+        // cases the sounds of objects 20, 22, 24 (11, 0.5 to 1.0) and 29, 28, 27, 26, 30, 31,
+        // 33, 34, 32 (12, 0.3 to 1.0).
         1392 => {
             let mut v: Vec<Action> = (0..=36u16).filter(|&i| i != 24).map(|i| reg(i, i as u8)).collect();
             v.extend([10, 12, 14, 1, 2, 3, 4, 5, 6, 7, 8, 9, 29, 28, 27, 26, 30, 31, 33, 34, 32].map(|obj| Action::InitObjOn { obj, end: false }));
@@ -1516,16 +1520,19 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([20, 22, 24].map(|obj| Action::InitObjOn { obj, end: false }));
                 v.extend((13..=18).map(|slot| Action::StopEffect { slot }));
             }
+            v.extend([20, 22, 24].map(|obj| Action::AddAnimObjSound { obj, cue: 11, a: 0.5, b: 1.0 }));
+            v.extend([29, 28, 27, 26, 30, 31, 33, 34, 32].map(|obj| Action::AddAnimObjSound { obj, cue: 12, a: 0.3, b: 1.0 }));
             v
         }
         // SPEC-0041 1394 Init: objects 3 to 6, 10, 12, 14, 16 and 1 off, 7 and 8 at their end; the
         // kill zones (S0, 0 to 10), S11 to S14, the levers (15, 18, 16, 17); flag 0 is clear in
         // play: object 9 off, effect 3 stopped, swap mode 3. Checkpoint words 21 and 22 start at
-        // locator 0 and camera 2. The dead-hero revive, the hero-death callback and the
-        // AddAnimObjSound calls are not reproduced.
+        // locator 0 and camera 2; the sounds of objects 3 and 4 (13, 0.0 to 1.0). The dead-hero
+        // revive and the hero-death callback are not reproduced.
         1394 => {
             let mut v: Vec<Action> = [3, 4, 5, 6, 10, 12, 14, 16, 1].map(|obj| Action::InitObjOn { obj, end: false }).to_vec();
             v.extend([7, 8].map(|obj| Action::InitObjOn { obj, end: true }));
+            v.extend([3, 4].map(|obj| Action::AddAnimObjSound { obj, cue: 13, a: 0.0, b: 1.0 }));
             v.extend((0..=10).map(|i| reg(i, 0)));
             v.extend([reg(11, 11), reg(12, 12), reg(13, 13), reg(14, 14), reg(15, 15), reg(16, 16), reg(17, 17), reg(18, 18)]);
             v.extend([Action::InitObjOn { obj: 9, end: false }, Action::StopEffect { slot: 3 }, Action::SwapMode { mode: 3 }]);
@@ -1606,10 +1613,11 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0041 1130 Init: with flag 675 clear objects 0, 29, 31, 33, 27, 1, 12, 15, 18 and 11
         // off and callbacks 1 to 7 on triggers 5, 6, 7, 4, 2, 1 and 0; with it set objects 29, 31,
-        // 33, 27 and 1 at their end and 11, 14, 17 and 19 off, no triggers. AddAnimObjSound and
-        // movie 50 (trigger 0) are not built.
+        // 33, 27 and 1 at their end and 11, 14, 17 and 19 off, no triggers; in both states the
+        // sounds of objects 11, 7, 8, 9, 10 (10) and 23, 24, 12 to 18, 20, 21, 22, 1, 2 (8), each
+        // 0.0 to 1.0. Movie 50 (trigger 0) is not built.
         1130 => {
-            if state.flag(675) {
+            let mut v = if state.flag(675) {
                 let mut v: Vec<Action> = [29, 31, 33, 27, 1].map(|obj| Action::InitObjOn { obj, end: true }).to_vec();
                 v.extend([11, 14, 17, 19].map(|obj| Action::InitObjOn { obj, end: false }));
                 v
@@ -1617,7 +1625,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 let mut v: Vec<Action> = [0, 29, 31, 33, 27, 1, 12, 15, 18, 11].map(|obj| Action::InitObjOn { obj, end: false }).to_vec();
                 v.extend([reg(5, 1), reg(6, 2), reg(7, 3), reg(4, 4), reg(2, 5), reg(1, 6)]);
                 v
-            }
+            };
+            v.extend([11, 7, 8, 9, 10].map(|obj| Action::AddAnimObjSound { obj, cue: 10, a: 0.0, b: 1.0 }));
+            v.extend([23, 24, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 1, 2].map(|obj| Action::AddAnimObjSound { obj, cue: 8, a: 0.0, b: 1.0 }));
+            v
         }
         // SPEC-0039 1344 Init: triggers 0 to 4 (handlers 2, 3, 6, 4, 5), objects 2, 3, 4, 5, 1 and 0
         // off; thread 7 loads slot 0 with set 0, 1 or 2 by flags 94, 93, 92 (only when flag 92
@@ -1646,8 +1657,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0039 1248 Init: with 79 clear objects 3, 4, 5, 2, 0 and 1 off; objects 30, 29, 28,
         // 27, 43, 45, 41, 37, 33, 25 and 26 off and 30 to 27 looped; triggers 16 to 18 (handlers
-        // 5, 4, 3), 0 (7) and 1 to 3 (6); teleport 0 and the arrival are fixed rules. Triggers 4
-        // and 27 (Low to Medium) and AddAnimObjSound are not reproduced.
+        // 5, 4, 3), 0 (7) and 1 to 3 (6); teleport 0 and the arrival are fixed rules; in both
+        // cases the sounds of objects 3, 4, 5, 2, 0, 1 (16, 0.1 to 1.0). Triggers 4 and 27 (Low
+        // to Medium) are not reproduced.
         1248 => {
             let mut v = Vec::new();
             if !state.flag(79) {
@@ -1656,6 +1668,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend([30, 29, 28, 27, 43, 45, 41, 37, 33, 25, 26].map(|obj| Action::InitObjOn { obj, end: false }));
             v.extend([30, 29, 28, 27].map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
             v.extend([reg(16, 5), reg(17, 4), reg(18, 3), reg(0, 7), reg(1, 6), reg(2, 6), reg(3, 6)]);
+            v.extend([3, 4, 5, 2, 0, 1].map(|obj| Action::AddAnimObjSound { obj, cue: 16, a: 0.1, b: 1.0 }));
             v
         }
         // SPEC-0039 706 Init: triggers 1 (handler 1) and 2 (handler 3); flag 62 when none of 62 to
@@ -2748,7 +2761,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         1427 => (0..=7).map(|i| reg(i, ((i + 1) / 2) as u8)).collect(),
         // SPEC-0037 1391 Init: object 0 at its start, S2, S0 and S1 on triggers 2, 0 and 1 (the
         // object sound is not reproduced).
-        1391 => vec![Action::InitObjOn { obj: 0, end: false }, reg(2, 2), reg(0, 0), reg(1, 1)],
+        // SPEC-0037 1391 Init: object 0 off, triggers 2, 0 and 1, and object 0's sound (6, 0.0 to
+        // 1.0).
+        1391 => vec![Action::InitObjOn { obj: 0, end: false }, reg(2, 2), reg(0, 0), reg(1, 1), Action::AddAnimObjSound { obj: 0, cue: 6, a: 0.0, b: 1.0 }],
         // SPEC-0043 1066 Init: T2 on triggers 0 to 2, T1 on 3; the world masks from flags 17 and
         // 414 (helpers A or B, then C or D; 16 set when 17 is clear); the slot-set chooser.
         1066 => {
@@ -3020,9 +3035,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // triggers 5 to 7 (routines 5 to 7), T0 and T1 on 0 and 1 (routines 0 and 1); the
         // switch handler on 29 to 32 (replaced below, never run); the drain-flag loop (each set flag
         // of 637 to 641 disables breakable 23, 26, 29, 32 or 35); then group type 12 (which
-        // replaces triggers 29 to 32). AddAnimObjSound is not built.
+        // replaces triggers 29 to 32); the sounds of the lever objects 11, 13, 15 (7, 0.5 to 1.0).
         1171 => {
             let mut v: Vec<Action> = [0, 1, 2, 11, 13, 15, 17, 20, 23, 26].into_iter().map(|obj| Action::InitObjOn { obj, end: false }).collect();
+            v.extend([11, 13, 15].map(|obj| Action::AddAnimObjSound { obj, cue: 7, a: 0.5, b: 1.0 }));
             v.extend([reg(5, 5), reg(6, 6), reg(7, 7), reg(29, 29), reg(30, 29), reg(31, 29), reg(32, 29), reg(0, 0), reg(1, 1)]);
             for (flag, id) in (637..=641).zip([23, 26, 29, 32, 35]) {
                 if state.flag(flag) {

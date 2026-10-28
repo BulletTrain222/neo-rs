@@ -2226,6 +2226,12 @@ impl Play {
                 Action::ActStart { stage } => self.act_start(stage),
                 Action::StartEffect { slot, camera } => self.start_placed(pack, slot, camera),
                 Action::SwitchEffect { slot, on } => self.switch_placed(pack, slot, on),
+                Action::AddAnimObjSound { obj, cue, a, b } => {
+                    let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                    if let Some(w) = w.filter(|w| obj < w.object_anims.len()) {
+                        w.object_anims[obj].add_sound(&w.motions[obj], cue, a, b);
+                    }
+                }
                 Action::InitObjOn { obj, .. } | Action::PlayAnim { obj, .. } | Action::LoopAnim { obj, speed: _ } | Action::StopAnim { obj } | Action::DeactivateObj { obj }
                     if [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).is_some_and(|w| obj < w.object_anims.len()) =>
                 {
@@ -7156,10 +7162,33 @@ impl Play {
             println!("      rumble on tick {}: level {} for {} ticks", self.ticks, s.level, s.count);
         }
         // SPEC-0028 7.1: the resident worlds' animated objects step before the hero update.
+        let mut object_sounds = Vec::new();
+        let current = self.world.pack;
         for w in [&mut self.world].into_iter().chain(self.other.as_mut()) {
             for (o, m) in w.object_anims.iter_mut().zip(&w.motions) {
                 o.tick(m);
             }
+            // SPEC-0031 Animated-object sounds: a slot's start plays once (do-not-restart) on
+            // the area slot at the object (its rest position stands in for the reference centre),
+            // and its end stops that cue there; only the current world's area slot sounds.
+            if w.pack == current {
+                for (i, o) in w.object_anims.iter().enumerate() {
+                    if o.sound_start.is_some() || o.sound_stop.is_some() {
+                        let at = w.objects.get(i).and_then(|ob| ob.as_ref()).map(|ob| [ob.rest[12], ob.rest[13], ob.rest[14]]);
+                        object_sounds.push((o.sound_start, o.sound_stop, at));
+                    }
+                }
+            }
+        }
+        for (start, stop, at) in object_sounds {
+            if let Some(cue) = start {
+                self.sound.play(neopets_sim::sound::AREA, cue, neopets_sim::sound::Play { emitter: at, do_not_restart: true, radius: Some((200.0, 0.0)), ..Default::default() });
+            }
+            if let Some(cue) = stop {
+                self.sound.stop(neopets_sim::sound::AREA, cue, at);
+            }
+        }
+        for w in [&mut self.world].into_iter().chain(self.other.as_mut()) {
             // SPEC-0048 Per tick: the movable-block list after the object animations.
             for b in &mut w.blocks {
                 b.tick();
