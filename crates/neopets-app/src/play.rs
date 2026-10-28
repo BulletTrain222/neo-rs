@@ -4562,10 +4562,17 @@ impl Play {
         let mut out = Vec::new();
         for c in self.characters.iter().filter(|c| !c.inactive && self.pack_drawn(c.pack) && c.enemy.as_ref().is_none_or(|e| !e.dead)) {
             for &(slot, _) in &c.model.attachments {
-                // The thrown-model word: while the Werelupe King's boomerang flies, its slot 0 model
-                // is drawn at the boomerang (SPEC-0019 Boomerang flight), spinning 0.6 radians per
-                // tick; the spin axis is taken as the vertical (the spec's eased axis is open).
-                let thrown = c.king.as_ref().and_then(|k| k.boomerang).map(|b| b.position);
+                // The thrown-model word (SPEC-0046 Held items step 1): while the Werelupe King's
+                // boomerang flies (SPEC-0019 Boomerang flight) or the Black Knight's flying sword
+                // is out of his hand (sub-states 0 to 4, SPEC-0012 Flying swords), the slot 0
+                // model is drawn at it instead of in the hand, spinning 0.6 radians per tick; the
+                // spin axis is taken as the vertical (the spec's eased axis is open).
+                let thrown = c
+                    .king
+                    .as_ref()
+                    .and_then(|k| k.boomerang)
+                    .map(|b| b.position)
+                    .or_else(|| c.knight.as_ref().filter(|k| k.sword.sub < 5).map(|k| k.sword.position));
                 let frame = match slot {
                     0 if thrown.is_some() => Self::character_attach(c, 0).map(|w| {
                         let (sn, cs) = (0.6 * (self.ticks % 10_000) as f32).sin_cos();
