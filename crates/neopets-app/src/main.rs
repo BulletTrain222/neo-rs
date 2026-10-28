@@ -2265,10 +2265,12 @@ fn sync_shots(
         }
         return;
     }
-    let spits = state.play.spit_points();
     for (m, mut t, mut vis) in &mut markers {
+        // A shot drawn by its flight effects, and the spits (drawn by their effects), have no
+        // marker; the marker stays for a pool shot whose flight ids are both -1.
         let at = match m.0.checked_sub(neopets_sim::projectile::SLOTS) {
-            Some(k) => spits.get(k).copied(),
+            Some(_) => None,
+            None if state.play.pool_slot_has_fx(m.0) => None,
             None => state.play.shots.slots.get(m.0).copied().flatten().map(|s| s.position),
         };
         match at {

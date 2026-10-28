@@ -5345,11 +5345,6 @@ impl Play {
         Some(([c.position[0], c.position[2]], d < if self.hero_index == 1 { 16.0 } else { 4.5 }))
     }
 
-    /// The Undead Draik's live spit records (drawn with the shot markers).
-    pub fn spit_points(&self) -> Vec<[f32; 3]> {
-        self.characters.iter().filter(|c| c.pack == self.world.pack).filter_map(|c| c.draik.as_ref()).flat_map(|k| k.spits.iter().flatten().map(|s| s.position)).collect()
-    }
-
     /// Diagnostic herding goal: 3.5 behind the nearest Whinny that is not penned, on the far
     /// side from the pen point.
     pub fn herd_goal(&self) -> Option<[f32; 2]> {
@@ -10292,17 +10287,18 @@ impl Play {
         }
     }
 
+    /// Whether pool slot `k` draws flight effects (its marker is then not drawn).
+    pub fn pool_slot_has_fx(&self, k: usize) -> bool {
+        self.shot_fx.get(k).copied().flatten().is_some_and(|(_, h)| h.iter().any(Option::is_some))
+    }
+
     /// SPEC-0034 Roberta's shot visuals, once per pass: each live shot's flight effects A and B
     /// follow it; a shot that has ended (by any route) stops them and plays C once at its last
     /// position.
     fn shot_fx_step(&mut self) {
         let table = self.effect_table.clone();
         let live: std::collections::HashMap<u32, ([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.id, (s.position, s.dir))).collect();
-        let frame_of = |d: [f32; 3]| {
-            let fw = unit([d[0], 0.0, d[2]]);
-            let fw = if fw == [0.0; 3] { [0.0, 0.0, 1.0] } else { fw };
-            [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw]
-        };
+        let frame_of = flat_frame;
         let ids: Vec<u32> = self.attack_fx.shots.keys().copied().collect();
         for id in ids {
             let Some((v, mut handles, last)) = self.attack_fx.shots.get(&id).copied() else { continue };
@@ -12304,6 +12300,14 @@ fn segment_box(a: [f32; 3], b: [f32; 3], origin: [f32; 3], axes: [[f32; 3]; 3], 
         }
     }
     true
+}
+
+/// An effect frame from a direction and world up: its flat forward as the third axis (+Z when
+/// the direction is vertical or zero).
+fn flat_frame(d: [f32; 3]) -> neopets_sim::effect::Frame {
+    let fw = unit([d[0], 0.0, d[2]]);
+    let fw = if fw == [0.0; 3] || fw.iter().any(|c| c.is_nan()) { [0.0, 0.0, 1.0] } else { fw };
+    [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw]
 }
 
 /// The attack-family tables the driver reads (SPEC-0034 3.17), 14 ids each by Mote index; the
