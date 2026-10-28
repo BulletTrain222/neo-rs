@@ -13129,6 +13129,21 @@ fn villager(e: usize) -> Option<usize> {
     VILLAGERS.iter().position(|(es, _, _)| es.contains(&e))
 }
 
+/// SPEC-0045 1023 arena master (entity 66, Shanra), by the round-result word S (word 26, set by
+/// the arena return): S 0: line 37 with flag 385 set (all five rounds won), else the prompt of
+/// the first set of 384 to 380 (lines 38 to 42), else 43; S 1: line 44 with 385 set, else prompt
+/// 82; any other S: prompt 45. The prompts have no conversation target.
+fn arena_master_1023(s: &GameState) -> Vec<Action> {
+    let prompt = |line: u16| vec![Action::Prompt { line, routine: 66 }];
+    match s.word(1023, 26) {
+        0 if s.flag(385) => vec![Action::Talk { line: 37 }],
+        0 => prompt([384u16, 383, 382, 381, 380].iter().position(|&f| s.flag(f)).map_or(43, |k| 38 + k as u16)),
+        1 if s.flag(385) => vec![Action::Talk { line: 44 }],
+        1 => prompt(82),
+        _ => prompt(45),
+    }
+}
+
 /// The templates: template C's flag-138 line first, then the fame rule, then the story chain.
 fn village_talk(k: u8, s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
     let (_, template, b) = *VILLAGERS.get(k as usize)?;
@@ -14677,6 +14692,23 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
         }
         (1148, 1, false) => vec![line(48)],
         // 1023 entity 90: the answer lines by the flag that chose the prompt; P becomes 1 or 2.
+        // SPEC-0045 1023 arena master's answer: no gives the line of the first set of 384 to 380
+        // (52 to 56), else 57; yes gives 46 to 50, else 51, then line 83 while the Meerca chase
+        // runs (127 set, 136 clear), otherwise the replacement load to eW 128 (pack 1176, the
+        // five-round arena) with argument 0.
+        (1023, 66, yes) => {
+            let first = [384u16, 383, 382, 381, 380].iter().position(|&f| s.flag(f));
+            let line = first.map_or(if yes { 51 } else { 57 }, |k| if yes { 46 + k as u16 } else { 52 + k as u16 });
+            let mut v = vec![Action::Talk { line }];
+            if yes {
+                if s.flag(127) && !s.flag(136) {
+                    v.push(Action::Talk { line: 83 });
+                } else {
+                    v.push(Action::ReplaceExterior { slot: 128, plane: 0 });
+                }
+            }
+            v
+        }
         (1023, 90, _) => {
             s.set_word(1023, 20, if yes { 1 } else { 2 });
             let base = if s.flag(487) { 289 } else if s.flag(486) { 292 } else if s.flag(485) { 295 } else { 298 };
@@ -14957,6 +14989,7 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (1023, 90) => Some(90),
         // SPEC-0045 1023 the tattered-cloak seller and map seller (entities 72, 75 and 94).
         (1023, 72 | 75 | 94) => Some(72),
+        (1023, 66) => Some(66),
         (1098, e) => castle_routine(e),
         // SPEC-0045 1163: the Miamice keeper (entities 0 and 10), entity 7 and Sir Harlag (15).
         (1163, 0 | 10) => Some(0),
@@ -15211,6 +15244,7 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
             return a;
         }
         (1133, _) => smithy_talk(state, &mut rot),
+        (1023, 66) => return arena_master_1023(state),
         (1023, r) if r >= 100 => village_talk(r - 100, state, &mut rot),
         (1023, 90) => {
             let a = village_90(state, &mut rot);
@@ -18671,6 +18705,27 @@ mod tests {
         assert_eq!(traded[0], Action::Message { line: 47 });
         assert!(traded.contains(&Action::GiveWordItem { word: 1, default: 99 }));
         assert!(!s.has_item(98) && s.has_item(42) && s.word(1148, 1) == 98);
+    }
+
+    #[test]
+    fn arena_master_1023() {
+        let mut s = GameState::default();
+        let r = proximity_routine(1023, 66).unwrap();
+        // First visit: prompt 43; yes starts the arena (line 51 and the load to eW 128).
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 43, routine: 66 }]);
+        assert_eq!(on_answer(1023, 66, true, &mut s), vec![Action::Talk { line: 51 }, Action::ReplaceExterior { slot: 128, plane: 0 }]);
+        assert_eq!(on_answer(1023, 66, false, &mut s), vec![Action::Talk { line: 57 }]);
+        // After round two (382 set): prompt 40; during the Meerca chase yes gives line 83.
+        s.set(381, true);
+        s.set(382, true);
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 40, routine: 66 }]);
+        s.set(127, true);
+        assert_eq!(on_answer(1023, 66, true, &mut s), vec![Action::Talk { line: 48 }, Action::Talk { line: 83 }]);
+        // A won round just returned (S = 1): prompt 82; all five won: line 44.
+        s.set_word(1023, 26, 1);
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 82, routine: 66 }]);
+        s.set(385, true);
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Talk { line: 44 }]);
     }
 
     #[test]

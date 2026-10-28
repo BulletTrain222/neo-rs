@@ -2206,7 +2206,7 @@ fn sync_worlds(
                         e.insert(ZoneGate(pack, z));
                     }
                     if let WorldPart::Scene(pack, _) = *part {
-                        e.insert(PartSig(pack, part_signature(&m.parts[i])));
+                        e.insert(part_signature(pack, &m.parts[i], false));
                     }
                     // SPEC-0046 Instanced meshes: an instance's parts draw only within the
                     // record's draw distance D1 of the eye (F is 0 on disc: no fade), with
@@ -2238,7 +2238,7 @@ fn sync_worlds(
                         e.insert(ZoneGate(pack, z));
                     }
                     if let WorldPart::Scene(pack, _) = *part {
-                        e.insert(PartSig(pack, part_signature(&m.parts[i]) ^ 0x9E37_79B9_7F4A_7C15));
+                        e.insert(part_signature(pack, &m.parts[i], true));
                     }
                     if let Some(speed) = scroll {
                         e.insert(pass1::Pass1Scroll(speed));
@@ -2317,25 +2317,36 @@ struct ZoneGate(u32, u8);
 #[derive(Component)]
 struct DrawCull(Vec3, f32);
 
-/// A world scene part's pack and geometry signature (its vertex count and its bounds).
+/// A world scene part's pack and geometry signature: whether it is a second-pass part, its
+/// vertex count and its bounds.
 #[derive(Component, Clone, Copy)]
-struct PartSig(u32, u64);
+struct PartSig {
+    pack: u32,
+    pass1: bool,
+    count: usize,
+    lo: [f32; 3],
+    hi: [f32; 3],
+}
 
-fn part_signature(p: &neopets_data::model::MeshPart) -> u64 {
-    use std::hash::{Hash, Hasher};
+fn part_signature(pack: u32, p: &neopets_data::model::MeshPart, pass1: bool) -> PartSig {
     let (lo, hi) = p.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    p.positions.len().hash(&mut h);
-    for v in lo.iter().chain(&hi) {
-        ((v * 10.0).round() as i64).hash(&mut h);
+    PartSig { pack, pass1, count: p.positions.len(), lo, hi }
+}
+
+impl PartSig {
+    /// The same geometry: the same kind and vertex count, every bound within half a unit (the
+    /// two packs place a shared mesh through their own matrices, which differ in the last
+    /// digits).
+    fn same(&self, o: &PartSig) -> bool {
+        self.pass1 == o.pass1 && self.count == o.count && (0..3).all(|k| (self.lo[k] - o.lo[k]).abs() <= 0.5 && (self.hi[k] - o.hi[k]).abs() <= 0.5)
     }
-    h.finish()
 }
 
 /// Each frame: a gated world part shows only while its zone query passes. A part of the other
 /// drawn world that repeats a part of the current world exactly (the same vertex count and
-/// bounds; 696 and 1023 share seven castle parts) is hidden: drawn twice in one place the two
-/// copies fight for depth and flicker (this build's draw rule, not a spec rule).
+/// bounds within half a unit; 696 and 1023 share their castle and mountain parts) is hidden:
+/// drawn twice in one place the two copies fight for depth and flicker (this build's draw
+/// rule, not a spec rule).
 fn sync_zones(
     state: Option<Res<PlayState>>,
     mut parts: Query<(Option<&ZoneGate>, Option<&PartSig>, Option<&DrawCull>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>, With<DrawCull>)>>,
@@ -2347,10 +2358,10 @@ fn sync_zones(
     // default) draws every instance at any distance.
     let eye = cameras.iter().next().map(|g| g.translation()).filter(|_| settings.original_foliage);
     let current = state.play.world.pack;
-    let mine: std::collections::HashSet<u64> = parts.iter().filter_map(|(_, s, ..)| s.filter(|s| s.0 == current).map(|s| s.1)).collect();
+    let mine: Vec<PartSig> = parts.iter().filter_map(|(_, s, ..)| s.filter(|s| s.pack == current).copied()).collect();
     for (g, s, cull, mut v) in &mut parts {
         let zone_ok = g.is_none_or(|g| state.play.zone_visible(g.0, g.1));
-        let dup = s.is_some_and(|s| s.0 != current && mine.contains(&s.1));
+        let dup = s.is_some_and(|s| s.pack != current && mine.iter().any(|m| m.same(s)));
         // Skipped at D1 or more (squared values compared).
         let near = cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
         let want = if zone_ok && !dup && near { Visibility::Inherited } else { Visibility::Hidden };

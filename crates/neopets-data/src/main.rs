@@ -44,6 +44,7 @@ fn run() -> Result<(), String> {
     let mut object_headers = false;
     let mut groups: Option<u32> = None;
     let mut shadow: Option<u32> = None;
+    let mut parts_of: Vec<u32> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -61,6 +62,10 @@ fn run() -> Result<(), String> {
             "--aim-targets" => aim = true,
             "--panels" => panels = true,
             "--object-headers" => object_headers = true,
+            "--parts" => {
+                let n = args.next().ok_or("--parts needs a pack")?;
+                parts_of.push(n.parse().map_err(|_| format!("Bad pack {n}"))?);
+            }
             "--shadow" => {
                 let n = args.next().ok_or("--shadow needs a resource")?;
                 shadow = Some(n.parse().map_err(|_| format!("Bad resource {n}"))?);
@@ -121,7 +126,7 @@ fn run() -> Result<(), String> {
             println!("{:#08x}: {w:#010x} i32 {} f32 {}", a + 4 * k as u32, w as i32, f32::from_bits(w));
         }
     }
-    if !(monster_word.is_some() || groups.is_some() || shadow.is_some() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(monster_word.is_some() || groups.is_some() || shadow.is_some() || !parts_of.is_empty() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -207,6 +212,17 @@ fn run() -> Result<(), String> {
     }
     if object_headers {
         object_header_census(&mut disc, &index)?;
+    }
+    for &n in &parts_of {
+        // A world pack's scene parts (every story layer, no placed objects): vertex count and
+        // bounds.
+        let bytes = index.read(&mut disc, n)?;
+        let chain = resource::walk_chunks(&bytes, None)?;
+        let m = neopets_data::model::build_world_parts(&bytes, &chain.chunks, u32::MAX, false)?;
+        for (i, p) in m.parts.iter().enumerate() {
+            let (lo, hi) = p.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
+            println!("pack {n} part {i} verts {} zone {:?} tex {:?} box {:?}..{:?}", p.positions.len(), p.zone, p.texture, lo.map(|v| v.round()), hi.map(|v| v.round()));
+        }
     }
     if let Some(n) = shadow {
         // A resource's type-33 shadow hulls (SPEC-0004 Optional per-model block).

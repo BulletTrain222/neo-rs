@@ -1895,6 +1895,10 @@ impl Play {
     /// Whether the other world is drawn with the current one (SPEC-0006 neighbour-world test
     /// with q = the other world's pack).
     pub fn other_drawn(&self) -> bool {
+        // NEOPETS_NO_OTHER: the other world is never drawn (diagnostic).
+        if std::env::var_os("NEOPETS_NO_OTHER").is_some() {
+            return false;
+        }
         self.other.as_ref().is_some_and(|o| self.boot.neighbour_ok(self.world.pack, self.world.kind, o.pack))
     }
 
@@ -11426,10 +11430,20 @@ impl Play {
     /// script call has touched is drawn at its rest block (a deviation: the original hides it
     /// until InitObjOn).
     /// The draw zone gate (SPEC-0006 Binary grids; SPEC-0004, SPEC-0028): column `c` of world
-    /// `pack` with key -1 (the active block). The current world uses the camera's zone row; the
-    /// second world is not gated here (its block choice is the neighbour's).
+    /// `pack` with key -1 (the active block). The current world uses block 0 with the camera's
+    /// zone row; the second world's draws use the block keyed by its world id (SPEC-0006 Zone
+    /// manager: the main loop makes that block active while the second world draws), which passes
+    /// everything when the current grid has no such block. Ungated, the second world's whole
+    /// backdrop drew over the current world's (1023 with 696: the far mountains fought, a
+    /// flicker).
     pub fn zone_visible(&self, pack: u32, c: u8) -> bool {
-        pack != self.world.pack || self.zones.query(self.world.zones.as_ref(), c as i32, -1)
+        if pack == self.world.pack {
+            return self.zones.query(self.world.zones.as_ref(), c as i32, -1);
+        }
+        match self.other.as_ref().filter(|o| o.pack == pack) {
+            Some(o) => self.zones.query(self.world.zones.as_ref(), c as i32, o.world_id),
+            None => true,
+        }
     }
 
     /// Read the attack-family tables (SPEC-0034 Where it lives; 14 ids each, index m - 160).
