@@ -1,6 +1,9 @@
 """Load every world pack headless from each of its first entry points, walk and jump for N
 ticks, and flag crashes, falls through the world, NaN positions and errors. A run is judged
-only up to its first game over or area change. Usage: python sweep.py <repo> <ticks> [packs...]"""
+only up to its first game over or area change. The headless trace is not fully
+deterministic (repeated runs of one build can take different paths, most likely from region
+loads finishing on different ticks), so compare flagged runs across repeats before calling one
+a regression. Usage: python sweep.py <repo> <ticks> [packs...]"""
 import re, subprocess, sys, json, os, time
 
 repo = sys.argv[1]
