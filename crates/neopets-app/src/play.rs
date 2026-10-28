@@ -8440,6 +8440,11 @@ impl Play {
     /// SPEC-0021 Important-item give: the important ids among a pool's slot-reset gives go to
     /// the party, count 1 each (capped at the carry limit).
     fn reset_gives(&mut self, pack: u32) {
+        // SPEC-0021 Coins: each coin ground bounce plays cue 0xA7 at the coin.
+        let bounces = self.pools.get_mut(&pack).map(|p| std::mem::take(&mut p.bounces)).unwrap_or_default();
+        for at in bounces {
+            self.sound.play(neopets_sim::sound::MAIN, 0xA7, neopets_sim::sound::Play { emitter: Some(at), ..Default::default() });
+        }
         let gives = self.pools.get_mut(&pack).map(|p| std::mem::take(&mut p.gives)).unwrap_or_default();
         for id in gives {
             if self.design.item_important(id) {

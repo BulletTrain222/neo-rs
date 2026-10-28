@@ -127,11 +127,14 @@ pub struct ItemPool {
     /// The ids the slot resets gave since the host last drained them (a dropped item taken, an
     /// attached slot reused, the pool released); the host gives the important ones.
     pub gives: Vec<u16>,
+    /// The points where a coin bounced off the ground since the host last drained them (cue
+    /// 0xA7 plays there; SPEC-0021 Coins).
+    pub bounces: Vec<Vec3>,
 }
 
 impl Default for ItemPool {
     fn default() -> Self {
-        Self { slots: vec![None; SLOTS], counter: 1, attached: vec![None; SLOTS], gives: Vec::new() }
+        Self { slots: vec![None; SLOTS], counter: 1, attached: vec![None; SLOTS], gives: Vec::new(), bounces: Vec::new() }
     }
 }
 
@@ -242,7 +245,9 @@ impl ItemPool {
                 it.age += DT;
             }
             if is_coin(it.id) {
-                coin_step(it, coins, ground, draw);
+                if coin_step(it, coins, ground, draw) {
+                    self.bounces.push(it.position);
+                }
             } else if it.charm {
                 charm_step(it, draw);
             } else {
@@ -357,7 +362,10 @@ fn charm_step(it: &mut WorldItem, draw: Draw) {
     it.position[1] += it.vy * DT;
 }
 
-fn coin_step(it: &mut WorldItem, c: &CoinWords, ground: &dyn Fn(f32, f32, f32) -> Option<f32>, draw: Draw) {
+/// Returns true on a ground contact that bounces (the speed after the restitution is at least
+/// the stop speed): the bounce cue 0xA7 plays at the coin.
+fn coin_step(it: &mut WorldItem, c: &CoinWords, ground: &dyn Fn(f32, f32, f32) -> Option<f32>, draw: Draw) -> bool {
+    let mut bounced = false;
     it.vy += c.gravity * DT;
     let p = it.position;
     let g = ground(p[0], p[2], p[1] + 2.0).unwrap_or(f32::MIN);
@@ -377,6 +385,8 @@ fn coin_step(it: &mut WorldItem, c: &CoinWords, ground: &dyn Fn(f32, f32, f32) -
         it.vy *= c.restitution;
         if it.vy.abs() < c.stop {
             it.vy = 0.0;
+        } else {
+            bounced = true;
         }
         it.spin *= c.spin_damping;
         it.hs *= c.damping;
@@ -391,6 +401,7 @@ fn coin_step(it: &mut WorldItem, c: &CoinWords, ground: &dyn Fn(f32, f32, f32) -
     for k in [0, 2] {
         it.position[k] += it.direction[k] * it.hs * DT;
     }
+    bounced
 }
 
 /// One drop group of resource 529 (money chance, range and its weighted sub-table entries).
