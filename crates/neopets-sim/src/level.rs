@@ -12001,7 +12001,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             // Thread 21 (flags 5, 4 and 3 clear at load; word 41 once per load): the first time
             // the active hero's hit points are below 0.2 of their maximum, line 214.
             if !state.flag(5) && !state.flag(4) && !state.flag(3) && state.word(pack, 41) == 0 && state.hero.hp_max > 0 && (state.hero.hp as f32) < 0.2 * state.hero.hp_max as f32 {
-                state.set_word(pack, 13, 1);
+                state.set_word(pack, 41, 1);
                 out.push(Action::Message { line: 214 });
             }
             // Threads 13 and 14: one tick after the last character of a wave dies, its slot is
@@ -17233,6 +17233,17 @@ mod tests {
         s.set_word(735, 250, 0);
         on_trigger(735, 2, enter(2), &mut s);
         assert!(on_hero_death(735, 0, &mut s).unwrap().1.contains(&Action::KillHero));
+    }
+
+    #[test]
+    fn low_health_hint_934() {
+        // Line 214 once per load, and the teleport's first-time word (13) is left alone.
+        let mut s = GameState::default();
+        s.hero.hp_max = 100;
+        s.hero.hp = 10;
+        let shown = (0..5).filter(|_| on_update(934, &mut s, false).contains(&Action::Message { line: 214 })).count();
+        assert_eq!(shown, 1);
+        assert_eq!(s.word(934, 13), 0);
     }
 
     #[test]
