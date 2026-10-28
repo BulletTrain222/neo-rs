@@ -490,6 +490,9 @@ pub struct Enemy {
     pub ambush: i32,
     /// A navmesh re-pick is pending (passed out through the next act).
     repick: bool,
+    /// DisableInvisibility (SPEC-0030 row 121; +0xE60): an invisible kind (Display in Default
+    /// 0) loses its hit and lock veto, and SetAI_Agro enters state 2, not 21.
+    pub visible: bool,
 }
 
 impl Enemy {
@@ -498,6 +501,7 @@ impl Enemy {
     pub fn new(p: Params, spawn: Spawn, rng: &mut Rng) -> Self {
         let default_state = spawn.default_state;
         let mut e = Self {
+            visible: false,
             p,
             spawn,
             default_state,
@@ -861,7 +865,7 @@ impl Enemy {
             return None;
         }
         self.previous = self.state;
-        self.state = if self.p.display_default { 2 } else { 21 };
+        self.state = if self.p.display_default || self.visible { 2 } else { 21 };
         self.search = rng.frange(self.p.search_min, self.p.search_max) as i32;
         self.last_seen = hero;
         Some(18)
@@ -919,7 +923,7 @@ impl Enemy {
     /// active-hero actor-table exception and the Display-in-Default branch (+0xE3C, the ambush
     /// word, +0xC4, +0xC8, state 14) are not built.
     pub fn lock_vetoed(&self, clip: u32) -> bool {
-        !self.p.display_default && (self.state == self.default_state as u32 || (self.state == 21 && clip != 82))
+        !self.p.display_default && !self.visible && (self.state == self.default_state as u32 || (self.state == 21 && clip != 82))
     }
 
     /// The flyer test: can-fly 1 with the retarget countdown at most 0, or can-fly 2.

@@ -2449,6 +2449,11 @@ impl Play {
                         c.anim.play(id);
                     }
                 }
+                Action::DisableInvisibility { entity } => {
+                    if let Some(e) = self.entity_mut(pack, entity).and_then(|c| c.enemy.as_mut()) {
+                        e.visible = true;
+                    }
+                }
                 Action::SetInvulnerable { entity, on } => {
                     if let Some(c) = self.entity_mut(pack, entity) {
                         c.invulnerable = on;

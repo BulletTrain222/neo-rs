@@ -153,6 +153,8 @@ pub enum Action {
     /// SetEntityInvulnerable(entity, on) (SPEC-0030 row 132): while set the entity is never a
     /// hit candidate.
     SetInvulnerable { entity: usize, on: bool },
+    /// DisableInvisibility(entity) (SPEC-0030 row 121).
+    DisableInvisibility { entity: usize },
     /// InitMiamouseBehavior(field mesh, cage mesh) and MiamiceCatchDisable (SPEC-0029
     /// Behavior 28).
     MiamouseInit { field: i32, cage: i32 },
@@ -1862,14 +1864,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0041 1414 Init: the thread loads slot 0 with set 1 (region 1416) under 102 and
-        // returns the camera; without 102 set 0 (1415), 3 s, entities 0 and 1 agro (their
-        // DisableInvisibility calls are not built) and the camera. The four proximity routines
+        // returns the camera; without 102 set 0 (1415), 3 s, entities 0 and 1 agro and made
+        // visible (DisableInvisibility) and the camera. The four proximity routines
         // (registered under 102), the teleports and the arrival are fixed rules.
         1414 => {
             if state.flag(102) {
                 vec![Action::LoadRegion { slot: 0, region: Some(1416) }, Action::ReturnCamera { preset: -1, release: true }]
             } else {
-                vec![Action::LoadRegion { slot: 0, region: Some(1415) }, Action::WaitLoads, wait(3.0), Action::Agro { entity: 0 }, Action::Agro { entity: 1 }, Action::ReturnCamera { preset: -1, release: true }]
+                vec![Action::LoadRegion { slot: 0, region: Some(1415) }, Action::WaitLoads, wait(3.0), Action::Agro { entity: 0 }, Action::DisableInvisibility { entity: 0 }, Action::Agro { entity: 1 }, Action::DisableInvisibility { entity: 1 }, Action::ReturnCamera { preset: -1, release: true }]
             }
         }
         // SPEC-0041 1409, 1421 and 1423 Init: their blackboard value (30 for world 160, 30 for
@@ -7691,8 +7693,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::InitObjOn { obj: 4, end: false },
                 Action::LoadRegion { slot: 1, region: Some(1126) },
                 Action::Agro { entity: 11 },
+                Action::DisableInvisibility { entity: 11 },
                 Action::Agro { entity: 12 },
+                Action::DisableInvisibility { entity: 12 },
                 Action::Agro { entity: 13 },
+                Action::DisableInvisibility { entity: 13 },
                 Action::Bits { word: 2, set: 1, clear: 0 },
             ]);
         }
@@ -10769,7 +10774,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set_word(pack, 2, 0);
                 let next = |set: u32, ais: &[usize], stage: i32| {
                     let mut v = vec![wait(3.0), Action::LoadRegion { slot: 1, region: None }, Action::LoadRegion { slot: 1, region: Some(1123 + set) }];
-                    v.extend(ais.iter().map(|&entity| Action::Agro { entity }));
+                    // SetAI_Agro and DisableInvisibility for each AI of the wave.
+                    v.extend(ais.iter().flat_map(|&entity| [Action::Agro { entity }, Action::DisableInvisibility { entity }]));
                     v.push(Action::Bits { word: 2, set: stage, clear: !stage });
                     v
                 };
