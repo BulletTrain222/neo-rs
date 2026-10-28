@@ -9909,6 +9909,94 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // Trigger 1 (30 and 31 clear at load): line 51 when the hero is not talking.
         (1098, 2) if first && !state.talking => out.actions.push(Action::Message { line: 51 }),
+        // SPEC-0045 1098 story triggers (Medium for the order inside each cutscene). Trigger 5
+        // (203 clear): the fade, letterbox, cameras 25 to 27 with entity 22's lines 43 and 45
+        // and entity 36's line 44, entity 44 to locator 13, flags 203 and 151, movie 8, the
+        // letterbox off and the camera returned (the placements of entities 22, 36 and 44 name
+        // no locators and are left out; the fade in after the movie stands in for the reload).
+        (1098, 5) if first && !state.flag(203) => {
+            state.set(203, true);
+            state.set(151, true);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::FadeOut { seconds: FADE, wait: true },
+                Action::LetterBox { on: true, seconds: 1.0, wait: false },
+                camera(25),
+                Action::FadeIn { seconds: FADE, wait: false },
+                Action::Converse { entity: 22, line: 43 },
+                camera(26),
+                Action::Converse { entity: 36, line: 44 },
+                camera(27),
+                Action::Converse { entity: 22, line: 45 },
+                Action::MoveEntity { entity: 44, locator: 13, face: true },
+                Action::PlayFmv { movie: 8 },
+                Action::LetterBox { on: false, seconds: 0.0, wait: false },
+                release_camera(),
+            ]);
+        }
+        // Trigger 4 (204 clear, 203 set): the fade, 204, movie 9, navmesh 10 for entities 23, 24,
+        // 25 and 36, the letterbox, the hero to locator 94, the four entities placed at 96 to 99
+        // and walked to 90 to 93, camera 30, the fade, slot A reset and loaded with j 6 (1105),
+        // the hero to locator 95, the camera returned, the letterbox off and the fade in. A fade
+        // in before camera 30 stands in for the movie's return.
+        (1098, 4) if first && state.flag(203) && !state.flag(204) => {
+            state.set(204, true);
+            let four = [23, 24, 25, 36];
+            out.actions.extend([Action::HoldHero, Action::FadeOut { seconds: FADE, wait: true }, Action::PlayFmv { movie: 9 }]);
+            out.actions.extend(four.map(|entity| Action::NavmeshAssign { entity, mesh: 10 }));
+            out.actions.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 94 }]);
+            out.actions.extend(four.iter().enumerate().map(|(k, &entity)| Action::MoveEntity { entity, locator: 96 + k, face: true }));
+            out.actions.extend(four.iter().enumerate().map(|(k, &entity)| Action::WalkEntity { entity, locator: 90 + k, wait: false, orient: true, stop: 1.1 }));
+            out.actions.extend([
+                Action::FadeIn { seconds: FADE, wait: false },
+                Action::PlayCamera { track: 30, wait: true, end: 1, speed: 1.0 },
+                Action::FadeOut { seconds: FADE, wait: true },
+                Action::LoadRegion { slot: 0, region: None },
+                Action::LoadRegion { slot: 0, region: Some(1098 + 1 + 6) },
+                Action::MoveHero { locator: 95 },
+                release_camera(),
+                Action::LetterBox { on: false, seconds: 0.0, wait: false },
+                Action::FadeIn { seconds: FADE, wait: false },
+            ]);
+        }
+        // Trigger 6 (entering, 216 set, 218 clear): 218, movie 15, the hero to locator 11 and the
+        // exterior load to eW 127 (pack 1174).
+        (1098, 6) if call.state == 1 && state.flag(216) && !state.flag(218) => {
+            state.set(218, true);
+            out.actions.extend([Action::PlayFmv { movie: 15 }, Action::MoveHero { locator: 11 }, Action::ReplaceExterior { slot: 127, plane: -1 }]);
+        }
+        // Trigger 9 (entering, s 28, 622 clear, 202 set): 622, the hero to locator 14, objects
+        // 10 and 11 played, object 14 off, camera 6, entity 44 to locator 13, the hero's walk to
+        // locator 15, the camera returned.
+        (1098, 9) if call.state == 1 && castle_stage(state) == 28 && !state.flag(622) && state.flag(202) => {
+            state.set(622, true);
+            out.actions.extend([
+                Action::MoveHero { locator: 14 },
+                Action::PlayAnim { obj: 10, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: 11, speed: 1.0, wait: false },
+                Action::DeactivateObj { obj: 14 },
+                camera(6),
+                Action::WalkEntity { entity: 44, locator: 13, wait: false, orient: true, stop: 1.1 },
+                Action::WalkHero { locator: 15, wait: true, orient: true },
+                release_camera(),
+            ]);
+        }
+        // Trigger 10 (state non-zero, object set), on every fourth such pass (word 2 counts): with
+        // 193 set and 194 clear the cutscene and 194; else with 205 set and 206 clear camera 14,
+        // the hero to locator 80, entity 39's line 3, 206 and the camera returned.
+        (1098, 10) if call.state != 0 && call.object => {
+            let n = state.word(pack, 2) + 1;
+            state.set_word(pack, 2, n);
+            if n % 4 == 0 && !state.talking {
+                if state.flag(193) && !state.flag(194) {
+                    state.set(194, true);
+                    out.actions.extend(castle_scene_10());
+                } else if state.flag(205) && !state.flag(206) {
+                    state.set(206, true);
+                    out.actions.extend([camera(14), Action::MoveHero { locator: 80 }, Action::Converse { entity: 39, line: 3 }, release_camera()]);
+                }
+            }
+        }
         // Triggers 11 and 12 (30 and 31 clear): slot A 1101 and slot B 1112; slot A 1102.
         (1098, 11) if first && !state.flag(30) && !state.flag(31) => {
             out.actions.extend([Action::LoadRegion { slot: 0, region: Some(1101) }, Action::LoadRegion { slot: 1, region: Some(1112) }]);
@@ -13201,6 +13289,20 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
 }
 
 /// SPEC-0045 1098: the castle stage s, the highest of flags 31 down to 21 that is set.
+/// SPEC-0045 1098 trigger 10's cutscene, also run by entities 35 and 36 (flag 193 set, 194
+/// clear). Word 1 is the forced word for slot B while entity 35 walks off.
+fn castle_scene_10() -> Vec<Action> {
+    use Action::*;
+    let mut v = vec![HoldHero, FadeOut { seconds: 0.5, wait: true }, Equip { on: false }, LetterBox { on: true, seconds: 1.0, wait: false }];
+    v.extend([MoveHero { locator: 77 }, MoveEntity { entity: 35, locator: 75, face: true }, camera(15), FadeIn { seconds: 0.5, wait: false }]);
+    v.extend([WalkHero { locator: 76, wait: true, orient: true }, Converse { entity: 35, line: 19 }, camera(13), Converse { entity: 35, line: 20 }]);
+    v.extend([camera(16), Sleep { ticks: 60 }, camera(14), Converse { entity: 35, line: 21 }, camera(13), Converse { entity: 35, line: 22 }]);
+    v.extend([camera(11), Converse { entity: 35, line: 23 }, Sleep { ticks: 1 }, Bits { word: 1, set: 1, clear: 0 }]);
+    v.extend([WalkEntity { entity: 35, locator: 80, wait: false, orient: true, stop: 1.1 }, FadeOut { seconds: 1.2, wait: true }, LoadRegion { slot: 1, region: None }]);
+    v.extend([Bits { word: 1, set: 0, clear: 1 }, LetterBox { on: false, seconds: 0.0, wait: false }, release_camera(), FadeIn { seconds: 1.0, wait: false }]);
+    v
+}
+
 fn castle_stage(s: &GameState) -> u16 {
     (21..=31).rev().find(|&f| s.flag(f)).unwrap_or(0)
 }
@@ -13208,9 +13310,9 @@ fn castle_stage(s: &GameState) -> u16 {
 /// SPEC-0045 1098 Init: the flag steps (21; 25 with 182; 202 and 28 with 201; 151), the rest
 /// prompt (trigger 0), trigger 1 with 30 and 31 clear, the slot triggers 11, 12 and 14, the
 /// slot thread's loads (31: j 1; 30: j 9 and j 0; 501 with item 72 not held and 503 and 504
-/// clear: j 21), and the module word that blocks teleport 6 when s is 31. The other story
-/// triggers (4 to 10, 17 to 20), the objects, effects, navmesh steps and the hero-death
-/// callback are not built.
+/// clear: j 21), the module word that blocks teleport 6 when s is 31, and the story triggers 4,
+/// 5, 6, 9 and 10 (routines 4, 5, 6, 9, 10). The switches (17 to 20), the objects, effects,
+/// navmesh steps and the hero-death callback are not built.
 fn castle_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     state.set(21, true);
@@ -13228,7 +13330,7 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
         state.set_word(1098, 0, 1);
     }
     // Triggers 7 and 8 set the transition maps 48 and 49 (registered in every case).
-    let mut out = vec![reg(0, 1), reg(7, 7), reg(8, 8)];
+    let mut out = vec![reg(0, 1), reg(7, 7), reg(8, 8), reg(4, 4), reg(5, 5), reg(6, 6), reg(9, 9), reg(10, 10)];
     let (f30, f31) = (state.flag(30), state.flag(31));
     if !f30 && !f31 {
         out.extend([reg(1, 2), reg(11, 11), reg(12, 12), reg(14, 14)]);
@@ -13351,7 +13453,7 @@ fn castle_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
                 talk(rot.pick(0, &three(8)))
             } else if s.flag(193) {
                 s.set(194, true);
-                (19..=23).map(|line| Action::Talk { line }).collect()
+                castle_scene_10()
             } else if s.flag(152) {
                 talk(rot.pick(1, &three(11)))
             } else {
@@ -17671,6 +17773,27 @@ mod tests {
         on_update(1056, &mut s, false);
         assert!(s.flag(171));
         assert_eq!(undamageable(1056), &[4, 7, 8, 9, 20, 21, 14]);
+    }
+
+    #[test]
+    fn castle_story_triggers() {
+        // SPEC-0045 1098 triggers 5, 4, 6 and 10.
+        let mut s = GameState::default();
+        assert!(on_init(1098, &mut s).contains(&Action::RegisterTrigger { index: 10, routine: 10 }));
+        let enter = |index| TriggerCall { index, state: 1, object: true, square: false, block: -1 };
+        assert!(on_trigger(1098, 4, enter(4), &mut s).actions.is_empty(), "trigger 4 waits for 203");
+        let a = on_trigger(1098, 5, enter(5), &mut s).actions;
+        assert!(s.flag(203) && s.flag(151) && a.contains(&Action::PlayFmv { movie: 8 }));
+        let b = on_trigger(1098, 4, enter(4), &mut s).actions;
+        assert!(s.flag(204) && b.contains(&Action::PlayFmv { movie: 9 }) && b.contains(&Action::LoadRegion { slot: 0, region: Some(1105) }));
+        s.set(216, true);
+        assert_eq!(on_trigger(1098, 6, enter(6), &mut s).actions.last(), Some(&Action::ReplaceExterior { slot: 127, plane: -1 }));
+        assert!(on_trigger(1098, 6, enter(6), &mut s).actions.is_empty());
+        // Trigger 10 acts on every fourth pass.
+        s.set(193, true);
+        let runs: Vec<bool> = (0..4).map(|_| !on_trigger(1098, 10, enter(10), &mut s).actions.is_empty()).collect();
+        assert_eq!(runs, [false, false, false, true]);
+        assert!(s.flag(194));
     }
 
     #[test]
