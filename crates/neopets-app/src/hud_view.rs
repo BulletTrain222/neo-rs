@@ -168,6 +168,11 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
         52 => p.hero == 1,
         // 60: the swing's HUD word is set and game-state word +0x08 (the swap mode) is 2.
         60 => p.swing,
+        // SPEC-0035 9c: 37 the Mote panel is open (the camera word is not modelled); 15 the
+        // selection equals the argument (255 none); 16 the owned count of Mote 160 + argument.
+        37 => p.mote_open,
+        15 => node.arg < 100 && p.mote_selection == node.arg || node.arg == 255 && p.mote_selection == 255,
+        16 => p.mote_counts.get(node.arg as usize).is_some_and(|&c| c > 0),
         57 => p.available[0],
         59 => p.available[1],
         58 => p.dead.get(node.arg as usize).copied().unwrap_or(false),
@@ -253,6 +258,11 @@ struct Inputs {
     swing: bool,
     available: [bool; 2],
     dead: [bool; 2],
+    /// The Mote panel: open (slot 37), its selection (slot 15) and the owned counts of Motes 160
+    /// to 173 (slot 16).
+    mote_open: bool,
+    mote_selection: u8,
+    mote_counts: [i32; 14],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -308,6 +318,11 @@ pub fn sync_hud(
     for g in [journal_icon, dpad_icon].into_iter().flatten() {
         subtree(f, g, &mut nodes);
     }
+    // SPEC-0021 / SPEC-0023 section 24: the Mote panel, group node 392.
+    let mote_root = (f.nodes.len() > 392).then_some(392usize);
+    if let Some(g) = mote_root {
+        subtree(f, g, &mut nodes);
+    }
     // SPEC-0023 section 12: the portrait swing's group (the pivot's parent).
     let swing_root = f.key(PIVOT).and_then(|n| f.nodes[n].parent);
     if let Some(g) = swing_root {
@@ -322,6 +337,14 @@ pub fn sync_hud(
     }
     if let Some(g) = pet_panel {
         subtree(f, g, &mut nodes);
+    }
+    if std::env::var_os("NEOPETS_TRACE_HUD_HANDLERS").is_some() {
+        let mut all = Vec::new();
+        subtree(f, 322, &mut all);
+        let mut hs: Vec<(i16, u8, u32)> = all.iter().map(|&n| (f.nodes[n].handler, f.nodes[n].mode, f.nodes[n].key as u32)).filter(|h| h.0 >= 0).collect();
+        hs.sort();
+        hs.dedup();
+        println!("hud handlers {hs:?}");
     }
     let mut panel_nodes = Vec::new();
     for &r in &panels {
@@ -380,6 +403,9 @@ pub fn sync_hud(
         pet: p.pet_kind(),
         hero: p.hero_index,
         swing: hud.swing.active && p.swap_mode == 2,
+        mote_open: p.mote_panel.open,
+        mote_selection: p.mote_panel.selection,
+        mote_counts: std::array::from_fn(|k| count(160 + k as i32)),
         available: hud.swing.available,
         dead: p.state.hero.dead,
         words: std::array::from_fn(|w| p.equipment.motes[p.hero_index.min(1)][w].map_or(-1, i32::from)).map(count),
@@ -486,6 +512,7 @@ pub fn sync_hud(
         };
         let (in_journal, in_dpad) = (under(journal_icon), under(dpad_icon));
         let in_swing = under(swing_root);
+        let in_mote = under(mote_root);
         // Section 12: drawn while the swing is active and the swap mode is 2.
         if in_swing {
             ok &= hud.swing.active && p.swap_mode == 2;
@@ -495,7 +522,9 @@ pub fn sync_hud(
         if in_journal || in_dpad {
             ok &= !p.quick.open && (!in_journal || hud.journal);
         }
-        let top = if in_swing {
+        let top = if in_mote {
+            mote_root.unwrap_or(bars)
+        } else if in_swing {
             swing_root.unwrap_or(bars)
         } else if in_journal {
             journal_icon.unwrap_or(bars)
@@ -540,7 +569,7 @@ pub fn sync_hud(
         let base = f.sprite(n).map_or([128; 4], |sp| sp.colour);
         let rgb = if tinted.contains(&n) { [hud.tint[0], hud.tint[1], hud.tint[2]] } else { [base[0], base[1], base[2]] };
         let c = |v: u8| v as f32 / 128.0;
-        let a = if in_swing {
+        let a = if in_swing || in_mote {
             128
         } else if in_journal {
             hud.journal_alpha()

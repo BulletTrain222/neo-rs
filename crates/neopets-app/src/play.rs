@@ -891,6 +891,10 @@ pub struct Play {
     monster_words: neopets_sim::hud::MonsterWords,
     name_font: Option<(neopets_data::frontend::Font, i32)>,
     pub panel_latch: neopets_sim::quick::PanelInput,
+    /// The second quick panel, the Mote picker (SPEC-0021), its boot direction table, and the
+    /// Square edge it reads (latched like the first panel's buttons).
+    pub mote_panel: neopets_sim::quick::MotePanel,
+    mote_table: [u8; 120],
     /// The shared dialogue box (SPEC-0022) with its speaker name and frame colour, the hero
     /// name colours (design table 10), the "Next" and "Finish" labels (table 13) and the box's
     /// boot words.
@@ -1127,6 +1131,8 @@ impl Play {
         let words = |at: u32, n: usize| neopets_data::archive::boot_u32_table(&boot_bytes, at, n);
         let rows = words(neopets_data::item::QUICK_ROWS, 32)?;
         let quick_rows: [[i32; 8]; 4] = std::array::from_fn(|r| std::array::from_fn(|k| rows[8 * r + k] as i32));
+        let mote_words = words(neopets_sim::quick::MOTE_TABLE_AT, 30)?;
+        let mote_table: [u8; 120] = std::array::from_fn(|k| mote_words[k / 4].to_le_bytes()[k % 4]);
         let heal_tables = (
             words(neopets_data::item::HEAL_A, 4)?.into_iter().map(|w| w as i32).collect(),
             words(neopets_data::item::HEAL_B, 2)?.into_iter().map(|w| w as i32).collect(),
@@ -1568,6 +1574,8 @@ impl Play {
             monster_words,
             name_font,
             panel_latch: Default::default(),
+            mote_panel: Default::default(),
+            mote_table,
             textbox: Default::default(),
             speaker: (Vec::new(), [128; 3]),
             hero_colour,
@@ -6879,11 +6887,55 @@ impl Play {
             panel.cross |= input.jump;
             panel.circle |= input.attack;
         }
-        let inv = &self.state.items;
-        let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
         let was_open = self.quick.open;
         let marker = self.quick.marker;
-        let out = self.quick.tick(panel, self.loco.state != 0x19, &self.quick_rows, &owns);
+        // SPEC-0021 Second quick panel: a Down edge opens it when both panels are closed and the
+        // in-play gate passes (cue 0x9A); while it is open (the first closed) its handler runs,
+        // takes Cross, Square and Circle, and re-arms the equipment panels each call.
+        let mote_was_open = self.mote_panel.open;
+        if !self.quick.open && !self.mote_panel.open && panel.down && self.loco.state != 0x19 && !self.dialogue_open {
+            self.mote_panel.open = true;
+            panel.down = false;
+            self.cue_fixed(0x9A);
+        } else if self.mote_panel.open && !self.quick.open {
+            let mi = neopets_sim::quick::MoteInput {
+                left: panel.left,
+                right: panel.right,
+                up: panel.up,
+                down: panel.down,
+                cross: input.jump,
+                square: input.square,
+                circle: input.attack,
+                triangle: panel.triangle,
+            };
+            let h = self.hero_index.min(1);
+            let words = self.equipment.motes[h];
+            let items = self.state.items.clone();
+            let held = |id: u16| items.get(&id).is_some_and(|&n| n > 0);
+            let r = self.mote_panel.tick(&mi, &self.mote_table, self.shield.is_some(), self.weapon.is_some(), &held, words);
+            panel = neopets_sim::quick::PanelInput::default();
+            if r.moved {
+                self.cue_fixed(0x9A);
+            }
+            match r.word {
+                Some((k, Some(id))) => self.item_command(&crate::menus::Command::EquipMote { word: k, id }),
+                Some((k, None)) => {
+                    if self.equipment.clear_mote(h, k) {
+                        self.cue_fixed(0xA4);
+                    }
+                }
+                None => {}
+            }
+            for w in 0..3 {
+                self.hud.rearm_word(w);
+            }
+        }
+        let inv = &self.state.items;
+        let owns = |id: i32| id >= 0 && inv.get(&(id as u16)).is_some_and(|&n| n > 0);
+        let out = self.quick.tick(panel, self.loco.state != 0x19 && !self.mote_panel.open, &self.quick_rows, &owns);
+        if self.quick.open {
+            self.mote_panel.open = false;
+        }
         // SPEC-0023 section 4: selecting or using a quick item re-arms G0, G1 and C; L3 re-arms
         // every group.
         if out.use_item.is_some() || self.quick.marker != marker {
@@ -6897,6 +6949,12 @@ impl Play {
         if out.consumed || was_open {
             input.jump = false;
             input.attack = false;
+        }
+        // The Mote panel takes Cross, Square and Circle while it is open.
+        if mote_was_open || self.mote_panel.open {
+            input.jump = false;
+            input.attack = false;
+            input.square = false;
         }
         if let Some(id) = out.use_item {
             self.use_item(id as u16);

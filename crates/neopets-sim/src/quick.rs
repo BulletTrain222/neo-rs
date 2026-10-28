@@ -5,8 +5,11 @@
 //! pool heal trunc(T x p / 100 + 1), applied when it is smaller than the missing amount or the
 //! use is forced.
 //!
-//! Not covered: cues, the second (Mote) panel, the three panel-control words, the in-play gate's
-//! hero predicate and game-global words, the charm-only gate and the use hook.
+//! The second quick panel, the Mote picker (SPEC-0021 Second quick panel and Mote equipping):
+//! `MotePanel`.
+//!
+//! Not covered: cues, the three panel-control words, the in-play gate's hero predicate and
+//! game-global words, the charm-only gate and the use hook.
 
 /// The panel's button edges this tick: a direction (0 Right, 1 Up, 2 Left, 3 Down), Cross,
 /// Circle and Triangle.
@@ -143,6 +146,109 @@ impl QuickPanel {
     }
 }
 
+/// SPEC-0021 Second quick panel: the boot direction table at 0x2DCE58, 15 rows of 8 bytes (row
+/// (selection + 1) mod 256; columns Left, Right, Up, Down, Up+Left, Up+Right, Down+Left,
+/// Down+Right).
+pub const MOTE_TABLE_AT: u32 = 0x002D_CE58;
+
+/// The Mote panel's input this tick: the direction edges and the button edges.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MoteInput {
+    pub left: bool,
+    pub right: bool,
+    pub up: bool,
+    pub down: bool,
+    pub cross: bool,
+    pub square: bool,
+    pub circle: bool,
+    pub triangle: bool,
+}
+
+/// What a Mote panel tick asks of the game.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MoteOut {
+    /// Set equipment word k to this Mote (Some) or clear it (None).
+    pub word: Option<(usize, Option<u16>)>,
+    /// A direction edge moved the selection (cue 0x9A).
+    pub moved: bool,
+}
+
+/// The Mote picker: open flag and selection (0 to 13 for Motes 160 to 173, 255 "No Mote").
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct MotePanel {
+    pub open: bool,
+    pub selection: u8,
+}
+
+impl Default for MotePanel {
+    fn default() -> Self {
+        Self { open: false, selection: 255 }
+    }
+}
+
+impl MotePanel {
+    /// The direction column, by the first matching rule of SPEC-0021 item 7 (None with no
+    /// direction).
+    pub fn column(i: &MoteInput) -> Option<usize> {
+        if !(i.left || i.right || i.up || i.down) {
+            return None;
+        }
+        Some(if i.up && i.left {
+            4
+        } else if i.up && i.right {
+            5
+        } else if i.down && i.left {
+            6
+        } else if i.right && i.down {
+            7
+        } else if !i.left && i.right {
+            1
+        } else if !i.left && !i.right {
+            if i.up { 2 } else { 3 }
+        } else {
+            0
+        })
+    }
+
+    /// One handler call while the panel is open (the first panel closed). Triangle closes it;
+    /// Cross equips into word 0, Square into word 1 when a shield is held, Circle into word 2
+    /// when a weapon is held (buttons take priority over the direction); otherwise a direction
+    /// moves the selection through the table. `owns` is the owned count test of a Mote id and
+    /// `words` the hero's three Mote words.
+    pub fn tick(&mut self, i: &MoteInput, table: &[u8; 120], shield: bool, weapon: bool, owns: &dyn Fn(u16) -> bool, words: [Option<u16>; 3]) -> MoteOut {
+        let mut out = MoteOut::default();
+        if i.triangle {
+            self.open = false;
+            return out;
+        }
+        let slot = if i.cross {
+            Some(0)
+        } else if i.square && shield {
+            Some(1)
+        } else if i.circle && weapon {
+            Some(2)
+        } else {
+            None
+        };
+        if i.cross || i.square || i.circle {
+            if let Some(k) = slot {
+                let id = 160 + self.selection as u16;
+                let equip = self.selection != 255 && owns(id) && words[k] != Some(id);
+                out.word = Some((k, equip.then_some(id)));
+            }
+            return out;
+        }
+        if let Some(c) = Self::column(i) {
+            let row = (self.selection as usize + 1) % 256;
+            if let Some(&next) = table.get(row * 8 + c) {
+                self.selection = next;
+            }
+            out.moved = true;
+        }
+        out
+    }
+}
+
 /// SPEC-0021 Consumable healing for one pool: the new current value when the use heals, else
 /// None. `table` is T for the active hero, `percent` the item's stat (100 for the full
 /// restores).
@@ -158,6 +264,36 @@ pub fn heal(table: i32, percent: i32, current: i32, max: i32, forced: bool) -> O
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mote_panel_vectors() {
+        // SPEC-0021 test vectors on a synthetic table holding the spec's entries: from 255,
+        // Left 12, Right 13, Up+Left 2; from 0, Right 1.
+        let mut table = [255u8; 120];
+        (table[0], table[1], table[4]) = (12, 13, 2);
+        table[8 + 1] = 1;
+        let none = |_: u16| false;
+        let mv = |sel: u8, i: MoteInput| {
+            let mut p = MotePanel { open: true, selection: sel };
+            p.tick(&i, &table, true, true, &none, [None; 3]);
+            p.selection
+        };
+        assert_eq!(mv(255, MoteInput { left: true, ..Default::default() }), 12);
+        assert_eq!(mv(255, MoteInput { right: true, ..Default::default() }), 13);
+        assert_eq!(mv(255, MoteInput { up: true, left: true, ..Default::default() }), 2);
+        assert_eq!(mv(0, MoteInput { right: true, ..Default::default() }), 1);
+        // Equip and clear: Circle equips an owned Mote into word 2; pressing it again clears;
+        // Square without a shield does nothing; Cross with "No Mote" clears word 0.
+        let owns = |id: u16| id == 160;
+        let mut p = MotePanel { open: true, selection: 0 };
+        let circle = MoteInput { circle: true, ..Default::default() };
+        assert_eq!(p.tick(&circle, &table, true, true, &owns, [None; 3]).word, Some((2, Some(160))));
+        assert_eq!(p.tick(&circle, &table, true, true, &owns, [None, None, Some(160)]).word, Some((2, None)));
+        assert_eq!(p.tick(&MoteInput { square: true, ..Default::default() }, &table, false, true, &owns, [None; 3]).word, None);
+        p.selection = 255;
+        assert_eq!(p.tick(&MoteInput { cross: true, ..Default::default() }, &table, true, true, &owns, [Some(160), None, None]).word, Some((0, None)));
+        assert!(!{ p.tick(&MoteInput { triangle: true, ..Default::default() }, &table, true, true, &owns, [None; 3]); p.open });
+    }
 
     const ROWS: [[i32; 8]; 4] = [
         [145, 54, 51, 52, 53, -1, -1, -1],
