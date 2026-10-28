@@ -10,7 +10,8 @@
 //! The D-pad hint's timer D and alpha (section 9) and the journal-notification icon's flag,
 //! phase and alpha (section 8).
 //!
-//! The hero-switch portrait swing (section 12): `Swing`.
+//! The hero-switch portrait swing (section 12): `Swing`. The icon tweens (section 11.1): `Tween`
+//! and the six-slot pool, started from the host's requests (`TweenRequest`).
 //!
 //! Not covered: the loss effects, the petpet meter and the countdown texts.
 
@@ -93,12 +94,15 @@ pub struct Hud {
     pub journal_phase: f32,
     /// The hero-switch portrait swing (section 12).
     pub swing: Swing,
+    /// The icon tween pool (section 11.1; six slots) and the requests not yet turned into tweens.
+    pub tweens: Vec<Tween>,
+    pub tween_requests: Vec<TweenRequest>,
 }
 
 impl Default for Hud {
     fn default() -> Self {
         // The full reset after a load: all timers 0, C = -1.
-        Self { c: -1, g0: 0, g1: 0, g: [0; 3], panel_alpha: [128; 4], watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default(), d: 0, journal: false, journal_phase: 0.0, swing: Swing::default() }
+        Self { c: -1, g0: 0, g1: 0, g: [0; 3], panel_alpha: [128; 4], watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default(), d: 0, journal: false, journal_phase: 0.0, swing: Swing::default(), tweens: Vec::new(), tween_requests: Vec::new() }
     }
 }
 
@@ -179,6 +183,82 @@ impl Swing {
     }
 }
 
+/// SPEC-0023 section 11.1: a tween's request, by HUD element keys (the host does not know the
+/// canvas layout; the HUD view turns a request into a tween).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum TweenRequest {
+    /// The quick-item marker moved to entry k: the item's icon flies in from cross icon k to
+    /// the selected-item icon (0xA1), fading in.
+    Quick { entry: usize },
+    /// A Mote equipped from the Mote panel's selection into equipment word k: its icon flies in
+    /// from the panel cell to the word's equipment icon.
+    Mote { selection: u8, word: usize },
+}
+
+/// Fly-in and fly-out speeds, canvas units per second (0x2DCE2C, 0x2DCED0).
+pub const FLY_IN: f32 = 800.0;
+pub const FLY_OUT: f32 = 100.0;
+
+/// One icon tween: the moved node, its start and end canvas points, speed and length, the
+/// start and end colours (128 = 1.0), the elapsed time, and the current rounded position and
+/// colour.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Tween {
+    pub node: usize,
+    from: [f32; 2],
+    to: [f32; 2],
+    speed: f32,
+    length: f32,
+    c0: [f32; 4],
+    c1: [f32; 4],
+    elapsed: f32,
+    pub pos: [i32; 2],
+    pub colour: [u8; 4],
+    pub live: bool,
+}
+
+impl Tween {
+    pub fn new(node: usize, from: [f32; 2], to: [f32; 2], speed: f32, c0: [u8; 4], c1: [u8; 4]) -> Self {
+        let length = ((to[0] - from[0]).powi(2) + (to[1] - from[1]).powi(2)).sqrt();
+        let f = |c: [u8; 4]| c.map(f32::from);
+        let mut t = Self { node, from, to, speed, length, c0: f(c0), c1: f(c1), elapsed: 0.0, pos: [0; 2], colour: [0; 4], live: true };
+        t.write(0.0, f(c0));
+        t
+    }
+
+    /// The duration T = distance / speed, in seconds.
+    pub fn duration(&self) -> f32 {
+        if self.speed > 0.0 { self.length / self.speed } else { 0.0 }
+    }
+
+    fn write(&mut self, along: f32, c: [f32; 4]) {
+        let k = if self.length > 0.0 { along / self.length } else { 1.0 };
+        self.pos = [0, 1].map(|i| round_away(self.from[i] + (self.to[i] - self.from[i]) * k));
+        self.colour = [0, 1, 2, 3].map(|i| round_away(c[i]).clamp(0, if i == 3 { 128 } else { 255 }) as u8);
+    }
+
+    /// One tick (frame step 1/60): the position moves speed x step along the line, the colour
+    /// by one step's change, the elapsed time by the step; at T both snap to the end values and
+    /// the tween ends after this tick.
+    pub fn step(&mut self) {
+        if !self.live {
+            return;
+        }
+        let dt = 1.0 / 60.0;
+        let t_end = self.duration();
+        self.elapsed += dt;
+        if self.elapsed >= t_end {
+            let c1 = self.c1;
+            self.write(self.length, c1);
+            self.live = false;
+            return;
+        }
+        let frac = if t_end > 0.0 { self.elapsed / t_end } else { 1.0 };
+        let c: [f32; 4] = std::array::from_fn(|i| self.c0[i] + (self.c1[i] - self.c0[i]) * frac);
+        self.write(self.speed * self.elapsed, c);
+    }
+}
+
 /// Round half away from zero.
 fn round_away(x: f32) -> i32 {
     if x < 0.0 { -((-x + 0.5).floor()) as i32 } else { (x + 0.5).floor() as i32 }
@@ -202,6 +282,16 @@ impl Hud {
         round_away(64.0 * (1.0 + p)).clamp(0, 255) as u8
     }
 
+    /// Section 11.1: start a tween; one already on the same node is cancelled first, and the
+    /// pool holds six (the oldest is dropped when full).
+    pub fn start_tween(&mut self, t: Tween) {
+        self.tweens.retain(|o| o.node != t.node && o.live);
+        if self.tweens.len() >= 6 {
+            self.tweens.remove(0);
+        }
+        self.tweens.push(t);
+    }
+
     /// Section 8: a progress flag with a journal record set for the first time.
     pub fn notify_journal(&mut self) {
         self.journal = true;
@@ -216,6 +306,9 @@ impl Hud {
         }
         if self.journal {
             self.journal_phase += 0.15;
+        }
+        for t in &mut self.tweens {
+            t.step();
         }
     }
 }
@@ -399,6 +492,32 @@ impl MonsterBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn icon_tweens() {
+        // Section 11.1 vectors: the quick-item fly-in from (300, 200) to (300, 320) at 800, 9
+        // ticks, y 213 and alpha 14 after tick 1, the end values after tick 9.
+        let mut t = Tween::new(1, [300.0, 200.0], [300.0, 320.0], FLY_IN, [128, 128, 128, 0], [128, 128, 128, 128]);
+        assert!((t.duration() - 0.15).abs() < 1e-6);
+        t.step();
+        assert_eq!((t.pos, t.colour[3]), ([300, 213], 14));
+        let ticks = 1 + (0..20).take_while(|_| { t.step(); t.live }).count();
+        assert_eq!((ticks + 1, t.pos, t.colour[3]), (9, [300, 320], 128));
+        // The Mote fly-out from (100, 50) up 30 at 100: alpha 200 limited to 128, 122 after
+        // tick 7, 0 at the end (18 ticks).
+        let mut o = Tween::new(2, [100.0, 50.0], [100.0, 20.0], FLY_OUT, [128, 128, 128, 200], [128, 128, 128, 0]);
+        o.step();
+        assert_eq!(o.colour[3], 128);
+        (0..6).for_each(|_| o.step());
+        assert_eq!(o.colour[3], 122);
+        (0..11).for_each(|_| o.step());
+        assert!(!o.live && o.pos == [100, 20] && o.colour[3] == 0);
+        // A new tween on the same node replaces the old one.
+        let mut h = Hud::default();
+        h.start_tween(Tween::new(5, [0.0, 0.0], [10.0, 0.0], FLY_IN, [128; 4], [128; 4]));
+        h.start_tween(Tween::new(5, [0.0, 0.0], [20.0, 0.0], FLY_IN, [128; 4], [128; 4]));
+        assert_eq!(h.tweens.len(), 1);
+    }
 
     #[test]
     fn portrait_swing() {

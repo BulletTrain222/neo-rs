@@ -280,7 +280,7 @@ struct Inputs {
 #[allow(clippy::too_many_arguments)]
 pub fn sync_hud(
     mut commands: Commands,
-    state: Option<Res<PlayState>>,
+    state: Option<ResMut<PlayState>>,
     art: Option<ResMut<HudArt>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
@@ -293,9 +293,43 @@ pub fn sync_hud(
     mut value_images: Local<HashMap<(usize, String), (Handle<Image>, u32, u32, i32)>>,
     mut prices: Query<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>)>,
 ) {
-    let (Some(state), Some(mut art)) = (state, art) else { return };
+    let (Some(mut state), Some(mut art)) = (state, art) else { return };
     let HudArt { f, mem, images: cache, name: name_image } = &mut *art;
     let f: &Frontend = f;
+    // SPEC-0023 section 11.1: the host's tween requests become tweens between two nodes' canvas
+    // points: the quick fly-in moves 0xA1 from cross icon k, fading in; a Mote fly-in moves the
+    // word's equipment icon (keys 164, 166 and 162 for words 0, 1 and 2) from the panel cell of
+    // the selection (the handler-15 node with that argument under group 392).
+    if !state.play.hud.tween_requests.is_empty() {
+        let zero: HashMap<usize, i32> = HashMap::new();
+        let none: HashMap<usize, (i32, i32, f32)> = HashMap::new();
+        let canvas = |n: usize| {
+            let (x, y, _, _) = place(f, n, &zero, &zero, &none);
+            [x, y]
+        };
+        let requests = std::mem::take(&mut state.play.hud.tween_requests);
+        for r in requests {
+            let made = match r {
+                neopets_sim::hud::TweenRequest::Quick { entry } => {
+                    let from = [0x9C, 0x9B, 0x9E, 0x9D].get(entry).and_then(|&k| f.key(k));
+                    from.zip(f.key(0xA1)).map(|(a, b)| neopets_sim::hud::Tween::new(b, canvas(a), canvas(b), neopets_sim::hud::FLY_IN, [128, 128, 128, 0], [128; 4]))
+                }
+                neopets_sim::hud::TweenRequest::Mote { selection, word } => {
+                    let mut cells = Vec::new();
+                    if f.nodes.len() > 392 {
+                        subtree(f, 392, &mut cells);
+                    }
+                    let cell = cells.into_iter().find(|&n| f.nodes[n].handler == 15 && f.nodes[n].arg == selection);
+                    let icon = [164u32, 166, 162].get(word).and_then(|&k| f.key(k));
+                    cell.zip(icon).map(|(a, b)| neopets_sim::hud::Tween::new(b, canvas(a), canvas(b), neopets_sim::hud::FLY_IN, [128; 4], [128; 4]))
+                }
+            };
+            if let Some(t) = made {
+                state.play.hud.start_tween(t);
+            }
+        }
+    }
+    let state = state.into_inner();
     let Some(window) = windows.iter().next() else { return };
     let p = &state.play;
     let s = (window.width() / 512.0).min(window.height() / 448.0);
@@ -442,6 +476,9 @@ pub fn sync_hud(
     ]
     .into_iter()
     .collect();
+    // A live tween writes its moved node's canvas position (as an offset from the parent's
+    // placement) and its colour on that node's subtree.
+    let tweened: Vec<neopets_sim::hud::Tween> = hud.tweens.iter().filter(|t| t.live).copied().collect();
     // The swing's placements of the two portrait groups.
     let mut ov: HashMap<usize, (i32, i32, f32)> = HashMap::new();
     if let Some(pv) = f.key(PIVOT) {
@@ -452,6 +489,16 @@ pub fn sync_hud(
                 ov.insert(n, placed[k]);
             }
         }
+    }
+    for t in &tweened {
+        let node = f.nodes[t.node];
+        let (px, py, psx, psy) = match node.parent {
+            Some(par) if !node.absolute => place(f, par, &HashMap::new(), &HashMap::new(), &ov),
+            _ => (0.0, 0.0, 1.0, 1.0),
+        };
+        let lx = ((t.pos[0] as f32 - px) / psx.max(1e-6)).round() as i32;
+        let ly = ((t.pos[1] as f32 - py) / psy.max(1e-6)).round() as i32;
+        ov.insert(t.node, (lx, ly, node.scale_x as f32 / 4096.0));
     }
     let xs: HashMap<usize, i32> = [
         (key(HEALTH_CAP), hud.health.cap_x),
@@ -588,7 +635,10 @@ pub fn sync_hud(
         let base = f.sprite(n).map_or([128; 4], |sp| sp.colour);
         let rgb = if tinted.contains(&n) { [hud.tint[0], hud.tint[1], hud.tint[2]] } else { [base[0], base[1], base[2]] };
         let c = |v: u8| v as f32 / 128.0;
-        let a = if in_swing || in_mote {
+        let tween_alpha = tweened.iter().find(|t| under(Some(t.node))).map(|t| t.colour[3]);
+        let a = if let Some(ta) = tween_alpha {
+            ta
+        } else if in_swing || in_mote {
             128
         } else if in_journal {
             hud.journal_alpha()

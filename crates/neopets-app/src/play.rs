@@ -6921,7 +6921,10 @@ impl Play {
                 self.cue_fixed(0x9A);
             }
             match r.word {
-                Some((k, Some(id))) => self.item_command(&crate::menus::Command::EquipMote { word: k, id }),
+                Some((k, Some(id))) => {
+                    self.item_command(&crate::menus::Command::EquipMote { word: k, id });
+                    self.hud.tween_requests.push(neopets_sim::hud::TweenRequest::Mote { selection: self.mote_panel.selection, word: k });
+                }
                 Some((k, None)) => {
                     if self.equipment.clear_mote(h, k) {
                         self.cue_fixed(0xA4);
@@ -6941,6 +6944,10 @@ impl Play {
         }
         // SPEC-0023 section 4: selecting or using a quick item re-arms G0, G1 and C; L3 re-arms
         // every group.
+        // SPEC-0023 section 11.1: the marker moved to a chosen entry: its icon flies in.
+        if self.quick.marker != marker && self.quick.marker >= 0 && self.quick.selection < 4 {
+            self.hud.tween_requests.push(neopets_sim::hud::TweenRequest::Quick { entry: self.quick.selection });
+        }
         if out.use_item.is_some() || self.quick.marker != marker {
             self.hud.rearm_quick();
         }
