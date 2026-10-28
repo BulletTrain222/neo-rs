@@ -11214,6 +11214,11 @@ impl Play {
         if self.hero_hp > 0 && (self.hero_hp as f32) < 0.15 * self.hero_max as f32 {
             self.sound.play(snd::MAIN, 157, Play { do_not_restart: true, ..Default::default() });
         }
+        // Independently, low magic: cue 158 while the magic pool is below 0.15 of its maximum
+        // (SPEC-0036 Low-health warning; the same hero and the same do-not-restart rule).
+        if self.hero_mp_max > 0 && (self.hero_mp as f32) < 0.15 * self.hero_mp_max as f32 {
+            self.sound.play(snd::MAIN, 158, Play { do_not_restart: true, ..Default::default() });
+        }
         self.creature_sounds();
         self.emitters();
         let finished = std::mem::take(&mut self.sound_finished);
