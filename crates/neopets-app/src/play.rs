@@ -2571,7 +2571,15 @@ impl Play {
                     let c = self.entity_mut(pack, entity)?;
                     c.held = false;
                     c.script_walk = None;
-                    c.anim.play(0);
+                    // ReleaseEntityControl (row 107) requests no animation; ReturnEntityAnimToIdle
+                    // (row 110) asks for the entity's own idle, which is animation 0 for
+                    // townsfolk. A boss's controller picks its own clips (the Juppie's 0 is a
+                    // death clip, and playing it at the intro's release made the hub sink it
+                    // again; SPEC-0015 Start of the fight), so a boss keeps its clip.
+                    let boss = c.boss.is_some() || c.gnarfas.is_some() || c.king.is_some() || c.knight.is_some() || c.gelert.is_some() || c.sister.is_some() || c.draik.is_some() || c.faerie.is_some() || c.serpent.is_some() || c.ixi.is_some();
+                    if !boss {
+                        c.anim.play(0);
+                    }
                 }
                 Action::Agro { entity } => {
                     let hero = self.loco.position();
@@ -6461,6 +6469,11 @@ impl Play {
             let frames = c.anim.bone_frames();
             let head = frames.get(neopets_sim::juppie::HEAD_BONE).map_or([c.position[0], c.position[1] + 2.0, c.position[2]], |f| place.mul(f).t);
             let clip = c.anim.clip_state();
+            // NEOPETS_TRACE_JUPPIE: the state, clip, progress and the root and head heights.
+            if std::env::var_os("NEOPETS_TRACE_JUPPIE").is_some() {
+                let root = frames.first().map_or(0.0, |f| place.mul(f).t[1]);
+                println!("      juppie tick {}: {:?} stage {} clip {} {:.2} root y {:.2} head y {:.2}", self.ticks, c.boss.as_ref().map(|b| b.top), c.boss.as_ref().map_or(0, |b| b.stage), clip.action, clip.progress, root, head[1]);
+            }
             let v = neopets_sim::juppie::View {
                 position: c.position,
                 facing: c.facing,
