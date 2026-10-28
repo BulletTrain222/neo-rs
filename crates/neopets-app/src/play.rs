@@ -9710,13 +9710,16 @@ impl Play {
                 let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
                 caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
             });
-            // The weak points: (bone, radius, length) by part.
+            // The weak points: (joint, radius, length) by part, the selectors 37, 34, 24, 9, 4 and
+            // 7 in the order left knee, right knee, left under-arm, right under-arm, back, neck
+            // (SPEC-0012 Open question 21); the cylinder runs from the joint along the frame's
+            // second basis vector.
             let part_shape = |k: usize| -> Option<Cylinder> {
                 let (bone, radius, length) = match k {
-                    kn::LEFT_KNEE => (0x22, 1.5, 2.0),
-                    kn::RIGHT_KNEE => (0x25, 1.5, 2.0),
-                    kn::LEFT_ARM => (0x09, 2.0, 2.5),
-                    kn::RIGHT_ARM => (0x18, 2.0, 2.5),
+                    kn::LEFT_KNEE => (37, 1.5, 2.0),
+                    kn::RIGHT_KNEE => (34, 1.5, 2.0),
+                    kn::LEFT_ARM => (24, 2.0, 2.5),
+                    kn::RIGHT_ARM => (9, 2.0, 2.5),
                     kn::BACK => (0x04, 1.5, 2.0),
                     _ => (0x07, 2.5, 2.0),
                 };

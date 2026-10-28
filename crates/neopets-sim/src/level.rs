@@ -1610,12 +1610,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             // Triggers 16 to 19: the breakable routine (27).
             v.extend((16..=19).map(|i| reg(i, 27)));
             v.extend([reg(3, 56), Action::LoadRegion { slot: 0, region: Some(759) }, Action::LoadRegion { slot: 1, region: Some(771) }, Action::WheelPattern]);
+            // SPEC-0031 R-0111: object 2's cue 6 (no caller gate).
+            v.extend(obj_sounds(&[(2, 6, 0.0)]));
             v
         }
         // SPEC-0041 1249 Init: by flag 80 the levers' up objects (47, 43, 45) or down objects (48,
         // 44, 46) with the other object sets of each branch; effects 0 to 15 stopped; the levers
-        // CB6 to CB8 on triggers 18, 16 and 17 and CB10 on 0. The object-swap callbacks CB1 to
-        // CB5 (Medium) and AddAnimObjSound are not reproduced.
+        // CB6 to CB8 on triggers 18, 16 and 17 and CB10 on 0; the 31 object sounds after the join
+        // (SPEC-0031 R-0111). The object-swap callbacks CB1 to CB5 (Medium) are not reproduced.
         1249 => {
             let up = state.flag(80);
             let objs: &[usize] = if up { &[13, 16, 20, 24, 10, 17, 21, 25, 47, 43, 45, 9, 1, 5, 7, 6] } else { &[13, 16, 20, 24, 10, 15, 19, 23, 48, 44, 46, 8, 0, 2, 4, 3] };
@@ -1625,6 +1627,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             v.extend((0..=15).map(|slot| Action::StopEffect { slot }));
             v.extend([reg(18, 6), reg(16, 7), reg(17, 8), reg(0, 10)]);
+            let mut snd = vec![(0, 8, 0.0), (1, 9, 0.7), (8, 8, 0.0), (10, 9, 0.0), (11, 5, 0.0), (12, 8, 0.2), (13, 6, 0.0), (14, 5, 0.0), (15, 8, 0.0), (16, 6, 0.0), (17, 9, 0.0), (18, 5, 0.0), (19, 8, 0.0), (20, 6, 0.0), (21, 9, 0.0), (22, 5, 0.0), (23, 8, 0.0), (24, 6, 0.0), (25, 9, 0.0)];
+            snd.splice(2..2, (2..=7).map(|o| (o, 13, 0.0)));
+            snd.extend((43..=48).map(|o| (o, 12, 0.5)));
+            v.extend(obj_sounds(&snd));
             v
         }
         // SPEC-0041 1247 Init: effect 0 stopped; with flag 78 set its 18 objects, else its 17 and
@@ -1638,6 +1644,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([2, 3, 7, 8, 10, 12, 15, 16, 18, 23, 24, 26, 29, 31, 32, 34, 5].map(|obj| Action::InitObjOn { obj, end: false }));
                 v.push(reg(4, 7));
             }
+            // SPEC-0031 R-0111: the 32 object sounds after the flag-78 join, in site order.
+            let pairs = [(2, 5), (3, 8), (6, 5), (7, 6), (8, 8), (10, 8), (11, 9), (11, 9), (22, 5), (23, 6), (24, 8), (26, 8), (29, 8), (25, 9), (27, 9), (28, 9), (30, 5), (31, 6), (32, 8), (34, 8), (33, 9), (35, 9), (13, 5), (12, 6), (14, 5), (15, 6), (16, 8), (18, 8), (17, 9), (19, 9), (5, 8), (4, 9)];
+            v.extend(obj_sounds(&pairs.map(|(o, c)| (o, c, 0.0))));
             v
         }
         // SPEC-0041 1130 Init: with flag 675 clear objects 0, 29, 31, 33, 27, 1, 12, 15, 18 and 11
@@ -1903,17 +1912,21 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 76 is clear and returns the normal camera. Its blackboard message's values are not
         // given; the proximity and on-enter routines are fixed rules. The shared entity-control
         // routine (Update) is not reproduced.
-        // SPEC-0042 1081 Init: groups 0 to 2's effects stopped; with 41 clear objects 6, 8, 7 and 3
-        // at their start, else 5 and 8 at their end; T0 on trigger 0. T2 (its step order is Low in
-        // the spec) and the breakable are not built.
+        // SPEC-0042 1081 Init: T2 on trigger 2; groups 0 to 2's effects stopped; with 41 clear
+        // objects 6, 8, 7 and 3 at their start, else 5 and 8 at their end and breakable 0
+        // inactive; T0 on trigger 0. Breakable handler B makes no calls.
         1081 => {
-            let mut v: Vec<Action> = (0..=2).map(|group| Action::GroupEffectsStop { group }).collect();
+            let mut v: Vec<Action> = vec![reg(2, 2)];
+            v.extend((0..=2).map(|group| Action::GroupEffectsStop { group }));
             if state.flag(41) {
                 v.extend([5, 8].map(|obj| Action::InitObjOn { obj, end: true }));
+                v.push(Action::SetBreakableActive { id: 0, on: false });
             } else {
                 v.extend([6, 8, 7, 3].map(|obj| Action::InitObjOn { obj, end: false }));
             }
             v.push(reg(0, 0));
+            // SPEC-0031 R-0111: at the end of Init, after the flag-41 join.
+            v.extend(obj_sounds(&[(6, 5, 0.0), (5, 6, 0.0)]));
             v
         }
         // SPEC-0042 1077 (run as pack 1129) Init: 35; by 38 objects 24 and 46 (and 12), by 36
@@ -2109,6 +2122,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([reg(PADS_1381[k], 1), reg(TARGETS_1381[k], 3), reg(AREAS_1381[k], 2), reg(GOALS_1381[k], 7), reg(ARMS_1381[k], 8)]);
             }
             v.push(reg(34, 4));
+            // SPEC-0031 R-0111: the helper's 19 object sounds (cue 7, and object 18's cue 8).
+            let mut snd: Vec<(usize, i32, f32)> = [50, 51, 52, 53, 54, 55, 58, 62, 66, 70, 74, 78, 170, 173, 176, 179, 182, 185].map(|o| (o, 7, 0.0)).to_vec();
+            snd.push((18, 8, 0.0));
+            v.extend(obj_sounds(&snd));
             v
         }
         // SPEC-0041 1090 Init: 314 and 42; the hurt triggers of bank A (1 to 7) and bank B (8 to
@@ -2736,6 +2753,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                     v.extend(thread6_1398(j));
                 }
             }
+            // SPEC-0031 R-0111: the nine object sounds after the state-106 join.
+            v.extend(obj_sounds(&[(1, 7, 0.0), (2, 7, 0.0), (5, 7, 0.0), (6, 7, 0.0), (7, 7, 0.0), (9, 7, 0.0), (3, 8, 0.0), (4, 8, 0.0), (8, 8, 0.0)]));
             v.extend([Action::LoadRegion { slot: 1, region: Some(1404) }, Action::ReturnCamera { preset: -1, release: true }]);
             v
         }
@@ -2996,33 +3015,31 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 Action::LoadRegion { slot: 0, region: Some(if state.flag(86) { 995 } else { 1000 }) },
             ]
         }
-        // SPEC-0039 886 Init: handler 1 on trigger 5, 2 on 2, 4 on 0; object 3 off while 250 is
-        // clear; 249 set when 248 is set, 249 clear and movie 30 not played; thread 3 (SPEC-0039, R-0096 answered) loads the
-        // first stored slot (0) with set 3, 2, 1 or 0 by the first set flag of 52, 51, 50 and 251
-        // (flag 49 is not read); with all four clear, flag 250 set loads set 4 into the third
-        // slot (2), and flag 250 clear set 5 into the second (1), then unhides entities 16 to 18
-        // (taken as ActivateEntity; the call is not named) and sets agro on 16 and 17. Region
-        // 887 + set. With 252 clear, collision mask 1.
+        // SPEC-0039 886 Init: handler 1 on trigger 5 and 2 on 2. Only with 250 clear: object 3, 249
+        // set when 248 is set, 249 clear and movie 30 not played, the slots and thread 3 (it loads
+        // the first slot with set 3, 2, 1 or 0 by the first set flag of 52, 51, 50 and 251, flag
+        // 49 not read; with all four clear set 5 into the second slot, DisableInvisibility for
+        // entities 16 to 18 and agro on 16 and 17), trigger 0 (handler 4) and, with 252 clear,
+        // collision mask 1. With 250 set no slot or thread is made (the set-4 branch is not
+        // reached). Region 887 + set.
         886 => {
             let mut v = vec![reg(5, 1), reg(2, 2)];
             if !state.flag(250) {
                 v.push(Action::InitObjOn { obj: 3, end: false });
-            }
-            if state.flag(248) && !state.flag(249) && !state.movies.contains(&30) {
-                state.set(249, true);
-            }
-            if let Some(set) = [(52, 3), (51, 2), (50, 1), (251, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
-                v.push(Action::LoadRegion { slot: 0, region: Some(887 + set) });
-            } else if state.flag(250) {
-                v.push(Action::LoadRegion { slot: 2, region: Some(891) });
-            } else {
-                v.push(Action::LoadRegion { slot: 1, region: Some(892) });
-                v.extend((16..=18).map(|entity| Action::ActivateEntity { entity }));
-                v.extend([Action::Agro { entity: 16 }, Action::Agro { entity: 17 }]);
-            }
-            v.push(reg(0, 4));
-            if !state.flag(252) {
-                v.push(Action::CollisMask { mask: 1 });
+                if state.flag(248) && !state.flag(249) && !state.movies.contains(&30) {
+                    state.set(249, true);
+                }
+                if let Some(set) = [(52, 3), (51, 2), (50, 1), (251, 0)].into_iter().find(|&(f, _)| state.flag(f)).map(|(_, j)| j) {
+                    v.push(Action::LoadRegion { slot: 0, region: Some(887 + set) });
+                } else {
+                    v.push(Action::LoadRegion { slot: 1, region: Some(892) });
+                    v.extend((16..=18).map(|entity| Action::DisableInvisibility { entity }));
+                    v.extend([Action::Agro { entity: 16 }, Action::Agro { entity: 17 }]);
+                }
+                v.push(reg(0, 4));
+                if !state.flag(252) {
+                    v.push(Action::CollisMask { mask: 1 });
+                }
             }
             v
         }
@@ -4531,6 +4548,12 @@ fn plate2_1324(index: u16, s: &mut GameState) -> Vec<Action> {
         Action::ReturnCamera { preset: -1, release: true },
     ]);
     v
+}
+
+/// AddAnimObjSound registrations over (start, 1.0) (SPEC-0031 Call-site arguments and gates,
+/// R-0111): (object, cue, start fraction).
+fn obj_sounds(list: &[(usize, i32, f32)]) -> Vec<Action> {
+    list.iter().map(|&(obj, cue, a)| Action::AddAnimObjSound { obj, cue, a, b: 1.0 }).collect()
 }
 
 /// SPEC-0041 1324's solved-scene helper (see the stage-1 plate callback).
@@ -6725,6 +6748,66 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         // SPEC-0042 1081 T0 (trigger 0, the hero): the fade, 314 and 315, the load of eW 105.
+        // SPEC-0042 1081 T2 (trigger 2, entering, flag 41 clear): the hero to locator 2, object 6
+        // (its cue 5), camera 5, 0.5 s, shake (0.5 s, 0.3); group 1's effect; 1 s, camera 4, 2 s,
+        // a 0.5 s fade out, the camera back, object 4, a fade in. With AI 14, 13 and 12 none
+        // active (taken as all dead): the reward scene (the hero to locator 3, camera 8, group 0's
+        // effect, shake (2 s, 1), breakable 0 broken, object 3 played, the walk to locator 4, hero
+        // animations 178 and 164, camera 9, object 3 off, item 103, flag 313, the weapon drawn,
+        // camera 7, objects 6, 4 and 7 off, object 5 on and played (its cue 6), object 8 played,
+        // the camera back, a fade in, flag 41); otherwise those still active turn aggressive
+        // (Low for the branch order).
+        (1081, 2) if call.object && call.state == 1 && !state.flag(41) => {
+            let v = &mut out.actions;
+            v.extend([
+                Action::MoveHero { locator: 2 },
+                Action::PlayAnim { obj: 6, speed: 1.0, wait: false },
+                Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                wait(0.5),
+                Action::CameraShakeMode { kind: 0, duration: 0.5, strength: 0.3 },
+                Action::GroupEffects { group: 1 },
+                wait(1.0),
+                camera(4),
+                wait(2.0),
+                Action::FadeOut { seconds: 0.5, wait: true },
+                release_camera(),
+                Action::InitObjOn { obj: 4, end: false },
+                Action::FadeIn { seconds: 0.5, wait: false },
+            ]);
+            let alive: Vec<usize> = [14, 13, 12].into_iter().filter(|e| !state.ai_dead.contains(e)).collect();
+            if alive.is_empty() {
+                state.set(313, true);
+                state.set(41, true);
+                v.extend([
+                    Action::FadeOut { seconds: 0.5, wait: true },
+                    Action::MoveHero { locator: 3 },
+                    Action::FadeIn { seconds: 0.5, wait: false },
+                    camera(8),
+                    Action::GroupEffects { group: 0 },
+                    Action::CameraShakeMode { kind: 0, duration: 2.0, strength: 1.0 },
+                    Action::Break { id: 0 },
+                    Action::PlayAnim { obj: 3, speed: 1.0, wait: false },
+                    Action::WalkHero { locator: 4, wait: true, orient: true },
+                    Action::HeroAnim { anim: 178, wait: true },
+                    Action::HeroAnim { anim: 164, wait: true },
+                    camera(9),
+                    Action::DeactivateObj { obj: 3 },
+                    Action::GiveItem { item: 103, count: 1 },
+                    Action::Equip { on: true },
+                    camera(7),
+                    Action::DeactivateObj { obj: 6 },
+                    Action::DeactivateObj { obj: 4 },
+                    Action::DeactivateObj { obj: 7 },
+                    Action::InitObjOn { obj: 5, end: false },
+                    Action::PlayAnim { obj: 5, speed: 1.0, wait: false },
+                    Action::PlayAnim { obj: 8, speed: 1.0, wait: false },
+                    release_camera(),
+                    Action::FadeIn { seconds: 1.0, wait: false },
+                ]);
+            } else {
+                v.extend(alive.into_iter().map(|entity| Action::Agro { entity }));
+            }
+        }
         (1081, 0) if call.object && state.word(pack, 1) == 0 => {
             state.set_word(pack, 1, 1);
             state.set(314, true);
@@ -12671,6 +12754,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 _ => None,
             };
             let mut actions: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
+            // SPEC-0021 Item 36: the stage-6 return to locator 28 grants one Rope Gun when flag 6
+            // (Free Tor's Farm) is set (the scene's staging is not reproduced).
+            if locator == Some(28) && state.flag(6) {
+                actions.push(Action::GiveItem { item: 36, count: 1 });
+            }
             actions.extend(farm_slots(state, message == 10));
             // The talk thread's round-up flags: one already set when the world becomes current
             // counts as seen, so only a flag that rises during the visit plays its talk (the
