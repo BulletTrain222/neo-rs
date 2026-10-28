@@ -10097,14 +10097,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 release_camera(),
             ]);
         }
-        // Triggers 17 to 20, the switches (Medium in the spec): while the switch object (15, 17,
-        // 19 or 21) stands (words 17 to 20 mark it swapped), the Square context 4; a press, when
-        // the switch is usable, walks the hero to locator 100 to 103, plays hero animation 140
-        // and the object, and swaps it for 16, 18, 20 or 22; 17 also sets flag 15 when clear and
-        // clears the teleport-6 word; 18 plays camera 7, 19 camera 4, 20 object 7 and camera 5;
-        // then the camera returns. Not usable: line 18. Usable is taken as s 30 or 31, or flag
-        // 167 clear, for every index (the spec ties the test to the index without saying how,
-        // R-0113). Entering 19 stops effects 9 and 10.
+        // Triggers 17 to 20, the switches (SPEC-0045 1098, R-0113; High for the gates): while the
+        // switch object (15, 17, 19 or 21) stands (words 17 to 20 mark it swapped), the Square
+        // context 4; a new press passes its own gate (17 and 20: stage 31; 18: flag 162 set and
+        // 167 clear; 19: stage 30), then walks the hero to locator 100 to 103, plays hero
+        // animation 140 and the object, and swaps it for 16, 18, 20 or 22; 17 also sets flag 15
+        // when clear and clears the teleport-6 word; 18 plays camera 7 and hero animation 0, 19
+        // camera 4, 20 object 7 and camera 5; then the camera returns. A failed gate: line 18.
+        // Entering 19 stops effects 9 and 10.
         (1098, 17..=20) if call.state != 0 && call.object && state.word(pack, routine) == 0 => {
             let k = (routine - 17) as usize;
             if routine == 19 && call.state == 1 {
@@ -10113,7 +10113,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             out.prompt = Some(4);
             if call.square && !state.talking {
                 let st = castle_stage(state);
-                if st == 30 || st == 31 || !state.flag(167) {
+                let usable = match routine {
+                    18 => state.flag(162) && !state.flag(167),
+                    19 => st == 30,
+                    _ => st == 31,
+                };
+                if usable {
                     state.set_word(pack, routine, 1);
                     let obj = 15 + 2 * k;
                     out.actions.extend([
@@ -10129,7 +10134,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                             state.set(15, true);
                             state.set_word(pack, 0, 0);
                         }
-                        18 => out.actions.push(Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }),
+                        18 => out.actions.extend([Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }, Action::HeroAnim { anim: 0, wait: false }]),
                         19 => out.actions.push(Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }),
                         _ => out.actions.extend([Action::PlayAnim { obj: 7, speed: 1.0, wait: false }, Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 }]),
                     }
@@ -18014,14 +18019,18 @@ mod tests {
         let runs: Vec<bool> = (0..4).map(|_| !on_trigger(1098, 10, enter(10), &mut s).actions.is_empty()).collect();
         assert_eq!(runs, [false, false, false, true]);
         assert!(s.flag(194));
-        // Switch 18: the prompt inside, a press swaps object 17 for 18 once; with 167 set (and s
-        // below 30) a switch shows line 18.
+        // Switch 18 (R-0113): with 162 clear a press shows line 18; with 162 set and 167 clear it
+        // swaps object 17 for 18 once (camera 7, hero animation 0). Switch 20 needs stage 31.
         let press = |index| TriggerCall { index, state: 2, object: true, square: true, block: -1 };
+        assert_eq!(on_trigger(1098, 18, press(18), &mut s).actions, vec![Action::Message { line: 18 }]);
+        s.set(162, true);
         let a = on_trigger(1098, 18, press(18), &mut s).actions;
         assert!(a.contains(&Action::WalkHero { locator: 101, wait: true, orient: true }) && a.contains(&Action::InitObjOn { obj: 18, end: false }));
+        assert!(a.contains(&Action::HeroAnim { anim: 0, wait: false }));
         assert!(on_trigger(1098, 18, press(18), &mut s).actions.is_empty());
-        s.set(167, true);
         assert_eq!(on_trigger(1098, 20, press(20), &mut s).actions, vec![Action::Message { line: 18 }]);
+        s.set(31, true);
+        assert!(on_trigger(1098, 20, press(20), &mut s).actions.contains(&Action::InitObjOn { obj: 22, end: false }));
     }
 
     #[test]
