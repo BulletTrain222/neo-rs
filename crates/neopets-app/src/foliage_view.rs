@@ -140,6 +140,12 @@ pub fn spawn<C: Component + Copy>(
                     if bush {
                         e.insert(BushPart { pack, patch: pi, plant: k, cut });
                     }
+                    // World shadows (this build's option): only trees cast; grass,
+                    // flowers and bushes bend round the hero and spring back, and their moving
+                    // shadows showed as a dark patch fading behind him.
+                    if p.kind.family != neopets_sim::foliage::Family::Tree {
+                        e.insert(bevy::light::NotShadowCaster);
+                    }
                 }
                 count += usize::from(!cut);
             }
