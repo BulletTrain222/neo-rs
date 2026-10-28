@@ -52,6 +52,8 @@ pub struct Placement {
     /// word (+0xC8).
     pub emerge_distance: f32,
     pub selector: u32,
+    /// The alarm group byte (+0xB7; 0xFF none; SPEC-0038 Behavior 3).
+    pub alarm: u8,
     /// The drop placement ordinal (s16 +0xB0): a kind-8 record of the same region, -1 none.
     pub drop: i16,
     /// The character's colour bytes (+0x40; the talk partner's frame colour, SPEC-0022).
@@ -215,6 +217,7 @@ pub fn records(p: &[u8]) -> Records {
                     key: s(0xAC),
                     emerge_distance: f32_at(p, data + 0xC0).unwrap_or(0.0),
                     selector: u32_at(p, data + 0xC8).unwrap_or(0),
+                    alarm: p.get(data + 0xB7).copied().unwrap_or(0xFF),
                     drop: i16_at(p, data + 0xB0).unwrap_or(-1),
                     colour: [p.get(data + 0x40).copied().unwrap_or(0), p.get(data + 0x41).copied().unwrap_or(0), p.get(data + 0x42).copied().unwrap_or(0)],
                     colours: std::array::from_fn(|i| p.get(data + 0x48 + 4 * i..data + 0x4C + 4 * i).map_or(0x80FF_FFFF, |b| u32::from_le_bytes(b.try_into().unwrap()))),

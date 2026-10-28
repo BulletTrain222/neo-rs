@@ -10,10 +10,12 @@
 //! retreat home and hide (Behavior 38), and the wait in line (outer 12) under the attack
 //! manager (`attackmgr`, Behavior 45).
 //!
-//! Not covered: the alarm groups and the group alert (Behaviors 3 and 10), socialize, the global
+//! The alarm groups (Behavior 3: the notice gate and the alarm-group check).
+//!
+//! Not covered: the group alert (Behavior 10), socialize, the global
 //! AI pause (state 20), the retarget countdown and flyer re-launch (state 22 is played but never
 //! entered), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target state 9 (it
-//! stands and notices), the alarm-group emerge of state 8, wandering in
+//! stands and notices), the alarm emerge's camera and cue, wandering in
 //! states 5 to 7 (they stand and notice),
 //! the counter-attack choice's code 5 (R-0117), the
 //! projectiles (missile
@@ -223,6 +225,11 @@ pub struct View<'a> {
     pub has: &'a dyn Fn(u32) -> bool,
     /// The attack manager holds this enemy back (Behavior 45).
     pub waits: bool,
+    /// Behavior 3's gate: another Display-in-Default 0 enemy of a different alarm group is in
+    /// state 19 or 2 (the host's test; only read when this row's word is 0).
+    pub alarm_block: bool,
+    /// The broadcast count of this enemy's alarm group (0 when none).
+    pub alarm_serial: u32,
     /// Behavior 35's clear-area test: the hero at least 5.0 away and no other live pool member
     /// closer than 5.0.
     pub clear: bool,
@@ -439,6 +446,8 @@ pub struct Spawn {
     pub home: Vec3,
     pub emerge_distance: f32,
     pub selector: u32,
+    /// The alarm group (spawn record byte 0xB7; None for 0xFF).
+    pub alarm: Option<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -470,6 +479,11 @@ pub struct Enemy {
     pub outer: u32,
     pub inner: u32,
     pub seq: u32,
+    /// Set on entering agro: the host posts an alarm broadcast for the enemy's group.
+    pub alarmed: bool,
+    /// The alarm-group check countdown (+0xC88) and the last group broadcast seen.
+    alarm_timer: i32,
+    alarm_seen: u32,
     /// The reanimation countdown (+0xD14; -1 idle; Behavior 34 and 35).
     pub reanim: i32,
     /// Set on entering agro (the setter for state 19, the take-hit's send): the host grants an
@@ -560,6 +574,9 @@ impl Enemy {
             outer: 0,
             inner: 0,
             seq: 0,
+            alarmed: false,
+            alarm_timer: 0,
+            alarm_seen: 0,
             reanim: -1,
             joined: false,
             line_wait: 0,
@@ -658,6 +675,7 @@ impl Enemy {
                 self.recovery = 0;
                 self.cooldown = [0; 4];
                 self.joined = true;
+                self.alarmed = self.spawn.alarm.is_some();
             }
             _ => {}
         }
@@ -759,9 +777,40 @@ impl Enemy {
         }
     }
 
-    /// Behavior 3: the notice check (no alarm-group gate, no socialize halving, no cloak).
+    /// Behavior 3, the alarm-group check: with a group and a broadcast for it not yet seen,
+    /// states 0, 3, 5, 6, 7 and 14 go to the alerted search (2) with animation 18; a hidden
+    /// enemy (state 8) plays its emerge (emerge sub-state 2), or goes to agro when it has none.
+    /// The camera and sound cue of the emerge (spawn word 0xC4 at 0) is not built.
+    fn alarm_check(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        if self.spawn.alarm.is_none() || v.alarm_serial <= self.alarm_seen {
+            return;
+        }
+        self.alarm_seen = v.alarm_serial;
+        match self.state {
+            0 | 3 | 5..=7 | 14 => {
+                self.set(2, v, rng, a);
+                a.anim = Some(18);
+            }
+            8 => {
+                let sel = self.spawn.selector;
+                let id = if self.p.can_fly != 0 { 165 } else if (1..=4).contains(&sel) { 132 + sel } else { 10 };
+                if (v.has)(id) {
+                    self.through(id, v, a);
+                    self.emerge = 2;
+                } else {
+                    self.set(19, v, rng, a);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    /// Behavior 3: the notice check (the alarm-group gate; no socialize halving, no cloak).
     fn notice(&self, v: &View, rng: &mut Rng) -> bool {
         let p = &self.p;
+        if !p.display_default && v.alarm_block {
+            return false;
+        }
         if !p.hostile || self.awareness != 0 {
             return false;
         }
@@ -1279,6 +1328,16 @@ impl Enemy {
         if self.retarget >= 0 {
             self.retarget -= 1;
         }
+        // Step 5, the alarm-group check countdown: at 0 it reloads with int[15, 45] and the
+        // check runs (Behavior 3).
+        let mut alarm_anim = None;
+        if self.alarm_timer <= 0 {
+            self.alarm_timer = rng.range(15, 45);
+            self.alarm_check(v, rng, &mut a);
+            alarm_anim = a.anim;
+        } else {
+            self.alarm_timer -= 1;
+        }
         match self.state {
             0 => self.set(self.default_state as u32, v, rng, &mut a),
             // State 4 (stunned): back to agro once status 0 is no longer active.
@@ -1336,6 +1395,10 @@ impl Enemy {
             8 => self.hide_handler(v, &mut a),
             0 | 3 | 5..=7 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
+        }
+        // The alarm's animation (18, or the emerge) is the one requested on its tick.
+        if alarm_anim.is_some() {
+            a.anim = alarm_anim;
         }
         a
     }
@@ -2187,6 +2250,8 @@ mod tests {
             clip: Clip::default(),
             has,
             waits: false,
+            alarm_block: false,
+            alarm_serial: 0,
             clear: true,
             locate: None,
         }
@@ -2488,6 +2553,40 @@ mod tests {
         v.clip = Clip { action: 85, progress: 1.0, finished: true };
         let a = e.tick(&v, &mut rng);
         assert!(a.heal && e.state == 19);
+    }
+
+    #[test]
+    fn alarm_groups() {
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(13);
+        // Entering agro flags a broadcast for a group member only.
+        let mut e = Enemy::new(skeleton(), Spawn { alarm: Some(3), ..Spawn::default() }, &mut rng);
+        let v = view([40.0, 0.0, 0.0], &has);
+        e.set(19, &v, &mut rng, &mut Act::default());
+        assert!(e.alarmed);
+        // A wandering member (state 5) sees a new broadcast on its check: the alerted search.
+        let mut p = skeleton();
+        (p.search_min, p.search_max) = (300.0, 300.0);
+        let mut e = Enemy::new(p, Spawn { alarm: Some(3), default_state: 5, ..Spawn::default() }, &mut rng);
+        e.state = 5;
+        let mut v = view([40.0, 0.0, 0.0], &has);
+        v.alarm_serial = 1;
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((e.state, a.anim), (2, Some(18)));
+        // Seen once: no second reaction to the same broadcast.
+        e.state = 5;
+        for _ in 0..60 {
+            e.tick(&v, &mut rng);
+        }
+        assert_eq!(e.state, 5);
+        // The notice gate: a Display-in-Default 0 row is blocked while another group is roused.
+        let mut p = skeleton();
+        p.display_default = false;
+        let mut e = Enemy::new(p, Spawn { alarm: Some(3), ..Spawn::default() }, &mut rng);
+        e.awareness = 0;
+        let mut v = view([1.0, 0.0, 0.0], &has);
+        v.alarm_block = true;
+        assert!((0..50).all(|_| !e.notice(&v, &mut rng)));
     }
 
     #[test]

@@ -883,6 +883,8 @@ pub struct Play {
     pub cloud_bursts: Vec<([f32; 3], u32)>,
     /// SPEC-0038 Behavior 45: the shared attack-manager list.
     attack_mgr: neopets_sim::attackmgr::Manager,
+    /// SPEC-0038 Behavior 3: the broadcast count of each alarm group (by pack and group).
+    alarms: HashMap<(u32, u8), u32>,
     /// SPEC-0011 Thorn hits: the five-record hazard pool, its contact radius, and the thorn
     /// shots' positions by pool slot as of the last tick.
     thorns: neopets_sim::thorn::Pool,
@@ -1604,6 +1606,7 @@ impl Play {
             cloud_defeated: Default::default(),
             cloud_bursts: Vec::new(),
             attack_mgr: Default::default(),
+            alarms: HashMap::new(),
             thorns: Default::default(),
             thorn_radius,
             thorn_shots: [None; neopets_sim::projectile::SLOTS],
@@ -5712,7 +5715,7 @@ impl Play {
                 enemy: match (row, tuning) {
                     (Some(r), Some(t)) if r.class == Some(17) => Some(Enemy::new(
                         params(&r, &t),
-                        enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector },
+                        enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector, alarm: (pl.alarm != 0xFF).then_some(pl.alarm) },
                         &mut self.rng,
                     )),
                     _ => None,
@@ -7883,6 +7886,7 @@ impl Play {
                 key: -1,
                 emerge_distance: 0.0,
                 selector: 0,
+                alarm: 0xFF,
                 drop: -1,
                 colour: [128; 3],
                 colours: [0x00FF_FFFF; 15],
@@ -8179,7 +8183,16 @@ impl Play {
                 e.joined = false;
                 self.attack_mgr.grant(c.id);
             }
+            // A group member entering agro posts its group's broadcast.
+            if let Some(e) = c.enemy.as_mut().filter(|e| e.alarmed) {
+                e.alarmed = false;
+                if let Some(g) = e.spawn.alarm {
+                    *self.alarms.entry((c.pack, g)).or_default() += 1;
+                }
+            }
         }
+        // The notice gate's inputs: the groups of the Display-in-Default 0 enemies in state 19 or 2.
+        let roused: Vec<(u32, Option<u8>)> = self.characters.iter().filter_map(|c| c.enemy.as_ref().filter(|e| !e.p.display_default && matches!(e.state, 19 | 2) && !e.is_dead()).map(|e| (c.pack, e.spawn.alarm))).collect();
         let world = &self.world;
         let mgr = &self.attack_mgr;
         // SPEC-0038 Behavior 35's clear-area test reads the live pool's positions.
@@ -8256,6 +8269,9 @@ impl Play {
             v.hero_swing = hero_swing;
             v.hero_recover = hero_recover;
             v.waits = mgr.waits(*id);
+            let own = e.spawn.alarm;
+            v.alarm_serial = own.and_then(|g| self.alarms.get(&(world.pack, g)).copied()).unwrap_or(0);
+            v.alarm_block = own.is_some() && roused.iter().any(|&(pk, g)| pk == world.pack && g.is_some_and(|g| Some(g) != own));
             let near = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() < 5.0;
             v.clear = !near(p, hero) && !pool.iter().any(|&(o, q)| o != *id && near(p, q));
             let locate = |q: [f32; 3]| mesh.is_none_or(|m| m.locate_full(q).is_some());
@@ -13004,6 +13020,8 @@ fn enemy_view<'a>(
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },
         has,
         waits: false,
+        alarm_block: false,
+        alarm_serial: 0,
         clear: true,
         locate: None,
     }
