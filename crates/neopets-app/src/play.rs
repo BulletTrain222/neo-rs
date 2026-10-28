@@ -6877,6 +6877,8 @@ impl Play {
         }
         if std::mem::take(&mut self.l3_latch) {
             self.hud.rearm_all();
+            // Section 9: L3 also sets the D-pad hint's timer.
+            self.hud.d = 240;
         }
         if out.consumed || was_open {
             input.jump = false;
@@ -7421,6 +7423,7 @@ impl Play {
                 poisoned: self.statuses.active(neopets_sim::status::POISON),
             };
             self.hud.tick(v, self.quick.open, &self.hud_words);
+            self.hud.tick_icons();
             let target = self.monster_bar.target.and_then(|id| self.characters.iter().find(|c| c.id == id));
             let (hp, max) = target.map_or((0, 1), |c| (c.hp, c.row.map_or(1, |r| r.hit_points as i32)));
             self.monster_bar.tick(hp, max, &self.monster_words);
@@ -11314,9 +11317,13 @@ impl Play {
         let risen: Vec<u16> = self.state.flags.difference(&self.flags_seen).copied().collect();
         self.flags_seen = self.state.flags.clone();
         for n in risen {
-            if let Some((_, v)) = self.design.flag_cue(n) {
+            if let Some((kind, v)) = self.design.flag_cue(n) {
                 if v >= 1 {
                     self.stinger(v - 1);
+                }
+                // SPEC-0023 section 8: a flag with a journal record sets the notification.
+                if kind != 0 {
+                    self.hud.notify_journal();
                 }
             }
         }

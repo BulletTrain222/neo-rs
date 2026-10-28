@@ -40,6 +40,8 @@ const ITEM_ICONS: [u32; 6] = [0x9C, 0x9B, 0x9E, 0x9D, 0xA0, 0xA1];
 /// SPEC-0023 sections 2 and 7: the petpet panel (the predicate-38 group above the portrait
 /// 0x3C's group) and its meter fill 0x12.
 const PET_PORTRAIT: u32 = 0x3C;
+const JOURNAL_ICON: u32 = 0xDF;
+const DPAD_HINT: u32 = 0xBB;
 const PET_FILL: u32 = 0x12;
 
 #[derive(Resource)]
@@ -279,7 +281,12 @@ pub fn sync_hud(
     let equip = f.key(EQUIP[0]).and_then(|n| f.nodes[n].parent);
     let panels: Vec<usize> = [cross, item_panel, equip].into_iter().flatten().collect();
     let pet_panel = f.key(PET_PORTRAIT).and_then(|n| f.nodes[n].parent).and_then(|n| f.nodes[n].parent);
+    // SPEC-0023 sections 8 and 9: the journal-notification icon (0xDF) and the D-pad hint (0xBB).
+    let (journal_icon, dpad_icon) = (f.key(JOURNAL_ICON), f.key(DPAD_HINT));
     let mut nodes = Vec::new();
+    for g in [journal_icon, dpad_icon].into_iter().flatten() {
+        subtree(f, g, &mut nodes);
+    }
     subtree(f, bars, &mut nodes);
     if let Some(m) = monster {
         subtree(f, m, &mut nodes);
@@ -427,7 +434,27 @@ pub fn sync_hud(
             }
             false
         };
-        let top = if in_monster(n) {
+        let under = |root: Option<usize>| {
+            let mut at = Some(n);
+            while let Some(i) = at {
+                if Some(i) == root {
+                    return true;
+                }
+                at = f.nodes[i].parent;
+            }
+            false
+        };
+        let (in_journal, in_dpad) = (under(journal_icon), under(dpad_icon));
+        // Both icons are hidden while the quick panel is open; the journal icon only shows while
+        // its flag is set.
+        if in_journal || in_dpad {
+            ok &= !p.quick.open && (!in_journal || hud.journal);
+        }
+        let top = if in_journal {
+            journal_icon.unwrap_or(bars)
+        } else if in_dpad {
+            dpad_icon.unwrap_or(bars)
+        } else if in_monster(n) {
             monster.unwrap_or(bars)
         } else if in_pet(n) {
             pet_panel.unwrap_or(bars)
@@ -466,7 +493,11 @@ pub fn sync_hud(
         let base = f.sprite(n).map_or([128; 4], |sp| sp.colour);
         let rgb = if tinted.contains(&n) { [hud.tint[0], hud.tint[1], hud.tint[2]] } else { [base[0], base[1], base[2]] };
         let c = |v: u8| v as f32 / 128.0;
-        let a = if in_monster(n) {
+        let a = if in_journal {
+            hud.journal_alpha()
+        } else if in_dpad {
+            hud.dpad_alpha()
+        } else if in_monster(n) {
             neopets_sim::hud::alpha(mb.t)
         } else if in_prompts(n) || in_pet(n) {
             128

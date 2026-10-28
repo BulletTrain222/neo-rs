@@ -7,8 +7,10 @@
 //! The monster health bar (section 10): the arm with its 600-tick timer, the zero-health cut,
 //! the frame width from the maximum and the name width, the fill width.
 //!
-//! Not covered: the D-pad hint and its timer D, the loss effects, the petpet meter, the journal
-//! icon, the portrait swing and the countdown texts.
+//! The D-pad hint's timer D and alpha (section 9) and the journal-notification icon's flag,
+//! phase and alpha (section 8).
+//!
+//! Not covered: the loss effects, the petpet meter, the portrait swing and the countdown texts.
 
 /// Bar scale K (float32 0.6666667).
 pub const K: f32 = 0.666_666_7;
@@ -82,12 +84,58 @@ pub struct Hud {
     pub bars_alpha: u8,
     pub health: Bar,
     pub pool: Bar,
+    /// The D-pad hint's timer D (element 0xBB; section 9).
+    pub d: i32,
+    /// The journal-notification flag and its phase (element 0xDF; section 8).
+    pub journal: bool,
+    pub journal_phase: f32,
 }
 
 impl Default for Hud {
     fn default() -> Self {
         // The full reset after a load: all timers 0, C = -1.
-        Self { c: -1, g0: 0, g1: 0, g: [0; 3], panel_alpha: [128; 4], watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default() }
+        Self { c: -1, g0: 0, g1: 0, g: [0; 3], panel_alpha: [128; 4], watched: [-1; 4], seen: None, pulse: None, tint: [128; 4], bars_alpha: 128, health: Bar::default(), pool: Bar::default(), d: 0, journal: false, journal_phase: 0.0 }
+    }
+}
+
+/// Round half away from zero.
+fn round_away(x: f32) -> i32 {
+    if x < 0.0 { -((-x + 0.5).floor()) as i32 } else { (x + 0.5).floor() as i32 }
+}
+
+impl Hud {
+    /// Section 9: 128 while D >= 30, else round(D x (128 - 32) x 0.033333335 + 32).
+    pub fn dpad_alpha(&self) -> u8 {
+        if self.d >= 30 { 128 } else { round_away(self.d as f32 * 96.0 * 0.033_333_335 + 32.0).clamp(0, 255) as u8 }
+    }
+
+    /// Section 8: y = -|phase| / 2 pi, t = |(round(y) - y) - 0.5| - 0.25, alpha =
+    /// round(64 (1 + P(t))) with the truncated sine series (it is inaccurate as t nears 0.75, so
+    /// the bottom of each cycle stays near 14 to 25).
+    pub fn journal_alpha(&self) -> u8 {
+        let y = -self.journal_phase.abs() / std::f32::consts::TAU;
+        let t = ((y.round() - y) - 0.5).abs() - 0.25;
+        let t2 = t * t;
+        let (c1, c3, c5, c7, c9) = (6.283185f32, 41.34167f32, 81.60223f32, 76.57496f32, 39.71066f32);
+        let p = t * (c1 - t2 * (c3 - t2 * (c5 - t2 * (c7 - t2 * c9))));
+        round_away(64.0 * (1.0 + p)).clamp(0, 255) as u8
+    }
+
+    /// Section 8: a progress flag with a journal record set for the first time.
+    pub fn notify_journal(&mut self) {
+        self.journal = true;
+        self.journal_phase = 0.0;
+    }
+
+    /// Per tick: D lowered by 1 while above 0, and the journal phase advanced by 0.15 (boot
+    /// 0x2DCF18) while the flag is set.
+    pub fn tick_icons(&mut self) {
+        if self.d > 0 {
+            self.d -= 1;
+        }
+        if self.journal {
+            self.journal_phase += 0.15;
+        }
     }
 }
 
@@ -270,6 +318,25 @@ impl MonsterBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dpad_and_journal_icons() {
+        // Section 9: full alpha for 210 ticks after L3, then down to 32.
+        let mut h = Hud { d: 240, ..Default::default() };
+        assert_eq!(h.dpad_alpha(), 128);
+        h.d = 15;
+        assert_eq!(h.dpad_alpha(), 80);
+        h.d = 0;
+        assert_eq!(h.dpad_alpha(), 32);
+        // Section 8: phase 0 gives P(0.25) = 1 (alpha 128); the flag's ticks advance the phase.
+        h.notify_journal();
+        assert_eq!(h.journal_alpha(), 128);
+        h.tick_icons();
+        assert!((h.journal_phase - 0.15).abs() < 1e-6 && h.journal_alpha() < 128);
+        // The series quirk: where t wraps to 0.75 the alpha runs 25, 18, 15, 14, 17.
+        let seq: Vec<u8> = (0..44).map(|_| { h.tick_icons(); h.journal_alpha() }).collect();
+        assert!(seq.windows(5).any(|w| w == [25, 18, 15, 14, 17]), "{seq:?}");
+    }
 
     const MW: MonsterWords = MonsterWords { divisor: 1.5, max: 250, min: 64, margin: 24, cap: -5, plate: -5 };
 

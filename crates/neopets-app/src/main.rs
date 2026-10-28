@@ -1320,8 +1320,14 @@ fn step_sim(
                 let frozen = !matches!(m.flow.current, menus::PLAY | menus::GAME_OVER | menus::BOX_HOST);
                 // SPEC-0023 section 4.1: opening the pause page clears the HUD timers and the
                 // monster bar timer, so the HUD stays hidden on return until a re-arm.
+                // SPEC-0023 section 8: opening the quest journal clears the notification.
+                if m.flow.current == menus::JOURNAL {
+                    play.play.hud.journal = false;
+                }
                 if m.flow.current == menus::PAUSE && !play.play.menu_open {
                     play.play.hud.hide_all();
+                    // Section 9: D is cleared when the pause page opens.
+                    play.play.hud.d = 0;
                     play.play.monster_bar.t = 0;
                     // SPEC-0031: pause and unpause cues (148, 149).
                     play.play.cue(148);
