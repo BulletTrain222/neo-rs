@@ -43,6 +43,7 @@ fn run() -> Result<(), String> {
     let mut panels = false;
     let mut object_headers = false;
     let mut groups: Option<u32> = None;
+    let mut shadow: Option<u32> = None;
     while let Some(arg) = args.next() {
         match arg.as_str() {
             "--iso" => explicit = Some(args.next().ok_or("--iso needs a path")?.into()),
@@ -60,6 +61,10 @@ fn run() -> Result<(), String> {
             "--aim-targets" => aim = true,
             "--panels" => panels = true,
             "--object-headers" => object_headers = true,
+            "--shadow" => {
+                let n = args.next().ok_or("--shadow needs a resource")?;
+                shadow = Some(n.parse().map_err(|_| format!("Bad resource {n}"))?);
+            }
             "--groups" => {
                 let n = args.next().ok_or("--groups needs a pack")?;
                 groups = Some(n.parse().map_err(|_| format!("Bad pack {n}"))?);
@@ -116,7 +121,7 @@ fn run() -> Result<(), String> {
             println!("{:#08x}: {w:#010x} i32 {} f32 {}", a + 4 * k as u32, w as i32, f32::from_bits(w));
         }
     }
-    if !(monster_word.is_some() || groups.is_some() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(monster_word.is_some() || groups.is_some() || shadow.is_some() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -202,6 +207,20 @@ fn run() -> Result<(), String> {
     }
     if object_headers {
         object_header_census(&mut disc, &index)?;
+    }
+    if let Some(n) = shadow {
+        // A resource's type-33 shadow hulls (SPEC-0004 Optional per-model block).
+        let bytes = index.read(&mut disc, n)?;
+        let chain = resource::walk_chunks(&bytes, None)?;
+        match neopets_data::shadow::find(&bytes, &chain.chunks) {
+            Some(units) => {
+                println!("resource {n}: {} shadow units", units.len());
+                for (k, u) in units.iter().enumerate().take(3) {
+                    println!("unit {k}: centre {:?} radius {} bank {} edges {} triangles {} points {}; points {:?}; first triangles {:?}; first edges {:?}", u.centre, u.radius, u.bank, u.edges.len(), u.triangles.len(), u.points.len(), u.points, &u.triangles[..u.triangles.len().min(2)], &u.edges[..u.edges.len().min(2)]);
+                }
+            }
+            None => println!("resource {n}: no shadow block"),
+        }
     }
     if let Some(pack) = groups {
         // A pack's type-40 script groups and its top-level type-11 locators (SPEC-0030 row 64).

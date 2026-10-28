@@ -44,8 +44,27 @@ static GRADE_SHADER: OnceLock<Handle<Shader>> = OnceLock::new();
 /// The camera exposure Bevy gives a 3D camera (EV100 9.7) and the ambient term's scale at
 /// roughness 1: the ambient brightness that makes a lit surface match its unlit colour.
 fn matched_ambient() -> f32 {
-    let exposure = 1.0 / (1.2 * 2f32.powf(9.7));
-    1.0 / (0.4524 * exposure)
+    1.0 / (0.4524 * exposure())
+}
+
+fn exposure() -> f32 {
+    1.0 / (1.2 * 2f32.powf(9.7))
+}
+
+/// World shadows (this build's option): the share of a lit surface's brightness that comes from
+/// the sun, and so the most a shadow takes away; the ambient light keeps the rest.
+pub const SUN_SHARE: f32 = 0.45;
+
+/// The sun's illuminance that adds SUN_SHARE of a surface's matched colour where it faces the
+/// sun straight on (a rough diffuse surface: albedo / pi x illuminance x exposure).
+pub fn sun_illuminance() -> f32 {
+    SUN_SHARE * std::f32::consts::PI / exposure()
+}
+
+/// The ambient brightness while lit: the full matched one, less the sun's share with world
+/// shadows on.
+fn ambient(settings: &DisplaySettings) -> f32 {
+    matched_ambient() * if settings.world_shadows { 1.0 - SUN_SHARE } else { 1.0 }
 }
 
 pub struct GraphicsPlugin;
@@ -132,8 +151,8 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 "#;
 
 /// The camera's anti-aliasing, bloom and ambient occlusion from the settings.
-fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize)>>) {
-    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count());
+fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool)>>) {
+    let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows > 0, settings.world_shadows);
     if *last == Some(key) {
         return;
     }
@@ -157,6 +176,11 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
         if settings.bloom > 0 {
             let (intensity, threshold) = if settings.bloom == 2 { (0.22, 0.55) } else { (0.10, 0.7) };
             c.insert((Hdr, Bloom { intensity, prefilter: BloomPrefilter { threshold, threshold_softness: 0.4 }, composite_mode: BloomCompositeMode::Additive, ..Bloom::NATURAL }));
+        } else if settings.char_shadows > 0 {
+            // The shadow volumes multiply the picture up and down again (shadow_view.rs), which
+            // needs the float picture.
+            c.remove::<Bloom>();
+            c.insert(Hdr);
         } else {
             c.remove::<(Bloom, Hdr)>();
         }
@@ -164,17 +188,20 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
         // check the matched colours against the unlit ones).
         if settings.ao && std::env::var_os("NEOPETS_GFX_LIT_ONLY").is_some() {
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
-            c.insert(AmbientLight { color: Color::WHITE, brightness: matched_ambient(), affects_lightmapped_meshes: true });
+            c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
         } else if settings.ao {
-            c.insert((ScreenSpaceAmbientOcclusion::default(), AmbientLight { color: Color::WHITE, brightness: matched_ambient(), affects_lightmapped_meshes: true }));
+            c.insert((ScreenSpaceAmbientOcclusion::default(), AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true }));
+        } else if settings.world_shadows {
+            c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
+            c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
         } else {
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass, AmbientLight)>();
         }
     }
 }
 
-/// While ambient occlusion is on, the solid unlit surfaces turn lit under the matched ambient
-/// light (and back when it goes off); new ones as they load.
+/// While ambient occlusion or world shadows are on, the solid unlit surfaces turn lit under the
+/// matched ambient light (and back when both go off); new ones as they load.
 fn apply_materials(settings: Res<DisplaySettings>, mut materials: ResMut<Assets<StandardMaterial>>, mut events: MessageReader<AssetEvent<StandardMaterial>>, mut lit: Local<HashSet<AssetId<StandardMaterial>>>, mut last: Local<Option<bool>>) {
     let eligible = |m: &StandardMaterial| m.unlit && matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_));
     let light = |m: &mut StandardMaterial| {
@@ -187,9 +214,10 @@ fn apply_materials(settings: Res<DisplaySettings>, mut materials: ResMut<Assets<
         m.double_sided = false;
     };
     let added: Vec<AssetId<StandardMaterial>> = events.read().filter_map(|e| if let AssetEvent::Added { id } = e { Some(*id) } else { None }).collect();
-    if *last != Some(settings.ao) {
-        *last = Some(settings.ao);
-        if settings.ao {
+    let on = settings.ao || settings.world_shadows;
+    if *last != Some(on) {
+        *last = Some(on);
+        if on {
             let ids: Vec<_> = materials.iter().filter(|(_, m)| eligible(m)).map(|(id, _)| id).collect();
             for id in ids {
                 if let Some(mut m) = materials.get_mut(id) {
@@ -206,7 +234,7 @@ fn apply_materials(settings: Res<DisplaySettings>, mut materials: ResMut<Assets<
         }
         return;
     }
-    if settings.ao {
+    if on {
         for id in added {
             if materials.get(id).is_some_and(|m| eligible(m)) {
                 if let Some(mut m) = materials.get_mut(id) {

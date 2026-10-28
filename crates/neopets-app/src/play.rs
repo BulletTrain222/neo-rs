@@ -1016,6 +1016,8 @@ pub struct Play {
     /// Character light states (SPEC-0046 Character lights): the hero's (key None) and each
     /// region character's, by id.
     char_lights: HashMap<Option<u64>, neopets_sim::charlight::State>,
+    /// The heroes' shadow hulls (Tor's outfit, Roberta's 512; SPEC-0004 type 33), by hero index.
+    pub shadow_hulls: [Vec<neopets_sim::shadow::Hull>; 2],
     /// The drop direction of a dig reward while it pays out (SPEC-0051 section 10 step 11).
     dig_drop: Option<[f32; 3]>,
     /// The hero's position on the last bush logic step (for the bend's speed).
@@ -1183,6 +1185,17 @@ impl Play {
             (Ok(Some(m)), Ok(Some(a))) => Some((m, a)),
             _ => None,
         };
+        // The outfits' shadow hulls (SPEC-0004 Optional per-model block, type 33).
+        let mut hulls = |n: u32| -> Vec<neopets_sim::shadow::Hull> {
+            let Ok(bytes) = index.read(disc, n) else { return Vec::new() };
+            let Ok(chain) = neopets_data::resource::walk_chunks(&bytes, None) else { return Vec::new() };
+            neopets_data::shadow::find(&bytes, &chain.chunks)
+                .unwrap_or_default()
+                .into_iter()
+                .map(|u| neopets_sim::shadow::Hull { bank: u.bank, edges: u.edges, triangles: u.triangles, points: u.points })
+                .collect()
+        };
+        let shadow_hulls_loaded = [hulls(outfit), hulls(512)];
         let boot = BootTravel::from_disc(disc)?;
         let items = neopets_data::item::ItemTable::parse(&index.read(disc, neopets_data::item::ITEM_CONFIG)?)?;
         let boot_bytes = neopets_data::archive::verified_boot_program(disc)?;
@@ -1529,6 +1542,7 @@ impl Play {
             hud_loss: [None; 2],
             hud_prev: [i32::MAX; 2],
             char_lights: HashMap::new(),
+            shadow_hulls: shadow_hulls_loaded,
             dig_drop: None,
             bend_last: None,
             swap_at: [0.0; 3],
@@ -11212,6 +11226,48 @@ impl Play {
                 self.spawn_item(pack, spawn);
             }
         }
+    }
+
+    /// The direction of the strongest directional light of the hero's light context (the
+    /// world-shadow sun), held at least 0.4 downward; None without one.
+    pub fn sun_direction(&self) -> Option<[f32; 3]> {
+        let s = self.char_lights.get(&None)?;
+        let best = s.slots.iter().filter_map(|x| x.entry.filter(|e| e.kind == 2).map(|e| (x.weight, e.direction))).max_by(|a, b| a.0.total_cmp(&b.0))?;
+        let mut d = unit(best.1);
+        if d[1] > -0.4 {
+            d[1] = -0.4;
+            d = unit(d);
+        }
+        Some(d)
+    }
+
+    /// SPEC-0046 Character shadow volumes for this frame: the hero is the one caster (the
+    /// Gnarfas, the other kind on disc, is not built), taken while within 50 units of the eye;
+    /// its hulls moved by its posed bones (the bank index taken as the skin index across the
+    /// families), its light direction from its character light context (straight down without
+    /// one) and the count signs from the camera eye.
+    pub fn shadow_volume(&self) -> neopets_sim::shadow::Volume {
+        use neopets_sim::shadow as sh;
+        let mut v = sh::Volume::default();
+        let hulls = &self.shadow_hulls[self.hero_index.min(1)];
+        let (eye, ..) = self.view();
+        let p = add(self.loco.position(), self.hero_draw_offset());
+        let d = sub(p, eye);
+        if hulls.is_empty() || sh::choose(&[d[0] * d[0] + d[1] * d[1] + d[2] * d[2]]).is_empty() {
+            return v;
+        }
+        let place = placement(p, self.loco.facing);
+        let frames = self.hero.bone_frames();
+        let slots: Vec<Option<sh::LightSlot>> = self.char_lights.get(&None).map_or(Vec::new(), |s| {
+            s.slots.iter().map(|x| x.entry.map(|e| sh::LightSlot { kind: e.kind, weight: x.weight, direction: e.direction, position: e.position })).collect()
+        });
+        let l = sh::light_direction(&slots, p, slots.is_empty()).unwrap_or([0.0, -1.0, 0.0]);
+        let frame = |b: u8| frames.get(b as usize).map(|f| {
+            let m = place.mul(f);
+            sh::Frame { cols: m.cols, t: m.t }
+        });
+        sh::volume(hulls, frame, l, eye, &mut v);
+        v
     }
 
     /// The Rope Gun's muzzle M = T + 0.37F - S of weapon attach frame 0 (SPEC-0033 State 27),

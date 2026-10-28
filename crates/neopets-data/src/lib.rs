@@ -30,6 +30,7 @@ mod mods;
 pub mod png;
 pub mod region;
 pub mod resource;
+pub mod shadow;
 pub mod texture;
 pub mod track;
 pub mod travel;

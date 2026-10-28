@@ -10,6 +10,7 @@ mod effect_view;
 mod foliage_view;
 mod graphics;
 mod pass1;
+mod shadow_view;
 mod orbit;
 mod pattern;
 mod audio_view;
@@ -881,6 +882,7 @@ fn main() {
         .insert_resource(display::DisplaySettings::load())
         .add_plugins(graphics::GraphicsPlugin)
         .add_plugins(pass1::Pass1Plugin)
+        .add_plugins(shadow_view::ShadowPlugin)
         .init_resource::<display::SceneTarget>()
         .add_systems(Startup, (setup_viewer, setup_hud, setup_play, dev_menu::spawn_panel, controls_page::spawn_page, perf::spawn_panel, display::setup, display::spawn_window))
         .add_systems(Update, (display::take_requests, display::apply_window, display::sync_scene).chain())
@@ -891,7 +893,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, shadow_view::sync_shadows, shadow_view::sync_sun), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -2194,6 +2196,10 @@ fn sync_worlds(
                         }
                         None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::IDENTITY, *part)),
                     };
+                    // The sky dome neither casts nor takes the world shadows.
+                    if matches!(*part, WorldPart::Dome(_)) {
+                        e.insert((bevy::light::NotShadowCaster, bevy::light::NotShadowReceiver));
+                    }
                     // A part under a type-3 node, or of an instance or placed object, draws only
                     // while its zone column passes.
                     if let (WorldPart::Scene(pack, _), Some(z)) = (*part, m.parts[i].zone) {

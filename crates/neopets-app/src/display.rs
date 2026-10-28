@@ -24,7 +24,10 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 11;
+pub const ROWS: usize = 13;
+/// Character shadow strengths: off, the original volumes as the game draws them (a drop of 8 of
+/// 255), and this build's stronger version of the same volumes.
+pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Strong"];
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct DisplaySettings {
@@ -49,11 +52,16 @@ pub struct DisplaySettings {
     /// SPEC-0046: instanced meshes hidden past their draw distance) instead of full models at
     /// every distance (this build's default).
     pub original_foliage: bool,
+    /// Character shadows (index into CHAR_SHADOWS; SPEC-0046 Character shadow volumes).
+    pub char_shadows: usize,
+    /// Shadows cast by everything (trees, buildings, props): this build's option, not in the
+    /// original.
+    pub world_shadows: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false }
     }
 }
 
@@ -84,6 +92,8 @@ impl DisplaySettings {
                 "colour" => s.colour = v.parse().unwrap_or(s.colour).min(crate::graphics::COLOUR.len() - 1),
                 "ambient occlusion" => s.ao = v == "true",
                 "original foliage" => s.original_foliage = v == "true",
+                "character shadows" => s.char_shadows = v.parse().unwrap_or(s.char_shadows).min(CHAR_SHADOWS.len() - 1),
+                "world shadows" => s.world_shadows = v == "true",
                 _ => {}
             }
         }
@@ -92,7 +102,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -104,7 +114,9 @@ impl DisplaySettings {
             self.bloom,
             self.colour,
             self.ao,
-            self.original_foliage
+            self.original_foliage,
+            self.char_shadows,
+            self.world_shadows
         )
     }
 
@@ -112,6 +124,16 @@ impl DisplaySettings {
         let mut s = std::fs::read_to_string(SETTINGS_FILE).map(|t| Self::parse(&t)).unwrap_or_default();
         // NEOPETS_GFX="aa,textures,bloom,colour,ao[,foliage]" (0/1 for the switches): the graphics options
         // for this run (diagnostic, for screenshot comparisons; not saved unless changed).
+        // NEOPETS_SHADOWS="char,world": the shadow settings for this run (diagnostic).
+        if let Some(v) = std::env::var("NEOPETS_SHADOWS").ok() {
+            let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+            if let Some(&c) = n.first() {
+                s.char_shadows = c.min(CHAR_SHADOWS.len() - 1);
+            }
+            if let Some(&w) = n.get(1) {
+                s.world_shadows = w != 0;
+            }
+        }
         if let Some(v) = std::env::var("NEOPETS_GFX").ok() {
             let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
             if let [aa, tex, bloom, colour, ao, ref rest @ ..] = n[..] {
@@ -148,6 +170,8 @@ impl DisplaySettings {
             ("Colour".into(), crate::graphics::COLOUR[self.colour].into()),
             ("Ambient occlusion".into(), if self.ao { "On".into() } else { "Off".into() }),
             ("Distant foliage".into(), if self.original_foliage { "Original".into() } else { "Full".into() }),
+            ("Character shadows".into(), CHAR_SHADOWS[self.char_shadows].into()),
+            ("World shadows".into(), if self.world_shadows { "On".into() } else { "Off".into() }),
         ]
     }
 
@@ -176,6 +200,8 @@ impl DisplaySettings {
             8 => self.colour = step(self.colour, crate::graphics::COLOUR.len()),
             9 => self.ao = !self.ao,
             10 => self.original_foliage = !self.original_foliage,
+            11 => self.char_shadows = step(self.char_shadows, CHAR_SHADOWS.len()),
+            12 => self.world_shadows = !self.world_shadows,
             _ => {}
         }
     }
@@ -393,6 +419,8 @@ const HELP: [&str; ROWS + 1] = [
     "Vivid and Rich lift colour and contrast a little; Original is the game's own colour.",
     "Soft shade where walls meet floors and in corners.",
     "Full keeps trees, bushes and props in 3D at any distance; Original turns far trees into sprites, fades distant plants out and hides props past their draw distance, as the PS2 game.",
+    "Shadows under the hero (and the Gnarfas): Original is the game's own faint shadow, Strong the same shape darker.",
+    "Shadows cast by everything, trees and buildings too, from the area's main light. Not in the original game.",
     "Back to Options.",
 ];
 
