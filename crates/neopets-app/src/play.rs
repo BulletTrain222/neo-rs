@@ -538,6 +538,8 @@ pub struct Character {
     pub gelert: Option<neopets_sim::gelert::Gelert>,
     pub gelert_slot: usize,
     pub gelert_hit: Option<(i32, bool)>,
+    /// SetEntityInvulnerable (SPEC-0030 row 132; +0x7F0): never a hit candidate while set.
+    pub invulnerable: bool,
 }
 
 impl Character {
@@ -545,6 +547,12 @@ impl Character {
     /// id has a kind in either table is skipped by hero swings, shots and the Mote walks.
     pub fn pet_like(&self) -> bool {
         neopets_sim::petpet::kind(self.pet_type).is_some() || neopets_sim::petpet::second_kind(self.pet_type).is_some()
+    }
+
+    /// Skipped by hero swings, shots and the Mote walks: pet-like, or invulnerable by script
+    /// (SPEC-0040 Behavior 17 base rule, the flag at +0x7F0).
+    pub fn unhittable(&self) -> bool {
+        self.pet_like() || self.invulnerable
     }
 }
 
@@ -2441,6 +2449,11 @@ impl Play {
                         c.anim.play(id);
                     }
                 }
+                Action::SetInvulnerable { entity, on } => {
+                    if let Some(c) = self.entity_mut(pack, entity) {
+                        c.invulnerable = on;
+                    }
+                }
                 Action::DeactivateEntity { entity } => {
                     // An entity whose region has not loaded yet is deactivated when it arrives
                     // (an Init's deactivations and streaming refusals run before the load).
@@ -3277,7 +3290,7 @@ impl Play {
                 continue;
             }
             // The first character whose bone capsule meets the shot sphere.
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like()).find_map(|(i, c)| {
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
@@ -4951,7 +4964,7 @@ impl Play {
         // Factor E: the live petpet of kind 0 or 7 (SPEC-0047 Passive bonuses).
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let mut hits = Vec::new();
-        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.pet_like()) {
+        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.unhittable()) {
             if self.hit_list.contains(&c.id) {
                 continue;
             }
@@ -5171,7 +5184,7 @@ impl Play {
             let p = neopets_sim::mote::power_index(0, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
             let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
             let mut hits = Vec::new();
-            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.pet_like()) {
+            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.unhittable()) {
                 let Some(r) = c.row else { continue };
                 if !o.touches(c.position, r.radius, r.height) || !o.list(c.id) {
                     continue;
@@ -5529,6 +5542,7 @@ impl Play {
                 gelert: row.filter(|r| r.class == Some(1)).and_then(|_| self.gelert_words.as_ref()).map(|w| neopets_sim::gelert::Gelert::new(w, self.state.flag(258), pl.ordinal > 0, &mut self.rng)),
                 gelert_slot: pl.ordinal,
                 gelert_hit: None,
+                invulnerable: false,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
                 sound_action: None,
@@ -5655,6 +5669,7 @@ impl Play {
             gelert: None,
             gelert_slot: 0,
             gelert_hit: None,
+            invulnerable: false,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
             sound_action: None,
@@ -7451,7 +7466,7 @@ impl Play {
         let chars: Vec<(u64, [f32; 3])> = self
             .characters
             .iter()
-            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like())
+            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable())
             .map(|c| (c.id, c.position))
             .collect();
         let attacking = self.loco.state == hero_states::ATTACK;
@@ -7482,7 +7497,7 @@ impl Play {
         let h = self.loco.position();
         let eye = add(h, [0.0, 1.5, 0.0]);
         let mut found = Vec::new();
-        for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.pet_like()) {
+        for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()) {
             if found.len() >= 10 {
                 break;
             }

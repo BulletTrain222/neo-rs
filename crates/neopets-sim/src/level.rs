@@ -150,6 +150,9 @@ pub enum Action {
     RefillMagic,
     /// The hero's hit points refilled to the maximum (1327's practice steps 231 and 233).
     RefillHealth,
+    /// SetEntityInvulnerable(entity, on) (SPEC-0030 row 132): while set the entity is never a
+    /// hit candidate.
+    SetInvulnerable { entity: usize, on: bool },
     /// InitMiamouseBehavior(field mesh, cage mesh) and MiamiceCatchDisable (SPEC-0029
     /// Behavior 28).
     MiamouseInit { field: i32, cage: i32 },
@@ -4430,13 +4433,13 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
         out.extend([Action::DeactivateEntity { entity: 1 }, Action::DeactivateEntity { entity: 0 }]);
     } else if bits & 2 == 0 {
         // The boss-room return: movie 55 counted, 326, entity 1, item 117 for item 116, the
-        // normal camera, a fade in, object 3, effects 24 to 26. The entity and hero moves (their
-        // locators are not given) and the boss-fight tweak are not built.
+        // normal camera, the boss-fight refill of instance 12, a fade in, object 3, effects 24 to
+        // 26. The entity and hero moves (their locators are not given) are not built.
         s.set_word(p, 1, bits | 2);
         s.queue_movie(55);
         s.set(326, true);
         s.remove_all(117);
-        out.extend([Action::ActivateEntity { entity: 1 }, Action::GiveItem { item: 116, count: 1 }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 1.0, wait: false }, Action::InitObjOn { obj: 3, end: false }]);
+        out.extend([Action::ActivateEntity { entity: 1 }, Action::GiveItem { item: 116, count: 1 }, Action::ReturnCamera { preset: -1, release: true }, Action::BossFight { instance: 12 }, Action::FadeIn { seconds: 1.0, wait: false }, Action::InitObjOn { obj: 3, end: false }]);
         out.extend((24..=26).map(|slot| Action::StartEffect { slot, camera: false }));
     } else {
         // H17, the taunts (by 330, 329, 328, 327, none: the first three lines then the last two
@@ -6842,11 +6845,13 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
         }
         // SPEC-0041 800 CB5 (trigger 1, entering, 55 clear, stage A not done): stage A (the
-        // camera and dialogue lines 0 to 6 with entities 10 and 11), then the stage chain armed.
+        // camera and dialogue lines 0 to 6 with entities 10 and 11, after the boss-fight refill
+        // of instance 2), then the stage chain armed.
         (800, 5) if call.object && call.state == 1 && !state.flag(55) && state.word(pack, 1) == 0 => {
             state.set_word(pack, 1, 1);
             out.actions.extend([
                 Action::HoldHero,
+                Action::BossFight { instance: 2 },
                 Action::MoveEntity { entity: 10, locator: 25, face: true },
                 Action::MoveEntity { entity: 11, locator: 26, face: true },
                 Action::LetterBox { on: true, seconds: 1.0, wait: false },
@@ -8115,7 +8120,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             ]);
         }
         // Routine 44 (trigger 2; 366 set, 367 clear): 367, the fade, set 21 into slot 0, movie
-        // 79, entity 76's loop 26, the fade in. SetEntityInvulnerable is not built.
+        // 79, entity 76's loop 26 and SetEntityInvulnerable(76), the fade in.
         (1300, 44) if call.object && call.state == 1 && state.flag(366) && !state.flag(367) => {
             state.set(367, true);
             out.actions.extend([
@@ -8125,6 +8130,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::WaitLoads,
                 Action::PlayFmv { movie: 79 },
                 Action::EntityAnim { entity: 76, anim: 26, looped: true, wait: false },
+                Action::SetInvulnerable { entity: 76, on: true },
                 wait(0.5),
                 Action::FadeIn { seconds: 1.0, wait: true },
             ]);
@@ -12101,22 +12107,25 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             Vec::new()
         }
         // SPEC-0041 985 arrivals: CB1 (281 clear at load: the hero at locator 9, the camera, 212;
-        // with 214 clear level states 0 to 2 cleared; step word A cleared; the arrival word) and
+        // with 214 clear level states 0 to 2 cleared and the boss-fight refill of instance 1;
+        // step word A cleared; the arrival word) and
         // CB4 (281 set: the hero at locator 9, the camera; step word B = B0; the arrival word).
         985 => {
             state.set_word(985, 3, 1);
+            let mut v = vec![Action::MoveHero { locator: 9 }, Action::ReturnCamera { preset: -1, release: true }];
             if state.word(985, 9) == 1 {
                 state.set(212, true);
                 if !state.flag(214) {
                     for l in 0..=2 {
                         state.set_level(l, false);
                     }
+                    v.push(Action::BossFight { instance: 1 });
                 }
                 state.set_word(985, 1, 0);
             } else {
                 state.set_word(985, 2, 1);
             }
-            vec![Action::MoveHero { locator: 9 }, Action::ReturnCamera { preset: -1, release: true }]
+            v
         }
         // SPEC-0041 1096 arrival: with 45 clear CB8 (the boss slot, objects 0 to 5, movie 51
         // counted, the hero at locator 10, object 14 off, entity 0, the fade in); with 45 set CB11
