@@ -326,6 +326,60 @@ pub struct Shot {
     pub class: u8,
     /// The status request (code, duration, amount, period), or None.
     pub status: Option<[i32; 4]>,
+    /// The host's id for the shot's visual record (SPEC-0034 Roberta's shot visuals).
+    pub id: u32,
+}
+
+/// Roberta's shot-visual tables (SPEC-0034 Roberta's shot visuals), read from the boot data.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct VisualTables {
+    /// The flight tables by kind 0 to 2 (8 entries by shot step).
+    pub flight: [[i32; 8]; 3],
+    /// The full-release flight table by Mote (14 entries, m - 160).
+    pub full: [i32; 14],
+    /// The Mote aura table (the second flight layer), by Mote.
+    pub aura: [i32; 14],
+    /// The impact table by Mote, and the impact tables by kind 0 to 2 (by shot step).
+    pub impact_mote: [i32; 14],
+    pub impact: [[i32; 8]; 3],
+}
+
+impl Default for VisualTables {
+    fn default() -> Self {
+        Self { flight: [[-1; 8]; 3], full: [-1; 14], aura: [-1; 14], impact_mote: [-1; 14], impact: [[-1; 8]; 3] }
+    }
+}
+
+/// The flight table addresses by kind, the full-release table, the impact tables.
+pub const FLIGHT_AT: [u32; 3] = [0x0031_54C8, 0x0031_54E8, 0x0031_5508];
+pub const FULL_AT: u32 = 0x0031_5440;
+pub const IMPACT_MOTE_AT: u32 = 0x0031_5478;
+pub const IMPACT_AT: [u32; 3] = [0x0031_5528, 0x0031_5548, 0x0031_5568];
+
+impl VisualTables {
+    /// A shot's effect ids (A flight, B second flight layer, C impact; -1 none) for its kind (the
+    /// launch class: 0 to 2 quick, 3 full release), shot step (0 to 7) and Mote. None when the
+    /// Mote's power-attack object supplies the visuals instead (a full release with 161, 162,
+    /// 164, 165, 166, 169, 171 or 173).
+    pub fn ids(&self, kind: u8, step: usize, mote: Option<u16>) -> Option<[i32; 3]> {
+        let m = mote.and_then(|id| usize::try_from(id as i32 - 160).ok()).filter(|&k| k < 14);
+        let step = step.min(7);
+        if kind == 3 && matches!(mote, Some(161 | 162 | 164 | 165 | 166 | 169 | 171 | 173)) {
+            return None;
+        }
+        let a = match kind {
+            0..=2 => self.flight[kind as usize][step],
+            3 => m.map_or(self.flight[2][step], |k| self.full[k]),
+            _ => 402,
+        };
+        let b = if kind == 3 { -1 } else { m.map_or(-1, |k| self.aura[k]) };
+        let c = match (m, kind) {
+            (Some(k), _) => self.impact_mote[k],
+            (None, 0..=2) => self.impact[kind as usize][step],
+            _ => 403,
+        };
+        Some([a, b, c])
+    }
 }
 
 fn unit(v: Vec3) -> Vec3 {
@@ -423,6 +477,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn shot_visual_ids() {
+        // SPEC-0034 Roberta's shot visuals, synthetic tables.
+        let mut t = VisualTables::default();
+        t.flight = [[10, 11, 12, 13, 14, 15, 16, 17], [20; 8], [30, 31, 32, 33, 34, 35, 36, 37]];
+        t.impact = [[50; 8], [60; 8], [70, 71, 72, 73, 74, 75, 76, 77]];
+        t.full[3] = 90;
+        t.aura[3] = 91;
+        t.impact_mote[3] = 92;
+        // Quick shots: A by kind and step, B the aura (none without a Mote), C by kind and step.
+        assert_eq!(t.ids(0, 2, None), Some([12, -1, 50]));
+        assert_eq!(t.ids(1, 0, Some(163)), Some([20, 91, 92]));
+        // Full release: A by Mote, or the kind-2 table at the step without one; no B.
+        assert_eq!(t.ids(3, 0, Some(163)), Some([90, -1, 92]));
+        assert_eq!(t.ids(3, 4, None), Some([34, -1, 403]));
+        // The Mote objects that supply their own visuals; another kind gives 402 and 403.
+        assert_eq!(t.ids(3, 0, Some(161)), None);
+        assert_eq!(t.ids(4, 0, None), Some([402, -1, 403]));
+    }
+
+    #[test]
     fn shot_world_cues() {
         // SPEC-0036 World contact vectors: collider surface 2 plays 8; a record with +0x4D 5
         // plays 10.
@@ -507,7 +581,7 @@ mod tests {
         let d = launch_dir(a, default_aim([0.0; 3], [0.0, 0.0, 1.0]));
         assert!((d[1] - 0.02563).abs() < 1e-4 && (d[2] - 0.99967).abs() < 1e-4);
         // Homing: shot at the origin, d (1, 0, 0), speed 60, target (0, 0, 10).
-        let mut s = Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 10, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None };
+        let mut s = Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 10, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0 };
         s.step(Some([0.0, 0.0, 10.0]));
         assert!((s.dir[0] - 0.948683).abs() < 1e-5 && (s.position[2] - 0.316228).abs() < 1e-5);
         s.step(Some([0.0, 0.0, 10.0]));

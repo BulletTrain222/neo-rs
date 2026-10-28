@@ -3161,6 +3161,9 @@ impl Play {
         let t = if full { mote.and_then(|id| neopets_sim::mote::power_index(1, id)).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0) } else { 1.0 };
         let status = (full && row.reaction != -1)
             .then(|| mote.and_then(|id| neopets_sim::mote::status_request(1, id, |k| self.design.attack_power(k))).map(|r| [row.reaction, r[1], r[2], r[3]]).unwrap_or([row.reaction, -1, -1, -1]));
+        // The shot's visual record (SPEC-0034): kind = the launch class; the shot step is taken
+        // as 0 (its mapping to the sub-states is not given, R-0114).
+        let visual = self.attack_fx.shot_tables.ids(class, 0, mote);
         let mut launched = 0;
         for _ in 0..count {
             if self.hero_shots.len() >= 6 {
@@ -3188,7 +3191,12 @@ impl Play {
                 t,
                 class,
                 status,
+                id: self.attack_fx.next_shot,
             });
+            if let Some(v) = visual {
+                self.attack_fx.shots.insert(self.attack_fx.next_shot, (v, [None; 2], anchor));
+            }
+            self.attack_fx.next_shot = self.attack_fx.next_shot.wrapping_add(1);
             launched += 1;
         }
         self.last_hit = format!("Roberta launched {launched} shot(s) (class {class}, held {held}, homing {}) on tick {}", row.homing, self.ticks);
@@ -6841,6 +6849,7 @@ impl Play {
         }
         self.roberta_displays_step();
         self.attack_fx_step();
+        self.shot_fx_step();
         self.items_flags_step();
         if self.hero_index == 0 && self.attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.attack = Some(neopets_sim::attack::TorAttack::start_with(self.gesture.mode));
@@ -10163,6 +10172,18 @@ impl Play {
             hold: [t(0x0031_52B8), t(0x0031_52F0)],
             light: t(0x0031_5588),
         };
+        // SPEC-0034 Roberta's shot visuals.
+        {
+            use neopets_sim::roberta as rb;
+            let t8 = |at: u32| neopets_data::archive::boot_u32_table(boot, at, 8).map(|w| std::array::from_fn(|k| w[k] as i32)).unwrap_or([-1; 8]);
+            self.attack_fx.shot_tables = rb::VisualTables {
+                flight: rb::FLIGHT_AT.map(t8),
+                full: t(rb::FULL_AT),
+                aura: t(0x0031_53D0),
+                impact_mote: t(rb::IMPACT_MOTE_AT),
+                impact: rb::IMPACT_AT.map(t8),
+            };
+        }
         if std::env::var_os("NEOPETS_TRACE_FX").is_some() {
             eprintln!("[fx] tables {:?}", self.attack_fx.tables);
         }
@@ -10176,7 +10197,7 @@ impl Play {
     /// effect at the hero, the spin glow 242 at T in sub-states 6 and 7. Both: on the first pass
     /// of sub-state 1 past the full-press threshold (50 Tor, 80 Roberta) the burst (detached; 243
     /// for Tor and 240 for Roberta with no Mote) and the charged-hold loop (N, target T; 245 for
-    /// Roberta with no Mote) until sub-state 1 ends. Roberta's shot visuals are not built.
+    /// Roberta with no Mote) until sub-state 1 ends. Roberta's shot visuals: shot_fx_step.
     fn attack_fx_step(&mut self) {
         let table = self.effect_table.clone();
         let h = self.hero_index;
@@ -10267,6 +10288,53 @@ impl Play {
             if now != fx.trace {
                 eprintln!("[fx] tick {}: {now}", self.ticks);
                 self.attack_fx.trace = now;
+            }
+        }
+    }
+
+    /// SPEC-0034 Roberta's shot visuals, once per pass: each live shot's flight effects A and B
+    /// follow it; a shot that has ended (by any route) stops them and plays C once at its last
+    /// position.
+    fn shot_fx_step(&mut self) {
+        let table = self.effect_table.clone();
+        let live: std::collections::HashMap<u32, ([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.id, (s.position, s.dir))).collect();
+        let frame_of = |d: [f32; 3]| {
+            let fw = unit([d[0], 0.0, d[2]]);
+            let fw = if fw == [0.0; 3] { [0.0, 0.0, 1.0] } else { fw };
+            [[fw[2], 0.0, -fw[0]], [0.0, 1.0, 0.0], fw]
+        };
+        let ids: Vec<u32> = self.attack_fx.shots.keys().copied().collect();
+        for id in ids {
+            let Some((v, mut handles, last)) = self.attack_fx.shots.get(&id).copied() else { continue };
+            match live.get(&id) {
+                Some(&(at, dir)) => {
+                    let frame = frame_of(dir);
+                    for (k, h) in handles.iter_mut().enumerate() {
+                        if v[k] < 0 {
+                            continue;
+                        }
+                        let hd = *h.get_or_insert_with(|| {
+                            let hd = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, v[k], at, frame));
+                            self.effects.update(&table, hd, None, &mut self.rng);
+                            hd
+                        });
+                        self.effects.set_position(hd, at);
+                    }
+                    self.attack_fx.shots.insert(id, (v, handles, at));
+                }
+                None => {
+                    for hd in handles.into_iter().flatten() {
+                        self.effects.stop(&table, hd);
+                        self.effects.release(hd);
+                    }
+                    if v[2] >= 0 {
+                        self.effects.one_shot(&table, v[2], last, frame_of([0.0, 0.0, 1.0]), &mut self.rng);
+                    }
+                    if std::env::var_os("NEOPETS_TRACE_FX").is_some() {
+                        eprintln!("[fx] tick {}: shot {id} ended at {last:?}; flight {:?}, impact {}", self.ticks, &v[..2], v[2]);
+                    }
+                    self.attack_fx.shots.remove(&id);
+                }
             }
         }
     }
@@ -12261,6 +12329,11 @@ impl Default for AttackTables {
 #[derive(Default)]
 struct AttackFx {
     tables: AttackTables,
+    /// Roberta's shot visuals: the tables, the next shot id, and per live shot its ids (A, B,
+    /// C), its flight handles and its last position.
+    shot_tables: neopets_sim::roberta::VisualTables,
+    next_shot: u32,
+    shots: std::collections::HashMap<u32, ([i32; 3], [Option<usize>; 2], [f32; 3])>,
     line: Option<(i32, usize)>,
     light: Option<(i32, usize)>,
     aura: Option<(i32, usize)>,
