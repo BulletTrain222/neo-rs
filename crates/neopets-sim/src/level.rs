@@ -4409,7 +4409,7 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
     };
     if bits & 128 != 0 {
         // The act start (movies 56, 91, 57 and 58 counted; act 4; 333; the return world eW 178,
-        // pack 1411, loaded at once). BossFightTweakHero is not built.
+        // pack 1411, loaded at once). Its BossFightTweakHero is stage 1, which has no effect.
         s.set_word(p, 1, (bits & !128) | 256);
         for m in [56, 91, 57, 58] {
             s.queue_movie(m);
@@ -7045,7 +7045,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1096, 5) if call.object => state.set(318, true),
         // SPEC-0044 1174 trigger 1, the Act 2 start (any fire; bit 15 is never set): bit 14, the
         // fade, 219 and 220, movie 16, act start 2, movie 89, 221, and the load of eW 151 (pack
-        // 1300) in place of movie 18 and its return world. The boss-fight tweak is not built.
+        // 1300) in place of movie 18 and its return world. The boss-fight tweak is stage 1 (no effect).
         (1174, 1) if state.word(pack, 3) == 0 => {
             state.set_word(pack, 3, 1);
             state.set_word(pack, 1, state.word(pack, 1) | 1 << 14);
@@ -10471,8 +10471,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // SPEC-0041 800 CB2 to CB4: after stage A, stage B once AIs 10 and 11 are dead (lines 7 and
         // 8, level state 0), stage C on level state 1 (set 7 into slot 3, lines 9 and 10, entities
         // 12 to 16 aggressive, level state 2), stage D on level state 3 (lines 11 and 12, object 0,
-        // flags 55 and 200). Level states 1 and 3 come from the raider fight (not built); the
-        // boss-fight tweaks and stage D's item activation are not built.
+        // flags 55 and 200). Level states 1 and 3 come from the raider fight (not built); stage
+        // D's item activation is not built (stage A's boss-fight refill is in CB5).
         800 => {
             let w = |s: &GameState, k| s.word(800, k);
             if w(state, 1) == 1 && w(state, 2) == 0 && state.ai_dead.contains(&10) && state.ai_dead.contains(&11) {
@@ -12140,8 +12140,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0041 1096 arrival: with 45 clear CB8 (the boss slot, objects 0 to 5, movie 51
         // counted, the hero at locator 10, object 14 off, entity 0, the fade in); with 45 set CB11
-        // (object 1). The boss slot's set (region 1097 taken) and the boss-fight tweak are open or
-        // not built.
+        // (object 1). The boss slot's set (region 1097 taken) is open.
         1096 if state.flag(45) => vec![Action::InitObjOn { obj: 1, end: false }],
         1096 => {
             state.queue_movie(51);
