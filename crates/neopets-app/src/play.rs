@@ -7102,11 +7102,35 @@ impl Play {
         self.corner_step();
         self.mote_objects_step();
         self.shots_step();
-        // A swing hit: power cue 2 in sub-state 10, else weapon cue 14 (no material impact).
+        // A swing hit (SPEC-0031 Creature blocks): power cue 2 in sub-state 10; else a Tor hit on
+        // one of the four special creature kinds (the record's kind at +0xAC) plays that
+        // creature's "impact special" cue on its block at its position (nothing when the block is
+        // not held); any other victim, and every Roberta hit, weapon cue 14 (no material impact).
         if self.hit_list.len() > hits {
             let power = self.attack.as_ref().is_some_and(|a| a.sub == 10);
-            let (slot, cue) = if power { (neopets_sim::sound::POWER, 2) } else { (neopets_sim::sound::WEAPON, 14) };
-            self.sound.play(slot, cue, neopets_sim::sound::Play::default());
+            let special = |kind: i32| match kind {
+                240 => Some((365, 34)),
+                480 => Some((391, 1)),
+                405 => Some((355, 15)),
+                1941 | 1942 | 1949 | 1950 => Some((361, 22)),
+                _ => None,
+            };
+            let specials: Vec<(u32, i32, [f32; 3])> = if self.hero_index == 0 {
+                self.hit_list[hits..].iter().filter_map(|id| self.characters.iter().find(|c| c.id == *id)).filter_map(|c| special(c.pet_type).map(|(b, q)| (b, q, c.position))).collect()
+            } else {
+                Vec::new()
+            };
+            if power {
+                self.sound.play(neopets_sim::sound::POWER, 2, neopets_sim::sound::Play::default());
+            } else if !specials.is_empty() {
+                for (block, cue, at) in specials {
+                    if let Some(slot) = self.sound.slots.iter().position(|&b| b == Some(block)) {
+                        self.sound.play(slot, cue, neopets_sim::sound::Play { emitter: Some(at), ..Default::default() });
+                    }
+                }
+            } else {
+                self.sound.play(neopets_sim::sound::WEAPON, 14, neopets_sim::sound::Play::default());
+            }
         }
         self.loco.shield = self.shield.is_some();
         self.status_step();
@@ -11216,6 +11240,9 @@ impl Play {
                     self.sound.slots[k] = Some(b);
                 }
             }
+        }
+        if std::env::var_os("NEOPETS_TRACE_SLOTS").is_some() && self.ticks % 100 == 0 {
+            println!("      sound slots {:?}; kinds {:?}", self.sound.slots, self.characters.iter().filter(|c| c.pack == self.world.pack).map(|c| (c.pet_type, c.sound_blocks.clone())).collect::<Vec<_>>());
         }
         let mut plays = Vec::new();
         for c in &mut self.characters {
