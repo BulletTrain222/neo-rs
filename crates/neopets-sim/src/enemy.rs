@@ -16,7 +16,7 @@
 //! stands and notices), the alarm-group emerge of state 8, wandering in
 //! states 5 to 7 (they stand and notice),
 //! the counter-attack choice's code 5 (R-0117), the
-//! the waiting approach-3 shots' extra aim scatter, projectiles (missile
+//! projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
 //! ghosts, reanimation (state 16 of rows 224, 226, 227) and drops and coins. The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).

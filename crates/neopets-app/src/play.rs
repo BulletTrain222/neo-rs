@@ -8282,7 +8282,7 @@ impl Play {
                 let to = unit(sub_v(p, cam.eye));
                 let out_of_cone = fwd[0] * to[0] + fwd[1] * to[1] + fwd[2] * to[2] < 0.85;
                 let slot = &e.p.slots[req.slot];
-                if let Some(mut setup) = neopets_sim::projectile::spawn(&slot.missile, e.p.element, *id, launch, hero, out_of_cone, &mut self.rng) {
+                if let Some(mut setup) = neopets_sim::projectile::spawn(&slot.missile, e.p.element, *id, launch, hero, (out_of_cone, self.attack_mgr.waits(*id)), &mut self.rng) {
                     // Behavior 13: the damage times the enemy damage scale (curse, strength).
                     setup.damage = (setup.damage * e.shot_scale()).max(0.0);
                     self.shots.submit(setup);

@@ -5,8 +5,7 @@
 //!
 //! Not covered: the effects and trails (SPEC-0034), the hold word, spells (kinds 2 to 7 never
 //! touch a character here), the mote eater's drain (built by the host from the event), the
-//! status roll (no statuses yet), the summon of a lobbed shot (Behavior 31), the attack
-//! manager's +3.0 scatter, the owner's own block query after a reflection (enemies do not guard
+//! status roll (no statuses yet), the summon of a lobbed shot (Behavior 31), the owner's own block query after a reflection (enemies do not guard
 //! here), the shield Mote's charge, and the world
 //! test against static meshes, primitives and moving objects: the build tests the segment
 //! against the cell's frame-record walls instead (R-0016).
@@ -388,17 +387,19 @@ fn ballistic(launch: Vec3, aim: Vec3, s: f32) -> (Vec3, i32) {
 }
 
 /// SPEC-0029 Behavior 13: build one shot for slot values m from the launch point toward the
-/// hero (scatter e = U[0, inaccuracy] + 5.0 outside the camera cone, along a random horizontal
-/// unit vector). None for a flight mode other than 0, 1 or 2 without the lobbed flag.
-pub fn spawn(m: &Missile, element: i32, owner: u64, launch: Vec3, hero: Vec3, out_of_cone: bool, rng: &mut Rng) -> Option<Setup> {
+/// hero (scatter e = U[0, inaccuracy] + 5.0 outside the camera cone + 3.0 while the attack
+/// manager has the enemy waiting in line (SPEC-0038 Behavior 45), along a random horizontal unit
+/// vector; drawn e, then x, then z). None for a flight mode other than 0, 1 or 2 without the
+/// lobbed flag.
+pub fn spawn(m: &Missile, element: i32, owner: u64, launch: Vec3, hero: Vec3, (out_of_cone, waiting): (bool, bool), rng: &mut Rng) -> Option<Setup> {
     let lobbed = m.flags & 0x02 != 0;
     if !lobbed && !(0..=2).contains(&m.flight) {
         return None;
     }
+    let e = rng.frange(0.0, m.inaccuracy) + if out_of_cone { 5.0 } else { 0.0 } + if waiting { 3.0 } else { 0.0 };
     let wx = rng.frange(-1.0, 1.0);
     let wz = rng.frange(-1.0, 1.0);
     let w = unit([wx, 0.0, wz]);
-    let e = rng.frange(0.0, m.inaccuracy) + if out_of_cone { 5.0 } else { 0.0 };
     let straight = !lobbed && m.flight != 1;
     let target = if straight { [hero[0], hero[1] + 2.5, hero[2]] } else { hero };
     let aim = [target[0] + e * w[0], target[1], target[2] + e * w[2]];
@@ -502,7 +503,7 @@ mod tests {
     fn archer_arrow_hits_on_tick_ten() {
         // SPEC-0029 test vector: launch (0, 2, 0), hero at (0, 0, 20), no scatter.
         let mut rng = Rng::seeded(1);
-        let s = spawn(&archer(), 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], false, &mut rng).unwrap();
+        let s = spawn(&archer(), 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], (false, false), &mut rng).unwrap();
         assert_eq!(s.lifetime, 35);
         assert!((s.velocity[1] - 0.04998).abs() < 1e-4 && (s.velocity[2] - 1.99938).abs() < 1e-4);
         assert!((10..=30).contains(&s.status.2));
@@ -528,7 +529,7 @@ mod tests {
     fn shot_effect_ids() {
         let mut rng = Rng::seeded(1);
         let m = Missile { effects: [1400, 1400, 1399, -1, 1399, 1398], ..archer() };
-        let s = spawn(&m, 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], false, &mut rng).unwrap();
+        let s = spawn(&m, 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], (false, false), &mut rng).unwrap();
         let mut pool = Pool::default();
         pool.submit(s);
         let (o, g, w) = (|_| true, |_, _, _| None, |_, _| false);
@@ -536,7 +537,7 @@ mod tests {
         let ev: Vec<Event> = (0..10).flat_map(|_| pool.tick(&e)).collect();
         assert!(matches!(ev[0], Event::Effect { id: 1398, at } if at[2] > 19.0));
         // Expiry with id 3 = -1: nothing.
-        let s = spawn(&m, 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 200.0], false, &mut rng).unwrap();
+        let s = spawn(&m, 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 200.0], (false, false), &mut rng).unwrap();
         pool.submit(s);
         let far = env([0.0, 0.0, 500.0], &o, &g, &w);
         let ev: Vec<Event> = (0..60).flat_map(|_| pool.tick(&far)).collect();
@@ -546,7 +547,7 @@ mod tests {
     #[test]
     fn arrow_expires_after_thirty_six_moves() {
         let mut rng = Rng::seeded(1);
-        let s = spawn(&archer(), 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], false, &mut rng).unwrap();
+        let s = spawn(&archer(), 1, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], (false, false), &mut rng).unwrap();
         let mut pool = Pool::default();
         pool.submit(s);
         let (o, g, w) = (|_| true, |_, _, _| None, |_, _| false);
@@ -563,7 +564,7 @@ mod tests {
     #[test]
     fn homing_turns_toward_the_hero() {
         let mut pool = Pool::default();
-        let mut s = spawn(&archer(), 0, 1, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], false, &mut Rng::seeded(1)).unwrap();
+        let mut s = spawn(&archer(), 0, 1, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], (false, false), &mut Rng::seeded(1)).unwrap();
         s.kind = 17;
         s.velocity = [0.0, 0.0, 1.0];
         s.lifetime = 200;
@@ -582,7 +583,7 @@ mod tests {
     fn flower_seed_ballistic_launch() {
         // SPEC-0038 vector: v 0.5, v_end 0.1, band 3 to 60; launch (0, 1, 0), hero (20, 0, 0).
         let m = Missile { flight: 1, speed: 0.5, end_speed: 0.1, band: (3.0, 60.0), effects: [-1; 6], ..Missile::default() };
-        let s = spawn(&m, 0, 1, [0.0, 1.0, 0.0], [20.0, 0.0, 0.0], false, &mut Rng::seeded(1)).unwrap();
+        let s = spawn(&m, 0, 1, [0.0, 1.0, 0.0], [20.0, 0.0, 0.0], (false, false), &mut Rng::seeded(1)).unwrap();
         assert_eq!((s.kind, s.lifetime), (1, 3961));
         assert!((s.velocity[0] - 0.30302).abs() < 1e-4, "{:?}", s.velocity);
         assert!((s.velocity[1] - 0.27820).abs() < 1e-4, "{:?}", s.velocity);
@@ -645,7 +646,7 @@ mod tests {
     #[test]
     fn guard_blocks_and_reflects() {
         let mut rng = Rng::seeded(1);
-        let s = spawn(&archer(), 0, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], false, &mut rng).unwrap();
+        let s = spawn(&archer(), 0, 7, [0.0, 2.0, 0.0], [0.0, 0.0, 20.0], (false, false), &mut rng).unwrap();
         let (o, g, w) = (|_| true, |_, _, _| None, |_, _| false);
         let mut e = env([0.0, 0.0, 20.0], &o, &g, &w);
         e.guard = true;
