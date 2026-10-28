@@ -850,6 +850,13 @@ pub struct Play {
     /// The Lava orbit's angle, 0 at the first activation and continuing across spawns.
     orbit_angle: f32,
     hit_list: Vec<u64>,
+    /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
+    swing_serial: u32,
+    /// SPEC-0011 Thorn hits: the five-record hazard pool, its contact radius, and the thorn
+    /// shots' positions by pool slot as of the last tick.
+    thorns: neopets_sim::thorn::Pool,
+    thorn_radius: f32,
+    thorn_shots: [Option<[f32; 3]>; neopets_sim::projectile::SLOTS],
     last_axis: Option<[f32; 3]>,
     /// The last hit, for the status line.
     pub last_hit: String,
@@ -1289,6 +1296,7 @@ impl Play {
             }
         };
         let drain_words = neopets_sim::sisters::DrainWords::read(&words(neopets_sim::sisters::DRAIN_WORDS, 7)?, &words(neopets_sim::sisters::DRAIN_TABLE, 14)?).ok_or("The drain words are short")?;
+        let thorn_radius = f32::from_bits(words(neopets_sim::thorn::RADIUS_WORD, 1)?[0]);
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
         let ixi_words = neopets_sim::ixi::Words::read(&words(neopets_sim::ixi::BASE, neopets_sim::ixi::WORDS)?).ok_or("The Ixi Chief's tuning block is short")?;
@@ -1551,6 +1559,10 @@ impl Play {
             knight_words,
             gelert_words,
             hit_list: Vec::new(),
+            swing_serial: 0,
+            thorns: Default::default(),
+            thorn_radius,
+            thorn_shots: [None; neopets_sim::projectile::SLOTS],
             last_axis: None,
             last_hit: String::new(),
             hero_hp: hero_max,
@@ -2019,6 +2031,8 @@ impl Play {
         }
         // The pool's slots are reset when a world starts (here: when a world is made current).
         self.shots.reset();
+        self.thorns.reset();
+        self.thorn_shots = [None; neopets_sim::projectile::SLOTS];
         // SPEC-0025: the region reset clears the remembered glow indices; a named map area is
         // the location a save names.
         self.save_points = Default::default();
@@ -3173,6 +3187,7 @@ impl Play {
         if a.cleared {
             a.cleared = false;
             self.hit_list.clear();
+            self.swing_serial = self.swing_serial.wrapping_add(1);
         }
         // Sub-state 14 (ids 162, 169 and 171) pays at release.
         if before != 14 && a.sub == 14 {
@@ -7101,6 +7116,7 @@ impl Play {
                 self.power_release();
             }
             self.hit_list.clear();
+            self.swing_serial = self.swing_serial.wrapping_add(1);
             if let Some(a) = self.attack.as_mut() {
                 a.cleared = false;
             }
@@ -7959,6 +7975,7 @@ impl Play {
             };
             self.shots.tick(&env)
         };
+        self.thorn_step(hero);
         for ev in events {
             match ev {
                 neopets_sim::projectile::Event::Hero { damage, blocked, element, .. } => {
@@ -9614,6 +9631,49 @@ impl Play {
             }
             if let Some(step) = step {
                 self.drain_step(step);
+            }
+        }
+    }
+
+    /// SPEC-0011 Thorn hits (Medium): on the first tick a thorn shot's pool slot is free again,
+    /// a live Malice (kind selector 0) claims a hazard record at the shot's last position, its
+    /// height from the ground probe started 8 above (Medium-Low). The hazards then tick: contact
+    /// with the hero's body (radius word 0x2DCB20) deals the thorn damage (10) and waits 120
+    /// ticks; after the 60-tick growth each swing whose weapon volume (radius 1.0, length 2.5
+    /// from the grip) reaches one counts a strike, and the third removes it. Not built: any
+    /// drawn hazard (the spec names no model or effect).
+    fn thorn_step(&mut self, hero: [f32; 3]) {
+        let pack = self.world.pack;
+        let malice = self.characters.iter().any(|c| c.pack == pack && c.dying.is_none() && c.sister.as_ref().is_some_and(|s| s.class == 13 && !s.dead()));
+        for (k, slot) in self.shots.slots.iter().enumerate() {
+            let now = slot.as_ref().filter(|s| s.s.kind == neopets_sim::thorn::SHOT_KIND).map(|s| s.position);
+            if let (Some(last), None) = (self.thorn_shots[k], slot.as_ref()) {
+                if malice {
+                    let y = self.world.ground_at(last[0], last[2], last[1] + 8.0).unwrap_or(last[1]);
+                    self.thorns.spawn([last[0], y, last[2]]);
+                }
+            }
+            self.thorn_shots[k] = now;
+        }
+        if self.thorns.live().next().is_none() {
+            return;
+        }
+        let r = self.thorn_radius;
+        let touches = |p: [f32; 3]| neopets_sim::projectile::sphere_meets_body(p, r, hero, contact::HERO_RADIUS, HERO_HEIGHT);
+        let blade = self.weapon_segment().map(|c| {
+            let p0 = add(c.center, scale(c.axis, -0.5 * c.length));
+            (p0, add(p0, scale(c.axis, 2.5)))
+        });
+        let reaches = move |p: [f32; 3]| blade.is_some_and(|(a, b)| neopets_sim::combat::segment_distance(a, b, p, p) <= 1.0);
+        let swing = blade.map(|_| (self.swing_serial, &reaches as &dyn Fn([f32; 3]) -> bool));
+        let events = self.thorns.tick(&touches, swing, self.sister_words.thorn_max_hits);
+        for ev in events {
+            match ev {
+                neopets_sim::thorn::Event::Contact(_) => {
+                    let d = self.enemy_damage(self.sister_words.special_damage[0] as f32, false, -1, 1.0);
+                    self.hero_hit(d, 0.0, false, [0.0, 0.0, 1.0], "a thorn".into());
+                }
+                neopets_sim::thorn::Event::Removed(i) => self.last_boss = format!("thorn hazard {i} removed on tick {}", self.ticks),
             }
         }
     }

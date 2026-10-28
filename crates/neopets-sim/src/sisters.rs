@@ -45,6 +45,8 @@ pub struct Words {
     pub special_damage: [i32; 3],
     /// The leach's MP drain (word 0x2DD458).
     pub leach_drain: i32,
+    /// ThornAttackMaxHits (0x2DAB84): the strikes that remove a thorn hazard.
+    pub thorn_max_hits: i32,
 }
 
 impl Words {
@@ -74,6 +76,7 @@ impl Words {
             status_chance: [i(0x002D_AB68), i(0x002D_AB70), i(0x002D_AB60)],
             special_damage: [i(0x002D_AB80), i(0x002D_AB7C), i(0x002D_AB74)],
             leach_drain: leach_drain as i32,
+            thorn_max_hits: i(0x002D_AB84),
         })
     }
 

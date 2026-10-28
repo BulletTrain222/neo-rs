@@ -68,6 +68,7 @@ pub mod serpent;
 pub mod shake;
 pub mod shop;
 pub mod synth;
+pub mod thorn;
 pub mod status;
 pub mod swap;
 mod step;
