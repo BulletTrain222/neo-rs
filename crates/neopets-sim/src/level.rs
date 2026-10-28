@@ -160,6 +160,9 @@ pub enum Action {
     RefillMagic,
     /// The hero's hit points refilled to the maximum (1327's practice steps 231 and 233).
     RefillHealth,
+    /// The hero's hit points raised to `percent` of the maximum when below it (1023's arena
+    /// return).
+    HeroHpAtLeast { percent: f32 },
     /// SetEntityInvulnerable(entity, on) (SPEC-0030 row 132): while set the entity is never a
     /// hit candidate.
     SetInvulnerable { entity: usize, on: bool },
@@ -13087,7 +13090,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             actions
         }
-        1023 => village_return(state).into_iter().collect(),
+        1023 => {
+            let mut v: Vec<Action> = village_return(state).into_iter().collect();
+            v.extend(arena_return_1023(state));
+            v
+        }
         _ => Vec::new(),
     }
 }
@@ -13095,7 +13102,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
 /// SPEC-0045 1023 activate-world routine: the hero goes back to the return locator of the
 /// world it came from (eW 106 pack 1098 to 16, 109/1129 to 17, 111/1131 to 10, 112/1133 to 9,
 /// 113/1136 to 7, 114/1139 to 12, 115/1140 to 15, 116/1143 to 13, 117/1148 to 11, 118/1150
-/// to 8, 125/1172 to 14). The arena return (value 10 for eW 90) is not built.
+/// to 8, 125/1172 to 14). The arena return (value 10 for eW 90) is `arena_return_1023`.
 fn village_return(state: &GameState) -> Option<Action> {
     let locator = match state.last_pack? {
         1098 => 16,
@@ -13127,6 +13134,52 @@ const VILLAGERS: [(&[usize], u8, u16); 34] = [
 
 fn villager(e: usize) -> Option<usize> {
     VILLAGERS.iter().position(|(es, _, _)| es.contains(&e))
+}
+
+/// SPEC-0045 1023 activate-world routine, the arena return (the type-2 value for eW 90 at 10,
+/// posted by pack 1176): a 0 s fade out, the hero's hit points raised to 50 percent when below,
+/// the hero to locator 6, the result R (the type-1 value for eW 90: 1 won, -1 lost) kept in the
+/// round-result word (26), equip off, 2.5 s, then the result step, talked by the arena master:
+/// won: the next rank (385 with 384 set, line 58; 384 with 383, 59; 383 with 382, 60; 382 with
+/// 381, 61; else 381, line 63 holding item 106 or 107, else 62); otherwise 380 and line 64 to
+/// 67 by the highest of 384 to 381 set, else 68. Both values are reset (type 2 to -1, type 1
+/// to 0). A 0.5 s fade in follows the move (this build's: the routine names none, and the arrival
+/// fade has already run).
+fn arena_return_1023(s: &mut GameState) -> Vec<Action> {
+    if s.blackboard.get(&(2, 90)) != Some(&10) {
+        return Vec::new();
+    }
+    let r = s.blackboard.get(&(1, 90)).copied().unwrap_or(0);
+    s.blackboard.insert((2, 90), -1);
+    s.blackboard.insert((1, 90), 0);
+    s.set_word(1023, 26, r);
+    let line = if r == 1 {
+        let (flag, line) = if s.flag(384) {
+            (385, 58)
+        } else if s.flag(383) {
+            (384, 59)
+        } else if s.flag(382) {
+            (383, 60)
+        } else if s.flag(381) {
+            (382, 61)
+        } else {
+            (381, if s.has_item(106) || s.has_item(107) { 63 } else { 62 })
+        };
+        s.set(flag, true);
+        line
+    } else {
+        s.set(380, true);
+        [384u16, 383, 382, 381].iter().position(|&f| s.flag(f)).map_or(68, |k| 64 + k as u16)
+    };
+    vec![
+        Action::FadeOut { seconds: 0.0, wait: false },
+        Action::HeroHpAtLeast { percent: 50.0 },
+        Action::MoveHero { locator: 6 },
+        Action::Equip { on: false },
+        Action::FadeIn { seconds: 0.5, wait: false },
+        wait(2.5),
+        Action::Converse { entity: 66, line },
+    ]
 }
 
 /// SPEC-0045 1023 arena master (entity 66, Shanra), by the round-result word S (word 26, set by
@@ -18705,6 +18758,25 @@ mod tests {
         assert_eq!(traded[0], Action::Message { line: 47 });
         assert!(traded.contains(&Action::GiveWordItem { word: 1, default: 99 }));
         assert!(!s.has_item(98) && s.has_item(42) && s.word(1148, 1) == 98);
+    }
+
+    #[test]
+    fn arena_return_1023() {
+        let mut s = GameState::default();
+        // A win posted by 1176: rank 381, line 62, the result word 1, both values reset.
+        s.blackboard.insert((2, 90), 10);
+        s.blackboard.insert((1, 90), 1);
+        let a = super::arena_return_1023(&mut s);
+        assert!(a.contains(&Action::MoveHero { locator: 6 }) && a.contains(&Action::Converse { entity: 66, line: 62 }));
+        assert!(s.flag(381) && s.word(1023, 26) == 1);
+        assert_eq!((s.blackboard.get(&(2, 90)), s.blackboard.get(&(1, 90))), (Some(&-1), Some(&0)));
+        // Nothing without the return value.
+        assert!(super::arena_return_1023(&mut s).is_empty());
+        // A loss after one win: 380 and line 67.
+        s.blackboard.insert((2, 90), 10);
+        s.blackboard.insert((1, 90), -1);
+        let a = super::arena_return_1023(&mut s);
+        assert!(s.flag(380) && a.contains(&Action::Converse { entity: 66, line: 67 }));
     }
 
     #[test]
