@@ -924,6 +924,8 @@ pub struct Play {
     pub effects: neopets_sim::effect::Effects,
     /// The item showcase in its full mode (SPEC-0021 Item showcase; SPEC-0033 Behavior 42).
     pub showcase: Option<Showcase>,
+    /// The screen-anchored showcase of modes 1 to 3 (SPEC-0021 Item showcase).
+    pub corner: Option<Corner>,
     /// The ids picked up before, for the first-pickup text.
     showcased: std::collections::HashSet<u16>,
     /// The swing-trail manager (SPEC-0034 3.8), the hero's held-weapon trail and each enemy's.
@@ -1437,6 +1439,7 @@ impl Play {
             effects: neopets_sim::effect::Effects::new(),
             trails: Default::default(),
             showcase: None,
+            corner: None,
             showcased: Default::default(),
             hero_trail: None,
             enemy_trails: HashMap::new(),
@@ -4854,22 +4857,31 @@ impl Play {
     /// 111 to 118, 1.5 with no valid weapon.
     /// SPEC-0021 Item showcase, start with quiet 0: when the item has showcase text and the
     /// hero is not busy, the full showcase (mode 4) and its pose task begin. Not built: the
-    /// screen-corner showcase of modes 1 to 3 (items without text, and quiet starts), the
-    /// showcase effect, the camera call (0.9425, 10.0) and the dropped stinger request 42 / 66.
+    /// showcase effect, the camera call (0.9425, 10.0), the dropped stinger request 42 / 66 and
+    /// the quiet starts of the two give paths. Without text, or with the hero busy, the
+    /// screen-anchored showcase of mode 1 starts instead.
     /// Diagnostic: the showcase started for item `id` in the current world.
     pub fn diag_showcase(&mut self, id: u16) {
         let pack = self.world.pack;
         self.start_showcase(id, pack);
-        println!("      showcase {id}: {:?}", self.showcase.as_ref().map(|s| (s.pose, s.floating, String::from_utf8_lossy(&s.text).into_owned())));
+        println!("      showcase {id}: {:?}, corner {:?}", self.showcase.as_ref().map(|s| (s.pose, s.floating, String::from_utf8_lossy(&s.text).into_owned())), self.corner);
     }
 
     fn start_showcase(&mut self, id: u16, pack: u32) {
-        if self.showcase.is_some() || neopets_sim::hero::busy_state(self.loco.state) || self.dialogue_open {
+        // Nothing happens while the full showcase (mode 4) runs.
+        if self.showcase.is_some() {
             return;
         }
         let first = self.showcased.insert(id);
         let flags = &self.state;
-        let Some(text) = self.design.item_showcase_text(id, first, |f| flags.flag(f)) else { return };
+        let text = self.design.item_showcase_text(id, first, |f| flags.flag(f));
+        let busy = neopets_sim::hero::busy_state(self.loco.state) || self.dialogue_open;
+        let Some(text) = text.filter(|_| !busy) else {
+            // Mode 1 (grow) at (0.5, 0.6, 5.0) with scale 0.
+            self.corner = Some(Corner { id, pack, mode: 1, x: 0.5, y: 0.6, z: 5.0, s: 0.0, timer: 0.0, angle: 0.0 });
+            return;
+        };
+        self.corner = None;
         // SPEC-0033 Behavior 42: the pose code and stinger by hero and item id.
         let tor = self.hero_index == 0;
         let (pose, stinger, floating) = match id {
@@ -4923,6 +4935,51 @@ impl Play {
 
     /// The floating showcase item (mode 4): its id, world and transform (2.8 up and 1.1 ahead of
     /// the hero, turned by the showcase angle), unless the pose hides it.
+    /// SPEC-0021 Item showcase, modes 1 to 3, each frame (dt = 1/60 here): the angle advances
+    /// by 2 pi / 5 rad/s and wraps; grow raises s by 1.5 dt (coins and Tal, 135 to 144, stop at
+    /// 0.4 and shrink; others move by (+0.5, -0.5) dt and stop at 0.8 to hold); hold lasts 1.3 s;
+    /// shrink lowers s by 2.5 dt and moves x by 0.5 dt, and ends below 0.
+    fn corner_step(&mut self) {
+        let Some(c) = self.corner.as_mut() else { return };
+        let dt = 1.0 / 60.0;
+        c.angle += 1.256_637_2 * dt;
+        if c.angle > std::f32::consts::TAU {
+            c.angle -= std::f32::consts::TAU;
+        }
+        match c.mode {
+            1 => {
+                c.s += 1.5 * dt;
+                if (135..=144).contains(&c.id) {
+                    if c.s > 0.4 {
+                        c.s = 0.4;
+                        c.mode = 3;
+                    }
+                } else {
+                    c.x += 0.5 * dt;
+                    c.y -= 0.5 * dt;
+                    if c.s > 0.8 {
+                        c.s = 0.8;
+                        c.mode = 2;
+                        c.timer = 0.0;
+                    }
+                }
+            }
+            2 => {
+                c.timer += dt;
+                if c.timer > 1.3 {
+                    c.mode = 3;
+                }
+            }
+            _ => {
+                c.s -= 2.5 * dt;
+                c.x += 0.5 * dt;
+                if c.s < 0.0 {
+                    self.corner = None;
+                }
+            }
+        }
+    }
+
     pub fn showcase_item(&self) -> Option<(u16, u32, [f32; 3], f32)> {
         let s = self.showcase.as_ref().filter(|s| s.floating)?;
         let (p, f) = (self.loco.position(), self.loco.facing);
@@ -7042,6 +7099,7 @@ impl Play {
         self.hero_swing();
         self.trail_step();
         self.showcase_step();
+        self.corner_step();
         self.mote_objects_step();
         self.shots_step();
         // A swing hit: power cue 2 in sub-state 10, else weapon cue 14 (no material impact).
@@ -12412,6 +12470,22 @@ pub struct Cheats {
     pub charge: bool,
     /// The developer menu's no clip: the hero's wall, box, block and sphere contacts are off.
     pub noclip: bool,
+}
+
+/// The screen-anchored showcase (modes 1 grow, 2 hold, 3 shrink): the item, its screen
+/// position (x, y as fractions of a 640 x 480 screen, z units in front of the camera), scale,
+/// hold timer and angle.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Corner {
+    pub id: u16,
+    pub pack: u32,
+    pub mode: u8,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub s: f32,
+    pub timer: f32,
+    pub angle: f32,
 }
 
 /// The full item showcase in progress (SPEC-0021 Item showcase).

@@ -1165,6 +1165,16 @@ fn step_sim(
                 play.play.state.timer.activate(start, 0.0, false);
             }
         }
+        // NEOPETS_TRACE_SHOWCASE="tick:id" in the window too: the item showcase started once.
+        if let Some((k, id)) = std::env::var("NEOPETS_TRACE_SHOWCASE").ok().and_then(|v| {
+            let (a, b) = v.split_once(':')?;
+            Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<u16>().ok()?))
+        }) {
+            static SHOWN: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+            if play.play.ticks >= k && !SHOWN.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                play.play.diag_showcase(id);
+            }
+        }
         // NEOPETS_TRACE_MOVIE="index[,index...]": diagnostic PlayFMV calls at play tick 60.
         if let Ok(v) = std::env::var("NEOPETS_TRACE_MOVIE") {
             static MOVIE_DONE: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -2368,6 +2378,7 @@ fn sync_items(
     archive: Option<ResMut<Archive>>,
     mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility, Option<&Children>), Without<ShowcaseMarker>>,
     mut showcases: Query<(Entity, &ShowcaseMarker, &mut Transform, &mut Visibility), Without<ItemMarker>>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
     parts: Query<&MeshMaterial3d<StandardMaterial>, With<ItemPart>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -2414,19 +2425,29 @@ fn sync_items(
         }
     }
     let mut archive = archive;
-    // SPEC-0021 Item showcase, mode 4: the item model floating above the hero.
-    let show = p.showcase_item();
+    // SPEC-0021 Item showcase, mode 4: the item model floating above the hero. Modes 1 to 3
+    // (Medium): anchored to the screen, at E + z F + 640 (x - 0.5)(z / 512) R + 480 (y - 0.5)
+    // (z / 512) U (the camera's forward, right and up; the PS2 rows point left and down, so the
+    // spec's minus signs become plus here), turned by the angle, then the camera's orientation,
+    // scaled by s.
+    let show: Option<(u16, u32, Transform)> = p.showcase_item().map(|(id, pack, at, angle)| (id, pack, Transform::from_translation(Vec3::from(at)).with_rotation(Quat::from_rotation_y(angle)))).or_else(|| {
+        let c = p.corner?;
+        let g = cameras.iter().next()?;
+        let k = c.z / 512.0;
+        let origin = g.translation() + g.forward() * c.z + g.right() * (640.0 * (c.x - 0.5) * k) + g.up() * (480.0 * (c.y - 0.5) * k);
+        let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(c.angle + std::f32::consts::PI);
+        Some((c.id, c.pack, Transform { translation: origin, rotation: rot, scale: Vec3::splat(c.s.max(1e-4)) }))
+    });
     for (e, s, mut t, mut vis) in &mut showcases {
         match show {
-            Some((id, _, at, angle)) if id == s.0 => {
-                t.translation = Vec3::from(at);
-                t.rotation = Quat::from_rotation_y(angle);
+            Some((id, _, tr)) if id == s.0 => {
+                *t = tr;
                 *vis = Visibility::Visible;
             }
             _ => commands.entity(e).despawn(),
         }
     }
-    if let Some((id, pack, at, _)) = show.filter(|(id, ..)| !showcases.iter().any(|(_, s, ..)| s.0 == *id)) {
+    if let Some((id, pack, at)) = show.filter(|(id, ..)| !showcases.iter().any(|(_, s, ..)| s.0 == *id)) {
         let id = id as u32;
         let key = (id, if matches!(id, 50..=59 | 98..=190) { 0 } else { pack });
         if !models.contains_key(&key) {
@@ -2443,7 +2464,7 @@ fn sync_items(
             models.insert(key, list);
         }
         if let Some(list) = &models[&key] {
-            commands.spawn((ShowcaseMarker(id as u16), Transform::from_translation(Vec3::from(at)), Visibility::Visible)).with_children(|c| {
+            commands.spawn((ShowcaseMarker(id as u16), at, Visibility::Visible)).with_children(|c| {
                 for (mesh, mat, flip) in list {
                     let mut e = c.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
                     if let Some(f) = flip {
