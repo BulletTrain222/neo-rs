@@ -1,7 +1,8 @@
 //! The developer menu: cheats and a free camera for testing. It is a tool of this build, not
 //! part of the original game, and follows no spec.
 //!
-//! F1 (or the controller's Select / Back button) opens and closes the menu; F4 pauses or resumes
+//! F1 (or the controller chord set on the Gamepad bindings tab, LB + L3 + A by default) opens
+//! and closes the menu; F4 pauses or resumes
 //! the game and F5 steps one tick while it is paused. In the menu: Up and Down (the D-pad) pick an
 //! entry, Left and Right change its value (Shift, or LB / RB, for steps of 10), Enter, Space or
 //! the south button (Cross / A) applies it, and Escape or the east button (Circle / B) closes the
@@ -314,7 +315,7 @@ pub fn spawn_panel(mut commands: Commands) {
             ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM)));
             ui.spawn((
                 Text::new("Keys: arrows pick and change (Shift x10), Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
-Pad: D-pad pick and change (LB/RB x10), A apply, B or Select close | Mouse: click rows and < >"),
+Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), A apply, B close | Mouse: click rows and < >"),
                 font(12.0),
                 TextColor(DIM),
                 Node { margin: UiRect { top: px(4), bottom: px(4), ..default() }, ..default() },
@@ -391,7 +392,7 @@ pub fn dev_mouse(mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), 
 }
 
 /// The menu's keys and actions, before the game reads its input.
-pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
+pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bindings: Res<crate::bindings::Bindings>, page: Res<crate::controls_page::ControlsPage>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
     let Some(mut play) = play else { return };
     if dev.open && dev.quests.is_none() {
         dev.quests = Some(play.play.map_tables().0);
@@ -457,9 +458,15 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
     dev.swallow = false;
     let pad = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
     let pad_held = |b: GamepadButton| gamepads.iter().any(|g| g.pressed(b));
-    if keys.just_pressed(KeyCode::F1) || pad(GamepadButton::Select) {
+    // The chord: every one of its buttons held, the last pressed this frame (not while the
+    // bindings page is up, where the chord is being set).
+    let chord_fired = !page.open && gamepads.iter().any(|g| crate::bindings::chord_fired(&bindings.dev_chord, |b| g.pressed(b), |b| g.just_pressed(b)));
+    if keys.just_pressed(KeyCode::F1) || chord_fired {
         dev.open = !dev.open;
         dev.swallow = true;
+        if chord_fired {
+            return;
+        }
     }
     if dev.open && (keys.just_pressed(KeyCode::Escape) || pad(GamepadButton::East)) {
         dev.open = false;

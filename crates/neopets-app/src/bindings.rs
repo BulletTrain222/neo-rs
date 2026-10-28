@@ -161,6 +161,25 @@ pub struct Bindings {
     /// Mouse camera speed, 1 to 20.
     pub sensitivity: u32,
     pub invert_mouse_y: bool,
+    /// The controller chord that opens and closes the developer menu: up to three buttons held
+    /// together (the last of them pressed). Default LB + L3 + A.
+    pub dev_chord: [Option<GamepadButton>; 3],
+}
+
+/// The developer menu chord's default: LB (L1) + L3 + A (Cross).
+pub const DEV_CHORD: [Option<GamepadButton>; 3] = [Some(GamepadButton::LeftTrigger), Some(GamepadButton::LeftThumb), Some(GamepadButton::South)];
+
+/// The chord's text: its buttons joined by " + ", or "-" when empty.
+pub fn chord_name(c: &[Option<GamepadButton>; 3]) -> String {
+    let names: Vec<String> = c.iter().flatten().map(|&b| pad_name(b)).collect();
+    if names.is_empty() { "-".to_string() } else { names.join(" + ") }
+}
+
+/// Whether a gamepad just completed the chord: every button of it held and at least one of them
+/// pressed this frame. An empty chord never fires.
+pub fn chord_fired(c: &[Option<GamepadButton>; 3], held: impl Fn(GamepadButton) -> bool, pressed: impl Fn(GamepadButton) -> bool) -> bool {
+    let set: Vec<GamepadButton> = c.iter().flatten().copied().collect();
+    !set.is_empty() && set.iter().all(|&b| held(b)) && set.iter().any(|&b| pressed(b))
 }
 
 impl Default for Bindings {
@@ -194,7 +213,7 @@ impl Default for Bindings {
         keys[DOWN] = two(Key(K::ArrowDown), Key(K::Numpad2));
         keys[LEFT] = two(Key(K::ArrowLeft), Key(K::Numpad4));
         keys[RIGHT] = two(Key(K::ArrowRight), Key(K::Numpad6));
-        Self { keys, pad: Self::default_pad(), mouse_look: true, sensitivity: 6, invert_mouse_y: false }
+        Self { keys, pad: Self::default_pad(), mouse_look: true, sensitivity: 6, invert_mouse_y: false, dev_chord: DEV_CHORD }
     }
 }
 
@@ -214,6 +233,7 @@ impl Bindings {
             s.push_str(&format!("pad {} = {}\n", k + FIRST_BUTTON, b.map_or_else(|| "-".to_string(), pad_name)));
         }
         s.push_str(&format!("mouse look = {}\nsensitivity = {}\ninvert mouse y = {}\n", self.mouse_look, self.sensitivity, self.invert_mouse_y));
+        s.push_str(&format!("dev menu = {}\n", chord_name(&self.dev_chord)));
         s
     }
 
@@ -234,6 +254,15 @@ impl Bindings {
                     "mouse look" => b.mouse_look = value == "true",
                     "sensitivity" => b.sensitivity = value.parse().unwrap_or(6).clamp(1, 20),
                     "invert mouse y" => b.invert_mouse_y = value == "true",
+                    "dev menu" => {
+                        let mut c = [None; 3];
+                        if value != "-" {
+                            for (slot, t) in c.iter_mut().zip(value.split('+')) {
+                                *slot = pad_parse(t.trim());
+                            }
+                        }
+                        b.dev_chord = c;
+                    }
                     _ => {}
                 }
             }

@@ -15,6 +15,8 @@ enum Row {
     MouseLook,
     Sensitivity,
     InvertY,
+    /// The developer menu's controller chord (up to three buttons).
+    DevChord,
     Reset,
     Back,
 }
@@ -35,9 +37,12 @@ fn layout(tab: usize) -> ([Vec<Row>; 2], Vec<Vec<Row>>) {
         left.extend(binds(b::FIRST_BUTTON..b::L3));
         let mut right = vec![Row::Header("STICK BUTTONS, START, SELECT, D-PAD")];
         right.extend(binds(b::L3..b::ACTIONS));
-        ([left, right], vec![vec![Row::Reset, Row::Back]])
+        ([left, right], vec![vec![Row::DevChord], vec![Row::Reset, Row::Back]])
     }
 }
+
+/// The chord row's capture marker in `ControlsPage::capture`.
+const CHORD: usize = usize::MAX;
 
 /// The rows the cursor can stand on, in order.
 fn selectable(tab: usize) -> Vec<Row> {
@@ -64,6 +69,8 @@ pub struct ControlsPage {
     /// A mouse press on a row or slot this frame.
     clicked: Option<(usize, Option<usize>)>,
     clicked_tab: Option<usize>,
+    /// The chord being recorded: the buttons in the order they went down.
+    chord: Vec<GamepadButton>,
 }
 
 #[derive(Component)]
@@ -171,6 +178,7 @@ fn build(commands: &mut Commands, body: Entity, tab: usize) {
                 Row::MouseLook => "Mouse camera".into(),
                 Row::Sensitivity => "Mouse speed".into(),
                 Row::InvertY => "Invert mouse Y".into(),
+                Row::DevChord => "Developer menu (up to 3 buttons held together)".into(),
                 Row::Reset => format!("Reset {} to defaults", TABS[tab]),
                 Row::Back => "Back".into(),
                 Row::Header(_) => String::new(),
@@ -185,6 +193,11 @@ fn build(commands: &mut Commands, body: Entity, tab: usize) {
                                     t.spawn((Text::default(), font(13.0), TextColor(TEXT), TextLayout::no_wrap(), CtlSlotText(i, slot)));
                                 });
                         }
+                    });
+                }
+                Row::DevChord => {
+                    row.spawn((Button, Node { width: px(360), height: px(18), justify_content: JustifyContent::Center, align_items: AlignItems::Center, ..default() }, BackgroundColor(SLOT), CtlSlot(i, 0))).with_children(|t| {
+                        t.spawn((Text::default(), font(13.0), TextColor(TEXT), TextLayout::no_wrap(), CtlSlotText(i, 0)));
                     });
                 }
                 Row::MouseLook | Row::Sensitivity | Row::InvertY => {
@@ -289,6 +302,29 @@ pub fn page_input(
             page.note = "Unchanged".into();
             return;
         }
+        // The chord: buttons are added as they go down (up to three); it is kept when they are
+        // all released again.
+        if action == CHORD {
+            let down: Vec<GamepadButton> = b::PAD_BUTTONS.iter().map(|e| e.0).filter(|&btn| pad(btn)).collect();
+            for btn in down {
+                if !page.chord.contains(&btn) && page.chord.len() < 3 {
+                    page.chord.push(btn);
+                }
+            }
+            let any_held = gamepads.iter().any(|g| b::PAD_BUTTONS.iter().any(|e| g.pressed(e.0)));
+            if !page.chord.is_empty() && !any_held {
+                let mut c = [None; 3];
+                for (slot, &btn) in c.iter_mut().zip(page.chord.iter()) {
+                    *slot = Some(btn);
+                }
+                bindings.dev_chord = c;
+                page.note = format!("Developer menu: {}", b::chord_name(&c));
+                page.capture = None;
+                page.chord.clear();
+                bindings.save();
+            }
+            return;
+        }
         let name = b::NAMES[action];
         if page.tab == 0 {
             let input = keys.get_just_pressed().copied().find(|&k| Input::bindable_key(k)).map(Input::Key).or_else(|| mouse.get_just_pressed().copied().next().map(Input::Mouse));
@@ -374,6 +410,18 @@ pub fn page_input(
                 page.note = if page.tab == 0 { format!("Press a key or mouse button for {} (Esc cancels)", b::NAMES[a]) } else { format!("Press a gamepad button for {} (Esc cancels)", b::NAMES[a]) };
             }
         }
+        Row::DevChord if clear => {
+            bindings.dev_chord = [None; 3];
+            page.note = "Developer menu chord cleared (F1 still opens it)".into();
+            bindings.save();
+        }
+        Row::DevChord if apply => {
+            page.capture = Some((CHORD, 0));
+            page.chord.clear();
+            page.capture_skip = if clicked.is_some() { 6 } else { 2 };
+            page.capture_left = 8.0;
+            page.note = "Hold up to three gamepad buttons together, then let go (Esc cancels)".into();
+        }
         Row::MouseLook if apply || left || right => {
             bindings.mouse_look = !bindings.mouse_look;
             bindings.save();
@@ -397,6 +445,7 @@ pub fn page_input(
                 bindings.invert_mouse_y = d.invert_mouse_y;
             } else {
                 bindings.pad = d.pad;
+                bindings.dev_chord = d.dev_chord;
             }
             bindings.save();
             page.note = format!("{} reset to defaults", TABS[page.tab]);
@@ -447,7 +496,19 @@ pub fn show_page(
         bg.0 = if waiting { SLOT_WAIT } else if here { SLOT_CURSOR } else { SLOT };
     }
     for (s, mut t) in &mut slot_texts {
-        let Some(Row::Bind(a)) = list.get(s.0).copied() else { continue };
+        let row = list.get(s.0).copied();
+        if row == Some(Row::DevChord) {
+            let text = if page.capture.is_some_and(|c| c.0 == CHORD) {
+                if page.chord.is_empty() { "Hold the buttons...".to_string() } else { page.chord.iter().map(|&btn| b::pad_name(btn)).collect::<Vec<_>>().join(" + ") }
+            } else {
+                b::chord_name(&bindings.dev_chord)
+            };
+            if t.0 != text {
+                t.0 = text;
+            }
+            continue;
+        }
+        let Some(Row::Bind(a)) = row else { continue };
         let text = if page.capture.is_some() && s.0 == page.cursor && s.1 == page.slot {
             "Press...".to_string()
         } else if page.tab == 0 {
@@ -512,5 +573,24 @@ mod tests {
         assert_eq!(all, (0..b::ACTIONS).collect::<Vec<_>>());
         assert_eq!(binds(1), (b::FIRST_BUTTON..b::ACTIONS).collect::<Vec<_>>());
         assert_eq!(selectable(0).last(), Some(&Row::Back));
+        assert!(selectable(1).contains(&Row::DevChord));
+    }
+
+    #[test]
+    fn dev_chord_fires_and_round_trips() {
+        use GamepadButton as G;
+        let c = b::DEV_CHORD;
+        // All three held, the last just pressed: fires; one missing or none new: does not.
+        assert!(b::chord_fired(&c, |_| true, |x| x == G::South));
+        assert!(!b::chord_fired(&c, |x| x != G::LeftThumb, |x| x == G::South));
+        assert!(!b::chord_fired(&c, |_| true, |_| false));
+        assert!(!b::chord_fired(&[None; 3], |_| true, |_| true));
+        // Select alone no longer opens it.
+        assert!(!b::chord_fired(&c, |x| x == G::Select, |x| x == G::Select));
+        // The settings file keeps it.
+        let mut bind = Bindings::default();
+        bind.dev_chord = [Some(G::Select), Some(G::North), None];
+        assert_eq!(Bindings::parse(&bind.text()).dev_chord, bind.dev_chord);
+        assert_eq!(Bindings::parse(&Bindings::default().text()).dev_chord, c);
     }
 }
