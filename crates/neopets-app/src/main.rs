@@ -861,7 +861,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), sync_shots, (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -2805,6 +2805,13 @@ fn sync_characters(
             Some(c) => {
                 t.translation = Vec3::from(c.position);
                 t.rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
+                // The Cloud Beast stand-ins move by pose, not by clips (the disc has none).
+                t.scale = Vec3::ONE;
+                if let Some((bob, lean, s)) = p.cloud_pose(c) {
+                    t.translation.y += bob;
+                    t.rotation *= Quat::from_rotation_x(lean);
+                    t.scale = Vec3::splat(s);
+                }
                 *vis = if p.pack_drawn(c.pack) && !c.inactive { Visibility::Visible } else { Visibility::Hidden };
             }
         }
@@ -2848,6 +2855,82 @@ fn sync_characters(
                     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, col);
                 }
             }
+        }
+    }
+}
+
+/// One drawn piece of the Cloud Beast's stand-in effects: 0 the gust, 1 and 2 the beams'
+/// cores, 3 and 4 their glows, 5 to 9 the balls, 10 the shock, 11 to 18 the bursts.
+#[derive(Component)]
+struct CloudFx(usize);
+
+/// SPEC-0010's effect definitions 447 to 454 are not on the disc; these are this build's own
+/// stand-ins: a pale translucent column for the gust, a bright core in a yellow glow for each
+/// beam, glowing yellow spheres for the balls, a pulsing translucent dome for the shock and
+/// short-lived sparks for the bursts.
+fn sync_cloud_fx(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    mut pieces: Query<(&CloudFx, &mut Transform, &mut Visibility, &MeshMaterial3d<StandardMaterial>)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    const N: usize = 19;
+    let Some(state) = state else { return };
+    let p = &state.play;
+    let fx = p.cloud_fx();
+    if fx.is_none() && p.cloud_bursts.is_empty() && pieces.is_empty() {
+        return;
+    }
+    if pieces.is_empty() {
+        let unit_cyl = meshes.add(Cylinder::new(1.0, 1.0));
+        let ball = meshes.add(Sphere::new(1.0).mesh().uv(16, 10));
+        let mat = |m: &mut Assets<StandardMaterial>, c: Color| {
+            m.add(StandardMaterial { base_color: c, unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, depth_bias: 1.0, ..default() })
+        };
+        for k in 0..N {
+            let (mesh, colour) = match k {
+                0 => (unit_cyl.clone(), Color::srgba(0.85, 0.93, 1.0, 0.25)),
+                1 | 2 => (unit_cyl.clone(), Color::srgba(1.0, 1.0, 0.92, 0.95)),
+                3 | 4 => (unit_cyl.clone(), Color::srgba(1.0, 0.85, 0.2, 0.35)),
+                5..=9 => (ball.clone(), Color::srgba(1.0, 0.92, 0.35, 0.9)),
+                10 => (ball.clone(), Color::srgba(0.55, 0.8, 1.0, 0.22)),
+                _ => (ball.clone(), Color::srgba(1.0, 0.95, 0.5, 0.8)),
+            };
+            commands.spawn((CloudFx(k), Mesh3d(mesh), MeshMaterial3d(mat(&mut materials, colour)), Transform::IDENTITY, Visibility::Hidden));
+        }
+        return;
+    }
+    // A column from a to b of radius r (the unit cylinder is along +Y, centred).
+    let column = |a: [f32; 3], b: [f32; 3], r: f32| -> Option<Transform> {
+        let (a, b) = (Vec3::from(a), Vec3::from(b));
+        let d = b - a;
+        let l = d.length();
+        (l > 1e-3).then(|| Transform { translation: (a + b) * 0.5, rotation: Quat::from_rotation_arc(Vec3::Y, d / l), scale: Vec3::new(r, l, r) })
+    };
+    let (gust, beams, balls, shock) = fx.unwrap_or((None, Vec::new(), Vec::new(), None));
+    let t = p.ticks as f32 / 60.0;
+    for (piece, mut tr, mut vis, mat) in &mut pieces {
+        let k = piece.0;
+        let placed = match k {
+            0 => gust.and_then(|(o, e, fade)| {
+                if let Some(mut m) = materials.get_mut(&mat.0) {
+                    m.base_color = Color::srgba(0.85, 0.93, 1.0, 0.1 + 0.18 * (128 - fade.clamp(0, 128)) as f32 / 128.0);
+                }
+                column(o, e, 1.8)
+            }),
+            1 | 2 => beams.get(k - 1).and_then(|&(a, b)| column(a, b, 0.12)),
+            3 | 4 => beams.get(k - 3).and_then(|&(a, b)| column(a, b, 0.45 + 0.1 * (t * 30.0 + k as f32).sin())),
+            5..=9 => balls.get(k - 5).map(|&b| Transform::from_translation(Vec3::from(b)).with_scale(Vec3::splat(0.7 + 0.1 * (t * 20.0).sin()))),
+            10 => shock.map(|(c, r)| Transform::from_translation(Vec3::from(c)).with_scale(Vec3::new(r, 0.35 * r, r) * (0.92 + 0.08 * (t * 18.0).sin()))),
+            _ => p.cloud_bursts.get(k - 11).map(|&(c, left)| Transform::from_translation(Vec3::from(c)).with_scale(Vec3::splat(0.4 + 0.12 * (20 - left.min(20)) as f32))),
+        };
+        match placed {
+            Some(x) => {
+                *tr = x;
+                *vis = Visibility::Visible;
+            }
+            None => *vis = Visibility::Hidden,
         }
     }
 }

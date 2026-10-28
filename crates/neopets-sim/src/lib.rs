@@ -14,6 +14,7 @@ pub mod burrows;
 pub mod charlight;
 pub mod charm;
 pub mod clip;
+pub mod cloudbeast;
 pub mod combat;
 pub mod contact;
 pub mod credits;

@@ -39,6 +39,7 @@ fn run() -> Result<(), String> {
     let mut blocks = false;
     let mut aim = false;
     let mut monster_word: Option<usize> = None;
+    let mut boot_words: Option<(u32, usize)> = None;
     let mut panels = false;
     let mut object_headers = false;
     while let Some(arg) = args.next() {
@@ -70,6 +71,12 @@ fn run() -> Result<(), String> {
                 let n = args.next().ok_or("--texture needs a resource number")?;
                 textures.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
             }
+            "--boot-words" => {
+                let a = args.next().ok_or("--boot-words needs an address and a count")?;
+                let n = args.next().ok_or("--boot-words needs a count")?;
+                let a = u32::from_str_radix(a.trim_start_matches("0x"), 16).map_err(|_| format!("Bad address {a}"))?;
+                boot_words = Some((a, n.parse().map_err(|_| format!("Bad count {n}"))?));
+            }
             "--monster-word" => {
                 let n = args.next().ok_or("--monster-word needs a row offset")?;
                 monster_word = Some(usize::from_str_radix(n.trim_start_matches("0x"), 16).map_err(|_| format!("Bad offset {n}"))?);
@@ -97,6 +104,13 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
+    if let Some((a, n)) = boot_words {
+        // Boot-program data words by virtual address, as u32, i32 and f32.
+        let boot = neopets_data::archive::verified_boot_program(&mut disc)?;
+        for (k, w) in neopets_data::archive::boot_u32_table(&boot, a, n)?.into_iter().enumerate() {
+            println!("{:#08x}: {w:#010x} i32 {} f32 {}", a + 4 * k as u32, w as i32, f32::from_bits(w));
+        }
+    }
     if !(monster_word.is_some() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }

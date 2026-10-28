@@ -455,6 +455,8 @@ pub struct Character {
     pub model: ModelData,
     /// The monster row of the placement (SPEC-0029 section 4).
     pub row: Option<neopets_data::monster::Row>,
+    /// SPEC-0010: the Cloud Beast's controller (the test spawn only).
+    pub cloud: Option<neopets_sim::cloudbeast::Cloud>,
     /// Hit points (from the row), and the death countdown once they reach 0.
     pub hp: i32,
     pub dying: Option<u32>,
@@ -855,6 +857,14 @@ pub struct Play {
     /// SPEC-0010 Test spawn: with NEOPETS_CLOUD_BEAST set, monster rows 1 (the Cloud Beast) and
     /// 2 (its companion), spawned in each world with the stand-in models (no model on disc).
     cloud_rows: Option<(neopets_data::monster::Row, neopets_data::monster::Row)>,
+    cloud_words: Option<neopets_sim::cloudbeast::Words>,
+    /// The arena: the level's locators 101 to 106 when it has all six, else a stand-in ring of
+    /// radius 16 around where the hero stood at the spawn, each point facing the centre.
+    cloud_arena: Option<(u32, [([f32; 3], [f32; 3]); 6])>,
+    /// Worlds whose Cloud Beast was defeated (no respawn there).
+    cloud_defeated: std::collections::HashSet<u32>,
+    /// Recent ball bursts and reply hit flashes for the stand-in effects: (point, ticks left).
+    pub cloud_bursts: Vec<([f32; 3], u32)>,
     /// SPEC-0038 Behavior 45: the shared attack-manager list.
     attack_mgr: neopets_sim::attackmgr::Manager,
     /// SPEC-0011 Thorn hits: the five-record hazard pool, its contact radius, and the thorn
@@ -1308,6 +1318,10 @@ impl Play {
         } else {
             None
         };
+        let cloud_words = match cloud_rows {
+            Some(_) => neopets_sim::cloudbeast::Words::read(&words(neopets_sim::cloudbeast::BASE, neopets_sim::cloudbeast::WORDS)?),
+            None => None,
+        };
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
         let ixi_words = neopets_sim::ixi::Words::read(&words(neopets_sim::ixi::BASE, neopets_sim::ixi::WORDS)?).ok_or("The Ixi Chief's tuning block is short")?;
@@ -1572,6 +1586,10 @@ impl Play {
             hit_list: Vec::new(),
             swing_serial: 0,
             cloud_rows,
+            cloud_words,
+            cloud_arena: None,
+            cloud_defeated: Default::default(),
+            cloud_bursts: Vec::new(),
             attack_mgr: Default::default(),
             thorns: Default::default(),
             thorn_radius,
@@ -5131,7 +5149,14 @@ impl Play {
             }
             let cplace = placement(c.position, c.facing);
             let cframes = c.anim.bone_frames();
-            let hit = c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
+            // The Cloud Beast stand-in has no rig: its body is a cylinder of the row's radius and
+            // height around the floating cloud (stand-in hurt shape).
+            let cloud_body = c.cloud.is_some().then(|| {
+                let r = c.row.map_or(3.0, |r| r.radius);
+                let h = c.row.map_or(3.5, |r| r.height);
+                neopets_sim::combat::Cylinder { center: add(c.position, [0.0, crate::placeholder::CLOUD_HOVER + 0.5 * h, 0.0]), axis: [0.0, 1.0, 0.0], radius: r, length: h }
+            });
+            let hit = cloud_body.is_some_and(|b| neopets_sim::combat::overlap(&weapon, &b)) || c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
                 if length <= 0.0 {
                     return false;
                 }
@@ -5240,6 +5265,18 @@ impl Play {
             } else {
                 c.pending_hit = Some(damage.max(0));
             }
+            return;
+        }
+        // SPEC-0010: the Cloud Beast keeps the shared NPC take-hit; its combat word is never agro,
+        // so the damage is doubled before the subtraction. The monster bar is armed as for the
+        // common enemies (a guess: the spec names no bar for the test spawn).
+        if self.characters.get(i).is_some_and(|c| c.cloud.is_some() && c.dying.is_none()) {
+            let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(self.characters[i].name.as_bytes(), *sp));
+            let c = &mut self.characters[i];
+            let max = c.row.map_or(1, |r| r.hit_points as i32);
+            self.monster_bar.arm(c.id, &c.name, width, c.hp, max, &self.monster_words);
+            c.hp -= 2 * damage.max(0);
+            self.last_hit = format!("{by}hit {} for {} (hp {})", c.name, 2 * damage.max(0), c.hp.max(0));
             return;
         }
         // SPEC-0016: the Plague Serpent takes a hit only as its stun strike (its own controller).
@@ -5706,6 +5743,7 @@ impl Play {
                 emotes: Default::default(),
                 sound_blocks: anim.sound_blocks(),
                 row,
+                cloud: None,
                 anim,
                 model,
             });
@@ -5833,6 +5871,7 @@ impl Play {
             emotes: Default::default(),
             sound_blocks: anim.sound_blocks(),
             row,
+            cloud: None,
             anim,
             model,
         });
@@ -7788,9 +7827,29 @@ impl Play {
         let Some((boss_row, companion_row)) = self.cloud_rows else { return };
         let pack = self.world.pack;
         let find = |s: &Self, class: i16| s.characters.iter().position(|c| c.pack == pack && c.slot == CLOUD_SLOT && c.row.is_some_and(|r| r.class == Some(class)));
+        if self.cloud_defeated.contains(&pack) {
+            return;
+        }
         if find(self, 9).is_none() {
             let f = self.loco.facing;
-            let at = add(self.loco.position(), scale(f, 12.0));
+            // The stand-in arena: a ring of radius 16 around the hero, point 0 ahead of the hero.
+            let centre = self.loco.position();
+            let a0 = f[0].atan2(f[2]);
+            let ring: [([f32; 3], [f32; 3]); 6] = std::array::from_fn(|k| {
+                let a = a0 + k as f32 * std::f32::consts::FRAC_PI_3;
+                let d = [a.sin(), 0.0, a.cos()];
+                (add(centre, scale(d, 16.0)), [-d[0], 0.0, -d[2]])
+            });
+            // SPEC-0010 Arena: the level locators with user ids 101 to 106 when all six exist (the
+            // Juppie and Plague Serpent arenas); otherwise the ring.
+            let w = &self.world;
+            let tagged: Vec<([f32; 3], [f32; 3])> = (101..=106).filter_map(|k| w.tags.iter().position(|&t| t == k).and_then(|i| w.entries.get(i)).copied()).collect();
+            let ring = <[([f32; 3], [f32; 3]); 6]>::try_from(tagged).unwrap_or(ring);
+            self.cloud_arena = Some((pack, ring));
+            let at = ring[0].0;
+            if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() {
+                println!("CLOUD arena {:?}", ring.map(|(p, _)| p));
+            }
             let back = [-f[0], 0.0, -f[2]];
             let bones = neopets_data::anim::BoneTable { parents: Vec::new(), rest_local: Vec::new(), rest_position: Vec::new(), hurt: Vec::new(), attach: Vec::new() };
             let placement = |ordinal: usize, name: &str, monster_type: u16| neopets_data::region::Placement {
@@ -7817,14 +7876,179 @@ impl Play {
             let anim = || HeroAnim::new(bones.clone(), Vec::new());
             self.bind_character(pack, CLOUD_SLOT, pack, placement(usize::MAX - 1, "Cloud Beast (stand-in)", 1), (crate::placeholder::cloud_beast(), anim(), Some(boss_row), None), None);
             self.bind_character(pack, CLOUD_SLOT, pack, placement(usize::MAX, "Cloud Beast companion (stand-in)", 2), (crate::placeholder::cloud_companion(), anim(), Some(companion_row), None), None);
+            if let (Some(w), Some(c)) = (self.cloud_words, find(self, 9)) {
+                self.characters[c].cloud = Some(neopets_sim::cloudbeast::Cloud::new(&w, &mut self.rng));
+                // NEOPETS_CLOUD_HP=n: the boss starts with n hit points (trace only).
+                if let Some(hp) = std::env::var("NEOPETS_CLOUD_HP").ok().and_then(|v| v.parse::<i32>().ok()) {
+                    self.characters[c].hp = hp;
+                }
+            }
             self.last_boss = format!("Cloud Beast stand-in spawned at {at:?} on tick {}", self.ticks);
         }
+        self.cloud_fight(pack);
         // The companion rides on the boss.
         if let (Some(b), Some(c)) = (find(self, 9), find(self, 10)) {
             let (p, f) = (self.characters[b].position, self.characters[b].facing);
             self.characters[c].position = [p[0], p[1] + crate::placeholder::COMPANION_RIDE, p[2]];
             self.characters[c].facing = f;
         }
+    }
+
+    /// SPEC-0010, one controller tick of the spawned Cloud Beast: the view (the stand-in arena,
+    /// the companion's orb as pose point 1, the hero's attack, guard and Fog Mote, Roberta's
+    /// shots), then the boss's place and facing, its hits on the hero (not blocked, no armour),
+    /// the gust's knock-back, the reply's self-damage and the death. Guesses where the disc has
+    /// nothing: the beam's wall sweep finds its hit by halving the segment against the level's
+    /// segment query and takes the reversed beam direction as the face normal; at death the
+    /// companion goes with the boss and the world is marked so the boss does not respawn.
+    fn cloud_fight(&mut self, pack: u32) {
+        let Some(w) = self.cloud_words else { return };
+        self.cloud_bursts.retain_mut(|(_, t)| {
+            *t = t.saturating_sub(1);
+            *t > 0
+        });
+        let find = |s: &Self, class: i16| s.characters.iter().position(|c| c.pack == pack && c.slot == CLOUD_SLOT && c.row.is_some_and(|r| r.class == Some(class)));
+        let Some(b) = find(self, 9) else { return };
+        let companion = find(self, 10);
+        if self.characters[b].hp <= 0 || self.characters[b].dying.is_some() {
+            if self.cloud_defeated.insert(pack) {
+                let disappear = self.characters[b].row.map_or(510, |r| r.disappear.max(1) as u32);
+                self.characters[b].dying.get_or_insert(disappear);
+                self.characters[b].cloud = None;
+                if let Some(c) = companion {
+                    self.characters[c].dying.get_or_insert(disappear);
+                }
+                self.last_boss = format!("Cloud Beast defeated on tick {}", self.ticks);
+                if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() {
+                    println!("CLOUD defeated on tick {}", self.ticks);
+                }
+            }
+            return;
+        }
+        let Some(mut cloud) = self.characters[b].cloud.take() else { return };
+        let hero = self.loco.position();
+        let shots: Vec<([f32; 3], [f32; 3])> = if self.hero_index == 1 { self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect() } else { Vec::new() };
+        let world = &self.world;
+        let ground = |x: f32, z: f32, c: f32| world.ground_at(x, z, c).unwrap_or(0.0);
+        let wall = |a: [f32; 3], e: [f32; 3]| -> Option<(f32, [f32; 3])> {
+            let g = world.ground.as_ref()?;
+            if g.segment_clear(a, e, false) {
+                return None;
+            }
+            let (mut lo, mut hi) = (0.0f32, 1.0f32);
+            for _ in 0..12 {
+                let m = 0.5 * (lo + hi);
+                if g.segment_clear(a, add(a, scale(sub_v(e, a), m)), false) {
+                    lo = m;
+                } else {
+                    hi = m;
+                }
+            }
+            Some((hi, unit(sub_v(a, e))))
+        };
+        let c = &self.characters[b];
+        let v = neopets_sim::cloudbeast::View {
+            position: c.position,
+            forward: c.facing,
+            hp: c.hp,
+            max_hp: c.row.map_or(240, |r| r.hit_points as i32),
+            hero,
+            hero_forward: self.loco.facing,
+            hero_radius: contact::HERO_RADIUS,
+            hero_height: HERO_HEIGHT,
+            variant: self.hero_index.min(1) as u8,
+            in_attack: self.hero_index == 0 && self.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub)),
+            guard: self.loco.state == hero_states::GUARD,
+            fog: self.equipment.motes[self.hero_index.min(1)][1] == Some(166),
+            shots: &shots,
+            companion: companion.map(|k| add(self.characters[k].position, [0.0, 0.6, 0.0])),
+            points: self.cloud_arena.filter(|(p, _)| *p == pack).map(|(_, r)| r),
+            ground: &ground,
+            wall: &wall,
+        };
+        let before = (cloud.state, cloud.stage);
+        let act = cloud.tick(&v, &w, &mut self.rng);
+        cloud.advance_clip();
+        // NEOPETS_TRACE_CLOUD: the controller's state changes and hits (trace only).
+        if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() && (before != (cloud.state, cloud.stage) || !act.hits.is_empty() || act.knock.is_some() || act.self_damage > 0) {
+            println!("CLOUD tick {} {:?} stage {} -> {:?} stage {} clip {} hp {} hero hp {} dist {:.1} hits {:?} knock {:?} self {}", self.ticks, before.0, before.1, cloud.state, cloud.stage, cloud.clip.id, v.hp, self.hero_hp, (v.position[0] - hero[0]).hypot(v.position[2] - hero[2]), act.hits, act.knock, act.self_damage);
+        }
+        let c = &mut self.characters[b];
+        if let Some(p) = act.position {
+            c.position = p;
+        }
+        c.facing = act.forward;
+        if act.self_damage > 0 {
+            c.hp -= act.self_damage;
+            c.flash = HIT_FLASH;
+        }
+        let at = add(c.position, [0.0, crate::placeholder::CLOUD_HOVER + 1.8, 0.0]);
+        if act.hit_fx {
+            c.flash = HIT_FLASH;
+            self.cloud_bursts.push((at, 20));
+        }
+        self.characters[b].cloud = Some(cloud);
+        let facing = self.characters[b].facing;
+        for h in act.hits {
+            match h {
+                neopets_sim::cloudbeast::Hit::Damage(d) => {
+                    self.hero_hit(d as f32, 0.0, false, facing, "the Cloud Beast".into());
+                }
+                neopets_sim::cloudbeast::Hit::Blocked => {
+                    self.hero_hit(0.0, 0.0, true, facing, "the Cloud Beast".into());
+                }
+            }
+        }
+        if let Some(k) = act.knock {
+            if self.loco.state != hero_states::DEAD {
+                self.loco.knock(k);
+            }
+        }
+        for p in act.bursts {
+            self.cloud_bursts.push((p, 20));
+        }
+    }
+
+    /// The stand-in effects of the Cloud Beast for drawing (its own effect definitions 447 to
+    /// 454 are not on the disc): the gust column (O, E, fade 0 to 128), the live beams, the
+    /// balls, the shock (centre and radius) and the bursts.
+    #[allow(clippy::type_complexity)]
+    pub fn cloud_fx(&self) -> Option<(Option<([f32; 3], [f32; 3], i32)>, Vec<([f32; 3], [f32; 3])>, Vec<[f32; 3]>, Option<([f32; 3], f32)>)> {
+        let c = self.characters.iter().find(|c| c.pack == self.world.pack && c.cloud.is_some())?;
+        let cl = c.cloud.as_ref()?;
+        let beams = cl.beams.iter().filter(|b| b.active && b.len > 0.0).map(|b| (b.start, b.end())).collect();
+        let balls = cl.balls.iter().flatten().map(|b| b.position).collect();
+        let shock = cl.shock.then(|| (add(c.position, [0.0, crate::placeholder::CLOUD_HOVER + 1.0, 0.0]), self.cloud_words.map_or(8.0, |w| w.shock_radius)));
+        Some((cl.gust.map(|(o, e)| (o, e, cl.fade)), beams, balls, shock))
+    }
+
+    /// The stand-in body's pose for a Cloud Beast character (boss or companion): a bob, a
+    /// forward lean (radians) and a scale, from the boss's current clip (the disc has no clips).
+    pub fn cloud_pose(&self, c: &Character) -> Option<(f32, f32, f32)> {
+        if c.slot != CLOUD_SLOT {
+            return None;
+        }
+        let boss = self.characters.iter().find(|b| b.pack == c.pack && b.slot == CLOUD_SLOT && b.cloud.is_some())?;
+        let clip = boss.cloud.as_ref()?.clip;
+        let t = self.ticks as f32 / 60.0;
+        let p = clip.progress();
+        let bob = 0.35 * (t * 1.7).sin();
+        let pi = std::f32::consts::PI;
+        Some(match clip.id {
+            5 => (bob + 0.5 * (p * pi).sin(), 0.0, 1.0 + 0.08 * (p * 4.0 * pi).sin()),
+            6 => (bob, -0.25 * p, 1.0 + 0.15 * p),
+            7 => (bob, 0.3, 1.15 - 0.2 * p),
+            22 => (bob, 0.15 * (1.0 - p), 0.95 + 0.05 * p),
+            8 => (bob + 0.05 * (t * 40.0).sin(), -0.1, 1.05),
+            10 => (bob, -0.1 * (1.0 - p), 1.0),
+            11 => (bob - 0.3 * p, 0.0, 1.0 - 0.1 * p),
+            12 => (bob, 0.0, 1.0 + 0.12 * (t * 25.0).sin().abs()),
+            13 => (bob, 0.0, 0.9 + 0.1 * p),
+            14 => (bob, 0.2 * (p * pi).sin(), 1.0 + 0.1 * (p * pi).sin()),
+            15 | 16 => (bob + 0.4 * (p * pi).sin(), -0.45 * (p * pi).sin(), 0.95),
+            23 => (bob, -0.2, 0.92 + 0.03 * (t * 12.0).sin()),
+            _ => (bob, 0.0, 1.0),
+        })
     }
 
     fn enemies_step(&mut self) {
