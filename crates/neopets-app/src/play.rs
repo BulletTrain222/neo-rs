@@ -271,6 +271,12 @@ impl World {
         // modes 1 and 2 apply only to an entry whose broken bit is set, and no disc entry has
         // them, so nothing changes here.
         world.breakables = neopets_data::world::breakables(&bytes, &chain.chunks);
+        // NEOPETS_TRACE_BREAK_KEYS: the entries whose break spawns a character by key.
+        if std::env::var_os("NEOPETS_TRACE_BREAK_KEYS").is_some() {
+            for (i, b) in world.breakables.iter().enumerate().filter(|(_, b)| b.spawn_key >= 0) {
+                println!("      break key: pack {} breakable {i} key {} at {:?}", world.pack, b.spawn_key, b.position());
+            }
+        }
         // SPEC-0048 Switch groups, set-up: in each kind-4 entry members 1 to n-1 are disabled.
         for g in world.groups.iter().filter(|g| g.kind == 4) {
             for &m in g.breakables.iter().skip(1) {
@@ -10374,8 +10380,8 @@ impl Play {
     /// the window, the swing triangle (P0 and the current and previous-tick tips) against every
     /// intact breakable's volume of the current world. A hit runs the element gate (the entry's
     /// class 0 or 7, or the slot-2 Mote's kind), the break effect from state 1 and the contact
-    /// cue by material. The script hook, Tor's recoil on a mismatch, the spawn by key, the piece
-    /// spawns and the timed effect are not built.
+    /// cue by material. The break's spawn by key is in `break_one_with`. The script hook, Tor's
+    /// recoil on a mismatch, the piece spawns and the timed effect are not built.
     fn breakable_walk(&mut self, p0: [f32; 3], tip: [f32; 3], prev: [f32; 3]) {
         use neopets_sim::combat::{Cylinder, segment_distance, segment_meets};
         let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
@@ -10457,7 +10463,8 @@ impl Play {
     }
 
     /// The break of breakable i of the current world from state 1 (SPEC-0048 Break effect): state
-    /// 2, the drop action for its placement (no luck gate) and the contact cue by material.
+    /// 2, the drop action for its placement (no luck gate), the spawn by key (step 3) and the
+    /// contact cue by material.
     /// Diagnostic: break breakable i of the current world when it is intact (trace only).
     pub fn diag_break(&mut self, i: usize) {
         if self.world.breakables.get(i).is_some_and(|b| b.state == 1) {
@@ -10474,6 +10481,7 @@ impl Play {
         let Some(b) = self.world.breakables.get_mut(i) else { return };
         b.state = 2;
         let (at, drop, cue) = (b.position(), b.drop, break_cue(b.material));
+        let (key, facing) = (b.spawn_key, unit([b.matrix[8], b.matrix[9], b.matrix[10]]));
         // The drop id is a placement id: entry p of the placement-id table (tag 0x13) names the
         // block and the ordinal among its item records (SPEC-0006, SPEC-0048 Placed drops on
         // break). Only the embedded block (0xFF) is resolved.
@@ -10484,6 +10492,14 @@ impl Play {
             .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
         if point.is_some() {
             self.payouts.push((pack, at, point));
+        }
+        // Step 3: a spawn key of 0 or more runs a world-level spawn by key at the break point
+        // with the entry's facing, the arrival flag set (SPEC-0029 Behavior 31).
+        if key >= 0 {
+            self.summon(pack, None, key, at, facing, None, true);
+            if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
+                println!("      breakable {i} spawn key {key}: {}", self.last_summon);
+            }
         }
         self.last_pickup = format!("breakable {i} of {pack} broken on tick {}", self.ticks);
         if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
