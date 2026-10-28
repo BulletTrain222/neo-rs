@@ -863,6 +863,8 @@ pub struct Play {
     hit_list: Vec<u64>,
     /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
     swing_serial: u32,
+    /// L1 held this tick (pad slot 0; SPEC-0038 Behavior 14 code 5).
+    l1_held: bool,
     /// SPEC-0060 Cut: last tick's weapon point 2.5 along the blade's frame axis.
     reed_point: Option<[f32; 3]>,
     /// SPEC-0040 Behavior 23A: the hero's stored look yaw and pitch.
@@ -1603,6 +1605,7 @@ impl Play {
             gelert_words,
             hit_list: Vec::new(),
             swing_serial: 0,
+            l1_held: false,
             reed_point: None,
             head_look: Default::default(),
             neck_joints,
@@ -6903,6 +6906,7 @@ impl Play {
     /// (ground step with the world swap search, root travel, constraint, gravity, contacts,
     /// integrator), then the animation pass, which stores the next root step.
     pub fn tick(&mut self, input: &HeroInput, pad: CameraPad) {
+        self.l1_held = input.guard;
         self.ticks += 1;
         // The hit flashes run down one frame a tick (60 ticks a second).
         self.hero_flash = self.hero_flash.saturating_sub(1);
@@ -8412,6 +8416,7 @@ impl Play {
             // velocity x the defend time (ticks) against the enemy's body capsule.
             v.hero_swing = hero_swing;
             v.hero_recover = hero_recover;
+            v.l1_held = self.l1_held;
             v.waits = mgr.waits(*id);
             let own = e.spawn.alarm;
             v.alarm_serial = own.and_then(|g| self.alarms.get(&(world.pack, g)).copied()).unwrap_or(0);
@@ -13184,6 +13189,7 @@ fn enemy_view<'a>(
         hero_blocks: false,
         hero_swing: None,
         hero_recover: false,
+        l1_held: false,
         missile_threat: false,
         hero_shot_live: false,
         spawn_bits: 0,

@@ -15,7 +15,7 @@
 //! Not covered: the group alert (Behavior 10), socialize, the global AI pause (state 20; its
 //! word has no known writer), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target
 //! state 9 (it stands and notices), the alarm emerge's camera and cue, wandering in states 5 to
-//! 7 (they stand and notice), the counter-attack choice's code 5 (R-0117), the grab-and-throw,
+//! 7 (they stand and notice), the grab-and-throw,
 //! theft and Mote drain, ghosts and the carried Neopoints of a theft (the drops are the host's
 //! pay_out; reanimation, state 16 of rows 224, 226 and 227, is built). The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
@@ -208,6 +208,8 @@ pub struct View<'a> {
     /// The active hero's recover window: table-B bit 0x800 on one of its playing clips this tick
     /// (SPEC-0038 Behavior 14).
     pub hero_recover: bool,
+    /// L1 held in pad slot 0 (mask 0x0004 of the held-button word; Behavior 14 code 5).
+    pub l1_held: bool,
     /// A live hero shot's path over the look-ahead meets this enemy's body capsule, and whether
     /// any hero shot is live.
     pub missile_threat: bool,
@@ -1478,8 +1480,7 @@ impl Enemy {
     /// range, in the melee arc, cooldown below 1, its trigger code holding) wins; when it is not
     /// already selected, one roll int[0, 100] below its chance selects it, draws its cooldown and
     /// starts the sequencer (state 0, or 6 with a charge type); the distances are not redrawn.
-    /// Code 5 (the blocked recoil with the hero flag bit of value 4) never holds here: the hero
-    /// flag word's meaning is open (R-0117).
+    /// Code 5: the sequencer in state 4 with L1 held in pad slot 0 (R-0117).
     fn counter_choose(&mut self, v: &View, rng: &mut Rng) {
         let d = len(sub(v.hero, v.position));
         let cos = dot(v.facing, unit(sub(v.hero, v.position)));
@@ -1497,6 +1498,7 @@ impl Enemy {
                 2 => matches!(self.outer, 5 | 6) && v.hero_recover,
                 3 => matches!(self.outer, 7 | 8) && v.hero_recover,
                 4 => self.outer == 2 && self.seq == 5,
+                5 => self.outer == 2 && self.seq == 4 && v.l1_held,
                 6 => self.outer == 10,
                 _ => false,
             };
@@ -2240,6 +2242,7 @@ mod tests {
             hero_blocks: false,
             hero_swing: None,
             hero_recover: false,
+            l1_held: false,
             missile_threat: false,
             hero_shot_live: false,
             spawn_bits: 0,
