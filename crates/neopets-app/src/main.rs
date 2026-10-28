@@ -1185,10 +1185,23 @@ fn step_sim(
                 play.play.statuses.apply(code as i32, secs);
             }
         }
-        // NEOPETS_TRACE_DOWN="tick,...": a D-pad Down edge on those play ticks (diagnostic; it
-        // opens the Mote panel).
-        if std::env::var("NEOPETS_TRACE_DOWN").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| k == play.play.ticks)) {
-            play.play.panel_latch.down = true;
+        // NEOPETS_TRACE_DOWN and NEOPETS_TRACE_LEFT="tick,...": a D-pad Down or Left edge once,
+        // on the first frame at or past each tick (diagnostic; Down opens the Mote panel).
+        {
+            static FIRED: std::sync::Mutex<Vec<(u8, u64)>> = std::sync::Mutex::new(Vec::new());
+            for (dir, var) in [(0u8, "NEOPETS_TRACE_DOWN"), (1, "NEOPETS_TRACE_LEFT")] {
+                for k in std::env::var(var).unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u64>().ok()) {
+                    let mut fired = FIRED.lock().unwrap();
+                    if play.play.ticks >= k && !fired.contains(&(dir, k)) {
+                        fired.push((dir, k));
+                        if dir == 0 {
+                            play.play.panel_latch.down = true;
+                        } else {
+                            play.play.panel_latch.left = true;
+                        }
+                    }
+                }
+            }
         }
         // NEOPETS_TRACE_SWITCH also works in the window: the chord on those play ticks.
         if std::env::var("NEOPETS_TRACE_SWITCH").ok().is_some_and(|v| v.split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| (k..k + 3).contains(&(play.play.ticks + 1)))) {
@@ -1266,7 +1279,7 @@ fn step_sim(
                 let ctx = menus::Ctx {
                     game_over: play.play.death.page.is_some() || play.play.death.flag_e,
                     dpad: if l.left { menus::LEFT } else { 0 } | if l.right { menus::RIGHT } else { 0 },
-                    shortcuts: !play.play.quick.open && !l.up && !l.down && !play.play.dialogue_open,
+                    shortcuts: !play.play.quick.open && !play.play.mote_panel.open && !l.up && !l.down && !play.play.dialogue_open,
                     book_gate: play.play.books.gate(),
                     book_index: play.play.books.index(),
                     box_busy: play.play.dialogue_open && play.play.textbox.open,

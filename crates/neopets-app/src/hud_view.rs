@@ -101,6 +101,18 @@ fn subtree(f: &Frontend, n: usize, out: &mut Vec<usize>) {
     }
 }
 
+/// Whether node `n` is node `root` or lies under it.
+fn under_node(f: &Frontend, n: usize, root: usize) -> bool {
+    let mut at = Some(n);
+    while let Some(i) = at {
+        if i == root {
+            return true;
+        }
+        at = f.nodes[i].parent;
+    }
+    false
+}
+
 /// The panel root a node belongs to, if any.
 fn panel_root(f: &Frontend, n: usize, roots: &[usize]) -> Option<usize> {
     let mut at = Some(n);
@@ -368,7 +380,12 @@ pub fn sync_hud(
             let price = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudPrice(line))).id();
             commands.entity(root).add_child(price);
         }
-        for &n in panel_nodes.iter().filter(|&&n| matches!(f.nodes[n].kind, 2 | 6)) {
+        // The Mote panel's label (node 393 under group 392, variable 11) is a value text too.
+        let mut mote_texts = Vec::new();
+        if f.nodes.len() > 392 {
+            subtree(f, 392, &mut mote_texts);
+        }
+        for &n in panel_nodes.iter().chain(mote_texts.iter().filter(|&&n| f.nodes[n].kind == 6 && f.values.get(&f.nodes[n].data).is_some_and(|v| v.variable == 11))).filter(|&&n| matches!(f.nodes[n].kind, 2 | 6)) {
             let child = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, HudValue(n))).id();
             commands.entity(root).add_child(child);
         }
@@ -517,10 +534,12 @@ pub fn sync_hud(
         if in_swing {
             ok &= hud.swing.active && p.swap_mode == 2;
         }
-        // Both icons are hidden while the quick panel is open; the journal icon only shows while
-        // its flag is set.
+        // Both icons are hidden while the quick panel is open or the letterbox or a screen fade
+        // is up (the busy test of SPEC-0023 section 4.1); the journal icon only shows while its
+        // flag is set.
         if in_journal || in_dpad {
-            ok &= !p.quick.open && (!in_journal || hud.journal);
+            let busy = p.bars.height() > 0.0 || p.fade.moving() || p.fade.opacity() > 0.0;
+            ok &= !p.quick.open && !p.mote_panel.open && !busy && (!in_journal || hud.journal);
         }
         let top = if in_mote {
             mote_root.unwrap_or(bars)
@@ -723,6 +742,14 @@ pub fn sync_hud(
                 Some(l) => (String::from_utf8_lossy(&l.text).into_owned(), l.font as usize, l.spacing as i32, l.colour, true),
                 None => continue,
             }
+        } else if under_node(f, n, 392) && f.values.get(&f.nodes[n].data).is_some_and(|v| v.variable == 11) {
+            // SPEC-0021 Second quick panel item 5: the label shows the owned count of the selected
+            // Mote, and nothing for "No Mote" (the name beside it is not built: its format in the
+            // label is not given).
+            let Some(v) = f.values.get(&f.nodes[n].data).copied() else { continue };
+            let sel = inputs.mote_selection;
+            let text = if sel == 255 { String::new() } else { inputs.mote_counts.get(sel as usize).copied().unwrap_or(0).to_string() };
+            (text, v.font as usize, v.spacing as i32, v.colour, inputs.mote_open && sel != 255)
         } else {
             let Some(v) = f.values.get(&f.nodes[n].data).copied() else { continue };
             let number = match f.nodes[n].handler {
@@ -738,7 +765,7 @@ pub fn sync_hud(
             (number.to_string(), v.font as usize, v.spacing as i32, v.colour, v.gate != 0 && v.format == 1)
         };
         let mut ok = shown && ok0;
-        let top = panel_root(f, n, &panels).unwrap_or(n);
+        let top = if under_node(f, n, 392) { 392 } else { panel_root(f, n, &panels).unwrap_or(n) };
         let mut at = Some(n);
         while let Some(i) = at {
             ok &= condition(f, i, &inputs);
