@@ -133,6 +133,10 @@ pub struct Tuning {
     pub max_fly: f32,
     /// Distance hide flag (u16 +0xA0).
     pub distance_hide: bool,
+    /// Difficulty value (u16 0x3A, the attack-manager weight) and the wait-in-line stand-off
+    /// spread R (f32 0xB0; SPEC-0038 Behavior 45).
+    pub weight: u16,
+    pub standoff: f32,
     /// Distance hide distance and chance (f32 +0xA4, +0xA8; SPEC-0038 Behavior 24).
     pub hide_distance: f32,
     pub hide_chance: f32,
@@ -196,6 +200,12 @@ impl MonsterTable {
     /// The class-17 values of (type, variant).
     pub fn tuning(&self, monster_type: u16, variant: u16) -> Option<Tuning> {
         self.tuning_at(self.index(monster_type, variant)?)
+    }
+
+    /// Row i's raw bytes.
+    pub fn row_bytes(&self, i: usize) -> Option<&[u8]> {
+        let r = ROWS_AT + ROW * i;
+        self.rows.get(r..r + ROW)
     }
 
     /// The class-17 values of row i.
@@ -272,6 +282,8 @@ impl MonsterTable {
             ground_min: f(0x9C),
             max_fly: f(0xB4),
             distance_hide: u(0xA0) != 0,
+            weight: u(0x3A),
+            standoff: f(0xB0),
             hide_distance: f(0xA4),
             hide_chance: f(0xA8),
             flying_hit: w(0xAC) as i32,

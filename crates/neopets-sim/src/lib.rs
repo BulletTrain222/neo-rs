@@ -3,6 +3,7 @@
 pub use ps2_float::{F, Vf};
 
 pub mod attack;
+pub mod attackmgr;
 pub mod camera;
 pub mod chain;
 pub mod climb;

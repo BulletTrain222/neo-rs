@@ -852,6 +852,8 @@ pub struct Play {
     hit_list: Vec<u64>,
     /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
     swing_serial: u32,
+    /// SPEC-0038 Behavior 45: the shared attack-manager list.
+    attack_mgr: neopets_sim::attackmgr::Manager,
     /// SPEC-0011 Thorn hits: the five-record hazard pool, its contact radius, and the thorn
     /// shots' positions by pool slot as of the last tick.
     thorns: neopets_sim::thorn::Pool,
@@ -1560,6 +1562,7 @@ impl Play {
             gelert_words,
             hit_list: Vec::new(),
             swing_serial: 0,
+            attack_mgr: Default::default(),
             thorns: Default::default(),
             thorn_radius,
             thorn_shots: [None; neopets_sim::projectile::SLOTS],
@@ -7799,7 +7802,29 @@ impl Play {
         // sub-states (8 and 13), under the script hold, or while a dialogue box is up.
         let roberta_leap = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 8 | 13));
         let attackable = !matches!(self.loco.state, 16 | 17 | 25 | 33 | 36 | 48 | 50..=55 | 57 | 59 | 60) && !roberta_leap && !self.held && !self.dialogue_open;
+        // SPEC-0038 Behavior 45: the attack manager's frame, before the enemies read their wait
+        // flags; the capacity from the selected hero's weapon and body item.
+        let h = self.hero_index.min(1);
+        let capacity = neopets_sim::attackmgr::capacity(h, self.equipment.entries[0][h], self.equipment.entries[2][h]);
+        let members: HashMap<u64, neopets_sim::attackmgr::Member> = self
+            .characters
+            .iter()
+            .filter_map(|c| {
+                let e = c.enemy.as_ref()?;
+                let d = sub_v(c.position, hero);
+                let weight = c.row.map_or(0, |_| e.p.weight as i16 as i32);
+                Some((c.id, neopets_sim::attackmgr::Member { agro: e.state == 19 && !e.dead, dist: (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(), movable: e.movable(), weight }))
+            })
+            .collect();
+        self.attack_mgr.run(capacity, &|id| members.get(&id).copied());
+        for c in self.characters.iter_mut() {
+            if let Some(e) = c.enemy.as_mut().filter(|e| e.joined) {
+                e.joined = false;
+                self.attack_mgr.grant(c.id);
+            }
+        }
         let world = &self.world;
+        let mgr = &self.attack_mgr;
         let mut strikes = Vec::new();
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
@@ -7871,6 +7896,9 @@ impl Play {
             // velocity x the defend time (ticks) against the enemy's body capsule.
             v.hero_swing = hero_swing;
             v.hero_recover = hero_recover;
+            v.waits = mgr.waits(*id);
+            let locate = |q: [f32; 3]| mesh.is_none_or(|m| m.locate_full(q).is_some());
+            v.locate = Some(&locate);
             v.hero_shot_live = !shot_paths.is_empty();
             let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
             let look = e.p.defence.hold.max(0) as f32;
@@ -12545,6 +12573,8 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         approach_timer_min: t.approach_timer_min,
         turn: t.turn,
         distance_hide: t.distance_hide,
+        weight: t.weight,
+        standoff: t.standoff,
         hide_distance: t.hide_distance,
         hide_chance: t.hide_chance,
         flying_hit: t.flying_hit,
@@ -12607,6 +12637,8 @@ fn enemy_view<'a>(
         radii: 0.0,
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },
         has,
+        waits: false,
+        locate: None,
     }
 }
 

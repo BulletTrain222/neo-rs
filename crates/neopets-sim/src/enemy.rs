@@ -7,7 +7,8 @@
 //! (Behavior 48.6), the take-hit hook (Behavior 37), the dead state (Behaviors 34 and 36) and the
 //! melee and missile defences (outers 5 to 8, with the defence hold and exit), and the
 //! counter-attack choice (Behavior 14), the distance-hide gate (Behavior 24) and state 14,
-//! retreat home and hide (Behavior 38).
+//! retreat home and hide (Behavior 38), and the wait in line (outer 12) under the attack
+//! manager (`attackmgr`, Behavior 45).
 //!
 //! Not covered: the alarm groups and the group alert (Behaviors 3 and 10), socialize, the global
 //! AI pause (state 20), the retarget countdown and flyer re-launch (state 22 is played but never
@@ -15,7 +16,7 @@
 //! stands and notices), the alarm-group emerge of state 8, wandering in
 //! states 5 to 7 (they stand and notice),
 //! the counter-attack choice's code 5 (R-0117), the
-//! confused outer 11, the attack manager and the wait in line (outer 12), projectiles (missile
+//! confused outer 11, the waiting approach-3 shots' extra aim scatter, projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
 //! ghosts, reanimation (state 16 of rows 224, 226, 227) and drops and coins. The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
@@ -103,6 +104,8 @@ pub struct Params {
     pub ground_min: f32,
     pub max_fly: f32,
     pub distance_hide: bool,
+    pub weight: u16,
+    pub standoff: f32,
     pub hide_distance: f32,
     pub hide_chance: f32,
     pub flying_hit: i32,
@@ -218,6 +221,10 @@ pub struct View<'a> {
     pub clip: Clip,
     /// The enemy's animation table holds an id.
     pub has: &'a dyn Fn(u32) -> bool,
+    /// The attack manager holds this enemy back (Behavior 45).
+    pub waits: bool,
+    /// Whether a point locates on the enemy's navmesh (None: every point does).
+    pub locate: Option<&'a dyn Fn(Vec3) -> bool>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -458,6 +465,12 @@ pub struct Enemy {
     pub outer: u32,
     pub inner: u32,
     pub seq: u32,
+    /// Set on entering agro (the setter for state 19, the take-hit's send): the host grants an
+    /// attack-manager entry and clears it (Behavior 45).
+    pub joined: bool,
+    /// Wait in line (outer 12): the countdown (0xBF8, not reset on entry) and the stand-off point.
+    line_wait: i32,
+    line_point: Vec3,
     /// State 14's phase word (+0xC04; Behavior 38).
     pub hide_phase: u8,
     hold: i32,
@@ -540,6 +553,9 @@ impl Enemy {
             outer: 0,
             inner: 0,
             seq: 0,
+            joined: false,
+            line_wait: 0,
+            line_point: [0.0; 3],
             hide_phase: 0,
             hold: 0,
             lock: 0,
@@ -633,6 +649,7 @@ impl Enemy {
                 self.outer = 0;
                 self.recovery = 0;
                 self.cooldown = [0; 4];
+                self.joined = true;
             }
             _ => {}
         }
@@ -869,6 +886,7 @@ impl Enemy {
             damage *= 2;
             self.previous = self.state;
             self.state = 19;
+            self.joined = true;
         }
         // Behavior 37 step 7: no hit reaction while stunned (status 0).
         if !self.status(0) && !(self.outer == 10 && self.react == 2 && self.stun_type == 1) {
@@ -1318,7 +1336,7 @@ impl Enemy {
             } else {
                 6
             };
-            self.enter(2, start);
+            self.start_sequencer(start, v, rng);
             self.draw_distances(rng);
             return;
         }
@@ -1362,7 +1380,72 @@ impl Enemy {
         }
         self.selected = Some(k);
         self.cooldown[k] = rng.range(s.delay_min as i32, s.delay_max as i32);
-        self.enter(2, if s.charge == -1 { 0 } else { 6 });
+        self.start_sequencer(if s.charge == -1 { 0 } else { 6 }, v, rng);
+    }
+
+    /// Outer event 2, the sequencer start: while the attack manager holds the enemy back and its
+    /// approach is not 3, it waits in line (outer 12) instead (Behavior 45).
+    fn start_sequencer(&mut self, start: u32, v: &View, rng: &mut Rng) {
+        if v.waits && self.p.approach != 3 {
+            self.enter(12, 0);
+            self.line_point = self.stand_off(self.p.standoff, v, rng);
+        } else {
+            self.enter(2, start);
+        }
+    }
+
+    /// The stand-off point: hero + (u - R/2, 0, v - R/2) with u and v from 0 to trunc(R) - 1;
+    /// a point off the navmesh moves halfway toward the enemy, up to 10 times, then the enemy's
+    /// own point.
+    fn stand_off(&self, r: f32, v: &View, rng: &mut Rng) -> Vec3 {
+        let n = r.max(0.0) as i32;
+        let mut draw = || if n > 0 { rng.range(0, n - 1) as f32 } else { 0.0 };
+        let (u, w) = (draw(), draw());
+        let mut p = [v.hero[0] + u - r / 2.0, v.hero[1], v.hero[2] + w - r / 2.0];
+        let Some(locate) = v.locate else { return p };
+        for _ in 0..10 {
+            if locate(p) {
+                return p;
+            }
+            p = [0.5 * (p[0] + v.position[0]), 0.5 * (p[1] + v.position[1]), 0.5 * (p[2] + v.position[2])];
+        }
+        if locate(p) { p } else { v.position }
+    }
+
+    /// Outer 12, wait in line (Behavior 45): with the countdown at 1 or more, face the hero,
+    /// the idle pick, count down, keep moving to P; at 0 or below and arrived at P, 73 once (163
+    /// for flyers), then the countdown int[600, 800] and a new P with R = 50.0. Every tick, once
+    /// the enemy no longer waits, outer 0 starts again.
+    fn wait_in_line(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let p = self.line_point;
+        let arrived = hdist(v.position, p) <= 1.0;
+        if self.line_wait >= 1 {
+            a.anim = Some(self.idle(!arrived, v, rng));
+            a.face = Some((v.hero, 0.3));
+            if !arrived {
+                a.go = Some(Go::Toward(p));
+            }
+            self.line_wait -= 1;
+        } else if arrived {
+            let id = if self.airborne() { 163 } else { 73 };
+            if self.through(id, v, a) {
+                self.through = None;
+                self.line_wait = rng.range(600, 800);
+                self.line_point = self.stand_off(50.0, v, rng);
+            }
+        } else {
+            a.anim = Some(if self.airborne() { 98 } else { 97 });
+            a.go = Some(Go::Toward(p));
+        }
+        if !v.waits {
+            self.enter(0, 0);
+        }
+    }
+
+    /// The attack manager's order-pass test: not in the sequencer's states 0 to 3, not
+    /// blocking, not in the hit reaction (outer 10 stands for the +0xAF8 marker here).
+    pub fn movable(&self) -> bool {
+        !(self.outer == 2 && self.seq <= 3) && !self.blocking && self.outer != 10
     }
 
     /// Behavior 44 missile and melee defence (before the other choices). Each starts outer 6 or
@@ -1602,6 +1685,7 @@ impl Enemy {
             }
             10 => self.reaction(v, a),
             5..=8 => self.defence(v, rng, a),
+            12 => self.wait_in_line(v, rng, a),
             _ => {}
         }
         // The agro tail (Behavior 23).
@@ -2018,6 +2102,8 @@ mod tests {
             radii: 2.0,
             clip: Clip::default(),
             has,
+            waits: false,
+            locate: None,
         }
     }
 
@@ -2232,6 +2318,41 @@ mod tests {
         let mut a = Act::default();
         e.retreat_step(&v, &mut rng, &mut a);
         assert_eq!((e.state, a.snap), (8, Some([-10.0, 0.0, 0.0])));
+    }
+
+    #[test]
+    fn waiting_enemies_stand_off_then_rejoin() {
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(9);
+        let mut p = skeleton();
+        p.standoff = 10.0;
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        (e.state, e.outer) = (19, 1);
+        let mut v = view([2.5, 0.0, 0.0], &has);
+        v.waits = true;
+        // A chosen attack is held back: outer 12 with a stand-off point within R/2 of the hero.
+        for _ in 0..400 {
+            e.choose(&v, &mut rng);
+            if e.outer == 12 {
+                break;
+            }
+        }
+        assert_eq!(e.outer, 12);
+        let q = e.line_point;
+        assert!((q[0] - 2.5).abs() <= 5.0 && q[2].abs() <= 5.0);
+        // Walking there; once no longer held, outer 0 again.
+        let mut a = Act::default();
+        e.wait_in_line(&v, &mut rng, &mut a);
+        assert_eq!(e.outer, 12);
+        v.waits = false;
+        e.wait_in_line(&v, &mut rng, &mut Act::default());
+        assert_eq!(e.outer, 0);
+        // Approach-3 enemies are never held back.
+        let mut e = Enemy::new(e.p.clone(), Spawn::default(), &mut rng);
+        e.p.approach = 3;
+        v.waits = true;
+        e.start_sequencer(0, &v, &mut rng);
+        assert_eq!((e.outer, e.seq), (2, 0));
     }
 
     #[test]

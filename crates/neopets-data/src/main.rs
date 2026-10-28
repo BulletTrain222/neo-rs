@@ -38,6 +38,7 @@ fn run() -> Result<(), String> {
     let mut lights = false;
     let mut blocks = false;
     let mut aim = false;
+    let mut monster_word: Option<usize> = None;
     let mut panels = false;
     let mut object_headers = false;
     while let Some(arg) = args.next() {
@@ -69,6 +70,10 @@ fn run() -> Result<(), String> {
                 let n = args.next().ok_or("--texture needs a resource number")?;
                 textures.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
             }
+            "--monster-word" => {
+                let n = args.next().ok_or("--monster-word needs a row offset")?;
+                monster_word = Some(usize::from_str_radix(n.trim_start_matches("0x"), 16).map_err(|_| format!("Bad offset {n}"))?);
+            }
             "--resource" => {
                 let n = args.next().ok_or("--resource needs a number")?;
                 show.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -92,7 +97,7 @@ fn run() -> Result<(), String> {
         println!("SHA-256 {name}: {}", fingerprint::to_hex(&digest));
     }
     println!("Disc identity checks passed. This does not validate gameplay or all asset formats.");
-    if !(object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(monster_word.is_some() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -158,6 +163,20 @@ fn run() -> Result<(), String> {
     }
     if aim {
         aim_census(&mut disc, &index)?;
+    }
+    if let Some(o) = monster_word {
+        // The 32-bit word at row offset `o` of every monster row (resource 530), as u16, u32
+        // and f32, with the count of each distinct value.
+        let t = neopets_data::monster::MonsterTable::parse(&index.read(&mut disc, 530)?, &index.read(&mut disc, 531)?)?;
+        let mut seen: std::collections::BTreeMap<u32, usize> = Default::default();
+        for i in 0..t.row_count() {
+            if let Some(b) = t.row_bytes(i).and_then(|b| b.get(o..o + 4)) {
+                *seen.entry(u32::from_le_bytes([b[0], b[1], b[2], b[3]])).or_default() += 1;
+            }
+        }
+        for (w, n) in seen {
+            println!("{w:#010x} u16 {} u32 {} f32 {}: {n} rows", w & 0xFFFF, w, f32::from_bits(w));
+        }
     }
     if panels {
         panel_census(&mut disc, &index)?;
