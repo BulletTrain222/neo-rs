@@ -173,6 +173,10 @@ pub enum Layout {
     Plain,
     /// Position, colour, normal, UV.
     Lit,
+    /// The CPU-animated leaves' draw packets (SPEC-0004 Multi-packet leaves): V4-32 positions
+    /// (w = 1), a V4-32 colour array that is zero on disc (the vertex animator writes it each
+    /// frame) and V4-32 UVs (z = w = 0). Decoded colours are neutral (128).
+    Animated,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -293,6 +297,24 @@ fn decode_batch(unpacks: &[Unpack]) -> Result<Batch, String> {
     const V3_32: (u32, u32) = (2, 0);
     const V2_32: (u32, u32) = (1, 0);
     const V4_8: (u32, u32) = (3, 2);
+    const V4_32: (u32, u32) = (3, 0);
+    if let [V4_32, V4_32, V4_32] = shape.as_slice() {
+        let n = arrays[0].num;
+        if arrays.iter().any(|u| u.num != n) || flag.num != n {
+            return Err("Attribute arrays of one batch differ in length".into());
+        }
+        return Ok(Batch {
+            layout: Layout::Animated,
+            positions: arrays[0].f32s::<4>(n).into_iter().map(|v| [v[0], v[1], v[2]]).collect(),
+            no_triangle: flag.data[..n].iter().map(|&f| f & 0x80 != 0).collect(),
+            colors: vec![[128; 4]; n],
+            normals: Vec::new(),
+            weights: Vec::new(),
+            bones: Vec::new(),
+            uvs: arrays[2].f32s::<4>(n).into_iter().map(|v| [v[0], v[1]]).collect(),
+            uvs_pass1: Vec::new(),
+        });
+    }
     let layout = match shape.as_slice() {
         [V3_32, V4_8, V3_32, V3_32, V4_8, V2_32] => Layout::Skinned,
         [V3_32, V4_8, V2_32] => Layout::Plain,
@@ -329,8 +351,19 @@ fn decode_batch(unpacks: &[Unpack]) -> Result<Batch, String> {
     Ok(b)
 }
 
-/// Decode a one-packet leaf's batches. Packet kinds other than 0 are not supported yet.
+/// Decode a leaf's batches. A kind-1 leaf (CPU-animated, double-buffered; SPEC-0004 Multi-packet
+/// leaves) holds the offsets of two byte-identical draw packets at packet + 0x3C (even parity)
+/// and + 0x40 (odd), relative to the packet itself (on disc the two copies fill the payload's
+/// end); the even copy is decoded as a one-packet leaf (the animation itself is the host's). Kind 2 is not supported (no leaf on disc uses it).
 pub fn decode_packet(payload: &[u8], leaf: &Leaf) -> Result<Vec<Batch>, String> {
+    if leaf.packet_kind == 1 {
+        let rel = u32_at(payload, leaf.packet + 0x3C).ok_or("Truncated kind-1 packet header")? as usize;
+        let draw = leaf.packet + rel;
+        if rel == 0 || draw >= payload.len() {
+            return Err(format!("Kind-1 draw packet {draw:#x} is outside the payload"));
+        }
+        return decode_packet(payload, &Leaf { packet_kind: 0, packet: draw, ..leaf.clone() });
+    }
     if leaf.packet_kind != 0 {
         return Err(format!("Packet kind {} is not supported", leaf.packet_kind));
     }

@@ -27,6 +27,7 @@ fn layout_name(l: Layout) -> &'static str {
         Layout::Skinned => "A skinned",
         Layout::Plain => "B plain",
         Layout::Lit => "C lit",
+        Layout::Animated => "animated (kind 1)",
     }
 }
 

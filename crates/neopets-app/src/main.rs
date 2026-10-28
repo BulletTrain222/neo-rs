@@ -860,7 +860,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items).chain(), (sync_characters, sync_attachments).chain(), sync_shots, (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), sync_shots, (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -869,6 +869,7 @@ fn main() {
     app.add_systems(Update, send_rumble);
     app.add_systems(Update, sync_uv_flip);
     app.add_systems(Startup, (setup_movies, movie_view::spawn_screen));
+    app.init_resource::<HeroItemFrames>();
     app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::hush).chain().after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
@@ -2487,6 +2488,11 @@ struct ShowcaseMarker(u16);
 #[derive(Component)]
 struct HeroItemRoot(u32);
 
+/// The focus hero's held items' drawn matrices this frame, by display resource (the saved
+/// weapon and shield transforms that the Mote glow takes; SPEC-0046 Hero-item effect matrices).
+#[derive(Resource, Default)]
+struct HeroItemFrames(std::collections::HashMap<u32, Mat4>);
+
 /// SPEC-0046 Held items, focus hero: the shield and weapon models (SPEC-0021 display slots,
 /// resources 544 to 563) at the frames `Play::hero_items` gives, with the stowed rescales. The
 /// box minimum and size are the model's vertex bounds (they match the root-node box, SPEC-0004
@@ -2502,7 +2508,9 @@ fn sync_hero_items(
     mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut models: Local<std::collections::HashMap<u32, Option<([f32; 3], [f32; 3])>>>,
+    mut frames: ResMut<HeroItemFrames>,
 ) {
+    frames.0.clear();
     let Some(state) = state else { return };
     let items = state.play.hero_items();
     let mut archive = archive;
@@ -2519,7 +2527,7 @@ fn sync_hero_items(
             let bounds = built.as_ref().map(|m| (m.min, m.max));
             if let Some(m) = built {
                 if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() {
-                    println!("hero item model {res}: {} parts, {} two-pass, {} env pass 0, {} flipbook", m.parts.len(), m.parts.iter().filter(|p| p.pass1.is_some()).count(), m.parts.iter().filter(|p| p.env_map).count(), m.parts.iter().filter(|p| p.flipbook.is_some()).count());
+                    println!("hero item model {res}: bounds {:?} to {:?}, {} parts, {} two-pass, {} env pass 0, {} flipbook", m.min, m.max, m.parts.len(), m.parts.iter().filter(|p| p.pass1.is_some()).count(), m.parts.iter().filter(|p| p.env_map).count(), m.parts.iter().filter(|p| p.flipbook.is_some()).count());
                 }
                 let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
                 // The held model's render pass 1 (the blade and metal shine; pass1.rs).
@@ -2546,6 +2554,7 @@ fn sync_hero_items(
         };
         let c = |k: usize| Vec4::new(frame.cols[k][0] * f, frame.cols[k][1] * f, frame.cols[k][2] * f, 0.0);
         let m = Mat4::from_cols(c(0), c(1), c(2), Vec4::new(frame.t[0], frame.t[1], frame.t[2], 1.0));
+        frames.0.insert(*res, m);
         shown.insert(*res);
         for (_, root, mut t, mut vis) in &mut roots {
             if root.0 == *res {
@@ -2555,6 +2564,100 @@ fn sync_hero_items(
         }
     }
     for (_, root, _, mut vis) in &mut roots {
+        if !shown.contains(&root.0) {
+            *vis = Visibility::Hidden;
+        }
+    }
+}
+
+/// A Mote glow model's drawn root, by registry model id, with its parts' materials.
+#[derive(Component)]
+struct GlowRoot(u32, Vec<Handle<StandardMaterial>>);
+
+/// SPEC-0046 Hero-item effect matrices and SPEC-0003 CPU vertex animator 3: Tor's Mote glow
+/// models (resource 9 children 16 to 28, ids 299 to 311) at the held item's drawn matrix,
+/// unlit and additive, coloured with the Mote's RGB (vertex colour 128 = 1.0). Each drawn frame
+/// the animator's U phase advances by 0.06 and its alpha phase p by 0.2, with alpha
+/// a = 64 + 186 (1 + sin p) / 2 (both phases are advanced once per frame here, not per mesh).
+#[allow(clippy::too_many_arguments)]
+fn sync_hero_glows(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    archive: Option<ResMut<Archive>>,
+    mut roots: Query<(&GlowRoot, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut models: Local<std::collections::HashMap<u32, bool>>,
+    mut phase: Local<(f32, f32)>,
+    frames: Res<HeroItemFrames>,
+) {
+    let Some(state) = state else { return };
+    // NEOPETS_NO_GLOW: the glow off (diagnostic).
+    let glows = if std::env::var_os("NEOPETS_NO_GLOW").is_some() { Vec::new() } else { state.play.hero_glows() };
+    let mut archive = archive;
+    if !glows.is_empty() {
+        phase.0 = (phase.0 + 0.06).rem_euclid(1.0);
+        phase.1 += 0.2;
+    }
+    let alpha = (64.0 + 186.0 * (1.0 + phase.1.sin()) / 2.0 + 0.5).floor();
+    let mut shown = std::collections::HashSet::new();
+    for (id, item, rgb) in &glows {
+        if !models.contains_key(id) {
+            let built = archive.as_deref_mut().and_then(|Archive { disc, index }| {
+                let b = index.read(disc, neopets_data::effect::RESOURCE).ok()?;
+                let c = neopets_data::resource::walk_chunks(&b, None).ok()?.chunks;
+                let m = neopets_data::model::build_roles(&b, &c, None, Some(&[(*id - 283) as u16]));
+                if std::env::var_os("NEOPETS_TRACE_GLOW").is_some() {
+                    match &m {
+                        Ok(m) => println!("glow model {id}: {} parts, {} trees, skipped {:?}, bounds {:?} to {:?}, first {:?}", m.parts.len(), m.trees, m.skipped_leaves, m.min, m.max, m.parts.first().map(|p| p.positions.iter().take(4).collect::<Vec<_>>())),
+                        Err(e) => println!("glow model {id}: {e}"),
+                    }
+                }
+                m.ok()
+            });
+            let built = built.filter(|m| !m.parts.is_empty());
+            let ok = built.is_some();
+            if let Some(m) = built {
+                let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                let mut handles = Vec::new();
+                let mut children = Vec::new();
+                for (_, mesh, material) in parts {
+                    let mut own = materials.get(&material).cloned().unwrap_or_default();
+                    own.unlit = true;
+                    own.alpha_mode = AlphaMode::Add;
+                    own.cull_mode = None;
+                    let h = materials.add(own);
+                    handles.push(h.clone());
+                    children.push((mesh, h));
+                }
+                commands.spawn((GlowRoot(*id, handles), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
+                    for (mesh, h) in children {
+                        c.spawn((Mesh3d(mesh), MeshMaterial3d(h), Transform::IDENTITY));
+                    }
+                });
+            }
+            models.insert(*id, ok);
+        }
+        // The glow takes the held item's drawn matrix (its frame with the stowed rescale).
+        let (Some(true), Some(&m)) = (models.get(id).copied(), frames.0.get(item)) else { continue };
+        shown.insert(*id);
+        let k = alpha / 128.0;
+        let colour = Color::linear_rgb(rgb[0] as f32 / 128.0 * k, rgb[1] as f32 / 128.0 * k, rgb[2] as f32 / 128.0 * k);
+        for (root, mut t, mut vis) in &mut roots {
+            if root.0 == *id {
+                *t = Transform::from_matrix(m);
+                *vis = Visibility::Visible;
+                for h in &root.1 {
+                    if let Some(mut mat) = materials.get_mut(h) {
+                        mat.base_color = colour;
+                        mat.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(phase.0, 0.0));
+                    }
+                }
+            }
+        }
+    }
+    for (root, _, mut vis) in &mut roots {
         if !shown.contains(&root.0) {
             *vis = Visibility::Hidden;
         }
@@ -3872,6 +3975,12 @@ fn setup_play(mut commands: Commands, request: Option<Res<PlayRequest>>, archive
             // `--give N`: diagnostic equipment (no inventory yet).
             for &id in &request.2 {
                 play.give(id);
+            }
+            // NEOPETS_TRACE_MOTES="w0,w1,w2" as in the trace: held Motes equipped (diagnostic).
+            if let Ok(m) = std::env::var("NEOPETS_TRACE_MOTES") {
+                for (word, id) in m.split(',').enumerate().filter_map(|(k, t)| Some((k, t.trim().parse::<u16>().ok()?))) {
+                    play.item_command(&menus::Command::EquipMote { word, id });
+                }
             }
             // NEOPETS_TRACE_PET="type,T" and NEOPETS_TRACE_QUICK=id as in the trace (diagnostic).
             if let Ok(v) = std::env::var("NEOPETS_TRACE_PET") {

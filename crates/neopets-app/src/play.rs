@@ -1001,6 +1001,8 @@ pub struct Play {
     /// the window to pass to the first controller's large motor.
     rumble: neopets_sim::rumble::Rumble,
     rumble_presets: Vec<neopets_sim::rumble::Preset>,
+    /// The Mote colour rows (SPEC-0023 section 25; 0x2DCA60, one RGB row per Mote 160 to 173).
+    mote_glow_rgb: [[u8; 3]; 14],
     landing_rumble: (usize, f32, f32),
     pub motor: Option<neopets_sim::rumble::Send>,
     /// The save game (SPEC-0025): the world key table (keys, saved ids), the growth words, the
@@ -1587,6 +1589,7 @@ impl Play {
             menu_open: false,
             rumble: Default::default(),
             rumble_presets: Vec::new(),
+            mote_glow_rgb: [[0; 3]; 14],
             landing_rumble: (5, 0.0, 0.0),
             motor: None,
             world_keys,
@@ -4689,6 +4692,27 @@ impl Play {
     /// the weapon (resource 544 + w; in the hand at W0 while drawn, else sheathed with axes (Y6,
     /// Z6, X6) at T6, which only Tor has). Nothing while the cloak is worn or the hero is not
     /// drawn. Each entry: the resource, the frame and the rescale rule of the stowed forms.
+    /// SPEC-0046 Hero-item effect matrices; SPEC-0023 section 25: Tor's weapon and shield Mote
+    /// glow. With Tor selected and a Mote in word 2 (weapon) or word 1 (shield), common model
+    /// 299 + (weapon id - 98) for weapons 98 to 105, or 307 + (shield id - 106), at the item's
+    /// drawn frame, tinted with the Mote's colour row. Roberta has none. Each entry is the glow
+    /// model, the held item's display resource (whose drawn matrix the glow takes) and the RGB.
+    pub fn hero_glows(&self) -> Vec<(u32, u32, [u8; 3])> {
+        if self.hero_index != 0 {
+            return Vec::new();
+        }
+        let rgb = |m: Option<u16>| m.and_then(|m| self.mote_glow_rgb.get((m as usize).wrapping_sub(160)).copied());
+        let (weapon, shield) = (rgb(self.equipment.motes[0][2]), rgb(self.equipment.motes[0][1]));
+        self.hero_items()
+            .into_iter()
+            .filter_map(|(res, _, _)| match res {
+                544..=551 => weapon.map(|c| (299 + res - 544, res, c)),
+                560..=564 => shield.map(|c| (307 + res - 560, res, c)),
+                _ => None,
+            })
+            .collect()
+    }
+
     pub fn hero_items(&self) -> Vec<(u32, neopets_data::anim::Affine, HeroItemScale)> {
         let mut out = Vec::new();
         if self.equipment.entries[2][self.hero_index] == Some(126) || self.loco.state == hero_states::DEAD {
@@ -10193,6 +10217,12 @@ impl Play {
         }
         if std::env::var_os("NEOPETS_TRACE_RUMBLE").is_some() {
             println!("      rumble presets {:?}, landing {:?}", self.rumble_presets, self.landing_rumble);
+        }
+        if let Ok(w) = neopets_data::archive::boot_u32_table(boot, 0x002D_CA60, 14) {
+            self.mote_glow_rgb = std::array::from_fn(|k| {
+                let b = w[k].to_le_bytes();
+                [b[0], b[1], b[2]]
+            });
         }
         let t = |at: u32| neopets_data::archive::boot_u32_table(boot, at, 14).map(|w| std::array::from_fn(|k| w[k] as i32)).unwrap_or([-1; 14]);
         self.attack_fx.tables = AttackTables {
