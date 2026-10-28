@@ -868,6 +868,8 @@ pub struct Play {
     hit_list: Vec<u64>,
     /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
     swing_serial: u32,
+    /// SPEC-0040 Behavior 23A: the hero's stored look yaw and pitch.
+    head_look: neopets_sim::look::Look,
     /// SPEC-0010 Test spawn: with NEOPETS_CLOUD_BEAST set, monster rows 1 (the Cloud Beast) and
     /// 2 (its companion), spawned in each world with the stand-in models (no model on disc).
     cloud_rows: Option<(neopets_data::monster::Row, neopets_data::monster::Row)>,
@@ -1599,6 +1601,7 @@ impl Play {
             gelert_words,
             hit_list: Vec::new(),
             swing_serial: 0,
+            head_look: Default::default(),
             cloud_rows,
             cloud_on: std::env::var_os("NEOPETS_CLOUD_BEAST").is_some(),
             cloud_words,
@@ -7499,6 +7502,7 @@ impl Play {
         }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
+        self.head_look_step();
         let (at, facing) = (self.loco.position(), self.loco.facing);
         if std::env::var_os("NEOPETS_NO_CHAINS").is_none() {
             self.hero.chain_step(at, facing);
@@ -8127,6 +8131,62 @@ impl Play {
         self.characters.retain(|c| !(c.pack == pack && c.slot == CLOUD_SLOT));
         let tags = (101..=106).all(|k| self.world.tags.contains(&k));
         if tags { "Cloud Beast spawned on this arena's points 101 to 106".into() } else { "Cloud Beast spawned on a ring around the hero".into() }
+    }
+
+    /// SPEC-0040 Behavior 23A, the hero's head look: on a tick whose main animation has the
+    /// head-look bit, the target is the talk partner's or the locked target's look point, else
+    /// the nearest live character in front (dot above 0.5) closer than the hero's range (12.0
+    /// Tor, 25.0 Roberta) raised 1.5, else 5.0 ahead of the head (the animation-chosen side and
+    /// reset targets are not built; Medium); the controller steps the yaw and pitch and the
+    /// look point turns head joint 6. Without the bit the head keeps its animated pose.
+    fn head_look_step(&mut self) {
+        self.hero.set_look(None);
+        // NEOPETS_TRACE_LOOK: the main id and its head-look bit once a second (trace only).
+        if std::env::var_os("NEOPETS_TRACE_LOOK").is_some() && self.ticks % 60 == 0 {
+            println!("LOOK tick {} action {} allowed {} state {} yaw {:.2} pitch {:.2}", self.ticks, self.hero.action(), self.hero.head_look_allowed(), self.loco.state, self.head_look.yaw, self.head_look.pitch);
+        }
+        // NEOPETS_NO_LOOK: no head look (comparison traces only).
+        if !self.hero.head_look_allowed() || std::env::var_os("NEOPETS_NO_LOOK").is_some() {
+            return;
+        }
+        let place = placement(self.loco.position(), self.loco.facing);
+        let Some(head) = self.hero.bone_frames().get(crate::character::HEAD_JOINT).map(|f| place.apply(f.t)) else { return };
+        let (side, fwd) = (place.cols[0], place.cols[2]);
+        let pack = self.world.pack;
+        let live = |c: &&Character| c.pack == pack && !c.inactive && c.dying.is_none();
+        let partner = self.talk_partner.as_ref().filter(|_| self.dialogue_open).and_then(|n| self.characters.iter().filter(live).find(|c| &c.name == n));
+        let locked = self.lock.and_then(|id| self.characters.iter().filter(live).find(|c| c.id == id));
+        let range = if self.hero_index == 0 { 12.0 } else { 25.0 };
+        let ahead = || {
+            self.characters
+                .iter()
+                .filter(live)
+                .filter(|c| c.row.is_some() && c.hp > 0)
+                .map(|c| (c, sub_v(c.position, head)))
+                .map(|(c, d)| (c, d, (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()))
+                .filter(|&(_, d, l)| l < range && l > 1e-3 && (d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2]) / l > 0.5)
+                .min_by(|a, b| a.2.total_cmp(&b.2))
+                .map(|(c, ..)| add(c.position, [0.0, 1.5, 0.0]))
+        };
+        let target = partner.or(locked).map(|c| c.shot_aim()).or_else(ahead).unwrap_or(add(head, scale(fwd, 5.0)));
+        // NEOPETS_TRACE_LOOK_SIDE: the target 5 units to the side and 2 up (trace only).
+        let target = if std::env::var_os("NEOPETS_TRACE_LOOK_SIDE").is_some() { add(add(head, scale(side, 5.0)), [0.0, 2.0, 0.0]) } else { target };
+        let point = self.head_look.step(head, target, fwd, side, false);
+        if std::env::var_os("NEOPETS_TRACE_LOOK").is_some() && self.ticks % 60 == 0 {
+            println!("LOOK head {head:?} hero {:?} target {target:?} fwd {fwd:?} side {side:?} point {point:?}", self.loco.position());
+        }
+        let v = sub_v(point, self.loco.position());
+        let local = [v[0] * side[0] + v[2] * side[2], v[1], v[0] * fwd[0] + v[2] * fwd[2]];
+        self.hero.set_look(Some(local));
+        if std::env::var_os("NEOPETS_TRACE_LOOK").is_some() && self.ticks % 60 == 0 {
+            if let Some(f) = self.hero.bone_frames().get(crate::character::HEAD_JOINT) {
+                let z = place.rotate(f.cols[2]);
+                let l = (z[0] * z[0] + z[1] * z[1] + z[2] * z[2]).sqrt();
+                let d = sub_v(point, place.apply(f.t));
+                let ld = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+                println!("LOOK head forward . look direction {:.3}", (z[0] * d[0] + z[1] * d[1] + z[2] * d[2]) / (l * ld));
+            }
+        }
     }
 
     fn enemies_step(&mut self) {

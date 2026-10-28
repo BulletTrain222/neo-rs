@@ -37,7 +37,15 @@ pub struct HeroAnim {
     last_owner: Option<[f32; 3]>,
     /// The main family's translation scale selector (SPEC-0005; 0 for the heroes).
     scale_set: i16,
+    /// The hero's head-look point in model space for this tick (SPEC-0040 Behavior 23A head
+    /// step on joint 6), cleared when no look is requested.
+    look: Option<[f32; 3]>,
 }
+
+/// The head joint of the hero's look (SPEC-0040 Behavior 23A, mode 0).
+pub const HEAD_JOINT: usize = 6;
+/// Word A bit 13 of the main entry: head look allowed (SPEC-0005).
+const HEAD_LOOK_BIT: u32 = 1 << 13;
 
 /// Action ids valid for the hero tables (SPEC-0005: ids 0 to 192).
 pub const ACTIONS: u32 = 193;
@@ -71,13 +79,87 @@ impl HeroAnim {
                 state
             })
             .collect();
-        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None, scale_set: 0 };
+        let mut hero = Self { bones, families, action: 0, face: None, effect_lists: Default::default(), chains: Vec::new(), last_owner: None, scale_set: 0, look: None };
         hero.play(3);
         hero
     }
 
     pub fn action(&self) -> u32 {
         self.action
+    }
+
+    /// Whether the current main id's word A has the head-look bit (13) set (SPEC-0005).
+    pub fn head_look_allowed(&self) -> bool {
+        self.families.first().and_then(|f| f.data.actions.get(self.action as usize)).is_some_and(|&a| a & HEAD_LOOK_BIT != 0)
+    }
+
+    /// The head-look point in model space for this tick, or None (no look: the head keeps its
+    /// animated pose).
+    pub fn set_look(&mut self, point: Option<[f32; 3]>) {
+        self.look = point;
+    }
+
+    /// The parent of each skin index across the families (main joints, then each other
+    /// family's joints after its skin base).
+    fn skin_parents(&self) -> Vec<Option<usize>> {
+        let n_main = self.families.first().map_or(0, |f| f.data.def.len());
+        let mut out = vec![None; self.bones.parents.len()];
+        for (fi, f) in self.families.iter().enumerate() {
+            for (i, p) in f.data.def.parents.iter().enumerate() {
+                let skin = f.skin_base + i;
+                let Some(slot) = out.get_mut(skin) else { break };
+                *slot = p.map(|p| p as usize).map(|p| if fi == 0 || p < n_main { p } else { f.skin_base + (p - n_main) });
+            }
+        }
+        out
+    }
+
+    /// The head step (SPEC-0040 Behavior 23A): joint 6 and the joints below it are turned about
+    /// the head's position so that the head's forward axis (Z) points at the look point with its
+    /// up axis levelled to world up (the level rotation and the yaw and pitch turn taken
+    /// together; the stand-in for the spec's two-step joint math, Medium-Low there).
+    fn apply_look(&self, m: &mut [Affine], point: [f32; 3]) {
+        let Some(head) = m.get(HEAD_JOINT).copied() else { return };
+        let o = head.apply(self.bones.rest_position.get(HEAD_JOINT).copied().unwrap_or_default());
+        let norm = |v: [f32; 3]| {
+            let l = (v[0] * v[0] + v[1] * v[1] + v[2] * v[2]).sqrt();
+            (l > 1e-6).then(|| [v[0] / l, v[1] / l, v[2] / l])
+        };
+        let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+        // The controller's look point lies below the head for a target above (its pitch quirk);
+        // the head step's pitch is negated for a point above, so the elevation is mirrored back
+        // (Medium-Low for the net direction in the spec).
+        let Some(fwd) = norm([point[0] - o[0], o[1] - point[1], point[2] - o[2]]) else { return };
+        let Some(side) = norm(cross([0.0, 1.0, 0.0], fwd)) else { return };
+        let up = cross(fwd, side);
+        // R = target frame x current frame transposed (the current frame's columns, made unit).
+        let cur: Vec<[f32; 3]> = head.cols.iter().map(|&c| norm(c).unwrap_or(c)).collect();
+        let tgt = [side, up, fwd];
+        let mut r = [[0.0f32; 3]; 3];
+        for (col, rc) in r.iter_mut().enumerate() {
+            for (row, v) in rc.iter_mut().enumerate() {
+                *v = (0..3).map(|k| tgt[k][row] * cur[k][col]).sum();
+            }
+        }
+        let rot = |v: [f32; 3]| [0, 1, 2].map(|row| (0..3).map(|c| r[c][row] * v[c]).sum::<f32>());
+        let parents = self.skin_parents();
+        let under = |mut i: usize| loop {
+            if i == HEAD_JOINT {
+                break true;
+            }
+            match parents.get(i).copied().flatten() {
+                Some(p) if p != i => i = p,
+                _ => break false,
+            }
+        };
+        for (i, a) in m.iter_mut().enumerate() {
+            if !under(i) {
+                continue;
+            }
+            a.cols = a.cols.map(rot);
+            let d = rot([a.t[0] - o[0], a.t[1] - o[1], a.t[2] - o[2]]);
+            a.t = [o[0] + d[0], o[1] + d[1], o[2] + d[2]];
+        }
     }
 
     pub fn set_effect_lists(&mut self, lists: std::sync::Arc<Vec<Vec<neopets_data::region::EffectEntry>>>) {
@@ -400,7 +482,11 @@ impl HeroAnim {
         // A stand-in with no families (placeholder models) has no bones to pose.
         let Some(main) = self.families.first() else { return Vec::new() };
         let others: Vec<Family> = self.families.iter().skip(1).map(family).collect();
-        anim::skin_matrices(&self.bones, &family(main), &others)
+        let mut m = anim::skin_matrices(&self.bones, &family(main), &others);
+        if let Some(p) = self.look {
+            self.apply_look(&mut m, p);
+        }
+        m
     }
 
     pub fn status(&self) -> String {

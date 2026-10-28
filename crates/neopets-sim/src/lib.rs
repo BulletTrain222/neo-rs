@@ -30,6 +30,7 @@ pub mod entityctl;
 pub mod foliage;
 pub mod hero;
 pub mod lock;
+pub mod look;
 pub mod movie;
 pub mod hud;
 pub mod inventory;
