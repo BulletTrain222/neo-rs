@@ -6913,6 +6913,9 @@ impl Play {
             let items = self.state.items.clone();
             let held = |id: u16| items.get(&id).is_some_and(|&n| n > 0);
             let r = self.mote_panel.tick(&mi, &self.mote_table, self.shield.is_some(), self.weapon.is_some(), &held, words);
+            if std::env::var_os("NEOPETS_TRACE_MOTE_PANEL").is_some() && (mi.circle || mi.cross || mi.square || mi.left || mi.right || mi.up || mi.down) {
+                println!("mote panel tick {}: {mi:?} -> {r:?}, selection {}", self.ticks, self.mote_panel.selection);
+            }
             panel = neopets_sim::quick::PanelInput::default();
             if r.moved {
                 self.cue_fixed(0x9A);

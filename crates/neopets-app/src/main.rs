@@ -1185,19 +1185,20 @@ fn step_sim(
                 play.play.statuses.apply(code as i32, secs);
             }
         }
-        // NEOPETS_TRACE_DOWN and NEOPETS_TRACE_LEFT="tick,...": a D-pad Down or Left edge once,
+        // NEOPETS_TRACE_DOWN, NEOPETS_TRACE_LEFT and NEOPETS_TRACE_CIRCLE="tick,...": a D-pad Down
+        // or Left edge, or a Circle edge, once,
         // on the first frame at or past each tick (diagnostic; Down opens the Mote panel).
         {
             static FIRED: std::sync::Mutex<Vec<(u8, u64)>> = std::sync::Mutex::new(Vec::new());
-            for (dir, var) in [(0u8, "NEOPETS_TRACE_DOWN"), (1, "NEOPETS_TRACE_LEFT")] {
+            for (dir, var) in [(0u8, "NEOPETS_TRACE_DOWN"), (1, "NEOPETS_TRACE_LEFT"), (2, "NEOPETS_TRACE_CIRCLE")] {
                 for k in std::env::var(var).unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u64>().ok()) {
                     let mut fired = FIRED.lock().unwrap();
                     if play.play.ticks >= k && !fired.contains(&(dir, k)) {
                         fired.push((dir, k));
-                        if dir == 0 {
-                            play.play.panel_latch.down = true;
-                        } else {
-                            play.play.panel_latch.left = true;
+                        match dir {
+                            0 => play.play.panel_latch.down = true,
+                            1 => play.play.panel_latch.left = true,
+                            _ => play.play.attack_latch = true,
                         }
                     }
                 }
