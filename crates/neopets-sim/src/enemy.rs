@@ -18,7 +18,7 @@
 //! the counter-attack choice's code 5 (R-0117), the
 //! projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
-//! ghosts, reanimation (state 16 of rows 224, 226, 227) and drops and coins. The alerted search
+//! ghosts and drops and coins (reanimation, state 16 of rows 224, 226 and 227, is built). The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
 //!
 //! Flyers (SPEC-0038 "Flyer", Behaviors 2 step 4, 34 step 2, 37 step 7, 41, 44 and 48; SPEC-0040
@@ -107,6 +107,7 @@ pub struct Params {
     pub standoff: f32,
     pub hide_distance: f32,
     pub hide_chance: f32,
+    pub reanimate: Option<(i32, i32)>,
     pub flying_hit: i32,
     pub anger: bool,
     pub view_angle: f32,
@@ -222,6 +223,9 @@ pub struct View<'a> {
     pub has: &'a dyn Fn(u32) -> bool,
     /// The attack manager holds this enemy back (Behavior 45).
     pub waits: bool,
+    /// Behavior 35's clear-area test: the hero at least 5.0 away and no other live pool member
+    /// closer than 5.0.
+    pub clear: bool,
     /// Whether a point locates on the enemy's navmesh (None: every point does).
     pub locate: Option<&'a dyn Fn(Vec3) -> bool>,
 }
@@ -293,6 +297,8 @@ pub struct Act {
     /// A flyer's row-speed step F in the character's own basis (x side B1, z forward B3), per
     /// tick (SPEC-0040 Behavior 14D item 7).
     pub fly: Option<Vec3>,
+    /// Health back to its maximum (the reanimation's rise, Behavior 35).
+    pub heal: bool,
     /// Set the position to this point (state 14's hide at home).
     pub snap: Option<Vec3>,
 }
@@ -464,6 +470,8 @@ pub struct Enemy {
     pub outer: u32,
     pub inner: u32,
     pub seq: u32,
+    /// The reanimation countdown (+0xD14; -1 idle; Behavior 34 and 35).
+    pub reanim: i32,
     /// Set on entering agro (the setter for state 19, the take-hit's send): the host grants an
     /// attack-manager entry and clears it (Behavior 45).
     pub joined: bool,
@@ -552,6 +560,7 @@ impl Enemy {
             outer: 0,
             inner: 0,
             seq: 0,
+            reanim: -1,
             joined: false,
             line_wait: 0,
             line_point: [0.0; 3],
@@ -963,13 +972,67 @@ impl Enemy {
 
     /// Behavior 34 step 2 with the death countdown: a can-fly 1 enemy that dies airborne is
     /// grounded (the countdown from the ground timer, max not reached).
+    /// Step 1 for the rows with the reanimation flag (224, 226, 227): a first death (countdown
+    /// idle at -1) draws the countdown from the row's range and sets class state 16; a death
+    /// while it runs changes nothing. The enemy is then not `dead` (no corpse): it lies, counts
+    /// as dead for the dead test while the countdown is above 0, and rises (Behavior 35).
     pub fn die(&mut self, rng: &mut Rng) {
-        if !self.dead {
-            if self.p.can_fly == 1 && self.retarget <= 0 {
-                self.ground(rng);
+        if self.dead {
+            return;
+        }
+        if self.p.can_fly == 1 && self.retarget <= 0 {
+            self.ground(rng);
+        }
+        if let Some((lo, hi)) = self.p.reanimate {
+            if self.reanim == -1 {
+                self.reanim = rng.range(lo, hi);
+                self.previous = self.state;
+                self.state = 16;
+                self.outer = 0;
+                self.through = None;
+                self.timers = Default::default();
             }
-            self.dead = true;
             self.disappear = self.p.disappear;
+            return;
+        }
+        self.dead = true;
+        self.disappear = self.p.disappear;
+    }
+
+    /// The dead test (streaming's kill bit, the scripts' AI-dead watches, the live counts): a
+    /// corpse, or a reanimating enemy while its countdown is above 0.
+    pub fn is_dead(&self) -> bool {
+        self.dead || (self.state == 16 && self.reanim > 0)
+    }
+
+    /// Class state 16 refuses hits (the reanimating enemy lying or rising).
+    pub fn lying(&self) -> bool {
+        self.state == 16
+    }
+
+    /// Behavior 35, one tick of class state 16: the countdown (58, or 153 flying), then the rise
+    /// 85 once the area is clear, health to the maximum and agro; with no animation 85, the
+    /// heal and agro at once.
+    fn reanimate_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let lie = if self.airborne() { 153 } else { 58 };
+        if self.reanim >= 0 {
+            a.anim = Some(lie);
+            self.reanim -= 1;
+            return;
+        }
+        if !(v.has)(85) {
+            a.heal = true;
+            self.set(19, v, rng, a);
+            return;
+        }
+        if v.clip.action != 85 {
+            a.anim = Some(if v.clip.action != 85 && v.clear { 85 } else { lie });
+            return;
+        }
+        a.anim = Some(85);
+        if v.clip.progress >= 0.99 {
+            a.heal = true;
+            self.set(19, v, rng, a);
         }
     }
 
@@ -1233,6 +1296,7 @@ impl Enemy {
             }
             19 => self.agro(v, rng, &mut a),
             14 => self.retreat_step(v, rng, &mut a),
+            16 => self.reanimate_step(v, rng, &mut a),
             _ => {}
         }
         // State handlers.
@@ -2123,6 +2187,7 @@ mod tests {
             clip: Clip::default(),
             has,
             waits: false,
+            clear: true,
             locate: None,
         }
     }
@@ -2394,6 +2459,35 @@ mod tests {
             e.tick(&v, &mut rng);
         }
         assert_ne!(e.outer, 11, "back to outer 0 and on once the status ends");
+    }
+
+    #[test]
+    fn reanimating_skeleton_lies_then_rises() {
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(12);
+        let mut p = skeleton();
+        p.reanimate = Some((10, 10));
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        e.state = 19;
+        e.die(&mut rng);
+        assert!(!e.dead && e.lying() && e.is_dead() && e.reanim == 10);
+        // A second death while lying does not restart the countdown.
+        e.reanim = 4;
+        e.die(&mut rng);
+        assert_eq!(e.reanim, 4);
+        let mut v = view([3.0, 0.0, 0.0], &has);
+        for _ in 0..5 {
+            assert_eq!(e.tick(&v, &mut rng).anim, Some(58));
+        }
+        assert!(!e.is_dead() && e.lying(), "countdown over: rising, no longer dead");
+        // The area not clear (the hero within 5.0): it keeps lying.
+        v.clear = false;
+        assert_eq!(e.tick(&v, &mut rng).anim, Some(58));
+        v.clear = true;
+        assert_eq!(e.tick(&v, &mut rng).anim, Some(85));
+        v.clip = Clip { action: 85, progress: 1.0, finished: true };
+        let a = e.tick(&v, &mut rng);
+        assert!(a.heal && e.state == 19);
     }
 
     #[test]

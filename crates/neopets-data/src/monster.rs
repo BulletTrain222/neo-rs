@@ -140,6 +140,9 @@ pub struct Tuning {
     /// Distance hide distance and chance (f32 +0xA4, +0xA8; SPEC-0038 Behavior 24).
     pub hide_distance: f32,
     pub hide_chance: f32,
+    /// The reanimation countdown range in ticks (int +0x160, +0x164) when the reanimation flag
+    /// (+0x15C) is set (SPEC-0038 Behavior 34 and 35).
+    pub reanimate: Option<(i32, i32)>,
     pub flying_hit: i32,
     pub anger: bool,
     pub view_angle: f32,
@@ -285,6 +288,7 @@ impl MonsterTable {
             weight: u(0x3A),
             standoff: f(0xB0),
             hide_distance: f(0xA4),
+            reanimate: (w(0x15C) != 0).then(|| (w(0x160) as i32, w(0x164) as i32)),
             hide_chance: f(0xA8),
             flying_hit: w(0xAC) as i32,
             anger: w(0x134) != 0,

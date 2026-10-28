@@ -568,7 +568,7 @@ impl Character {
     /// Skipped by hero swings, shots and the Mote walks: pet-like, or invulnerable by script
     /// (SPEC-0040 Behavior 17 base rule, the flag at +0x7F0).
     pub fn unhittable(&self) -> bool {
-        self.pet_like() || self.invulnerable
+        self.pet_like() || self.invulnerable || self.enemy.as_ref().is_some_and(|e| e.lying())
     }
 }
 
@@ -2568,7 +2568,7 @@ impl Play {
                 }
                 Action::ActivateEntity { entity } => {
                     self.pending_off.remove(&(pack, entity));
-                    if let Some(c) = self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(entity) && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead)) {
+                    if let Some(c) = self.characters.iter_mut().find(|c| c.pack == pack && c.entity == Some(entity) && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead())) {
                         c.deactivated = false;
                         c.inactive = false;
                         return None;
@@ -3392,7 +3392,7 @@ impl Play {
                 continue;
             }
             // The first character whose bone capsule meets the shot sphere.
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()).find_map(|(i, c)| {
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
@@ -5157,7 +5157,7 @@ impl Play {
         // Factor E: the live petpet of kind 0 or 7 (SPEC-0047 Passive bonuses).
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let mut hits = Vec::new();
-        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.unhittable()) {
+        for (i, c) in self.characters.iter_mut().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && !c.unhittable()) {
             if self.hit_list.contains(&c.id) {
                 continue;
             }
@@ -5330,7 +5330,7 @@ impl Play {
         {
             if let Some(e) = c.enemy.as_mut() {
                 // SPEC-0023 10.1: the take-hit arms the monster bar before the damage.
-                if !e.dead {
+                if !e.is_dead() {
                     let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
                     let max = c.row.map_or(1, |r| r.hit_points as i32);
                     self.monster_bar.arm(c.id, &c.name, width, c.hp, max, &self.monster_words);
@@ -5340,7 +5340,7 @@ impl Play {
                     w.steer_to(toward, 1.0);
                 }
                 c.hp -= applied;
-                if c.hp <= 0 && !e.dead {
+                if c.hp <= 0 && !e.is_dead() {
                     c.hp = 0;
                     e.die(&mut self.rng);
                     self.payouts.push((c.pack, c.position, c.drop));
@@ -5392,7 +5392,7 @@ impl Play {
             let p = neopets_sim::mote::power_index(0, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
             let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
             let mut hits = Vec::new();
-            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead) && !c.unhittable()) {
+            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && !c.unhittable()) {
                 let Some(r) = c.row else { continue };
                 let base = c.stand_in_body().map_or(c.position, |b| [b.center[0], b.center[1] - 0.5 * b.length, b.center[2]]);
                 if !o.touches(base, r.radius, r.height) || !o.list(c.id) {
@@ -5541,7 +5541,7 @@ impl Play {
         let p = self.loco.position();
         // A Juppie in a stage with no living enemy about: stand on the stage's first unused
         // locator so its slam reaches it (diagnostic only).
-        let enemies = self.characters.iter().any(|c| c.pack == self.world.pack && !c.inactive && c.enemy.as_ref().is_some_and(|e| !e.dead) && c.dying.is_none());
+        let enemies = self.characters.iter().any(|c| c.pack == self.world.pack && !c.inactive && c.enemy.as_ref().is_some_and(|e| !e.is_dead()) && c.dying.is_none());
         if let Some((c, b)) = self.characters.iter().filter(|c| c.pack == self.world.pack && !c.held).find_map(|c| Some((c, c.boss.as_ref()?))) {
             let stunned = matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3));
             if stunned {
@@ -5566,7 +5566,7 @@ impl Play {
         let c = self
             .characters
             .iter()
-            .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.dead))
+            .filter(|c| c.pack == self.world.pack && c.dying.is_none() && !c.inactive && !c.enemy.as_ref().is_some_and(|e| e.is_dead()))
             // A stunned boss is fought first; otherwise the nearest class-17 enemy.
             .filter(|c| self.fight_target.as_ref().is_none_or(|n| *n == c.name))
             .filter(|c| c.row.is_some_and(|r| r.class == Some(17)) || c.gnarfas.is_some() || c.king.is_some() || c.knight.as_ref().is_some_and(|k| !k.defeated()) || c.gelert.as_ref().is_some_and(|g| g.state != neopets_sim::gelert::State::Death && g.state != neopets_sim::gelert::State::CloneWait) || c.sister.as_ref().is_some_and(|s| !s.dead()) || c.draik.as_ref().is_some_and(|k| k.stage < 6) || c.faerie.is_some() || c.serpent.is_some() || c.ixi.as_ref().is_some_and(|k| k.state != neopets_sim::ixi::State::Death) || c.boss.as_ref().is_some_and(|b| matches!(b.top, neopets_sim::juppie::Top::Slam(2 | 3))))
@@ -5773,7 +5773,7 @@ impl Play {
     /// minion keys and the arrival flag, with animation 82 in state 21. Returns the summoned
     /// character. The block's free-object and cap tests and the summoner id are not built.
     fn summon(&mut self, pack: u32, block: Option<u8>, key: i16, at: [f32; 3], facing: [f32; 3], drop: Option<u16>, arrive: bool) -> Option<u64> {
-        let live: std::collections::HashSet<u64> = self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.dead)).map(|c| c.id).collect();
+        let live: std::collections::HashSet<u64> = self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())).map(|c| c.id).collect();
         for r in &mut self.reserves {
             if r.bound.is_some_and(|id| !live.contains(&id)) {
                 r.bound = None;
@@ -6347,7 +6347,7 @@ impl Play {
                 // Every other living non-townsfolk character takes 10000.
                 for o in self.characters.iter_mut().filter(|o| o.id != id && o.pack == pack && o.townsfolk.is_none() && o.dying.is_none()) {
                     if let Some(e) = o.enemy.as_mut() {
-                        if !e.dead {
+                        if !e.is_dead() {
                             o.hp = 0;
                             e.die(&mut self.rng);
                         }
@@ -7578,7 +7578,7 @@ impl Play {
         self.light_step();
         // IsAI_Dead (SPEC-0030 row 45): a bound character's dead test, else the kill memory of
         // this load for its entity id.
-        for c in self.characters.iter().filter(|c| c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.dead)) {
+        for c in self.characters.iter().filter(|c| c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead())) {
             if let Some(e) = c.entity {
                 self.killed.insert((c.pack, e));
             }
@@ -7586,7 +7586,7 @@ impl Play {
         let pack = self.world.pack;
         self.state.ai_dead = self.killed.iter().filter(|(p, _)| *p == pack).map(|&(_, e)| e).collect();
         self.state.entity_mesh = self.characters.iter().filter(|c| c.pack == pack && !c.inactive).filter_map(|c| Some((c.entity?, c.walker.as_ref()?.mesh.map_or(-1, |m| m as i32)))).collect();
-        self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0));
+        self.state.ai_dead.retain(|&e| !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.is_dead()) && c.hp > 0));
         self.slot_arrived.retain(|(p, _)| *p == pack || self.other.as_ref().is_some_and(|o| o.pack == *p));
         // The switch-group stages whose 0.4 s has passed become breakable.
         let (now, cur) = (self.ticks, self.world.pack);
@@ -7602,7 +7602,7 @@ impl Play {
             .slot_arrived
             .iter()
             .filter(|(p, _)| *p == pack)
-            .map(|&(_, slot)| (slot, self.characters.iter().filter(|c| c.pack == pack && c.slot == slot && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.dead) && c.hp > 0).count()))
+            .map(|&(_, slot)| (slot, self.characters.iter().filter(|c| c.pack == pack && c.slot == slot && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.is_dead()) && c.hp > 0).count()))
             .collect();
         self.state.animating = self.world.object_anims.iter().enumerate().filter(|(_, a)| a.animating()).map(|(i, _)| i).collect();
         // Dead characters disappear when their countdown ends.
@@ -7784,7 +7784,7 @@ impl Play {
         let chars: Vec<(u64, [f32; 3])> = self
             .characters
             .iter()
-            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable())
+            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable())
             .map(|c| (c.id, c.position))
             .collect();
         let attacking = self.loco.state == hero_states::ATTACK;
@@ -7815,7 +7815,7 @@ impl Play {
         let h = self.loco.position();
         let eye = add(h, [0.0, 1.5, 0.0]);
         let mut found = Vec::new();
-        for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.dead) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()) {
+        for c in self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()) {
             if found.len() >= 10 {
                 break;
             }
@@ -8170,7 +8170,7 @@ impl Play {
                 let e = c.enemy.as_ref()?;
                 let d = sub_v(c.position, hero);
                 let weight = c.row.map_or(0, |_| e.p.weight as i16 as i32);
-                Some((c.id, neopets_sim::attackmgr::Member { agro: e.state == 19 && !e.dead, dist: (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(), movable: e.movable(), weight }))
+                Some((c.id, neopets_sim::attackmgr::Member { agro: e.state == 19 && !e.is_dead(), dist: (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt(), movable: e.movable(), weight }))
             })
             .collect();
         self.attack_mgr.run(capacity, &|id| members.get(&id).copied());
@@ -8182,10 +8182,12 @@ impl Play {
         }
         let world = &self.world;
         let mgr = &self.attack_mgr;
+        // SPEC-0038 Behavior 35's clear-area test reads the live pool's positions.
+        let pool: Vec<(u64, [f32; 3])> = self.characters.iter().filter(|c| c.dying.is_none() && c.hp > 0 && !c.inactive).map(|c| (c.id, c.position)).collect();
         let mut strikes = Vec::new();
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
-            let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, .. } = c else { continue };
+            let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, hp, .. } = c else { continue };
             let p = wk.position();
             if e.dead {
                 let clip = anim.clip_state();
@@ -8254,6 +8256,8 @@ impl Play {
             v.hero_swing = hero_swing;
             v.hero_recover = hero_recover;
             v.waits = mgr.waits(*id);
+            let near = |a: [f32; 3], b: [f32; 3]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2) + (a[2] - b[2]).powi(2)).sqrt() < 5.0;
+            v.clear = !near(p, hero) && !pool.iter().any(|&(o, q)| o != *id && near(p, q));
             let locate = |q: [f32; 3]| mesh.is_none_or(|m| m.locate_full(q).is_some());
             v.locate = Some(&locate);
             v.hero_shot_live = !shot_paths.is_empty();
@@ -8329,6 +8333,10 @@ impl Play {
                 let m = e.p.slots[s.slot].missile;
                 strikes.push((*id, s, wk.facing, (m.status, m.status_chance, m.status_range), e.strike_scale(), e.status(11)));
             }
+            // SPEC-0038 Behavior 35: the rise sets health to its maximum.
+            if act.heal {
+                *hp = row.hit_points as i32;
+            }
             for amount in act.status_hits.into_iter().flatten() {
                 dots.push((*id, amount));
             }
@@ -8391,7 +8399,7 @@ impl Play {
                         if let Some(e) = c.enemy.as_mut() {
                             let (applied, _) = e.take_hit(damage.trunc() as i32, hero, &mut self.rng);
                             c.hp -= applied;
-                            if c.hp <= 0 && !e.dead {
+                            if c.hp <= 0 && !e.is_dead() {
                                 c.hp = 0;
                                 e.die(&mut self.rng);
                                 self.payouts.push((c.pack, c.position, c.drop));
@@ -10337,7 +10345,7 @@ impl Play {
             let level = |f: u16| level_flags.contains(&f);
             let progress = self.state.flag(364);
             let partner = self.characters.iter().find(|o| o.pack == pack && o.row.is_some_and(|r| r.class == Some(38))).map(|o| o.position);
-            let summons_alive = self.duel_summons.iter().any(|id| self.characters.iter().any(|o| o.id == *id && o.dying.is_none() && !o.enemy.as_ref().is_some_and(|e| e.dead)));
+            let summons_alive = self.duel_summons.iter().any(|id| self.characters.iter().any(|o| o.id == *id && o.dying.is_none() && !o.enemy.as_ref().is_some_and(|e| e.is_dead())));
             let c = &mut self.characters[i];
             let (radius, height) = c.row.map_or((1.0, 3.0), |r| (r.radius, r.height));
             let near = (hero[0] - c.position[0]).hypot(hero[2] - c.position[2]) < 65.0;
@@ -11408,7 +11416,7 @@ impl Play {
         let table = self.effect_table.clone();
         let mut who: Vec<(u64, [bool; 14], [f32; 3])> = vec![(Self::HERO_DISPLAY, std::array::from_fn(|c| self.statuses.active(c)), self.loco.position())];
         for c in &self.characters {
-            if let Some(e) = c.enemy.as_ref().filter(|e| !e.dead && !c.inactive) {
+            if let Some(e) = c.enemy.as_ref().filter(|e| !e.is_dead() && !c.inactive) {
                 who.push((c.id, std::array::from_fn(|k| e.status(k)), c.position));
             }
         }
@@ -12075,7 +12083,7 @@ impl Play {
             }
         }
         // Intensity: k counts the characters in AI state 19 (agro) that are not dead.
-        let k = self.characters.iter().filter(|c| c.enemy.as_ref().is_some_and(|e| e.state == 19 && !e.dead)).count();
+        let k = self.characters.iter().filter(|c| c.enemy.as_ref().is_some_and(|e| e.state == 19 && !e.is_dead())).count();
         self.intensity.tick(k, self.hero_hp, self.hero_max);
     }
 
@@ -12381,7 +12389,7 @@ impl Play {
             .filter(|&i| {
                 let c = &self.characters[i];
                 let flyer = c.enemy.is_none() && c.hp > 0 && c.row.is_some_and(|r| r.class == Some(17) && r.can_fly != 0);
-                c.pack == pack && !c.inactive && c.dying.is_none() && (c.enemy.as_ref().is_some_and(|e| !e.dead) || flyer)
+                c.pack == pack && !c.inactive && c.dying.is_none() && (c.enemy.as_ref().is_some_and(|e| !e.is_dead()) || flyer)
             })
             .collect();
         for &i in &targets {
@@ -12698,7 +12706,7 @@ impl Play {
                 Some(t) => format!("{} [mode {} id {} at {:.0},{:.0}]", c.name, t.mode, c.anim.action(), c.position[0], c.position[2]),
                 None if c.enemy.is_some() => {
                     let e = c.enemy.as_ref().unwrap();
-                    let what = if e.dead { "dead".to_string() } else { format!("state {} outer {} inner {} seq {}", e.state, e.outer, e.inner, e.seq) };
+                    let what = if e.is_dead() { "dead".to_string() } else { format!("state {} outer {} inner {} seq {}", e.state, e.outer, e.inner, e.seq) };
                     format!(
                         "{} [{what}, hp {}, id {} at {:.0},{:.1},{:.0}]",
                         if c.name.is_empty() { "(unnamed)" } else { &c.name },
@@ -12930,6 +12938,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         approach_timer_min: t.approach_timer_min,
         turn: t.turn,
         distance_hide: t.distance_hide,
+        reanimate: t.reanimate,
         weight: t.weight,
         standoff: t.standoff,
         hide_distance: t.hide_distance,
@@ -12995,6 +13004,7 @@ fn enemy_view<'a>(
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },
         has,
         waits: false,
+        clear: true,
         locate: None,
     }
 }
