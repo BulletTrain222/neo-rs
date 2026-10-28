@@ -286,7 +286,7 @@ impl HeroAnim {
 
     /// Diagnostic: per main joint, (joint, parent, sampled translation, rest local translation).
     pub fn main_translations(&self) -> Vec<(usize, Option<u32>, Option<[f32; 3]>, [f32; 3])> {
-        let f = &self.families[0];
+        let Some(f) = self.families.first() else { return Vec::new() };
         (0..f.joints.len())
             .map(|i| (i, f.data.def.parents.get(i).copied().flatten(), f.joints[i].map(|j| j.1), self.bones.rest_local.get(i).copied().unwrap_or_default()))
             .collect()
@@ -397,12 +397,14 @@ impl HeroAnim {
                 joints: &f.joints,
             }
         }
+        // A stand-in with no families (placeholder models) has no bones to pose.
+        let Some(main) = self.families.first() else { return Vec::new() };
         let others: Vec<Family> = self.families.iter().skip(1).map(family).collect();
-        anim::skin_matrices(&self.bones, &family(&self.families[0]), &others)
+        anim::skin_matrices(&self.bones, &family(main), &others)
     }
 
     pub fn status(&self) -> String {
-        let main = &self.families[0];
+        let Some(main) = self.families.first() else { return "Animation: no families".into() };
         match main.current {
             Some(c) => {
                 let clip = &main.data.clips[c];

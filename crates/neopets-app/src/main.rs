@@ -17,6 +17,7 @@ mod hud_view;
 mod menu_view;
 mod menus;
 mod movie_view;
+mod placeholder;
 mod play;
 
 use bevy::asset::RenderAssetUsages;

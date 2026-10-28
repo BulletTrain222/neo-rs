@@ -852,6 +852,9 @@ pub struct Play {
     hit_list: Vec<u64>,
     /// Bumped with each clear of the hit list: one melee swing (the thorn hazards' strike gate).
     swing_serial: u32,
+    /// SPEC-0010 Test spawn: with NEOPETS_CLOUD_BEAST set, monster rows 1 (the Cloud Beast) and
+    /// 2 (its companion), spawned in each world with the stand-in models (no model on disc).
+    cloud_rows: Option<(neopets_data::monster::Row, neopets_data::monster::Row)>,
     /// SPEC-0038 Behavior 45: the shared attack-manager list.
     attack_mgr: neopets_sim::attackmgr::Manager,
     /// SPEC-0011 Thorn hits: the five-record hazard pool, its contact radius, and the thorn
@@ -1299,6 +1302,12 @@ impl Play {
         };
         let drain_words = neopets_sim::sisters::DrainWords::read(&words(neopets_sim::sisters::DRAIN_WORDS, 7)?, &words(neopets_sim::sisters::DRAIN_TABLE, 14)?).ok_or("The drain words are short")?;
         let thorn_radius = f32::from_bits(words(neopets_sim::thorn::RADIUS_WORD, 1)?[0]);
+        let cloud_rows = if std::env::var_os("NEOPETS_CLOUD_BEAST").is_some() {
+            let t = neopets_data::monster::MonsterTable::parse(&index.read(disc, 530)?, &index.read(disc, 531)?)?;
+            t.row(1, 0).zip(t.row(2, 0))
+        } else {
+            None
+        };
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
         let ixi_words = neopets_sim::ixi::Words::read(&words(neopets_sim::ixi::BASE, neopets_sim::ixi::WORDS)?).ok_or("The Ixi Chief's tuning block is short")?;
@@ -1562,6 +1571,7 @@ impl Play {
             gelert_words,
             hit_list: Vec::new(),
             swing_serial: 0,
+            cloud_rows,
             attack_mgr: Default::default(),
             thorns: Default::default(),
             thorn_radius,
@@ -7625,6 +7635,7 @@ impl Play {
         self.fyora_step();
         self.serpent_step();
         self.mice_step();
+        self.cloud_beast_step();
         self.enemies_step();
         self.lock_step();
         self.npc_block_step();
@@ -7766,6 +7777,54 @@ impl Play {
             }
         }
         (!found.is_empty()).then(|| found[self.rng.index(found.len() as u32) as usize])
+    }
+
+    /// SPEC-0010 Test spawn (NEOPETS_CLOUD_BEAST): the cut Cloud Beast (type 1, variant 0, row
+    /// 1, class 9) 12 units in front of the hero and its companion (type 2, row 2, class 10)
+    /// riding on it, both with the stand-in models of `placeholder` (the disc has no model,
+    /// skeleton or clip bank for either) and no animation families. Respawned when missing from
+    /// the current world. The class-9 controller is not built: the boss stays where it spawned.
+    fn cloud_beast_step(&mut self) {
+        let Some((boss_row, companion_row)) = self.cloud_rows else { return };
+        let pack = self.world.pack;
+        let find = |s: &Self, class: i16| s.characters.iter().position(|c| c.pack == pack && c.slot == CLOUD_SLOT && c.row.is_some_and(|r| r.class == Some(class)));
+        if find(self, 9).is_none() {
+            let f = self.loco.facing;
+            let at = add(self.loco.position(), scale(f, 12.0));
+            let back = [-f[0], 0.0, -f[2]];
+            let bones = neopets_data::anim::BoneTable { parents: Vec::new(), rest_local: Vec::new(), rest_position: Vec::new(), hurt: Vec::new(), attach: Vec::new() };
+            let placement = |ordinal: usize, name: &str, monster_type: u16| neopets_data::region::Placement {
+                ordinal,
+                position: at,
+                facing: back,
+                name: name.into(),
+                skeletons: [-1; 3],
+                tables: [-1; 3],
+                model_set: -1,
+                monster_type,
+                variant: 0,
+                ai_code: 0,
+                scale_set: 0,
+                summon: false,
+                key: -1,
+                emerge_distance: 0.0,
+                selector: 0,
+                drop: -1,
+                colour: [128; 3],
+                colours: [0x00FF_FFFF; 15],
+            };
+            self.characters.retain(|c| !(c.pack == pack && c.slot == CLOUD_SLOT));
+            let anim = || HeroAnim::new(bones.clone(), Vec::new());
+            self.bind_character(pack, CLOUD_SLOT, pack, placement(usize::MAX - 1, "Cloud Beast (stand-in)", 1), (crate::placeholder::cloud_beast(), anim(), Some(boss_row), None), None);
+            self.bind_character(pack, CLOUD_SLOT, pack, placement(usize::MAX, "Cloud Beast companion (stand-in)", 2), (crate::placeholder::cloud_companion(), anim(), Some(companion_row), None), None);
+            self.last_boss = format!("Cloud Beast stand-in spawned at {at:?} on tick {}", self.ticks);
+        }
+        // The companion rides on the boss.
+        if let (Some(b), Some(c)) = (find(self, 9), find(self, 10)) {
+            let (p, f) = (self.characters[b].position, self.characters[b].facing);
+            self.characters[c].position = [p[0], p[1] + crate::placeholder::COMPANION_RIDE, p[2]];
+            self.characters[c].facing = f;
+        }
     }
 
     fn enemies_step(&mut self) {
@@ -12691,6 +12750,9 @@ pub const HIT_FLASH: u8 = 14;
 pub const FLASH_COLOUR: [[f32; 3]; 15] = [[1.5, 0.5, 0.5]; 15];
 
 /// The colour slot vectors of a record's 15 colour words: (byte 0, byte 1, byte 2) / 255.
+/// The block slot of the Cloud Beast test spawn (no region load uses it).
+const CLOUD_SLOT: u8 = 240;
+
 pub fn slot_colours(words: &[u32; 15]) -> [[f32; 3]; 15] {
     words.map(|w| [(w & 0xFF) as f32 / 255.0, ((w >> 8) & 0xFF) as f32 / 255.0, ((w >> 16) & 0xFF) as f32 / 255.0])
 }
