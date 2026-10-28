@@ -2319,7 +2319,7 @@ fn sync_items(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut assets: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
-    mut models: Local<std::collections::HashMap<(u32, u32), Option<Vec<(Handle<Mesh>, StandardMaterial)>>>>,
+    mut models: Local<std::collections::HashMap<(u32, u32), Option<Vec<(Handle<Mesh>, StandardMaterial, Option<neopets_data::material::Flipbook>)>>>>,
     mut boot: Local<Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)>>,
 ) {
     let Some(state) = state else { return };
@@ -2383,15 +2383,18 @@ fn sync_items(
             let list = built.map(|m| {
                 part_assets(&m, &mut meshes, &mut materials, &mut images)
                     .into_iter()
-                    .map(|(_, mesh, mat)| (mesh, materials.get(&mat).cloned().unwrap_or_default()))
+                    .map(|(k, mesh, mat)| (mesh, materials.get(&mat).cloned().unwrap_or_default(), m.parts[k].flipbook))
                     .collect::<Vec<_>>()
             });
             models.insert(key, list);
         }
         if let Some(list) = &models[&key] {
             commands.spawn((ShowcaseMarker(id as u16), Transform::from_translation(Vec3::from(at)), Visibility::Visible)).with_children(|c| {
-                for (mesh, mat) in list {
-                    c.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
+                for (mesh, mat, flip) in list {
+                    let mut e = c.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
+                    if let Some(f) = flip {
+                        e.insert(UvFlip(*f));
+                    }
                 }
             });
         }
@@ -2416,7 +2419,7 @@ fn sync_items(
                 let list = built.map(|m| {
                     part_assets(&m, &mut meshes, &mut materials, &mut images)
                         .into_iter()
-                        .map(|(_, mesh, mat)| (mesh, materials.get(&mat).cloned().unwrap_or_default()))
+                        .map(|(k, mesh, mat)| (mesh, materials.get(&mat).cloned().unwrap_or_default(), m.parts[k].flipbook))
                         .collect::<Vec<_>>()
                 });
                 models.insert(key, list);
@@ -2425,8 +2428,11 @@ fn sync_items(
             match &models[&key] {
                 Some(list) => {
                     commands.spawn(root).with_children(|c| {
-                        for (mesh, mat) in list {
-                            c.spawn((ItemPart, Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
+                        for (mesh, mat, flip) in list {
+                            let mut e = c.spawn((ItemPart, Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
+                            if let Some(f) = flip {
+                                e.insert(UvFlip(*f));
+                            }
                         }
                     });
                 }
