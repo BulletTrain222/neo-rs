@@ -158,10 +158,13 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
         54 => p.g[1] != 0,
         55 => p.g[2] != 0 && p.shield,
         56 => true,
-        // The active hero is Tor (14), not Roberta (52).
-        14 => true,
-        52 => false,
-        // 17, 19 and 20 (an equipment word's item count above 0): no Motes are equipped yet.
+        // SPEC-0035 9c: the active hero is Tor (14) or Roberta (52); the count of the item in
+        // equipment word 2 (17), word 0 (19) or word 1 (20) is above 0.
+        14 => p.hero == 0,
+        52 => p.hero == 1,
+        17 => p.words[2] > 0,
+        19 => p.words[0] > 0,
+        20 => p.words[1] > 0,
         _ => false,
     };
     match node.mode {
@@ -222,6 +225,11 @@ struct Inputs {
     shield: bool,
     /// The live petpet's kind while present (T at least 1).
     pet: Option<u8>,
+    /// The active hero index (predicate slots 14 and 52).
+    hero: usize,
+    /// The owned counts of the Motes in the active hero's equipment words 0, 1 and 2
+    /// (predicate slots 19, 20 and 17; SPEC-0023 section 5).
+    words: [i32; 3],
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -337,6 +345,8 @@ pub fn sync_hud(
         weapon: p.weapon.is_some(),
         shield: p.shield.is_some(),
         pet: p.pet_kind(),
+        hero: p.hero_index,
+        words: std::array::from_fn(|w| p.equipment.motes[p.hero_index.min(1)][w].map_or(-1, i32::from)).map(count),
     };
     let key = |k: u32| f.key(k).unwrap_or(usize::MAX);
     let node_x = |k: u32| f.key(k).map_or(0, |n| f.nodes[n].x as i32);
@@ -611,7 +621,9 @@ pub fn sync_hud(
                 33 => inputs.counts[1],
                 34 => inputs.counts[2],
                 36 => inputs.counts[3],
-                17 | 19 | 20 => 0,
+                17 => inputs.words[2],
+                19 => inputs.words[0],
+                20 => inputs.words[1],
                 _ => inputs.marker_count,
             };
             (number.to_string(), v.font as usize, v.spacing as i32, v.colour, v.gate != 0 && v.format == 1)
