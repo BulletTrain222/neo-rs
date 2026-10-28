@@ -10,7 +10,7 @@
 //!
 //! Not covered: the memory card (the card state passes at once), the quit box (Quit goes back to the card state without asking, and
 //! the world is not torn down), options, credits, the item screens, journal and maps (their
-//! pages open and Triangle leaves them), sounds (the menu moves, the save-complete cue), key masks
+//! pages open and Triangle leaves them), key masks
 //! and animation slots, spatial pages, and the predicates other than those listed in
 //! `predicate`. The card boxes cover the clean side's jobs only: no card, format or card-gone
 //! records.

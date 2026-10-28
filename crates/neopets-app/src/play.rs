@@ -7061,8 +7061,10 @@ impl Play {
                 }
             }
             // The chooser's last fallback (SPEC-0040 Behavior 29 item 3): Square with no target
-            // enters the sneak while the weapon is sheathed, and sheathes it while drawn.
-            if self.square_now && !self.book_prompt && self.door_prompt.is_none() && self.prompt_shown.is_none() {
+            // enters the sneak while the weapon is sheathed, and sheathes it while drawn. A
+            // "Save Game" caption shown this pass stops it too (SPEC-0025 Save points, order
+            // against the hero's Square handling).
+            if self.square_now && !self.book_prompt && self.door_prompt.is_none() && self.prompt_shown.is_none() && !self.save_prompt {
                 if self.weapon_drawn {
                     self.draw_items(false);
                 } else {

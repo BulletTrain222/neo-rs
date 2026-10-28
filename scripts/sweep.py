@@ -8,7 +8,8 @@ import re, subprocess, sys, json, os, time
 
 repo = sys.argv[1]
 ticks = int(sys.argv[2])
-exe = os.path.join(repo, 'target', 'release', 'neopets-app.exe')
+# NEOPETS_SWEEP_EXE: run a copy of the exe, so the build can go on while the sweep runs.
+exe = os.environ.get('NEOPETS_SWEEP_EXE') or os.path.join(repo, 'target', 'release', 'neopets-app.exe')
 packs = sys.argv[3:]
 MAX_ENTRIES = 4
 if not packs:
