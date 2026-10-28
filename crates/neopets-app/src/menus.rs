@@ -8,8 +8,7 @@
 //! (condition modes and predicates, the focused flag of kind-4 items, row spacing, alignment and
 //! scale) with the picker's rows by the journal row drawer (section 14.3).
 //!
-//! Not covered: the memory card (the card state passes at once), movies (the attract goes
-//! straight to the title), the quit box (Quit goes back to the card state without asking, and
+//! Not covered: the memory card (the card state passes at once), the quit box (Quit goes back to the card state without asking, and
 //! the world is not torn down), options, credits, the item screens, journal and maps (their
 //! pages open and Triangle leaves them), sounds (the menu moves, the save-complete cue), key masks
 //! and animation slots, spatial pages, and the predicates other than those listed in
@@ -258,6 +257,8 @@ pub struct BookPage {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Flow {
     pub current: usize,
+    /// Movies the attract queued (SPEC-0026 Attract), taken by the host's movie step.
+    pub movies: Vec<u16>,
     stack: Vec<usize>,
     /// The current screen's pass count and focus index.
     pub pass: u32,
@@ -389,7 +390,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -841,6 +842,8 @@ impl Flow {
                 let wait = if self.attract_visits == 0 { 300 } else { 1 };
                 if self.pass + 1 >= wait {
                     self.attract_visits += 1;
+                    // Movie 0 (the first ACT1 movie), then 86 (the title movie), both appended.
+                    self.movies.extend([0, 86]);
                     result = Some(TITLE);
                 }
             }

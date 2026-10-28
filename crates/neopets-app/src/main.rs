@@ -869,7 +869,7 @@ fn main() {
     app.add_systems(Update, send_rumble);
     app.add_systems(Update, sync_uv_flip);
     app.add_systems(Startup, (setup_movies, movie_view::spawn_screen));
-    app.add_systems(Update, movie_view::sync_screen.after(step_sim));
+    app.add_systems(Update, (movie_view::sync_screen, movie_view::hush).after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     audio_view::register(&mut app);
@@ -1090,10 +1090,18 @@ fn step_sim(
     // SPEC-0026 Movies: the movies queued last frame play now, and while one plays the whole
     // game loop waits (no ticks, no input to the game).
     if let Some(mv) = movies.as_deref_mut() {
+        if let Some(m) = menu.as_deref_mut() {
+            mv.take(&mut m.flow.movies);
+        }
         if let Some(p) = play.as_deref_mut() {
             mv.take(&mut p.play.state.movie_queue);
         }
-        if mv.step(elapsed, vpad.held(bindings::CROSS) || vpad.held(bindings::START)) {
+        let playing = mv.step(elapsed, vpad.held(bindings::CROSS) || vpad.held(bindings::START));
+        // The played word is set as each movie starts, whoever queued it.
+        if let (Some(m), Some(p)) = (mv.started.take(), play.as_deref_mut()) {
+            p.play.state.movies.insert(m);
+        }
+        if playing {
             driver.last_ticks = 0;
             return;
         }

@@ -5,7 +5,8 @@
 //! Not covered: the picture and sound. No spec describes the Bink stream yet (R-0112), so each
 //! movie is a black screen with its name for its real play time. Also not covered: the reload
 //! world hand-off (Playback steps 2, 3, 6 and 7: the world stays loaded and the hero keeps
-//! their place), stopping the game's sound, and the attract pair (movies 0 and 86).
+//! their place). The original stops the game's sound before the queue plays and the reload
+//! restarts it; without the reload, the sound is paused here and resumes after the queue.
 use bevy::prelude::*;
 use neopets_data::movie::{self, Header};
 use std::collections::VecDeque;
@@ -16,6 +17,8 @@ pub struct Movies {
     table: Vec<Option<(String, Header)>>,
     queue: VecDeque<u16>,
     current: Option<Current>,
+    /// The movie that started this frame, for its played word.
+    pub started: Option<u16>,
 }
 
 struct Current {
@@ -50,6 +53,7 @@ impl Movies {
                 return !self.queue.is_empty();
             };
             println!("movie {index} ({name}): {} frames at {:.3} fps, {:.1} s (picture not decoded)", h.frames, h.fps(), h.seconds());
+            self.started = Some(index);
             self.current = Some(Current {
                 index,
                 frames: h.frames,
@@ -128,4 +132,22 @@ pub fn sync_screen(movies: Option<Res<Movies>>, mut screen: Query<&mut Visibilit
             }
         }
     }
+}
+
+/// While a movie plays every game sound is paused; when the queue is done they resume.
+pub fn hush(movies: Option<Res<Movies>>, mut sinks: Query<&mut bevy::audio::AudioSink>, mut was: Local<bool>) {
+    use bevy::audio::AudioSinkPlayback;
+    let now = movies.is_some_and(|m| m.current.is_some() || !m.queue.is_empty());
+    if now {
+        for s in &mut sinks {
+            if !s.is_paused() {
+                s.pause();
+            }
+        }
+    } else if *was {
+        for s in &mut sinks {
+            s.play();
+        }
+    }
+    *was = now;
 }
