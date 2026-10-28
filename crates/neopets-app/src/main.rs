@@ -2146,7 +2146,8 @@ fn sync_worlds(
                         e.insert(PartSig(pack, part_signature(&m.parts[i])));
                     }
                     // SPEC-0046 Instanced meshes: an instance's parts draw only within the
-                    // record's draw distance D1 of the eye (F is 0 on disc: no fade).
+                    // record's draw distance D1 of the eye (F is 0 on disc: no fade), with
+                    // Distant foliage set to Original.
                     if let Some((at, d1, _)) = m.parts[i].cull {
                         e.insert(DrawCull(Vec3::from(at), d1));
                     }
@@ -2276,9 +2277,12 @@ fn sync_zones(
     state: Option<Res<PlayState>>,
     mut parts: Query<(Option<&ZoneGate>, Option<&PartSig>, Option<&DrawCull>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>, With<DrawCull>)>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
+    settings: Res<display::DisplaySettings>,
 ) {
     let Some(state) = state else { return };
-    let eye = cameras.iter().next().map(|g| g.translation());
+    // The instance draw distance applies only with Distant foliage set to Original; Full (the
+    // default) draws every instance at any distance.
+    let eye = cameras.iter().next().map(|g| g.translation()).filter(|_| settings.original_foliage);
     let current = state.play.world.pack;
     let mine: std::collections::HashSet<u64> = parts.iter().filter_map(|(_, s, ..)| s.filter(|s| s.0 == current).map(|s| s.1)).collect();
     for (g, s, cull, mut v) in &mut parts {

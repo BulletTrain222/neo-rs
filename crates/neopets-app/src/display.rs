@@ -45,8 +45,9 @@ pub struct DisplaySettings {
     pub bloom: usize,
     pub colour: usize,
     pub ao: bool,
-    /// Distant foliage as the original draws it (SPEC-0060: far sprites, fades out by distance)
-    /// instead of full models at every distance (this build's default).
+    /// Distant foliage as the original draws it (SPEC-0060: far sprites, fades out by distance;
+    /// SPEC-0046: instanced meshes hidden past their draw distance) instead of full models at
+    /// every distance (this build's default).
     pub original_foliage: bool,
 }
 
@@ -391,7 +392,7 @@ const HELP: [&str; ROWS + 1] = [
     "A soft glow around bright light, magic and sky.",
     "Vivid and Rich lift colour and contrast a little; Original is the game's own colour.",
     "Soft shade where walls meet floors and in corners.",
-    "Full keeps trees and bushes in 3D at any distance; Original turns far trees into sprites and fades distant plants out, as the PS2 game.",
+    "Full keeps trees, bushes and props in 3D at any distance; Original turns far trees into sprites, fades distant plants out and hides props past their draw distance, as the PS2 game.",
     "Back to Options.",
 ];
 
