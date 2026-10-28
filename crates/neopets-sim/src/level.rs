@@ -9981,6 +9981,48 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 release_camera(),
             ]);
         }
+        // Triggers 17 to 20, the switches (Medium in the spec): while the switch object (15, 17,
+        // 19 or 21) stands (words 17 to 20 mark it swapped), the Square context 4; a press, when
+        // the switch is usable, walks the hero to locator 100 to 103, plays hero animation 140
+        // and the object, and swaps it for 16, 18, 20 or 22; 17 also sets flag 15 when clear and
+        // clears the teleport-6 word; 18 plays camera 7, 19 camera 4, 20 object 7 and camera 5;
+        // then the camera returns. Not usable: line 18. Usable is taken as s 30 or 31, or flag
+        // 167 clear, for every index (the spec ties the test to the index without saying how,
+        // R-0113). Entering 19 stops effects 9 and 10.
+        (1098, 17..=20) if call.state != 0 && call.object && state.word(pack, routine) == 0 => {
+            let k = (routine - 17) as usize;
+            if routine == 19 && call.state == 1 {
+                out.actions.extend([Action::StopEffect { slot: 9 }, Action::StopEffect { slot: 10 }]);
+            }
+            out.prompt = Some(4);
+            if call.square && !state.talking {
+                let st = castle_stage(state);
+                if st == 30 || st == 31 || !state.flag(167) {
+                    state.set_word(pack, routine, 1);
+                    let obj = 15 + 2 * k;
+                    out.actions.extend([
+                        Action::HoldHero,
+                        Action::WalkHero { locator: 100 + k, wait: true, orient: true },
+                        Action::HeroAnim { anim: 140, wait: false },
+                        Action::PlayAnim { obj, speed: 1.0, wait: true },
+                        Action::DeactivateObj { obj },
+                        Action::InitObjOn { obj: obj + 1, end: false },
+                    ]);
+                    match routine {
+                        17 => {
+                            state.set(15, true);
+                            state.set_word(pack, 0, 0);
+                        }
+                        18 => out.actions.push(Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 }),
+                        19 => out.actions.push(Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }),
+                        _ => out.actions.extend([Action::PlayAnim { obj: 7, speed: 1.0, wait: false }, Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 }]),
+                    }
+                    out.actions.push(release_camera());
+                } else {
+                    out.actions.push(Action::Message { line: 18 });
+                }
+            }
+        }
         // Trigger 10 (state non-zero, object set), on every fourth such pass (word 2 counts): with
         // 193 set and 194 clear the cutscene and 194; else with 205 set and 206 clear camera 14,
         // the hero to locator 80, entity 39's line 3, 206 and the camera returned.
@@ -13311,8 +13353,8 @@ fn castle_stage(s: &GameState) -> u16 {
 /// prompt (trigger 0), trigger 1 with 30 and 31 clear, the slot triggers 11, 12 and 14, the
 /// slot thread's loads (31: j 1; 30: j 9 and j 0; 501 with item 72 not held and 503 and 504
 /// clear: j 21), the module word that blocks teleport 6 when s is 31, and the story triggers 4,
-/// 5, 6, 9 and 10 (routines 4, 5, 6, 9, 10). The switches (17 to 20), the objects, effects,
-/// navmesh steps and the hero-death callback are not built.
+/// 5, 6, 9 and 10 (routines 4, 5, 6, 9, 10) and the switches 17 to 20 (routines 17 to 20). The
+/// objects, effects, navmesh steps and the hero-death callback are not built.
 fn castle_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     state.set(21, true);
@@ -13330,7 +13372,7 @@ fn castle_init(state: &mut GameState) -> Vec<Action> {
         state.set_word(1098, 0, 1);
     }
     // Triggers 7 and 8 set the transition maps 48 and 49 (registered in every case).
-    let mut out = vec![reg(0, 1), reg(7, 7), reg(8, 8), reg(4, 4), reg(5, 5), reg(6, 6), reg(9, 9), reg(10, 10)];
+    let mut out = vec![reg(0, 1), reg(7, 7), reg(8, 8), reg(4, 4), reg(5, 5), reg(6, 6), reg(9, 9), reg(10, 10), reg(17, 17), reg(18, 18), reg(19, 19), reg(20, 20)];
     let (f30, f31) = (state.flag(30), state.flag(31));
     if !f30 && !f31 {
         out.extend([reg(1, 2), reg(11, 11), reg(12, 12), reg(14, 14)]);
@@ -17794,6 +17836,14 @@ mod tests {
         let runs: Vec<bool> = (0..4).map(|_| !on_trigger(1098, 10, enter(10), &mut s).actions.is_empty()).collect();
         assert_eq!(runs, [false, false, false, true]);
         assert!(s.flag(194));
+        // Switch 18: the prompt inside, a press swaps object 17 for 18 once; with 167 set (and s
+        // below 30) a switch shows line 18.
+        let press = |index| TriggerCall { index, state: 2, object: true, square: true, block: -1 };
+        let a = on_trigger(1098, 18, press(18), &mut s).actions;
+        assert!(a.contains(&Action::WalkHero { locator: 101, wait: true, orient: true }) && a.contains(&Action::InitObjOn { obj: 18, end: false }));
+        assert!(on_trigger(1098, 18, press(18), &mut s).actions.is_empty());
+        s.set(167, true);
+        assert_eq!(on_trigger(1098, 20, press(20), &mut s).actions, vec![Action::Message { line: 18 }]);
     }
 
     #[test]
