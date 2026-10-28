@@ -2745,7 +2745,7 @@ impl Play {
                     }
                 }
                 Action::HeroStatus { code, seconds } => {
-                    self.statuses.apply(code, seconds);
+                    self.hero_status(code, seconds);
                 }
                 Action::ItemActivate { slot, ordinal, snap, placed } => {
                     if let Some(p) = self.slot_items.get(&(pack, slot)).and_then(|v| v.get(ordinal)).copied() {
@@ -8013,7 +8013,7 @@ impl Play {
                     // SPEC-0029 Behavior 9: int[0, 100] at most the chance; no stun while stunned.
                     let r = self.rng.range(0, 100);
                     if r <= chance && !(code == 0 && self.statuses.active(neopets_sim::status::STUN)) {
-                        self.statuses.apply(code, seconds);
+                        self.hero_status(code, seconds);
                     }
                 }
                 neopets_sim::projectile::Event::Summon { key, at } => {
@@ -8055,7 +8055,7 @@ impl Play {
             // Status 11 (poison attack): a landed melee hit also poisons the hero at the default
             // (SPEC-0029 Behavior 27.1), through the hero's apply.
             if poison_attack && !s.blocked {
-                self.statuses.apply(neopets_sim::status::POISON as i32, -1);
+                self.hero_status(neopets_sim::status::POISON as i32, -1);
             }
             let died = self.hero_hit(damage, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" }));
             // SPEC-0038 Behavior 13 strike test: the status roll int[0, 100] strictly below the
@@ -8064,7 +8064,7 @@ impl Play {
                 let r = self.rng.range(0, 100);
                 if (r as f32) < status.1 {
                     let ticks = self.rng.range(status.2 .1 as i32, status.2 .0 as i32);
-                    self.statuses.apply(status.0, ticks / 60);
+                    self.hero_status(status.0, ticks / 60);
                 }
             }
             if died {
@@ -10205,7 +10205,7 @@ impl Play {
                 self.state.set_level(f, true);
             }
             for &(code, seconds) in &act.statuses {
-                self.statuses.apply(code, seconds);
+                self.hero_status(code, seconds);
             }
             if let Some(setup) = act.launch {
                 self.shots.submit(setup);
@@ -10997,6 +10997,16 @@ impl Play {
 
     /// The id the status displays use for the selected hero.
     const HERO_DISPLAY: u64 = u64::MAX;
+
+    /// The hero's status apply from a hit, a shot or a script, with the immunity block's
+    /// one-shot (SPEC-0036 Status display and cues) at the hero's origin (R-0045).
+    fn hero_status(&mut self, code: i32, seconds: i32) -> bool {
+        if let Some(fx) = self.statuses.immunity_block(code) {
+            let table = self.effect_table.clone();
+            self.effects.one_shot(&table, fx, self.loco.position(), neopets_sim::effect::IDENTITY, &mut self.rng);
+        }
+        self.statuses.apply(code, seconds)
+    }
 
     /// SPEC-0036 Status display and cues for the hero and the common enemies: a status that
     /// became active this tick runs the display start (codes 8 to 10 play their one-shot), the

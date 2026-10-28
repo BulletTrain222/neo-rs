@@ -66,6 +66,17 @@ impl Statuses {
         }
     }
 
+    /// SPEC-0036 Status display and cues, Immunity block: the one-shot effect (0xC2 curse, 0xC3
+    /// poison, 0xC4 slow) when an active immunity stops `code`, else None.
+    pub fn immunity_block(&self, code: i32) -> Option<i32> {
+        match usize::try_from(code).ok()? {
+            CURSE if self.active(IMMUNE_CURSE) => Some(0xC2),
+            POISON if self.active(IMMUNE_POISON) => Some(0xC3),
+            SLOW if self.active(IMMUNE_SLOW) => Some(0xC4),
+            _ => None,
+        }
+    }
+
     /// The hero's status-apply method: `seconds` -1 takes the default. Returns false when the
     /// apply was blocked (an immunity, or a code the hero's method ignores).
     pub fn apply(&mut self, code: i32, seconds: i32) -> bool {
@@ -348,6 +359,15 @@ mod tests {
         hero.tick(None);
         assert_eq!(hero.colour, kept);
         assert!(kept[0] < 1.0 - 1.0 / 30.0);
+    }
+
+    #[test]
+    fn immunity_block_effects() {
+        let mut s = Statuses::default();
+        assert_eq!(s.immunity_block(CURSE as i32), None);
+        s.apply(IMMUNE_POISON as i32, -1);
+        assert_eq!(s.immunity_block(POISON as i32), Some(0xC3));
+        assert_eq!((s.immunity_block(CURSE as i32), s.immunity_block(STUN as i32), s.immunity_block(-1)), (None, None, None));
     }
 
     #[test]
