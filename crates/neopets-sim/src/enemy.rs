@@ -16,7 +16,7 @@
 //! stands and notices), the alarm-group emerge of state 8, wandering in
 //! states 5 to 7 (they stand and notice),
 //! the counter-attack choice's code 5 (R-0117), the
-//! confused outer 11, the waiting approach-3 shots' extra aim scatter, projectiles (missile
+//! the waiting approach-3 shots' extra aim scatter, projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
 //! ghosts, reanimation (state 16 of rows 224, 226, 227) and drops and coins. The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
@@ -28,8 +28,7 @@
 //!
 //! Statuses (SPEC-0029 Behavior 27): the apply with its element immunity and defaults, the
 //! stunned state 4, poison and fire hits, the slow and speed scales and the outgoing curse and
-//! strength scales. Not covered: confusion's outer 11 (the timer runs but the enemy is not
-//! confused) and the status display.
+//! strength scales, and confusion's outer 11 (Behavior 44). Not covered: the status display.
 
 use crate::hero::Vec3;
 use crate::rng::Rng;
@@ -1086,6 +1085,10 @@ impl Enemy {
         if self.status(0) {
             self.state = 4;
         }
+        // Step 7: confusion requests outer 11 unless the enemy is attacking (outer 2).
+        if self.status(6) && self.state == 19 && !matches!(self.outer, 2 | 11) {
+            self.enter(11, 0);
+        }
         let dot = |timer: i32, (amount, period): (i32, i32), (a0, p0): (i32, i32)| {
             let p = if period < 0 { p0 } else { period };
             let a = if amount < 0 { a0 } else { amount };
@@ -1288,6 +1291,10 @@ impl Enemy {
         }
         self.selected = None;
         if ![1, 3, 4, 11].contains(&self.outer) || self.recovery >= 1 {
+            return;
+        }
+        // Confused (outer 11): the choice runs only within the two radii plus 0.25.
+        if self.outer == 11 && hdist(v.position, v.hero) > v.radii + 0.25 {
             return;
         }
         let d = len(sub(v.hero, v.position));
@@ -1686,6 +1693,19 @@ impl Enemy {
             10 => self.reaction(v, a),
             5..=8 => self.defence(v, rng, a),
             12 => self.wait_in_line(v, rng, a),
+            // Outer 11, confused (Behavior 44; SPEC-0029 Behavior 27.2 step 7): each tick a
+            // random horizontal direction (x and z from [-1, 1), normalized) blended in at 0.05
+            // and animation 69; outer 0 once the status has ended.
+            11 => {
+                if self.status(6) {
+                    let dir = unit([rng.frange(-1.0, 1.0), 0.0, rng.frange(-1.0, 1.0)]);
+                    a.anim = Some(69);
+                    a.face = Some(([v.position[0] + dir[0], v.position[1], v.position[2] + dir[2]], 0.05));
+                } else {
+                    self.enter(0, 0);
+                    a.anim = Some(self.idle(false, v, rng));
+                }
+            }
             _ => {}
         }
         // The agro tail (Behavior 23).
@@ -2353,6 +2373,27 @@ mod tests {
         v.waits = true;
         e.start_sequencer(0, &v, &mut rng);
         assert_eq!((e.outer, e.seq), (2, 0));
+    }
+
+    #[test]
+    fn confusion_wanders_then_recovers() {
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(11);
+        let mut p = skeleton();
+        for s in &mut p.slots {
+            s.kind = UNUSED;
+        }
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        (e.state, e.outer) = (19, 1);
+        assert!(e.apply_status(6, 1, -1, -1));
+        let v = view([8.0, 0.0, 0.0], &has);
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((e.outer, a.anim), (11, Some(69)));
+        assert!(a.face.is_some_and(|(_, w)| w == 0.05));
+        for _ in 0..70 {
+            e.tick(&v, &mut rng);
+        }
+        assert_ne!(e.outer, 11, "back to outer 0 and on once the status ends");
     }
 
     #[test]
