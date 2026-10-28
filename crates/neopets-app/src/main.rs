@@ -3254,6 +3254,22 @@ fn play_trace(
     (guard, save_test): (bool, bool),
 ) {
     let Archive { disc, index } = &mut *archive;
+    // NEOPETS_TRACE_REGIONS="a-b": the character names of regions a to b (diagnostic).
+    if let Some((a, b)) = std::env::var("NEOPETS_TRACE_REGIONS").ok().and_then(|v| {
+        let (a, b) = v.split_once('-')?;
+        Some((a.trim().parse::<u32>().ok()?, b.trim().parse::<u32>().ok()?))
+    }) {
+        let table = match (index.read(disc, 530), index.read(disc, 531)) {
+            (Ok(x), Ok(y)) => neopets_data::monster::MonsterTable::parse(&x, &y).unwrap_or_default(),
+            _ => Default::default(),
+        };
+        for r in a..=b {
+            match load_region(disc, index, &table, r) {
+                Ok((list, _)) => println!("      region {r}: {:?}", list.iter().map(|c| c.0.name.clone()).collect::<Vec<_>>()),
+                Err(e) => println!("      region {r}: {e}"),
+            }
+        }
+    }
     let mut play = match play::Play::load_with_flags(disc, index, pack, PLAY_OUTFIT, flags) {
         Ok(play) => play,
         Err(e) => {
