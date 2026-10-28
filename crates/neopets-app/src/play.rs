@@ -10593,7 +10593,7 @@ impl Play {
     /// test (event bit 0x4) against the hero's bone capsules, the stun strike is any hero hit
     /// that reaches it (the head cylinder is not tested), and the mouth is taken 2.5 above its
     /// position (the head bone is not given). A landed lunge is unreduced damage with the hit
-    /// flash 222 at the hero; the hero's reaction state 0x36 and the neck look are not built.
+    /// flash 222 at the hero; the hero's reaction state 0x36 is not built (the neck look is).
     fn serpent_step(&mut self) {
         use neopets_sim::combat::Cylinder;
         let pack = self.world.pack;
