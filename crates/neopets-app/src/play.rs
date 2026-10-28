@@ -7917,11 +7917,34 @@ impl Play {
                 self.characters[b].dying.get_or_insert(disappear);
                 self.characters[b].cloud = None;
                 if let Some(c) = companion {
-                    self.characters[c].dying.get_or_insert(disappear);
+                    let own = self.characters[c].row.map_or(disappear, |r| r.disappear.max(1) as u32);
+                    self.characters[c].dying.get_or_insert(own);
                 }
                 self.last_boss = format!("Cloud Beast defeated on tick {}", self.ticks);
                 // Stinger 1, the Werelupe King's death stinger (SPEC-0019; a guess for this boss).
                 self.stinger(1);
+                // A reward (a guess: the disc gives the boss none): 200 Neopoints in coins and the
+                // Wind Mote (167), whose pickup text likens it to a tiny thundercloud.
+                let p = self.characters[b].position;
+                let spawn = |id: u16, charm: bool| neopets_sim::items::Spawn {
+                    id,
+                    point: [p[0], p[1] + 1.0, p[2]],
+                    placed: false,
+                    charm,
+                    s0: 0.25,
+                    s1: 1.0,
+                    delay: 0.0,
+                    larg: -1.0,
+                    direction: None,
+                    flag: 0,
+                    map: 0,
+                    price: 0,
+                };
+                for id in neopets_sim::items::coin_split(200, &self.coins.0, &self.coins.1) {
+                    self.spawn_item(pack, spawn(id, false));
+                }
+                let charm = self.item_kind(167) == 17;
+                self.spawn_item(pack, spawn(167, charm));
                 if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() {
                     println!("CLOUD defeated on tick {}", self.ticks);
                 }
@@ -8038,6 +8061,11 @@ impl Play {
     pub fn cloud_pose(&self, c: &Character) -> Option<(f32, f32, f32)> {
         if c.slot != CLOUD_SLOT {
             return None;
+        }
+        // Defeated: the cloud shrinks and sinks over its first two seconds of the corpse timer.
+        if let (Some(t), Some(r)) = (c.dying, c.row) {
+            let k = ((t as f32 - (r.disappear.max(1) as f32 - 120.0)) / 120.0).clamp(0.02, 1.0);
+            return Some((-1.5 * (1.0 - k), 0.0, k));
         }
         let boss = self.characters.iter().find(|b| b.pack == c.pack && b.slot == CLOUD_SLOT && b.cloud.is_some())?;
         let clip = boss.cloud.as_ref()?.clip;
