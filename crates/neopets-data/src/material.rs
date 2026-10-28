@@ -62,6 +62,41 @@ pub struct Group {
     pub uv_speed_pass1_bits: [u32; 2],
     pub clamp_pass1: Option<u64>,
     pub alpha_pass1: Option<u64>,
+    /// Pass 0's texture animator kind (group byte 0x2B: 1 variant 1, 2 variant 2) and its grid
+    /// record (group offset 0x00: frame count, rows, columns, divisor or key; SPEC-0003
+    /// Sub-texture frame addressing).
+    pub animator: u8,
+    /// The grid record's float bits (see `grid`).
+    pub grid_bits: [u32; 4],
+}
+
+/// A variant-1 flipbook of pass 0 (SPEC-0003 Sub-texture frame addressing): the grid record and
+/// the texture's size.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Flipbook {
+    pub count: i32,
+    pub rows: i32,
+    pub cols: i32,
+    pub divisor: i32,
+    pub width: u32,
+    pub height: u32,
+}
+
+impl Flipbook {
+    /// The cell shown at render frame N, as a UV offset in texture units: L = min(count,
+    /// rows x columns), index floor(N / D) mod L, column index mod columns, row index /
+    /// columns, offset (column x cell width, row x cell height) over the texture size, with the
+    /// cell sizes floor(size / columns) and floor(size / rows).
+    pub fn offset(&self, n: u16) -> [f32; 2] {
+        if self.count <= 0 || self.rows <= 0 || self.cols <= 0 {
+            return [0.0; 2];
+        }
+        let l = self.count.min(self.rows * self.cols).max(1);
+        let i = (n as i32 / self.divisor.max(1)) % l;
+        let (col, row) = (i % self.cols, i / self.cols);
+        let (cw, ch) = (self.width as i32 / self.cols, self.height as i32 / self.rows);
+        [(col * cw) as f32 / self.width.max(1) as f32, (row * ch) as f32 / self.height.max(1) as f32]
+    }
 }
 
 /// The UV scroll offset of one axis (SPEC-0003 UV modes, mode 2): s x N - trunc(s x N), with N
@@ -98,6 +133,11 @@ impl Group {
     /// other than 0xFFFF (SPEC-0003 How a pass is drawn).
     pub fn two_pass(&self) -> bool {
         self.mode == 2 && self.tex0_pass1.is_some() && self.program_pass1 != 0xFFFF
+    }
+
+    /// Pass 0's grid record as floats (frame count, rows, columns, divisor or key).
+    pub fn grid(&self) -> [f32; 4] {
+        self.grid_bits.map(f32::from_bits)
     }
 
     /// Pass 1's scroll speeds (su, sv).
@@ -198,6 +238,8 @@ impl ShaderList {
                     uv_speed_pass1_bits: [u32_at(group, 0x70).unwrap_or(0), u32_at(group, 0x74).unwrap_or(0)],
                     clamp_pass1: regs.clamp_pass1,
                     alpha_pass1: if mode == 2 { regs.alpha_pass1 } else { None },
+                    animator: group[0x2B],
+                    grid_bits: [0, 4, 8, 12].map(|o| u32_at(group, o).unwrap_or(0)),
                 })
             })
             .collect::<Result<Vec<_>, String>>()?;
@@ -293,6 +335,19 @@ pub fn lists_in_chain(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn flipbook_cells() {
+        // SPEC-0003 disc users of variant 1: resource 1248 group 1 (32 cells, 4 x 8, divisor 1,
+        // 256 x 128): one cell per pass, frame 9 is column 1 of row 1; resource 9 group 102
+        // (16 cells, 4 x 4, divisor 2, 128 x 128): frame 9 shows cell 4 (row 1).
+        let a = super::Flipbook { count: 32, rows: 4, cols: 8, divisor: 1, width: 256, height: 128 };
+        assert_eq!(a.offset(9), [32.0 / 256.0, 32.0 / 128.0]);
+        assert_eq!(a.offset(32), [0.0, 0.0]);
+        let b = super::Flipbook { count: 16, rows: 4, cols: 4, divisor: 2, width: 128, height: 128 };
+        assert_eq!(b.offset(9), [0.0, 0.25]);
+        assert_eq!(b.offset(33), [0.0, 0.0]);
+    }
+
 
     #[test]
     fn scroll_vectors() {

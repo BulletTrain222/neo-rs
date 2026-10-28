@@ -121,6 +121,9 @@ pub struct MeshPart {
     /// Pass 0's UV mode is 1, the environment map (SPEC-0003 UV modes): its UVs are generated
     /// from the view each frame, not the stored ones.
     pub env_map: bool,
+    /// Pass 0's variant-1 flipbook (a variant-2 group always shows cell 0, its mesh UVs as
+    /// stored; SPEC-0003 Sub-texture frame addressing).
+    pub flipbook: Option<material::Flipbook>,
     pub positions: Vec<[f32; 3]>,
     /// Layout B has no normals; its parts get +Y placeholders (it is drawn unlit).
     pub normals: Vec<[f32; 3]>,
@@ -381,6 +384,11 @@ impl Builder {
                 zone: leaf.zone.or(zone),
                 scroll: group.filter(|g| g.uv_mode == 2 && g.uv_speed() != [0.0; 2]).map(|g| g.uv_speed()),
                 env_map: group.is_some_and(|g| g.uv_mode == 1),
+                flipbook: group.filter(|g| g.animator == 1 && g.grid()[0] as i32 > 0).and_then(|g| {
+                    let t = g.tex0?;
+                    let [count, rows, cols, d] = g.grid().map(|f| f as i32);
+                    Some(material::Flipbook { count, rows, cols, divisor: d, width: 1 << t.tw.min(10), height: 1 << t.th.min(10) })
+                }),
                 positions: Vec::new(),
                 normals: Vec::new(),
                 uvs: Vec::new(),

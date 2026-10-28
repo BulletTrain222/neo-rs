@@ -866,6 +866,7 @@ fn main() {
     app.add_systems(Update, sync_breakables.after(sync_objects));
     app.add_systems(Update, sync_blocks.after(sync_objects));
     app.add_systems(Update, send_rumble);
+    app.add_systems(Update, sync_uv_flip);
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     audio_view::register(&mut app);
@@ -1969,11 +1970,14 @@ fn sync_worlds(
             match built {
                 Ok((list, breakables, blocks)) => {
                     for (i, m) in blocks {
-                        let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        let parts = flip_parts(&m, part_assets(&m, &mut meshes, &mut materials, &mut images), &mut materials);
                         let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
                         commands.spawn((Transform::IDENTITY, Visibility::Visible, BlockRoot(pack, i), *part)).with_children(|c| {
-                            for (_, mesh, material) in parts {
-                                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            for (_, mesh, material, flip) in parts {
+                                let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                                if let Some(f) = flip {
+                                    e.insert(UvFlip(f));
+                                }
                             }
                             for (_, mesh, material, scroll) in second {
                                 let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
@@ -1984,11 +1988,14 @@ fn sync_worlds(
                         });
                     }
                     for (i, matrix, m) in breakables {
-                        let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        let parts = flip_parts(&m, part_assets(&m, &mut meshes, &mut materials, &mut images), &mut materials);
                         let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
                         commands.spawn((Transform::from_matrix(Mat4::from_cols_array(&matrix)), Visibility::Visible, BreakableRoot(pack, i), *part)).with_children(|c| {
-                            for (_, mesh, material) in parts {
-                                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            for (_, mesh, material, flip) in parts {
+                                let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                                if let Some(f) = flip {
+                                    e.insert(UvFlip(f));
+                                }
                             }
                             for (_, mesh, material, scroll) in second {
                                 let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
@@ -1999,11 +2006,14 @@ fn sync_worlds(
                         });
                     }
                     for (i, m) in list {
-                        let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
+                        let parts = flip_parts(&m, part_assets(&m, &mut meshes, &mut materials, &mut images), &mut materials);
                         let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
                         commands.spawn((Transform::IDENTITY, Visibility::Visible, ObjectRoot(pack, i), *part)).with_children(|c| {
-                            for (_, mesh, material) in parts {
-                                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                            for (_, mesh, material, flip) in parts {
+                                let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                                if let Some(f) = flip {
+                                    e.insert(UvFlip(f));
+                                }
                             }
                             for (_, mesh, material, scroll) in second {
                                 let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
@@ -2062,7 +2072,7 @@ fn sync_worlds(
                             let image = env_textures.entry(t).or_insert_with(|| images.add(model_texture(&m.textures[t]))).clone();
                             commands.spawn((Mesh3d(mesh), MeshMaterial3d(pass1_materials.add(pass1::env_base(image))), Transform::IDENTITY, *part))
                         }
-                        None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, *part)),
+                        None => commands.spawn((Mesh3d(mesh), MeshMaterial3d(material.clone()), Transform::IDENTITY, *part)),
                     };
                     // A part under a type-3 node, or of an instance or placed object, draws only
                     // while its zone column passes.
@@ -2074,6 +2084,18 @@ fn sync_worlds(
                     }
                     if let Some(speed) = m.parts[i].scroll.filter(|_| m.parts[i].texture.is_some()) {
                         e.insert(UvScroll(speed));
+                    }
+                    // A variant-1 flipbook steps its own copy of the material through the cells.
+                    if let (Some(fb), None) = (m.parts[i].flipbook, env) {
+                        if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() {
+                            let q = &m.parts[i].positions;
+                            let n = q.len().max(1) as f32;
+                            let c = q.iter().fold([0.0f32; 3], |a, p| [a[0] + p[0] / n, a[1] + p[1] / n, a[2] + p[2] / n]);
+                            println!("flipbook part {i}: middle ({:.0}, {:.0}, {:.0}), {:?}", c[0], c[1], c[2], fb);
+                        }
+                        if let Some(own) = materials.get(&material).cloned() {
+                            e.insert((MeshMaterial3d(materials.add(own)), UvFlip(fb)));
+                        }
                     }
                 }
                 // Render pass 1 of the two-pass parts (pass1.rs), gated like their pass 0; its
@@ -2096,6 +2118,46 @@ fn sync_worlds(
         }
     }
     *shown = want;
+}
+
+/// The parts with their flipbooks: a flipbook part gets its own copy of the material, which
+/// the flipbook steps.
+fn flip_parts(
+    m: &neopets_data::model::ModelData,
+    parts: Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>)>,
+    materials: &mut Assets<StandardMaterial>,
+) -> Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>, Option<neopets_data::material::Flipbook>)> {
+    parts
+        .into_iter()
+        .map(|(i, mesh, material)| match m.parts[i].flipbook {
+            Some(f) => {
+                let own = materials.get(&material).cloned().map_or(material, |c| materials.add(c));
+                (i, mesh, own, Some(f))
+            }
+            None => (i, mesh, material, None),
+        })
+        .collect()
+}
+
+/// A world part's variant-1 flipbook (SPEC-0003 Sub-texture frame addressing).
+#[derive(Component, Clone, Copy)]
+struct UvFlip(neopets_data::material::Flipbook);
+
+/// Each frame: a flipbook part's UV offset is its cell at the render frame counter (the play
+/// tick, which holds under a pause as the cells do).
+fn sync_uv_flip(state: Option<Res<PlayState>>, parts: Query<(&UvFlip, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let Some(state) = state else { return };
+    let n = state.play.ticks as u16;
+    // NEOPETS_TRACE_FLIP: the flipbook parts and their offsets every 60 ticks (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_FLIP").is_some() && n % 60 == 0 {
+        println!("flipbooks on tick {n}: {} parts, offsets {:?}", parts.iter().count(), parts.iter().map(|(f, _)| f.0.offset(n)).collect::<Vec<_>>());
+    }
+    for (f, m) in &parts {
+        if let Some(mut mat) = materials.get_mut(&m.0) {
+            let off = f.0.offset(n);
+            mat.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(off[0], off[1]));
+        }
+    }
 }
 
 /// A world part's UV scroll speeds per pass (SPEC-0003 UV mode 2).
