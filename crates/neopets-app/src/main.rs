@@ -70,7 +70,9 @@ fn check_effects(disc: &mut Disc, index: &ArchiveIndex) -> Result<(), String> {
     }
     // The bars' loss effects (SPEC-0023 section 3): started as the loss step starts them, the
     // spawners and particles live after each tick count.
-    for id in [0xFA2, 0xFA3] {
+    // NEOPETS_FX_IDS="a,b,...": more effect ids to run the same way (diagnostic).
+    let extra: Vec<i32> = std::env::var("NEOPETS_FX_IDS").map(|v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect()).unwrap_or_default();
+    for id in [0xFA2, 0xFA3].into_iter().chain(extra) {
         let mut fx = Effects::new();
         let h = fx.add_object(EffectObject::new(&table, id, [0.0; 3], IDENTITY));
         fx.update(&table, h, None, &mut Midpoint);
@@ -1799,8 +1801,11 @@ fn cycle_textures(keys: Res<ButtonInput<KeyCode>>, mut textures: ResMut<TextureV
 }
 
 /// Put the current decoded texture on the quad, sized to its aspect ratio; hide the quad when
-/// the selected resource has no textures.
+/// the selected resource has no textures. The quad is the resource viewer's: in play it stays
+/// hidden (it stood at (-3, 2, -3) in every world, showing the pack's first texture, and in the
+/// middle of the Juppie arena, 1217, it could be seen).
 fn apply_texture(
+    play: Option<Res<PlayState>>,
     mut textures: ResMut<TextureView>,
     models: Res<ModelView>,
     mut quads: Query<
@@ -1810,6 +1815,14 @@ fn apply_texture(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    if play.is_some() {
+        for (_, _, mut visibility) in &mut quads {
+            if *visibility != Visibility::Hidden {
+                *visibility = Visibility::Hidden;
+            }
+        }
+        return;
+    }
     if !textures.dirty {
         return;
     }
@@ -3242,6 +3255,27 @@ fn play_trace(
             std::process::exit(1)
         }
     };
+    // NEOPETS_TRACE_QUADS="x,z,r": the world scene's mesh parts of at most 8 vertices whose
+    // centre is within r of (x, z), with their texture, zone and vertices.
+    if let Some((x, z, r)) = std::env::var("NEOPETS_TRACE_QUADS").ok().and_then(|v| {
+        let n: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        (n.len() == 3).then(|| (n[0], n[1], n[2]))
+    }) {
+        let bytes = index.read(disc, pack).unwrap_or_default();
+        if let Ok(chain) = neopets_data::resource::walk_chunks(&bytes, None) {
+            for layers in [0u32, u32::MAX] {
+                if let Ok(Some(m)) = archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false, layers) {
+                    for (i, p) in m.parts.iter().enumerate() {
+                        let n = p.positions.len().max(1) as f32;
+                        let c = p.positions.iter().fold([0.0f32; 3], |a, q| [a[0] + q[0] / n, a[1] + q[1] / n, a[2] + q[2] / n]);
+                        if p.positions.len() <= 8 && (c[0] - x).hypot(c[2] - z) <= r {
+                            println!("      layers {layers:#x} part {i}: centre ({:.1}, {:.1}, {:.1}) texture {:?} zone {:?} env {} cull {:?} positions {:?}", c[0], c[1], c[2], p.texture, p.zone, p.env_map, p.cull, p.positions.iter().map(|q| q.map(|v| (v * 10.0).round() / 10.0)).collect::<Vec<_>>());
+                        }
+                    }
+                }
+            }
+        }
+    }
     // NEOPETS_TRACE_BOSS=n: start as the developer menu's boss fight n instead (trace only).
     if let Some(b) = std::env::var("NEOPETS_TRACE_BOSS").ok().and_then(|v| v.parse::<usize>().ok()).and_then(|i| play::BOSSES.get(i)) {
         match boss_fight(disc, index, &play, b) {
@@ -3390,13 +3424,26 @@ fn play_trace(
             println!("      locator {k}: tag {:?} at {:?}", play.world.tags.get(k), e.0.map(|x| x.round() as i32));
         }
     }
+    // NEOPETS_TRACE_NEAR="x,z,r": the placed objects whose rest origin is within r of (x, z).
+    if let Some((x, z, r)) = std::env::var("NEOPETS_TRACE_NEAR").ok().and_then(|v| {
+        let n: Vec<f32> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+        (n.len() == 3).then(|| (n[0], n[1], n[2]))
+    }) {
+        for (k, o) in play.world.objects.iter().enumerate() {
+            let Some(o) = o else { continue };
+            let t = [o.rest[12], o.rest[13], o.rest[14]];
+            if (t[0] - x).hypot(t[2] - z) <= r {
+                println!("      object {k}: at ({:.1}, {:.1}, {:.1}) scale {:?} state {} keys {} zone {} tree {} set {} header {} anim {:?}", t[0], t[1], t[2], o.scale, o.state, o.keys, o.zone, o.tree.is_some(), o.model_set.is_some(), o.header.is_some(), play.world.object_anims.get(k).map(|a| (a.state, a.visible())));
+            }
+        }
+    }
     if std::env::var_os("NEOPETS_TRACE_TRIGGERS").is_some() {
         for v in &play.world.all_volumes {
             println!("      trigger {} kind {} flags {:#x} mask {:#x} {:?}", v.index, v.kind, v.flags, v.mask, v.shape);
         }
     }
     println!("Entity table of {} (entity: region j or 255 embedded, ordinal): {:?}", play.world.pack, play.world.entity_table());
-    let placed: Vec<String> = play.world.placed_effects.iter().take(12).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
+    let placed: Vec<String> = play.world.placed_effects.iter().take(40).enumerate().map(|(k, p)| format!("{k}: id {} at {:.1},{:.1},{:.1}", p.id, p.position[0], p.position[1], p.position[2])).collect();
     println!("Placed effects of {} ({} records): {}", play.world.pack, play.world.placed_effects.len(), placed.join("; "));
     let trees: Vec<String> = play.world.patches.iter().filter(|p| p.key == 4).take(3).map(|p| format!("({:.1},{:.1})", (p.area[0] + p.area[1]) / 2.0, (p.area[2] + p.area[3]) / 2.0)).collect();
     println!("Foliage of {}: {} patches; key-4 tree patches at {}", play.world.pack, play.world.patches.len(), trees.join(" "));

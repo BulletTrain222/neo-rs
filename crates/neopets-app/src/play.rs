@@ -11808,6 +11808,14 @@ impl Play {
     pub fn object_matrix(&self, pack: u32, i: usize) -> Option<[f32; 16]> {
         let w = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack)?;
         let obj = w.objects.get(i)?.as_ref()?;
+        // NEOPETS_HIDE_OBJ="a-b": objects a to b are never drawn (diagnostic).
+        if std::env::var("NEOPETS_HIDE_OBJ").ok().and_then(|v| {
+            let (a, b) = v.split_once('-')?;
+            Some((a.trim().parse::<usize>().ok()?..=b.trim().parse::<usize>().ok()?).contains(&i))
+        }) == Some(true)
+        {
+            return None;
+        }
         // SPEC-0028 section 7: an object whose zone query fails is not drawn.
         if !self.zone_visible(pack, obj.zone) {
             return None;
@@ -12077,6 +12085,10 @@ impl Play {
     /// outside the table does nothing.
     fn start_placed(&mut self, pack: u32, slot: usize, camera: bool) {
         let table = self.effect_table.clone();
+        // NEOPETS_SKIP_FX="a,b": these placed records are never started (diagnostic).
+        if std::env::var("NEOPETS_SKIP_FX").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<usize>().ok() == Some(slot))) {
+            return;
+        }
         let Some(h) = self.placed_object(pack, slot) else { return };
         let listener = camera.then(|| {
             let (eye, focus) = (self.camera.eye, self.camera.focus);

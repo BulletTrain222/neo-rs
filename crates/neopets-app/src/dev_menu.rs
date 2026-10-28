@@ -451,6 +451,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             }
         }
     }
+    // NEOPETS_DEV_BOSS=n: the boss fight request for boss n, once, a second in (diagnostic).
+    if *frames == 60 {
+        if let Some(n) = std::env::var("NEOPETS_DEV_BOSS").ok().and_then(|v| v.parse::<usize>().ok()).filter(|&n| n < crate::play::BOSSES.len()) {
+            dev.boss = Some(n);
+        }
+    }
     // NEOPETS_DEV="drop": the coin drop (with item 160) a second after the options apply.
     if *frames == 90 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drop")) {
         info!("Developer drop: {} world items", play.play.dev_drop(160));
@@ -728,15 +734,34 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
     }
 }
 
-/// A label cut to one row's width (28 characters).
-fn fit(s: String) -> String {
-    if s.chars().count() <= 28 { s } else { format!("{}...", s.chars().take(25).collect::<String>()) }
+/// A label's visible width in characters.
+const FIT: usize = 28;
+
+/// A label that fits one row (28 characters) as it is; a longer one as a marquee at `t` seconds:
+/// its start held for 1.5 s, then scrolling left at 6 characters a second and wrapping round
+/// after a gap.
+fn fit(s: String, t: f64) -> String {
+    let chars: Vec<char> = s.chars().collect();
+    if chars.len() <= FIT {
+        return s;
+    }
+    const GAP: usize = 5;
+    const RATE: f64 = 6.0;
+    const HOLD: f64 = 1.5;
+    let n = chars.len() + GAP;
+    let phase = t.rem_euclid(HOLD + n as f64 / RATE);
+    let start = (((phase - HOLD).max(0.0) * RATE) as usize).min(n - 1);
+    (0..FIT).map(|k| {
+        let i = (start + k) % n;
+        chars.get(i).copied().unwrap_or(' ')
+    }).collect()
 }
 
 /// The menu window's rows (labels, values, cursor and hover colours), the last result, and the
 /// status box while the menu is closed.
 #[allow(clippy::type_complexity)]
 pub fn show_panel(
+    time: Res<Time<Real>>,
     dev: Res<DevMenu>,
     play: Option<Res<PlayState>>,
     mut boxes: Query<&mut Node, (With<DevPanel>, Without<DevWindow>)>,
@@ -761,7 +786,7 @@ pub fn show_panel(
     let p = &play.play;
     if dev.open {
         for (mut t, l) in &mut labels {
-            let s = fit(row_text(ENTRIES[l.0], &dev, p).0);
+            let s = fit(row_text(ENTRIES[l.0], &dev, p).0, time.elapsed_secs_f64());
             if t.0 != s {
                 t.0 = s;
             }
@@ -836,4 +861,19 @@ pub fn show_panel(
 
 fn speed_label(k: usize) -> String {
     if k == 0 { "paused".into() } else { format!("{}x", SPEEDS[k]) }
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn long_labels_scroll() {
+        // A short label is kept; a long one holds its start, then scrolls and wraps.
+        assert_eq!(super::fit("Full heal".into(), 9.0), "Full heal");
+        let long = "Boss fight: The Darkest Faerie (final form)".to_string();
+        let a = super::fit(long.clone(), 0.5);
+        assert_eq!(a.chars().count(), super::FIT);
+        assert!(long.starts_with(&a));
+        let b = super::fit(long.clone(), 1.5 + 1.0);
+        assert_eq!(b, long.chars().skip(6).take(super::FIT).collect::<String>());
+    }
 }
