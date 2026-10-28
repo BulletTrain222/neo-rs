@@ -8622,7 +8622,16 @@ impl Play {
             let look = e.p.defence.hold.max(0) as f32;
             v.missile_threat = shot_paths.iter().any(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body));
             let outer_before = e.outer;
+            let before = (e.outer, e.inner, e.seq, e.selected);
             let act = e.tick(&v, &mut self.rng);
+            // NEOPETS_TRACE_AGRO: each change of an enemy's agro sub-states (diagnostic).
+            if std::env::var("NEOPETS_TRACE_AGRO").as_deref() == Ok("clip") && e.outer == 2 && self.ticks % 5 == 0 {
+                println!("      agro clip {name} tick {}: seq {} clip {} progress {:.3} finished {} window {:?}", self.ticks, e.seq, v.clip.action, v.clip.progress, v.clip.finished, anim.layer0_window());
+            }
+            if before != (e.outer, e.inner, e.seq, e.selected) && std::env::var_os("NEOPETS_TRACE_AGRO").is_some() {
+                let d = sub_v(hero, p);
+                println!("      agro {name} tick {}: outer {} inner {} seq {} slot {:?} d {:.1} attackable {} recovery {}", self.ticks, e.outer, e.inner, e.seq, e.selected, (d[0] * d[0] + d[2] * d[2]).sqrt(), v.hero_attackable, e.recovery);
+            }
             // The flyer's goal height (SPEC-0040 Behavior 21), with the ground under it.
             let fly_y = e.airborne().then(|| e.fly_target(&v, world.ground_at(p[0], p[2], p[1] + 8.0)));
             // NEOPETS_TRACE_DEFENCE: a defence starting (outers 5 to 8).

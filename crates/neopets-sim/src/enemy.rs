@@ -471,7 +471,7 @@ pub struct Enemy {
     awareness: i32,
     alert: bool,
     cooldown: [i32; 4],
-    recovery: i32,
+    pub recovery: i32,
     pub selected: Option<usize>,
     desired: f32,
     retreat: f32,

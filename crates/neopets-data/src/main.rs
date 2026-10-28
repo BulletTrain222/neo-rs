@@ -39,6 +39,7 @@ fn run() -> Result<(), String> {
     let mut blocks = false;
     let mut aim = false;
     let mut monster_word: Option<usize> = None;
+    let mut monster_row: Option<usize> = None;
     let mut boot_words: Option<(u32, usize)> = None;
     let mut panels = false;
     let mut object_headers = false;
@@ -96,6 +97,10 @@ fn run() -> Result<(), String> {
                 let n = args.next().ok_or("--monster-word needs a row offset")?;
                 monster_word = Some(usize::from_str_radix(n.trim_start_matches("0x"), 16).map_err(|_| format!("Bad offset {n}"))?);
             }
+            "--monster-row" => {
+                let n = args.next().ok_or("--monster-row needs a row index")?;
+                monster_row = Some(n.parse().map_err(|_| format!("Bad row {n}"))?);
+            }
             "--resource" => {
                 let n = args.next().ok_or("--resource needs a number")?;
                 show.push(n.parse::<u32>().map_err(|_| format!("Bad resource number {n}"))?);
@@ -126,7 +131,7 @@ fn run() -> Result<(), String> {
             println!("{:#08x}: {w:#010x} i32 {} f32 {}", a + 4 * k as u32, w as i32, f32::from_bits(w));
         }
     }
-    if !(monster_word.is_some() || groups.is_some() || shadow.is_some() || !parts_of.is_empty() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
+    if !(monster_word.is_some() || monster_row.is_some() || groups.is_some() || shadow.is_some() || !parts_of.is_empty() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());
     }
     let index = ArchiveIndex::from_disc(&mut disc)?;
@@ -206,6 +211,11 @@ fn run() -> Result<(), String> {
         for (w, n) in seen {
             println!("{w:#010x} u16 {} u32 {} f32 {}: {n} rows", w & 0xFFFF, w, f32::from_bits(w));
         }
+    }
+    if let Some(i) = monster_row {
+        // The class-17 values of one monster row (resource 530), as parsed.
+        let t = neopets_data::monster::MonsterTable::parse(&index.read(&mut disc, 530)?, &index.read(&mut disc, 531)?)?;
+        println!("{:#?}", t.tuning_at(i).ok_or(format!("No row {i}"))?);
     }
     if panels {
         panel_census(&mut disc, &index)?;
