@@ -31,6 +31,9 @@ pub struct DevMenu {
     /// The warp list's cursor, and a warp the host runs after this frame's ticks.
     warp_at: usize,
     pub warp: Option<u32>,
+    /// The boss list's cursor, and a boss fight the host builds after this frame's ticks.
+    boss_at: usize,
+    pub boss: Option<usize>,
     /// The game speed (an index into SPEEDS; 0 is paused) and a one-tick step asked for.
     speed: usize,
     pub step: bool,
@@ -58,7 +61,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -123,6 +126,7 @@ enum Entry {
     Weapon,
     Noclip,
     CloudBeast,
+    BossFight,
 }
 
 /// The menu's sections and their entries, in display order.
@@ -130,12 +134,12 @@ const SECTIONS: [(&str, &[Entry]); 6] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start]),
-    ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::CloudBeast]),
+    ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 20] = [
+const ENTRIES: [Entry; 21] = [
     Entry::God,
     Entry::Noclip,
     Entry::Magic,
@@ -148,6 +152,7 @@ const ENTRIES: [Entry; 20] = [
     Entry::Heal,
     Entry::Hero,
     Entry::Kill,
+    Entry::BossFight,
     Entry::CloudBeast,
     Entry::Weapon,
     Entry::Item,
@@ -169,7 +174,7 @@ enum Kind {
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam => Kind::Toggle,
-        Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag => Kind::Choice,
+        Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
         _ => Kind::Action,
     }
 }
@@ -508,6 +513,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
                 let n = worlds(&play.play).len().max(1) as i32;
                 dev.warp_at = (dev.warp_at as i32 + delta).rem_euclid(n) as usize;
             }
+            Entry::BossFight => dev.boss_at = (dev.boss_at as i32 + delta.signum()).rem_euclid(crate::play::BOSSES.len() as i32) as usize,
             Entry::Speed => dev.speed = (dev.speed as i32 + delta.signum()).clamp(0, SPEEDS.len() as i32 - 1) as usize,
             Entry::Start => {
                 let n = play.play.dev_start_points().max(1) as i32;
@@ -586,6 +592,11 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, mut
         }
         Entry::Kill => format!("Defeated {} enemies here", p.dev_kill_enemies()),
         Entry::CloudBeast => p.dev_cloud_beast(),
+        Entry::BossFight => {
+            let b = crate::play::BOSSES[dev.boss_at % crate::play::BOSSES.len()];
+            dev.boss = Some(dev.boss_at % crate::play::BOSSES.len());
+            format!("Starting the {} fight (world pack {})", b.name, b.pack)
+        }
         Entry::Drop => format!("Dropped {} world items", p.dev_drop(dev.item)),
         Entry::Start => {
             if p.dev_go_start(dev.start) { format!("To start point {}", dev.start) } else { "No start points here".into() }
@@ -682,7 +693,11 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::Heal => ("Full heal".into(), format!("{}/{} HP", p.hero_hp, p.hero_max)),
         Entry::Hero => (format!("Switch hero  (now {})", if p.hero_index == 0 { "Tor" } else { "Roberta" }), String::new()),
         Entry::Kill => ("Defeat every enemy here".into(), String::new()),
-        Entry::CloudBeast => ("Spawn the Cloud Beast (cut boss)".into(), String::new()),
+        Entry::CloudBeast => ("Spawn the Cloud Beast here (cut boss)".into(), String::new()),
+        Entry::BossFight => {
+            let n = crate::play::BOSSES.len();
+            (format!("Boss fight: {}", crate::play::BOSSES[dev.boss_at % n].name), format!("{} of {n}", dev.boss_at % n + 1))
+        }
         Entry::Weapon => {
             let w = weapons(p);
             match w.get(dev.weapon_at) {

@@ -87,6 +87,32 @@ impl DesignTables {
         Ok(Self { tables, paths })
     }
 
+    /// Table 11 (SPEC-0024; SPEC-0049 Stage table rows): the progress flags stage `stage` sets,
+    /// in table order (rows with flag -1 skipped).
+    pub fn stage_flags(&self, stage: u16) -> Vec<u16> {
+        let Some(t) = self.tables.get(11) else { return Vec::new() };
+        (0..t.count)
+            .filter_map(|i| t.record(i))
+            .filter(|r| r.len() >= 4 && u16::from_le_bytes([r[0], r[1]]) == stage)
+            .filter_map(|r| u16::try_from(i16::from_le_bytes([r[2], r[3]])).ok())
+            .collect()
+    }
+
+    /// Table 12 (SPEC-0024): the start-point item grants of stage `stage` as (item, count), in
+    /// table order (rows with item -1 or a count below 1 skipped).
+    pub fn stage_items(&self, stage: u16) -> Vec<(u16, u32)> {
+        let Some(t) = self.tables.get(12) else { return Vec::new() };
+        (0..t.count)
+            .filter_map(|i| t.record(i))
+            .filter(|r| r.len() >= 6 && u16::from_le_bytes([r[0], r[1]]) == stage)
+            .filter_map(|r| {
+                let item = u16::try_from(i16::from_le_bytes([r[2], r[3]])).ok()?;
+                let n = i16::from_le_bytes([r[4], r[5]]);
+                (n > 0).then_some((item, n as u32))
+            })
+            .collect()
+    }
+
     fn word(&self, table: usize, i: usize, at: usize) -> Option<u32> {
         let r = self.tables.get(table)?.record(i)?;
         Some(u32::from_le_bytes(r.get(at..at + 4)?.try_into().ok()?))

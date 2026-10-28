@@ -877,6 +877,8 @@ pub struct Play {
     cloud_rows: Option<(neopets_data::monster::Row, neopets_data::monster::Row)>,
     /// The test spawn is on (NEOPETS_CLOUD_BEAST, or the developer menu).
     cloud_on: bool,
+    /// The next spawn also places the hero in the middle of the arena (the menu's fight entry).
+    cloud_place_hero: bool,
     cloud_words: Option<neopets_sim::cloudbeast::Words>,
     /// The arena: the level's locators 101 to 106 when it has all six, else a stand-in ring of
     /// radius 16 around where the hero stood at the spawn, each point facing the centre.
@@ -1608,6 +1610,7 @@ impl Play {
             neck_joints,
             cloud_rows,
             cloud_on: std::env::var_os("NEOPETS_CLOUD_BEAST").is_some(),
+            cloud_place_hero: false,
             cloud_words,
             cloud_arena: None,
             cloud_defeated: Default::default(),
@@ -5681,6 +5684,10 @@ impl Play {
                 }
                 continue;
             }
+            // The pack's AI-player activate callback refuses some embedded records.
+            if slot == EMBEDDED_SLOT && level::admits(pack, pl.ordinal, &self.state) == Some(false) {
+                continue;
+            }
             let drop = usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied());
             self.bind_character(pack, slot, region, pl, (model, anim, row, tuning), drop);
         }
@@ -7873,6 +7880,13 @@ impl Play {
             let ring = <[([f32; 3], [f32; 3]); 6]>::try_from(tagged).unwrap_or(ring);
             self.cloud_arena = Some((pack, ring));
             let at = ring[0].0;
+            // The menu's fight entry: the hero to the middle of the six points, facing point 0.
+            if std::mem::take(&mut self.cloud_place_hero) {
+                let c = ring.iter().fold([0.0; 3], |a, (p, _)| add(a, scale(*p, 1.0 / 6.0)));
+                let d = sub_v(at, c);
+                let l = d[0].hypot(d[2]).max(1e-3);
+                self.arrive((c, [d[0] / l, 0.0, d[2] / l]));
+            }
             if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() {
                 println!("CLOUD arena {:?}", ring.map(|(p, _)| p));
             }
@@ -8125,6 +8139,69 @@ impl Play {
 
     /// Developer menu: spawn the Cloud Beast in this world around the hero (removing one already
     /// here, and clearing a defeat).
+    /// Developer menu, after the warp to the Cloud Beast fight: the test spawn on, its defeat
+    /// mark cleared, and the hero placed in the arena at the spawn.
+    pub fn dev_cloud_fight(&mut self) {
+        if self.cloud_rows.is_none() || self.cloud_words.is_none() {
+            return;
+        }
+        self.cloud_on = true;
+        self.cloud_place_hero = true;
+        self.cloud_defeated.remove(&self.world.pack);
+    }
+
+    /// The progress flags a boss fight starts with: its start index's stage rows (table 11, in
+    /// stage order), then its walkthrough flags.
+    pub fn boss_flags(&self, b: &BossStart) -> Vec<u16> {
+        let mut f: Vec<u16> = START_STAGES[b.start.min(8)].iter().flat_map(|&s| self.design.stage_flags(s)).collect();
+        f.extend(b.flags);
+        f
+    }
+
+    /// After the boss world's load: the stage item grants (table 12; item 135 adds Neopoints, 136
+    /// to 139 add 5, 10, 25 and 100), the extra gear, the equipment, full health and magic, the
+    /// hero, the placement and, for the Cloud Beast, the test spawn.
+    pub fn boss_setup(&mut self, b: &BossStart) {
+        let grants: Vec<(u16, u32)> = START_STAGES[b.start.min(8)].iter().flat_map(|&s| self.design.stage_items(s)).collect();
+        for (item, n) in grants {
+            match item {
+                135 => self.state.neopoints += n as i32,
+                136 => self.state.neopoints += 5,
+                137 => self.state.neopoints += 10,
+                138 => self.state.neopoints += 25,
+                139 => self.state.neopoints += 100,
+                _ => self.state.give(item, n),
+            }
+        }
+        for &id in b.items {
+            if !self.state.items.get(&id).is_some_and(|&n| n > 0) {
+                self.give(id);
+            }
+        }
+        self.equipment_step();
+        self.weapon = self.equipment.entries[0][self.hero_index.min(1)];
+        if b.roberta {
+            self.trace_select_hero(1);
+        }
+        (self.hero_hp, self.hero_mp) = (self.hero_max, self.hero_mp_max);
+        if let Place::Trigger(k) = b.place {
+            let at = self.world.all_volumes.iter().find(|v| v.index == k).map(|v| match v.shape {
+                neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
+                neopets_sim::trigger::Shape::Cylinder { base, axis, length, .. } => add(base, scale(axis, 0.5 * length)),
+                neopets_sim::trigger::Shape::Rectangle { origin, axes, extents } => add(origin, add(add(scale(axes[0], 0.5 * extents[0]), scale(axes[1], 0.5 * extents[1])), scale(axes[2], 0.5 * extents[2]))),
+            });
+            if let Some(p) = at {
+                let y = self.world.ground_at(p[0], p[2], p[1] + 8.0).unwrap_or(p[1]);
+                let facing = self.loco.facing;
+                self.arrive(([p[0], y, p[2]], facing));
+            }
+        }
+        if b.cloud {
+            self.dev_cloud_fight();
+        }
+        self.last_boss = format!("developer menu: boss fight {} in {} (start index {}, {} flags)", b.name, b.pack, b.start, self.state.flags.len());
+    }
+
     pub fn dev_cloud_beast(&mut self) -> String {
         if self.cloud_rows.is_none() || self.cloud_words.is_none() {
             return "The Cloud Beast's monster rows are not on this disc".into();
@@ -13159,6 +13236,65 @@ pub const FLASH_COLOUR: [[f32; 3]; 15] = [[1.5, 0.5, 0.5]; 15];
 /// The colour slot vectors of a record's 15 colour words: (byte 0, byte 1, byte 2) / 255.
 /// The block slot of the Cloud Beast test spawn (no region load uses it).
 const CLOUD_SLOT: u8 = 240;
+/// Where a developer-menu boss fight puts the hero after the load.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Place {
+    /// The world's entry record (the load's own arrival).
+    Entry(usize),
+    /// The middle of the volume of this trigger index (its fight starts on contact).
+    Trigger(u16),
+}
+
+/// A developer-menu boss fight (this build's tool, not part of the game): the world, the
+/// start-point index whose stages set flags and grant items as the game's own chooser does
+/// (SPEC-0035 start-point confirm; SPEC-0049 and SPEC-0024 tables 11 and 12), the walkthrough
+/// flags between that checkpoint and the fight (SPEC-0058, the step cited), gear the stages do
+/// not grant, the hero, and where the hero goes.
+#[derive(Clone, Copy, Debug)]
+pub struct BossStart {
+    pub name: &'static str,
+    pub pack: u32,
+    pub start: usize,
+    pub flags: &'static [u16],
+    pub items: &'static [u16],
+    pub roberta: bool,
+    pub place: Place,
+    pub cloud: bool,
+}
+
+/// SPEC-0035 start-point confirm: the stage ids each start index sets (index 0 sets none).
+pub const START_STAGES: [&[u16]; 9] = [&[], &[0], &[0, 1], &[0, 1, 2], &[4], &[4, 5], &[0, 1, 3], &[0, 1, 3, 6], &[0, 1, 2, 7]];
+
+/// The fights. Act 1 fights take the enlistment gear of step 7 (sword 99, armour 120).
+pub const BOSSES: &[BossStart] = &[
+    // Step 9: the Act 1 Juppie fight is due with 145 set and 82 and 83 clear; trigger 0.
+    BossStart { name: "Juppie (Act 1)", pack: 1217, start: 0, flags: &[1, 2, 17, 143, 145], items: &[99, 120], roberta: false, place: Place::Trigger(0), cloud: false },
+    // Steps 13 to 15: Cogham's raiders, then the raider leader's staged fight (trigger 1, 55 clear).
+    BossStart { name: "Raider leader (Act 1)", pack: 800, start: 5, flags: &[193, 194, 195, 197, 198, 199], items: &[99, 120], roberta: false, place: Place::Trigger(1), cloud: false },
+    // Steps 16 to 19: the glade freed (211), the load to 985 needs 212 on and 214 off; 281 clear.
+    BossStart { name: "Gnarfas", pack: 985, start: 5, flags: &[193, 194, 195, 197, 198, 199, 200, 55, 56, 201, 202, 203, 151, 204, 205, 29, 206, 208, 209, 210, 623, 211, 212, 213], items: &[99, 120], roberta: false, place: Place::Entry(0), cloud: false },
+    // Steps 28 to 33: Brightvale and Bogshot; trigger 23 starts the fight (263 clear).
+    BossStart { name: "Plague Serpent", pack: 735, start: 2, flags: &[249, 250, 68, 251, 259, 266, 260, 264, 76], items: &[], roberta: false, place: Place::Trigger(23), cloud: false },
+    // Step 35: 296 and 297 on, the load into 989 needs 298 off.
+    BossStart { name: "Black Knight", pack: 989, start: 2, flags: &[249, 250, 68, 251, 296, 297], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
+    // Step 36: the Act 3 Juppie fight (276, 277; 1217's Init sets 81 and 83 with 248 on).
+    BossStart { name: "Juppie (Act 3)", pack: 1217, start: 2, flags: &[249, 250, 276, 277], items: &[], roberta: false, place: Place::Trigger(0), cloud: false },
+    // Step 37: the mines (286); trigger 1 starts the intro.
+    BossStart { name: "Ixi Chieftain (Act 3)", pack: 864, start: 2, flags: &[249, 250, 286], items: &[], roberta: false, place: Place::Trigger(1), cloud: false },
+    // Step 38: the lair's entrance sphere (trigger 1) walks the hero into the arena.
+    BossStart { name: "Werelupe King", pack: 1246, start: 2, flags: &[249, 250, 271, 272, 273], items: &[], roberta: false, place: Place::Trigger(1), cloud: false },
+    // Step 39: the second load into 985 (66 on, 283 off, 281 set).
+    BossStart { name: "Gelert Assassin", pack: 985, start: 2, flags: &[249, 250, 64, 214, 216, 66, 281], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
+    // Steps 41 and 42: the dungeons (305, 35); the vault's arrival with 45 clear starts the fight.
+    BossStart { name: "Undead Draik", pack: 1096, start: 7, flags: &[305, 35], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
+    // Step 43: the food chute (319); trigger 6 with 320 set starts movie 52 and the fight.
+    BossStart { name: "Faerie Sisters", pack: 1122, start: 7, flags: &[305, 35, 319, 320], items: &[], roberta: false, place: Place::Trigger(6), cloud: false },
+    // Step 46: the final fight in 1432.
+    BossStart { name: "Darkest Faerie", pack: 1432, start: 8, flags: &[], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
+    // Cut content (SPEC-0010): this build's stand-in on the Juppie arena's points 101 to 106.
+    BossStart { name: "Cloud Beast (cut)", pack: 1217, start: 2, flags: &[249, 250, 276, 277, 278, 84, 5, 6], items: &[], roberta: false, place: Place::Entry(0), cloud: true },
+];
+
 
 pub fn slot_colours(words: &[u32; 15]) -> [[f32; 3]; 15] {
     words.map(|w| [(w & 0xFF) as f32 / 255.0, ((w >> 8) & 0xFF) as f32 / 255.0, ((w >> 16) & 0xFF) as f32 / 255.0])

@@ -11854,6 +11854,18 @@ pub fn entity_step(pack: u32, state: &mut GameState, talking: &dyn Fn(usize) -> 
     state.entity_tables.get_mut(&pack).map(|t| t.step(talking, walking, random)).unwrap_or_default()
 }
 
+/// A pack's AI-player activate callback (the streaming filter of its embedded block, asked with a
+/// record ordinal): Some(false) refuses the record. None: the pack registers no filter.
+/// SPEC-0041 985: flag 281 clear admits ordinals 5 (Illusen), 7 (Gnarfas) and 8 (the Werelupe
+/// King); flag 281 set admits 0 to 4 (the Gelert Assassins) and 6. The walk-mesh assignments
+/// it also makes are not reproduced.
+pub fn admits(pack: u32, ordinal: usize, s: &GameState) -> Option<bool> {
+    match pack {
+        985 => Some(if s.flag(281) { ordinal <= 4 || ordinal == 6 } else { matches!(ordinal, 5 | 7 | 8) }),
+        _ => None,
+    }
+}
+
 /// The hero-death callback of a pack (RegisterHeroDeathCallback; SPEC-0055 section 5) for a death
 /// of `hero` that the gate allows: its flag (true skips the default death) and the task's
 /// actions (empty while an earlier task of the area still runs). None: no callback is registered.

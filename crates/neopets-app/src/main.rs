@@ -226,6 +226,18 @@ fn warp(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play, pack: u32) -> R
     Ok(play)
 }
 
+/// Developer menu boss fight: a new game in the boss's world with its start flags (the stage
+/// rows of its start index and its walkthrough flags), then the stage grants, gear and placement.
+fn boss_fight(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play, b: &play::BossStart) -> Result<play::Play, String> {
+    let flags = old.boss_flags(b);
+    let mut play = play::Play::load_with_flags(disc, index, b.pack, PLAY_OUTFIT, &flags)?;
+    play.generation = old.generation + 1;
+    play.options = old.options;
+    play.cheats = old.cheats;
+    play.boss_setup(b);
+    Ok(play)
+}
+
 fn new_game(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play) -> Result<play::Play, String> {
     let mut play = play::Play::load(disc, index, PLAY_PACK, PLAY_OUTFIT)?;
     play.generation = old.generation + 1;
@@ -1486,6 +1498,20 @@ fn step_sim(
                     info!("Warped to world pack {pack}");
                 }
                 Err(e) => error!("Warp to {pack} failed: {e}"),
+            }
+        }
+        if let (Some(i), Some(archive)) = (dev.boss.take(), archive.as_deref_mut()) {
+            let b = play::BOSSES[i];
+            match boss_fight(&mut archive.disc, &archive.index, &play.play, &b) {
+                Ok(new) => {
+                    play.play = new;
+                    match archive.disc.reopen() {
+                        Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
+                        Err(e) => error!("No loader thread, streaming is off: {e}"),
+                    }
+                    info!("Boss fight: {} in {}", b.name, b.pack);
+                }
+                Err(e) => error!("Boss fight {} failed: {e}", b.name),
             }
         }
         if let (true, Some(archive)) = (quit, archive.as_deref_mut()) {
@@ -3172,6 +3198,13 @@ fn play_trace(
             std::process::exit(1)
         }
     };
+    // NEOPETS_TRACE_BOSS=n: start as the developer menu's boss fight n instead (trace only).
+    if let Some(b) = std::env::var("NEOPETS_TRACE_BOSS").ok().and_then(|v| v.parse::<usize>().ok()).and_then(|i| play::BOSSES.get(i)) {
+        match boss_fight(disc, index, &play, b) {
+            Ok(p) => play = p,
+            Err(e) => eprintln!("Boss fight {} failed: {e}", b.name),
+        }
+    }
     // `--seed N`: a fixed seed for the random stream (SPEC-0008 developer option).
     if let Some(n) = seed {
         play.rng = neopets_sim::rng::Rng::seeded(n);
