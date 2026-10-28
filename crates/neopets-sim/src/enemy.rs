@@ -5,14 +5,15 @@
 //! attack choice (Behavior 7), the distance draws (Behavior 4), the attack sequencer (Behavior 13:
 //! melee, charge and loop states), the agro tail with the leash (Behavior 23), the chase stop
 //! (Behavior 48.6), the take-hit hook (Behavior 37), the dead state (Behaviors 34 and 36) and the
-//! melee and missile defences (outers 5 to 8, with the defence hold and exit).
+//! melee and missile defences (outers 5 to 8, with the defence hold and exit), and the
+//! counter-attack choice (Behavior 14).
 //!
 //! Not covered: the alarm groups and the group alert (Behaviors 3 and 10), socialize, the global
 //! AI pause (state 20), the retarget countdown and flyer re-launch (state 22 is played but never
 //! entered), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target state 9 (it
 //! stands and notices), the alarm-group emerge of state 8, wandering in
 //! states 5 to 7 (they stand and notice), retreat home (state 14) and the distance-hide gate,
-//! the counter-attack choice (Behavior 14), the
+//! the counter-attack choice's code 5 (R-0117), the
 //! confused outer 11, the attack manager and the wait in line (outer 12), projectiles (missile
 //! slots play their strike with no shot), the grab-and-throw, theft and Mote drain,
 //! ghosts, reanimation (state 16 of rows 224, 226, 227) and drops and coins. The alerted search
@@ -65,6 +66,9 @@ pub struct Slot {
     /// The blocked-charge kind (+0x2AC), the stun range (max +0x27C, min +0x28C) and type
     /// (+0x29C) of a blocked charge.
     pub blocked_charge: i32,
+    /// The counter-attack trigger code and chance (SPEC-0038 Layout section 5, Behavior 14).
+    pub counter_trigger: i32,
+    pub counter_chance: f32,
     pub stun_max: f32,
     pub stun_min: f32,
     pub stun_type: i32,
@@ -196,6 +200,9 @@ pub struct View<'a> {
     pub hero_blocks: bool,
     /// The hero's melee swing class while it swings (swing_class), None otherwise.
     pub hero_swing: Option<u8>,
+    /// The active hero's recover window: table-B bit 0x800 on one of its playing clips this tick
+    /// (SPEC-0038 Behavior 14).
+    pub hero_recover: bool,
     /// A live hero shot's path over the look-ahead meets this enemy's body capsule, and whether
     /// any hero shot is live.
     pub missile_threat: bool,
@@ -1273,6 +1280,47 @@ impl Enemy {
         }
     }
 
+    /// Behavior 14: the counter-attack choice, every agro tick after the normal choice, with no
+    /// attackable, recovery or outer gate and no cooldown count-down. The last eligible slot (in
+    /// range, in the melee arc, cooldown below 1, its trigger code holding) wins; when it is not
+    /// already selected, one roll int[0, 100] below its chance selects it, draws its cooldown and
+    /// starts the sequencer (state 0, or 6 with a charge type); the distances are not redrawn.
+    /// Code 5 (the blocked recoil with the hero flag bit of value 4) never holds here: the hero
+    /// flag word's meaning is open (R-0117).
+    fn counter_choose(&mut self, v: &View, rng: &mut Rng) {
+        let d = len(sub(v.hero, v.position));
+        let cos = dot(v.facing, unit(sub(v.hero, v.position)));
+        let mut win = None;
+        for k in 0..4 {
+            let s = self.p.slots[k];
+            if s.kind == UNUSED || self.cooldown[k] >= 1 {
+                continue;
+            }
+            if !(s.trigger_min < d && d < s.trigger_max) || cos <= s.arc {
+                continue;
+            }
+            let holds = match s.counter_trigger {
+                1 => v.hero_recover,
+                2 => matches!(self.outer, 5 | 6) && v.hero_recover,
+                3 => matches!(self.outer, 7 | 8) && v.hero_recover,
+                4 => self.outer == 2 && self.seq == 5,
+                6 => self.outer == 10,
+                _ => false,
+            };
+            if holds {
+                win = Some(k);
+            }
+        }
+        let Some(k) = win.filter(|&k| self.selected != Some(k)) else { return };
+        let s = self.p.slots[k];
+        if (rng.range(0, 100) as f32) >= s.counter_chance {
+            return;
+        }
+        self.selected = Some(k);
+        self.cooldown[k] = rng.range(s.delay_min as i32, s.delay_max as i32);
+        self.enter(2, if s.charge == -1 { 0 } else { 6 });
+    }
+
     /// Behavior 44 missile and melee defence (before the other choices). Each starts outer 6 or
     /// 8 (missile) or 5 or 7 (melee) and sets the defence hold.
     fn defend(&mut self, v: &View, rng: &mut Rng) {
@@ -1382,6 +1430,7 @@ impl Enemy {
             self.counter = 0;
         }
         self.choose(v, rng);
+        self.counter_choose(v, rng);
         let d = len(sub(v.hero, v.position));
         let dir = unit(sub(v.hero, v.position));
         let near_waypoint = hdist(v.position, v.waypoint) <= 1.0;
@@ -1911,6 +1960,7 @@ mod tests {
             contact: false,
             hero_blocks: false,
             hero_swing: None,
+            hero_recover: false,
             missile_threat: false,
             hero_shot_live: false,
             spawn_bits: 0,
@@ -2082,6 +2132,40 @@ mod tests {
         }
         assert!(chosen);
         assert_eq!(e.seq, 1, "within range on the mesh: wind-up at once");
+    }
+
+    #[test]
+    fn counter_attack_choice() {
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(3);
+        let mut p = skeleton();
+        p.slots[1].counter_trigger = 6;
+        p.slots[1].counter_chance = 100.0;
+        p.slots[0].counter_trigger = 1;
+        p.slots[0].counter_chance = 100.0;
+        let mut e = Enemy::new(p, Spawn::default(), &mut rng);
+        let mut v = view([2.5, 0.0, 0.0], &has);
+        // Code 6 in the hit reaction (outer 10): slot 1 is chosen and the sequencer starts.
+        e.outer = 10;
+        e.counter_choose(&v, &mut rng);
+        assert_eq!((e.selected, e.outer, e.seq), (Some(1), 2, 0));
+        assert!(e.cooldown[1] >= 60);
+        // Code 1 needs the hero's recover window; slot 0 alone holds then (slot 1 is cooling).
+        let mut e = Enemy::new(e.p.clone(), Spawn::default(), &mut rng);
+        e.outer = 1;
+        e.counter_choose(&v, &mut rng);
+        assert_eq!(e.selected, None);
+        v.hero_recover = true;
+        e.counter_choose(&v, &mut rng);
+        assert_eq!(e.selected, Some(0));
+        // A chance of 0 never passes.
+        let mut e = Enemy::new(e.p.clone(), Spawn::default(), &mut rng);
+        e.p.slots[0].counter_chance = 0.0;
+        e.outer = 1;
+        for _ in 0..50 {
+            e.counter_choose(&v, &mut rng);
+        }
+        assert_eq!(e.selected, None);
     }
 
     #[test]

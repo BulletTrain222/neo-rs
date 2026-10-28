@@ -79,6 +79,10 @@ pub struct AttackSlot {
     /// chance, +0x38C/+0x39C status range, +0x43C visual kind, +0x44C/+0x45C area duration and
     /// radius, +0x3CC + 2k spawn key).
     pub blocked_charge: i32,
+    /// Counter Attack Trigger (+0x22C, codes 1 to 6) and Counter Attack Chance (+0x23C, a
+    /// percent; SPEC-0038 Layout section 5).
+    pub counter_trigger: i32,
+    pub counter_chance: f32,
     pub stun_max: f32,
     pub stun_min: f32,
     pub stun_type: i32,
@@ -224,6 +228,8 @@ impl MonsterTable {
             loop_max: w(0x4BC + 4 * k) as i32,
             loop_hold: f(0x4CC + 4 * k),
             blocked_charge: w(0x2AC + 4 * k) as i32,
+            counter_trigger: w(0x22C + 4 * k) as i32,
+            counter_chance: f(0x23C + 4 * k),
             stun_max: f(0x27C + 4 * k),
             stun_min: f(0x28C + 4 * k),
             stun_type: w(0x29C + 4 * k) as i32,

@@ -7790,6 +7790,7 @@ impl Play {
             _ => self.r_attack.as_ref().map(|a| a.sub),
         };
         let hero_swing = swing_sub.and_then(|s| enemy::swing_class(self.hero_index, s));
+        let hero_recover = self.hero.frame_bits() & 0x800 != 0;
         let shot_paths: Vec<([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect();
         let guarding = self.loco.state == hero_states::GUARD;
         // SPEC-0007 Hit reaction and invulnerability / SPEC-0036 Hittable predicate: no common
@@ -7869,6 +7870,7 @@ impl Play {
             // The missile defence: each live hero shot's path from its position to position +
             // velocity x the defend time (ticks) against the enemy's body capsule.
             v.hero_swing = hero_swing;
+            v.hero_recover = hero_recover;
             v.hero_shot_live = !shot_paths.is_empty();
             let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
             let look = e.p.defence.hold.max(0) as f32;
@@ -12492,6 +12494,8 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         loop_max: s.loop_max,
         loop_hold: s.loop_hold,
         blocked_charge: s.blocked_charge,
+        counter_trigger: s.counter_trigger,
+        counter_chance: s.counter_chance,
         stun_max: s.stun_max,
         stun_min: s.stun_min,
         stun_type: s.stun_type,
@@ -12590,6 +12594,7 @@ fn enemy_view<'a>(
         contact,
         hero_blocks: false,
         hero_swing: None,
+        hero_recover: false,
         missile_threat: false,
         hero_shot_live: false,
         spawn_bits: 0,
