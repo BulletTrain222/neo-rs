@@ -83,6 +83,13 @@ pub struct AttackSlot {
     /// percent; SPEC-0038 Layout section 5).
     pub counter_trigger: i32,
     pub counter_chance: f32,
+    /// The steal of the slot (SPEC-0029 Layout section 4, Behavior 11a): its amount range
+    /// (+0x3DC, +0x3EC), selector (+0x3FC: 0 Neopoints, 1 to 3 items) and chance in percent
+    /// (+0x40C); enabled by flag bit 0x04.
+    pub steal_min: i32,
+    pub steal_max: i32,
+    pub steal_selector: u32,
+    pub steal_chance: f32,
     pub stun_max: f32,
     pub stun_min: f32,
     pub stun_type: i32,
@@ -246,6 +253,10 @@ impl MonsterTable {
             blocked_charge: w(0x2AC + 4 * k) as i32,
             counter_trigger: w(0x22C + 4 * k) as i32,
             counter_chance: f(0x23C + 4 * k),
+            steal_min: w(0x3DC + 4 * k) as i32,
+            steal_max: w(0x3EC + 4 * k) as i32,
+            steal_selector: w(0x3FC + 4 * k),
+            steal_chance: f(0x40C + 4 * k),
             stun_max: f(0x27C + 4 * k),
             stun_min: f(0x28C + 4 * k),
             stun_type: w(0x29C + 4 * k) as i32,

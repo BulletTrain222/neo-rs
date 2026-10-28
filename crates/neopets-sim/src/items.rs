@@ -468,6 +468,19 @@ pub fn item_roll(group: Option<&Group>, subs: &[Vec<(u16, i16)>], index: &mut dy
 }
 
 /// The exact greedy coin split over the denominations (100, 25, 10, 5, 1), as coin ids.
+/// SPEC-0029 Behavior 11a, the Neopoint steal of an enemy attack (after its impact gate): a
+/// chance roll r in 0..=100 succeeds when r < chance; the amount is `min` when the bounds are
+/// equal, else a draw between them (swapped when reversed), both included; the amount taken is
+/// at most the wallet. None when the roll fails (no amount is drawn).
+pub fn steal_amount(chance: f32, min: i32, max: i32, wallet: i32, rng: &mut crate::rng::Rng) -> Option<i32> {
+    let r = rng.range(0, 100);
+    if (r as f32) >= chance {
+        return None;
+    }
+    let amount = if min == max { min } else { rng.range(min.min(max), min.max(max)) };
+    Some(amount.min(wallet.max(0)).max(0))
+}
+
 pub fn coin_split(amount: i32, denominations: &[i32], ids: &[u16]) -> Vec<u16> {
     let mut out = Vec::new();
     let mut left = amount.max(0);
@@ -490,6 +503,24 @@ pub fn luck_passes(luck: i32, r: i32) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn steal_rules() {
+        let mut rng = crate::rng::Rng::seeded(7);
+        // Chance 0 never steals; chance 101 always does, within the range and the wallet.
+        assert_eq!(super::steal_amount(0.0, 10, 100, 500, &mut rng), None);
+        for _ in 0..50 {
+            let a = super::steal_amount(101.0, 10, 100, 500, &mut rng).unwrap();
+            assert!((10..=100).contains(&a));
+            assert_eq!(super::steal_amount(101.0, 100, 10, 30, &mut rng).map(|a| a <= 30), Some(true));
+        }
+        // Equal bounds take that amount; an empty wallet gives 0.
+        assert_eq!(super::steal_amount(101.0, 0, 0, 500, &mut rng), Some(0));
+        assert_eq!(super::steal_amount(101.0, 10, 100, 0, &mut rng), Some(0));
+        // About half of the rolls succeed at chance 50 (50 of 101).
+        let hits = (0..2000).filter(|_| super::steal_amount(50.0, 10, 100, 500, &mut rng).is_some()).count();
+        assert!((900..1100).contains(&hits), "{hits}");
+    }
+
     use super::*;
 
     const COINS: CoinWords = CoinWords { launch: 16.0, gravity: -40.0, restitution: -0.65, stop: 1.0, rest: 0.6, damping: 0.98, spin_damping: 0.98, horizontal: 2.0 };

@@ -3309,6 +3309,10 @@ fn play_trace(
             }
         }
     }
+    // NEOPETS_TRACE_NP=n: the wallet starts at n Neopoints (diagnostic).
+    if let Some(n) = std::env::var("NEOPETS_TRACE_NP").ok().and_then(|v| v.trim().parse::<i32>().ok()) {
+        play.state.neopoints = n;
+    }
     // NEOPETS_TRACE_BOSS=n: start as the developer menu's boss fight n instead (trace only).
     if let Some(b) = std::env::var("NEOPETS_TRACE_BOSS").ok().and_then(|v| v.parse::<usize>().ok()).and_then(|i| play::BOSSES.get(i)) {
         match boss_fight(disc, index, &play, b) {

@@ -8814,6 +8814,23 @@ impl Play {
                 self.hero_status(neopets_sim::status::POISON as i32, -1);
             }
             let died = self.hero_hit(damage, s.knockback, s.blocked, f, format!("slot {}{}", s.slot, if s.blocked { ", blocked" } else { "" }));
+            // SPEC-0029 Behavior 11a: a landed hit of a slot with the steal bit (0x04) and
+            // selector 0 may take Neopoints, dropped at once as coins at the hero (the Thief, the
+            // Rogue and the Thug). A blocked hit is taken as failing the impact gate (Open
+            // question 157). The item branch (selectors 1 to 3, the Crokabeks) is not built.
+            let slot = self.characters.iter().find(|c| c.id == at).and_then(|c| c.enemy.as_ref()).map(|e| e.p.slots[s.slot]);
+            if let Some(sl) = slot.filter(|sl| !s.blocked && sl.flags & 0x04 != 0 && sl.steal_selector == 0) {
+                if let Some(taken) = neopets_sim::items::steal_amount(sl.steal_chance, sl.steal_min, sl.steal_max, self.state.neopoints, &mut self.rng).filter(|&t| t > 0) {
+                    self.state.neopoints -= taken;
+                    let pack = self.world.pack;
+                    let p = self.loco.position();
+                    let spawn = |id: u16| neopets_sim::items::Spawn { id, point: [p[0], p[1] + 1.0, p[2]], placed: false, charm: false, s0: 0.25, s1: 1.0, delay: 0.0, larg: -1.0, direction: None, flag: 0, map: 0, price: 0 };
+                    for id in neopets_sim::items::coin_split(taken, &self.coins.0, &self.coins.1) {
+                        self.spawn_item(pack, spawn(id));
+                    }
+                    self.last_fx = format!("stole {taken} Neopoints (slot {}) on tick {}", s.slot, self.ticks);
+                }
+            }
             // SPEC-0038 Behavior 13 strike test: the status roll int[0, 100] strictly below the
             // chance, for int[int(range max), int(range min)] / 60 whole seconds.
             if status.0 != -1 && !s.blocked {
@@ -13483,6 +13500,10 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         blocked_charge: s.blocked_charge,
         counter_trigger: s.counter_trigger,
         counter_chance: s.counter_chance,
+        steal_min: s.steal_min,
+        steal_max: s.steal_max,
+        steal_selector: s.steal_selector,
+        steal_chance: s.steal_chance,
         stun_max: s.stun_max,
         stun_min: s.stun_min,
         stun_type: s.stun_type,

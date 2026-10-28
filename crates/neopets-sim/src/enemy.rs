@@ -69,6 +69,11 @@ pub struct Slot {
     /// The counter-attack trigger code and chance (SPEC-0038 Layout section 5, Behavior 14).
     pub counter_trigger: i32,
     pub counter_chance: f32,
+    /// The slot's Neopoint steal (SPEC-0029 Behavior 11a): range, selector and chance.
+    pub steal_min: i32,
+    pub steal_max: i32,
+    pub steal_selector: u32,
+    pub steal_chance: f32,
     pub stun_max: f32,
     pub stun_min: f32,
     pub stun_type: i32,
