@@ -3,7 +3,7 @@
 //! (deadly-ground respawn) with their 1.5 s rule, the deadly-ground kill test, the state-60
 //! penalty, and the game-over page's pass counter and exit test.
 //!
-//! Not covered: death callbacks (no level registers one yet), the partner (Roberta is not
+//! Death callbacks are level::on_hero_death. Not covered: the partner (Roberta is not
 //! playable, so the switch request is always refused), the death camera (mode 8), effects and
 //! sounds, the hurting surface and the deep overlay, and the front end behind the game-over page
 //! (the card state, countdown, attract and title; the session snapshot of Continue).

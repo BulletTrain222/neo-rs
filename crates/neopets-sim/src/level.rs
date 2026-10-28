@@ -1493,7 +1493,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 5, region 1377) into slot 1 and the round's set t (4 to 0 by flags 599 to 596, region
         // 1372 + t) into slot 0, then the round intro (here the fade in after the loads and line
         // H1; the scene's moves and cameras are Medium in the spec and not reproduced) and entity
-        // 30's walk to locator 15 and loop 55. The hero-death callback is not built.
+        // 30's walk to locator 15 and loop 55. The hero-death callback is on_hero_death.
         1371 if state.blackboard.get(&(2, 157)) == Some(&20) => {
             state.set_word(pack, 4, 1);
             let t = [(599, 4), (598, 3), (597, 2), (596, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, t)| t);
@@ -1557,7 +1557,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // kill zones (S0, 0 to 10), S11 to S14, the levers (15, 18, 16, 17); flag 0 is clear in
         // play: object 9 off, effect 3 stopped, swap mode 3. Checkpoint words 21 and 22 start at
         // locator 0 and camera 2; the sounds of objects 3 and 4 (13, 0.0 to 1.0). The dead-hero
-        // revive and the hero-death callback are not reproduced.
+        // revive is not reproduced; the hero-death callback is on_hero_death.
         1394 => {
             let mut v: Vec<Action> = [3, 4, 5, 6, 10, 12, 14, 16, 1].map(|obj| Action::InitObjOn { obj, end: false }).to_vec();
             v.extend([7, 8].map(|obj| Action::InitObjOn { obj, end: true }));
@@ -7675,7 +7675,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1432, 1) if call.object && state.word(pack, 1) & 1 << 8 != 0 => state.set_word(pack, 1, state.word(pack, 1) | 1 << 4),
         // SPEC-0043 1122 trigger 5 (entering, 320 clear, once per load): the opening (cameras 4
         // and 5, objects 1, 2, 0, 4 and 5), then wave 1 (set 3 into slot 1, AIs 11 to 13
-        // aggressive); Update runs the next waves and the end. DisableInvisibility is not built.
+        // aggressive); Update runs the next waves and the end.
         (1122, 5) if call.object && call.state == 1 && !state.flag(320) && state.word(pack, 1) == 0 => {
             state.set_word(pack, 1, 1);
             out.actions.extend([
@@ -11417,7 +11417,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // the word back to -1.
         // Watcher V (arena rounds): every character of the round slot dead: 1 s, the win scene
         // H5, swap mode 2, the won result for eW 157 and its load (pack 1350). The loss (both
-        // heroes dead) needs the hero-death callback, which is not built.
+        // heroes dead) comes from the hero-death callback (on_hero_death, word 6).
         1371 if state.word(pack, 4) == 1 => {
             // The round lost (both heroes down): 595, swap mode 2, the lost result for eW 157 and
             // its load. The loss scene (Medium in the spec) is not reproduced.
@@ -13450,7 +13450,7 @@ fn castle_stage(s: &GameState) -> u16 {
 /// slot thread's loads (31: j 1; 30: j 9 and j 0; 501 with item 72 not held and 503 and 504
 /// clear: j 21), the module word that blocks teleport 6 when s is 31, and the story triggers 4,
 /// 5, 6, 9 and 10 (routines 4, 5, 6, 9, 10) and the switches 17 to 20 (routines 17 to 20). The
-/// objects, effects, navmesh steps and the hero-death callback are not built.
+/// objects, effects and navmesh steps are not built; the hero-death callback is on_hero_death.
 fn castle_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     state.set(21, true);
