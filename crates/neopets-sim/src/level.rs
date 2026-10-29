@@ -5190,11 +5190,15 @@ fn arena_1246(s: &mut GameState) -> Vec<Action> {
         s.set(273, true);
         v.push(Action::Sleep { ticks: 60 });
     } else if s.flag(273) {
-        // The reward: movie 42 (counted as played), swap mode 2, the hero outside the arena,
-        // item 14 and line 1.
-        s.queue_movie(42);
-        s.set_level(8, true);
+        // The death scene and reward, in the order of SPEC-0039 1246 branch 2: the King's death
+        // loop (27) for 1.3 s, the fade out, movie 42 the first time, level state 8, and only then
+        // the King and entities 17 to 24 removed; swap mode 2, the hero outside the arena, item
+        // 14 and line 1. The boss-fight tweak (encounter 14, stage 1) is not reproduced.
         v.extend([Action::EntityAnim { entity: 16, anim: 27, looped: true, wait: false }, wait(1.3), Action::FadeOut { seconds: 1.0, wait: true }]);
+        if !s.movies.contains(&42) {
+            v.push(Action::PlayFmv { movie: 42 });
+        }
+        v.push(Action::LevelState { flag: 8, on: true });
         off(&mut v);
         v.extend([
             Action::SwapMode { mode: 2 },
@@ -15885,8 +15889,14 @@ mod tests {
         // Vector 3: 273 set, 8 clear: item 14 once, swap mode 2, level state 8, locator 9.
         s.set_word(1246, 1, 0);
         s.set(273, true);
+        // The order: the death loop, the fade, movie 42, level state 8, then the King removed.
         let r = on_trigger(1246, 2, fire, &mut s).actions;
-        assert!(r.contains(&Action::GiveItem { item: 14, count: 1 }) && r.contains(&Action::SwapMode { mode: 2 }) && r.contains(&Action::MoveHero { locator: 9 }) && s.level(8));
+        assert!(r.contains(&Action::GiveItem { item: 14, count: 1 }) && r.contains(&Action::SwapMode { mode: 2 }) && r.contains(&Action::MoveHero { locator: 9 }));
+        let at = |a: &Action| r.iter().position(|x| x == a).unwrap();
+        assert!(at(&Action::FadeOut { seconds: 1.0, wait: true }) < at(&Action::PlayFmv { movie: 42 }));
+        assert!(at(&Action::PlayFmv { movie: 42 }) < at(&Action::LevelState { flag: 8, on: true }));
+        assert!(at(&Action::LevelState { flag: 8, on: true }) < at(&Action::DeactivateEntity { entity: 16 }));
+        s.set_level(8, true);
         // Vector 4: 273 and 8 set: entities 16 to 24 off, no item.
         s.set_word(1246, 1, 0);
         let r = on_trigger(1246, 2, fire, &mut s).actions;

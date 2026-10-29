@@ -10869,9 +10869,9 @@ impl Play {
                 }
             }
             c.hp -= act.hp_loss;
-            if act.remove {
-                c.dying = Some(1);
-            }
+            // A dead sister is not removed (SPEC-0011 item 10): at the end of her death clip she
+            // stays on its last frame and her loop keeps running (stepping the drain).
+            let _ = act.remove;
             if std::mem::discriminant(&before) != std::mem::discriminant(&after) {
                 self.last_boss = format!("{} {:?} -> {:?} (hp {}, alive {}, shield {}) on tick {}", c.name, before, after, c.hp, self.sister_group.alive, self.sister_group.shielded, self.ticks);
             }
