@@ -102,6 +102,7 @@ impl Movies {
 /// the frame that queued them already shows the movie screen (SPEC-0026: the movie step runs
 /// at the end of the pass).
 pub fn collect(mut movies: Option<ResMut<Movies>>, mut play: Option<ResMut<crate::PlayState>>, mut menu: Option<ResMut<crate::menu_view::Menu>>, settings: Res<crate::display::DisplaySettings>) {
+    let _span = crate::perf::span("collect");
     let Some(mv) = movies.as_deref_mut() else { return };
     mv.off = !settings.movies;
     if let Some(m) = menu.as_deref_mut() {
@@ -139,6 +140,7 @@ pub fn spawn_screen(mut commands: Commands) {
 }
 
 pub fn sync_screen(movies: Option<Res<Movies>>, mut screen: Query<&mut Visibility, With<MovieScreen>>, mut caption: Query<&mut Text, With<MovieCaption>>) {
+    let _span = crate::perf::span("sync_screen");
     let text = movies.as_deref().and_then(Movies::caption);
     for mut v in &mut screen {
         let want = if text.is_some() { Visibility::Inherited } else { Visibility::Hidden };
@@ -157,6 +159,7 @@ pub fn sync_screen(movies: Option<Res<Movies>>, mut screen: Query<&mut Visibilit
 
 /// While a movie plays every game sound is paused; when the queue is done they resume.
 pub fn hush(movies: Option<Res<Movies>>, mut sinks: Query<&mut bevy::audio::AudioSink>, mut was: Local<bool>) {
+    let _span = crate::perf::span("hush");
     use bevy::audio::AudioSinkPlayback;
     let now = movies.is_some_and(|m| m.current.is_some() || !m.queue.is_empty());
     if now {

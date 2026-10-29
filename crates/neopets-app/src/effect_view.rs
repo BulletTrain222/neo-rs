@@ -31,6 +31,7 @@ pub fn sync_trails(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let _span = crate::perf::span("sync_trails");
     let Some(state) = state else { return };
     let play = &state.play;
     let (mut positions, mut uvs, mut colours, mut indices) = (Vec::new(), Vec::new(), Vec::new(), Vec::new());
@@ -105,6 +106,7 @@ pub fn sync_effects(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let _span = crate::perf::span("sync_effects");
     let Some(state) = state else { return };
     let Some(camera) = cameras.iter().next() else { return };
     let (right, up) = (camera.right().as_vec3(), camera.up().as_vec3());

@@ -193,6 +193,7 @@ pub fn sync_bushes(
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     mut parts: Query<(&PatchPart, Option<&BushPart>, Option<&FoliageLod>, &mut Transform, &mut Visibility), Without<Camera3d>>,
 ) {
+    let _span = crate::perf::span("sync_bushes");
     let Some(state) = state else { return };
     let eye = cameras.iter().next().map(|c| c.translation());
     let original = settings.original_foliage;

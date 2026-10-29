@@ -476,6 +476,7 @@ impl Streamer {
 
 /// Send the pending step's request to the loader and install finished loads.
 fn stream_worlds(play: Option<ResMut<PlayState>>, streamer: Option<ResMut<Streamer>>) {
+    let _span = crate::perf::span("stream_worlds");
     let (Some(mut state), Some(mut streamer)) = (play, streamer) else { return };
     for line in streamer.pump(&mut state.play) {
         info!("{line}");
@@ -879,6 +880,8 @@ fn main() {
                     .unwrap_or((1000, 600))
                     .into(),
                 visible: !smoke_test,
+                // NEOPETS_PERF_NOVSYNC: no vsync, to measure the real frame cost (diagnostic).
+                present_mode: if std::env::var_os("NEOPETS_PERF_NOVSYNC").is_some() { bevy::window::PresentMode::AutoNoVsync } else { bevy::window::PresentMode::AutoVsync },
                 ..default()
             }),
             ..default()
@@ -919,6 +922,9 @@ fn main() {
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     app.add_systems(Update, button_style::apply);
+    if perf::perf_enabled() {
+        app.init_resource::<perf::PerfLog>().add_systems(First, perf::perf_first).add_systems(Last, perf::perf_last);
+    }
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
@@ -1112,6 +1118,7 @@ fn read_input(
     gamepads: Query<&Gamepad>,
     mut driver: ResMut<SimDriver>,
 ) {
+    let _span = crate::perf::span("read_input");
     // The bound movement keys, and the gamepads' left sticks (not while the bindings page is up).
     let sticks: Vec<Vec2> = if mute.0 { Vec::new() } else { gamepads.iter().map(|g| g.left_stick()).collect() };
     driver.input = movement(pad.movement, sticks);
@@ -1133,6 +1140,7 @@ fn step_sim(
     mut dev: ResMut<dev_menu::DevMenu>,
     mut movies: Option<ResMut<movie_view::Movies>>,
 ) {
+    let _span = crate::perf::span("step_sim");
     let mut elapsed = time.delta().as_nanos().min(u64::MAX as u128) as u64;
     // SPEC-0026 Movies: the movies queued last frame play now, and while one plays the whole
     // game loop waits (no ticks, no input to the game).
@@ -1582,6 +1590,7 @@ fn step_sim(
 }
 
 fn browse_resources(keys: Res<ButtonInput<KeyCode>>, mut browser: ResMut<Browser>) {
+    let _span = crate::perf::span("browse_resources");
     const DIGITS: [(KeyCode, KeyCode, char); 10] = [
         (KeyCode::Digit0, KeyCode::Numpad0, '0'),
         (KeyCode::Digit1, KeyCode::Numpad1, '1'),
@@ -1633,6 +1642,7 @@ fn orbit_camera(
     play: Option<Res<PlayState>>,
     mut cameras: Query<(&mut Orbit, &mut Transform)>,
 ) {
+    let _span = crate::perf::span("orbit_camera");
     // In play mode the follow camera owns the view.
     if play.is_some() {
         return;
@@ -1671,6 +1681,7 @@ fn orbit_camera(
 
 /// F6 shows or hides the developer info panel (Tab is the game's Start key).
 fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<Hud>>) {
+    let _span = crate::perf::span("toggle_hud");
     if keys.just_pressed(KeyCode::F6) {
         for mut node in &mut huds {
             node.display = match node.display {
@@ -1682,6 +1693,7 @@ fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<H
 }
 
 fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Query<&mut Text, With<SimText>>) {
+    let _span = crate::perf::span("show_sim");
     let d = &*driver;
     let play_line = play
         .map(|p| format!("{}\n{}\n{}\n", p.play.status(), p.play.status_camera(), p.play.status_worlds()))
@@ -1711,6 +1723,7 @@ fn show_browser(
     mut texts: Query<&mut Text, With<BrowserText>>,
     play_request: Option<Res<PlayRequest>>,
 ) {
+    let _span = crate::perf::span("show_browser");
     let Some(mut archive) = archive else {
         for mut text in &mut texts {
             text.0 = "RESOURCE BROWSER\nNo validated ISO, so the archive is unavailable.".into();
@@ -1802,6 +1815,7 @@ fn show_browser(
 }
 
 fn cycle_textures(keys: Res<ButtonInput<KeyCode>>, mut textures: ResMut<TextureView>) {
+    let _span = crate::perf::span("cycle_textures");
     let len = textures.images.len();
     if len < 2 {
         return;
@@ -1830,6 +1844,7 @@ fn apply_texture(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let _span = crate::perf::span("apply_texture");
     if play.is_some() {
         for (_, _, mut visibility) in &mut quads {
             if *visibility != Visibility::Hidden {
@@ -1867,6 +1882,7 @@ fn toggle_view(
     mut models: ResMut<ModelView>,
     mut textures: ResMut<TextureView>,
 ) {
+    let _span = crate::perf::span("toggle_view");
     if keys.just_pressed(KeyCode::KeyV) && models.data.is_some() {
         models.show_model = !models.show_model;
         models.dirty = true;
@@ -1904,6 +1920,7 @@ fn apply_model(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let _span = crate::perf::span("apply_model");
     if !models.dirty {
         return;
     }
@@ -1959,6 +1976,7 @@ struct ObjectRoot(u32, usize);
 /// SPEC-0033 Behavior 1C step 4: the motor send of the last tick goes to pad 0's large motor
 /// (the first connected controller's strong motor) for its countdown, replacing what it played.
 fn send_rumble(state: Option<ResMut<PlayState>>, gamepads: Query<Entity, With<Gamepad>>, mut out: MessageWriter<bevy::input::gamepad::GamepadRumbleRequest>) {
+    let _span = crate::perf::span("send_rumble");
     let Some(mut state) = state else { return };
     let Some(send) = state.play.motor.take() else { return };
     let Some(gamepad) = gamepads.iter().min() else { return };
@@ -1979,6 +1997,7 @@ struct BlockRoot(u32, usize);
 /// Movable blocks draw their mesh (local, about the base centre) at the block position with
 /// axis B as its x and axis A as its z.
 fn sync_blocks(state: Option<Res<PlayState>>, mut roots: Query<(&BlockRoot, &mut Transform)>) {
+    let _span = crate::perf::span("sync_blocks");
     let Some(state) = state else { return };
     for (b, mut t) in &mut roots {
         if let Some(m) = state.play.block_matrix(b.0, b.1) {
@@ -1993,6 +2012,7 @@ struct BreakableRoot(u32, usize);
 
 /// Breakables are drawn in states 1 and 3 with their own matrix (SPEC-0048 Breakable draw).
 fn sync_breakables(state: Option<Res<PlayState>>, mut roots: Query<(&BreakableRoot, &mut Visibility)>) {
+    let _span = crate::perf::span("sync_breakables");
     let Some(state) = state else { return };
     for (b, mut vis) in &mut roots {
         let want = if state.play.breakable_matrix(b.0, b.1).is_some() { Visibility::Visible } else { Visibility::Hidden };
@@ -2003,6 +2023,7 @@ fn sync_breakables(state: Option<Res<PlayState>>, mut roots: Query<(&BreakableRo
 }
 
 fn sync_objects(state: Option<Res<PlayState>>, mut roots: Query<(&ObjectRoot, &mut Transform, &mut Visibility)>) {
+    let _span = crate::perf::span("sync_objects");
     let Some(state) = state else { return };
     for (o, mut t, mut vis) in &mut roots {
         match state.play.object_matrix(o.0, o.1) {
@@ -2030,6 +2051,7 @@ fn sync_worlds(
     mut images: ResMut<Assets<Image>>,
     mut shown: Local<Vec<WorldPart>>,
 ) {
+    let _span = crate::perf::span("sync_worlds");
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
     let p = &state.play;
     let mask = |pack: u32| p.display_mask.get(&pack).copied().unwrap_or(0);
@@ -2301,6 +2323,7 @@ struct UvFlip(neopets_data::material::Flipbook);
 /// Each frame: a flipbook part's UV offset is its cell at the render frame counter (the play
 /// tick, which holds under a pause as the cells do).
 fn sync_uv_flip(state: Option<Res<PlayState>>, parts: Query<(&UvFlip, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let _span = crate::perf::span("sync_uv_flip");
     let Some(state) = state else { return };
     let n = state.play.ticks as u16;
     // NEOPETS_TRACE_FLIP: the flipbook parts and their offsets every 60 ticks (diagnostic).
@@ -2322,6 +2345,7 @@ struct UvScroll([f32; 2]);
 /// Each frame: a scrolling part's UV offset is frac(s x N) per axis, N the 16-bit pass counter
 /// (the play tick).
 fn sync_uv_scroll(state: Option<Res<PlayState>>, parts: Query<(&UvScroll, &MeshMaterial3d<StandardMaterial>)>, mut materials: ResMut<Assets<StandardMaterial>>) {
+    let _span = crate::perf::span("sync_uv_scroll");
     let Some(state) = state else { return };
     let n = state.play.ticks as u16;
     for (s, m) in &parts {
@@ -2376,6 +2400,7 @@ fn sync_zones(
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     settings: Res<display::DisplaySettings>,
 ) {
+    let _span = crate::perf::span("sync_zones");
     let Some(state) = state else { return };
     // The instance draw distance applies only with Distant foliage set to Original; Full (the
     // default) draws every instance at any distance.
@@ -2415,6 +2440,7 @@ fn sync_shots(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut made: Local<bool>,
 ) {
+    let _span = crate::perf::span("sync_shots");
     let Some(state) = state else { return };
     if !*made {
         *made = true;
@@ -2531,6 +2557,7 @@ fn sync_items(
     mut models: Local<std::collections::HashMap<(u32, u32), Option<Vec<(Handle<Mesh>, StandardMaterial, Option<neopets_data::material::Flipbook>)>>>>,
     mut boot: Local<Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)>>,
 ) {
+    let _span = crate::perf::span("sync_items");
     let Some(state) = state else { return };
     let p = &state.play;
     let (mesh, mats) = assets.get_or_insert_with(|| {
@@ -2700,6 +2727,7 @@ fn sync_hero_items(
     mut models: Local<std::collections::HashMap<u32, Option<([f32; 3], [f32; 3])>>>,
     mut frames: ResMut<HeroItemFrames>,
 ) {
+    let _span = crate::perf::span("sync_hero_items");
     frames.0.clear();
     let Some(state) = state else { return };
     let items = state.play.hero_items();
@@ -2782,6 +2810,7 @@ fn sync_hero_glows(
     mut phase: Local<(f32, f32)>,
     frames: Res<HeroItemFrames>,
 ) {
+    let _span = crate::perf::span("sync_hero_glows");
     let Some(state) = state else { return };
     // NEOPETS_NO_GLOW: the glow off (diagnostic).
     let glows = if std::env::var_os("NEOPETS_NO_GLOW").is_some() { Vec::new() } else { state.play.hero_glows() };
@@ -2874,6 +2903,7 @@ fn sync_attachments(
     mut images: ResMut<Assets<Image>>,
     mut spawned: Local<std::collections::HashSet<(u64, u8)>>,
 ) {
+    let _span = crate::perf::span("sync_attachments");
     let Some(state) = state else { return };
     let p = &state.play;
     let frames: std::collections::HashMap<(u64, u8), neopets_data::anim::Affine> = p.character_attachments().into_iter().map(|(id, slot, f)| ((id, slot), f)).collect();
@@ -2927,7 +2957,10 @@ fn sync_characters(
     mut skinned: Local<std::collections::HashMap<u64, Vec<(Handle<Mesh>, usize)>>>,
     mut generation: Local<u32>,
     mut rigid: Local<std::collections::HashMap<u64, (Vec<(Handle<Mesh>, usize)>, bool)>>,
+    mut kids: Local<std::collections::HashMap<u64, (Vec<Entity>, Option<(u64, bool)>)>>,
+    seen: Query<&ViewVisibility>,
 ) {
+    let _span = crate::perf::span("sync_characters");
     let Some(state) = state else { return };
     let p = &state.play;
     let live: std::collections::HashSet<u64> = p.characters.iter().map(|c| c.id).collect();
@@ -2936,6 +2969,7 @@ fn sync_characters(
     if rebuilt {
         skinned.clear();
         rigid.clear();
+        kids.clear();
     }
     for (e, root, mut t, mut vis) in &mut roots {
         if rebuilt {
@@ -2965,11 +2999,13 @@ fn sync_characters(
     }
     skinned.retain(|id, _| live.contains(id));
     rigid.retain(|id, _| live.contains(id));
+    kids.retain(|id, _| live.contains(id));
     for c in &p.characters {
         let rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
         if !skinned.contains_key(&c.id) {
             let parts = part_assets(&c.model, &mut meshes, &mut materials, &mut images);
             let mut list = Vec::new();
+            let mut spawned = Vec::new();
             commands
                 .spawn((Transform::from_translation(Vec3::from(c.position)).with_rotation(rotation), Visibility::Visible, CharacterRoot(c.id)))
                 .with_children(|ch| {
@@ -2985,10 +3021,11 @@ fn sync_characters(
                                 rigid.entry(c.id).or_default().0.push((mesh.clone(), i));
                             }
                         }
-                        ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                        spawned.push(ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY)).id());
                     }
                 });
             skinned.insert(c.id, list);
+            kids.insert(c.id, (spawned, None));
         }
         if !p.pack_drawn(c.pack) {
             continue;
@@ -3005,6 +3042,20 @@ fn sync_characters(
                 }
             }
         }
+        // Performance: the skin is rebuilt only for a drawn character (not inactive or
+        // hiding), when one of its meshes was on screen last frame (or it has never been
+        // skinned), and when a game tick has run or its flash changed since the last skin.
+        let hidden = c.inactive || c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action));
+        let Some((children, stamp)) = kids.get_mut(&c.id) else { continue };
+        let now = (p.ticks, c.flash > 0);
+        let on_screen = children.iter().any(|&k| seen.get(k).is_ok_and(|v| v.get()));
+        // NEOPETS_PERF_NOSKIP: skin every character every frame, as before (diagnostic).
+        static NOSKIP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let noskip = *NOSKIP.get_or_init(|| std::env::var_os("NEOPETS_PERF_NOSKIP").is_some());
+        if !noskip && (hidden || (stamp.is_some() && (!on_screen || *stamp == Some(now)))) {
+            continue;
+        }
+        *stamp = Some(now);
         let matrices = c.anim.skin_matrices();
         let tint = p.status_tint(Some(c.id));
         let lights = p.lights(Some(c.id), c.position);
@@ -3040,6 +3091,7 @@ fn sync_cloud_fx(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
+    let _span = crate::perf::span("sync_cloud_fx");
     const N: usize = 19;
     let Some(state) = state else { return };
     let p = &state.play;
@@ -3244,6 +3296,7 @@ fn relight(part: &neopets_data::model::MeshPart, normals: &[[f32; 3]], rotation:
 }
 
 fn choose_action(keys: Res<ButtonInput<KeyCode>>, mut models: ResMut<ModelView>) {
+    let _span = crate::perf::span("choose_action");
     let Some(hero) = models.hero.as_mut() else { return };
     let a = hero.action();
     if keys.just_pressed(KeyCode::Equal) {
@@ -3255,6 +3308,7 @@ fn choose_action(keys: Res<ButtonInput<KeyCode>>, mut models: ResMut<ModelView>)
 
 /// Re-skin the hero's layout-A parts from its current pose (CPU skinning, every frame).
 fn skin_hero(models: Res<ModelView>, mut meshes: ResMut<Assets<Mesh>>) {
+    let _span = crate::perf::span("skin_hero");
     let (Some(hero), Some(data)) = (&models.hero, &models.data) else { return };
     if !models.showing() {
         return;
@@ -4511,6 +4565,7 @@ fn play_frame(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
 ) {
+    let _span = crate::perf::span("play_frame");
     let Some(mut state) = play else { return };
     let p = state.play.loco.position();
     let f = state.play.loco.facing;
@@ -4597,6 +4652,7 @@ fn sync_fade(
     mut overlay: Query<(&mut BackgroundColor, &mut Visibility), With<FadeOverlay>>,
     mut bars: Query<(&mut Node, &mut Visibility), (With<LetterBar>, Without<FadeOverlay>)>,
 ) {
+    let _span = crate::perf::span("sync_fade");
     let Some(state) = play else { return };
     if bars.is_empty() {
         for top in [true, false] {

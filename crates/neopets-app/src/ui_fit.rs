@@ -20,6 +20,7 @@ pub enum FitToWindow {
 
 /// After UI layout: each FitToWindow node's scale and the shift that keeps its anchor.
 pub fn fit_to_window(windows: Query<&Window, With<bevy::window::PrimaryWindow>>, mut nodes: Query<(&ComputedNode, &FitToWindow, &mut UiTransform)>) {
+    let _span = crate::perf::span("fit_to_window");
     let Ok(win) = windows.single() else { return };
     for (node, fit, mut t) in &mut nodes {
         let size = node.size() * node.inverse_scale_factor();

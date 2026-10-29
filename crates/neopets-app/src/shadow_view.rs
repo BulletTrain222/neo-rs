@@ -33,7 +33,7 @@ impl Plugin for ShadowPlugin {
         app.add_plugins((MaterialPlugin::<ShadowSubtract>::default(), MaterialPlugin::<ShadowAdd>::default()));
         // The sun's shadow map: 4096 texels a cascade (Bevy's default 2048 left the characters'
         // shadows soft and faint).
-        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: sun_tuning().0 as usize });
         app.add_systems(PostUpdate, extend_cascades.after(bevy::light::SimulationLightSystems::UpdateDirectionalLightCascades).before(bevy::light::SimulationLightSystems::UpdateLightFrusta));
     }
 }
@@ -109,6 +109,7 @@ pub fn sync_shadows(
     mut parts: Query<(&VolumeMesh, &Mesh3d, &mut Visibility)>,
     mut made: Local<Option<(Handle<ShadowSubtract>, Handle<ShadowAdd>)>>,
 ) {
+    let _span = crate::perf::span("sync_shadows");
     let f = FACTORS[settings.char_shadows.min(FACTORS.len() - 1)];
     let (down, up) = (Vec4::splat(f), Vec4::splat(1.0 / f));
     let Some(state) = state else { return };
@@ -158,13 +159,14 @@ pub fn sync_shadows(
 pub struct Sun;
 
 pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, settings: Res<crate::display::DisplaySettings>, mut suns: Query<(&mut Transform, &mut Visibility), With<Sun>>, mut made: Local<bool>) {
+    let _span = crate::perf::span("sync_sun");
     if !*made {
         *made = true;
         commands.spawn((
             // Smaller biases than Bevy's (0.02 depth, 1.8 normal texels) keep a character's
             // shadow at its feet with the finer map.
             DirectionalLight { illuminance: crate::graphics::sun_illuminance(), shadow_maps_enabled: true, shadow_depth_bias: 0.01, shadow_normal_bias: 0.9, ..default() },
-            bevy::light::CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: 200.0, first_cascade_far_bound: 20.0, ..default() }.build(),
+            bevy::light::CascadeShadowConfigBuilder { num_cascades: sun_tuning().1 as usize, maximum_distance: sun_tuning().2, first_cascade_far_bound: 20.0, ..default() }.build(),
             Transform::default(),
             Visibility::Hidden,
             Sun,
@@ -193,6 +195,22 @@ pub struct CasterOff;
 /// How far each cascade's culling box reaches back toward the sun, in world units.
 const CASTER_REACH: f32 = 500.0;
 
+/// The sun's shadow map size, cascade count, shadow distance and caster reach;
+/// NEOPETS_SUN="size,cascades,distance,reach" overrides them (diagnostic).
+fn sun_tuning() -> (f32, f32, f32, f32) {
+    static T: std::sync::OnceLock<(f32, f32, f32, f32)> = std::sync::OnceLock::new();
+    *T.get_or_init(|| {
+        let mut t = (4096.0, 3.0, 200.0, CASTER_REACH);
+        if let Ok(v) = std::env::var("NEOPETS_SUN") {
+            let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if let [a, b, c, d] = n[..] {
+                t = (a, b, c, d);
+            }
+        }
+        t
+    })
+}
+
 /// Bevy fits each cascade's depth range to its slice of the camera's view, so a caster between
 /// the sun and that range (a tall tree beside the path) was cut from the near cascade: the
 /// ground close to the camera came out lit inside the tree's shadow, a wedge with straight edges
@@ -209,10 +227,11 @@ fn extend_cascades(mut lights: Query<&mut bevy::light::Cascades>) {
                     continue;
                 }
                 let cascade_from_world = p.inverse() * k.clip_from_world;
-                let r2 = 1.0 / (1.0 / r + CASTER_REACH);
+                let reach = sun_tuning().3;
+                let r2 = 1.0 / (1.0 / r + reach);
                 let mut q = p;
                 q.z_axis.z = r2;
-                q.w_axis.z = 1.0 - r2 * CASTER_REACH;
+                q.w_axis.z = 1.0 - r2 * reach;
                 k.clip_from_cascade = q;
                 k.clip_from_world = q * cascade_from_world;
             }
@@ -234,6 +253,7 @@ pub fn mark_faint(
     materials: Res<Assets<StandardMaterial>>,
     added: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), (Or<(Added<Mesh3d>, Changed<MeshMaterial3d<StandardMaterial>>)>, Without<FaintCaster>)>,
 ) {
+    let _span = crate::perf::span("mark_faint");
     for (e, mesh, material) in &added {
         let Some(m) = materials.get(&material.0) else { continue };
         if matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)) {
@@ -264,6 +284,7 @@ pub fn sync_casters(
     mut last: Local<Option<bool>>,
     faint: Query<(), With<FaintCaster>>,
 ) {
+    let _span = crate::perf::span("sync_casters");
     let characters_only = !settings.world_shadows;
     if *last == Some(characters_only) && added.is_empty() {
         return;

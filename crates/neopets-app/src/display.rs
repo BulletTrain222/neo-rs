@@ -296,6 +296,7 @@ pub fn take_requests(
     mut settings: ResMut<DisplaySettings>,
     monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
 ) {
+    let _span = crate::perf::span("take_requests");
     let Some(mut menu) = menu else { return };
     if menu.flow.display_requests.is_empty() {
         return;
@@ -314,6 +315,7 @@ pub fn apply_window(
     monitors: Query<&bevy::window::Monitor, With<bevy::window::PrimaryMonitor>>,
     mut last: Local<Option<DisplaySettings>>,
 ) {
+    let _span = crate::perf::span("apply_window");
     let Ok(mut window) = windows.single_mut() else { return };
     // The first run keeps the window as built unless a settings file asked for something; the
     // size then starts as the window's own size in physical pixels (a scaled display makes the
@@ -367,6 +369,7 @@ pub fn sync_scene(
     mut images: ResMut<Assets<Image>>,
     mut target: ResMut<SceneTarget>,
 ) {
+    let _span = crate::perf::span("sync_scene");
     let Ok(window) = windows.single() else { return };
     let (pw, ph) = (window.physical_width() as f32, window.physical_height() as f32);
     if pw < 1.0 || ph < 1.0 {
@@ -511,6 +514,7 @@ pub fn spawn_window(mut commands: Commands) {
 /// The mouse on the Display window: hovering a row focuses it, a click on < or > changes it (a
 /// click on the row steps it forward), and Back returns to Options.
 pub fn window_mouse(menu: Option<ResMut<crate::menu_view::Menu>>, rows: Query<(&Interaction, &DispRow), Changed<Interaction>>, steps: Query<(&Interaction, &DispStep), Changed<Interaction>>) {
+    let _span = crate::perf::span("window_mouse");
     let Some(mut menu) = menu else { return };
     let flow = &mut menu.flow;
     if flow.current != crate::menus::DISPLAY {
@@ -552,6 +556,7 @@ pub fn show_window(
     mut values: Query<(&DispValue, &mut Text), (Without<DispLabel>, Without<DispHelp>)>,
     mut help: Query<&mut Text, (With<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
 ) {
+    let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
     let open = flow.is_some_and(|f| f.current == crate::menus::DISPLAY);
     for mut n in &mut windows {

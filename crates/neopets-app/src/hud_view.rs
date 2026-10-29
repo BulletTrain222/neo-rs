@@ -302,6 +302,7 @@ pub fn sync_hud(
     mut value_images: Local<HashMap<(usize, String), (Handle<Image>, u32, u32, i32)>>,
     mut prices: Query<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>)>,
 ) {
+    let _span = crate::perf::span("sync_hud");
     let (Some(mut state), Some(mut art)) = (state, art) else { return };
     let HudArt { f, mem, images: cache, name: name_image, .. } = &mut *art;
     let f: &Frontend = f;
@@ -926,6 +927,7 @@ pub fn sync_textbox(
     mut parts: Query<(&BoxPart, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>)>,
     mut cache: Local<BoxCache>,
 ) {
+    let _span = crate::perf::span("sync_textbox");
     let (Some(state), Some(mut art)) = (state, art) else { return };
     let Some(window) = windows.iter().next() else { return };
     let Ok(root) = canvas.single() else { return };

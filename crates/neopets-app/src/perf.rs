@@ -221,3 +221,88 @@ pub fn perf_overlay(
         c.0 = bar_colour(ms);
     }
 }
+
+/// NEOPETS_PERF (diagnostic): every 120 frames, the mean frame time, the main world's CPU time
+/// per frame (First to Last), the slowest frame, and the entity, mesh and visible-mesh counts.
+#[derive(Resource, Default)]
+pub struct PerfLog {
+    start: Option<std::time::Instant>,
+    frames: u32,
+    frame: f32,
+    main: f32,
+    worst: f32,
+    /// Named spans timed inside systems (`span`), summed over the window.
+    pub spans: std::collections::BTreeMap<&'static str, f32>,
+}
+
+pub fn perf_enabled() -> bool {
+    std::env::var_os("NEOPETS_PERF").is_some()
+}
+
+pub fn perf_first(mut log: ResMut<PerfLog>) {
+    log.start = Some(std::time::Instant::now());
+}
+
+pub fn perf_last(
+    mut log: ResMut<PerfLog>,
+    time: Res<Time>,
+    entities: Query<()>,
+    meshes: Query<&ViewVisibility, With<Mesh3d>>,
+    mats: Query<&MeshMaterial3d<StandardMaterial>>,
+    images: Res<Assets<Image>>,
+    materials: Res<Assets<StandardMaterial>>,
+) {
+    let main = log.start.map_or(0.0, |s| s.elapsed().as_secs_f32() * 1000.0);
+    let dt = time.delta_secs() * 1000.0;
+    log.frames += 1;
+    log.frame += dt;
+    log.main += main;
+    log.worst = log.worst.max(dt);
+    for (k, v) in take_spans() {
+        *log.spans.entry(k).or_default() += v;
+    }
+    if log.frames >= 120 {
+        let n = log.frames as f32;
+        let visible = meshes.iter().filter(|v| v.get()).count();
+        let distinct: std::collections::HashSet<_> = mats.iter().map(|m| m.0.id()).collect();
+        info!("perf: {} standard-material meshes, {} distinct materials, {} material assets, {} images", mats.iter().count(), distinct.len(), materials.len(), images.len());
+        let mut sorted: Vec<(&&str, &f32)> = log.spans.iter().collect();
+        sorted.sort_by(|a, b| b.1.total_cmp(a.1));
+        let spans: Vec<String> = sorted.iter().map(|(k, v)| format!("{k} {:.2}", *v / n)).collect();
+        info!(
+            "perf: frame {:.2} ms (worst {:.1}), main {:.2} ms; entities {}, meshes {} ({} visible); spans ms/frame: {}",
+            log.frame / n,
+            log.worst,
+            log.main / n,
+            entities.iter().count(),
+            meshes.iter().count(),
+            visible,
+            spans.join(", ")
+        );
+        *log = PerfLog::default();
+    }
+}
+
+static SPANS: std::sync::Mutex<std::collections::BTreeMap<&'static str, f32>> = std::sync::Mutex::new(std::collections::BTreeMap::new());
+static ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+/// A timed span (NEOPETS_PERF): its time is added to the named total when it drops.
+pub struct Span(Option<(&'static str, std::time::Instant)>);
+
+pub fn span(name: &'static str) -> Span {
+    Span((*ENABLED.get_or_init(perf_enabled)).then(|| (name, std::time::Instant::now())))
+}
+
+impl Drop for Span {
+    fn drop(&mut self) {
+        if let Some((name, t)) = self.0 {
+            if let Ok(mut m) = SPANS.lock() {
+                *m.entry(name).or_default() += t.elapsed().as_secs_f32() * 1000.0;
+            }
+        }
+    }
+}
+
+fn take_spans() -> std::collections::BTreeMap<&'static str, f32> {
+    SPANS.lock().map(|mut m| std::mem::take(&mut *m)).unwrap_or_default()
+}

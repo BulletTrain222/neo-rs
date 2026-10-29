@@ -198,6 +198,7 @@ pub fn sync_menu(
     mut cache: Local<MenuCache>,
     mut pool: Local<usize>,
 ) {
+    let _span = crate::perf::span("sync_menu");
     let (Some(_state), Some(menu), Some(art)) = (state, menu, art) else { return };
     if cache.style != art.style {
         cache.style = art.style;

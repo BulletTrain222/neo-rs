@@ -181,6 +181,7 @@ pub fn sync_effects(
     mut link: Local<EffectsLink>,
     mut sources: ResMut<Assets<EffectsSource>>,
 ) {
+    let _span = crate::perf::span("sync_effects");
     let Some(mut state) = state else { return };
     if !link.spawned {
         link.spawned = true;
@@ -347,6 +348,7 @@ pub fn sync_bank(
     mut link: Local<BankLink>,
     mut sources: ResMut<Assets<MusicSource>>,
 ) {
+    let _span = crate::perf::span("sync_bank");
     let Some(state) = state else { return };
     let p = &state.play;
     if !link.spawned {
@@ -403,6 +405,7 @@ pub fn sync_music(
     mut voices: Query<(Entity, &StreamVoice, Option<&mut AudioSink>)>,
     mut cache: Local<HashMap<u32, Option<Handle<Pcm>>>>,
 ) {
+    let _span = crate::perf::span("sync_music");
     let Some(state) = state else { return };
     let channels = state.play.music.channels;
     for (e, v, sink) in &mut voices {
@@ -450,6 +453,7 @@ pub fn sync_stingers(
     mut cache: Local<HashMap<i32, Option<Handle<Pcm>>>>,
     mut banks: Local<HashMap<u32, Option<Vec<u8>>>>,
 ) {
+    let _span = crate::perf::span("sync_stingers");
     let Some(mut state) = state else { return };
     // A voice whose sink has emptied has finished.
     let mut playing = false;

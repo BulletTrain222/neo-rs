@@ -234,6 +234,7 @@ fn build(commands: &mut Commands, body: Entity, tab: usize) {
 /// The mouse on the page: hovering moves the cursor, a press on a row or slot is kept for
 /// `page_input`, a press on a tab switches to it.
 pub fn page_mouse(mut page: ResMut<ControlsPage>, rows: Query<(&Interaction, &CtlRow), Changed<Interaction>>, slots: Query<(&Interaction, &CtlSlot), Changed<Interaction>>, tabs: Query<(&Interaction, &CtlTab), Changed<Interaction>>) {
+    let _span = crate::perf::span("page_mouse");
     if !page.open || page.capture.is_some() {
         return;
     }
@@ -274,6 +275,7 @@ pub fn page_input(
     mut bindings: ResMut<Bindings>,
     mut mute: ResMut<PadMute>,
 ) {
+    let _span = crate::perf::span("page_input");
     if let Some(mut m) = menu {
         if std::mem::take(&mut m.flow.controls_request) {
             *page = ControlsPage { open: true, ..default() };
@@ -470,6 +472,7 @@ pub fn show_page(
     mut values: Query<(&CtlValue, &mut Text), (Without<CtlSlotText>, Without<CtlNote>)>,
     mut notes: Query<&mut Text, (With<CtlNote>, Without<CtlSlotText>, Without<CtlValue>)>,
 ) {
+    let _span = crate::perf::span("show_page");
     for mut n in &mut windows {
         n.display = if page.open { Display::Flex } else { Display::None };
     }
@@ -550,6 +553,7 @@ pub fn grab_cursor(
     mut look: ResMut<b::MouseLook>,
     mut windows: Query<(&Window, &mut CursorOptions), With<PrimaryWindow>>,
 ) {
+    let _span = crate::perf::span("grab_cursor");
     let in_play = play.is_some() && menu.as_ref().is_some_and(|m| matches!(m.flow.current, crate::menus::PLAY | crate::menus::BOX_HOST));
     let Ok((window, mut cursor)) = windows.single_mut() else { return };
     let on = bindings.mouse_look && in_play && window.focused && !dev.blocks_input() && !page.open && std::env::var_os("NEOPETS_NO_GRAB").is_none();

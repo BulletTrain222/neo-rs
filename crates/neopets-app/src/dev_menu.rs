@@ -398,6 +398,7 @@ Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT o
 /// The mouse on the menu: hovering a row moves the cursor to it; a click applies it, and a
 /// click on < or > steps its value. Runs before `dev_input`, which acts on the click.
 pub fn dev_mouse(mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), Changed<Interaction>>, steps: Query<(&Interaction, &DevStep), Changed<Interaction>>) {
+    let _span = crate::perf::span("dev_mouse");
     if !dev.open {
         return;
     }
@@ -421,6 +422,7 @@ pub fn dev_mouse(mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), 
 
 /// The menu's keys and actions, before the game reads its input.
 pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bindings: Res<crate::bindings::Bindings>, page: Res<crate::controls_page::ControlsPage>, mut dev: ResMut<DevMenu>, play: Option<ResMut<PlayState>>, cameras: Query<&Transform, With<Orbit>>, mut perf: ResMut<crate::perf::PerfOverlay>, mut frames: Local<u32>) {
+    let _span = crate::perf::span("dev_input");
     let Some(mut play) = play else { return };
     if dev.open && dev.quests.is_none() {
         dev.quests = Some(play.play.map_tables().0);
@@ -684,6 +686,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
 /// The free camera: moves and looks, then replaces the play camera's pose (after the play's
 /// frame has set it).
 pub fn free_camera(time: Res<Time>, keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, gamepads: Query<&Gamepad>, mut dev: ResMut<DevMenu>, mut cameras: Query<&mut Transform, With<Orbit>>) {
+    let _span = crate::perf::span("free_camera");
     let open = dev.open;
     let Some(fc) = dev.free.as_mut() else { return };
     let dt = time.delta_secs().min(0.1);
@@ -819,6 +822,7 @@ pub fn show_panel(
     // Each row's label and when it was first shown: a changed label scrolls from its start.
     mut shown: Local<std::collections::HashMap<usize, (String, f64)>>,
 ) {
+    let _span = crate::perf::span("show_panel");
     for mut n in &mut windows {
         n.display = if dev.open { Display::Flex } else { Display::None };
     }

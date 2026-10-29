@@ -354,6 +354,7 @@ pub fn mouse_stick(delta: f32, sensitivity: u32) -> f32 {
 
 /// Read the virtual pad from the keyboard, mouse and gamepads.
 pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseButton>>, motion: Res<AccumulatedMouseMotion>, gamepads: Query<&Gamepad>, bindings: Res<Bindings>, mute: Res<PadMute>, look: Res<MouseLook>, mut pad: ResMut<Pad>) {
+    let _span = crate::perf::span("read_pad");
     *pad = Pad::default();
     if mute.0 {
         return;

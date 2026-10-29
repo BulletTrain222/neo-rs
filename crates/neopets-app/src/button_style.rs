@@ -93,6 +93,7 @@ pub fn overrides(xbox: bool) -> HashMap<u32, Rgba> {
 /// When the choice changes: the HUD art's overrides are replaced and its picture caches are
 /// marked stale (the HUD, the dialogue box and the menus rebuild their icons).
 pub fn apply(settings: Res<crate::display::DisplaySettings>, art: Option<ResMut<crate::hud_view::HudArt>>, mut last: Local<Option<bool>>) {
+    let _span = crate::perf::span("apply");
     let Some(mut art) = art else { return };
     if *last == Some(settings.xbox_buttons) {
         return;
