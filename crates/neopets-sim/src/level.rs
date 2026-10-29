@@ -10916,7 +10916,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 if has(0) && !has(1) {
                     state.set_word(pack, 1, b | 6);
                     state.set_word(pack, 6, 1);
-                    state.set_level(3, false);
+                    // Level state 3, which holds the boss, clears once camera 11 has ended
+                    // (SPEC-0014 Encounter flow, pack 864).
                     out.extend([
                         Action::BossFight { instance: 8 },
                         Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 },
@@ -10924,6 +10925,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                         Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
                         Action::PlayCamera { track: 11, wait: true, end: 1, speed: 1.0 },
                         Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
+                        Action::LevelState { flag: 3, on: false },
                         Action::ReturnCamera { preset: -1, release: true },
                         Action::Bits { word: 6, set: 0, clear: 1 },
                     ]);
@@ -16525,8 +16527,13 @@ mod tests {
         on_activate(864, &mut s);
         assert_eq!(on_trigger(864, 24, inside(24), &mut s).actions, vec![Action::ReplaceExterior { slot: 50, plane: -1 }]);
         // The fight: start, then the boss's level state 0 marks the end (293) and the end stage.
+        // Level state 3 clears after camera 11 (an action of the scene, after the camera).
         on_trigger(864, 1, inside(1), &mut s);
-        assert!(on_update(864, &mut s, false).contains(&Action::Message { line: 6 }) && !s.level(3));
+        let start = on_update(864, &mut s, false);
+        assert!(start.contains(&Action::Message { line: 6 }) && s.level(3));
+        let cam = start.iter().position(|a| matches!(a, Action::PlayCamera { track: 11, .. })).unwrap();
+        assert!(start[cam..].contains(&Action::LevelState { flag: 3, on: false }));
+        s.set_level(3, false);
         s.set_word(864, 6, 0);
         s.set_level(0, true);
         on_update(864, &mut s, false);
