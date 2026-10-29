@@ -9,9 +9,9 @@
 //! menu. The mouse works too: hovering picks a row, clicking applies it, and the < and > buttons
 //! change its value. F2 toggles the free camera: WASD or the arrows
 //! move, E and Q rise and sink, J/L and I/K or a right-button drag look around, Shift is fast.
-//! On a controller both stick clicks together (L3 + R3) toggle it; the left stick moves, the
-//! right stick looks, the right and left triggers (R2, L2) rise and sink, and holding the south
-//! button (Cross / A) is fast.
+//! On a controller the menu's Free camera row turns it on (and closes the menu) and the east
+//! button (Circle / B) ends it; the left stick moves, the right stick looks, the right and left
+//! triggers (R2, L2) rise and sink, and holding the south button (Cross / A) is fast.
 //! While the menu is open or the free camera is on, the hero and the game menus get no input.
 //! Warp rebuilds the game in another world pack (the save's world-key list), keeping the
 //! session (flags, items, Neopoints, maps, the heroes' pools and equipment, cheats, options).
@@ -172,6 +172,35 @@ enum Kind {
     Action,
 }
 
+/// The number of rows in the left column (the first three sections).
+const LEFT: usize = {
+    let mut n = 0;
+    let mut k = 0;
+    while k < 3 {
+        n += SECTIONS[k].1.len();
+        k += 1;
+    }
+    n
+};
+
+/// The rows of the column holding row `i`, as (first, count).
+fn column_of(i: usize) -> (usize, usize) {
+    if i < LEFT { (0, LEFT) } else { (LEFT, ENTRIES.len() - LEFT) }
+}
+
+/// Row `i` moved `d` rows within its column, wrapping.
+fn column_step(i: usize, d: i32) -> usize {
+    let (first, n) = column_of(i);
+    first + (i as i32 - first as i32 + d).rem_euclid(n as i32) as usize
+}
+
+/// The row at the same height in the other column (its last row when that column is shorter).
+fn other_column(i: usize) -> usize {
+    let (first, _) = column_of(i);
+    let (to, n) = column_of(if first == 0 { LEFT } else { 0 });
+    to + (i - first).min(n - 1)
+}
+
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam => Kind::Toggle,
@@ -313,8 +342,8 @@ pub fn spawn_panel(mut commands: Commands) {
             ui.spawn((Text::new("Developer menu"), font(22.0), TextColor(GOLD)));
             ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM)));
             ui.spawn((
-                Text::new("Keys: arrows pick and change (Shift x10), Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
-Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), A apply, B close | Mouse: click rows and < >"),
+                Text::new("Keys: arrows pick and change (Shift x10), Tab other column, Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
+Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT other column, A apply, B close | Mouse: click rows and < >"),
                 font(12.0),
                 TextColor(DIM),
                 Node { margin: UiRect { top: px(4), bottom: px(4), ..default() }, ..default() },
@@ -478,13 +507,14 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         dev.swallow = true;
         return;
     }
-    // L3 + R3 together on a controller: one stick click pressed while the other is held.
-    let chord = gamepads.iter().any(|g| {
-        let (l, r) = (GamepadButton::LeftThumb, GamepadButton::RightThumb);
-        (g.just_pressed(l) && g.pressed(r)) || (g.just_pressed(r) && g.pressed(l))
-    });
-    if keys.just_pressed(KeyCode::F2) || chord {
+    if keys.just_pressed(KeyCode::F2) {
         toggle_free(&mut dev);
+    }
+    // B ends the free camera while the menu is closed.
+    if !dev.open && dev.free.is_some() && pad(GamepadButton::East) {
+        dev.free = None;
+        dev.swallow = true;
+        return;
     }
     if keys.just_pressed(KeyCode::F4) {
         dev.speed = if dev.speed == 0 { NORMAL } else { 0 };
@@ -495,12 +525,18 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     if !dev.open {
         return;
     }
-    let n = ENTRIES.len();
+    // Up and down move within the cursor's column (wrapping); LT or RT (Tab) jump to the other
+    // column at the same height, and so do Left and Right on a row with no value to change.
     if keys.just_pressed(KeyCode::ArrowDown) || keys.just_pressed(KeyCode::KeyS) || pad(GamepadButton::DPadDown) {
-        dev.cursor = (dev.cursor + 1) % n;
+        dev.cursor = column_step(dev.cursor, 1);
     }
     if keys.just_pressed(KeyCode::ArrowUp) || keys.just_pressed(KeyCode::KeyW) || pad(GamepadButton::DPadUp) {
-        dev.cursor = (dev.cursor + n - 1) % n;
+        dev.cursor = column_step(dev.cursor, -1);
+    }
+    let sideways = keys.just_pressed(KeyCode::ArrowRight) || keys.just_pressed(KeyCode::KeyD) || pad(GamepadButton::DPadRight) || keys.just_pressed(KeyCode::ArrowLeft) || keys.just_pressed(KeyCode::KeyA) || pad(GamepadButton::DPadLeft);
+    if keys.just_pressed(KeyCode::Tab) || pad(GamepadButton::LeftTrigger2) || pad(GamepadButton::RightTrigger2) || (sideways && kind(ENTRIES[dev.cursor]) != Kind::Choice) {
+        dev.cursor = other_column(dev.cursor);
+        return;
     }
     let tens = keys.any_pressed([KeyCode::ShiftLeft, KeyCode::ShiftRight]) || pad_held(GamepadButton::LeftTrigger) || pad_held(GamepadButton::RightTrigger);
     let step: i32 = if tens { 10 } else { 1 };
@@ -555,6 +591,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         }
         Entry::FreeCam => {
             toggle_free(&mut dev);
+            // Turned on from the menu: the menu closes so the camera can move at once (it is
+            // held still while the menu is open).
+            if dev.free.is_some() {
+                dev.open = false;
+                dev.swallow = true;
+            }
             format!("Free camera {}", on(dev.free.is_some()))
         }
         Entry::Neopoints => {
@@ -846,7 +888,7 @@ pub fn show_panel(
         }
         if let Some(fc) = dev.free {
             s.push_str(&format!(
-                "FREE CAMERA (F2 or L3+R3 ends) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast",
+                "FREE CAMERA (F2 or B ends) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast",
                 fc.pos.x, fc.pos.y, fc.pos.z
             ));
         }
@@ -864,6 +906,18 @@ fn speed_label(k: usize) -> String {
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+
+    #[test]
+    fn columns() {
+        // Down wraps within the left column; the other column keeps the height.
+        assert_eq!(column_step(LEFT - 1, 1), 0);
+        assert_eq!(column_step(LEFT, -1), ENTRIES.len() - 1);
+        assert_eq!(other_column(2), LEFT + 2);
+        assert_eq!(other_column(ENTRIES.len() - 1), LEFT - 1);
+        assert_eq!(other_column(other_column(3)), 3);
+    }
+
     #[test]
     fn long_labels_scroll() {
         // A short label is kept; a long one holds its start, then scrolls and wraps.
@@ -876,3 +930,4 @@ mod tests {
         assert_eq!(b, long.chars().skip(6).take(super::FIT).collect::<String>());
     }
 }
+
