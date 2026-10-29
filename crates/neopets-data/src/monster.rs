@@ -176,8 +176,22 @@ pub struct Tuning {
     /// facing) is below it (SPEC-0036 Hit detection step 4).
     pub blocking_angle: f32,
     pub slots: [AttackSlot; 4],
+    /// The map search (SPEC-0038 Layout and Behavior 9), when its flag (0x11C) is set: chance
+    /// f32 0x124, timer min and max ints 0x128 and 0x12C, type int 0x130 and the greedy hostile
+    /// range f32 0x168 (the search distance f32 0x120 limits only the enemy-target types).
+    pub map_search: Option<MapSearch>,
     /// Weapon N: (radius +4(N-1), full length +0x14 + 4(N-1)), clamped to 40.0.
     pub weapons: [(f32, f32); 5],
+}
+
+/// A row's map search values (SPEC-0038 Behavior 9).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MapSearch {
+    pub distance: f32,
+    pub chance: f32,
+    pub timer: (i32, i32),
+    pub kind: u32,
+    pub greedy: f32,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -323,6 +337,7 @@ impl MonsterTable {
             defence_timer: (f(0x104), f(0x108)),
             blocking_angle: f(0x10C),
             slots: std::array::from_fn(slot),
+            map_search: (w(0x11C) != 0).then(|| MapSearch { distance: f(0x120), chance: f(0x124), timer: (w(0x128) as i32, w(0x12C) as i32), kind: w(0x130), greedy: f(0x168) }),
             weapons: std::array::from_fn(|n| (f(4 * n).min(40.0), f(0x14 + 4 * n).min(40.0))),
         })
     }

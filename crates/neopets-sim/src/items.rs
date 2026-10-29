@@ -282,6 +282,16 @@ impl ItemPool {
         (it.flag != 1 && d < 25.0 && (d < base + radius || range)).then_some(i)
     }
 
+    /// An enemy's map-search consume (SPEC-0038 Behavior 39): the slot is freed with no give.
+    pub fn destroy(&mut self, i: usize) {
+        if let Some(s) = self.slots.get_mut(i) {
+            *s = None;
+        }
+        if let Some(a) = self.attached.get_mut(i) {
+            *a = None;
+        }
+    }
+
     /// The take: the slot is freed and reset; a dropped item (finite lifetime) gives its id
     /// through the reset (SPEC-0021 Important-item give), before the pickup's own add.
     pub fn take(&mut self, i: usize) -> Option<WorldItem> {

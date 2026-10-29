@@ -132,6 +132,18 @@ pub struct Params {
     pub element: i32,
     pub slots: [Slot; 4],
     pub defence: Defence,
+    /// The map search of the item types 0 and 1 (Behavior 9): chance, cooldown draw (min,
+    /// max), type and the greedy hostile range; None when the row's flag is clear.
+    pub map_search: Option<MapSearch>,
+}
+
+/// A row's map search (Behavior 9; the enemy-target types 2 to 8 are not built).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MapSearch {
+    pub chance: f32,
+    pub timer: (i32, i32),
+    pub kind: u32,
+    pub greedy: f32,
 }
 
 /// The defence words of the monster row (SPEC-0038 Layout section 2, 0xE0 to 0x108).
@@ -239,6 +251,9 @@ pub struct View<'a> {
     pub clear: bool,
     /// Whether a point locates on the enemy's navmesh (None: every point does).
     pub locate: Option<&'a dyn Fn(Vec3) -> bool>,
+    /// The world items of the enemy's world: (pool index, item id, position), for the map
+    /// search of types 0 and 1 (Behaviors 9 and 39).
+    pub items: &'a [(usize, u16, Vec3)],
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -312,6 +327,8 @@ pub struct Act {
     pub heal: bool,
     /// Set the position to this point (state 14's hide at home).
     pub snap: Option<Vec3>,
+    /// Remove this world item (pool index): the map search's arrival (Behavior 39).
+    pub consume: Option<usize>,
 }
 
 /// SPEC-0040 Behavior 21, the flyer goal height. `ambush` is the ambush word (+0xBC0); while it
@@ -513,7 +530,13 @@ pub struct Enemy {
     start: Vec3,
     ticks: u32,
     loop_count: i32,
-    reentered: bool,
+    /// The strike-window word (0xBFC, SPEC-0038 Behavior 13 state 3): set while the strike
+    /// test sees an open window, cleared in state 3 by a closed window (or one with bit 0x20).
+    window: bool,
+    /// The map-search cooldown (types 0 and 1 never re-arm it) and state 17's target, a world
+    /// item's pool index (Behaviors 9 and 39).
+    map_cooldown: i32,
+    map_target: Option<usize>,
     /// The hero is on this enemy's hit list (cleared at each attack start).
     hit: bool,
     /// The shot counter and the spawn-pending flag of a missile slot.
@@ -608,7 +631,9 @@ impl Enemy {
             block_hit: false,
             ticks: 0,
             loop_count: 0,
-            reentered: false,
+            window: false,
+            map_cooldown: 0,
+            map_target: None,
             hit: false,
             shots: 0,
             pending: false,
@@ -922,7 +947,7 @@ impl Enemy {
             2 => {
                 self.seq = param;
                 self.hit = false;
-                self.reentered = false;
+                self.window = false;
                 self.shots = 0;
                 self.pending = false;
             }
@@ -1356,6 +1381,8 @@ impl Enemy {
         } else {
             self.alarm_timer -= 1;
         }
+        // Step 6, the map search.
+        self.map_search(v, rng);
         match self.state {
             0 => self.set(self.default_state as u32, v, rng, &mut a),
             // State 4 (stunned): back to agro once status 0 is no longer active.
@@ -1411,6 +1438,7 @@ impl Enemy {
                 }
             }
             8 => self.hide_handler(v, &mut a),
+            17 => self.fetch_step(v, rng, &mut a),
             0 | 3 | 5..=7 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
         }
@@ -1419,6 +1447,77 @@ impl Enemy {
             a.anim = alarm_anim;
         }
         a
+    }
+
+    /// Behavior 9, the map search of the item types each tick (not in the confused outer 11,
+    /// the map-search attack state 18 or while lying in state 16; the cooldown at 0): for each
+    /// item id of the type in order (type 0: 145; type 1: 135 to 139), the nearest such item
+    /// in the world; a roll int[1, 100] below the chance, a route to it (the item locates on
+    /// the enemy's navmesh) and the hero farther than the greedy hostile range make it the
+    /// target, the last passing id winning; a target sends the enemy to state 17. Types 0 and
+    /// 1 do not re-arm the cooldown, so the rolls repeat every tick.
+    fn map_search(&mut self, v: &View, rng: &mut Rng) {
+        let Some(m) = self.p.map_search else { return };
+        if self.map_cooldown > 0 {
+            self.map_cooldown -= 1;
+            return;
+        }
+        if self.outer == 11 || matches!(self.state, 16 | 18) {
+            return;
+        }
+        let ids: &[u16] = match m.kind {
+            0 => &[145],
+            1 => &[135, 136, 137, 138, 139],
+            _ => return,
+        };
+        let mut target = None;
+        for &id in ids {
+            let nearest = v.items.iter().filter(|it| it.1 == id).min_by(|a, b| len(sub(a.2, v.position)).total_cmp(&len(sub(b.2, v.position))));
+            let Some(&(index, _, at)) = nearest else { continue };
+            if rng.range(1, 100) as f32 >= m.chance {
+                continue;
+            }
+            if !v.locate.is_none_or(|f| f(at)) {
+                continue;
+            }
+            if len(sub(v.hero, v.position)) <= m.greedy {
+                continue;
+            }
+            target = Some(index);
+        }
+        if let Some(t) = target {
+            self.map_target = Some(t);
+            self.state = 17;
+            self.through = None;
+        }
+    }
+
+    /// Behavior 39, state 17: the hero closer than the greedy range, or the target gone, resets
+    /// to the default state; within 1.0 of the item it is consumed (the pool slot freed, no
+    /// give) with the idle pick and the reset; otherwise the enemy runs to it (gait 0).
+    fn fetch_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let greedy = self.p.map_search.map_or(0.0, |m| m.greedy);
+        let item = self.map_target.and_then(|t| v.items.iter().find(|it| it.0 == t)).copied();
+        match item {
+            Some((index, _, at)) if len(sub(v.hero, v.position)) >= greedy => {
+                if len(sub(at, v.position)) < 1.0 {
+                    a.consume = Some(index);
+                    a.anim = Some(self.idle(false, v, rng));
+                    self.map_target = None;
+                    self.set(0, v, rng, a);
+                } else if self.gaits[0] != 0 {
+                    self.walk(0, at, v, a);
+                } else {
+                    // No gait table yet (never in agro): the walk-home pick of state 8.
+                    a.anim = Some(2);
+                    a.go = Some(Go::Toward(at));
+                }
+            }
+            _ => {
+                self.map_target = None;
+                self.set(0, v, rng, a);
+            }
+        }
     }
 
     /// Behavior 7: the normal attack choice.
@@ -2070,6 +2169,10 @@ impl Enemy {
             2 => {
                 a.rate = Some(s.strike_speed);
                 let done = self.through(kb, v, a);
+                // The strike test sets the window word whenever the window is open.
+                if v.spawn_bits & 0x1F != 0 {
+                    self.window = true;
+                }
                 let struck = if s.kind == MELEE { strike(self, a) } else { None };
                 if let Some(blocked) = struck {
                     self.seq = if blocked { 4 } else { 3 };
@@ -2085,13 +2188,20 @@ impl Enemy {
                         self.seq = 5;
                     }
                 } else {
+                    // Each separate open window of B allows one more strike: a closed window,
+                    // or an open one on a frame with bit 0x20, clears the window word; an open
+                    // window with the word clear goes back to state 2 with the hit list
+                    // cleared and the word set (a B with three windows can hit three times).
                     let done = self.through(kb, v, a);
-                    if !self.reentered && v.contact && !done {
-                        self.reentered = true;
-                        self.hit = false;
-                        self.seq = 2;
-                    } else if done {
+                    let open = v.spawn_bits & 0x1F != 0;
+                    if done {
                         self.seq = 5;
+                    } else if !open || v.spawn_bits & 0x20 != 0 {
+                        self.window = false;
+                    } else if !self.window && s.kind == MELEE {
+                        self.hit = false;
+                        self.window = true;
+                        self.seq = 2;
                     }
                 }
             }
@@ -2150,7 +2260,12 @@ impl Enemy {
                         }
                     }
                     2 => {
-                        strike(self, a);
+                        // The strike test runs once C plays (SPEC-0063 round 1, item 3): on the
+                        // tick C is requested the run clip B still plays, and its frames strike
+                        // nothing.
+                        if v.clip.action == kc {
+                            strike(self, a);
+                        }
                         if done {
                             self.seq = 12;
                         }
@@ -2281,6 +2396,7 @@ mod tests {
             alarm_block: false,
             alarm_serial: 0,
             clear: true,
+            items: &[],
             locate: None,
         }
     }
@@ -2447,6 +2563,41 @@ mod tests {
         }
         assert!(chosen);
         assert_eq!(e.seq, 1, "within range on the mesh: wind-up at once");
+    }
+
+    #[test]
+    fn map_search_fetches_coins() {
+        // SPEC-0038 Behaviors 9 and 39 (the Rogue's type 1, greedy range 10): a coin and the
+        // hero farther than 10 send the enemy to state 17; it runs to the coin, consumes it on
+        // arrival within 1.0 and resets to its default state; the hero coming within 10 makes
+        // it give up.
+        let has = |_: u32| true;
+        let mut rng = Rng::seeded(3);
+        let mut p = skeleton();
+        p.map_search = Some(MapSearch { chance: 101.0, timer: (15, 120), kind: 1, greedy: 10.0 });
+        let items = [(4usize, 137u16, [6.0, 0.0, 0.0]), (2, 200, [1.0, 0.0, 0.0])];
+        let mut v = view([-20.0, 0.0, 0.0], &has);
+        v.items = &items;
+        let mut e = Enemy::new(p, Spawn { default_state: 8, home: [0.0; 3], ..Spawn::default() }, &mut rng);
+        e.state = 8;
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((e.state, e.map_target), (17, Some(4)));
+        assert_eq!(a.go, Some(Go::Toward([6.0, 0.0, 0.0])));
+        v.position = [5.5, 0.0, 0.0];
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((a.consume, e.state, e.map_target), (Some(4), 0, None));
+        // The hero within the greedy range: no search, and a fetch is given up.
+        v.position = [0.0; 3];
+        v.hero = [-8.0, 0.0, 0.0];
+        let mut e = Enemy::new(p, Spawn { default_state: 8, home: [0.0; 3], ..Spawn::default() }, &mut rng);
+        e.state = 8;
+        e.tick(&v, &mut rng);
+        assert_ne!(e.state, 17);
+        e.state = 17;
+        e.map_target = Some(4);
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((a.consume, e.map_target), (None, None));
+        assert_ne!(e.state, 17);
     }
 
     #[test]

@@ -645,8 +645,13 @@ impl Character {
 
     /// Skipped by hero swings, shots and the Mote walks: pet-like, or invulnerable by script
     /// (SPEC-0040 Behavior 17 base rule, the flag at +0x7F0).
+    /// An enemy kind is also not hittable in its melee or missile dodge (agro outer sub-state 5
+    /// or 6) or, when not script-held, while animation 74, 75 or 76 plays (SPEC-0036 Hittable
+    /// predicate, tests 2 and 6).
     pub fn unhittable(&self) -> bool {
-        self.pet_like() || self.invulnerable || self.enemy.as_ref().is_some_and(|e| e.lying())
+        self.pet_like()
+            || self.invulnerable
+            || self.enemy.as_ref().is_some_and(|e| e.lying() || (e.state == 19 && matches!(e.outer, 5 | 6)) || (!self.held && matches!(self.anim.clip_state().action, 74..=76)))
     }
 }
 
@@ -8689,6 +8694,10 @@ impl Play {
         let mgr = &self.attack_mgr;
         // SPEC-0038 Behavior 35's clear-area test reads the live pool's positions.
         let pool: Vec<(u64, [f32; 3])> = self.characters.iter().filter(|c| c.dying.is_none() && c.hp > 0 && !c.inactive).map(|c| (c.id, c.position)).collect();
+        // SPEC-0038 Behaviors 9 and 39: the current world's items for the map search, and the
+        // items enemies consume this tick.
+        let world_items: Vec<(usize, u16, [f32; 3])> = self.pools.get(&world.pack).map(|pool| pool.slots.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|it| (i, it.id, it.position))).collect()).unwrap_or_default();
+        let mut consumed = Vec::new();
         let mut strikes = Vec::new();
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
@@ -8769,6 +8778,7 @@ impl Play {
             v.clear = !near(p, hero) && !pool.iter().any(|&(o, q)| o != *id && near(p, q));
             let locate = |q: [f32; 3]| mesh.is_none_or(|m| m.locate_full(q).is_some());
             v.locate = Some(&locate);
+            v.items = &world_items;
             v.hero_shot_live = !shot_paths.is_empty();
             let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
             let look = e.p.defence.hold.max(0) as f32;
@@ -8857,6 +8867,12 @@ impl Play {
             }
             for amount in act.status_hits.into_iter().flatten() {
                 dots.push((*id, amount));
+            }
+            consumed.extend(act.consume);
+        }
+        if let Some(pool) = self.pools.get_mut(&self.world.pack) {
+            for i in consumed {
+                pool.destroy(i);
             }
         }
         // SPEC-0029 Behavior 27.2 steps 3 and 8: each poison or fire hit is a take-hit.
@@ -13780,6 +13796,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         element: t.element as i32,
         slots: t.slots.each_ref().map(slot),
         defence: enemy::Defence { hold: t.defend_time, missile: t.missile_defence, block: t.melee_block, dodge: t.melee_dodge, exit: t.defence_timer, angle: t.blocking_angle },
+        map_search: t.map_search.map(|m| enemy::MapSearch { chance: m.chance, timer: m.timer, kind: m.kind, greedy: m.greedy }),
     }
 }
 
@@ -13826,6 +13843,7 @@ fn enemy_view<'a>(
         alarm_block: false,
         alarm_serial: 0,
         clear: true,
+        items: &[],
         locate: None,
     }
 }
