@@ -1604,10 +1604,16 @@ impl Enemy {
     /// 8 (missile) or 5 or 7 (melee) and sets the defence hold.
     fn defend(&mut self, v: &View, rng: &mut Rng) {
         let d = self.p.defence;
-        // The melee latch follows the hero's swing every tick, so a swing is judged once.
+        // The melee latch (0xB88): set whenever the hero swings with the defence hold below 1
+        // (even when the reach or arc test then fails), cleared when the swing ends, so a swing
+        // is judged once, on its first tick with the hold run out.
         let swinging = v.hero_swing.is_some();
-        let edge = swinging && !self.swing_latch;
-        self.swing_latch = swinging;
+        let edge = swinging && !self.swing_latch && self.defence_hold < 1;
+        if !swinging {
+            self.swing_latch = false;
+        } else if self.defence_hold < 1 {
+            self.swing_latch = true;
+        }
         if self.outer != 10 && !(self.outer == 2 && self.seq == 5) && self.defence_hold < 1 && v.missile_threat {
             let mut to = None;
             if rng.range(1, 100) < d.missile.0 as i32 {
@@ -2114,6 +2120,9 @@ impl Enemy {
                 }
             }
             7 => {
+                // The charge run plays B at the strike word (SPEC-0038 Behavior 13, play rate:
+                // states 1, 2, 5, 6 and 7 store a slot word).
+                a.rate = Some(s.strike_speed);
                 self.ticks += 1;
                 self.through(kb, v, a);
                 let struck = if s.charge != 2 { strike(self, a) } else { None };

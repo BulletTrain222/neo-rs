@@ -249,9 +249,10 @@ impl HeroAnim {
         Some((c.root.len(), sum))
     }
 
-    /// The main family's table holds a clip for the action.
+    /// The main family's table names a clip for the action (no lookup-miss fallback to clip 0;
+    /// SPEC-0038 Layout section 6 and Behavior 13: a missing phase is skipped).
     pub fn has(&self, action: u32) -> bool {
-        self.families.first().is_some_and(|f| f.data.clip_for(action).is_some())
+        self.families.first().is_some_and(|f| f.data.named_clip(action).is_some())
     }
 
     /// Request an action id. A change of main clip restarts the main, sub-part and face clips;

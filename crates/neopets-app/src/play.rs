@@ -5494,17 +5494,23 @@ impl Play {
             if !hit {
                 continue;
             }
-            self.hit_list.push(c.id);
-            // SPEC-0036 Hit detection step 4: a guarding (blocking) target refuses a hit that is
-            // not the power step when dot(target facing, hero facing) is below its Blocking
-            // Angle; the block plays its hit reaction (SPEC-0038 Behavior 44, outer 7).
+            // SPEC-0036 Hit detection step 4: a guarding target never takes damage from a swing
+            // that is not a power hit (Tor's power step, sub-state 10, with a Mote in word 2).
+            // With dot(target facing, hero facing) below its Blocking Angle the swing is blocked
+            // (the block plays its hit reaction, SPEC-0038 Behavior 44, outer 7) and counts as
+            // landed; otherwise the swing has no effect at all and the target stays out of the
+            // hit list, so a later window tick can still be blocked.
             let hf = self.loco.facing;
-            if let Some(e) = c.enemy.as_mut().filter(|e| e.blocking && sub != 10) {
+            let power_hit = sub == 10 && mote_id.is_some();
+            if let Some(e) = c.enemy.as_mut().filter(|e| e.blocking && !power_hit) {
                 if c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < e.p.defence.angle {
+                    self.hit_list.push(c.id);
                     e.block_hit = true;
-                    continue;
+                    landed += 1;
                 }
+                continue;
             }
+            self.hit_list.push(c.id);
             // SPEC-0036 Damage: x = P A B C D E (P, B, C, E are 1 without a Mote or petpet), y = x
             // − defence, truncated; D by sub-state.
             let d_factor = match sub {

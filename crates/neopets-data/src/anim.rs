@@ -505,6 +505,14 @@ impl FamilyData {
 
     /// The clip for an action id: word A bits 0–11; an id past the table or 0xFFF is a lookup
     /// miss, which gives clip 0. None when the index is not a clip of the bank.
+    /// The clip the table names for the action, with no fallback: None for an id at or past
+    /// the table's end or a clip field of 0xFFF (SPEC-0038 Layout section 6: such a slot phase
+    /// counts as missing and is skipped).
+    pub fn named_clip(&self, action: u32) -> Option<usize> {
+        let index = (self.actions.get(action as usize).copied()? & 0xFFF) as usize;
+        (index != 0xFFF && index < self.clips.len()).then_some(index)
+    }
+
     pub fn clip_for(&self, action: u32) -> Option<usize> {
         let index = match self.actions.get(action as usize) {
             Some(&a) if a & 0xFFF != 0xFFF => (a & 0xFFF) as usize,
