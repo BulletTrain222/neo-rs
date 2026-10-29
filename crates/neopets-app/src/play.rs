@@ -8548,7 +8548,7 @@ impl Play {
         }
         if find(self, 9).is_none() {
             let f = self.loco.facing;
-            // The stand-in arena: six points on the stage's ring around the hero (radius 24 by
+            // The stand-in arena: six points on the stage's ring around the hero (radius 40 by
             // default, `stage_view::ring`), point 0 ahead of the hero.
             let centre = self.loco.position();
             let a0 = f[0].atan2(f[2]);

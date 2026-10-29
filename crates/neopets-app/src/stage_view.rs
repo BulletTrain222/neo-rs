@@ -1,5 +1,5 @@
 //! The developer test stage's look (this build's own art, not from any disc): a wide flat
-//! floor of muted stone tiles, the arena ring the Cloud Beast moves on (radius 24 by default, as
+//! floor of muted stone tiles, the arena ring the Cloud Beast moves on (radius 40 by default, as
 //! its stand-in arena) and a mark at the centre. The stage itself is `play::World::test_stage`.
 use bevy::prelude::*;
 
@@ -7,12 +7,13 @@ use bevy::prelude::*;
 const HALF: f32 = 600.0;
 const TILE: f32 = 4.0;
 /// The arena ring's radius (the Cloud Beast's stand-in ring: its six points sit on it) and the
-/// drawn line's width. 24 by default (neighbouring points 24 apart, opposite ones 48; the two
-/// disc levels with points 101 to 106 spread theirs over about 30 to 35 units); NEOPETS_CLOUD_RING
+/// drawn line's width. 40 by default at the user's request (neighbouring points 40 apart,
+/// opposite ones 80; the two disc levels with points 101 to 106 spread theirs over about 30 to 35
+/// units); NEOPETS_CLOUD_RING
 /// sets another radius (diagnostic).
 pub fn ring() -> f32 {
     static R: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *R.get_or_init(|| std::env::var("NEOPETS_CLOUD_RING").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|r| *r > 2.0).unwrap_or(24.0))
+    *R.get_or_init(|| std::env::var("NEOPETS_CLOUD_RING").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|r| *r > 2.0).unwrap_or(40.0))
 }
 const LINE: f32 = 0.35;
 
