@@ -7,12 +7,15 @@ const EDGE: f32 = 16.0;
 const MIN_SCALE: f32 = 0.35;
 
 /// A window laid out at its full size and then scaled down as one piece to fit the game window
-/// (never up). Its top edge stays put; `centred` keeps it centred across, else its left edge
-/// stays put. Bevy's UI picking follows the transform, so clicks land on the scaled rows.
+/// (never up). Its top edge stays put, and across: its left edge (Left), its centre (Centre)
+/// or its right edge (Right). Bevy's UI picking follows the transform, so clicks land on the
+/// scaled rows.
 #[derive(Component, Clone, Copy)]
 #[require(UiTransform)]
-pub struct FitToWindow {
-    pub centred: bool,
+pub enum FitToWindow {
+    Left,
+    Centre,
+    Right,
 }
 
 /// After UI layout: each FitToWindow node's scale and the shift that keeps its anchor.
@@ -27,7 +30,12 @@ pub fn fit_to_window(windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
         let s = (room.x / size.x).min(room.y / size.y).clamp(MIN_SCALE, 1.0);
         // UiTransform scales about the node's centre: shift it so the anchor stays put.
         let shift = -(1.0 - s) * size / 2.0;
-        let want = UiTransform { translation: Val2::px(if fit.centred { 0.0 } else { shift.x }, shift.y), scale: Vec2::splat(s), ..UiTransform::IDENTITY };
+        let x = match fit {
+            FitToWindow::Left => shift.x,
+            FitToWindow::Centre => 0.0,
+            FitToWindow::Right => -shift.x,
+        };
+        let want = UiTransform { translation: Val2::px(x, shift.y), scale: Vec2::splat(s), ..UiTransform::IDENTITY };
         if *t != want {
             *t = want;
         }

@@ -469,7 +469,7 @@ pub fn spawn_window(mut commands: Commands) {
                 display: Display::None,
                 ..default()
             },
-            crate::ui_fit::FitToWindow { centred: true },
+            crate::ui_fit::FitToWindow::Centre,
             BackgroundColor(PANEL),
             GlobalZIndex(5003),
             DispWindow,

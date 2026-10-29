@@ -333,7 +333,7 @@ pub fn spawn_panel(mut commands: Commands) {
                 display: Display::None,
                 ..default()
             },
-            crate::ui_fit::FitToWindow { centred: false },
+            crate::ui_fit::FitToWindow::Left,
             BackgroundColor(PANEL),
             GlobalZIndex(5002),
             DevWindow,
