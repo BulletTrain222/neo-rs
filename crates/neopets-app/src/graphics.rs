@@ -213,6 +213,10 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
                 c.insert(DepthPrepass);
             }
         }
+        // NEOPETS_OCCLUSION: GPU occlusion culling, with the depth prepass it needs (diagnostic).
+        if std::env::var_os("NEOPETS_OCCLUSION").is_some() {
+            c.insert((DepthPrepass, bevy::render::occlusion_culling::OcclusionCulling));
+        }
     }
 }
 

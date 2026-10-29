@@ -2152,7 +2152,10 @@ fn sync_worlds(
         }
     }
     let slot = p.boot.areas.slot_of(p.world.pack);
-    want.push(WorldPart::Dome(neopets_data::area::dome_for_slot(slot)));
+    // NEOPETS_PERF_NODOME: no sky dome (diagnostic, to measure its cost).
+    if std::env::var_os("NEOPETS_PERF_NODOME").is_none() {
+        want.push(WorldPart::Dome(neopets_data::area::dome_for_slot(slot)));
+    }
     // The test stage has no disc scene: its own floor under the default sky dome.
     if p.on_test_stage() {
         want = vec![WorldPart::Stage, WorldPart::Dome(neopets_data::area::dome_for_slot(None))];
