@@ -649,8 +649,10 @@ impl Character {
     /// shots in its own hit routine: Gnarfas, the Plague Serpent, the Faerie Sisters, the Black
     /// Knight and the Undead Draik (SPEC-0036 Hittable predicate). The Mote power-attack objects
     /// and the target finder never select them.
+    /// The Juppie is excluded from every hero hit scan as well: only its stun loop counts swings
+    /// and only its dazed loop shots (SPEC-0015 Hero actions).
     pub fn own_hit_check(&self) -> bool {
-        self.gnarfas.is_some() || self.serpent.is_some() || self.sister.is_some() || self.knight.is_some() || self.draik.is_some()
+        self.gnarfas.is_some() || self.serpent.is_some() || self.sister.is_some() || self.knight.is_some() || self.draik.is_some() || self.boss.is_some()
     }
 
     /// An enemy kind is also not hittable in its melee or missile dodge (agro outer sub-state 5
@@ -3696,8 +3698,10 @@ impl Play {
             }
             // The first character whose bone capsule meets the shot sphere.
             // The Black Knight is never a shot target here (SPEC-0012 G15): its weak-point test
-            // reads the shot slots itself, and a shot off the guarding knight pays nothing.
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none()).find_map(|(i, c)| {
+            // reads the shot slots itself, and a shot off the guarding knight pays nothing. Nor is
+            // the Juppie (SPEC-0015 Hero actions): shots pass through its body; its mouth bounce
+            // and the Act 3 dazed loop are not built.
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none() && c.boss.is_none()).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
@@ -5655,7 +5659,8 @@ impl Play {
         // death take none; a melee hit and the summed shots reach it separately).
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.ixi.is_some()) {
             if by.contains("shot") {
-                c.pending_shot = Some(c.pending_shot.unwrap_or(0) + damage.max(0));
+                // Several shots in one tick: the last one's damage stands (Edge cases 2).
+                c.pending_shot = Some(damage.max(0));
             } else {
                 c.pending_hit = Some(damage.max(0));
             }

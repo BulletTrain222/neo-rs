@@ -226,6 +226,9 @@ pub struct Act {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Ixi {
+    /// The first damaging hit through the shared hero hit path has been doubled (the shared NPC
+    /// take-hit doubles the first one, as the boss is never in agro; SPEC-0014 Hero actions).
+    shared_doubled: bool,
     pub state: State,
     pub mode: u8,
     pub stage: u8,
@@ -275,7 +278,7 @@ impl Ixi {
     /// otherwise); mode 0 starts in the dormant hold.
     pub fn new(mode: u8, w: &Words) -> Self {
         let scale = if mode == 0 { w.base_scale } else { 1.0 };
-        Self { state: if mode == 0 { State::Hold } else { State::Idle }, mode, stage: 0, scale, lava: [false; 2], cool: [0; 5], hit: false, melee: false, orbit_dir: 0, orbit_timer: 30, retreat: 0.0 }
+        Self { shared_doubled: false, state: if mode == 0 { State::Hold } else { State::Idle }, mode, stage: 0, scale, lava: [false; 2], cool: [0; 5], hit: false, melee: false, orbit_dir: 0, orbit_timer: 30, retreat: 0.0 }
     }
 
     fn free(&self) -> bool {
@@ -337,14 +340,30 @@ impl Ixi {
                 }
             }
         }
-        // The incoming hits (none in the hold, the lava or death).
+        // The shared hero hit path (SPEC-0014 Hero actions): it refuses the boss in idle, hold
+        // and the stage transition (invulnerable); the block states guard, so a frontal swing is
+        // blocked there (a side or rear one goes through) and every shot bounces; in every other
+        // state the hit is subtracted again, the first damaging one doubled.
+        let mut shared = 0;
+        if !matches!(self.state, State::Idle | State::Hold | State::Transition) {
+            let guard = matches!(self.state, State::BlockMelee | State::BlockMissile);
+            shared += v.melee_hit.filter(|_| !(guard && in_front)).unwrap_or(0).max(0);
+            shared += v.shot_hit.filter(|_| !guard).unwrap_or(0).max(0);
+        }
+        if shared > 0 && !self.shared_doubled {
+            shared *= 2;
+            self.shared_doubled = true;
+        }
+        a.hp_loss = shared;
+        // The incoming hits of its own check (none in the hold, the lava or death): a shot's
+        // damage replaces a melee hit's in the same tick (Edge cases 2).
         if !matches!(self.state, State::Hold | State::Lava | State::Death) {
             let shielded = matches!(self.state, State::DodgeMelee(_) | State::BlockMelee | State::ForwardSwipe | State::GetHit) && in_front;
             let melee = v.melee_hit.filter(|_| !matches!(self.state, State::GetHit | State::Transition) && !shielded);
-            let total = melee.unwrap_or(0) + v.shot_hit.unwrap_or(0);
+            let own = v.shot_hit.or(melee).unwrap_or(0);
             if melee.is_some() || v.shot_hit.is_some() {
                 a.flash = true;
-                a.hp_loss = total;
+                a.hp_loss += own;
                 self.enter(State::GetHit);
             }
         }
@@ -826,6 +845,20 @@ mod tests {
         let three = |f: u16| f == 3;
         let mut v = view(&valid, &three, 100);
         v.shot_hit = Some(10);
+        assert_eq!(k.tick(&v, &w, &mut rng).hp_loss, 0);
+        // Moving, a swing counts by both routes: the own check 10 and the shared path 10, the
+        // first shared hit doubled (30), the next 20; in a block state a frontal swing passes
+        // only the own check's front rule (ignored there too), so nothing.
+        let mut k = Ixi::new(1, &w);
+        k.state = State::Move(0);
+        let mut v = view(&valid, &no, 100);
+        v.hero = [0.0, 0.0, 30.0];
+        v.melee_hit = Some(10);
+        assert_eq!(k.tick(&v, &w, &mut rng).hp_loss, 30);
+        k.state = State::Move(0);
+        assert_eq!(k.tick(&v, &w, &mut rng).hp_loss, 20);
+        k.state = State::BlockMelee;
+        v.hero = [0.0, 0.0, 3.0];
         assert_eq!(k.tick(&v, &w, &mut rng).hp_loss, 0);
         // The charge: no distance check; sub-step 0 takes the first valid candidate.
         let mut k = Ixi::new(1, &w);
