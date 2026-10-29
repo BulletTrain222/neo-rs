@@ -5706,8 +5706,12 @@ impl Play {
         }
         // SPEC-0013: the Gelert Assassin's controller takes a hit only in its hittable states.
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.gelert.is_some()) {
-            let (d, shot) = c.gelert_hit.unwrap_or((0, false));
-            c.gelert_hit = Some((d + damage.max(0), shot || by.contains("shot")));
+            // G7: a melee contact takes the tick; otherwise the last overlapping shot's damage
+            // stands (each slot is still removed).
+            let shot = by.contains("shot");
+            if !(shot && c.gelert_hit.is_some_and(|(_, s)| !s)) {
+                c.gelert_hit = Some((damage.max(0), shot));
+            }
             return;
         }
         // SPEC-0011: a Faerie Sister's own controller applies the hit (the shield, the flinch and
@@ -10472,6 +10476,7 @@ impl Play {
                 missile_near,
                 hit_melee: pending.is_some_and(|(_, shot)| !shot),
                 hit_missiles: pending.is_some_and(|(_, shot)| shot) as u32,
+                hit_damage: pending.map_or(0, |(d, _)| d),
                 nav_blocked: blocked,
                 level: &level,
                 walkable: &walkable,
@@ -10480,10 +10485,9 @@ impl Play {
             };
             let Some(g) = c.gelert.as_mut() else { continue };
             let before = g.state;
-            if let Some((damage, _)) = pending.filter(|_| g.state.hittable() && !g.clone) {
-                c.hp -= damage;
-            }
+            // G7: damage only when the hit makes the boss flinch, times the time factor.
             let act = g.tick(&v, &words, &mut self.rng);
+            c.hp = (c.hp - act.hp_loss).max(0);
             let after = g.state;
             let is_clone = g.clone;
             c.anim.set_rate(act.rate);

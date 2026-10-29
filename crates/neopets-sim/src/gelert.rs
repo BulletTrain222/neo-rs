@@ -212,6 +212,9 @@ pub struct View<'a> {
     /// Hits on the boss this tick: a melee hit, and the number of missile slots that hit.
     pub hit_melee: bool,
     pub hit_missiles: u32,
+    /// The hero hit damage of this tick's hit (melee at scale 1.0, else the last overlapping
+    /// shot slot's damage query), before the time factor.
+    pub hit_damage: i32,
     /// The navmesh blocked flag (SPEC-0056).
     pub nav_blocked: bool,
     pub level: &'a dyn Fn(u16) -> bool,
@@ -389,6 +392,12 @@ impl Gelert {
         }
     }
 
+    /// G7: the damage a flinching hit takes: trunc(hero hit damage x (1 + 4 x elapsed / 7200)),
+    /// the factor a float, unclamped (2.0 at 15 s, 5.0 at 60 s since the last reset).
+    pub fn taken(&self, damage: i32) -> i32 {
+        (damage.max(0) as f32 * (1.0 + 4.0 * self.elapsed as f32 / 7200.0)) as i32
+    }
+
     /// One tick (4.1).
     pub fn tick(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
         let mut a = Act { rate: 1.0, ..Act::default() };
@@ -539,11 +548,13 @@ impl Gelert {
                     self.enter(State::Heal(2));
                 }
                 State::LightArc(_) => {
+                    a.hp_loss = self.taken(v.hit_damage);
                     self.enter(State::Flinch);
                     a.anim = Some(if rng.range(0, 1) == 1 { 17 } else { 16 });
                     a.effects.push(222);
                 }
                 _ => {
+                    a.hp_loss = self.taken(v.hit_damage);
                     self.enter(State::Flinch);
                     a.anim = Some(if rng.range(0, 1) == 1 { 17 } else { 16 });
                     a.effects.push(222);
@@ -1127,12 +1138,27 @@ mod tests {
             missile_near: false,
             hit_melee: false,
             hit_missiles: 0,
+            hit_damage: 0,
             nav_blocked: false,
             level,
             walkable: walk,
             rainbow: [None; 8],
             clones_alive: 0,
         }
+    }
+
+    #[test]
+    fn damage_time_factor() {
+        // SPEC-0013 G7: a hit of 15 takes 15 at the start, 30 at 15 s (900 ticks at 2 a tick:
+        // counter 1800), 75 at 60 s (counter 7200).
+        let w = words();
+        let mut rng = Rng::seeded(1);
+        let mut g = Gelert::new(&w, false, false, &mut rng);
+        assert_eq!(g.taken(15), 15);
+        g.elapsed = 1800;
+        assert_eq!(g.taken(15), 30);
+        g.elapsed = 7200;
+        assert_eq!(g.taken(15), 75);
     }
 
     #[test]
