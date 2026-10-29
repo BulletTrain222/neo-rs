@@ -55,6 +55,12 @@ impl Built {
     }
 }
 
+/// A part that lies flat: its mean normal points up (above 0.9).
+fn is_flat(p: &neopets_data::model::MeshPart) -> bool {
+    let n = p.normals.len().max(1) as f32;
+    p.normals.iter().map(|q| q[1]).sum::<f32>() / n > 0.9
+}
+
 /// One part's mesh, as `part_assets` builds it.
 fn part_mesh(part: &neopets_data::model::MeshPart) -> Mesh {
     let g = crate::gs_unit(part);
@@ -107,7 +113,9 @@ pub fn spawn(
     // NEOPETS_NO_MERGE: every part keeps its own entity, as before (diagnostic).
     let no_merge = std::env::var_os("NEOPETS_NO_MERGE").is_some();
     let mut env_textures: HashMap<usize, Handle<Image>> = HashMap::new();
-    let mut groups: HashMap<(AssetId<StandardMaterial>, Option<u8>, i32, i32), (Handle<StandardMaterial>, Vec<usize>)> = HashMap::new();
+    let mut groups: HashMap<(AssetId<StandardMaterial>, Option<u8>, i32, i32, bool), (Handle<StandardMaterial>, Vec<usize>)> = HashMap::new();
+    // NEOPETS_FLAT_NOCAST: flat ground parts cast no sun shadow (diagnostic, to measure).
+    let flat_ground = std::env::var_os("NEOPETS_FLAT_NOCAST").is_some();
     let mut count = 0;
     for (i, p) in m.parts.iter().enumerate() {
         let env = p.texture.filter(|_| p.env_map && !no_pass1);
@@ -121,7 +129,7 @@ pub fn spawn(
         if !apart {
             let n = p.positions.len().max(1) as f32;
             let c = p.positions.iter().fold([0.0f32; 2], |a, q| [a[0] + q[0] / n, a[1] + q[2] / n]);
-            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32);
+            let key = (material.id(), p.zone, (c[0] / CELL).floor() as i32, (c[1] / CELL).floor() as i32, flat_ground && is_flat(p));
             groups.entry(key).or_insert_with(|| (material, Vec::new())).1.push(i);
             continue;
         }
@@ -157,9 +165,12 @@ pub fn spawn(
             }
         }
     }
-    for ((_, zone, _, _), (material, list)) in groups {
+    for ((_, zone, _, _, flat), (material, list)) in groups {
         let parts: Vec<&neopets_data::model::MeshPart> = list.iter().map(|&i| &m.parts[i]).collect();
         let mut e = commands.spawn((Mesh3d(meshes.add(merged_mesh(&parts))), MeshMaterial3d(material), Transform::IDENTITY, part));
+        if flat {
+            e.insert(bevy::light::NotShadowCaster);
+        }
         count += 1;
         if let Some(z) = zone {
             e.insert(ZoneGate(pack, z));
