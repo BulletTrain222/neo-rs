@@ -126,6 +126,9 @@ pub struct World {
     /// a hero shot fires under the current mask.
     pub all_volumes: Vec<neopets_sim::trigger::Volume>,
     shot_volumes: Vec<neopets_sim::trigger::Volume>,
+    /// The solid volumes (flag bit 0; SPEC-0028 Blade recoil, SPEC-0036 World contact), each
+    /// with its gate mask; the users test the current collision mask.
+    pub solids: Vec<neopets_sim::trigger::Volume>,
     routines: HashMap<u16, u8>,
     /// Script-group type registrations: trigger index to its owner group (SPEC-0048 Script
     /// groups, type registration); a later RegisterTrigger on the index replaces it.
@@ -233,6 +236,7 @@ impl World {
             books: Vec::new(),
             all_volumes: Vec::new(),
             shot_volumes: Vec::new(),
+            solids: Vec::new(),
             routines: HashMap::new(),
             group_routes: HashMap::new(),
             disabled_triggers: Default::default(),
@@ -322,6 +326,7 @@ impl World {
             books: Vec::new(),
             all_volumes: Vec::new(),
             shot_volumes: Vec::new(),
+            solids: Vec::new(),
             routines: HashMap::new(),
             group_routes: HashMap::new(),
             disabled_triggers: Default::default(),
@@ -407,6 +412,7 @@ impl World {
                 _ => None,
             })
             .collect();
+        world.solids = all.iter().map(|(v, _)| *v).filter(|v| v.solid(0xFFFF)).collect();
         world.volumes = all.into_iter().map(|(v, _)| v).filter(|v| v.fires_on_contact(0xFFFF) || v.fires_on_shot(0xFFFF)).collect();
         world.all_volumes = world.volumes.clone();
         // SPEC-0048 Source and Placement: each n1 entry with a bit-1 box is a block, placed on
@@ -1039,6 +1045,10 @@ pub struct Play {
     thorn_radius: f32,
     thorn_shots: [Option<[f32; 3]>; neopets_sim::projectile::SLOTS],
     last_axis: Option<[f32; 3]>,
+    /// The hero's recoil material word (SPEC-0028 Blade recoil; 6 at start) and the blade's
+    /// previous direction (the triangle's secondary direction D).
+    recoil_material: u8,
+    blade_last: Option<[f32; 3]>,
     /// The last hit, for the status line.
     pub last_hit: String,
     /// The hero's health and maximum (SPEC-0036 Start values), the band factor tables
@@ -1801,6 +1811,8 @@ impl Play {
             thorn_radius,
             thorn_shots: [None; neopets_sim::projectile::SLOTS],
             last_axis: None,
+            recoil_material: 6,
+            blade_last: None,
             last_hit: String::new(),
             hero_hp: hero_max,
             hero_max,
@@ -3817,7 +3829,7 @@ impl Play {
                 // records (byte +0x4C not 6) met by the shot's path, the last match's byte
                 // +0x4D picking the cue. The cue plays once from the weapon bank.
                 let mask = self.world.collis_mask;
-                let collider = self.world.all_volumes.iter().find(|v| v.solid_for_shot(mask) && v.shot_hits(s.position, s.radius)).map(|v| {
+                let collider = self.world.solids.iter().find(|v| v.solid_for_shot(mask) && v.shot_hits(s.position, s.radius)).map(|v| {
                     let at = match v.shape {
                         neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
                         neopets_sim::trigger::Shape::Cylinder { base, .. } => base,
@@ -5582,6 +5594,56 @@ impl Play {
                 _ => None,
             })
             .unwrap_or(1.5)
+    }
+
+    /// SPEC-0028 Blade recoil: Tor (hero 0) with event bit 0x01 on his frame and the busy gate
+    /// clear (no head record of the candidate list in range) tests each solid volume of the
+    /// current collision mask: a cylinder against the test cylinder from his feet, the others
+    /// against the blade triangle from attach point 0 (Q its translation, U the blade axis, D
+    /// the previous tick's axis, W the weapon reach). Each hit requests sub-state 13 and writes
+    /// the material of its mode byte; there is no one-hit latch (the spec leaves the per-swing
+    /// count open). Interpretation: D as the previous axis (the spec gives it as a stored
+    /// secondary direction, Medium); the type-10 world-face candidates are not tested.
+    fn blade_recoil(&mut self) {
+        let window = self.hero.frame_bits() & 1 != 0;
+        if self.hero_index != 0 || !window {
+            self.blade_last = None;
+            return;
+        }
+        let p = self.loco.position();
+        let place = placement(p, self.loco.facing);
+        let frames = self.hero.bone_frames();
+        let Some(&(Some(bone), angles, offset)) = self.hero.bones().attach.first() else { return };
+        let Some(bw) = frames.get(bone) else { return };
+        let w = place.mul(bw).mul(&attach_rotation(offset, angles));
+        let (q, u) = (w.t, unit(w.cols[2]));
+        let d = self.blade_last.replace(u).unwrap_or(u);
+        if self.candidates.records.first().is_some_and(|r| r.in_range) {
+            return;
+        }
+        let tri = neopets_sim::trigger::blade_triangle(q, u, d, self.weapon_reach());
+        let mask = self.world.collis_mask;
+        // NEOPETS_TRACE_BLADE: the triangle and the nearest solid's shape on each window tick.
+        if std::env::var_os("NEOPETS_TRACE_BLADE").is_some() {
+            let near = self.world.solids.iter().filter(|v| v.solid(mask)).min_by(|a, b| {
+                let c = |v: &neopets_sim::trigger::Volume| match v.shape {
+                    neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
+                    neopets_sim::trigger::Shape::Cylinder { base, .. } => base,
+                    neopets_sim::trigger::Shape::Rectangle { origin, .. } => origin,
+                };
+                let d = |x: [f32; 3]| (x[0] - q[0]).powi(2) + (x[2] - q[2]).powi(2);
+                d(c(a)).total_cmp(&d(c(b)))
+            });
+            println!("      blade tick {}: tri {:?} nearest {:?}", self.ticks, tri.map(|p| p.map(|x| (x * 100.0).round() / 100.0)), near.map(|v| v.shape));
+        }
+        let hit = self.world.solids.iter().find(|v| v.solid(mask) && v.blade_hits(p, neopets_sim::contact::HERO_RADIUS, tri)).copied();
+        if let Some(v) = hit {
+            if let Some(a) = self.attack.as_mut() {
+                a.recoil();
+                self.recoil_material = neopets_sim::trigger::recoil_material(v.surface);
+                self.last_fx = format!("blade recoil off a kind-{} solid (mode {}, material {}) on tick {}", v.kind, v.surface, self.recoil_material, self.ticks);
+            }
+        }
     }
 
     /// SPEC-0036 Hero swing, per tick while the attack window (bit 0x1) is on: the weapon
@@ -7832,16 +7894,17 @@ impl Play {
                 self.sound.play(slot, cue, Cue::default());
             }
             // SPEC-0036 Tor's sub-state 13 (the recoil): while the current action is not 26, the
-            // recoil voice cue (13 for material 4, the only material this build requests;
-            // SPEC-0048 Element recoil) and the rumble request.
+            // recoil voice cue by the recoil material (SPEC-0028 Blade recoil; 13 for the
+            // element mismatch's material 4, SPEC-0048 Element recoil) and the rumble request.
             if sub == 13 && self.hero.clip_state().action != 26 {
-                self.sound.play(VOICE, 13, Cue::default());
+                self.sound.play(VOICE, neopets_sim::trigger::recoil_cue(self.recoil_material).into(), Cue::default());
                 let (p, t, m) = self.landing_rumble;
                 self.rumble.request(&self.rumble_presets, p, t, m);
             }
         }
         let hits = self.hit_list.len();
         self.hero_swing();
+        self.blade_recoil();
         self.trail_step();
         self.showcase_step();
         self.corner_step();
@@ -12320,6 +12383,7 @@ impl Play {
         if recoil && self.hero_index == 0 {
             if let Some(a) = self.attack.as_mut() {
                 a.recoil();
+                self.recoil_material = 4;
             }
         }
         for gi in chained {

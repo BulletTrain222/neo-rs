@@ -3527,6 +3527,18 @@ fn play_trace(
     let kinds: Vec<String> = play.world.groups.iter().enumerate().map(|(i, g)| format!("{i}:k{} t{:?} o{:?}", g.kind, g.triggers.first(), g.objects.iter().take(2).collect::<Vec<_>>())).collect();
     println!("Script groups of {}: {}", play.world.pack, kinds.join(" "));
     println!("Script volumes of {} (index, a point inside): {:?}", play.world.pack, play.world.volume_points());
+    let solid_kinds: Vec<usize> = [1u8, 3, 4, 7].iter().map(|k| play.world.solids.iter().filter(|v| v.kind == *k).count()).collect();
+    let hero = play.loco.position();
+    let mut near: Vec<(f32, u8, [f32; 3])> = play.world.solids.iter().map(|v| {
+        let at = match v.shape {
+            neopets_sim::trigger::Shape::Sphere { centre, .. } => centre,
+            neopets_sim::trigger::Shape::Cylinder { base, .. } => base,
+            neopets_sim::trigger::Shape::Rectangle { origin, .. } => origin,
+        };
+        (((at[0] - hero[0]).powi(2) + (at[2] - hero[2]).powi(2)).sqrt(), v.kind, at)
+    }).collect();
+    near.sort_by(|a, b| a.0.total_cmp(&b.0));
+    println!("Solid volumes of {} (kinds 1, 3, 4, 7): {:?}; nearest {:?}", play.world.pack, solid_kinds, near.iter().take(3).map(|n| (n.1, n.2.map(|x| x.round()))).collect::<Vec<_>>());
     if to.is_some_and(|t| t[0].is_nan()) {
         let goal = match to.map(|t| t[1]) {
             Some(g) if g == 0.0 => play::Goal::NewNeighbour,

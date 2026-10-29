@@ -188,6 +188,131 @@ impl Volume {
     }
 }
 
+/// SPEC-0028 Blade recoil: the volume mode byte (+0x11) to the recoil material.
+pub fn recoil_material(mode: u8) -> u8 {
+    match mode {
+        0 => 0,
+        1 => 1,
+        2 => 4,
+        3 => 6,
+        4 => 9,
+        5 => 2,
+        6 => 8,
+        7 => 3,
+        8..=16 => mode + 10,
+        17 => 10,
+        18 => 27,
+        _ => 0,
+    }
+}
+
+/// SPEC-0028 Blade recoil: a world-face record's material byte to the recoil material.
+pub fn face_material(b: u8) -> u8 {
+    match b {
+        0..=3 => b + 1,
+        4..=8 => b,
+        9 | 10 => 9,
+        11 => 8,
+        12..=18 => b - 1,
+        19 => 10,
+        _ => 0,
+    }
+}
+
+/// SPEC-0028 Blade recoil: the recoil cue of a material (SPEC-0036 plays it).
+pub fn recoil_cue(material: u8) -> u16 {
+    match material {
+        1 | 6 | 20 => 11,
+        2 | 23 | 26 => 20,
+        3 => 18,
+        4 => 13,
+        5 | 22 | 27 => 15,
+        7 => 17,
+        8 => 19,
+        9 | 21 | 24 => 12,
+        10 => 29,
+        11 => 25,
+        12 => 21,
+        13 => 22,
+        14 | 18 | 25 => 23,
+        15 => 26,
+        16 => 24,
+        17 | 19 => 28,
+        _ => 11,
+    }
+}
+
+/// The blade test cylinder's radius (SPEC-0028 Kind-3 blade test).
+pub const BLADE_RADIUS: f32 = 0.5;
+
+impl Volume {
+    /// A solid volume for Tor's blade recoil (SPEC-0028 Blade recoil): flag bit 0 on a sphere,
+    /// a cylinder or a rectangle, with the gate mask against the world's gate word (the hero's
+    /// contact walk visits the primitives of the current collision mask).
+    pub fn solid(&self, world_mask: u16) -> bool {
+        (self.mask == 0 || self.mask & world_mask != 0) && self.flags & 1 != 0 && matches!(self.kind, 1 | 3 | 4 | 7)
+    }
+
+    /// The blade test (SPEC-0028 Blade recoil). A cylinder (kind 3) takes the upright test
+    /// cylinder of radius 0.5 and length 0.25 x the hero's contact radius from the contact point
+    /// `foot` (the static overlap: the volumes do not move). The other kinds take the blade
+    /// triangle's three edges: a sphere by the closest distance (at most the stored radius), a
+    /// static rectangle by the segment crossing its plane inside the extents, a moving one by
+    /// the same test on its box's five faces (all but the top). No margins.
+    pub fn blade_hits(&self, foot: [f32; 3], contact_radius: f32, tri: [[f32; 3]; 3]) -> bool {
+        let edges = [(tri[0], tri[1]), (tri[0], tri[2]), (tri[1], tri[2])];
+        match self.shape {
+            Shape::Cylinder { .. } => self.touches_with(foot, BLADE_RADIUS, 0.25 * contact_radius),
+            Shape::Sphere { centre, radius } => edges.iter().any(|&(a, b)| segment_point(a, b, centre) <= radius),
+            Shape::Rectangle { origin, axes, extents } => {
+                // Box coordinates of a point.
+                let local = |p: [f32; 3]| {
+                    let d = sub(p, origin);
+                    [dot(d, axes[0]), dot(d, axes[1]), dot(d, axes[2])]
+                };
+                // The segment crossing the plane x[n] = c with the other two coordinates in range.
+                let face = |a: [f32; 3], b: [f32; 3], n: usize, c: f32, ranges: [(usize, f32); 2]| {
+                    let (da, db) = (a[n] - c, b[n] - c);
+                    if (da > 0.0 && db > 0.0) || (da < 0.0 && db < 0.0) {
+                        return false;
+                    }
+                    let t = if da == db { 0.0 } else { da / (da - db) };
+                    ranges.iter().all(|&(k, e)| {
+                        let x = a[k] + t * (b[k] - a[k]);
+                        x >= e.min(0.0) && x <= e.max(0.0)
+                    })
+                };
+                edges.iter().any(|&(p, q)| {
+                    let (a, b) = (local(p), local(q));
+                    if extents[2] <= 0.0 {
+                        // Static: the plane through the corner along the normal (axis 2).
+                        face(a, b, 2, 0.0, [(0, extents[0]), (1, extents[1])])
+                    } else {
+                        // Moving: U (axis 0, extent eU), B (axis 1, eB), A (axis 2, eA); the two
+                        // A faces, the two B faces and the bottom (u = 0).
+                        let (eu, eb, ea) = (extents[0], extents[1], extents[2]);
+                        face(a, b, 2, 0.0, [(1, eb), (0, eu)])
+                            || face(a, b, 2, ea, [(1, eb), (0, eu)])
+                            || face(a, b, 1, 0.0, [(2, ea), (0, eu)])
+                            || face(a, b, 1, eb, [(2, ea), (0, eu)])
+                            || face(a, b, 0, 0.0, [(2, ea), (1, eb)])
+                    }
+                })
+            }
+        }
+    }
+}
+
+/// The blade triangle (SPEC-0028 Blade triangle): Q the first weapon attachment frame's
+/// translation, U its first basis vector, D the secondary direction, W the weapon reach;
+/// r = 0.6 W, P0 = Q + 0.25 U, P1 = P0 + 0.25 r D, P2 = P0 + 0.25 r U.
+pub fn blade_triangle(q: [f32; 3], u: [f32; 3], d: [f32; 3], reach: f32) -> [[f32; 3]; 3] {
+    let r = 0.6 * reach;
+    let p0 = [q[0] + 0.25 * u[0], q[1] + 0.25 * u[1], q[2] + 0.25 * u[2]];
+    let at = |v: [f32; 3]| [p0[0] + 0.25 * r * v[0], p0[1] + 0.25 * r * v[1], p0[2] + 0.25 * r * v[2]];
+    [p0, at(d), at(u)]
+}
+
 fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
@@ -284,6 +409,46 @@ impl Record {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blade_recoil_maps_and_tests() {
+        // SPEC-0028 synthetic: mode 4 gives material 9 and cue 12; 17 gives 10 and 29; 0 and 19
+        // give 0 and 11; face byte 11 gives material 8 and cue 19.
+        assert_eq!((recoil_material(4), recoil_cue(9)), (9, 12));
+        assert_eq!((recoil_material(17), recoil_cue(10)), (10, 29));
+        assert_eq!((recoil_material(0), recoil_cue(0)), (0, 11));
+        assert_eq!(recoil_material(19), 0);
+        assert_eq!((face_material(11), recoil_cue(8)), (8, 19));
+        assert_eq!(recoil_cue(4), 13);
+        // Bit 0 marks the solid; 0x0008 alone does not.
+        let sphere = Volume { kind: 1, flags: 0x0001, mask: 0, index: 0, surface: 0, shape: Shape::Sphere { centre: [0.0; 3], radius: 1.0 } };
+        assert!(sphere.solid(0) && !Volume { flags: 0x0008, ..sphere }.solid(0));
+        // A sphere of radius 1.0 at the origin: an edge from (1, 0, -2) to (1, 0, 2) hits (the
+        // boundary counts); at x = 1.01 it misses.
+        let tri = |x: f32| [[x, 0.0, -2.0], [x, 0.0, 2.0], [x, 0.0, 2.0]];
+        assert!(sphere.blade_hits([9.0; 3], 1.0, tri(1.0)));
+        assert!(!sphere.blade_hits([9.0; 3], 1.0, tri(1.01)));
+        // A static rectangle: normal (0, 1, 0), axis (1, 0, 0) extent 10, axis (0, 0, 1) extent
+        // 4. A segment crossing at (5, 0, 2) hits; one crossing at x = 12 does not.
+        let rect = Volume { kind: 4, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[1.0, 0.0, 0.0], [0.0, 0.0, 1.0], [0.0, 1.0, 0.0]], extents: [10.0, 4.0, 0.0] }, ..sphere };
+        let seg = |x: f32| [[x, 1.0, 2.0], [x, -1.0, 2.0], [x, -1.0, 2.0]];
+        assert!(rect.blade_hits([0.0; 3], 1.0, seg(5.0)));
+        assert!(!rect.blade_hits([0.0; 3], 1.0, seg(12.0)));
+        // A moving rectangle (the 1324 plate's box): a segment through the far A face hits; one
+        // above the box (only the top face, which is not built) does not.
+        let plate = Volume { kind: 4, shape: Shape::Rectangle { origin: [0.0; 3], axes: [[0.0, 1.0, 0.0], [1.0, 0.0, 0.0], [0.0, 0.0, 1.0]], extents: [10.0, 5.0, 2.0] }, ..sphere };
+        assert!(plate.blade_hits([0.0; 3], 1.0, [[2.0, 5.0, 1.0], [2.0, 5.0, 3.0], [2.0, 5.0, 3.0]]));
+        assert!(!plate.blade_hits([0.0; 3], 1.0, [[2.0, 11.0, 1.0], [2.0, 9.0 + 2.5, 1.5], [2.0, 12.0, 1.0]]));
+        // A cylinder: the test cylinder of radius 0.5 and length 0.25 x 4.0 = 1.0 from the foot.
+        let cyl = Volume { kind: 3, shape: Shape::Cylinder { base: [0.0; 3], axis: [0.0, 1.0, 0.0], length: 3.5, radius: 1.0 }, ..sphere };
+        assert!(cyl.blade_hits([1.4, 0.0, 0.0], 4.0, tri(0.0)));
+        assert!(!cyl.blade_hits([1.6, 0.0, 0.0], 4.0, tri(0.0)));
+        assert!(!cyl.blade_hits([0.0, -1.1, 0.0], 4.0, tri(0.0)));
+        // The triangle with the default reach 1.5: r 0.9, each extension 0.225.
+        let t = blade_triangle([0.0; 3], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0], 1.5);
+        assert_eq!(t[0], [0.0, 0.0, 0.25]);
+        assert!((t[1][0] - 0.225).abs() < 1e-6 && (t[2][2] - 0.475).abs() < 1e-6);
+    }
 
     #[test]
     fn shot_gates_and_hits() {
