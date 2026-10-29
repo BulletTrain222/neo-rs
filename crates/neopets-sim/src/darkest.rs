@@ -235,7 +235,8 @@ impl Faerie {
         } else if (v.level)(18) {
             self.loop_a(v, w)
         } else {
-            // Loop B (the duel with Queen Fyora) is not built: she holds animation 0.
+            // Loop B (the duel with Queen Fyora) runs through `loop_b`, which needs the partner
+            // and the shared slots; without them she holds animation 0.
             Act { anim: Some(0), ..Act::default() }
         }
     }
