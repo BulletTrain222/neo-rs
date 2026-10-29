@@ -953,7 +953,18 @@ pub fn sync_textbox(
         }
         None if p.dialogue_open && p.textbox.open && !p.menu_open => {
             let (name, colour) = p.box_speaker();
-            (&p.textbox, name, colour, Prompt::Continue(if p.textbox.more() { &p.box_labels.0 } else { &p.box_labels.1 }))
+            // SPEC-0022 Prompt row: a LevelPrompt's last page shows no "Finish" but the two
+            // choices, Circle and Triangle, with the table-13 labels 0x21 "Yes" and 0x22 "No"
+            // (every live call passes -1 for its labels, SPEC-0030 row 100).
+            let prompt = if p.textbox.more() {
+                Prompt::Continue(&p.box_labels.0)
+            } else if p.textbox.choice {
+                let label = |i: usize| p.labels.get(i).map_or(&[][..], |l| &l[..]);
+                Prompt::Choice(label(0x21), label(0x22))
+            } else {
+                Prompt::Continue(&p.box_labels.1)
+            };
+            (&p.textbox, name, colour, prompt)
         }
         None => {
             for (_, _, _, mut vis) in &mut parts {
