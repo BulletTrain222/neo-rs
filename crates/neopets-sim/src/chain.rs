@@ -117,7 +117,7 @@ pub fn link_rotation(theta: f32, phi: f32) -> [f32; 4] {
 /// each later link from the joint before it.
 pub fn tor() -> Vec<Chain> {
     let a = [0.188, 0.448, 0.466, 0.410, 0.340];
-    let yaw = [[-3.5, 1.25], [-1.25, 1.25], [-1.57, 1.57], [-1.7, 1.7], [-2.0, 2.0]];
+    let yaw = [[-1.25, 1.25], [-1.25, 1.25], [-1.57, 1.57], [-1.7, 1.7], [-2.0, 2.0]];
     let pitch = [[-10.6, 0.45], [-1.4, 2.0], [-1.4, 1.9], [-1.5, 2.3], [-1.6, 2.4]];
     let chain = (0..5)
         .map(|i| Link {
@@ -141,10 +141,12 @@ pub fn tor() -> Vec<Chain> {
 }
 
 /// Roberta's two head chains (mode 2): joints 7 to 10 from joint 3, and 11 to 14 from joint 5.
+/// Rest pitches 0.25, -1.25, -0.75 and 0.2 rad, each link's pitch limited to [rest, rest + 10]
+/// (R-0126): at rest the strands hang down behind her head.
 pub fn roberta() -> Vec<Chain> {
     let a = [0.038, 0.383, 0.457, 0.470];
-    let beta = [0.25, -3.5, -6.0, 0.2];
-    let pitch = [[0.25, 10.25], [-3.5, 8.75], [-6.0, 9.25], [0.2, 10.2]];
+    let beta = [0.25, -1.25, -0.75, 0.2];
+    let pitch = beta.map(|b| [b, b + 10.0]);
     [(7, 3), (11, 5)]
         .into_iter()
         .map(|(first, root)| {
@@ -244,5 +246,54 @@ mod tests {
         let r = roberta();
         assert_eq!(r[1].iter().map(|l| (l.joint, l.hangs_from)).collect::<Vec<_>>(), [(11, 5), (12, 11), (13, 12), (14, 13)]);
         assert_eq!(r[0][3].k.pitch, [0.2, 10.2]);
+        assert_eq!(r[0][1].k.pitch, [-1.25, 8.75]);
+        assert_eq!(t[0][0].k.yaw, [-1.25, 1.25]);
+    }
+
+    /// Runs one tick of a chain from the link-0 frame `m0`, each later link from the frame the
+    /// previous link has just rebuilt (its link joint turned by its rotation, at its T).
+    fn chain_tick(chain: &mut Chain, m0: Frame) -> Vec<(f32, Vec3)> {
+        let mut f = m0;
+        let mut out = Vec::new();
+        for link in chain.iter_mut() {
+            let (theta, phi) = step_link(link, &f, [0.0; 3]);
+            let n = link.points.unwrap().1;
+            out.push((phi, n));
+            let r = neopets_data_free_quat(link_rotation(theta, phi));
+            let axis = |c: [f32; 3]| add(add(scale(f.x, c[0]), scale(f.y, c[1])), scale(f.z, c[2]));
+            let t = sub(f.p, scale(f.z, link.k.a));
+            f = Frame { x: axis(r[0]), y: axis(r[1]), z: axis(r[2]), p: t };
+        }
+        out
+    }
+
+    #[test]
+    fn roberta_rest_pose_and_bind_tick() {
+        // SPEC-0040 Behavior 25 test vector: chain 0, root identity, link 0's joint at
+        // (0.267375, 3.02515, -0.000143).
+        let m0 = Frame { p: [0.267375, 3.02515, -0.000143], ..IDENTITY };
+        let mut chain = roberta().remove(0);
+        let rest = chain_tick(&mut chain, m0);
+        let want = [[0.2674, 3.1199, -0.4092], [0.2674, 2.7354, -0.6562], [0.2674, 2.2729, -0.5724], [0.2674, 1.8030, -0.5822]];
+        for (i, (phi, n)) in rest.iter().enumerate() {
+            assert!((0..3).all(|k| (n[k] - want[i][k]).abs() < 2e-4), "link {i}: {n:?}");
+            assert!((phi - [0.25, -1.25, -0.75, 0.2][i]).abs() < 1e-4, "link {i}: {phi}");
+        }
+        // Another tick leaves everything unchanged.
+        let again = chain_tick(&mut chain, m0);
+        assert!(again.iter().zip(&rest).all(|(a, b)| (0..3).all(|k| (a.1[k] - b.1[k]).abs() < 1e-4)));
+        // One tick from the straight bind placement.
+        let mut chain = roberta().remove(0);
+        for (link, z) in chain.iter_mut().zip([-0.4211, -0.8781, -1.3481, -1.8181]) {
+            let p = [0.2674, 3.0252, z];
+            link.points = Some((p, p));
+        }
+        let bind = chain_tick(&mut chain, m0);
+        let want = [[0.2674, 3.1199, -0.4092], [0.2674, 2.9817, -0.8448], [0.2674, 2.9569, -1.3142], [0.2674, 3.0258, -1.7791]];
+        let phis = [0.25, -0.5573, 0.2544, 0.2];
+        for (i, (phi, n)) in bind.iter().enumerate() {
+            assert!((0..3).all(|k| (n[k] - want[i][k]).abs() < 5e-4), "link {i}: {n:?}");
+            assert!((phi - phis[i]).abs() < 5e-4, "link {i}: {phi}");
+        }
     }
 }
