@@ -11108,6 +11108,13 @@ impl Play {
                 neopets_sim::draik::Move::Still => {}
             }
             c.hp -= act.hp_loss;
+            // SPEC-0023 10.1 (Undead Draik): the monster bar is armed after the subtraction in
+            // its hit reactions; the lethal hit arms it at 0, which cuts its timer to 60 at once.
+            if act.hp_loss > 0 {
+                let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(c.name.as_bytes(), *sp));
+                let max = c.row.map_or(1, |r| r.hit_points as i32);
+                self.monster_bar.arm(c.id, &c.name, width, c.hp.max(0), max, &self.monster_words);
+            }
             if std::mem::discriminant(&before) != std::mem::discriminant(&after) || act.hp_loss != 0 {
                 self.last_boss = format!("Undead Draik stage {} {:?} -> {:?} (hp {}) on tick {}", stage_now, before, after, c.hp, self.ticks);
             }
