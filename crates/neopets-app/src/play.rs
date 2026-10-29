@@ -9113,6 +9113,8 @@ impl Play {
             let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
             v.radii = row.radius + contact::HERO_RADIUS;
             v.spawn_bits = bits;
+            let ground = world.probe(p[0], p[2], p[1] + 2.5);
+            v.gap = if ground.found { (p[1] - ground.height).max(0.0) } else { f32::MAX };
             // SPEC-0036 Guard timer and per-attacker block: the guard predicate (state 20; the
             // 40-tick threat-sense timer is not implemented) and dot(hero facing, attacker
             // facing) at most -0.5.
@@ -14207,6 +14209,7 @@ fn enemy_view<'a>(
         waypoint: wk.waypoint(),
         blocked: wk.blocked,
         speed,
+        gap: 0.0,
         contact,
         hero_blocks: false,
         hero_swing: None,

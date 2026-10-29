@@ -216,6 +216,8 @@ pub struct View<'a> {
     /// The blocked flag (0xCC4) and the enemy's speed this tick (units per tick).
     pub blocked: bool,
     pub speed: f32,
+    /// The ground gap: position height minus the ground height under it (hit kind 7's landing).
+    pub gap: f32,
     /// A weapon volume touches one of the hero's bone capsules this tick (the strike test).
     pub contact: bool,
     /// The hero guards and faces this enemy (dot of the facings at most -0.5).
@@ -986,8 +988,9 @@ impl Enemy {
                 Some(0)
             };
             // Behavior 44 kind 0: a flyer's grounded countdown starts (the navmesh pick follows
-            // through the host on the next tick).
-            if kind == Some(0) && self.p.can_fly != 0 {
+            // through the host on the next tick); kind 7 grounds an airborne Can Fly 1 enemy the
+            // same way.
+            if (kind == Some(0) && self.p.can_fly != 0) || (kind == Some(7) && self.p.can_fly == 1 && self.airborne()) {
                 self.ground(rng);
             }
             if let Some(kind) = kind {
@@ -2067,9 +2070,10 @@ impl Enemy {
         };
         if self.react_phase == 0 {
             let done = match self.react {
+                // Kind 7 waits on 76 until the ground gap is at most 2.0 (not a speed test).
                 7 => {
                     a.anim = Some(76);
-                    v.speed <= 2.0
+                    v.gap <= 2.0
                 }
                 2 => {
                     a.anim = Some(60);
@@ -2388,6 +2392,7 @@ mod tests {
             waypoint: [0.0; 3],
             blocked: false,
             speed: 0.0,
+            gap: 0.0,
             contact: false,
             hero_blocks: false,
             hero_swing: None,
@@ -2999,9 +3004,11 @@ mod tests {
         let mut a = Act { anim: Some(2), ..Act::default() };
         e.fly_step(&mut a);
         assert_eq!((a.anim, a.fly), (Some(98), Some([0.0, 0.0, 0.2])));
-        // A hit while airborne: flying hit 1 gives kind 7 and no grounding.
+        // A hit while airborne: flying hit 1 gives kind 7, which grounds a Can Fly 1 flyer for
+        // the ground timer range.
         e.take_hit(1, [0.0; 3], &mut rng);
-        assert_eq!((e.outer, e.react, e.retarget), (10, 7, -1));
+        assert_eq!((e.outer, e.react), (10, 7));
+        assert!((60..120).contains(&e.retarget) && !e.airborne() && e.take_repick());
         // Grounded (as by a death or kind 0): not airborne, and on reaching 0 the re-launch.
         e.ground(&mut rng);
         assert!((60..120).contains(&e.retarget) && !e.airborne());
