@@ -1254,6 +1254,16 @@ impl Enemy {
 
     /// Steps 4 and 6: slow halves the scale when moving or attacking; speed doubles it when
     /// moving (tests A and B read as moving and attacking; Medium); stun sets it to 0.
+    /// SPEC-0005 Playback 1b: P starts at 1.0 and the status factors act on it; a sequencer
+    /// state that stores a slot word replaces P with it, status factors included (a slowed enemy
+    /// entering a wind-up whose word is 1.0 plays at 1.0).
+    fn apply_status_rate(&self, a: &mut Act) {
+        let s = self.status_scale(a);
+        if s != 1.0 && a.rate.is_none() {
+            a.rate = Some(s);
+        }
+    }
+
     fn status_scale(&self, a: &Act) -> f32 {
         if self.status(0) {
             return 0.0;
@@ -1309,10 +1319,7 @@ impl Enemy {
         if self.airborne() {
             self.fly_step(&mut a);
         }
-        let s = self.status_scale(&a);
-        if s != 1.0 {
-            a.rate = Some(a.rate.unwrap_or(1.0) * s);
-        }
+        self.apply_status_rate(&mut a);
         a
     }
 
@@ -2563,6 +2570,21 @@ mod tests {
         }
         assert!(chosen);
         assert_eq!(e.seq, 1, "within range on the mesh: wind-up at once");
+    }
+
+    #[test]
+    fn stored_word_replaces_status_factors() {
+        // SPEC-0005 Playback 1b test vector 2: slowed while walking, 0.5; entering a wind-up
+        // whose stored word is 1.0, the word replaces the factor.
+        let mut rng = Rng::seeded(2);
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        e.timers[3] = 600;
+        let mut walk = Act { go: Some(Go::Toward([5.0, 0.0, 0.0])), ..Act::default() };
+        e.apply_status_rate(&mut walk);
+        assert_eq!(walk.rate, Some(0.5));
+        let mut wind = Act { rate: Some(1.0), go: Some(Go::Toward([5.0, 0.0, 0.0])), ..Act::default() };
+        e.apply_status_rate(&mut wind);
+        assert_eq!(wind.rate, Some(1.0));
     }
 
     #[test]

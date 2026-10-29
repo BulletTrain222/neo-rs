@@ -11157,6 +11157,12 @@ impl Play {
                 let max = c.row.map_or(1, |r| r.hit_points as i32);
                 self.monster_bar.arm(c.id, &c.name, width, c.hp.max(0), max, &self.monster_words);
             }
+            // SPEC-0029 6.10: after the killing hit (HP 0, the death hook) the Draik adds one hit
+            // point back through the shared heal, so its HP reads 1 (the 1096 script follows its
+            // level states, not its HP).
+            if after == neopets_sim::draik::State::Dead && before != after && c.hp <= 0 {
+                c.hp = 1;
+            }
             if std::mem::discriminant(&before) != std::mem::discriminant(&after) || act.hp_loss != 0 {
                 self.last_boss = format!("Undead Draik stage {} {:?} -> {:?} (hp {}) on tick {}", stage_now, before, after, c.hp, self.ticks);
             }
