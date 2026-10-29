@@ -202,11 +202,15 @@ pub fn sync_bushes(
     let (mut near_shown, mut far_shown) = (0, 0);
     for (p, b, lod, mut t, mut vis) in &mut parts {
         let mut on = state.play.patch_on(p.pack, p.patch);
+        // Performance: a transform is written only when it changes (a write marks the entity
+        // changed, and Bevy then propagates and prepares it again), and a far sprite turns to the
+        // camera only while it is drawn.
+        let mut facing: Option<Quat> = None;
         if let (Some(l), Some(e)) = (lod, eye) {
             let to = e - t.translation;
             if l.role == Role::Far {
                 let yaw = to.x.atan2(to.z);
-                t.rotation = Quat::from_rotation_y(if l.plane_x { yaw - std::f32::consts::FRAC_PI_2 } else { yaw });
+                facing = Some(Quat::from_rotation_y(if l.plane_x { yaw - std::f32::consts::FRAC_PI_2 } else { yaw }));
             }
             let centre = state.play.foliage.get(&p.pack).and_then(|v| v.get(p.patch)).map(|q| Vec3::from(q.centre));
             if original {
@@ -229,14 +233,25 @@ pub fn sync_bushes(
                     // turned to the camera, until the reed is gone (Reed angles).
                     if lod.is_some_and(|l| l.role == Role::Far) {
                         let want = if on && r.state != 2 { Visibility::Visible } else { Visibility::Hidden };
+                        if let (Visibility::Visible, Some(f)) = (want, facing) {
+                            if t.rotation != f {
+                                t.rotation = f;
+                            }
+                        }
                         if *vis != want {
                             *vis = want;
                         }
                         continue;
                     }
-                    t.translation = Vec3::from(q.position) + Vec3::from(r.offset);
+                    let at = Vec3::from(q.position) + Vec3::from(r.offset);
                     // Its frame rows: model x to right, y to up, z to forward (Reed angles).
-                    t.rotation = Quat::from_mat3(&Mat3::from_cols(Vec3::from(r.right), Vec3::from(r.up), Vec3::from(r.forward())));
+                    let rot = Quat::from_mat3(&Mat3::from_cols(Vec3::from(r.right), Vec3::from(r.up), Vec3::from(r.forward())));
+                    if t.translation != at {
+                        t.translation = at;
+                    }
+                    if t.rotation != rot {
+                        t.rotation = rot;
+                    }
                     let want = if on && r.state != 2 { Visibility::Visible } else { Visibility::Hidden };
                     if *vis != want {
                         *vis = want;
@@ -244,13 +259,24 @@ pub fn sync_bushes(
                     continue;
                 }
                 let (Some(bush), Some(q)) = (patch.bushes.get(b.plant), patch.plants.get(b.plant)) else { continue };
-                t.scale = Vec3::splat(bush.scale().max(0.0));
+                let scale = Vec3::splat(bush.scale().max(0.0));
                 // The bush is drawn along its up axis (the hero bend and spring-back).
-                t.rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::from(bush.up)) * Quat::from_rotation_y(q.yaw);
+                let rot = Quat::from_rotation_arc(Vec3::Y, Vec3::from(bush.up)) * Quat::from_rotation_y(q.yaw);
+                if t.scale != scale {
+                    t.scale = scale;
+                }
+                if t.rotation != rot {
+                    t.rotation = rot;
+                }
                 on && (bush.state == 0) == b.cut
             }
         };
         let want = if shown { Visibility::Visible } else { Visibility::Hidden };
+        if let (true, Some(f)) = (shown, facing) {
+            if t.rotation != f {
+                t.rotation = f;
+            }
+        }
         if trace && shown {
             match lod.map(|l| l.role) {
                 Some(Role::Far) => far_shown += 1,

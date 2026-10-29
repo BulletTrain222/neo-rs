@@ -1908,6 +1908,10 @@ fn toggle_view(
 /// alpha is at least 0.5. Opaque keeps early depth rejection and draws the shadow and depth
 /// passes without the texture.
 fn mask_never_cuts(t: &neopets_data::model::ModelTexture, part: &neopets_data::model::MeshPart) -> bool {
+    // NEOPETS_NO_OPAQUE_TWIN: every textured part keeps Mask(0.5) (diagnostic).
+    if std::env::var_os("NEOPETS_NO_OPAQUE_TWIN").is_some() {
+        return false;
+    }
     let tex = t.image.rgba.chunks_exact(4).map(|p| p[3]).min().unwrap_or(255) as f32 / 255.0;
     let vertex = part.colors.iter().map(|c| c[3].min(1.0)).fold(1.0f32, f32::min);
     tex * vertex >= 0.5
@@ -2029,6 +2033,14 @@ fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, par
     info!("perf: meshes by owner {n:?}");
 }
 
+/// Performance: write a component's value only when it differs (a write through `Mut` marks
+/// the component changed, and Bevy then propagates and prepares the entity again).
+fn set_if<T: PartialEq, D: std::ops::DerefMut<Target = T>>(d: &mut D, v: T) {
+    if **d != v {
+        **d = v;
+    }
+}
+
 /// A drawn piece of a resident world in play mode: a world pack's scene or a sky dome.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum WorldPart {
@@ -2077,7 +2089,7 @@ fn sync_blocks(state: Option<Res<PlayState>>, mut roots: Query<(&BlockRoot, &mut
     let Some(state) = state else { return };
     for (b, mut t) in &mut roots {
         if let Some(m) = state.play.block_matrix(b.0, b.1) {
-            *t = Transform::from_matrix(Mat4::from_cols_array(&m));
+            set_if(&mut t, Transform::from_matrix(Mat4::from_cols_array(&m)));
         }
     }
 }
@@ -2104,8 +2116,8 @@ fn sync_objects(state: Option<Res<PlayState>>, mut roots: Query<(&ObjectRoot, &m
     for (o, mut t, mut vis) in &mut roots {
         match state.play.object_matrix(o.0, o.1) {
             Some(m) => {
-                *t = Transform::from_matrix(Mat4::from_cols_array(&m));
-                *vis = Visibility::Visible;
+                set_if(&mut t, Transform::from_matrix(Mat4::from_cols_array(&m)));
+                set_if(&mut vis, Visibility::Visible);
             }
             None => *vis = Visibility::Hidden,
         }
@@ -2590,11 +2602,11 @@ fn sync_shots(
                 let d = b - a;
                 let l = d.length();
                 if l < 1e-3 {
-                    *vis = Visibility::Hidden;
+                    set_if(&mut vis, Visibility::Hidden);
                     continue;
                 }
-                *t = Transform::from_translation((a + b) * 0.5).with_rotation(Quat::from_rotation_arc(Vec3::Y, d / l)).with_scale(Vec3::new(1.0, l, 1.0));
-                *vis = Visibility::Visible;
+                set_if(&mut t, Transform::from_translation((a + b) * 0.5).with_rotation(Quat::from_rotation_arc(Vec3::Y, d / l)).with_scale(Vec3::new(1.0, l, 1.0)));
+                set_if(&mut vis, Visibility::Visible);
             }
             None => *vis = Visibility::Hidden,
         }
@@ -2610,7 +2622,7 @@ fn sync_shots(
         match at {
             Some(p) => {
                 t.translation = Vec3::from(p);
-                *vis = Visibility::Visible;
+                set_if(&mut vis, Visibility::Visible);
             }
             None => *vis = Visibility::Hidden,
         }
@@ -2699,10 +2711,8 @@ fn sync_items(
     for (e, m, mut t, mut vis, children) in &mut markers {
         match p.pools.get(&m.0).and_then(|pool| pool.slots.get(m.1).copied().flatten()) {
             Some(it) if p.pack_drawn(m.0) => {
-                t.translation = Vec3::from(it.position);
-                t.rotation = Quat::from_rotation_y(it.angle);
-                t.scale = Vec3::splat(it.drawn_scale().max(0.001));
-                *vis = Visibility::Visible;
+                set_if(&mut t, Transform::from_translation(Vec3::from(it.position)).with_rotation(Quat::from_rotation_y(it.angle)).with_scale(Vec3::splat(it.drawn_scale().max(0.001))));
+                set_if(&mut vis, Visibility::Visible);
                 seen.insert((m.0, m.1));
                 let alpha = it.life.clamp(0.0, 1.0);
                 for c in children.into_iter().flatten() {
@@ -2717,7 +2727,7 @@ fn sync_items(
                 }
             }
             Some(_) => {
-                *vis = Visibility::Hidden;
+                set_if(&mut vis, Visibility::Hidden);
                 seen.insert((m.0, m.1));
             }
             None => commands.entity(e).despawn(),
@@ -2740,8 +2750,8 @@ fn sync_items(
     for (e, s, mut t, mut vis) in &mut showcases {
         match show {
             Some((id, _, tr)) if id == s.0 => {
-                *t = tr;
-                *vis = Visibility::Visible;
+                set_if(&mut t, tr);
+                set_if(&mut vis, Visibility::Visible);
             }
             _ => commands.entity(e).despawn(),
         }
@@ -2904,14 +2914,14 @@ fn sync_hero_items(
         shown.insert(*res);
         for (_, root, mut t, mut vis) in &mut roots {
             if root.0 == *res {
-                *t = Transform::from_matrix(m);
-                *vis = Visibility::Visible;
+                set_if(&mut t, Transform::from_matrix(m));
+                set_if(&mut vis, Visibility::Visible);
             }
         }
     }
     for (_, root, _, mut vis) in &mut roots {
         if !shown.contains(&root.0) {
-            *vis = Visibility::Hidden;
+            set_if(&mut vis, Visibility::Hidden);
         }
     }
 }
@@ -2993,8 +3003,8 @@ fn sync_hero_glows(
         let colour = Color::linear_rgb(rgb[0] as f32 / 128.0 * k, rgb[1] as f32 / 128.0 * k, rgb[2] as f32 / 128.0 * k);
         for (root, mut t, mut vis) in &mut roots {
             if root.0 == *id {
-                *t = Transform::from_matrix(m);
-                *vis = Visibility::Visible;
+                set_if(&mut t, Transform::from_matrix(m));
+                set_if(&mut vis, Visibility::Visible);
                 let uv = bevy::math::Affine2::from_translation(Vec2::new(phase.0, 0.0));
                 for h in &root.1 {
                     if materials.get(h).is_some_and(|mat| mat.base_color != colour || mat.uv_transform != uv) {
@@ -3009,7 +3019,7 @@ fn sync_hero_glows(
     }
     for (root, _, mut vis) in &mut roots {
         if !shown.contains(&root.0) {
-            *vis = Visibility::Hidden;
+            set_if(&mut vis, Visibility::Hidden);
         }
     }
 }
@@ -3048,8 +3058,8 @@ fn sync_attachments(
         match frames.get(&(root.0, root.1)) {
             Some(f) => {
                 let c = |k: usize| Vec4::new(f.cols[k][0], f.cols[k][1], f.cols[k][2], 0.0);
-                *t = Transform::from_matrix(Mat4::from_cols(c(0), c(1), c(2), Vec4::new(f.t[0], f.t[1], f.t[2], 1.0)));
-                *vis = Visibility::Visible;
+                set_if(&mut t, Transform::from_matrix(Mat4::from_cols(c(0), c(1), c(2), Vec4::new(f.t[0], f.t[1], f.t[2], 1.0))));
+                set_if(&mut vis, Visibility::Visible);
             }
             None => *vis = Visibility::Hidden,
         }
@@ -3115,18 +3125,17 @@ fn sync_characters(
                 skinned.remove(&root.0);
             }
             Some(c) => {
-                t.translation = Vec3::from(c.position);
-                t.rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
+                let mut want = Transform::from_translation(Vec3::from(c.position)).with_rotation(Quat::from_rotation_y(c.facing[0].atan2(c.facing[2])));
                 // The Cloud Beast stand-ins move by pose, not by clips (the disc has none).
-                t.scale = Vec3::ONE;
                 if let Some((bob, lean, s)) = p.cloud_pose(c) {
-                    t.translation.y += bob;
-                    t.rotation *= Quat::from_rotation_x(lean);
-                    t.scale = Vec3::splat(s);
+                    want.translation.y += bob;
+                    want.rotation *= Quat::from_rotation_x(lean);
+                    want.scale = Vec3::splat(s);
                 }
+                set_if(&mut t, want);
                 // SPEC-0038 Behavior 40: a hiding enemy with cue word 0 is not drawn.
                 let hidden = c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action));
-                *vis = if p.pack_drawn(c.pack) && !c.inactive && !hidden { Visibility::Visible } else { Visibility::Hidden };
+                set_if(&mut vis, if p.pack_drawn(c.pack) && !c.inactive && !hidden { Visibility::Visible } else { Visibility::Hidden });
             }
         }
     }
@@ -3286,8 +3295,8 @@ fn sync_cloud_fx(
         };
         match placed {
             Some(x) => {
-                *tr = x;
-                *vis = Visibility::Visible;
+                set_if(&mut tr, x);
+                set_if(&mut vis, Visibility::Visible);
             }
             None => *vis = Visibility::Hidden,
         }

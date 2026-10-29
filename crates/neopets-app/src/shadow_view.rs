@@ -109,6 +109,7 @@ pub fn sync_shadows(
     mut add: ResMut<Assets<ShadowAdd>>,
     mut parts: Query<(&VolumeMesh, &Mesh3d, &mut Visibility)>,
     mut made: Local<Option<(Handle<ShadowSubtract>, Handle<ShadowAdd>)>>,
+    mut stamp: Local<Option<(u64, usize)>>,
 ) {
     let _span = crate::perf::span("sync_shadows");
     let f = FACTORS[settings.char_shadows.min(FACTORS.len() - 1)];
@@ -133,6 +134,12 @@ pub fn sync_shadows(
                 m.amount = up;
             }
         }
+    }
+    // Performance: the volumes are built again only when a game tick has run or the setting
+    // changed (the hero and the light move only on ticks).
+    let now = (state.play.ticks, settings.char_shadows);
+    if std::mem::replace(&mut *stamp, Some(now)) == Some(now) {
+        return;
     }
     let on = f < 1.0;
     let v = if on { state.play.shadow_volume() } else { Default::default() };
