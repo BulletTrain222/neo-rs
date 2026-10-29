@@ -4,6 +4,7 @@ mod controls_page;
 mod character;
 mod controls;
 mod dev_menu;
+mod ui_fit;
 mod display;
 mod perf;
 mod effect_view;
@@ -914,7 +915,7 @@ fn main() {
     app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::hush).chain().after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
-    app.add_systems(PostUpdate, dev_menu::fit_window.after(bevy::ui::UiSystems::Layout));
+    app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());

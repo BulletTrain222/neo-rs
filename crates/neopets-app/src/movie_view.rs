@@ -19,6 +19,9 @@ pub struct Movies {
     current: Option<Current>,
     /// The movie that started this frame, for its played word.
     pub started: Option<u16>,
+    /// The Display page's "Movie cutscenes" is Off: each queued movie is passed over at once,
+    /// as a skip on its first frame would (its played word is still set).
+    pub off: bool,
 }
 
 struct Current {
@@ -44,6 +47,11 @@ impl Movies {
     pub fn step(&mut self, elapsed_ns: u64, held: bool) -> bool {
         if self.current.is_none() {
             let Some(index) = self.queue.pop_front() else { return false };
+            if self.off {
+                println!("movie {index}: passed over (Movie cutscenes off)");
+                self.started = Some(index);
+                return false;
+            }
             let Some((name, h)) = self.table.get(index as usize).cloned().flatten() else {
                 eprintln!("movie {index}: not in the table or unreadable; skipped");
                 return !self.queue.is_empty();
@@ -93,8 +101,9 @@ impl Movies {
 /// After the frame's ticks: the movies the level scripts and the attract queued, in order, so
 /// the frame that queued them already shows the movie screen (SPEC-0026: the movie step runs
 /// at the end of the pass).
-pub fn collect(mut movies: Option<ResMut<Movies>>, mut play: Option<ResMut<crate::PlayState>>, mut menu: Option<ResMut<crate::menu_view::Menu>>) {
+pub fn collect(mut movies: Option<ResMut<Movies>>, mut play: Option<ResMut<crate::PlayState>>, mut menu: Option<ResMut<crate::menu_view::Menu>>, settings: Res<crate::display::DisplaySettings>) {
     let Some(mv) = movies.as_deref_mut() else { return };
+    mv.off = !settings.movies;
     if let Some(m) = menu.as_deref_mut() {
         mv.queue.extend(m.flow.movies.drain(..));
     }

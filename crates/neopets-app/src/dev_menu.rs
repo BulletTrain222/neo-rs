@@ -304,7 +304,7 @@ pub fn spawn_panel(mut commands: Commands) {
                 display: Display::None,
                 ..default()
             },
-            UiTransform::IDENTITY,
+            crate::ui_fit::FitToWindow { centred: false },
             BackgroundColor(PANEL),
             GlobalZIndex(5002),
             DevWindow,
@@ -364,30 +364,6 @@ Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), A apply
             });
             ui.spawn((Text::default(), font(14.0), TextColor(ON), Node { margin: UiRect::top(px(8)), ..default() }, DevNote));
         });
-}
-
-/// The menu's margin to the window edges, in logical pixels, and the smallest scale it takes.
-const EDGE: f32 = 16.0;
-const MIN_SCALE: f32 = 0.35;
-
-/// The menu window is laid out at its full size and then scaled down, as one piece, to fit the
-/// game window (never up), kept at its top-left corner; clicks follow the scaled rows.
-pub fn fit_window(windows: Query<&Window, With<bevy::window::PrimaryWindow>>, mut menu: Query<(&ComputedNode, &mut UiTransform), With<DevWindow>>) {
-    let Ok(win) = windows.single() else { return };
-    for (node, mut t) in &mut menu {
-        let size = node.size() * node.inverse_scale_factor();
-        if size.x <= 0.0 || size.y <= 0.0 {
-            continue;
-        }
-        let room = Vec2::new(win.width() - 2.0 * EDGE, win.height() - 2.0 * EDGE).max(Vec2::ONE);
-        let s = (room.x / size.x).min(room.y / size.y).clamp(MIN_SCALE, 1.0);
-        // UiTransform scales about the node's centre: move it back so the top-left stays put.
-        let shift = -(1.0 - s) * size / 2.0;
-        let want = UiTransform { translation: Val2::px(shift.x, shift.y), scale: Vec2::splat(s), ..UiTransform::IDENTITY };
-        if *t != want {
-            *t = want;
-        }
-    }
 }
 
 /// The mouse on the menu: hovering a row moves the cursor to it; a click applies it, and a

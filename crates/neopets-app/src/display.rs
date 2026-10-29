@@ -24,7 +24,7 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 13;
+pub const ROWS: usize = 14;
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
 /// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
 pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Detailed"];
@@ -57,11 +57,14 @@ pub struct DisplaySettings {
     /// Shadows cast by everything (trees, buildings, props): this build's option, not in the
     /// original.
     pub world_shadows: bool,
+    /// Movie cutscenes played (on) or passed over at once, as if skipped (this build's testing
+    /// option, not in the original).
+    pub movies: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, movies: true }
     }
 }
 
@@ -94,6 +97,7 @@ impl DisplaySettings {
                 "original foliage" => s.original_foliage = v == "true",
                 "character shadows" => s.char_shadows = v.parse().unwrap_or(s.char_shadows).min(CHAR_SHADOWS.len() - 1),
                 "world shadows" => s.world_shadows = v == "true",
+                "movies" => s.movies = v != "false",
                 _ => {}
             }
         }
@@ -102,7 +106,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nmovies = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -116,7 +120,8 @@ impl DisplaySettings {
             self.ao,
             self.original_foliage,
             self.char_shadows,
-            self.world_shadows
+            self.world_shadows,
+            self.movies
         )
     }
 
@@ -133,6 +138,10 @@ impl DisplaySettings {
             if let Some(&w) = n.get(1) {
                 s.world_shadows = w != 0;
             }
+        }
+        // NEOPETS_MOVIES=0 or 1: Movie cutscenes for this run (diagnostic).
+        if let Ok(v) = std::env::var("NEOPETS_MOVIES") {
+            s.movies = v.trim() != "0";
         }
         if let Some(v) = std::env::var("NEOPETS_GFX").ok() {
             let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
@@ -172,6 +181,7 @@ impl DisplaySettings {
             ("Distant foliage".into(), if self.original_foliage { "Original".into() } else { "Full".into() }),
             ("Character shadows".into(), CHAR_SHADOWS[self.char_shadows].into()),
             ("World shadows".into(), if self.world_shadows { "On".into() } else { "Off".into() }),
+            ("Movie cutscenes".into(), if self.movies { "On".into() } else { "Off".into() }),
         ]
     }
 
@@ -202,6 +212,7 @@ impl DisplaySettings {
             10 => self.original_foliage = !self.original_foliage,
             11 => self.char_shadows = step(self.char_shadows, CHAR_SHADOWS.len()),
             12 => self.world_shadows = !self.world_shadows,
+            13 => self.movies = !self.movies,
             _ => {}
         }
     }
@@ -423,6 +434,7 @@ const HELP: [&str; ROWS + 1] = [
     "Full keeps trees, bushes and props in 3D at any distance; Original turns far trees into sprites, fades distant plants out and hides props past their draw distance, as the PS2 game.",
     "Original is the game's own faint, blocky hero shadow; Detailed casts every character's real shape from the area's main light.",
     "Shadows cast by everything, trees and buildings too, from the area's main light. Not in the original game.",
+    "Off passes over every movie cutscene at once, as if skipped (for testing). Not in the original game.",
     "Back to Options.",
 ];
 
@@ -445,6 +457,7 @@ pub fn spawn_window(mut commands: Commands) {
                 display: Display::None,
                 ..default()
             },
+            crate::ui_fit::FitToWindow { centred: true },
             BackgroundColor(PANEL),
             GlobalZIndex(5003),
             DispWindow,
@@ -593,6 +606,8 @@ mod tests {
         assert_eq!(SCALES[s.scale], 150);
         s.change(4, 1, &sizes);
         assert!(!s.smooth);
+        s.change(13, 1, &sizes);
+        assert!(!s.movies && s.rows()[13].1 == "Off", "Movie cutscenes off");
         assert_eq!(DisplaySettings::parse(&s.text()), s);
         assert_eq!(s.rows()[3].1, "150%");
         assert_eq!(DisplaySettings::parse("scale = 33\nmode = 9\n").mode, 2, "bad values clamp or keep");
