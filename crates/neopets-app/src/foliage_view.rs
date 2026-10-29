@@ -224,8 +224,18 @@ pub fn sync_bushes(
                 // A reed (SPEC-0060 Behavior 9): drawn along its up axis, its cut piece at the
                 // fall's offset, hidden once gone.
                 if let (Some(r), Some(q)) = (patch.reeds.get(b.plant), patch.plants.get(b.plant)) {
+                    // A far sprite never bends or follows the fall: it stays at the base point,
+                    // turned to the camera, until the reed is gone (Reed angles).
+                    if lod.is_some_and(|l| l.role == Role::Far) {
+                        let want = if on && r.state != 2 { Visibility::Visible } else { Visibility::Hidden };
+                        if *vis != want {
+                            *vis = want;
+                        }
+                        continue;
+                    }
                     t.translation = Vec3::from(q.position) + Vec3::from(r.offset);
-                    t.rotation = Quat::from_rotation_arc(Vec3::Y, Vec3::from(r.up)) * Quat::from_rotation_y(q.yaw);
+                    // Its frame rows: model x to right, y to up, z to forward (Reed angles).
+                    t.rotation = Quat::from_mat3(&Mat3::from_cols(Vec3::from(r.right), Vec3::from(r.up), Vec3::from(r.forward())));
                     let want = if on && r.state != 2 { Visibility::Visible } else { Visibility::Hidden };
                     if *vis != want {
                         *vis = want;

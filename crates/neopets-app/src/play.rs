@@ -11294,7 +11294,7 @@ impl Play {
                     .collect();
                 let bushes = if kind.family == neopets_sim::foliage::Family::Bush { plants.iter().map(|q| neopets_sim::foliage::Bush::new(q.scale, &mut rng)).collect() } else { Vec::new() };
                 let centre = [(p.area[0] + p.area[1]) / 2.0, p.height, (p.area[2] + p.area[3]) / 2.0];
-                let reeds = if kind.family == neopets_sim::foliage::Family::Reed { vec![Default::default(); plants.len()] } else { Vec::new() };
+                let reeds = if kind.family == neopets_sim::foliage::Family::Reed { plants.iter().map(|q| neopets_sim::foliage::Reed::new(q.yaw)).collect() } else { Vec::new() };
                 built.push(LivePatch { kind, model, centre, plants, bushes, reeds, zone: p.zone as u8, on: true, overrides: p.overrides });
             }
             self.foliage.insert(pack, built);
@@ -11368,15 +11368,11 @@ impl Play {
         // the piece launched along the weapon point's motion; the weapon test is taken as the bush capsule's, a
         // radius 0.5 and length 6.0 up from the base), the cut piece's fall and the drop roll.
         let mut reed_cuts = 0;
-        // SPEC-0060 Cut: the launch direction is the normalized change of the weapon point 2.5
-        // along its frame axis between two samples (here this tick and the last); with no change
-        // (not established) the blade axis.
+        // SPEC-0060 Cut set-up: the launch is the change of the weapon point 2.5 along its frame
+        // axis between two samples (here this tick and the last); `Reed::cut` keeps its
+        // horizontal part, normalised (a zero change gives a piece that never moves off).
         let point = weapon.as_ref().map(|w| add(w.center, scale(w.axis, 2.5 - 0.5 * w.length - 0.25)));
-        let launch = weapon.as_ref().map(|w| {
-            let d = point.zip(self.reed_point).map(|(a, b)| sub_v(a, b)).unwrap_or([0.0; 3]);
-            let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-            if l > 1e-6 { scale(d, 1.0 / l) } else { w.axis }
-        });
+        let launch = point.zip(self.reed_point).map(|(a, b)| sub_v(a, b));
         self.reed_point = point;
         let worlds = [&self.world].into_iter().chain(self.other.as_ref());
         let worlds: Vec<_> = worlds.collect();
@@ -11390,14 +11386,13 @@ impl Play {
                 for (q, r) in p.plants.iter().zip(p.reeds.iter_mut()) {
                     match r.state {
                         0 => {
-                            let (dx, dz) = (q.position[0] - hero[0], q.position[2] - hero[2]);
-                            let distance = dx.hypot(dz);
-                            let away = if distance > 1e-4 { [dx / distance, 0.0, dz / distance] } else { [0.0; 3] };
-                            r.bend_step(distance, away);
-                            let near = (q.position[0] - hero[0]).powi(2) + (q.position[1] - hero[1]).powi(2) + (q.position[2] - hero[2]).powi(2) < 25.0;
-                            if let (true, Some(w)) = (near, weapon.as_ref()) {
-                                let reed = neopets_sim::combat::Cylinder::from_base(q.position, [0.0, 1.0, 0.0], 0.5, 6.0);
-                                if neopets_sim::combat::overlap(w, &reed) && r.cut(launch.unwrap_or(w.axis)) {
+                            // Reed angles: the spring-back, the body contact and bend, then the
+                            // weapon test inside the 5-unit gate with the latch clear, against a
+                            // capsule of radius 0.5 and length 6 along the reed's current up.
+                            let cuttable = r.standing_step(q.position, hero);
+                            if let (true, Some(w)) = (cuttable, weapon.as_ref()) {
+                                let reed = neopets_sim::combat::Cylinder::from_base(q.position, r.up, 0.5, 6.0);
+                                if neopets_sim::combat::overlap(w, &reed) && r.cut(launch.unwrap_or([0.0; 3])) {
                                     reed_cuts += 1;
                                     if let Some(id) = neopets_sim::foliage::reed_drop(self.rng.range(0, 100)) {
                                         drops.push((pack, q.position, vec![id]));

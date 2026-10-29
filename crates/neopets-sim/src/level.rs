@@ -13346,48 +13346,42 @@ const VILLAGE_ZONES: [[Zone; 8]; 2] = {
 };
 
 /// SPEC-0006 zone load for 1023 trigger `index` (27 to 34) in state 1: set 1 with flag 10 or
-/// 11, else set 0. The slot: 0 when its record (word 30) is free, else 1 when it is free (word
-/// 31) and enabled (set 0 only), else the thread waits for slot 0. A plain zone resets the slot
-/// and loads its region (the replacement when its first flag is set and its second clear),
-/// freeing the record at once. A cycle zone draws a candidate (Random(0, 2), the host's raw
-/// draw; an empty one becomes the first), holds the record and loads it, and frees the record
-/// when the hero leaves the trigger. The later passes of a cycle (the next candidate reloaded
-/// while the trigger stays active) are not built. The region is 1023 + 1 + j.
-///
-/// This build's deviation (R-0123): in set 0 (where slot 1 is enabled) a cycle zone takes slot 1
-/// (waiting for its record) and a plain zone slot 0. Each district has a plain zone and a cycle
-/// zone round the same centre (27 and 31, 28 and 32, 29 and 33, 30 and 34), and by the slot rule
-/// as given the cycle load took the slot the plain zone had just freed, so walking into a
-/// district unloaded its fixed people a moment after loading them (the arena master and the
-/// wheel host, region 1035, among them).
+/// 11, else set 0. The slot rule, the same for plain and cycle zones: slot 0 when its record
+/// (word 30) is free, else slot 1 when its record (word 31) is free and slot 1 is enabled (set
+/// 0 only), else a wait (this build waits for slot 0's record; the spec retries both each
+/// tick). A zone holds its record from the pick until the hero has left its trigger; then the
+/// slot is reset (its region unloads) and the record freed (Slot lifetime, R-0123). A plain
+/// zone loads its region (the replacement when its first flag is set and its second clear); a
+/// cycle zone draws a candidate (Random(0, 2), the host's raw draw; an empty one becomes the
+/// first). The later passes of a cycle (the next candidate reloaded while the trigger stays
+/// active) are not built. The region is 1023 + 1 + j. So the arena district's region 1035
+/// (sphere 27) stays loaded while the cycle zone of sphere 31 takes the other slot.
 fn village_zone(index: u16, s: &GameState) -> Vec<Action> {
     let set = (s.flag(10) || s.flag(11)) as usize;
     let Some(&zone) = index.checked_sub(27).and_then(|z| VILLAGE_ZONES[set].get(z as usize)) else { return Vec::new() };
-    let (j, cycle) = match zone {
+    let j = match zone {
         Zone::Empty => return Vec::new(),
-        Zone::Plain(n, r, a, b) => (if r >= 0 && (a == 0 || s.flag(a)) && (b == 0 || !s.flag(b)) { r } else { n }, false),
-        Zone::Cycle(c) => (Some(c[(s.trigger_raw % 3) as usize]).filter(|&j| j >= 0).unwrap_or(c[0]), true),
+        Zone::Plain(n, r, a, b) => if r >= 0 && (a == 0 || s.flag(a)) && (b == 0 || !s.flag(b)) { r } else { n },
+        Zone::Cycle(c) => Some(c[(s.trigger_raw % 3) as usize]).filter(|&j| j >= 0).unwrap_or(c[0]),
     };
     let mut v = Vec::new();
-    let slot = if set == 0 && cycle {
-        if s.word(1023, 31) != 0 {
-            v.push(Action::WaitWord { word: 31 });
-        }
-        1
-    } else if s.word(1023, 30) == 0 {
+    let slot = if s.word(1023, 30) == 0 {
         0
+    } else if set == 0 && s.word(1023, 31) == 0 {
+        1
     } else {
         v.push(Action::WaitWord { word: 30 });
         0
     };
     let region = Some(1024 + j as u32);
-    if cycle {
-        v.push(Action::Bits { word: 30 + slot, set: 1, clear: 0 });
-    }
-    v.extend([Action::LoadRegion { slot, region: None }, Action::LoadRegion { slot, region }]);
-    if cycle {
-        v.extend([Action::WaitInside { index }, Action::Bits { word: 30 + slot, set: 0, clear: 1 }]);
-    }
+    v.extend([
+        Action::Bits { word: 30 + slot, set: 1, clear: 0 },
+        Action::LoadRegion { slot, region: None },
+        Action::LoadRegion { slot, region },
+        Action::WaitInside { index },
+        Action::LoadRegion { slot, region: None },
+        Action::Bits { word: 30 + slot, set: 0, clear: 1 },
+    ]);
     v
 }
 
@@ -19041,19 +19035,39 @@ mod tests {
         let init = on_init(1023, &mut s);
         assert!(init.contains(&Action::RegisterTrigger { index: 33, routine: 4 }));
         let load = |s: &mut GameState, i| on_trigger(1023, 4, call(i), s).actions;
-        assert_eq!(load(&mut s, 29), vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1039) }]);
+        // A zone holds its slot's record until the hero leaves its trigger, then resets the slot
+        // (its region unloads) and frees the record (SPEC-0006 Slot lifetime).
+        let held = |slot: u8, region: u32, index: u16| {
+            vec![
+                Action::Bits { word: 30 + slot, set: 1, clear: 0 },
+                Action::LoadRegion { slot, region: None },
+                Action::LoadRegion { slot, region: Some(region) },
+                Action::WaitInside { index },
+                Action::LoadRegion { slot, region: None },
+                Action::Bits { word: 30 + slot, set: 0, clear: 1 },
+            ]
+        };
+        assert_eq!(load(&mut s, 29), held(0, 1039, 29));
         s.set(136, true);
-        assert_eq!(load(&mut s, 29)[1], Action::LoadRegion { slot: 0, region: Some(1040) });
+        assert_eq!(load(&mut s, 29)[2], Action::LoadRegion { slot: 0, region: Some(1040) });
+        // The test vector: sphere 27 loads 1035 into slot 0; with slot 0 held, sphere 31's cycle
+        // zone takes slot 1, so the arena master's region stays.
         s.trigger_raw = 4;
-        // Set 0: a cycle zone takes slot 1, so the district's plain zone (27, region 1035 with
-        // the arena master and the wheel host) keeps slot 0.
-        assert_eq!(load(&mut s, 27), vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1035) }]);
-        assert_eq!(load(&mut s, 31)[2], Action::LoadRegion { slot: 1, region: Some(1024 + 13) });
+        assert_eq!(load(&mut s, 27), held(0, 1035, 27));
+        s.set_word(1023, 30, 1);
+        assert_eq!(load(&mut s, 31), held(1, 1024 + 13, 31));
+        // Both held: a third zone waits for slot 0.
+        s.set_word(1023, 31, 1);
+        assert_eq!(load(&mut s, 29)[0], Action::WaitWord { word: 30 });
+        // Set 1: slot 1 is not enabled, and triggers 27 to 31 load nothing.
+        s.set_word(1023, 30, 0);
+        s.set_word(1023, 31, 0);
         s.set(11, true);
         assert!(load(&mut s, 27).is_empty());
-        assert_eq!(load(&mut s, 33), vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1052) }]);
+        assert_eq!(load(&mut s, 33), held(0, 1052, 33));
         s.trigger_raw = 2;
-        assert_eq!(load(&mut s, 34)[2], Action::LoadRegion { slot: 0, region: Some(1053) });
+        s.set_word(1023, 30, 1);
+        assert_eq!(load(&mut s, 34)[0], Action::WaitWord { word: 30 });
     }
 
     #[test]

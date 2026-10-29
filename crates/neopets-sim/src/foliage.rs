@@ -411,67 +411,136 @@ pub fn place(kind: &Kind, area: [f32; 4], height: f32, row: f32, offset: f32, j:
         z += r.frange(-j, j);
     }
     let y = if kind.snap { ground(x, z).filter(|&h| h > -1.0e8)? } else { height };
-    let yaw = r.frange(-std::f32::consts::PI, std::f32::consts::PI);
+    // Step 6: the facing is the unnormalised horizontal vector of two uniform [-1, 1] draws
+    // (x, then z), so its angle atan2(x, z) favours the diagonals.
+    let (fx, fz) = (r.frange(-1.0, 1.0), r.frange(-1.0, 1.0));
+    let yaw = fx.atan2(fz);
     let scale = r.frange(kind.s0, scale_max(kind));
     Some(Placed { position: [x, y, z], yaw, scale, colour })
 }
 
-/// A reed (Behavior 9): state 0 standing, 1 cut and falling, 2 gone (not drawn, never regrown
-/// until the patch is built again).
+/// A reed (Behavior 9; SPEC-0060 Reed angles, build guide): state 0 standing, 1 cut and
+/// falling, 2 gone (not drawn, never regrown until the patch is built again). Its frame is the
+/// right, up and forward rows (model x, y, z), up starting at world up and right from the yaw;
+/// after a change of up the frame is rebuilt by projecting the stored right row.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Reed {
     pub state: u8,
-    /// The up axis it is drawn along.
     pub up: [f32; 3],
+    pub right: [f32; 3],
     /// The cut piece's displacement from its anchor (the reed's base).
     pub offset: [f32; 3],
     velocity: [f32; 3],
     fall: u8,
+    /// The bend latch: set by a flat lean (s at most 0.25), cleared on a step without contact.
+    pub latch: bool,
 }
 
 impl Default for Reed {
     fn default() -> Self {
-        Self { state: 0, up: UP, offset: [0.0; 3], velocity: [0.0; 3], fall: 0 }
+        Self::new(0.0)
     }
 }
 
+/// The hero body for the reed contact: a vertical segment of this height from the hero's
+/// position, radius R (SPEC-0040 Layout body size).
+const BODY_HEIGHT: f32 = 3.5;
+const BODY_RADIUS: f32 = 1.175;
+
+fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+    [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
+}
+
 impl Reed {
-    /// The bend (state 0): within 5 units the reed tilts away from the hero, taken as the bush
-    /// bend's target 0.76 U + 0.24 `away` (the horizontal direction from the hero to the reed)
-    /// and its 0.98 step; farther, or with no direction, it springs back as a bush does.
-    pub fn bend_step(&mut self, distance: f32, away: [f32; 3]) {
-        if self.state != 0 {
-            return;
-        }
-        if distance < 5.0 && away != [0.0; 3] {
-            let t: [f32; 3] = std::array::from_fn(|i| 0.76 * UP[i] + 0.24 * away[i]);
-            if t[1] < 0.994 {
-                self.up = normalize(std::array::from_fn(|i| 0.02 * UP[i] + 0.98 * t[i]));
-            }
-        } else {
-            let u = self.up;
-            self.up = normalize(std::array::from_fn(|i| 0.925 * u[i] + 0.075 * UP[i]));
-        }
+    /// A standing reed of yaw phi (forward (sin phi, 0, cos phi), right (cos phi, 0, -sin phi)).
+    pub fn new(yaw: f32) -> Self {
+        let (s, c) = yaw.sin_cos();
+        Self { state: 0, up: UP, right: [c, 0.0, -s], offset: [0.0; 3], velocity: [0.0; 3], fall: 0, latch: false }
     }
 
-    /// The cut by a weapon hit: state 1 and the fall's sub-state 0, the piece launched along
-    /// `velocity` (unit: the normalized motion of a weapon point; SPEC-0060 Cut). False when
-    /// the reed is not standing.
-    pub fn cut(&mut self, velocity: [f32; 3]) -> bool {
+    /// The forward row (right x up).
+    pub fn forward(&self) -> [f32; 3] {
+        cross(self.right, self.up)
+    }
+
+    /// The frame rebuild for a new up axis U: forward = normalise(right x U), right = U x
+    /// forward. With right parallel to U the previous frame is kept (rewrite choice).
+    fn rebuild(&mut self, u: [f32; 3]) {
+        let f = cross(self.right, u);
+        if f.iter().map(|c| c * c).sum::<f32>().sqrt() < 1e-6 {
+            return;
+        }
+        let f = normalize(f);
+        self.right = cross(u, f);
+        self.up = u;
+    }
+
+    /// One step of a standing reed at `base` with the hero at `hero` (state 0): the spring-back
+    /// (latch clear and up.y below 0.999: up = normalise(0.925 up + 0.075 world up)), then, when
+    /// the hero is within 5 units horizontally, the body contact (a sphere of radius 0.75 1.4
+    /// above the base against the hero's vertical segment of radius R) and the bend: with
+    /// contact and the latch clear, a = the horizontal unit vector from the hero to the base, s
+    /// = d - R, w = 1 for s at most 0.25 (which sets the latch) else 1 - 2 (s - 0.25), T =
+    /// normalise(w a + (1 - w) world up); up eases 7.5 percent toward T when it already leans
+    /// further, else becomes T at once. No contact clears the latch. Returns whether the weapon
+    /// may cut it this step (within the 5-unit gate with the latch clear).
+    pub fn standing_step(&mut self, base: [f32; 3], hero: [f32; 3]) -> bool {
+        if self.state != 0 {
+            return false;
+        }
+        if !self.latch && self.up[1] < 0.999 {
+            let u = self.up;
+            self.rebuild(normalize(std::array::from_fn(|i| 0.925 * u[i] + 0.075 * UP[i])));
+        }
+        let (dx, dz) = (base[0] - hero[0], base[2] - hero[2]);
+        let d = dx.hypot(dz);
+        if d >= 5.0 {
+            self.latch = false;
+            return false;
+        }
+        // The contact sphere's distance to the hero's vertical segment.
+        let c = [base[0], base[1] + 1.4, base[2]];
+        let y = c[1].clamp(hero[1], hero[1] + BODY_HEIGHT);
+        let gap = (c[0] - hero[0]).hypot(c[2] - hero[2]).hypot(c[1] - y);
+        if gap >= BODY_RADIUS + 0.75 {
+            self.latch = false;
+            return true;
+        }
+        if self.latch || d < 1e-6 {
+            // Latched (or the hero right over the base: the frame is kept, a rewrite choice).
+            return !self.latch;
+        }
+        let a = [dx / d, 0.0, dz / d];
+        let s = d - BODY_RADIUS;
+        let w = if s <= 0.25 { 1.0 } else { (1.0 - 2.0 * (s - 0.25)).clamp(0.0, 1.0) };
+        let t = normalize(std::array::from_fn(|i| w * a[i] + (1.0 - w) * UP[i]));
+        if s <= 0.25 {
+            self.latch = true;
+        }
+        let u = if self.up[1] < t[1] { normalize(std::array::from_fn(|i| 0.075 * t[i] + 0.925 * self.up[i])) } else { t };
+        self.rebuild(u);
+        !self.latch
+    }
+
+    /// The cut (Cut set-up): state 1 and the fall's sub-state 0, the launch velocity the
+    /// horizontal part of `motion` (the weapon tip's change between the last two poses)
+    /// normalised, or zero when it has none. False when the reed is not standing.
+    pub fn cut(&mut self, motion: [f32; 3]) -> bool {
         if self.state != 0 {
             return false;
         }
         self.state = 1;
         self.fall = 0;
-        self.velocity = velocity;
+        let l = motion[0].hypot(motion[2]);
+        self.velocity = if l > 1e-6 { [motion[0] / l, 0.0, motion[2] / l] } else { [0.0; 3] };
         true
     }
 
     /// One fall tick (state 1). `ground` is the ground probe result under the piece with ceiling
     /// y + 8.0 and `base_y` the anchor's height. Sub-state 0: offset += 0.05 v until the piece is
-    /// more than 0.5 from its anchor; 1: y -= 0.07 until below the ground less 1.25; 2: up =
-    /// normalize(0.965 v + 0.035 up) each tick while |v.y| is above 0.001 (the piece stays in
-    /// state 1 and drawn, the velocity fixed), else state 2 (gone) at once (SPEC-0060 Reed state).
+    /// strictly more than 0.5 from its anchor; 1: y -= 0.07 until strictly below the ground less
+    /// 1.25; 2: while |up.y| is above 0.001, up = normalise(0.965 up + 0.035 v) and the frame
+    /// rebuild (the stalk topples toward v), else state 2 (gone).
     pub fn fall_step(&mut self, base_y: f32, ground: Option<f32>) {
         if self.state != 1 {
             return;
@@ -493,8 +562,8 @@ impl Reed {
             }
             _ => {
                 let (u, v) = (self.up, self.velocity);
-                if v[1].abs() > 0.001 {
-                    self.up = normalize(std::array::from_fn(|i| 0.965 * v[i] + 0.035 * u[i]));
+                if u[1].abs() > 0.001 {
+                    self.rebuild(normalize(std::array::from_fn(|i| 0.965 * u[i] + 0.035 * v[i])));
                 } else {
                     self.state = 2;
                 }
@@ -543,29 +612,60 @@ mod tests {
     #[test]
     fn reed_bend_cut_fall_drop() {
         use super::*;
-        let mut r = Reed::default();
-        // Within 5 units it tilts away from the hero (+x); farther it springs back.
-        r.bend_step(3.0, [1.0, 0.0, 0.0]);
-        assert!(r.up[0] > 0.2 && r.up[1] < 0.99);
-        let tilted = r.up;
-        r.bend_step(6.0, [1.0, 0.0, 0.0]);
-        assert!(r.up[0] < tilted[0]);
-        // A cut launches the piece; it moves 0.05 v a tick until 0.5 out (11 ticks at |v| 1).
-        assert!(r.cut([1.0, 0.0, 0.0]));
+        let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 2e-3);
+        // SPEC-0060 Reed angles vectors: draws 0.5 and -0.5 give phi = 135 degrees.
+        let phi = 0.5f32.atan2(-0.5);
+        let mut r = Reed::new(phi);
+        assert!(near(r.forward(), [0.7071, 0.0, -0.7071]) && near(r.right, [-0.7071, 0.0, -0.7071]));
+        // The hero due west at d (a = +x): 1.9 tilts 3 degrees, 1.675 gives 45 at once with the
+        // rebuilt frame, 1.4 lies flat and latches (no cut while latched).
+        let base = [0.0, 0.0, 0.0];
+        assert!(r.standing_step(base, [-1.9, 0.0, 0.0]));
+        assert!(near(r.up, [0.0526, 0.9986, 0.0]) && !r.latch);
+        let mut r = Reed::new(phi);
+        r.standing_step(base, [-1.675, 0.0, 0.0]);
+        assert!(near(r.up, [0.7071, 0.7071, 0.0]));
+        assert!(near(r.right, [-0.4082, 0.4082, -0.8165]) && near(r.forward(), [0.5774, -0.5774, -0.5774]));
+        assert!(!r.standing_step(base, [-1.4, 0.0, 0.0]));
+        assert!(near(r.up, [1.0, 0.0, 0.0]) && r.latch);
+        // Stepping back out of contact clears the latch (that step does not spring back: it starts
+        // latched); the spring-back from flat then first gives
+        // up.y >= 0.999 on step 49.
+        r.standing_step(base, [-2.0, 0.0, 0.0]);
+        assert!(!r.latch);
+        let mut n = 0;
+        while r.up[1] < 0.999 {
+            r.standing_step(base, [-20.0, 0.0, 0.0]);
+            n += 1;
+        }
+        assert_eq!(n, 49);
+        // The cut fall with v = +z: 11 ticks out, 18 down, 213 turning, gone about 243 after.
+        let mut r = Reed::new(phi);
+        assert!(r.cut([0.0, 0.3, 2.0]));
         assert!(!r.cut([1.0, 0.0, 0.0]));
-        for _ in 0..11 {
+        // (The spec's 11 ticks out come from the console's rounding near coordinate 1000; the
+        // plain f32 sum at the origin passes 0.5 on tick 10.)
+        let (mut t, mut turned) = (0, 0);
+        while r.state == 1 {
+            let turning = r.fall == 2;
+            r.fall_step(0.0, Some(0.0));
+            t += 1;
+            if turning && r.state == 1 {
+                turned += 1;
+                if turned == 1 {
+                    assert!(near(r.up, [0.0, 0.9993, 0.0362]), "{:?}", r.up);
+                }
+            }
+        }
+        assert_eq!(turned, 213);
+        assert!((240..=245).contains(&t), "{t}");
+        // A zero launch never leaves sub-state 0.
+        let mut r = Reed::new(0.0);
+        r.cut([0.0, 1.0, 0.0]);
+        for _ in 0..50 {
             r.fall_step(0.0, Some(0.0));
         }
-        assert_eq!(r.fall, 1);
-        // It sinks 0.07 a tick until below the ground less 1.25, then turns over and is gone.
-        for _ in 0..19 {
-            r.fall_step(0.0, Some(0.0));
-        }
-        assert_eq!(r.fall, 2);
-        for _ in 0..400 {
-            r.fall_step(0.0, Some(0.0));
-        }
-        assert_eq!(r.state, 2);
+        assert_eq!((r.state, r.fall), (1, 0));
         // The drop roll.
         assert_eq!((reed_drop(0), reed_drop(5), reed_drop(19), reed_drop(20), reed_drop(100)), (Some(138), Some(136), Some(135), None, None));
     }
@@ -657,31 +757,5 @@ mod tests {
         assert!(bush_drop(277, 50, 0, false).is_empty());
         assert_eq!(bush_drop(256, 0, 0, true), vec![152]);
         assert_eq!(cut_model(262), Some(263));
-    }
-
-    #[test]
-    fn reed_piece_launch_decides_its_end() {
-        // SPEC-0060 vectors: a unit launch moves 0.05 a tick, state 0 ends after 0.5; a launch
-        // with |y| above 0.001 keeps updating in the last fall state (still drawn); a level one
-        // is gone on its first update there.
-        let run = |v: [f32; 3]| {
-            let mut r = Reed::default();
-            r.cut(v);
-            let mut n = 0;
-            while r.fall == 0 {
-                r.fall_step(0.0, Some(0.0));
-                n += 1;
-            }
-            // The spec's vector gives 11 (0.5 exactly after 10 under the console's arithmetic);
-            // the plain f32 sum here passes 0.5 on tick 10.
-            assert!((10..=11).contains(&n));
-            for _ in 0..200 {
-                r.fall_step(0.0, Some(0.0));
-            }
-            r.state
-        };
-        assert_eq!(run([1.0, 0.0, 0.0]), 2);
-        let tilted = [0.6, 0.8, 0.0];
-        assert_eq!(run(tilted), 1);
     }
 }
