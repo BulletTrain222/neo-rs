@@ -1391,6 +1391,8 @@ impl Play {
                 cone: float(LOCATOR_CONE)?,
                 locator_distance: float(LOCATOR_DISTANCE)?,
                 stun_table: std::array::from_fn(|k| table[k] as i32),
+                dazed_cone: float(DAZED_CONE)?,
+                spit_damage: int(SPIT_DAMAGE)? as f32,
             }
         };
         let gnarfas_words = {
@@ -6178,7 +6180,12 @@ impl Play {
                 held: false,
                 inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 deactivated: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
-                boss: row.filter(|r| r.class == Some(18)).map(|_| neopets_sim::juppie::Juppie::default()),
+                // SPEC-0015 Variant: the spit flag from the Act 3 marker (story flag 0x53).
+                boss: row.filter(|r| r.class == Some(18)).map(|_| {
+                    let mut j = neopets_sim::juppie::Juppie::default();
+                    j.spit = self.state.flag(0x53);
+                    j
+                }),
                 miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
                 gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
                 pending_hit: None,
@@ -6740,6 +6747,29 @@ impl Play {
             let place = placement(c.position, c.facing);
             let frames = c.anim.bone_frames();
             let head = frames.get(neopets_sim::juppie::HEAD_BONE).map_or([c.position[0], c.position[1] + 2.0, c.position[2]], |f| place.mul(f).t);
+            // The mouth point (bone 25) and its horizontal forward, and the hero's armed shot
+            // slots with their damage by the hero shot rule (trunc(S x C x T), defence 0).
+            let mouth_frame = frames.get(25).map(|f| place.mul(f));
+            let mouth = mouth_frame.as_ref().map_or(head, |m| m.t);
+            let mouth_forward = mouth_frame.as_ref().map_or(c.facing, |m| {
+                let z = m.cols[2];
+                let l = z[0].hypot(z[2]).max(1e-6);
+                [z[0] / l, 0.0, z[2] / l]
+            });
+            let t_type = c.row.map_or(0, |r| r.target_type as i32);
+            let mote = self.equipment.motes[1][2];
+            let gst = mote.and_then(|m| self.items.get(m)).map_or(0.0, |it| it.stats[6] as f32);
+            let shot_slots: Vec<(usize, [f32; 3], f32, i32)> = self
+                .hero_shots
+                .iter()
+                .enumerate()
+                .filter(|(_, s)| s.armed())
+                .map(|(k, s)| {
+                    let cf = if neopets_sim::mote::matches(s.element, t_type) { neopets_sim::mote::one_plus_percent(gst) } else { 1.0 };
+                    let damage = neopets_sim::charm::damage(neopets_sim::charm::scale(s.scale, cf, s.t, 1.0, 1.0), 1.0, 0.0, 1.0).0;
+                    (k, s.position, s.radius, damage)
+                })
+                .collect();
             let clip = c.anim.clip_state();
             // NEOPETS_TRACE_JUPPIE: the state, clip, progress and the root and head heights.
             if std::env::var_os("NEOPETS_TRACE_JUPPIE").is_some() {
@@ -6758,6 +6788,10 @@ impl Play {
                 level: &level,
                 locator: &locator,
                 hero_hit: hits.iter().find(|(h, _)| *h == id).map(|&(_, d)| d),
+                release: c.anim.frame_bits() & 0x20 != 0,
+                mouth,
+                mouth_forward,
+                shots: &shot_slots,
             };
             let Some(boss) = c.boss.as_mut() else { continue };
             let before = boss.top;
@@ -6818,6 +6852,24 @@ impl Play {
                 // The shared hit flash 222, detached, at the impact point (SPEC-0015; SPEC-0029).
                 let table = self.effect_table.clone();
                 self.effects.one_shot(&table, 222, head, neopets_sim::effect::IDENTITY, &mut self.rng);
+            }
+            // SPEC-0015 Spit: one projectile from the mouth at the hero's feet into the pool.
+            if act.spit {
+                let setup = neopets_sim::juppie::spit_setup(mouth, hero, self.juppie_words.spit_damage, id);
+                self.shots.submit(setup);
+            }
+            // The hit helper: bounced shots fly on; counted ones are disarmed.
+            for &k in &act.bounced {
+                if let Some(s) = self.hero_shots.get_mut(k) {
+                    s.bounce(&mut self.rng);
+                }
+            }
+            let mut gone = act.absorbed.clone();
+            gone.sort_unstable();
+            for &k in gone.iter().rev() {
+                if k < self.hero_shots.len() {
+                    self.hero_shots.remove(k);
+                }
             }
             if let Some(p) = act.blocker {
                 // The head cylinder (radius 4.0, length 10.0) pushes the hero's body out.

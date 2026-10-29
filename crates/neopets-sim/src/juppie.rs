@@ -3,9 +3,12 @@
 //! loop and counted hits, the set-backs and the death sequence, and the finale holds. The level
 //! flags it reads and posts are shared with the level script (SPEC-0045 pack 1217).
 //!
-//! Not covered: the spit and the dazed loop (both need the spit flag, the Act 3 marker 83),
-//! the stun box blocker (the head cylinder blocker is returned) and the hit helper's deflection
-//! effects. Every tuning value is read from the boot data at the addresses of SPEC-0015.
+//! The Act 3 variant (the spit flag, story flag 0x53): the spit attack (pre-wait, shoot cycles,
+//! recover) and the dazed loop after a locator slam, with the hit helper that counts Roberta's
+//! shots at the mouth inside the front cone and bounces every other contact.
+//!
+//! Not covered: the stun box blocker (the head cylinder blocker is returned) and the hit helper's
+//! deflection effects. Every tuning value is read from the boot data at the addresses of SPEC-0015.
 
 use crate::rng::Rng;
 
@@ -29,6 +32,9 @@ pub struct Words {
     pub cone: f32,
     pub locator_distance: f32,
     pub stun_table: [i32; 3],
+    /// The dazed front cone (0x2DAFD8) and the spit damage (0x2DAF84).
+    pub dazed_cone: f32,
+    pub spit_damage: f32,
 }
 
 /// The boot addresses: (slam min, max, chance, damage, stun min, max, counts, spit distance,
@@ -48,6 +54,42 @@ pub const LOCATOR_DISTANCE: u32 = 0x002D_AFB8;
 pub const LOCATOR_CONE: u32 = 0x002D_AFBC;
 pub const IMPACT: u32 = 0x002D_AFC8;
 pub const STUN_TABLE: u32 = 0x002D_AFE8;
+pub const DAZED_CONE: u32 = 0x002D_AFD8;
+pub const SPIT_DAMAGE: u32 = 0x002D_AF84;
+
+/// The spit projectile (SPEC-0015 Spit projectile): pool kind 1 (straight with gravity 32 / 3600
+/// per tick squared), visual kind 23, element 0, radius 1.0, no area; from the mouth at the
+/// hero's feet: horizontal speed s = 0.5 - 0.4 (1 - (d - 5) / 95)^2 per tick, flight time T =
+/// d / s ticks, vertical speed dy / T + 0.5 (32 / 3600) T; the life argument trunc(60 T) + 1 as
+/// written (the ground ends it first); effects 1400, 1400 (flight), 1399 (blocked), none
+/// (expiry), 1399 (world), 1399 (hit).
+pub fn spit_setup(mouth: Vec3, hero: Vec3, damage: f32, owner: u64) -> crate::projectile::Setup {
+    let (dx, dz) = (hero[0] - mouth[0], hero[2] - mouth[2]);
+    let d = dx.hypot(dz);
+    let u = 1.0 - (d - 5.0) / 95.0;
+    let s = 0.5 - 0.4 * u * u;
+    let t = if s > 0.0 { d / s } else { 1.0 }.max(1.0);
+    let dir = if d > 0.0 { [dx / d, dz / d] } else { [0.0, 0.0] };
+    let vy = (hero[1] - mouth[1]) / t + 0.5 * (32.0 / 3600.0) * t;
+    crate::projectile::Setup {
+        kind: 1,
+        visual: 23,
+        element: 0,
+        owner: Some(owner),
+        start: mouth,
+        velocity: [dir[0] * s, vy, dir[1] * s],
+        lifetime: (t * 60.0) as i32 + 1,
+        damage,
+        radius: 1.0,
+        spin: 0.0,
+        area_radius: 0.0,
+        area_duration: 0,
+        key: -1,
+        ignore_world: false,
+        status: (-1, 0, 0),
+        effects: [1400, 1400, 1399, -1, 1399, 1399],
+    }
+}
 
 /// The head bone (15) and the stage locators by stage with their level flags.
 pub const HEAD_BONE: usize = 15;
@@ -68,8 +110,10 @@ pub enum Top {
     StageStart,
     /// The free decision state (animation 7).
     Free,
-    /// The head slam at a sub-step.
+    /// The head slam at a sub-step (5 the dazed loop, 6 the dazed entry; spit flag only).
     Slam(u8),
+    /// The spit at a sub-step: 0 the pre-wait, 1 the shoot cycles, 2 the recover.
+    Spit(u8),
     /// The finale hold (top-level state 6, animation 7) and the idle hold (animation 0).
     Finale,
     Idle,
@@ -92,6 +136,13 @@ pub struct View<'a> {
     pub locator: &'a dyn Fn(usize) -> Option<Vec3>,
     /// The hero's melee damage when its swing hit the boss this tick.
     pub hero_hit: Option<i32>,
+    /// The release event (frame bit 0x20) on the boss's current frame.
+    pub release: bool,
+    /// The mouth point (bone 25) and its horizontal forward direction.
+    pub mouth: Vec3,
+    pub mouth_forward: Vec3,
+    /// The hero's armed shot slots: (slot index, centre, radius, the hero shot damage).
+    pub shots: &'a [(usize, Vec3, f32, i32)],
 }
 
 /// What it asks for this tick.
@@ -110,6 +161,11 @@ pub struct Act {
     pub death: bool,
     /// The head cylinder blocker (centre, radius 4.0, length 10.0) of the stun.
     pub blocker: Option<Vec3>,
+    /// A spit is launched this tick from the mouth at the hero's feet.
+    pub spit: bool,
+    /// The hit helper: shot slots that bounce, and slots counted (disarmed) in the dazed loop.
+    pub bounced: Vec<usize>,
+    pub absorbed: Vec<usize>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -125,11 +181,20 @@ pub struct Juppie {
     pub uses: u32,
     /// The controller's start request of animation 7 has been made.
     started: bool,
+    /// The spit flag (story flag 0x53 at fight start): spits and the dazed loop.
+    pub spit: bool,
+    /// The dazed timer, the spit's pre-wait counter (-1 before its request tick), cycle count,
+    /// cycles done and the once-per-cycle release latch.
+    dazed: i32,
+    spit_wait: i32,
+    spit_count: i32,
+    spit_done: i32,
+    spit_fired: bool,
 }
 
 impl Default for Juppie {
     fn default() -> Self {
-        Self { stage: 0, marker: None, top: Top::Hub { played: false }, cooldown: 0, stun: 0, counted: 0, slam_latch: false, once: false, uses: 0, started: false }
+        Self { stage: 0, marker: None, top: Top::Hub { played: false }, cooldown: 0, stun: 0, counted: 0, slam_latch: false, once: false, uses: 0, started: false, spit: false, dazed: 0, spit_wait: -1, spit_count: 0, spit_done: 0, spit_fired: false }
     }
 }
 
@@ -159,6 +224,24 @@ impl Juppie {
     /// One tick.
     pub fn tick(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
         let mut a = Act::default();
+        let dazed = self.top == Top::Slam(5) && self.dazed > 0;
+        self.state_step(v, w, rng, &mut a);
+        // The hit helper's deflect pass on every tick the dazed loop did not run it: every
+        // contact of a hero shot with the mouth cylinder bounces.
+        if !dazed {
+            a.bounced = v.shots.iter().filter(|s| Self::mouth_touch(v, s.1, s.2)).map(|s| s.0).collect();
+        }
+        a
+    }
+
+    /// A shot sphere against the vertical cylinder of radius 4.0 standing 6.0 tall on the mouth
+    /// point.
+    fn mouth_touch(v: &View, c: Vec3, r: f32) -> bool {
+        hdist(c, v.mouth) <= 4.0 + r && c[1] >= v.mouth[1] - r && c[1] <= v.mouth[1] + 6.0 + r
+    }
+
+    fn state_step(&mut self, v: &View, w: &Words, rng: &mut Rng, a: &mut Act) {
+        let a = &mut *a;
         match self.top {
             Top::Hub { .. } => {
                 // The controller's start requests animation 7 once (R-0036 4); after that the
@@ -187,12 +270,13 @@ impl Juppie {
             }
             Top::StageStart => {
                 a.face = Some(1.0);
-                if Self::play(&mut a, v, 5) {
+                if Self::play(a, v, 5) {
                     self.top = Top::Free;
                 }
             }
-            Top::Free => self.free(v, w, rng, &mut a),
-            Top::Slam(s) => self.slam(s, v, w, rng, &mut a),
+            Top::Free => self.free(v, w, rng, a),
+            Top::Slam(s) => self.slam(s, v, w, rng, a),
+            Top::Spit(s) => self.spit_step(s, v, a),
             Top::Finale => {
                 a.anim = Some(7);
                 if (v.level)(18) {
@@ -201,7 +285,50 @@ impl Juppie {
             }
             Top::Idle => a.anim = Some(0),
         }
-        a
+    }
+
+    /// The spit (SPEC-0015 Spit): 0 plays 0x13 turning at 0.25, a 120-tick counter set on the
+    /// request tick, then 1; 1 plays 0x14 turning at 0.25, one spit on the first tick of the
+    /// release event, and at its end counts the cycle: below the count 0x16 for this tick (the
+    /// next cycle's 0x14 replaces it), else 2; 2 plays 0x16 to its end, then free.
+    fn spit_step(&mut self, s: u8, v: &View, a: &mut Act) {
+        match s {
+            0 => {
+                a.face = Some(0.25);
+                a.anim = Some(0x13);
+                if self.spit_wait < 0 {
+                    self.spit_wait = 120;
+                } else {
+                    self.spit_wait -= 1;
+                    if self.spit_wait <= 0 {
+                        self.spit_fired = false;
+                        self.top = Top::Spit(1);
+                    }
+                }
+            }
+            1 => {
+                a.face = Some(0.25);
+                let ended = Self::play(a, v, 0x14);
+                if v.clip.0 == 0x14 && v.release && !self.spit_fired {
+                    self.spit_fired = true;
+                    a.spit = true;
+                }
+                if ended {
+                    self.spit_done += 1;
+                    if self.spit_done >= self.spit_count {
+                        self.top = Top::Spit(2);
+                    } else {
+                        a.anim = Some(0x16);
+                        self.spit_fired = false;
+                    }
+                }
+            }
+            _ => {
+                if Self::play(a, v, 0x16) {
+                    self.top = Top::Free;
+                }
+            }
+        }
     }
 
     /// The free state: the stage rules when the stage is complete, else the cadence.
@@ -248,8 +375,13 @@ impl Juppie {
         let d = hdist(v.position, v.hero);
         if d > w.slam_min && d < w.slam_max && rng.range(0, 100) < w.slam_chance {
             self.top = Top::Slam(0);
+        } else if self.spit && d < w.spit_distance && rng.range(0, 100) < w.spit_chance {
+            // A failed slam roll, or a distance outside the band, falls through to the spit.
+            self.spit_count = rng.range(3, 5);
+            self.spit_done = 0;
+            self.spit_wait = -1;
+            self.top = Top::Spit(0);
         }
-        // The spit needs the spit flag (Act 3), which this build does not run.
     }
 
     fn death(&mut self, a: &mut Act) {
@@ -309,7 +441,7 @@ impl Juppie {
                 if ended {
                     if self.once {
                         self.stun = rng.range(ticks(w.stun_min), ticks(w.stun_max));
-                        self.top = Top::Slam(2);
+                        self.top = if self.spit { Top::Slam(6) } else { Top::Slam(2) };
                     } else {
                         self.top = Top::Slam(4);
                     }
@@ -337,6 +469,49 @@ impl Juppie {
                 self.stun -= 1;
                 if self.stun <= 0 {
                     self.top = Top::Slam(4);
+                }
+            }
+            // The dazed entry: 0x11 to its end, then the 300-tick dazed timer.
+            6 => {
+                if Self::play(a, v, 0x11) {
+                    self.dazed = 300;
+                    self.top = Top::Slam(5);
+                }
+            }
+            // The dazed loop: at 0 on a tick's start, free; else the countdown, animation 3, the
+            // head blocker and the hit helper counting the shots that touch the mouth cylinder
+            // with the horizontal direction from the mouth above 0.9 along its forward (each
+            // slot's damage truncated, summed, subtracted once); the HP exits.
+            5 => {
+                if self.dazed <= 0 {
+                    self.top = Top::Free;
+                    return;
+                }
+                self.dazed -= 1;
+                a.anim = Some(3);
+                a.blocker = Some(v.head);
+                let mut total = 0;
+                for &(k, c, r, damage) in v.shots {
+                    if !Self::mouth_touch(v, c, r) {
+                        continue;
+                    }
+                    let (dx, dz) = (c[0] - v.mouth[0], c[2] - v.mouth[2]);
+                    let l = dx.hypot(dz);
+                    let dot = if l > 0.0 { (dx * v.mouth_forward[0] + dz * v.mouth_forward[2]) / l } else { 0.0 };
+                    if dot > w.dazed_cone {
+                        a.absorbed.push(k);
+                        total += damage.max(0);
+                    } else {
+                        a.bounced.push(k);
+                    }
+                }
+                a.hp_loss = total;
+                let f = (v.hp - total).max(0) as f32 / v.max_hp.max(1) as f32;
+                if f <= 0.0 {
+                    self.death(a);
+                } else if f <= self.threshold() {
+                    self.marker = Some(self.stage);
+                    self.top = Top::Free;
                 }
             }
             3 => {
@@ -375,11 +550,68 @@ mod tests {
             cone: 0.9,
             locator_distance: 10.0,
             stun_table: [4, 2, 0],
+            dazed_cone: 0.9,
+            spit_damage: 100.0,
         }
     }
 
     fn view<'a>(level: &'a dyn Fn(u16) -> bool, locator: &'a dyn Fn(usize) -> Option<Vec3>, clip: (u32, f32, bool)) -> View<'a> {
-        View { position: [0.0; 3], facing: [0.0, 0.0, 1.0], head: [0.0, 0.0, 3.0], hero: [0.0, 0.0, 20.0], clip, can_act: true, hp: 190, max_hp: 190, level, locator, hero_hit: None }
+        View { position: [0.0; 3], facing: [0.0, 0.0, 1.0], head: [0.0, 0.0, 3.0], hero: [0.0, 0.0, 20.0], clip, can_act: true, hp: 190, max_hp: 190, level, locator, hero_hit: None, release: false, mouth: [0.0, 2.0, 3.0], mouth_forward: [0.0, 0.0, 1.0], shots: &[] }
+    }
+
+    #[test]
+    fn spit_and_dazed_loop() {
+        let w = words();
+        let mut rng = Rng::seeded(4);
+        let no = |_: u16| false;
+        let nol = |_: usize| None;
+        // The chooser: inside the slam band's near edge (d 5) only the spit roll can pass.
+        let mut n = 0;
+        loop {
+            let mut j = Juppie { stage: 1, top: Top::Free, spit: true, ..Juppie::default() };
+            let mut v = view(&no, &nol, (7, 0.0, false));
+            v.hero = [0.0, 0.0, 5.0];
+            j.tick(&v, &w, &mut rng);
+            n += 1;
+            if j.top == Top::Spit(0) {
+                assert!((3..=5).contains(&j.spit_count));
+                break;
+            }
+            assert!(n < 100);
+        }
+        // The pre-wait: 120 ticks after the request tick, then the shoot cycles; one spit per
+        // cycle on the release event; the count of cycles, then the recover.
+        let mut j = Juppie { stage: 1, top: Top::Spit(0), spit: true, spit_count: 3, ..Juppie::default() };
+        let v = view(&no, &nol, (0x13, 0.5, false));
+        let mut t = 0;
+        while j.top == Top::Spit(0) {
+            j.tick(&v, &w, &mut rng);
+            t += 1;
+        }
+        assert_eq!(t, 121);
+        let mut spits = 0;
+        for _ in 0..3 {
+            let mut v = view(&no, &nol, (0x14, 0.3, false));
+            v.release = true;
+            spits += j.tick(&v, &w, &mut rng).spit as i32;
+            spits += j.tick(&v, &w, &mut rng).spit as i32;
+            j.tick(&view(&no, &nol, (0x14, 1.0, true)), &w, &mut rng);
+        }
+        assert_eq!((spits, j.top), (3, Top::Spit(2)));
+        // A locator slam with the spit flag: the dazed entry, then 300 dazed ticks.
+        let mut j = Juppie { stage: 1, top: Top::Slam(6), spit: true, ..Juppie::default() };
+        j.tick(&view(&no, &nol, (0x11, 1.0, true)), &w, &mut rng);
+        assert_eq!((j.top, j.dazed), (Top::Slam(5), 300));
+        // A shot at the mouth inside the cone is counted; one beside the mouth bounces.
+        let shots = [(0usize, [0.0, 3.0, 5.0], 0.5, 20), (1, [3.5, 3.0, 3.0], 0.5, 20)];
+        let mut v = view(&no, &nol, (3, 0.5, false));
+        v.shots = &shots;
+        let a = j.tick(&v, &w, &mut rng);
+        assert_eq!((a.absorbed, a.bounced, a.hp_loss), (vec![0], vec![1], 20));
+        // Outside the dazed loop every contact bounces.
+        let mut j = Juppie { stage: 1, top: Top::Free, ..Juppie::default() };
+        let a = j.tick(&v, &w, &mut rng);
+        assert_eq!((a.absorbed.len(), a.bounced), (0, vec![0, 1]));
     }
 
     #[test]
