@@ -220,6 +220,11 @@ pub struct King {
     hop_timer: i32,
     trigger_was: bool,
     started: bool,
+    /// The one-shot blocked word (+0x8BC): set by the hero's swing blocked by the guarding King,
+    /// read and cleared by the block state.
+    pub blocked: bool,
+    /// The first damaging hero hit has been doubled.
+    doubled: bool,
 }
 
 /// The attack counters: boomerang, flame wave, swing, lunge, combo.
@@ -250,7 +255,27 @@ fn roll(rng: &mut Rng) -> i32 {
 impl King {
     /// The controller start: idle, ready, phase 1, home at the start position, the rings empty.
     pub fn new(home: Vec3) -> Self {
-        Self { state: State::Idle, phase: 0, ready: true, home, boomerang: None, rings: [Ring::default(); 5], counters: [0; 5], once: false, swing_toggle: false, hop_timer: 0, trigger_was: false, started: true }
+        Self { state: State::Idle, phase: 0, ready: true, home, boomerang: None, rings: [Ring::default(); 5], counters: [0; 5], once: false, swing_toggle: false, hop_timer: 0, trigger_was: false, started: true, blocked: false, doubled: false }
+    }
+
+    /// Hurt side (SPEC-0019 G11, G14): the King cannot be hit during the flinch, the catch, the
+    /// roll and the jump (nor while held, which the host tests).
+    pub fn hittable(&self) -> bool {
+        !matches!(self.state, State::Flinch(_) | State::Catch | State::Roll(_) | State::Jump { .. })
+    }
+
+    /// Guarding (base state 20): the block, holding or in its recovery.
+    pub fn guarding(&self) -> bool {
+        matches!(self.state, State::Block { .. })
+    }
+
+    /// The damage a hero hit takes: the first damaging hit of the fight is doubled.
+    pub fn hit_damage(&mut self, damage: i32) -> i32 {
+        if damage > 0 && !self.doubled {
+            self.doubled = true;
+            return 2 * damage;
+        }
+        damage.max(0)
     }
 
     /// The attack state gate: idle, hit flinch, walk, hop back and the orbits.
@@ -412,6 +437,11 @@ impl King {
                     if ended(0x1D) {
                         self.state = State::Idle;
                     }
+                } else if std::mem::take(&mut self.blocked) {
+                    // The one-shot blocked word (+0x8BC), set by the hero's blocked swing: the
+                    // recovery is requested on the next tick.
+                    self.state = State::Block { recovery: true };
+                    a.anim = Some(0x19);
                 } else if v.hero_attacking {
                     a.anim = Some(0x19);
                 } else if roll(rng) < w.overhead_chance && d < w.overhead_distance && v.hero_attack_state {
@@ -716,6 +746,25 @@ mod tests {
 
     fn flat(_: f32, _: f32) -> f32 {
         0.0
+    }
+
+    #[test]
+    fn hurt_side() {
+        // SPEC-0019 G14: not hittable in the flinch, catch, roll and jump; the block guards; the
+        // first damaging hit is doubled; the blocked word sends the block to its recovery.
+        let mut k = King::new([0.0; 3]);
+        assert!(k.hittable() && !k.guarding());
+        assert_eq!((k.hit_damage(0), k.hit_damage(7), k.hit_damage(7)), (0, 14, 7));
+        for s in [State::Flinch(0x0B), State::Catch, State::Roll(0x14), State::Jump { part: 7, velocity: [0.0; 3] }] {
+            k.state = s;
+            assert!(!k.hittable());
+        }
+        k.state = State::Block { recovery: false };
+        assert!(k.hittable() && k.guarding());
+        k.blocked = true;
+        let mut rng = Rng::seeded(1);
+        k.tick(&view([0.0, 0.0, 5.0], 100), &words(), &mut rng);
+        assert_eq!((k.state, k.blocked), (State::Block { recovery: true }, false));
     }
 
     fn view(hero: Vec3, hp: i32) -> View<'static> {

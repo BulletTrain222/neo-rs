@@ -3701,7 +3701,7 @@ impl Play {
             // reads the shot slots itself, and a shot off the guarding knight pays nothing. Nor is
             // the Juppie (SPEC-0015 Hero actions): shots pass through its body; its mouth bounce
             // and the Act 3 dazed loop are not built.
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none() && c.boss.is_none()).find_map(|(i, c)| {
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none() && c.boss.is_none() && c.king.as_ref().is_none_or(|k| k.hittable() && !k.guarding())).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
@@ -5541,6 +5541,24 @@ impl Play {
             // SPEC-0029 G11: the Undead Draik the same way while it guards (outside its stun and
             // hit reactions, and before stage 5, Blocking Angle 2.0); exposed, the swing passes
             // through to its own hit check.
+            // SPEC-0019 G14: the Werelupe King cannot be hit in its flinch, catch, roll and
+            // jump; while it blocks, a swing from its front (dot of the facings below 0) is
+            // blocked (counted as landed, the blocked word set, Tor's recoil) and one from beside
+            // or behind does nothing; a power step with a Mote passes through the guard.
+            if let Some(k) = c.king.as_mut() {
+                if !k.hittable() {
+                    continue;
+                }
+                if k.guarding() && !power_hit {
+                    if c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < 0.0 {
+                        self.hit_list.push(c.id);
+                        landed += 1;
+                        knight_block = true;
+                        k.blocked = true;
+                    }
+                    continue;
+                }
+            }
             let guards = match (c.knight.as_ref(), c.draik.as_ref()) {
                 (Some(k), _) => Some(!k.exposed),
                 (_, Some(d)) => Some(d.guarding()),
@@ -5651,7 +5669,10 @@ impl Play {
         // SPEC-0019: the Werelupe King takes the damage at once and flinches on its next tick; its
         // own controller handles its death.
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.king.is_some()) {
-            c.hp -= damage.max(0);
+            // Status ticks (poison, fire) hurt it in any state (G14).
+            let Some(k) = c.king.as_mut().filter(|k| k.hittable() || by.starts_with("status")) else { return };
+            let damage = k.hit_damage(damage);
+            c.hp -= damage;
             c.pending_hit = Some(damage);
             return;
         }
