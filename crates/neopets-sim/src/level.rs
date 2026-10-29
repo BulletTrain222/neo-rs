@@ -138,6 +138,9 @@ pub enum Action {
     WaitHeroNear { locator: usize, distance: f32 },
     /// LoopEntityAnim with an animation drawn by Random(1, 2) from the pair.
     RandomLoop { entity: usize, anims: [u32; 2] },
+    /// LaunchFireMote(from, to, speed): the fire-Mote shot from locator `from` toward locator
+    /// `to` (the hero + 1.5 up when missing) into the enemy pool (SPEC-0044 1056).
+    LaunchFireMote { from: usize, to: usize, speed: f32 },
     /// GrabEntityControl and LoopEntityAnim forever with an animation drawn by Random(0, 6)
     /// from the seven (1176's spectators).
     RandomLoop7 { entity: usize, anims: [u32; 7] },
@@ -745,6 +748,10 @@ pub struct HeroView {
     pub fire_held: bool,
     /// The selected hero's position.
     pub position: [f32; 3],
+    /// Square held this tick.
+    pub square_held: bool,
+    /// A reflected shot is live in the enemy pool's first ten slots (SPEC-0044 1056).
+    pub deflected: bool,
 }
 
 impl GameState {
@@ -13674,7 +13681,7 @@ fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
 /// SPEC-0044 1056 Init: the lesson flags (23 from 158, 24 from 167, 26 from 180 or 185), triggers
 /// 0 and 1 and the zone triggers 5, 6, 7, 9, 10, 11, 12 and 14, and the setup thread's slot
 /// loads and trainer choice. The breakables, the other dialogue routines (their entities come
-/// from a module table), the prompt routines and the shield lesson's launcher are not built.
+/// from a module table) and the prompt routines are not built.
 fn yard_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     if state.flag(158) {
@@ -13835,10 +13842,11 @@ const REMARKS: [[u16; 3]; 11] = [
 ];
 
 /// SPEC-0044 1056 Update (per tick): the melee edge (level states 2 and 3), the lesson of the
-/// first set stage flag while 191 is clear (the chain, spin and mote lessons; the shield
-/// lesson's launcher is not built), the remarks and the auto-talk. Module words: 0 the zone
+/// first set stage flag while 191 is clear (the chain, spin, mote and shield lessons, with the
+/// shield lesson's fire-Mote launcher), the remarks and the auto-talk. Module words: 0 the zone
 /// marks of this tick, 1 the spin marks, 2 the previous sub-state, 3 the pending remark, 4 the
-/// chain's hit on entity 4, 5 to 7 the last jab start ticks, 9 a pending auto-talk, 10 the
+/// chain's hit on entity 4, 5 to 7 the last jab start ticks, 9 a pending auto-talk, 12 the shield launcher on, 13 its ticks to the next shot, 14 the
+/// shield step (1: waiting for Square's release, 2: the launcher started), 10 the
 /// mote item's activation, 11 the trainer + 1.
 fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
     let w = |s: &GameState, k: u8| s.word(1056, k);
@@ -13862,11 +13870,37 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
     let mut activate_item = false;
     let mut talk_now = false;
     let mut remark = 0;
+    let fire_shield = matches!(s.hero.shield_mote, Some(160 | 161));
     if !s.flag(191) {
         if s.flag(26) {
-            // The shield lesson: the trainer's first talk; the launcher is not built.
-            if !s.flag(188) {
+            // The shield lesson: the trainer's first talk (item 160 x20, lines 5 and 4); a
+            // fire shield alignment sets 189 and, once Square is released, the trainer's line 3
+            // turns the launcher on (word 12); while 189 is set a deflected shot sets 190 with
+            // the launcher off and the trainer's closing talk, and a non-fire shield clears 189
+            // with the launcher off.
+            if s.flag(190) {
+            } else if !s.flag(188) {
                 talk_now = true;
+            } else if !s.flag(189) {
+                if fire_shield {
+                    s.set(189, true);
+                    s.set_word(1056, 14, 1);
+                }
+            } else if s.word(1056, 14) == 1 {
+                if !s.hero.square_held {
+                    s.set_word(1056, 14, 2);
+                    s.set_word(1056, 12, 1);
+                    s.set_word(1056, 13, 0);
+                    talk_now = true;
+                }
+            } else if s.hero.deflected {
+                s.set(190, true);
+                s.set_word(1056, 12, 0);
+                s.set_word(1056, 9, 1);
+            } else if !fire_shield {
+                s.set(189, false);
+                s.set_word(1056, 12, 0);
+                s.set_word(1056, 14, 0);
             }
         } else if s.flag(24) {
             let fire = |m: Option<u16>| matches!(m, Some(160 | 161));
@@ -14007,6 +14041,21 @@ fn yard_update(s: &mut GameState, dialog: bool) -> Vec<Action> {
             out.push(Action::Converse { entity: trainer as usize, line });
         }
         s.rotations.insert((1056, 60), rot);
+    }
+    // The shield launcher (word 12 on; word 13 the ticks to the next shot): LaunchFireMote from
+    // locator 101 toward 102 at 0.9, Wait 3.0 s, repeated.
+    if s.word(1056, 12) != 0 {
+        let left = w(s, 13);
+        if left <= 0 {
+            out.push(Action::LaunchFireMote { from: 101, to: 102, speed: 0.9 });
+            s.set_word(1056, 13, 180);
+        } else {
+            s.set_word(1056, 13, left - 1);
+        }
+    }
+    // The shield area: with 188 set, 190 clear and no item 160, 160 x20.
+    if s.flag(26) && s.flag(188) && !s.flag(190) && inside(9) && !s.has_item(160) {
+        s.give(160, 20);
     }
     // The mote area: magic refilled; with no fire alignment and no item 160, 160 x100.
     if s.flag(24) && !s.flag(191) && inside(7) {
@@ -17233,6 +17282,37 @@ mod tests {
         s.set_word(735, 250, 0);
         on_trigger(735, 2, enter(2), &mut s);
         assert!(on_hero_death(735, 0, &mut s).unwrap().1.contains(&Action::KillHero));
+    }
+
+    #[test]
+    fn shield_lesson_1056() {
+        let mut s = GameState::default();
+        s.set(26, true);
+        s.set(188, true);
+        s.set_word(1056, 11, 1);
+        // A fire shield with Square held: 189, the launcher still off.
+        s.hero.shield_mote = Some(160);
+        s.hero.square_held = true;
+        super::yard_update(&mut s, false);
+        assert!(s.flag(189) && s.word(1056, 12) == 0);
+        // Square released: the launcher on; it fires at once and again 181 ticks later.
+        s.hero.square_held = false;
+        let shots = (0..200).flat_map(|_| super::yard_update(&mut s, false)).filter(|a| matches!(a, Action::LaunchFireMote { from: 101, to: 102, .. })).count();
+        assert_eq!(shots, 2);
+        // A deflected shot: 190 and the launcher off.
+        s.hero.deflected = true;
+        super::yard_update(&mut s, false);
+        assert!(s.flag(190) && s.word(1056, 12) == 0);
+        // A non-fire shield before a deflection clears 189.
+        let mut t = GameState::default();
+        t.set(26, true);
+        t.set(188, true);
+        t.set(189, true);
+        t.set_word(1056, 14, 2);
+        t.set_word(1056, 12, 1);
+        t.hero.shield_mote = Some(162);
+        super::yard_update(&mut t, false);
+        assert!(!t.flag(189) && t.word(1056, 12) == 0);
     }
 
     #[test]

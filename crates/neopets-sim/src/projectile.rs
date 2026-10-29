@@ -143,7 +143,40 @@ pub struct Pool {
     pub slots: [Option<Shot>; SLOTS],
 }
 
+/// LaunchFireMote (SPEC-0044 1056 Shield lesson; SPEC-0030): behaviour kind 0, visual 23, fire
+/// (element 1), no owner, damage 3.0, radius 2.0, the effects 528, -1, 991, -1, 991 and 991, the
+/// direction toward the target at `speed` units per tick and a lifetime of trunc(distance /
+/// speed) + 20 ticks.
+pub fn fire_mote(start: Vec3, target: Vec3, speed: f32) -> Setup {
+    let to = [target[0] - start[0], target[1] - start[1], target[2] - start[2]];
+    let d = len(to);
+    let dir = if d > 0.0 { unit(to) } else { [0.0; 3] };
+    Setup {
+        kind: 0,
+        visual: 23,
+        element: 1,
+        owner: None,
+        start,
+        velocity: [dir[0] * speed, dir[1] * speed, dir[2] * speed],
+        lifetime: if speed > 0.0 { (d / speed) as i32 + 20 } else { 20 },
+        damage: 3.0,
+        radius: 2.0,
+        spin: 0.0,
+        area_radius: 0.0,
+        area_duration: 0,
+        key: -1,
+        ignore_world: false,
+        status: (-1, 0, 0),
+        effects: [528, -1, 991, -1, 991, 991],
+    }
+}
+
 impl Pool {
+    /// A live shot among the first ten slots with hit selector 0 (reflected; SPEC-0044 1056).
+    pub fn deflected(&self) -> bool {
+        self.slots.iter().take(10).flatten().any(|s| s.at_owner)
+    }
+
     /// Claim the first free slot; a full pool creates nothing.
     pub fn submit(&mut self, s: Setup) -> bool {
         match self.slots.iter_mut().find(|x| x.is_none()) {
@@ -456,6 +489,16 @@ pub fn spawn(m: &Missile, element: i32, owner: u64, launch: Vec3, hero: Vec3, (o
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fire_mote_vectors() {
+        let s = fire_mote([0.0; 3], [3.0, 4.0, 0.0], 0.5);
+        assert!((s.velocity[0] - 0.3).abs() < 1e-6 && (s.velocity[1] - 0.4).abs() < 1e-6);
+        assert_eq!(s.lifetime, 30);
+        assert_eq!(fire_mote([0.0; 3], [0.0, 0.0, 1.0], 0.9).lifetime, 21);
+        // The courtyard's locators 101 and 102: 65 ticks.
+        assert_eq!(fire_mote([-53.94, 37.14, 421.53], [-16.82, 20.21, 423.77], 0.9).lifetime, 65);
+    }
 
     fn env<'a>(hero: Vec3, owner: &'a dyn Fn(u64) -> bool, ground: &'a dyn Fn(f32, f32, f32) -> Option<f32>, wall: &'a dyn Fn(Vec3, Vec3) -> bool) -> Env<'a> {
         Env {

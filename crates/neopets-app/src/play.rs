@@ -705,6 +705,8 @@ pub struct Play {
     square_now: bool,
     /// Square's press edge as the script button query reads it (also while the hero is held).
     button_square: bool,
+    /// Square held on the last input (the level scripts' Square release tests).
+    square_held: bool,
     /// The Talk label is shown this tick, and the talked character (the speaker of its lines).
     pub talk_prompt: bool,
     pub talk_partner: Option<String>,
@@ -1506,6 +1508,7 @@ impl Play {
             message: None,
             square_now: false,
             button_square: false,
+            square_held: false,
             talk_prompt: false,
             talk_partner: None,
             talk_with: None,
@@ -2575,6 +2578,12 @@ impl Play {
                     let v = self.state.words.get(&(pack, word)).copied().unwrap_or(0);
                     let item = if v > 0 { v as u16 } else { default };
                     self.state.give(item, 1);
+                }
+                Action::LaunchFireMote { from, to, speed } => {
+                    let Some((start, _)) = self.locator(pack, from) else { return None };
+                    let hero = self.loco.position();
+                    let target = self.locator(pack, to).map_or([hero[0], hero[1] + 1.5, hero[2]], |(p, _)| p);
+                    self.shots.submit(neopets_sim::projectile::fire_mote(start, target, speed));
                 }
                 Action::RandomLoop7 { entity, anims } => {
                     let a = anims[self.rng.range(0, 6).clamp(0, 6) as usize];
@@ -7243,6 +7252,7 @@ impl Play {
         // take the hero's input; a scripted walk (SPEC-0033 4A.4 and 4A.5) steers it instead.
         // The script button query (IsButtonPressed) reads the pad, not the hero's input.
         self.button_square = input.square;
+        self.square_held = input.square_held;
         if self.held || self.cut.is_some_and(|c| c.state == 1) || self.fade.moving() {
             input = HeroInput::default();
         }
@@ -7662,6 +7672,8 @@ impl Play {
             self.state.hero.hp_max = self.hero_max;
             self.state.miamice_caged = self.catch.count;
             self.state.hero.shield_mote = self.equipment.motes[0][1];
+            self.state.hero.square_held = self.square_held;
+            self.state.hero.deflected = self.shots.deflected();
             self.state.hero.tick = self.ticks;
             self.state.hero.position = self.loco.position();
             self.state.obj_times = self.world.object_anims.iter().enumerate().map(|(i, a)| (i, a.time)).collect();
