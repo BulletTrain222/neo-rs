@@ -15,6 +15,14 @@ foreach ($dir in $roots) {
         if ($_.Extension -notin $allowed) { $violations += $rel }
     }
 }
+# The user's own models for this build (assets/README.md): Wavefront OBJ only, plus the README.
+$assets = Join-Path $rewriteRoot 'assets'
+if (Test-Path -LiteralPath $assets) {
+    Get-ChildItem -LiteralPath $assets -File -Recurse -Force | ForEach-Object {
+        $rel = $_.FullName.Substring($rewriteRoot.Length + 1)
+        if ($_.Extension -notin @('.obj', '.md')) { $violations += $rel }
+    }
+}
 if ($violations.Count) { $violations | ForEach-Object { Write-Host "Review unexpected source file: $_" }; exit 1 }
 Write-Host 'Source extension audit passed. Private data, mods, caches, and builds are excluded.'
 Write-Host 'This check does not establish legal provenance or detect game bytes pasted into source.'

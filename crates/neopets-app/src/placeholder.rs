@@ -232,15 +232,21 @@ pub fn cloud_beast() -> ModelData {
     custom_cloud_beast().unwrap_or_else(cloudbreaker)
 }
 
-/// The user's own Cloud Beast model, when present: a Wavefront OBJ at NEOPETS_CLOUD_MODEL or
-/// `private/models/cloud_beast.obj` (positions and faces; normals, UVs and materials ignored).
+/// The user's own Cloud Beast model, when present: a Wavefront OBJ at NEOPETS_CLOUD_MODEL, else
+/// `assets/models/cloud_beast.obj` beside the executable or in the working folder (shipped with
+/// the build; assets/README.md), else `private/models/cloud_beast.obj` (positions and faces;
+/// normals, UVs and materials ignored).
 /// It is scaled to stand from the ground to just under the companion's ride height, centred,
 /// turned by NEOPETS_CLOUD_MODEL_YAW degrees (default 0: the file's +z is the front, where the
 /// user's Tempest Golem holds its fists) and
 /// coloured lavender with the stand-in's key-light shading from smooth vertex normals.
 fn custom_cloud_beast() -> Option<ModelData> {
-    let path = std::env::var("NEOPETS_CLOUD_MODEL").unwrap_or_else(|_| "private/models/cloud_beast.obj".into());
-    let text = std::fs::read_to_string(&path).ok()?;
+    let beside = std::env::current_exe().ok().and_then(|e| e.parent().map(|d| d.join("assets/models/cloud_beast.obj")));
+    let candidates: Vec<std::path::PathBuf> = match std::env::var("NEOPETS_CLOUD_MODEL") {
+        Ok(p) => vec![p.into()],
+        Err(_) => beside.into_iter().chain(["assets/models/cloud_beast.obj".into(), "private/models/cloud_beast.obj".into()]).collect(),
+    };
+    let text = candidates.iter().find_map(|p| std::fs::read_to_string(p).ok())?;
     let mut pos: Vec<V> = Vec::new();
     let mut idx: Vec<u32> = Vec::new();
     for line in text.lines() {
