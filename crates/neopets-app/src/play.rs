@@ -11939,14 +11939,14 @@ impl Play {
                 let from = [eye[0], eye[1] - rp::SIGHT_DROP, eye[2]];
                 let targets = &self.world.aim_targets;
                 let ground = self.world.ground.as_ref();
-                // The sight sweep (this build's per-sample test; R-0121): the line from 1.5
-                // below the eye to the target, stopped 1.0 short, is tested against the frame
-                // records of the cell under each sample point (0, 5, 15, 30, 50, ...).
+                // The sight sweep (SPEC-0030 row 126; R-0121): the frame records of the cell under
+                // each sample point (every 5 units) are tested against the whole line from 1.5
+                // below the eye to the target. Not covered: the cells' class-3 volume records.
                 let sight = |to: [f32; 3]| {
                     let d = sub(to, from);
                     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
-                    let end = add(from, scale(d, ((l - 1.0) / l).max(0.0)));
-                    ground.is_none_or(|g| rp::sight_samples(l - 1.0).iter().all(|&k| {
+                    let end = to;
+                    ground.is_none_or(|g| rp::sight_samples(l).iter().all(|&k| {
                         let q = add(from, scale(d, k / l));
                         !g.frames_at(q[0], q[2]).iter().any(|r| r.crossed_by(from, end))
                     }))
@@ -11967,8 +11967,8 @@ impl Play {
                     if let (Some(g), Some(t)) = (ground, targets.first()) {
                         let d = sub(t.point, from);
                         let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                        let end = add(from, scale(d, (l - 1.0) / l));
-                        for &k in &rp::sight_samples(l - 1.0) {
+                        let end = t.point;
+                        for &k in &rp::sight_samples(l) {
                             let q = add(from, scale(d, k / l));
                             for r in g.frames_at(q[0], q[2]).iter().filter(|r| r.crossed_by(from, end)).take(2) {
                                 println!("        sample {k}: kind {} start {:?} face {:?} len {} h {}", r.kind, r.start.map(|v| v.round()), r.face.map(|v| (v * 100.0).round() / 100.0), r.length, r.height);

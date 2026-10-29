@@ -81,14 +81,13 @@ pub fn scan(targets: &[Target], eye: Vec3, forward: Vec3, clear: impl Fn(usize) 
     best.map(|(i, _)| i)
 }
 
-/// The sight sweep's sample distances along the line (0, 5, 15, 30, 50, 75, ...: each gap 5
-/// more than the last), up to `length`.
+/// The sight sweep's sample distances along the line (SPEC-0030 row 126; R-0121): 0, 5, 10, 15
+/// and every further 5 units, stopping when the offset reaches `length`.
 pub fn sight_samples(length: f32) -> Vec<f32> {
-    let (mut d, mut step, mut out) = (0.0f32, 5.0f32, Vec::new());
-    while d <= length {
+    let (mut d, mut out) = (0.0f32, Vec::new());
+    while d < length {
         out.push(d);
-        d += step;
-        step += 5.0;
+        d += 5.0;
     }
     out
 }
@@ -313,7 +312,8 @@ mod tests {
         let list = [Target { point: [0.0, 0.0, 50.0], active: false }, t([0.5, 0.0, 50.0]), t([0.1, 0.0, 50.0])];
         assert_eq!(scan(&list, eye, f, |_| true), Some(2));
         assert_eq!(scan(&list, eye, f, |i| i != 2), Some(1));
-        assert_eq!(sight_samples(80.0), vec![0.0, 5.0, 15.0, 30.0, 50.0, 75.0]);
+        assert_eq!(sight_samples(22.0), vec![0.0, 5.0, 10.0, 15.0, 20.0]);
+        assert_eq!(sight_samples(20.0), vec![0.0, 5.0, 10.0, 15.0]);
     }
 
     #[test]
