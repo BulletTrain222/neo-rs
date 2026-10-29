@@ -155,6 +155,10 @@ impl DisplaySettings {
                 s.shadow_quality = q.min(SHADOW_QUALITY.len() - 1);
             }
         }
+        // NEOPETS_SCALE=percent: the render scale for this run (diagnostic).
+        if let Some(i) = std::env::var("NEOPETS_SCALE").ok().and_then(|v| v.trim().parse::<u32>().ok()).and_then(|p| SCALES.iter().position(|&x| x == p)) {
+            s.scale = i;
+        }
         // NEOPETS_BUTTONS=xbox: the Xbox button pictures for this run (diagnostic).
         if let Ok(v) = std::env::var("NEOPETS_BUTTONS") {
             s.xbox_buttons = v.trim() == "xbox";

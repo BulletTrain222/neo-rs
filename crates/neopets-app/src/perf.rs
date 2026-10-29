@@ -306,3 +306,44 @@ impl Drop for Span {
 fn take_spans() -> std::collections::BTreeMap<&'static str, f32> {
     SPANS.lock().map(|mut m| std::mem::take(&mut *m)).unwrap_or_default()
 }
+
+/// NEOPETS_PERF: the render world's phases timed on the render thread (the span names start
+/// with "render:"), by marks between Bevy's chained render sets.
+pub fn add_render_timing(app: &mut App) {
+    use bevy::render::{Render, RenderApp, RenderSystems as S};
+    static MARKS: std::sync::Mutex<Vec<(&'static str, std::time::Instant)>> = std::sync::Mutex::new(Vec::new());
+    fn mark(name: &'static str) -> impl FnMut() {
+        move || {
+            if let Ok(mut m) = MARKS.lock() {
+                let now = std::time::Instant::now();
+                if let Some(&(prev, t)) = m.last() {
+                    if let Ok(mut s) = SPANS.lock() {
+                        *s.entry(prev).or_default() += (now - t).as_secs_f32() * 1000.0;
+                    }
+                }
+                if name == "render:end" {
+                    m.clear();
+                } else {
+                    m.push((name, now));
+                }
+            }
+        }
+    }
+    let Some(r) = app.get_sub_app_mut(RenderApp) else { return };
+    r.add_systems(
+        Render,
+        (
+            mark("render:extract commands").before(S::ExtractCommands),
+            mark("render:prepare meshes").after(S::ExtractCommands).before(S::PrepareMeshes),
+            mark("render:create views").after(S::PrepareMeshes).before(S::CreateViews),
+            mark("render:specialize").after(S::CreateViews).before(S::Specialize),
+            mark("render:prepare views").after(S::Specialize).before(S::PrepareViews),
+            mark("render:queue").after(S::PrepareViews).before(S::Queue),
+            mark("render:phase sort").after(S::Queue).before(S::PhaseSort),
+            mark("render:prepare").after(S::PhaseSort).before(S::Prepare),
+            mark("render:render").after(S::Prepare).before(S::Render),
+            mark("render:cleanup").after(S::Render).before(S::Cleanup),
+            mark("render:end").after(S::PostCleanup),
+        ),
+    );
+}

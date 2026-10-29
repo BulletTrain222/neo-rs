@@ -25,12 +25,14 @@ pub struct Built {
     pub sigs: Vec<PartSig>,
     pub shared: Vec<bool>,
     textures: Vec<Handle<StandardMaterial>>,
+    /// Each texture's opaque twin (made when a part needs it; see `mask_never_cuts`).
+    opaque: HashMap<usize, Handle<StandardMaterial>>,
     untextured: Handle<StandardMaterial>,
 }
 
 impl Built {
     pub fn new(model: neopets_data::model::ModelData, pack: u32, materials: &mut Assets<StandardMaterial>, images: &mut Assets<Image>) -> Self {
-        let textures = model
+        let textures: Vec<Handle<StandardMaterial>> = model
             .textures
             .iter()
             .map(|t| materials.add(StandardMaterial { base_color_texture: Some(images.add(model_texture(t))), unlit: true, alpha_mode: AlphaMode::Mask(0.5), cull_mode: None, ..default() }))
@@ -38,7 +40,13 @@ impl Built {
         let untextured = materials.add(StandardMaterial { unlit: true, cull_mode: None, ..default() });
         let sigs = model.parts.iter().map(|p| part_signature(pack, p, false)).collect();
         let shared = vec![false; model.parts.len()];
-        Self { model: Arc::new(model), sigs, shared, textures, untextured }
+        let mut opaque = HashMap::new();
+        for p in &model.parts {
+            if let Some(t) = p.texture.filter(|&t| p.flipbook.is_none() && crate::mask_never_cuts(&model.textures[t], p)) {
+                opaque.entry(t).or_insert_with(|| crate::opaque_twin(materials, &textures[t]));
+            }
+        }
+        Self { model: Arc::new(model), sigs, shared, textures, opaque, untextured }
     }
 
     /// The parts that repeat a part of one of `others` (the other drawn scenes' signatures).
@@ -104,7 +112,11 @@ pub fn spawn(
     for (i, p) in m.parts.iter().enumerate() {
         let env = p.texture.filter(|_| p.env_map && !no_pass1);
         let scrolling = p.scroll.is_some() && p.texture.is_some();
-        let material = p.texture.map_or(b.untextured.clone(), |t| b.textures[t].clone());
+        let material = match p.texture {
+            None => b.untextured.clone(),
+            Some(t) if p.flipbook.is_none() && crate::mask_never_cuts(&m.textures[t], p) => b.opaque.get(&t).cloned().unwrap_or_else(|| b.textures[t].clone()),
+            Some(t) => b.textures[t].clone(),
+        };
         let apart = no_merge || env.is_some() || scrolling || p.flipbook.is_some() || p.cull.is_some() || b.shared[i];
         if !apart {
             let n = p.positions.len().max(1) as f32;

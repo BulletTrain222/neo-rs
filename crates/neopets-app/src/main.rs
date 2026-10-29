@@ -923,8 +923,14 @@ fn main() {
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     app.add_systems(Update, button_style::apply);
+    // NEOPETS_PERF_GPU: Bevy's render diagnostics (CPU and GPU time per render pass), logged
+    // every 4 seconds (diagnostic).
+    if std::env::var_os("NEOPETS_PERF_GPU").is_some() {
+        app.add_plugins((bevy::render::diagnostic::RenderDiagnosticsPlugin, bevy::diagnostic::LogDiagnosticsPlugin { wait_duration: std::time::Duration::from_secs(4), ..default() }));
+    }
     if perf::perf_enabled() {
         app.init_resource::<perf::PerfLog>().add_systems(First, perf::perf_first).add_systems(Last, (perf::perf_last, perf_kinds));
+        perf::add_render_timing(&mut app);
     }
     audio_view::register(&mut app);
     if smoke_test {
@@ -1897,6 +1903,23 @@ fn toggle_view(
     }
 }
 
+/// Performance: whether a textured part can draw Opaque instead of Mask(0.5) with the same
+/// result: no fragment is cut when the texture's lowest alpha times the part's lowest vertex
+/// alpha is at least 0.5. Opaque keeps early depth rejection and draws the shadow and depth
+/// passes without the texture.
+fn mask_never_cuts(t: &neopets_data::model::ModelTexture, part: &neopets_data::model::MeshPart) -> bool {
+    let tex = t.image.rgba.chunks_exact(4).map(|p| p[3]).min().unwrap_or(255) as f32 / 255.0;
+    let vertex = part.colors.iter().map(|c| c[3].min(1.0)).fold(1.0f32, f32::min);
+    tex * vertex >= 0.5
+}
+
+/// The opaque twin of a Mask(0.5) material (see `mask_never_cuts`).
+fn opaque_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMaterial>) -> Handle<StandardMaterial> {
+    let mut m = materials.get(mask).cloned().unwrap_or_default();
+    m.alpha_mode = AlphaMode::Opaque;
+    materials.add(m)
+}
+
 fn model_texture(t: &neopets_data::model::ModelTexture) -> Image {
     use bevy::image::{ImageAddressMode, ImageFilterMode, ImageSamplerDescriptor};
     // With mipmaps for the Display page's distant-texture option (graphics.rs).
@@ -1962,11 +1985,31 @@ fn apply_model(
 
 /// NEOPETS_PERF: every 240 frames, the meshes by owner (scene, objects, foliage, dome,
 /// characters and the rest), counting a mesh by its nearest tagged ancestor.
-fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, parts: Query<&WorldPart>, chars: Query<(), Or<(With<CharacterRoot>, With<HeroRoot>)>>, mut frames: Local<u32>) {
+fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, parts: Query<&WorldPart>, chars: Query<(), Or<(With<CharacterRoot>, With<HeroRoot>)>>, mut frames: Local<u32>, mut events: MessageReader<AssetEvent<Mesh>>, assets: Res<Assets<Mesh>>, mut changed: Local<(usize, usize)>, users: Query<(Entity, &Mesh3d)>, mut by: Local<std::collections::HashMap<AssetId<Mesh>, usize>>, names: Query<&Name>) {
     *frames += 1;
+    for e in events.read() {
+        if let AssetEvent::Modified { id } = e {
+            changed.0 += 1;
+            changed.1 += assets.get(*id).map_or(0, |m| m.count_vertices());
+            *by.entry(*id).or_default() += 1;
+        }
+    }
     if *frames % 240 != 0 {
         return;
     }
+    // The owners of the meshes changed in the last frame window, by kind.
+    info!("perf: meshes modified per frame {:.1}, vertices {:.0}", changed.0 as f32 / 240.0, changed.1 as f32 / 240.0);
+    *changed = (0, 0);
+    let mut owners: std::collections::BTreeMap<String, usize> = Default::default();
+    for (e, m) in &users {
+        let Some(&n) = by.get(&m.0.id()) else { continue };
+        let root = std::iter::successors(Some(e), |&x| parents.get(x).ok().map(|p| p.parent())).last().unwrap_or(e);
+        let kind = if chars.contains(root) { "characters".to_string() } else { names.get(root).map_or_else(|_| format!("{root:?}").split('v').next().unwrap_or("").to_string(), |n| n.to_string()) };
+        let kind = if kind == "characters" { kind } else if parts.get(root).is_ok() { "world".into() } else { format!("other {}", if names.get(root).is_ok() { kind } else { String::new() }) };
+        *owners.entry(kind).or_default() += n;
+    }
+    by.clear();
+    info!("perf: mesh modifications by owner over 240 frames {owners:?}");
     let mut n: std::collections::BTreeMap<&str, usize> = Default::default();
     for e in &meshes {
         let kind = std::iter::successors(Some(e), |&x| parents.get(x).ok().map(|p| p.parent())).find_map(|x| {
@@ -3030,10 +3073,12 @@ fn sync_characters(
     mut rigid: Local<std::collections::HashMap<u64, (Vec<(Handle<Mesh>, usize)>, bool)>>,
     mut kids: Local<std::collections::HashMap<u64, (Vec<Entity>, Option<(u64, bool)>)>>,
     seen: Query<&ViewVisibility>,
+    cameras: Query<&GlobalTransform, With<Camera3d>>,
 ) {
     let _span = crate::perf::span("sync_characters");
     let Some(state) = state else { return };
     let p = &state.play;
+    let eye = cameras.iter().next().map(|g| g.translation());
     let live: std::collections::HashSet<u64> = p.characters.iter().map(|c| c.id).collect();
     // A rebuilt game (Quit or a load) draws every character again.
     let rebuilt = std::mem::replace(&mut *generation, p.generation) != p.generation;
@@ -3123,7 +3168,13 @@ fn sync_characters(
         // NEOPETS_PERF_NOSKIP: skin every character every frame, as before (diagnostic).
         static NOSKIP: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
         let noskip = *NOSKIP.get_or_init(|| std::env::var_os("NEOPETS_PERF_NOSKIP").is_some());
-        if !noskip && (hidden || (stamp.is_some() && (!on_screen || *stamp == Some(now)))) {
+        // A far character re-skins less often: every tick within 25 units of the camera, every
+        // second tick within 60, every fourth beyond (staggered by character); a flash change
+        // re-skins at once.
+        let d = eye.map_or(0.0, |e| e.distance(Vec3::from(c.position)));
+        let every: u64 = if d < 25.0 { 1 } else if d < 60.0 { 2 } else { 4 };
+        let due = stamp.is_none_or(|(t, f)| f != now.1 || (p.ticks >= t + every && (p.ticks + c.id) % every == 0) || p.ticks >= t + 2 * every);
+        if !noskip && (hidden || (stamp.is_some() && (!on_screen || !due))) {
             continue;
         }
         *stamp = Some(now);
@@ -3250,6 +3301,7 @@ pub(crate) fn part_assets(
         cull_mode: None,
         ..default()
     });
+    let mut opaque: std::collections::HashMap<usize, Handle<StandardMaterial>> = std::collections::HashMap::new();
     m.parts
         .iter()
         .enumerate()
@@ -3279,7 +3331,11 @@ pub(crate) fn part_assets(
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
             mesh.insert_indices(Indices::U32(part.indices.clone()));
-            let material = scrolling.unwrap_or_else(|| part.texture.map_or(untextured.clone(), |t| handles[t].clone()));
+            let material = scrolling.unwrap_or_else(|| match part.texture {
+                None => untextured.clone(),
+                Some(t) if part.flipbook.is_none() && mask_never_cuts(&m.textures[t], part) => opaque.entry(t).or_insert_with(|| opaque_twin(materials, &handles[t])).clone(),
+                Some(t) => handles[t].clone(),
+            });
             (i, meshes.add(mesh), material)
         })
         .collect()
