@@ -656,6 +656,20 @@ impl Character {
         self.gnarfas.is_some() || self.serpent.is_some() || self.sister.is_some() || self.knight.is_some() || self.draik.is_some() || self.boss.is_some() || self.faerie.is_some()
     }
 
+    /// The guard query (base state 20; SPEC-0029 Open question 171): a blocking common enemy
+    /// (outer 7 or 8), the Black Knight outside an open stun gate, the guarding Undead Draik and
+    /// Werelupe King, and the Ixi Chief in idle, hold, the stage transition and its blocks. A hero
+    /// shot meets such a target as a guarding target. (Gnarfas's missile block removes the shot
+    /// in its own check instead, SPEC-0020.)
+    pub fn guards(&self) -> bool {
+        use neopets_sim::ixi::State as Ixi;
+        self.enemy.as_ref().is_some_and(|e| e.blocking)
+            || self.knight.as_ref().is_some_and(|k| !k.exposed && !k.defeated())
+            || self.draik.as_ref().is_some_and(|d| d.guarding())
+            || self.king.as_ref().is_some_and(|k| k.guarding())
+            || self.ixi.as_ref().is_some_and(|x| matches!(x.state, Ixi::Idle | Ixi::Hold | Ixi::Transition | Ixi::BlockMelee | Ixi::BlockMissile))
+    }
+
     /// An enemy kind is also not hittable in its melee or missile dodge (agro outer sub-state 5
     /// or 6) or, when not script-held, while animation 74, 75 or 76 plays (SPEC-0036 Hittable
     /// predicate, tests 2 and 6).
@@ -3625,6 +3639,7 @@ impl Play {
                 class,
                 status,
                 id: self.attack_fx.next_shot,
+                arming: 0,
             });
             if let Some(v) = visual {
                 self.attack_fx.shots.insert(self.attack_fx.next_shot, (v, [None; 2], anchor));
@@ -3703,7 +3718,10 @@ impl Play {
             // the Juppie (SPEC-0015 Hero actions): shots pass through its body; its mouth bounce
             // and the Act 3 dazed loop are not built. Nor the Darkest Faerie, whose absorb test
             // reads the shot slots itself (SPEC-0054).
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none() && c.boss.is_none() && c.faerie.is_none() && c.king.as_ref().is_none_or(|k| k.hittable() && !k.guarding())).find_map(|(i, c)| {
+            // SPEC-0036 Hit on characters: a candidate passes the eligibility test, or guards
+            // while the shot is armed (a guarding target is tested even when not hittable).
+            let armed = s.armed();
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some()).filter(|(_, c)| (c.guards() && armed) || (!c.guards() && !c.unhittable() && c.knight.is_none() && c.boss.is_none() && c.faerie.is_none() && c.king.as_ref().is_none_or(|k| k.hittable()))).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
@@ -3752,6 +3770,20 @@ impl Play {
                 }
                 continue;
             };
+            // SPEC-0036 Quick shot meets a guarding target: it bounces (no damage, nothing paid)
+            // and flies on; a full-release shot is not blocked: a hittable target takes it as
+            // below, any other is passed with the shot disarmed.
+            if self.characters[i].guards() {
+                if s.class < 3 {
+                    s.bounce(&mut self.rng);
+                    keep.push(s);
+                    continue;
+                }
+                let c = &self.characters[i];
+                if c.unhittable() || c.knight.is_some() || c.draik.is_some() || c.king.is_some() || c.gnarfas.is_some() {
+                    continue;
+                }
+            }
             // SPEC-0020 Hero actions: Gnarfas's own check removes a shot that meets him before
             // asking for its damage, so it flinches him (49 ticks) with damage 0 and nothing is
             // paid (SPEC-0036 Quick-shot payment).

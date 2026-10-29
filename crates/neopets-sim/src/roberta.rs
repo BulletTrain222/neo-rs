@@ -328,6 +328,9 @@ pub struct Shot {
     pub status: Option<[i32; 4]>,
     /// The host's id for the shot's visual record (SPEC-0034 Roberta's shot visuals).
     pub id: u32,
+    /// The arming counter (+0x7C): 0 at launch, 15 after a bounce; while above 0 after its
+    /// decrement the shot ignores guards and does not steer (SPEC-0036 Arming counter).
+    pub arming: i32,
 }
 
 /// Roberta's shot-visual tables (SPEC-0034 Roberta's shot visuals), read from the boot data.
@@ -396,7 +399,10 @@ impl Shot {
         if self.life <= 0 {
             return false;
         }
-        if self.homing != 0 {
+        if self.arming > 0 {
+            self.arming -= 1;
+        }
+        if self.homing != 0 && self.arming == 0 {
             if let Some(a) = target_aim {
                 let w = unit([a[0] - self.position[0], a[1] - self.position[1], a[2] - self.position[2]]);
                 self.dir = unit(std::array::from_fn(|k| 0.75 * self.dir[k] + 0.25 * w[k]));
@@ -406,6 +412,37 @@ impl Shot {
             self.position[k] += self.dir[k] * self.speed / 60.0;
         }
         true
+    }
+}
+
+impl Shot {
+    /// Guard handling is allowed (the arming counter is 0 after this tick's decrement).
+    pub fn armed(&self) -> bool {
+        self.arming == 0
+    }
+
+    /// A quick shot meeting a guarding target with no deflect (SPEC-0036 Quick shot meets a
+    /// guarding target): d and the side axis (d x up) are negated; r1 = U(0, 0.5) with a fair
+    /// sign, d1 = r1 side + (1 - |r1|) d; r2 drawn the same way, d2 = r2 up + (1 - |r2|) d1, not
+    /// renormalised (the speed falls to 61 to 100 percent); the arming counter becomes 15. The
+    /// rebuilt-frame quirk of a second bounce is not reproduced.
+    pub fn bounce(&mut self, rng: &mut crate::rng::Rng) {
+        let mut draw = || {
+            let r = rng.frange(0.0, 0.5);
+            if rng.range(0, 1) == 1 { -r } else { r }
+        };
+        let (r1, r2) = (draw(), draw());
+        self.bounce_with(r1, r2);
+    }
+
+    pub fn bounce_with(&mut self, r1: f32, r2: f32) {
+        let d = self.dir;
+        let side = [-d[2], 0.0, d[0]];
+        let (d, side) = (d.map(|c| -c), side.map(|c| -c));
+        let d1: Vec3 = std::array::from_fn(|k| r1 * side[k] + (1.0 - r1.abs()) * d[k]);
+        let up = [0.0, 1.0, 0.0];
+        self.dir = std::array::from_fn(|k| r2 * up[k] + (1.0 - r2.abs()) * d1[k]);
+        self.arming = 15;
     }
 }
 
@@ -484,6 +521,29 @@ impl Displays {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shot_bounce() {
+        // SPEC-0036 Bounce test vectors: d = (1, 0, 0) (side (0, 0, 1)), r1 = r2 = 0.3 gives
+        // (-0.49, 0.3, -0.21); both -0.5 gives (-0.25, -0.5, 0.25); r = 0 gives (-1, 0, 0).
+        let shot = || Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 30, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0, arming: 0 };
+        let near = |a: Vec3, b: Vec3| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5);
+        for ((r1, r2), want) in [((0.3, 0.3), [-0.49, 0.3, -0.21]), ((-0.5, -0.5), [-0.25, -0.5, 0.25]), ((0.0, 0.0), [-1.0, 0.0, 0.0])] {
+            let mut s = shot();
+            s.bounce_with(r1, r2);
+            assert!(near(s.dir, want), "{:?}", s.dir);
+            assert_eq!(s.arming, 15);
+        }
+        // Armed again after 15 updates; no steer before.
+        let mut s = shot();
+        s.bounce_with(0.0, 0.0);
+        for _ in 0..14 {
+            s.step(Some([0.0, 0.0, 10.0]));
+            assert!(!s.armed() && s.dir == [-1.0, 0.0, 0.0]);
+        }
+        s.step(Some([0.0, 0.0, 10.0]));
+        assert!(s.armed() && s.dir != [-1.0, 0.0, 0.0]);
+    }
+
     use super::*;
 
     #[test]
@@ -603,7 +663,7 @@ mod tests {
         let d = launch_dir(a, default_aim([0.0; 3], [0.0, 0.0, 1.0]));
         assert!((d[1] - 0.02563).abs() < 1e-4 && (d[2] - 0.99967).abs() < 1e-4);
         // Homing: shot at the origin, d (1, 0, 0), speed 60, target (0, 0, 10).
-        let mut s = Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 10, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0 };
+        let mut s = Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 10, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0, arming: 0 };
         s.step(Some([0.0, 0.0, 10.0]));
         assert!((s.dir[0] - 0.948683).abs() < 1e-5 && (s.position[2] - 0.316228).abs() < 1e-5);
         s.step(Some([0.0, 0.0, 10.0]));
