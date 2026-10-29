@@ -9,6 +9,7 @@ mod stage_view;
 mod ui_fit;
 mod display;
 mod perf;
+mod scene_merge;
 mod effect_view;
 mod foliage_view;
 mod graphics;
@@ -923,7 +924,7 @@ fn main() {
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     app.add_systems(Update, button_style::apply);
     if perf::perf_enabled() {
-        app.init_resource::<perf::PerfLog>().add_systems(First, perf::perf_first).add_systems(Last, perf::perf_last);
+        app.init_resource::<perf::PerfLog>().add_systems(First, perf::perf_first).add_systems(Last, (perf::perf_last, perf_kinds));
     }
     audio_view::register(&mut app);
     if smoke_test {
@@ -1017,6 +1018,12 @@ fn setup_viewer(
         }),
         orbit.transform(),
         orbit,
+        // NEOPETS_SHADOW_FILTER=0/1/2: hardware 2x2, Gaussian, temporal (diagnostic).
+        match std::env::var("NEOPETS_SHADOW_FILTER").ok().as_deref() {
+            Some("0") => bevy::light::ShadowFilteringMethod::Hardware2x2,
+            Some("2") => bevy::light::ShadowFilteringMethod::Temporal,
+            _ => bevy::light::ShadowFilteringMethod::Gaussian,
+        },
     ));
     let mut unlit = |r: f32, g: f32, b: f32| {
         materials.add(StandardMaterial {
@@ -1953,6 +1960,29 @@ fn apply_model(
     }
 }
 
+/// NEOPETS_PERF: every 240 frames, the meshes by owner (scene, objects, foliage, dome,
+/// characters and the rest), counting a mesh by its nearest tagged ancestor.
+fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, parts: Query<&WorldPart>, chars: Query<(), Or<(With<CharacterRoot>, With<HeroRoot>)>>, mut frames: Local<u32>) {
+    *frames += 1;
+    if *frames % 240 != 0 {
+        return;
+    }
+    let mut n: std::collections::BTreeMap<&str, usize> = Default::default();
+    for e in &meshes {
+        let kind = std::iter::successors(Some(e), |&x| parents.get(x).ok().map(|p| p.parent())).find_map(|x| {
+            parts.get(x).ok().map(|p| match p {
+                WorldPart::Scene(..) => "scene",
+                WorldPart::Dome(_) => "dome",
+                WorldPart::Foliage(_) => "foliage",
+                WorldPart::Objects(..) => "objects",
+                WorldPart::Stage => "stage",
+            }).or_else(|| chars.contains(x).then_some("characters"))
+        });
+        *n.entry(kind.unwrap_or("other")).or_default() += 1;
+    }
+    info!("perf: meshes by owner {n:?}");
+}
+
 /// A drawn piece of a resident world in play mode: a world pack's scene or a sky dome.
 #[derive(Component, Clone, Copy, PartialEq, Eq, Hash, Debug)]
 enum WorldPart {
@@ -2050,6 +2080,7 @@ fn sync_worlds(
     mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut shown: Local<Vec<WorldPart>>,
+    mut built: Local<std::collections::HashMap<WorldPart, scene_merge::Built>>,
 ) {
     let _span = crate::perf::span("sync_worlds");
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
@@ -2062,13 +2093,15 @@ fn sync_worlds(
         info!("scene layers of {}: display {} story {:#x}", p.world.pack, mask(p.world.pack), p.story_layers());
     }
     let mut want = vec![WorldPart::Scene(p.world.pack, layers(p.world.pack)), WorldPart::Objects(p.world.pack, mask(p.world.pack))];
-    if p.foliage.contains_key(&p.world.pack) {
+    // NEOPETS_PERF_NOFOLIAGE: no foliage drawn (diagnostic, to measure its cost).
+    let no_foliage = std::env::var_os("NEOPETS_PERF_NOFOLIAGE").is_some();
+    if p.foliage.contains_key(&p.world.pack) && !no_foliage {
         want.push(WorldPart::Foliage(p.world.pack));
     }
     if let (true, Some(o)) = (p.other_drawn(), &p.other) {
         want.push(WorldPart::Scene(o.pack, layers(o.pack)));
         want.push(WorldPart::Objects(o.pack, mask(o.pack)));
-        if p.foliage.contains_key(&o.pack) {
+        if p.foliage.contains_key(&o.pack) && !no_foliage {
             want.push(WorldPart::Foliage(o.pack));
         }
     }
@@ -2086,6 +2119,8 @@ fn sync_worlds(
             commands.entity(e).despawn();
         }
     }
+    built.retain(|k, _| want.contains(k));
+    let mut fresh: Vec<WorldPart> = Vec::new();
     let Archive { disc, index } = &mut *archive;
     for part in &want {
         if shown.contains(part) {
@@ -2222,6 +2257,14 @@ fn sync_worlds(
             WorldPart::Foliage(_) | WorldPart::Objects(..) | WorldPart::Stage => Ok(None),
         };
         match model {
+            // A scene is kept and spawned below, merged (scene_merge.rs), once the twins of the
+            // other drawn scenes are known.
+            Ok(Some(m)) if matches!(*part, WorldPart::Scene(..)) => {
+                if let WorldPart::Scene(pack, _) = *part {
+                    built.insert(*part, scene_merge::Built::new(m, pack, &mut materials, &mut images));
+                    fresh.push(*part);
+                }
+            }
             Ok(Some(m)) => {
                 // An environment-mapped pass 0 is drawn by the pass-1 shader with view-generated
                 // UVs (pass1.rs), its texture shared per model texture.
@@ -2293,6 +2336,34 @@ fn sync_worlds(
             Ok(None) => {}
             Err(e) => error!("{part:?} could not be built: {e}"),
         }
+    }
+    // Spawn the new scenes, and spawn again an older scene in which a new scene found twins (its
+    // twins must be separate entities for the duplicate rule of sync_zones).
+    let keys: Vec<WorldPart> = built.keys().copied().collect();
+    for k in keys {
+        let WorldPart::Scene(pack, _) = k else { continue };
+        let twins = {
+            let others: Vec<&[PartSig]> = built.iter().filter(|(o, _)| matches!(o, WorldPart::Scene(op, _) if *op != pack)).map(|(_, b)| &b.sigs[..]).collect();
+            built[&k].twins(&others)
+        };
+        let is_fresh = fresh.contains(&k);
+        let b = built.get_mut(&k).expect("kept scene");
+        let grew = twins.iter().zip(&b.shared).any(|(t, s)| *t && !*s);
+        if !is_fresh && !grew {
+            continue;
+        }
+        if !is_fresh {
+            for (e, p) in &parts {
+                if *p == k {
+                    commands.entity(e).despawn();
+                }
+            }
+        }
+        for (s, t) in b.shared.iter_mut().zip(twins) {
+            *s |= t;
+        }
+        let n = scene_merge::spawn(&mut commands, k, pack, b, &mut meshes, &mut materials, &mut pass1_materials, &mut images);
+        info!("scene of {pack}: {} parts in {n} entities ({} twins)", b.model.parts.len(), b.shared.iter().filter(|&&s| s).count());
     }
     *shown = want;
 }
