@@ -74,6 +74,8 @@ pub struct World {
     pub zones: Option<neopets_sim::zone::Grid>,
     pub children: Vec<u16>,
     ground: Option<Ground>,
+    /// The developer test stage's floor height (this build's own flat world; no disc pack).
+    pub flat: Option<f32>,
     /// Rectangle primitives that push characters out (SPEC-0018 box push) under the world's
     /// collision mask, and all of them with their gate masks.
     boxes: Vec<BoxShape>,
@@ -176,6 +178,75 @@ impl World {
         self.entities.iter().map(|&(r, o)| (r, o as u16)).collect()
     }
 
+    /// The developer test stage (this build's own world, no disc pack and not the original's):
+    /// a flat floor at height 0 everywhere, one entry record at the origin facing +Z, and
+    /// nothing else (no level geometry, objects, triggers, script, lines or music).
+    pub fn test_stage(pack: u32) -> Self {
+        World {
+            pack,
+            kind: Kind::Exterior,
+            buffer: Buffer::Exterior,
+            placed_effects: Vec::new(),
+            objects: Vec::new(),
+            breakables: Vec::new(),
+            blocks: Vec::new(),
+            owner_poses: Default::default(),
+            rails: Vec::new(),
+            grab_lines: Vec::new(),
+            panels: Vec::new(),
+            block_meshes: Vec::new(),
+            motions: Vec::new(),
+            object_anims: Vec::new(),
+            headers: Vec::new(),
+            obj_links: Default::default(),
+            anim_routines: Default::default(),
+            patches: Vec::new(),
+            lights: Vec::new(),
+            world_id: -1,
+            zones: None,
+            children: Vec::new(),
+            ground: None,
+            flat: Some(0.0),
+            boxes: Vec::new(),
+            all_boxes: Vec::new(),
+            push_spheres: Vec::new(),
+            all_spheres: Vec::new(),
+            collis_mask: 0,
+            neighbours: Neighbours::default(),
+            planes: Vec::new(),
+            arrivals: Neighbours::default(),
+            entries: vec![([0.0; 3], [0.0, 0.0, 1.0])],
+            tags: vec![0],
+            scripted_doors: false,
+            lines: Default::default(),
+            entities: Vec::new(),
+            navmeshes: Vec::new(),
+            pens: Vec::new(),
+            save_points: Vec::new(),
+            map_area: None,
+            music: None,
+            ambients: Vec::new(),
+            ambient_counters: Vec::new(),
+            spheres: Vec::new(),
+            capacity: 0,
+            volumes: Vec::new(),
+            books: Vec::new(),
+            all_volumes: Vec::new(),
+            shot_volumes: Vec::new(),
+            routines: HashMap::new(),
+            group_routes: HashMap::new(),
+            disabled_triggers: Default::default(),
+            records: HashMap::new(),
+            groups: Vec::new(),
+            aim_targets: Vec::new(),
+            placements: Vec::new(),
+            item_points: Vec::new(),
+            locks: Vec::new(),
+            opened: Default::default(),
+            tracks: Vec::new(),
+        }
+    }
+
     pub fn load(disc: &mut Disc, index: &ArchiveIndex, boot: &BootTravel, pack: u32) -> Result<(Self, Vec<u8>), String> {
         let bytes = index.read(disc, pack)?;
         let chain = resource::walk_chunks(&bytes, None)?;
@@ -215,6 +286,7 @@ impl World {
             anim_routines: Default::default(),
             children: neopets_data::model::find_trees(&bytes, &chain.chunks).0.iter().filter(|t| t.depth > 0).map(|t| t.role_id).collect(),
             ground: Ground::of(&bytes, &chain.chunks, CellOrder::XMajor),
+            flat: None,
             boxes: Vec::new(),
             push_spheres: Vec::new(),
             all_spheres: Vec::new(),
@@ -412,6 +484,10 @@ impl World {
     }
 
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
+        // The test stage: one level floor everywhere, found from at or above it.
+        if let Some(h) = self.flat.filter(|&h| c >= h - 0.5) {
+            return ProbeHit { height: h, normal: UP, kind: None, found: true, respawn: None, surface: None, zone: None };
+        }
         self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
     }
 }
@@ -8393,6 +8469,31 @@ impl Play {
         self.cloud_defeated.remove(&self.world.pack);
     }
 
+    /// Developer menu: make the flat test stage (`World::test_stage`, this build's own world)
+    /// current in place of the loaded one, dropping that world, its characters, scenes and
+    /// threads, and put the hero at the stage's origin facing +Z.
+    pub fn enter_test_stage(&mut self) {
+        self.world = World::test_stage(STAGE_PACK);
+        self.other = None;
+        self.kinds.insert(STAGE_PACK, Kind::Exterior);
+        self.state.reset_levels();
+        self.threads.clear();
+        self.characters.clear();
+        self.drop_camera_play();
+        // A fade or letterbox the dropped world's scene had started would never be undone.
+        self.fade = Default::default();
+        self.bars = Default::default();
+        // The stage has no region of its own to load.
+        self.slot_regions.insert((STAGE_PACK, EMBEDDED_SLOT), STAGE_PACK);
+        self.arrive(([0.0; 3], [0.0, 0.0, 1.0]));
+        self.activated();
+    }
+
+    /// Whether the current world is the developer test stage.
+    pub fn on_test_stage(&self) -> bool {
+        self.world.flat.is_some()
+    }
+
     /// The progress flags a boss fight starts with: its start index's stage rows (table 11, in
     /// stage order), then its walkthrough flags.
     pub fn boss_flags(&self, b: &BossStart) -> Vec<u16> {
@@ -8440,6 +8541,7 @@ impl Play {
             }
         }
         if b.cloud {
+            self.enter_test_stage();
             self.dev_cloud_fight();
         }
         self.last_boss = format!("developer menu: boss fight {} in {} (start index {}, {} flags)", b.name, b.pack, b.start, self.state.flags.len());
@@ -13808,6 +13910,9 @@ pub struct BossStart {
 pub const START_STAGES: [&[u16]; 9] = [&[], &[0], &[0, 1], &[0, 1, 2], &[4], &[4, 5], &[0, 1, 3], &[0, 1, 3, 6], &[0, 1, 2, 7]];
 
 /// The fights. Act 1 fights take the enlistment gear of step 7 (sword 99, armour 120).
+/// The developer test stage's pack number (none on the disc uses it).
+pub const STAGE_PACK: u32 = 90_000;
+
 pub const BOSSES: &[BossStart] = &[
     // Step 9: the Act 1 Juppie fight is due with 145 set and 82 and 83 clear; trigger 0.
     BossStart { name: "Juppie (Act 1)", pack: 1217, start: 0, flags: &[1, 2, 17, 143, 145], items: &[99, 120], roberta: false, place: Place::Trigger(0), cloud: false },
@@ -13833,8 +13938,9 @@ pub const BOSSES: &[BossStart] = &[
     BossStart { name: "Faerie Sisters", pack: 1122, start: 7, flags: &[305, 35, 319, 320], items: &[], roberta: false, place: Place::Trigger(6), cloud: false },
     // Step 46: the final fight in 1432.
     BossStart { name: "Darkest Faerie", pack: 1432, start: 8, flags: &[], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
-    // Cut content (SPEC-0010): this build's stand-in on the Juppie arena's points 101 to 106.
-    BossStart { name: "Cloud Beast (cut)", pack: 1217, start: 2, flags: &[249, 250, 276, 277, 278, 84, 5, 6], items: &[], roberta: false, place: Place::Entry(0), cloud: true },
+    // Cut content (SPEC-0010): this build's stand-in, fought on the flat test stage (the Act 3
+    // kit of start index 2 is given in the Juppie arena's load, which the stage then replaces).
+    BossStart { name: "Cloud Beast (cut, flat test stage)", pack: 1217, start: 2, flags: &[249, 250, 276, 277, 278, 84, 5, 6], items: &[], roberta: false, place: Place::Entry(0), cloud: true },
 ];
 
 

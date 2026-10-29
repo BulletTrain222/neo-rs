@@ -5,6 +5,7 @@ mod controls_page;
 mod character;
 mod controls;
 mod dev_menu;
+mod stage_view;
 mod ui_fit;
 mod display;
 mod perf;
@@ -1946,6 +1947,8 @@ enum WorldPart {
     /// The world's placed objects (type 29), each on its own transform (SPEC-0028 7.1), built
     /// with the world's display mask word.
     Objects(u32, u32),
+    /// The developer test stage's floor and ring (stage_view.rs; this build's own art).
+    Stage,
 }
 
 /// A placed object's root entity: (pack, object index).
@@ -2049,6 +2052,10 @@ fn sync_worlds(
     }
     let slot = p.boot.areas.slot_of(p.world.pack);
     want.push(WorldPart::Dome(neopets_data::area::dome_for_slot(slot)));
+    // The test stage has no disc scene: its own floor under the default sky dome.
+    if p.on_test_stage() {
+        want = vec![WorldPart::Stage, WorldPart::Dome(neopets_data::area::dome_for_slot(None))];
+    }
     if *shown == want {
         return;
     }
@@ -2162,6 +2169,10 @@ fn sync_worlds(
             }
             continue;
         }
+        if let WorldPart::Stage = *part {
+            stage_view::spawn(&mut commands, &mut meshes, &mut materials, &mut images, *part);
+            continue;
+        }
         if let WorldPart::Foliage(pack) = *part {
             match foliage_view::models(disc, index, p, pack) {
                 Ok(models) => {
@@ -2186,7 +2197,7 @@ fn sync_worlds(
                     archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false, layers)
                 }),
             WorldPart::Dome(d) => archive_view::dome(disc, index, d),
-            WorldPart::Foliage(_) | WorldPart::Objects(..) => Ok(None),
+            WorldPart::Foliage(_) | WorldPart::Objects(..) | WorldPart::Stage => Ok(None),
         };
         match model {
             Ok(Some(m)) => {
