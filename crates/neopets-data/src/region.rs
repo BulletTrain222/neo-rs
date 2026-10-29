@@ -52,6 +52,9 @@ pub struct Placement {
     /// word (+0xC8).
     pub emerge_distance: f32,
     pub selector: u32,
+    /// The default state's words at +0xB8 to +0xD4 (SPEC-0006 kind 3: the patrol path, the
+    /// wander side, the pause and stand ranges and percents; SPEC-0038 states 5 to 7).
+    pub words: [u32; 8],
     /// The alarm group byte (+0xB7; 0xFF none; SPEC-0038 Behavior 3).
     pub alarm: u8,
     /// The drop placement ordinal (s16 +0xB0): a kind-8 record of the same region, -1 none.
@@ -217,6 +220,7 @@ pub fn records(p: &[u8]) -> Records {
                     key: s(0xAC),
                     emerge_distance: f32_at(p, data + 0xC0).unwrap_or(0.0),
                     selector: u32_at(p, data + 0xC8).unwrap_or(0),
+                    words: std::array::from_fn(|i| u32_at(p, data + 0xB8 + 4 * i).unwrap_or(0)),
                     alarm: p.get(data + 0xB7).copied().unwrap_or(0xFF),
                     drop: i16_at(p, data + 0xB0).unwrap_or(-1),
                     colour: [p.get(data + 0x40).copied().unwrap_or(0), p.get(data + 0x41).copied().unwrap_or(0), p.get(data + 0x42).copied().unwrap_or(0)],

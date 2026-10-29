@@ -6317,7 +6317,7 @@ impl Play {
                 enemy: match (row, tuning) {
                     (Some(r), Some(t)) if r.class == Some(17) => Some(Enemy::new(
                         params(&r, &t),
-                        enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector, alarm: (pl.alarm != 0xFF).then_some(pl.alarm) },
+                        enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector, alarm: (pl.alarm != 0xFF).then_some(pl.alarm), facing: pl.facing, words: pl.words },
                         &mut self.rng,
                     )),
                     _ => None,
@@ -8591,6 +8591,7 @@ impl Play {
                 key: -1,
                 emerge_distance: 0.0,
                 selector: 0,
+                words: [0; 8],
                 alarm: 0xFF,
                 drop: -1,
                 colour: [128; 3],
@@ -9133,6 +9134,7 @@ impl Play {
             v.clear = !near(p, hero) && !pool.iter().any(|&(o, q)| o != *id && near(p, q));
             let locate = |q: [f32; 3]| mesh.is_none_or(|m| m.locate_full(q).is_some());
             v.locate = Some(&locate);
+            v.mesh = mesh;
             v.items = &world_items;
             v.hero_shot_live = !shot_paths.is_empty();
             let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
@@ -14227,6 +14229,7 @@ fn enemy_view<'a>(
         clear: true,
         items: &[],
         locate: None,
+        mesh: None,
     }
 }
 

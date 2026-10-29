@@ -253,6 +253,8 @@ pub struct View<'a> {
     pub clear: bool,
     /// Whether a point locates on the enemy's navmesh (None: every point does).
     pub locate: Option<&'a dyn Fn(Vec3) -> bool>,
+    /// The enemy's current navmesh (the wander's random triangle).
+    pub mesh: Option<&'a crate::nav::NavMesh>,
     /// The world items of the enemy's world: (pool index, item id, position), for the map
     /// search of types 0 and 1 (Behaviors 9 and 39).
     pub items: &'a [(usize, u16, Vec3)],
@@ -471,6 +473,19 @@ pub struct Spawn {
     pub selector: u32,
     /// The alarm group (spawn record byte 0xB7; None for 0xFF).
     pub alarm: Option<u8>,
+    /// The placed facing (the sentry's look direction) and the default state's words at +0xB8
+    /// to +0xD4 (SPEC-0006 kind 3; SPEC-0038 states 5 to 7).
+    pub facing: Vec3,
+    pub words: [u32; 8],
+}
+
+impl Spawn {
+    fn int(&self, at: usize) -> i32 {
+        self.words[(at - 0xB8) / 4] as i32
+    }
+    fn float(&self, at: usize) -> f32 {
+        f32::from_bits(self.words[(at - 0xB8) / 4])
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -546,6 +561,16 @@ pub struct Enemy {
     pending: bool,
     idle_timer: i32,
     idle_variant: Option<u32>,
+    /// The idle states (SPEC-0038 states 5 and 7): the wander goal, the pause timer, the fidget
+    /// counter and the stuck counter; the sentry's stand timer and its look-in-progress word.
+    goal: Option<Vec3>,
+    pause: i32,
+    fidget: i32,
+    stuck: i32,
+    stand: i32,
+    looking: bool,
+    /// State 2's alert animation was requested (a notice pass or the group alarm).
+    alerting: bool,
     through: Option<u32>,
     through_seen: bool,
     force: bool,
@@ -596,7 +621,7 @@ impl Enemy {
             desired: 0.0,
             retreat: 0.0,
             charge: [0.0; 4],
-            search: 0,
+            search: -1,
             last_seen: [0.0; 3],
             approach_dir: [0.0; 3],
             approach_timer: 0,
@@ -641,6 +666,13 @@ impl Enemy {
             pending: false,
             idle_timer: 0,
             idle_variant: None,
+            goal: None,
+            pause: 0,
+            fidget: 0,
+            stuck: 0,
+            stand: 0,
+            looking: true,
+            alerting: false,
             through: None,
             through_seen: false,
             force: false,
@@ -691,8 +723,11 @@ impl Enemy {
                 if s == 2 && !self.p.display_default {
                     s = 21;
                 }
-                self.search = rng.frange(self.p.search_min, self.p.search_max) as i32;
-                self.last_seen = v.hero;
+                // State 21 runs on its stored values (creation: countdown -1, the origin).
+                if s == 2 {
+                    self.search = rng.frange(self.p.search_min, self.p.search_max) as i32;
+                    self.last_seen = v.hero;
+                }
             }
             10 => {
                 if (v.has)(73) {
@@ -713,6 +748,7 @@ impl Enemy {
         if s == 8 {
             self.emerge = 0;
         }
+        self.alerting = false;
         if s != self.state {
             self.previous = self.state;
         }
@@ -821,6 +857,8 @@ impl Enemy {
             0 | 3 | 5..=7 | 14 => {
                 self.set(2, v, rng, a);
                 a.anim = Some(18);
+                // The group alarm needs no second pass: the alert animation runs to its gate.
+                self.alerting = true;
             }
             8 => {
                 let sel = self.spawn.selector;
@@ -1423,19 +1461,9 @@ impl Enemy {
                     self.set(0, v, rng, &mut a);
                 }
             }
-            2 | 21 => {
-                if self.state == 21 {
-                    a.anim = Some(self.idle(true, v, rng));
-                    a.go = Some(Go::Toward(self.last_seen));
-                } else {
-                    a.anim = Some(self.idle(false, v, rng));
-                    a.face = Some((self.last_seen, 0.1));
-                }
-                self.search -= 1;
-                if self.search < 1 {
-                    self.set(0, v, rng, &mut a);
-                }
-            }
+            2 | 21 => self.search_step(v, rng, &mut a),
+            5 => self.wander_step(v, rng, &mut a),
+            7 => self.sentry_step(v, rng, &mut a),
             10 if a.anim.is_none() && (v.has)(73) => a.anim = Some(73),
             22 => {
                 if self.through(75, v, &mut a) {
@@ -1449,7 +1477,8 @@ impl Enemy {
             }
             8 => self.hide_handler(v, &mut a),
             17 => self.fetch_step(v, rng, &mut a),
-            0 | 3 | 5..=7 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
+            // State 6 (patrol) stands: the area's path list is not read (REQUESTS).
+            0 | 3 | 6 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
         }
         // The alarm's animation (18, or the emerge) is the one requested on its tick.
@@ -1457,6 +1486,152 @@ impl Enemy {
             a.anim = alarm_anim;
         }
         a
+    }
+
+    /// States 2 and 21, the alerted and the hidden search (SPEC-0038 state table): the search
+    /// look (16, flying 147) unless the alert or lose-interest animation is current, the aim at
+    /// the stored point (no walk), the notice test again (it passes only on an awareness-cycle
+    /// tick): a pass requests the alert animation (18, flying 149; 82 for state 21), which runs
+    /// to its 0.99 gate before agro (no clip: agro at once). Without a pass the countdown runs
+    /// (not while the alert plays); at 0 or below the lose-interest animation (17, flying 148)
+    /// plays through and the setter returns to the default state (no clip: at once).
+    /// Interpretation: the aim weight 0.1 (the row's aim turn weight is not mapped here).
+    fn search_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let fly = self.airborne();
+        let alert = if self.state == 21 { 82 } else if fly { 149 } else { 18 };
+        let (lose, look) = if fly { (148, 147) } else { (17, 16) };
+        let cur = v.clip.action;
+        if cur != alert && cur != lose {
+            a.anim = Some(if (v.has)(look) { look } else { self.idle(false, v, rng) });
+        }
+        a.face = Some((self.last_seen, 0.1));
+        if self.alerting || cur == alert {
+            if !(v.has)(alert) {
+                self.set(19, v, rng, a);
+                return;
+            }
+            self.alerting = true;
+            a.anim = Some(alert);
+            if cur == alert && v.clip.progress >= 0.99 {
+                self.set(19, v, rng, a);
+            }
+            return;
+        }
+        if self.notice(v, rng) {
+            if (v.has)(alert) {
+                self.alerting = true;
+                a.anim = Some(alert);
+            } else {
+                self.set(19, v, rng, a);
+            }
+            return;
+        }
+        self.search -= 1;
+        if self.search <= 0 && self.through(lose, v, a) {
+            self.set(0, v, rng, a);
+        }
+    }
+
+    /// State 5, wander (SPEC-0038 state table): R (+0xBC), the pause range (+0xC0, +0xC4) and
+    /// percent (+0xC8). The pause timer counts down; with no goal one is chosen (R below 0.1:
+    /// a random triangle's centroid of the navmesh; else a whole-number point in the square of
+    /// side R about home, accepted on the navmesh, otherwise moved halfway toward the enemy, up
+    /// to 10 tries, then home). While not paused the enemy walks to it (gait 2); within 0.5, or
+    /// blocked for 120 ticks, the goal is dropped and a roll below the percent starts a pause
+    /// (pause and fidget drawn from the range) in the idle pick, with animation 3 played once
+    /// each time the fidget counter runs out (the counter runs only when the table has 3).
+    fn wander_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let s = self.spawn;
+        if self.pause > 0 {
+            self.pause -= 1;
+        }
+        if self.goal.is_none() {
+            let r = s.float(0xBC);
+            let goal = if r < 0.1 {
+                v.mesh.filter(|m| !m.is_empty()).map(|m| {
+                    let t = m.triangles[rng.index(m.len() as u32) as usize];
+                    std::array::from_fn(|i| (t[0][i] + t[1][i] + t[2][i]) / 3.0)
+                })
+            } else {
+                let n = r as i32;
+                let home = s.home;
+                let mut q = [home[0] + rng.range(0, n - 1) as f32 - r / 2.0, home[1], home[2] + rng.range(0, n - 1) as f32 - r / 2.0];
+                let mut found = None;
+                for _ in 0..10 {
+                    if v.locate.is_none_or(|f| f(q)) {
+                        found = Some(q);
+                        break;
+                    }
+                    q = std::array::from_fn(|i| (q[i] + v.position[i]) / 2.0);
+                }
+                found
+            };
+            self.goal = Some(goal.unwrap_or(s.home));
+            self.stuck = 0;
+        }
+        if self.pause < 1 {
+            let goal = self.goal.unwrap_or(s.home);
+            self.stuck = if v.blocked { self.stuck + 1 } else { 0 };
+            let d = (goal[0] - v.position[0]).hypot(goal[2] - v.position[2]);
+            if d < 0.5 || self.stuck >= 120 {
+                self.goal = None;
+                let (lo, hi) = (s.int(0xC0), s.int(0xC4));
+                if rng.range(1, 100) < s.int(0xC8) {
+                    self.pause = rng.range(lo.min(hi), lo.max(hi));
+                    self.fidget = rng.range(lo.min(hi), lo.max(hi));
+                }
+                a.anim = Some(self.idle(false, v, rng));
+                return;
+            }
+            a.anim = Some(2);
+            a.go = Some(Go::Toward(goal));
+            return;
+        }
+        // Paused: the idle pick, and the fidget 3 when its counter runs out.
+        if self.through == Some(3) || ((v.has)(3) && { self.fidget -= 1; self.fidget < 1 }) {
+            if self.through(3, v, a) {
+                self.through = None;
+                let (lo, hi) = (s.int(0xC0), s.int(0xC4));
+                self.fidget = rng.range(lo.min(hi), lo.max(hi));
+            }
+            return;
+        }
+        a.anim = Some(self.idle(false, v, rng));
+    }
+
+    /// State 7, sentry or guard (SPEC-0038 state table): farther than 0.5 from home it walks
+    /// home (gait 2). At home with +0xC4 = 0 it stands in 7 (flying 144) and plays the look 8
+    /// (flying 145) once whenever the stand timer (int[60, 600]) has run out, the look first
+    /// (creation leaves the timer at 0). With +0xC4 nonzero it turns to the placed facing and
+    /// holds 7. Interpretation: the aim weight 0.1.
+    fn sentry_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let s = self.spawn;
+        let home = s.home;
+        if (home[0] - v.position[0]).hypot(home[2] - v.position[2]) > 0.5 {
+            a.anim = Some(2);
+            a.go = Some(Go::Toward(home));
+            return;
+        }
+        let fly = self.airborne();
+        let (stand, look) = if fly { (144, 145) } else { (7, 8) };
+        if s.int(0xC4) != 0 {
+            a.face = Some(([home[0] + s.facing[0], home[1] + s.facing[1], home[2] + s.facing[2]], 0.1));
+            a.anim = Some(stand);
+            return;
+        }
+        if self.looking {
+            if self.through(look, v, a) {
+                self.looking = false;
+                self.through = None;
+                self.stand = rng.range(60, 600);
+            }
+            return;
+        }
+        a.anim = Some(stand);
+        self.stand -= 1;
+        if self.stand <= 0 {
+            self.looking = true;
+        }
     }
 
     /// Behavior 9, the map search of the item types each tick (not in the confused outer 11,
@@ -2410,6 +2585,7 @@ mod tests {
             clear: true,
             items: &[],
             locate: None,
+            mesh: None,
         }
     }
 
@@ -3022,6 +3198,76 @@ mod tests {
         let mut f = Enemy::new(p, Spawn::default(), &mut rng);
         f.die(&mut rng);
         assert!(f.retarget >= 60 && !f.airborne());
+    }
+
+    #[test]
+    fn search_alert_and_lose_interest() {
+        let has = |_| true;
+        let mut rng = Rng::seeded(5);
+        // The group alarm's alert runs to its gate, then agro.
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        let mut v = view([500.0, 0.0, 0.0], &has);
+        let mut a = Act::default();
+        e.set(2, &v, &mut rng, &mut a);
+        e.alerting = true;
+        v.clip = Clip { action: 18, progress: 0.5, finished: false };
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((e.state, a.anim), (2, Some(18)));
+        v.clip = Clip { action: 18, progress: 0.99, finished: false };
+        e.tick(&v, &mut rng);
+        assert_eq!(e.state, 19);
+        // No pass (the hero far away): the countdown runs out, 17 plays through, then the
+        // default state.
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        let mut v = view([500.0, 0.0, 0.0], &has);
+        let mut a = Act::default();
+        e.set(2, &v, &mut rng, &mut a);
+        e.search = 1;
+        v.clip = Clip { action: 16, progress: 0.1, finished: false };
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((e.state, a.anim), (2, Some(17)));
+        v.clip = Clip { action: 17, progress: 0.5, finished: false };
+        e.tick(&v, &mut rng);
+        v.clip = Clip { action: 17, progress: 1.0, finished: true };
+        e.tick(&v, &mut rng);
+        assert_eq!(e.state, 0);
+    }
+
+    #[test]
+    fn wander_and_sentry() {
+        let has = |_| true;
+        let mut rng = Rng::seeded(5);
+        // Wander: a square of side 8 about home, pause 30 ticks every time.
+        let mut words = [0u32; 8];
+        words[1] = 8.0f32.to_bits();
+        (words[2], words[3], words[4]) = (30, 30, 101);
+        let spawn = Spawn { default_state: 5, words, ..Spawn::default() };
+        let mut e = Enemy::new(skeleton(), spawn, &mut rng);
+        e.state = 5;
+        let mut v = view([500.0, 0.0, 0.0], &has);
+        let a = e.tick(&v, &mut rng);
+        let goal = e.goal.unwrap();
+        assert!(goal[0].abs() <= 4.0 && goal[2].abs() <= 4.0, "{goal:?}");
+        assert_eq!((a.anim, a.go), (Some(2), Some(Go::Toward(goal))));
+        // At the goal: a pause of 30 ticks, in the idle pick.
+        v.position = goal;
+        e.tick(&v, &mut rng);
+        assert_eq!((e.goal, e.pause), (None, 30));
+        // Sentry: at home it looks first (8), then stands (7).
+        let mut e = Enemy::new(skeleton(), Spawn { default_state: 7, ..Spawn::default() }, &mut rng);
+        e.state = 7;
+        let mut v = view([500.0, 0.0, 0.0], &has);
+        v.clip = Clip { action: 0, progress: 0.0, finished: false };
+        assert_eq!(e.tick(&v, &mut rng).anim, Some(8));
+        v.clip = Clip { action: 8, progress: 0.5, finished: false };
+        e.tick(&v, &mut rng);
+        v.clip = Clip { action: 8, progress: 1.0, finished: true };
+        e.tick(&v, &mut rng);
+        assert!(!e.looking && (60..=600).contains(&e.stand));
+        assert_eq!(e.tick(&v, &mut rng).anim, Some(7));
+        // Away from home it walks back.
+        v.position = [3.0, 0.0, 0.0];
+        assert_eq!(e.tick(&v, &mut rng).go, Some(Go::Toward([0.0; 3])));
     }
 
     #[test]
