@@ -4172,8 +4172,9 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
         v
     };
     if !l(s, 0) && b & 1 != 0 {
-        s.set_level(0, true);
-        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 9 }, Action::BossFight { instance: 5 }, Action::FadeIn { seconds: FADE, wait: true }, Action::HoldHero, cam(25, true), anim(25)]);
+        // Level state 0, which releases the boss (SPEC-0013 G1), is set once camera 25 has
+        // finished (SPEC-0041 985 CB6 stage 0); the busy word keeps the stage from rerunning.
+        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 9 }, Action::BossFight { instance: 5 }, Action::FadeIn { seconds: FADE, wait: true }, Action::HoldHero, cam(25, true), Action::LevelState { flag: 0, on: true }, anim(25)]);
         for (line, track) in (0..=5).zip([26, 27, 28, 29, 30, 33]) {
             v.extend([cam(track, false), Action::Converse { entity: 0, line }]);
         }
@@ -16555,12 +16556,17 @@ mod tests {
         s.set_word(985, 4, 0);
         on_trigger(985, 2, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(on_update(985, &mut s, false).contains(&Action::ReplaceExterior { slot: 74, plane: -1 }) && s.flag(64));
-        // The 281 branch: the intro sets level state 0; level states 7 then the end with item 30.
+        // The 281 branch: the intro sets level state 0 once camera 25 has finished (an action
+        // of the scene, after the camera); level states 7 then the end with item 30.
         let mut s = GameState::default();
         s.set(281, true);
         on_init(985, &mut s);
         on_activate(985, &mut s);
-        assert!(on_update(985, &mut s, false).contains(&Action::Converse { entity: 0, line: 5 }));
+        let intro = on_update(985, &mut s, false);
+        assert!(intro.contains(&Action::Converse { entity: 0, line: 5 }) && !s.level(0));
+        let cam = intro.iter().position(|a| matches!(a, Action::PlayCamera { track: 25, .. })).unwrap();
+        assert_eq!(intro[cam + 1], Action::LevelState { flag: 0, on: true });
+        s.set_level(0, true);
         s.set_word(985, 4, 0);
         s.set_level(7, true);
         on_update(985, &mut s, false);

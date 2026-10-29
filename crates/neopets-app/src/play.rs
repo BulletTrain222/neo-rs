@@ -10643,6 +10643,10 @@ impl Play {
                 clones_alive,
             };
             let Some(g) = c.gelert.as_mut() else { continue };
+            // NEOPETS_TRACE_GELERT: the regime, level state 0 and the state every 30 ticks.
+            if std::env::var_os("NEOPETS_TRACE_GELERT").is_some() && self.ticks % 30 == 0 && !g.clone {
+                println!("      gelert tick {}: scripted {} level 0 {} state {:?}", self.ticks, g.scripted, self.state.level(0), g.state);
+            }
             let before = g.state;
             // G7: damage only when the hit makes the boss flinch, times the time factor.
             let act = g.tick(&v, &words, &mut self.rng);
@@ -14207,7 +14211,9 @@ pub const BOSSES: &[BossStart] = &[
     // the King's death (SPEC-0058 step 38): it must stay clear, or the arena plays the ending.
     BossStart { name: "Werelupe King", pack: 1246, start: 2, flags: &[249, 250, 271, 272], items: &[], roberta: false, place: Place::Trigger(1), cloud: false },
     // Step 39: the second load into 985 (66 on, 283 off, 281 set).
-    BossStart { name: "Gelert Assassin", pack: 985, start: 2, flags: &[249, 250, 64, 214, 216, 66, 281], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
+    // Flag 258 (the Brightvale library, step 30) puts the boss on its scripted, shipped branch
+    // (SPEC-0013 G1): the slip timer starts its shadow slips.
+    BossStart { name: "Gelert Assassin", pack: 985, start: 2, flags: &[249, 250, 258, 64, 214, 216, 66, 281], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
     // Steps 41 and 42: the dungeons (305, 35); the vault's arrival with 45 clear starts the fight.
     BossStart { name: "Undead Draik", pack: 1096, start: 7, flags: &[305, 35], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
     // Step 43: the food chute (319); trigger 6 with 320 set starts movie 52 and the fight.

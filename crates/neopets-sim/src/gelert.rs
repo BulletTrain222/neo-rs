@@ -274,7 +274,7 @@ pub struct Gelert {
     pub state: State,
     pub pattern: u8,
     pub clone: bool,
-    scripted: bool,
+    pub scripted: bool,
     hits: i32,
     t_slip: i32,
     t_attack: i32,
