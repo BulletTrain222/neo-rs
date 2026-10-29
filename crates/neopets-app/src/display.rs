@@ -24,13 +24,16 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 16;
+pub const ROWS: usize = 17;
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
 /// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
 pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Detailed"];
 
 /// The sun shadow quality (shadow_view.rs: the map size and cascades of each level).
 pub const SHADOW_QUALITY: [&str; 3] = ["Low", "Medium", "High"];
+
+/// The graphics presets (`DisplaySettings::apply_preset`).
+pub const PRESETS: [&str; 3] = ["Low", "Medium", "High"];
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct DisplaySettings {
@@ -189,6 +192,28 @@ impl DisplaySettings {
         }
     }
 
+    /// A graphics preset's options: (anti-aliasing, bloom, ambient occlusion, world shadows,
+    /// shadow quality). Low turns off the costly passes (FXAA, no bloom, no ambient occlusion,
+    /// no world shadows, Low shadows); Medium is the new-player look (SMAA, bloom, ambient
+    /// occlusion, Medium shadows, no world shadows); High adds world shadows at High quality.
+    /// The other options (colour, textures, foliage, character shadows) are left as they are.
+    fn preset_values(p: usize) -> (usize, usize, bool, bool, usize) {
+        match p {
+            0 => (3, 0, false, false, 0),
+            1 => (2, 1, true, false, 1),
+            _ => (2, 1, true, true, 2),
+        }
+    }
+
+    /// The preset the options match, if any (the Display page shows Custom otherwise).
+    pub fn preset(&self) -> Option<usize> {
+        (0..PRESETS.len()).find(|&p| Self::preset_values(p) == (self.aa, self.bloom, self.ao, self.world_shadows, self.shadow_quality))
+    }
+
+    pub fn apply_preset(&mut self, p: usize) {
+        (self.aa, self.bloom, self.ao, self.world_shadows, self.shadow_quality) = Self::preset_values(p);
+    }
+
     /// The rows as (name, value) for the Display page.
     pub fn rows(&self) -> [(String, String); ROWS] {
         [
@@ -197,6 +222,7 @@ impl DisplaySettings {
             ("Aspect ratio".into(), ASPECTS[self.aspect].0.into()),
             ("Render scale".into(), format!("{}%", SCALES[self.scale])),
             ("Upscale filter".into(), if self.smooth { "Smooth".into() } else { "Sharp".into() }),
+            ("Graphics preset".into(), self.preset().map_or("Custom", |p| PRESETS[p]).into()),
             ("Anti-aliasing".into(), crate::graphics::AA[self.aa].into()),
             ("Distant textures".into(), if self.sharp_textures { "Sharp".into() } else { "Original".into() }),
             ("Bloom".into(), crate::graphics::BLOOM[self.bloom].into()),
@@ -230,17 +256,25 @@ impl DisplaySettings {
             2 => self.aspect = step(self.aspect, ASPECTS.len()),
             3 => self.scale = (self.scale as i32 + delta).clamp(0, SCALES.len() as i32 - 1) as usize,
             4 => self.smooth = !self.smooth,
-            5 => self.aa = step(self.aa, crate::graphics::AA.len()),
-            6 => self.sharp_textures = !self.sharp_textures,
-            7 => self.bloom = step(self.bloom, crate::graphics::BLOOM.len()),
-            8 => self.colour = step(self.colour, crate::graphics::COLOUR.len()),
-            9 => self.ao = !self.ao,
-            10 => self.original_foliage = !self.original_foliage,
-            11 => self.char_shadows = step(self.char_shadows, CHAR_SHADOWS.len()),
-            12 => self.world_shadows = !self.world_shadows,
-            13 => self.shadow_quality = step(self.shadow_quality, SHADOW_QUALITY.len()),
-            14 => self.movies = !self.movies,
-            15 => self.xbox_buttons = !self.xbox_buttons,
+            5 => {
+                let next = match self.preset() {
+                    Some(p) => (p as i32 + delta).rem_euclid(PRESETS.len() as i32) as usize,
+                    None if delta > 0 => 0,
+                    None => PRESETS.len() - 1,
+                };
+                self.apply_preset(next);
+            }
+            6 => self.aa = step(self.aa, crate::graphics::AA.len()),
+            7 => self.sharp_textures = !self.sharp_textures,
+            8 => self.bloom = step(self.bloom, crate::graphics::BLOOM.len()),
+            9 => self.colour = step(self.colour, crate::graphics::COLOUR.len()),
+            10 => self.ao = !self.ao,
+            11 => self.original_foliage = !self.original_foliage,
+            12 => self.char_shadows = step(self.char_shadows, CHAR_SHADOWS.len()),
+            13 => self.world_shadows = !self.world_shadows,
+            14 => self.shadow_quality = step(self.shadow_quality, SHADOW_QUALITY.len()),
+            15 => self.movies = !self.movies,
+            16 => self.xbox_buttons = !self.xbox_buttons,
             _ => {}
         }
     }
@@ -457,6 +491,7 @@ const HELP: [&str; ROWS + 1] = [
     "The shape of the game picture; bars fill the rest of the window.",
     "How sharp the 3D world is drawn. Higher looks better and costs speed.",
     "How the world picture is scaled to the window: Sharp keeps pixels crisp, Smooth blends them.",
+    "Sets the costly options at once. Low runs best on slower computers; High adds shadows from everything. Changing an option below shows Custom.",
     "Smooths jagged edges. SMAA also smooths leaves and fences; MSAA turns to SMAA while ambient occlusion is on.",
     "Keeps ground and walls crisp at a distance and at an angle, without shimmer.",
     "A soft glow around bright light, magic and sky.",
@@ -626,6 +661,23 @@ mod tests {
     }
 
     #[test]
+    fn graphics_presets() {
+        let sizes = [(1920, 1080)];
+        let mut s = DisplaySettings::default();
+        // The new-player options are the Medium preset.
+        assert_eq!((s.preset(), s.rows()[5].1.as_str()), (Some(1), "Medium"));
+        s.change(5, 1, &sizes);
+        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(2), 2, 1, true, true, 2));
+        s.change(5, 1, &sizes);
+        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(0), 3, 0, false, false, 0));
+        // Changing an option below shows Custom; Right from Custom goes to Low.
+        s.change(10, 1, &sizes);
+        assert_eq!(s.rows()[5].1, "Custom");
+        s.change(5, 1, &sizes);
+        assert_eq!(s.preset(), Some(0));
+    }
+
+    #[test]
     fn settings_round_trip_and_rows() {
         let mut s = DisplaySettings::default();
         let sizes = [(1920, 1080), (1280, 720), (1000, 600)];
@@ -641,14 +693,14 @@ mod tests {
         assert_eq!(SCALES[s.scale], 150);
         s.change(4, 1, &sizes);
         assert!(!s.smooth);
+        s.change(16, 1, &sizes);
+        assert!(s.xbox_buttons && s.rows()[16].1 == "Xbox");
         s.change(15, 1, &sizes);
-        assert!(s.xbox_buttons && s.rows()[15].1 == "Xbox");
+        assert!(!s.movies && s.rows()[15].1 == "Off", "Movie cutscenes off");
+        assert_eq!(s.rows()[14].1, "Medium");
         s.change(14, 1, &sizes);
-        assert!(!s.movies && s.rows()[14].1 == "Off", "Movie cutscenes off");
-        assert_eq!(s.rows()[13].1, "Medium");
-        s.change(13, 1, &sizes);
-        s.change(13, 1, &sizes);
-        assert_eq!((s.shadow_quality, s.rows()[13].1.as_str()), (0, "Low"), "wraps to Low");
+        s.change(14, 1, &sizes);
+        assert_eq!((s.shadow_quality, s.rows()[14].1.as_str()), (0, "Low"), "wraps to Low");
         assert_eq!(DisplaySettings::parse(&s.text()), s);
         assert_eq!(s.rows()[3].1, "150%");
         assert_eq!(DisplaySettings::parse("scale = 33\nmode = 9\n").mode, 2, "bad values clamp or keep");
