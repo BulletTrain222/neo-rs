@@ -196,6 +196,9 @@ pub struct View<'a> {
     /// The hero's melee hit (its damage) and the summed damage of the shots that hit.
     pub melee_hit: Option<i32>,
     pub shot_hit: Option<i32>,
+    /// A Mote power-attack object's hit: it reaches the boss only through the shared hero hit
+    /// path (SPEC-0014 Hero actions).
+    pub object_hit: Option<i32>,
     /// The monster weapon test of weapons 1 to 5 against the hero this tick.
     pub weapons: [bool; 5],
     pub frame_bits: u32,
@@ -349,6 +352,8 @@ impl Ixi {
             let guard = matches!(self.state, State::BlockMelee | State::BlockMissile);
             shared += v.melee_hit.filter(|_| !(guard && in_front)).unwrap_or(0).max(0);
             shared += v.shot_hit.filter(|_| !guard).unwrap_or(0).max(0);
+            // The power objects ignore the guard (they test the hittable query only).
+            shared += v.object_hit.unwrap_or(0).max(0);
         }
         if shared > 0 && !self.shared_doubled {
             shared *= 2;
@@ -729,6 +734,7 @@ mod tests {
             missile_contact: false,
             melee_hit: None,
             shot_hit: None,
+            object_hit: None,
             weapons: [false; 5],
             frame_bits: 0,
             clip: (7, false),

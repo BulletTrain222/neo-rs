@@ -594,6 +594,8 @@ pub struct Character {
     /// that hit it this tick (its melee hit is `pending_hit`).
     pub ixi: Option<neopets_sim::ixi::Ixi>,
     pub pending_shot: Option<i32>,
+    /// The Mote power-attack objects' hits on the Ixi Chief this tick (shared path only).
+    pub pending_object: Option<i32>,
     /// A Faerie Sister's controller (behaviour classes 13, 15 and 16; SPEC-0011) and the hero's
     /// hit on her this tick (damage, and whether it was a shot).
     pub sister: Option<neopets_sim::sisters::Sister>,
@@ -633,6 +635,18 @@ pub struct Character {
 impl Character {
     /// The Cloud Beast stand-in's body (it has no rig): a cylinder of the row's radius and
     /// height around the floating cloud, the base raised by the hover. None for anyone else.
+    /// The body a hero swing (`shot` false) or a hero shot (`shot` true) is tested against
+    /// instead of the bone capsules: the Cloud Beast stand-in's body for both, and a Faerie
+    /// Sister's own hit cylinders (SPEC-0011 item 7: melee radius 3.0 and height 6.0 standing
+    /// on her position; shots radius 1.5 and length 6.0 with its base 3.0 above her).
+    pub fn hit_body(&self, shot: bool) -> Option<neopets_sim::combat::Cylinder> {
+        if self.sister.is_some() {
+            let (radius, base, length) = if shot { (1.5, 3.0, 6.0) } else { (3.0, 0.0, 6.0) };
+            return Some(neopets_sim::combat::Cylinder { center: add(self.position, [0.0, base + 0.5 * length, 0.0]), axis: [0.0, 1.0, 0.0], radius, length });
+        }
+        self.stand_in_body()
+    }
+
     pub fn stand_in_body(&self) -> Option<neopets_sim::combat::Cylinder> {
         self.cloud.as_ref()?;
         let r = self.row.map_or(3.0, |r| r.radius);
@@ -3788,12 +3802,14 @@ impl Play {
                     let d = sub_v(s.position, q);
                     (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() <= radius + s.radius
                 });
-                // The Cloud Beast stand-in: the shot sphere against its body cylinder.
-                let cloud = c.stand_in_body().is_some_and(|b| {
+                // A body cylinder in place of the bones (the Cloud Beast stand-in, a Faerie
+                // Sister's shot cylinder): the shot sphere against it.
+                let body = c.hit_body(true);
+                let cloud = body.is_some_and(|b| {
                     let (lo, hi) = (b.center[1] - 0.5 * b.length, b.center[1] + 0.5 * b.length);
                     (s.position[0] - b.center[0]).hypot(s.position[2] - b.center[2]) <= b.radius + s.radius && s.position[1] >= lo - s.radius && s.position[1] <= hi + s.radius
                 });
-                (touches || cloud).then_some(i)
+                ((touches && body.is_none()) || cloud).then_some(i)
             });
             let Some(i) = hit else {
                 // SPEC-0036 World contact: the first solid collider of the cell disarms the shot
@@ -3853,6 +3869,27 @@ impl Play {
             let c = if neopets_sim::mote::matches(s.element, t_type) { neopets_sim::mote::one_plus_percent(gst) } else { 1.0 };
             // trunc(max(0, S x C x T - defence)), absorbed when S x C x T > 0 and the result <= 0.
             let (damage, absorbed) = neopets_sim::charm::damage(neopets_sim::charm::scale(s.scale, c, s.t, 1.0, 1.0), 1.0, defence, 1.0);
+            // SPEC-0016 Hero actions: a shot counted as the Plague Serpent's stun strike deals the
+            // hero's melee damage query (power 1.0, the current attack sub-state's step factor,
+            // the word-2 Mote's factors), not the shot's own damage.
+            let (damage, absorbed) = if self.characters[i].serpent.is_some() {
+                let h = self.hero_index.min(1);
+                let stat_a = self.weapon.and_then(|id| self.items.get(id)).filter(|it| it.is_weapon()).map_or(0, |it| it.stats[0]);
+                let mote_id = self.equipment.motes[h][2];
+                let am = mote_id.and_then(|id| self.items.get(id)).map(|it| neopets_sim::mote::AttackMote { f: it.stats[5] as f32, g: it.stats[6] as f32, kind: neopets_sim::mote::element(mote_id) });
+                let d = match h {
+                    0 => match self.attack.as_ref().map(|a| a.sub) {
+                        Some(4 | 12) => 2.0,
+                        Some(5 | 6) => 0.75,
+                        _ => 1.0,
+                    },
+                    _ => self.r_attack.as_ref().map_or(1.0, |a| a.step_factor()),
+                };
+                let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
+                neopets_sim::mote::melee(1.0, stat_a as f32, am, t_type, d, e, defence, self.statuses.damage_scale())
+            } else {
+                (damage, absorbed)
+            };
             // The Plague Serpent and the Undead Draik are not hittable: a shot that meets them
             // pays nothing (SPEC-0036 Quick-shot payment; SPEC-0016 Hero actions).
             let unpaid = self.characters[i].serpent.is_some() || self.characters[i].draik.is_some();
@@ -5598,8 +5635,8 @@ impl Play {
             let cframes = c.anim.bone_frames();
             // The Cloud Beast stand-in has no rig: its body is a cylinder of the row's radius and
             // height around the floating cloud (stand-in hurt shape).
-            let cloud_body = c.stand_in_body();
-            let hit = cloud_body.is_some_and(|b| neopets_sim::combat::overlap(&weapon, &b)) || c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
+            let own_body = c.hit_body(false);
+            let hit = own_body.is_some_and(|b| neopets_sim::combat::overlap(&weapon, &b)) || own_body.is_none() && c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
                 if length <= 0.0 {
                     return false;
                 }
@@ -5769,7 +5806,9 @@ impl Play {
         // SPEC-0014 Incoming hits: the Ixi Chief's controller applies the hit (the hold, lava and
         // death take none; a melee hit and the summed shots reach it separately).
         if let Some(c) = self.characters.get_mut(i).filter(|c| c.ixi.is_some()) {
-            if by.contains("shot") {
+            if by.starts_with("Mote") {
+                c.pending_object = Some(c.pending_object.unwrap_or(0) + damage.max(0));
+            } else if by.contains("shot") {
                 // Several shots in one tick: the last one's damage stands (Edge cases 2).
                 c.pending_shot = Some(damage.max(0));
             } else {
@@ -6246,6 +6285,7 @@ impl Play {
                 king: row.filter(|r| r.class == Some(32)).map(|_| neopets_sim::werelupe::King::new(position)),
                 ixi: row.filter(|r| r.class == Some(11)).map(|_| neopets_sim::ixi::Ixi::new(neopets_sim::ixi::fight_mode(self.state.flag(358), self.state.flag(60)), &self.ixi_words)),
                 pending_shot: None,
+                pending_object: None,
                 sister: row.and_then(|r| r.class).filter(|c| matches!(c, 13 | 15 | 16)).map(|c| neopets_sim::sisters::Sister::new(c as u8)),
                 sister_hit: None,
                 draik: row.filter(|r| r.class == Some(12)).map(|_| neopets_sim::draik::Draik::new(&self.draik_words, &mut self.rng)),
@@ -6377,6 +6417,7 @@ impl Play {
             king: None,
             ixi: None,
             pending_shot: None,
+            pending_object: None,
             sister: None,
             sister_hit: None,
             draik: None,
@@ -10139,6 +10180,7 @@ impl Play {
                 missile_contact,
                 melee_hit: c.pending_hit.take(),
                 shot_hit: c.pending_shot.take(),
+                object_hit: c.pending_object.take(),
                 weapons,
                 frame_bits: bits,
                 clip: (clip.action, clip.progress >= 0.99),
