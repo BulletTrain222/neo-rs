@@ -70,7 +70,7 @@ fn part_mesh(part: &neopets_data::model::MeshPart) -> Mesh {
     mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
     mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
     mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-    mesh.insert_indices(Indices::U32(part.indices.clone()));
+    mesh.insert_indices(Indices::U32(if part.scroll.is_some() { part.indices.clone() } else { crate::drawn_indices(part) }));
     mesh
 }
 
@@ -84,7 +84,7 @@ fn merged_mesh(parts: &[&neopets_data::model::MeshPart]) -> Mesh {
         nrm.extend_from_slice(&part.normals);
         uv.extend_from_slice(&part.uvs);
         col.extend(part.colors.iter().map(|c| [(c[0] * g).powf(2.2), (c[1] * g).powf(2.2), (c[2] * g).powf(2.2), c[3].min(1.0)]));
-        idx.extend(part.indices.iter().map(|i| i + base));
+        idx.extend(crate::drawn_indices(part).iter().map(|i| i + base));
     }
     let mut mesh = Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default());
     mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);

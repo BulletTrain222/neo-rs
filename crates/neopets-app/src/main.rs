@@ -1917,6 +1917,19 @@ fn mask_never_cuts(t: &neopets_data::model::ModelTexture, part: &neopets_data::m
     tex * vertex >= 0.5
 }
 
+/// The indices a Mask(0.5) part draws: a triangle whose three vertex alphas are all below 0.5
+/// is cut at every pixel (the interpolated vertex alpha stays below 0.5 and the texture alpha
+/// is at most 1), so it is left out. Bevy's depth prepass tests only the material and texture
+/// alpha, so such a triangle would otherwise write depth and leave a black hole where the main
+/// pass draws nothing (seen on Roberta's head with the sun or ambient occlusion on).
+fn drawn_indices(part: &neopets_data::model::MeshPart) -> Vec<u32> {
+    if part.colors.is_empty() {
+        return part.indices.clone();
+    }
+    let cut = |i: u32| part.colors.get(i as usize).is_none_or(|c| c[3].min(1.0) < 0.5);
+    part.indices.chunks_exact(3).filter(|t| !(cut(t[0]) && cut(t[1]) && cut(t[2]))).flatten().copied().collect()
+}
+
 /// The opaque twin of a Mask(0.5) material (see `mask_never_cuts`).
 fn opaque_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMaterial>) -> Handle<StandardMaterial> {
     let mut m = materials.get(mask).cloned().unwrap_or_default();
@@ -3359,7 +3372,8 @@ pub(crate) fn part_assets(
             mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, part.normals.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_UV_0, part.uvs.clone());
             mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colors);
-            mesh.insert_indices(Indices::U32(part.indices.clone()));
+            // A blended (scrolling) part keeps every triangle; a masked one drops the cut ones.
+            mesh.insert_indices(Indices::U32(if scrolling.is_some() { part.indices.clone() } else { drawn_indices(part) }));
             let material = scrolling.unwrap_or_else(|| match part.texture {
                 None => untextured.clone(),
                 Some(t) if part.flipbook.is_none() && mask_never_cuts(&m.textures[t], part) => opaque.entry(t).or_insert_with(|| opaque_twin(materials, &handles[t])).clone(),
@@ -4733,6 +4747,17 @@ fn play_frame(
         // A hero switch re-spawns the hero with the incoming model.
         for e in &hero_roots {
             commands.entity(e).despawn();
+        }
+        // Roberta's head piece (the outfit part whose every vertex alpha is 0; R-0126's answer
+        // calls it see-through) is drawn solid: the user reports black hair there in the
+        // original, and a vertex alpha of 0 hides a surface on the GS only with blending or the
+        // alpha test on (this build's choice until R-0128 is answered).
+        if state.play.hero_index == 1 {
+            for part in state.play.model.parts.iter_mut().filter(|p| !p.colors.is_empty() && p.colors.iter().all(|c| c[3] < 0.5)) {
+                for c in &mut part.colors {
+                    c[3] = 1.0;
+                }
+            }
         }
         let parts = part_assets(&state.play.model, &mut meshes, &mut materials, &mut images);
         let mut skinned = Vec::new();
