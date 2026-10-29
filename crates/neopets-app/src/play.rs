@@ -650,9 +650,10 @@ impl Character {
     /// Knight and the Undead Draik (SPEC-0036 Hittable predicate). The Mote power-attack objects
     /// and the target finder never select them.
     /// The Juppie is excluded from every hero hit scan as well: only its stun loop counts swings
-    /// and only its dazed loop shots (SPEC-0015 Hero actions).
+    /// and only its dazed loop shots (SPEC-0015 Hero actions); so is the Darkest Faerie, whose
+    /// own tests take the flinch, the form-2 hit and the absorbed shots (SPEC-0054 Hero actions).
     pub fn own_hit_check(&self) -> bool {
-        self.gnarfas.is_some() || self.serpent.is_some() || self.sister.is_some() || self.knight.is_some() || self.draik.is_some() || self.boss.is_some()
+        self.gnarfas.is_some() || self.serpent.is_some() || self.sister.is_some() || self.knight.is_some() || self.draik.is_some() || self.boss.is_some() || self.faerie.is_some()
     }
 
     /// An enemy kind is also not hittable in its melee or missile dodge (agro outer sub-state 5
@@ -3700,8 +3701,9 @@ impl Play {
             // The Black Knight is never a shot target here (SPEC-0012 G15): its weak-point test
             // reads the shot slots itself, and a shot off the guarding knight pays nothing. Nor is
             // the Juppie (SPEC-0015 Hero actions): shots pass through its body; its mouth bounce
-            // and the Act 3 dazed loop are not built.
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none() && c.boss.is_none() && c.king.as_ref().is_none_or(|k| k.hittable() && !k.guarding())).find_map(|(i, c)| {
+            // and the Act 3 dazed loop are not built. Nor the Darkest Faerie, whose absorb test
+            // reads the shot slots itself (SPEC-0054).
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none() && c.boss.is_none() && c.faerie.is_none() && c.king.as_ref().is_none_or(|k| k.hittable() && !k.guarding())).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
