@@ -298,7 +298,9 @@ pub fn apply_window(
     // built 1000 x 600 larger).
     if last.is_none() {
         let default = DisplaySettings::default();
-        if settings.mode == default.mode && settings.size == default.size {
+        // NEOPETS_WINDOW (diagnostic) keeps the window as built over the settings file.
+        if settings.mode == default.mode && settings.size == default.size || std::env::var_os("NEOPETS_WINDOW").is_some() {
+            settings.mode = 0;
             settings.size = (window.physical_width(), window.physical_height());
             *last = Some(settings.clone());
             return;

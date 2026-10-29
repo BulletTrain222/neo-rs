@@ -866,7 +866,15 @@ fn main() {
         .add_plugins(DefaultPlugins.set(WindowPlugin {
             primary_window: Some(Window {
                 title: "Neopets • Rust rewrite workspace".into(),
-                resolution: (1000, 600).into(),
+                // NEOPETS_WINDOW=WxH: the starting window size (diagnostic; 1000 x 600 by default).
+                resolution: std::env::var("NEOPETS_WINDOW")
+                    .ok()
+                    .and_then(|v| {
+                        let (w, h) = v.split_once('x')?;
+                        Some((w.trim().parse::<u32>().ok()?, h.trim().parse::<u32>().ok()?))
+                    })
+                    .unwrap_or((1000, 600))
+                    .into(),
                 visible: !smoke_test,
                 ..default()
             }),
@@ -906,6 +914,7 @@ fn main() {
     app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::hush).chain().after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
+    app.add_systems(PostUpdate, dev_menu::fit_window.after(bevy::ui::UiSystems::Layout));
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());
