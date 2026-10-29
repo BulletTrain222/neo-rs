@@ -3695,7 +3695,9 @@ impl Play {
                 continue;
             }
             // The first character whose bone capsule meets the shot sphere.
-            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable()).find_map(|(i, c)| {
+            // The Black Knight is never a shot target here (SPEC-0012 G15): its weak-point test
+            // reads the shot slots itself, and a shot off the guarding knight pays nothing.
+            let hit = self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.knight.is_none()).find_map(|(i, c)| {
                 let place = placement(c.position, c.facing);
                 let frames = c.anim.bone_frames();
                 let touches = c.anim.bones().hurt.iter().zip(&frames).any(|(&(base, length, radius), f)| {
@@ -5482,6 +5484,7 @@ impl Play {
             _ => 1.0,
         };
         let mut landed = 0;
+        let mut knight_block = false;
         let hero_at = self.loco.position();
         // Factor E: the live petpet of kind 0 or 7 (SPEC-0047 Passive bonuses).
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
@@ -5522,6 +5525,20 @@ impl Play {
             // hit list, so a later window tick can still be blocked.
             let hf = self.loco.facing;
             let power_hit = sub == 10 && mote_id.is_some();
+            // SPEC-0012 G15: the Black Knight is unhittable and guarding on every tick its stun
+            // gate does not pass: the swing is blocked whatever the facing (Blocking Angle 1.0):
+            // no damage, impact cue 34, one block per swing, the magic paid as for a landed hit,
+            // and Tor's sword recoils (sub-state 13); a power step with a Mote passes through
+            // with no effect. With the gate passing the swing passes through; the damage comes
+            // only from the knight's weak-point routine.
+            if let Some(k) = c.knight.as_ref() {
+                if !k.exposed && !power_hit {
+                    self.hit_list.push(c.id);
+                    landed += 1;
+                    knight_block = true;
+                }
+                continue;
+            }
             if let Some(e) = c.enemy.as_mut().filter(|e| e.blocking && !power_hit) {
                 if c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < e.p.defence.angle {
                     self.hit_list.push(c.id);
@@ -5556,6 +5573,15 @@ impl Play {
                 continue;
             }
             hits.push((i, damage));
+        }
+        // The knight's block (SPEC-0012 G15): the impact cue and, for Tor, the sword bounce.
+        if knight_block {
+            self.sound.play(neopets_sim::sound::WEAPON, 34, neopets_sim::sound::Play { emitter: Some(hero_at), ..Default::default() });
+            if self.hero_index == 0 {
+                if let Some(a) = self.attack.as_mut() {
+                    a.recoil();
+                }
+            }
         }
         // Step 6: the breakable walk on every tick of the window.
         let tip = add(p0, scale(axis, l));
@@ -10137,6 +10163,12 @@ impl Play {
         let hero_damage = neopets_sim::mote::melee(1.0, stat_a as f32, None, -1, 1.0, e_factor, 0.0, self.statuses.damage_scale()).0;
         let hero_mesh = neopets_sim::nav::closest(&self.world.navmeshes, hero, 1);
         let (hero_index, attacking, guarding) = (self.hero_index as u8, self.loco.state == hero_states::ATTACK, self.loco.state == hero_states::GUARD);
+        // SPEC-0012 G9, the strike-active predicate: Tor in the attack state with sub-state 11 or
+        // 12 or in jump state 7 in air phase 8 or 9; Roberta in the attack state with 5 or 12.
+        let striking = match self.hero_index {
+            0 => (attacking && self.attack.as_ref().is_some_and(|a| matches!(a.sub, 11 | 12))) || (self.loco.state == 7 && matches!(self.loco.phase, 8 | 9)),
+            _ => attacking && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 5 | 12)),
+        };
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let level_flags = self.state.level_flags.clone();
@@ -10173,11 +10205,8 @@ impl Play {
                 let m = place.mul(frames.get(bone)?);
                 Some(Cylinder::from_base(m.t, unit(m.cols[1]), radius, length))
             };
-            let part_hit = |k: usize| {
-                part_shape(k).is_some_and(|cyl| {
-                    neopets_sim::combat::overlap(&body, &cyl) || shots.iter().any(|&(p, r)| (0..3).map(|j| (p[j] - cyl.center[j]).powi(2)).sum::<f32>().sqrt() < 5.0 + r)
-                })
-            };
+            let part_hit = |k: usize| part_shape(k).is_some_and(|cyl| neopets_sim::combat::overlap(&body, &cyl));
+            let part_shot = |k: usize| part_shape(k).is_some_and(|cyl| shots.iter().any(|&(p, r)| (0..3).map(|j| (p[j] - cyl.center[j]).powi(2)).sum::<f32>().sqrt() < 5.0 + r));
             let r = c.row.map_or(1.5, |r| r.radius);
             let height = c.row.map_or(6.0, |r| r.height);
             let shot_overlap = shots.first().is_some_and(|&(p, sr)| neopets_sim::gnarfas::segment_distance(c.position, add(c.position, [0.0, height, 0.0]), p, p) <= r + sr);
@@ -10194,6 +10223,7 @@ impl Play {
                 hero_index,
                 hero_attack: attacking,
                 hero_guard: guarding,
+                hero_strike: striking,
                 shots: !shots.is_empty(),
                 shot_overlap,
                 weapons,
@@ -10204,6 +10234,7 @@ impl Play {
                 contact: hd < r + 1.0,
                 edge: false,
                 part_hit: &part_hit,
+                part_shot: &part_shot,
                 hero_damage,
                 second_measure: hd,
                 ground: world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0),

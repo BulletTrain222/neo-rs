@@ -253,6 +253,9 @@ pub struct View<'a> {
     pub hero_index: u8,
     pub hero_attack: bool,
     pub hero_guard: bool,
+    /// The strike-active predicate (SPEC-0012 G9): Tor in action state 13 with sub-state 11 or
+    /// 12, or in action state 7 in air phase 8 or 9; Roberta in state 13 with sub-state 5 or 12.
+    pub hero_strike: bool,
     /// Roberta's shot slots: any active; the first active one overlaps the knight.
     pub shots: bool,
     pub shot_overlap: bool,
@@ -266,8 +269,10 @@ pub struct View<'a> {
     /// The body contact and walk-mesh edge-contact flags.
     pub contact: bool,
     pub edge: bool,
-    /// The weak-point test of a part (the hero's body or an armed shot touches it).
+    /// The weak-point test of a part: the hero's body cylinder touches it (melee).
     pub part_hit: &'a dyn Fn(usize) -> bool,
+    /// The weak-point test of a part by an armed hero shot (tested whatever the gate).
+    pub part_shot: &'a dyn Fn(usize) -> bool,
     /// The hero's damage query for the knight (argument 1.0), rounded down.
     pub hero_damage: i32,
     /// The high swing's second measure (below 10.0 to swing).
@@ -321,6 +326,9 @@ pub struct Knight {
     pub glow: [Glow; 6],
     pub sword: Sword,
     defeated_sent: bool,
+    /// This tick's stun gate passed (base state 1 for the tick: neither hittable nor guarding,
+    /// so the hero's swing passes through; otherwise the knight guards and blocks it; G9, G15).
+    pub exposed: bool,
 }
 
 fn hdist(a: Vec3, b: Vec3) -> f32 {
@@ -368,6 +376,7 @@ impl Knight {
             glow: [Glow::default(); 6],
             sword: Sword::default(),
             defeated_sent: false,
+            exposed: false,
         }
     }
 
@@ -393,6 +402,7 @@ impl Knight {
 
     fn tick_inner(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
         let mut a = Act::default();
+        self.exposed = false;
         // 1. The glow, from the flags of the previous tick.
         for k in 0..6 {
             self.glow[k].step(self.lit[k]);
@@ -563,8 +573,29 @@ impl Knight {
                 self.lit[k] = true;
             }
         }
-        for &k in parts {
-            if self.parts[k] > 0 && (v.part_hit)(k) {
+        // The gate for the melee part test (G9 step 5): knees, the hero attacking in front of
+        // the knight (dot with its forward axis above 0.25); the back, attacking and behind
+        // (below -0.25); the under-arms, striking and on that arm's side (the side axis is +X
+        // when the knight faces +Z: the left arm above 0.25, the right below -0.25), with the
+        // arm's part above 0; the neck, striking and behind. A passing gate exposes the knight
+        // for the tick; an armed shot is tested whatever the gate.
+        let dir = hdir(v.position, v.hero);
+        let f = {
+            let l = v.facing[0].hypot(v.facing[2]).max(1e-6);
+            [v.facing[0] / l, 0.0, v.facing[2] / l]
+        };
+        let (front, side) = (dir[0] * f[0] + dir[2] * f[2], dir[0] * f[2] - dir[2] * f[0]);
+        let gate = |k: usize, parts: &[i32; 6]| match k {
+            LEFT_KNEE | RIGHT_KNEE => v.hero_attack && front > 0.25,
+            BACK => v.hero_attack && front < -0.25,
+            NECK => v.hero_strike && front < -0.25,
+            LEFT_ARM => v.hero_strike && side > 0.25 && parts[k] > 0,
+            _ => v.hero_strike && side < -0.25 && parts[k] > 0,
+        };
+        let open: Vec<bool> = parts.iter().map(|&k| gate(k, &self.parts)).collect();
+        self.exposed = open.iter().any(|&o| o);
+        for (n, &k) in parts.iter().enumerate() {
+            if self.parts[k] > 0 && ((open[n] && (v.part_hit)(k)) || (v.part_shot)(k)) {
                 self.parts[k] = if self.parts[k] < v.hero_damage { 0 } else { self.parts[k] - v.hero_damage };
                 self.hit = true;
                 a.part_effect = Some(k);
@@ -1048,6 +1079,7 @@ mod tests {
             hero_index: 0,
             hero_attack: false,
             hero_guard: false,
+            hero_strike: false,
             shots: false,
             shot_overlap: false,
             weapons: [false; 5],
@@ -1058,6 +1090,7 @@ mod tests {
             contact: false,
             edge: false,
             part_hit: part,
+            part_shot: &|_| false,
             hero_damage: 12,
             second_measure: 5.0,
             ground: Some(0.0),
@@ -1178,22 +1211,33 @@ mod tests {
         k.tick(&v, &w, &mut rng);
         assert_eq!(k.state, State::Charge(4));
         let right = |p: usize| p == RIGHT_KNEE;
+        // The hero in front but not attacking fails the knee gate: blocked, nothing lost.
         let a = k.tick(&view(&no, &right, &nosword, 3.0), &w, &mut rng);
-        assert_eq!((k.parts[RIGHT_KNEE], a.part_effect, a.anim), (38, Some(RIGHT_KNEE), Some(45)));
-        // 599 more ticks expose; the 601st ends the stun with no test.
-        for _ in 0..599 {
+        assert_eq!((k.parts[RIGHT_KNEE], a.part_effect, k.exposed), (50, None, false));
+        let mut v = view(&no, &right, &nosword, 3.0);
+        v.hero_attack = true;
+        let a = k.tick(&v, &w, &mut rng);
+        assert_eq!((k.parts[RIGHT_KNEE], a.part_effect, a.anim, k.exposed), (38, Some(RIGHT_KNEE), Some(45), true));
+        // Attacking from behind fails the knee gate too.
+        let mut v = view(&no, &right, &nosword, -3.0);
+        v.hero_attack = true;
+        k.tick(&v, &w, &mut rng);
+        assert!(!k.exposed && k.parts[RIGHT_KNEE] == 38);
+        // 597 more ticks expose; the 601st ends the stun with no test.
+        for _ in 0..597 {
             k.tick(&view(&no, &miss, &nosword, 30.0), &w, &mut rng);
         }
         assert_eq!(k.state, State::Charge(4));
         k.tick(&view(&no, &right, &nosword, 30.0), &w, &mut rng);
         assert_eq!((k.state, k.parts[RIGHT_KNEE]), (State::Charge(5), 38));
-        // The weak-point floor: 5 HP taking 20 leaves 0.
+        // The weak-point floor: 5 HP taking 20 leaves 0 (the hero attacking from behind).
         let mut k = Knight::new(&w);
         k.state = State::FloorStrike(3);
         k.stun = 600;
         k.parts[BACK] = 5;
         let back = |p: usize| p == BACK;
-        let mut v = view(&no, &back, &nosword, 3.0);
+        let mut v = view(&no, &back, &nosword, -3.0);
+        v.hero_attack = true;
         v.hero_damage = 20;
         k.tick(&v, &w, &mut rng);
         assert_eq!((k.parts[BACK], k.state), (0, State::FloorStrike(5)));
