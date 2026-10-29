@@ -60,7 +60,7 @@ Offsets inside the runtime character record are not part of this spec. The offse
 | Behavior class | int, 0 to 39 | The walk or NPC class now running. 0 means none. |
 | Walk target | position, optional orientation, stop distance | Where a walk class moves the character. |
 | Navigation state | nav index, next nav index, arrival flag | Used by the per-tick walk step. |
-| Navigation-mesh index | int | Which mesh of the world the character walks on. -1 (no mesh) unless a level script assigns one (see "Region characters with no navigation mesh"). |
+| Navigation-mesh index | int | Which mesh of the world the character walks on. -1 (no mesh) unless a level script or a boss controller assigns one (see "Region characters with no navigation mesh"). |
 | Partner id | int | Villagers only: the character id of the paired villager. |
 | Move type | int | The movement type set by the script call SetAI_MovementType: 0 walk, 1 run, 2 fast run (3 and 4 also accepted). Default 0. Kept in the character's navigation block. |
 | Blocked flag | flag | Set when the navmesh confinement pushes, clips or restores the character. Nothing else sets it (see "Blocked flag"). |
@@ -241,7 +241,7 @@ Orientation (classes 25 and 26), after arrival: each tick, if the dot product of
 Each tick the step works on these values (High). P is the character's position. c is the triangle that contains P: the stored current triangle is tested first, then its three neighbours in edge order, then the outward search of SPEC-0018 ("Locate with a last triangle"). G is this tick's goal point and t its triangle, both from the goal latch of SPEC-0029 Behavior 2b, which runs the steering look-ahead (SPEC-0029 Behavior 2a) on the walk target. The step keeps a stored current triangle C0, a stored target triangle T0 and a steering point K. All distances are horizontal. Triangle containment tests the point's x-z projection against the triangle edges and does not compare its height with the triangle plane (R-0088, High).
 
 1. Off the mesh (c = -1): the nearest-triangle search of SPEC-0029 Behavior 2b runs from P. It also sets the current triangle. The character steers toward that triangle's centroid with weight 0.1 and plays the movement clip of its mode.
-2. No goal triangle (t = -1): the idle picker runs (its clip plays), and there is no steering.
+2. No goal triangle (t = -1): the idle picker runs (its clip plays), and there is no steering. For the Ixi Chief the idle picker requests animation 0 (the rearing clip).
 3. Otherwise G is stored as the latch's fallback point for the next tick. Then:
    - Settled (c = C0 and t = c): T0 becomes c. Let d = |G - P|. If d < 0.25, or the block is fresh (the blocked flag is set and the blocked timer is exactly 120; see "Blocked flag"), the walk arrives: the arrival flag is set, the base state becomes 1 (through the same set-state method that puts a held Miamouse in base state 33; High), the idle picker runs, and the character turns toward the current hero's direction with weight 0.1. Otherwise it steers toward G with weight 0.3.
    - Any other case: if d < 0.25, the walk arrives as above, but without the turn toward the hero. A fresh block does not end the walk here. Otherwise:
@@ -250,7 +250,7 @@ Each tick the step works on these values (High). P is the character's position. 
      - New triangle (c differs from C0): T0 becomes t and C0 becomes c.
      - Route part: if C0 differs from T0, the step reads e = table(C0, T0) of the character's mesh ("Route table") and runs the route step (below) on triangle c and edge e. A character with no mesh gets -1 and does nothing more. If C0 equals T0 (it has just entered the goal's triangle), it steers toward G with weight 0.1 and plays the movement clip. It then settles on the next tick.
 
-The table is read on every tick that is not settled, so a change of either triangle changes the edge at once. There is no separate re-plan step.
+The table is read on every tick that is not settled, so a change of either triangle changes the edge at once. There is no separate re-plan step. The Undead Draik's walking attack sub-steps call this step without setting a locomotion clip; the clip is the one stored by its approach state.
 
 ### Route step (High)
 
@@ -371,7 +371,7 @@ The townsfolk (class 6) wander and patrol do not read the flag.
 
 ### Region characters with no navigation mesh (High)
 
-A region character's navigation-mesh index is -1 by default; only the script call CharacterNavmeshAssign gives it one (SPEC-0030). With index -1 the confinement step runs only its timer countdown. Such a character's only world walls are cell list B, the movable-block contact pass, the character push and the moving-object collision of the ground step. It passes through the world's wall segments (frame records) and the primitives of cell list A. Every probe of its spawn point searches fails, so the search always ends at retry 10 with the home point.
+A region character's navigation-mesh index is -1 by default; the script call CharacterNavmeshAssign gives it one (SPEC-0030), and a boss controller can also assign its own at start-up (the Gelert Assassin assigns mesh 0, and the pack 985 script assigns mesh 0 to entities 0 to 4 again; SPEC-0013). With index -1 the confinement step runs only its timer countdown. Such a character's only world walls are cell list B, the movable-block contact pass, the character push and the moving-object collision of the ground step. It passes through the world's wall segments (frame records) and the primitives of cell list A. Every probe of its spawn point searches fails, so the search always ends at retry 10 with the home point.
 
 ### Movable-block contact pass (High for the selection, Medium-High for the push)
 

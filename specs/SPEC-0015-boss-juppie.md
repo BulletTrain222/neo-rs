@@ -1,24 +1,222 @@
 # SPEC-0015: Boss behavior: Juppie boss
 
-- Answers: proactive, none requested (boss AI)
+- Answers: proactive, none requested (boss AI); proactive (fight AI build guide); proactive (minion AI: Tentacles); R-0122 (ordinary state 1 uses action 2, both attack recoveries return there, hub action 6/7 burrows and stage-start action 5 emerges; strict slam range and action-to-clip mapping clarified; retail visibility remains open); proactive (second fight AI pass: set-back reachable through the locator-use count, slam push direction, death halts the controller, hero actions against the boss)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Tuning values and addresses: High (every listed word is a word of the boot program data and holds its default). Attack-choice rules and cooldown tables: High. Stage flow and level flags: High for the logic, Medium for the story meaning. Stage-complete marker and death sequence: High. Locator test and locator use counter: High (both thresholds included). Head-slam sequence: High for order and for the stun re-entry rule (one draw; the counter keeps its remaining time), Medium for the meaning of the stun-loop checks. Dazed loop: High for its exit rules; the per-tick field write and its reader (the main loop's skip of the deflect pass) are High. Spit sequence: High for order and timing (the between-cycle animation reload is Medium). Spit projectile arc: High for the horizontal speed formula and the vertical-speed formula, Medium for their per-tick application, High for the unit of the life argument (ticks); its effect ids and their roles: High (the visual descriptions: Medium). Sounds (animation cues, the cues that never play): High. Head-slam hit flash 222: High for the id, Medium for the point. Stun self-damage: Medium. Head-slam window and raw damage, spit pool kind and its hero-hit rule: High.
 
 ## Summary
 
-The Juppie boss uses two attacks: a head slam onto a point near the hero, and a spit, in which it throws a set of Juppie projectiles at the hero. It picks an attack on a timer whose length depends on its stage. Its HP fraction, checked at 5/6, 1/2 and 0, moves the fight through stages, and the level's scripts react to the same moments through level flags. A slam that lands on a stage locator can stun the boss, and the stage events mark placed locators for the level's scripts. The level's stage spawns place Tentacle characters, not Juppies: one at the fight's start, two after the stage-1 threshold and three after the stage-2 threshold (SPEC-0045, module 1217). A boss that gains HP above a stage threshold is set back to replay that stage. Its sounds come only from its animation table, and the spit glob is silent (see Sounds and effects). Times are seconds on the 60 Hz game tick (SPEC-0007): ticks = trunc(seconds x 60).
+The Juppie boss uses two attacks: a head slam onto a point near the hero, and a spit, in which it throws a set of Juppie projectiles at the hero. It picks an attack on a timer whose length depends on its stage. Its HP fraction, checked at 5/6, 1/2 and 0, moves the fight through stages, and the level's scripts react to the same moments through level flags. A slam that consumes an eligible stage locator during its action window stuns the boss, even if the slam misses the hero; locator use and hero impact are separate tests. The stage events mark placed locators for the level's scripts. The level's stage spawns place Tentacle characters, not Juppies: one at the fight's start, two after the stage-1 threshold and three after the stage-2 threshold (SPEC-0045, module 1217). Each locator use also counts toward the stage: when the stage's last locator has been used and the stage's HP threshold has still not been reached by the end of the stun or dazed loop, the boss is set back and the stage is replayed (a normal part of play; see Stages). Its sounds come only from its animation table, and the spit glob is silent (see Sounds and effects). Times are seconds on the 60 Hz game tick (SPEC-0007): ticks = trunc(seconds x 60).
+
+## Fight AI build guide
+
+This is the ordered recipe for the shipped fight. Details are in the sections named in brackets. All times are ticks of the 60 Hz game tick. "Request tick" means the tick on which a state handler first asks for an action.
+
+**1. What is shipped.** Act 1 (character region 1218, monster row 7, 190 HP, spit flag clear) and Act 3 (region 1219, monster row 8, 400 HP, spit flag set) run the same controller. Not part of the shipped fight, do not build: the unused tuning words (Juppie count, dazed time for act 1, damage range, spit linger), the head-slam cue and the two spit cues (never play), and the handlers of the finale hold (6) and the idle hold (7) (they never run: the controller stops for good when the boss dies, see item 10). The three set-back branches of the stage rules ARE part of the fight: they run whenever a stage's locators are all used and its HP threshold is not reached (item 8).
+
+**2. Initial values.**
+- Top-level state 2 (hub), sub-step 0, stage 0, decision cooldown 0, counted-hit counter 0, slam latch and once-per-slam latch clear, "helper already ran" flag 0. The stage-complete marker is not initialised by the controller; treat it as 0 (it is never read before a stage start writes 0 to it). The marker is one word with two writers: a stage start sets it to 0, a locator use adds 1 to it, and a stun or dazed HP exit sets it to the stage number (see Stages; this is why set-back is reachable).
+- Spit flag: 1 in Act 3 (story flag 0x53), else 0 [Variant: the spit flag].
+- HP: full (190 in Act 1, 400 in Act 3). The boss never moves from its authored position; it only turns [Arena and Tentacle staging; Movement below].
+- Action 7 is requested once before the first tick. Every clip of this boss plays at play rate 1.0, so the clip speed is 0.5 keys per tick (speed byte 1), except action 22, which plays at 0.25 keys per tick (speed byte 2) [Durations and timing].
+- All action ids the controller requests exist in the character's action table (0, 2, 3, 5, 6, 7, 9, 16, 17, 18, 19, 20, 21 and 22; the table has 108 entries and each of these has a clip). No request falls back to clip 0, and no phase is skipped for a missing clip.
+
+**3. Per-tick order** (the boss's think; the animation pass of the same tick runs after it). The think is the boss's class coroutine, stepped once per tick by the shared character update, and only in base states that allow it: it is not stepped while the boss's base state is 16 (dead), 25, 33 (script control), 36, 42 (inactive zone), 53 or 55 (SPEC-0040, Behavior 3). The "helper already ran" flag is cleared at the start of every pass and set by the dazed loop.
+1. Stage-start gate, using the state value at the start of the tick: state 6 with level flag 0x12 set becomes state 7; in the hub (state 2) the stage-start flags 1, 5 and 10 are tested [Stages].
+2. Attack chooser (it can enter an attack only while the state is 0 or 1 and the stage-complete marker differs from the stage) [Attack decision].
+3. Stage-complete executor (only while the state is 0 or 1 and the marker equals the stage) [Stages].
+4. In every state except 2, 6 and 7 the boss records itself as the hero's last attacker and its body-push flag is set to 1; in states 2, 6 and 7 the body-push flag is 0.
+5. The handler of the state value as it now stands (steps 1 to 3 may have just changed it, and the new state's handler runs in the same tick).
+6. The hit helper's deflect pass (every contact of the hero's projectile slots is deflected) unless the dazed loop ran the helper this tick; the "helper already ran" flag is then cleared.
+
+Two consequences: a handler that sets the state to 1 takes effect for the gate, chooser and executor on the next tick, and the state-1 handler also runs on the next tick.
+
+**4. State table.** T is the request tick of the action; "done" is the tick on which the progress gate of the current action passes (see Durations and timing).
+
+| State and sub-step | Action (clip entry, keys) | Per tick | Exit |
+| --- | --- | --- | --- |
+| Hub (2) | 7 at start. Otherwise 6 (clip 4, 67 keys), then 7 (clip 5, 2 keys) | No turning. If the current action is neither 6 nor 7, request 6; at 6's done tick (T + 132) request 7 | A stage-start flag moves to state 3 |
+| Stage start (3) | 5 (clip 2, 79 keys) | Turn toward the hero at rate 1.0 every tick | Done at T + 156: state 1 (its handler runs on the next tick) |
+| Free (1) | 2 (clip 0, 88 keys, looping) | Turn at rate 1.0 every tick; the chooser runs | Attack chosen, or the stage-complete executor |
+| Slam 0, approach (4/0) | 21 (clip 15, 31 keys) | Turn at rate 1.0 on the request tick only; no turning afterwards | Done at T + 61: clear latches and the counted-hit counter, sub-step 1 |
+| Slam 1, strike (4/1) | 18 (clip 6, 39 keys), requested on the tick after the approach's done tick (call it S) | No turning. Window ticks S + 20 to S + 39: stage events (a locator use adds 1 to the marker word), then the 7.0 impact test | Done at S + 77: latch set gives the stun draw and sub-step 2 (spit flag clear) or 6 (spit flag set); latch clear gives sub-step 4 |
+| Stun 2 (4/2) | 16 (clip 7, 60 keys, looping) | Counter -1; while it is still above 0: blockers, hero-melee hit test | Counter reaches 0: sub-step 4. Counted hit: sub-step 3 (HP above threshold) or 4 (at or below) |
+| Count check 3 (4/3) | 9 (clip 11, 27 keys) | Nothing counted | Done at T + 53: fewer than 3 counted hits: sub-step 2 (counter kept); else 4 |
+| Recover 4 (4/4) | 17 (clip 8, 36 keys) | Nothing | Done at T + 71: state 1 |
+| Dazed entry 6 (4/6) | 17 | Nothing | Done at T + 71: dazed timer 300, sub-step 5 |
+| Dazed 5 (4/5) | 3 (clip 9, 64 keys, looping) | Timer -1; hit helper in counting mode; head blocker | Timer 0 at the start of a tick: state 1; HP exit: state 1 at once |
+| Spit 0, pre-wait (5/0) | 19 (clip 12, 38 keys) | Turn at rate 0.25 every tick; counter 120 set on the request tick, then -1 per tick | Counter reaches 0 on request tick + 120; sub-step 1 starts on request tick + 121 |
+| Spit 1, shoot (5/1) | 20 (clip 13, 25 keys) | Turn at rate 0.25 every tick; one projectile on the first tick the release event is seen (T + 16) | Done at T + 49: cycle counted; fewer than the count: request 22 on this tick and 20 again on the next (cycle length 50 ticks); else sub-step 2 |
+| Spit 2, recover (5/2) | 22 (clip 16, 12 keys, speed 0.25) | Nothing | Requested on the tick after the last cycle's done tick; done at T + 45: state 1 |
+| Finale (6) | 7 | Never runs: the death halts the controller on the tick it sets this state | (Level flag 0x12 would give state 7) |
+| Idle hold (7) | 0 (clip 1, 47 keys) | Never runs | Never |
+
+**5. Attack chooser, in priority order** (free state, stage active, marker differs from stage, cooldown 0) [Attack decision]:
+1. Draw the cooldown from the stage's range (inclusive; 90 to 210, 45 to 120 and 15 to 60 ticks for stages 1, 2 and 3).
+2. D is the horizontal distance to the hero. If 10.0 < D < 50.0, roll 0 to 100 inclusive; a roll below 50 starts the head slam.
+3. Otherwise, only when the spit flag is set and D < 100.0, roll 0 to 100 inclusive; a roll below 50 starts the spit with a count drawn from 3 to 5 inclusive.
+4. The chooser runs once per tick in every state. On any pass where it does not enter an attack and the cooldown is above 0 it lowers the cooldown by one, also during attacks and in the hub, so the cooldown keeps running while the boss is busy. Every slam or spit takes longer than the longest cooldown (at least 212 ticks against at most 210), so the next decision happens on the first free tick after an attack.
+5. Random draws of one decision, in order: the cooldown (one draw), the slam roll (only when D is in the band), the spit roll (only with the spit flag and D below 100; also reached when D is 10.0 or less), the spit count (only after a passed spit roll). A decision that finds the marker equal to the stage draws nothing and only lowers the cooldown. All draws use the one shared generator.
+
+**6. Movement.** None: the boss has no walking, no route use, no nav-mesh use and no root-motion travel (all its clips have zero root travel). It only turns, by a normalised blend of its facing toward the horizontal direction to the hero, with the per-tick rates in the state table: new facing = normalise((1 - r) x old + r x target), with r the rate (1.0 faces the hero exactly; 0.25 closes about a quarter of the remaining angle per tick for small angles, so 10 ticks close over 94 % of it). When the old and the target direction are almost opposite (dot product below -0.99), 0.1 of the character's side vector is added to the blend before it is normalised, so the turn starts. The target is the unit horizontal vector from the boss to the selected hero's feet position; if the hero is exactly above the boss no meaningful target exists and the facing is left unchanged (rewrite choice). The slam is aimed once, on the request tick of its approach; the hero can leave that line during the next 62 + 78 ticks. There is no unreachable-hero case: attacks are chosen by distance only and use no path test.
+
+**7. Hit and hurt windows.**
+- Slam damage: during the strike's window ticks (S + 20 to S + 39; event bit 0x1 on keys 10 to 19) the boss's head point (bone 15) sweeps forward along its facing: 19.4 units from the boss at S + 20, 24.0 at S + 21, 27.3 at S + 22, 30.5 at S + 23, 32.9 at S + 24 and 34.6 to 35.0 from S + 25 on (Medium; see Head slam). The first tick on which that point is within 7.0 horizontal units of the hero deals 25 raw damage once and pushes the hero. The target is the selected hero only, the test ignores height, guard, state and invulnerability (none exists), and the push is applied even to a hero that is busy, already knocked or dead (the hero's own back direction, see Knockback). Jumping does not avoid the slam; leaving the aimed line or the 12.4 to 42.0 band before the window does.
+- Locators: on each window tick before the hero is hit and before a locator has been used in this slam, the stage's locators are tried (see Stage events). A use latches the stun path (spit flag clear) or the dazed path (spit flag set) whether or not the hero was hit, and adds 1 to the marker word, which is also the stage-complete marker (Stages).
+- Hurt side: the hero can hurt the boss only in the two loops. In the stun loop the hero's melee counts, at 4 times its damage, with no per-swing latch; a counted hit sends the boss to the count check for 54 ticks, during which nothing counts. In the dazed loop only the hero's projectile slots count, at the mouth point and inside a 0.9 cone; melee does nothing. At all other times melee has no effect and projectile slots that touch the mouth zone bounce back (the quick-shot bounce of SPEC-0036). The mouth zone is a vertical finite cylinder of radius 4.0 and height 6.0 standing on the mouth bone (bone 25) point, tested against the shot's sphere. The hero's own swing, shots and Mote objects never target this boss at all (its hittable word is set at start), so the only damage paths are the two loops above; every body part of the boss lets a shot pass through. In the stun loop the weapon test uses the boss's 19 hurt capsules (bones 1 to 3, 5, 6, 8 to 15, 27 to 29 and 35 to 37; the head bone 15 is the biggest, length 5.72, radius 3.70) and a 65-unit distance gate between the two characters.
+- Block, dodge, parry, counter and hit-stun reactions do not exist; the boss is never invulnerable or flinched, it simply has no hurtable state outside the loops.
+
+**8. Phases** (see Stages): stage starts come from level flags 1, 5 and 10 and are read only while the boss is in the hub. One marker word (cleared at the stage start) decides when the boss stops attacking: it gets +1 for every locator used and is set to the stage number when a stun or dazed loop's HP check is at or below 5/6, 1/2 or 0. Once the marker equals the stage and the boss is next free (state 0 or 1, which includes the first tick after the recover animation), the executor runs: if the HP fraction is at or below the stage threshold it sets level flag 3 or 8 (or runs the death sequence in stage 3) and the boss goes to the hub; if it is not, the stage is set back (stage 1 to stage 0 with flag 0xF set and flag 1 cleared; stage 2 to stage 1 with flag 0x10 set and flag 5 cleared; stage 3 to stage 2 with flag 0x11 set and flag 10 cleared) and the boss goes to the hub anyway. So a stage lasts until its locators are all used (1, 2 or 3 stuns, one per used locator) or until the HP threshold is reached, and every stage that ends on the locators without the HP threshold is replayed: the script respawns that stage's Tentacles, the player kills them again, and the stage starts again with the HP the boss still has. The hub lowers the boss (action 6, 132 ticks) and holds it (action 7) until the next stage-start flag. Nothing else resets on a phase change except the marker; the cooldown ranges follow the stage.
+
+**9. Arena hand-offs.** The level raises flags 1, 5 and 10 (stage starts) and 0x12 (finale release). A stage start is raised only after the stage's Tentacles are dead (Minion AI: Tentacles), so the boss waits in its hub for the player to kill them. The boss raises flags 2, 6, 7, 0xB, 0xC and 0xD (locator uses), 3 and 8 (stage complete) and 0xE (death), and, on a set-back, 0xF, 0x10 or 0x11 (and it clears flag 1, 5 or 10) (see Stages and Stage events; SPEC-0045). The script answers 0xF, 0x10 and 0x11 by re-arming that stage: it clears the stage's locator flags (2; 6 and 7; 0xB, 0xC and 0xD) and respawns the stage's Tentacles, and it raises the stage-start flag again when they are dead (no intro scene the second time).
+
+**10. Death.** On a stun-loop, dazed-loop or stage-3 HP fraction of 0 or less, run the death sequence. The damage that takes the HP to 0 (a damage at or above the current HP leaves exactly 0, never a negative value) also makes the shared character code put the boss into its dead base state, so from the next tick the controller is no longer stepped: states 6 and 7 never run, no action 7 is requested and level flag 0x12 is never read. Until the level script takes over, the shared update requests action 58 every tick; the boss has no clip for it, so the lookup miss plays clip 0 (the free-state loop of action 2) and the boss stays standing and visible, not buried (Medium-High). The outro then plays the boss's action 0 itself and deactivates it. HP is 1 afterwards (the sequence sets it after the damage). The sequence's 10000 damage reaches every other living, non-townsfolk character without a dead test (a dead one is hit again; nothing visible changes).
+
+**11. Easy mistakes.**
+- The approach turns the boss once; the head lands about 35 units along that line, not on the hero's later position.
+- "Done" is a progress gate read before the tick's animation pass: a one-shot clip of F keys at 0.5 keys per tick is done on request tick + 2F - 1 (request tick + 2F - 2 when F is 50 or more), not after F or 2F ticks.
+- Stage events run on every window tick until used, and the locator range test is horizontal.
+- The stun counter is drawn once per slam and survives count checks; the dazed timer is 300 ticks and ends early on an HP exit.
+- Percent rolls are 0 to 100 inclusive (101 values); distances are horizontal; the cooldown keeps running during attacks.
+- In Act 3 a failed slam roll, or a distance outside the slam band, falls through to the spit roll in the same tick.
+- The marker word counts locator uses AND records the HP exit: do not give the locator count its own variable (item 8).
+- The executor runs before the state handler: the tick on which the boss is next free with the marker equal to the stage, it goes to the hub and the free-state handler (action 2) never runs.
+
+**Edge cases for implementers** (each one settled; the number in brackets is the confidence).
+1. **Set-back is common.** The marker equals the stage as soon as the stage's last locator is used (stage 1: after 1 use; stage 2: after 2; stage 3: after 3), whatever the HP. The boss then finishes the current slam, stun or dazed loop and recover, and the executor tests the HP: at or below the threshold it completes the stage, otherwise it sets the stage back (item 8). With 190 HP in Act 1, stage 1 needs the boss at 158 or less by the end of the one stun that follows the first locator use, or the stage is replayed with the same HP. In stage 2 the first locator use does not end the stage (marker 1, stage 2): the boss goes back to attacking and the second locator use ends it; an HP exit at any time sets the marker to the stage at once. [High]
+2. **Executor tick.** The tick after a recover animation ends, or the tick after a dazed-loop HP exit, the boss is in state 1; the executor of the next tick finds the marker equal to the stage, changes the state to the hub before the handlers run, and the hub handler requests action 6 on that same tick. The state-1 handler never runs in between. [High]
+3. **Slam push.** The push uses the selected hero's own forward direction, not the boss's: the hero's velocity is set to 5.0 x normalise(-9 x f + (0, 12, 0)) with f the hero's horizontal forward unit vector, which is a horizontal speed of 3.0 backwards from where the hero faces and 4.0 upwards, and the hero is written to the long-fall state 48 (SPEC-0033, Behavior 9B). A hero facing the boss flies away from it; a hero facing away flies back toward it. [High]
+4. **Slam hit rules.** The take-hit receives 25, the boss as attacker and blocked flag 0: a guarding hero is not protected; a hero that is busy (charging, power step) loses 25 HP, keeps its state for the reaction but is still pushed into state 48; a hero that is already dead (state 16) takes nothing but is still pushed. A killing slam runs the hero's death handler first and the push then writes state 48 over the death state, which is the same call order as a normal hit (Medium; rewrite choice: skip the push when the hero's health is 0). The hero's hit state 17 is written first and replaced by the push in the same call. [High; Medium for the killing case]
+5. **Who is the target.** Every distance, turn, slam, spit and counted hit uses the hero that is selected at that tick. A hero swap mid-fight retargets the next tick; the slam's one-hit latch and the spit's release latch are not reset. The boss never tests whether the hero is alive, reachable, on the mesh or in line of sight. [High]
+6. **Counted hits with no damage.** The stun-loop hit counts whenever the hero's attack window is open and the weapon touches a capsule; an unarmed hero or a zero-damage swing therefore counts as a hit worth 0 HP, uses up one of the 3 counted hits and starts the 54-tick count check. [High]
+7. **One count per swing in practice.** The stun test has no hit list, but a counted hit puts the boss into the 54-tick count check, longer than any hero attack window, so a single swing never counts twice. A held attack that opens a new window after the check can count again. [Medium-High]
+8. **Dazed loop is a Roberta fight.** The helper reads only the hero's six shot slots; Tor has none that are ever armed, and the Mote objects, swings and petpet attacks never reach this boss. In Act 3 the boss can be hurt only by Roberta's shots that touch the mouth cylinder inside the 0.9 cone while the dazed timer runs (or while the loop is counting); a shot that touches the mouth zone at any other time (including every shot in Act 1, outside the cone, or in the free states) bounces back reversed with a random spread. [High for the slots; Medium-High for the Tor conclusion]
+9. **Counted damage.** Stun loop: trunc(4 x trunc(melee damage)), melee damage per SPEC-0036 with defence 0 and no Mote or magic cost paid. Dazed loop: for each counted slot the hero shot rule of SPEC-0036 (the larger of 0 and S x C x T minus the boss's defence, which is 0), truncated per slot, summed, subtracted once per tick; a slot with a positive result also sets the boss name panel; the slot is disarmed on every counted contact, even for 0 damage. [High]
+10. **HP exit.** Both loops compare current HP / max HP (single precision) with the threshold after every damage step: the stun loop leaves for recover only when the fraction is at or below the threshold, the dazed loop checks it on every tick even without damage. Damage never takes HP below 0. [High]
+11. **Death halts the controller.** See item 10 of this guide: after the killing blow nothing of the controller runs again; only the level script's calls move the boss. A clean build can end the controller thread on the death tick. [Medium-High]
+12. **Spit shape.** The spit is a sphere of radius 1.0 launched from the mouth bone point at the selected hero's feet position as it is on the release tick; gravity is 32 / 3600 per tick squared; the projectile ends at the ground, a wall, a hit, or when the boss stops existing; the pool holds 10 shots for all enemies and a launch with no free slot is silently lost (the cycle still counts). A hero in Roberta's spin, leap or landing is not hit. [High; Medium-High for the full pool]
+13. **Reload clip.** Between spit cycles the reload action (22) is requested on the tick a cycle ends and replaced by the next shoot action on the following tick, so it shows for one pass only; the cycle length is 50 ticks. [High]
+14. **Locator tests are level flags.** A locator is used only if its level flag is clear; the script clears the flags on a set-back. A stage re-entered without that clear would find the locator spent and never stun again. [High]
+15. **Scripted control.** While the level script has the boss in script control (the intro, the stage scenes that grab it, the outro) the controller is not stepped; the first step after the release finds action 7 current and the hub waits. [Medium-High]
+16. **No speed changes.** No status or effect changes this boss's clip rate; every duration in this guide is exact. [Medium-High]
+
+**Hero actions against this boss** (selected hero; Act 1 spit flag clear, Act 3 spit flag set).
+
+| Hero action | What it does to the boss | When |
+| --- | --- | --- |
+| Melee swing (any combo hit, either hero) | Nothing, except in the stun loop (Act 1): counts as a hit worth 4 x trunc(melee damage) | Hero attack window open, weapon within the 65-unit gate and touching one of the 19 hurt capsules, boss in sub-step 2 with the stun counter above 0 |
+| Tor power attack (charged melee with a Mote) | Same as a swing; its power factor is part of the melee damage; no status is applied to the boss | Same |
+| Roberta quick shot, full release, rock | Passes through the body; bounces off the mouth cylinder; counts in the dazed loop (Act 3) | Dazed loop: mouth cylinder, inside the 0.9 cone; elsewhere bounce |
+| Mote spell objects, charm attacks, petpet attacks | Nothing: the boss is excluded from every hero hit scan | Always |
+| Guard (shield up) | Does not reduce the slam (25 raw); reduces the spit (blocked: max(1, 0.25 x damage) after shield and armour, if the hero faces the shot) | Spit blocking needs the dot product of the shot direction and the hero's forward below 0 |
+| Dodge, roll, parry | None exist for either hero; jumping does not avoid the slam (horizontal test); leaving the aimed line (before the strike window) or the 12.4 to 42.0 band avoids it | The slam is aimed once at the approach start |
+| Shield Mote reflection | Never reflects the spit (kind 1 is not reflectable) | Always |
+| Items, healing | No effect on the boss | Always |
+| Standing on the stunned boss's blocker shapes | The hero is pushed out of the box and the head cylinder | Each stun tick (and the head cylinder on each dazed tick) |
+
+### Minion AI: Tentacles (pack 1217)
+
+The Juppie boss spawns nothing itself. The only minions of the fight are the Tentacle characters that the level script places (SPEC-0045, module 1217). They are ordinary common enemies (SPEC-0038 holds the rules; this section gives the numbers). All times are ticks at 60 per second; s is the tick on which a state first requests an animation. Confidence: High for the row, the clip data and the swing arithmetic; Medium-High for the hide cycle and the stage gating; Medium for the duplicate bodies.
+
+**Who they are.** Entities 0, 1 and 2 of the pack are three Tentacle records in the pack's own character region (monster type 98, variant 0, monster row 239, behavior class 17). The region has one clip set of 30 clips and a 166-entry action table; all three records use the same set and table. Row values: 18 hit points, body radius 2.0, height 3.0, approach routine 1 (rush), attack-manager weight 8, hostile, awareness 100 % with a 30-tick awareness timer (one notice test every 32 ticks), view cosine 0.0, notice band 5 to 40 units (90 % at 5, 25 % at 40), death disappear timer 200. Spawn record: default state word 8 (hide at home), emerge trigger distance 200, emerge selector 0 (action 10), alarm group none for entity 0 and group 2 for entities 1 and 2.
+
+**Spawns, counts and respawn.**
+- The script places them: spawn 1 = entity 0 at locator 13 (every intro); spawn 2 = entities 0 and 1 at locators 14 and 15 when the boss raises level flag 3; spawn 3 = entities 0, 1 and 2 at locators 16, 17 and 18 when it raises flag 8. A placement is a forced bind of a fresh full-health body (it also clears the record's kill mark), a move to the locator, and SetAI_Agro. So a Tentacle killed in an earlier stage returns in the next one. One that is still alive is not removed: its record is bound a second time into a free cell (the block holds at most 6 active characters) at the record's authored point (-0.35, 3.61, 4.23), runs its own AI, and the script's move and agro calls reach the first body (SPEC-0045; Medium).
+- Counts in a run with no set-back: 1, then 2, then 3 bodies. Each set-back (Stages) raises level flag 0xF, 0x10 or 0x11 and the script reruns that stage's spawn: a replayed stage 1 places entity 0 again at locator 13, a replayed stage 2 places entities 0 and 1 again at locators 14 and 15, a replayed stage 3 places entities 0, 1 and 2 again at locators 16 to 18. The bodies of the earlier placement had to be killed to start the stage, so a rerun normally finds them dead and places fresh ones; a body that is still alive when its spawn reruns is bound a second time as described above (Medium). Nothing else spawns Tentacles.
+- **The Tentacles gate the boss.** Juppie stays in its hub until the script sees the current Tentacles dead: stage 1 starts (flag 1) after entity 0 dies; stage 2 starts (flag 5) after entities 0 and 1 are both dead (spawn 2 only happens after the boss has reached its stage-1 threshold); stage 3 starts (flag 10) after entities 0, 1 and 2 are all dead (SPEC-0045, Fight monitor, including its scene delays). Nothing times out: a Tentacle that is never killed holds the fight. "Dead" is the first tick of the death state, not the end of the corpse.
+
+**Action ids with a clip** (clip, keys, speed byte; every clip plays at 0.25 keys per tick, 4 ticks per key, except where the speed byte is 1: 2 ticks per key). Ids not listed have no clip. The attack phase ids are checked against the table and skipped when missing (SPEC-0038 Behavior 13); every other missing id plays clip 0 of the set.
+- Locomotion: 21 rush walk (clip 18, 21 keys, loop, forward 7.1 units per second = 0.118 per tick); 22 rush hold (clip 15, 36 keys, speed byte 1, loop); 23 back-off (clip 12, 12 keys, loop, backward 23.9 units per second = 0.40 per tick); 2 and 4 walk (clip 16, 21 keys, loop, 7.2 per second); 0 idle (clip 3, 21 keys, loop); 125 walk home (clip 19, 20 keys, loop, 20.3 per second).
+- Hide cycle: 9 hide pick (clip 5, 1 key); 10 emerge (clip 17, 40 keys, one-shot, gate at s + 156); 81 sink (clip 4, 23 keys, gate s + 89); 82 rise (clip 1, 25 keys, gate s + 96).
+- Attacks (slot k, phases A..E = ids 33 + 5k to 37 + 5k): slot 0 has B = 34 (clip 14, 30 keys) and D = 36 (clip 8, 22 keys); slot 1 has B = 39 (clip 6, 18 keys) and D = 41 (clip 8); slot 2 has B = 44 (clip 23, 23 keys) only. Every A, C and E is missing, slot 2 has no D, and slot 3 is unused. So a swing has no wind-up and no recovery clip: the strike clip starts on the first tick and the end path runs the tick after the clip passes its gate.
+- Reactions: 57 hit reaction (clip 2, 25 keys, gate s + 96); 55 melee dodge (clip 24, 15 keys, gate s + 57, backward 11.3 per second); 53 and 54 missile dodge (clip 4, 23 keys, gate s + 89); 58 death (clip 9, 25 keys, gate s + 96, progress 0.95 at s + 92). Missing: 56 block, 60 and 61 stun, 64, 17 and 18 search.
+
+**State table** (R = 1.0 outside the attack states):
+
+| State | Action | Ticks and motion | Exit |
+| --- | --- | --- | --- |
+| Hide at home (class state 8) | 9 | Held; no steering | Hero within 200 (times the band factor): emerge |
+| Emerge (8, sub-steps 1 and 2) | 10 | Gate at s + 156 | Agro (19) |
+| Alerted search (2, after SetAI_Agro) | 18 missing: clip 0 plays | Notice test once every 32 ticks (first at about tick 31); on a pass, with no clip for 18, agro at once | Agro |
+| Agro set-up (outer 0) | idle pick | 1 tick | Rush (outer 1) from the next tick |
+| Rush walk (outer 1, inner 0) | 21 | 0.118 per tick toward the hero (route steering, SPEC-0056) | Distance below the drawn desired distance (3 + 12 f, f from 0.20 to 0.80: 5.4 to 12.6): hold |
+| Rush hold (inner 1) | 22 | Faces the hero (turn blend 1.0 per tick) | Distance below 3.0: back off; above 15.0: walk |
+| Back off (inner 2) | 23 | 0.40 per tick toward the point 17 units from the hero along the hero-to-Tentacle line | Distance above the desired distance: hold |
+| Swing (outer 2) | slot table below | R = 2.0 in the sequencer's states 1, 2 and 5; R = 1.0 in state 3 (after a hit) and state 4 | End path: recovery 0 (both attack timer words are 0), then outer 0 |
+| Hit reaction (outer 10, kind 0) | 57 | 96 ticks; every further hit restarts the clip | Outer 0 |
+| Retreat (class state 14) | 81, then 125, then 82 | Phase 0 sink 89 ticks; phase 1 walk home (at its post it is already home and goes straight on); phase 2 rise 96 ticks | Hero within 20: agro; else the default state (hide, then emerge again) |
+| Dead | 58 | One play; the disappear countdown (200) starts at progress 0.95 (s + 92), so the body is released about 293 ticks after the death tick | Removed |
+
+**Attack chooser** (every agro tick while the hero is attackable and the recovery counter is 0; slots are tested k = 3, 2, 1, 0 and the first to pass wins; a roll is an integer 1 to 100 that must be below the chance, so chance 50 is 49 in 100 per tick and 25 is 24 in 100; SPEC-0038 Behavior 7):
+
+| k | Band (strict) | Chance per tick | Facing cosine above | Melee range | Cooldown draw (ticks, set at the choice and again at the end path) | Damage | Knockback |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| 3 | none (band 0 to 0) | never | | | | | |
+| 2 | 3 to 13 | 24 % | 0.0 | 6.0 | 0 to 60 | 10 | 15 |
+| 1 | 3 to 10 | 49 % | 0.0 | 4.0 | 0 to 45 | 10 | 3 |
+| 0 | 3 to 17 | 49 % | 0.9239 | 5.0 | 5 to 45 | 10 | 0 |
+
+If the distance is above the slot's melee range the sequencer starts in state 0 and walks (id 21) until within range, then goes on at once when both the hero and the Tentacle are on the walk mesh; otherwise it turns toward the hero (blend 0.1) until the facing cosine is at least 0.95. Damage goes through the shared enemy chain (SPEC-0029 Behavior 10.5), so a guarding hero's shield and armour apply; a block plays D (slot 0 or 1: clip 8, 22 keys, 85 ticks at R = 1.0) and then the end path.
+
+**Hide gate (the rule a port forgets).** While the Tentacle is in the rush outer sub-state, every tick the hero is farther than 8.0 and a 0 to 100 roll is below 100 (100 in 101) sends it to the retreat state. So a Tentacle only fights while the hero is within 8.0 units. When the hero is farther it sinks (81), rises (82) or emerges (10) in a cycle of roughly 90 to 250 ticks and does not chase; the cycle repeats until the hero comes within 8.0 (Medium: the composition of phase 1 with the hide state). Entities 1 and 2 share alarm group 2: when one of them enters agro, the other, if it is hiding in the hide state, plays its emerge clip 10 and then enters agro whatever the distance, and if it is sinking it goes to the alerted search (SPEC-0038 Behavior 3).
+
+**Hit windows** (the hero is assumed inside the strike volume; weapon volumes are radius 2.0, length 1.5 on every weapon, all five event bits set together on these clips; the hit list allows one hit per window):
+
+| Slot | Strike frames | Window ticks after s | First hit at | If no contact: gate and end path | After a hit (rest of the swing at R = 1.0): gate and end path |
+| --- | --- | --- | --- | --- | --- |
+| 0 | 9 to 14 of 30 | 18 to 29 | s + 18 | s + 59, s + 60 | s + 97, s + 98 |
+| 1 | 6 to 8 of 18 | 12 to 17 | s + 12 | s + 35, s + 36 | s + 56, s + 57 |
+| 2 | 4 to 7 of 23 | 8 to 15 | s + 8 | s + 45, s + 46 | s + 80, s + 81 |
+
+One hit per swing: the single window re-arms nothing. The strike speed word is 2.0 on all three slots, so the strike plays at 0.5 keys per tick until the hit; the follow-through state then runs at 1.0, which is why a swing that connects lasts longer than one that misses.
+
+**Hurt side.** 18 hit points. The first hit on a Tentacle that is not in agro is doubled and puts it in agro. Melee defence (once per hero swing, only when the Tentacle's defence hold is 0, the hero is within 8.0 and in front): block chance 0; dodge chance 20, 20 and 10 for the hero's quick, normal and heavy swings (19, 19 and 9 in 100), which plays 55 (57 ticks) and is then barred from defending for 0 to 120 ticks. Hero shots whose path meets the body within 60 ticks are dodged in 99 of 100 cases (53 or 54, 89 ticks). Slot 1 is also the counter-attack slot: during a hit reaction it starts with chance 10 per tick (10 in 101). With starting gear the attack manager lets one attacker swing at a time (weight 8 each; capacity 0), so extra Tentacles wait in line.
+
+**Timeline test vector** (tick 0 = the tick the script calls SetAI_Agro; hero standing still, line of sight clear):
+- Far hero. Hero at the Act 1 intro point, 15.0 units from the spawn-1 body at locator 13. Tick 0: state 2. About tick 31 and every 32 ticks after: notice passes with probability 0.71 (chance 90 - 65 x 10 / 35 = 71.4). On the pass tick the Tentacle enters agro; the next tick outer 0 becomes outer 1; the tick after, the hide gate fires (99 %): it sinks for 89 ticks (81), then rises for 96 (82) or emerges for 156 (10), and repeats. Earliest sink request at about tick 33. No attack happens.
+- Near hero. Hero 4.0 units in front, facing within 18 degrees. Notice passes at about tick 31 (4.0 is inside the near edge, so it passes whenever the awareness roll of 100 % does). Agro from tick 32 (outer 0), rush from tick 33, first choice on tick 33: per tick k = 2 24 %, then k = 1 49 %, then k = 0 49 %, so the first swing starts within a few ticks (probability of no choice in a tick is 0.76 x 0.51 x 0.51 = 0.20). With s the first tick of state 1 (the tick after the choice when the Tentacle is within the slot's melee range): slot 2 hits at s + 8 (10 damage, knockback 15), slot 1 at s + 12 (knockback 3), slot 0 at s + 18 (knockback 0). The end path of a swing that connected runs at s + 81 (slot 2), s + 57 (slot 1) or s + 98 (slot 0); the next choice may follow the next tick (recovery 0), limited only by the slot cooldowns (other slots start at 0). About 60 to 100 ticks per swing, so at most one hit per 1.3 to 1.7 seconds from one Tentacle.
+
+**Edge cases for implementers (Tentacles and the stage gate).**
+1. A stage start waits for more than the Tentacle deaths: in stages 2 and 3 the script also waits until the stage's main records have finished their own closing step (at least 0.4 s plus their animation), and in Act 1 the first start of each stage plays a short scene first (SPEC-0045, Fight controller). The flag is therefore raised some time after the last Tentacle dies, not on the same tick (Medium; the waits are in SPEC-0045).
+2. After a set-back the same stage's Tentacles are placed again (fresh bodies at full health, same locators) and the stage starts again only when they are dead; killing the earlier bodies is not enough. No scene plays the second time.
+3. The boss's own death sequence (10000 damage to every living non-townsfolk character) kills any Tentacle still alive, through the common death path.
+4. A Tentacle never leaves the arena ring on its own: it fights only within 8.0 of the hero and otherwise sinks, rises and emerges in place, so the player has to walk to it (the hide gate above).
+5. The hero's melee, shots and Mote objects hurt a Tentacle as a normal class-17 enemy (SPEC-0036 and SPEC-0038 apply); unlike the boss, a Tentacle is on the hero's hit lists.
+
+**Open.** The exact order of the forced bind's think-loop start and SetAI_Agro (if the start step ran second it would replace the alerted search by the hide state, and the Tentacle would emerge by action 10 and reach agro 156 ticks later instead; Medium). Whether a second body of an entity is visible on screen (SPEC-0045).
 
 ## Where it lives on the disc
 
 - The tuning values are 32-bit words in the boot program's data. The clean side reads them at runtime from the boot executable by virtual address (SPEC-0001 gives the fingerprint). File offset = virtual address - 0xFFF80.
 - All addresses below are in the 0x2DAF50 to 0x2DAFF0 range of the boot program's data.
 - Locator objects with ids 101 to 106 (0x65 to 0x6A) are placed by the level (SPEC-0006). Stage events post their script events at these locators.
-- "Animation n" means entry n of the boss's own animation table (SPEC-0005).
+- "Action n" means entry n of the boss's action table, which maps to a body-clip entry (SPEC-0005); the action number and clip-entry index are not interchangeable.
 - "Distance" is the horizontal distance between the boss and the hero, in world units (see Cross-boss facts in SPEC-0014).
 - "Post script event n" means set level flag n (SPEC-0014, cross-boss facts).
 - Action-frame (attack-active) queries. Every non-hero boss is an AI-controlled character (only three character method tables exist: base, hero and AI-controlled character). When a boss asks the action-frame query of itself, the answer is true when any of animation event bits 0x1 to 0x10 is set on its current frame. When it asks the same query of the hero, the answer is the hero's attack-active word (event bit 0x1 of the hero's current frame, SPEC-0036). High. The boss's can-act query in the slam (sub-step 1) is this boss-side query (Medium for the identification).
 - "Top-level state n" is the boss's main state number. The states used here are 1 (free) and 6 (finale).
+
+### Act 1 and Act 3 character variants
+
+Act 1 uses character region 1218 and Act 3 uses 1219. Their body-animation data and skeleton definitions are identical: each has 18 body clips on a 41-bone rig, and the paired animation and skeleton chunks match byte for byte. Their model-bearing data differs, so use the matching region for the intended appearance. Controller animation requests are action IDs resolved through the character's animation table; do not treat an action ID as a type-25 clip-entry index.
+
+| Fight action ID | Body-clip entry | Frames | Fight role | Root-bone local Y | Actor root-motion record |
+|---:|---:|---:|---|---|---|
+| 2 | 0 | 88 | Ordinary free/facing | 0 throughout | Zero XYZ |
+| 3 | 9 | 64 | Dazed loop | Not summarized | Zero XYZ |
+| 5 | 2 | 79 | Stage-start emerge | −29.1009 at first key; range to +0.3928; last keys 0 | Zero XYZ |
+| 6 | 4 | 67 | Hub descent | 0 at first key, descends to −28.3731 | Zero XYZ |
+| 7 | 5 | 2 | Buried hub hold | −29.1009 at both keys | Zero XYZ |
+| 16 | 7 | 60 | Stun | Not summarized | Zero XYZ |
+| 17 | 8 | 36 | Slam recovery / dazed entry | Not summarized | Zero XYZ |
+| 18 | 6 | 39 | Head slam | Not summarized | Zero XYZ |
+| 19 | 12 | 38 | Spit pre-wait | Not summarized | Zero XYZ |
+| 20 | 13 | 25 | Spit release | Not summarized | Zero XYZ |
+| 21 | 15 | 31 | Head-slam approach | 0 throughout | Zero XYZ |
+| 22 | 16 | 12 | Spit reload / recovery | Not summarized | Zero XYZ |
+
+The actions listed with zero root-motion translation do not move the character object's mover through the root-motion sampler. The negative Y values above are animated root-bone pose translations applied under the actor's world matrix; with the Juppie's near-zero root rest position, they move the skinned model down relative to its stationary actor position. This is the authored hub burrow and stage-start rise. It does not establish the exact retail silhouette, floor clipping or camera view.
 
 ## Layout
 
@@ -32,7 +230,7 @@ Type: "f32" = IEEE single, "i32" = signed 32-bit integer.
 | Head slam: max distance | f32 | 0x2DAF54 | 50.0 | Head slam only when distance is less than this |
 | Head slam: chance | i32 % | 0x2DAF68 | 50 | |
 | Head slam: damage | i32 | 0x2DAF6C | 25 | Raw: not scaled, and not reduced by the hero's defences |
-| Head slam: stun min (`headSlamStunMin`, registered twice) | f32 s | 0x2DAF60 | 2.0 | Minimum stun wait after a landed slam |
+| Head slam: stun min (`headSlamStunMin`, registered twice) | f32 s | 0x2DAF60 | 2.0 | Minimum stun wait after a slam consumes a stage locator |
 | Head slam: stun max | f32 s | 0x2DAF64 | 5.0 | Maximum stun wait (not in the tuning list; see Edge cases) |
 | Head slam: count per stage (registered under the name `spitJuppieDamage`, which is wrong for these words) | i32 | 0x2DAFA0, 0x2DAFA4, 0x2DAFA8 | 3, 3, 3 | Stage 1, 2 and 3 values: counted hits allowed in the stun loop before recovery |
 | Spit: trigger distance | f32 | 0x2DAF70 | 100.0 | Spit only when distance is less than this |
@@ -54,7 +252,7 @@ Fixed values read at runtime, not in the tuning list:
 | Slam impact radius | f32 | 0x2DAFC8 | 7.0 | A slam hits the hero only within this horizontal distance of the impact point |
 | Slam push speed | f32 | 0x2DAF5C | 5.0 | Speed of the head-slam push on the hero (used) |
 | Locator front cone | f32 | 0x2DAFBC | 0.9 | Minimum dot product for a stage locator to be usable (see Stage events) |
-| Locator distance | f32 | 0x2DAFB8 | 10.0 | Maximum distance from the head bone to a usable stage locator |
+| Locator distance | f32 | 0x2DAFB8 | 10.0 | Maximum horizontal distance from the head bone to a usable stage locator |
 | Dazed front cone | f32 | 0x2DAFD8 | 0.9 | Minimum dot product for a counted hit in the dazed loop |
 | Dazed shape values | f32 | 0x2DAFD0, 0x2DAFD4 | 4.0, 6.0 | Size values of the mouth-area hit shape in the dazed loop |
 | Stun blocker box | f32 | 0x2DAFDC, 0x2DAFE0, 0x2DAFE4 | 4.0, 1.0, 30.0 | Full sizes of the box that blocks the hero during the stun (the box reaches half of each size from its centre) |
@@ -79,7 +277,7 @@ Registered tuning values that the behavior does not use are listed under Edge ca
 
 ### Variant: the spit flag
 
-At fight start the spit flag is set when story progress flag 0x53 is set (the Act 3 marker), or when the third word of the stun self-damage table (0x2DAFF0, value 0 on disc, never written) is nonzero. The table is indexed by the flag (0 or 1), so its third entry is otherwise never read as a multiplier. No later writer is known, so the flag is fixed for the fight. With the flag: spit attacks are possible, and a landed slam leads to the dazed loop. Without it: no spit, and a landed slam leads to the stun loop.
+At fight start the spit flag is set when story progress flag 0x53 is set (the Act 3 marker), or when the third word of the stun self-damage table (0x2DAFF0, value 0 on disc, never written) is nonzero. The table is indexed by the flag (0 or 1), so its third entry is otherwise never read as a multiplier. No later writer is known, so the flag is fixed for the fight. With the flag: spit attacks are possible, and a locator-consuming slam leads to the dazed loop. Without it: no spit, and a locator-consuming slam leads to the stun loop.
 
 ### Stages
 
@@ -93,35 +291,40 @@ The boss has a stage value (1, 2, 3, or 0 for dormant). Stage 0 is dormant: the 
 
 When a flag moves it to a stage, the boss enters a short stage-start state (it turns to face the hero at rate 1.0 and plays animation 5), then returns to free. The stage-complete marker is cleared at the same time.
 
-**Stage-complete marker**: while set, the marker holds the stage number (1, 2 or 3), not just a yes or no. Cleared means no stage is marked.
+**Stage-complete marker**: one integer word with three writers. The stage start sets it to 0. Every locator use (Stage events) adds 1 to it. A stun-loop or dazed-loop HP exit sets it to the stage number (1, 2 or 3). The stage counts as complete (ready for the stage rules) exactly when the word equals the stage number. Because the stage has 1, 2 or 3 locators and each can be used once, the word cannot pass the stage number through uses alone: stage 1 is complete after 1 use, stage 2 after 2 uses, stage 3 after 3 uses, or earlier through an HP exit.
+**Stage complete**: the stage is complete when the marker equals the stage number (by locator uses, by an HP exit, or both). The attack chooser runs only while it is not. Once the boss is free (state 0 or 1) with the stage complete, the executor runs, and the stage rules decide by the HP fraction f (current HP / max HP) at that moment, not by how the stage became complete:
 
-**Stage complete**: the stage is marked complete when, during the stun loop or the dazed loop, the HP fraction f (current HP / max HP) is at or below the stage threshold. The attack chooser runs only while the stage is not complete. Once the boss is free with the stage complete, the stage rules run:
+- **Stage 1**: if f <= 5/6, set level flag 3 and return to the hub. Otherwise (the locator was used but the HP threshold was not reached): the marker and the stage go to 0, level flag 0xF is set, level flag 1 is cleared, and the boss returns to the hub.
+- **Stage 2**: if f <= 0.5, set level flag 8 and return to the hub. Otherwise (both locators were used but the HP threshold was not reached): the marker goes to 0 and the stage back to 1, level flag 0x10 is set, level flag 5 is cleared, and the boss returns to the hub to wait for the stage-start flag again.
+- **Stage 3**: if f <= 0, run the death sequence (below). Otherwise (all three locators were used but the boss is still alive): the marker goes to 0 and the stage back to 2, level flag 0x11 is set, level flag 10 is cleared, and the boss returns to the hub.
 
-- **Stage 1**: if f <= 5/6, set level flag 3 and return to the hub. Otherwise (HP rose above the threshold): the stage goes back to 0, level flag 0xF is set, level flag 1 is cleared, and the boss returns to the hub.
-- **Stage 2**: if f <= 0.5, set level flag 8 and return to the hub. Otherwise (HP rose above the threshold): the stage goes back to 1, level flag 0x10 is set, level flag 5 is cleared, and the boss returns to the hub to wait for the stage-start flag again.
-- **Stage 3**: if f <= 0, run the death sequence (below). Otherwise (HP rose above the threshold): the stage goes back to 2, level flag 0x11 is set, level flag 10 is cleared, and the boss returns to the hub.
-
-So a set-back means: replay the stage. The flag that started it is cleared, the flag of the set-back (0xF, 0x10 or 0x11) tells the level to re-arm that stage's locators, and the boss waits in the hub until the stage-start flag is raised again. A set-back is reachable only when HP rises above the threshold after the stage-complete marker was set. Nothing in the shipped game raises the Juppie's HP: the marker is set with the same threshold that the stage rule tests (5/6, 1/2, 0), the boss's own code only subtracts, the Juppie's level module writes no hit points, and the heal spell of the common enemies needs a Minion Wizard that this arena never holds. So the three set-back branches are unreachable in play (Medium-High; Open question "Stage numbering semantics").
+So a set-back means: replay the stage. The flag that started it is cleared, the flag of the set-back (0xF, 0x10 or 0x11) tells the level to re-arm that stage's locators, and the boss waits in the hub until the stage-start flag is raised again. A set-back happens whenever the last locator of the stage was used and the HP threshold was not reached by the time the boss is next free: the boss's HP is not changed (it keeps whatever damage the player has done), only the stage structure repeats. The HP exit alone can never produce a set-back, because it sets the marker only when the same threshold is met. The three set-back branches are therefore part of normal play (High). In Act 1 with 190 HP the thresholds are 158 and 95; in Act 3 with 400 HP they are 333 and 200. The level script answers each set-back by clearing that stage's locator flags and respawning its Tentacles (SPEC-0045).
 
 ### Death sequence
 
 Used by the stun loop, the dazed loop and the stage-3 rule when the HP fraction is 0 or less. In this order:
 
 1. Set level flag 0xE.
-2. Every other living character in the world's character table whose townsfolk flag is clear takes 10000 damage. Townsfolk (characters whose default behaviour class is 6, with the townsfolk flag set; SPEC-0056) are spared. The boss itself is not hit by this rule, and characters that are already dead are skipped (High).
+2. Every other living character in the world's character table whose townsfolk flag is clear takes 10000 damage. Townsfolk (characters whose default behaviour class is 6, with the townsfolk flag set; SPEC-0056) are spared. The boss itself is not hit by this rule. The rule has no dead test: a character that is already dead is hit again, which changes nothing visible (High).
 3. Set the boss's HP to 1.
-4. Set the boss's top-level state to 6 (finale). The finale hold then plays animation 7 (see States).
+4. Set the boss's top-level state to 6 (finale). Nothing of the controller runs after this: the damage that took the HP to 0 already put the boss into the shared dead base state, in which the controller is not stepped (Build guide, item 10), so the finale hold never plays animation 7 (Medium-High).
 
 ### Stage events (locators)
 
 Each stage has locators, each with its own level flag. Stage 1: locator 101 (flag 2). Stage 2: locator 102 (flag 6) and locator 103 (flag 7). Stage 3: locators 104, 105 and 106 (flags 0xB, 0xC and 0xD).
 
-- During the slam's animation (before impact), the stage events run once per slam. For each locator of the current stage whose flag is clear, the locator is usable when both tests pass:
+- The stage events are called from the strike of the head slam (sub-step 1), on every window tick, until a locator has been used in this slam or the hero has been struck by it; after either, they are not called again in that slam. On each call, for each locator of the current stage whose flag is clear, the locator is usable when both tests pass:
   - the horizontal unit direction from the boss to the locator, dotted with the boss's forward direction, is above 0.9;
-  - the distance from the boss's head point (skeleton bone 15) to the locator is below 10.0.
-- A usable locator is used once: its flag is set, its script event is posted there (the level's scripts decide what spawns at that locator), and the boss's use counter goes up by one. A use is reported to the slam, which sets the once-per-slam latch. The stage's locators are tried in order and each is skipped while its flag is set. Stage 1 tries locator 101. Stage 2 tries locator 102, then locator 103. Stage 3 tries 104, then 105, then 106. At most one locator is used per call.
+  - the horizontal distance (the vertical difference is ignored) from the boss's head point (skeleton bone 15) to the locator is below 10.0. The stage locators lie 12.5 to 15.2 units above the ground (Act 1 positions below), so only the horizontal reading can pass for a head point at about 5 to 13 units.
+- A usable locator is used once: its flag is set, its script event is posted there (the level's scripts decide what spawns at that locator), and the marker word goes up by one (the same word as the stage-complete marker; Stages). A use is reported to the slam, which sets the once-per-slam latch. The stage's locators are tried in order and each is skipped while its flag is set. Stage 1 tries locator 101. Stage 2 tries locator 102, then locator 103. Stage 3 tries 104, then 105, then 106. At most one locator is used per call.
 
-A locator is used only when its flag is clear. The test is called only from the slam's stage events. The use counter is not checked by the slam itself; the slam only uses the reported use (Medium on the spawn meaning).
+A locator is used only when its flag is clear. The test is called only from the slam's stage events.
+
+Locator positions (x, z, height; the boss stands at x 4.311, z 25.921 in Act 1) with the horizontal distance and unit direction from the boss: 101 at (-1.44, 2.83, 14.4), 23.79, (-0.242, -0.970); 102 at (6.35, -5.09, 15.0), 31.08, (0.065, -0.998); 103 at (-15.71, 3.23, 15.2), 30.26, (-0.662, -0.750); 104 at (17.90, 2.00, 15.2), 27.51, (0.494, -0.869); 105 at (-6.16, -4.06, 12.6), 31.75, (-0.330, -0.944); 106 at (7.67, 5.67, 15.2), 20.52, (0.164, -0.986). A locator passes the front test when the boss faces within 25.8 degrees of its direction. With the boss facing straight at a locator at distance L, the head point (reach 19.4 to 35.0 during the window) passes the range test when L is within 10 units of the reach. The first slam of the fight against a hero standing at the intro position (20.04 away, unit direction (-0.215, -0.977)) faces within about 1 degree of locator 101, which is therefore used on the first window tick. The slam itself only uses the reported use; the added count is read by the chooser and the executor as the stage-complete marker (Stages), which is what ends a stage after its last locator (High; Medium on the spawn meaning).
+
+### Arena and Tentacle staging
+
+The Act 1 Juppie actor is placed at (4.311, 1.9105, 25.9214), facing approximately (-0.0734, 0, -0.9973). The Act 1 intro ends with Tor at locator 90, (0, 0, 6.349), about 20.04 horizontal units from the boss. Pack 1217 places Tentacles at locators 13 to 18, not Juppies. Those locators are at y=0 and all use +Z facing. Their horizontal distances from the boss's authored position are: 13: 32.854; 14: 42.127; 15: 35.982; 16: 24.147; 17: 45.621; 18: 25.613 units. The stage-2 pair (14,15) is 16.397 units apart. Stage-3 pair distances are 16–17: 24.524, 16–18: 31.939, and 17–18: 39.271. These are x/z straight-line distances; the spawn calls request ground probing, so the final character heights and route connectivity are not implied by the stored y values. The locators share +Z facing and are not radially oriented toward the boss.
 
 ### Attack decision (cadence)
 
@@ -139,32 +342,80 @@ The cooldown is drawn at the start of each decision cycle only. The head-slam ro
 
 ### Start of the fight
 
-When the boss's controller starts (the moment the Juppie's character is activated in its region), it sets the boss's top-level state to the hub (2) and the stage to 0, and requests animation 7 once before its first tick (High; the request is the same animation request that every later animation change uses). The hub's animation rule is: if the current animation is 7, do nothing; otherwise, if it is not 6, request 6; if it is 6 and 6 has finished (progress at least 0.99), request 7. So at the start of a fight the boss is already in animation 7 and the hub's animation 6 never plays; animation 6 plays only when the boss returns to the hub from another animation (after an attack ends, for example). No other animation request before the controller's own is known: the class switch only starts the controller, and the spawn record carries no animation field (Medium); the level script's own animation calls during the intro (SPEC-0045) end with 6 and then 7 before the boss is released, which agrees with this rule (Medium-High for the sequence with the intro, High for the controller's own request).
+When the boss's controller starts (the moment the Juppie's character is activated in its region), it sets the boss's top-level state to the hub (2) and the stage to 0, and requests action 7 once before its first tick (High; the request is the same animation request that every later animation change uses). The hub's animation rule is: if the current action is 7, do nothing; otherwise, if it is not 6, request 6; if it is 6 and 6 has finished (progress at least 0.99), request 7. Action 6 descends the skinned model and action 7 holds it in the buried pose; at fight activation action 7 is already current, so the initial hub skips the descent clip. After a stage-complete transition returns the boss to the hub from a visible attack/recovery pose, the hub plays action 6 and then holds on 7. When a stage-start flag arrives, state 3 plays action 5 to raise the model and returns to state 1/action 2. The stage-start action begins at the same root-bone Y as action 7's hold. Both attack recoveries return to state 1. State 0 requests action 7, but is not the ordinary free/facing state. The shared root-motion sample scale is 0.000977 (SPEC-0005); the relevant burrow/rise movement is in the root-bone pose, not actor root-motion records. No other animation request before the controller's own is known: the class switch only starts the controller, and the spawn record carries no animation field (Medium); the level script's own animation calls during the intro (SPEC-0045) end with action 6 and then 7 before the boss is released, which agrees with this rule (Medium-High for the sequence with the intro, High for the controller's own request).
 
 ### States
 
 | State | Animations | Behavior | Ends |
 | --- | --- | --- | --- |
-| Free (decision) | 7 | Runs the cadence above | Attack chosen |
-| Free, facing | 2 | Turns toward the hero at rate 1.0 | Choice |
+| State 0 (decision eligible) | 7 | Runs the cadence above while stage is active | Attack chosen or state transition |
+| State 1 (free, facing) | 2 | Turns toward the hero at rate 1.0; runs the cadence above while stage is active | Attack chosen or state transition |
 | Hub | 6 once, then 7 (only when the current animation is neither; see Start of the fight) | Waits for stage flags | Stage flag sets the next stage |
 | Head slam | sub-steps below | Slam onto a point near the hero | See sub-steps |
 | Spit | sub-steps below | Throws the spit projectiles | See sub-steps |
 | Stage start | 5 | Turns toward the hero at rate 1.0 | Animation ends: free |
-| Finale hold | 7 | Holds (top-level state 6) | Level flag 0x12 sets the boss to the idle hold |
-| Idle hold | 0 | Holds | Never |
+| Finale hold | 7 | Top-level state 6, set by the death sequence; its handler never runs because the controller stops with the boss's death (Build guide, item 10) | Level flag 0x12 would set the idle hold, but the boss no longer reads it |
+| Idle hold | 0 | Never runs | Never |
+
+**Between attacks and stage changes.** The ordinary encounter path goes from hub state 2 to stage-start state 3/action 5, then to free/facing state 1/action 2. Both attack recoveries return to state 1. Thus the boss does not burrow between ordinary attacks. At a stage-complete threshold it returns to the hub, where action 6 lowers the skinned model and action 7 holds it below its actor root; the next stage-start action 5 raises it again. This animation sequence explains the boss disappearing and reappearing around Tentacle spawns (Medium-High). Exact retail visibility still depends on floor clipping, crossfade, scene and camera rendering, which are not established by the asset data alone.
+
+### Durations and timing (Confidence: High for the rule and the clip data; Medium for the head reach)
+
+**Clip data of the fight's actions** (regions 1218 and 1219 are identical; the character's own action table maps each id to a clip entry, and every id below has a clip). The boss never changes its play rate, so R = 1.0 and the clip speed is 0.5 keys per tick divided by the speed byte S (SPEC-0005, Playback 1a).
+
+| Action | Clip entry | Keys F | Loop | Speed byte S | Keys per tick | "Done" tick after the request tick |
+| ---: | ---: | ---: | :---: | ---: | ---: | --- |
+| 0 | 1 | 47 | no | 1 | 0.5 | not used |
+| 2 | 0 | 88 | yes | 1 | 0.5 | not used (176-tick period) |
+| 3 | 9 | 64 | yes | 1 | 0.5 | not used |
+| 5 | 2 | 79 | no | 1 | 0.5 | 156 |
+| 6 | 4 | 67 | no | 1 | 0.5 | 132 |
+| 7 | 5 | 2 | yes | 1 | 0.5 | not used |
+| 9 | 11 | 27 | no | 1 | 0.5 | 53 |
+| 16 | 7 | 60 | yes | 1 | 0.5 | not used |
+| 17 | 8 | 36 | no | 1 | 0.5 | 71 |
+| 18 | 6 | 39 | no | 1 | 0.5 | 77 |
+| 19 | 12 | 38 | no | 1 | 0.5 | not used (a 120-tick counter ends the wait) |
+| 20 | 13 | 25 | no | 1 | 0.5 | 49 (release event on key 8) |
+| 21 | 15 | 31 | no | 1 | 0.5 | 61 |
+| 22 | 16 | 12 | no | 2 | 0.25 | 45 |
+
+**The done tick.** A "when the animation ends" test in this controller is the progress gate: the current action's clip has progress (cursor plus stored fraction) / F of at least 0.99, or is flagged finished (SPEC-0005, Clip progress). It is read in the boss's think, before the animation pass of the same tick, so it sees the state left by the previous tick's pass (SPEC-0007, Order of work inside one tick). A clip requested on tick T is first sampled in the pass of tick T. For S = 1 the gate passes on T + 2F - 1 when F is under 50 and on T + 2F - 2 when F is 50 or more (progress reaches 1 - 0.5/F one tick before the finished flag). For action 22 (11 key steps at 0.25) the gate passes on T + 45, because the progress on T + 44 is 0.979. The ticks are in the last column of the table above. A handler that finds the gate passed changes the state or sub-step in that tick; the next handler runs on the following tick.
+
+**Frame events** are read from the whole part of the cursor left by the previous pass: on tick T + k the cursor is k / 2, so key f is seen on ticks T + 2f and T + 2f + 1. The slam's event bit 0x1 (keys 10 to 19) is therefore seen on ticks T + 20 to T + 39, and the spit's release bit 0x20 (key 8) is first seen on T + 16 and again on T + 17; the once-per-cycle latch makes it fire once.
+
+**Composite durations** (E is the tick on which the chooser enters the attack; the handler runs on that same tick):
+- Slam approach: ticks E to E + 61. The strike is requested on S = E + 62, its window is E + 82 to E + 101, and it is done on E + 139.
+- Slam without a latch: recover is requested on E + 140, done on E + 211, and the state-1 handler runs from E + 212 (212 ticks in all).
+- Slam with a latch, spit flag clear (stun): the stun is drawn on E + 139 as N ticks (120 to 300). The stun handler runs from E + 140; the counter is N - 1 after its first tick and reaches 0 on E + 139 + N, so there are N - 1 active ticks. Recover is requested on E + 140 + N and the state-1 handler runs from E + 212 + N (332 to 512 ticks after E).
+- A counted hit on stun tick h: count check requested on h + 1, done on h + 54; when the stun resumes, its first tick is h + 55 (the counter is decremented then, and no new draw happens). With 3 counted hits recover is requested on h + 55 of the third.
+- Slam with a latch, spit flag set (dazed): entry action 17 is requested on E + 140 and done on E + 211, which sets the timer to 300; the dazed loop runs on E + 212 to E + 511 (300 active ticks); on E + 512 the timer is 0 and the state becomes 1; the state-1 handler runs from E + 513.
+- An HP exit in the stun loop on tick h: recover is requested on h + 1 and done on h + 72, where the state becomes 1; on h + 73 the stage executor puts the boss in the hub before the handlers run, so the state-1 handler never runs and the hub handler requests action 6 on h + 73. An HP exit in the dazed loop on tick h: state 1 at once, the executor puts the boss in the hub on h + 1 and the hub handler requests action 6 on h + 1. The same applies to a slam whose last locator use did not reach the HP threshold: after the recover (stun path: the stun end then the recover; dazed path: the dazed timer end) the executor runs on the first tick of state 1 and the stage is set back.
+- Hub entry on tick X from an attack pose: action 6 is requested on X, action 7 on X + 132.
+- Stage start on tick X (gate): action 5 is requested on X, the state becomes 1 on X + 156, and the state-1 handler and the chooser first run on X + 157.
+- Spit: action 19 is requested on E and the shoot sub-step starts on E + 121. With cycle i counted from 0 the shoot action is requested on E + 121 + 50i, its projectile is spawned on E + 137 + 50i, and the cycle is done on E + 170 + 50i. After n cycles the recover action is requested on E + 121 + 50n, done on E + 166 + 50n, and the state-1 handler runs from E + 167 + 50n (n = 3: 317; n = 5: 417 ticks after E).
+
+**Slam head reach (Medium).** Derived from the slam clip's own bone data, with the actor unscaled and its forward axis the local +Z axis (the axis along which authored root motion would travel). The head point is read from the pose of the previous pass (cursor (k - 1) / 2 on tick S + k), so it lags the event bit by half a key. Horizontal distance from the boss to bone 15 along the facing, with a sideways offset of 0.25 to 1.0 units and a height of 5 to 13 above the actor origin:
+
+| Tick S + k | 19 | 20 | 21 | 22 | 23 | 24 | 25 | 26 | 27 | 28 | 29 | 30 to 39 |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Reach | 14.0 | 19.4 | 24.0 | 27.3 | 30.5 | 32.9 | 34.6 | 34.8 | 34.9 | 35.0 | 35.0 | 34.6 to 35.0 |
+
+With the hero standing on the facing line at horizontal distance D from the boss (the sideways offset is negligible against the 7.0 radius), the slam hits when some window tick has |reach - D| below about 7.0. This needs D between about 12.4 and 42.0. The tick of the hit is S + 20 for D up to 26.3, S + 21 up to 31.0, S + 22 up to 34.3, S + 23 up to 37.5, S + 24 up to 39.9 and S + 25 or later above that.
+
+Hero-hit tests and locator tests read the boss's pose of the previous pass.
 
 ### Head slam (sub-steps)
 
 Sub-step 0, approach:
 
-- Play animation 0x15 and turn toward the hero at rate 1.0 per tick.
+- On the request tick (the first tick on which the current action is not 0x15) request animation 0x15 and turn toward the hero at rate 1.0, which faces the hero exactly. The later ticks of the approach do not turn the boss, so the strike is aimed along the direction to the hero on the entry tick. The approach is done 61 ticks after the request tick (see Durations and timing).
 - When it ends: clear the slam latch, the once-per-slam latch, and the counted-hit counter of the stun loop (so each slam starts with zero counted stun hits), then go to sub-step 1.
 
 Sub-step 1, slam:
 
-- Play animation 0x12. While it runs (not yet ended), and only while the slam latch is clear and the boss's can-act query is true (event bit 0x1, on in frames 10 to 19 of the 39-frame clip; at clip speed byte 1 that is ticks 20 to 39 after the clip starts, SPEC-0005; Medium for the exact first tick):
-  - Run the stage events once per slam (see Stage events). If they report a spawn, set the once-per-slam latch.
+- Play animation 0x12. While it runs (not yet ended), and only while the slam latch is clear and the boss's can-act query is true (event bit 0x1, on in frames 10 to 19 of the 39-frame clip; at clip speed byte 1 that is ticks 20 to 39 after the clip starts, SPEC-0005; exact ticks in Durations and timing):
+  - Unless the once-per-slam latch is already set, run the stage events (see Stage events); if they report a use, set the once-per-slam latch. This call comes before the impact test on every such tick. When the impact test sets the slam latch, the rest of the window does nothing, so locators are no longer tried.
   - Find the impact point: the position of the boss's head bone (bone 15) in world space. If its horizontal distance to the hero is less than 7.0 (word 0x2DAFC8), set the slam latch, deal head-slam damage 25 (raw, unblockable) to the hero, push the hero (see Knockback), and play the shared hit flash, one-shot effect 222, detached, at the slam's stored strike point (taken to be this impact point; SPEC-0034; High for the id, Medium for the point). There is no weapon volume: the test is this distance only.
 - When it ends:
   - If the once-per-slam latch is set: draw the stun wait from 2.0 to 5.0 s (ticks 120 to 300 inclusive). This is the only draw of the stun wait for this slam. If the spit flag is set, go to sub-step 6 (dazed). Otherwise go to sub-step 2 (stun).
@@ -177,6 +428,7 @@ Sub-step 2, stun:
   - Box: centre c = B + 0.5 x |P − B|h x u, where |P − B|h is the horizontal distance from B to P, so c is the horizontal midpoint between the boss's position and its head bone, at the height of B. The values are full sizes, halved about c: 4.0 along the world up axis (2.0 above and below c), 30.0 along u (15.0 either side of c, so along the line from the boss's body to its head), and 1.0 along w = normalize(up x u) = (u.z, 0, −u.x) (0.5 either side). The box is a thin wall 4 high, 30 long and 1 thick lying along the stunned boss (High).
   - Cylinder: centre P, axis the world up axis, radius 4.0 and length 10.0 (5.0 above and below P). It is tested with the finite-cylinder overlap of SPEC-0018 against the hero's body cylinder (its radius and length from the hero's motion record), and on overlap the hero is pushed out by the overlap depth (High for the shape and sizes; Medium-High for the push).
   - The shapes go into the hero's pending contact list (SPEC-0040, pending contact shapes; the box is tag 3, the cylinder tag 0). The list holds up to ten shapes; a shape is not added when ten are already held. The hero's mover resolves every held shape once and then empties the list, so the blockers act only on the ticks on which the boss adds them (High).
+- The hero-melee test has no per-swing latch on the boss's side and does not use the hero's hit list; the boss leaves this sub-step on the first counted hit, so at most one hit counts per visit. Each counted hit also registers the boss as the target of the boss name panel for 10 s (600 ticks; display only, Medium).
 - Each tick, a hit on the boss counts when the hero is attacking, the hero's attack frames are active, and the hero's weapon touches the boss's hit shape (the hero's single-weapon reach test, SPEC-0029 Behavior 10.2). A counted hit: the counted-hit counter increases by 1, and the boss loses trunc(4 x trunc(hero melee damage)) HP (the table entry for the spit flag being clear; the stun loop runs only then). Then, if the HP fraction is above the stage threshold: go to sub-step 3. Otherwise: set the stage-complete marker and go to sub-step 4. If the HP fraction is 0 or less: run the death sequence.
 
 Sub-step 3, stun count check:
@@ -185,7 +437,7 @@ Sub-step 3, stun count check:
 
 Sub-step 4, recover:
 
-- Play animation 0x11. When it ends: the boss returns to free.
+- Play animation 0x11. When it ends: set the top-level state to 1 (ordinary free/facing; animation 2).
 
 Sub-step 6, dazed entry (only when the spit flag is set):
 
@@ -199,15 +451,16 @@ Sub-step 5, dazed loop:
 
 Hit helper (dazed loop and every other tick):
 
-- Each of the hero's six attack slots is tested against a shape at the mouth point (bone 25; shape values 4.0 and 6.0).
-- In the dazed loop, a contact counts only when the horizontal unit direction from bone 25 to the slot's position, dotted with bone 25's forward direction, is above 0.9. For each counted contact, the returned single-precision damage is converted to an integer by truncation toward zero before it is added to the tick total; the resulting integer total is subtracted from boss HP. Other contacts are deflected (High for conversion and summation order).
-- Outside the dazed loop the helper runs each tick in a mode that deflects every contact. (On ticks the dazed loop runs the helper, the deflect pass is skipped.)
+- Each of the hero's six attack slots (the six shot slots of the selected hero; only armed slots are tested) is tested against a vertical finite cylinder standing on the mouth point (bone 25): radius 4.0 and height 6.0 above that point, so its centre is 3.0 above the point; a slot touches when its sphere (its own radius) overlaps the cylinder (SPEC-0018 finite-cylinder test, High for the shape; the axis is the world up axis).
+- A contact that is not counted (every contact outside the dazed loop, and contacts outside the cone inside it) bounces the shot (SPEC-0036 quick-shot bounce: direction and side axis negated, random spread); a counted contact disarms the slot and adds its damage.
+- In the dazed loop, a contact counts only when the horizontal unit direction from bone 25 to the slot's position, dotted with bone 25's forward direction, is above 0.9. For each counted contact, the returned single-precision damage is converted to an integer by truncation toward zero before it is added to the tick total; the resulting integer total is subtracted from boss HP. Other contacts bounce (High for conversion and summation order).
+- Outside the dazed loop the helper runs each tick in a mode that bounces every contact. (On ticks the dazed loop runs the helper, the deflect pass is skipped.)
 
 ### Spit (sub-steps)
 
 Sub-step 0, pre-wait:
 
-- Play animation 0x13. Turn toward the hero at rate 0.25 per tick. A wait counter of 2.0 s (120 ticks) starts when the animation starts and counts down while it plays. When it reaches 0: go to sub-step 1.
+- Play animation 0x13. Turn toward the hero at rate 0.25 per tick. A wait counter of 2.0 s (120 ticks) is set on the request tick and first counts down on the next tick; when it reaches 0 (request tick + 120): go to sub-step 1, whose first tick is request tick + 121. The pre-wait clip is 74 ticks long and holds its last key for the rest of the wait.
 
 Sub-step 1, shoot:
 
@@ -216,12 +469,12 @@ Sub-step 1, shoot:
 
 Sub-step 2, recover:
 
-- Play animation 0x16. When it ends: the boss returns to free.
+- Play animation 0x16. When it ends: set the top-level state to 1 (ordinary free/facing; animation 2).
 
 Spit projectile (formulas, pool kind and life argument unit High):
 
 - It is a projectile of the shared enemy projectile pool (SPEC-0029 Behavior 9): behaviour kind 1 (straight with gravity), visual kind 23, element 0, damage 100 (word 0x2DAF84), area radius 0 and area duration 0. Because the area duration is 0, the landing does not leave a damaging ground area: the slot ends on the tick after landing.
-- It is launched from the mouth point (bone 25) toward the hero's position. Let d be the horizontal distance from the launch point to the hero and dy the height difference.
+- It is launched from the mouth point (bone 25) toward the selected hero's position point (the feet) as it is on the release tick. Let d be the horizontal distance from the launch point to the hero and dy the height difference (hero position height minus launch height). The projectile's sphere radius is 1.0 (tested against the hero's body capsule, SPEC-0029 Behavior 9), the launch owner is the boss (the shot is released if the boss stops existing), and the gravity of the pool is 32 / 3600 per tick squared. A launch finds the first free of the pool's 10 slots; with none free the cycle's shot is silently lost and the cycle still counts.
 - Horizontal speed s = 0.5 - 0.4 x (1 - (d - 5) / 95)^2 units per tick. Flight time T = d / s ticks.
 - Vertical speed = dy / T + 0.5 x (g / 3600) x T, where g is the game's gravity in units per second squared (SPEC-0007) and 3600 is 60 squared, matching 60 ticks per second. The projectile moves at these speeds per tick; the pool's kind-1 motion applies the gravity each tick (vertical speed minus g / 3600, then the move; SPEC-0029 Behavior 9).
 - Damage 100 on contact with the hero, through the pool's hero-hit rule (SPEC-0029 Behavior 9): the hero's shield reduction and armour reduce it, and a guarding hero facing the spit takes max(1, 0.25 D) with the blocked flag. Kind 1 is not reflectable, so a shield never sends the spit back.
@@ -237,7 +490,7 @@ Spit projectile (formulas, pool kind and life argument unit High):
 
 ### Knockback
 
-- Head slam: the hero is pushed with K = 5.0 (0x2DAF5C) opposite the boss's forward direction: the push vector is K x normalize(−9 x f + (0, 12, 0)), where f is the boss's horizontal forward unit vector. The hero enters its knocked state. This slam-specific direction is read from the boss's facing; it does not use the hero's facing or a boss-to-hero direction.
+- Head slam: the hero is pushed with K = 5.0 (0x2DAF5C) opposite the HERO'S forward direction: the push vector is K x normalize(−9 x f + (0, 12, 0)), where f is the selected hero's own horizontal forward unit vector (the facing the hero has when the slam lands). It does not use the boss's facing or a boss-to-hero direction. The hero's velocity is replaced by this vector (horizontal part 3.0, vertical part 4.0) and the hero enters its long-fall state 48. The push runs after the take-hit in the same call, whatever the hero's state or health (see the build guide's edge cases).
 
 ### Damage
 
@@ -277,7 +530,7 @@ Consequences in play:
 
 - Start of the fight with the intro skipped: the boss is released with animation 7 already current, so the hub requests nothing and animation 7 plays from the first tick.
 
-- **Spit flag**: the spit is only chosen when the spit flag is set. A boss with the flag clear never spits, and a landed slam goes to the stun loop instead of the dazed loop.
+- **Spit flag**: the spit is only chosen when the spit flag is set. A boss with the flag clear never spits, and a slam that consumes a stage locator goes to the stun loop instead of the dazed loop. The hero-impact test does not control that transition.
 - **Stun re-entry**: returning from the count check to the stun loop does not draw a new stun wait. The stun counter resumes with the time it had left, so a stun interrupted by counted hits lasts one drawn wait in total (High).
 - **Counted-hit counter**: it is cleared at the start of each slam (sub-step 0), not at the stun end. It counts hits within one slam only.
 - **Stun max value**: the head-slam stun maximum (5.0 s, at 0x2DAF64) is taken from an address that is not in the tuning list. The registration lists the stun-min address (0x2DAF60) twice under the same name (`headSlamStunMin`, both rows with the value 2.0). The second row is a duplicate, not the maximum, and no registered name covers 0x2DAF64. Use the addresses above.
@@ -285,7 +538,8 @@ Consequences in play:
 - **Spit damage and head-slam counts**: the name `spitJuppieDamage` is registered for four words. Only 0x2DAF84 (100) is the spit projectile damage. The three entries at 0x2DAFA0, 0x2DAFA4 and 0x2DAFA8 (each 3) are the per-stage counts used by the stun loop, not damage; they need their own names.
 - **Juppie count**: the tuning values for the minimum and maximum number of Juppies (0x2DAF7C = 1 and 0x2DAF80 = 5 on disc) are not used by the behavior. The spit count is always the fixed range 3 to 5.
 - **Unused tuning values**: dazed time for act 1 (0x2DAFAC, 5.0), head-slam damage range (0x2DAF58, 20.0), and spit linger time (0x2DAF74, 2.0). Do not apply them.
-- **Stage 1 above 5/6**: the stage-1 branch with f > 5/6 sets the stage back to 0 (see Stages). Reproduce it.
+- **Stage 1 above 5/6**: the stage-1 branch with f > 5/6 sets the stage back to 0 (see Stages). It runs in normal play, whenever the stage-1 locator was used and the stun or dazed loop ended with the boss above 5/6. Reproduce it.
+- **Act 3 stage thresholds**: with 400 max HP, 333 HP gives f = 0.8325 and is at or below 5/6, while 334 HP gives 0.835 and is above it; 200 HP is exactly the stage-2 threshold 0.5, and 0 HP is the stage-3 death threshold.
 - **Stage 2 above 0.5**: the boss sets the stage back to 1 and waits in the hub. It does not start a spit (the spit happens only through the decision).
 - **Dormant boss**: a boss in stage 0 never starts a decision.
 - **Timer rounding**: all tick counts use truncation (trunc(seconds x 60)).
@@ -308,8 +562,9 @@ Synthetic checks on the rules, except the last item, which is read from the disc
 - **Counted-hit reset**: a new slam starts with the counted-hit counter at 0 even if the previous slam ended with counter 3.
 - Spit pre-wait: 120 ticks. Spit count: each of 3, 4, 5 possible; never 2 or 6.
 - Slam impact at horizontal distance 6.9 from the hero: hit for 25. At 7.0: no hit (must be less than 7.0).
-- Juppie slam push: boss forward f = (1, 0, 0), K = 5.0 gives hero velocity (−3, 4, 0) before the knocked state; reversing the boss direction reverses only the horizontal component.
-- Locator: a locator at 5 units in front with dot 0.95 and the head bone 9.0 from it, flag clear: used (flag set, event posted, use counter goes up by one, one use reported to the slam). Dot 0.85: not used. Head bone 10.0 from it: not used (must be below 10.0). A locator whose flag is already set is never used again.
+- Juppie slam push: the selected hero's forward f = (1, 0, 0), K = 5.0 gives hero velocity (−3, 4, 0) before the knocked state; reversing the hero's direction reverses only the horizontal component. The boss's own facing has no part in it: a hero facing +X is pushed toward -X whichever way the boss faces.
+- Locator: a locator at 5 units in front with dot 0.95 and the head bone 9.0 (horizontal) from it, flag clear: used (flag set, event posted, the marker word goes up by one, one use reported to the slam). Dot 0.85: not used. Head bone 10.0 from it: not used (must be below 10.0). A locator whose flag is already set is never used again.
+- Locator use versus player impact: during the slam's active action window, a clear locator in the forward cone and within 10.0 of head bone 15 is consumed even if the hero's horizontal distance from the head point is at least 7.0. That slam does not damage the hero, but its consumed-locator latch still selects the stun or dazed path when the slam animation ends.
 - Stage 2 with locator 102 unusable and locator 103 usable and flag clear: 103 is used, and the call reports one use.
 - Stage 2 with HP fraction 0.5: flag 8 and back to the hub. HP fraction 0.51: stage goes back to 1, flag 0x10 set, flag 5 cleared, boss waits in the hub.
 - Stage 3 with HP fraction 0: death sequence (flag 0xE, other living non-townsfolk characters take 10000, boss HP set to 1, top-level state 6). HP fraction 0.01: stage goes back to 2, flag 0x11 set, flag 10 cleared.
@@ -327,21 +582,55 @@ Synthetic checks on the rules, except the last item, which is read from the disc
 - Head slam on a hero with armour: still 25 (no reduction).
 - Disc: an unblocked spit hit on the hero plays the pool's id 5, effect 1399, which resolves to definition 392 of effect group 3 (resource 9). A spit that reaches its lifetime plays id 3, which is -1, so nothing is shown.
 
+### Timeline test vectors (fight AI)
+
+Values marked (random) depend on draws; their range is given. Every other number is fixed by the rules above.
+
+**Timeline A: Act 1, stage 1, hero standing still at the intro position (horizontal distance 20.04, on the line to locator 101), spit flag clear.** Tick 0 is the tick on which the boss's gate sees level flag 1.
+- Tick 0: stage 1, marker 0, state 3; action 5 is requested and the boss turns to face the hero. Ticks 1 to 155: stage start (turning every tick). Tick 156: done; state 1. Tick 157: the chooser (it runs before the handler) draws the cooldown d1 (random, 90 to 210) and rolls the slam (20.04 is inside 10 to 50): the slam starts when the roll is below 50 (probability 50/101); when it does not, the state-1 handler then requests action 2 on this tick.
+- If the slam starts (E = 157): approach ticks 157 to 218 (the boss turned once, on 157, toward the hero). The strike is requested on 219; its window is ticks 239 to 258.
+  - Tick 239 (first window tick): the stage events try locator 101: the unit direction to it from the boss dotted with the facing is about 1.0 (above 0.9) and the head point (19.4 units out along the facing) is about 4.4 horizontal units from the locator (below 10.0), so level flag 2 is set, the marker becomes 1 (equal to the stage) and the once-per-slam latch is set. On the same tick the head point is about 0.7 from the hero (below 7.0): 25 raw damage, the hero is pushed (velocity of length 5.0, backwards from the hero's own facing), effect 222 plays, and the slam latch is set.
+  - Tick 296: done; the latch is set, so the stun wait N is drawn (random, 120 to 300) and the boss enters the stun. Stun ticks 297 to 295 + N are active (animation 16, blockers added each tick). Tick 296 + N: counter 0, sub-step 4. Tick 297 + N: recover requested. Tick 368 + N: done; state 1. On tick 369 + N (489 to 669) the boss is free with the marker (1) equal to the stage (1), so no new decision is made: the executor tests the HP. With no counted hit in the stun (f above 5/6) the stage is set back on that tick (marker and stage 0, flag 0xF set, flag 1 cleared, hub, action 6 requested on 369 + N, action 7 on 501 + N) and the fight waits for the replayed stage-1 Tentacle (Timeline F). With the stun's counted hits having taken f to 5/6 or less, the HP exit had already set the marker and sent the boss to recover earlier, and the executor sets level flag 3 on the tick after that recover (Timeline E).
+- If the first roll fails (probability 51/101): the cooldown is d1 - 1 after tick 157 and reaches 0 at the start of tick 157 + d1 (247 to 367); the next draw and roll are made on that tick. A second slam attempt therefore starts on 157 + d1 at the earliest 247.
+- Hero damage dealt to the boss in this window: none (the hero's melee has no effect outside the stun loop).
+
+**Timeline B: slam that misses and still stuns.** Same as A but the hero stands 45.0 units from the boss on the line through locator 101 (outside the 12.4 to 42.0 band). The slam is chosen (45.0 is inside 10 to 50). On the first window tick the head point (19.4 out) is 4.4 from locator 101 in range, so the locator is used and the latch set; the head never comes within 7.0 of the hero (its farthest reach is 35.0, 10.0 short), so there is no damage. The slam still ends in the stun (Act 1) with the same durations as A.
+
+**Timeline C: hero moves.** Same as A but the hero runs straight away from the boss at 0.3214 units per tick from tick E: at the first window tick (E + 82) the hero is 20.04 + 26.4 = 46.4 away, beyond the 42.0 limit, so the slam misses. A hero that closes to within about 12 units of the boss before the window is also missed (it is never struck inside 12.4 units; the boss does not turn again after tick E). A hero that steps sideways by more than 7 units from the facing line before the window is also missed. Locator use depends only on the boss's facing, not on the hero.
+
+**Timeline D: Act 3, stage 1, spit flag set, hero standing still 60.0 units away.** Tick 0 as in A; tick 157 is the first decision. 60.0 is outside 10 to 50 so no slam is rolled; 60.0 is under 100 so the spit roll is made: the spit starts on roll below 50 (50/101) with a count n of 3 to 5 (random).
+- If the spit starts (E = 157): action 19 requested on 157, turning toward the hero at rate 0.25 every tick; the counter is 120 and reaches 0 on tick 277; the shoot starts on tick 278 (action 20). Projectiles spawn on ticks 294, 344, 394 (and 444, 494 for counts 4 and 5); each cycle is done 33 ticks after its spawn (327, 377, 427, ...). Each projectile: damage 100, horizontal speed 0.4291 units per tick at distance 60, flight time about 139.8 ticks (the first lands near tick 434).
+- After the last cycle (n = 3: done on 427) the recover action is requested on 428 and done on 473; the state-1 handler and the next decision (cooldown already 0) run on 474. For n = 4 and n = 5 the same ticks are 524 and 574.
+
+**Timeline E: stage change (Act 1).** Stage 1, the hero hits the boss in the stun loop on tick h with the HP fraction left at or below 5/6: marker 1; recover requested on h + 1; done on h + 72 (the state becomes 1); the executor runs on h + 73 before the handlers: level flag 3 is set and the state becomes the hub, action 6 requested on h + 73 and action 7 on h + 205 (the state-1 handler never runs). Nothing else happens until the level raises flag 5: on that tick the stage becomes 2, marker 0, state 3, action 5 is requested, the state is 1 on +156 and the first stage-2 decision (cooldown ranges 45 to 120) runs on +157.
+
+**Timeline F: set-back of stage 1 (Act 1, 190 HP).** As Timeline A with the locator used on the first window tick (marker 1) and the stun of N ticks passing with no counted hit (HP 190, f = 1.0). Recover is done on 368 + N; on 369 + N the executor finds marker 1 = stage 1 and f above 5/6: stage 0, marker 0, level flag 0xF set, level flag 1 cleared, hub. The script clears level flag 2, places Tentacle entity 0 again at locator 13 and puts it on the hero; when it dies the script raises level flag 1 again (no intro scene the second time), the hub sees it, and the stage-start sequence of Timeline A repeats with the same HP and all stage-1 rules. A hero who lands counted hits worth 32 or more HP in the stun (190 to 158) avoids the replay.
+
+**Timeline G: stage 2 with two locator uses (Act 1).** Stage 2 starts with marker 0. Slam one uses locator 102 or 103 (whichever the boss faces; 102 is tried first): marker 1, stun, recover; on the next free tick the marker (1) differs from the stage (2), so the boss decides again (the cooldown has long run out) and may slam or stand. A later slam that uses the other locator makes the marker 2; after its stun and recover the executor tests f <= 0.5: yes gives level flag 8 and the hub, no gives the stage-2 set-back (stage 1, marker 0, flag 0x10 set, flag 5 cleared, hub). An HP exit in either stun (f <= 0.5, the marker set to 2 at once) ends the stage after that recover.
+
+**Spit projectile at other distances.** d = 20: speed 0.2163 per tick, flight 92.4 ticks. d = 35: 0.3127, 111.9. d = 80: 0.4823, 165.9. d = 99: 0.5000, 198.0 (the speed formula has its maximum 0.5 at d = 100).
+
 ## Open questions
 
-- **Starting animation (R-0036 4)**: Resolved: animation 7, requested once by the controller when it starts, with the hub's animation 6 skipped (see Start of the fight; High). Test vector: a new fight enters the hub with the current animation 7; the hub requests nothing; when the hub is entered after an attack with another animation current (17, for example) it requests 6, and when 6 reaches 0.99 it requests 7.
+- **Default if unresolved (rewrite choice):** play rate R = 1.0 for every clip of this boss (nothing in the controller or in a status path changes it); actor scale 1.0 and forward axis local +Z for the slam head reach; the boss name panel on a counted hit may be left out; the unlabelled head-point call made each non-hub tick may be left out; a killing slam may skip the knocked-state push when the hero's health is 0 (the original writes state 48 over the death state; the effect on a dead hero is not established); with the hero exactly above the boss the facing is left unchanged; after the boss's death nothing of the controller runs, and the boss shows the free-state loop (clip 0) until the outro's own animation call; a Tor-only party in Act 3 simply cannot hurt the boss (no shot slots), as in the original.
+- **Slam head reach and facing axis:** the reach table in Durations and timing assumes an unscaled actor and that the model faces along its local +Z axis. If the model is scaled or faces another axis, scale or rotate the table; the rest of the timing is unaffected. [Medium]
+- **Unlabelled per-tick call:** in every non-hub, non-finale state the loop passes a point near the mouth bone to a routine whose purpose is not identified; no other fight rule depends on it [Low].
+- **R-0122 (partly resolved):** Resolved: ordinary free/facing state 1 uses action 2; both attack recoveries return there. State 0, the hub and finale hold use action 7, a two-frame buried hold. At a stage-complete transition the hub plays action 6 to lower the skinned model, then holds on 7; stage-start action 5 raises it from the same buried root pose and returns to free action 2. Head-slam approach action 21 maps to a clip whose root-bone Y and actor root-motion records are zero, so the approach does not lower the model. The shared root-motion sample scale is 0.000977. The slam chance requires horizontal distance strictly between 10.0 and 50.0; at 10.0 or less the slam is not rolled, and in Act 1 no spit branch is available. Open: the exact retail silhouette, whether the model fully clips below the floor, and the camera/scene view during the hub transition. The actor's mover position remains unchanged by these burrow clips; their animated root-bone pose translates the skinned model beneath that actor transform. See Act 1 and Act 3 character variants, Start of the fight and Between attacks and stage changes. [High for mappings and pose samples; Medium-High for rendered-model implication; live visibility is not established]
+
+- **Starting animation (R-0036 4)**: Resolved: action 7, requested once by the controller when it starts, with the hub's action 6 skipped (see Start of the fight; High). Test vector: a new fight enters the hub with action 7 already current; the hub requests nothing. When stage-complete processing returns the boss to the hub with another action current, the hub requests action 6; after action 6 reaches 0.99 it requests action 7.
 - **Stage events and the spawn**: Resolved. Pack 1217 turns stage-locator flags into Tentacle hit and close scenes; the boss thresholds start two additional groups, bringing the Tentacle count from one to two and then three. See SPEC-0045, pack 1217, Stage spawns and Fight monitor (High).
 - **Spit flag meaning**: the spit flag comes from the Act 3 story flag. Its meaning as "spit allowed" is the observed behavior; no other writer is known.
-- **Stage numbering semantics**: Resolved (Medium-High). The set-back branches for stage 1, 2 and 3 re-stage the fight (stage back to 0, 1 or 2, flag 0xF, 0x10 or 0x11 set, the start flag 1, 5 or 10 cleared), but they cannot run: the stage-complete marker is only set when the HP fraction is at or below the same threshold that the stage rule then tests, and nothing raises the Juppie's HP between the two (see Stages). They are defensive code. The clean side should implement them as written and may treat them as never taken. Test vector: Act 1 Juppie (190 HP), stage 1: at 158 HP the fraction is 0.8316, at or below 5/6, so the marker is set and flag 3 is raised; there is no HP value that sets the marker and later fails the test.
+- **Stage numbering semantics**: Resolved (Medium-High). The set-back branches for stage 1, 2 and 3 re-stage the fight (stage back to 0, 1 or 2, flag 0xF, 0x10 or 0x11 set, the start flag 1, 5 or 10 cleared), and they DO run: the marker word is also the locator-use count, so it equals the stage as soon as the stage's last locator is used, whatever the HP (see Stages). The HP exit alone can never trigger them. Implement them as written. Test vector: Act 1 Juppie (190 HP), stage 1: a slam uses locator 101 (marker 1); the stun ends with the boss at 190 HP (f = 1.0): the executor sets the stage back (stage 0, flag 0xF set, flag 1 cleared). The same slam followed by counted hits that leave 158 HP (f = 0.8316) sets level flag 3 instead.
 - **Dazed loop per-fight field**: Resolved: it is the "helper already ran" flag. The main loop skips the deflect pass of the hit helper while it is set and clears it after each tick, so a dazed-loop tick runs the helper once, in counting mode (see Dazed loop; High).
 - **Stun loop and dazed loop state after a stage-complete marker**: Resolved: the dazed loop's HP exit goes to the top-level free state, and the stun loop's HP exit goes to recover (sub-step 4). This is High, and the rule is written under Behavior and Edge cases. Test vectors (synthetic, stage 1, threshold 5/6 = 0.8333): in the stun loop (spit flag clear) a counted hit leaves f = 0.80: the marker becomes 1 and the boss goes to sub-step 4 (animation 0x11), then to free; once free with the marker set, f <= 5/6 sets level flag 3 and returns the boss to the hub. The same hit leaving f = 0.90 plays animation 9 and returns to the stun loop (counted hits below 3) or to recover (3 counted hits). In the dazed loop (spit flag set) a counted hit leaving f = 0.80 sets the marker to 1 and leaves the loop for the top-level free state at once, with the dazed timer abandoned; a hit leaving f = 0.90 keeps the loop going until the timer ends.
-- **Projectile life unit and zero-distance boundary**: Resolved: the life argument trunc(T x 60) + 1 uses T in ticks, and the pool lifetime counts ticks (SPEC-0029 Behavior 9), so the spit lives about 60 times its flight time; the world and ground test ends it first (SPEC-0029 edge case "ballistic lifetime unit slip") (High). At release, the selector requires only horizontal distance D < 100; it has no positive-distance lower bound. The launch routine has no d = 0 guard: it normalizes the horizontal aim vector by d, computes T = d/s, then divides the vertical term by T. The exact values delivered to the projectile builder at d = 0, and their downstream pool behavior, remain open because the static trace does not settle the PS2 floating-point zero-division results.
+- **Projectile life unit and zero-distance boundary**: Resolved: the life argument trunc(T x 60) + 1 uses T in ticks, and the pool lifetime counts ticks (SPEC-0029 Behavior 9), so the spit lives about 60 times its flight time; the world and ground test ends it first (SPEC-0029 edge case "ballistic lifetime unit slip") (High). At release, the selector requires only horizontal distance D < 100; it has no positive-distance lower bound. The launch routine has no d = 0 guard: it normalizes the horizontal aim vector by d, computes T = d/s, then divides the vertical term by T. The exact values delivered to the projectile builder at d = 0, and their downstream pool behavior, remain open because the PS2 floating-point results of that division by zero are not established.
 - **Spit projectile gravity**: Resolved: the spit is a kind-1 projectile of the enemy pool, whose motion subtracts g / 3600 from the vertical speed each tick before the move (SPEC-0029 Behavior 9; High).
 - **Spit damage path**: Resolved: the spit goes through the pool's hero-hit rule, so the hero's shield and armour reduce it and a block gives max(1, 0.25 D); it is not raw damage (High).
 - **Stun blockers on the hero side**: Resolved: both blockers go into the hero's pending contact list, which the hero's mover resolves and empties each tick; the cylinder is tested against the hero's body cylinder with the SPEC-0018 overlap (High). The box's own resolution step is the tag-3 rule of SPEC-0040 (its internals are open there).
 - **Spit display effects**: Resolved: 1400 (0x578) is the in-flight glob, set as both flight effects, and 1399 (0x577) is the splat burst, used for a blocked hit, a world impact and an unblocked hit; lifetime expiry has no effect (-1). The roles of the pool's six ids and the visual-kind replacements are given under Spit projectile (High for the ids and roles; Medium for the visual descriptions).
 - **Strike point and sound step gates**: the point where the head slam's hit flash plays is taken to be the slam's impact point (Medium). The boss is taken to be a world character like every character spawned from a level's character records, so the world-character sound rule applies (Medium-High); two further gates of the animation-sound step, a motion-block gate and a per-character mute word, are not named.
 - **Blocker shapes**: Resolved for the box: its three values are full sizes, halved about the centre, with 4.0 on the up axis (High). Resolved: the 30.0 runs along the horizontal direction from the boss's position to its head bone, about the midpoint of the two, and the second shape is a vertical cylinder of radius 4.0 and length 10.0 centred on the head bone (see Sub-step 2; High).
-- **Finale state**: Resolved. In Act 1, pack 1217 sends level flag 18 after entity 7 plays its death animation, closes the eleven fight records, then runs the post-fight exchange and sets result flags 82 and 147. Act 3 follows the same broad order with entity 8 and result flags 278, 84, 5 and 6. Full scene order: SPEC-0045, pack 1217, Outro A and Outro B (High for the calls and order).
+- **Finale state**: Resolved. In Act 1, pack 1217 sends level flag 18 after entity 7 plays its death animation, closes the eleven fight records, then runs the post-fight exchange and sets result flags 82 and 147. Act 3 follows the same broad order with entity 8 and result flags 278, 84, 5 and 6. Full scene order: SPEC-0045, pack 1217, Outro A and Outro B (High for the calls and order). The boss's own controller does not take part after its death: the death damage puts the boss into the dead base state and the controller stops, and the outro's animation calls (script control) then drive the boss (Medium-High; Build guide, item 10).
 - **Random generator**: Resolved: the boss uses the shared Mersenne Twister (state at data address 0x39BE50), seeded once on its first draw from the BCD date and time bytes of the console's real-time clock, so the sequence differs from boot to boot (SPEC-0014; High).
 - **Dazed-loop helper value**: Resolved. For each counted contact the helper asks the hero's shot routine for the damage of that shot slot against the boss; this is the hero shot rule of SPEC-0036 (Roberta shot projectile): the larger of 0 and S x C x T minus the boss's defence, where S is the damage scale stored in the shot slot. The returned single-precision value is truncated toward zero to a whole number for each contact, and the whole numbers are added into the tick total that is subtracted from the boss's HP (see Hit helper; High). The truncation is per contact, not on the sum. Test vector: two counted contacts in one tick that return 17.9 and 12.6 reduce the boss's HP by 29 (17 plus 12), not by 30; a contact that returns 0.7 reduces it by 0 and still disarms the shot.
+

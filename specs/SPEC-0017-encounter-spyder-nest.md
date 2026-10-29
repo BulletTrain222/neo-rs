@@ -1,15 +1,66 @@
 # SPEC-0017: Encounter behavior: Spyder Nest
 
-- Answers: proactive, none requested (boss AI and encounter behavior)
+- Answers: proactive, none requested (boss AI and encounter behavior); proactive (fight AI build guide)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
-- Confidence: per section. Tunable defaults and addresses: High (taken from the boot program image). Level object fields: High. Setup, timing and the valve state sweep: High. Nest state: High (the nest starts active; idle is unreachable). Valve state machine: High for transitions and animations. Hit rules: High for the window, the two branches and their HP costs; High for the valve cylinder's centre and axis (the valve's root bone) and for the absence of a direction gate at the attacking call. Spawn placement: High for the gate and the offsets, Medium-High for the placement rule. Animation speed-up: High. Spider release and death: High for the state steps; Medium for the spider chooser (see SPEC-0038). No nest or valve attack, and the spiders' damage path and row values: High. Valve hit flash 222 and the spider sound cues: High. Reachability (the encounter never runs on this disc; no record places the nest or a valve, and no valve or nest model, animation or sound exists): High. Start-up world binding: Medium. Presentation (a debug text only): High. Spider mode after release (agro, mode 19): High.
+- Confidence: per section. Tunable defaults and addresses: High (taken from the boot program image). Level object fields: High. Setup, timing and the valve state sweep: High. Nest state: High (the nest starts active; idle is unreachable). Valve state machine: High for transitions and animations. Hit rules: High for the window, the two branches and their HP costs; High for the valve cylinder's centre and axis (the valve's root bone) and for the absence of a direction gate at the attacking call. Spawn placement: High for the gate and the offsets, Medium-High for the placement rule. Animation speed-up: High. Spider release and death: High for the state steps; Medium for the spider chooser (see SPEC-0038). No nest or valve attack, and the spiders' damage path and row values: High. Valve hit flash 222 and the spider sound cues: High. Reachability (the encounter never runs on this disc; no record places the nest or a valve, and no valve or nest model, animation or sound exists): High. Start-up world binding: Medium. Presentation (a debug text only): High. Spider mode after release (agro, mode 19): High. Spider attack ids, clips and tick counts (Behavior 9e): High for the clip facts, Medium-High for tick offsets. Valve and nest animation lengths: no data (rewrite choice).
 
 ## Summary
 
 The Spyder Nest is an encounter controller with three valves, each of which holds a group of spiders. A valve is closed while its spiders are alive. When every spider of a valve is dead, the valve waits 10 s, opens, and releases its spiders again. The hero damages a valve by hitting it while its hit window is open. The window stays open until a hit lands, so a valve can be hit at any point of its cycle, not only while it is open. Each valve has 3 hit points, and by default each open cycle allows one hit, so a valve needs three cycles to die. Each destroyed valve speeds the nest's animation up by a factor of 1.2. When a valve reaches 0 hit points it is destroyed and its living spiders take 1000 damage. When all three valves are destroyed, the nest enters its defeat state. A clean implementation can build the setup, the valve cycle, the hit rule and the defeat from this spec. Spider behavior is not covered here; SPEC-0038 (Behavior 12) gives the spider states the nest uses.
 
 **The encounter is not reachable on this disc (High).** The nest controller is the think routine of behaviour class 3, and each valve is a character of class 4, which yields every tick and does nothing (SPEC-0029, Layout 3). Class 3 occurs only on monster row 12 and class 4 only on rows 13 to 15 (types 10 to 13). No placement record of types 10 to 13 exists in any region or world pack, and no record selects rows 12 to 15 at load, including by a variant that overflows from another type. The only run-time route in code is the variant re-pick of SPEC-0029 (Run-time variant re-pick): it sets a placed character's variant to 0 to 5 and reads first row of its type plus that variant, so a re-picked type 6 character (variant 5, row 12) or type 8 character (variants 2 to 5, rows 12 to 15) could land on a nest or valve row, and type 7 and 9 characters could too, but those two types are placed only in the unreached pack 1259. The re-pick needs a Minion Wizard to hit the target, changes only the row and palette, and only a later default-class request would read the new class. The reachable type 6 and 8 characters are the Juppie monsters of the Juppie stage and the Plague Serpent; no shipped placement puts a Minion Wizard in the same resident set with either (Medium), so this is a code possibility, not an encounter. No class request in the boot program passes class 3 or 4 (the only explicit classes requested are 23 to 26, 34 and 35; SPEC-0029). The level-module API inventory has no class-request call: the generic SetAI_Behavior API changes an enemy AI mode and its parameters, not its behavior class (SPEC-0030). No level module names the nest, its valves or its states, and no story row, flag or movie belongs to it. So no pack holds the nest, no level module drives it, and it has no trigger, gate, win or lose rule, flag, movie or exit. Spiders do appear in play, but only as ordinary class-17 common enemies (SPEC-0038). A clean implementation may omit the encounter, or implement it from this spec as unused content; the per-tick rules below describe the code as it would run if a level placed the nest.
+
+## Fight AI build guide
+
+Not part of the shipped game: no level places the nest or a valve (Summary). This guide is for a clean side that chooses to include the encounter; every rule below is the behavior the code would show if a level placed it. Tick numbers are 60 ticks per second. "Request tick" means the tick in which an animation id is asked for; the clip starts in that tick's animation pass. Section references point to the detailed rules below.
+
+**A. Initial values.**
+- Nest (the character of monster row 12, record 0 of its world): state 1 (active) from the first tick. It never attacks and has no hit points; it is not hittable.
+- Valves (three, found by monster row 13, 14, 15; Layout): state 0, HP 3, spider count 5 / 3 / 2 for valves 0 / 1 / 2, countdown 0, spawn-once flag clear, hit window closed (all zero at start; Medium).
+- Spiders: every placed character whose placement code is 5 (valve 0), 7 (valve 1) or 6 (valve 2) joins that valve's list in level order, is hidden and set to the dead state 16, so it counts as dead. HP when revealed: Spyder 25, Poison Spyder 16, Giant Spyder 150. Positions and facings come from the level.
+- Disc tunables: spider counts, valve HP, HP per hit (Layout, 0x2DB0A0 to 0x2DB0B0) and the four launch constants (0x2DB0B8 to 0x2DB0C4). Everything else is a fixed value or a spider animation fact (section 9e).
+- "Valve point" means the world position of the valve's root bone (bone 0). The valve forward axis is the third row of that bone's world frame and its up axis the second row (forward: Medium-High; up: High).
+
+**B. Start-up.** Tick 0: bind the whole world, register spiders, hide them (Behavior 1). Wait 180 ticks. The per-tick loop starts at tick 180 (loop tick n = 0).
+
+**C. Per-tick order of the nest (Behavior 2).** (1) copy tunables into the valves; (2) valve sweep 0, 1, 2 (living count, alive or closed); (3) nest update (destroyed count d; d = 3 means defeated, otherwise animation rate 1.2^d); (4) while active, run each valve's state step 0, 1, 2, each followed in the same tick by its hit test (window open), its destruction check (HP exactly 0) and its spider despawn check; (5) debug text (skippable). The sweep always runs before the state step, so a state set by the sweep is stepped in the same tick.
+
+**D. Valve states (Behavior 3; animation ids 0 to 4 have no disc data, so the lengths are rewrite choices, Open question 13).**
+
+| State | Animation id | Duration in ticks | Exit |
+| --- | --- | --- | --- |
+| 0 initial | 0 | 0 (sweep moves it at once) | closed in the first loop tick |
+| 1 closed | none | countdown 600 set by the sweep; the same tick subtracts 1, so 599 remains after the first tick; the tick that finds 0 changes the state without a decrement | 600 ticks after the sweep tick: state 2 |
+| 2 opening | 1 | L1 (default 60) ticks; the first tick only requests it | animation 1 finished: open the hit window, state 3 |
+| 3 spawn | 2 | one tick to request, then the reveal on the next tick (animation 2 playing and unfinished) | the sweep moves it to 4 the tick after the reveal |
+| 4 alive | 0 | until every spider among the first N is dead | sweep: closed (state 1, countdown 600, spawn-once flag cleared) |
+| 5 hit reaction | 3 | not reached: the sweep moves the valve out first | none |
+| 6 destroyed | 4 (request 0, then 4, each tick) | plays through; nothing waits for it | final |
+
+Real cycle length (default L1 = 60): if the sweep that sets the closed state is in tick u, the countdown reaches 0 in tick u + 599, state 2 in u + 600, animation 1 is requested in u + 601, the window opens and state 3 begins in u + 601 + L1, animation 2 is requested in u + 602 + L1, the spiders are revealed in u + 603 + L1 and the valve is alive from u + 604 + L1.
+
+**E. Hit rules (Behavior 5).** The window opens when animation 1 finishes and closes only on a hit. While open, the hit test runs in every valve state. Hero not attacking: an armed shot within 3.0 plus its radius of the valve point hits for 1 HP (slot stays armed). Hero attacking: the hero's body cylinder against the valve cylinder (radius 2.0, length 4.0 along the root bone's up axis from the bone position), then the swept test, then armed shots within 5.0 plus radius of the root bone; costs the HP-per-hit tunable (default 1). A hit sets state 5 and closes the window, so at most one hit lands per cycle. Destroyed exactly when HP is 0.
+
+**F. Spiders in the fight (Behavior 4, section 9c, section 9e).** Revealed spiders are launched out of the valve straight into the agro machine of SPEC-0038 (Behavior 44), with approach routine 4 (strafe band 4 to 15). They use only two attacks, a melee swing and a charge bite; a Giant Spyder also has a second charge. The real attack ids, clips and tick counts are in section 9e. The summary:
+
+| Attack | Used by | Chooser band (strict) and chance | Cooldown | Hit window after the request | Real total (before the recovery draw) |
+| --- | --- | --- | --- | --- | --- |
+| Swing (slot 0) | all three | distance below 6 (Spyder, Giant) or 8 (Poison), facing cosine above 0.9239, roll 1 to 100 below 25 | 30 to 60 at the choice and again at the end | ticks 17 to 33 (one hit) | about 45 |
+| Charge (slot 2) | all three | distance 10 to 35 exclusive, facing cosine above 0.707, roll below 50, a route to the hero | none | Spyder, Giant ticks 20 to 39 and Poison ticks 0 to 7 after the bite clip starts; one hit | run time plus 68 (Spyder, Giant) or 28 (Poison) |
+| Charge (slot 1) | Giant only | distance 4 to 10 exclusive, facing cosine above 0.9239, roll below 25 | 30 to 120 | ticks 0 to 7 after the bite clip starts; one hit | 37-tick wind-up, then the run, then 39 |
+
+After each attack the recovery countdown is a whole number from 15 to 30 for a Spyder or Poison Spyder and 30 to 60 for a Giant Spyder, during which no new attack is chosen.
+
+**G. Movement (SPEC-0038 Behavior 48).** All spiders move by root motion: walk and sequencer approach 0.1876 units per tick (11.26 per second); strafe forward 0.1876 for a Spyder and 0.1563 (9.38 per second) for Poison and Giant Spyders; back steps and side steps 0.1876; charge run of slot 2 0.2657 per tick at play rate 1.7; the Giant Spyder's slot 1 lunge runs at play rate 1.0 and moves 0.262, 0.343, 0.392 and 0.392 units per tick in turn, each value held for 4 ticks and the cycle repeating. Turning is the blend of SPEC-0038 Behavior 48. A spider that cannot reach the hero is handled by the agro leash of SPEC-0038 (Behavior 23).
+
+**H. Hurt side.** Spiders are hit like every common enemy (SPEC-0038 Behavior 37). Defence values: Spyder missile dodge 75, melee dodge 25 / 50 / 75 (quick / normal / heavy); Poison Spyder missile dodge 100, melee dodge 25 / 50 / 75; Giant Spyder missile dodge 100, melee dodge 95 / 50 / 50, defend hold 30 and defence timer 15 to 30. No spider blocks. A hurt spider keeps its valve membership; a dead spider leaves the living count at once.
+
+**I. Phases.** There are no HP phases. Each destroyed valve multiplies the nest animation rate by 1.2. Destruction kills that valve's living spiders and ends its cycle for good.
+
+**J. Hand-offs.** None. No flag, movie, camera or exit belongs to the encounter (Behavior 8). Default if unresolved (rewrite choice): a host level polls the nest state and treats state 2 as the win.
+
+**K. Defeat.** All three valves destroyed: nest state 2, defeat animation 4 each tick if not already playing; the loop never ends.
 
 ## Where it lives on the disc
 
@@ -180,7 +231,7 @@ Consequences:
 
 - The nest and its valves never attack the hero. Neither has a hit routine of its own; their only effects on characters are the 1000 damage a destroyed valve deals to its own spiders.
 - All damage to the hero comes from the spiders. They are class-17 common enemies (SPEC-0038), so their hits use the shared enemy chain (SPEC-0029 Behaviors 10.1 and 10.5): the hero's shield block, armour, armour Mote and petpet factor apply, unlike a boss's melee hits.
-- Attack damage words of the spider monster rows (attack slots 0, 1 and 2; "none" = no value in that slot): Spyder (row 234) 3, none, 7, with a blocking angle of 0.966; Poison Spyder (row 235) 5, none, 15; Giant Spyder (row 236) 5, 20, 15.
+- Attack damage words of the spider monster rows, by slot number 0, 1 and 2 ("none" = slot unused): Spyder (row 234) 3, none, 7 (slot 2 unblockable), with a blocking angle of 0.966; Poison Spyder (row 235) 5 with a 25 % poison chance, none, 15 with a 50 % poison chance; Giant Spyder (row 236) 5, 20 (unblockable), 15 (unblockable, knockback 2, slow chance 25 %). Poison lasts a whole number of seconds from 600 to 1800 ticks divided by 60 (10 to 30 s); the Giant's slow lasts 60 to 600 ticks divided by 60 (1 to 10 s). The Giant's slots 0 and 1 carry status 0 (stun) with chance 25 and a value drawn from 1 to 10 ticks, which truncates to 0 seconds, so they have no visible effect (Medium). Slot 0 is the swing and slot 2 the charge bite for all three; slot 1 of the Giant Spyder is its second charge (section 9e). The status roll is a draw from 0 to 100 inclusive that must be strictly below the chance (SPEC-0038 Behavior 13).
 
 ### 9b. Sounds and effects
 
@@ -193,7 +244,7 @@ Consequences:
 - Per cycle, with the defaults: valve 0 releases 5 normal Spyders, valve 1 releases 3 Poison Spyders, valve 2 releases 2 Giant Spyders, 10 in all. Which monster row a spider uses comes from its own placement; the nest only checks the behaviour code (Layout).
 - Respawn: the same characters come back. A valve releases again only when every spider among its first N entries is dead (or hidden), and then after 600 ticks plus the opening animation. Each release restores full HP, so no spider stays dead while its valve stands.
 - When a valve is destroyed, its spiders take 1000 damage on every tick, so its group is gone for good. The other valves keep cycling.
-- Spiders are released straight into AI mode 19 (agro) on the hero's ground mesh, launched out of the valve (Behavior 4). From there they run the class-17 agro machine of SPEC-0038 with the rows' values: all three spider rows use approach routine 4 (strafe). HP: Spyder 25, Poison Spyder 16, Giant Spyder 150. Attacks as in Behavior 9a.
+- Spiders are released straight into AI mode 19 (agro) on the hero's ground mesh, launched out of the valve (Behavior 4). From there they run the class-17 agro machine of SPEC-0038 with the rows' values: all three spider rows use approach routine 4 (strafe). HP: Spyder 25, Poison Spyder 16, Giant Spyder 150. Damage as in Behavior 9a; attack clips, windows and real tick counts in Behavior 9e.
 - Death of a spider: the shared enemy death (state 16, death animation 58, then despawn flag), after which the valve counts it dead.
 
 ### 9d. Intended play sequence (as the code would run; not reachable on this disc)
@@ -205,6 +256,32 @@ Consequences:
 5. To get the next hit on a valve, the player kills all of that valve's spiders; 10 s later the valve opens again and releases them with full HP.
 6. After three counted hits a valve is destroyed and its spiders die. Each destroyed valve makes the nest pulse 1.2 times faster.
 7. When the third valve is destroyed the nest plays its defeat animation. Nothing else happens; the player leaves the world by its ordinary exits.
+
+### 9e. Spider animation ids, clips and real durations (High for the table facts; Medium-High for the tick offsets, which can move by one tick with the order of the behavior and animation steps)
+
+All three spider kinds share one 34-clip family on disc, and each kind has its own 166-entry action table (ids 0 to 165). Every clip below has speed byte 2 unless noted, so at play rate R it advances R x 0.25 keys per tick (4 ticks per key at R = 1.0; SPEC-0005 Playback 1a). A one-shot clip of F keys reaches its last key after 4(F - 1) ticks at R = 1.0 and the next tick's progress gate (0.99) passes; the phase waits of SPEC-0038 Behavior 13 use that gate. An id with no clip in the table is skipped in the same tick with no wait.
+
+**Attack ids per slot (k = 0, 1, 2; id = 33 + 5k + phase, phases A wind-up, B strike, C follow-through, D blocked, E recovery).**
+
+| Slot | Used by | A | B | C | D | E |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 (swing) | all three | 33 missing | 34: clip 11, 14 keys, one-shot, weapon-3 window on keys 5 to 9 | 35 missing | 36: clip 8, 22 keys, one-shot | 37 missing |
+| 1 (charge 2) | Giant only | 38: clip 25, 10 keys, one-shot | 39: clip 28, 4 keys, looping, weapon-3 window on all keys | 40: clip 27, 4 keys, one-shot, window on keys 0 and 1 | 41: clip 8 | 42: clip 26, 7 keys, one-shot |
+| 2 (charge 2) | all three | 43 missing | 44: clip 3, 7 keys, looping (the run) | 45: Spyder and Giant clip 11 (window keys 5 to 9); Poison clip 27 (window keys 0 and 1) | 46: clip 8 | 47: clip 9, 4 keys, one-shot |
+
+Slot 3 (ids 48 to 52) is unused by all three rows and has no clips. Slot 1 of the Spyder and Poison Spyder is unused. The weapon-3 volume is a finite cylinder centred on the third attachment frame, radius 3.0 and length 3.0 for the Spyder and Poison Spyder, radius 4.0 and length 4.0 for the Giant Spyder (SPEC-0029 Behavior 10.2). A window that is open on every key of a clip stays open for the whole clip, so one swing or bite gives one hit.
+
+**Play rates.** Row speed words, wind-up / strike / recovery: slot 0 is 1.0 / 1.2 / 1.0; slot 2 is 2.0 / 1.7 / 1.2; the Giant's slot 1 is 1.0 / 1.0 / 1.0. The strike word applies in sequencer state 2 (swing) and in states 6 (from the tick the run clip starts) and 7 (the run); states 3, 4, 8, 9 and 12 run at 1.0. The swing's strike clip is requested in the last tick of state 1, whose rate is the wind-up word 1.0, so its first animation pass advances 0.25 keys and every later pass 0.3 keys (Medium).
+
+**Real durations (ticks from the request tick of the clip named; High for the arithmetic).**
+- Swing (slot 0): the wind-up is skipped, so the strike clip 34 is requested in the first sequencer tick after the approach (the approach walks at id 2 while the distance is above 3.0). Window passes in ticks 17 to 33 (first possible hit one tick later). The clip's gate passes in tick 44; with no follow-through the sequencer goes to recovery and the end path runs in tick 45. A blocked swing plays clip 8 (id 36), whose gate passes 85 ticks after its request, then the end path runs the next tick. The end path draws the recovery countdown and the slot cooldown (30 to 60) again.
+- Charge (slot 2): wind-up id 43 is missing, so the run clip 44 is requested in the first sequencer tick and the state becomes 7 at once. The spider runs 0.2657 units per tick (first step the tick after the request) until the hero is within the melee range 3.0 (state 8) or it has run 30 to 40 units (the charge distance range of this slot, drawn at the choice); from 12.0 units away it needs 34 steps. State 8 requests clip 45. Poison Spyder: window passes in ticks 0 to 7, gate in tick 13, the recovery clip 47 is requested in tick 14 and its gate passes in tick 27, so the end path runs in tick 27 after the bite starts. Spyder and Giant Spyder: window passes in ticks 20 to 39, gate in tick 53, clip 47 requested in tick 54, end path in tick 67.
+- Charge (Giant slot 1): clip 38 wind-up gate in tick 37, then the lunge clip 39 is requested (rate 1.0); the lunge ends when the hero is within 3.0 or after 5 to 10 units; state 8 requests clip 40 (window passes in ticks 0 to 7, gate in tick 13); clip 42 is requested in tick 14 and its gate passes in tick 25 after that, so the end path runs in tick 39 after the bite starts.
+- After any end path the outer sub-state is 0 and the normal choice cannot run again until the recovery countdown (15 to 30, or 30 to 60 for the Giant Spyder) has run out; the choice also needs the hero attackable (SPEC-0038 Behavior 7).
+- Death: clip 12 (id 58), 35 keys, one-shot. It starts in the tick the spider is set to the dead state; its finished flag is first seen 137 ticks after the request, and the valve step of that tick sets the despawn flag. The valve counts the spider dead from the tick it enters state 16, not from the despawn flag.
+- Other present ids: walk 2 (clip 0, 10 keys, looping); rush 21 (clip 3); strafe forward 28 (Spyder clip 0; Poison and Giant clip 3); back step 32 (clip 17); side steps 29 and 30 (clips 18 and 16); strafe hold 31 (Spyder clip 1, 8 keys; Poison and Giant clip 21, 20 keys); melee dodge 55 (clip 24, 12 keys); missile dodges 53 and 54 (clips 20 and 19, 9 keys each); hit reaction kind 0 id 57 (clip 14, 21 keys); confused 69 (clip 30, 55 keys, looping). Absent: ids 85, 97, 116 to 119, 132, 142, 153, 155 and 156. Spiders therefore never use the rise (85) or the flyer ids, and the fidget picker has only id 115 (clip 13, 60 keys, looping) to choose.
+
+**Spiders and the attack manager.** The spiders take part in the shared attack manager of SPEC-0038 Behavior 45 (budget weights 5 for a Spyder, 8 for a Poison Spyder, 12 for a Giant Spyder; capacity 3.0 x (weapon grade + armour grade) from the hero's gear, 0 with starting gear). With ten spiders in agro and starting gear only the first in the manager's order may attack and the rest wait in line (outer sub-state 12); the order is nearest first, with the 5.0-unit swap rule. A better-equipped hero is attacked by more spiders at once.
 
 ### 10. Timings
 
@@ -265,7 +342,28 @@ Synthetic values. Defaults are the tunables above.
 - Release mode: a revealed spider has base state 1 and AI mode 19, and its previous mode is kept as the prior mode.
 - Debug text with nest state 1, valve 1 in state 4 with 2 HP, valve 0 in state 1 with 3 HP, valve 2 in state 6 with 0 HP: nest "fighting"; sack A "idle" 2; sack B "pre-open" 3; sack C "dead" 0.
 
+### Timeline vectors (defaults; valve animation 1 length L1 = 60 ticks as the rewrite choice of Open question 13)
+
+**Nest timeline, hero standing still (ticks since the encounter starts; no random draws).**
+- Tick 0: setup; all ten spiders hidden in state 16; the valves are in state 0. Ticks 1 to 179: nothing changes.
+- Tick 180 (loop tick 0): sweep sets all three valves closed with countdown 600; the same tick's state step leaves 599.
+- Tick 779: countdown reaches 0. Tick 780: state 2. Tick 781: animation 1 requested.
+- Tick 841: animation 1 finished: the hit window opens on all three valves, state 3. Tick 842: animation 2 requested.
+- Tick 843: spiders revealed (5 Spyders, 3 Poison Spyders, 2 Giant Spyders), each at the valve point plus 5.0 along the valve's forward axis, base state 1, agro, full HP, velocity gains (10 forward, 10 up). Tick 844: the sweep moves each valve to state 4.
+- If the hero kills the last spider of a valve in tick K (the spider is in state 16 from tick K): tick K + 1 the sweep sets closed and countdown 600; the window (if closed by a hit) reopens in tick K + 662; the spiders are revealed again in tick K + 664 with full HP. A hit at any tick from 841 on (or from K + 662 in later cycles) takes 1 HP and closes the window; three hits on one valve need three windows. Fastest possible run, with every valve's spiders killed in the tick after each reveal: windows at ticks 841, 1506 (K = 844) and 2171 (K = 1509), so the first valve cannot be destroyed before tick 2171, and a real fight is longer because the ten spiders must be killed first.
+
+**One Poison Spyder against a hero standing still 12.0 units away, flat open ground, hero attackable, no other spider in the manager list (reveal tick r = 843; random draws marked).**
+- r: first agro tick, outer sub-state 0. r + 1: outer 4 (strafe), inner 10. From r + 1 on, each tick the charge (slot 2) is chosen with chance 50 % while the distance is between 10 and 35 and the spider faces the hero within 45 degrees (draw: geometric, tick r + 1 with probability 0.5). Call the choice tick s.
+- s: bite-run clip requested; steps of 0.2657 units from s + 1; distance 3.0 reached after 34 steps; s + 35: state 8, bite clip 45 requested; weapon-3 window passes s + 35 to s + 42; first hit possible in s + 36 for 15 damage (poison 50 % for 10 to 30 s, draw 0 to 100 strictly below 50); s + 48: bite clip gate; s + 49: recovery clip 47 requested; s + 62: end path, recovery countdown N = a whole number from 15 to 30 (draw), slot 2 cooldown 0.
+- The spider is now about 3.0 units from the hero. If the spider backs off (distance below 4 gives the back-off inner state, SPEC-0038 Behavior 44) it stops at a desired distance of 4 + 11 x f with f from 0.20 to 0.80, that is 6.2 to 12.8 units, and may charge again when that distance is above 10 (min cycle s + 62 + 15 = s + 77 plus the roll wait).
+- Swing (slot 0) from within 8.0 units, facing within 22.5 degrees, 25 % per tick: strike clip requested in tick w (after walking in to 3.0 if farther); window passes w + 17 to w + 33; first hit w + 18 for 5 damage (poison 25 % for 10 to 30 s); gate w + 44; end path w + 45; slot 0 cooldown drawn from 30 to 60 at w and again at w + 45; recovery N from 15 to 30. Next swing starts no earlier than w + 45 + max(N, cooldown) and typically w + 80 to w + 115 including the roll wait. In 600 ticks a lone Poison Spyder in reach lands about 5 to 7 attacks, at most one hit each.
+- Death of that spider at tick K: clip 58 starts in tick K, finished flag seen in tick K + 137, despawn flag set in that tick's valve step.
+
+**Spyder vs Giant Spyder differences in the same setting.** Spyder (25 HP): charge bite clip 45 is the 14-key clip: window passes s + 55 to s + 74 (first hit one tick later), hit 7 unblockable, gate s + 88, end path s + 102. Giant Spyder (150 HP): the same slot-2 timing with a larger weapon cylinder (radius 4.0, length 4.0), damage 15, unblockable, knockback 2; its slot-1 lunge (distance 4 to 10, 25 % per tick) has the 37-tick wind-up in ticks s to s + 37.
+
 ## Open questions
+
+**Default if unresolved (rewrite choice):** (a) valve animation lengths: animation 1 (opening) 60 ticks, animation 2 (spawn) 60 ticks, animation 4 (destruction) 90 ticks, none of which exist on disc; keep the opening length the only one that matters (it times the window and the reveal). (b) Hidden spiders stay registered and invisible until revealed and are never freed by streaming or corpse removal (their despawn flag stops their update); if a rewrite frees dead characters, keep one spawn pool per valve instead. (c) Valve destruction kills spiders through the normal death path of SPEC-0038 (loot and kill credit as for a hero kill), because the identity of the damage source is not known. (d) The nest has no exit: the host level script polls nest state 2.
 
 1. Starting nest state. Resolved: the nest starts active (1) before the setup scan, and the idle branch is unreachable (Per-fight state; High).
 2. Spider behavior beyond the nest's own release and state-16 checks is covered in SPEC-0038: Behavior 12 describes spider release, inactive/death handling and chooser; Behavior 44 describes the agro machine entered at release; Behavior 48 describes common-enemy movement. The nest and valves themselves do not attack (Behavior 9a; High).
@@ -279,3 +377,8 @@ Synthetic values. Defaults are the tunables above.
 10. The attacking branch's valve cylinder. Resolved: axis = the valve root bone's up axis, centre = the root bone's world position + 2.0 along it; the call passes no direction gate, so the fallback shot-slot test has none (see Hit tests; High).
 11. The centre of the valve cylinder. Resolved: 2.0 (half of the length 4.0) along the root bone's own up axis from the root bone's world position (High).
 12. Which pack and level module hold the fight, and its triggers, flags, movies and exit. Resolved: none; the encounter is not placed on this disc (Summary; High).
+13. Lengths of the valve and nest animations 0 to 4. Open: no data exists on disc. Default if unresolved: item (a) above. Only the length of animation 1 changes the fight (it delays the window and the reveal by that many ticks, Behavior D of the guide).
+14. What frees or hides a spider while it waits for its valve. Open: hidden spiders are set to the dead state, whose corpse countdown can release them through streaming; the nest sets the despawn flag once the death clip has finished, which stops their update, but the countdown value at setup is not known. Default if unresolved: item (b) above.
+15. Kill credit and loot for spiders killed by a destroyed valve. Open. Default if unresolved: item (c) above.
+16. Whether the nest, valves and spiders update in the order nest, valve, spider within one tick, and whether "animation 2 playing" is true on the request tick or the next. Medium: the nest is record 0 and updates first, and the playing test needs the clip started by an animation pass, so the reveal is the tick after the request. A one-tick shift moves every later number in the timeline vectors by one tick.
+17. Corrections for other specs (not edited here): SPEC-0038 Behavior 12 describes a spider's dead state 16 as waiting for animation 85 and returning to agro, but the spider rows have no reanimation flag, so a killed spider uses the plain dead state of SPEC-0038 Behavior 36, and no spider table has animation 85. SPEC-0038's Poison Spyder worked example numbers the slots from 1 (its slots 1 and 3 are slots 0 and 2 here) and plays the charge wind-up, but the charge wind-up id 43 has no clip, so the charge goes straight to the run clip.

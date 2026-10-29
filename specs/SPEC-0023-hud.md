@@ -371,7 +371,7 @@ One bar shows one monster at a time: the monster that was armed most recently. I
 - These bosses also arm the bar from their own hit code, at the point where their own damage rule applies (each is the same arm step):
   - Black Knight: in the four enraged stun states (charge, high swing, floor strike, sword spin), after a part loses HP.
   - Cloud Beast: on the first tick of the special-reply state.
-  - Undead Draik: hit reactions 1, 3 and 5.
+  - Undead Draik: the arm runs after the subtraction in hit reactions 1, 3 and 5; in the lethal stage-5 branch it runs with health 0 before one hit point is added back, so the bar timer is cut to 60 ticks at once.
   - Faerie Sisters: the dodge reaction, when the hit does not take the sister below 0 (Medium-High).
   - Gelert Assassin: when its hit detection applies damage, and on its flinch.
   - Gnarfas: its own hit detection.

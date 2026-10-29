@@ -1,13 +1,172 @@
 # SPEC-0014: Boss behavior: Ixi Chief
 
-- Answers: proactive, none requested (boss AI); R-0067 (the locomotion slot values, clips and root travel of modes 0, 1, 3, 5 and 6, and the charge walk clip); R-0088 (navigation steering, the charge start wait and charge-point validity)
+- Answers: proactive, none requested (boss AI); proactive (fight AI build guide); proactive (minion AI: Ixi Henchmen); R-0067 (the locomotion slot values, clips and root travel of modes 0, 1, 3, 5 and 6, and the charge walk clip); R-0088 (navigation steering, the charge start wait and charge-point validity)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
-- Confidence: per section. Tuning values and addresses: High (the defaults are words of the boot program data). Fight mode and stage/HP rules: High. Mode-2 flag source (game state 358, set by the final fight's script pack): High; whether mode 2 is reached in play: Medium. Stage and fight mode as separate values: High. Lava quirk (mechanism): High. Level-flag interaction: High for the flags, Medium for which level script reacts to them. Attack choice and cooldowns: High. Charge sub-steps, exits and navigation steering: High; charge-point containment ignores height (High); the pack-800 stuck scenario follows from static rules (Medium-High). Push: High for the formula, Medium for which hits use it. Incoming-hit rules: High for the control flow. Missile contact: Medium-High (per-bone spheres with radius above zero; the sphere geometry is Medium; the projectile path length of 120 ticks is Medium). Orbit: High for the mode numbers and the 30-tick flip; the 3.0-unit offset and its side sign are High. Buck kick hit: High (monster weapons 4 and 5). Movement-blocking flag (lock word): High. Knockback lanes: High (the knocked state's own effect belongs to the hero, SPEC-0036). Attack shapes, windows, damage path and block rule (Hit shapes and windows): High. Sounds (animation cues, the unused counter-attack cue) and the incoming-hit flash 222: High; the flash point: Medium.
+- Confidence: per section. Tuning values and addresses: High (the defaults are words of the boot program data). Fight mode and stage/HP rules: High. Mode-2 flag source (game state 358, set by the final fight's script pack): High; whether mode 2 is reached in play: Medium. Stage and fight mode as separate values: High. Lava quirk (mechanism): High. Level-flag interaction: High for the flags, Medium for which level script reacts to them. Attack choice and cooldowns: High. Charge sub-steps, exits and navigation steering: High; charge-point containment ignores height (High); the pack-800 stuck scenario follows from static rules (Medium-High). Push: High for the formula, Medium for which hits use it. Incoming-hit rules: High for the control flow. Missile reaction path (the 120-tick look-ahead that starts a block or dodge): Medium-High for the control flow, Medium for the 120 being ticks of travel. Shot contact in the boss's own hit check (present shot position and radius against the boss's bone capsules): High for the control flow, Medium for the capsule geometry. Pass-two additions (shot contact test, sticky lock word, melee-reaction latch, orbit stall, get-hit re-entry, mode-1 death loop, run-past latch): High for the control flow, Medium where marked. Orbit: High for the mode numbers and the 30-tick flip; the 3.0-unit offset and its side sign are High. Buck kick hit: High (monster weapons 4 and 5). Movement-blocking flag (lock word): High. Knockback lanes: High (the knocked state's own effect belongs to the hero, SPEC-0036). Attack shapes, windows, damage path and block rule (Hit shapes and windows): High. Sounds (animation cues, the unused counter-attack cue) and the incoming-hit flash 222: High; the flash point: Medium. Fight AI build guide: High for the state codes, the tick order, the clip data and the durations (the durations follow from the clip key counts and the speed rule; the one-tick offsets are Medium-High); the second hit route on the boss through the shared hero hit path: Medium-High; the held-pose drift after a repeated counter attack or buck kick: Medium.
 
 ## Summary
 
-The Ixi Chief is a melee boss that answers incoming missiles and melee attacks with a block or a dodge, counters some attacks, and chooses among a charge, two swipes, a buck kick and (in fight mode 1) a whirl. Movement keeps it inside a distance band from the hero. Its HP decides three stages. In fight mode 1 it also sets off two lava events at HP fractions 0.66 and 0.33 (the second one can never fire, see Behavior). The fight mode is chosen once when the fight starts from two story progress flags. Its sounds come only from its animation table, and each counted hit on it shows a hit flash (see Sounds and effects). Times are seconds on the 60 Hz game tick (SPEC-0007): a stored time T seconds becomes ticks = trunc(T x 60).
+The Ixi Chieftain controller is used by two distinct encounters: the Cogham Steppes Ixi Raiders fight in pack 800 (instance 2, mode 0) and the Abandoned Mines fight in pack 864 (instance 8, mode 1). Keep their story scripts and phase gates separate. The boss answers incoming missiles and melee attacks with a block or dodge, counters some attacks, and chooses among a charge, two swipes, a buck kick and (in mode 1) a whirl. Movement keeps it inside a distance band from the hero. Mode 0 has a dormant stage, a half-health transition and a death stage; mode 1 has lava and death rules but does not use those stages. In mode 1 the boss has two lava thresholds at HP fractions 0.66 and 0.33, but the second never fires (see Behavior). Fight mode is chosen once from two story progress flags. Sounds come from the animation table, and each counted hit shows a hit flash (see Sounds and effects). Times are seconds on the 60 Hz game tick (SPEC-0007): a stored time T seconds becomes ticks = trunc(T x 60).
+
+## Fight AI build guide
+
+This is the ordered recipe for the two shipped fights (pack 800 in fight mode 0, pack 864 in fight mode 1). Mode 2 belongs to no shipped Ixi fight and is only noted where it differs. The detailed sections below hold the full rules; this guide gives the order, the numbers and the durations. All durations assume play rate 1.0, which holds for this boss (nothing scales its play rate), and 60 ticks per second.
+
+**1. Initial values.**
+- Hit points, current and maximum: read from the monster row of type 74 variant 0 (the only row of that type); the shipped value is 300. Body radius 2.0, body height 5.0, weight 5.5, Blocking Angle 0.0, defence 0 (read from the same row; the shipped values are given for checking). No per-area scaling applies.
+- Position and facing: the character record of the fight's region. Shipped values for checking: the pack-800 fight at (513.613, 306.913, 2411.887) facing (-0.897, 0, -0.442); the pack-864 fight at (-798.605, 45.337, 2283.740) facing (-0.999, 0, -0.038). The level scripts move the boss later (for example pack 800 stage C places it at locator 17).
+- State 0 (idle); charge sub-step 0; stage 0; fight mode chosen once (Fight mode); both lava latches clear; all five cooldowns 0; hit latch 0; melee-reaction latch 0; dodge direction 0; orbit direction 0 and orbit timer 0; motion lock word 0 (set by the height rule and never cleared by the boss, see Stages and modes); damage scale 0.25 (mode 0) or 1.0 (modes 1 and 2). The hero the boss watches is the currently selected hero, read again at the top of every pass (a hero switch retargets the boss on the next tick).
+- Before the loop starts: the seven locomotion slots are set to (9, 10, 30, 14, 15, 17, 16); the invulnerable word is set; if the boss has no assigned navigation mesh it takes the first ground mesh that contains it.
+- Tunables from disc data: the tuning words under Layout (read from the boot program's data), the monster row above, the character record, and the animation table and clips of the boss's region (regions 806 and 869 hold identical clips for every id used).
+
+**2. Per-tick order.** See Each tick, in order: pass head (base state 1, invulnerable word cleared, locomotion slots), cooldown countdown, hold and stage-0 release, stage and mode rules, reactions (only when allowed), contact check (every state but hold), attack chooser and movement band (only when free), the state's handler, wait. An animation requested on tick n starts in tick n's animation pass; its root travel first moves the boss on tick n + 1; "clip ended" is tested before that tick's animation pass.
+
+**3. States, animations and durations.** s = the tick the handler first requests the animation. A one-shot clip of F keys ends at tick s + 4F - 3 (the state goes to idle in that tick). Every requested id has a clip, so nothing is skipped and nothing falls back to clip 0.
+
+| Code | State | Animation id -> clip (keys) | Duration / exit |
+| --- | --- | --- | --- |
+| 0 | Idle | 7 -> clip 7 (51 keys, speed byte 1, loop) | until the chooser or a reaction changes it; invulnerable word and base state 20 set |
+| 1 | Block missile | 5 -> clip 8 (15, loop) | one tick after the last missile path contact; base state 20 |
+| 2 | Dodge missile | 0x13 -> clip 23 or 0x14 -> clip 24 (18 keys) | s + 69; slides 19.1 left or 18.3 right |
+| 3 | Dodge melee | as state 2 | s + 69 |
+| 4 | Block melee | 5 -> clip 8 | first tick the hero is not attacking; base state 20 |
+| 5 | Counter attack | 0x19 -> clip 1 (16) | s + 61; never hits; no cooldown |
+| 6 | Charge | sub-steps 0 to 6 (see Charge) | 0 instant; 1 until within 1.0 of the point; 2 exactly 100 ticks; 3 exactly 65; 4 until D < 6.0; 5 until the hero is over 7.5 away or blocked; 6 exactly 49; cooldown 60 to 180 at the end. The first tick of sub-steps 2 and 3 only requests the animation (no turn that tick); the hit latch is cleared only on the way into sub-step 6 |
+| 7 | Forward swipe | 0x18 -> clip 4 (22) | s + 85; window s + 24 to s + 47; cooldown 60 to 180 at the end |
+| 8 | Wide swipe | 0x1A -> clip 4 (22) | s + 85; same window; turns toward the hero at 0.25; cooldown 60 to 180 at the end |
+| 9 | Whirl | 0x1B -> clip 15 (15, loop) | s + 59; hit test s + 1 to s + 58; cooldown 120 to 240 at the end; dashes forward 20 units per second |
+| 10 | Buck kick | 0x1D -> clip 13 (20) | s + 77; window s + 48 to s + 63; no cooldown |
+| 11 | Rush forward | locomotion mode 1 (clip 26) | until the chooser changes it |
+| 12 | Strafe close | locomotion mode 0 (clip 21) | until the chooser changes it |
+| 13 | Strafe back | locomotion mode 3 (clip 29) | until the chooser changes it |
+| 14 | Orbit | locomotion mode 5 or 6 (clips 27 and 28) | until the chooser changes it |
+| 15 | Hold | 7 | until level flag 3 clears (modes 1 and 2) or level flag 0 sets (mode 0 stage 0) |
+| 16 | Stage transition | 7 | until level flag 2 sets (mode 0) |
+| 17 | Death | 7 | never |
+| 18 | Get hit | 6 -> clip 11 (13) | s + 49, then 25 of 101 to forward swipe, else idle; slides back 11.7 |
+| 19 | Lava | 1 -> clip 14 (33) | s + 129; level flag 2 posted on ticks s + 80 to s + 83 |
+
+**4. Attack chooser (free states only; first rule that fires wins).** (1) hero guarding and D < 6.0: counter attack. (2) charge cooldown 0: charge, no distance test, retreat distance a real from 10.0 to 20.0. (3) forward-swipe cooldown 0 and D < 7.0: 50 of 101 forward swipe, else cooldown 60 to 180. (4) wide-swipe cooldown 0, D < 7.0 and the hero walking-strafing or strafe-jumping: wide swipe at 50 of 101 in mode 1 and 25 of 101 in modes 0 and 2, else cooldown 60 to 180. (5) hero behind the boss (dot below -0.5) and D < 4.0: buck kick. (6) mode 1 only: whirl cooldown 0: a roll of 40 or more draws the cooldown 120 to 240 and stops; a roll below 40 starts the whirl if D < 15.0 and does nothing otherwise (no cooldown). Rolls are integers from 0 to 100 inclusive and the event happens when the roll is below the chance. D is always horizontal.
+
+**5. Movement (free states, after the chooser).** D > 15.0 rush forward; 13.0 <= D <= 15.0 no change (an idle boss stays idle); 10.0 < D < 13.0 strafe close; D < 5.0 strafe back (target 2.0 behind it); 5.0 <= D <= 10.0 orbit unless already orbiting or strafing close with D above 8.0. Speeds come from the clips' root travel: rush 20.0 units per second, strafe close 5.67, strafe back 9.56 backward, orbit 5.67 sideways, charge walk and charge-to 20.0. The navigation step (SPEC-0056) steers; an unreachable orbit target is replaced by the boss's own position and that tick uses locomotion mode 0 instead of 5 or 6 (see Orbit: the boss then stalls), and an unreachable charge target ends the charge (cooldown 60 to 180, idle). Idle, hold, the attacks and the reactions never turn the boss; only the movement steering, charge sub-steps 2 and 3, the wide swipe and the shared hit hook (it faces the attacker) do.
+
+**6. Reactions.** Missile: cooldown 0 and a projectile path contact: block 25 of 101, else dodge 25 of 101 (direction by coin flip), cooldown 30 to 60 whenever a contact was found. Melee: hero attacking, latch clear, D < 7.0 and the hero facing the boss (dot above 0.5): dodge 25 of 101, else block 25 of 101; the latch stays set until the hero stops attacking, and it is cleared only on a tick on which reactions are evaluated (see Edge cases). Allowed in free states and in states 5, 7, 8, 9, 10 and charge sub-steps 0, 2, 3, 4, 6. Odds per hero swing in reach and facing: dodge 25/101 (24.8 %), block 76/101 x 25/101 (18.6 %), nothing 56.6 %; per shot with a path contact: block 24.8 %, dodge 18.6 %, nothing 56.6 %. Both reactions can fire on the same tick; the melee one (evaluated second) wins, and a counted hit later in the tick replaces either.
+
+**7. Hit and hurt.** Boss attacks: weapon volumes in ticks as listed in the table above; damage = trunc(tuned value x scale), unreduced, once per attack (hit latch); only the forward swipe can be blocked by a guarding hero facing the boss. Hero hits on the boss: the boss's own contact check (state 18 entry, HP loss) plus the shared hero hit path in the states where the boss is not invulnerable (Incoming hits, Hurt side). Invulnerable only in idle, hold and stage transition (to the shared path); ignores all hits in hold and lava (own check). The own check tests melee in every state except get-hit and stage transition, and shots in every state except hold and lava; a shot counts only when it actually overlaps a bone capsule (present position and radius), not along its look-ahead path.
+
+**8. Phases.** Mode 0: stage 0 hold until level flag 0 (then idle and three cooldowns of 60 to 180); stage 1 until HP ratio is strictly below 0.5 (then state 16, level flag 1) and level flag 2 (then idle, stage 2, cooldowns unchanged); stage 2 until the HP ratio is 0 or less (then state 17, level flag 3). Mode 1: hold while level flag 3 is set; lava at ratio strictly below 0.66 (once; the 0.33 trigger can never fire); death at ratio 0 or less (state 17, level flag 0). These rules override any state, busy or not.
+
+**9. Arena hand-offs.** Pack 800: gate Henchmen 10 and 11 both dead sets level state 0; level state 1 starts the ranged-Henchmen entrance; level state 2 releases stage 2; level state 3 starts the finale. Pack 864: level state 3 holds the boss until camera 11 ends; a lethal hit posts level state 0; the end sequence raises level state 3 again. The lava post (level flag 2) is read by the level data; the boss itself does nothing else with it. See Encounter flow.
+
+**10. Death.** State 17 requests animation 7 and never leaves it; the boss stands in the idle pose with no death animation and no death sound, pays nothing (its drop ordinal is none) and is removed only by the level script. The shared death hook does not mark it dead (class 11 is excluded from the dead base state).
+
+**11. Pitfalls a port gets wrong easily.**
+- The counter attack is triggered by the hero guarding, not attacking; it never damages; with the hero guarding inside 6.0 the boss freezes in the counter pose (Timeline D).
+- Wide-swipe chance is 50 only in mode 1; mode 0 is 25 (and mode 2 is 25).
+- The whirl dashes forward at 20 units per second for its whole length and is tested from its second tick; the stop-and-slam lunges 10.3 units.
+- Charge sub-step 2 is a full 100-tick idle pause and sub-step 3 a 65-tick twirl, both with the boss hittable.
+- In modes 1 and 2 the first thing the boss does after the hold is a charge (cooldowns start at 0, no distance test).
+- Orbit direction flips only on a contact tick with the timer at 0.
+- Block states use animation 5; 0x14 is the dodge animation and the base state number 20 (guard) is a different thing.
+- Percent rolls are 0 to 100 inclusive (chance P is P in 101), cooldown draws are inclusive integer ranges of ticks.
+- Stage, lava and death rules override busy states; the contact check runs in every state except hold.
+- Distances are horizontal; the heights only matter through the lock word (difference above 1.0).
+- Do not apply the unused tuning values; do not use clip 0 for any id.
+
+**Edge cases for implementers (the easy-to-miss settled rules).**
+1. Shot contact in the boss's own check is a present-tick overlap of the shot's position and radius with a bone capsule (bones whose hurt length is above 0). The 120-tick look-ahead path is used only by the missile reaction and by the block-missile state's hold test. A shot that is blocked or bounced by the shared hero hit path on the tick it arrives never reaches the own check.
+2. When several hero shots overlap the boss in one tick, each is consumed, but only the last one in slot order sets the damage (each shot's damage is truncated to a whole number first); damage is not summed. A shot and a melee contact in the same tick: the shot's damage is used and the melee damage is dropped. Either one sets get-hit and plays the hit flash.
+3. Melee is not tested at all in get-hit or stage transition; so one hero swing gives at most one own-check hit. In dodge-melee, block-melee and forward swipe a swing from the front (boss forward dot direction to hero above 0.5) is ignored; a swing from the side or behind (dot 0.5 or below) counts.
+4. Get-hit does not restart: a second counted hit (a shot) while the state is already get-hit takes its HP but leaves the clip running, so the stagger is not extended. A counted hit on the tick right after a get-hit clip finished (the animation still reads as the finished get-hit clip) makes the handler end the state at once and roll the 25/101 swipe again.
+5. The melee-reaction latch is cleared only on a tick on which the reaction step runs and the hero is not attacking. Reactions do not run in get-hit, the dodge and block states, lava, hold, stage transition, death or charge sub-steps 1 and 5. If the hero's swing ended while the boss was in one of those states, the latch stays set into the hero's next swing, and that swing gets no dodge or block roll until a tick on which reactions run sees the hero not attacking.
+6. The height rule sets the motion lock word whenever the boss and the hero differ in height by more than 1.0, and nothing in the boss clears it again: after the first such tick (a hero jump is enough) the lock stays set for the rest of the fight. The charge does not set it. With it set the edge guard and the navigation-mesh position restore never fire for this boss.
+7. Orbit stall: when the orbit side point is not a valid place to stand, that tick uses locomotion mode 0 with the boss's own position as the move target. The navigation step then counts the boss as arrived (target within 0.25), sets base state 1 and turns it toward the hero at 0.1; the idle request it makes is animation 0, the same rearing clip as the lava animation (with its death cue the first time). The boss stays in orbit state; each later tick re-tests the side point and orbit resumes as soon as it is valid (Medium).
+8. Reactions and the chooser order inside a tick: reactions (missile, then melee), then the contact check, then the chooser and movement band only if the boss is still free, then the state handler. A counted hit therefore also cancels an attack the chooser would have started.
+9. Idle and hold never turn the boss. An idle boss at distance 13 to 15 keeps whatever facing it had; it also stays invulnerable to the shared hero hit path, but not to the own check.
+10. A hit latch is set when the weapon volume overlaps the hero, whatever the hero's state (blocked, dead, busy or knocked back); the hit is consumed even if the hero's take-hit ignores it. Nothing in the controller checks whether the hero is alive; the boss keeps acting against the selected hero object.
+11. Mode 1 after death: the end sequence raises level flag 3 again, which forces hold on every tick, but the death rule runs after the hold rule in the same tick and sets death again (re-posting level flag 0 every tick) until flag 3 clears. The boss ends each tick in the death state.
+12. A counted hit on a dead boss sets get-hit for one tick (the rear-slide clip request and the hit flash), then the death rule restores death on the next tick.
+13. In stage 1 the transition is entered from any state; the hero's shots still count in the transition state and send the boss to get-hit for a tick, after which the transition is entered again and level flag 1 posted again.
+14. Charge sub-step 4 aborts to idle (cooldown 60 to 180) on the first tick if the hero's position is not inside the boss's navigation mesh, for example when the hero stands off the mesh; a jumping hero is fine because only the ground-plane position is tested.
+
+**Hero actions against this boss.** Hero damage per melee hit is the hero's damage product (weapon stat A times the step factor and the Mote factors, SPEC-0036 Damage), with no reduction (the boss's defence is 0); the boss has 300 hit points. The boss shows its health bar (monster health bar, 10 seconds) after a counted hit. Facing terms use the boss's facing against the hero's facing unless noted.
+
+| Hero action | Effect on the boss, by boss state | Confidence |
+| --- | --- | --- |
+| Normal swing (Tor sword, Roberta wand) | Own check: every state except hold, get-hit and stage transition counts a swing whose window is active and whose weapon reaches a bone capsule: the hero's damage is subtracted once and the boss goes to get-hit. In dodge-melee, block-melee and forward swipe a frontal swing (dot above 0.5) is ignored by this check. Shared hero hit path: refuses the boss in idle, hold and stage transition (a frontal swing there only plays the block effect, no damage, because those states are guarding); in the block states the boss is guarding and not invulnerable, so a swing from the front is blocked and one from the side or behind goes through; in every other state the same damage is subtracted again (the first damaging shared hit of the fight is doubled) | High (own check); Medium-High (shared path) |
+| Power attack, full release, Mote power objects | The power objects reach the boss only through the shared path and only when the boss passes the hittable test: nothing in idle, hold or stage transition; full damage in every other state, including the block states. Tor's power melee step is a normal swing with the power factor | Medium-High |
+| Shield guard (L1, or the 40-tick timer that rises when the boss attacks within 10 in front of an idle armed hero) | A hero that is guarding with the boss within 6.0 makes the chooser start the counter attack (animation only, never damages) on every free tick. The guard blocks only the forward swipe (hero facing the boss, dot above 0.5): damage 0 and the block reaction. The wide swipe, slam, whirl, buck kick and the run-past push ignore guard | High |
+| Dodge or roll | The heroes have none. A sidestep (L2 strafe) or strafe jump makes the wide swipe eligible inside 7.0. Hero walk is about 13.5 and run about 19.3 units per second against boss rush and charge at 20.0 and orbit at 5.67 | High |
+| Quick shot (Roberta) | When a shot's 120-tick look-ahead path touches the boss and the missile cooldown is 0: block 24.8 %, dodge 18.6 %, nothing 56.6 %, then a 30 to 60 tick cooldown. Shared path: a guarding boss (idle, hold, stage transition, both block states) bounces the shot with no damage and no cost to the hero, whatever the facing; a shot that meets the boss in any other state damages it through the shared take-hit. Own check: a live shot that overlaps a bone capsule is consumed and its damage subtracted in every state except hold and lava, including a shot that was just bounced and still overlaps on the next pass (Medium-Low) | Medium-High |
+| Full-release shot | Not blocked by a guarding target: a boss that passes the hittable test takes the damage; in idle, hold and stage transition the shot is disarmed with no damage from the shared path (the own check can still count an overlapping shot outside hold) | Medium |
+| Items and statuses | No consumable acts on the boss. A status carried by a spell or shot goes through the shared enemy status rule (element immunity applies) | Medium |
+
+Pace: with u the hero's damage per hit, a swing that lands on a boss in a state where both routes work removes about 2u (3u for the first damaging shared hit of the fight); in idle it removes u. So about 150 / u such hits kill the boss from full health, and up to 300 / u if it is always caught idle. Swords have stat A of 4, 7, 10, 15, 20, 25, 30 and 40; the step factor is 1.0 for ordinary swings and 2.0 for Tor's sub-states 4 and 12.
+
+### Minion AI: Ixi Henchmen (pack 800; none in pack 864)
+
+The Ixi Henchmen are ordinary common enemies (SPEC-0038 holds the rules; this section gives the numbers of the two rows the fight uses). They run no bespoke controller. Pack 864 (Abandoned Mines) has no Henchman record in any region its instance loader requests: its Chief fights without them. All times are ticks at 60 per second; s is the tick on which the attack sequencer first runs its state 1. Confidence: High for the rows, clips and swing arithmetic; Medium-High for the notice timing after the script's aggro call; Medium for the charge flow.
+
+**Who and where.**
+
+| Entities | Region | Monster row | Kind | Hit points | Default state | Role |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 and 2 (ambient) | 801 | 160 | Close combat, strafe (approach 4) | 65 | wander variants 5 and 6 | Camp enemies, never script-aggroed; notice the hero on their own |
+| 1 (ambient) | 801 | 157 | Ranged, keep distance (approach 3) | 65 | wander variant 6 | Same |
+| 10 and 11 (gate pair) | 807 | 160 | Close combat | 65 | wander variant 7 | The opening gate: both dead sets level state 0 |
+| 12 to 16 (wave) | 808 | 157 | Ranged | 65 | wander variant 7 | Introduced after the Chieftain's half-health signal |
+
+Each row has radius 2.0 (160) or 1.5 (157), height 4.0 or 3.5, attack-manager weight 8, death disappear timer 360 and death animation 58 (clip 10, 28 keys on row 160, gate s + 108; clip 24, 14 keys on row 157, gate s + 53). Both rows keep the same clip set and table in every region (the 807 and 808 tables equal the 801 ones).
+
+**How the script makes them aggressive (Medium-High).** Nothing else sets them to agro; the call is SetAI_Agro, which puts an enemy in the alerted search (class state 2), not in agro.
+- Gate pair: the opening scene moves them to locators 25 and 26, loops action 44 on them at script speeds 1.7 and 1.5, then calls SetAI_Agro on both, returns them to idle and gives the player control.
+- Wave: the stage-C scene walks entities 16 to 12 to locators 20 to 24 at script speed 1.1, plays dialogue line 10, calls SetAI_Agro on entities 12 to 16, waits 1.0 s (60 ticks) and releases control.
+- In the alerted search the enemy runs the notice test once per awareness cycle; the first test comes about 31 ticks (row 160) or 61 ticks (row 157) after the call, then every 32 or 62 ticks. Row 160: awareness roll 85 %, band 5 to 40 (70 % at 5, 10 % at 40), view cosine 0.707 (chance halved when the hero is outside it). Row 157: awareness 100 %, band 5 to 100 (90 % at 5, 60 % at 100), view cosine 0.9239. A hero closer than the near edge is always noticed. Both rows lack the search clip (action 18), so a notice moves them straight to agro. A blocked sight line shrinks the band (SPEC-0038 Behavior 3). Expected delay at 12 units: row 160 passes a cycle with probability 0.85 x 0.57 = 0.48, so agro starts around tick 31, 63, 95, ...; row 157, at 30 units, about 0.81 per cycle (ticks 61, 123, ...).
+- The ambient trio wanders (wander variants, notice moves them to the alerted search) and aggroes by sight only.
+
+**Action ids with a clip.** Every clip plays at 0.25 keys per tick (speed byte 2; 4 ticks per key). Missing ids are skipped in the same tick when they are attack phases, and play clip 0 of the set otherwise.
+- Row 160 (clip set of 40): locomotion 28 strafe forward (clip 22, 11 keys, loop, 5.7 units per second = 0.095 per tick), 32 back (clip 29, 9.6 per second backward), 29 and 30 sidesteps (5.7 per second), 31 hold (clip 31, 14 keys), 21 rush walk (clip 26, 7 keys, 20.0 per second, used by the charge), 0 idle (clip 30, 50 keys), 2 walk (5.0 per second); reactions 57 hit (clip 11, 13 keys, gate s + 49), 55 melee dodge (clip 12, 16 keys, gate s + 61), 53 and 54 missile dodge (18 keys, gate s + 69), 56 block (clip 8, 15 keys, loop), 17 search end (clip 38, 15 keys). Missing: 18, 23, 24, 26 (no keep-distance gaits), 62, 64, 81, 82, 125.
+- Row 157 (clip set of 26): locomotion 24 keep-distance forward (clip 22, 11 keys, 5.0 per second = 0.083 per tick), 26 back (clip 12, 16 keys, 6.9 per second backward), 25 hold (clip 0, 20 keys), 28 (9.6 per second), 21 rush (20.0 per second), 29 and 30 sidesteps (5.7); reactions 57 hit (clip 25, 13 keys, gate s + 49), 55 melee dodge (clip 12), 53 and 54 missile dodge (gate s + 69). Missing: 18, 23, 56, 62, 64.
+
+**Attack slots, per row** (phases A..E = ids 33 + 5k to 37 + 5k; band is strict on both ends; chance per tick is one less than the row percent because the roll is 1 to 100 and must be below it; slots are tested k = 3, 2, 1, 0 and the first to pass wins; the recovery after every swing is a draw from 30 to 180 ticks on row 160 and 30 to 120 on row 157, and each slot cooldown is drawn at the choice and again at the end path):
+
+| Row, slot | Type | Band | Chance per tick | Facing cosine above | Range | Cooldown | Speed words (wind-up, strike, recovery) | Clips present | Damage and knockback |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 160 k=0 | melee | 0 to 10 | 24 % | 0.9239 | 4.0 | 30 to 60 | 1.0, 1.0, 1.0 | B 34 (15 keys), D 36 (3 keys) | 15, 0 |
+| 160 k=1 | melee | 7 to 12 | never (chance 0) | 0.707 | 10.0 | 30 to 60 | 1.0 | B 39 | 21, 0 (unused) |
+| 160 k=2 | melee charge kind 2 | 0 to 50 | 24 % (needs a route) | 0.966 | 5.0 | 60 to 120 | 1.0 | B 44 (7 keys, loop), C 45 (22 keys), D 46 (3 keys) | 35, 1.0 |
+| 157 k=0 | missile, straight | 10 to 40 | 84 % | 0.9239 | n/a | 60 to 120 | 1.0 | A 33 (20 keys), B 34 (12 keys) | 5 |
+| 157 k=1 | melee | 2 to 12 | 99 % | 0.707 | 10.0 | 60 to 180 | 1.3, 1.3, 1.0 | B 39 (21 keys) | 10, 5 |
+| 157 k=2 | missile, lobbed arc | 15 to 80 | 24 % | 0.0 | n/a | 60 to 240 | 1.0 | A 43 (20 keys), B 44 (9 keys) | 10 |
+
+Row 160 slot 3 and row 157 slot 3 are unused. A melee slot beyond its range walks (row 160 uses strafe forward 28) and starts its swing when within range and facing; a missile slot starts at once when the hero and the Henchman are on the walk mesh.
+
+**Melee timelines** (the hero inside the strike volume for the whole window; weapon volumes: row 160 weapon 1 radius 4.0, weapons 2 to 5 radius 2.0, all length 2.0; row 157 weapon 4 and 5 radius 2.5 length 2.0, weapon 1 and 3 radius 1.0):
+- Row 160 slot 0. B (id 34) is requested on tick s (A is missing). Strike frames 5 to 9, so one window of ticks s + 20 to s + 39 and one hit (15 damage) at s + 20. The clip passes its gate on tick s + 57 and the end path runs on s + 58 (the same with or without a hit, since the rate is 1.0). The swing clip carries about 3.4 units of forward root travel. A blocked hit plays D (id 36, gate 9 ticks).
+- Row 160 slot 2 (charge). On the tick after the choice: B (id 44, the 20 units-per-second rush clip) starts and the Henchman runs at 0.333 per tick until the hero is within 5.0 units (it then goes on) or it has run its drawn charge distance (10 to 50 units, drawn when the enemy enters agro and again after each normal choice). No strike test runs during the run. Then C (id 45) is requested on tick c; the window is ticks c + 24 to c + 47 (frames 6 to 11), one hit of 35 damage with knockback 1.0 at c + 24; C passes its gate on c + 85 and the end path runs on c + 86 (Medium: one hit per swing).
+- Row 157 slot 1 (swipe, strike rate 1.3 = 0.325 keys per tick): B (id 39) requested on s; strike frames 12 to 15, window ticks s + 37 to s + 49, hit (10 damage, knockback 5) at s + 37; the rest of the clip runs at 1.0 after the hit, so the gate comes on s + 69 and the end path on s + 70; without contact the gate comes on s + 62 and the end path on s + 63.
+
+**Ranged timelines (row 157).** 
+- Slot 0 (straight shot). A (id 33) is requested on s and needs 77 ticks: its gate passes on s + 77, and on that tick B (id 34) is requested. B's frames 0 to 2 carry the release bit, so the first tick of B (s + 78) fires the single projectile (spawn count 1); B passes its gate on s + 122 and the end path runs on s + 123. So there is no instant shot: the wind-up alone is 1.28 seconds. The shot flies at 2.0 units per tick for 20 ticks (range 40), damage 5, radius 0.1, aimed at the hero's position plus 2.5 up, with no scatter unless the Henchman is outside the camera cone (+5.0) or waiting in line (+3.0); a hero 30 units away is reached about 15 ticks after the spawn. The next choice can come from s + 123 + N, N the recovery draw (30 to 120), and the slot cooldown (60 to 120, redrawn at s + 123) must also be spent.
+- Slot 2 (lob). A (id 43, the same 77-tick clip) then B (id 44, 9 keys): the release bit is on frame 2, so the lobbed shot spawns on s + 85 (B requested on s + 77, first frame-2 tick 8 ticks later); B passes its gate on s + 110 and the end path runs on s + 111. The shot is ballistic (kind 1) with speed s_v = 1.0 + u squared x (0.3 - 1.0), u = 1 - (d - 15) / 65: 0.3 per tick at 15 units, 1.0 at 80; flight time d / s_v ticks (about 51 ticks at 30 units); damage 10, radius 0.1, no area (duration 0, radius 0). Effect 1415 plays on the straight shot's world impact only.
+
+**Movement.**
+- Row 157 (keep distance): desired distance drawn as 10 + 30 f (f from 0.20 to 0.80: 16 to 34). Holds (action 25, turn blend 0.25) while the hero is 10 to 40 away; walks forward (24, 0.083 per tick) when beyond 40 until closer than the desired distance; backs away (26, 0.115 per tick) when closer than 10 until beyond the desired distance. Never waits in line (approach 3).
+- Row 160 (strafe): desired distance 10 + 10 f (12 to 18). Walks forward (28) until closer than the desired distance, then holds (31) facing the hero and, after each hold of 60 to 180 ticks, picks hold, left sidestep or right sidestep at random (sidesteps at 0.095 per tick); backs off (32, 0.16 per tick) when closer than 10.0; walks again beyond 20.0. A blocked sidestep sets a 120-tick lock.
+
+**Defence (decides how the fight feels).** Row 160 blocks 80 % and dodges 80 % of the hero's melee swings: r1 at most 80 blocks, else r2 below 80 dodges (79 in 100), so 96 % of swings are defended; after a defence ends there is no new one for 60 to 240 ticks. Hero shots meeting the body within 60 ticks: dodge 79 %, then block 49 % (block wins), so 89 % are avoided. Row 157 blocks nothing and dodges melee at 89 %, 74 % and 59 % (quick, normal, heavy swings), hero shots at 89 % (look-ahead 180 ticks); after a defence ends there is no new one for 60 to 120 ticks. A defended swing deals nothing; the animations are 55 (dodge) and 56 (block, row 160).
+
+**Other Henchman facts an implementer needs.**
+- Drops. Each Henchman pays out on its first death tick. Ambient entity 0 (region 801 record 0) and the gate pair (region 807 records 0 and 1) drop one Red Juppie (item 150) at their position; ambient entities 1 and 2 use the group money and item roll of their placements (SPEC-0021, SPEC-0038); the five wave Henchmen have no drop placement and drop nothing. Standard inventory and world-item limits apply.
+- Blocking. No attack slot of either row carries the unblockable or forced-block flag. A guarding hero facing the Henchman (hero facing dot Henchman facing at most -0.5) blocks every strike: the strike's damage is reduced by the shield (SPEC-0036 Enemy attack damage to a hero), the swing plays the hero's block reaction, and the blocked clip variant (D) plays. Armour and the shield reduce the straight and lobbed shots too (pool rule).
+- Counter swipe (row 157 slot 1 only). The ranged Henchman's swipe has a counter trigger 6 with chance 75: while it is in its hit reaction, with the hero between 2.0 and 12.0 away and inside the 0.707 facing cone, each tick draws one 0 to 100 roll (75/101 passes) and a pass starts the swipe at once, with its 60 to 180 tick slot cooldown drawn then. So a wave Henchman hit from close range answers with a swipe about three times in four. Row 160 has no counter slot.
+- Attack manager. Each Henchman has weight 8. Capacity is 3 x (weapon index + armour index) of the selected hero (0 with starting gear). The entry list order is by distance with the hysteresis of SPEC-0038 Behavior 45; entry k may attack when the weights before it sum to at most the capacity. With starting gear only the first entry attacks; a row 160 Henchman refused this way goes to wait in line (strafe stand-off point within 10 of the hero, walking, face the hero) and starts its swing only when released; a row 157 Henchman is never held back. Two gate Henchmen therefore attack one at a time until the hero's gear index sum is 3 or more.
+- Target. All Henchmen act against the currently selected hero, re-read each tick.
+
+**Timeline test vector, ranged wave (hero standing still 30 units away, wave Henchman already in agro, facing within 22 degrees, cooldowns 0).** Tick 0: slot 2 passes with 24 % (band 15 to 80); otherwise slot 0 with 84 %; so the first choice is slot 0 on tick 0 with probability 0.76 x 0.84 = 0.64. Take slot 0 chosen on tick 0: s = 1 (state 0 passes at once), A requested on 1, B requested on 78, the shot spawns on 79, reaches the hero near tick 94, B gate on 123, end path on 124, next choice from tick 124 + N (N = 30 to 120) and not before the slot cooldown (60 to 120 from tick 124). Slot 2 chosen: A on 1, B on 78, lobbed shot spawns on 86, end path on 112.
+
+**Timeline test vector, close-combat gate pair (hero standing still 6 units away, both already in agro).** Each tick: slot 2 (charge) 24 % if a route exists and facing within 15 degrees, else slot 0 at 24 % (band 0 to 10, facing within 22.5 degrees, range 4.0). Slot 0 chosen on tick 0: distance 6 is above range 4: it walks forward at 0.095 per tick, needs 2.0 units, so about 21 ticks; s then is about 22; hit on s + 20 (tick 42), end path on s + 58 (tick 80); next recovery draw 30 to 180.
 
 ## Where it lives on the disc
 
@@ -55,8 +214,8 @@ Type: "f32" = IEEE single, "i32" = signed 32-bit integer. A percent value is an 
 | Forward swipe damage | i32 | 0x2DAEF4 | 50 | Before scale |
 | Wide swipe cooldown min | f32 | 0x2DAEF8 | 1.0 s | |
 | Wide swipe cooldown max | f32 | 0x2DAEFC | 3.0 s | |
-| Wide swipe chance, fight mode 0 | i32 % | 0x2DAF00 | 25 | |
-| Wide swipe chance, fight modes 1 and 2 | i32 % | 0x2DAF04 | 50 | |
+| Wide swipe chance, fight modes 0 and 2 | i32 % | 0x2DAF00 | 25 | Used whenever the fight mode is not 1 |
+| Wide swipe chance, fight mode 1 | i32 % | 0x2DAF04 | 50 | Used only when the fight mode is exactly 1 |
 | Wide swipe damage | i32 | 0x2DAF08 | 35 | Before scale |
 | Buck kick range | f32 | 0x2DAF0C | 4.0 | |
 | Buck kick damage | i32 | 0x2DAF14 | 25 | Before scale |
@@ -92,7 +251,10 @@ Tuning values that the boot program registers but the behavior does not read are
 | Hit latch | one hit per attack |
 | Melee-reaction latch | set when a melee reaction was evaluated, cleared when the hero stops attacking |
 | Dodge direction | 0 or 1, picked at random |
-| Orbit direction and timer | 0 or 1; 30-tick timer |
+| Orbit direction and timer | 0 or 1; timer in ticks, 0 at orbit entry, reloaded with 30 at a flip (see Orbit) |
+| Hit points | Current and maximum: 300 each (monster row 155; see the build guide) |
+| Invulnerable word (+0x7F0) | Cleared at the start of every controller pass; set again by the handlers of idle, hold and stage-transition (see Incoming hits) |
+| Base state | Written 1 at the start of every pass; 20 (guarding) by the handlers of idle, hold, stage-transition and both block states |
 | Retreat distance | float, the charge's candidate distance |
 | Charge target | a point in world space |
 | Damage scale | 0.25 or 1.0 (see Damage) |
@@ -114,22 +276,29 @@ At fight start the boss reads two story progress flags and picks a fight mode. I
 - Else progress flag 0x3C set: mode 1.
 - Else: mode 0.
 
-The Ixi fight's level script sets flag 0x3C when the level loads, so the normal fight is mode 1. No known level runs the fight without it (Open questions). The damage scale is 0.25 in mode 0 and 1.0 in modes 1 and 2.
+The Abandoned Mines fight in pack 864 sets flag 0x3C and therefore uses mode 1. The Cogham Steppes Chieftain in pack 800 does not set that flag and uses mode 0. Both use this controller, but their encounter scripts, phase gates and roles differ. The damage scale is 0.25 in mode 0 and 1.0 in modes 1 and 2.
 
 Mode 2 (High for the flag, Medium for its use): progress flag 0x166 is game state 358, which the fight reads through the game-state query (SPEC-0030). The only writer on the disc is the init of script pack 1432 (the final fight), which sets it. So mode 2 applies to an Ixi Chief whose controller starts after the final fight has begun. Whether that world places an Ixi Chief is not established (Open questions).
 
 ### Each tick, in order
 
+0. Pass head: write base state 1, clear the invulnerable word, and make sure the seven locomotion slots hold their standard values (Locomotion clips).
 1. Count down each cooldown that is above 0 by one tick (missile defense, charge, forward swipe, wide swipe, whirl). A cooldown stops at 0.
-2. Stage and mode rules (see Stages and modes).
-3. If the boss is free (see Busy and free), run, in order: missile reaction, melee reaction, the contact check, the attack chooser, and the movement band.
-4. Run the handler of the current state.
+2. Hold and stage-0 release (modes 1 and 2: the level-flag-3 hold; mode 0: the stage 0 and stage 1 hand-offs), then the stage and mode rules (height lock, transition, lava, death; see Stages and modes). These two steps set the state directly, even from a busy state.
+3. Missile reaction and melee reaction, only when the state allows reactions (see Busy and free).
+4. The contact check (Incoming hits). It runs in every state except hold, whether or not the boss is free.
+5. If the boss is free: the attack chooser, then the movement band. A state set by the chooser makes the boss busy, so the movement band then does nothing in the same tick.
+6. Run the handler of the current state (the state may have changed in steps 2 to 5 of this same tick; a state entered this way runs its handler's first step in this tick). After the handler, in every state except idle, hold, death and stage-transition, the controller stores the boss's id word (+0x14C) into the hero's attacker field (+0x15E0); no behavior depends on it that this spec needs.
+7. Wait one tick.
+
+The controller runs once per tick inside the character update, before the character's motion step and animation pass of the same tick (SPEC-0007, SPEC-0040 Behavior 14D). So an animation requested in step 6 on tick n starts in the animation pass of tick n, and its root travel first moves the boss on tick n + 1. A gate such as "the clip has ended" is tested in step 6 and sees the cursor left by the previous tick's animation pass.
 
 ### Busy and free
 
 - A state is **free** when the boss is idle or in one of the movement states (rush forward, strafe close, strafe back, orbit). Every other state is **busy**, including the attack states, the reactions, get-hit, lava, the stage-transition state, the hold states and death.
-- The missile and melee reactions are evaluated when the boss is free, and also in the charge (except its run-past and start sub-steps), counter-attack, forward-swipe, wide-swipe, whirl and buck-kick states. In all other busy states they are not evaluated.
-- Attack choice runs only while the boss is free.
+- The missile and melee reactions are evaluated when the boss is free, and also in the charge (sub-steps 0, 2, 3, 4 and 6; not sub-step 1, the walk to the charge point, and not sub-step 5, the run past), counter-attack, forward-swipe, wide-swipe, whirl and buck-kick states. In all other busy states they are not evaluated. A reaction replaces the current state at once (the interrupted attack's animation is simply replaced; no cooldown of the interrupted attack is set, and the hit latch is untouched).
+- Attack choice and the movement band run only while the boss is free.
+- State codes (decimal, used by the build guide): 0 idle, 1 block missile, 2 dodge missile, 3 dodge melee, 4 block melee, 5 counter attack, 6 charge, 7 forward swipe, 8 wide swipe, 9 whirl, 10 buck kick, 11 rush forward, 12 strafe close, 13 strafe back, 14 orbit, 15 hold, 16 stage transition, 17 death, 18 get hit, 19 lava. Free states are 0 and 11 to 14.
 
 ### Stages and modes
 
@@ -139,7 +308,7 @@ The stage value and the fight mode are separate values. The stage rules below re
 
 **Fight mode 0:**
 
-- **Stage 1**: while the HP ratio (current HP / max HP) is below **0.5**, the boss enters the stage-transition state, sets level flag 1, and holds (idle pose, animation 7). When level flag 2 is set, it returns to idle and moves to **stage 2**.
+- **Stage 1**: every tick the state is not already the stage-transition state and the HP ratio (current HP / max HP) is below **0.5**, the boss enters the stage-transition state (from any state, busy or not), sets level flag 1, and holds (idle pose, animation 7). When level flag 2 is set, it returns to idle and moves to **stage 2**. The cooldowns are not re-rolled when stage 2 starts: they kept counting down through the transition, so at stage 2 the charge cooldown is normally 0 and the first free tick starts a charge. No death test runs in stage 1 (a boss at 0 HP in stage 1 waits for stage 2 and then dies on the next tick).
 - **Stage 2**: when the HP ratio is 0 or less, the boss enters the death state (animation 7, never ends) and sets level flag 3.
 
 **Fight mode 1:**
@@ -153,19 +322,27 @@ The stage value and the fight mode are separate values. The stage rules below re
 - Death at HP ratio 0 or less, which sets no flag.
 - No lava triggers.
 
-**Hold (modes 1 and 2):** while level flag 3 is set, the boss is in its hold state (animation 7). When flag 3 clears, the hold ends and the boss returns to idle. The level sets flag 3 when it loads, clears it when the intro cutscene ends, and sets it again when the end cutscene starts.
+**Hold (modes 1 and 2):** while level flag 3 is set, the boss is in its hold state (animation 7), forced from any state on every tick. When flag 3 clears, the hold ends and the boss returns to idle. In modes 1 and 2 no cooldown is ever rolled at the start of the fight: all five cooldowns are 0 when the hold ends, so the first free tick after release starts a charge (the charge rule has no distance test and comes before the swipes), and the forward-swipe and wide-swipe cooldowns stay 0 until their first failed roll. The level sets flag 3 when it loads, clears it when the intro cutscene ends, and sets it again when the end cutscene starts. After the boss has died in mode 1, the hold rule (run first) and the death rule (run after it) both act on every tick while flag 3 is set: the hold rule writes the hold state, the death rule immediately writes the death state again and posts level flag 0 again, so level flag 0 is re-posted on every one of those ticks and the state the handler sees is death. In mode 2 the same alternation happens without a post.
 
-**Height check (High):** at the start of every stage-rule pass, in every fight mode, the boss compares its own height (the y of its position) with the height of the controlled hero. When the two differ by more than 1.0 (strictly), the boss's lock word is set to 1. The lock word is cleared to 0 at the start of every controller pass, and the charge handler also sets it on every tick it runs (Medium-High for the charge). It is the lock word of the motion record (SPEC-0040, edge guard): while it is 1, the edge guard that reverses a root step over a drop of more than 2.0 does not fire, and the navigation-mesh recovery that puts a character back at its last valid position after a failed triangle locate is skipped (SPEC-0029). So a boss on a different level from the hero can walk over ledges that would normally hold it back. Test vector: boss height 12.0 and hero height 10.5 set the lock word; heights 12.0 and 11.2 do not; heights that differ by exactly 1.0 do not.
+**Height check (High):** at the start of every stage-rule pass, in every fight mode, the boss compares its own height (the y of its position) with the height of the controlled hero. When the two differ by more than 1.0 (strictly), the boss's lock word is set to 1. Nothing in the boss's controller clears it again and the charge handler does not set it, so after the first tick on which the heights differ by more than 1.0 (a hero jump is enough) the lock word stays 1 for the rest of the fight (High for the boss's own code; Medium-High that no shared routine clears it). It is the lock word of the motion record (SPEC-0040, edge guard): while it is 1, the edge guard that reverses a root step over a drop of more than 2.0 does not fire, and the navigation-mesh recovery that puts a character back at its last valid position after a failed triangle locate is skipped (SPEC-0029). So once the lock word is set the boss can walk over ledges that would normally hold it back. Test vector: boss height 12.0 and hero height 10.5 set the lock word; heights 12.0 and 11.2 do not; heights that differ by exactly 1.0 do not; a later tick with equal heights leaves the lock word at 1.
 
 **Lava (mode 1 only):**
 
 - **Lava trigger 1**: the first tick the HP ratio is strictly below 0.66, the boss enters the lava state and sets the first lava latch.
 - **Lava trigger 2**: the first tick the HP ratio is strictly below 0.33, the same thing would happen with the second latch. The lava state sets the second latch on each of its ticks, including the first. The second check runs only while the first latch is set, so once trigger 1 has entered the lava state, the second latch is already set when trigger 2 is checked, and trigger 2 can never fire. Reproduce this.
-- The lava state plays animation 1. While it plays, every tick the boss's own action-frame query is true it sets level flag 2. When animation 1 ends, the boss returns to idle.
+- The lava state plays animation 1 (clip 14, 33 keys, one-shot, speed byte 2). While it plays, every tick the boss's own action-frame query is true it sets level flag 2; the clip's only event bit (bit 0x1) is on key 20, so the flag is set on the 4 ticks s + 80 to s + 83 (s = the tick the state is entered, which is also the tick the clip is requested). The clip ends 129 ticks after s (s + 129, back to idle). The boss is not invulnerable in this state (only the boss's own contact check ignores hits; see Incoming hits). The lava rule overrides any other state, including a charge in progress.
 
 The stage-transition state (stage 1, mode 0) is never entered in modes 1 and 2.
 
-### Encounter flow (pack 864; High for state and call order)
+### Encounter flow (pack 800: Cogham Steppes Ixi Raiders; High for state and call order)
+
+Pack 800 is a separate fight from the Abandoned Mines encounter below. Its entity 9 is the Ixi Chieftain and uses fight instance 2. Its initial enemy sets include three ambient Ixi Henchmen (entities 0–2), the Chieftain (entity 9), and two close-combat Henchmen (entities 10–11). The ambient trio is not part of the opening gate. The opening scene moves entities 10 and 11 to their arena positions, then waits until both are dead before setting level state 0. That state releases the Chieftain from mode-0 stage 0.
+
+At less than half of its maximum HP, the Chieftain enters its mode-0 transition and sets level state 1. The level script then introduces five ranged Henchmen (entities 12–16), walks them to their entry points and makes them aggressive. It sets level state 2 after the entrance scene, which releases the Chieftain into stage 2. At zero HP, the Chieftain sets level state 3. The final scene stages the five Henchmen and Chieftain, activates placement ID 12 at a fixed point; pack 800 maps it through slot 5 to resource 806 record 0, whose item key is 9 (Raider Boss Eye Patch; SPEC-0021), changes instance 2 to stage 1 and sets progress flag 55. The level exit gives item 9 (Raider Boss Eye Patch) if the hero does not already have it.
+
+The pack-800 script uses four once-words to guard its stage sequence. Stage A starts instance 2 at stage 0. The Henchman death gate, Chieftain half-health signal, script release, Chieftain defeat signal and finale release are separate events; do not collapse them into a single health threshold. Pack 800's Chieftain uses the 0.25 mode-0 damage scale and the stage-1/stage-2 rules above. Pack 864's progress flag 60 instead selects mode 1, as described below.
+
+### Encounter flow (pack 864: Abandoned Mines; High for state and call order)
 
 Init creates the character slot stores, raises progress flag 287, raises progress flag 60 if it is clear, and sets level state 3. The Chieftain is region set 4; its instance-trigger worker loads that set into store A through main trigger 10. Script trigger 1 separately marks the fight-start stage bit. When the stage thread sees that bit, it starts boss-fight instance 8 at stage 0, plays camera 8 and dialogue line 6, then cameras 10 and 11. Once camera 11 ends, it plays camera 7 and clears level state 3. That clear releases the boss's held state. Progress flag 60 selects normal fight mode 1, with full damage scale and the mode-1 lava and death rules.
 
@@ -180,7 +357,7 @@ Test path: after trigger 1 marks fight start, instance 8 starts at stage 0; leve
 2. Otherwise roll the missile dodge chance. If the roll is below it: enter the dodge-missile state with a dodge direction drawn from a coin flip.
 3. Set the missile-defense cooldown to a random tick count from 0.5 to 1.0 s. This is set only when a contact was found.
 
-The missile contact is the same test as the one described under Incoming hits: the projectile's path is tested against the boss's per-bone collision spheres (see there).
+The missile contact of the reaction (and the hold test of the block-missile state) tests each live hero shot's look-ahead path, from its position to its position plus 120 times its velocity, against the boss's bone capsules (bones with a hurt length above 0). This is a different test from the present-tick overlap that the contact check uses (see Incoming hits). The block-missile state stays while any live shot's path still touches a capsule; the first tick with none (the shot has passed, been consumed or bounced away) returns to idle. Only the hero's own six shot slots are examined, not the enemy projectile pool.
 
 **Melee reaction** (runs only when the hero is attacking, the melee-reaction latch is clear, the hero is within 7.0 units, and the hero is in front of the boss):
 
@@ -190,32 +367,49 @@ The missile contact is the same test as the one described under Incoming hits: t
 - Otherwise roll the melee block chance. If the roll is below it: enter the block-melee state.
 - Otherwise the boss does nothing (the latch stays set until the hero stops attacking).
 
-The melee latch clears as soon as the hero is not attacking.
+The melee latch clears on the first tick on which the reaction step runs and the hero is not attacking. The reaction step does not run in the states that block reactions (see Busy and free), so a latch set before such a state began is still set when the boss is free again if the hero has started a new swing by then; that new swing gets no roll. The melee reaction is evaluated after the missile reaction in the same tick and replaces its state; the melee test needs only the hero's attack flag, not an active hit window, so the dodge or block roll happens on the first tick the hero is attacking within 7.0 and in front.
 
 ### Incoming hits (contact)
 
-- In the hold state the boss takes no hits. In the lava state all hits are ignored.
+- This section is the boss's own contact check. The hero's swing and shots also reach the boss through the shared hero hit path (Hurt side below), which is a second route onto the same HP.
+- In the hold state the boss takes no hits. In the lava state all hits are ignored by this check.
 - A **hero melee hit** counts when the boss is not in the get-hit or stage-transition state, the hero is attacking with its attack frames active, and the hero's weapon touches the boss (the hero's single-weapon reach test, SPEC-0029 Behavior 10.2; this is the only use of that test in this boss).
-- A **hero projectile** (up to six projectile slots) counts when its path touches one of the boss's per-bone collision spheres, and only spheres with a radius above zero count (Medium-High). The projectile is used up. The path tested for each active projectile slot runs from the projectile's current position to its position plus 120 times its velocity (120 ticks of travel; the 120 is a fixed value, and its meaning as ticks is Medium).
-- During dodge-melee, block-melee, forward-swipe and get-hit, a melee hit is ignored when the hero is in front of the boss (the dot product of the boss's forward direction with the direction from the boss to the hero is above 0.5).
-- A counted hit (melee or projectile) puts the boss in the get-hit state and reduces its HP by the hero's damage (melee) or by the summed projectile damage.
+- A **hero projectile** (up to six projectile slots) counts when the shot's present position, grown by the shot's own radius, overlaps one of the boss's bone capsules (a capsule is a bone whose hurt length is above 0; its radius and length come from the bone record; Medium for the capsule geometry, High for the control flow). The shot is used up and its slot cleared. This is a present-tick overlap, not a look-ahead: the 120-tick path of the missile reaction below is not used here. The shot's damage is the shot's stored damage product against the boss's defence (0), truncated to a whole number.
+- During dodge-melee, block-melee and forward-swipe, a melee hit is ignored when the hero is in front of the boss (the dot product of the boss's forward direction with the direction from the boss to the hero is above 0.5). In get-hit and stage transition melee is not tested at all, so the front test never matters there.
+- A counted hit (melee or projectile) puts the boss in the get-hit state and reduces its HP by the hero's damage (melee) or by the damage of the last overlapping shot in slot order (shots are not summed; a shot and a melee contact in the same tick use the shot's damage only). When the HP reaches 0 the shared death hook runs.
 - A counted hit first plays the shared hit flash at the boss's position: one-shot effect 222, detached (SPEC-0034; the helper's flag is clear, so not 220). High for the id; Medium for the point.
 
 The sphere geometry itself is Medium confidence.
+
+Other details of this check (High):
+
+- Projectiles are not filtered by facing and are not ignored in the get-hit or stage-transition states; only hold and lava ignore them. So a projectile contact during the stage-transition state puts the boss in get-hit; the stage rule then re-enters the transition on the next tick and sets level flag 1 again.
+- The check also runs in the death state. A counted hit there sets get-hit for one tick; on the next tick the death rule fires again (and posts its level flag again).
+- A counted hit does not clear the boss's hit latch or its cooldowns, and a block or dodge state that the reaction step chose earlier in the same tick is replaced by get-hit if the same projectile or swing is also counted.
+
+**Hurt side: the second route (Medium-High; the shared hero hit path).** Every region character, the Chieftain included, is a target of the hero's swing and shots through the shared hit path (SPEC-0036 Hit detection, SPEC-0029 Behavior 10.3 and Open question 170). Three flags decide what that path does to the boss:
+
+- Invulnerable word +0x7F0: cleared at the start of each pass and set again by the handlers of idle, hold and stage-transition. So in those three states the shared path refuses the boss as a target; in every other state (including lava, death, get-hit and the whole charge) the boss is a normal hit candidate for the shared path.
+- Guard: the handlers of idle, hold, stage-transition, block missile and block melee write base state 20 (the guarding state), and every pass head writes base state 1. While in base state 20 the boss is a guarding target: a hero swing or shot is tested even though the boss is not hittable, and it is blocked (no damage, block effect) when the dot product of the boss's facing and the hero's facing is below the monster row's Blocking Angle, which is 0.0 for this boss. In practice a swing from the front (the two facings roughly opposed, dot below 0) is blocked while the boss idles or blocks; a swing from behind or from the side with dot 0 or above goes on to the hittable test (refused in idle, hold and stage-transition; accepted in the two block states).
+- In every state where the shared path accepts the hit, the shared take-hit subtracts the damage from the same HP word and the boss's own check can subtract again in the same pass: one swing that connects with the boss in the movement states, the charge, the swipes, the whirl or the buck kick removes the hit's damage through the shared path (the first such hit of the fight is doubled, SPEC-0029 Behavior 34 take-hit rule) and, once, through the boss's own check (the own check then puts the boss into get-hit, in which melee is not tested, so the own check counts that swing once; the shared path has its own once-per-swing hit list). In lava and get-hit the shared path alone can damage the boss with melee (the own check ignores or has already counted it). In idle and stage-transition only the own check can damage the boss; in hold neither route can.
+
+Default if unresolved (rewrite choice): implement both routes exactly as written above; if only one route can be built, build the boss's own check (it alone decides get-hit, level posts and death), and treat the shared route as extra damage in the states listed.
 
 ### Attack chooser (runs while free)
 
 Let D be the horizontal distance to the hero. The chooser checks, in order, and the first rule that fires sets the state:
 
-1. **Counter attack**: if the hero is currently in an attacking query and D < 6.0, enter the counter-attack state. (The 6.0 is written in the behavior, not a tuning value.)
-2. **Charge**: if the charge cooldown is 0, enter the charge state, set the retreat distance to a uniform real from 10.0 to 20.0, and set the charge sub-step to 0. There is **no distance check** on this rule.
+1. **Counter attack**: if the hero is **guarding** (the hero's guard query: the hero is in its guard action state 20, or Roberta is in attack sub-state 6 or 7, or the hero's guard timer is above 0; SPEC-0036, Taking a hit) and D < 6.0, enter the counter-attack state. This is not the hero-attacking test; the hero-attacking test belongs to the melee reaction and the contact check. (The 6.0 is written in the behavior, not a tuning value.) The counter attack has no cooldown and deals no damage, so a hero that keeps guarding inside 6.0 units makes the chooser pick it on every free tick (see the build guide, Pitfalls).
+2. **Charge**: if the charge cooldown is 0, enter the charge state, set the retreat distance to a uniform real from 10.0 to 20.0, and set the charge sub-step to 0. There is **no distance check** on this rule. This rule does not clear the hit latch (the charge clears it itself when it enters the stop-and-slam).
 3. **Forward swipe**: if the forward-swipe cooldown is 0 and D < 7.0: roll the forward swipe chance. If the roll is below it, enter the forward-swipe state. Otherwise set the forward-swipe cooldown to a random tick count from the forward-swipe range. (Nothing happens when D >= 7.0.)
-4. **Wide swipe**: if the wide-swipe cooldown is 0, D < 7.0, and the hero is in walk-and-turn/strafe (state 32) or a strafe jump (states 43 to 46; SPEC-0033): roll the wide-swipe chance (fight mode 0: 25; fight modes 1 and 2: 50). If below, enter the wide-swipe state. Otherwise set the wide-swipe cooldown.
+4. **Wide swipe**: if the wide-swipe cooldown is 0, D < 7.0, and the hero is in walk-and-turn/strafe (state 32) or a strafe jump (states 43 to 46; SPEC-0033): roll the wide-swipe chance (fight mode 1: 50; fight modes 0 and 2: 25). If below, enter the wide-swipe state. Otherwise set the wide-swipe cooldown.
 5. **Buck kick**: if the hero is behind the boss (the dot product of the boss's forward direction with the direction to the hero is below -0.5) and D < 4.0, enter the buck-kick state.
 6. **Whirl** (fight mode 1 only): if the whirl cooldown is 0: roll the whirl chance (40). If the roll is 40 or more, set the whirl cooldown to a random tick count from 2.0 to 4.0 s and stop. If the roll is below 40 and D < 15.0, enter the whirl state. Otherwise nothing.
 7. Otherwise stay idle.
 
-When the chooser picks an attack, it also clears the hit latch.
+When the chooser picks the counter attack, a swipe, the buck kick or the whirl, it also clears the hit latch (not for the charge, see rule 2). The roll for rule 3 and rule 4 uses a percent roll of 0 to 100 inclusive and "below" the stated chance. Rules 3 and 4 draw their cooldown only after a failed roll inside range; a roll that picks the attack sets the cooldown later, when the attack ends.
+
+Rule 5 is evaluated even when rules 3 and 4 failed: a hero behind the boss and farther than 4.0 falls through to rule 6. With the boss in fight modes 0 and 2, the chooser stops after rule 5.
 
 ### Movement band (runs while free; only changes the state when the boss is in a movement-capable state or idle)
 
@@ -224,7 +418,7 @@ Using D (horizontal distance to the hero), checked in this order. The movement s
 - D > 15.0: rush forward (locomotion mode 1).
 - 10.0 < D <= 15.0: strafe close (locomotion mode 0) if D < 13.0. For 13.0 <= D <= 15.0 the current movement is kept.
 - D < 5.0: strafe back (locomotion mode 3).
-- 5.0 <= D <= 10.0: orbit (locomotion modes 5 and 6), unless the boss is already orbiting, or it is strafing close and D is above 8.0. Entering orbit draws the orbit direction from a coin flip and resets the orbit timer (the 30-tick timer in Per-fight state).
+- 5.0 <= D <= 10.0: orbit (locomotion modes 5 and 6), unless the boss is already orbiting, or it is strafing close and D is above 8.0. Entering orbit draws the orbit direction from a coin flip and sets the orbit timer to 0 (see Orbit for what the timer does). The test uses the state the boss has when the movement band runs, so a boss in idle, rush forward or strafe back at D between 5.0 and 10.0 enters orbit; a boss already orbiting stays in it.
 
 The 8.0 and 13.0 limits are fixed in the behavior, not tuning values. The gaps (8 to 10 while strafing close, 13 to 15) give the band some hysteresis.
 
@@ -232,7 +426,9 @@ The 8.0 and 13.0 limits are fixed in the behavior, not tuning values. The gaps (
 
 ### Orbit
 
-Orbit moves the boss toward a point 3.0 units to one side of its own position. Let d be the horizontal unit direction from the boss to the hero and s = normalize(d x up) = (−d.z, 0, d.x), with up = (0, 1, 0). Direction 0 targets the boss's position + 3.0 x s and uses locomotion mode 5; direction 1 targets the boss's position − 3.0 x s and uses locomotion mode 6. With the handedness of SPEC-0004 (facing +Z, the right side is −X), s is the boss's right-hand side while it faces the hero, so direction 0's target point lies on its right and direction 1's on its left (the steps themselves follow the clip root travel, Locomotion clips, which goes the other way). If the target is not a valid place to stand (the navigation check), the target becomes the boss's own position. The 30-tick timer restarts when it runs out, and at that moment the direction flips (High).
+Orbit moves the boss toward a point 3.0 units to one side of its own position. Let d be the horizontal unit direction from the boss to the hero and s = normalize(d x up) = (−d.z, 0, d.x), with up = (0, 1, 0). Direction 0 targets the boss's position + 3.0 x s and uses locomotion mode 5; direction 1 targets the boss's position − 3.0 x s and uses locomotion mode 6. With the handedness of SPEC-0004 (facing +Z, the right side is −X), s is the boss's right-hand side while it faces the hero, so direction 0's target point lies on its right and direction 1's on its left (the steps themselves follow the clip root travel, Locomotion clips, which goes the other way). If the target is not a valid place to stand (the navigation check), the target becomes the boss's own position and the locomotion mode is set to 0 for that tick (the strafe-close gait, not the orbit gait). The navigation step then finds the target within 0.25 and treats the boss as arrived: arrival flag set, base state 1, the shared idle request (for this boss animation 0, the same rearing clip as animation 1, whose first start plays the death cue), and a turn toward the hero at 0.1. The boss stays in the orbit state, so it stalls in place until the hero moves and the side point becomes valid again (Medium for the animation the idle request names).
+
+**Direction flip (High).** The orbit timer is 0 when the orbit is entered. Each orbit tick: if the boss's motion record has its touched flag set (a contact against a surface or body resolved in the last motion step; SPEC-0040 Behavior 14) and the timer is 0 or less, the direction flips (0 to 1 or 1 to 0) and the timer is set to 30; then, if the timer is above 0, it counts down by 1. So the direction flips only on a tick where the boss has touched something and the timer has run out. With no contact the boss keeps circling in its drawn direction indefinitely; after a flip the next flip is possible no earlier than 30 ticks later (the timer is 29 after the flip tick, and reaches 0 on the 30th tick after it). The timer is not reset by leaving and re-entering orbit except through the entry rule (set to 0 at every orbit entry, so a re-entered orbit may flip on its first contact tick). Test vector: orbit entered, direction 0, no contact for 200 ticks: still direction 0. Contact on tick 5: flips to direction 1 on tick 5 (timer 29 after that tick's decrement); contact again on tick 20: no flip (timer 14); contact on tick 35: timer reaches 0 after tick 34's decrement, so tick 35 flips to direction 0.
 
 ### Locomotion clips
 
@@ -242,8 +438,8 @@ All of these clips have speed byte 2, so at play rate 1.0 a clip advances a quar
 
 | Mode | Used for | Table entry | Clip | Keys (ticks) | Root value per key | Travel |
 | --- | --- | --- | --- | --- | --- | --- |
-| 0 | Rush forward | 9 | 21 | 14 (56) | forward 387 | 0.0945 per tick, 5.67 units/s forward |
-| 1 | Strafe close | 10 | 26 | 7 (28) | forward 1365 | 0.3334 per tick, 20.0 units/s forward |
+| 0 | Strafe close (state 12); also the base mode that the charge walk overrides | 9 | 21 | 14 (56) | forward 387 | 0.0945 per tick, 5.67 units/s forward |
+| 1 | Rush forward (state 11) | 10 | 26 | 7 (28) | forward 1365 | 0.3334 per tick, 20.0 units/s forward |
 | 3 | Strafe back | 14 | 29 | 11 (44) | forward -652 | -0.1592 per tick, 9.56 units/s backward, with a small vertical bob (at most 48 per key) |
 | 5 | Orbit, direction 0 | 16 | 27 | 11 (44) | sideways +387 | 0.0945 per tick, 5.67 units/s sideways |
 | 6 | Orbit, direction 1 | 17 | 28 | 11 (44) | sideways -387 | 0.0945 per tick the other way, 5.67 units/s |
@@ -262,26 +458,28 @@ Animation numbers are entries of the boss's table. "Hit" means the boss applies 
 
 | State | Animations | Behavior | Ends |
 | --- | --- | --- | --- |
-| Idle | 7 | Hovers; runs the choosers | Not applicable |
-| Stage-transition (mode 0, HP below 0.5) | 7 | Holds; sets level flag 1 on entry | Level flag 2 sets stage 2 and returns to idle |
-| Death | 7 | Holds | Never |
-| Hold (modes 1 and 2) | 7 | Holds | Level flag 3 clears |
-| Block missile | block pose (5) with the block animation (0x14) | Holds while any missile contact is present | When no missile contact remains: idle |
-| Dodge missile | 0x13 (dodge, direction 0) or 0x14 (direction 1) | Plays the dodge chosen by the direction | Animation ends: idle |
+| Idle | 7 (clip 7, 51 keys, speed byte 1, loop; no root travel) | Requests animation 7 each tick; sets the invulnerable word and base state 20 | Not applicable (the choosers move it on) |
+| Stage-transition (mode 0, HP below 0.5) | 7 | Same handler as idle; sets level flag 1 on entry | Level flag 2 sets stage 2 and returns to idle |
+| Death | 7 | Requests animation 7 only (no invulnerable word, base state not written beyond the pass head) | Never |
+| Hold (modes 1 and 2; mode 0 stage 0) | 7 | Same handler as idle | Level flag 3 clears (modes 1 and 2) or level flag 0 sets (mode 0 stage 0) |
+| Block missile | 5 (block pose, clip 8, 15 keys, loop); base state 20 (guard) written each tick | Holds while any missile path contact is present | First tick with no missile path contact: idle |
+| Dodge missile | 0x13 (direction 0, clip 23, 18 keys, one-shot) or 0x14 (direction 1, clip 24, 18 keys, one-shot) | Plays the dodge chosen by the direction; by root travel it slides about 19.1 units to its own left (direction 0) or 18.3 to its own right (direction 1) over the clip | Animation ends (tick s + 69): idle |
 | Dodge melee | same as dodge missile | Same | Same |
-| Block melee | block pose (5) with 0x14 | Holds while the hero is attacking | When the hero stops attacking: idle |
-| Counter attack | 0x19 | Would hit once with counter-attack damage x scale through the weapon test, but its clip has no event bits, so it never hits (see Hit shapes and windows) | Animation ends: idle |
+| Block melee | 5 (block pose); base state 20 (guard) written each tick | Holds while the hero is attacking | First tick the hero is not attacking: idle |
+| Counter attack | 0x19 (clip 1, 16 keys, one-shot) | Would hit once with counter-attack damage x scale through the weapon test, but its clip has no event bits, so it never hits (see Hit shapes and windows) | Animation ends (tick s + 61): idle. No cooldown |
 | Charge | sub-steps below | Charges at a target point | See sub-steps |
-| Forward swipe | 0x18 | One hit at most | Animation ends: idle; forward-swipe cooldown is set |
-| Wide swipe | 0x1A | Turns toward the hero at rate 0.25 per tick while playing; one hit at most | Animation ends: idle; wide-swipe cooldown is set |
-| Whirl | 0x1B | One hit if the hero is within the whirl hit range (no guard test); pushes the hero (see Push) | Animation ends: idle; whirl cooldown is set (2 to 4 s) |
-| Buck kick | 0x1D | One hit at the first contact of weapon 4 or 5 (see Hit shapes and windows) | Animation ends: idle (no cooldown set) |
-| Rush forward | locomotion mode 1 | Moves toward the hero | Until the chooser changes state |
-| Strafe close | locomotion mode 0 | Moves toward the hero | Until the chooser changes state |
-| Strafe back | locomotion mode 3 | Moves away from the hero | Until the chooser changes state |
-| Orbit | locomotion mode 5 (direction 0) or 6 (direction 1) | Circles the hero; the direction flips every 30 ticks | Until the chooser changes state |
-| Get hit | 6 | No damage | Animation ends: 25 % (roll below 25 of 0 to 100) to forward swipe, otherwise idle |
-| Lava (mode 1) | 1 | Sets level flag 2 while playing (see Lava) | Animation ends: idle |
+| Forward swipe | 0x18 (clip 4, 22 keys, one-shot) | One hit at most; weapon window frames 6 to 11 | Animation ends (tick s + 85): idle; forward-swipe cooldown is set |
+| Wide swipe | 0x1A (the same clip 4) | Turns toward the hero at rate 0.25 per tick on every tick after the request tick while playing; one hit at most | Animation ends (tick s + 85): idle; wide-swipe cooldown is set |
+| Whirl | 0x1B (clip 15, 15 keys, loop, root travel 20 units/s forward) | One hit if the hero is within the whirl hit range (no guard test); pushes the hero (see Push). Tested on every tick from s + 1 until the hit lands | Animation passes the 0.99 gate (tick s + 59): idle; whirl cooldown is set (2 to 4 s) |
+| Buck kick | 0x1D (clip 13, 20 keys, one-shot) | One hit at the first contact of weapon 4 or 5 (see Hit shapes and windows) | Animation ends (tick s + 77): idle (no cooldown set) |
+| Rush forward (state 11) | locomotion mode 1 (clip 26, 20 units/s) | Moves toward the hero | Until the chooser changes state |
+| Strafe close (state 12) | locomotion mode 0 (clip 21, 5.67 units/s) | Moves toward the hero | Until the chooser changes state |
+| Strafe back (state 13) | locomotion mode 3 (clip 29, 9.56 units/s backward) | Moves away from the hero | Until the chooser changes state |
+| Orbit (state 14) | locomotion mode 5 (direction 0) or 6 (direction 1) (clips 27 and 28, 5.67 units/s sideways) | Circles the hero; the direction flips only on a contact tick once the timer has run out (see Orbit) | Until the chooser changes state |
+| Get hit (state 18) | 6 (clip 11, 13 keys, one-shot; root travel 11.7 units backward with side swings) | No damage | Animation ends (tick s + 49): 25 of 101 (roll below 25 of 0 to 100) to forward swipe, otherwise idle |
+| Lava (mode 1, state 19) | 1 (clip 14, 33 keys, one-shot) | Sets level flag 2 while the clip's event frame is current (see Lava) | Animation ends (tick s + 129): idle |
+
+In the table, s is the tick on which the state's handler first requests the animation (the tick the state is entered when a chooser, reaction, stage rule or contact check enters it; the tick after the previous step for the charge sub-steps). The end ticks are for the tick the end test first passes and the state goes to idle in that same tick; the next chooser pass is the following tick. Derivation: a one-shot clip of F keys at speed byte 2 and play rate 1.0 (a quarter key per tick) has its end test pass at tick s + 4F - 3 (SPEC-0005 Playback 1a and Clip progress); a looping clip passes when cursor plus stored fraction reaches 0.99 of its key count, which is tick s + 59 for 15 keys at speed byte 2 and tick s + 100 for 51 keys at speed byte 1. All of the boss's requested animation ids exist in its action table, so no request is skipped and none falls back to clip 0.
 
 Animation 0x30 is not a boss animation. It is the hero's knocked state, which the push (see Push) puts the hero into.
 
@@ -293,19 +491,23 @@ Entering the get-hit state plays animation 6. While the state runs, each tick do
 2. Otherwise, if the current clip's progress has reached 0.99 (the shared clip-end test of SPEC-0040 Behavior 22B, asked of the boss's current animation, which step 1 has just found to be 6), draw a percent roll from 0 to 100 inclusive (101 values). If the roll is below 25, clear the boss's once-per-attack hit latch and enter the forward-swipe state (state code 7). Otherwise go to idle (state code 0). This is the 25 of 101 chance in the table above.
 3. If the clip has not ended, nothing changes.
 
+Re-entry: a counted hit while the state is already get-hit leaves the state number unchanged and the handler finds animation 6 already current, so the clip is not restarted and the stagger is not extended. A counted hit on a tick when the previous get-hit has just ended (animation 6 still current and finished, the idle handler not yet run) makes step 2 fire at once, with a new 25/101 swipe roll. The get-hit clip slides the boss backward 11.7 units; the swipe that may follow starts on the tick after the roll.
+
 The cleared word is the shared once-per-attack hit latch of the boss: the forward swipe, the counter attack and the whirl deal their hit only while it is 0 and set it to 1 when they hit, the charge uses it the same way, and the attack chooser clears it whenever it starts an attack. The get-hit branch clears it itself because the forward swipe it starts does not pass through the chooser; without that clear, a swipe started after a landed hit would never hit.
 
-Confidence: High for the branches, the roll range, the clip-end test and the latch. Medium for the state code numbers (the state table above lists names only).
+Confidence: High for the branches, the roll range, the clip-end test, the latch and the state code numbers (the numbers 0 to 14 and 18 also appear in the boss's own debug name list).
 
 ### Charge (sub-steps)
 
 Sub-step 0 is entered when the charge starts.
 
+Durations (R = 1; s0 = the tick the charge is chosen, with sub-step 0 running in that same tick). Each sub-step that is entered by a handler step runs from the next tick. Sub-step 1 lasts until the boss is within 1.0 of the charge point: with a straight run of length L at 0.3334 units per tick, the first step of travel on the second tick of the sub-step (root travel lags one tick), its exit step runs on tick s1 + k + 1, where s1 is its first tick and k = the smallest whole number with L - 0.3334 k below 1.0 (L = 10.0 gives k = 27, so the exit step runs on tick s1 + 28). Sub-step 2 lasts exactly 100 ticks (its first tick requests animation 7; the 0.99 gate of that looping 51-key clip, speed byte 1, passes 100 ticks later and the handler sets sub-step 3 in that tick). Sub-step 3 lasts 65 ticks (animation 0x15, 17 keys: gate at s + 65; its first tick requests the animation). Sub-step 4's exit step (the percent roll) runs on tick s4 + k + 1, where s4 is its first tick and k = the smallest whole number with D0 - 0.3334 k below 6.0 for a stationary hero at distance D0 when sub-step 4 starts (D0 = 15.0 gives k = 27, exit on tick s4 + 28). Sub-step 6 lasts 49 ticks (animation 0x17, 13 keys). Sub-step 5 lasts until the hero is more than 7.5 away or the boss is blocked. The boss is hittable in every sub-step.
+
 0. **Find a position**: try three candidate points around the hero, in order: the hero's position plus the retreat distance along the hero's forward direction, then along the hero's side axis, then along the opposite side. The side axis is the first row of the hero's orientation frame, normalize(up x f) = (f.z, 0, −f.x) for the hero's forward direction f; with the handedness of SPEC-0004 this is the hero's left-hand side, so the second candidate is to the hero's left and the third to its right (High). The first candidate that is a valid place to stand (a navigation check) becomes the charge target. If none is valid, set the charge cooldown to a random tick count (1.0 to 3.0 s) and go idle.
 1. **Start**: walk toward the target, playing table entry 30 (clip 9, 20.0 units/s; see Locomotion clips). Move on to sub-step 2 when the boss is within 1.0 horizontal units of the target.
 2. **Turn and face**: play animation 7 if it is not already playing. Turn toward the hero at rate 0.1 per tick. When the animation ends: sub-step 3.
 3. **Pre-twirl**: play animation 0x15. Turn toward the hero at rate 1.0 per tick. When the animation ends: sub-step 4.
-4. **Charge to**: the target is the hero's current position, re-read every tick. If that point is not valid for navigation, set the charge cooldown and go idle. Otherwise move toward it, playing animation 0x16. When the horizontal distance to the hero is below 6.0, roll the charge-slam chance (40): if the roll is below 40, go to sub-step 6 (stop-and-slam). Otherwise go to sub-step 5 (run past) and clear the hit latch.
+4. **Charge to**: the target is the hero's current position, re-read every tick. If that point is not valid for navigation, set the charge cooldown and go idle. Otherwise move toward it, playing animation 0x16. When the horizontal distance to the hero is below 6.0, roll the charge-slam chance (40): if the roll is below 40, go to sub-step 6 (stop-and-slam). Otherwise go to sub-step 5 (run past); the hit latch is not touched on this branch (it is cleared only on the way into the stop-and-slam, and the chooser clears it for the next attack). The movement call of this tick runs before the distance test, so the test sees the position after the steering call; it uses the boss position read on that tick.
 5. **Run past**: the move target is the boss's position plus 1.0 times its forward direction. Leave (idle, and set the charge cooldown) when the hero is more than 7.5 units away, or when the boss is blocked. While the hero is within 7.5 units and the boss is not blocked, a body contact pushes the hero (see Push) with total speed K = 5.0, which is 3.0 horizontally away from the boss plus 4.0 upward, unless the hero is already in its knocked state.
 6. **Stop and slam**: play animation 0x17. One hit at most, applied while the animation plays when the hit test passes (stop-and-slam damage x scale). When the animation ends, the boss always goes idle and the charge cooldown is drawn (whether or not it hit).
 
@@ -337,6 +539,10 @@ The boss's melee shapes are the monster weapon cylinders of its monster row (row
 | Wide swipe (0x1A) | weapon 1 | bit 0x1, frames 6 to 11 (the same window as the forward swipe) | 35 | no |
 | Whirl (0x1B, looping) | horizontal distance below 12.0 (whirl hit range) | bit 0x1 is on in every frame | 100, once; push K = 5.0 | no |
 | Buck kick (0x1D) | weapons 4 and 5 | bits 0x8 and 0x10, frames 12 to 15 of 20 | 25 | no |
+
+**Windows in ticks.** At a quarter key per tick, frame f of a one-shot attack clip is the current frame on ticks s + 4f to s + 4f + 3 (s = the request tick). The boss's attack tests run in the controller step, so they see the frame left by the previous tick's animation pass, and the weapon volumes are placed from the pose of the previous pass; treat each window as accurate to one tick (Medium-High). Stop and slam: frame 6, ticks s + 24 to s + 27. Forward and wide swipe: frames 6 to 11, ticks s + 24 to s + 47. Buck kick: frames 12 to 15, ticks s + 48 to s + 63. Lava flag post: frame 20, ticks s + 80 to s + 83. Whirl: every frame, ticks s + 1 to s + 58 (the test starts on the second tick, after the request tick, and stops when the hit latch is set or the clip ends). A hit lands on the first tick of the window on which the weapon volume overlaps a hero bone capsule (the hero's capsules are those of the previous pass); a hero that stays inside the volume is hit once, because the hit latch is then set.
+
+**Root travel during attacks (High for the values, Medium-High for the effect).** The attack clips move the boss by their own root travel, like every clip. Stop and slam: 10.3 units forward over the clip, 9.55 of them before frame 6. Forward and wide swipe: 2.5 units forward over the clip (mostly in frames 0 to 4). Counter attack: lunges 11.4 units forward by frame 9 and returns, net 0. Buck kick: net 0 (peak 5.7 forward at frame 13). Whirl and charge-to: 0.3334 units per tick forward along the boss's current facing (about 19.3 units over the whirl's 58 ticks; the whirl does not steer). Get hit: 11.7 units backward with side swings. Pre-twirl, idle, block pose and lava: none.
 
 ### Damage
 
@@ -413,14 +619,16 @@ Synthetic checks on the rules, not disc data.
 - Mode 2, HP ratio 0.10: no lava.
 - Game state 358 set (the final fight's script pack has run its init) when the controller starts: mode 2. Game state 358 clear, 0x3C set: mode 1.
 - Missile roll 24 with block chance 25: block. Roll 25: not a block; dodge roll 24 with dodge chance 25: dodge.
-- Missile contact: a projectile whose path (from its position to its position plus 120 times its velocity) meets a sphere of radius 0 does not count; one that meets a sphere of radius above 0 does (the reaction then rolls as above). Velocity (0, 0, 0.1) from the origin gives a path ending at z = 12. A sphere of radius 0.5 centred at z = 11 is hit; a sphere of radius 0.5 centred at z = 13 is not.
+- Missile reaction contact: a shot whose look-ahead path (from its position to its position plus 120 times its velocity) meets a bone of hurt length 0 does not count; one that meets a bone capsule of length above 0 does (the reaction then rolls as above). Velocity (0, 0, 0.1) from the origin gives a path ending at z = 12. A small capsule centred at z = 11 is reached; one centred at z = 13 is not.
+- Own-check shot contact: the same shot at the origin with radius 0.1 and a capsule of radius 0.5 centred 0.55 away overlaps (0.1 + 0.5 is above 0.55): counted this tick. The same capsule 0.7 away is not counted this tick, although its look-ahead path touches it (the reaction may start a block or dodge, but no damage is taken until the shot overlaps).
+- Two shots overlapping in one tick, damages 6 (slot 1) and 4 (slot 3): the boss loses 4 (the last slot), both shots are consumed. A shot of 4 and a melee contact of 9 in one tick: 4.
 - Melee: hero attacking, distance 6.9, dot 0.6 with the latch clear: a roll of 0 for melee dodge (below 25) gives dodge. A roll of 30 gives no dodge; a block roll of 10 gives block.
 - Counter attack at scale 0.25: trunc(25 x 0.25) = 6. Scale 1.0: 25.
 - Forward swipe at scale 0.25: trunc(50 x 0.25) = 12. Wide swipe at 0.25: trunc(35 x 0.25) = 8. Whirl at 0.25: 25. Stop-and-slam at 0.25: 25. Buck kick at 0.25: 6.
 - Cooldown ticks: charge 1.0 to 3.0 s gives an inclusive range of 60 to 180 ticks. Whirl 2.0 to 4.0 s gives 120 to 240. Missile defense 0.5 to 1.0 s gives 30 to 60.
 - Movement: D = 16 -> rush forward (locomotion mode 1). D = 12 -> strafe close (mode 0). D = 4 -> strafe back (mode 3). D = 14 -> no change. D = 9 with the boss idle -> orbit (mode 5 or 6, by the drawn direction).
 - Locomotion clips: the slot values are (9, 10, 30, 14, 15, 17, 16), so mode 5 plays table entry 16 (clip 27) and mode 6 plays entry 17 (clip 28). Mode 1 over one 28-tick cycle moves 28 x 0.3334 = 9.34 units forward; mode 0 over its 56-tick cycle moves 5.29 units. Charge sub-step 1 over 28 ticks moves 9.34 units.
-- Orbit timer: a boss in direction 0 is still in direction 0 after 29 ticks, and direction 1 from tick 30 on (the timer restarts at 30).
+- Orbit timer: see the flip vector under Orbit (the direction changes only on a contact tick once the timer has run out; no contact means no flip, however long the orbit lasts).
 - Charge sub-step 4 with the horizontal distance at 5.9: the roll of 39 (below 40) goes to stop-and-slam; a roll of 40 goes to run past.
 - Run past: hero at 7.6 horizontal units -> the run past ends. At 7.5 it does not.
 - Push: K = 5.0 with a hero directly in front (d = (1, 0, 0)): velocity = (3.0, 4.0, 0). Check: 0.6 x 5 = 3, 0.8 x 5 = 4. The run past uses the same K = 5.0, so its push gives the same velocity. With d = (0, 0, -1) the velocity is (0, 4.0, -3.0); its length is 5.0 in every case.
@@ -431,13 +639,51 @@ Synthetic checks on the rules, not disc data.
 - Whirl: the hero 11.9 units away: 100 x scale once (25 in mode 0, 100 in mode 1). 12.0 units away: nothing.
 - Forward swipe block: the hero guards with dot(hero facing, hero-to-boss) = 0.6: take-hit 0 with the blocked flag, HP unchanged. Dot 0.4: trunc(50 x scale).
 - Get hit to forward swipe: the boss's last whirl hit set the hit latch to 1; it is then hit and plays animation 6. At progress 0.99 the roll is 24: the latch becomes 0 and the forward swipe starts, so its hit can land. Roll 25: idle, latch unchanged (the next attack start clears it). At progress 0.98 no roll is made.
+- Wide swipe chance by mode: fight mode 1 uses 50 (roll 49 enters the wide swipe, roll 50 fails and sets the cooldown); fight modes 0 and 2 use 25 (roll 24 enters, roll 25 fails).
+- Counter attack trigger: hero guarding at D = 5.9: counter attack (state 5), whatever the charge cooldown. Hero attacking but not guarding at D = 5.9: no counter attack; the chooser goes on to the charge rule.
+- Block animation: a boss entering block missile requests animation 5 (never 0x14) and writes base state 20 on every tick it stays in the state.
+
+**Timeline vectors (R = 1, 60 ticks per second; s is the request tick of an animation).** Durations come from the clip key counts and the speed rule; random draws are marked.
+
+Timeline A (mode 1, the Abandoned Mines opening). The hold ends and the boss, at (0, 0, 25) facing -Z, has all cooldowns at 0. The hero stands still at the origin facing +Z, not guarding, not attacking, no projectiles; the arena is open and every point is a valid place to stand. The retreat distance draws R = 15.0 (random: any value from 10.0 to 20.0; the walk, tick 29 below, then depends on R as in the Charge durations).
+- Tick 0: the hold clears, the state becomes idle, the chooser runs: rule 1 no (hero not guarding), rule 2 yes (charge cooldown 0, no distance test). Charge sub-step 0 runs in the same tick and the first candidate (0, 0, 15) is valid, so the sub-step becomes 1.
+- Tick 1: sub-step 1 requests the walk clip (entry 30, clip 9). The boss moves 0.3334 per tick from tick 2.
+- Tick 29: after 27 steps the boss is 0.998 from the charge point; sub-step 2 is set.
+- Ticks 30 to 130: sub-step 2 (animation 7, turn weight 0.1). At tick 130 the gate passes and sub-step 3 is set (exactly 100 ticks after the request on tick 30).
+- Ticks 131 to 196: sub-step 3 (animation 0x15, turn weight 1.0). At tick 196 the gate passes (65 ticks after the request on tick 131) and sub-step 4 is set.
+- Tick 197: sub-step 4 requests animation 0x16 through the walk slot. The boss moves from tick 198, 0.3334 per tick toward the hero.
+- Tick 225: the distance is 5.998, below 6.0. The percent roll (random, 0 to 100): 39 or less goes to the stop-and-slam (sub-step 6, hit latch cleared); 40 or more goes to the run past (sub-step 5).
+  - Slam branch (40 of 101): tick 226 requests animation 0x17; the weapon window is ticks 250 to 253; if the weapon volume overlaps a hero bone capsule on a tick of the window, 100 x 1.0 = 100 damage lands on that tick (whether it overlaps depends on the body-to-body push between boss and hero during the 10.3-unit lunge, 9.55 of it before the window: Medium). Tick 275 the gate passes: idle, charge cooldown drawn (random 60 to 180, so the next charge is possible from tick 335 to 455). The boss is hittable the whole time; a landed hero hit sets get-hit (below).
+  - Run-past branch (61 of 101): from tick 226 the boss runs straight along its facing at 0.3334 per tick; it leaves (idle, charge cooldown drawn) once the hero is more than 7.5 away (after it has passed the hero) or the boss is blocked; if its touched flag is set while the hero is within 7.5 and not knocked, the hero is pushed.
+- From the first free tick after the charge: rule 1 no; rule 2 no (cooldown above 0); rule 3: the forward-swipe cooldown is still 0 (never rolled in mode 1), so when D < 7.0 the 50 % roll runs on that tick and, on a miss, draws the cooldown (60 to 180 ticks); rules 4 to 6 follow as written.
+
+Timeline B (mode 0, the Cogham Steppes fight after the release; the hero stands still 5.0 units in front of the boss, not guarding, and the boss faces it). On the release tick (call it tick 0) level flag 0 is set: stage 1, idle, and three cooldowns drawn from 60 to 180 ticks (random: Nc, Nf, Nw). At tick 0 and until the first cooldown ends: rules 3 and 4 do nothing (cooldowns above 0); rule 5 does not fire (the hero is in front); rule 6 is not available in mode 0; the movement band sees D = 5.0 (5.0 is not below 5.0) and starts the orbit (direction by coin flip, timer 0): ordinary circling at 5.67 units per second with no direction flip unless the boss touches something. The cooldowns reach 0 on ticks Nc, Nf and Nw (the count decreases at the start of each tick, so a cooldown drawn as N is 0 on tick N). On tick Nf (if the charge is not also ready): D < 7.0, so the forward-swipe roll runs: 50 of 101 starts the swipe with s = Nf (window ticks Nf + 24 to Nf + 47; 50 x 0.25 = 12 damage on the first tick the weapon overlaps the hero, none if the hero is guarding and facing the boss; end at tick Nf + 85, cooldown redrawn then), otherwise the cooldown is redrawn (60 to 180) and the next roll is that many ticks later. The charge starts on tick Nc whatever the distance, because rule 2 comes before rule 3 (if Nc and Nf are equal, the charge wins). No attack can start before tick 60, and the first attack tick is the smallest of Nc and Nf (and Nw, only if the hero is strafing or strafe-jumping), so it lies between tick 60 and tick 180 unless the forward-swipe rolls keep failing.
+
+Timeline C (a landed hero hit on a free boss, mode 1, 300 HP). Tick h: a hero swing counts; the state becomes get-hit and the handler requests animation 6 in the same tick (s = h). The boss's HP drops by the hero's damage (and the shared route adds damage as in Hurt side). It slides backward about 11.7 units over the clip. Tick h + 49: the gate passes; the percent roll (0 to 100): 24 or less sets the hit latch to 0 and the state to forward swipe (its request is on tick h + 50, s = h + 50, ends h + 135, window h + 74 to h + 97), otherwise idle on tick h + 50 for the chooser. If the hit takes the HP ratio below 0.66 for the first time, the lava state replaces get-hit on tick h + 1 (the stage rules run before the handler of the next pass and override any state).
+
+Timeline D (hero holds guard 5.0 units from the boss, boss free, any mode). Tick c: the counter attack is chosen and its handler requests animation 0x19 (s = c). Tick c + 61: the gate passes, idle. Tick c + 62: the chooser picks the counter attack again (the hero still guards); the animation id is still 0x19 and the clip is finished, so the handler ends the state again at once; this repeats every tick. The boss neither moves (apart from a small backward drift of the held last pose, 0.076 per tick) nor damages anything until the hero stops guarding or goes beyond 6.0 (Medium for the drift).
+
+Timeline E (own-check shot during get-hit, mode 1, 300 HP). Tick h: a melee contact is counted; get-hit begins (s = h) and the boss loses u. Tick h + 10: a hero shot overlaps a capsule: the shot is consumed, the boss loses the shot's damage, the state stays get-hit, the clip keeps playing (no restart) and the gate still passes on tick h + 49. A melee swing that reaches the boss on tick h + 12 is not tested at all. At tick h + 49 the 25/101 roll decides forward swipe or idle as usual.
+
+Timeline F (mode 1 end of fight). Tick d: the boss's HP ratio is 0 or less: death state, level flag 0 posted (first time). The end sequence raises level flag 3 on a later tick e: from tick e until flag 3 clears, every tick the hold rule writes the hold state, the death rule writes death again and posts level flag 0 again; the handler runs death each tick (animation 7).
 
 ## Open questions
 
+- Default if unresolved (rewrite choice): the orbit stall (edge case 7) requests animation 0 only when the idle request really names animation 0 for this boss; if a rebuild prefers to keep the current clip instead, the visible difference is one rearing animation and the death cue when the boss orbits into a wall.
+- Default if unresolved (rewrite choice): a hero shot that was bounced by the shared path while the boss guards stays live and, if it still overlaps a bone capsule on the next pass, is counted by the boss's own check (damage and get-hit). If that proves too harsh in play, treat a bounced shot as spent.
+- Default if unresolved (rewrite choice): a hero shot's damage in the own check is the shot's stored product against defence 0, truncated; two shots in one tick use the last slot's damage.
+- Default if unresolved (rewrite choice): the Henchman strike windows assume the hero stays inside the weapon volume for the whole window; place the volumes with the weapon-volume rule of SPEC-0029 for exact hit timing.
+- Default if unresolved (rewrite choice): the touched flag that gates the orbit flip is raised by any resolved wall, navigation-mesh edge or character body contact of the boss's last motion step.
+- Default if unresolved (rewrite choice): the weapon volumes of the boss's attacks are placed from the boss's pose of the previous pass, and the windows in ticks may be off by one tick either way.
+- Default if unresolved (rewrite choice): in pack 864 the level data may react to level states 1 and 2 (the boss posts only state 2, in the lava event, and state 0 at death); the boss does nothing further with them.
+- Default if unresolved (rewrite choice): after a counter attack or buck kick repeats on consecutive ticks, the boss holds the last pose of the clip and drifts backward by the held-key root step (about 0.076 units per tick for the counter attack, same for the buck kick) until the repeat condition ends.
+- Resolved: the counter-attack trigger is the hero's guard query, not its attacking query; the wide-swipe chance is 50 only in fight mode 1; the block states play animation 5 and write base state 20; the orbit direction flips only when the motion record's touched flag is set and the timer is 0 (all High; see the chooser, States and Orbit sections).
+- Resolved: all animation ids that the controller requests exist in the boss's action table (regions 806 and 869), so the skip rule for ids with no clip never applies to this boss; durations are in the States table and the build guide.
+- Not part of the shipped fights (one line only): fight mode 2 is not reached by the pack-800 or pack-864 fights; the pair-compatibility predicate has no known caller in this boss's controller and is not needed to build either fight.
 - Resolved (R-0067, side of root x): in modes 5 and 6 the shared steering turns the boss's move direction toward the hero (SPEC-0029, Behavior 2: with d the direction to the side target, mode 5 steers to up x d and mode 6 to d x up, which is the direction to the hero), and the root step of a clip is applied along the record's side axis, up x forward (SPEC-0040, Behavior 14C), a positive root x going along it. The table entries of these clips carry no mirror flag. With the boss facing +Z that axis is +X, which is the boss's left (SPEC-0004: the right side is -X). So the mode 5 clip, whose sideways root is positive, moves the boss to its left of the line to the hero, and the mode 6 clip, whose sideways root is negative, to its right. This is the opposite of the side point that the target names; that point only feeds the steering (High for the rule; Medium-High for what shows on screen). Test vector: boss at (0, 0, 0) and hero at (0, 0, 10): mode 5 moves toward +X and mode 6 toward -X, while the mode 5 target point is (-3, 0, 0) and the mode 6 target point is (3, 0, 0). Ixi Chief: direction 0 (mode 5, +387 per key, 0.0945 per tick) circles to its left, direction 1 (mode 6, -387) to its right; the orbit timer is as given.
 
-- **Resolved: mode-2 whirl.** The attack chooser gates whirl selection on fight mode exactly 1. Mode 2 can use its 50 % wide-swipe chance, but cannot select the whirl. The wide-swipe row covers modes 1 and 2 (High).
-- **Mode 2 start**: whether any Ixi Chief starts its controller in the final-fight world, so whether mode 2 is reached in play (Medium). The clean side must not guess. Answered: no known level script runs the fight in mode 0, and mode 2's flag 0x166 (game state 358) is set only by the init of script pack 1432, the final fight (High).
+- **Resolved: mode-2 whirl.** The attack chooser gates whirl selection on fight mode exactly 1. Mode 2 uses the 25 % wide-swipe chance (only mode 1 uses 50) and cannot select the whirl (High). Mode 2 is not part of either shipped Ixi fight.
+- **Mode 2 start**: resolved for the known story route (High): pack 800 selects mode 0 and pack 864 selects mode 1. Pack 1432 sets the mode-2 flag, but its character records contain the Darkest Faerie and minions, not an Ixi Chieftain; no later Ixi encounter is part of the documented route. A manually reached Ixi after the flag is set would use mode 2, but that route is not established.
 - **Ixi action-frame and attack queries**: Resolved: the boss-side query is the AI-character action-frame query and the hero-side query is the hero's attack-active word (see Cross-boss facts; High).
 - **Hit test of the counter attack and the wide swipe**: Resolved: both use the monster weapon test, and the counter attack never hits (see Hit shapes and windows; High).
 - **Shared volume test**: Resolved: the buck kick and the other melee attacks use the monster weapon test of SPEC-0029 Behavior 10.2 (row 155) (High).
@@ -450,7 +696,7 @@ Synthetic checks on the rules, not disc data.
 - **Random generator clock source**: Resolved: the first-use seed comes from the console's real-time clock, so the sequence differs from boot to boot (High).
 - **Intro and end cutscenes.** Resolved: pack 864 script trigger 1 starts boss-fight instance 8 at stage 0 and the camera/dialogue sequence; clearing level state 3 releases the boss. In normal mode, its death event sets level state 0; the stage thread then raises flag 293 and, on the following pass, holds and deactivates the boss, plays the closing cameras, and ends instance 8 at stage 1. See Encounter flow (High for the level-state sequence; camera art and some flag labels remain unspecified).
 - **Movement-blocking flag**: Resolved (High). It is the motion record's lock word of SPEC-0040, set when the boss's height and the controlled hero's height differ by more than 1.0 (see Stages and modes, Height check). While set it switches off the edge guard and the navigation-mesh position restore.
-- **Hero path length 120**: Answered: a fixed value; whether its unit is one tick of travel is Medium (the spit's velocities are per tick, SPEC-0015).
+- **Hero path length 120**: Answered: a fixed value used only by the missile reaction and the block-missile hold test, not by the contact check; whether its unit is one tick of travel is Medium (the spit's velocities are per tick, SPEC-0015).
 - Resolved: **Get-hit roll range.** This boss uses the inclusive 0 to 100 range, so a threshold of 25 passes for 25 of 101 possible draws. The 0 to 99 draws in SPEC-0021 are Index(100) drop and item bands; they are a separate helper and do not conflict (High).
 - **Get-hit clip-end test**: Resolved: it is the shared test "current clip progress at least 0.99" (SPEC-0040 Behavior 22B); the animation id is checked separately just before it (see Get hit step; High).
 - **Get-hit counter**: Resolved: the word reset on the forward-swipe branch is the boss's once-per-attack hit latch, so the forward swipe that follows a get-hit can hit (see Get hit step; High).

@@ -140,7 +140,7 @@ The sections follow in increasing code size. "Init" means the routine the module
 
 
 ### 735: Exterior, hero-death and activate-world callbacks, a set of triggers and a cutscene chain (code size 16,004 bytes)
-- Family: Exterior. Exit exported (empty). Update exported; one call is reached from it and does not run in play.
+- Family: Exterior. Exit exported (empty). Update exported; one call is reached from it and does not run in play. Between the activation of the serpent and its move to locator 28 there are at least 120 ticks (0.5 s fade in and a 2.0 s wait) in which its controller runs with the serpent free at its stored pose; the held part afterwards lasts at least 120 ticks of script animation.
 - Confidence: High for Init, the boss watcher, the intro, the monitor, the victory, the death callback, trigger 21 and sequence S1, the exit routine, the activate-world arrival and triggers 4 and 5; Medium for the sound-and-breakable routine.
 - Init, all ungated except where a flag is named, in this order:
   - Hero-death callback registered (flag argument 1); activate-world callback registered.

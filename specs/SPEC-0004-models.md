@@ -1,6 +1,6 @@
 # SPEC-0004: Static models and meshes
 
-- Answers: R-0004; R-0109 (Roberta type-33 block and visible outfit geometry)
+- Answers: R-0004; R-0109 (Roberta type-33 block and visible outfit geometry); R-0119 (type-29 second-table count, offset, stride and shared-model handle interpretation)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: per section. Container, node tree, packet and vertex layouts, strip rule, bounds and material binding: High. Load status of mesh resources: Medium (per line). Load-time handling of type-8 containers: High for the dispatch and the child codes below; Medium for what each code stores. World placement: High for the level mesh, Medium-High for placed objects. Vertex program choice, batch tag fields, two-pass batches, skinning arithmetic, the absence of back-face culling and multi-packet leaves: High. Vertex colour scale: High; unlit overflow: Medium-High; lighting: Medium-High (the light model is in SPEC-0046). Vertex pass size (128 positions per pass): Medium-Low. Coordinate handedness: Medium-High. Type-33 block: High for the header, unit, list and count rules, the radius rule and the load-time conversion; Medium for the sphere centre and the triangle index byte; Low for the bank index mapping. Packet pointer relocation at load time: Medium. Item model registry key and the disc id mapping: High. Attach-point table and per-frame attach matrices: High; attach-point roles: Medium-High.
@@ -248,8 +248,8 @@ Attribute meanings:
 | --- | --- | --- |
 | 0x00 | 4 | s32 object count *N* (1 … 241) |
 | 0x04 | 4 | u32 offset of the object offset table (0x10 in nearly all packs) |
-| 0x08 | 4 | s32 count of a second table (meaning not decoded) |
-| 0x0C | 4 | u32 offset of the second table |
+| 0x08 | 4 | s32 count of the second table (u32 payload-relative model handles in the type-40 kind-3 selection path) |
+| 0x0C | 4 | u32 payload-relative offset of the second table |
 | 0x10 + 4k | 4 | u32 offset of object *k* |
 
 Object record (offsets from the object's start; offsets it contains are payload-relative):
@@ -265,6 +265,8 @@ Object record (offsets from the object's start; offsets it contains are payload-
 | 0x1E0 | 4 | Offset of the part-record array |
 
 The loader needs the type-5 model sets and the type-10 table before it in the chain than the placed-object chunk. This holds in every pack that has a type-29 chunk (SPEC-0006 load order).
+
+Second-table entries are 4-byte unsigned payload-relative offsets, not first-table placed-object ordinals or archive resource ids. The type-40 kind-3 setup uses valid second-table entries as shared render-model handles. Pack 735 has 32 entries beginning at type-29 payload offset 0x15F8D0; candidate index 3 resolves to payload offset 0x10960. The exact node-tree or submodel identity named by that handle, and its ordinary unbroken draw path, are not established here (SPEC-0030, TriggerBaggus).
 
 ### Instanced meshes (chunk type 20)
 
@@ -301,7 +303,7 @@ World position of an object's vertex = matrix × (x, y, z, 1). Apply the matrix 
 
 A type-33 chunk is a flat chunk with no nested tree. It sits in two places: as the last chunk of the outfit chains in resources 504–519 (16 flat chunks, one per outfit), and as a child of a type-18 model-set wrapper (571 of the 1,339 wrappers that have IDM children). All 587 chunks parse exactly to their payload end.
 
-The type-33 block is shadow-volume input, not visible hair or cap geometry. Roberta's outfit also contains a visible type-8 model tree; its mesh leaves have no part labels in the asset, and the available mapping does not identify which leaf forms the head or whether a head piece is hidden by a runtime visibility choice. No separate head attachment has been established. The model records alone therefore do not explain a rendered gap at the head.
+The type-33 block is shadow-volume input, not visible hair or cap geometry. Roberta's outfit also contains a visible type-8 model tree; its mesh leaves have no part labels in the asset, and which leaf forms the head, or whether a head piece is hidden by a runtime visibility choice, is not established. No separate head attachment has been established. The model records alone therefore do not explain a rendered gap at the head.
 
 The block describes shadow-casting geometry for pieces of a character that are attached to bones. Each unit holds one piece: a bounding sphere, a list of the piece's edges, a list of its triangles, and its hull points, plus a bone matrix bank index. The size of each list is a count byte in the unit, so the whole layout follows from the counts.
 
