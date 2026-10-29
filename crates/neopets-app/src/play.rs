@@ -645,6 +645,14 @@ impl Character {
 
     /// Skipped by hero swings, shots and the Mote walks: pet-like, or invulnerable by script
     /// (SPEC-0040 Behavior 17 base rule, the flag at +0x7F0).
+    /// A boss whose controller sets the unhittable word (+0x7F0) and tests the hero's swing and
+    /// shots in its own hit routine: Gnarfas, the Plague Serpent, the Faerie Sisters, the Black
+    /// Knight and the Undead Draik (SPEC-0036 Hittable predicate). The Mote power-attack objects
+    /// and the target finder never select them.
+    pub fn own_hit_check(&self) -> bool {
+        self.gnarfas.is_some() || self.serpent.is_some() || self.sister.is_some() || self.knight.is_some() || self.draik.is_some()
+    }
+
     /// An enemy kind is also not hittable in its melee or missile dodge (agro outer sub-state 5
     /// or 6) or, when not script-held, while animation 74, 75 or 76 plays (SPEC-0036 Hittable
     /// predicate, tests 2 and 6).
@@ -3736,6 +3744,13 @@ impl Play {
                 }
                 continue;
             };
+            // SPEC-0020 Hero actions: Gnarfas's own check removes a shot that meets him before
+            // asking for its damage, so it flinches him (49 ticks) with damage 0 and nothing is
+            // paid (SPEC-0036 Quick-shot payment).
+            if self.characters[i].gnarfas.is_some() {
+                self.characters[i].pending_shot = Some(0);
+                continue;
+            }
             let (t_type, defence) = self.characters[i].row.map_or((0, 0.0), |r| (r.target_type as i32, r.defence));
             let mote = self.equipment.motes[1][2];
             let gst = mote.and_then(|id| self.items.get(id)).map_or(0.0, |i| i.stats[6] as f32);
@@ -5712,7 +5727,7 @@ impl Play {
             let p = neopets_sim::mote::power_index(0, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
             let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
             let mut hits = Vec::new();
-            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && !c.unhittable()) {
+            for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && !c.unhittable() && !c.own_hit_check()) {
                 let Some(r) = c.row else { continue };
                 let base = c.stand_in_body().map_or(c.position, |b| [b.center[0], b.center[1] - 0.5 * b.length, b.center[2]]);
                 if !o.touches(base, r.radius, r.height) || !o.list(c.id) {
@@ -9661,7 +9676,8 @@ impl Play {
             let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
             let trees = neopets_sim::gnarfas::TREES.map(locator);
             let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
-            let busy = neopets_sim::hero::busy_state(self.loco.state) || self.held;
+            // SPEC-0020: "the hero is down" is action state 16 only.
+            let busy = self.loco.state == 16;
             let st = self.loco.state;
             let c = &mut self.characters[i];
             let body = c.row.map_or(1.0, |r| r.radius);
@@ -9702,7 +9718,8 @@ impl Play {
                 hero_blocks: st == 20 && faces,
                 hero_down: matches!(st, 7..=11 | 0x2B..=0x2E),
                 hero_attack_start: self.state.hero.fire,
-                hit: c.pending_hit.take(),
+                shot: c.pending_hit.is_none() && c.pending_shot.is_some(),
+                hit: c.pending_hit.take().or(c.pending_shot.take()),
                 missile_near: near10,
                 missile_ahead: near120,
                 chain_hit,

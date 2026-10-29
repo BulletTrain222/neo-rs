@@ -154,7 +154,8 @@ pub struct View<'a> {
     pub hero: Vec3,
     pub hero_hp: i32,
     pub hero_max: i32,
-    /// The hero's busy condition (the hold test).
+    /// The hero is down: its action state is 16 (the hold, the knockback and the death gate;
+    /// not the busy list, which would freeze the boss whenever the hero swings or jumps).
     pub hero_busy: bool,
     /// The hero is guarding and faces Gnarfas (the block test of the chain hits).
     pub hero_blocks: bool,
@@ -164,6 +165,9 @@ pub struct View<'a> {
     pub hero_attack_start: bool,
     /// The hero's hit on Gnarfas this tick (melee or a missile slot), with its damage.
     pub hit: Option<i32>,
+    /// The hit was a hero shot only (no melee hit this tick): a block removes it (SPEC-0020 Hero
+    /// actions).
+    pub shot: bool,
     /// A hero missile's path (10 ticks ahead) touches Gnarfas; and 120 ticks ahead.
     pub missile_near: bool,
     pub missile_ahead: bool,
@@ -287,7 +291,8 @@ impl Gnarfas {
         // Taking damage, before the hub (not in the flinch, death and the attacks).
         let immune = matches!(self.state, State::Flinch { .. } | State::Death { .. } | State::Whip { .. } | State::Rapid { .. } | State::Power { .. } | State::Slam { .. } | State::Butt { .. });
         if let (Some(damage), false) = (v.hit, immune) {
-            if self.state != State::BlockMissile {
+            // A shot meeting the missile block is only removed; a melee hit flinches him there too.
+            if !(v.shot && self.state == State::BlockMissile) {
                 self.state = State::Flinch { exhausted: self.state == State::Exhaust, damage };
             }
         }
@@ -400,9 +405,10 @@ impl Gnarfas {
                     self.state = State::Death { sent: true };
                 }
             }
+            // The maniacal laugh is action 0 (SPEC-0020 What a port gets wrong).
             State::Laugh => {
-                a.anim = Some(0x12);
-                if ended(0x12) {
+                a.anim = Some(0);
+                if ended(0) {
                     self.state = State::Idle;
                 }
             }
@@ -626,6 +632,7 @@ mod tests {
             hero_blocks: false,
             hero_down: false,
             hero_attack_start: false,
+            shot: false,
             hit: None,
             missile_near: false,
             missile_ahead: false,
