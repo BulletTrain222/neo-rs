@@ -14203,8 +14203,9 @@ pub const BOSSES: &[BossStart] = &[
     BossStart { name: "Juppie (Act 3)", pack: 1217, start: 2, flags: &[249, 250, 276, 277], items: &[], roberta: false, place: Place::Trigger(0), cloud: false },
     // Step 37: the mines (286); trigger 1 starts the intro.
     BossStart { name: "Ixi Chieftain (Act 3)", pack: 864, start: 2, flags: &[249, 250, 286], items: &[], roberta: false, place: Place::Trigger(1), cloud: false },
-    // Step 38: the lair's entrance sphere (trigger 1) walks the hero into the arena.
-    BossStart { name: "Werelupe King", pack: 1246, start: 2, flags: &[249, 250, 271, 272, 273], items: &[], roberta: false, place: Place::Trigger(1), cloud: false },
+    // Step 38: the lair's entrance sphere (trigger 1) walks the hero into the arena. Flag 273 is
+    // the King's death (SPEC-0058 step 38): it must stay clear, or the arena plays the ending.
+    BossStart { name: "Werelupe King", pack: 1246, start: 2, flags: &[249, 250, 271, 272], items: &[], roberta: false, place: Place::Trigger(1), cloud: false },
     // Step 39: the second load into 985 (66 on, 283 off, 281 set).
     BossStart { name: "Gelert Assassin", pack: 985, start: 2, flags: &[249, 250, 64, 214, 216, 66, 281], items: &[], roberta: false, place: Place::Entry(0), cloud: false },
     // Steps 41 and 42: the dungeons (305, 35); the vault's arrival with 45 clear starts the fight.

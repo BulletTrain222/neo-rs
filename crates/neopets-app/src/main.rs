@@ -3311,6 +3311,18 @@ fn play_trace(
             std::process::exit(1)
         }
     };
+    // NEOPETS_TRACE_BOSS=n: the trace starts as the developer menu's boss fight n does (its
+    // world, start flags, stage grants, gear and placement; `play::BOSSES`), so a boss's own
+    // timeline can be traced headlessly (diagnostic).
+    if let Some(b) = std::env::var("NEOPETS_TRACE_BOSS").ok().and_then(|v| v.trim().parse::<usize>().ok()).and_then(|n| play::BOSSES.get(n).copied()) {
+        match boss_fight(disc, index, &play, &b) {
+            Ok(p) => {
+                play = p;
+                println!("      boss fight {} in {} (start index {})", b.name, b.pack, b.start);
+            }
+            Err(e) => eprintln!("Boss fight {} could not start: {e}", b.name),
+        }
+    }
     // NEOPETS_TRACE_QUADS="x,z,r": the world scene's mesh parts of at most 8 vertices whose
     // centre is within r of (x, z), with their texture, zone and vertices.
     if let Some((x, z, r)) = std::env::var("NEOPETS_TRACE_QUADS").ok().and_then(|v| {
