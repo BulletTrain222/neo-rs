@@ -1,5 +1,6 @@
 mod archive_view;
 mod bindings;
+mod button_style;
 mod controls_page;
 mod character;
 mod controls;
@@ -916,6 +917,7 @@ fn main() {
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
+    app.add_systems(Update, button_style::apply);
     audio_view::register(&mut app);
     if smoke_test {
         app.insert_resource(bevy::winit::WinitSettings::continuous());

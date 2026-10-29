@@ -53,6 +53,8 @@ pub struct HudArt {
     images: HashMap<(usize, u32, u32), Handle<Image>>,
     /// The monster name's text image (name, image, baseline).
     name: Option<(String, Handle<Image>, u32, u32, i32)>,
+    /// Counts the button-picture changes, so the dialogue box and the menus rebuild their icons.
+    pub style: u32,
 }
 
 /// Shared read access to the front-end database and its texture memory.
@@ -68,7 +70,14 @@ impl HudArt {
 
     pub fn new(f: Frontend) -> Option<Self> {
         let mem = f.memory()?;
-        Some(Self { f, mem, images: HashMap::new(), name: None })
+        Some(Self { f, mem, images: HashMap::new(), name: None, style: 0 })
+    }
+
+    /// Put art in place of sheet assets (the button pictures) and drop the cached sprites.
+    pub fn set_overrides(&mut self, overrides: HashMap<u32, neopets_data::texture::Image>) {
+        self.f.sprite_overrides = overrides;
+        self.images.clear();
+        self.style += 1;
     }
 }
 
@@ -294,7 +303,7 @@ pub fn sync_hud(
     mut prices: Query<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>)>,
 ) {
     let (Some(mut state), Some(mut art)) = (state, art) else { return };
-    let HudArt { f, mem, images: cache, name: name_image } = &mut *art;
+    let HudArt { f, mem, images: cache, name: name_image, .. } = &mut *art;
     let f: &Frontend = f;
     // SPEC-0023 section 11.1: the host's tween requests become tweens between two nodes' canvas
     // points: the quick fly-in moves 0xA1 from cross icon k, fading in; a Mote fly-in moves the
@@ -954,6 +963,7 @@ pub fn sync_textbox(
         }
     };
     let s = (window.width() / 512.0).min(window.height() / 448.0);
+    let art_style = art.style;
     let HudArt { f, mem, .. } = &mut *art;
     let f: &Frontend = f;
     let w = p.box_words;
@@ -977,9 +987,9 @@ pub fn sync_textbox(
         (BoxPart::Frame, hash(frame_h)),
         (BoxPart::Name, hash(name)),
         (BoxPart::Body, hash((page, visible))),
-        (BoxPart::Icon, hash(right.map(|r| r.0))),
+        (BoxPart::Icon, hash((right.map(|r| r.0), art_style))),
         (BoxPart::Label, hash(right.map(|r| r.1))),
-        (BoxPart::Icon2, hash(left.map(|r| r.0))),
+        (BoxPart::Icon2, hash((left.map(|r| r.0), art_style))),
         (BoxPart::Label2, hash(left.map(|r| r.1))),
     ];
     for (part, k) in &wanted {

@@ -121,6 +121,8 @@ fn picture(archive: &mut crate::Archive, resource: u32) -> Option<neopets_data::
 
 #[derive(Default)]
 pub struct MenuCache {
+    /// The HUD art's button-picture count the sprites were made with.
+    style: u32,
     sprites: HashMap<(usize, u32, u32), Handle<Image>>,
     labels: HashMap<usize, (Handle<Image>, u32, u32, i32)>,
     texts: HashMap<(usize, Vec<u8>, i32, [u8; 4]), Option<(Handle<Image>, u32, u32, i32)>>,
@@ -197,6 +199,10 @@ pub fn sync_menu(
     mut pool: Local<usize>,
 ) {
     let (Some(_state), Some(menu), Some(art)) = (state, menu, art) else { return };
+    if cache.style != art.style {
+        cache.style = art.style;
+        cache.sprites.clear();
+    }
     let Some(window) = windows.iter().next() else { return };
     let flow = &menu.flow;
     // Play and the box host draw over the running world (the box itself is the HUD's).

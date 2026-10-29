@@ -251,6 +251,9 @@ pub struct Frontend {
     pub pages: HashMap<usize, Page>,
     pub targets: HashMap<usize, Target>,
     pub texture: Option<TextureChunk>,
+    /// Art the caller puts in place of a sheet asset (by asset index), drawn instead of the
+    /// disc's sprite at any requested size (the player's button-picture choice).
+    pub sprite_overrides: HashMap<u32, Image>,
 }
 
 impl Frontend {
@@ -406,7 +409,7 @@ impl Frontend {
                 targets.insert(n, Target { target: i16_at(p, r + 4).ok_or_else(bad)?, state: i16_at(p, r + 6).ok_or_else(bad)? });
             }
         }
-        Ok(Self { nodes, keys, screens, sprites, values, assets, fonts, labels, pages, targets, texture: None })
+        Ok(Self { nodes, keys, screens, sprites, values, assets, fonts, labels, pages, targets, texture: None, sprite_overrides: HashMap::new() })
     }
 
     /// The node a section C key names.
@@ -447,6 +450,19 @@ impl Frontend {
     pub fn sprite_image(&self, mem: &GsMemory, node: usize, width: u32, height: u32) -> Option<Image> {
         let n = self.nodes.get(node)?;
         let s = self.sprite(node)?;
+        if let Some(o) = self.sprite_overrides.get(&s.asset) {
+            // Nearest texel from the override, scaled to the requested size.
+            let (width, height) = (width.clamp(1, 1024), height.clamp(1, 1024));
+            let mut rgba = Vec::with_capacity((width * height * 4) as usize);
+            for y in 0..height {
+                for x in 0..width {
+                    let (sx, sy) = ((x * o.width / width).min(o.width - 1), (y * o.height / height).min(o.height - 1));
+                    let i = ((sy * o.width + sx) * 4) as usize;
+                    rgba.extend_from_slice(o.rgba.get(i..i + 4)?);
+                }
+            }
+            return Some(Image { width, height, rgba });
+        }
         let (texture, palette) = self.sheet_entries(s.asset)?;
         let tex = self.texture.as_ref()?;
         let sub = tex.entries.get(texture)?;
