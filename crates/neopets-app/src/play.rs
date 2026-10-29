@@ -9070,12 +9070,12 @@ impl Play {
                 continue;
             }
             // The navmesh pick: the first mesh holding the enemy, of kind 2 (flying) when the
-            // row can fly, else 1 (SPEC-0038 Behavior 6); a flyer with no flying mesh under it
-            // takes a ground mesh. A grounding or the retarget step picks again.
+            // row's Can Fly word is not 0 (a grounded Can Fly 1 enemy included), else kind 1
+            // (SPEC-0038 Navmesh pick); no fallback to the other kind. A grounding or the
+            // retarget step picks again.
             let fly_kind = if row.can_fly != 0 { 2 } else { 1 };
             if e.take_repick() || wk.mesh.and_then(|i| world.navmeshes.get(i)).is_none_or(|m| m.locate_full(p).is_none()) {
-                let find = |kind: u32| world.navmeshes.iter().position(|m| m.kind == kind && m.locate_full(p).is_some());
-                let pick = find(fly_kind).or_else(|| find(1));
+                let pick = world.navmeshes.iter().position(|m| m.kind == fly_kind && m.locate_full(p).is_some());
                 if pick.is_some() {
                     wk.assign_mesh(pick, &world.navmeshes);
                 }
