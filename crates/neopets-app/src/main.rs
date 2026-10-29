@@ -2957,7 +2957,9 @@ fn sync_characters(
                     t.rotation *= Quat::from_rotation_x(lean);
                     t.scale = Vec3::splat(s);
                 }
-                *vis = if p.pack_drawn(c.pack) && !c.inactive { Visibility::Visible } else { Visibility::Hidden };
+                // SPEC-0038 Behavior 40: a hiding enemy with cue word 0 is not drawn.
+                let hidden = c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action));
+                *vis = if p.pack_drawn(c.pack) && !c.inactive && !hidden { Visibility::Visible } else { Visibility::Hidden };
             }
         }
     }

@@ -1186,6 +1186,25 @@ impl Enemy {
     /// active-hero actor-table exception and the Display-in-Default branch (+0xE3C, the ambush
     /// word, +0xC4, +0xC8, state 14) are not built.
     pub fn lock_vetoed(&self, clip: u32) -> bool {
+        self.hidden(clip) || self.cloaked(clip)
+    }
+
+    /// SPEC-0038 Behavior 40 (the cue word): a waiting state-8 enemy is hidden (not drawn, not
+    /// hittable, not auto-targetable) while its emerge sub-state is 0, its cue word (+0xC4) is 0
+    /// and its current animation (`clip`) is the hide pick; the same rule hides a Display-1
+    /// enemy in state 14 at phase 1. With cue word 1 it is drawn and hittable while it hides.
+    pub fn hidden(&self, clip: u32) -> bool {
+        if self.spawn.int(0xC4) != 0 {
+            return false;
+        }
+        let pick = match self.spawn.selector {
+            s @ 1..=4 => 127 + s,
+            _ => 9,
+        };
+        (self.state == 8 && self.emerge == 0 && clip == pick) || (self.p.display_default && self.state == 14 && self.hide_phase == 1)
+    }
+
+    fn cloaked(&self, clip: u32) -> bool {
         !self.p.display_default && !self.visible && (self.state == self.default_state as u32 || (self.state == 21 && clip != 82))
     }
 
@@ -3268,6 +3287,27 @@ mod tests {
         // Away from home it walks back.
         v.position = [3.0, 0.0, 0.0];
         assert_eq!(e.tick(&v, &mut rng).go, Some(Go::Toward([0.0; 3])));
+    }
+
+    #[test]
+    fn a_waiting_enemy_hides_on_its_hide_pick() {
+        let mut rng = Rng::seeded(5);
+        let mut e = Enemy::new(skeleton(), Spawn { default_state: 8, ..Spawn::default() }, &mut rng);
+        e.state = 8;
+        // Cue word 0, emerge sub-state 0, the hide pick 9 current: hidden.
+        assert!(e.hidden(9) && e.lock_vetoed(9));
+        assert!(!e.hidden(2), "walking home it is drawn");
+        e.emerge = 1;
+        assert!(!e.hidden(9));
+        // Cue word 1: drawn and hittable while it hides; selector 2 hides on 129.
+        let mut words = [0u32; 8];
+        words[3] = 1;
+        let mut e = Enemy::new(skeleton(), Spawn { default_state: 8, words, ..Spawn::default() }, &mut rng);
+        e.state = 8;
+        assert!(!e.hidden(9));
+        let mut e = Enemy::new(skeleton(), Spawn { default_state: 8, selector: 2, ..Spawn::default() }, &mut rng);
+        e.state = 8;
+        assert!(e.hidden(129) && !e.hidden(9));
     }
 
     #[test]

@@ -700,7 +700,7 @@ impl Character {
     pub fn unhittable(&self) -> bool {
         self.pet_like()
             || self.invulnerable
-            || self.enemy.as_ref().is_some_and(|e| e.lying() || (e.state == 19 && matches!(e.outer, 5 | 6)) || (!self.held && matches!(self.anim.clip_state().action, 74..=76)))
+            || self.enemy.as_ref().is_some_and(|e| e.lying() || e.hidden(self.anim.clip_state().action) || (e.state == 19 && matches!(e.outer, 5 | 6)) || (!self.held && matches!(self.anim.clip_state().action, 74..=76)))
     }
 }
 
