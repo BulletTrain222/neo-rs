@@ -242,6 +242,11 @@ impl Juppie {
 
     fn state_step(&mut self, v: &View, w: &Words, rng: &mut Rng, a: &mut Act) {
         let a = &mut *a;
+        // The chooser runs on every pass whatever the state (R-0122; SPEC-0015 cadence step 1):
+        // outside the free state it only lowers the decision cooldown.
+        if self.top != Top::Free && self.cooldown > 0 {
+            self.cooldown -= 1;
+        }
         match self.top {
             Top::Hub { .. } => {
                 // The controller's start requests animation 7 once (R-0036 4); after that the
@@ -331,9 +336,10 @@ impl Juppie {
         }
     }
 
-    /// The free state: the stage rules when the stage is complete, else the cadence.
+    /// The free state (state 1, free and facing; R-0122): the stage rules when the stage is
+    /// complete (the hub, the free handler not run), else action 2 turning toward the hero at
+    /// rate 1.0 and the cadence.
     fn free(&mut self, v: &View, w: &Words, rng: &mut Rng, a: &mut Act) {
-        a.anim = Some(7);
         let f = Self::fraction(v);
         if let Some(stage) = self.marker {
             self.marker = None;
@@ -363,11 +369,10 @@ impl Juppie {
             self.top = Top::Hub { played: false };
             return;
         }
-        if self.stage == 0 {
-            return;
-        }
-        if self.cooldown > 0 {
-            self.cooldown -= 1;
+        a.anim = Some(2);
+        a.face = Some(1.0);
+        if self.stage == 0 || self.cooldown > 0 {
+            self.cooldown = (self.cooldown - 1).max(0);
             return;
         }
         let (lo, hi) = w.cooldown[(self.stage.max(1) - 1) as usize];
@@ -381,6 +386,9 @@ impl Juppie {
             self.spit_done = 0;
             self.spit_wait = -1;
             self.top = Top::Spit(0);
+        } else {
+            // No attack: the same pass lowers the new cooldown by one tick.
+            self.cooldown -= 1;
         }
     }
 
@@ -648,7 +656,8 @@ mod tests {
             k.tick(&view(&flag1, &none, (7, 0.5, false)), &w, &mut rng);
             seen.push(k.cooldown);
         }
-        assert!(seen.iter().all(|&c| (90..=210).contains(&c)), "{seen:?}");
+        // A draw that starts no attack loses one tick on the same pass.
+        assert!(seen.iter().all(|&c| (89..=210).contains(&c)), "{seen:?}");
         // Distance 10.0 is not eligible; 10.5 is (with a roll below 50 about half the time).
         let mut slams = 0;
         for _ in 0..400 {
