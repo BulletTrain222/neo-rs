@@ -22,7 +22,7 @@ pub struct Pass1Plugin;
 
 impl Plugin for Pass1Plugin {
     fn build(&self, app: &mut App) {
-        let handle = app.world_mut().resource_mut::<Assets<Shader>>().add(Shader::from_wgsl(WGSL, "neopets/pass1.wgsl"));
+        let handle = app.world_mut().resource_mut::<Assets<Shader>>().add(Shader::from_wgsl(WGSL.replace("#{SUN_SHARE}", &format!("{:?}", crate::graphics::SUN_SHARE)), "neopets/pass1.wgsl"));
         let _ = SHADER.set(handle);
         app.add_plugins(MaterialPlugin::<Pass1Material>::default()).add_systems(Update, scroll_pass1);
     }
@@ -121,7 +121,30 @@ fn scroll_pass1(state: Option<Res<crate::PlayState>>, mut frames: Local<u32>, pa
 
 const WGSL: &str = r#"
 #import bevy_pbr::forward_io::VertexOutput
-#import bevy_pbr::mesh_view_bindings::view
+#import bevy_pbr::mesh_view_bindings::{view, lights}
+#import bevy_pbr::mesh_view_types::DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT
+#import bevy_pbr::shadows::fetch_directional_shadow
+
+// The sun's share of a lit surface (graphics.rs SUN_SHARE): while the shadow sun shines the
+// lit pass-0 surfaces take (1 - share) from the ambient light and share x N.L x shadow from the
+// sun, and these layers follow them, so a shadow is not painted over by an unlit layer.
+const SUN_SHARE: f32 = #{SUN_SHARE};
+
+fn sun_factor(in: VertexOutput) -> f32 {
+    if lights.n_directional_lights == 0u {
+        return 1.0;
+    }
+    let light = &lights.directional_lights[0];
+    let n = normalize(in.world_normal);
+    let ndl = abs(dot(n, (*light).direction_to_light));
+    var shadow = 1.0;
+    if ((*light).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
+        let view_z = dot(vec4<f32>(view.view_from_world[0].z, view.view_from_world[1].z, view.view_from_world[2].z, view.view_from_world[3].z), in.world_position);
+        let toward = select(-n, n, dot(n, (*light).direction_to_light) >= 0.0);
+        shadow = fetch_directional_shadow(0u, in.world_position, toward, view_z, in.position.xy);
+    }
+    return (1.0 - SUN_SHARE) + SUN_SHARE * ndl * shadow;
+}
 
 struct Pass1 {
     mode: vec4<f32>,
@@ -146,7 +169,7 @@ fn fragment(in: VertexOutput) -> @location(0) vec4<f32> {
         uv = vec2<f32>(0.5 * (1.0 - r.z), 0.5 * (1.0 + r.y));
     }
     let t = textureSample(pass1_texture, pass1_sampler, uv);
-    var c = t.rgb;
+    var c = t.rgb * sun_factor(in);
     var a = t.a;
 #ifdef VERTEX_COLORS
     c = c * in.color.rgb;

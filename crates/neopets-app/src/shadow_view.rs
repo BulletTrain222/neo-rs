@@ -31,6 +31,10 @@ impl Plugin for ShadowPlugin {
         let handle = app.world_mut().resource_mut::<Assets<Shader>>().add(Shader::from_wgsl(WGSL, "neopets/shadow_volume.wgsl"));
         let _ = SHADER.set(handle);
         app.add_plugins((MaterialPlugin::<ShadowSubtract>::default(), MaterialPlugin::<ShadowAdd>::default()));
+        // The sun's shadow map: 4096 texels a cascade (Bevy's default 2048 left the characters'
+        // shadows soft and faint).
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
+        app.add_systems(PostUpdate, extend_cascades.after(bevy::light::SimulationLightSystems::UpdateDirectionalLightCascades).before(bevy::light::SimulationLightSystems::UpdateLightFrusta));
     }
 }
 
@@ -157,8 +161,10 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
     if !*made {
         *made = true;
         commands.spawn((
-            DirectionalLight { illuminance: crate::graphics::sun_illuminance(), shadow_maps_enabled: true, ..default() },
-            bevy::light::CascadeShadowConfigBuilder { maximum_distance: 160.0, first_cascade_far_bound: 25.0, ..default() }.build(),
+            // Smaller biases than Bevy's (0.02 depth, 1.8 normal texels) keep a character's
+            // shadow at its feet with the finer map.
+            DirectionalLight { illuminance: crate::graphics::sun_illuminance(), shadow_maps_enabled: true, shadow_depth_bias: 0.01, shadow_normal_bias: 0.9, ..default() },
+            bevy::light::CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: 200.0, first_cascade_far_bound: 20.0, ..default() }.build(),
             Transform::default(),
             Visibility::Hidden,
             Sun,
@@ -184,6 +190,66 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
 #[derive(Component)]
 pub struct CasterOff;
 
+/// How far each cascade's culling box reaches back toward the sun, in world units.
+const CASTER_REACH: f32 = 500.0;
+
+/// Bevy fits each cascade's depth range to its slice of the camera's view, so a caster between
+/// the sun and that range (a tall tree beside the path) was cut from the near cascade: the
+/// ground close to the camera came out lit inside the tree's shadow, a wedge with straight edges
+/// at the cascade's bounds. Each cascade's depth range is extended CASTER_REACH toward the sun:
+/// the orthographic depth row is remade so the near side sits CASTER_REACH further out, and the
+/// view-projection follows it (the culling box is built from it afterwards).
+fn extend_cascades(mut lights: Query<&mut bevy::light::Cascades>) {
+    for mut c in &mut lights {
+        for cascades in c.cascades.values_mut() {
+            for k in cascades.iter_mut() {
+                let p = k.clip_from_cascade;
+                let r = p.z_axis.z;
+                if r <= 0.0 || p.w_axis.z != 1.0 {
+                    continue;
+                }
+                let cascade_from_world = p.inverse() * k.clip_from_world;
+                let r2 = 1.0 / (1.0 / r + CASTER_REACH);
+                let mut q = p;
+                q.z_axis.z = r2;
+                q.w_axis.z = 1.0 - r2 * CASTER_REACH;
+                k.clip_from_cascade = q;
+                k.clip_from_world = q * cascade_from_world;
+            }
+        }
+    }
+}
+
+/// A blended mesh that its vertex colours make mostly see-through (every vertex alpha below
+/// 0.5: fades, glows and dark decal quads) never casts: Bevy's shadow pass cuts out by the
+/// texture's alpha only, so such a quad would cast a solid rectangle.
+#[derive(Component)]
+pub struct FaintCaster;
+
+/// Marks the new faint blended meshes (`FaintCaster`, NotShadowCaster).
+#[allow(clippy::type_complexity)]
+pub fn mark_faint(
+    mut commands: Commands,
+    meshes: Res<Assets<Mesh>>,
+    materials: Res<Assets<StandardMaterial>>,
+    added: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), (Or<(Added<Mesh3d>, Changed<MeshMaterial3d<StandardMaterial>>)>, Without<FaintCaster>)>,
+) {
+    for (e, mesh, material) in &added {
+        let Some(m) = materials.get(&material.0) else { continue };
+        if matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)) {
+            continue;
+        }
+        let Some(mesh) = meshes.get(&mesh.0) else { continue };
+        let faint = match mesh.attribute(Mesh::ATTRIBUTE_COLOR) {
+            Some(bevy::mesh::VertexAttributeValues::Float32x4(c)) => !c.is_empty() && c.iter().all(|v| v[3] * m.base_color.alpha() < 0.5),
+            _ => m.base_color.alpha() < 0.5,
+        };
+        if faint {
+            commands.entity(e).insert((FaintCaster, bevy::light::NotShadowCaster));
+        }
+    }
+}
+
 /// With Character shadows Detailed and World shadows off, only the characters (the hero, the
 /// world's characters, their items and attachments) cast: every other mesh is marked
 /// NotShadowCaster; with World shadows on the marks come off again.
@@ -196,6 +262,7 @@ pub fn sync_casters(
     parents: Query<&ChildOf>,
     roots: Query<(), Or<(With<crate::HeroRoot>, With<crate::CharacterRoot>, With<crate::AttachmentRoot>, With<crate::HeroItemRoot>)>>,
     mut last: Local<Option<bool>>,
+    faint: Query<(), With<FaintCaster>>,
 ) {
     let characters_only = !settings.world_shadows;
     if *last == Some(characters_only) && added.is_empty() {
@@ -207,7 +274,7 @@ pub fn sync_casters(
         let want_off = characters_only && !character;
         if want_off && !off {
             commands.entity(e).insert((bevy::light::NotShadowCaster, CasterOff));
-        } else if !want_off && managed {
+        } else if !want_off && managed && !faint.contains(e) {
             commands.entity(e).remove::<(bevy::light::NotShadowCaster, CasterOff)>();
         }
     }

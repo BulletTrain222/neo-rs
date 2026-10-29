@@ -105,7 +105,8 @@ pub fn spawn<C: Component + Copy>(
                                 materials.add(base)
                             })
                             .clone();
-                        commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), transform, Visibility::Hidden, tag, PatchPart { pack, patch: pi }, lod(Role::Far, plane_x)));
+                        // A far sprite is a flat card turned to the camera: it casts no shadow.
+                        commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), transform, Visibility::Hidden, tag, PatchPart { pack, patch: pi }, lod(Role::Far, plane_x), bevy::light::NotShadowCaster));
                     }
                 }
             }
@@ -139,6 +140,9 @@ pub fn spawn<C: Component + Copy>(
                     let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), transform, visibility, tag, PatchPart { pack, patch: pi }, lod(role, plane_x)));
                     if bush {
                         e.insert(BushPart { pack, patch: pi, plant: k, cut });
+                    }
+                    if role == Role::Far {
+                        e.insert(bevy::light::NotShadowCaster);
                     }
                 }
                 count += usize::from(!cut);
