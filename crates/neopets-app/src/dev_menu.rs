@@ -778,24 +778,25 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
 /// A label's visible width in characters.
 const FIT: usize = 28;
 
-/// A label that fits one row (28 characters) as it is; a longer one as a marquee at `t` seconds:
-/// its start held for 1.5 s, then scrolling left at 6 characters a second and wrapping round
-/// after a gap.
+/// A label that fits one row (28 characters) as it is; a longer one keeps its kind ("Item: ",
+/// "Boss fight: " and the like, up to the first ": ") in place and runs the rest as a marquee
+/// at `t` seconds in the width left: its start held for 2 s, then scrolling left at 3
+/// characters a second and wrapping round after a gap.
 fn fit(s: String, t: f64) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= FIT {
         return s;
     }
+    let kind = s.find(": ").map(|b| s[..b + 2].chars().count()).filter(|&k| k + 8 <= FIT).unwrap_or(0);
+    let (head, rest) = chars.split_at(kind);
+    let width = FIT - kind;
     const GAP: usize = 5;
-    const RATE: f64 = 6.0;
-    const HOLD: f64 = 1.5;
-    let n = chars.len() + GAP;
+    const RATE: f64 = 3.0;
+    const HOLD: f64 = 2.0;
+    let n = rest.len() + GAP;
     let phase = t.rem_euclid(HOLD + n as f64 / RATE);
     let start = (((phase - HOLD).max(0.0) * RATE) as usize).min(n - 1);
-    (0..FIT).map(|k| {
-        let i = (start + k) % n;
-        chars.get(i).copied().unwrap_or(' ')
-    }).collect()
+    head.iter().copied().chain((0..width).map(|k| rest.get((start + k) % n).copied().unwrap_or(' '))).collect()
 }
 
 /// The menu window's rows (labels, values, cursor and hover colours), the last result, and the
@@ -815,6 +816,8 @@ pub fn show_panel(
     mut headers: Query<(&mut Text, &DevHeader), (Without<DevDetail>, Without<DevNote>, Without<DevLabel>, Without<DevValue>, Without<DevText>)>,
     mut rows: Query<(&Interaction, &DevRow, &mut BackgroundColor), Without<DevStep>>,
     mut arrows: Query<(&Interaction, &mut BackgroundColor), (With<DevStep>, Without<DevRow>)>,
+    // Each row's label and when it was first shown: a changed label scrolls from its start.
+    mut shown: Local<std::collections::HashMap<usize, (String, f64)>>,
 ) {
     for mut n in &mut windows {
         n.display = if dev.open { Display::Flex } else { Display::None };
@@ -827,7 +830,13 @@ pub fn show_panel(
     let p = &play.play;
     if dev.open {
         for (mut t, l) in &mut labels {
-            let s = fit(row_text(ENTRIES[l.0], &dev, p).0, time.elapsed_secs_f64());
+            let label = row_text(ENTRIES[l.0], &dev, p).0;
+            let now = time.elapsed_secs_f64();
+            let since = shown.entry(l.0).or_insert_with(|| (label.clone(), now));
+            if since.0 != label {
+                *since = (label.clone(), now);
+            }
+            let s = fit(label, now - since.1);
             if t.0 != s {
                 t.0 = s;
             }
@@ -926,8 +935,9 @@ mod tests {
         let a = super::fit(long.clone(), 0.5);
         assert_eq!(a.chars().count(), super::FIT);
         assert!(long.starts_with(&a));
-        let b = super::fit(long.clone(), 1.5 + 1.0);
-        assert_eq!(b, long.chars().skip(6).take(super::FIT).collect::<String>());
+        // After the hold, 1 s scrolls the name 3 characters; "Boss fight: " stays put.
+        let b = super::fit(long.clone(), 2.0 + 1.0);
+        assert_eq!(b, format!("Boss fight: {}", long.chars().skip(12 + 3).take(super::FIT - 12).collect::<String>()));
     }
 }
 
