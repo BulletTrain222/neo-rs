@@ -72,7 +72,7 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, movies: true, xbox_buttons: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 1, movies: true, xbox_buttons: false }
     }
 }
 
@@ -645,7 +645,8 @@ mod tests {
         assert!(s.xbox_buttons && s.rows()[15].1 == "Xbox");
         s.change(14, 1, &sizes);
         assert!(!s.movies && s.rows()[14].1 == "Off", "Movie cutscenes off");
-        assert_eq!(s.rows()[13].1, "High");
+        assert_eq!(s.rows()[13].1, "Medium");
+        s.change(13, 1, &sizes);
         s.change(13, 1, &sizes);
         assert_eq!((s.shadow_quality, s.rows()[13].1.as_str()), (0, "Low"), "wraps to Low");
         assert_eq!(DisplaySettings::parse(&s.text()), s);

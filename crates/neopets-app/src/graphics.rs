@@ -156,6 +156,20 @@ fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
 "#;
 
 /// The camera's anti-aliasing, bloom and ambient occlusion from the settings.
+/// The ambient occlusion quality: Medium (8 samples a pixel), about 1.4 ms cheaper than Bevy's
+/// default High at 1920 x 1080 and alike to the eye; NEOPETS_SSAO=low|medium|high|ultra
+/// chooses another (diagnostic).
+fn ssao_quality() -> bevy::pbr::ScreenSpaceAmbientOcclusionQualityLevel {
+    use bevy::pbr::ScreenSpaceAmbientOcclusionQualityLevel as Q;
+    match std::env::var("NEOPETS_SSAO").ok().as_deref() {
+        Some("low") => Q::Low,
+        Some("medium") => Q::Medium,
+        Some("ultra") => Q::Ultra,
+        Some("high") => Q::High,
+        _ => Q::Medium,
+    }
+}
+
 fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras: Query<Entity, With<Camera3d>>, mut last: Local<Option<(usize, usize, bool, usize, bool, bool)>>) {
     let key = (settings.aa, settings.bloom, settings.ao, cameras.iter().count(), settings.char_shadows == 1, sun_on(&settings));
     if *last == Some(key) {
@@ -195,7 +209,7 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass)>();
             c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
         } else if settings.ao {
-            c.insert((ScreenSpaceAmbientOcclusion::default(), AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true }));
+            c.insert((ScreenSpaceAmbientOcclusion { quality_level: ssao_quality(), ..default() }, AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true }));
         } else if sun_on(&settings) {
             c.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
             c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });

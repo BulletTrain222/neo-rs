@@ -3191,7 +3191,10 @@ fn sync_characters(
         let d = eye.map_or(0.0, |e| e.distance(Vec3::from(c.position)));
         let every: u64 = if d < 25.0 { 1 } else if d < 60.0 { 2 } else { 4 };
         let due = stamp.is_none_or(|(t, f)| f != now.1 || (p.ticks >= t + every && (p.ticks + c.id) % every == 0) || p.ticks >= t + 2 * every);
-        if !noskip && (hidden || (stamp.is_some() && (!on_screen || !due))) {
+        // NEOPETS_PERF_FREEZE: characters skinned once only (diagnostic, to measure uploads).
+        static FREEZE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let freeze = *FREEZE.get_or_init(|| std::env::var_os("NEOPETS_PERF_FREEZE").is_some());
+        if (freeze && stamp.is_some()) || (!noskip && (hidden || (stamp.is_some() && (!on_screen || !due)))) {
             continue;
         }
         *stamp = Some(now);
