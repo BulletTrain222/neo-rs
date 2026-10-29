@@ -2013,6 +2013,20 @@ impl Play {
         true
     }
 
+    /// SPEC-0027 Camera initialisation at a world load: a scripted play of the world left
+    /// behind ends with it (its track belongs to that world's table, SPEC-0030 row 294), and
+    /// the camera is attached to the hero. The old world's hold on the hero ends too (the
+    /// arrival places the hero afresh; this build's hold flag stands for the scripted state).
+    /// Without this, 1176's won or lost round (HoldHero and camera 5 at end mode 1, then the
+    /// load of 1023) left the hero held in the village: 1023's zone-loader thread waits there
+    /// for good, so the no-threads release never came.
+    fn drop_camera_play(&mut self) {
+        self.cut = None;
+        self.cut_target = None;
+        self.held = false;
+        self.hero_walk = None;
+    }
+
     /// The current world's Init (a world loaded by a door job).
     fn run_init(&mut self) {
         let mut init = level::on_init(self.world.pack, &mut self.state);
@@ -6645,6 +6659,7 @@ impl Play {
                 let exterior = std::mem::replace(&mut self.world, world);
                 self.other = Some(exterior);
                 self.state.reset_levels();
+                self.drop_camera_play();
                 self.run_init();
                 let (l, g) = self.world.entries.first().copied().unwrap_or(([0.0; 3], [1.0, 0.0, 0.0]));
                 let l = self.world.snap(l, 6.0);
@@ -6656,6 +6671,7 @@ impl Play {
                 self.world = world;
                 self.other = None;
                 self.state.reset_levels();
+                self.drop_camera_play();
                 self.run_init();
                 let landing = self.world.landing(plane, false, false).or_else(|| {
                     let (l, g) = self.world.entries.first().copied()?;
