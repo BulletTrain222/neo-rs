@@ -621,6 +621,9 @@ pub struct Character {
     /// The Gelert Assassin (behaviour class 1; SPEC-0013), its clone slot (block ordinal) and
     /// the hit waiting for its controller (damage, from a shot).
     pub gelert: Option<neopets_sim::gelert::Gelert>,
+    /// The shot-deflect flag (+0xE5C): set by the Black Knight's parry and deflect stance and
+    /// the Gelert Assassin's deflect clip; only creation clears it (SPEC-0036; SPEC-0029 10.6).
+    pub deflects: bool,
     pub gelert_slot: usize,
     pub gelert_hit: Option<(i32, bool)>,
     /// SetEntityInvulnerable (SPEC-0030 row 132; +0x7F0): never a hit candidate while set.
@@ -668,6 +671,7 @@ impl Character {
             || self.draik.as_ref().is_some_and(|d| d.guarding())
             || self.king.as_ref().is_some_and(|k| k.guarding())
             || self.ixi.as_ref().is_some_and(|x| matches!(x.state, Ixi::Idle | Ixi::Hold | Ixi::Transition | Ixi::BlockMelee | Ixi::BlockMissile))
+            || (self.gelert.as_ref().is_some_and(|g| g.state == neopets_sim::gelert::State::Deflect) && self.anim.clip_state().action == 21)
     }
 
     /// An enemy kind is also not hittable in its melee or missile dodge (agro outer sub-state 5
@@ -3642,6 +3646,7 @@ impl Play {
                 status,
                 id: self.attack_fx.next_shot,
                 arming: 0,
+                hostile: false,
             });
             if let Some(v) = visual {
                 self.attack_fx.shots.insert(self.attack_fx.next_shot, (v, [None; 2], anchor));
@@ -3696,10 +3701,24 @@ impl Play {
     fn shots_step(&mut self) {
         let pack = self.world.pack;
         let hero = self.loco.position();
+        // The hero's aim point for deflected shots, and the hero's guard (state 20 or Roberta's
+        // spin, sub-states 6 and 7).
+        let hero_aim = [hero[0], hero[1] + 0.5 * neopets_sim::motion::HERO_HEIGHT, hero[2]];
+        let hero_guards = self.loco.state == hero_states::GUARD || (self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 6 | 7)));
+        // The deflect flags: the knight's parry and deflect stance, the Gelert's deflect clip.
+        for c in &mut self.characters {
+            let knight = c.knight.as_ref().is_some_and(|k| matches!(k.state, neopets_sim::knight::State::Parry | neopets_sim::knight::State::Deflect(..)));
+            let gelert = c.gelert.as_ref().is_some_and(|g| g.state == neopets_sim::gelert::State::Deflect) && c.anim.clip_state().action == 21;
+            c.deflects |= knight || gelert;
+        }
         let mut shots = std::mem::take(&mut self.hero_shots);
         let mut keep = Vec::new();
         for mut s in shots.drain(..) {
-            let aim = s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| c.id).and_then(|id| self.aim_point(id));
+            let aim = if s.hostile {
+                Some(hero_aim)
+            } else {
+                s.target.and_then(|id| self.characters.iter().find(|c| c.id == id && c.dying.is_none())).map(|c| c.id).and_then(|id| self.aim_point(id))
+            };
             let before = s.position;
             if !s.step(aim) {
                 continue;
@@ -3711,6 +3730,36 @@ impl Play {
                 if let Some(code) = hit.surface {
                     let cue = neopets_sim::roberta::surface_cue(code as u32);
                     self.sound.play(neopets_sim::sound::WEAPON, cue, neopets_sim::sound::Play { emitter: Some(s.position), ..Default::default() });
+                }
+                continue;
+            }
+            // A hostile (deflected) shot tests the hero's body cylinder instead of the
+            // characters: a guarding hero bounces it again (it stays hostile); otherwise the
+            // hero takes trunc(S x C x T) (defence 0, C 1) and the shot is disarmed; such a hit
+            // also pays the quick-shot cost (a quirk to reproduce; SPEC-0036).
+            if s.hostile {
+                let touch = (s.position[0] - hero[0]).hypot(s.position[2] - hero[2]) <= neopets_sim::contact::HERO_RADIUS + s.radius
+                    && s.position[1] >= hero[1] - s.radius
+                    && s.position[1] <= hero[1] + neopets_sim::motion::HERO_HEIGHT + s.radius;
+                if !(touch && s.armed()) {
+                    keep.push(s);
+                    continue;
+                }
+                if hero_guards {
+                    s.bounce(&mut self.rng);
+                    keep.push(s);
+                    continue;
+                }
+                let damage = (s.scale * s.t).max(0.0);
+                let back = [-s.dir[0], 0.0, -s.dir[2]];
+                self.hero_hit(damage, 0.0, false, back, "a deflected shot".into());
+                if s.class < 3 {
+                    let mote = self.equipment.motes[1][2];
+                    let (cost, q) = self.magic.roberta_quick(s.class, mote);
+                    self.pay_mp(cost);
+                    if let Some(id) = mote {
+                        self.spend_charge(2, id, q);
+                    }
                 }
                 continue;
             }
@@ -3776,6 +3825,11 @@ impl Play {
             // and flies on; a full-release shot is not blocked: a hittable target takes it as
             // below, any other is passed with the shot disarmed.
             if self.characters[i].guards() {
+                if s.class < 3 && self.characters[i].deflects {
+                    s.deflect(hero_aim);
+                    keep.push(s);
+                    continue;
+                }
                 if s.class < 3 {
                     s.bounce(&mut self.rng);
                     keep.push(s);
@@ -6208,6 +6262,7 @@ impl Play {
                 gelert: row.filter(|r| r.class == Some(1)).and_then(|_| self.gelert_words.as_ref()).map(|w| neopets_sim::gelert::Gelert::new(w, self.state.flag(258), pl.ordinal > 0, &mut self.rng)),
                 gelert_slot: pl.ordinal,
                 gelert_hit: None,
+                deflects: false,
                 invulnerable: false,
                 hp: row.map_or(1, |r| r.hit_points as i32),
                 dying: None,
@@ -6338,6 +6393,7 @@ impl Play {
             gelert: None,
             gelert_slot: 0,
             gelert_hit: None,
+            deflects: false,
             invulnerable: false,
             hp: row.map_or(1, |r| r.hit_points as i32),
             dying: None,
@@ -6869,6 +6925,23 @@ impl Play {
             for &k in gone.iter().rev() {
                 if k < self.hero_shots.len() {
                     self.hero_shots.remove(k);
+                }
+            }
+            // SPEC-0015 sub-step 2: while stunned (not in the dazed loop) a thin wall lies along
+            // the boss too: centre c = B + 0.5 |P - B|h u at B's height (P the head, u the
+            // horizontal unit direction from B to P), 4 high, 30 along u and 1 across.
+            let stunned = self.characters.get(i).and_then(|c| c.boss.as_ref()).is_some_and(|b| b.top == neopets_sim::juppie::Top::Slam(2));
+            if let (true, Some(_)) = (stunned, act.blocker) {
+                let b = self.characters[i].position;
+                let (dx, dz) = (head[0] - b[0], head[2] - b[2]);
+                let l = dx.hypot(dz);
+                if l > 1e-4 {
+                    let u = [dx / l, 0.0, dz / l];
+                    let w = [u[2], 0.0, -u[0]];
+                    let c = [b[0] + 0.5 * l * u[0], b[1], b[2] + 0.5 * l * u[2]];
+                    let origin: [f32; 3] = std::array::from_fn(|k| c[k] - 2.0 * UP[k] - 15.0 * u[k] - 0.5 * w[k]);
+                    let wall = contact::BoxShape { origin, axes: [UP, u, w], extents: [4.0, 30.0, 1.0] };
+                    contact::resolve(&mut self.loco.body.position, &[wall], contact::HERO_RADIUS);
                 }
             }
             if let Some(p) = act.blocker {

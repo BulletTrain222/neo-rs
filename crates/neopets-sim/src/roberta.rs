@@ -331,6 +331,9 @@ pub struct Shot {
     /// The arming counter (+0x7C): 0 at launch, 15 after a bounce; while above 0 after its
     /// decrement the shot ignores guards and does not steer (SPEC-0036 Arming counter).
     pub arming: i32,
+    /// Deflected by a guarding target with the deflect flag: it now tests the hero and, once
+    /// armed, steers toward the current hero (SPEC-0036 Quick shot meets a guarding target).
+    pub hostile: bool,
 }
 
 /// Roberta's shot-visual tables (SPEC-0034 Roberta's shot visuals), read from the boot data.
@@ -435,6 +438,14 @@ impl Shot {
         self.bounce_with(r1, r2);
     }
 
+    /// The deflect: d = unit(the current hero's aim point - the shot's position), the arming
+    /// counter 15, and the shot turns hostile.
+    pub fn deflect(&mut self, hero_aim: Vec3) {
+        self.dir = unit([hero_aim[0] - self.position[0], hero_aim[1] - self.position[1], hero_aim[2] - self.position[2]]);
+        self.arming = 15;
+        self.hostile = true;
+    }
+
     pub fn bounce_with(&mut self, r1: f32, r2: f32) {
         let d = self.dir;
         let side = [-d[2], 0.0, d[0]];
@@ -525,7 +536,7 @@ mod tests {
     fn shot_bounce() {
         // SPEC-0036 Bounce test vectors: d = (1, 0, 0) (side (0, 0, 1)), r1 = r2 = 0.3 gives
         // (-0.49, 0.3, -0.21); both -0.5 gives (-0.25, -0.5, 0.25); r = 0 gives (-1, 0, 0).
-        let shot = || Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 30, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0, arming: 0 };
+        let shot = || Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 30, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0, arming: 0, hostile: false };
         let near = |a: Vec3, b: Vec3| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-5);
         for ((r1, r2), want) in [((0.3, 0.3), [-0.49, 0.3, -0.21]), ((-0.5, -0.5), [-0.25, -0.5, 0.25]), ((0.0, 0.0), [-1.0, 0.0, 0.0])] {
             let mut s = shot();
@@ -542,6 +553,11 @@ mod tests {
         }
         s.step(Some([0.0, 0.0, 10.0]));
         assert!(s.armed() && s.dir != [-1.0, 0.0, 0.0]);
+        // The deflect: aimed at the hero's aim point, armed 15, hostile.
+        let mut s = shot();
+        s.position = [10.0, 1.0, 0.0];
+        s.deflect([0.0, 1.0, 0.0]);
+        assert!(near(s.dir, [-1.0, 0.0, 0.0]) && s.arming == 15 && s.hostile);
     }
 
     use super::*;
@@ -663,7 +679,7 @@ mod tests {
         let d = launch_dir(a, default_aim([0.0; 3], [0.0, 0.0, 1.0]));
         assert!((d[1] - 0.02563).abs() < 1e-4 && (d[2] - 0.99967).abs() < 1e-4);
         // Homing: shot at the origin, d (1, 0, 0), speed 60, target (0, 0, 10).
-        let mut s = Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 10, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0, arming: 0 };
+        let mut s = Shot { position: [0.0; 3], dir: [1.0, 0.0, 0.0], speed: 60.0, radius: 1.0, life: 10, homing: 1, target: Some(1), element: 0, scale: 1.0, t: 1.0, class: 0, status: None, id: 0, arming: 0, hostile: false };
         s.step(Some([0.0, 0.0, 10.0]));
         assert!((s.dir[0] - 0.948683).abs() < 1e-5 && (s.position[2] - 0.316228).abs() < 1e-5);
         s.step(Some([0.0, 0.0, 10.0]));
