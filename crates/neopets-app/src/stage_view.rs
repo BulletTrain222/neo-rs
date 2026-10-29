@@ -1,13 +1,19 @@
 //! The developer test stage's look (this build's own art, not from any disc): a wide flat
-//! floor of muted stone tiles, the arena ring the Cloud Beast moves on (radius 16, as its
-//! stand-in arena) and a mark at the centre. The stage itself is `play::World::test_stage`.
+//! floor of muted stone tiles, the arena ring the Cloud Beast moves on (radius 24 by default, as
+//! its stand-in arena) and a mark at the centre. The stage itself is `play::World::test_stage`.
 use bevy::prelude::*;
 
 /// The floor's half width and one tile's size, in world units.
 const HALF: f32 = 600.0;
 const TILE: f32 = 4.0;
-/// The arena ring's radius (the Cloud Beast's stand-in ring) and its line width.
-pub const RING: f32 = 16.0;
+/// The arena ring's radius (the Cloud Beast's stand-in ring: its six points sit on it) and the
+/// drawn line's width. 24 by default (neighbouring points 24 apart, opposite ones 48; the two
+/// disc levels with points 101 to 106 spread theirs over about 30 to 35 units); NEOPETS_CLOUD_RING
+/// sets another radius (diagnostic).
+pub fn ring() -> f32 {
+    static R: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
+    *R.get_or_init(|| std::env::var("NEOPETS_CLOUD_RING").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|r| *r > 2.0).unwrap_or(24.0))
+}
 const LINE: f32 = 0.35;
 
 /// The tile texture: 8 x 8 tiles of 8 pixels in two stone tones, each tile with a darker
@@ -51,6 +57,6 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
     let line = materials.add(StandardMaterial { base_color: Color::srgb(0.85, 0.82, 0.62), unlit: true, ..default() });
     // The flat shapes are built in the XY plane; laid down on the floor, a hair above it.
     let flat = Transform::from_xyz(0.0, 0.02, 0.0).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
-    commands.spawn((Mesh3d(meshes.add(Annulus::new(RING - LINE / 2.0, RING + LINE / 2.0).mesh().resolution(96))), MeshMaterial3d(line.clone()), flat, bevy::light::NotShadowCaster, part));
+    commands.spawn((Mesh3d(meshes.add(Annulus::new(ring() - LINE / 2.0, ring() + LINE / 2.0).mesh().resolution(96))), MeshMaterial3d(line.clone()), flat, bevy::light::NotShadowCaster, part));
     commands.spawn((Mesh3d(meshes.add(Annulus::new(0.9, 0.9 + LINE).mesh().resolution(32))), MeshMaterial3d(line), flat, bevy::light::NotShadowCaster, part));
 }

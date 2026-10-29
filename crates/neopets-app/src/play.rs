@@ -8548,13 +8548,14 @@ impl Play {
         }
         if find(self, 9).is_none() {
             let f = self.loco.facing;
-            // The stand-in arena: a ring of radius 16 around the hero, point 0 ahead of the hero.
+            // The stand-in arena: six points on the stage's ring around the hero (radius 24 by
+            // default, `stage_view::ring`), point 0 ahead of the hero.
             let centre = self.loco.position();
             let a0 = f[0].atan2(f[2]);
             let ring: [([f32; 3], [f32; 3]); 6] = std::array::from_fn(|k| {
                 let a = a0 + k as f32 * std::f32::consts::FRAC_PI_3;
                 let d = [a.sin(), 0.0, a.cos()];
-                (add(centre, scale(d, 16.0)), [-d[0], 0.0, -d[2]])
+                (add(centre, scale(d, crate::stage_view::ring())), [-d[0], 0.0, -d[2]])
             });
             // SPEC-0010 Arena: the level locators with user ids 101 to 106 when all six exist (the
             // Juppie and Plague Serpent arenas); otherwise the ring.
