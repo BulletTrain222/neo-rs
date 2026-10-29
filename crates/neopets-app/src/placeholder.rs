@@ -229,6 +229,96 @@ fn tail(p: &mut MeshPart, start: V, len: f32, r0: f32, curl: f32) {
 /// mouth, glowing blue cracks down its arms and a curling wisp tail in place of legs. It faces
 /// +z and floats at CLOUD_HOVER, about the size of its row (radius 3.0, height 3.5).
 pub fn cloud_beast() -> ModelData {
+    custom_cloud_beast().unwrap_or_else(cloudbreaker)
+}
+
+/// The user's own Cloud Beast model, when present: a Wavefront OBJ at NEOPETS_CLOUD_MODEL or
+/// `private/models/cloud_beast.obj` (positions and faces; normals, UVs and materials ignored).
+/// It is scaled to stand from the ground to just under the companion's ride height, centred,
+/// turned by NEOPETS_CLOUD_MODEL_YAW degrees (default 0: the file's +z is the front, where the
+/// user's Tempest Golem holds its fists) and
+/// coloured lavender with the stand-in's key-light shading from smooth vertex normals.
+fn custom_cloud_beast() -> Option<ModelData> {
+    let path = std::env::var("NEOPETS_CLOUD_MODEL").unwrap_or_else(|_| "private/models/cloud_beast.obj".into());
+    let text = std::fs::read_to_string(&path).ok()?;
+    let mut pos: Vec<V> = Vec::new();
+    let mut idx: Vec<u32> = Vec::new();
+    for line in text.lines() {
+        let mut it = line.split_whitespace();
+        match it.next() {
+            Some("v") => {
+                let v: Vec<f32> = it.take(3).filter_map(|t| t.parse().ok()).collect();
+                if let [x, y, z] = v[..] {
+                    pos.push([x, y, z]);
+                }
+            }
+            Some("f") => {
+                // Each corner is "v", "v/vt", "v//vn" or "v/vt/vn", 1-based or negative.
+                let corners: Vec<u32> = it
+                    .filter_map(|t| t.split('/').next()?.parse::<i64>().ok())
+                    .map(|i| if i < 0 { pos.len() as i64 + i } else { i - 1 })
+                    .filter(|&i| i >= 0)
+                    .map(|i| i as u32)
+                    .collect();
+                for k in 1..corners.len().saturating_sub(1) {
+                    idx.extend([corners[0], corners[k], corners[k + 1]]);
+                }
+            }
+            _ => {}
+        }
+    }
+    if pos.is_empty() || idx.is_empty() || idx.iter().any(|&i| i as usize >= pos.len()) {
+        return None;
+    }
+    let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
+    for q in &pos {
+        for k in 0..3 {
+            lo[k] = lo[k].min(q[k]);
+            hi[k] = hi[k].max(q[k]);
+        }
+    }
+    let top = COMPANION_RIDE - 0.3;
+    let s = top / (hi[1] - lo[1]).max(1e-3);
+    let yaw = std::env::var("NEOPETS_CLOUD_MODEL_YAW").ok().and_then(|v| v.trim().parse::<f32>().ok()).unwrap_or(0.0).to_radians();
+    let (sy, cy) = yaw.sin_cos();
+    let mid = [(lo[0] + hi[0]) / 2.0, lo[1], (lo[2] + hi[2]) / 2.0];
+    let place = |q: V| {
+        let (x, y, z) = ((q[0] - mid[0]) * s, (q[1] - mid[1]) * s, (q[2] - mid[2]) * s);
+        [x * cy + z * sy, y, -x * sy + z * cy]
+    };
+    let positions: Vec<V> = pos.iter().map(|&q| place(q)).collect();
+    // Smooth normals: the area-weighted face normals summed at each vertex.
+    let mut normals = vec![[0.0f32; 3]; positions.len()];
+    for t in idx.chunks_exact(3) {
+        let (a, b, c) = (positions[t[0] as usize], positions[t[1] as usize], positions[t[2] as usize]);
+        let n = cross(sub(b, a), sub(c, a));
+        for &i in t {
+            normals[i as usize] = add(normals[i as usize], n);
+        }
+    }
+    let normals: Vec<V> = normals.into_iter().map(unit).collect();
+    let key = unit([-0.45, 0.75, 0.55]);
+    let colors: Vec<[f32; 4]> = normals
+        .iter()
+        .map(|n| {
+            let up = 0.5 + 0.5 * n[1];
+            let lit = 0.74 + 0.4 * (n[0] * key[0] + n[1] * key[1] + n[2] * key[2]).max(0.0);
+            let c = [0, 1, 2].map(|q| (LAV_LOW[q] + (LAV_TOP[q] - LAV_LOW[q]) * up) * lit);
+            [c[0], c[1], c[2], 1.0]
+        })
+        .collect();
+    let mut p = part();
+    p.uvs = vec![[0.0, 0.0]; positions.len()];
+    p.raw_colors = vec![[128; 4]; positions.len()];
+    p.positions = positions;
+    p.normals = normals;
+    p.colors = colors;
+    p.indices = idx;
+    Some(model(p))
+}
+
+/// The procedural Cloudbreaker (used when no custom model file is present).
+pub fn cloudbreaker() -> ModelData {
     let mut p = part();
     let h = CLOUD_HOVER;
     let y = |v: f32| h + v;
@@ -327,7 +417,7 @@ pub fn cloud_companion() -> ModelData {
 mod tests {
     #[test]
     fn stand_ins_have_geometry() {
-        let m = super::cloud_beast();
+        let m = super::cloudbreaker();
         let p = &m.parts[0];
         assert!(p.indices.len() % 3 == 0 && p.indices.iter().all(|&i| (i as usize) < p.positions.len()));
         assert_eq!(p.positions.len(), p.colors.len());
