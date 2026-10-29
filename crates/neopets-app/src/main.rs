@@ -3311,6 +3311,10 @@ fn play_trace(
             std::process::exit(1)
         }
     };
+    // NEOPETS_TRACE_GOD: the developer menu's god mode from the start (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_GOD").is_some() {
+        play.cheats.god = true;
+    }
     // NEOPETS_TRACE_BOSS=n: the trace starts as the developer menu's boss fight n does (its
     // world, start flags, stage grants, gear and placement; `play::BOSSES`), so a boss's own
     // timeline can be traced headlessly (diagnostic).
@@ -3319,6 +3323,7 @@ fn play_trace(
             Ok(p) => {
                 play = p;
                 println!("      boss fight {} in {} (start index {})", b.name, b.pack, b.start);
+                play.cheats.god |= std::env::var_os("NEOPETS_TRACE_GOD").is_some();
             }
             Err(e) => eprintln!("Boss fight {} could not start: {e}", b.name),
         }
