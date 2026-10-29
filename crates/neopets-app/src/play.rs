@@ -3759,7 +3759,10 @@ impl Play {
             let c = if neopets_sim::mote::matches(s.element, t_type) { neopets_sim::mote::one_plus_percent(gst) } else { 1.0 };
             // trunc(max(0, S x C x T - defence)), absorbed when S x C x T > 0 and the result <= 0.
             let (damage, absorbed) = neopets_sim::charm::damage(neopets_sim::charm::scale(s.scale, c, s.t, 1.0, 1.0), 1.0, defence, 1.0);
-            if s.class < 3 {
+            // The Plague Serpent and the Undead Draik are not hittable: a shot that meets them
+            // pays nothing (SPEC-0036 Quick-shot payment; SPEC-0016 Hero actions).
+            let unpaid = self.characters[i].serpent.is_some() || self.characters[i].draik.is_some();
+            if s.class < 3 && !unpaid {
                 // The quick-shot payment: the class's cost and exactly Q of word-2 charge.
                 let (cost, q) = self.magic.roberta_quick(s.class, mote);
                 self.pay_mp(cost);
@@ -5531,13 +5534,23 @@ impl Play {
             // and Tor's sword recoils (sub-state 13); a power step with a Mote passes through
             // with no effect. With the gate passing the swing passes through; the damage comes
             // only from the knight's weak-point routine.
-            if let Some(k) = c.knight.as_ref() {
-                if !k.exposed && !power_hit {
+            // SPEC-0029 G11: the Undead Draik the same way while it guards (outside its stun and
+            // hit reactions, and before stage 5, Blocking Angle 2.0); exposed, the swing passes
+            // through to its own hit check.
+            let guards = match (c.knight.as_ref(), c.draik.as_ref()) {
+                (Some(k), _) => Some(!k.exposed),
+                (_, Some(d)) => Some(d.guarding()),
+                _ => None,
+            };
+            if let Some(guarding) = guards {
+                if guarding && !power_hit {
                     self.hit_list.push(c.id);
                     landed += 1;
                     knight_block = true;
                 }
-                continue;
+                if guarding || c.knight.is_some() {
+                    continue;
+                }
             }
             if let Some(e) = c.enemy.as_mut().filter(|e| e.blocking && !power_hit) {
                 if c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < e.p.defence.angle {
@@ -5558,8 +5571,14 @@ impl Play {
             // y = (x - defence) x G, the attacker's status scale (curse 0.75, strength 1.5); E is
             // 1 (no petpet).
             let t = c.row.map_or(0, |r| r.target_type as i32);
+            // The bosses with their own hit checks are skipped by the swing resolver that pays the
+            // magic and Mote charge and sends the power step's status (SPEC-0011 and SPEC-0020
+            // Hero actions); their routines take the hit. A Faerie Sister's takes the power step
+            // at power 1.0 (the attack power table is not used); Gnarfas's uses the table.
+            let own = c.own_hit_check();
+            let power = if c.sister.is_some() || c.serpent.is_some() { 1.0 } else { power };
             let (damage, absorbed) = neopets_sim::mote::melee(power, stat_a as f32, mote, t, d_factor, e_factor, c.row.map_or(0.0, |r| r.defence), g);
-            if damage > 0 || absorbed {
+            if (damage > 0 || absorbed) && !own {
                 landed += 1;
             }
             // A boss takes its hits through its own controller (SPEC-0015 counted hits).
@@ -5572,7 +5591,7 @@ impl Play {
                 self.boss_hits.push((c.id, damage));
                 continue;
             }
-            hits.push((i, damage));
+            hits.push((i, damage, own));
         }
         // The knight's block (SPEC-0012 G15): the impact cue and, for Tor, the sword bounce.
         if knight_block {
@@ -5590,14 +5609,14 @@ impl Play {
         // SPEC-0036 Damage, take-hit: in the power step a status request of the word-2 Mote
         // also goes to the target (SPEC-0029 Behavior 27.1).
         let request = mote_id.filter(|_| sub == 10).and_then(|id| neopets_sim::mote::status_request(0, id, |k| self.design.attack_power(k)));
-        for &(i, _) in &hits {
+        for &(i, _, _) in &hits {
             if let Some(e) = self.characters.get(i).and_then(|c| c.entity) {
                 self.state.hero.hits.push(e);
             }
         }
-        for (i, damage) in hits {
+        for (i, damage, own) in hits {
             self.character_take_hit(i, damage, hero_at, "");
-            if let Some(r) = request {
+            if let Some(r) = request.filter(|_| !own) {
                 self.character_status(i, r);
             }
         }

@@ -309,6 +309,12 @@ fn open(band: (f32, f32), d: f32) -> bool {
 }
 
 impl Draik {
+    /// Guarding for the hero's swing (SPEC-0029 G11: base state 20 with Blocking Angle 2.0):
+    /// every tick of stages 1 and 3 outside the stun and the hit reactions; never in stage 5.
+    pub fn guarding(&self) -> bool {
+        self.stage < 5 && !matches!(self.state, State::Stun(_) | State::Reaction(_) | State::Dead)
+    }
+
     /// The spit records' tick: each moves by its velocity, then hurts the hero and ends when its
     /// sphere touches the hero (`hits`), or ends when its height reaches the ground under it
     /// (`ground`, the probe from 8 above). Returns the spits that ended.
