@@ -2541,8 +2541,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // 75: 0; else 3 or 2; region 736 + set). Words: 1 the watcher's busy word, 2 the post-fight
         // word cleared (the file holds it set), 3 to 5 the stored hit points, 6 the monitor's
         // start tick (0: not started), 7 line 3 shown, 30 and 31 the item scenes' once-words.
-        // The breakables, the platform and breaker threads, the stepping stones and the AI
-        // activate callback are not built.
+        // The breaker thread and the platform-time thread run from Update; the AI activate
+        // callback (it refuses ordinal 73) and the empty breakable routine are not built.
         735 => {
             let mut v = vec![reg(21, 1), Action::RegisterGroupTriggers { group: 8, routine: 8 }, reg(4, 4), reg(5, 5), reg(2, 2)];
             if !state.flag(263) {
@@ -11479,9 +11479,22 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // kept); 11 and not 12: the victory (263, 75, 50, 70; movie 38 counted; objects 0 and 13;
         // camera 4 and line 2; level state 12; the post-fight word cleared); 9: the monitor (AI 73
         // dead: level state 11; else line 3 once, 5 s after AI 73 is seen unhurt while the hero is
-        // hurt). The intro's boss-fight refill (instance 10) follows camera 22; breakable 0 is not
-        // built.
+        // hurt). The intro's boss-fight refill (instance 10) follows camera 22.
         735 => {
+            // The platform-time thread: on each change of level state 13 (word 8 keeps the last
+            // seen value plus one) objects 54 and 50 take 1.0 s or 0.04 s and objects 51 to 53
+            // 1.5 s or 0.04 s (the later time with the state set; which of the pair goes with
+            // which state is this build's reading).
+            let l13 = state.level(13) as i32 + 1;
+            if state.word(pack, 8) == 0 {
+                state.set_word(pack, 8, l13);
+            } else if state.word(pack, 8) != l13 {
+                state.set_word(pack, 8, l13);
+                let on = l13 == 2;
+                for (obj, t) in [(54, 1.0), (50, 1.0), (51, 1.5), (52, 1.5), (53, 1.5)] {
+                    out.push(Action::SetObjTime { obj, seconds: if on { t } else { 0.04 } });
+                }
+            }
             // The breaker thread: each set level state 1 to 7 plays its group's break scene, in
             // order, and is cleared (state 0's group is empty and not posted in play).
             for k in 1..=7u16 {
@@ -11512,6 +11525,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                         Action::EntityAnim { entity: 73, anim: 3, looped: false, wait: true },
                         Action::DeactivateObj { obj: 54 },
                         Action::DeactivateObj { obj: 12 },
+                        Action::MakeBreakable { id: 0, on: true },
+                        Action::Break { id: 0 },
                         wait(1.0),
                         Action::EntityAnim { entity: 73, anim: 4, looped: false, wait: true },
                         wait(1.0),
@@ -17275,6 +17290,9 @@ mod tests {
         // Line 3 once, 5 s after the hero is hurt while AI 73 is not.
         s.hero.hp = 18;
         s.hero.tick = 1000;
+        // The platform-time thread sees level state 13 set by the intro: the later times.
+        let times = on_update(735, &mut s, false);
+        assert!(times.contains(&Action::SetObjTime { obj: 54, seconds: 1.0 }) && times.contains(&Action::SetObjTime { obj: 52, seconds: 1.5 }) && times.len() == 5);
         assert!(on_update(735, &mut s, false).is_empty());
         s.hero.tick = 1301;
         assert_eq!(on_update(735, &mut s, false), vec![Action::Message { line: 3 }]);
