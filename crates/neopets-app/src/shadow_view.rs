@@ -33,7 +33,8 @@ impl Plugin for ShadowPlugin {
         app.add_plugins((MaterialPlugin::<ShadowSubtract>::default(), MaterialPlugin::<ShadowAdd>::default()));
         // The sun's shadow map: 4096 texels a cascade (Bevy's default 2048 left the characters'
         // shadows soft and faint).
-        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: sun_tuning().0 as usize });
+        app.insert_resource(bevy::light::DirectionalLightShadowMap { size: 4096 });
+        app.add_systems(Update, apply_quality);
         app.add_systems(PostUpdate, extend_cascades.after(bevy::light::SimulationLightSystems::UpdateDirectionalLightCascades).before(bevy::light::SimulationLightSystems::UpdateLightFrusta));
     }
 }
@@ -166,7 +167,7 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
             // Smaller biases than Bevy's (0.02 depth, 1.8 normal texels) keep a character's
             // shadow at its feet with the finer map.
             DirectionalLight { illuminance: crate::graphics::sun_illuminance(), shadow_maps_enabled: true, shadow_depth_bias: 0.01, shadow_normal_bias: 0.9, ..default() },
-            bevy::light::CascadeShadowConfigBuilder { num_cascades: sun_tuning().1 as usize, maximum_distance: sun_tuning().2, first_cascade_far_bound: 20.0, ..default() }.build(),
+            bevy::light::CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: 200.0, first_cascade_far_bound: 20.0, ..default() }.build(),
             Transform::default(),
             Visibility::Hidden,
             Sun,
@@ -195,20 +196,46 @@ pub struct CasterOff;
 /// How far each cascade's culling box reaches back toward the sun, in world units.
 const CASTER_REACH: f32 = 500.0;
 
-/// The sun's shadow map size, cascade count, shadow distance and caster reach;
-/// NEOPETS_SUN="size,cascades,distance,reach" overrides them (diagnostic).
-fn sun_tuning() -> (f32, f32, f32, f32) {
-    static T: std::sync::OnceLock<(f32, f32, f32, f32)> = std::sync::OnceLock::new();
+/// NEOPETS_SUN="size,cascades,distance,reach": the sun's shadow map size, cascade count,
+/// shadow distance and caster reach, over the Shadow quality setting (diagnostic).
+fn sun_override() -> Option<(f32, f32, f32, f32)> {
+    static T: std::sync::OnceLock<Option<(f32, f32, f32, f32)>> = std::sync::OnceLock::new();
     *T.get_or_init(|| {
-        let mut t = (4096.0, 3.0, 200.0, CASTER_REACH);
-        if let Ok(v) = std::env::var("NEOPETS_SUN") {
-            let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
-            if let [a, b, c, d] = n[..] {
-                t = (a, b, c, d);
-            }
+        let v = std::env::var("NEOPETS_SUN").ok()?;
+        let n: Vec<f32> = v.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+        match n[..] {
+            [a, b, c, d] => Some((a, b, c, d)),
+            _ => None,
         }
-        t
     })
+}
+
+/// The Shadow quality levels: each cascade's map size, the cascade count and the shadow
+/// distance. High is the 4096 map that keeps the characters' shadows crisp; Medium halves the
+/// map; Low quarters it and draws two cascades over a shorter distance.
+fn quality(level: usize) -> (f32, f32, f32) {
+    match level {
+        0 => (1024.0, 2.0, 150.0),
+        1 => (2048.0, 3.0, 200.0),
+        _ => (4096.0, 3.0, 200.0),
+    }
+}
+
+/// The Shadow quality setting, applied to the shadow map and the sun's cascades when it
+/// changes (and once the sun exists).
+fn apply_quality(settings: Res<crate::display::DisplaySettings>, mut map: ResMut<bevy::light::DirectionalLightShadowMap>, mut suns: Query<&mut bevy::light::CascadeShadowConfig, With<Sun>>, mut last: Local<Option<usize>>) {
+    let level = settings.shadow_quality;
+    if *last == Some(level) || suns.is_empty() {
+        return;
+    }
+    *last = Some(level);
+    let (size, cascades, distance) = sun_override().map_or(quality(level), |t| (t.0, t.1, t.2));
+    if map.size != size as usize {
+        map.size = size as usize;
+    }
+    for mut c in &mut suns {
+        *c = bevy::light::CascadeShadowConfigBuilder { num_cascades: cascades as usize, maximum_distance: distance, first_cascade_far_bound: 20.0, ..default() }.build();
+    }
 }
 
 /// Bevy fits each cascade's depth range to its slice of the camera's view, so a caster between
@@ -227,7 +254,7 @@ fn extend_cascades(mut lights: Query<&mut bevy::light::Cascades>) {
                     continue;
                 }
                 let cascade_from_world = p.inverse() * k.clip_from_world;
-                let reach = sun_tuning().3;
+                let reach = sun_override().map_or(CASTER_REACH, |t| t.3);
                 let r2 = 1.0 / (1.0 / r + reach);
                 let mut q = p;
                 q.z_axis.z = r2;

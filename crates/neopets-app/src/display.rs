@@ -24,10 +24,13 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 15;
+pub const ROWS: usize = 16;
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
 /// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
 pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Detailed"];
+
+/// The sun shadow quality (shadow_view.rs: the map size and cascades of each level).
+pub const SHADOW_QUALITY: [&str; 3] = ["Low", "Medium", "High"];
 
 #[derive(Resource, Clone, Debug, PartialEq)]
 pub struct DisplaySettings {
@@ -57,6 +60,8 @@ pub struct DisplaySettings {
     /// Shadows cast by everything (trees, buildings, props): this build's option, not in the
     /// original.
     pub world_shadows: bool,
+    /// The sun shadow quality (index into SHADOW_QUALITY): this build's option.
+    pub shadow_quality: usize,
     /// Movie cutscenes played (on) or passed over at once, as if skipped (this build's testing
     /// option, not in the original).
     pub movies: bool,
@@ -67,7 +72,7 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, movies: true, xbox_buttons: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, movies: true, xbox_buttons: false }
     }
 }
 
@@ -100,6 +105,7 @@ impl DisplaySettings {
                 "original foliage" => s.original_foliage = v == "true",
                 "character shadows" => s.char_shadows = v.parse().unwrap_or(s.char_shadows).min(CHAR_SHADOWS.len() - 1),
                 "world shadows" => s.world_shadows = v == "true",
+                "shadow quality" => s.shadow_quality = v.parse().unwrap_or(s.shadow_quality).min(SHADOW_QUALITY.len() - 1),
                 "movies" => s.movies = v != "false",
                 "button pictures" => s.xbox_buttons = v == "xbox",
                 _ => {}
@@ -110,7 +116,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nmovies = {}\nbutton pictures = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow quality = {}\nmovies = {}\nbutton pictures = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -125,6 +131,7 @@ impl DisplaySettings {
             self.original_foliage,
             self.char_shadows,
             self.world_shadows,
+            self.shadow_quality,
             self.movies,
             if self.xbox_buttons { "xbox" } else { "playstation" }
         )
@@ -134,7 +141,7 @@ impl DisplaySettings {
         let mut s = std::fs::read_to_string(SETTINGS_FILE).map(|t| Self::parse(&t)).unwrap_or_default();
         // NEOPETS_GFX="aa,textures,bloom,colour,ao[,foliage]" (0/1 for the switches): the graphics options
         // for this run (diagnostic, for screenshot comparisons; not saved unless changed).
-        // NEOPETS_SHADOWS="char,world": the shadow settings for this run (diagnostic).
+        // NEOPETS_SHADOWS="char,world[,quality]": the shadow settings for this run (diagnostic).
         if let Some(v) = std::env::var("NEOPETS_SHADOWS").ok() {
             let n: Vec<usize> = v.split(',').filter_map(|t| t.trim().parse().ok()).collect();
             if let Some(&c) = n.first() {
@@ -142,6 +149,10 @@ impl DisplaySettings {
             }
             if let Some(&w) = n.get(1) {
                 s.world_shadows = w != 0;
+            }
+            // An optional third value: the shadow quality (0 Low, 1 Medium, 2 High).
+            if let Some(&q) = n.get(2) {
+                s.shadow_quality = q.min(SHADOW_QUALITY.len() - 1);
             }
         }
         // NEOPETS_BUTTONS=xbox: the Xbox button pictures for this run (diagnostic).
@@ -190,6 +201,7 @@ impl DisplaySettings {
             ("Distant foliage".into(), if self.original_foliage { "Original".into() } else { "Full".into() }),
             ("Character shadows".into(), CHAR_SHADOWS[self.char_shadows].into()),
             ("World shadows".into(), if self.world_shadows { "On".into() } else { "Off".into() }),
+            ("Shadow quality".into(), SHADOW_QUALITY[self.shadow_quality].into()),
             ("Movie cutscenes".into(), if self.movies { "On".into() } else { "Off".into() }),
             ("Button pictures".into(), if self.xbox_buttons { "Xbox".into() } else { "PlayStation".into() }),
         ]
@@ -222,8 +234,9 @@ impl DisplaySettings {
             10 => self.original_foliage = !self.original_foliage,
             11 => self.char_shadows = step(self.char_shadows, CHAR_SHADOWS.len()),
             12 => self.world_shadows = !self.world_shadows,
-            13 => self.movies = !self.movies,
-            14 => self.xbox_buttons = !self.xbox_buttons,
+            13 => self.shadow_quality = step(self.shadow_quality, SHADOW_QUALITY.len()),
+            14 => self.movies = !self.movies,
+            15 => self.xbox_buttons = !self.xbox_buttons,
             _ => {}
         }
     }
@@ -448,6 +461,7 @@ const HELP: [&str; ROWS + 1] = [
     "Full keeps trees, bushes and props in 3D at any distance; Original turns far trees into sprites, fades distant plants out and hides props past their draw distance, as the PS2 game.",
     "Original is the game's own faint, blocky hero shadow; Detailed casts every character's real shape from the area's main light.",
     "Shadows cast by everything, trees and buildings too, from the area's main light. Not in the original game.",
+    "How sharp the shadows from the area's main light are (World shadows and Detailed character shadows). Lower is faster and softer.",
     "Off passes over every movie cutscene at once, as if skipped (for testing). Not in the original game.",
     "The button pictures in boxes and menus: the game's PlayStation ones, or Xbox A, B, X and Y.",
     "Back to Options.",
@@ -623,10 +637,13 @@ mod tests {
         assert_eq!(SCALES[s.scale], 150);
         s.change(4, 1, &sizes);
         assert!(!s.smooth);
+        s.change(15, 1, &sizes);
+        assert!(s.xbox_buttons && s.rows()[15].1 == "Xbox");
         s.change(14, 1, &sizes);
-        assert!(s.xbox_buttons && s.rows()[14].1 == "Xbox");
+        assert!(!s.movies && s.rows()[14].1 == "Off", "Movie cutscenes off");
+        assert_eq!(s.rows()[13].1, "High");
         s.change(13, 1, &sizes);
-        assert!(!s.movies && s.rows()[13].1 == "Off", "Movie cutscenes off");
+        assert_eq!((s.shadow_quality, s.rows()[13].1.as_str()), (0, "Low"), "wraps to Low");
         assert_eq!(DisplaySettings::parse(&s.text()), s);
         assert_eq!(s.rows()[3].1, "150%");
         assert_eq!(DisplaySettings::parse("scale = 33\nmode = 9\n").mode, 2, "bad values clamp or keep");
