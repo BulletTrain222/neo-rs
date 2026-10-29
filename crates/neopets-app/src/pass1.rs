@@ -112,9 +112,13 @@ pub struct Pass1Scroll(pub [f32; 2]);
 fn scroll_pass1(state: Option<Res<crate::PlayState>>, mut frames: Local<u32>, parts: Query<(&Pass1Scroll, &MeshMaterial3d<Pass1Material>)>, mut materials: ResMut<Assets<Pass1Material>>) {
     *frames = frames.wrapping_add(1);
     let n = state.map_or(*frames as u16, |s| s.play.ticks as u16);
+    // Performance: only a changed offset is written (a get_mut marks the material changed).
     for (s, m) in &parts {
-        if let Some(mut mat) = materials.get_mut(&m.0) {
-            mat.params.offset = Vec4::new(neopets_data::material::scroll_offset(s.0[0], n), neopets_data::material::scroll_offset(s.0[1], n), 0.0, 0.0);
+        let want = Vec4::new(neopets_data::material::scroll_offset(s.0[0], n), neopets_data::material::scroll_offset(s.0[1], n), 0.0, 0.0);
+        if materials.get(&m.0).is_some_and(|mat| mat.params.offset != want) {
+            if let Some(mut mat) = materials.get_mut(&m.0) {
+                mat.params.offset = want;
+            }
         }
     }
 }

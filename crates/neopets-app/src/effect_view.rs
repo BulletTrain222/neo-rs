@@ -56,8 +56,11 @@ pub fn sync_trails(
     mesh.insert_indices(Indices::U32(indices));
     match made.as_ref() {
         Some((h, _)) => {
-            if let Some(mut m) = meshes.get_mut(h) {
-                *m = mesh;
+            let empty_again = empty && meshes.get(h).is_some_and(|m| m.count_vertices() == 0);
+            if !empty_again {
+                if let Some(mut m) = meshes.get_mut(h) {
+                    *m = mesh;
+                }
             }
         }
         None => {
@@ -161,8 +164,11 @@ pub fn sync_effects(
         mesh.insert_indices(Indices::U32(indices));
         match made.meshes.get(group) {
             Some(h) => {
-                if let Some(mut m) = meshes.get_mut(h) {
-                    *m = mesh;
+                let empty_again = mesh.count_vertices() == 0 && meshes.get(h).is_some_and(|m| m.count_vertices() == 0);
+                if !empty_again {
+                    if let Some(mut m) = meshes.get_mut(h) {
+                        *m = mesh;
+                    }
                 }
             }
             None => {

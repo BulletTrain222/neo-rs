@@ -1985,8 +1985,10 @@ fn apply_model(
 
 /// NEOPETS_PERF: every 240 frames, the meshes by owner (scene, objects, foliage, dome,
 /// characters and the rest), counting a mesh by its nearest tagged ancestor.
-fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, parts: Query<&WorldPart>, chars: Query<(), Or<(With<CharacterRoot>, With<HeroRoot>)>>, mut frames: Local<u32>, mut events: MessageReader<AssetEvent<Mesh>>, assets: Res<Assets<Mesh>>, mut changed: Local<(usize, usize)>, users: Query<(Entity, &Mesh3d)>, mut by: Local<std::collections::HashMap<AssetId<Mesh>, usize>>, names: Query<&Name>) {
+fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, parts: Query<&WorldPart>, chars: Query<(), Or<(With<CharacterRoot>, With<HeroRoot>)>>, mut frames: Local<u32>, mut events: MessageReader<AssetEvent<Mesh>>, assets: Res<Assets<Mesh>>, mut changed: Local<(usize, usize)>, users: Query<(Entity, &Mesh3d)>, mut by: Local<std::collections::HashMap<AssetId<Mesh>, usize>>, names: Query<&Name>, mut mat_events: MessageReader<AssetEvent<StandardMaterial>>, mut img_events: MessageReader<AssetEvent<Image>>, mut other: Local<(usize, usize)>) {
     *frames += 1;
+    other.0 += mat_events.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count();
+    other.1 += img_events.read().filter(|e| matches!(e, AssetEvent::Modified { .. })).count();
     for e in events.read() {
         if let AssetEvent::Modified { id } = e {
             changed.0 += 1;
@@ -1998,7 +2000,8 @@ fn perf_kinds(meshes: Query<Entity, With<Mesh3d>>, parents: Query<&ChildOf>, par
         return;
     }
     // The owners of the meshes changed in the last frame window, by kind.
-    info!("perf: meshes modified per frame {:.1}, vertices {:.0}", changed.0 as f32 / 240.0, changed.1 as f32 / 240.0);
+    info!("perf: meshes modified per frame {:.1}, vertices {:.0}; materials {:.1}, images {:.1}", changed.0 as f32 / 240.0, changed.1 as f32 / 240.0, other.0 as f32 / 240.0, other.1 as f32 / 240.0);
+    *other = (0, 0);
     *changed = (0, 0);
     let mut owners: std::collections::BTreeMap<String, usize> = Default::default();
     for (e, m) in &users {
@@ -2444,10 +2447,15 @@ fn sync_uv_flip(state: Option<Res<PlayState>>, parts: Query<(&UvFlip, &MeshMater
     if std::env::var_os("NEOPETS_TRACE_FLIP").is_some() && n % 60 == 0 {
         println!("flipbooks on tick {n}: {} parts, offsets {:?}", parts.iter().count(), parts.iter().map(|(f, _)| f.0.offset(n)).collect::<Vec<_>>());
     }
+    // Performance: only a changed offset is written (a get_mut marks the material changed,
+    // which the renderer prepares again).
     for (f, m) in &parts {
-        if let Some(mut mat) = materials.get_mut(&m.0) {
-            let off = f.0.offset(n);
-            mat.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(off[0], off[1]));
+        let off = f.0.offset(n);
+        let want = bevy::math::Affine2::from_translation(Vec2::new(off[0], off[1]));
+        if materials.get(&m.0).is_some_and(|mat| mat.uv_transform != want) {
+            if let Some(mut mat) = materials.get_mut(&m.0) {
+                mat.uv_transform = want;
+            }
         }
     }
 }
@@ -2463,9 +2471,12 @@ fn sync_uv_scroll(state: Option<Res<PlayState>>, parts: Query<(&UvScroll, &MeshM
     let Some(state) = state else { return };
     let n = state.play.ticks as u16;
     for (s, m) in &parts {
-        if let Some(mut mat) = materials.get_mut(&m.0) {
-            let off = Vec2::new(neopets_data::material::scroll_offset(s.0[0], n), neopets_data::material::scroll_offset(s.0[1], n));
-            mat.uv_transform = bevy::math::Affine2::from_translation(off);
+        let off = Vec2::new(neopets_data::material::scroll_offset(s.0[0], n), neopets_data::material::scroll_offset(s.0[1], n));
+        let want = bevy::math::Affine2::from_translation(off);
+        if materials.get(&m.0).is_some_and(|mat| mat.uv_transform != want) {
+            if let Some(mut mat) = materials.get_mut(&m.0) {
+                mat.uv_transform = want;
+            }
         }
     }
 }
@@ -2693,8 +2704,8 @@ fn sync_items(
                 let alpha = it.life.clamp(0.0, 1.0);
                 for c in children.into_iter().flatten() {
                     if let Ok(h) = parts.get(*c) {
-                        if let Some(mut mat) = materials.get_mut(&h.0) {
-                            if (mat.base_color.alpha() - alpha).abs() > 1e-3 {
+                        if materials.get(&h.0).is_some_and(|mat| (mat.base_color.alpha() - alpha).abs() > 1e-3) {
+                            if let Some(mut mat) = materials.get_mut(&h.0) {
                                 mat.base_color.set_alpha(alpha);
                                 mat.alpha_mode = AlphaMode::Blend;
                             }
@@ -2981,10 +2992,13 @@ fn sync_hero_glows(
             if root.0 == *id {
                 *t = Transform::from_matrix(m);
                 *vis = Visibility::Visible;
+                let uv = bevy::math::Affine2::from_translation(Vec2::new(phase.0, 0.0));
                 for h in &root.1 {
-                    if let Some(mut mat) = materials.get_mut(h) {
-                        mat.base_color = colour;
-                        mat.uv_transform = bevy::math::Affine2::from_translation(Vec2::new(phase.0, 0.0));
+                    if materials.get(h).is_some_and(|mat| mat.base_color != colour || mat.uv_transform != uv) {
+                        if let Some(mut mat) = materials.get_mut(h) {
+                            mat.base_color = colour;
+                            mat.uv_transform = uv;
+                        }
                     }
                 }
             }
@@ -4691,6 +4705,7 @@ fn play_frame(
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
+    mut hero_stamp: Local<Option<(u64, bool, usize, usize)>>,
 ) {
     let _span = crate::perf::span("play_frame");
     let Some(mut state) = play else { return };
@@ -4733,10 +4748,14 @@ fn play_frame(
         t.translation = Vec3::from(p) + Vec3::from(off);
         t.rotation = rotation;
     }
-    let matrices = state.play.hero.skin_matrices();
+    // Performance: the hero's skin is rebuilt once per game tick (and when its flash or model
+    // changes), not on every drawn frame.
+    let stamp = (state.play.ticks, state.play.hero_flash > 0, state.play.hero_index, state.skinned.len());
+    let fresh = std::mem::replace(&mut *hero_stamp, Some(stamp)) != Some(stamp);
+    let matrices = if fresh { state.play.hero.skin_matrices() } else { Vec::new() };
     let tint = state.play.status_tint(None);
     let lights = state.play.lights(None, p);
-    for (handle, i) in &state.skinned {
+    for (handle, i) in state.skinned.iter().filter(|_| fresh) {
         let part = &state.play.model.parts[*i];
         let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
         let flash = (state.play.hero_flash > 0).then_some(&play::FLASH_COLOUR);

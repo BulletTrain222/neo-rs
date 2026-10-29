@@ -208,6 +208,10 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
             }
         } else {
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass, AmbientLight)>();
+            // NEOPETS_PREPASS_ALWAYS: a depth prepass without the sun too (diagnostic).
+            if std::env::var_os("NEOPETS_PREPASS_ALWAYS").is_some() {
+                c.insert(DepthPrepass);
+            }
         }
     }
 }

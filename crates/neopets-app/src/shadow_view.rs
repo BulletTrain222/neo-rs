@@ -123,13 +123,13 @@ pub fn sync_shadows(
         return;
     }
     if let Some((s, a)) = made.as_ref() {
-        if let Some(mut m) = subtract.get_mut(s) {
-            if m.amount != down {
+        if subtract.get(s).is_some_and(|m| m.amount != down) {
+            if let Some(mut m) = subtract.get_mut(s) {
                 m.amount = down;
             }
         }
-        if let Some(mut m) = add.get_mut(a) {
-            if m.amount != up {
+        if add.get(a).is_some_and(|m| m.amount != up) {
+            if let Some(mut m) = add.get_mut(a) {
                 m.amount = up;
             }
         }
