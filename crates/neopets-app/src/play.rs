@@ -993,6 +993,8 @@ pub struct Play {
     pub equipment: neopets_sim::inventory::Equipment,
     /// The Tattered Cloak is worn (the cloak swap; SPEC-0021 Tattered Cloak, partly).
     pub cloak_worn: bool,
+    /// The outfit model resource each hero is drawn with now (504 to 519; SPEC-0021 Outfit items).
+    pub outfits: [u32; 2],
     /// The party's weapon-drawn and shield-raised flags (SPEC-0040 Behavior 29), shared by both
     /// heroes.
     pub weapon_drawn: bool,
@@ -1797,6 +1799,7 @@ impl Play {
             seen_pack: 0,
             equipment: Default::default(),
             cloak_worn: false,
+            outfits: [outfit, 512],
             buyable: None,
             buy_caption: None,
             price_lines: [(0, 0); 2],
@@ -4404,6 +4407,38 @@ impl Play {
         if hero != self.hero_index {
             self.exchange_heroes();
         }
+    }
+
+    /// SPEC-0021 Outfit items (body family): the outfit model resource hero h should wear. Hero
+    /// 0's outfit k is item 119 + k and hero 1's is 127 + k; an empty body entry gives outfit 0;
+    /// item 126 (the Tattered Cloak, worn by the cloak swap) gives outfit 7 for either hero. Outfit
+    /// k is resource 504 + k for hero 0 and 512 + k for hero 1.
+    pub fn wanted_outfit(&self, h: usize) -> u32 {
+        let h = h.min(1);
+        let base: u32 = if h == 0 { 504 } else { 512 };
+        let first: i32 = if h == 0 { 119 } else { 127 };
+        let k = if self.cloak_worn {
+            7
+        } else {
+            match self.equipment.entries[2][h] {
+                None => 0,
+                Some(126) => 7,
+                Some(id) => (id as i32 - first).clamp(0, 7),
+            }
+        };
+        base + k as u32
+    }
+
+    /// The active hero's outfit model replaced (a body item or the cloak changed it): the model
+    /// and the animation rig of the new outfit, the animation's clip kept playing; the renderer
+    /// re-spawns the hero.
+    pub fn set_outfit(&mut self, resource: u32, model: ModelData, mut anim: HeroAnim) {
+        let action = self.hero.clip_state().action;
+        anim.play(action);
+        self.model = model;
+        self.hero = anim;
+        self.outfits[self.hero_index.min(1)] = resource;
+        self.spawned = false;
     }
 
     fn exchange_heroes(&mut self) {

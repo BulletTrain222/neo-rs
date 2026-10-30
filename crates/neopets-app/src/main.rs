@@ -1587,6 +1587,24 @@ fn step_sim(
                 dev.warp_names.insert(pack, area.and_then(|m| play.play.area_name(m)).unwrap_or_default());
             }
         }
+        // SPEC-0021 Outfit items: the active hero wears the outfit its body entry (or the worn
+        // cloak) names; a change loads that outfit's model and rig from the disc.
+        if let Some(archive) = archive.as_deref_mut() {
+            let h = play.play.hero_index.min(1);
+            let want = play.play.wanted_outfit(h);
+            if want != play.play.outfits[h] {
+                match (archive_view::model(&mut archive.disc, &archive.index, want), archive_view::hero(&mut archive.disc, &archive.index, want)) {
+                    (Ok(Some(m)), Ok(Some(a))) => {
+                        info!("Outfit {want} for hero {h}");
+                        play.play.set_outfit(want, m, a);
+                    }
+                    _ => {
+                        error!("Outfit {want} could not be loaded");
+                        play.play.outfits[h] = want;
+                    }
+                }
+            }
+        }
         if let (Some(pack), Some(archive)) = (dev.warp.take(), archive.as_deref_mut()) {
             match warp(&mut archive.disc, &archive.index, &play.play, pack) {
                 Ok(new) => {
