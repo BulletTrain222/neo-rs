@@ -1605,7 +1605,7 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
         pc.items.tab = 0;
         pc.items.cursor = flow.quest_cursor.min(19);
         pc.items.grid = std::array::from_fn(|k| pc.items.view.quests.get(page + k).copied().filter(|&id| id >= 0).unwrap_or(0));
-        pc.items.view.grid_counts = pc.items.grid.map(|id| u32::from(id > 0));
+        pc.items.view.grid_counts = std::array::from_fn(|k| u32::from(pc.items.view.quests.get(page + k).is_some_and(|&id| id >= 0)));
         pc.items.view.marker = -1;
     }
     let group = match tab {
@@ -1676,6 +1676,12 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
                 let id = if let Some(k) = equip_icons.iter().position(|&c| c == node) {
                     Some(pc.items.view.equipped_ids.get(k).copied().unwrap_or(-1))
                 } else if tab == 2 && nd.handler == 2 && (nd.arg as usize) < 20 {
+                    // A cell past the owned quest items is empty: no icon. (The grid's 0 means
+                    // empty, but item 0 is a real quest item, a note, so the id alone drew that
+                    // note in every empty cell.)
+                    if pc.items.view.grid_counts[nd.arg as usize] == 0 {
+                        return None;
+                    }
                     Some(pc.items.grid[nd.arg as usize])
                 } else {
                     None
