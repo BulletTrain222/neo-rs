@@ -64,10 +64,18 @@ pub fn spawn<C: Component + Copy>(
     tag: C,
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
+    pass1_materials: &mut Assets<crate::pass1::Pass1Material>,
     images: &mut Assets<Image>,
 ) -> usize {
     let Some(patches) = play.foliage.get(&pack) else { return 0 };
     let mut assets: HashMap<u16, Vec<(usize, Handle<Mesh>, Handle<StandardMaterial>)>> = HashMap::new();
+    // SPEC-0003 How a pass is drawn: a near model's second-pass layer (shared per model and
+    // drawn as a child-free twin of each plant's part, with the plant's components so the bush
+    // and distance steps move and hide it too), and its environment-mapped pass-0 parts drawn by
+    // the pass-1 shader. Far sprites keep one pass.
+    type Second = (Vec<(usize, Handle<Mesh>, Handle<crate::pass1::Pass1Material>, Option<[f32; 2]>)>, HashMap<usize, Handle<crate::pass1::Pass1Material>>);
+    let mut seconds: HashMap<u16, Second> = HashMap::new();
+    let no_pass1 = std::env::var_os("NEOPETS_NO_PASS1").is_some();
     let mut tinted: HashMap<(AssetId<StandardMaterial>, [u8; 4]), Handle<StandardMaterial>> = HashMap::new();
     let mut count = 0;
     for (pi, p) in patches.iter().enumerate() {
@@ -114,10 +122,37 @@ pub fn spawn<C: Component + Copy>(
         for (id, cut) in drawn {
             let Some(model) = models.get(&id) else { continue };
             let parts = assets.entry(id).or_insert_with(|| crate::part_assets(model, meshes, materials, images)).clone();
+            let (second, env) = if far_only {
+                Default::default()
+            } else {
+                seconds
+                    .entry(id)
+                    .or_insert_with(|| {
+                        let second = crate::pass1_assets(model, meshes, pass1_materials, images);
+                        let mut textures: HashMap<usize, Handle<Image>> = HashMap::new();
+                        let env: HashMap<usize, Handle<crate::pass1::Pass1Material>> = model
+                            .parts
+                            .iter()
+                            .enumerate()
+                            .filter(|(_, q)| q.env_map && !no_pass1)
+                            .filter_map(|(i, q)| {
+                                let t = q.texture?;
+                                let tex = model.textures.get(t)?;
+                                let image = textures.entry(t).or_insert_with(|| images.add(crate::model_texture(tex))).clone();
+                                Some((i, pass1_materials.add(crate::pass1::env_base(image))))
+                            })
+                            .collect();
+                        if std::env::var_os("NEOPETS_TRACE_PASS1").is_some() && (!second.is_empty() || !env.is_empty()) {
+                            println!("foliage model {id}: {} pass-1 parts, {} environment-mapped parts", second.len(), env.len());
+                        }
+                        (second, env)
+                    })
+                    .clone()
+            };
             for (k, q) in p.plants.iter().enumerate() {
                 let transform = Transform::from_translation(Vec3::from(q.position)).with_rotation(Quat::from_rotation_y(q.yaw)).with_scale(Vec3::splat(q.scale));
                 let visibility = if cut { Visibility::Hidden } else { Visibility::Visible };
-                for (_, mesh, material) in &parts {
+                for (i, mesh, material) in &parts {
                     let m = tinted
                         .entry((material.id(), if far_only { q.colour } else { [0; 4] }))
                         .or_insert_with(|| {
@@ -137,12 +172,24 @@ pub fn spawn<C: Component + Copy>(
                         .clone();
                     let role = if far_only { Role::Far } else { Role::Near };
                     let plane_x = far_only && quad_in_x(model);
-                    let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), transform, visibility, tag, PatchPart { pack, patch: pi }, lod(role, plane_x)));
+                    let mut e = match env.get(i) {
+                        Some(em) => commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(em.clone()), transform, visibility, tag, PatchPart { pack, patch: pi }, lod(role, plane_x))),
+                        None => commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m), transform, visibility, tag, PatchPart { pack, patch: pi }, lod(role, plane_x))),
+                    };
                     if bush {
                         e.insert(BushPart { pack, patch: pi, plant: k, cut });
                     }
                     if role == Role::Far {
                         e.insert(bevy::light::NotShadowCaster);
+                    }
+                }
+                for (_, mesh, material, scroll) in &second {
+                    let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(material.clone()), transform, visibility, tag, PatchPart { pack, patch: pi }, lod(Role::Near, false), bevy::light::NotShadowCaster));
+                    if bush {
+                        e.insert(BushPart { pack, patch: pi, plant: k, cut });
+                    }
+                    if let Some(s) = scroll {
+                        e.insert(crate::pass1::Pass1Scroll(*s));
                     }
                 }
                 count += usize::from(!cut);

@@ -6496,33 +6496,32 @@ impl Play {
             let n = ((hp.max(0) as f32 / max.max(1) as f32) * 10.0).round() as usize;
             format!("[{}{}]", "#".repeat(n.min(10)), "-".repeat(10 - n.min(10)))
         };
-        let dist = (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]);
         let short = |s: String| s.split(|ch: char| ch == '{' || ch == '(').next().unwrap_or("").trim().to_string();
-        let head = |phase: String| format!("{}  HP {}/{} {}  {}  ({:.0} away)", c.name, c.hp.max(0), max, bar(c.hp, max), phase, dist);
+        let head = |phase: String| format!("{}  {}/{} {}  {}", c.name, c.hp.max(0), max, bar(c.hp, max), phase);
         if let Some(g) = &c.gnarfas {
             use neopets_sim::gnarfas::State as S;
             let open = matches!(g.state, S::Jump { .. } | S::Exhaust | S::Laugh);
             let busy = matches!(g.state, S::Flinch { .. } | S::Whip { .. } | S::Rapid { .. } | S::Power { .. } | S::Slam { .. } | S::Butt { .. });
             return vec![
                 head(format!("phase {}", if self.state.level(0) && self.state.level(1) { 2 } else { 1 })),
-                format!("doing: {}   {}", short(format!("{:?}", g.state)), if open { "OPEN: hit him now!" } else if busy { "can't be hurt during this" } else { "free: he dodges most swings" }),
-                "hurt: sword only (shots just flinch him); hit him after a jump, in his exhaustion or his laugh".to_string(),
-                format!("strikes taken {}; guard (L1) the whip and rapid strike, jump his body slam", g.strikes),
+                format!("{}: {}", short(format!("{:?}", g.state)), if open { "OPEN, hit him now!" } else if busy { "can't be hurt" } else { "dodges most swings" }),
+                "hurt: sword, after his jump, tiredness or laugh".to_string(),
+                format!("block whip and rapid strike; jump the slam ({} strikes)", g.strikes),
             ];
         }
         if let Some(k) = &c.king {
             let now = if k.guarding() {
-                "GUARDING: hit from the side or behind, or use a Mote"
+                "GUARDING, hit his side or back"
             } else if k.hittable() {
-                "can be hit now"
+                "can be hit"
             } else {
-                "can't be hurt during this"
+                "can't be hurt"
             };
             return vec![
-                head(format!("phase {}", k.phase)),
-                format!("doing: {}   {now}", short(format!("{:?}", k.state))),
-                "hurt: sword, shots and Motes; Motes and full-release shots go through his guard".to_string(),
-                "guard (L1) facing him to block his swings and lunge; jump his flame rings".to_string(),
+                head(format!("phase {}", k.phase + 1)),
+                format!("{}: {now}", short(format!("{:?}", k.state))),
+                "hurt: sword, shots, Motes (Motes pierce his guard)".to_string(),
+                "block (L1) his swings; jump the flame rings".to_string(),
             ];
         }
         if let Some(g) = &c.gelert {
@@ -6530,91 +6529,91 @@ impl Play {
             let now = if g.invisible {
                 "INVISIBLE"
             } else if g.state.hittable() {
-                "can be hit now"
+                "can be hit"
             } else {
-                "can't be hurt during this"
+                "can't be hurt"
             };
             return vec![
                 head(format!("pattern {}", g.pattern)),
-                format!("doing: {}   {now}", short(format!("{:?}", g.state))),
-                "hurt: sword swings and Roberta's quick shots only; Motes and spells do nothing".to_string(),
-                format!("clones awake {clones} (any hit removes one); block his lunge and swing facing him"),
+                format!("{}: {now}", short(format!("{:?}", g.state))),
+                "hurt: sword or quick shots (Motes do nothing)".to_string(),
+                format!("clones up {clones} (a hit pops one); block facing him"),
             ];
         }
         if let Some(k) = &c.ixi {
             use neopets_sim::ixi::State as S;
             let now = if k.state == S::Hold {
-                "held by the scene"
+                "waiting for the scene"
             } else if matches!(k.state, S::GetHit) {
                 "hit!"
             } else {
-                "he blocks or dodges most hits"
+                "blocks or dodges most hits"
             };
             return vec![
-                head(format!("stage {} (mode {})", k.stage, k.mode)),
-                format!("doing: {}   {now}", short(format!("{:?}", k.state))),
-                "hurt: hit him as he comes out of a charge or a swipe; he blocks and dodges the rest".to_string(),
-                if k.mode == 0 { "half HP starts the next wave; kill the Henchmen first".to_string() } else { format!("the lava rises at set HP (passed {:?}); keep off it", k.lava) },
+                head(format!("stage {}", k.stage)),
+                format!("{}: {now}", short(format!("{:?}", k.state))),
+                "hurt: right after his charge or a swipe".to_string(),
+                if k.mode == 0 { "kill the Henchmen; half HP brings a new wave".to_string() } else { format!("the lava rises as he weakens ({} of 2)", k.lava.iter().filter(|&&l| l).count()) },
             ];
         }
         if let Some(s) = &c.serpent {
             use neopets_sim::serpent::{Bite, State as S};
             let doing = match s.state {
-                S::Bite(b) => format!("bite: {}", short(format!("{b:?}"))),
+                S::Bite(b) => format!("Bite {}", short(format!("{b:?}"))),
                 st => short(format!("{st:?}")),
             };
             let open = matches!(s.state, S::Bite(Bite::Stun { .. }));
             return vec![
                 head(format!("phase {}", s.phase)),
-                format!("doing: {doing}   {}", if open { "STUNNED: hit its head now!" } else { "can't be hurt now" }),
-                "hurt: guard (L1) its lunge so it bites your shield, then hit the stunned head".to_string(),
-                format!("anchor {}; stay above the swamp, its belch poisons", s.slot),
+                format!("{doing}: {}", if open { "STUNNED, hit its head!" } else { "can't be hurt" }),
+                "hurt: block (L1) its lunge, then hit the head".to_string(),
+                "stay off the swamp; its belch poisons".to_string(),
             ];
         }
         if let Some(d) = &c.draik {
             use neopets_sim::draik::State as S;
             let now = if matches!(d.state, S::Stun(_)) {
-                "STUNNED: hit it now!"
+                "STUNNED, hit it!"
             } else if d.guarding() {
                 "guarding"
             } else {
-                ""
+                "attacking"
             };
             return vec![
                 head(format!("stage {}", d.stage)),
-                format!("doing: {}   {now}", short(format!("{:?}", d.state))),
-                "hurt: hit it while stunned; breaking its bones (parts) moves the stage on".to_string(),
-                format!("parts broken {}/9; hazards {}", d.broken.iter().filter(|&&b| b).count(), d.hazards.len()),
+                format!("{}: {now}", short(format!("{:?}", d.state))),
+                "hurt: hit it while it is stunned".to_string(),
+                format!("bones broken {}/9", d.broken.iter().filter(|&&b| b).count()),
             ];
         }
         if let Some(s) = &c.sister {
             let all: Vec<String> = self.characters.iter().filter(|o| o.pack == pack && !o.inactive && o.sister.as_ref().is_some_and(|x| !x.dead())).map(|o| format!("{} {}", o.name, o.hp.max(0))).collect();
             return vec![
                 head(format!("{} left", all.len())),
-                format!("doing: {}   {}", short(format!("{:?}", s.state)), if self.sister_group.shielded { "SHIELDED: hit one with a shot first" } else { "shield down: hit them" }),
-                "hurt: a hero shot breaks the shared shield, then swords and shots hurt them".to_string(),
-                format!("HP: {}", all.join(", ")),
+                format!("{}: {}", short(format!("{:?}", s.state)), if self.sister_group.shielded { "SHIELDED, shoot one first" } else { "shield down" }),
+                "hurt: a shot breaks the shield, then any hit".to_string(),
+                all.join(", "),
             ];
         }
         if let Some(f) = &c.faerie {
             let doing = match f.code {
                 0 => "idle",
-                1 => "waiting (walk in past the entrance, or a swap)",
+                1 => "waiting (walk in, or a swap)",
                 2 => "shoving you away",
                 3 => "casting orbs",
                 4 => "bolt",
-                5 => "STUNNED: hit her with the sword",
+                5 => "STUNNED, hit her!",
                 6 => "stun ending",
-                7 => "ABSORB WINDOW: shoot her as Roberta",
+                7 => "shoot her as Roberta!",
                 8 | 9 => "falling",
                 10 => "landed: walk Roberta to her",
                 _ => "attacking",
             };
             return vec![
-                format!("{}  (no HP: stuns, then absorbs)  ({:.0} away)", c.name, dist),
-                format!("doing: {doing} (code {})", f.code),
-                "hurt: guard to reflect her orbs back (stuns her); after 3 stuns Roberta shoots her 3 times".to_string(),
-                format!("stuns {}/3, absorbs {}/3", f.stuns, f.absorbs),
+                format!("{}  stuns {}/3  absorbs {}/3", c.name, f.stuns, f.absorbs),
+                doing.to_string(),
+                "hurt: block her orbs back (3 stuns)".to_string(),
+                "then Roberta shoots her 3 times".to_string(),
             ];
         }
         if let Some(b) = &c.boss {
@@ -6622,17 +6621,17 @@ impl Play {
             let open = matches!(b.top, Top::Slam(2 | 3 | 5));
             return vec![
                 head(format!("stage {}", b.stage)),
-                format!("doing: {}   {}", short(format!("{:?}", b.top)), if open { "HEAD DOWN: hit it now!" } else { "can't be hurt now" }),
-                "hurt: stand on a marked spot so its head slam lands there, then hit the stuck head".to_string(),
-                format!("kill the Tentacles to start each stage; spots used {}", b.uses),
+                format!("{}: {}", short(format!("{:?}", b.top)), if open { "HEAD DOWN, hit it!" } else { "can't be hurt" }),
+                "hurt: lure its slam onto a mark, hit the head".to_string(),
+                format!("kill Tentacles to start a stage ({} marks used)", b.uses),
             ];
         }
         if let Some(k) = &c.cloud {
             return vec![
                 head(format!("stage {}", k.stage)),
-                format!("doing: {}", short(format!("{:?}", k.state))),
-                "hurt: guard (L1) its lightning facing it to send the bolt back (blows do nothing)".to_string(),
-                "cut content: the stand-in is this build's own".to_string(),
+                short(format!("{:?}", k.state)),
+                "hurt: block (L1) its lightning to send it back".to_string(),
+                "cut content: this build's stand-in".to_string(),
             ];
         }
         Vec::new()

@@ -2450,7 +2450,7 @@ fn sync_worlds(
         if let WorldPart::Foliage(pack) = *part {
             match foliage_view::models(disc, index, p, pack) {
                 Ok(models) => {
-                    let n = foliage_view::spawn(&mut commands, p, pack, &models, *part, &mut meshes, &mut materials, &mut images);
+                    let n = foliage_view::spawn(&mut commands, p, pack, &models, *part, &mut meshes, &mut materials, &mut pass1_materials, &mut images);
                     info!("foliage of {pack}: {n} plants of {} models", models.len());
                 }
                 Err(e) => error!("foliage of {pack}: {e}"),
