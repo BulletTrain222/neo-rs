@@ -9235,6 +9235,13 @@ impl Play {
         if std::env::var_os("NEOPETS_TRACE_CLOUD").is_some() && (before != (cloud.state, cloud.stage) || !act.hits.is_empty() || act.knock.is_some() || act.self_damage > 0) {
             println!("CLOUD tick {} {:?} stage {} -> {:?} stage {} clip {} hp {} hero hp {} dist {:.1} hits {:?} knock {:?} self {}", self.ticks, before.0, before.1, cloud.state, cloud.stage, cloud.clip.id, v.hp, self.hero_hp, (v.position[0] - hero[0]).hypot(v.position[2] - hero[2]), act.hits, act.knock, act.self_damage);
         }
+        // NEOPETS_TRACE_CLOUD_BALLS: the live balls every 5 ticks, and each burst (trace only).
+        if std::env::var_os("NEOPETS_TRACE_CLOUD_BALLS").is_some() && (self.ticks % 5 == 0 || !act.bursts.is_empty()) {
+            let live: Vec<[i32; 3]> = cloud.balls.iter().flatten().map(|b| b.position.map(|v| v.round() as i32)).collect();
+            if !live.is_empty() || !act.bursts.is_empty() {
+                println!("BALLS tick {} live {live:?} bursts {:?} boss {:?}", self.ticks, act.bursts.iter().map(|p| p.map(|v| v.round() as i32)).collect::<Vec<_>>(), v.position.map(|x| x.round() as i32));
+            }
+        }
         let c = &mut self.characters[b];
         if let Some(p) = act.position {
             c.position = p;
