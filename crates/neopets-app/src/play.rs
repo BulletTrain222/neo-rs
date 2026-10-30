@@ -6646,7 +6646,8 @@ impl Play {
     /// is walked up to; one in its attack sequence (outer 2) within 9 is guarded against,
     /// facing it; one blocking (outer 7 or 8, or its blocking word) is circled to its back; a
     /// flyer more than 2.5 above the hero is jumped at, with the attack pressed in the air;
-    /// otherwise the hero closes to 3.5 and presses attack every 18 ticks.
+    /// otherwise the hero closes to its reach (3.5, or the body radius + 2.5) and presses
+    /// attack every 18 ticks.
     pub fn duel_step(&mut self) -> Option<FightPlan> {
         let mut duel = self.fight_duel.take()?;
         let pack = self.world.pack;
@@ -6686,7 +6687,8 @@ impl Play {
             let (dx, dz) = (hero[0] - at[0], hero[2] - at[2]);
             let l = dx.hypot(dz);
             let (ux, uz) = if l > 0.1 { (dx / l, dz / l) } else { (1.0, 0.0) };
-            self.place_at(at[0] + 5.0 * ux, at[2] + 5.0 * uz, at[1] + 6.0);
+            // The probe starts just above its height, so a floor below is not taken instead.
+            self.place_at(at[0] + 5.0 * ux, at[2] + 5.0 * uz, at[1] + 1.5);
             self.face_point(at[0], at[2]);
         }
         let k = duel.current?;
@@ -6704,6 +6706,9 @@ impl Play {
         }
         r.hp = c.hp;
         r.states.insert(e.state);
+        r.emerge = e.spawn.emerge_distance;
+        r.held += u32::from(c.held);
+        r.alarm = e.spawn.alarm;
         if d < 6.0 {
             r.engaged += 1;
             let sig = (e.state, e.outer, e.inner, e.seq, clip.action, (c.position[0] * 10.0) as i32, (c.position[1] * 10.0) as i32, (c.position[2] * 10.0) as i32);
@@ -6714,18 +6719,24 @@ impl Play {
         if c.position[1] < e.spawn.home[1] - 30.0 {
             r.fell = true;
         }
+        // Close enough to swing: 3.5, or the body radius + 2.5 for a big enemy (a Giant Slorg's
+        // body holds the hero at about 4.2).
+        let reach = (c.row.map_or(1.0, |r| r.radius) + 2.5).max(3.5);
         let height = c.position[1] - hero[1];
-        let attacking = e.state == 19 && e.outer == 2 && d < 9.0;
+        let attacking = e.state == 19 && e.outer == 2 && d < reach + 5.5;
         let blocking = e.blocking || (e.state == 19 && matches!(e.outer, 7 | 8));
         if blocking {
             r.blocks += 1;
         }
         let t = self.ticks;
-        let mut plan = FightPlan { goal: [c.position[0], c.position[2]], close: d < 3.5, ..Default::default() };
+        let mut plan = FightPlan { goal: [c.position[0], c.position[2]], close: d < reach, ..Default::default() };
         if e.state == 8 {
-            plan.close = d < 2.0;
-        } else if attacking && t % 90 < 60 {
-            // Guard facing it (two thirds of the time, so a blocked attack still gets answered).
+            // Inside its emerge distance (3D; a short one asks the hero to stand at its feet).
+            let d3 = (0..3).map(|k| (c.position[k] - hero[k]).powi(2)).sum::<f32>().sqrt();
+            plan.close = d3 < (0.8 * e.spawn.emerge_distance).clamp(0.5, 2.0);
+        } else if attacking && (d > reach || t % 90 < 30) {
+            // Guard facing it while it comes in; at arm's length a third of the time, so a
+            // caster or archer in its wind-up still gets hit.
             plan.guard = true;
             plan.close = true;
         } else if blocking {
@@ -6742,6 +6753,7 @@ impl Play {
             plan.attack = t % 18 == 0;
             plan.attack_held = t % 18 < 4;
         }
+        plan.run = !plan.close && !plan.guard && d > 8.0;
         // NEOPETS_TRACE_DUEL_STEP: the plan and both sides once a second.
         if t % 60 == 0 && std::env::var_os("NEOPETS_TRACE_DUEL_STEP").is_some() {
             println!("      duel tick {t}: {} d {d:.1} height {height:.1} enemy state {} outer {} seq {} clip {} hp {} | hero state {} action {} | plan {:?}", c.name, e.state, e.outer, e.seq, clip.action, c.hp, self.loco.state, self.loco.action(), plan);
@@ -6758,10 +6770,18 @@ impl Play {
             .map(|r| {
                 let took = r.ended.unwrap_or(self.ticks).saturating_sub(r.started);
                 let mut flags = Vec::new();
-                if !r.killed {
+                // One that only ever waited hidden (state 8) wakes by its alarm group or a
+                // script, not by the hero (emerge distance 0, or the hero could not get close).
+                let waited = r.states.len() == 1 && r.states.contains(&8);
+                if waited && !r.killed {
+                    flags.push("waiting(alarm-or-script)");
+                } else if !r.killed {
                     flags.push(if r.hp >= r.start_hp { "never-hurt" } else { "not-beaten" });
                 }
-                if r.longest_still >= 300 {
+                if r.held > 0 {
+                    flags.push("script-held");
+                }
+                if r.longest_still >= 300 && !waited {
                     flags.push("froze");
                 }
                 if r.fell {
@@ -6770,7 +6790,7 @@ impl Play {
                 if r.engaged == 0 {
                     flags.push("never-reached");
                 }
-                format!("DUEL {} {} \"{}\" hp {}/{} {} in {} ticks engaged {} still {} blocks {} states {:?} {}", r.pack, r.id, r.name, r.hp.max(0), r.start_hp, if r.killed { "killed" } else { "alive" }, took, r.engaged, r.longest_still, r.blocks, r.states, if flags.is_empty() { "ok".to_string() } else { flags.join(",") })
+                format!("DUEL {} {} \"{}\" hp {}/{} {} in {} ticks engaged {} still {} blocks {} states {:?} {} emerge {:.1} alarm {:?}", r.pack, r.id, r.name, r.hp.max(0), r.start_hp, if r.killed { "killed" } else { "alive" }, took, r.engaged, r.longest_still, r.blocks, r.states, if flags.is_empty() { "ok".to_string() } else { flags.join(",") }, r.emerge, r.alarm)
             })
             .collect()
     }
@@ -15516,6 +15536,8 @@ pub struct FightPlan {
     pub attack: bool,
     pub attack_held: bool,
     pub jump: bool,
+    /// Run (R1) toward a far target.
+    pub run: bool,
 }
 
 /// One enemy fought by the duel trace (diagnostic): what happened to it.
@@ -15539,6 +15561,12 @@ pub struct DuelRecord {
     pub last_hurt: u64,
     pub states: std::collections::BTreeSet<u32>,
     pub blocks: u32,
+    /// The placement's emerge distance and alarm group (a waiting enemy wakes by these or by
+    /// a script).
+    pub emerge: f32,
+    pub alarm: Option<u8>,
+    /// Ticks the script held it (a held character's AI does not run and it cannot be hit).
+    pub held: u32,
 }
 
 /// The duel trace (diagnostic, NEOPETS_TRACE_DUEL): fight every living hostile common enemy

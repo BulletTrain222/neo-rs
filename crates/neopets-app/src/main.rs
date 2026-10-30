@@ -4935,6 +4935,7 @@ fn play_trace(
             input.attack = p.attack;
             input.attack_held = p.attack_held;
             input.jump = p.jump || input.jump;
+            input.run = p.run;
         }
         if std::env::var("NEOPETS_TRACE_SQUARE").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
             input.square = true;

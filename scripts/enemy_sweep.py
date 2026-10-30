@@ -1,5 +1,6 @@
 """Fight every common enemy of every world pack with the duel trace and group the outcomes by
-enemy name. Each pack runs headless from its first entry with Tor holding the sword (item 99),
+enemy name. Each pack runs headless from its first entry with Tor holding a sword (SWEEP_WEAPON,
+default 105, the Altadorian Sword, the last of the swords),
 god mode on, and NEOPETS_TRACE_DUEL placing him beside each living hostile common enemy in turn
 (each given LIMIT ticks). Flags: never-hurt (its HP never fell), not-beaten (hurt but alive at
 the limit), froze (state, sub-states, clip and position unchanged for 300 ticks while the hero
@@ -16,7 +17,7 @@ packs = sys.argv[3:]
 if not packs:
     out = subprocess.run([exe, '--play-trace', '1', '--pack', '909'], cwd=repo, capture_output=True, text=True, env={**os.environ, 'NEOPETS_LIST_WORLDS': '1'}).stdout
     packs = re.search(r'WORLDS (.*)', out).group(1).split()
-line_re = re.compile(r'^DUEL (\d+) (\d+) "([^"]*)" hp (-?\d+)/(\d+) (killed|alive) in (\d+) ticks engaged (\d+) still (\d+) blocks (\d+) states (\{[^}]*\}) (.*)$')
+line_re = re.compile(r'^DUEL (\d+) (\d+) "([^"]*)" hp (-?\d+)/(\d+) (killed|alive) in (\d+) ticks engaged (\d+) still (\d+) blocks (\d+) states (\{[^}]*\}) (\S+) emerge (\S+) alarm (.*)$')
 out_dir = os.path.join(repo, 'private', 'enemy-sweep')
 os.makedirs(out_dir, exist_ok=True)
 fights = []
@@ -24,7 +25,7 @@ for p in packs:
     env = {k: v for k, v in os.environ.items() if not k.startswith('NEOPETS_')}
     env.update({'NEOPETS_TRACE_DUEL': str(limit), 'NEOPETS_TRACE_GOD': '1', 'NEOPETS_TRACE_STAND': '1'})
     try:
-        r = subprocess.run([exe, '--play-trace', '60000', '--pack', p, '--give', '99', '--seed', '1'], cwd=repo, capture_output=True, text=True, timeout=1800, errors='replace', env=env)
+        r = subprocess.run([exe, '--play-trace', '60000', '--pack', p, '--give', os.environ.get('SWEEP_WEAPON', '105'), '--seed', '1'], cwd=repo, capture_output=True, text=True, timeout=1800, errors='replace', env=env)
         text = r.stdout + r.stderr
         code = r.returncode
     except subprocess.TimeoutExpired:
@@ -35,7 +36,7 @@ for p in packs:
         m = line_re.match(line)
         if m:
             found += 1
-            fights.append({'pack': int(m[1]), 'id': int(m[2]), 'name': m[3], 'hp': int(m[4]), 'max': int(m[5]), 'killed': m[6] == 'killed', 'ticks': int(m[7]), 'engaged': int(m[8]), 'still': int(m[9]), 'blocks': int(m[10]), 'states': m[11], 'flags': m[12]})
+            fights.append({'pack': int(m[1]), 'id': int(m[2]), 'name': m[3], 'hp': int(m[4]), 'max': int(m[5]), 'killed': m[6] == 'killed', 'ticks': int(m[7]), 'engaged': int(m[8]), 'still': int(m[9]), 'blocks': int(m[10]), 'states': m[11], 'flags': m[12], 'emerge': float(m[13]), 'alarm': m[14]})
     crash = 'panicked' in text or code not in (0,)
     print(p, f'{found} enemies', 'CRASH' if crash else '', flush=True)
 json.dump(fights, open(os.path.join(out_dir, 'fights.json'), 'w'), indent=1)
