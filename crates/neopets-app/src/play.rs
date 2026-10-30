@@ -11192,6 +11192,15 @@ impl Play {
             let before = k.state;
             let act = k.tick(&v, &words, &mut self.rng);
             let after = k.state;
+            // SPEC-0012 Blend: the six weak-point glow colours drive the knight's mesh colour
+            // slots 1 to 6 (left knee, right knee, left under-arm, right under-arm, back, neck):
+            // black while unlit, the magenta pulse while exposed. Taken as the slot's colour scale
+            // (multiplied, as every colour slot is; the spec leaves added or multiplied Medium), so
+            // the grey inner pieces those slots colour show black, as the armour around them.
+            let glow: [[f32; 3]; 6] = std::array::from_fn(|i| [k.glow[i].colour[0], k.glow[i].colour[1], k.glow[i].colour[2]]);
+            for (i, g) in glow.iter().enumerate() {
+                c.slots[i + 1] = *g;
+            }
             if let Some(a) = act.anim {
                 if clip.action != a || (clip.progress >= 0.99 && before != after) {
                     c.anim.play(a);
