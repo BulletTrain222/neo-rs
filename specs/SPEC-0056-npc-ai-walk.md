@@ -1,6 +1,6 @@
 # SPEC-0056: NPC AI modes, walk-to-point routines and proximity items
 
-- Answers: none (new topic; the script calls that drive these routines are specified in SPEC-0030); R-0079 (the block contact pass for region characters: place in the tick and response); R-0088 (navigation containment and fresh-block arrival as used by the Ixi Chief)
+- Answers: none (new topic; the script calls that drive these routines are specified in SPEC-0030); R-0079 (the block contact pass for region characters: place in the tick and response); R-0088 (navigation containment and fresh-block arrival as used by the Ixi Chief); R-0127 (where a path comes from, how the path walk starts and ends)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (boot program and level modules; no fingerprint check is stated in this spec, see SPEC-0001)
 - Confidence: per section. Mode numbers: High. Mode names: labels only (the number-to-name map is not established). Townsfolk class, the mode-from-code rule and the per-character values: High. Walk and path arrival distances: High. All distances are horizontal (ground-plane) distances: High for the walk, hold, greeting and villager tests, Medium-High for the navigation arrival test. Steering weights and final orientation: High. Hold branch and greeting: High. Villager timer ranges: High in ticks and in seconds (60 ticks per second, set once at start-up; see SPEC-0007). Pairing rules: High, and no pair forms on disc. Base states and script control: High; the park-and-resume of a script walk and the script hold during a walk: Medium-High. Talk facing: High. Travel by root motion and facing: High. Place of the AI step in the tick and the one-tick delay from clip request to first root displacement: High. Townsfolk speeds at R = 1: High. Movement-type to animation mapping in the walk classes: Medium-High. Proximity items: High that some callbacks give items; Medium for their gates; High for the 5.8 firing distance and the Action press, Medium for which characters can be the hero's candidate. Wall collision of region characters (navmesh confinement, its edge-reach quirk and the off-mesh restore): High; the blocked flag's setter, clearers and readers: High. Route table: High for the layout and for the read by the navigation step, Medium-High for its meaning (the next edge on a shortest route). Route step through the chosen edge: Low. Spawn point search, its retry rule, its cursor quirk and its callers: High. Movable-block contact pass: High for the block selection, Medium-High for the push. Values marked "(confirmed on disc)" match the boot program's code and data.
@@ -75,7 +75,7 @@ Offsets inside the runtime character record are not part of this spec. The offse
 | --- | --- | --- |
 | +0x10 | vector | Placement facing. Mode 0 with code 0 turns toward it. |
 | +0x84 | signed 16-bit int | Behavior code. |
-| +0xB8 | signed 32-bit int | Patrol route: a world path index, -1 for none. Outside the AI block, so SetAI_Behavior does not change it. |
+| +0xB8 | signed 32-bit int | Path index: the number of a path in the area's path list (SPEC-0006, Tagged tables, tag 0x0A), -1 for none. It is the patrol route of mode 6 and the route of a script path walk (class 35), which overwrites it. Outside the AI block, so SetAI_Behavior does not change it. |
 | +0xBC | 32-bit float (wander) or signed 32-bit int (patrol) | Wander: radius r. Patrol: loop mode (0 loop, any other value back-and-forth). |
 | +0xC0 | signed 32-bit int | Wander: shortest pause, ticks. Not used by patrol. |
 | +0xC4 | signed 32-bit int | Wander: longest pause, ticks. Patrol: shortest point pause, ticks. |
@@ -132,7 +132,7 @@ Class 6 is the townsfolk class (see "Townsfolk class"). Class 17 is the common-e
 | 24 | WalkEntity | above zero (the gate is the stop radius) | distance below the stop radius | Play idle animation; end |
 | 25 | WalkEntityAndOrient | zero or less | distance below 1.0 | Set the position to the walk target; turn to the target orientation; then end step |
 | 26 | WalkEntityAndOrient | above zero (the gate is the stop radius) | distance below the stop radius | Turn to the target orientation; then end step |
-| 35 | WalkEntityAlongPath | (path index) | distance to the current path point below 0.5 | Advance to the next path point |
+| 35 | WalkEntityAlongPath | (path index) | distance to the current path point below 0.5 | Advance to the next path point; at the last point the class ends (Path walk) |
 
 The stop radius of classes 24 and 26 is the gate value of the walk call (SPEC-0030 rows 106 and 108). On arrival, classes 23 and 25 put the character exactly on the walk target point (all three coordinates, so a jump of less than 1.0 horizontally and a change of height to the target's height); classes 24 and 26 leave it where it stopped (High).
 
@@ -412,11 +412,12 @@ Table variant B is the townsfolk animation table used by 198 character records; 
 
 ### Path walk (class 35)
 
-- A path index of 0 or more sets the character's path, as SPEC-0030 describes. A negative index keeps the path already set.
-- The character walks to the current path point. The point is reached when the distance to it is below 0.5.
-- On reaching a point, the path step advances the index. In loop mode the index wraps to the first point after the last. In back-and-forth mode the direction reverses at each end. The mode is a per-character setting.
-- If no path is set, the class plays animation index 30.
-- A path walk starts at point 0 (Medium-High). It uses the same hold test and hold branch as the walk-to-point classes.
+- Route (High). The path is path number +0xB8 of the character's placement in the area's path list (SPEC-0006, Tagged tables, tag 0x0A): a run of entry records of the pack's entry list. A walk call with a path index of 0 or more first writes that index into the placement word (SPEC-0030 row 111); a negative index leaves the placement's own value, which is how a script walks a character along the path its placement names. The route is valid when 0 ≤ index < the path count: the first point is entry A[index] and the point count is B[index] − A[index] + 1. A route is set up once in the life of a character (the NPC reset clears it): a later walk call with another index changes the placement word but not the route already set up (Medium-High).
+- Start (High). The point index starts at 0 and the reached flag is clear, so the first target is point 0 (unlike the patrol of mode 6, whose first target is point 1). A character that stands elsewhere first walks to point 0. The class uses movement type 0 (townsfolk walk id 1; 5.00 units per second at R = 1, 1.71 for table variant B; see Walk speed and movement type), and the animation requests are those of the other walk classes.
+- Each tick that is not a hold (High). With the reached flag clear, the navigation target is the current point, the navigation step runs, and when the horizontal distance to the point is then below 0.5 the reached flag is set. With the reached flag set at the start of the tick: if the current point is the last one, the class ends (End, below); otherwise the index goes up by 1, the flag is cleared and the navigation target becomes the new point (the navigation step runs from the next tick). The loop word +0xBC is not read by the path walk: loop and back-and-forth placements walk alike. There is no pause at a point, no random stop and no position snap.
+- End (Medium-High). On the tick after the last point is reached the class ends with no further animation request (unlike the classes 23 and 25, it does not snap or play an idle): the character's class and priority reset to 0 and the parked townsfolk class resumes (Class requests have priorities, below). From then on IsEntityWalkToPointActive is false for it and a WAIT loop of the walk call stops waiting. A path of one point is walked to and ends the same way. The character is not removed: the cycle zones of pack 1023 deactivate their finished walkers (SPEC-0006, Cycle load).
+- No route (Medium-Low). With an invalid index no route is set up, the reached flag stays clear, and the class steers toward entry 0 of the pack's entry list (a point past the list also reads entry 0), never advances and never ends. No shipped walk call names an invalid path.
+- Hold (High). The hold test and hold branch are those of the walk-to-point classes and run before the arrival test each tick.
 - The script query IsEntityWalkToPointActive (SPEC-0030) is true while class 35 is the character's current requested class, as it is for classes 23 to 26 (High).
 
 ### Wander (mode 5) (High)
@@ -451,7 +452,7 @@ Values: the route (+0xB8), the loop mode, the point-pause range, the random-stop
 
 These timing values are the same spawn-record block, +0xC4 to +0xD4, that the class-17 default state 6 reads (SPEC-0038 open question 20): +0xC4 and +0xC8 are the hold (point-pause) range, +0xCC the chance (a stop or move happens when a roll from 1 to 100 is below it) and +0xD0 and +0xD4 the move (random-stop) range (High).
 
-1. Each tick: request the townsfolk walk animations for speed code 6 (walk id 8). The route is started once, if it is valid: the first point is the route's start, the count is the route's length, and the reached flag is set to 1. If the pause timer is above 0, it drops by 1.
+1. Each tick: request the townsfolk walk animations for speed code 6 (walk id 8). The route is started once, if it is valid (the placement's +0xB8 names a path of the area's path list: the first point is the path's first entry and the count is its point count; SPEC-0006, Tagged tables, tag 0x0A), and the reached flag is set to 1. If the pause timer is above 0, it drops by 1.
 2. When the reached flag is set, the path step advances the index and the new point becomes the target. The first step happens on the start tick, so a patrol's first target is route point 1, not point 0. In loop mode, the index goes up by 1 and wraps to 0 after the last point. In back-and-forth mode, it starts forward, runs to the last point, then back to point 0, then forward again.
 3. Walking (pause timer below 1): the navigation step runs toward the point. When the horizontal distance is below 0.5, the reached flag is set, and the pause timer and the fidget timer draw from the point-pause range. Otherwise each walking tick makes a roll from 1 to 100. If the roll is below the random-stop chance, both timers draw from the random-stop range.
 4. Pausing: as wander step 4, with fidget id 11 in place of id 2. After the fidget's clip reaches progress 0.99, the fidget timer is drawn again from the point-pause range. On body 526, id 11 names clip 48, so the fidget is a no-op as in wander. Id 7 is never requested, because its gate is only ever cleared.
@@ -491,7 +492,7 @@ For a townsfolk on the shared body bank (main family -7). Clip numbers are clips
 | 3 (villager pair) | the gestures of SPEC-0040, then 0 (no pair forms on disc) |
 | 10, 11, 12 | 65, 97, 98 |
 | 1, 2, 4, 7, 8, 9 | nothing |
-| Script walks (classes 23 to 26 and 35) | walk slots 1, 6, 5 or 3 by move type; the hold as mode 13; 0 on arrival; 30 for a path walk with no path |
+| Script walks (classes 23 to 26 and 35) | walk slots 1, 6, 5 or 3 by move type; the hold as mode 13; 0 on arrival (classes 23 to 26; class 35 requests nothing when it ends) |
 
 A townsfolk never requests ids 115 to 119, 141 or 142, because the idle picker returns 0 for it. The picker's mode-19 test runs before the flag test: with mode word 19 it gives id 1 (a walk clip), never 141, since no class-6 row can fly. That happens only if a script sets behavior 19 on a townsfolk that then runs a routine that calls the picker (Medium; no such script is known).
 
@@ -562,7 +563,7 @@ Modules that register a proximity callback but give no item on approach:
 - Villager pairs never form on disc, because the pair radius is 0.0 and the distance test is strict.
 - Arrival tests are strict. A distance exactly equal to the threshold does not arrive.
 - The timer ranges are 5 to 12 and 10 to 30 times the rate variable (confirmed on disc). At 60 ticks per second they are the integers 300 to 720 and 600 to 1800.
-- A class 35 walk with no path set plays animation index 30.
+- A class 35 walk with no valid path stays on entry 0 of the pack's entry list and never ends (Path walk, No route).
 - A proximity registration with an index outside the callback table is ignored.
 - A walk call that targets a point beyond the world's locator count does nothing (SPEC-0030).
 - Arrival versus step length: the per-tick steps (walk 0.0834, run 0.2250, fast run 0.3216) are all shorter than the diameters of the arrival circles (2.0, 1.0 and 0.5), so a walker heading straight at its point always has at least one tick inside the circle. Only an off-centre pass at fast run can miss the 0.25 circle of the navigation step.
@@ -587,6 +588,8 @@ Synthetic values; they are not copied from the disc.
 
 - TV-0056-1 (class 23): distance 0.99 at a decision point: arrived. Distance 1.00: not arrived.
 - TV-0056-1a (class 23 arrival): character at (10.0, 2.0, 5.0), walk target (10.5, 2.0, 5.5): horizontal distance 0.707 is below 1.0, so the character is set to (10.5, 2.0, 5.5) and the class ends. The same walk with class 24 and stop radius 1.1 ends with the character still at (10.0, 2.0, 5.0).
+- TV-0056-R127a (path walk, disc values from pack 1023; High): Wymond (placement +0xB8 = 8) is walked with path -1. Path 8 is entries 146 to 156, 11 points. The first target is point 0 at (-8.57, 29.37, 655.11), the point he stands on (horizontal distance 0, below 0.5), so on the next tick the reached flag is seen set, the index goes to 1 and the target becomes (-25.10, 29.37, 654.89). He covers 173.3 units of segments (horizontal) at 5.00 units per second, about 34.7 s plus the turns of the navigation route, and when point 10 is reached the class ends one tick later and IsEntityWalkToPointActive turns false.
+- TV-0056-R127b (patrol start; High): a Skeleton Archer of pack 790 (default state 6, +0xB8 = 4, +0xBC = 1) has a route of 2 points (entries 27 and 28). The start tick sets the reached flag, so the first step moves the index from 0 to 1 and the first target is point 1 at (2154.02, 56.42, -940.91), not point 0 at (2237.60, 56.42, -941.08). On reaching it the index goes back to 0, then 1, and so on (back and forth). With +0xBC = 0 it would go 1, 0, 1, 0.
 - TV-0056-2 (class 24, stop radius 1.1): distance 1.09: arrived. Distance 1.11: keeps walking.
 - TV-0056-3 (class 35): point distance 0.49: reached. Distance 0.50: not reached.
 - TV-0056-4 (steering on the mesh, w = 0.3): facing c = (0, 0, 1), direction t = (1, 0, 0). v = (0.3, 0, 0.7), so facing = (0.39392, 0, 0.91915).
@@ -671,6 +674,8 @@ A complete route over one real navigation mesh: the type-21 mesh 1 of the first 
 
 ## Open questions
 
+Default if unresolved (rewrite choice): a class 35 walk with an invalid path index steers toward entry 0 of the entry list and never ends, as in Path walk, No route.
+
 1. Resolved: the townsfolk pre-step sets the mode to the code whenever the mode is 0, in the same tick (see "Mode from code"); the mode 8 or 0 setters and the animation-81 wait belong to class 17 (SPEC-0038).
 2. Resolved: townsfolk never enter mode 23, because every townsfolk row has remap switch 1; mode 23 is the class-17 wait for animation 81.
 3. Resolved: the displacement is the root motion of the locomotion animation (see "Travel by root motion" and "Walk speed and movement type").
@@ -704,3 +709,4 @@ A complete route over one real navigation mesh: the type-21 mesh 1 of the first 
 31. Resolved: the route step aims at the point where the straight line to the goal crosses the named edge. That point is clamped to keep m = radius + 0.25 from the triangle's other two sides, but never past the midpoint (the 0.5 clamp). It falls back to the midpoint for a goal 100 or more away, or one behind the walker. A boundary edge is aimed at like any other, so the walker presses against it ("Route step"; High for the geometry, Medium for the boundary-edge consequence).
 32. Narrowed: counted over directed links in meshes of 2 to 60 triangles (420,890 reachable pairs), the share of pairs on a shortest route is 420,408 by 3D centroid distance, 420,440 by horizontal centroid distance, 415,734 by centroid-to-edge-midpoint-to-centroid distance and 414,430 by step count. 14 of the 27,813 neighbour links are one-way. No tested cost explains every pair. This does not matter to a clean side that reads the table.
 33. Resolved: arrival calls the character's set-state method with 1, the same method that sets base state 33 for a held Miamouse (High).
+34. Resolved (R-0127): a path is a run of entry records of the pack's entry list, named by the placement's +0xB8 (SPEC-0006, Tagged tables). The path walk starts at point 0, steps one point each time the point is reached (within 0.5 horizontal) with no pause, ends after the last point, and then reads as not walking; the mode 6 patrol is the looping or back-and-forth version with pauses (High).

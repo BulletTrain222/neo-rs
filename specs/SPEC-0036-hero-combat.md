@@ -620,7 +620,7 @@ So a swing is one tick behind its animation: the first tick of a window tests th
 
 
 **Hittable predicate.** A character is a candidate for the hero swing, Roberta's shots and the Mote object walks only when its hittable query passes:
-- base rule: its action state is not 16, 33, 36, 53 or 54, and its word +0x7F0 is 0 (Gnarfas and the Faerie Sisters set +0x7F0 to 1 once when their controllers start and never clear it; the Undead Draik sets it once before its loop (SPEC-0029, Section 6); the Black Knight sets it with base state 20 on every tick and writes base state 1 only on stun ticks where its gate passes; the Ixi Chief clears it every pass.);
+- base rule: its action state is not 16, 33, 36, 53 or 54, and its word +0x7F0 is 0 (Gnarfas and the Faerie Sisters set +0x7F0 to 1 once when their controllers start and never clear it; the Undead Draik sets it once before its loop (SPEC-0029, Section 6); the Cloud Beast sets it to 1 on itself and on its companion on every tick that is not in its reaction state and never clears it (SPEC-0010); the Black Knight sets it with base state 20 on every tick and writes base state 1 only on stun ticks where its gate passes; the Ixi Chief clears it every pass.);
 - a hero target: also not in states 17, 25, 57, 59 or 60, not busy (SPEC-0033 Behavior 3), and not in hero mode 1 with mode code 8 or 13;
 - an enemy-kind target: not hittable when its class state (+0xA34) is 16 or when any of these six tests holds; otherwise the base rule (High for the tests):
   1. its script-hold word (+0xC54) is set;
