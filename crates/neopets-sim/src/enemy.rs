@@ -568,6 +568,9 @@ pub struct Enemy {
     fidget: i32,
     stuck: i32,
     stand: i32,
+    /// State 6's route (SPEC-0038 state 6; the path named by +0xB8), None when the path index
+    /// names no path.
+    pub patrol: Option<crate::npc::Patrol>,
     looking: bool,
     /// State 2's alert animation was requested (a notice pass or the group alarm).
     alerting: bool,
@@ -676,6 +679,7 @@ impl Enemy {
             fidget: 0,
             stuck: 0,
             stand: 0,
+            patrol: None,
             looking: true,
             alerting: false,
             through: None,
@@ -1514,6 +1518,7 @@ impl Enemy {
             }
             2 | 21 => self.search_step(v, rng, &mut a),
             5 => self.wander_step(v, rng, &mut a),
+            6 if self.patrol.is_some() => self.patrol_step(v, rng, &mut a),
             7 => self.sentry_step(v, rng, &mut a),
             10 if a.anim.is_none() && (v.has)(73) => a.anim = Some(73),
             22 => {
@@ -1528,7 +1533,7 @@ impl Enemy {
             }
             8 => self.hide_handler(v, &mut a),
             17 => self.fetch_step(v, rng, &mut a),
-            // State 6 (patrol) stands: the area's path list is not read (REQUESTS).
+            // State 6 with no route stands (the spec's steer toward entry 0 is not built).
             0 | 3 | 6 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
         }
@@ -1643,6 +1648,34 @@ impl Enemy {
             if self.through(3, v, a) {
                 self.through = None;
                 let (lo, hi) = (s.int(0xC0), s.int(0xC4));
+                self.fidget = rng.range(lo.min(hi), lo.max(hi));
+            }
+            return;
+        }
+        a.anim = Some(self.idle(false, v, rng));
+    }
+
+    /// State 6, patrol (SPEC-0038 state table): the route's points in order with the patrol gait
+    /// (4, flying 99), a pause at each point and the random stop once per awareness cycle; while
+    /// paused the idle pick, with animation 6 (flying 142) played through as the fidget whenever
+    /// its counter (drawn from the pause's range) runs out.
+    fn patrol_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let Some(route) = self.patrol.as_mut() else { return };
+        let (go, paused) = route.enemy_step(v.position, self.awareness == 0, rng);
+        if let Some((lo, hi)) = paused {
+            self.fidget = rng.range(lo.min(hi), lo.max(hi));
+        }
+        if let Some(p) = go {
+            self.through = None;
+            a.anim = Some(4);
+            a.go = Some(Go::Toward(p));
+            return;
+        }
+        let fidget = if self.airborne() { 142 } else { 6 };
+        if self.through == Some(fidget) || ((v.has)(fidget) && { self.fidget -= 1; self.fidget < 1 }) {
+            if self.through(fidget, v, a) {
+                self.through = None;
+                let (lo, hi) = (self.spawn.int(0xC4), self.spawn.int(0xC8));
                 self.fidget = rng.range(lo.min(hi), lo.max(hi));
             }
             return;
@@ -3318,6 +3351,37 @@ mod tests {
         assert_eq!(e.tick(&v, &mut rng).anim, Some(7));
         // Away from home it walks back.
         v.position = [3.0, 0.0, 0.0];
+        assert_eq!(e.tick(&v, &mut rng).go, Some(Go::Toward([0.0; 3])));
+    }
+
+    #[test]
+    fn patrol_walks_the_route_and_pauses_at_points() {
+        let has = |_| true;
+        let mut rng = Rng::seeded(5);
+        // Loop route of three points, a 20-tick pause at each point, no random stop.
+        let mut words = [0u32; 8];
+        (words[3], words[4]) = (20, 20);
+        let spawn = Spawn { default_state: 6, words, ..Spawn::default() };
+        let mut e = Enemy::new(skeleton(), spawn, &mut rng);
+        e.patrol = Some(crate::npc::Patrol::new(vec![[0.0; 3], [10.0, 0.0, 0.0], [10.0, 0.0, 10.0]], words));
+        e.state = 6;
+        let mut v = view([500.0, 0.0, 500.0], &has);
+        v.position = [0.0; 3];
+        // The route starts at point 1, with the patrol gait.
+        let a = e.tick(&v, &mut rng);
+        assert_eq!((a.anim, a.go), (Some(4), Some(Go::Toward([10.0, 0.0, 0.0]))));
+        // Within 0.5 of it: the pause, no walk, for 20 ticks; then on to point 2.
+        v.position = [9.8, 0.0, 0.0];
+        assert_eq!(e.tick(&v, &mut rng).go, None);
+        for _ in 0..19 {
+            assert_eq!(e.tick(&v, &mut rng).go, None);
+        }
+        assert_eq!(e.tick(&v, &mut rng).go, Some(Go::Toward([10.0, 0.0, 10.0])));
+        // The loop wraps from the last point to point 0.
+        v.position = [10.0, 0.0, 10.0];
+        for _ in 0..21 {
+            e.tick(&v, &mut rng);
+        }
         assert_eq!(e.tick(&v, &mut rng).go, Some(Go::Toward([0.0; 3])));
     }
 

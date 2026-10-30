@@ -6734,17 +6734,22 @@ impl Play {
                 name: pl.name,
                 position,
                 facing: pl.facing,
-                townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing).with_patrol(patrol)),
+                townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing).with_patrol(patrol.clone())),
                 walker: row.filter(|r| matches!(r.class, Some(1 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
                 enemy: match (row, tuning) {
-                    (Some(r), Some(t)) if r.class == Some(17) => Some(Enemy::new(
-                        params(&r, &t),
-                        enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector, alarm: (pl.alarm != 0xFF).then_some(pl.alarm), facing: pl.facing, words: pl.words },
-                        &mut self.rng,
-                    )),
+                    (Some(r), Some(t)) if r.class == Some(17) => {
+                        let mut e = Enemy::new(
+                            params(&r, &t),
+                            enemy::Spawn { default_state: pl.ai_code as u16, home: position, emerge_distance: pl.emerge_distance, selector: pl.selector, alarm: (pl.alarm != 0xFF).then_some(pl.alarm), facing: pl.facing, words: pl.words },
+                            &mut self.rng,
+                        );
+                        // SPEC-0038 state 6: the route named by +0xB8 (the same path list).
+                        e.patrol = patrol.clone();
+                        Some(e)
+                    }
                     _ => None,
                 },
                 weapons: tuning.map_or([(0.0, 0.0); 5], |t| t.weapons),
@@ -9878,6 +9883,11 @@ impl Play {
             // 0.1); a can-fly 1 flyer has no gravity and no ground projection.
             let airborne = e.airborne();
             wk.float = airborne && row.can_fly == 1;
+            // NEOPETS_TRACE_PATROL: each patrolling enemy's position, target and animation every 60 ticks (or the
+            // variable's number).
+            if e.state == 6 && e.patrol.is_some() && self.ticks % std::env::var("NEOPETS_TRACE_PATROL").ok().and_then(|v| v.parse::<u64>().ok()).unwrap_or(60).max(1) == 0 && std::env::var_os("NEOPETS_TRACE_PATROL").is_some() {
+                println!("      patrol {name} home {:.1} tick {}: at ({:.1}, {:.1}) blocked {} target {:?} anim {:?} go {:?}", e.spawn.home[0], self.ticks, p[0], p[2], wk.blocked, e.patrol.as_ref().and_then(|r| r.target()), act.anim, act.go);
+            }
             // NEOPETS_TRACE_FLY: each flyer's height, its goal and the ground every 15 ticks.
             if row.can_fly != 0 && self.ticks % 15 == 0 && std::env::var_os("NEOPETS_TRACE_FLY").is_some() {
                 println!("      fly {name} tick {}: can_fly {} airborne {airborne} retarget {} state {} y {:.2} goal {:?} ground {:?} hero y {:.1} max_fly {} step {:?} anim {:?} at ({:.1}, {:.1}) mesh {:?} blocked {} go {:?}", self.ticks, row.can_fly, e.retarget, e.state, wk.position()[1], fly_y, fly_y.and_then(|g| world.ground_at(p[0], p[2], g + 8.0)), hero[1], e.p.max_fly, act.fly, act.anim, p[0], p[2], wk.mesh, wk.blocked, act.go);

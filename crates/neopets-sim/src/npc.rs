@@ -54,6 +54,43 @@ impl Patrol {
         Self { points, looping: w(1) == 0, hold: (w(3), w(4)), chance: w(5), stop: (w(6), w(7)), index: 0, forward: true, reached: false, started: false, pause: 0, fidget: 0, fidget_asked: false }
     }
 
+    /// The common-enemy form of the route (SPEC-0038 state 6): the route starts at point 1, a
+    /// point counts as reached within 0.5 and starts a pause of int[+0xC4, +0xC8] ticks; while
+    /// walking, `may_stop` (the tick the awareness countdown is 0) allows the roll below +0xCC
+    /// that stops for int[+0xD0, +0xD4] ticks. Returns the point to walk to (None while paused)
+    /// and, on the tick a pause starts, its range (for the fidget counter).
+    pub fn enemy_step(&mut self, position: Vec3, may_stop: bool, rng: &mut Rng) -> (Option<Vec3>, Option<(i32, i32)>) {
+        if self.points.is_empty() {
+            return (None, None);
+        }
+        let draw = |r: (i32, i32), rng: &mut Rng| rng.range(r.0.min(r.1), r.0.max(r.1));
+        if !self.started {
+            self.started = true;
+            self.reached = true;
+        }
+        if self.pause > 0 {
+            self.pause -= 1;
+        }
+        if self.reached {
+            self.advance();
+            self.reached = false;
+        }
+        if self.pause >= 1 {
+            return (None, None);
+        }
+        let target = self.points[self.index];
+        if horizontal(position, target).0 < 0.5 {
+            self.reached = true;
+            self.pause = draw(self.hold, rng);
+            return (None, Some(self.hold));
+        }
+        if may_stop && rng.range(1, 100) < self.chance {
+            self.pause = draw(self.stop, rng);
+            return (None, Some(self.stop));
+        }
+        (Some(target), None)
+    }
+
     /// The route point now targeted.
     pub fn target(&self) -> Option<Vec3> {
         self.points.get(self.index).copied()
