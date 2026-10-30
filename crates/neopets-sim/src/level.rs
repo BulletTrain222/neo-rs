@@ -162,6 +162,8 @@ pub enum Action {
     Equip { on: bool },
     /// StartExteriorReplacementLoad of an eW slot, arriving on a plane (-1: entry record 0).
     ReplaceExterior { slot: usize, plane: i32 },
+    /// SetMaxActiveAI (SPEC-0030 row 62): the embedded block's active cap, clamped to 15.
+    MaxActiveAi { cap: usize },
     /// The hero's magic refilled (the 1056 mote area).
     RefillMagic,
     /// The hero's hit points refilled to the maximum (1327's practice steps 231 and 233).
@@ -2496,8 +2498,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // (region 1177), C (1178) and B (1179 + r); the opponent entity 12 + r (word 1); the
         // opening scene (cameras 6, 4, 5 and 7, the opponent's intro animation, line 53 - r,
         // entity 11's walk to locator 1 and loop 55), with spectators 0 to 10 each looping one
-        // of 40, 37, 38, 55, 26, 70 and 69 (Random(0, 6)) forever. SetMaxActiveAI is not
-        // built; the use-item hook (CB4) is `on_hero_use_item`.
+        // of 40, 37, 38, 55, 26, 70 and 69 (Random(0, 6)) forever; SetMaxActiveAI(12). The
+        // use-item hook (CB4) is `on_hero_use_item`.
         1176 => {
             let r = [(384, 4), (383, 3), (382, 2), (381, 1)].into_iter().find(|&(f, _)| state.flag(f)).map_or(0, |(_, r)| r);
             let opp = 12 + r as usize;
@@ -2511,6 +2513,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 Action::LoadRegion { slot: 2, region: Some(1178) },
                 Action::LoadRegion { slot: 1, region: Some(1179 + r as u32) },
                 Action::WaitLoads,
+                Action::MaxActiveAi { cap: 12 },
             ];
             v.extend((0..=10).map(|entity| Action::RandomLoop7 { entity, anims: [40, 37, 38, 55, 26, 70, 69] }));
             v.extend([
@@ -5250,7 +5253,7 @@ fn arena_1246(s: &mut GameState) -> Vec<Action> {
         ]);
     } else if s.level(2) {
         // The intro: the gates (objects 1, 0 on, 5 off, 4 on), entity 21 off during it, camera
-        // 4, the King's animation 18, entity 21 back; SetMaxActiveAI(12) is not built.
+        // 4, the King's animation 18, entity 21 back, then SetMaxActiveAI(12) (SPEC-0019 step 6).
         s.set_level(3, true);
         v.extend([
             Action::InitObjOn { obj: 1, end: false },
@@ -5271,6 +5274,7 @@ fn arena_1246(s: &mut GameState) -> Vec<Action> {
             Action::LetterBox { on: false, seconds: 1.0, wait: false },
             Action::ActivateEntity { entity: 21 },
             Action::FadeIn { seconds: FADE, wait: true },
+            Action::MaxActiveAi { cap: 12 },
             Action::ReleaseEntity { entity: 16 },
         ]);
     } else {

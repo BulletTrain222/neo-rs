@@ -718,6 +718,24 @@ struct Reserve {
     bound: Option<u64>,
 }
 
+/// A record of a streaming character block (SPEC-0006 Character activation, streaming and
+/// kill memory): the loaded parts and the character it is bound to, if any.
+struct StreamRec {
+    pl: neopets_data::region::Placement,
+    model: ModelData,
+    anim: HeroAnim,
+    row: Option<neopets_data::monster::Row>,
+    tuning: Option<neopets_data::monster::Tuning>,
+    drop: Option<neopets_data::region::ItemPoint>,
+    bound: Option<u64>,
+}
+
+/// SPEC-0006 streaming constants: the bind and release range (squared, 280 units), the swap
+/// margin (added to a squared distance, a quirk kept) and the most objects a block owns.
+const STREAM_RANGE: f32 = 78_400.0;
+const STREAM_MARGIN: f32 = 20.0;
+const BLOCK_OBJECTS: usize = 15;
+
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
 /// is selected (the original reloads the shared hero pool on each swap; this build keeps both).
 pub struct Parked {
@@ -970,6 +988,10 @@ pub struct Play {
     ixi_words: neopets_sim::ixi::Words,
     faerie_words: neopets_sim::darkest::Words,
     reserves: Vec<Reserve>,
+    /// The embedded block of each resident world while streaming (SPEC-0006), and the caps
+    /// SetMaxActiveAI set (default 6).
+    blocks: HashMap<u32, Vec<StreamRec>>,
+    max_active: HashMap<u32, usize>,
     /// The duel's shared slots (SPEC-0029 Behavior 19), its words, and the loop-B summons.
     duel: neopets_sim::fyora::Slots,
     duel_words: neopets_sim::fyora::Words,
@@ -1773,6 +1795,8 @@ impl Play {
             ixi_words,
             faerie_words,
             reserves: Vec::new(),
+            blocks: HashMap::new(),
+            max_active: HashMap::new(),
             duel: [None; 4],
             duel_words,
             serpent_words,
@@ -2859,8 +2883,10 @@ impl Play {
                 Action::DeactivateEntity { entity } => {
                     // An entity whose region has not loaded yet is deactivated when it arrives
                     // (an Init's deactivations and streaming refusals run before the load).
+                    // The record keeps its kill bit (SPEC-0030 row 114): streaming never binds it
+                    // again until ActivateEntity clears it.
+                    self.pending_off.insert((pack, entity));
                     let Some(c) = self.entity_mut(pack, entity) else {
-                        self.pending_off.insert((pack, entity));
                         return None;
                     };
                     c.inactive = true;
@@ -2911,6 +2937,9 @@ impl Play {
                     return Some(if wait { Wait::HeroOneShot } else { Wait::Ticks(1) });
                 }
                 Action::Equip { .. } => {}
+                Action::MaxActiveAi { cap } => {
+                    self.max_active.insert(pack, cap.min(BLOCK_OBJECTS));
+                }
                 Action::ReplaceExterior { slot, plane } => {
                     if let Some(&p) = self.boot.areas.packs.get(slot) {
                         self.job = Some(Job::Replace(p, plane));
@@ -6306,6 +6335,23 @@ impl Play {
             self.reserves.retain(|r| !(r.pack == pack && r.slot == slot));
         }
         let live_type = self.petpet.as_ref().map(|p| p.type_id);
+        // SPEC-0006 streaming: the embedded block keeps its records and binds the nearest
+        // eligible ones up to its cap, every tick (`stream_step`); NEOPETS_NO_STREAM binds them
+        // all at load as before (diagnostic).
+        if slot == EMBEDDED_SLOT && !rebind && std::env::var_os("NEOPETS_NO_STREAM").is_none() {
+            let mut recs = Vec::new();
+            for (pl, model, anim, row, tuning) in loaded {
+                if pl.summon {
+                    self.reserves.push(Reserve { pack, slot, region, pl, model, anim, row, tuning, bound: None });
+                    continue;
+                }
+                let drop = usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied());
+                recs.push(StreamRec { pl, model, anim, row, tuning, drop, bound: None });
+            }
+            self.blocks.insert(pack, recs);
+            self.stream_pack(pack);
+            return;
+        }
         for (pl, model, anim, row, tuning) in loaded {
             // SPEC-0047 Acquisition: while a petpet of type t is live, no record of type t binds.
             if live_type == Some(pl.key as i32) {
@@ -6322,7 +6368,106 @@ impl Play {
                 continue;
             }
             let drop = usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied());
-            self.bind_character(pack, slot, region, pl, (model, anim, row, tuning), drop);
+            let ordinal = pl.ordinal;
+            let id = self.bind_character(pack, slot, region, pl, (model, anim, row, tuning), drop);
+            // A forced bind takes its record's place in the streaming block.
+            if rebind {
+                if let Some(r) = self.blocks.get_mut(&pack).and_then(|b| b.iter_mut().find(|r| r.pl.ordinal == ordinal)) {
+                    r.bound = Some(id);
+                }
+            }
+        }
+    }
+
+    /// SPEC-0006 streaming, every tick: each resident world's embedded block.
+    fn stream_step(&mut self) {
+        let packs: Vec<u32> = self.blocks.keys().copied().collect();
+        for pack in packs {
+            self.stream_pack(pack);
+        }
+    }
+
+    /// One streaming pass of a world's embedded block (SPEC-0006 Per tick, streaming block):
+    /// (1) release a bound character in a disabled cell or beyond 280 units (a dead one leaves
+    /// with its countdown, and its kill memory keeps it from binding again) and note the
+    /// farthest kept; (2) with one kept, swap the farthest for the nearest eligible record when
+    /// that is nearer by the margin (one swap a tick); (3) fill free places up to min(cap, the
+    /// block's objects) with the nearest eligible records within 280 units.
+    fn stream_pack(&mut self, pack: u32) {
+        let Some(world) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { return };
+        let Some(recs) = self.blocks.get(&pack) else { return };
+        let hero = self.loco.position();
+        let d2 = |p: [f32; 3]| (p[0] - hero[0]).powi(2) + (p[1] - hero[1]).powi(2) + (p[2] - hero[2]).powi(2);
+        let (grid, zones) = (self.world.zones.as_ref(), self.zones);
+        let cell = |p: [f32; 3]| {
+            let hit = world.probe(p[0], p[2], p[1] + 2.5);
+            hit.zone.filter(|_| hit.found).is_none_or(|z| zones.query(grid, z as i32, world.world_id))
+        };
+        // A record whose character has gone (a death's countdown, a script removal) is free.
+        let free: Vec<bool> = recs.iter().map(|r| r.bound.is_none_or(|id| !self.characters.iter().any(|c| c.id == id))).collect();
+        let bound_ids: Vec<u64> = recs.iter().filter_map(|r| r.bound).collect();
+        let mut release = Vec::new();
+        let mut farthest: Option<(u64, f32)> = None;
+        let mut kept = 0usize;
+        // A deactivated character (kept hidden here; released with its kill bit in the
+        // original) takes no place.
+        for c in self.characters.iter().filter(|c| bound_ids.contains(&c.id) && !c.deactivated) {
+            let d = d2(c.position);
+            if !cell(c.position) || d > STREAM_RANGE {
+                release.push(c.id);
+                continue;
+            }
+            kept += 1;
+            if farthest.is_none_or(|(_, fd)| d > fd) {
+                farthest = Some((c.id, d));
+            }
+        }
+        let live_type = self.petpet.as_ref().map(|p| p.type_id);
+        let eligible = |i: usize, r: &StreamRec| {
+            if !free[i] || level::admits(pack, r.pl.ordinal, &self.state) == Some(false) {
+                return false;
+            }
+            let entity = self.entity_of(pack, pack, r.pl.ordinal);
+            if entity.is_some_and(|e| self.pending_off.contains(&(pack, e))) {
+                return false;
+            }
+            if r.tuning.as_ref().is_some_and(|t| t.reanimate.is_some()) {
+                return true;
+            }
+            let killed = entity.is_some_and(|e| self.killed.contains(&(pack, e)));
+            !killed && live_type != Some(r.pl.key as i32)
+        };
+        let cap = self.max_active.get(&pack).copied().unwrap_or(6).min(recs.len().min(BLOCK_OBJECTS));
+        // The eligible, gated records within range, nearest first (the earlier record wins a tie).
+        let mut near: Vec<(usize, f32)> = recs.iter().enumerate().filter(|&(i, r)| eligible(i, r)).map(|(i, r)| (i, d2(r.pl.position))).filter(|&(i, d)| d < STREAM_RANGE && cell(recs[i].pl.position)).collect();
+        near.sort_by(|a, b| a.1.total_cmp(&b.1));
+        let mut near = near.into_iter().peekable();
+        let mut binds = Vec::new();
+        if let (Some((far, fd)), Some(&(i, d))) = (farthest, near.peek()) {
+            if d + STREAM_MARGIN < fd {
+                release.push(far);
+                binds.push(i);
+                near.next();
+            }
+        }
+        // A swap keeps the active count; the fill tops it up.
+        for (i, _) in near.take(cap.saturating_sub(kept)) {
+            binds.push(i);
+        }
+        let recs = self.blocks.get_mut(&pack).unwrap_or_else(|| unreachable!());
+        for (r, &f) in recs.iter_mut().zip(&free) {
+            if f || r.bound.is_some_and(|id| release.contains(&id)) {
+                r.bound = None;
+            }
+        }
+        self.characters.retain(|c| !release.contains(&c.id));
+        for i in binds {
+            let r = &self.blocks[&pack][i];
+            let (pl, parts, drop) = (r.pl.clone(), (r.model.clone(), r.anim.clone(), r.row, r.tuning), r.drop);
+            let id = self.bind_character(pack, EMBEDDED_SLOT, pack, pl, parts, drop);
+            if let Some(r) = self.blocks.get_mut(&pack).and_then(|b| b.get_mut(i)) {
+                r.bound = Some(id);
+            }
         }
     }
 
@@ -8309,6 +8454,7 @@ impl Play {
             self.state.timer.tick();
         }
         self.zone_step();
+        self.stream_step();
         self.foliage_step();
         self.placed_release_step();
         self.placed_zone_step();
@@ -8370,6 +8516,8 @@ impl Play {
             }
         }
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
+        self.blocks.retain(|pack, _| resident.contains(pack));
+        self.max_active.retain(|pack, _| resident.contains(pack));
         // A released world's script threads end with its module (SPEC-0030 Lifetime: the
         // module's threads last until its buffer is released).
         self.threads.retain(|t| resident.contains(&t.pack));
