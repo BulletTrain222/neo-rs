@@ -913,7 +913,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, dev_menu::show_panel, perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1977,6 +1977,33 @@ fn drawn_indices(part: &neopets_data::model::MeshPart) -> Vec<u32> {
 }
 
 /// The opaque twin of a Mask(0.5) material (see `mask_never_cuts`).
+/// A textured part whose vertex alpha fades: some vertices below 0.5 and some at or above it
+/// (path edges laid over the grass). Drawn with Mask(0.5) its cut would follow the vertex alpha,
+/// which Bevy's depth prepass does not see, so with the sun or ambient occlusion on the prepass
+/// wrote depth where the main pass drew nothing: black holes in the ground (user's F8 view 3 in
+/// 1230). Such a part is drawn blended with its vertex alpha instead (`blend_twin`), outside
+/// the prepass.
+fn vertex_fades(part: &neopets_data::model::MeshPart) -> bool {
+    std::env::var_os("NEOPETS_NO_FADE_BLEND").is_none()
+        && part.texture.is_some()
+        && part.colors.iter().any(|c| c[3] < 0.5)
+        && part.colors.iter().any(|c| c[3] >= 0.5)
+}
+
+/// The cut core of a soft material: Mask at the alpha test's reference, 120 of 128.
+fn cut_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMaterial>) -> Handle<StandardMaterial> {
+    let mut m = materials.get(mask).cloned().unwrap_or_default();
+    m.alpha_mode = AlphaMode::Mask(120.0 / 128.0);
+    materials.add(m)
+}
+
+/// The blended twin of a Mask(0.5) material (see `vertex_fades`).
+fn blend_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMaterial>) -> Handle<StandardMaterial> {
+    let mut m = materials.get(mask).cloned().unwrap_or_default();
+    m.alpha_mode = AlphaMode::Blend;
+    materials.add(m)
+}
+
 fn opaque_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMaterial>) -> Handle<StandardMaterial> {
     let mut m = materials.get(mask).cloned().unwrap_or_default();
     m.alpha_mode = AlphaMode::Opaque;
@@ -2565,6 +2592,14 @@ struct ZoneGate(u32, u8);
 #[derive(Component)]
 struct DrawCull(Vec3, f32);
 
+/// NEOPETS_DUP_LEVEL: how many of the wider duplicate rules apply: 0 exact repeats only, 1 the
+/// near-copies of large parts, 2 (default) and the 40 percent box overlap, 3 and the 90 percent
+/// containment, 4 and the cover by several parts. Levels 3 and 4 hid 696's own canyon walls
+/// beside 1023 (the user's F8 views 1 and 2), so they are off.
+pub fn dup_level() -> u8 {
+    std::env::var("NEOPETS_DUP_LEVEL").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
+}
+
 /// Every built scene's part signatures by pack, merged parts included (the duplicate rule of
 /// `sync_zones` compares the other world's parts with all of the current world's).
 #[derive(Resource, Default)]
@@ -2616,7 +2651,11 @@ impl PartSig {
             return true;
         }
         let size = (0..3).map(|k| self.hi[k] - self.lo[k]).fold(0.0f32, f32::max);
-        (size > 200.0 && diff <= 0.05 * size) || (size > 800.0 && diff <= 0.25 * size) || (size > 100.0 && self.overlap(o) >= 0.4) || self.contains(o) >= 0.9
+        // NEOPETS_DUP_LEVEL=k (diagnostic): only the first k of the wider rules below.
+        let level = dup_level();
+        (level >= 1 && ((size > 200.0 && diff <= 0.05 * size) || (size > 800.0 && diff <= 0.25 * size)))
+            || (level >= 2 && size > 100.0 && self.overlap(o) >= 0.4)
+            || (level >= 3 && self.contains(o) >= 0.9)
     }
 
     /// The part of `o`'s box that lies inside this one's (each extent at least 1 unit).
@@ -2676,7 +2715,7 @@ fn sync_zones(
         // 90 percent together (the sum of the covered parts, overlaps counted twice): 696's town
         // copy straddles several of 1023's parts.
         let dup = s.is_some_and(|s| {
-            s.pack != current && *dups.2.entry(e).or_insert_with(|| mine.iter().any(|m| m.same(s)) || mine.iter().map(|m| m.contains(s)).sum::<f32>() >= 0.9)
+            s.pack != current && *dups.2.entry(e).or_insert_with(|| mine.iter().any(|m| m.same(s)) || (dup_level() >= 4 && mine.iter().map(|m| m.contains(s)).sum::<f32>() >= 0.9))
         });
         // Skipped at D1 or more (squared values compared).
         let near = cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
@@ -4313,9 +4352,16 @@ fn play_trace(
         // drawn camera's eye to the named character's chest on that tick (diagnostic).
         if let Some((t, name)) = std::env::var("NEOPETS_TRACE_LOS").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.trim().parse::<u64>().ok(), b.to_string()))) {
             if t == Some(play.ticks) {
-                let (eye, fwd, up, focal) = play.view();
-                if let Some(c) = play.characters.iter().find(|c| c.name == name) {
-                    let to = [c.position[0], c.position[1] + 1.5, c.position[2]];
+                let (mut eye, fwd, up, focal) = play.view();
+                // "@x,y,z,x,y,z": an explicit segment instead of the camera and a character.
+                let seg: Vec<f32> = name.strip_prefix('@').map(|r| r.split(',').filter_map(|v| v.parse().ok()).collect()).unwrap_or_default();
+                let target = if seg.len() == 6 {
+                    eye = [seg[0], seg[1], seg[2]];
+                    Some([seg[3], seg[4], seg[5]])
+                } else {
+                    play.characters.iter().find(|c| c.name == name).map(|c| [c.position[0], c.position[1] + 1.5, c.position[2]])
+                };
+                if let Some(to) = target {
                     let d = [to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]];
                     let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
                     let angle = ((d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2]) / l).clamp(-1.0, 1.0).acos().to_degrees();

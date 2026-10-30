@@ -27,6 +27,14 @@ pub struct Built {
     textures: Vec<Handle<StandardMaterial>>,
     /// Each texture's opaque twin (made when a part needs it; see `mask_never_cuts`).
     opaque: HashMap<usize, Handle<StandardMaterial>>,
+    /// Each texture's blended twin (made when a part's vertex alpha fades; see `vertex_fades`).
+    blend: HashMap<usize, Handle<StandardMaterial>>,
+    /// Textures with soft alpha (a texel between 16 and 239 of 255) and their cut twins at the
+    /// alpha test's reference (SPEC-0003 TEST: ATE GEQUAL 120 of 128, AFAIL framebuffer only:
+    /// texels at or above 120/128 write depth, softer ones still blend without writing it). A
+    /// soft part is drawn twice: the cut twin, then the blended twin over it.
+    soft: Vec<bool>,
+    cut: HashMap<usize, Handle<StandardMaterial>>,
     untextured: Handle<StandardMaterial>,
 }
 
@@ -41,12 +49,24 @@ impl Built {
         let sigs = model.parts.iter().map(|p| part_signature(pack, p, false)).collect();
         let shared = vec![false; model.parts.len()];
         let mut opaque = HashMap::new();
+        let mut blend = HashMap::new();
+        let soft: Vec<bool> = model.textures.iter().map(|t| std::env::var_os("NEOPETS_NO_SOFT").is_none() && t.image.rgba.chunks_exact(4).any(|q| (16..240).contains(&q[3]))).collect();
+        let mut cut = HashMap::new();
         for p in &model.parts {
+            if let Some(t) = p.texture.filter(|&t| p.flipbook.is_none() && !p.env_map && p.scroll.is_none() && soft[t] && !crate::vertex_fades(p)) {
+                cut.entry(t).or_insert_with(|| crate::cut_twin(materials, &textures[t]));
+                blend.entry(t).or_insert_with(|| crate::blend_twin(materials, &textures[t]));
+                continue;
+            }
+            if let Some(t) = p.texture.filter(|_| p.flipbook.is_none() && crate::vertex_fades(p)) {
+                blend.entry(t).or_insert_with(|| crate::blend_twin(materials, &textures[t]));
+                continue;
+            }
             if let Some(t) = p.texture.filter(|&t| p.flipbook.is_none() && crate::mask_never_cuts(&model.textures[t], p)) {
                 opaque.entry(t).or_insert_with(|| crate::opaque_twin(materials, &textures[t]));
             }
         }
-        Self { model: Arc::new(model), sigs, shared, textures, opaque, untextured }
+        Self { model: Arc::new(model), sigs, shared, textures, opaque, blend, soft, cut, untextured }
     }
 
     /// The parts that repeat a part of one of `others` (the other drawn scenes' signatures).
@@ -60,7 +80,7 @@ impl Built {
         }
         // A twin repeats a part of another scene, or its box is covered by 90 percent by the
         // other scene's boxes together (`sync_zones` hides it while the other world is current).
-        let out: Vec<bool> = self.sigs.iter().map(|s| others.iter().any(|o| o.iter().any(|t| t.same(s)) || o.iter().map(|t| t.contains(s)).sum::<f32>() >= 0.9)).collect();
+        let out: Vec<bool> = self.sigs.iter().map(|s| others.iter().any(|o| o.iter().any(|t| t.same(s)) || (crate::dup_level() >= 4 && o.iter().map(|t| t.contains(s)).sum::<f32>() >= 0.9))).collect();
         if std::env::var_os("NEOPETS_TRACE_TWINS").is_some() {
             println!("twins of {:?}: {} of {} against {} other scenes", self.sigs.first().map(|s| s.pack), out.iter().filter(|&&t| t).count(), out.len(), others.len());
             for (s, t) in self.sigs.iter().zip(&out).filter(|(s, _)| s.size() > 1000.0) {
@@ -136,12 +156,17 @@ pub fn spawn(
     for (i, p) in m.parts.iter().enumerate() {
         let env = p.texture.filter(|_| p.env_map && !no_pass1);
         let scrolling = p.scroll.is_some() && p.texture.is_some();
+        let fades = p.flipbook.is_none() && crate::vertex_fades(p);
+        let soft = p.texture.is_some_and(|t| b.soft[t]) && p.flipbook.is_none() && !p.env_map && p.scroll.is_none() && !fades;
         let material = match p.texture {
             None => b.untextured.clone(),
+            Some(t) if soft => b.cut.get(&t).cloned().unwrap_or_else(|| b.textures[t].clone()),
+            Some(t) if fades => b.blend.get(&t).cloned().unwrap_or_else(|| b.textures[t].clone()),
             Some(t) if p.flipbook.is_none() && crate::mask_never_cuts(&m.textures[t], p) => b.opaque.get(&t).cloned().unwrap_or_else(|| b.textures[t].clone()),
             Some(t) => b.textures[t].clone(),
         };
-        let apart = no_merge || env.is_some() || scrolling || p.flipbook.is_some() || p.cull.is_some() || b.shared[i];
+        // A blended part is kept apart so it sorts with the other transparent draws.
+        let apart = no_merge || env.is_some() || scrolling || fades || soft || p.flipbook.is_some() || p.cull.is_some() || b.shared[i];
         if !apart {
             let n = p.positions.len().max(1) as f32;
             let c = p.positions.iter().fold([0.0f32; 2], |a, q| [a[0] + q[0] / n, a[1] + q[2] / n]);
@@ -150,6 +175,19 @@ pub fn spawn(
             continue;
         }
         let mesh = meshes.add(part_mesh(p));
+        // A soft part's blended layer over its cut core.
+        if let (true, Some(t)) = (soft, p.texture) {
+            if let Some(m) = b.blend.get(&t) {
+                let mut e = commands.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(m.clone()), Transform::IDENTITY, part, b.sigs[i]));
+                count += 1;
+                if let Some(z) = p.zone {
+                    e.insert(ZoneGate(pack, z));
+                }
+                if let Some((at, d1, _)) = p.cull {
+                    e.insert(DrawCull(Vec3::from(at), d1));
+                }
+            }
+        }
         let mut e = match env {
             // An environment-mapped pass 0 is drawn by the pass-1 shader with view-generated UVs
             // (pass1.rs), its texture shared per model texture.

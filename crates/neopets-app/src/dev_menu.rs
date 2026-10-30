@@ -41,6 +41,8 @@ pub struct DevMenu {
     start: usize,
     pub free: Option<FreeCam>,
     note: String,
+    /// A short message shown at the top of the screen for its frame count (F8 view saves).
+    pub toast: Option<(String, u32)>,
     /// The weapon list's cursor.
     weapon_at: usize,
     /// A mouse click this frame: apply the cursor's entry, or step its value.
@@ -62,7 +64,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -506,6 +508,51 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     // The chord: every one of its buttons held, the last pressed this frame (not while the
     // bindings page is up, where the chord is being set).
     let chord_fired = !page.open && gamepads.iter().any(|g| crate::bindings::chord_fired(&bindings.dev_chord, |b| g.pressed(b), |b| g.just_pressed(b)));
+    // F8: the view to private/views.txt (the world, the hero's position and the drawn camera),
+    // one numbered line per press, for reproducing what the player sees (a test tool of this
+    // build). NEOPETS_VIEW=n (or "last") starts there again.
+    if keys.just_pressed(KeyCode::F8) {
+        if let Some(t) = cameras.iter().next() {
+            let fc = dev.free.unwrap_or_else(|| FreeCam::from_transform(t));
+            let h = play.play.loco.position();
+            let path = "private/views.txt";
+            let n = std::fs::read_to_string(path).map_or(0, |s| s.lines().filter(|l| l.starts_with("view ")).count()) + 1;
+            let line = format!(
+                "view {n}: pack {} hero {:.2},{:.2},{:.2} cam {:.3},{:.3},{:.3},{:.5},{:.5} tick {}
+",
+                play.play.world.pack, h[0], h[2], h[1], fc.pos.x, fc.pos.y, fc.pos.z, fc.yaw, fc.pitch, play.play.ticks
+            );
+            let _ = std::fs::create_dir_all("private");
+            match std::fs::OpenOptions::new().create(true).append(true).open(path).and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes())) {
+                Ok(()) => {
+                    info!("Saved {}", line.trim());
+                    dev.toast = Some((format!("View {n} saved (F8)"), 150));
+                }
+                Err(e) => error!("F8: could not write {path}: {e}"),
+            }
+        }
+    }
+    if let Some((_, f)) = dev.toast.as_mut() {
+        *f = f.saturating_sub(1);
+        if *f == 0 {
+            dev.toast = None;
+        }
+    }
+    // NEOPETS_VIEW=n or "last": the camera of saved view n, as the free camera, once play has
+    // run a second (the world and the hero position come from the launch: --pack and --start).
+    if *frames == 60 {
+        if let Some(v) = std::env::var("NEOPETS_VIEW").ok() {
+            let text = std::fs::read_to_string("private/views.txt").unwrap_or_default();
+            let lines: Vec<&str> = text.lines().filter(|l| l.starts_with("view ")).collect();
+            let line = if v == "last" { lines.last().copied() } else { lines.iter().copied().find(|l| l.starts_with(&format!("view {v}:"))) };
+            if let Some(cam) = line.and_then(|l| l.split(" cam ").nth(1)).and_then(|r| r.split_whitespace().next()) {
+                let n: Vec<f32> = cam.split(',').filter_map(|x| x.parse().ok()).collect();
+                if n.len() == 5 {
+                    dev.free = Some(FreeCam { pos: Vec3::new(n[0], n[1], n[2]), yaw: n[3], pitch: n[4] });
+                }
+            }
+        }
+    }
     if keys.just_pressed(KeyCode::F1) || chord_fired {
         dev.open = !dev.open;
         dev.swallow = true;
@@ -814,6 +861,33 @@ fn fit(s: String, t: f64) -> String {
 /// The menu window's rows (labels, values, cursor and hover colours), the last result, and the
 /// status box while the menu is closed.
 #[allow(clippy::type_complexity)]
+/// The F8 toast: one text node at the top middle while `DevMenu::toast` is set.
+#[derive(Component)]
+pub struct ViewToast;
+
+pub fn show_toast(mut commands: Commands, dev: Res<DevMenu>, mut toasts: Query<(Entity, &mut Text), With<ViewToast>>) {
+    match (&dev.toast, toasts.iter_mut().next()) {
+        (Some((msg, _)), Some((_, mut t))) => {
+            if t.0 != *msg {
+                t.0 = msg.clone();
+            }
+        }
+        (Some((msg, _)), None) => {
+            commands.spawn((
+                Text::new(msg.clone()),
+                TextFont { font_size: bevy::text::FontSize::Px(26.0), ..default() },
+                TextColor(Color::srgb(1.0, 0.9, 0.4)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.6)),
+                Node { position_type: PositionType::Absolute, top: px(16), left: percent(42), padding: UiRect::all(px(8)), ..default() },
+                GlobalZIndex(1000),
+                ViewToast,
+            ));
+        }
+        (None, Some((e, _))) => commands.entity(e).despawn(),
+        (None, None) => {}
+    }
+}
+
 pub fn show_panel(
     time: Res<Time<Real>>,
     dev: Res<DevMenu>,

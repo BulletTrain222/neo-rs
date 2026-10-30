@@ -231,7 +231,15 @@ fn run() -> Result<(), String> {
         let m = neopets_data::model::build_world_parts(&bytes, &chain.chunks, u32::MAX, false)?;
         for (i, p) in m.parts.iter().enumerate() {
             let (lo, hi) = p.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(lo, hi), q| (std::array::from_fn(|k| lo[k].min(q[k])), std::array::from_fn(|k| hi[k].max(q[k]))));
-            println!("pack {n} part {i} verts {} zone {:?} tex {:?} box {:?}..{:?}", p.positions.len(), p.zone, p.texture, lo.map(|v| v.round()), hi.map(|v| v.round()));
+            let flat = p.normals.iter().filter(|q| q[0] * q[0] + q[1] * q[1] + q[2] * q[2] < 0.01).count();
+            let down = p.normals.iter().filter(|q| q[1] < -0.5).count();
+            let (ulo, uhi) = p.uvs.iter().fold(([f32::MAX; 2], [f32::MIN; 2]), |(a, b), q| ([a[0].min(q[0]), a[1].min(q[1])], [b[0].max(q[0]), b[1].max(q[1])]));
+            let wrap = p.texture.and_then(|t| m.textures.get(t)).map(|t| {
+                let a = t.image.rgba.chunks_exact(4).map(|q| q[3]);
+                (t.repeat_u, t.repeat_v, t.image.width, t.image.height, a.clone().min().unwrap_or(0), a.max().unwrap_or(0))
+            });
+            let va = p.colors.iter().map(|c| c[3]).fold((f32::MAX, f32::MIN), |(a, b), v| (a.min(v), b.max(v)));
+            println!("pack {n} part {i} verts {} zone {:?} tex {:?} box {:?}..{:?} normals zero {flat} down {down} of {} uv {:?}..{:?} wrap {wrap:?} vertex alpha {va:?}", p.positions.len(), p.zone, p.texture, lo.map(|v| v.round()), hi.map(|v| v.round()), p.normals.len(), ulo.map(|v| (v * 100.0).round() / 100.0), uhi.map(|v| (v * 100.0).round() / 100.0));
         }
     }
     if let Some(n) = shadow {
