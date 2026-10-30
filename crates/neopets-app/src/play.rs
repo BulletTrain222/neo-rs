@@ -1064,6 +1064,12 @@ pub struct Play {
     rebind: Vec<(u32, usize)>,
     /// Entities deactivated before their characters loaded.
     pending_off: std::collections::HashSet<(u32, usize)>,
+    /// Script holds (an entity animation) asked for an entity not bound yet, by (pack, entity):
+    /// the animation and the tick it lapses (120 ticks on: this build's bridge for its own
+    /// binding order, not a game rule), applied when the entity is bound. 985's thread grabs the Werelupe King
+    /// (entity 8) on its first tick, before the King's region has bound it (SPEC-0041 985 CB3
+    /// rule 4); without this the hold was lost and the King fought beside Gnarfas.
+    pending_holds: std::collections::HashMap<(u32, usize), (u32, u64)>,
     /// The Juppie tuning words and the boss hits of this tick's swing (character id, damage).
     juppie_words: neopets_sim::juppie::Words,
     gnarfas_words: neopets_sim::gnarfas::Words,
@@ -1906,6 +1912,7 @@ impl Play {
             gesture: Default::default(),
             gesture_words,
             pending_off: Default::default(),
+            pending_holds: Default::default(),
             juppie_words,
             gnarfas_words,
             king_words,
@@ -2978,7 +2985,12 @@ impl Play {
                 }
                 Action::EntityAnim { entity, anim, looped: _, wait } => {
                     // The clip plays as the character's animation (loops repeat as its clip
-                    // does); the entity is under script control.
+                    // does); the entity is under script control. An entity not bound yet takes
+                    // the hold when it is.
+                    if self.entity_mut(pack, entity).is_none() {
+                        self.pending_holds.insert((pack, entity), (anim, self.ticks + 120));
+                        return None;
+                    }
                     let c = self.entity_mut(pack, entity)?;
                     c.held = true;
                     c.script_walk = None;
@@ -2986,6 +2998,7 @@ impl Play {
                     return wait.then_some(Wait::EntityAnim(pack, entity, anim));
                 }
                 Action::ReleaseEntity { entity } => {
+                    self.pending_holds.remove(&(pack, entity));
                     let c = self.entity_mut(pack, entity)?;
                     c.held = false;
                     c.script_walk = None;
@@ -6460,6 +6473,171 @@ impl Play {
     /// Diagnostic fight goal: a stunned boss, else the nearest living active class-17 character
     /// of the current world, and
     /// whether it is within 4.5 units.
+    /// The F6 boss box (this build's tool): the Black Knight's own readout when it wrote one,
+    /// else four short lines for the nearest boss of the current world: its name, HP and
+    /// phase; what it is doing and whether it can be hurt now; how to hurt it (from its spec's
+    /// hero-action guide); and its progress. Empty when no boss is about.
+    pub fn boss_lines(&self) -> Vec<String> {
+        if !self.boss_info.is_empty() {
+            return self.boss_info.clone();
+        }
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let live = |c: &&Character| c.pack == pack && !c.inactive && c.dying.is_none() && Self::is_boss(c) && c.knight.is_none() && !c.gelert.as_ref().is_some_and(|g| g.clone);
+        let Some(c) = self.characters.iter().filter(live).min_by(|a, b| {
+            // A boss under the script's hold (a watcher, or one in its intro) comes after a free one.
+            let d = |c: &Character| (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]);
+            a.held.cmp(&b.held).then(d(a).total_cmp(&d(b)))
+        }) else {
+            return Vec::new();
+        };
+        let max = c.row.map_or(1, |r| r.hit_points as i32).max(1);
+        let bar = |hp: i32, max: i32| {
+            let n = ((hp.max(0) as f32 / max.max(1) as f32) * 10.0).round() as usize;
+            format!("[{}{}]", "#".repeat(n.min(10)), "-".repeat(10 - n.min(10)))
+        };
+        let dist = (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]);
+        let short = |s: String| s.split(|ch: char| ch == '{' || ch == '(').next().unwrap_or("").trim().to_string();
+        let head = |phase: String| format!("{}  HP {}/{} {}  {}  ({:.0} away)", c.name, c.hp.max(0), max, bar(c.hp, max), phase, dist);
+        if let Some(g) = &c.gnarfas {
+            use neopets_sim::gnarfas::State as S;
+            let open = matches!(g.state, S::Jump { .. } | S::Exhaust | S::Laugh);
+            let busy = matches!(g.state, S::Flinch { .. } | S::Whip { .. } | S::Rapid { .. } | S::Power { .. } | S::Slam { .. } | S::Butt { .. });
+            return vec![
+                head(format!("phase {}", if self.state.level(0) && self.state.level(1) { 2 } else { 1 })),
+                format!("doing: {}   {}", short(format!("{:?}", g.state)), if open { "OPEN: hit him now!" } else if busy { "can't be hurt during this" } else { "free: he dodges most swings" }),
+                "hurt: sword only (shots just flinch him); hit him after a jump, in his exhaustion or his laugh".to_string(),
+                format!("strikes taken {}; guard (L1) the whip and rapid strike, jump his body slam", g.strikes),
+            ];
+        }
+        if let Some(k) = &c.king {
+            let now = if k.guarding() {
+                "GUARDING: hit from the side or behind, or use a Mote"
+            } else if k.hittable() {
+                "can be hit now"
+            } else {
+                "can't be hurt during this"
+            };
+            return vec![
+                head(format!("phase {}", k.phase)),
+                format!("doing: {}   {now}", short(format!("{:?}", k.state))),
+                "hurt: sword, shots and Motes; Motes and full-release shots go through his guard".to_string(),
+                "guard (L1) facing him to block his swings and lunge; jump his flame rings".to_string(),
+            ];
+        }
+        if let Some(g) = &c.gelert {
+            let clones = self.characters.iter().filter(|o| o.pack == pack && !o.inactive && o.gelert.as_ref().is_some_and(|x| x.clone && x.state != neopets_sim::gelert::State::CloneWait)).count();
+            let now = if g.invisible {
+                "INVISIBLE"
+            } else if g.state.hittable() {
+                "can be hit now"
+            } else {
+                "can't be hurt during this"
+            };
+            return vec![
+                head(format!("pattern {}", g.pattern)),
+                format!("doing: {}   {now}", short(format!("{:?}", g.state))),
+                "hurt: sword swings and Roberta's quick shots only; Motes and spells do nothing".to_string(),
+                format!("clones awake {clones} (any hit removes one); block his lunge and swing facing him"),
+            ];
+        }
+        if let Some(k) = &c.ixi {
+            use neopets_sim::ixi::State as S;
+            let now = if k.state == S::Hold {
+                "held by the scene"
+            } else if matches!(k.state, S::GetHit) {
+                "hit!"
+            } else {
+                "he blocks or dodges most hits"
+            };
+            return vec![
+                head(format!("stage {} (mode {})", k.stage, k.mode)),
+                format!("doing: {}   {now}", short(format!("{:?}", k.state))),
+                "hurt: hit him as he comes out of a charge or a swipe; he blocks and dodges the rest".to_string(),
+                if k.mode == 0 { "half HP starts the next wave; kill the Henchmen first".to_string() } else { format!("the lava rises at set HP (passed {:?}); keep off it", k.lava) },
+            ];
+        }
+        if let Some(s) = &c.serpent {
+            use neopets_sim::serpent::{Bite, State as S};
+            let doing = match s.state {
+                S::Bite(b) => format!("bite: {}", short(format!("{b:?}"))),
+                st => short(format!("{st:?}")),
+            };
+            let open = matches!(s.state, S::Bite(Bite::Stun { .. }));
+            return vec![
+                head(format!("phase {}", s.phase)),
+                format!("doing: {doing}   {}", if open { "STUNNED: hit its head now!" } else { "can't be hurt now" }),
+                "hurt: guard (L1) its lunge so it bites your shield, then hit the stunned head".to_string(),
+                format!("anchor {}; stay above the swamp, its belch poisons", s.slot),
+            ];
+        }
+        if let Some(d) = &c.draik {
+            use neopets_sim::draik::State as S;
+            let now = if matches!(d.state, S::Stun(_)) {
+                "STUNNED: hit it now!"
+            } else if d.guarding() {
+                "guarding"
+            } else {
+                ""
+            };
+            return vec![
+                head(format!("stage {}", d.stage)),
+                format!("doing: {}   {now}", short(format!("{:?}", d.state))),
+                "hurt: hit it while stunned; breaking its bones (parts) moves the stage on".to_string(),
+                format!("parts broken {}/9; hazards {}", d.broken.iter().filter(|&&b| b).count(), d.hazards.len()),
+            ];
+        }
+        if let Some(s) = &c.sister {
+            let all: Vec<String> = self.characters.iter().filter(|o| o.pack == pack && !o.inactive && o.sister.as_ref().is_some_and(|x| !x.dead())).map(|o| format!("{} {}", o.name, o.hp.max(0))).collect();
+            return vec![
+                head(format!("{} left", all.len())),
+                format!("doing: {}   {}", short(format!("{:?}", s.state)), if self.sister_group.shielded { "SHIELDED: hit one with a shot first" } else { "shield down: hit them" }),
+                "hurt: a hero shot breaks the shared shield, then swords and shots hurt them".to_string(),
+                format!("HP: {}", all.join(", ")),
+            ];
+        }
+        if let Some(f) = &c.faerie {
+            let doing = match f.code {
+                0 => "idle",
+                1 => "waiting (walk in past the entrance, or a swap)",
+                2 => "shoving you away",
+                3 => "casting orbs",
+                4 => "bolt",
+                5 => "STUNNED: hit her with the sword",
+                6 => "stun ending",
+                7 => "ABSORB WINDOW: shoot her as Roberta",
+                8 | 9 => "falling",
+                10 => "landed: walk Roberta to her",
+                _ => "attacking",
+            };
+            return vec![
+                format!("{}  (no HP: stuns, then absorbs)  ({:.0} away)", c.name, dist),
+                format!("doing: {doing} (code {})", f.code),
+                "hurt: guard to reflect her orbs back (stuns her); after 3 stuns Roberta shoots her 3 times".to_string(),
+                format!("stuns {}/3, absorbs {}/3", f.stuns, f.absorbs),
+            ];
+        }
+        if let Some(b) = &c.boss {
+            use neopets_sim::juppie::Top;
+            let open = matches!(b.top, Top::Slam(2 | 3 | 5));
+            return vec![
+                head(format!("stage {}", b.stage)),
+                format!("doing: {}   {}", short(format!("{:?}", b.top)), if open { "HEAD DOWN: hit it now!" } else { "can't be hurt now" }),
+                "hurt: stand on a marked spot so its head slam lands there, then hit the stuck head".to_string(),
+                format!("kill the Tentacles to start each stage; spots used {}", b.uses),
+            ];
+        }
+        if let Some(k) = &c.cloud {
+            return vec![
+                head(format!("stage {}", k.stage)),
+                format!("doing: {}", short(format!("{:?}", k.state))),
+                "hurt: guard (L1) its lightning facing it to send the bolt back (blows do nothing)".to_string(),
+                "cut content: the stand-in is this build's own".to_string(),
+            ];
+        }
+        Vec::new()
+    }
+
     /// Whether a character runs one of the boss controllers.
     pub fn is_boss(c: &Character) -> bool {
         c.boss.is_some() || c.gnarfas.is_some() || c.king.is_some() || c.ixi.is_some() || c.sister.is_some() || c.draik.is_some() || c.faerie.is_some() || c.serpent.is_some() || c.knight.is_some() || c.gelert.is_some() || c.cloud.is_some()
@@ -8859,6 +9037,20 @@ impl Play {
         let table = self.effect_table.clone();
         self.effects.tick(&table, &mut self.rng);
         self.light_step();
+        // Script holds waiting for their entity: applied once it is bound.
+        if !self.pending_holds.is_empty() {
+            let now = self.ticks;
+            self.pending_holds.retain(|_, (_, lapse)| *lapse >= now);
+            let due: Vec<((u32, usize), u32)> = self.pending_holds.iter().filter(|((p, e), _)| self.characters.iter().any(|c| c.pack == *p && c.entity == Some(*e))).map(|(&k, &(a, _))| (k, a)).collect();
+            for ((p, e), anim) in due {
+                self.pending_holds.remove(&(p, e));
+                if let Some(c) = self.entity_mut(p, e) {
+                    c.held = true;
+                    c.script_walk = None;
+                    c.anim.play(anim);
+                }
+            }
+        }
         // IsAI_Dead (SPEC-0030 row 45): a bound character's dead test, else the kill memory of
         // this load for its entity id.
         for c in self.characters.iter().filter(|c| c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead())) {
@@ -8901,6 +9093,7 @@ impl Play {
         let pet = self.pet_char;
         self.characters.retain(|c| resident.contains(&c.pack) || Some(c.id) == pet);
         self.pending_off.retain(|(p, _)| resident.contains(p));
+        self.pending_holds.retain(|(p, _), _| resident.contains(p));
         // A released world's pool resets every slot: its important dropped items go to the
         // party (SPEC-0021 Pool lifetime and Important-item give).
         let released: Vec<u32> = self.pools.keys().copied().filter(|p| !resident.contains(p)).collect();
@@ -14456,7 +14649,8 @@ impl Play {
         // their HP each tick (Gnarfas, the Werelupe King, the Ixi Chieftain, the Plague Serpent, the Cloud Beast): HP to 0, so
         // each runs its own defeat (the Ixi Chieftain of 800 still goes through its half-health
         // scene first, as its stage rules say; press again after it).
-        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0) {
+        // A script-held boss (the Werelupe King watching the Gnarfas fight) is left alone.
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && !c.held && c.dying.is_none() && c.hp > 0) {
             if c.boss.as_mut().is_some_and(|b| b.dev_defeat()) {
                 c.hp = 0;
                 bosses += 1;

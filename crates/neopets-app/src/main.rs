@@ -1771,7 +1771,7 @@ struct BossBox;
 struct BossBoxOn(bool);
 
 fn show_boss_box(mut commands: Commands, on: Res<BossBoxOn>, play: Option<Res<PlayState>>, mut boxes: Query<(Entity, &mut Text), With<BossBox>>) {
-    let lines = play.as_ref().map(|p| p.play.boss_info.join("\n")).filter(|l| !l.is_empty() && on.0);
+    let lines = play.as_ref().filter(|_| on.0).map(|p| p.play.boss_lines().join("\n")).filter(|l| !l.is_empty());
     match (lines, boxes.iter_mut().next()) {
         (Some(l), Some((_, mut t))) => {
             if t.0 != l {
@@ -1798,7 +1798,7 @@ fn show_boss_box(mut commands: Commands, on: Res<BossBoxOn>, play: Option<Res<Pl
 /// fight it toggles the small boss box instead.
 fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<Hud>>, play: Option<Res<PlayState>>, mut boss_box: ResMut<BossBoxOn>) {
     let _span = crate::perf::span("toggle_hud");
-    if keys.just_pressed(KeyCode::F6) && play.as_ref().is_some_and(|p| !p.play.boss_info.is_empty()) {
+    if keys.just_pressed(KeyCode::F6) && play.as_ref().is_some_and(|p| !p.play.boss_lines().is_empty()) {
         boss_box.0 = !boss_box.0;
         return;
     }
@@ -4504,6 +4504,15 @@ fn play_trace(
                 }
                 if play.ticks >= k && (play.ticks - k) % 120 == 0 {
                     println!("      SCENE {}", play.diag_scene_report());
+                }
+            }
+        }
+        // NEOPETS_TRACE_BOX=n: the F6 boss box's lines every n ticks.
+        if let Some(n) = std::env::var("NEOPETS_TRACE_BOX").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|&n| n > 0) {
+            if play.ticks % n == 0 {
+                let lines = play.boss_lines();
+                if !lines.is_empty() {
+                    println!("      BOX tick {}: {}", play.ticks, lines.join(" | "));
                 }
             }
         }
