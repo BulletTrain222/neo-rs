@@ -3344,6 +3344,7 @@ fn sync_characters(
     mut roots: Query<(Entity, &CharacterRoot, &mut Transform, &mut Visibility)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut skinned: Local<std::collections::HashMap<u64, Vec<(Handle<Mesh>, usize)>>>,
     mut generation: Local<u32>,
@@ -3417,11 +3418,40 @@ fn sync_characters(
                 println!("cut {}: {all} triangles, {tex} textured and {plain} untextured fully below 0.5", c.name);
             }
             let parts = part_assets(&c.model, &mut meshes, &mut materials, &mut images);
+            // SPEC-0003 How a pass is drawn: the second-pass layer of two-pass parts, skinned with
+            // pass 0 (its mesh shares the part's vertices, so the skinning loop writes both), and
+            // an environment-mapped pass 0 drawn by the pass-1 shader as on the scenes.
+            let second = pass1_assets(&c.model, &mut meshes, &mut pass1_materials, &mut images);
+            let no_pass1 = std::env::var_os("NEOPETS_NO_PASS1").is_some();
+            let mut env_textures: std::collections::HashMap<usize, Handle<Image>> = std::collections::HashMap::new();
+            let env: std::collections::HashMap<usize, Handle<pass1::Pass1Material>> = c
+                .model
+                .parts
+                .iter()
+                .enumerate()
+                .filter(|(_, q)| q.env_map && !no_pass1)
+                .filter_map(|(i, q)| {
+                    let t = q.texture?;
+                    let tex = c.model.textures.get(t)?;
+                    let image = env_textures.entry(t).or_insert_with(|| images.add(model_texture(tex))).clone();
+                    Some((i, pass1_materials.add(pass1::env_base(image))))
+                })
+                .collect();
             let mut list = Vec::new();
             let mut spawned = Vec::new();
             commands
                 .spawn((Transform::from_translation(Vec3::from(c.position)).with_rotation(rotation), Visibility::Visible, CharacterRoot(c.id)))
                 .with_children(|ch| {
+                    for (i, mesh, material, scroll) in second {
+                        if !c.model.parts[i].weights.is_empty() {
+                            list.push((mesh.clone(), i));
+                        }
+                        let mut e = ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                        if let Some(s) = scroll {
+                            e.insert(pass1::Pass1Scroll(s));
+                        }
+                        spawned.push(e.id());
+                    }
                     for (i, mesh, material) in parts {
                         if !c.model.parts[i].weights.is_empty() {
                             list.push((mesh.clone(), i));
@@ -3434,7 +3464,11 @@ fn sync_characters(
                                 rigid.entry(c.id).or_default().0.push((mesh.clone(), i));
                             }
                         }
-                        spawned.push(ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY)).id());
+                        let id = match env.get(&i) {
+                            Some(m) => ch.spawn((Mesh3d(mesh), MeshMaterial3d(m.clone()), Transform::IDENTITY)).id(),
+                            None => ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY)).id(),
+                        };
+                        spawned.push(id);
                     }
                 });
             skinned.insert(c.id, list);
@@ -5265,6 +5299,7 @@ fn play_frame(
     mut projections: Query<&mut Projection>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut hero_stamp: Local<Option<(u64, bool, usize, usize)>>,
 ) {
@@ -5292,10 +5327,21 @@ fn play_frame(
             }
         }
         let parts = part_assets(&state.play.model, &mut meshes, &mut materials, &mut images);
+        // SPEC-0003 How a pass is drawn: two-pass parts' second layer, skinned with pass 0.
+        let second = pass1_assets(&state.play.model, &mut meshes, &mut pass1_materials, &mut images);
         let mut skinned = Vec::new();
         commands
             .spawn((Transform::from_translation(Vec3::from(p)).with_rotation(rotation), Visibility::Visible, HeroRoot))
             .with_children(|c| {
+                for (i, mesh, material, scroll) in second {
+                    if !state.play.model.parts[i].weights.is_empty() {
+                        skinned.push((mesh.clone(), i));
+                    }
+                    let mut e = c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
+                    if let Some(s) = scroll {
+                        e.insert(pass1::Pass1Scroll(s));
+                    }
+                }
                 for (i, mesh, material) in parts {
                     if !state.play.model.parts[i].weights.is_empty() {
                         skinned.push((mesh.clone(), i));
