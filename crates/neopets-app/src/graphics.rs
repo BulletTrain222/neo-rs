@@ -86,7 +86,7 @@ impl Plugin for GraphicsPlugin {
 pub struct GradeUniform {
     /// Saturation, contrast, warmth, vibrance.
     pub a: Vec4,
-    /// Vignette, -, -, on (above 0.5).
+    /// Vignette, the render scale (source texels per window pixel), -, grade on (above 0.5).
     pub b: Vec4,
 }
 
@@ -106,12 +106,14 @@ impl UiMaterial for SceneGrade {
     }
 }
 
-pub fn grade_uniform(colour: usize) -> GradeUniform {
-    match colour {
+pub fn grade_uniform(colour: usize, scale: f32) -> GradeUniform {
+    let mut g = match colour {
         1 => GradeUniform { a: Vec4::new(1.10, 1.06, 0.0, 0.25), b: Vec4::new(0.10, 0.0, 0.0, 1.0) },
         2 => GradeUniform { a: Vec4::new(1.18, 1.10, 0.015, 0.30), b: Vec4::new(0.18, 0.0, 0.0, 1.0) },
         _ => GradeUniform::default(),
-    }
+    };
+    g.b.y = scale;
+    g
 }
 
 const GRADE_WGSL: &str = r#"
@@ -134,9 +136,29 @@ fn to_linear(c: vec3<f32>) -> vec3<f32> {
     return pow(max(c, vec3<f32>(0.0)), vec3<f32>(2.2));
 }
 
+// Above a render scale of 1 each window pixel covers several scene texels: average a grid of
+// samples over that footprint (a box filter), so the drawn detail is kept rather than one texel
+// picked per pixel, which shimmers and flickers as the camera moves.
+fn scene_at(uv: vec2<f32>) -> vec4<f32> {
+    let r = grade.b.y;
+    if r <= 1.01 {
+        return textureSample(scene, scene_sampler, uv);
+    }
+    let texel = 1.0 / vec2<f32>(textureDimensions(scene));
+    let n = i32(clamp(ceil(r), 2.0, 3.0));
+    var sum = vec4<f32>(0.0);
+    for (var j = 0; j < n; j++) {
+        for (var i = 0; i < n; i++) {
+            let o = (vec2<f32>(f32(i), f32(j)) + 0.5) / f32(n) - 0.5;
+            sum += textureSampleLevel(scene, scene_sampler, uv + o * r * texel, 0.0);
+        }
+    }
+    return sum / f32(n * n);
+}
+
 @fragment
 fn fragment(in: UiVertexOutput) -> @location(0) vec4<f32> {
-    let s = textureSample(scene, scene_sampler, in.uv);
+    let s = scene_at(in.uv);
     if grade.b.w < 0.5 {
         return vec4<f32>(s.rgb, 1.0);
     }
@@ -354,18 +376,18 @@ fn apply_textures(settings: Res<DisplaySettings>, mut images: ResMut<Assets<Imag
 }
 
 /// The colour grade from the settings.
-fn apply_grade(settings: Res<DisplaySettings>, mut grades: ResMut<Assets<SceneGrade>>, mut last: Local<Option<usize>>) {
-    if *last == Some(settings.colour) && !grades.is_changed() {
+fn apply_grade(settings: Res<DisplaySettings>, mut grades: ResMut<Assets<SceneGrade>>, mut last: Local<Option<(usize, usize)>>) {
+    if *last == Some((settings.colour, settings.scale)) && !grades.is_changed() {
         return;
     }
-    let want = grade_uniform(settings.colour);
+    let want = grade_uniform(settings.colour, crate::display::SCALES[settings.scale] as f32 / 100.0);
     let ids: Vec<_> = grades.iter().filter(|(_, g)| g.grade.a != want.a || g.grade.b != want.b).map(|(id, _)| id).collect();
     for id in ids {
         if let Some(mut g) = grades.get_mut(id) {
             g.grade = want;
         }
     }
-    *last = Some(settings.colour);
+    *last = Some((settings.colour, settings.scale));
 }
 
 #[cfg(test)]
