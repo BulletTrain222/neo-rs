@@ -838,45 +838,61 @@ impl Ground {
     /// The frame records named by the items of the cell containing (x, z), for the pack's own
     /// model set (patch id 0).
     pub fn frames_at(&self, x: f32, z: f32) -> Vec<FrameRecord> {
+        self.cell_frames(x, z, &|id| (id == 0).then_some(&self.set[..])).into_iter().flat_map(|(_, f)| f).collect()
+    }
+
+    /// The frame records of the placed objects' inline model sets named in the cell containing
+    /// (x, z), for each object `owner` gives a pose (the object drawn), in the object's rest
+    /// frame (SPEC-0028 Character versus moving placed objects; SPEC-0018 Who walks what, item 4).
+    pub fn object_frames_at(&self, x: f32, z: f32, owner: &dyn Fn(usize) -> Option<OwnerPose>) -> Vec<(OwnerPose, Vec<FrameRecord>)> {
+        let mut out: Vec<(usize, OwnerPose, Vec<FrameRecord>)> = Vec::new();
+        for (id, frames) in self.cell_frames(x, z, &|id| (id != 0).then(|| self.owned.iter().find(|o| o.id == id).map(|o| &o.set[..])).flatten()) {
+            let Some(o) = self.owned.iter().find(|o| o.id == id) else { continue };
+            let Some(pose) = owner(o.object) else { continue };
+            match out.iter_mut().find(|e| e.0 == o.object) {
+                Some(e) => e.2.extend(frames),
+                None => out.push((o.object, pose, frames)),
+            }
+        }
+        out.into_iter().map(|(_, p, f)| (p, f)).collect()
+    }
+
+    /// The frame records of each cell entry whose patch id `set_of` maps to a model set, by
+    /// patch id; an entry whose gate fails gives none (SPEC-0018).
+    fn cell_frames<'a>(&'a self, x: f32, z: f32, set_of: &dyn Fn(i32) -> Option<&'a [u8]>) -> Vec<(i32, Vec<FrameRecord>)> {
         let Some(rec) = self.cell_at(x, z) else {
             return Vec::new();
         };
         let count = i32_at(&self.grid, rec + 0x08).unwrap_or(0).clamp(0, 1 << 12) as usize;
         let entries = rec + u32_at(&self.grid, rec + 0x0C).unwrap_or(0) as usize;
-        let table = u32_at(&self.set, 8).unwrap_or(0) as usize;
         let mut out = Vec::new();
         for e in 0..count {
             let at = entries + CELL_ENTRY * e;
-            let (Some(0), Some(index)) = (i32_at(&self.grid, at), i32_at(&self.grid, at + 4)) else {
+            let (Some(id), Some(index)) = (i32_at(&self.grid, at), i32_at(&self.grid, at + 4)) else {
                 continue;
             };
-            let Some(entry) = u32_at(&self.set, table + 4 * index as usize).map(|v| v as usize) else { continue };
-            // An entry whose gate fails has all its frame records skipped (SPEC-0018).
-            if !gate_passes(&self.set, entry, self.mask) {
+            let Some(set) = set_of(id) else { continue };
+            let table = u32_at(set, 8).unwrap_or(0) as usize;
+            let Some(entry) = u32_at(set, table + 4 * index as usize).map(|v| v as usize) else { continue };
+            if !gate_passes(set, entry, self.mask) {
                 continue;
             }
-            let gate = self.set.get(entry + 0x42..entry + 0x44).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
+            let gate = set.get(entry + 0x42..entry + 0x44).map_or(0, |b| u16::from_le_bytes([b[0], b[1]]));
             let n = i32_at(&self.grid, at + 0x0C).unwrap_or(0).clamp(0, 1 << 12) as usize;
             let items = entries + u32_at(&self.grid, at + 0x10).unwrap_or(0) as usize;
+            let mut frames = Vec::new();
             for k in 0..n {
                 let Some(item) = u32_at(&self.grid, items + 4 * k) else { break };
                 let r = entry + item as usize;
-                let v = |o: usize| {
-                    Some([f32_at(&self.set, r + o)?, f32_at(&self.set, r + o + 4)?, f32_at(&self.set, r + o + 8)?, f32_at(&self.set, r + o + 12)?])
-                };
-                if let (Some(start), Some(face), Some(run), Some(top), Some(length), Some(height), Some(kind)) = (
-                    v(0x00),
-                    v(0x10),
-                    v(0x20),
-                    v(0x30),
-                    f32_at(&self.set, r + 0x40),
-                    f32_at(&self.set, r + 0x44),
-                    self.set.get(r + 0x4C).copied(),
-                ) {
-                    let surface = self.set.get(r + 0x4D).copied().unwrap_or(0);
-                    out.push(FrameRecord { kind: kind as i8, gate, start: [start[0], start[1], start[2]], face, run, top, length, height, surface });
+                let v = |o: usize| Some([f32_at(set, r + o)?, f32_at(set, r + o + 4)?, f32_at(set, r + o + 8)?, f32_at(set, r + o + 12)?]);
+                if let (Some(start), Some(face), Some(run), Some(top), Some(length), Some(height), Some(kind)) =
+                    (v(0x00), v(0x10), v(0x20), v(0x30), f32_at(set, r + 0x40), f32_at(set, r + 0x44), set.get(r + 0x4C).copied())
+                {
+                    let surface = set.get(r + 0x4D).copied().unwrap_or(0);
+                    frames.push(FrameRecord { kind: kind as i8, gate, start: [start[0], start[1], start[2]], face, run, top, length, height, surface });
                 }
             }
+            out.push((id, frames));
         }
         out
     }

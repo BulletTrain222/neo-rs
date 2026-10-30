@@ -4204,6 +4204,103 @@ fn play_trace(
                 play.diag_replace_exterior(sl, 0);
             }
         }
+        // NEOPETS_TRACE_LOS="tick,name": the world scene parts that cross the line from the
+        // drawn camera's eye to the named character's chest on that tick (diagnostic).
+        if let Some((t, name)) = std::env::var("NEOPETS_TRACE_LOS").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.trim().parse::<u64>().ok(), b.to_string()))) {
+            if t == Some(play.ticks) {
+                let (eye, fwd, up, focal) = play.view();
+                if let Some(c) = play.characters.iter().find(|c| c.name == name) {
+                    let to = [c.position[0], c.position[1] + 1.5, c.position[2]];
+                    let d = [to[0] - eye[0], to[1] - eye[1], to[2] - eye[2]];
+                    let l = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt().max(1e-6);
+                    let angle = ((d[0] * fwd[0] + d[1] * fwd[1] + d[2] * fwd[2]) / l).clamp(-1.0, 1.0).acos().to_degrees();
+                    println!("      los tick {t:?}: eye {eye:?} forward {fwd:?} up {up:?} focal {focal} to {name} {to:?}, {angle:.0} degrees off the view axis; camera {}", play.status_camera());
+                    // The drawn objects whose origin lies nearest the line (objects are not in the
+                    // scene model).
+                    let mut objs: Vec<(f32, f32, usize, i32, bool)> = (0..play.world.objects.len())
+                        .filter_map(|i| {
+                            let m = play.object_matrix(play.world.pack, i)?;
+                            let o = [m[12], m[13], m[14]];
+                            let v = [o[0] - eye[0], o[1] - eye[1], o[2] - eye[2]];
+                            let s = ((v[0] * d[0] + v[1] * d[1] + v[2] * d[2]) / (l * l)).clamp(0.0, 1.0);
+                            let q = [eye[0] + d[0] * s - o[0], eye[1] + d[1] * s - o[1], eye[2] + d[2] * s - o[2]];
+                            let a = play.world.object_anims.get(i);
+                            Some(((q[0] * q[0] + q[1] * q[1] + q[2] * q[2]).sqrt(), s * l, i, a.map_or(-1, |a| a.state as i32), a.is_some_and(|a| a.scripted)))
+                        })
+                        .collect();
+                    objs.sort_by(|a, b| a.0.total_cmp(&b.0));
+                    for (off, along, i, st, scripted) in objs.iter().take(12) {
+                        println!("      los object {i}: {off:.1} from the line, {along:.1} along it, state {st}, scripted {scripted}");
+                    }
+                    let Archive { disc, index } = &mut *archive;
+                    let bytes = index.read(disc, play.world.pack).unwrap_or_default();
+                    if let Ok(chain) = neopets_data::resource::walk_chunks(&bytes, None) {
+                        if let Ok(Some(m)) = archive_view::world_scene(disc, index, play.world.pack, &bytes, &chain.chunks, false, u32::MAX) {
+                            let sub = |a: [f32; 3], b: [f32; 3]| [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
+                            let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+                            let dot = |a: [f32; 3], b: [f32; 3]| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+                            let d = sub(to, eye);
+                            for (i, p) in m.parts.iter().enumerate() {
+                                let mut hits = 0;
+                                for t in p.indices.chunks_exact(3) {
+                                    let (a, b, c) = (p.positions[t[0] as usize], p.positions[t[1] as usize], p.positions[t[2] as usize]);
+                                    let (e1, e2) = (sub(b, a), sub(c, a));
+                                    let h = cross(d, e2);
+                                    let det = dot(e1, h);
+                                    if det.abs() < 1e-8 {
+                                        continue;
+                                    }
+                                    let s = sub(eye, a);
+                                    let u = dot(s, h) / det;
+                                    let q = cross(s, e1);
+                                    let v = dot(d, q) / det;
+                                    let w = dot(e2, q) / det;
+                                    if (0.0..=1.0).contains(&u) && v >= 0.0 && u + v <= 1.0 && (0.0..=1.0).contains(&w) {
+                                        hits += 1;
+                                    }
+                                }
+                                if hits > 0 {
+                                    let n = p.positions.len().max(1) as f32;
+                                    let ce = p.positions.iter().fold([0.0f32; 3], |a, q| [a[0] + q[0] / n, a[1] + q[1] / n, a[2] + q[2] / n]);
+                                    let alpha = p.colors.iter().map(|c| c[3]).fold(0.0f32, f32::max);
+                                    println!("      los part {i}: {hits} hits, {} vertices, centre ({:.1}, {:.1}, {:.1}), texture {:?}, zone {:?}, env {}, cull {:?}, max vertex alpha {alpha:.2}", p.positions.len(), ce[0], ce[1], ce[2], p.texture, p.zone, p.env_map, p.cull);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // NEOPETS_TRACE_OBJON="tick,obj": InitObjOn for that object on that tick (diagnostic).
+        if let Some((t, o)) = std::env::var("NEOPETS_TRACE_OBJON").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?)) }) {
+            if t == play.ticks {
+                play.diag_object_on(o);
+            }
+        }
+        // NEOPETS_TRACE_OBJS="tick,a-b": objects a to b of the current world on that tick: drawn
+        // matrix origin, animation state, and the probed ground from 10 above (diagnostic).
+        if let Some((t, a, b)) = std::env::var("NEOPETS_TRACE_OBJS").ok().and_then(|v| {
+            let (t, r) = v.split_once(',')?;
+            let (a, b) = r.split_once('-')?;
+            Some((t.trim().parse::<u64>().ok()?, a.trim().parse::<usize>().ok()?, b.trim().parse::<usize>().ok()?))
+        }) {
+            // Tick 0: every 10 ticks, with the hero's position.
+            if t == 0 && play.ticks % 10 == 0 {
+                let h = play.loco.position();
+                println!("      hero tick {}: ({:.2}, {:.2}, {:.2}) ground under {:?}", play.ticks, h[0], h[1], h[2], play.world.ground_at(h[0], h[2], h[1] + 3.0));
+            }
+            if t == play.ticks {
+                let sets = play.world.object_sets();
+                for i in a..=b {
+                    let m = play.object_matrix(play.world.pack, i);
+                    let st = play.world.object_anims.get(i).map(|o| (o.state, o.scripted, o.drawn));
+                    let set = sets.iter().find(|(_, o)| *o == i).map(|(id, _)| *id);
+                    let g = m.and_then(|m| play.world.ground_at(m[12], m[14], m[13] + 10.0));
+                    let walls = m.map_or(0, |m| play.world.object_wall_count(m[12], m[14]));
+                    println!("      obj {i}: drawn at {:?}, anim {st:?}, patch set {set:?}, owner pose {}, ground from 10 above {g:?}, object walls in its cell {walls}", m.map(|m| [m[12], m[13], m[14]]), play.world.owner_poses.contains_key(&i));
+                }
+            }
+        }
         // NEOPETS_TRACE_CHARS=tick: each character's name, position and activity (diagnostic).
         if std::env::var("NEOPETS_TRACE_CHARS").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) {
             for c in &play.characters {

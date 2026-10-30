@@ -489,6 +489,26 @@ impl World {
         h.found.then_some(h.height)
     }
 
+    /// The walls of the drawn placed objects whose model sets the cell at (x, z) names, each with
+    /// its pose (SPEC-0028 Character versus moving placed objects).
+    fn object_walls(&self, x: f32, z: f32) -> Vec<(ground::OwnerPose, Vec<WallEdge>)> {
+        let Some(g) = &self.ground else { return Vec::new() };
+        g.object_frames_at(x, z, &|o| self.owner_poses.get(&o).copied())
+            .into_iter()
+            .map(|(pose, f)| (pose, f.into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height }).collect()))
+            .collect()
+    }
+
+    /// Diagnostic: the number of drawn objects' walls the cell at (x, z) gives.
+    pub fn object_wall_count(&self, x: f32, z: f32) -> usize {
+        self.object_walls(x, z).iter().map(|(_, w)| w.len()).sum()
+    }
+
+    /// Diagnostic: the placed objects' registered patch sets (patch id, object).
+    pub fn object_sets(&self) -> Vec<(i32, usize)> {
+        self.ground.as_ref().map(|g| g.object_sets()).unwrap_or_default()
+    }
+
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         // The test stage: one level floor everywhere, found from at or above it.
         if let Some(h) = self.flat.filter(|&h| c >= h - 0.5) {
@@ -496,6 +516,25 @@ impl World {
         }
         self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
     }
+}
+
+/// A world point in an owner object's rest frame: rest x inverse(current) applied to p (the
+/// object frames are rigid, so the inverse is the transposed rotation).
+fn rest_point(pose: &ground::OwnerPose, p: [f32; 3]) -> [f32; 3] {
+    let (c, r) = (&pose.current, &pose.rest);
+    let d = [p[0] - c[12], p[1] - c[13], p[2] - c[14]];
+    let unit_len = |k: usize| (c[k] * c[k] + c[k + 1] * c[k + 1] + c[k + 2] * c[k + 2]).max(1e-12);
+    // Local coordinates along the current axes (divided by their squared lengths for scale).
+    let l: [f32; 3] = std::array::from_fn(|a| (c[4 * a] * d[0] + c[4 * a + 1] * d[1] + c[4 * a + 2] * d[2]) / unit_len(4 * a));
+    std::array::from_fn(|k| r[12 + k] + l[0] * r[k] + l[1] * r[4 + k] + l[2] * r[8 + k])
+}
+
+/// A vector in an owner object's rest frame taken back to world space (current x inverse(rest)).
+fn world_vector(pose: &ground::OwnerPose, v: [f32; 3]) -> [f32; 3] {
+    let (c, r) = (&pose.current, &pose.rest);
+    let unit_len = |k: usize| (r[k] * r[k] + r[k + 1] * r[k + 1] + r[k + 2] * r[k + 2]).max(1e-12);
+    let l: [f32; 3] = std::array::from_fn(|a| (r[4 * a] * v[0] + r[4 * a + 1] * v[1] + r[4 * a + 2] * v[2]) / unit_len(4 * a));
+    std::array::from_fn(|k| l[0] * c[k] + l[1] * c[4 + k] + l[2] * c[8 + k])
 }
 
 /// Diagnostic route goals for the trace.
@@ -8179,6 +8218,18 @@ impl Play {
                         .map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height })
                         .collect();
                     contact::resolve_walls(p, &walls, contact::HERO_RADIUS);
+                    // A drawn placed object's own walls: the position is taken into the
+                    // object's rest frame, pushed there and the push taken back to world space.
+                    for (pose, walls) in if std::env::var_os("NEOPETS_NO_OBJ_WALLS").is_some() { Vec::new() } else { world.object_walls(p[0], p[2]) } {
+                        let local = rest_point(&pose, *p);
+                        let mut q = local;
+                        if contact::resolve_walls(&mut q, &walls, contact::HERO_RADIUS) {
+                            let d = world_vector(&pose, [q[0] - local[0], q[1] - local[1], q[2] - local[2]]);
+                            for k in 0..3 {
+                                p[k] += d[k];
+                            }
+                        }
+                    }
                 }
                 // On a ladder (state 41) the box primitives are skipped too: the mount's point 0.9
                 // out from a ladder on a wall lies inside the wall's box by the hero radius, so
@@ -12956,8 +13007,17 @@ impl Play {
     /// the zone of the hero's ground entry (camera mode 0 follows the hero); the active block is
     /// block 0 for the current world's passes.
     fn zone_step(&mut self) {
-        let p = self.loco.position();
-        let hit = self.world.probe(p[0], p[2], p[1] + 2.5);
+        // SPEC-0006 Zone manager: R is the zone of the camera's own ground entry; only the follow
+        // camera (mode 0 with a target) uses its target's, the hero's. A scripted camera track
+        // takes the ground under its eye.
+        let scripted = self.cut.is_some_and(|c| c.state != 0 && c.last.is_some());
+        let hit = if scripted {
+            let (eye, ..) = self.view();
+            self.world.probe(eye[0], eye[2], eye[1])
+        } else {
+            let p = self.loco.position();
+            self.world.probe(p[0], p[2], p[1] + 2.5)
+        };
         self.zones.active = Some(0);
         self.zones.update(self.world.zones.as_ref(), self.world.world_id, hit.zone.filter(|_| hit.found));
         // The cell flag of each region character: 1 without a ground entry, else the zone query
@@ -13846,6 +13906,11 @@ impl Play {
     /// Developer menu: the current world's start points, and a move to start point k.
     pub fn dev_start_points(&self) -> usize {
         self.world.entries.len()
+    }
+
+    /// Diagnostic: InitObjOn for an object of the current world, at its start pose.
+    pub fn diag_object_on(&mut self, obj: usize) {
+        self.execute(Action::InitObjOn { obj, end: false }, self.world.pack);
     }
 
     /// Diagnostic: the exterior replacement load a level script's ReplaceExterior asks for.
