@@ -4574,6 +4574,24 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_PROBE="tick,x0,z0,x1,z1,step,ceiling": the ground probe on a grid of the
+        // current world on that tick: each point's height (or "-" for none) (diagnostic).
+        if let Some(v) = std::env::var("NEOPETS_TRACE_PROBE").ok().map(|v| v.split(',').filter_map(|t| t.trim().parse::<f32>().ok()).collect::<Vec<f32>>()).filter(|v| v.len() == 7) {
+            if v[0] as u64 == play.ticks {
+                let mut z = v[2];
+                while z <= v[4] {
+                    let mut row = format!("      probe z {z:7.1}:");
+                    let mut x = v[1];
+                    while x <= v[3] {
+                        let h = play.world.ground_at(x, z, v[6]);
+                        row.push_str(&h.map_or("      -".to_string(), |h| format!(" {h:6.1}")));
+                        x += v[5];
+                    }
+                    println!("{row}");
+                    z += v[5];
+                }
+            }
+        }
         // NEOPETS_TRACE_BONES="tick,name": that character's posed bones (model space) and its
         // bind pose, on that tick (diagnostic).
         if let Some((t, name)) = std::env::var("NEOPETS_TRACE_BONES").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.trim().parse::<u64>().ok(), b.trim().to_string()))) {

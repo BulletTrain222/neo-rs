@@ -4728,7 +4728,7 @@ impl Play {
             let mut q = p;
             contact::resolve(&mut q, std::slice::from_ref(b), contact::HERO_RADIUS + 0.3);
             if q != p {
-                out.push(format!("box {k} mask {m} active {} origin {:?} extents {:?}", self.world.boxes.contains(b), b.origin, b.extents));
+                out.push(format!("box {k} mask {m} active {} origin {:?} axes {:?} extents {:?} push {:?}", self.world.boxes.contains(b), b.origin, b.axes, b.extents, contact::push(p, b, contact::HERO_RADIUS)));
             }
         }
         if let Some(g) = &self.world.ground {
@@ -8393,12 +8393,27 @@ impl Play {
                 // cell lists A and B as such, cylinders, spheres, the ledge tests, the shared
                 // contact response (pushes move the position only) and recovery.
                 if let (Some(g), true) = (&world.ground, wall_contact) {
-                    let walls: Vec<WallEdge> = g
-                        .frames_at(p[0], p[2])
-                        .into_iter()
-                        .map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height })
-                        .collect();
-                    contact::resolve_walls(p, &walls, contact::HERO_RADIUS);
+                    let walls_at = |x: f32, z: f32| -> Vec<WallEdge> { g.frames_at(x, z).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height }).collect() };
+                    // A long horizontal step this tick (a knockback: the Black Knight's swing
+                    // moves Tor 2.35 in one tick) is walked in sub-steps of at most 0.5 with the
+                    // walls tested at each, so it cannot pass through a wall (this build's
+                    // guard; the walls are otherwise tested only at the end point).
+                    let (dx, dz) = (p[0] - hero_at[0], p[2] - hero_at[2]);
+                    let n = ((dx.hypot(dz) / 0.5).ceil() as usize).clamp(1, 16);
+                    if n > 1 {
+                        let mut q = [hero_at[0], p[1], hero_at[2]];
+                        for _ in 0..n {
+                            let from = q;
+                            q[0] += dx / n as f32;
+                            q[2] += dz / n as f32;
+                            let w = walls_at(q[0], q[2]);
+                            contact::resolve_walls_from(&mut q, &w, contact::HERO_RADIUS, from);
+                        }
+                        p[0] = q[0];
+                        p[2] = q[2];
+                    }
+                    let w = walls_at(p[0], p[2]);
+                    contact::resolve_walls_from(p, &w, contact::HERO_RADIUS, hero_at);
                     // A drawn placed object's own walls: the position is taken into the
                     // object's rest frame, pushed there and the push taken back to world space.
                     for (pose, walls) in if std::env::var_os("NEOPETS_NO_OBJ_WALLS").is_some() { Vec::new() } else { world.object_walls(p[0], p[2]) } {
@@ -8428,6 +8443,7 @@ impl Play {
                 if !noclip {
                     contact::resolve_spheres(p, &world.push_spheres);
                 }
+                let mut pushed = false;
                 for &(q, r, h) in &bodies {
                     if p[1] >= q[1] + h || q[1] >= p[1] + HERO_HEIGHT {
                         continue;
@@ -8439,7 +8455,15 @@ impl Play {
                         let (ux, uz) = if d > 1e-4 { (dx / d, dz / d) } else { (1.0, 0.0) };
                         p[0] = q[0] + ux * min;
                         p[2] = q[2] + uz * min;
+                        pushed = true;
                     }
+                }
+                // A body push is followed by the walls again, so a character cannot shove the
+                // hero through a wall (this build's order; the Black Knight pushed Tor off the
+                // edge of the 989 balcony, past the wall at its end, into the void).
+                if let (true, Some(g), true) = (pushed, &world.ground, wall_contact) {
+                    let walls: Vec<WallEdge> = g.frames_at(p[0], p[2]).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height }).collect();
+                    contact::resolve_walls_from(p, &walls, contact::HERO_RADIUS, hero_at);
                 }
                 let moved = (0..3).any(|k| (p[k] - before[k]).abs() > 1e-5);
                 if moved || c.floor || c.side_touch {

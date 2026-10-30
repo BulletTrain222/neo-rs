@@ -154,6 +154,33 @@ impl WallEdge {
     }
 }
 
+/// As `resolve_walls`, but each wall pushes toward the side of its face plane that `from` (the
+/// position at the start of the step) was on, so a step that ends just past a wall's plane is
+/// put back on the side it came from instead of out through the far side (this build's guard;
+/// a hero stepping 1.2 past a wall at the Black Knight's dais went through it).
+pub fn resolve_walls_from(p: &mut Vec3, walls: &[WallEdge], r: f32, from: Vec3) -> bool {
+    let mut hit = false;
+    for w in walls {
+        if let Some(d) = w.push(*p, r) {
+            let (a, a0) = (plane(w.face, *p), plane(w.face, from));
+            let flip = a0.abs() > 1e-3 && (a < 0.0) != (a0 < 0.0);
+            let d = if flip {
+                // Back to the starting side: the full reach r from the plane.
+                let side = if a0 < 0.0 { -1.0 } else { 1.0 };
+                let n = [w.face[0], w.face[1], w.face[2]];
+                let m = side * r - a;
+                [n[0] * m, 0.0, n[2] * m]
+            } else {
+                d
+            };
+            p[0] += d[0];
+            p[2] += d[2];
+            hit = true;
+        }
+    }
+    hit
+}
+
 /// Push a point out of each wall it touches, in order. Reports whether any wall pushed.
 pub fn resolve_walls(p: &mut Vec3, walls: &[WallEdge], r: f32) -> bool {
     let mut hit = false;
