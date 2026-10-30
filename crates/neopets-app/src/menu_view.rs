@@ -216,6 +216,23 @@ pub fn sync_menu(
     draws.extend(menus::journal_draws(&art.f, flow));
     draws.extend(menus::book_draws(&art.f, flow));
     draws.extend(menus::display_draws(&art.f, flow));
+    // NEOPETS_TRACE_DRAWS: every menu draw with its node's ancestor chain (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_DRAWS").is_some() && flow.pass % 120 == 1 {
+        for d in &draws {
+            let (kind, node, x, y) = match d {
+                menus::Draw::Sprite { node, x, y, .. } => ("sprite", *node, *x, *y),
+                menus::Draw::Label { node, x, y, .. } => ("label", *node, *x, *y),
+                _ => continue,
+            };
+            let mut chain = Vec::new();
+            let mut n = Some(node);
+            while let Some(k) = n {
+                chain.push(format!("{k}(h{} a{})", art.f.nodes[k].handler, art.f.nodes[k].arg));
+                n = art.f.nodes[k].parent;
+            }
+            println!("draw {kind} at {x:.0},{y:.0}: {}", chain.join(" < "));
+        }
+    }
     // Grow the pool of UI entities to the draw count.
     if backdrop.is_empty() {
         commands.spawn((
@@ -352,6 +369,13 @@ pub fn sync_menu(
                 cache.texts[&key].as_ref().map(|(h0, w, h, base)| (h0.clone(), x, y - *base as f32, *w as f32, *h as f32, Color::srgba(1.0, 1.0, 1.0, (alpha as f32 / 128.0).min(1.0))))
             }
         });
+    }
+    // The console frame is 512 x 448: a quad wholly outside it is never seen there (the Charms
+    // tab's off-page prompt, node 196 at x 570), so it is not drawn into the side bars here.
+    for p in placed.iter_mut() {
+        if p.as_ref().is_some_and(|&(_, x, y, w, h, _)| x >= 512.0 || y >= 448.0 || x + w <= 0.0 || y + h <= 0.0) {
+            *p = None;
+        }
     }
     for (item, mut node, mut image, mut vis) in &mut items {
         match placed.get(item.0).cloned().flatten() {

@@ -1600,6 +1600,22 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
             dump(fe, n, 0);
         }
     }
+    // NEOPETS_TRACE_NODES=n,m: the subtrees of nodes n and m, once (diagnostic).
+    static NODES_DUMPED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_NODES") {
+        if !NODES_DUMPED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            fn dump(fe: &Frontend, n: usize, depth: usize) {
+                let d = fe.nodes[n];
+                println!("{:indent$}node {n}: kind {} handler {} arg {} mode {} at {},{} size {}x{} data {}", "", d.kind, d.handler, d.arg, d.mode, d.x, d.y, d.width, d.height, d.data, indent = depth * 2);
+                for c in fe.children(n) {
+                    dump(fe, c, depth + 1);
+                }
+            }
+            for n in v.split(',').filter_map(|t| t.trim().parse::<usize>().ok()).filter(|&n| n < fe.nodes.len()) {
+                dump(fe, n, 0);
+            }
+        }
+    }
     // Every tab state also draws element 0xBF (the NeoPoints label and balance) and 0xBE (the
     // equipped-item icons of categories 1, 5 and 2; section 14.1, HUD lines).
     for key in [0xBF, 0xBE] {
