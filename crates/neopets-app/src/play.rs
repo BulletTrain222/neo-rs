@@ -3221,7 +3221,16 @@ impl Play {
                 }
                 Action::SetAdventure { level } => self.intensity.adventure(level),
                 Action::LoadRegion { slot, region } => {
-                    let pack = self.world.pack;
+                    if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
+                        println!("      LoadRegion slot {slot} region {region:?} from script {pack} in world {} on tick {}", self.world.pack, self.ticks);
+                    }
+                    // The slot is the calling script's own world's (SPEC-0030 LoadRegion). A step
+                    // of a world that has since been replaced changes nothing: without this, 1023's
+                    // unload of its slots 0 and 1 landing after the arena load cleared 1176's
+                    // slots, and the Rogue and six spectators never bound.
+                    if pack != self.world.pack && self.other.as_ref().is_none_or(|o| o.pack != pack) {
+                        return None;
+                    }
                     self.slot_arrived.remove(&(pack, slot));
                     self.characters.retain(|c| !(c.pack == pack && c.slot == slot));
                     match region {
@@ -6223,6 +6232,9 @@ impl Play {
         loaded: Vec<(neopets_data::region::Placement, ModelData, HeroAnim, Option<neopets_data::monster::Row>, Option<neopets_data::monster::Tuning>)>,
         items: Vec<neopets_data::region::ItemPoint>,
     ) {
+        if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
+            println!("      add {region} to ({pack}, {slot}): wanted {:?}, petpet type {:?}, keys {:?}", self.slot_regions.get(&(pack, slot)), self.petpet.as_ref().map(|p| p.type_id), loaded.iter().map(|l| (l.0.key, l.0.summon)).collect::<Vec<_>>());
+        }
         if self.slot_regions.get(&(pack, slot)) != Some(&region) {
             return;
         }
@@ -13636,6 +13648,11 @@ impl Play {
     /// Developer menu: the current world's start points, and a move to start point k.
     pub fn dev_start_points(&self) -> usize {
         self.world.entries.len()
+    }
+
+    /// Diagnostic: the exterior replacement load a level script's ReplaceExterior asks for.
+    pub fn diag_replace_exterior(&mut self, slot: usize, plane: i32) {
+        self.execute(Action::ReplaceExterior { slot, plane }, self.world.pack);
     }
 
     pub fn dev_go_start(&mut self, k: usize) -> bool {

@@ -193,6 +193,11 @@ fn wav(pcm: &[i16], channels: u16, rate: u32) -> Vec<u8> {
 /// found the current world is kept. The original posts the two loads and applies the slot over
 /// the live objects instead of rebuilding them (a simplification here); key C is not read.
 fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::Slot) -> Result<play::Play, String> {
+    let Archive { disc, index } = archive;
+    load_game_from(disc, index, old, slot)
+}
+
+fn load_game_from(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play, slot: &neopets_sim::save::Slot) -> Result<play::Play, String> {
     let (keys, ids) = &old.world_keys;
     let pack_of = |k: usize| {
         let key = slot.key(k);
@@ -203,7 +208,6 @@ fn load_game(archive: &mut Archive, old: &play::Play, slot: &neopets_sim::save::
     };
     let (t, e) = (pack_of(0), pack_of(1));
     let current = e.or(t).unwrap_or(old.world.pack);
-    let Archive { disc, index } = archive;
     let mut play = play::Play::load(disc, index, current, PLAY_OUTFIT)?;
     if let Some(t) = t.filter(|&t| t != current && play.other.as_ref().is_none_or(|o| o.pack != t)) {
         play.load_other(disc, index, t)?;
@@ -1352,6 +1356,17 @@ fn step_sim(
             }
         }
         let mut pending: Option<neopets_sim::save::Slot> = None;
+        // NEOPETS_LOAD_SLOT=k (diagnostic): load slot k (1 to 4) of the save file once, on the
+        // first play frame, as the Load page would.
+        static SLOT_LOADED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if let Some(k) = std::env::var("NEOPETS_LOAD_SLOT").ok().and_then(|v| v.parse::<usize>().ok()) {
+            if !SLOT_LOADED.swap(true, std::sync::atomic::Ordering::Relaxed) {
+                pending = read_save(&save_file()).and_then(|f| f.slot(k.saturating_sub(1)).cloned());
+                if pending.is_none() {
+                    error!("NEOPETS_LOAD_SLOT: slot {k} is empty or the save file is unreadable");
+                }
+            }
+        }
         // Quit's world teardown, run after this frame's ticks.
         let mut quit = false;
         for _ in 0..ticks {
@@ -3565,6 +3580,20 @@ fn play_trace(
             std::process::exit(1)
         }
     };
+    // NEOPETS_LOAD_SLOT=k: the trace starts from slot k (1 to 4) of the save file, as the
+    // Load page would load it (diagnostic, for a player's save).
+    if let Some(k) = std::env::var("NEOPETS_LOAD_SLOT").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+        match read_save(&save_file()).and_then(|f| f.slot(k.saturating_sub(1)).cloned()) {
+            Some(slot) => match load_game_from(disc, index, &play, &slot) {
+                Ok(p) => {
+                    play = p;
+                    println!("      loaded slot {k}: world {}, hero at {:?}", play.world.pack, play.loco.position());
+                }
+                Err(e) => eprintln!("Slot {k} could not load: {e}"),
+            },
+            None => eprintln!("Slot {k} is empty or the save file is unreadable"),
+        }
+    }
     // NEOPETS_TRACE_GOD: the developer menu's god mode from the start (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_GOD").is_some() {
         play.cheats.god = true;
@@ -3802,7 +3831,10 @@ fn play_trace(
         route = if to.is_some_and(|t| t[1] >= 2.0) {
             Vec::new()
         } else if goal == play::Goal::Door {
-            play.stand_before_door(0).map(|m| vec![m]).unwrap_or_default()
+            // NEOPETS_TRACE_DOOR=k: the first door walked through is door k (default 0).
+            let k = std::env::var("NEOPETS_TRACE_DOOR").ok().and_then(|v| v.trim().parse().ok()).unwrap_or(0);
+            println!("      doors of {}: {}", play.world.pack, play.world.planes.len());
+            play.stand_before_door(k).map(|m| vec![m]).unwrap_or_default()
         } else {
             play.route_to(400_000, goal).unwrap_or_default()
         };
@@ -4160,6 +4192,13 @@ fn play_trace(
         }) {
             if k == play.ticks {
                 play.diag_showcase(id);
+            }
+        }
+        // NEOPETS_TRACE_REPLACE="tick,slot": the exterior replacement load to eW slot on that
+        // tick, as the arena master's yes asks for it (diagnostic).
+        if let Some((t, sl)) = std::env::var("NEOPETS_TRACE_REPLACE").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<u64>().ok()?, b.trim().parse::<usize>().ok()?)) }) {
+            if t == play.ticks {
+                play.diag_replace_exterior(sl, 0);
             }
         }
         // NEOPETS_TRACE_CHARS=tick: each character's name, position and activity (diagnostic).
