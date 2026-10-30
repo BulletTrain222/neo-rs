@@ -3326,7 +3326,8 @@ fn sync_characters(
                 }
                 set_if(&mut t, want);
                 // SPEC-0038 Behavior 40: a hiding enemy with cue word 0 is not drawn.
-                let hidden = c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action));
+                // SPEC-0010 Vanishing: the Cloud Beast's bodies during the gust's travel.
+                let hidden = c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action)) || p.cloud_hidden(c);
                 set_if(&mut vis, if p.pack_drawn(c.pack) && !c.inactive && !hidden { Visibility::Visible } else { Visibility::Hidden });
             }
         }
@@ -3438,15 +3439,45 @@ fn sync_characters(
     }
 }
 
-/// One drawn piece of the Cloud Beast's stand-in effects: 0 the gust, 1 and 2 the beams'
-/// cores, 3 and 4 their glows, 5 to 9 the balls, 10 the shock, 11 to 18 the bursts.
+/// One drawn piece of the Cloud Beast's stand-in effects (index ranges in `CloudPiece`).
 #[derive(Component)]
 struct CloudFx(usize);
 
-/// SPEC-0010's effect definitions 447 to 454 are not on the disc; these are this build's own
-/// stand-ins: a pale translucent column for the gust, a bright core in a yellow glow for each
-/// beam, glowing yellow spheres for the balls, a pulsing translucent dome for the shock and
-/// short-lived sparks for the bursts.
+/// The pieces: the gust column and its swirl rings, the jagged bolt segments and glow of each
+/// beam, the balls, the shock dome, the bursts, the cloud puffs and the companion's charge glow.
+struct CloudPiece;
+
+impl CloudPiece {
+    const GUST: usize = 0;
+    const RINGS: std::ops::Range<usize> = 1..5;
+    /// Beam b's segments: BOLTS.start + b * SEGMENTS + i; its glow GLOWS.start + b.
+    const SEGMENTS: usize = 8;
+    const BOLTS: std::ops::Range<usize> = 5..21;
+    const GLOWS: std::ops::Range<usize> = 21..23;
+    const BALLS: std::ops::Range<usize> = 23..28;
+    const SHOCK: usize = 28;
+    const BURSTS: std::ops::Range<usize> = 29..45;
+    const PUFFS: std::ops::Range<usize> = 45..61;
+    const ORB: usize = 61;
+    const COUNT: usize = 62;
+}
+
+/// A hash of three integers to 0..1 (the bolts' jitter; this build's own, no game data).
+fn jitter(a: u32, b: u32, c: u32) -> f32 {
+    let mut h = a.wrapping_mul(0x9E37_79B1) ^ b.wrapping_mul(0x85EB_CA77) ^ c.wrapping_mul(0xC2B2_AE3D);
+    h ^= h >> 15;
+    h = h.wrapping_mul(0x2C1B_3C6D);
+    h ^= h >> 12;
+    (h & 0xFFFF) as f32 / 65535.0
+}
+
+/// SPEC-0010's effect definitions 447 to 457 are not on the disc; these are this build's own
+/// stand-ins (not the original's look): the gust as a pale column with swirl rings; each beam as
+/// a jagged bolt of eight thin segments re-drawn every 3 ticks inside a soft glow, yellow for the
+/// first beam and pale cyan for the second (the reflected or wall-bounced beam); glowing balls; a
+/// pulsing dome for the shock; short sparks for bursts; sixteen soft cloud puffs drifting round
+/// the body (the kind-340 cloud emitters, hidden during the gust's travel as the spec stops
+/// them); and a flickering glow on the companion while the lightning winds up and fires.
 fn sync_cloud_fx(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
@@ -3455,7 +3486,6 @@ fn sync_cloud_fx(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     let _span = crate::perf::span("sync_cloud_fx");
-    const N: usize = 19;
     let Some(state) = state else { return };
     let p = &state.play;
     let fx = p.cloud_fx();
@@ -3465,45 +3495,113 @@ fn sync_cloud_fx(
     if pieces.is_empty() {
         let unit_cyl = meshes.add(Cylinder::new(1.0, 1.0));
         let ball = meshes.add(Sphere::new(1.0).mesh().uv(16, 10));
-        let mat = |m: &mut Assets<StandardMaterial>, c: Color| {
-            m.add(StandardMaterial { base_color: c, unlit: true, alpha_mode: AlphaMode::Blend, cull_mode: None, depth_bias: 1.0, ..default() })
+        let ring = meshes.add(Torus::new(0.85, 1.0));
+        let mat = |m: &mut Assets<StandardMaterial>, c: Color, add: bool| {
+            m.add(StandardMaterial { base_color: c, unlit: true, alpha_mode: if add { AlphaMode::Add } else { AlphaMode::Blend }, cull_mode: None, depth_bias: 1.0, ..default() })
         };
-        for k in 0..N {
-            let (mesh, colour) = match k {
-                0 => (unit_cyl.clone(), Color::srgba(0.85, 0.93, 1.0, 0.25)),
-                1 | 2 => (unit_cyl.clone(), Color::srgba(1.0, 1.0, 0.92, 0.95)),
-                3 | 4 => (unit_cyl.clone(), Color::srgba(1.0, 0.85, 0.2, 0.35)),
-                5..=9 => (ball.clone(), Color::srgba(1.0, 0.92, 0.35, 0.9)),
-                10 => (ball.clone(), Color::srgba(0.55, 0.8, 1.0, 0.22)),
-                _ => (ball.clone(), Color::srgba(1.0, 0.95, 0.5, 0.8)),
+        for k in 0..CloudPiece::COUNT {
+            let (mesh, colour, add) = match k {
+                CloudPiece::GUST => (unit_cyl.clone(), Color::srgba(0.85, 0.93, 1.0, 0.25), false),
+                k if CloudPiece::RINGS.contains(&k) => (ring.clone(), Color::srgba(0.9, 0.96, 1.0, 0.35), false),
+                k if CloudPiece::BOLTS.contains(&k) => {
+                    let second = k >= CloudPiece::BOLTS.start + CloudPiece::SEGMENTS;
+                    (unit_cyl.clone(), if second { Color::srgba(0.75, 0.95, 1.0, 1.0) } else { Color::srgba(1.0, 1.0, 0.85, 1.0) }, true)
+                }
+                k if CloudPiece::GLOWS.contains(&k) => {
+                    let second = k > CloudPiece::GLOWS.start;
+                    (unit_cyl.clone(), if second { Color::srgba(0.3, 0.75, 1.0, 0.35) } else { Color::srgba(1.0, 0.8, 0.2, 0.35) }, true)
+                }
+                k if CloudPiece::BALLS.contains(&k) => (ball.clone(), Color::srgba(1.0, 0.92, 0.35, 0.9), false),
+                CloudPiece::SHOCK => (ball.clone(), Color::srgba(0.55, 0.8, 1.0, 0.22), false),
+                k if CloudPiece::BURSTS.contains(&k) => (ball.clone(), Color::srgba(1.0, 0.95, 0.5, 0.8), true),
+                k if CloudPiece::PUFFS.contains(&k) => (ball.clone(), Color::srgba(0.86, 0.86, 0.95, 0.42), false),
+                _ => (ball.clone(), Color::srgba(1.0, 0.9, 0.35, 0.6), true),
             };
-            commands.spawn((CloudFx(k), Mesh3d(mesh), MeshMaterial3d(mat(&mut materials, colour)), Transform::IDENTITY, Visibility::Hidden, bevy::light::NotShadowCaster));
+            commands.spawn((CloudFx(k), Mesh3d(mesh), MeshMaterial3d(mat(&mut materials, colour, add)), Transform::IDENTITY, Visibility::Hidden, bevy::light::NotShadowCaster));
         }
         return;
     }
     // A column from a to b of radius r (the unit cylinder is along +Y, centred).
-    let column = |a: [f32; 3], b: [f32; 3], r: f32| -> Option<Transform> {
-        let (a, b) = (Vec3::from(a), Vec3::from(b));
+    let column = |a: Vec3, b: Vec3, r: f32| -> Option<Transform> {
         let d = b - a;
         let l = d.length();
         (l > 1e-3).then(|| Transform { translation: (a + b) * 0.5, rotation: Quat::from_rotation_arc(Vec3::Y, d / l), scale: Vec3::new(r, l, r) })
     };
-    let (gust, beams, balls, shock) = fx.unwrap_or((None, Vec::new(), Vec::new(), None));
+    // The jagged bolt: point i of SEGMENTS + 1 from a to b, pushed off the line by up to 0.6 x
+    // a sine taper (0 at both ends), re-drawn every 3 ticks.
+    let bolt_point = |a: Vec3, b: Vec3, beam: u32, i: usize| -> Vec3 {
+        let d = b - a;
+        let l = d.length().max(1e-3);
+        let dir = d / l;
+        let side = dir.cross(Vec3::Y).try_normalize().unwrap_or(Vec3::X);
+        let up = side.cross(dir);
+        let f = i as f32 / CloudPiece::SEGMENTS as f32;
+        let taper = (f * std::f32::consts::PI).sin();
+        let frame = (p.ticks / 3) as u32;
+        let (u, v) = (jitter(frame, beam, i as u32) - 0.5, jitter(frame, beam + 7, i as u32 + 31) - 0.5);
+        let amp = (0.08 * l).min(1.2) * taper;
+        a + d * f + (side * u + up * v) * 2.0 * amp
+    };
+    let draw = fx;
     let t = p.ticks as f32 / 60.0;
     for (piece, mut tr, mut vis, mat) in &mut pieces {
         let k = piece.0;
-        let placed = match k {
-            0 => gust.and_then(|(o, e, fade)| {
+        let placed = match (k, draw.as_ref()) {
+            (CloudPiece::GUST, Some(d)) => d.gust.and_then(|(o, e, fade)| {
                 if let Some(mut m) = materials.get_mut(&mat.0) {
                     m.base_color = Color::srgba(0.85, 0.93, 1.0, 0.1 + 0.18 * (128 - fade.clamp(0, 128)) as f32 / 128.0);
                 }
-                column(o, e, 1.8)
+                column(Vec3::from(o), Vec3::from(e), 1.8)
             }),
-            1 | 2 => beams.get(k - 1).and_then(|&(a, b)| column(a, b, 0.12)),
-            3 | 4 => beams.get(k - 3).and_then(|&(a, b)| column(a, b, 0.45 + 0.1 * (t * 30.0 + k as f32).sin())),
-            5..=9 => balls.get(k - 5).map(|&b| Transform::from_translation(Vec3::from(b)).with_scale(Vec3::splat(0.7 + 0.1 * (t * 20.0).sin()))),
-            10 => shock.map(|(c, r)| Transform::from_translation(Vec3::from(c)).with_scale(Vec3::new(r, 0.35 * r, r) * (0.92 + 0.08 * (t * 18.0).sin()))),
-            _ => p.cloud_bursts.get(k - 11).map(|&(c, left)| Transform::from_translation(Vec3::from(c)).with_scale(Vec3::splat(0.4 + 0.12 * (20 - left.min(20)) as f32))),
+            (k, Some(d)) if CloudPiece::RINGS.contains(&k) => d.gust.and_then(|(o, e, _)| {
+                let (o, e) = (Vec3::from(o), Vec3::from(e));
+                let axis = (e - o).try_normalize()?;
+                let i = (k - CloudPiece::RINGS.start) as f32;
+                let f = ((i + t * 2.5) / 4.0).fract();
+                Some(Transform { translation: o + (e - o) * f, rotation: Quat::from_rotation_arc(Vec3::Y, axis) * Quat::from_rotation_y(t * 6.0 + i), scale: Vec3::splat(1.6 + 0.6 * (f * std::f32::consts::PI).sin()) })
+            }),
+            (k, Some(d)) if CloudPiece::BOLTS.contains(&k) => {
+                let n = k - CloudPiece::BOLTS.start;
+                let (b, i) = (n / CloudPiece::SEGMENTS, n % CloudPiece::SEGMENTS);
+                d.beams.iter().find(|x| x.2 == (b == 1)).and_then(|&(a, e, _)| {
+                    let (a, e) = (Vec3::from(a), Vec3::from(e));
+                    column(bolt_point(a, e, b as u32, i), bolt_point(a, e, b as u32, i + 1), 0.09)
+                })
+            }
+            (k, Some(d)) if CloudPiece::GLOWS.contains(&k) => {
+                let b = k - CloudPiece::GLOWS.start;
+                d.beams.iter().find(|x| x.2 == (b == 1)).and_then(|&(a, e, _)| column(Vec3::from(a), Vec3::from(e), 0.5 + 0.15 * (t * 30.0 + k as f32).sin()))
+            }
+            (k, Some(d)) if CloudPiece::BALLS.contains(&k) => d.balls.get(k - CloudPiece::BALLS.start).map(|&b| Transform::from_translation(Vec3::from(b)).with_scale(Vec3::splat(0.7 + 0.1 * (t * 20.0).sin()))),
+            (CloudPiece::SHOCK, Some(d)) => d.shock.map(|(c, r)| Transform::from_translation(Vec3::from(c)).with_scale(Vec3::new(r, 0.35 * r, r) * (0.92 + 0.08 * (t * 18.0).sin()))),
+            (k, _) if CloudPiece::BURSTS.contains(&k) => p.cloud_bursts.get(k - CloudPiece::BURSTS.start).map(|&(c, left)| Transform::from_translation(Vec3::from(c)).with_scale(Vec3::splat(0.4 + 0.12 * (20 - left.min(20)) as f32))),
+            (k, Some(d)) if CloudPiece::PUFFS.contains(&k) && !d.hidden => {
+                // The cloud darkens toward storm grey as the stages rise (this build's choice).
+                let c = match d.stage {
+                    1 => Color::srgba(0.86, 0.86, 0.95, 0.42),
+                    2 => Color::srgba(0.62, 0.62, 0.72, 0.5),
+                    _ => Color::srgba(0.38, 0.38, 0.48, 0.58),
+                };
+                if materials.get(&mat.0).is_some_and(|m| m.base_color != c) {
+                    if let Some(mut m) = materials.get_mut(&mat.0) {
+                        m.base_color = c;
+                    }
+                }
+                // Puff i drifts round the body on its own orbit, height and breathing.
+                let i = (k - CloudPiece::PUFFS.start) as f32;
+                let a = i * 2.399 + t * (0.25 + 0.05 * (i % 3.0));
+                let r = d.radius * (0.85 + 0.25 * (i * 1.7).sin()) + 0.3 * (t * 0.9 + i).sin();
+                let h = -1.6 + 3.2 * ((i * 0.618).fract()) + 0.25 * (t * 1.3 + i).sin();
+                let s = d.radius * (0.32 + 0.08 * (i * 2.3).cos()) * (1.0 + 0.1 * (t * 1.1 + i * 0.7).sin());
+                Some(Transform::from_translation(Vec3::from(d.body) + Vec3::new(r * a.cos(), h, r * a.sin())).with_scale(Vec3::new(s, 0.75 * s, s)))
+            }
+            (CloudPiece::ORB, Some(d)) if !d.hidden => d.orb.zip(d.charge).map(|(o, ph)| {
+                // Wind-up: a flicker that grows; fire: a steady bright glow.
+                let flicker = 0.75 + 0.25 * jitter((p.ticks / 2) as u32, 3, 9);
+                let s = if ph == 0 { 0.8 + 0.6 * flicker } else { 1.5 + 0.2 * (t * 40.0).sin() };
+                Transform::from_translation(Vec3::from(o)).with_scale(Vec3::splat(s))
+            }),
+            _ => None,
         };
         match placed {
             Some(x) => {

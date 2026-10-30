@@ -759,6 +759,7 @@ impl Character {
             || self.king.as_ref().is_some_and(|k| k.guarding())
             || self.ixi.as_ref().is_some_and(|x| matches!(x.state, Ixi::Idle | Ixi::Hold | Ixi::Transition | Ixi::BlockMelee | Ixi::BlockMissile))
             || (self.gelert.as_ref().is_some_and(|g| g.state == neopets_sim::gelert::State::Deflect) && self.anim.clip_state().action == 21)
+            || (self.slot == CLOUD_SLOT && !self.invulnerable)
     }
 
     /// An enemy kind is also not hittable in its melee or missile dodge (agro outer sub-state 5
@@ -802,6 +803,25 @@ struct StreamRec {
 const STREAM_RANGE: f32 = 78_400.0;
 const STREAM_MARGIN: f32 = 20.0;
 const BLOCK_OBJECTS: usize = 15;
+
+/// The Cloud Beast's stand-in effects for one frame (`Play::cloud_fx`).
+pub struct CloudDraw {
+    /// The gust column (O, E, fade 0 to 128).
+    pub gust: Option<([f32; 3], [f32; 3], i32)>,
+    /// The live beams (start, end, whether it is the second (reflected or bounced) beam).
+    pub beams: Vec<([f32; 3], [f32; 3], bool)>,
+    pub balls: Vec<[f32; 3]>,
+    /// The shock (centre, radius).
+    pub shock: Option<([f32; 3], f32)>,
+    /// The body's centre and radius, and whether it is hidden (the gust's travel).
+    pub body: [f32; 3],
+    pub radius: f32,
+    pub hidden: bool,
+    /// The companion's pose point 1, and the lightning phase (0 wind-up, 1 fire).
+    pub orb: Option<[f32; 3]>,
+    pub charge: Option<u8>,
+    pub stage: u8,
+}
 
 /// The parked hero (SPEC-0053 3.9): its model, animation and pools, kept while the other hero
 /// is selected (the original reloads the shared hero pool on each swap; this build keeps both).
@@ -1131,6 +1151,9 @@ pub struct Play {
     cloud_defeated: std::collections::HashSet<u32>,
     /// Recent ball bursts and reply hit flashes for the stand-in effects: (point, ticks left).
     pub cloud_bursts: Vec<([f32; 3], u32)>,
+    /// This build's one-time fight hint (shown by the developer toast), and whether it was given.
+    pub cloud_hint: Option<String>,
+    cloud_hinted: bool,
     /// SPEC-0038 Behavior 45: the shared attack-manager list.
     attack_mgr: neopets_sim::attackmgr::Manager,
     /// SPEC-0038 Behavior 3: the broadcast count of each alarm group (by pack and group).
@@ -1906,6 +1929,8 @@ impl Play {
             cloud_arena: None,
             cloud_defeated: Default::default(),
             cloud_bursts: Vec::new(),
+            cloud_hint: None,
+            cloud_hinted: false,
             attack_mgr: Default::default(),
             alarms: HashMap::new(),
             thorns: Default::default(),
@@ -5955,6 +5980,18 @@ impl Play {
                     continue;
                 }
             }
+            // SPEC-0010 Hurt side: the Cloud Beast and its companion reach the swing only in the
+            // reaction state, in the guard stance (Blocking Angle 0): a non-power swing from the
+            // front (dot of the facings below 0) is blocked (counted as landed, the block
+            // reaction); any other swing, a power step included, does nothing. Never damage.
+            if c.slot == CLOUD_SLOT {
+                if !power_hit && c.facing[0] * hf[0] + c.facing[1] * hf[1] + c.facing[2] * hf[2] < 0.0 {
+                    self.hit_list.push(c.id);
+                    landed += 1;
+                    knight_block = true;
+                }
+                continue;
+            }
             let guards = match (c.knight.as_ref(), c.draik.as_ref()) {
                 (Some(k), _) => Some(!k.exposed),
                 (_, Some(d)) => Some(d.guarding()),
@@ -6085,16 +6122,11 @@ impl Play {
             }
             return;
         }
-        // SPEC-0010: the Cloud Beast keeps the shared NPC take-hit; its combat word is never agro,
-        // so the damage is doubled before the subtraction. The monster bar is armed as for the
-        // common enemies (a guess: the spec names no bar for the test spawn).
-        if self.characters.get(i).is_some_and(|c| c.cloud.is_some() && c.dying.is_none()) {
-            let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(self.characters[i].name.as_bytes(), *sp));
-            let c = &mut self.characters[i];
-            let max = c.row.map_or(1, |r| r.hit_points as i32);
-            self.monster_bar.arm(c.id, &c.name, width, c.hp, max, &self.monster_words);
-            c.hp -= 2 * damage.max(0);
-            self.last_hit = format!("{by}hit {} for {} (hp {})", c.name, 2 * damage.max(0), c.hp.max(0));
+        // SPEC-0010 Hurt side: the hero never damages the Cloud Beast or its companion (both are
+        // unhittable outside the reaction state and only guard in it); its one HP loss is the
+        // special reply to a reflected bolt, in its own controller.
+        if self.characters.get(i).is_some_and(|c| c.slot == CLOUD_SLOT) {
+            self.last_hit = format!("{by}hit the guarding {} (no damage)", self.characters[i].name);
             return;
         }
         // SPEC-0016: the Plague Serpent takes a hit only as its stun strike (its own controller).
@@ -8893,6 +8925,13 @@ impl Play {
             .collect();
         let attacking = self.loco.state == hero_states::ATTACK;
         self.lock = self.candidates.tick(&chars, self.loco.position(), self.loco.facing, attacking);
+        // SPEC-0010 Hero lock-on: while its companion exists the Cloud Beast writes its id into the
+        // hero's forced lock word every tick (both bodies are otherwise unhittable, so no
+        // candidate scan finds them).
+        let forced = self.characters.iter().find(|c| c.pack == pack && c.slot == CLOUD_SLOT && c.cloud.is_some() && c.dying.is_none()).filter(|_| self.characters.iter().any(|o| o.pack == pack && o.slot == CLOUD_SLOT && o.cloud.is_none() && o.dying.is_none())).map(|c| c.id);
+        if forced.is_some() {
+            self.lock = forced;
+        }
         // SPEC-0053 3.9: the target list, with the clear-path test from the hero's chest to the
         // character's target point.
         let hero = self.loco.position();
@@ -8914,7 +8953,7 @@ impl Play {
         }
         let tor = self.hero_index == 0;
         let f = self.loco.facing;
-        let target = self.targets.records.first().filter(|r| r.flag).and_then(|r| self.aim_point(r.id)).or_else(|| {
+        let target = forced.and_then(|id| self.aim_point(id)).or_else(|| self.targets.records.first().filter(|r| r.flag).and_then(|r| self.aim_point(r.id))).or_else(|| {
             if !tor {
                 return None;
             }
@@ -9205,7 +9244,44 @@ impl Play {
         // the Mote-use cue 0xA2 when the shock starts and when a bolt first fires.
         let shock_started = before.0 != neopets_sim::cloudbeast::State::Shock && cloud.state == neopets_sim::cloudbeast::State::Shock;
         let bolt_started = !fired && cloud.beams[0].active;
+        // SPEC-0010 tail: outside the reaction state both bodies are unhittable (the build's
+        // reading of the never-cleared invulnerable word: the reaction's guard stance is the one
+        // window the hero's hits reach them, and only as blocks).
+        let stage_up = cloud.stage > before.1;
+        let reacting = cloud.state == neopets_sim::cloudbeast::State::Reaction;
+        let entered_reaction = reacting && before.0 != neopets_sim::cloudbeast::State::Reaction;
         self.characters[b].cloud = Some(cloud);
+        self.characters[b].invulnerable = !reacting;
+        if let Some(k) = companion {
+            self.characters[k].invulnerable = !reacting;
+        }
+        // A stage change (this build's addition; the original resets nothing and shows nothing): a
+        // ring of bursts around the body and the Mote-use cue, so the escalation reads.
+        if stage_up {
+            let p = add(self.characters[b].position, [0.0, crate::placeholder::CLOUD_HOVER + 1.75, 0.0]);
+            for k in 0..8 {
+                let a = k as f32 * std::f32::consts::FRAC_PI_4;
+                self.cloud_bursts.push((add(p, [3.5 * a.cos(), 0.8 * (k % 2) as f32, 3.5 * a.sin()]), 30));
+            }
+            self.cue(0xA2);
+        }
+        // The special reply shows the boss in the monster health bar (10 s; SPEC-0010 State 7).
+        if act.hit_fx {
+            let width = self.name_font.as_ref().map_or(10, |(f, sp)| f.measure(self.characters[b].name.as_bytes(), *sp));
+            let c = &self.characters[b];
+            let max = c.row.map_or(1, |r| r.hit_points as i32);
+            self.monster_bar.arm(c.id, &c.name, width, c.hp, max, &self.monster_words);
+        }
+        // This build's hint (an addition: the fight can only be won by the reflect, and nothing
+        // in the game says so): once, the first time the beast guards against the hero.
+        if entered_reaction && !std::mem::replace(&mut self.cloud_hinted, true) {
+            let fog = self.equipment.motes[self.hero_index.min(1)][1] == Some(166);
+            self.cloud_hint = Some(if fog {
+                "It shrugs off your blows! Guard (shield) facing its lightning from afar: the Fog Mote turns the bolt back.".into()
+            } else {
+                "It shrugs off your blows! Its own lightning, turned back by a Fog Mote on your shield, might hurt it.".into()
+            });
+        }
         if shock_started || bolt_started {
             self.cue(0xA2);
         }
@@ -9231,16 +9307,29 @@ impl Play {
     }
 
     /// The stand-in effects of the Cloud Beast for drawing (its own effect definitions 447 to
-    /// 454 are not on the disc): the gust column (O, E, fade 0 to 128), the live beams, the
-    /// balls, the shock (centre and radius) and the bursts.
-    #[allow(clippy::type_complexity)]
-    pub fn cloud_fx(&self) -> Option<(Option<([f32; 3], [f32; 3], i32)>, Vec<([f32; 3], [f32; 3])>, Vec<[f32; 3]>, Option<([f32; 3], f32)>)> {
+    /// 457 are not on the disc).
+    pub fn cloud_fx(&self) -> Option<CloudDraw> {
         let c = self.characters.iter().find(|c| c.pack == self.world.pack && c.cloud.is_some())?;
         let cl = c.cloud.as_ref()?;
-        let beams = cl.beams.iter().filter(|b| b.active && b.len > 0.0).map(|b| (b.start, b.end())).collect();
-        let balls = cl.balls.iter().flatten().map(|b| b.position).collect();
-        let shock = cl.shock.then(|| (add(c.position, [0.0, crate::placeholder::CLOUD_HOVER + 1.0, 0.0]), self.cloud_words.map_or(8.0, |w| w.shock_radius)));
-        Some((cl.gust.map(|(o, e)| (o, e, cl.fade)), beams, balls, shock))
+        let orb = self.characters.iter().find(|o| o.pack == c.pack && o.slot == CLOUD_SLOT && o.cloud.is_none() && o.dying.is_none()).map(|o| add(o.position, [0.0, 0.6, 0.0]));
+        Some(CloudDraw {
+            gust: cl.gust.map(|(o, e)| (o, e, cl.fade)),
+            beams: cl.beams.iter().enumerate().filter(|(_, b)| b.active && b.len > 0.0).map(|(k, b)| (b.start, b.end(), k == 1)).collect(),
+            balls: cl.balls.iter().flatten().map(|b| b.position).collect(),
+            shock: cl.shock.then(|| (add(c.position, [0.0, crate::placeholder::CLOUD_HOVER + 1.0, 0.0]), self.cloud_words.map_or(8.0, |w| w.shock_radius))),
+            body: add(c.position, [0.0, crate::placeholder::CLOUD_HOVER + 1.75, 0.0]),
+            radius: c.row.map_or(3.0, |r| r.radius),
+            hidden: cl.hidden(),
+            orb,
+            charge: cl.lightning_phase(),
+            stage: cl.stage,
+        })
+    }
+
+    /// SPEC-0010 Vanishing: a Cloud Beast body (boss or companion) is not drawn during the gust's
+    /// travel.
+    pub fn cloud_hidden(&self, c: &Character) -> bool {
+        c.slot == CLOUD_SLOT && self.characters.iter().any(|b| b.pack == c.pack && b.slot == CLOUD_SLOT && b.cloud.as_ref().is_some_and(|k| k.hidden()))
     }
 
     /// The stand-in body's pose for a Cloud Beast character (boss or companion): a bob, a
@@ -9288,6 +9377,15 @@ impl Play {
         self.cloud_on = true;
         self.cloud_place_hero = true;
         self.cloud_defeated.remove(&self.world.pack);
+        self.cloud_hinted = false;
+        // The fight's one damage path needs the Fog Mote (166) in the shield word (SPEC-0010 Test
+        // setup): the test fight gives it and puts it on both heroes' shields.
+        if !self.state.has_item(166) {
+            self.state.give(166, 1);
+        }
+        for h in 0..2 {
+            self.equipment.set_mote(h, 1, 166);
+        }
     }
 
     /// Developer menu: make the flat test stage (`World::test_stage`, this build's own world)

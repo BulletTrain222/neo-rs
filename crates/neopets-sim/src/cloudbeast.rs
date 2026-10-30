@@ -343,6 +343,17 @@ impl Cloud {
         }
     }
 
+    /// The lightning's phase for drawing: Some(0) the wind-up, Some(1) the fire phase.
+    pub fn lightning_phase(&self) -> Option<u8> {
+        (self.state == State::Lightning && self.sub < 2).then_some(self.sub)
+    }
+
+    /// SPEC-0010 Vanishing: neither the boss nor the companion is drawn from the tick the gust
+    /// clip ends through the travel (sub-step 2 of air-flow and of each rapid cycle).
+    pub fn hidden(&self) -> bool {
+        matches!(self.state, State::AirFlow | State::Rapid) && self.sub == 2
+    }
+
     fn play(&mut self, id: u32) {
         if self.clip.id != id {
             self.clip = Clip { id, t: 0.0 };

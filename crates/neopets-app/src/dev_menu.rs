@@ -532,6 +532,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             }
         }
     }
+    // The Cloud Beast fight's one-time hint (this build's addition), on the same toast.
+    if let Some(h) = play.play.cloud_hint.take() {
+        dev.toast = Some((h, 480));
+    }
     if let Some((_, f)) = dev.toast.as_mut() {
         *f = f.saturating_sub(1);
         if *f == 0 {
