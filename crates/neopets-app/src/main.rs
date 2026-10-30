@@ -1189,6 +1189,11 @@ fn step_sim(
         if let (Some(m), Some(p)) = (mv.started.take(), play.as_deref_mut()) {
             p.play.state.movies.insert(m);
         }
+        if std::mem::take(&mut mv.ended) {
+            if let Some(p) = play.as_deref_mut() {
+                p.play.after_movies();
+            }
+        }
         if playing {
             driver.last_ticks = 0;
             return;

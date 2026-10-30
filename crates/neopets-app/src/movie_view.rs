@@ -3,9 +3,9 @@
 //! check once per frame, and the game loop suspended while a movie plays.
 //!
 //! Not covered: the picture and sound. No spec describes the Bink stream yet (R-0112), so each
-//! movie is a black screen with its name for its real play time. Also not covered: the reload
-//! world hand-off (Playback steps 2, 3, 6 and 7: the world stays loaded and the hero keeps
-//! their place). The original stops the game's sound before the queue plays and the reload
+//! movie is a black screen with its name for its real play time. Of the hand-off only step 3's
+//! camera and screen-effect reset is built (`ended`; `Play::after_movies`); the reload of world
+//! W (Playback steps 2, 6 and 7) is not (the world stays loaded and the hero keeps their place). The original stops the game's sound before the queue plays and the reload
 //! restarts it; without the reload, the sound is paused here and resumes after the queue.
 use bevy::prelude::*;
 use neopets_data::movie::{self, Header};
@@ -19,6 +19,9 @@ pub struct Movies {
     current: Option<Current>,
     /// The movie that started this frame, for its played word.
     pub started: Option<u16>,
+    /// The queue ran empty this frame after playing (or passing over) movies: the hand-off's
+    /// camera and screen-effect reset is due (SPEC-0026 Playback and handoff, step 3).
+    pub ended: bool,
     /// The Display page's "Movie cutscenes" is Off: each queued movie is passed over at once,
     /// as a skip on its first frame would (its played word is still set).
     pub off: bool,
@@ -45,6 +48,15 @@ impl Movies {
     /// Advance by `elapsed_ns` with Cross or Start `held`. Returns true while a movie plays (the
     /// game loop is suspended for the whole frame).
     pub fn step(&mut self, elapsed_ns: u64, held: bool) -> bool {
+        let busy = self.current.is_some() || !self.queue.is_empty();
+        let playing = self.step_queue(elapsed_ns, held);
+        if busy && self.current.is_none() && self.queue.is_empty() {
+            self.ended = true;
+        }
+        playing
+    }
+
+    fn step_queue(&mut self, elapsed_ns: u64, held: bool) -> bool {
         if self.current.is_none() {
             let Some(index) = self.queue.pop_front() else { return false };
             if self.off {

@@ -2306,6 +2306,21 @@ impl Play {
         true
     }
 
+    /// SPEC-0026 Playback and handoff, step 3 (the parts built): once the movie queue has
+    /// played, the camera returns to normal (ReturnToNormalCamera(-1, true): the follow camera
+    /// behind the hero) and the screen effect is reset (bars and fade cleared). This build's
+    /// hold flag is kept: it also stands for a running script scene's hold, which the movie
+    /// does not end here. Not built: the reload of world W (steps 2, 6 and 7) and the
+    /// sound-slot reset.
+    pub fn after_movies(&mut self) {
+        self.cut = None;
+        self.cut_target = None;
+        let f = followed(&self.loco, &self.world);
+        self.camera.place_behind(&f);
+        self.fade = Default::default();
+        self.bars = Default::default();
+    }
+
     /// SPEC-0027 Camera initialisation at a world load: a scripted play of the world left
     /// behind ends with it (its track belongs to that world's table, SPEC-0030 row 294), and
     /// the camera is attached to the hero. The old world's hold on the hero ends too (the
