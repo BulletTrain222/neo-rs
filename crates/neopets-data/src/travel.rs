@@ -242,6 +242,33 @@ fn tagged_pairs(bytes: &[u8], top: &[Chunk], tag: u32) -> Vec<(u8, u8)> {
 }
 
 /// Walk the type-15 tagged records and read the lookup table with the given tag.
+/// The area's path list (SPEC-0006 Tagged tables, tag 0x0A; R-0127): at +0x10 a u16 count N,
+/// then the u16 arrays A[N] and B[N]; path k is the pack's entry records A[k] to B[k], both
+/// included. Empty when the pack has no such table.
+pub fn path_list(bytes: &[u8], top: &[Chunk]) -> Vec<(u16, u16)> {
+    let Some(c) = top.iter().find(|c| c.kind == TAGGED) else { return Vec::new() };
+    paths_in(&bytes[c.payload.clone()]).unwrap_or_default()
+}
+
+fn paths_in(p: &[u8]) -> Option<Vec<(u16, u16)>> {
+    let u16_at = |at: usize| p.get(at..at + 2).map(|b| u16::from_le_bytes([b[0], b[1]]));
+    let mut at = 0usize;
+    while at + 0x10 <= p.len() {
+        let t = u32_at(p, at)?;
+        let len = match t {
+            0x0B | 0x0D | 0x0E => (0x10 + (u16_at(at + 0x10)? as usize + 3) * 2).div_ceil(16) * 16,
+            0x0A => {
+                let n = u16_at(at + 0x10)? as usize;
+                return (0..n).map(|k| Some((u16_at(at + 0x12 + 2 * k)?, u16_at(at + 0x12 + 2 * (n + k))?))).collect();
+            }
+            0x12 | 0x13 => 0x10 + (u32_at(p, at + 8)? as usize & !0xF),
+            _ => return None,
+        };
+        at += len.max(0x10);
+    }
+    Some(Vec::new())
+}
+
 fn tagged_lookup(bytes: &[u8], top: &[Chunk], tag: u32) -> Option<Neighbours> {
     let c = top.iter().find(|c| c.kind == TAGGED)?;
     let p = &bytes[c.payload.clone()];
@@ -279,6 +306,17 @@ mod tests {
     fn swap_set_has_92_slots() {
         assert_eq!((0..193).filter(|&s| in_swap_set(s)).count(), 92);
         assert!(in_swap_set(68) && !in_swap_set(0) && in_swap_set(191));
+    }
+
+    #[test]
+    fn path_list_ranges() {
+        // SPEC-0006 test vector: N = 3, A = {1, 4, 7}, B = {3, 4, 9}.
+        let mut p = vec![0u8; 0x20];
+        p[0] = 0x0A;
+        for (i, v) in [3u16, 1, 4, 7, 3, 4, 9].iter().enumerate() {
+            p[0x10 + 2 * i..0x12 + 2 * i].copy_from_slice(&v.to_le_bytes());
+        }
+        assert_eq!(paths_in(&p), Some(vec![(1, 3), (4, 4), (7, 9)]));
     }
 
     #[test]

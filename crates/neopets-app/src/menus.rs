@@ -319,8 +319,6 @@ pub struct Flow {
     pub item_cursor: usize,
     pub charm_cursor: usize,
     pub quest_cursor: usize,
-    /// The Quest-items tab's scroll offset (entries; a multiple of 5).
-    pub quest_scroll: usize,
     pub grid_ids: [i32; 20],
     pub view: ItemView,
     /// The Display page (this build's display settings, not a disc page): its focused row, and
@@ -395,7 +393,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, quest_scroll: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -535,8 +533,9 @@ impl Flow {
             }
             _ => {
                 let n = v.quests.iter().take_while(|&&c| c >= 0).count();
-                if n >= 2 {
-                    (self.quest_cursor, self.quest_scroll) = quest_move(self.quest_cursor, self.quest_scroll, n, (up, down, left, right));
+                if n >= 2 && (up || down || left || right) {
+                    self.quest_cursor = quest_move(self.quest_cursor, n, (up, down, left, right));
+                    self.sounds.push(0x9A);
                 }
                 if buttons & (CROSS | CIRCLE) != 0 {
                     self.sounds.push(0xA2);
@@ -1016,7 +1015,6 @@ impl Flow {
                 }
                 if self.pass == 0 && self.current == ITEMS + 2 {
                     self.quest_cursor = 0;
-                    self.quest_scroll = 0;
                 }
                 result = self.item_screen(state as usize - 8, edge, second, &mut command);
                 generic = false;
@@ -1351,34 +1349,34 @@ pub struct Ctx {
     pub box_busy: bool,
 }
 
-/// The Quest-items tab's cursor move (SPEC-0035 section 14.1 gives the 20 cells and the scroll
-/// offset, not how the offset moves; R-0130). This build's choice: Left and Right move within the
-/// row (wrapping), Up and Down move a row; past the last shown row (or above the first) the
-/// offset scrolls one row of 5, and the cursor stays on an entry (at most n - 1). Returns the
-/// cursor and the offset.
-pub fn quest_move(cursor: usize, scroll: usize, n: usize, (up, down, left, right): (bool, bool, bool, bool)) -> (usize, usize) {
-    let (mut cursor, mut scroll) = (cursor, scroll);
-    let col = cursor % 5;
-    if left {
-        cursor = cursor - col + (col + 4) % 5;
+/// The Quest-items tab's cursor move (SPEC-0035 section 14.1, R-0130): the cursor is an index
+/// into the owned records on a 4-row by 5-column grid; nothing moves with fewer than two. Up
+/// and Down move a row, wrapping between rows 0 and 3; Left and Right a column, wrapping within
+/// the row; a step onto an index of n or more is repeated until it lands below n, so empty cells
+/// are skipped. Opposite presses cancel. The cursor stays 0 to 19 and the tab never scrolls.
+pub fn quest_move(cursor: usize, n: usize, (up, down, left, right): (bool, bool, bool, bool)) -> usize {
+    if n < 2 {
+        return cursor;
     }
-    if right {
-        cursor = cursor - col + (col + 1) % 5;
+    let (mut row, mut col) = (cursor / 5 % 4, cursor % 5);
+    let at = |r: usize, c: usize| r * 5 + c;
+    if up != down {
+        for _ in 0..4 {
+            row = if down { (row + 1) % 4 } else { (row + 3) % 4 };
+            if at(row, col) < n {
+                break;
+            }
+        }
     }
-    if down && cursor + 5 < n.div_ceil(5) * 5 {
-        cursor += 5;
+    if left != right {
+        for _ in 0..5 {
+            col = if right { (col + 1) % 5 } else { (col + 4) % 5 };
+            if at(row, col) < n {
+                break;
+            }
+        }
     }
-    if up && cursor >= 5 {
-        cursor -= 5;
-    }
-    cursor = cursor.min(n.saturating_sub(1));
-    if cursor >= scroll + 20 {
-        scroll = cursor / 5 * 5 - 15;
-    }
-    if cursor < scroll {
-        scroll = cursor / 5 * 5;
-    }
-    (cursor, scroll)
+    at(row, col)
 }
 
 /// Predicate table A (section 9c), the slots this build implements: 0, 2 and 56 always 1;
@@ -1603,9 +1601,9 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
     let tab = flow.current - ITEMS;
     let mut pc = flow.pc();
     if tab == 2 {
-        let page = flow.quest_scroll;
+        let page = 0;
         pc.items.tab = 0;
-        pc.items.cursor = flow.quest_cursor.saturating_sub(page).min(19);
+        pc.items.cursor = flow.quest_cursor.min(19);
         pc.items.grid = std::array::from_fn(|k| pc.items.view.quests.get(page + k).copied().filter(|&id| id >= 0).unwrap_or(0));
         pc.items.view.grid_counts = pc.items.grid.map(|id| u32::from(id > 0));
         pc.items.view.marker = -1;
@@ -2092,15 +2090,22 @@ mod tests {
     }
 
     #[test]
-    fn quest_tab_scrolls_by_rows() {
-        // 27 entries: Down from row 3 (cursor 17) scrolls one row; Up from the top row scrolls back.
-        assert_eq!(quest_move(17, 0, 27, (false, true, false, false)), (22, 5));
-        assert_eq!(quest_move(22, 5, 27, (false, true, false, false)), (26, 10));
-        assert_eq!(quest_move(26, 10, 27, (false, true, false, false)), (26, 10));
-        assert_eq!(quest_move(10, 10, 27, (true, false, false, false)), (5, 5));
-        // Left and Right wrap within the row, kept on an entry.
-        assert_eq!(quest_move(0, 0, 27, (false, false, true, false)), (4, 0));
-        assert_eq!(quest_move(26, 10, 27, (false, false, false, true)), (26, 10));
+    fn quest_tab_cursor_vectors() {
+        // SPEC-0035 section 14.1 vectors, n = 23: Down x4 from 0 gives 5, 10, 15, 0.
+        let mut c = 0;
+        let down = (false, true, false, false);
+        let seq: Vec<usize> = (0..4).map(|_| { c = quest_move(c, 23, down); c }).collect();
+        assert_eq!(seq, vec![5, 10, 15, 0]);
+        // Right x3 gives 1, 2, 3; Up x5 then gives 18, 13, 8, 3, 18.
+        let seq: Vec<usize> = (0..3).map(|_| { c = quest_move(c, 23, (false, false, false, true)); c }).collect();
+        assert_eq!(seq, vec![1, 2, 3]);
+        let seq: Vec<usize> = (0..5).map(|_| { c = quest_move(c, 23, (true, false, false, false)); c }).collect();
+        assert_eq!(seq, vec![18, 13, 8, 3, 18]);
+        // n = 7: from 6 Right gives 5, Left from 5 gives 6, Down from 6 gives 1, Up from 1 gives 6.
+        assert_eq!(quest_move(6, 7, (false, false, false, true)), 5);
+        assert_eq!(quest_move(5, 7, (false, false, true, false)), 6);
+        assert_eq!(quest_move(6, 7, (false, true, false, false)), 1);
+        assert_eq!(quest_move(1, 7, (true, false, false, false)), 6);
     }
 
     #[test]
