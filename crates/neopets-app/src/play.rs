@@ -1637,7 +1637,9 @@ impl Play {
             (Ok(a), Ok(b)) => neopets_data::monster::MonsterTable::parse(&a, &b).ok().and_then(|t| t.row(1, 0).zip(t.row(2, 0))),
             _ => None,
         };
-        let cloud_words = neopets_sim::cloudbeast::Words::read(&words(neopets_sim::cloudbeast::BASE, neopets_sim::cloudbeast::WORDS)?);
+        // This build's choice (the user's request, not the original): the bouncing balls travel
+        // twice the disc's range (50 units, 0x2DA5C0), so 100 units and about 10 s.
+        let cloud_words = neopets_sim::cloudbeast::Words::read(&words(neopets_sim::cloudbeast::BASE, neopets_sim::cloudbeast::WORDS)?).map(|w| neopets_sim::cloudbeast::Words { ball_range: 2.0 * w.ball_range, ..w });
         let neck_joints: Vec<usize> = words(neopets_sim::look::NECK_JOINTS_AT, 6)?.into_iter().map(|w| w as usize).collect();
         let sister_words = neopets_sim::sisters::Words::read(&words(neopets_sim::sisters::BASE, neopets_sim::sisters::WORDS)?, words(neopets_sim::sisters::LEACH_DRAIN, 1)?[0]).ok_or("The Faerie Sisters' tuning block is short")?;
         let draik_words = neopets_sim::draik::Words::read(&words(neopets_sim::draik::BASE, neopets_sim::draik::WORDS)?).ok_or("The Draik's tuning block is short")?;
