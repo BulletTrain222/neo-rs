@@ -1771,7 +1771,11 @@ fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Que
     let _span = crate::perf::span("show_sim");
     let d = &*driver;
     let play_line = play
-        .map(|p| format!("{}\n{}\n{}\n", p.play.status(), p.play.status_camera(), p.play.status_worlds()))
+        .map(|p| {
+            // A boss readout first, when a boss controller wrote one (F6; this build's tool).
+            let boss = if p.play.boss_info.is_empty() { String::new() } else { p.play.boss_info.join("\n") + "\n\n" };
+            format!("{boss}{}\n{}\n{}\n", p.play.status(), p.play.status_camera(), p.play.status_worlds())
+        })
         .unwrap_or_default();
     for mut text in &mut texts {
         text.0 = play_line.clone() + &format!(

@@ -493,6 +493,44 @@ impl Knight {
         a
     }
 
+    /// A readable account of the fight for the developer overlay (this build's tool): the
+    /// state, the phase and the flags, each weak point's HP, the stun countdown, and for each
+    /// phase-2 attack whether its conditions hold now (the same tests as `choose`).
+    pub fn describe(&self, v: &View, w: &Words) -> Vec<String> {
+        let d = hdist(v.position, v.hero);
+        let to_hero = hdir(v.position, v.hero);
+        let p = self.parts;
+        let yes = |b: bool| if b { "yes" } else { "no" };
+        let part = |name: &str, k: usize, max: i32| format!("{name} {}/{max}{}", p[k].max(0), if p[k] <= 0 { " BROKEN" } else if self.lit[k] { " EXPOSED" } else { "" });
+        let knees = p[LEFT_KNEE] > 0 || p[RIGHT_KNEE] > 0;
+        let arms = p[LEFT_ARM] > 0 || p[RIGHT_ARM] > 0;
+        let charge_dir = charge_passes(&self.refs, to_hero[0], to_hero[2], w.charge_range);
+        let phase_name = match self.phase {
+            0 => "0 (slow swing: make it miss)",
+            1 => "1 (angry swing: make it miss)",
+            _ => "2 (enraged attacks)",
+        };
+        vec![
+            format!("BLACK KNIGHT  state {:?}  phase {phase_name}", self.state),
+            format!("HP shown {} (the original's sum counts the right knee twice and skips the right under-arm)", display_hp(&p)),
+            format!("weak points: {}, {}, {}, {}, {}, {}", part("L knee", LEFT_KNEE, 50), part("R knee", RIGHT_KNEE, 50), part("L armpit", LEFT_ARM, 50), part("R armpit", RIGHT_ARM, 50), part("back", BACK, 50), part("neck", NECK, 100)),
+            format!("stun left {} ticks{}   your hit gate open now: {}", self.stun.max(0), if self.stun > 0 { format!(" ({:.1} s)", self.stun as f32 / 60.0) } else { String::new() }, yes(self.exposed)),
+            format!("hero distance {d:.1}   knight from his start {:.1} (chandelier swing needs under 10.0)   hero on his mesh: {}", v.second_measure, yes(v.hero_on_mesh_full)),
+            format!(
+                "phase 2 picks, first match: charge [knees left {}, you along the x axis {}] -> chandelier high swing [you within {:.0}: {}, him near start: {}, armpits left: {}] -> floor strike [back left: {}] -> sword spin [only neck left: {}]",
+                yes(knees),
+                yes(charge_dir),
+                w.high_range,
+                yes(d < w.high_range),
+                yes(v.second_measure < 10.0),
+                yes(arms),
+                yes(p[BACK] > 0),
+                yes(p[..5].iter().all(|&x| x <= 0)),
+            ),
+            format!("flags: laugh {} angry-start {} enraged-start {} loosen-neck {} en-garde {}", yes(self.laugh), yes(self.angry), yes(self.enraged), yes(self.loosen), yes(self.en_garde)),
+        ]
+    }
+
     fn choose(&mut self, v: &View, w: &Words, d: f32, to_hero: Vec3, rng: &mut Rng) {
         if self.counter {
             self.counter = false;

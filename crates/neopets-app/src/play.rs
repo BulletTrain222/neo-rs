@@ -1095,6 +1095,9 @@ pub struct Play {
     duel_summons: Vec<u64>,
     boss_hits: Vec<(u64, i32)>,
     pub last_boss: String,
+    /// The boss readout of the F6 panel (this build's tool): lines from the boss's controller,
+    /// rewritten every tick (the Black Knight's `describe`).
+    pub boss_info: Vec<String>,
     /// The last spawn-by-key request's outcome.
     pub last_summon: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
@@ -1922,6 +1925,7 @@ impl Play {
             duel_summons: Vec::new(),
             boss_hits: Vec::new(),
             last_boss: String::new(),
+            boss_info: Vec::new(),
             last_summon: String::new(),
             petpet: None,
             pet_char: None,
@@ -11109,6 +11113,7 @@ impl Play {
         use neopets_sim::combat::Cylinder;
         use neopets_sim::knight as kn;
         let pack = self.world.pack;
+        self.boss_info.clear();
         let hero = self.loco.position();
         let hf = self.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.knight.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
@@ -11243,6 +11248,7 @@ impl Play {
             let before = k.state;
             let act = k.tick(&v, &words, &mut self.rng);
             let after = k.state;
+            self.boss_info = k.describe(&v, &words);
             // SPEC-0012 Blend: the six weak-point glow colours drive the knight's mesh colour
             // slots 1 to 6 (left knee, right knee, left under-arm, right under-arm, back, neck):
             // black while unlit, the magenta pulse while exposed. Taken as the slot's colour scale
