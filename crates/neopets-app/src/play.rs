@@ -11192,6 +11192,20 @@ impl Play {
             let fwd = unit([c.facing[0], 0.0, c.facing[2]]);
             let sword_hit = |p: [f32; 3]| neopets_sim::gnarfas::segment_distance(hero, add(hero, [0.0, 3.5, 0.0]), p, p) <= 2.0;
             let own_mesh = neopets_sim::nav::closest(&world.navmeshes, c.position, 1);
+            // SPEC-0012 (A walk mesh): at controller start a knight with no walk mesh takes the
+            // one that contains its position; the shared edge step then keeps it on that mesh.
+            // Without it the walker's confinement did nothing and a charge or a walk carried the
+            // knight through the walls and off the map.
+            let pos = c.position;
+            if let Some(wk) = c.walker.as_mut().filter(|w| w.mesh.is_none()) {
+                let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.locate_full(pos).is_some()).or_else(|| world.navmeshes.iter().position(|m| m.locate_full(pos).is_some()));
+                if pick.is_some() {
+                    wk.assign_mesh(pick, &world.navmeshes);
+                }
+            }
+            // The charge's edge contact: the mesh edge pushed the knight back on the last tick
+            // (the walker's blocked flag, set with its 120-tick timer at that push).
+            let edge = c.walker.as_ref().is_some_and(|w| w.blocked && w.blocked_timer >= 120);
             let clip = c.anim.clip_state();
             let v = kn::View {
                 position: c.position,
@@ -11210,7 +11224,7 @@ impl Play {
                 hero_on_mesh: hero_mesh >= 0 && hero_mesh == own_mesh,
                 hero_on_mesh_full: hero_mesh >= 0 && hero_mesh == own_mesh,
                 contact: hd < r + 1.0,
-                edge: false,
+                edge,
                 part_hit: &part_hit,
                 part_shot: &part_shot,
                 hero_damage,
