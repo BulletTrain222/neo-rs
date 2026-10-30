@@ -4111,6 +4111,10 @@ impl Play {
                     }
                 }
                 if let Some(s) = shot {
+                    if std::env::var_os("NEOPETS_TRACE_SHOTS").is_some() {
+                        let groups: Vec<_> = [0, 1].map(|j| s.s.effects[j]).into_iter().filter(|&e| e != -1).map(|e| (e, self.effect_table.find(e))).collect();
+                        eprintln!("SHOT tick {} slot {k} kind {} visual {} effects {:?} groups {groups:?}", self.ticks, s.s.kind, s.s.visual, s.s.effects);
+                    }
                     let objects = [0, 1].map(|j| {
                         (s.s.effects[j] != -1).then(|| self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, s.s.effects[j], s.position, neopets_sim::effect::IDENTITY)))
                     });

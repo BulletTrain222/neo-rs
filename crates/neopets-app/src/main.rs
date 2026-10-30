@@ -2796,11 +2796,14 @@ fn sync_shots(
     }
     for (m, mut t, mut vis) in &mut markers {
         // A shot drawn by its flight effects, and the spits (drawn by their effects), have no
-        // marker; the marker stays for a pool shot whose flight ids are both -1.
+        // marker. SPEC-0029 Visual update: a shot draws only its flight effects and, for visual
+        // kinds below 5, a trail model part, so one of visual kind 5 or more with both flight
+        // ids -1 draws nothing (the Spore Monster's lobbed seed, kind 8, visual 23). The marker
+        // stays for a visual kind below 5 with no flight effect (its trail part is not drawn).
         let at = match m.0.checked_sub(neopets_sim::projectile::SLOTS) {
             Some(_) => None,
             None if state.play.pool_slot_has_fx(m.0) => None,
-            None => state.play.shots.slots.get(m.0).copied().flatten().map(|s| s.position),
+            None => state.play.shots.slots.get(m.0).copied().flatten().filter(|s| s.s.visual < 5).map(|s| s.position),
         };
         match at {
             Some(p) => {
