@@ -869,6 +869,7 @@ fn main() {
             typing: None,
         })
         .init_resource::<BrowserView>()
+        .init_resource::<SceneSigs>()
         .init_resource::<TextureView>()
         .init_resource::<ModelView>()
         .insert_resource(ClearColor(Color::srgb(0.025, 0.035, 0.06)))
@@ -952,6 +953,8 @@ fn main() {
 struct ScreenshotPath(String, f32);
 
 /// Capture one frame once rendering has settled, then exit; for reviewing the window.
+static SERIES_TAKEN: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
 /// Waits on real time, not frames: render pipelines compile asynchronously after startup,
 /// and meshes are simply not drawn until theirs are ready.
 fn screenshot_and_exit(
@@ -963,6 +966,23 @@ fn screenshot_and_exit(
 ) {
     use bevy::render::view::screenshot::{Screenshot, save_to_disk};
     let elapsed = time.elapsed_secs();
+    // NEOPETS_SHOT_SERIES=n: n captures on consecutive frames, saved as <path>.<k>.png
+    // (diagnostic, for flicker).
+    let series = std::env::var("NEOPETS_SHOT_SERIES").ok().and_then(|v| v.parse::<usize>().ok());
+    if let Some(n) = series {
+        if elapsed >= path.1 && !*taken {
+            let k = SERIES_TAKEN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if k < n {
+                commands.spawn(Screenshot::primary_window()).observe(save_to_disk(format!("{}.{k}.png", path.0)));
+                return;
+            }
+            *taken = true;
+        }
+        if *taken && elapsed >= path.1 + 2.0 {
+            exit.write(AppExit::Success);
+        }
+        return;
+    }
     if !*taken && elapsed >= path.1 {
         *taken = true;
         commands
@@ -2178,6 +2198,7 @@ fn sync_worlds(
     mut images: ResMut<Assets<Image>>,
     mut shown: Local<Vec<WorldPart>>,
     mut built: Local<std::collections::HashMap<WorldPart, scene_merge::Built>>,
+    mut sigs: ResMut<SceneSigs>,
 ) {
     let _span = crate::perf::span("sync_worlds");
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
@@ -2463,6 +2484,7 @@ fn sync_worlds(
             *s |= t;
         }
         let n = scene_merge::spawn(&mut commands, k, pack, b, &mut meshes, &mut materials, &mut pass1_materials, &mut images);
+        sigs.0.insert(pack, b.sigs.clone());
         info!("scene of {pack}: {} parts in {n} entities ({} twins)", b.model.parts.len(), b.shared.iter().filter(|&&s| s).count());
     }
     *shown = want;
@@ -2543,14 +2565,19 @@ struct ZoneGate(u32, u8);
 #[derive(Component)]
 struct DrawCull(Vec3, f32);
 
+/// Every built scene's part signatures by pack, merged parts included (the duplicate rule of
+/// `sync_zones` compares the other world's parts with all of the current world's).
+#[derive(Resource, Default)]
+struct SceneSigs(std::collections::HashMap<u32, Vec<PartSig>>);
+
 /// A world scene part's pack and geometry signature: whether it is a second-pass part, its
 /// vertex count and its bounds.
 #[derive(Component, Clone, Copy)]
-struct PartSig {
-    pack: u32,
+pub struct PartSig {
+    pub pack: u32,
     pass1: bool,
-    count: usize,
-    lo: [f32; 3],
+    pub count: usize,
+    pub lo: [f32; 3],
     hi: [f32; 3],
 }
 
@@ -2563,8 +2590,54 @@ impl PartSig {
     /// The same geometry: the same kind and vertex count, every bound within half a unit (the
     /// two packs place a shared mesh through their own matrices, which differ in the last
     /// digits).
+    /// A large part (over 200 units across) also repeats one whose bounds all lie within 5
+    /// percent of its size, and a mountain-sized one (over 800) within 25 percent, whatever
+    /// the vertex count: 696 carries lower-detail copies of 1023's ring of mountains (900 to
+    /// 1700 units across, bounds 18 to 250 apart) that overlap them and fight for depth (user
+    /// report: the mountains flicker; gone with the second world hidden). A part over 100 units
+    /// whose box overlaps by 40 percent or more (intersection over union) is a copy too: the
+    /// cliffs and castle rock behind the town (696 parts 64 to 71) and the north cliffs. And a
+    /// part whose box lies at least 90 percent inside this one's: 696 holds a low-detail copy
+    /// of the whole town (rocks, bushes, ground pieces) inside 1023's own geometry.
+    pub fn diff(&self, o: &PartSig) -> f32 {
+        (0..3).map(|k| (self.lo[k] - o.lo[k]).abs().max((self.hi[k] - o.hi[k]).abs())).fold(0.0f32, f32::max)
+    }
+
+    pub fn size(&self) -> f32 {
+        (0..3).map(|k| self.hi[k] - self.lo[k]).fold(0.0f32, f32::max)
+    }
+
     fn same(&self, o: &PartSig) -> bool {
-        self.pass1 == o.pass1 && self.count == o.count && (0..3).all(|k| (self.lo[k] - o.lo[k]).abs() <= 0.5 && (self.hi[k] - o.hi[k]).abs() <= 0.5)
+        if self.pass1 != o.pass1 {
+            return false;
+        }
+        let diff = (0..3).map(|k| (self.lo[k] - o.lo[k]).abs().max((self.hi[k] - o.hi[k]).abs())).fold(0.0f32, f32::max);
+        if self.count == o.count && diff <= 0.5 {
+            return true;
+        }
+        let size = (0..3).map(|k| self.hi[k] - self.lo[k]).fold(0.0f32, f32::max);
+        (size > 200.0 && diff <= 0.05 * size) || (size > 800.0 && diff <= 0.25 * size) || (size > 100.0 && self.overlap(o) >= 0.4) || self.contains(o) >= 0.9
+    }
+
+    /// The part of `o`'s box that lies inside this one's (each extent at least 1 unit).
+    pub fn contains(&self, o: &PartSig) -> f32 {
+        let vol = |lo: [f32; 3], hi: [f32; 3]| (0..3).map(|k| (hi[k] - lo[k]).max(1.0)).product::<f32>();
+        let (lo, hi): ([f32; 3], [f32; 3]) = (std::array::from_fn(|k| self.lo[k].max(o.lo[k])), std::array::from_fn(|k| self.hi[k].min(o.hi[k])));
+        if (0..3).any(|k| hi[k] < lo[k]) {
+            return 0.0;
+        }
+        vol(lo, hi) / vol(o.lo, o.hi)
+    }
+
+    /// The bounding boxes' intersection over their union (each extent at least 1 unit).
+    pub fn overlap(&self, o: &PartSig) -> f32 {
+        let vol = |lo: [f32; 3], hi: [f32; 3]| (0..3).map(|k| (hi[k] - lo[k]).max(1.0)).product::<f32>();
+        let (lo, hi): ([f32; 3], [f32; 3]) = (std::array::from_fn(|k| self.lo[k].max(o.lo[k])), std::array::from_fn(|k| self.hi[k].min(o.hi[k])));
+        if (0..3).any(|k| hi[k] <= lo[k]) {
+            return 0.0;
+        }
+        let i = vol(lo, hi);
+        i / (vol(self.lo, self.hi) + vol(o.lo, o.hi) - i)
     }
 }
 
@@ -2575,9 +2648,12 @@ impl PartSig {
 /// rule, not a spec rule).
 fn sync_zones(
     state: Option<Res<PlayState>>,
-    mut parts: Query<(Option<&ZoneGate>, Option<&PartSig>, Option<&DrawCull>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>, With<DrawCull>)>>,
+    mut parts: Query<(Entity, Option<&ZoneGate>, Option<&PartSig>, Option<&DrawCull>, &mut Visibility), Or<(With<ZoneGate>, With<PartSig>, With<DrawCull>)>>,
     cameras: Query<&GlobalTransform, With<Camera3d>>,
     settings: Res<display::DisplaySettings>,
+    mut toggles: Local<(std::collections::HashMap<Entity, (u32, String)>, u32)>,
+    sigs: Res<SceneSigs>,
+    mut dups: Local<(u32, usize, std::collections::HashMap<Entity, bool>)>,
 ) {
     let _span = crate::perf::span("sync_zones");
     let Some(state) = state else { return };
@@ -2585,15 +2661,39 @@ fn sync_zones(
     // default) draws every instance at any distance.
     let eye = cameras.iter().next().map(|g| g.translation()).filter(|_| settings.original_foliage);
     let current = state.play.world.pack;
-    let mine: Vec<PartSig> = parts.iter().filter_map(|(_, s, ..)| s.filter(|s| s.pack == current).copied()).collect();
-    for (g, s, cull, mut v) in &mut parts {
+    let mine: &[PartSig] = sigs.0.get(&current).map_or(&[], |v| &v[..]);
+    // The duplicate test is cached per entity until the current world or its scene changes.
+    let key = (current, mine.len() + sigs.0.len());
+    if (dups.0, dups.1) != key {
+        *dups = (key.0, key.1, std::collections::HashMap::new());
+    }
+    // NEOPETS_TRACE_VIS: parts whose visibility changes, counted and printed every 300 frames
+    // (diagnostic, for flicker).
+    let trace = std::env::var_os("NEOPETS_TRACE_VIS").is_some();
+    for (e, g, s, cull, mut v) in &mut parts {
         let zone_ok = g.is_none_or(|g| state.play.zone_visible(g.0, g.1));
-        let dup = s.is_some_and(|s| s.pack != current && mine.iter().any(|m| m.same(s)));
+        let dup = s.is_some_and(|s| s.pack != current && *dups.2.entry(e).or_insert_with(|| mine.iter().any(|m| m.same(s))));
         // Skipped at D1 or more (squared values compared).
         let near = cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
         let want = if zone_ok && !dup && near { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
+            if trace {
+                let t = (*toggles).0.entry(e).or_insert((0, String::new()));
+                t.0 += 1;
+                t.1 = format!("zone {:?} sig {:?} zone_ok {zone_ok} dup {dup} near {near}", g.map(|g| (g.0, g.1)), s.map(|s| (s.pack, s.count, s.lo, s.hi)));
+            }
             *v = want;
+        }
+    }
+    if trace {
+        (*toggles).1 += 1;
+        if (*toggles).1 % 300 == 0 {
+            let mut list: Vec<_> = (*toggles).0.iter().filter(|(_, t)| t.0 > 2).map(|(e, t)| (t.0, *e, t.1.clone())).collect();
+            list.sort_by(|a, b| b.0.cmp(&a.0));
+            println!("vis frame {}: {} parts toggled more than twice", (*toggles).1, list.len());
+            for (n, e, d) in list.iter().take(10) {
+                println!("  {e:?} toggled {n}: {d}");
+            }
         }
     }
 }

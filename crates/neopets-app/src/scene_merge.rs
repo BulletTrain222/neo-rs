@@ -51,7 +51,21 @@ impl Built {
 
     /// The parts that repeat a part of one of `others` (the other drawn scenes' signatures).
     pub fn twins(&self, others: &[&[PartSig]]) -> Vec<bool> {
-        self.sigs.iter().map(|s| others.iter().any(|o| o.iter().any(|t| t.same(s)))).collect()
+        // NEOPETS_TRACE_TWINS: each large part's closest part in the other scenes (diagnostic).
+        if std::env::var_os("NEOPETS_TRACE_TWINS").is_some() {
+            for s in self.sigs.iter().filter(|s| s.size() > 200.0) {
+                let best = others.iter().flat_map(|o| o.iter()).map(|t| (t.diff(s), t.count, t.pack, t.same(s), s.same(t))).min_by(|a, b| a.0.total_cmp(&b.0));
+                println!("twin check {} part ({} verts, size {:.0}, lo {:?}): closest {best:?}", s.pack, s.count, s.size(), s.lo);
+            }
+        }
+        let out: Vec<bool> = self.sigs.iter().map(|s| others.iter().any(|o| o.iter().any(|t| t.same(s)))).collect();
+        if std::env::var_os("NEOPETS_TRACE_TWINS").is_some() {
+            println!("twins of {:?}: {} of {} against {} other scenes", self.sigs.first().map(|s| s.pack), out.iter().filter(|&&t| t).count(), out.len(), others.len());
+            for (s, t) in self.sigs.iter().zip(&out).filter(|(s, _)| s.size() > 1000.0) {
+                println!("  big part {} verts lo {:?}: twin {t}", s.count, s.lo);
+            }
+        }
+        out
     }
 }
 
