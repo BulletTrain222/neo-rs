@@ -4204,7 +4204,9 @@ fn play_trace(
         // NEOPETS_TRACE_CHARS=tick: each character's name, position and activity (diagnostic).
         if std::env::var("NEOPETS_TRACE_CHARS").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) {
             for c in &play.characters {
-                println!("      char {} {:?} entity {:?} at ({:.1}, {:.1}, {:.1}) inactive {} deactivated {} enemy {}", c.name, c.pack, c.entity, c.position[0], c.position[1], c.position[2], c.inactive, c.deactivated, c.enemy.is_some());
+                let world = [&play.world].into_iter().chain(play.other.as_ref()).find(|w| w.pack == c.pack);
+                let ground = world.and_then(|w| w.ground_at(c.position[0], c.position[2], c.position[1] + 5.0));
+                println!("      char {} {:?} entity {:?} at ({:.1}, {:.1}, {:.1}) inactive {} deactivated {} enemy {} ground {:?} fly {}", c.name, c.pack, c.entity, c.position[0], c.position[1], c.position[2], c.inactive, c.deactivated, c.enemy.is_some(), ground.map(|g| (g * 10.0).round() / 10.0), c.row.map_or(0, |r| r.can_fly));
             }
         }
         // NEOPETS_TRACE_BLOCKERS=tick: what pushes the hero on that tick (diagnostic).
