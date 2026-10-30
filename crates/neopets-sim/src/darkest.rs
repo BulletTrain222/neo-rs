@@ -222,6 +222,25 @@ impl Faerie {
         self.first = true;
     }
 
+    /// Developer menu (this build's tool): the final fight moved on by one of the player's
+    /// steps. In the absorb window, the third absorb (the fall follows); before the third stun,
+    /// a stun hold with the count at 2, so its end makes the third (levels 12 and 10, the
+    /// script's swap and burst); otherwise nothing (also while she waits in code 1, before the
+    /// hero has walked in or during a swap). Returns whether it acted.
+    pub fn dev_advance(&mut self) -> bool {
+        if self.code == 7 {
+            self.absorbs = 3;
+            true
+        } else if self.stuns < 3 && !self.hold_flag && !matches!(self.code, 1 | 8 | 9) {
+            self.stuns = 2;
+            self.flinch = false;
+            self.enter(6);
+            true
+        } else {
+            false
+        }
+    }
+
     fn launch(&mut self, ty: u8, kind: u8, at: Vec3) {
         if let Some(s) = self.slots.iter_mut().find(|s| s.is_none()) {
             *s = Some(Slot { ty, kind, position: at });

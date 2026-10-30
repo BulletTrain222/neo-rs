@@ -5357,6 +5357,13 @@ impl Play {
         out
     }
 
+    /// SPEC-0036 Knockback on the hero: the long fall with the new velocity, and any ledge
+    /// hold dropped (the hero is no longer on it).
+    fn knock_hero(&mut self, velocity: [f32; 3]) {
+        self.ledge = None;
+        self.loco.knock(velocity);
+    }
+
     fn leave_ledge(&mut self, state: u8) {
         self.ledge = None;
         self.loco.body.no_gravity = false;
@@ -6453,6 +6460,50 @@ impl Play {
     /// Diagnostic fight goal: a stunned boss, else the nearest living active class-17 character
     /// of the current world, and
     /// whether it is within 4.5 units.
+    /// Whether a character runs one of the boss controllers.
+    pub fn is_boss(c: &Character) -> bool {
+        c.boss.is_some() || c.gnarfas.is_some() || c.king.is_some() || c.ixi.is_some() || c.sister.is_some() || c.draik.is_some() || c.faerie.is_some() || c.serpent.is_some() || c.knight.is_some() || c.gelert.is_some() || c.cloud.is_some()
+    }
+
+    /// NEOPETS_BOSS_DEFEAT (diagnostic): the developer menu's defeat of every enemy and boss of
+    /// the current world. Returns how many it acted on.
+    pub fn diag_defeat_bosses(&mut self) -> usize {
+        self.dev_kill_enemies()
+    }
+
+    /// A one-line account of what could hold the player after a fight (diagnostic): the world,
+    /// the hero's state and hold, the fade, bars, camera play and dialogue, each script thread's
+    /// wait, and the bosses still about.
+    pub fn diag_scene_report(&self) -> String {
+        let threads: Vec<String> = self.threads.iter().map(|t| format!("{}:{:?}+{}", t.pack, t.wait, t.calls.len())).collect();
+        let bosses: Vec<String> = self.characters.iter().filter(|c| Self::is_boss(c)).map(|c| format!("{} hp {}{}{}", c.name, c.hp, if c.inactive { " inactive" } else { "" }, if c.dying.is_some() { " dying" } else { "" })).collect();
+        format!(
+            "tick {} world {} (other {:?}) hero state {} hp {}/{} held {} walk {} | fade {:.0}->{:.0} bars {:.2}->{:.2} cut {} dialogue {} movies {:?} | levels {:?} dead AIs {:?} flags {:?} | threads {:?} | bosses {:?} | {}",
+            self.ticks,
+            self.world.pack,
+            self.other.as_ref().map(|o| o.pack),
+            self.loco.state,
+            self.hero_hp,
+            self.hero_max,
+            self.held,
+            self.hero_walk.is_some(),
+            self.fade.alpha,
+            self.fade.target,
+            self.bars.progress,
+            self.bars.target,
+            self.cut.is_some(),
+            self.dialogue_open,
+            self.state.movie_queue,
+            { let mut l: Vec<u16> = self.state.level_flags.iter().copied().collect(); l.sort_unstable(); l },
+            { let mut d: Vec<u32> = self.state.ai_dead.iter().map(|&e| e as u32).collect(); d.sort_unstable(); d },
+            // NEOPETS_SCENE_FLAGS="a,b,...": those story flags' values as well.
+            std::env::var("NEOPETS_SCENE_FLAGS").ok().map(|v| v.split(',').filter_map(|t| t.trim().parse::<u16>().ok()).map(|f| (f, self.state.flag(f))).collect::<Vec<_>>()).unwrap_or_default(),
+            threads,
+            bosses,
+            self.last_boss
+        )
+    }
+
     pub fn fight_goal(&self) -> Option<([f32; 2], bool)> {
         let p = self.loco.position();
         // A Juppie in a stage with no living enemy about: stand on the stage's first unused
@@ -9439,7 +9490,7 @@ impl Play {
         }
         if let Some(k) = act.knock {
             if self.loco.state != hero_states::DEAD {
-                self.loco.knock(k);
+                self.knock_hero(k);
             }
         }
         for p in act.bursts {
@@ -10688,7 +10739,7 @@ impl Play {
         if damage > 0 && knockback > 0.0 {
             let d = unit([9.0 * attacker_facing[0], 9.0 * attacker_facing[1] + 12.0, 9.0 * attacker_facing[2]]);
             self.attack = None;
-            self.loco.knock(scale(d, knockback));
+            self.knock_hero(scale(d, knockback));
         }
         false
     }
@@ -10861,7 +10912,7 @@ impl Play {
             if let Some(s) = act.knockback {
                 let k = unit([9.0 * d[0], 12.0, 9.0 * d[2]]);
                 self.attack = None;
-                self.loco.knock(scale(k, self.gnarfas_words.push * s));
+                self.knock_hero(scale(k, self.gnarfas_words.push * s));
             }
         }
     }
@@ -11026,7 +11077,7 @@ impl Play {
             }
             if let Some(p) = act.push {
                 self.attack = None;
-                self.loco.knock(p);
+                self.knock_hero(p);
             }
         }
     }
@@ -12039,7 +12090,7 @@ impl Play {
                 if let Some((u, speed)) = throw {
                     // R-0066: the throw is speed x unit((0, 12, 0) + 9 u).
                     self.attack = None;
-                    self.loco.knock(scale(unit([9.0 * u[0], 12.0, 9.0 * u[2]]), speed));
+                    self.knock_hero(scale(unit([9.0 * u[0], 12.0, 9.0 * u[2]]), speed));
                 }
             }
         }
@@ -12166,7 +12217,7 @@ impl Play {
                 self.attack = None;
                 let at = add(self.loco.position(), p.offset);
                 self.loco.body.position = at;
-                self.loco.knock(p.velocity);
+                self.knock_hero(p.velocity);
             }
         }
     }
@@ -12272,6 +12323,22 @@ impl Play {
             let world = &self.world;
             let ground = |x: f32, z: f32, from: f32| world.ground_at(x, z, from);
             let c = &mut self.characters[i];
+            // SPEC-0016 9 and 11C, Defeat: health 0 (a stun strike) runs the shared death hook:
+            // base state 16 with the 510-tick death countdown, and the controller is no longer
+            // stepped (its phase check would otherwise start a change at 0 HP). The corpse loops
+            // the idle clip and sinks 1/180 a tick until the countdown ends; the dead AI is what
+            // 735's victory scene waits for (level state 11).
+            if c.hp <= 0 || c.dying.is_some() {
+                if c.dying.is_none() {
+                    c.dying = Some(510);
+                    c.anim.play(5);
+                    let t = self.ticks;
+                    self.last_boss = format!("Plague Serpent defeated on tick {t}");
+                } else {
+                    c.position[1] -= 1.0 / 180.0;
+                }
+                continue;
+            }
             let bits = c.anim.frame_bits();
             let place = placement(c.position, c.facing);
             let frames = c.anim.bone_frames();
@@ -14338,8 +14405,6 @@ impl Play {
         Ok(())
     }
 
-    /// Give an item diagnostically: a weapon (types 3 and 6) or one of Tor's shields (type 5) is
-    /// equipped; every item is also counted as held.
     /// Developer menu: every living enemy of the current world takes a defeating hit (bosses that
     /// refuse damage keep refusing it). Returns how many were hit.
     pub fn dev_kill_enemies(&mut self) -> usize {
@@ -14384,6 +14449,26 @@ impl Play {
             if let Some(sis) = c.sister.as_mut().filter(|s| s.state != neopets_sim::sisters::State::Dead) {
                 sis.state = neopets_sim::sisters::State::Dead;
                 c.hp = 0;
+                bosses += 1;
+            }
+        }
+        // The Juppies: their death sequence on the next tick. The bosses whose controllers read
+        // their HP each tick (Gnarfas, the Werelupe King, the Ixi Chieftain, the Plague Serpent, the Cloud Beast): HP to 0, so
+        // each runs its own defeat (the Ixi Chieftain of 800 still goes through its half-health
+        // scene first, as its stage rules say; press again after it).
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0) {
+            if c.boss.as_mut().is_some_and(|b| b.dev_defeat()) {
+                c.hp = 0;
+                bosses += 1;
+            } else if c.gnarfas.is_some() || c.king.is_some() || c.ixi.as_ref().is_some_and(|k| k.state != neopets_sim::ixi::State::Death) || c.serpent.is_some() || c.cloud.is_some() {
+                c.hp = 0;
+                bosses += 1;
+            }
+        }
+        // The Darkest Faerie has no HP (SPEC-0054): her fight moves on one step (a third stun,
+        // or the third absorb in the window).
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
+            if c.faerie.as_mut().is_some_and(|f| f.dev_advance()) {
                 bosses += 1;
             }
         }

@@ -518,9 +518,14 @@ impl Locomotion {
 
     /// SPEC-0036 Knockback on the hero: the velocity is replaced and the hero enters the long
     /// fall (state 48, SPEC-0033 Behavior 9B).
+    /// A hold that switched gravity off (a ledge, ladder, panel, line or rope) ends with the
+    /// knock: without this the long fall kept the hold's no-gravity flag and a hero knocked off a
+    /// ledge rose for ever at the knock's speed.
     pub fn knock(&mut self, velocity: Vec3) {
         self.body.velocity = velocity;
         self.body.gain = 1.0;
+        self.body.no_gravity = false;
+        self.body.no_snap = false;
         self.state = LONG_FALL;
         self.request = ANIM_LONG_FALL;
     }
@@ -952,6 +957,23 @@ mod tests {
         assert_eq!(f.shown, 0.0);
         f.tick(-1.0, 8);
         assert!(f.shown < 0.0);
+    }
+
+    #[test]
+    fn a_knock_from_a_no_gravity_hold_falls() {
+        // A ledge hold switches gravity off; the knock must switch it back on so the long fall
+        // comes down (it used to keep rising at the knock's speed).
+        let mut h = Locomotion::spawn([0.0, 10.0, 0.0], FWD);
+        h.body.no_gravity = true;
+        h.body.no_snap = true;
+        h.knock([0.0, 4.0, 1.0]);
+        assert_eq!(h.state, LONG_FALL);
+        assert!(!h.body.no_gravity && !h.body.no_snap);
+        let first = h.body.velocity[1];
+        for _ in 0..30 {
+            tick(&mut h, &HeroInput::default(), |_, _, _| (-100.0, [0.0, 1.0, 0.0]));
+        }
+        assert!(h.body.velocity[1] < first, "{} then {}", first, h.body.velocity[1]);
     }
 
     #[test]

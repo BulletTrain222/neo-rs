@@ -4399,8 +4399,9 @@ fn play_trace(
                 println!("      {line}");
             }
         }
-        // `--trace-to x,z` steers the stick toward a point through the camera's rows.
-        let (mut forward, mut side) = (0.7, 0.0);
+        // `--trace-to x,z` steers the stick toward a point through the camera's rows; without
+        // one the stick is held forward at 0.7, or left centred with NEOPETS_TRACE_STAND.
+        let (mut forward, mut side) = (if std::env::var_os("NEOPETS_TRACE_STAND").is_some() { 0.0 } else { 0.7 }, 0.0);
         // After a swap along a `swap` route, go on to a cell that names a new neighbour.
         if play.swaps > 0 && to.is_some_and(|t| t[1].is_nan()) && route.len() <= 1 && !rerouted {
             rerouted = true;
@@ -4487,6 +4488,28 @@ fn play_trace(
             if play.ticks == k {
                 play.state.set_level(f, true);
                 println!("      diagnostic: level flag {f} set on tick {k}");
+            }
+        }
+        // NEOPETS_BOSS_DEFEAT="tick" (or "tick,every" to repeat every 300 ticks after it): the
+        // developer menu's defeat of every enemy and boss on that tick; from then on, and with
+        // NEOPETS_TRACE_SCENE=n every n ticks from the start, a line of what could hold the
+        // player (diagnostic: soft locks after a fight).
+        if let Ok(v) = std::env::var("NEOPETS_BOSS_DEFEAT") {
+            let mut it = v.split(',');
+            if let Some(k) = it.next().and_then(|t| t.trim().parse::<u64>().ok()) {
+                let every = it.next().is_some_and(|t| t.trim() == "every");
+                if play.ticks == k || (every && play.ticks > k && (play.ticks - k) % 300 == 0) {
+                    let n = play.diag_defeat_bosses();
+                    println!("      DEFEAT on tick {}: {n} acted on", play.ticks);
+                }
+                if play.ticks >= k && (play.ticks - k) % 120 == 0 {
+                    println!("      SCENE {}", play.diag_scene_report());
+                }
+            }
+        }
+        if let Some(n) = std::env::var("NEOPETS_TRACE_SCENE").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|&n| n > 0) {
+            if play.ticks % n == 0 {
+                println!("      SCENE {}", play.diag_scene_report());
             }
         }
         let fight = to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten();

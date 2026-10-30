@@ -190,11 +190,13 @@ pub struct Juppie {
     spit_count: i32,
     spit_done: i32,
     spit_fired: bool,
+    /// The developer menu's defeat, run on the next tick (`dev_defeat`).
+    dev_death: bool,
 }
 
 impl Default for Juppie {
     fn default() -> Self {
-        Self { stage: 0, marker: None, top: Top::Hub { played: false }, cooldown: 0, stun: 0, counted: 0, slam_latch: false, once: false, uses: 0, started: false, spit: false, dazed: 0, spit_wait: -1, spit_count: 0, spit_done: 0, spit_fired: false }
+        Self { stage: 0, marker: None, top: Top::Hub { played: false }, cooldown: 0, stun: 0, counted: 0, slam_latch: false, once: false, uses: 0, started: false, spit: false, dazed: 0, spit_wait: -1, spit_count: 0, spit_done: 0, spit_fired: false, dev_death: false }
     }
 }
 
@@ -222,8 +224,20 @@ impl Juppie {
     }
 
     /// One tick.
+    /// Developer menu (this build's tool): the death sequence on the next tick, as a lethal
+    /// blow in the stun or dazed loop runs it (the boss's HP is checked only there, so HP 0
+    /// alone does nothing while it is free). Returns whether it was armed.
+    pub fn dev_defeat(&mut self) -> bool {
+        self.dev_death = self.top != Top::Finale;
+        self.dev_death
+    }
+
     pub fn tick(&mut self, v: &View, w: &Words, rng: &mut Rng) -> Act {
         let mut a = Act::default();
+        if std::mem::take(&mut self.dev_death) {
+            self.death(&mut a);
+            return a;
+        }
         let dazed = self.top == Top::Slam(5) && self.dazed > 0;
         self.state_step(v, w, rng, &mut a);
         // The hit helper's deflect pass on every tick the dazed loop did not run it: every
