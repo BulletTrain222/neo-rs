@@ -1968,7 +1968,11 @@ pub fn picker_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
             out.push(sprite(icon, p, None, None));
         }
         let (tx, ty) = (fe.nodes[title].x as f32, fe.nodes[title].y as f32 + p);
-        out.push(Draw::Text { font: title_font, text: line1.to_vec(), spacing: title_spacing, x: tx, y: ty, colour: w.title_colour });
+        // With eight slots (this build) each row is numbered, so the scrolled list shows which
+        // slot is which.
+        let mut text = format!("{}. ", k + 1).into_bytes();
+        text.extend_from_slice(line1);
+        out.push(Draw::Text { font: title_font, text, spacing: title_spacing, x: tx, y: ty, colour: w.title_colour });
         let (ox, oy) = (fe.nodes[objective].x as f32, fe.nodes[objective].y as f32 + p);
         if limit != 0 {
             for (i, &(a, b)) in lines.iter().take(shown).enumerate() {

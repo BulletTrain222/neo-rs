@@ -1531,7 +1531,10 @@ fn step_sim(
             // (diagnostic, for a screenshot).
             if let Some((page, k)) = std::env::var("NEOPETS_TRACE_PAGE").ok().and_then(|v| v.split_once('@').map(|(a, b)| (a.to_string(), b.trim().parse::<u64>().ok()))) {
                 if k == Some(play.play.ticks) {
-                    if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
+                    // "save@n": the save screen, as a save point's Square press opens it.
+                    if page == "save" {
+                        play.play.save_open = true;
+                    } else if let (Some(m), Some(a)) = (menu.as_deref_mut(), art.as_deref()) {
                         m.flow.map_view = play.play.map_view();
                         m.flow.trace_open(&a.f, &page);
                     }
