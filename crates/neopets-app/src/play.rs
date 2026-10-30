@@ -8196,6 +8196,23 @@ impl Play {
         // push out of a wall, box, block or sphere, or a block top's floor contact.
         let touched = Cell::new(false);
         let swap = Cell::new(false);
+        // SPEC-0040 Behavior 11, character-to-character push: the hero (not in action state 33
+        // or 53) against each active, living character of a drawn world within 20 units whose
+        // vertical body cylinder (its row's radius and height) overlaps the hero's, pushed out
+        // along the horizontal overlap direction. The collidable word (+0x284) and the
+        // candidate-side cases (the hero's states 50, 52, 21 and 41, the class callback) are
+        // not built: the hero is always the one moved.
+        let hero_at = self.loco.position();
+        let bodies: Vec<([f32; 3], f32, f32)> = if noclip || matches!(hero_state, 33 | 53) {
+            Vec::new()
+        } else {
+            self.characters
+                .iter()
+                .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char)
+                .filter_map(|c| c.row.map(|r| (c.position, r.radius, r.height)))
+                .filter(|(q, ..)| (q[0] - hero_at[0]).powi(2) + (q[1] - hero_at[1]).powi(2) + (q[2] - hero_at[2]).powi(2) < 400.0)
+                .collect()
+        };
         self.loco.record_tick(
             self.root_step,
             |x, z, c| {
@@ -8251,6 +8268,19 @@ impl Play {
                 // SPEC-0018 Sphere contact: out of the pushing spheres to r + 1.25.
                 if !noclip {
                     contact::resolve_spheres(p, &world.push_spheres);
+                }
+                for &(q, r, h) in &bodies {
+                    if p[1] >= q[1] + h || q[1] >= p[1] + HERO_HEIGHT {
+                        continue;
+                    }
+                    let (dx, dz) = (p[0] - q[0], p[2] - q[2]);
+                    let d = dx.hypot(dz);
+                    let min = contact::HERO_RADIUS + r;
+                    if d < min {
+                        let (ux, uz) = if d > 1e-4 { (dx / d, dz / d) } else { (1.0, 0.0) };
+                        p[0] = q[0] + ux * min;
+                        p[2] = q[2] + uz * min;
+                    }
                 }
                 let moved = (0..3).any(|k| (p[k] - before[k]).abs() > 1e-5);
                 if moved || c.floor || c.side_touch {
