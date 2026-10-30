@@ -924,7 +924,7 @@ impl Enemy {
     fn idle(&mut self, moving: bool, v: &View, rng: &mut Rng) -> u32 {
         let base = if moving { 97 } else { 0 };
         if let Some(id) = self.idle_variant {
-            if v.clip.action == id && !v.clip.ended() {
+            if v.clip.action == self.shown(id) && !v.clip.ended() {
                 return id;
             }
             self.idle_variant = None;
@@ -945,9 +945,25 @@ impl Enemy {
         }
     }
 
+    /// The id that plays for a requested id: its flying form while airborne (`fly_step`; 141
+    /// for the agro idle), else the id itself.
+    fn shown(&self, id: u32) -> u32 {
+        if !self.airborne() {
+            id
+        } else if self.state == 19 && matches!(id, 0 | 1) {
+            141
+        } else {
+            fly_anim(id)
+        }
+    }
+
     /// Play an animation to its end: true once it has finished (at once when the table lacks it).
+    /// The table test and the end test read the id that actually plays (a flyer's flying form:
+    /// a flying dodge requested as 55 plays 140, and comparing with 55 never ended it, so the
+    /// flyer hung in the dodge, unhittable).
     fn through(&mut self, id: u32, v: &View, a: &mut Act) -> bool {
-        if !(v.has)(id) {
+        let shown = self.shown(id);
+        if !(v.has)(shown) {
             return true;
         }
         a.anim = Some(id);
@@ -956,10 +972,10 @@ impl Enemy {
             self.through_seen = false;
             return false;
         }
-        if v.clip.action == id && !v.clip.ended() {
+        if v.clip.action == shown && !v.clip.ended() {
             self.through_seen = true;
         }
-        v.clip.action == id && v.clip.ended() && self.through_seen
+        v.clip.action == shown && v.clip.ended() && self.through_seen
     }
 
     /// Gait n of the current set (gaits 5 and 6 are swapped in the lookup).
@@ -1477,7 +1493,7 @@ impl Enemy {
                 }
             }
             10 => {
-                if v.clip.action == 73 && v.clip.ended() {
+                if v.clip.action == self.shown(73) && v.clip.ended() {
                     self.set(0, v, rng, &mut a);
                 }
             }

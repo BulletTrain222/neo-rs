@@ -1432,7 +1432,23 @@ impl Play {
     /// Load a hero outfit and a world pack's ground and spawn point. Pack 909 starts as the new
     /// game does, with 691 resident in T.
     pub fn load(disc: &mut Disc, index: &ArchiveIndex, pack: u32, outfit: u32) -> Result<Self, String> {
-        Self::load_with_flags(disc, index, pack, outfit, &[])
+        let mut play = Self::load_with_flags(disc, index, pack, outfit, &[])?;
+        play.new_game_kit();
+        Ok(play)
+    }
+
+    /// SPEC-0021 New game: the reset adds Farmer's Clothes (119) x1, Red Juppie (150) x3,
+    /// Purple Juppie (149) x3 and the Golden Negg (151) through the normal add. The Golden Negg is
+    /// a stat-up the add consumes, and the same reset then empties the once-per-area lists and
+    /// sets the pools to their start values, so nothing of it is left: the kit is the clothes and
+    /// the six Juppies, with the clothes in the body entry.
+    pub fn new_game_kit(&mut self) {
+        self.state.items.clear();
+        self.give(119);
+        for _ in 0..3 {
+            self.give(150);
+            self.give(149);
+        }
     }
 
     /// As `load`, with story flags set before the start world's Init (a diagnostic stand-in for
@@ -9775,7 +9791,7 @@ impl Play {
             wk.float = airborne && row.can_fly == 1;
             // NEOPETS_TRACE_FLY: each flyer's height, its goal and the ground every 15 ticks.
             if row.can_fly != 0 && self.ticks % 15 == 0 && std::env::var_os("NEOPETS_TRACE_FLY").is_some() {
-                println!("      fly {name} tick {}: can_fly {} airborne {airborne} retarget {} state {} y {:.2} goal {:?} ground {:?} hero y {:.1} max_fly {} step {:?} anim {:?}", self.ticks, row.can_fly, e.retarget, e.state, wk.position()[1], fly_y, fly_y.and_then(|g| world.ground_at(p[0], p[2], g + 8.0)), hero[1], e.p.max_fly, act.fly, act.anim);
+                println!("      fly {name} tick {}: can_fly {} airborne {airborne} retarget {} state {} y {:.2} goal {:?} ground {:?} hero y {:.1} max_fly {} step {:?} anim {:?} at ({:.1}, {:.1}) mesh {:?} blocked {} go {:?}", self.ticks, row.can_fly, e.retarget, e.state, wk.position()[1], fly_y, fly_y.and_then(|g| world.ground_at(p[0], p[2], g + 8.0)), hero[1], e.p.max_fly, act.fly, act.anim, p[0], p[2], wk.mesh, wk.blocked, act.go);
             }
             if airborne {
                 if let Some(f) = act.fly {
@@ -14543,7 +14559,7 @@ impl Play {
                 Some(t) => format!("{} [mode {} id {} at {:.0},{:.0}]", c.name, t.mode, c.anim.action(), c.position[0], c.position[2]),
                 None if c.enemy.is_some() => {
                     let e = c.enemy.as_ref().unwrap();
-                    let what = if e.is_dead() { "dead".to_string() } else { format!("state {} outer {} inner {} seq {}", e.state, e.outer, e.inner, e.seq) };
+                    let what = if e.is_dead() { "dead".to_string() } else { format!("state {} outer {} inner {} seq {}{}", e.state, e.outer, e.inner, e.seq, if c.held { " HELD" } else { "" }) };
                     format!(
                         "{} [{what}, hp {}, id {} at {:.0},{:.1},{:.0}]",
                         if c.name.is_empty() { "(unnamed)" } else { &c.name },
