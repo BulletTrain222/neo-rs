@@ -1098,6 +1098,9 @@ pub struct Play {
     /// The boss readout of the F6 panel (this build's tool): lines from the boss's controller,
     /// rewritten every tick (the Black Knight's `describe`).
     pub boss_info: Vec<String>,
+    /// SPEC-0026 flag B: armed by an exterior replacement load; counts non-busy passes and at 6
+    /// fades the screen in over 5 frames from black.
+    fade_in_after_load: Option<u32>,
     /// The last spawn-by-key request's outcome.
     pub last_summon: String,
     /// The live petpet (SPEC-0047 class 34), its character once its package has loaded, the
@@ -1926,6 +1929,7 @@ impl Play {
             boss_hits: Vec::new(),
             last_boss: String::new(),
             boss_info: Vec::new(),
+            fade_in_after_load: None,
             last_summon: String::new(),
             petpet: None,
             pet_char: None,
@@ -7544,6 +7548,9 @@ impl Play {
                 self.arrive(landing.unwrap_or(([0.0; 3], [1.0, 0.0, 0.0])));
                 self.last_door = format!("replaced the exterior with {}, arriving at door {plane}", self.world.pack);
                 self.activated();
+                // SPEC-0026 flag B: the post-load fade-in (the knight's defeat faded out to the
+                // return to 986 and nothing faded back in: a black screen).
+                self.fade_in_after_load = Some(0);
             }
             Job::ReloadTransition(_) => {
                 if self.world.buffer == Buffer::Exterior {
@@ -8762,6 +8769,18 @@ impl Play {
             self.state.timer.tick();
         }
         self.zone_step();
+        // SPEC-0026 flag B (six-pass rule): a pass with no load in progress counts, a busy pass
+        // resets the count; at 6 the screen fades in over 5 frames from black.
+        if let Some(n) = self.fade_in_after_load {
+            let busy = self.job.is_some() || self.wanted.is_some() || !self.region_wanted.is_empty() || self.loads_out > 0;
+            let n = if busy { 0 } else { n + 1 };
+            if n >= 6 {
+                self.fade_in_after_load = None;
+                self.fade.fade_in([0; 3], 5);
+            } else {
+                self.fade_in_after_load = Some(n);
+            }
+        }
         self.stream_step();
         self.foliage_step();
         self.placed_release_step();
@@ -11245,6 +11264,11 @@ impl Play {
             };
             let Some(k) = c.knight.as_mut() else { continue };
             k.start.get_or_insert(c.position);
+            // NEOPETS_KNIGHT_DEFEAT: every weak point at 0 on the first tick (diagnostic: the
+            // defeat and the arena's hand-off without the fight).
+            if self.ticks < 5 && std::env::var_os("NEOPETS_KNIGHT_DEFEAT").is_some() {
+                k.parts = [0; 6];
+            }
             let before = k.state;
             let act = k.tick(&v, &words, &mut self.rng);
             let after = k.state;
