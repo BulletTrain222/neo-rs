@@ -8337,6 +8337,9 @@ impl Play {
             }
         }
         self.slot_regions.retain(|(pack, _), _| resident.contains(pack));
+        // A released world's script threads end with its module (SPEC-0030 Lifetime: the
+        // module's threads last until its buffer is released).
+        self.threads.retain(|t| resident.contains(&t.pack));
         let hero = self.loco.position();
         let talking = if self.dialogue_open { self.talk_with } else { None };
         // Whinnies: routine, group count after each member (SPEC-0049), motion-record tick.

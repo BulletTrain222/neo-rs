@@ -1424,7 +1424,10 @@ impl Enemy {
         if self.p.can_fly == 1 && self.state == 19 && self.outer == 2 && matches!(self.seq, 7..=9 | 12) {
             return v.hero[1] + 2.0;
         }
-        fly_goal(self.p.can_fly, self.p.max_fly, v.hero, v.position, self.spawn.home, self.ambush, ground)
+        // The home-height rule applies only to an enemy waiting in state 8 (Behavior 21); one
+        // that left state 8 without the emerge is not held at home.
+        let ambush = if self.ambush == 0 && self.state != 8 { -1 } else { self.ambush };
+        fly_goal(self.p.can_fly, self.p.max_fly, v.hero, v.position, self.spawn.home, ambush, ground)
     }
 
     fn think(&mut self, v: &View, rng: &mut Rng) -> Act {
