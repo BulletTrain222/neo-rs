@@ -933,8 +933,10 @@ pub fn sync_textbox(
     let Ok(root) = canvas.single() else { return };
     if parts.is_empty() {
         // Above the front-end pages: a card message shows over the save and load screens.
-        for part in [BoxPart::Frame, BoxPart::Name, BoxPart::Body, BoxPart::Icon, BoxPart::Label, BoxPart::Icon2, BoxPart::Label2] {
-            let e = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, part, GlobalZIndex(1000))).id();
+        // Each part on its own layer, the frame lowest: parts sharing one global z-index have no
+        // fixed order, and the frame was sometimes drawn over the name and the prompt icon.
+        for (k, part) in [BoxPart::Frame, BoxPart::Name, BoxPart::Body, BoxPart::Icon, BoxPart::Label, BoxPart::Icon2, BoxPart::Label2].into_iter().enumerate() {
+            let e = commands.spawn((Node { position_type: PositionType::Absolute, ..default() }, ImageNode::default(), Visibility::Hidden, part, GlobalZIndex(1000 + k as i32))).id();
             commands.entity(root).add_child(e);
         }
         return;
