@@ -1404,7 +1404,9 @@ fn predicate(slot: i16, arg: u8, pc: Pc) -> i32 {
         13 => (a < 3 && v.equipped[a]) as i32,
         14 => (v.hero == 0) as i32,
         52 => (v.hero == 1) as i32,
-        15 => (it.tab == 1 && v.mote_selection as i32 == a as i32 % 100) as i32,
+        // The Mote panel's cells: the selection equals the argument (0 to 13 a Mote, 255 the
+        // centre "No Mote" cell).
+        15 => (it.tab == 1 && v.mote_selection as usize == a) as i32,
         16 => if a < 14 { v.mote_counts[a] as i32 } else { 0 },
         17 => (count_of(v.motes[2]) > 0) as i32,
         19 => (count_of(v.motes[0]) > 0) as i32,
