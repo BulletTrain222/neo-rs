@@ -1297,7 +1297,8 @@ fn step_sim(
         // Cross is a press edge; keep it for the next tick when this frame runs none.
         play.play.jump_latch |= vpad.pressed(bindings::CROSS);
         if let Some(auto) = autowalk.as_deref() {
-            input.forward = 0.7;
+            // NEOPETS_AUTO_STAND: --autojump presses only, the hero stands (diagnostic).
+            input.forward = if std::env::var_os("NEOPETS_AUTO_STAND").is_some() { 0.0 } else { 0.7 };
             if auto.jump && ticks > 0 && play.play.ticks % 120 == 0 {
                 play.play.jump_latch = true;
             }
@@ -1326,6 +1327,11 @@ fn step_sim(
             edge |= m.latched.0;
             buttons |= m.latched.1;
             m.latched = (0, 0);
+        }
+        // --autojump also presses Square every 10 ticks while a dialogue box is open, as the
+        // trace does (diagnostic, for screenshots past a scene's lines).
+        if autowalk.as_deref().is_some_and(|a| a.jump) && ticks > 0 && play.play.dialogue_open && play.play.ticks % 10 == 0 {
+            play.play.square_latch = true;
         }
         // A slot to apply after this frame's ticks (a load, or Continue with the snapshot).
         // The developer menu or free camera holds the hero's and the game menus' input.
@@ -1923,7 +1929,9 @@ fn mask_never_cuts(t: &neopets_data::model::ModelTexture, part: &neopets_data::m
 /// alpha, so such a triangle would otherwise write depth and leave a black hole where the main
 /// pass draws nothing (seen on Roberta's head with the sun or ambient occlusion on).
 fn drawn_indices(part: &neopets_data::model::MeshPart) -> Vec<u32> {
-    if part.colors.is_empty() {
+    // Only a textured part draws Mask(0.5); an untextured one draws solid whatever its vertex
+    // alpha, so it keeps every triangle.
+    if part.colors.is_empty() || part.texture.is_none() {
         return part.indices.clone();
     }
     let cut = |i: u32| part.colors.get(i as usize).is_none_or(|c| c[3].min(1.0) < 0.5);
@@ -3158,6 +3166,26 @@ fn sync_characters(
     for c in &p.characters {
         let rotation = Quat::from_rotation_y(c.facing[0].atan2(c.facing[2]));
         if !skinned.contains_key(&c.id) {
+            if std::env::var_os("NEOPETS_TRACE_CUT").is_some() {
+                if let Some(e) = &c.enemy {
+                    println!("spawn {}: default state {}, words {:?}", c.name, e.spawn.default_state, e.spawn.words);
+                }
+            }
+            // NEOPETS_TRACE_CUT: each new character's triangles whose three vertex alphas are below
+            // 0.5, textured and untextured (diagnostic).
+            if std::env::var_os("NEOPETS_TRACE_CUT").is_some() {
+                let (mut tex, mut plain, mut all) = (0, 0, 0);
+                for part in &c.model.parts {
+                    let cut = |i: u32| part.colors.get(i as usize).is_some_and(|q| q[3] < 0.5);
+                    for t in part.indices.chunks_exact(3) {
+                        all += 1;
+                        if t.iter().all(|&i| cut(i)) {
+                            if part.texture.is_some() { tex += 1 } else { plain += 1 }
+                        }
+                    }
+                }
+                println!("cut {}: {all} triangles, {tex} textured and {plain} untextured fully below 0.5", c.name);
+            }
             let parts = part_assets(&c.model, &mut meshes, &mut materials, &mut images);
             let mut list = Vec::new();
             let mut spawned = Vec::new();

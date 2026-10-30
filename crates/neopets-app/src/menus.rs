@@ -620,6 +620,10 @@ impl Flow {
         } else if page == "display" {
             self.enter(fe, OPTIONS, &ctx);
             self.open_display();
+        } else if let Some(tab) = page.strip_prefix("items") {
+            // "items", "items1" or "items2": the item page's tab.
+            self.item_tab = tab.parse::<usize>().unwrap_or(0).min(2);
+            self.enter(fe, ITEMS + self.item_tab, &ctx);
         } else if page == "journal" {
             self.map.area = self.map_view.hero_area;
             self.enter(fe, JOURNAL, &ctx);
