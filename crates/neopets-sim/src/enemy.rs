@@ -588,7 +588,9 @@ pub struct Enemy {
     pub block_hit: bool,
     /// The retarget (grounded) countdown (0xBF4): -1 idle; a grounding sets it positive.
     pub retarget: i32,
-    /// The ambush word (+0xBC0; SPEC-0040 Behavior 21): 0 keeps a flyer at its home height.
+    /// The ambush word (+0xBC0; SPEC-0040 Behavior 21): -1 at creation, 0 only while the enemy
+    /// waits in state 8, 1 and 2 during the emerge and 2 afterwards; 0 keeps a flyer at its home
+    /// height.
     pub ambush: i32,
     /// A navmesh re-pick is pending (passed out through the next act).
     repick: bool,
@@ -677,12 +679,16 @@ impl Enemy {
             through_seen: false,
             force: false,
             retarget: -1,
-            ambush: 0,
+            ambush: -1,
             repick: false,
         };
         e.draw_distances(rng);
         e.idle_timer = rng.range(120, 600);
         e.state = if default_state == 8 { 8 } else { e.default_case() };
+        // Waiting in state 8 sets the ambush word to 0 (SPEC-0040 Behavior 21).
+        if e.state == 8 {
+            e.ambush = 0;
+        }
         e
     }
 
@@ -747,6 +753,7 @@ impl Enemy {
         }
         if s == 8 {
             self.emerge = 0;
+            self.ambush = 0;
         }
         self.alerting = false;
         if s != self.state {
@@ -763,6 +770,7 @@ impl Enemy {
             0 => {
                 if len(sub(v.hero, v.position)) < self.spawn.emerge_distance * v.bands.0 {
                     self.emerge = 1;
+                    self.ambush = 1;
                 }
             }
             1 => {
@@ -780,6 +788,7 @@ impl Enemy {
                 }
                 self.through(id, v, a);
                 self.emerge = 2;
+                self.ambush = 2;
             }
             _ => match self.through {
                 Some(id) => {

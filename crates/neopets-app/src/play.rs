@@ -9165,7 +9165,8 @@ impl Play {
                 println!("      agro {name} tick {}: outer {} inner {} seq {} slot {:?} d {:.1} attackable {} recovery {}", self.ticks, e.outer, e.inner, e.seq, e.selected, (d[0] * d[0] + d[2] * d[2]).sqrt(), v.hero_attackable, e.recovery);
             }
             // The flyer's goal height (SPEC-0040 Behavior 21), with the ground under it.
-            let fly_y = e.airborne().then(|| e.fly_target(&v, world.ground_at(p[0], p[2], p[1] + 8.0)));
+            // The ground floor term probes from 8.0 above the goal point.
+            let fly_y = e.airborne().then(|| e.fly_target(&v, world.ground_at(p[0], p[2], e.fly_target(&v, None) + 8.0)));
             // NEOPETS_TRACE_DEFENCE: a defence starting (outers 5 to 8).
             if e.outer != outer_before && (5..=8).contains(&e.outer) && std::env::var_os("NEOPETS_TRACE_DEFENCE").is_some() {
                 println!("      defence: {name} enters outer {} (swing class {:?}) on tick {}", e.outer, v.hero_swing, self.ticks);
@@ -9211,6 +9212,10 @@ impl Play {
             // 0.1); a can-fly 1 flyer has no gravity and no ground projection.
             let airborne = e.airborne();
             wk.float = airborne && row.can_fly == 1;
+            // NEOPETS_TRACE_FLY: each flyer's height, its goal and the ground every 15 ticks.
+            if row.can_fly != 0 && self.ticks % 15 == 0 && std::env::var_os("NEOPETS_TRACE_FLY").is_some() {
+                println!("      fly {name} tick {}: can_fly {} airborne {airborne} retarget {} state {} y {:.2} goal {:?} ground {:?} hero y {:.1} max_fly {} step {:?} anim {:?}", self.ticks, row.can_fly, e.retarget, e.state, wk.position()[1], fly_y, fly_y.and_then(|g| world.ground_at(p[0], p[2], g + 8.0)), hero[1], e.p.max_fly, act.fly, act.anim);
+            }
             if airborne {
                 if let Some(f) = act.fly {
                     step = add(step, f);

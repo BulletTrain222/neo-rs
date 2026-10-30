@@ -3568,7 +3568,7 @@ fn play_trace(
         };
         for r in a..=b {
             match load_region(disc, index, &table, r) {
-                Ok((list, _)) => println!("      region {r}: {:?}", list.iter().map(|c| c.0.name.clone()).collect::<Vec<_>>()),
+                Ok((list, _)) => println!("      region {r}: {:?}", list.iter().map(|c| match c.3.map_or(0, |row| row.can_fly) { 0 => c.0.name.clone(), f => format!("{} (fly {f})", c.0.name) }).collect::<Vec<_>>()),
                 Err(e) => println!("      region {r}: {e}"),
             }
         }
