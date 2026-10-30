@@ -4,8 +4,11 @@
 //! range while closer than 20.0), the in-range records moved to the front and their pairwise
 //! order (the 1.0 swap quirk), and the lock (the head record while it is in range).
 //!
-//! Not covered: the forced and held targets, the world lock-out counter, the run suppression of
-//! the target flag (item 6) and the attack turn (item 7). The candidate test is the host's.
+//! Also the hero's target list (SPEC-0053 3.9, at +0xA70) and the attack turn toward its head
+//! (SPEC-0040 Behavior 20 item 7, `aim`).
+//!
+//! Not covered: the forced and held targets of the lock, the world lock-out counter and the run
+//! suppression of the target flag (item 6). The candidate and scan tests are the host's.
 
 use crate::hero::Vec3;
 
@@ -93,6 +96,106 @@ impl Candidates {
     }
 }
 
+/// The target list's range and cone by attack variant (0 Tor, 1 Roberta; boot data 0x2DD6A8 to
+/// 0x2DD6B4), its rescan period (0x2DD6B8) and the near distance that keeps a hit target listed
+/// as a candidate behind the hero.
+pub const TARGET_RANGE: [f32; 2] = [20.0, 100.0];
+pub const TARGET_CONE: f32 = 0.5;
+pub const RESCAN: u32 = 90;
+const NEAR: f32 = 6.0;
+
+/// A target list record (SPEC-0053 Layout +0xA70): the character, its hit counter, distance,
+/// alignment and candidate flag (in range, in front and with a clear path).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Target {
+    pub id: u64,
+    pub counter: u32,
+    pub d: f32,
+    pub dot: f32,
+    pub flag: bool,
+}
+
+/// The hero's target list (SPEC-0053 3.9): up to 15 records; characters that pass the scan are
+/// added on the rescan (every 90 ticks, and on the first tick after the list is emptied); each
+/// tick every record is refreshed, a gone one dropped, and the candidates moved ahead.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TargetList {
+    pub records: Vec<Target>,
+    clock: u32,
+}
+
+impl TargetList {
+    /// The select step (SPEC-0053 step 9): empty the list.
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    /// One tick. `chars` pass the scan's test (id, position); `variant` 0 Tor, 1 Roberta; `clear`
+    /// is the clear-path test from the hero to a character.
+    pub fn tick(&mut self, chars: &[(u64, Vec3)], hero: Vec3, forward: Vec3, variant: usize, clear: impl Fn(u64) -> bool) {
+        let range = TARGET_RANGE[variant.min(1)];
+        if self.clock == 0 {
+            for &(id, p) in chars {
+                if self.records.len() < RECORDS && !self.records.iter().any(|r| r.id == id) && dist(p, hero) <= range {
+                    self.records.push(Target { id, ..Default::default() });
+                }
+            }
+        }
+        self.clock = (self.clock + 1) % RESCAN;
+        self.records.retain(|r| chars.iter().any(|c| c.0 == r.id));
+        for r in &mut self.records {
+            let Some(&(_, p)) = chars.iter().find(|c| c.0 == r.id) else { continue };
+            r.d = dist(p, hero);
+            let to = [p[0] - hero[0], p[1] - hero[1], p[2] - hero[2]];
+            let n = r.d.max(1e-6);
+            r.dot = (forward[0] * to[0] + forward[1] * to[1] + forward[2] * to[2]) / n;
+            r.flag = !((r.dot < TARGET_CONE && (r.counter < 1 || r.d > NEAR)) || r.d > range) && clear(r.id);
+        }
+        // Candidates ahead of non-candidates, each group in its order.
+        let (mut a, b): (Vec<Target>, Vec<Target>) = self.records.iter().partition(|r| r.flag);
+        a.extend(b);
+        self.records = a;
+    }
+
+    /// Raise a listed character's counter (the hero's ten-entry list of hits, +0x400).
+    pub fn hit(&mut self, id: u64) {
+        if let Some(r) = self.records.iter_mut().find(|r| r.id == id) {
+            r.counter += 1;
+        }
+    }
+}
+
+/// The shared aim rule (SPEC-0040 Behavior 8) as the attack turn uses it (Behavior 20 item 7):
+/// from facing `f` toward the horizontal direction to `to` from `at`, weight 1.0 under 4.0
+/// (strictly) and 0.25 otherwise; when the two point opposite (dot below -0.99), 0.1 times the
+/// body side axis is added. `ahead_only` (Tor) refuses the instant turn at a target not ahead.
+/// None when there is no turn.
+pub fn aim(f: Vec3, at: Vec3, to: Vec3, ahead_only: bool) -> Option<Vec3> {
+    let (dx, dz) = (to[0] - at[0], to[2] - at[2]);
+    let dd = dx.hypot(dz);
+    if dd < 1e-6 {
+        return None;
+    }
+    let d = [dx / dd, 0.0, dz / dd];
+    let dot = f[0] * d[0] + f[2] * d[2];
+    let w = if dd < 4.0 {
+        if ahead_only && dot <= 0.0 {
+            return None;
+        }
+        1.0
+    } else {
+        0.25
+    };
+    let mut v = [w * d[0] + (1.0 - w) * f[0], 0.0, w * d[2] + (1.0 - w) * f[2]];
+    if dot < -0.99 {
+        // The body side axis (right of the facing).
+        v[0] += 0.1 * f[2];
+        v[2] -= 0.1 * f[0];
+    }
+    let n = v[0].hypot(v[2]);
+    (n > 1e-6).then(|| [v[0] / n, 0.0, v[2] / n])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +225,31 @@ mod tests {
         assert_eq!(c.records.len(), RECORDS);
         c.tick(&many[1..], [0.0; 3], fwd, false);
         assert!(!c.records.iter().any(|r| r.id == 0));
+    }
+
+    #[test]
+    fn attack_turn_vectors() {
+        // SPEC-0040 vector 161: facing (0, 0, 1), target point (3, 5, 0): D = 3, instant turn.
+        let f = aim([0.0, 0.0, 1.0], [0.0; 3], [3.0, 5.0, 0.0], false).unwrap();
+        assert!((f[0] - 1.0).abs() < 1e-5 && f[2].abs() < 1e-5);
+        // Target at (8, 0, 0): weight 0.25, (0.31623, 0, 0.94868).
+        let f = aim([0.0, 0.0, 1.0], [0.0; 3], [8.0, 0.0, 0.0], false).unwrap();
+        assert!((f[0] - 0.31623).abs() < 1e-4 && (f[2] - 0.94868).abs() < 1e-4);
+        // Tor refuses the instant turn at a near target behind him.
+        assert_eq!(aim([0.0, 0.0, 1.0], [0.0; 3], [0.0, 0.0, -3.0], true), None);
+    }
+
+    #[test]
+    fn target_list_flags() {
+        let mut t = TargetList::default();
+        let fwd = [0.0, 0.0, 1.0];
+        // Ahead within range: a candidate; behind: not; beyond 20: not listed.
+        let chars = [(1, [0.0, 0.0, 10.0]), (2, [0.0, 0.0, -5.0]), (3, [0.0, 0.0, 30.0])];
+        t.tick(&chars, [0.0; 3], fwd, 0, |_| true);
+        assert_eq!(t.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>(), vec![(1, true), (2, false)]);
+        // A hit target close behind stays a candidate; a blocked path clears the flag.
+        t.hit(2);
+        t.tick(&chars, [0.0; 3], fwd, 0, |id| id != 1);
+        assert_eq!(t.records.iter().map(|r| (r.id, r.flag)).collect::<Vec<_>>(), vec![(2, true), (1, false)]);
     }
 }

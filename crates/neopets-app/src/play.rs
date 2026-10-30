@@ -1004,6 +1004,8 @@ pub struct Play {
     pub hero_shots: Vec<neopets_sim::roberta::Shot>,
     /// The hero's candidate list and its lock (SPEC-0040 Behavior 20).
     pub candidates: neopets_sim::lock::Candidates,
+    /// The hero's target list (SPEC-0053 3.9), which the attack turn aims at.
+    pub targets: neopets_sim::lock::TargetList,
     pub lock: Option<u64>,
     /// Diagnostic: the fight trace's target by character name (NEOPETS_TRACE_TARGET).
     pub fight_target: Option<String>,
@@ -1794,6 +1796,7 @@ impl Play {
             r_attack: None,
             hero_shots: Vec::new(),
             candidates: Default::default(),
+            targets: Default::default(),
             lock: None,
             fight_target: None,
             shot_rows,
@@ -4278,6 +4281,8 @@ impl Play {
         std::mem::swap(&mut self.hero_mp_max, &mut p.mp_max);
         self.parked = Some(p);
         self.hero_index = 1 - self.hero_index;
+        // SPEC-0053 step 9: the incoming hero's target list is emptied.
+        self.targets.clear();
         self.draw_items(false);
         self.statuses.clear_all();
         self.attack = None;
@@ -8732,6 +8737,53 @@ impl Play {
             .collect();
         let attacking = self.loco.state == hero_states::ATTACK;
         self.lock = self.candidates.tick(&chars, self.loco.position(), self.loco.facing, attacking);
+        // SPEC-0053 3.9: the target list, with the clear-path test from the hero's chest to the
+        // character's target point.
+        let hero = self.loco.position();
+        let eye = add(hero, [0.0, 1.5, 0.0]);
+        let points: Vec<(u64, [f32; 3])> = chars.iter().map(|&(id, p)| (id, self.aim_point(id).unwrap_or(p))).collect();
+        let clear = |id: u64| {
+            let Some(&(_, at)) = points.iter().find(|c| c.0 == id) else { return false };
+            self.world.ground.as_ref().is_none_or(|g| g.segment_clear(eye, at, true))
+        };
+        let mut targets = std::mem::take(&mut self.targets);
+        targets.tick(&chars, hero, self.loco.facing, self.hero_index.min(1), clear);
+        self.targets = targets;
+        // SPEC-0040 Behavior 20 item 7, the attack turn: while the hero attacks, toward the head
+        // of the target list when it is a candidate; else, for Tor, toward the nearest intact
+        // breakable ahead (dot above 0.5) within his reach of 12.0. Roberta never turns toward a
+        // breakable; her forced aim point (aim mode) is not built here.
+        if !attacking {
+            return;
+        }
+        let tor = self.hero_index == 0;
+        let f = self.loco.facing;
+        let target = self.targets.records.first().filter(|r| r.flag).and_then(|r| self.aim_point(r.id)).or_else(|| {
+            if !tor {
+                return None;
+            }
+            self.world
+                .breakables
+                .iter()
+                .filter(|b| matches!(b.state, 1 | 3))
+                .map(|b| [b.matrix[12], b.matrix[13], b.matrix[14]])
+                .filter_map(|p| {
+                    let (dx, dz) = (p[0] - hero[0], p[2] - hero[2]);
+                    let d = dx.hypot(dz);
+                    (d < 12.0 && d > 1e-6 && (f[0] * dx + f[2] * dz) / d > 0.5).then_some((d, p))
+                })
+                .min_by(|a, b| a.0.total_cmp(&b.0))
+                .map(|(_, p)| p)
+        });
+        if let Some(to) = target {
+            if let Some(nf) = neopets_sim::lock::aim(f, hero, to, tor) {
+                // NEOPETS_TRACE_TURN: each attack turn (diagnostic).
+                if std::env::var_os("NEOPETS_TRACE_TURN").is_some() {
+                    println!("      attack turn on tick {}: facing {:?} -> {:?} toward {:?}", self.ticks, f.map(|v| (v * 100.0).round() / 100.0), nf.map(|v| (v * 100.0).round() / 100.0), to.map(|v| v.round()));
+                }
+                self.loco.facing = nf;
+            }
+        }
     }
 
     /// The target point of a character (SPEC-0040 Behavior 20 item 6, R-0102): the shared
@@ -13916,6 +13968,16 @@ impl Play {
     /// Diagnostic: the exterior replacement load a level script's ReplaceExterior asks for.
     pub fn diag_replace_exterior(&mut self, slot: usize, plane: i32) {
         self.execute(Action::ReplaceExterior { slot, plane }, self.world.pack);
+    }
+
+    /// Developer free camera: the hero onto the ground under a point (probed from that point
+    /// down), facing the horizontal direction given. False when there is no ground there.
+    pub fn dev_place(&mut self, at: [f32; 3], facing: [f32; 3]) -> bool {
+        let Some(y) = self.world.ground_at(at[0], at[2], at[1]) else { return false };
+        let n = facing[0].hypot(facing[2]);
+        let f = if n > 1e-6 { [facing[0] / n, 0.0, facing[2] / n] } else { self.loco.facing };
+        self.arrive(([at[0], y, at[2]], f));
+        true
     }
 
     pub fn dev_go_start(&mut self, k: usize) -> bool {

@@ -574,6 +574,20 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         dev.swallow = true;
         return;
     }
+    // T or the gamepad's Y while the free camera is on: the hero to the ground under the camera,
+    // facing the way it looks, and the free camera ends (a test tool of this build).
+    if !dev.open && (keys.just_pressed(KeyCode::KeyT) || pad(GamepadButton::North)) {
+        if let Some(fc) = dev.free {
+            let f = fc.forward();
+            if play.play.dev_place([fc.pos.x, fc.pos.y, fc.pos.z], [f.x, 0.0, f.z]) {
+                dev.free = None;
+                dev.swallow = true;
+                dev.toast = Some(("Tor moved here".into(), 90));
+                return;
+            }
+            dev.toast = Some(("No ground under the camera".into(), 90));
+        }
+    }
     if keys.just_pressed(KeyCode::F4) {
         dev.speed = if dev.speed == 0 { NORMAL } else { 0 };
     }
@@ -984,7 +998,7 @@ pub fn show_panel(
         }
         if let Some(fc) = dev.free {
             s.push_str(&format!(
-                "FREE CAMERA (F2 or B ends) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast",
+                "FREE CAMERA (F2 or B ends; T or Y moves Tor here) at ({:.1}, {:.1}, {:.1}): WASD or left stick move, E/Q or RT/LT up/down, J/L I/K, right stick or right-drag look, Shift or A fast",
                 fc.pos.x, fc.pos.y, fc.pos.z
             ));
         }
