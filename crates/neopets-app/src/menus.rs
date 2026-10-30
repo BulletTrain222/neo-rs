@@ -377,13 +377,16 @@ pub struct ItemView {
     pub hero: usize,
     pub motes: [i32; 3],
     pub equipped: [bool; 3],
+    /// The equipped items' ids for the equipment icons (element 0xBE: weapon, body, shield; -1
+    /// for none).
+    pub equipped_ids: [i32; 3],
     pub cloak: bool,
     pub mote_counts: [u32; 14],
 }
 
 impl Default for ItemView {
     fn default() -> Self {
-        Self { grid_counts: [0; 20], charms: [-1; 14], quests: [-1; 60], marker: -1, hero: 0, motes: [-1; 3], equipped: [false; 3], cloak: false, mote_counts: [0; 14] }
+        Self { grid_counts: [0; 20], charms: [-1; 14], quests: [-1; 60], marker: -1, hero: 0, motes: [-1; 3], equipped: [false; 3], equipped_ids: [-1; 3], cloak: false, mote_counts: [0; 14] }
     }
 }
 
@@ -1561,21 +1564,90 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
     let Some(g) = fe.key(0xC2) else { return Vec::new() };
     let mut out = Vec::new();
     // The Items tab draws the 0xC2 group; the Charms tab draws the Mote panel (key 0xC0) on its
-    // own; the Quest-items tab draws neither here.
+    // own. The Quest-items tab shows its owned category-7 entries in at most 20 cells (section
+    // 14.1) without saying how they are drawn: this build draws the 0xC2 cells with the page of
+    // 20 entries that holds the cursor as their ids (each shown once, no count).
     let tab = flow.current - ITEMS;
+    let mut pc = flow.pc();
+    if tab == 2 {
+        let page = flow.quest_cursor / 20 * 20;
+        pc.items.tab = 0;
+        pc.items.cursor = flow.quest_cursor % 20;
+        pc.items.grid = std::array::from_fn(|k| pc.items.view.quests.get(page + k).copied().filter(|&id| id >= 0).unwrap_or(0));
+        pc.items.view.grid_counts = pc.items.grid.map(|id| u32::from(id > 0));
+        pc.items.view.marker = -1;
+    }
     let group = match tab {
-        0 => Some(g),
+        0 | 2 => Some(g),
         1 => fe.key(0xC0),
         _ => None,
     };
     if let Some(n) = group {
         let (x, y) = node_xy(fe, n);
         let mut counter = 0;
-        draw_node(fe, n, (x, y, 1.0, 1.0), false, flow.focus, flow.pc(), &mut counter, &mut out);
+        draw_node(fe, n, (x, y, 1.0, 1.0), false, flow.focus, pc, &mut counter, &mut out);
     }
+    // NEOPETS_TRACE_BE: element 0xBE's subtree (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_BE").is_some() && flow.pass % 120 == 1 {
+        fn dump(fe: &Frontend, n: usize, depth: usize) {
+            let d = fe.nodes[n];
+            println!("{:indent$}node {n}: kind {} handler {} arg {} mode {} at {},{} size {}x{} data {}", "", d.kind, d.handler, d.arg, d.mode, d.x, d.y, d.width, d.height, d.data, indent = depth * 2);
+            for c in fe.children(n) {
+                dump(fe, c, depth + 1);
+            }
+        }
+        if let Some(n) = fe.key(0xBE) {
+            dump(fe, n, 0);
+        }
+    }
+    // Every tab state also draws element 0xBF (the NeoPoints label and balance) and 0xBE (the
+    // equipped-item icons of categories 1, 5 and 2; section 14.1, HUD lines).
+    for key in [0xBF, 0xBE] {
+        if let Some(n) = fe.key(key) {
+            let (x, y) = node_xy(fe, n);
+            let mut counter = 0;
+            draw_node(fe, n, (x, y, 1.0, 1.0), false, flow.focus, pc, &mut counter, &mut out);
+        }
+    }
+    // The art of an item's icon is the child of node 0x9F at the item's id (SPEC-0023 section
+    // 11; R-0020). Element 0xBE's three icons show the equipped weapon, body and shield (an
+    // empty one is drawn with alpha 0, so it is left out); the Quest-items cells show their
+    // entries' icons.
+    let art: Vec<usize> = fe.key(0x9F).map(|g| fe.children(g)).unwrap_or_default();
+    let art_of = |id: i32| usize::try_from(id).ok().and_then(|i| art.get(i).copied());
+    let equip_icons: Vec<usize> = fe.key(0xBE).map(|g| fe.children(g)).unwrap_or_default();
+    out = out
+        .into_iter()
+        .filter_map(|d| match d {
+            Draw::Sprite { node, x, y, w, h, colour, texels } => {
+                let nd = fe.nodes[node];
+                // The use and activate emblems (handler 4 and their children) belong to the
+                // Items-tab entries, so the Quest tab leaves them out.
+                if tab == 2 && (nd.handler == 4 || nd.parent.is_some_and(|p| fe.nodes[p].handler == 4)) {
+                    return None;
+                }
+                let id = if let Some(k) = equip_icons.iter().position(|&c| c == node) {
+                    Some(pc.items.view.equipped_ids.get(k).copied().unwrap_or(-1))
+                } else if tab == 2 && nd.handler == 2 && (nd.arg as usize) < 20 {
+                    Some(pc.items.grid[nd.arg as usize])
+                } else {
+                    None
+                };
+                match id {
+                    None => Some(Draw::Sprite { node, x, y, w, h, colour, texels }),
+                    Some(id) => art_of(id).map(|a| {
+                        if std::env::var_os("NEOPETS_TRACE_BE").is_some() {
+                            println!("swap {node} -> art {a}: quad {w}x{h} texels {texels:?}, art node {}x{}", fe.nodes[a].width, fe.nodes[a].height);
+                        }
+                        Draw::Sprite { node: a, x, y, w, h, colour, texels }
+                    }),
+                }
+            }
+            d => Some(d),
+        })
+        .collect();
     // SPEC-0035 section 14.1: a cell with an owned count of 0 is hidden. The icon layer's
     // predicate (slot 2) is always 1, so the rule is applied here (R-0031).
-    let pc = flow.pc();
     out.retain(|d| match d {
         Draw::Sprite { node, .. } => {
             let n = fe.nodes[*node];

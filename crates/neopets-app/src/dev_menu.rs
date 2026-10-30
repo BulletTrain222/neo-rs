@@ -487,6 +487,15 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             dev.boss = Some(n);
         }
     }
+    // NEOPETS_DEV_QUEST: every quest item (category 7) given, two seconds in (diagnostic, for
+    // the item screen's Quest-items tab).
+    if *frames == 120 && std::env::var_os("NEOPETS_DEV_QUEST").is_some() {
+        let ids = play.play.items_of_category(7);
+        for &id in &ids {
+            play.play.give(id);
+        }
+        info!("Developer quest items: {ids:?}");
+    }
     // NEOPETS_DEV="drop": the coin drop (with item 160) a second after the options apply.
     if *frames == 90 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drop")) {
         info!("Developer drop: {} world items", play.play.dev_drop(160));

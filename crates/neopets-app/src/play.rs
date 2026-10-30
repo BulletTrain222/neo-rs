@@ -13694,6 +13694,11 @@ impl Play {
         self.design.item_name(id).map_or_else(|| "(no name)".to_string(), |n| String::from_utf8_lossy(&n).into_owned())
     }
 
+    /// Diagnostic: the item ids of a design-table category.
+    pub fn items_of_category(&self, category: u32) -> Vec<u16> {
+        (0..400u16).filter(|&id| self.design.item_category(id) == Some(category)).collect()
+    }
+
     pub fn give(&mut self, id: u16) {
         // The add puts equipment into its family entry (equipment_step); a Mote adds its
         // charge of 100 (SPEC-0021 Inventory).
@@ -13808,6 +13813,7 @@ impl Play {
         v.motes = self.equipment.motes[self.hero_index].map(|m| m.map_or(-1, |id| id as i32));
         let e = &self.equipment.entries;
         v.equipped = [e[0][0].is_some(), e[2][0].is_some(), e[1][0].is_some()];
+        v.equipped_ids = [e[0][0], e[2][0], e[1][0]].map(|x| x.map_or(-1, |id| id as i32));
         v.cloak = count(126) > 0;
         v.mote_counts = std::array::from_fn(|k| count(160 + k as i32));
         v
