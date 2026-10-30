@@ -725,6 +725,9 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         Entry::BossFight => {
             let b = crate::play::BOSSES[dev.boss_at % crate::play::BOSSES.len()];
             dev.boss = Some(dev.boss_at % crate::play::BOSSES.len());
+            // The menu closes so the fight starts in view (the press is not passed to play).
+            dev.open = false;
+            dev.swallow = true;
             format!("Starting the {} fight (world pack {})", b.name, b.pack)
         }
         Entry::Drop => format!("Dropped {} world items", p.dev_drop(dev.item)),

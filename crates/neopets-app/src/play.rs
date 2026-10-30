@@ -8218,6 +8218,13 @@ impl Play {
         if let Some(id) = out.use_item {
             self.use_item(id as u16);
         }
+        // No attack without a weapon (the user's report and this build's rule, pending R-0132:
+        // SPEC-0036 lets an unarmed hero swing for 0 damage, but the attack selector's "attack
+        // kind 0 or 1" gate of SPEC-0033 is not defined): the attack input is dropped while the
+        // active hero's weapon-family entry (Tor's sword, Roberta's wand) is empty.
+        if self.equipment.entries[0][self.hero_index.min(1)].is_none() {
+            input.attack = false;
+        }
         if matches!(self.loco.state, hero_states::DEAD | hero_states::HURT | hero_states::LONG_FALL) {
             input = HeroInput { side: input.side, forward: input.forward, ..HeroInput::default() };
         }
