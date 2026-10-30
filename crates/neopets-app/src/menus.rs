@@ -84,6 +84,9 @@ pub enum Command {
     UseItem(u16),
     Marker(i32),
     EquipMote { word: usize, id: u16 },
+    /// The Charms tab's Mote picker: the shared selection moved, or equipment word k cleared.
+    MoteSelect(u8),
+    ClearMote(usize),
     Cloak,
     /// The book reader's exit: the book cursor to -1, and with `true` the saved book word too.
     BookClose(bool),
@@ -382,11 +385,15 @@ pub struct ItemView {
     pub equipped_ids: [i32; 3],
     pub cloak: bool,
     pub mote_counts: [u32; 14],
+    /// The shared Mote selection (0 to 13, 255 "No Mote") and the boot direction table of the
+    /// second quick panel (SPEC-0021), which the Charms tab runs.
+    pub mote_selection: u8,
+    pub mote_table: [u8; 120],
 }
 
 impl Default for ItemView {
     fn default() -> Self {
-        Self { grid_counts: [0; 20], charms: [-1; 14], quests: [-1; 60], marker: -1, hero: 0, motes: [-1; 3], equipped: [false; 3], equipped_ids: [-1; 3], cloak: false, mote_counts: [0; 14] }
+        Self { grid_counts: [0; 20], charms: [-1; 14], quests: [-1; 60], marker: -1, hero: 0, motes: [-1; 3], equipped: [false; 3], equipped_ids: [-1; 3], cloak: false, mote_counts: [0; 14], mote_selection: 255, mote_table: [255; 120] }
     }
 }
 
@@ -452,7 +459,7 @@ impl Flow {
         let tab = self.current.saturating_sub(ITEMS).min(2);
         let (cursor, selected) = match tab {
             0 => (self.item_cursor, if v.grid_counts[self.item_cursor] > 0 { self.grid_ids[self.item_cursor] } else { -1 }),
-            1 => (self.charm_cursor, v.charms[self.charm_cursor.min(13)]),
+            1 => (self.charm_cursor, if v.mote_selection < 14 && v.mote_counts[v.mote_selection as usize] > 0 { 160 + v.mote_selection as i32 } else { -1 }),
             _ => (self.quest_cursor, v.quests[self.quest_cursor.min(59)]),
         };
         ItemPc { tab, cursor, grid, selected, view: *v }
@@ -507,28 +514,26 @@ impl Flow {
                 }
             }
             1 => {
-                // The Mote picker over the owned charms: Left and Right step through the list
-                // (with at least two entries); Cross equips word 0, Square word 1 (with a shield)
-                // and Circle word 2 (with a weapon).
-                let n = v.charms.iter().take_while(|&&c| c >= 0).count();
-                if n >= 2 && (left || up) {
-                    self.charm_cursor = (self.charm_cursor + n - 1) % n;
-                } else if n >= 2 && (right || down) {
-                    self.charm_cursor = (self.charm_cursor + 1) % n;
+                // SPEC-0035 section 14.1: the Charms tab runs the Mote picker of the in-play second
+                // quick panel (SPEC-0021): the one shared selection over Motes 160 to 173 and "No
+                // Mote", moved by the boot direction table (diagonals included, unowned Motes
+                // allowed, cue 0x9A on every direction edge); Cross equips word 0, Square word 1
+                // (with a shield) and Circle word 2 (with a weapon), and a button on "No Mote", an
+                // unowned Mote or the Mote already there clears that word.
+                let i = neopets_sim::quick::MoteInput { left, right, up, down, cross: buttons & CROSS != 0, square: buttons & SQUARE != 0, circle: buttons & CIRCLE != 0, triangle: false };
+                let mut panel = neopets_sim::quick::MotePanel { open: true, selection: v.mote_selection };
+                let owns = |id: u16| (160..=173).contains(&id) && v.mote_counts[(id - 160) as usize] > 0;
+                let words = v.motes.map(|m| u16::try_from(m).ok());
+                let r = panel.tick(&i, &v.mote_table, v.equipped[2], v.equipped[0], &owns, words);
+                if r.moved {
+                    self.sounds.push(0x9A);
+                    self.view.mote_selection = panel.selection;
+                    *command = Some(Command::MoteSelect(panel.selection));
                 }
-                self.charm_cursor = self.charm_cursor.min(n.saturating_sub(1));
-                let id = v.charms[self.charm_cursor];
-                let word = if buttons & CROSS != 0 {
-                    Some(0)
-                } else if buttons & SQUARE != 0 && v.equipped[2] {
-                    Some(1)
-                } else if buttons & CIRCLE != 0 && v.equipped[0] {
-                    Some(2)
-                } else {
-                    None
-                };
-                if let (Some(word), true) = (word, id >= 0) {
-                    *command = Some(Command::EquipMote { word, id: id as u16 });
+                match r.word {
+                    Some((word, Some(id))) => *command = Some(Command::EquipMote { word, id }),
+                    Some((word, None)) => *command = Some(Command::ClearMote(word)),
+                    None => {}
                 }
             }
             _ => {
@@ -1399,7 +1404,7 @@ fn predicate(slot: i16, arg: u8, pc: Pc) -> i32 {
         13 => (a < 3 && v.equipped[a]) as i32,
         14 => (v.hero == 0) as i32,
         52 => (v.hero == 1) as i32,
-        15 => (it.tab == 1 && v.charms.get(it.cursor).copied().unwrap_or(-1) == 160 + a as i32 % 100) as i32,
+        15 => (it.tab == 1 && v.mote_selection as i32 == a as i32 % 100) as i32,
         16 => if a < 14 { v.mote_counts[a] as i32 } else { 0 },
         17 => (count_of(v.motes[2]) > 0) as i32,
         19 => (count_of(v.motes[0]) > 0) as i32,

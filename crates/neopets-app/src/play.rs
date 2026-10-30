@@ -14428,6 +14428,8 @@ impl Play {
         v.equipped_ids = [e[0][0], e[2][0], e[1][0]].map(|x| x.map_or(-1, |id| id as i32));
         v.cloak = count(126) > 0;
         v.mote_counts = std::array::from_fn(|k| count(160 + k as i32));
+        v.mote_selection = self.mote_panel.selection;
+        v.mote_table = self.mote_table;
         v
     }
 
@@ -14466,6 +14468,13 @@ impl Play {
             Command::EquipMote { word, id } => {
                 if self.equipment.set_mote(self.hero_index, word, id) {
                     self.cue(0xA3);
+                    self.hud.rearm_word(word);
+                }
+            }
+            Command::MoteSelect(s) => self.mote_panel.selection = s,
+            Command::ClearMote(word) => {
+                if self.equipment.clear_mote(self.hero_index.min(1), word) {
+                    self.cue(0xA4);
                     self.hud.rearm_word(word);
                 }
             }
