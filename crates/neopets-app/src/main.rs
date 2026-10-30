@@ -3964,6 +3964,11 @@ fn play_trace(
     if std::env::var_os("NEOPETS_TRACE_GOD").is_some() {
         play.cheats.god = true;
     }
+    // NEOPETS_TRACE_DUEL="limit": the duel trace, each enemy given at most `limit` ticks
+    // (default 2400); its report is printed at the end.
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_DUEL") {
+        play.fight_duel = Some(play::Duel { limit: v.trim().parse().unwrap_or(2400), ..Default::default() });
+    }
     // NEOPETS_TRACE_BOSS=n: the trace starts as the developer menu's boss fight n does (its
     // world, start flags, stage grants, gear and placement; `play::BOSSES`), so a boss's own
     // timeline can be traced headlessly (diagnostic).
@@ -4269,6 +4274,11 @@ fn play_trace(
     // NEOPETS_TRACE_QUIT=n: Quit's world teardown on tick n (diagnostic; the pause page's Quit).
     let mut quit_at: Option<u64> = std::env::var("NEOPETS_TRACE_QUIT").ok().and_then(|v| v.trim().parse().ok());
     for _ in 0..ticks {
+        // The duel trace ends once every enemy it found has been fought (after a 600-tick
+        // grace for regions to load).
+        if play.ticks > 600 && play.fight_duel.as_ref().is_some_and(|d| d.done) {
+            break;
+        }
         // Once: the new game's tick count starts again. A game-over exit with nothing pending
         // tears the world down the same way.
         // NEOPETS_TRACE_KILL="n[,n...]": the developer menu's enemy defeat on those ticks.
@@ -4521,7 +4531,9 @@ fn play_trace(
                 println!("      SCENE {}", play.diag_scene_report());
             }
         }
-        let fight = to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten();
+        // NEOPETS_TRACE_DUEL="limit": the duel trace's plan replaces the fight goal and buttons.
+        let duel_plan = play.duel_step();
+        let fight = if play.fight_duel.is_some() { duel_plan.map(|p| (p.goal, p.close)) } else { to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten() };
         // NEOPETS_TRACE_MICE: while carrying a Miamouse, walk to the cage's middle; otherwise
         // sneak (Square held) up behind the nearest catchable one.
         let cage = mice.then(|| play.cage_goal()).flatten();
@@ -4918,6 +4930,12 @@ fn play_trace(
             ..Default::default()
         };
         let mut input = input;
+        if let Some(p) = duel_plan {
+            input.guard = p.guard;
+            input.attack = p.attack;
+            input.attack_held = p.attack_held;
+            input.jump = p.jump || input.jump;
+        }
         if std::env::var("NEOPETS_TRACE_SQUARE").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
             input.square = true;
         }
@@ -5128,6 +5146,9 @@ fn play_trace(
     }
     let mut held: Vec<(u16, u32)> = play.state.items.iter().map(|(k, v)| (*k, *v)).collect();
     held.sort_unstable();
+    for line in play.duel_report() {
+        println!("{line}");
+    }
     println!("Held items at the end: {held:?}; {} NP; weapon {:?}, shield {:?}, entries {:?}", play.state.neopoints, play.weapon, play.shield, play.equipment.entries);
     if save_test {
         let path = "private/saves/trace.bin";

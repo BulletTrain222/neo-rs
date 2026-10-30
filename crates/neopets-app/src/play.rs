@@ -1059,6 +1059,8 @@ pub struct Play {
     pub lock: Option<u64>,
     /// Diagnostic: the fight trace's target by character name (NEOPETS_TRACE_TARGET).
     pub fight_target: Option<String>,
+    /// The duel trace (diagnostic; NEOPETS_TRACE_DUEL).
+    pub fight_duel: Option<Duel>,
     shot_rows: neopets_sim::roberta::Rows,
     /// Forced binds waiting for the embedded region: (pack, ordinal).
     rebind: Vec<(u32, usize)>,
@@ -1885,6 +1887,7 @@ impl Play {
             targets: Default::default(),
             lock: None,
             fight_target: None,
+            fight_duel: None,
             shot_rows,
             hero_index: 0,
             parked,
@@ -6635,6 +6638,141 @@ impl Play {
             ];
         }
         Vec::new()
+    }
+
+    /// The duel trace's step (diagnostic): keeps the current target (or picks the nearest
+    /// unvisited living hostile common enemy and places the hero 5 units from it), records its
+    /// state, and returns this tick's fight plan. The rules: an enemy waiting hidden (state 8)
+    /// is walked up to; one in its attack sequence (outer 2) within 9 is guarded against,
+    /// facing it; one blocking (outer 7 or 8, or its blocking word) is circled to its back; a
+    /// flyer more than 2.5 above the hero is jumped at, with the attack pressed in the air;
+    /// otherwise the hero closes to 3.5 and presses attack every 18 ticks.
+    pub fn duel_step(&mut self) -> Option<FightPlan> {
+        let mut duel = self.fight_duel.take()?;
+        let pack = self.world.pack;
+        let hero = self.loco.position();
+        let alive = |c: &Character| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && c.enemy.as_ref().is_some_and(|e| !e.is_dead()) && c.row.is_some_and(|r| r.hostile && r.class == Some(17));
+        // The current target ends when it dies, leaves or runs out of time.
+        if let Some(k) = duel.current {
+            let r = &mut duel.records[k];
+            let c = self.characters.iter().find(|c| c.id == r.id);
+            let over = match c {
+                None => true,
+                Some(c) => !alive(c) || self.ticks >= r.started + duel.limit,
+            };
+            if over {
+                r.killed = c.is_none_or(|c| c.dying.is_some() || c.hp <= 0 || c.enemy.as_ref().is_some_and(|e| e.is_dead()));
+                r.hp = c.map_or(0, |c| c.hp);
+                r.ended = Some(self.ticks);
+                duel.current = None;
+            }
+        }
+        if duel.current.is_none() {
+            let next = self.characters.iter().filter(|c| alive(c) && !duel.visited.contains(&c.id)).min_by(|a, b| {
+                let d = |c: &Character| (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]);
+                d(a).total_cmp(&d(b))
+            });
+            let Some(c) = next else {
+                // None found yet before the regions have loaded is not the end.
+                duel.done = self.ticks > 600;
+                self.fight_duel = Some(duel);
+                return None;
+            };
+            let (id, at, name, hp) = (c.id, c.position, c.name.clone(), c.hp);
+            duel.visited.insert(id);
+            duel.records.push(DuelRecord { id, name, pack, start_hp: hp, hp, started: self.ticks, last_hurt: self.ticks, ..Default::default() });
+            duel.current = Some(duel.records.len() - 1);
+            // Beside it, on the side the hero comes from (or +x), on the ground.
+            let (dx, dz) = (hero[0] - at[0], hero[2] - at[2]);
+            let l = dx.hypot(dz);
+            let (ux, uz) = if l > 0.1 { (dx / l, dz / l) } else { (1.0, 0.0) };
+            self.place_at(at[0] + 5.0 * ux, at[2] + 5.0 * uz, at[1] + 6.0);
+            self.face_point(at[0], at[2]);
+        }
+        let k = duel.current?;
+        let hero = self.loco.position();
+        let Some(c) = self.characters.iter().find(|c| c.id == duel.records[k].id) else {
+            self.fight_duel = Some(duel);
+            return None;
+        };
+        let e = c.enemy.as_ref()?;
+        let d = (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]);
+        let clip = c.anim.clip_state();
+        let r = &mut duel.records[k];
+        if c.hp < r.hp {
+            r.last_hurt = self.ticks;
+        }
+        r.hp = c.hp;
+        r.states.insert(e.state);
+        if d < 6.0 {
+            r.engaged += 1;
+            let sig = (e.state, e.outer, e.inner, e.seq, clip.action, (c.position[0] * 10.0) as i32, (c.position[1] * 10.0) as i32, (c.position[2] * 10.0) as i32);
+            r.still = if sig == r.last_sig { r.still + 1 } else { 0 };
+            r.longest_still = r.longest_still.max(r.still);
+            r.last_sig = sig;
+        }
+        if c.position[1] < e.spawn.home[1] - 30.0 {
+            r.fell = true;
+        }
+        let height = c.position[1] - hero[1];
+        let attacking = e.state == 19 && e.outer == 2 && d < 9.0;
+        let blocking = e.blocking || (e.state == 19 && matches!(e.outer, 7 | 8));
+        if blocking {
+            r.blocks += 1;
+        }
+        let t = self.ticks;
+        let mut plan = FightPlan { goal: [c.position[0], c.position[2]], close: d < 3.5, ..Default::default() };
+        if e.state == 8 {
+            plan.close = d < 2.0;
+        } else if attacking && t % 90 < 60 {
+            // Guard facing it (two thirds of the time, so a blocked attack still gets answered).
+            plan.guard = true;
+            plan.close = true;
+        } else if blocking {
+            // Round to its back.
+            let f = c.facing;
+            plan.goal = [c.position[0] - 3.0 * f[0], c.position[2] - 3.0 * f[2]];
+            plan.close = ((plan.goal[0] - hero[0]).hypot(plan.goal[1] - hero[2])) < 1.0;
+            plan.attack = plan.close && t % 18 == 0;
+        } else if e.airborne() && height > 2.5 && d < 6.0 {
+            plan.close = true;
+            plan.jump = t % 50 == 0;
+            plan.attack = matches!(self.loco.state, 7..=11) && t % 6 == 0;
+        } else if plan.close {
+            plan.attack = t % 18 == 0;
+            plan.attack_held = t % 18 < 4;
+        }
+        // NEOPETS_TRACE_DUEL_STEP: the plan and both sides once a second.
+        if t % 60 == 0 && std::env::var_os("NEOPETS_TRACE_DUEL_STEP").is_some() {
+            println!("      duel tick {t}: {} d {d:.1} height {height:.1} enemy state {} outer {} seq {} clip {} hp {} | hero state {} action {} | plan {:?}", c.name, e.state, e.outer, e.seq, clip.action, c.hp, self.loco.state, self.loco.action(), plan);
+        }
+        self.fight_duel = Some(duel);
+        Some(plan)
+    }
+
+    /// The duel trace's report (diagnostic): one line per enemy fought, with its flags.
+    pub fn duel_report(&self) -> Vec<String> {
+        let Some(d) = &self.fight_duel else { return Vec::new() };
+        d.records
+            .iter()
+            .map(|r| {
+                let took = r.ended.unwrap_or(self.ticks).saturating_sub(r.started);
+                let mut flags = Vec::new();
+                if !r.killed {
+                    flags.push(if r.hp >= r.start_hp { "never-hurt" } else { "not-beaten" });
+                }
+                if r.longest_still >= 300 {
+                    flags.push("froze");
+                }
+                if r.fell {
+                    flags.push("fell");
+                }
+                if r.engaged == 0 {
+                    flags.push("never-reached");
+                }
+                format!("DUEL {} {} \"{}\" hp {}/{} {} in {} ticks engaged {} still {} blocks {} states {:?} {}", r.pack, r.id, r.name, r.hp.max(0), r.start_hp, if r.killed { "killed" } else { "alive" }, took, r.engaged, r.longest_still, r.blocks, r.states, if flags.is_empty() { "ok".to_string() } else { flags.join(",") })
+            })
+            .collect()
     }
 
     /// Whether a character runs one of the boss controllers.
@@ -15366,6 +15504,53 @@ pub enum Place {
     Entry(usize),
     /// The middle of the volume of this trigger index (its fight starts on contact).
     Trigger(u16),
+}
+
+/// The trace's fight decision for one tick (diagnostic): where to walk, whether the target is
+/// close enough to fight, and the buttons.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct FightPlan {
+    pub goal: [f32; 2],
+    pub close: bool,
+    pub guard: bool,
+    pub attack: bool,
+    pub attack_held: bool,
+    pub jump: bool,
+}
+
+/// One enemy fought by the duel trace (diagnostic): what happened to it.
+#[derive(Clone, Debug, Default)]
+pub struct DuelRecord {
+    pub id: u64,
+    pub name: String,
+    pub pack: u32,
+    pub start_hp: i32,
+    pub hp: i32,
+    pub started: u64,
+    pub ended: Option<u64>,
+    pub killed: bool,
+    /// The longest run of ticks with the enemy's state, sub-states, clip and position all
+    /// unchanged while the hero was within 6 and it was alive.
+    pub longest_still: u32,
+    pub still: u32,
+    pub last_sig: (u32, u32, u32, u32, u32, i32, i32, i32),
+    pub fell: bool,
+    pub engaged: u32,
+    pub last_hurt: u64,
+    pub states: std::collections::BTreeSet<u32>,
+    pub blocks: u32,
+}
+
+/// The duel trace (diagnostic, NEOPETS_TRACE_DUEL): fight every living hostile common enemy
+/// of the current world in turn, the hero placed beside each, and record the outcome.
+#[derive(Clone, Debug, Default)]
+pub struct Duel {
+    pub visited: std::collections::HashSet<u64>,
+    pub current: Option<usize>,
+    pub records: Vec<DuelRecord>,
+    /// Ticks a target may take before the duel gives up on it.
+    pub limit: u64,
+    pub done: bool,
 }
 
 /// A developer-menu boss fight (this build's tool, not part of the game): the world, the
