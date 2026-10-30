@@ -58,7 +58,9 @@ impl Built {
                 println!("twin check {} part ({} verts, size {:.0}, lo {:?}): closest {best:?}", s.pack, s.count, s.size(), s.lo);
             }
         }
-        let out: Vec<bool> = self.sigs.iter().map(|s| others.iter().any(|o| o.iter().any(|t| t.same(s)))).collect();
+        // A twin repeats a part of another scene, or its box is covered by 90 percent by the
+        // other scene's boxes together (`sync_zones` hides it while the other world is current).
+        let out: Vec<bool> = self.sigs.iter().map(|s| others.iter().any(|o| o.iter().any(|t| t.same(s)) || o.iter().map(|t| t.contains(s)).sum::<f32>() >= 0.9)).collect();
         if std::env::var_os("NEOPETS_TRACE_TWINS").is_some() {
             println!("twins of {:?}: {} of {} against {} other scenes", self.sigs.first().map(|s| s.pack), out.iter().filter(|&&t| t).count(), out.len(), others.len());
             for (s, t) in self.sigs.iter().zip(&out).filter(|(s, _)| s.size() > 1000.0) {

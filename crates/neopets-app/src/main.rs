@@ -2672,7 +2672,12 @@ fn sync_zones(
     let trace = std::env::var_os("NEOPETS_TRACE_VIS").is_some();
     for (e, g, s, cull, mut v) in &mut parts {
         let zone_ok = g.is_none_or(|g| state.play.zone_visible(g.0, g.1));
-        let dup = s.is_some_and(|s| s.pack != current && *dups.2.entry(e).or_insert_with(|| mine.iter().any(|m| m.same(s))));
+        // A repeat of one current part, or a part whose box the current parts' boxes cover by
+        // 90 percent together (the sum of the covered parts, overlaps counted twice): 696's town
+        // copy straddles several of 1023's parts.
+        let dup = s.is_some_and(|s| {
+            s.pack != current && *dups.2.entry(e).or_insert_with(|| mine.iter().any(|m| m.same(s)) || mine.iter().map(|m| m.contains(s)).sum::<f32>() >= 0.9)
+        });
         // Skipped at D1 or more (squared values compared).
         let near = cull.is_none_or(|c| eye.is_none_or(|e| e.distance_squared(c.0) < c.1 * c.1));
         let want = if zone_ok && !dup && near { Visibility::Inherited } else { Visibility::Hidden };
