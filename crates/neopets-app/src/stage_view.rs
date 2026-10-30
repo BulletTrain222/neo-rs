@@ -1,6 +1,8 @@
 //! The developer test stage's look (this build's own art, not from any disc): a wide flat
 //! floor of muted stone tiles, the arena ring the Cloud Beast moves on (radius 40 by default, as
-//! its stand-in arena) and a mark at the centre. The stage itself is `play::World::test_stage`.
+//! its stand-in arena), a mark at the centre and a stone wall round the arena (radius 50, at the
+//! user's request; solid as a ring of push boxes, `wall_boxes`). The stage itself is
+//! `play::World::test_stage`.
 use bevy::prelude::*;
 
 /// The floor's half width and one tile's size, in world units.
@@ -16,6 +18,29 @@ pub fn ring() -> f32 {
     *R.get_or_init(|| std::env::var("NEOPETS_CLOUD_RING").ok().and_then(|v| v.trim().parse::<f32>().ok()).filter(|r| *r > 2.0).unwrap_or(40.0))
 }
 const LINE: f32 = 0.35;
+
+/// The arena wall: its inner radius, thickness and height, and the push boxes that make it
+/// solid (this build's own stage; WALL_SEGMENTS boxes, each a little longer than its share of
+/// the circle so neighbours overlap and leave no gap).
+pub const WALL: f32 = 50.0;
+const WALL_THICK: f32 = 2.0;
+const WALL_HEIGHT: f32 = 10.0;
+const WALL_SEGMENTS: usize = 64;
+
+pub fn wall_boxes() -> Vec<neopets_sim::contact::BoxShape> {
+    let len = std::f32::consts::TAU * (WALL + WALL_THICK) / WALL_SEGMENTS as f32 + 0.6;
+    (0..WALL_SEGMENTS)
+        .map(|k| {
+            let a = k as f32 * std::f32::consts::TAU / WALL_SEGMENTS as f32;
+            let (out, along) = ([a.cos(), 0.0, a.sin()], [-a.sin(), 0.0, a.cos()]);
+            neopets_sim::contact::BoxShape {
+                origin: [WALL * out[0] - 0.5 * len * along[0], 0.0, WALL * out[2] - 0.5 * len * along[2]],
+                axes: [[0.0, 1.0, 0.0], along, out],
+                extents: [WALL_HEIGHT, len, WALL_THICK],
+            }
+        })
+        .collect()
+}
 
 /// The tile texture: 8 x 8 tiles of 8 pixels in two stone tones, each tile with a darker
 /// edge, so the floor reads as ground at speed.
@@ -60,4 +85,9 @@ pub fn spawn(commands: &mut Commands, meshes: &mut Assets<Mesh>, materials: &mut
     let flat = Transform::from_xyz(0.0, 0.02, 0.0).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
     commands.spawn((Mesh3d(meshes.add(Annulus::new(ring() - LINE / 2.0, ring() + LINE / 2.0).mesh().resolution(96))), MeshMaterial3d(line.clone()), flat, bevy::light::NotShadowCaster, part));
     commands.spawn((Mesh3d(meshes.add(Annulus::new(0.9, 0.9 + LINE).mesh().resolution(32))), MeshMaterial3d(line), flat, bevy::light::NotShadowCaster, part));
+    // The wall: the annulus extruded upward (the extrusion runs along its local Z), in a warm
+    // stone tone, lit and casting shadows.
+    let stone = materials.add(StandardMaterial { base_color: Color::srgb(0.58, 0.55, 0.48), perceptual_roughness: 1.0, reflectance: 0.05, ..default() });
+    let up = Transform::from_xyz(0.0, 0.5 * WALL_HEIGHT, 0.0).with_rotation(Quat::from_rotation_x(-std::f32::consts::FRAC_PI_2));
+    commands.spawn((Mesh3d(meshes.add(Extrusion::new(Annulus::new(WALL, WALL + WALL_THICK), WALL_HEIGHT).mesh().resolution(2 * WALL_SEGMENTS as u32))), MeshMaterial3d(stone), up, part));
 }
