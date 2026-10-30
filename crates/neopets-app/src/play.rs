@@ -1016,6 +1016,9 @@ pub struct Play {
     l1_held: bool,
     /// SPEC-0060 Cut: last tick's weapon point 2.5 along the blade's frame axis.
     reed_point: Option<[f32; 3]>,
+    /// The flying boomerang's drawn frame state by character: the eased reference axis, the
+    /// spin angle and the last tick stepped (SPEC-0019 Boomerang flight, thrown model frame).
+    thrown_frame: std::sync::Mutex<HashMap<u64, ([f32; 3], f32, u64)>>,
     /// SPEC-0040 Behavior 23A: the hero's stored look yaw and pitch.
     head_look: neopets_sim::look::Look,
     /// The Plague Serpent's neck joints (boot list 0x320F48; SPEC-0016 6A).
@@ -1796,6 +1799,7 @@ impl Play {
             swing_serial: 0,
             l1_held: false,
             reed_point: None,
+            thrown_frame: Default::default(),
             head_look: Default::default(),
             neck_joints,
             cloud_rows,
@@ -5208,6 +5212,8 @@ impl Play {
     /// Werelupe King's boomerang (the Black Knight is not in play).
     pub fn character_attachments(&self) -> Vec<(u64, u8, neopets_data::anim::Affine)> {
         let mut out = Vec::new();
+        // A boomerang's frame state lasts while it flies; the next throw starts again.
+        self.thrown_frame.lock().unwrap_or_else(|e| e.into_inner()).retain(|id, _| self.characters.iter().any(|c| c.id == *id && c.king.as_ref().is_some_and(|k| k.boomerang.is_some())));
         for c in self.characters.iter().filter(|c| !c.inactive && self.pack_drawn(c.pack) && c.enemy.as_ref().is_none_or(|e| !e.dead)) {
             for &(slot, _) in &c.model.attachments {
                 // The thrown-model word (SPEC-0046 Held items step 1): while the Werelupe King's
@@ -5221,7 +5227,34 @@ impl Play {
                     .and_then(|k| k.boomerang)
                     .map(|b| b.position)
                     .or_else(|| c.knight.as_ref().filter(|k| k.sword.sub < 5).map(|k| k.sword.position));
+                let boomerang = c.king.as_ref().and_then(|k| k.boomerang);
                 let frame = match slot {
+                    // SPEC-0019 Boomerang flight: the frame is rebuilt each tick from the flight
+                    // direction and a reference axis. The axis starts as the held frame's second
+                    // basis direction and eases (95 percent kept) toward world up in phases 0 to 2,
+                    // toward minus the hand frame's first basis direction on the way back to the
+                    // hand; the model spins 0.6 radians a tick about the flight direction. The
+                    // model's third axis is taken along the flight (Medium-High in the spec).
+                    0 if boomerang.is_some() => Self::character_attach(c, 0).map(|w| {
+                        let b = boomerang.unwrap_or_else(|| unreachable!());
+                        let mut map = self.thrown_frame.lock().unwrap_or_else(|e| e.into_inner());
+                        let e = map.entry(c.id).or_insert((w.cols[1], 0.0, self.ticks));
+                        let target = if b.phase <= 2 { UP } else { w.cols[0].map(|v| -v) };
+                        while e.2 < self.ticks {
+                            e.0 = unit(std::array::from_fn(|i| 0.95 * e.0[i] + 0.05 * target[i]));
+                            e.1 = (e.1 + 0.6) % std::f32::consts::TAU;
+                            e.2 += 1;
+                        }
+                        let f = unit([b.direction[0], b.direction[1], b.direction[2]]);
+                        let r = e.0;
+                        let along = r[0] * f[0] + r[1] * f[1] + r[2] * f[2];
+                        let y0 = unit(std::array::from_fn(|i| r[i] - along * f[i]));
+                        let x0 = [y0[1] * f[2] - y0[2] * f[1], y0[2] * f[0] - y0[0] * f[2], y0[0] * f[1] - y0[1] * f[0]];
+                        let (sn, cs) = e.1.sin_cos();
+                        let x = std::array::from_fn(|i| cs * x0[i] + sn * y0[i]);
+                        let y = std::array::from_fn(|i| -sn * x0[i] + cs * y0[i]);
+                        neopets_data::anim::Affine { cols: [x, y, f], t: b.position }
+                    }),
                     0 if thrown.is_some() => Self::character_attach(c, 0).map(|w| {
                         let (sn, cs) = (0.6 * (self.ticks % 10_000) as f32).sin_cos();
                         let turn = |v: [f32; 3]| [cs * v[0] + sn * v[2], v[1], -sn * v[0] + cs * v[2]];
