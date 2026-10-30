@@ -11806,6 +11806,11 @@ impl Play {
                             // weapon test inside the 5-unit gate with the latch clear, against a
                             // capsule of radius 0.5 and length 6 along the reed's current up.
                             let cuttable = r.standing_step(q.position, hero);
+                            // NEOPETS_TRACE_REEDS: each reed within 2.5 of the hero, its distance and tilt.
+                            let dh = (q.position[0] - hero[0]).hypot(q.position[2] - hero[2]);
+                            if dh < 2.5 && std::env::var_os("NEOPETS_TRACE_REEDS").is_some() {
+                                println!("      reed tick {}: d {dh:.2} base y {:.2} hero y {:.2} tilt {:.0} latch {}", self.ticks, q.position[1], hero[1], r.up[1].clamp(-1.0, 1.0).acos().to_degrees(), r.latch);
+                            }
                             if let (true, Some(w)) = (cuttable, weapon.as_ref()) {
                                 let reed = neopets_sim::combat::Cylinder::from_base(q.position, r.up, 0.5, 6.0);
                                 if neopets_sim::combat::overlap(w, &reed) && r.cut(launch.unwrap_or([0.0; 3])) {
