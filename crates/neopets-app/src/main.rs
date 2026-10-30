@@ -1998,10 +1998,16 @@ fn cut_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMate
 }
 
 /// The blended twin of a Mask(0.5) material (see `vertex_fades`).
+/// It is a world surface, so it turns lit with the solid ones when world shadows or ambient
+/// occlusion are on (`graphics::SCENE_BLENDS`).
 fn blend_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMaterial>) -> Handle<StandardMaterial> {
     let mut m = materials.get(mask).cloned().unwrap_or_default();
     m.alpha_mode = AlphaMode::Blend;
-    materials.add(m)
+    let h = materials.add(m);
+    if let Ok(mut set) = graphics::SCENE_BLENDS.lock() {
+        set.get_or_insert_with(Default::default).insert(h.id());
+    }
+    h
 }
 
 fn opaque_twin(materials: &mut Assets<StandardMaterial>, mask: &Handle<StandardMaterial>) -> Handle<StandardMaterial> {

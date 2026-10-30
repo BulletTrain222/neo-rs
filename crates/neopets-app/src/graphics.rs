@@ -256,10 +256,16 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
     }
 }
 
-/// While ambient occlusion or world shadows are on, the solid unlit surfaces turn lit under the
-/// matched ambient light (and back when both go off); new ones as they load.
+/// The blended world surfaces (the vertex-faded parts' twins, `blend_twin`): lit with the solid
+/// ones, so the faded edges of paths and ground take the same shadows.
+pub static SCENE_BLENDS: std::sync::Mutex<Option<HashSet<AssetId<StandardMaterial>>>> = std::sync::Mutex::new(None);
+
+/// While ambient occlusion or world shadows are on, the solid unlit surfaces and the blended world
+/// surfaces turn lit under the matched ambient light (and back when both go off); new ones as
+/// they load.
 fn apply_materials(settings: Res<DisplaySettings>, mut materials: ResMut<Assets<StandardMaterial>>, mut events: MessageReader<AssetEvent<StandardMaterial>>, mut lit: Local<HashSet<AssetId<StandardMaterial>>>, mut last: Local<Option<bool>>) {
-    let eligible = |m: &StandardMaterial| m.unlit && matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_));
+    let blends = SCENE_BLENDS.lock().ok().and_then(|s| s.clone()).unwrap_or_default();
+    let eligible = |id: AssetId<StandardMaterial>, m: &StandardMaterial| m.unlit && (matches!(m.alpha_mode, AlphaMode::Opaque | AlphaMode::Mask(_)) || blends.contains(&id));
     let light = |m: &mut StandardMaterial| {
         m.unlit = false;
         m.perceptual_roughness = 1.0;
@@ -274,7 +280,7 @@ fn apply_materials(settings: Res<DisplaySettings>, mut materials: ResMut<Assets<
     if *last != Some(on) {
         *last = Some(on);
         if on {
-            let ids: Vec<_> = materials.iter().filter(|(_, m)| eligible(m)).map(|(id, _)| id).collect();
+            let ids: Vec<_> = materials.iter().filter(|&(id, m)| eligible(id, m)).map(|(id, _)| id).collect();
             for id in ids {
                 if let Some(mut m) = materials.get_mut(id) {
                     light(&mut m);
@@ -292,7 +298,7 @@ fn apply_materials(settings: Res<DisplaySettings>, mut materials: ResMut<Assets<
     }
     if on {
         for id in added {
-            if materials.get(id).is_some_and(|m| eligible(m)) {
+            if materials.get(id).is_some_and(|m| eligible(id, m)) {
                 if let Some(mut m) = materials.get_mut(id) {
                     light(&mut m);
                     lit.insert(id);
