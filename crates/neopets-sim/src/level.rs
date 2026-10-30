@@ -223,6 +223,16 @@ pub enum Action {
     WheelSpin,
     WheelResult,
     WheelRound,
+    /// One pass of a cycle zone's thread (SPEC-0006 Zone load, Cycle load): the host checks the
+    /// trigger and expands it into the reload (when the walk word is 0), the walk check, a
+    /// one-tick wait and the next pass, or into the release once the hero has left.
+    CyclePass { index: u16, slot: u8, candidates: [i32; 3], next: usize },
+    /// Start a path walk with path -1 for each character of a region slot (SPEC-0030 row 111;
+    /// villager socialising off), and set the walk word.
+    SlotPathWalks { slot: u8 },
+    /// The cycle pass's walk check: the walk word is 1 while a character of the slot still walks
+    /// its path; each character that does not is deactivated.
+    CycleCheck { slot: u8 },
     /// The 1217 object records (SPEC-0045 1217): a request to a main record (kind 0, with an
     /// inner request unless -1), a gate (1) or a cage (2); the close of main record `index`
     /// (request 4 unless in state 5, inner request 4 unless in 5 or 7); thread routine 2 (the
@@ -13378,17 +13388,18 @@ const VILLAGE_ZONES: [[Zone; 8]; 2] = {
 /// tick). A zone holds its record from the pick until the hero has left its trigger; then the
 /// slot is reset (its region unloads) and the record freed (Slot lifetime, R-0123). A plain
 /// zone loads its region (the replacement when its first flag is set and its second clear); a
-/// cycle zone draws a candidate (Random(0, 2), the host's raw draw; an empty one becomes the
-/// first). The later passes of a cycle (the next candidate reloaded while the trigger stays
-/// active) are not built. The region is 1023 + 1 + j. So the arena district's region 1035
-/// (sphere 27) stays loaded while the cycle zone of sphere 31 takes the other slot.
+/// cycle zone draws a candidate (Random(0, 2), the host's raw draw) and runs its passes
+/// (`Action::CyclePass`, SPEC-0006 Cycle load): each group of walkers is loaded, walks its
+/// paths, and the next candidate loads when every walker has finished. The region is 1023 + 1 +
+/// j. So the arena district's region 1035 (sphere 27) stays loaded while the cycle zone of
+/// sphere 31 takes the other slot.
 fn village_zone(index: u16, s: &GameState) -> Vec<Action> {
     let set = (s.flag(10) || s.flag(11)) as usize;
     let Some(&zone) = index.checked_sub(27).and_then(|z| VILLAGE_ZONES[set].get(z as usize)) else { return Vec::new() };
     let j = match zone {
         Zone::Empty => return Vec::new(),
         Zone::Plain(n, r, a, b) => if r >= 0 && (a == 0 || s.flag(a)) && (b == 0 || !s.flag(b)) { r } else { n },
-        Zone::Cycle(c) => Some(c[(s.trigger_raw % 3) as usize]).filter(|&j| j >= 0).unwrap_or(c[0]),
+        Zone::Cycle(_) => 0,
     };
     let mut v = Vec::new();
     let slot = if s.word(1023, 30) == 0 {
@@ -13399,6 +13410,10 @@ fn village_zone(index: u16, s: &GameState) -> Vec<Action> {
         v.push(Action::WaitWord { word: 30 });
         0
     };
+    if let Zone::Cycle(candidates) = zone {
+        v.extend([Action::Bits { word: 30 + slot, set: 1, clear: 0 }, Action::CyclePass { index, slot, candidates, next: (s.trigger_raw % 3) as usize }]);
+        return v;
+    }
     let region = Some(1024 + j as u32);
     v.extend([
         Action::Bits { word: 30 + slot, set: 1, clear: 0 },
@@ -19100,7 +19115,8 @@ mod tests {
         s.trigger_raw = 4;
         assert_eq!(load(&mut s, 27), held(0, 1035, 27));
         s.set_word(1023, 30, 1);
-        assert_eq!(load(&mut s, 31), held(1, 1024 + 13, 31));
+        // A cycle zone holds its record and runs its passes (the draw 4 % 3 picks candidate 1).
+        assert_eq!(load(&mut s, 31), vec![Action::Bits { word: 31, set: 1, clear: 0 }, Action::CyclePass { index: 31, slot: 1, candidates: [12, 13, 14], next: 1 }]);
         // Both held: a third zone waits for slot 0.
         s.set_word(1023, 31, 1);
         assert_eq!(load(&mut s, 29)[0], Action::WaitWord { word: 30 });

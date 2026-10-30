@@ -5068,12 +5068,12 @@ fn play_frame(
         for e in &hero_roots {
             commands.entity(e).despawn();
         }
-        // Roberta's head piece (the outfit part whose every vertex alpha is 0; R-0126's answer
-        // calls it see-through) is drawn solid: the user reports black hair there in the
-        // original, and a vertex alpha of 0 hides a surface on the GS only with blending or the
-        // alpha test on (this build's choice until R-0128 is answered).
-        if state.play.hero_index == 1 {
-            for part in state.play.model.parts.iter_mut().filter(|p| !p.colors.is_empty() && p.colors.iter().all(|c| c[3] < 0.5)) {
+        // SPEC-0046 (R-0128): program 6 draws with texture function highlight 2, so its vertex
+        // alpha is an additive highlight, never the opacity: every program-6 part of the hero
+        // is drawn solid (Roberta's head dome among them, whose base alpha is 0). The additive
+        // highlight itself is not drawn.
+        {
+            for part in state.play.model.parts.iter_mut().filter(|p| p.program == Some(6) || (!p.colors.is_empty() && p.colors.iter().all(|c| c[3] < 0.5))) {
                 for c in &mut part.colors {
                     c[3] = 1.0;
                 }

@@ -610,6 +610,37 @@ mod tests {
         assert_eq!(both.weights(10.0, false, true), (0.0, 1.0));
     }
     #[test]
+    fn reed_walk_past_vectors() {
+        use super::*;
+        // SPEC-0060 Reed walk-past: the hero walks along +x at 0.1 a step on z = -D; step 0 is
+        // the closest approach. Tilt from vertical in degrees after each step.
+        let walk = |depth: f32, from: i32, to: i32| {
+            let mut r = Reed::new(0.0);
+            (-40..=to)
+                .map(|k| {
+                    r.standing_step([0.0; 3], [k as f32 * 0.1, 0.0, -depth]);
+                    (k, r.up[1].clamp(-1.0, 1.0).acos().to_degrees(), r.latch)
+                })
+                .filter(|&(k, ..)| k >= from)
+                .collect::<Vec<_>>()
+        };
+        let fringe = walk(1.8, -6, 10);
+        let want = [3.35, 7.31, 10.96, 14.07, 16.44, 17.93, 18.43, 17.93, 16.59, 15.25, 13.88, 12.42, 10.88, 10.06, 9.31, 8.62, 7.97];
+        for (&(k, t, latch), w) in fringe.iter().zip(want) {
+            assert!((t - w).abs() < 0.02 && !latch, "D 1.8 step {k}: {t} (want {w})");
+        }
+        let deep = walk(1.6, 0, 11);
+        let want = [61.70, 61.04, 59.05, 55.67, 51.92, 48.15, 44.28, 40.28, 36.16, 31.99, 27.85, 25.83];
+        for (&(k, t, _), w) in deep.iter().zip(want) {
+            assert!((t - w).abs() < 0.02, "D 1.6 step {k}: {t} (want {w})");
+        }
+        let flat = walk(1.3, -6, 16);
+        assert!((flat[0].1 - 89.21).abs() < 0.02, "{:?}", flat[0]);
+        assert!(flat[1..=20].iter().all(|&(_, t, latch)| (t - 90.0).abs() < 0.01 && latch), "flat and latched from step -5 to 14");
+        assert!(!flat[21].2 && (flat[22].1 - 85.36).abs() < 0.02, "{:?}", &flat[21..]);
+    }
+
+    #[test]
     fn reed_bend_cut_fall_drop() {
         use super::*;
         let near = |a: [f32; 3], b: [f32; 3]| a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 2e-3);

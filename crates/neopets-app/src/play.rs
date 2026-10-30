@@ -91,6 +91,8 @@ pub struct World {
     pub planes: Vec<TeleportPlane>,
     arrivals: Neighbours,
     pub entries: Vec<([f32; 3], [f32; 3])>,
+    /// The area's path list (type-15 tag 0x0A): each path's first and last entry record.
+    paths: Vec<(u16, u16)>,
     /// The entry records' locator tags (u16 +0x1E), by list position.
     pub tags: Vec<u16>,
     /// The module imports RegisterTeleportCallback: its doors are script doors, which need the
@@ -219,6 +221,7 @@ impl World {
             planes: Vec::new(),
             arrivals: Neighbours::default(),
             entries: vec![([0.0; 3], [0.0, 0.0, 1.0])],
+            paths: Vec::new(),
             tags: vec![0],
             scripted_doors: false,
             lines: Default::default(),
@@ -304,6 +307,7 @@ impl World {
             planes: ground::teleport_planes(&bytes, &chain.chunks),
             arrivals: Neighbours::arrivals(&bytes, &chain.chunks),
             entries: (0..4096).map_while(|i| ground::entry_record(&bytes, &chain.chunks, i)).collect(),
+            paths: neopets_data::travel::path_list(&bytes, &chain.chunks),
             tags: (0..4096).map_while(|i| ground::entry_tag(&bytes, &chain.chunks, i)).collect(),
             scripted_doors: boot.imports(&bytes, &chain.chunks, "RegisterTeleportCallback"),
             lines: neopets_data::dialogue::LineTable::of(&bytes, &chain.chunks),
@@ -504,6 +508,14 @@ impl World {
         self.object_walls(x, z).iter().map(|(_, w)| w.len()).sum()
     }
 
+    /// Path k of the area's path list as positions (SPEC-0006 Tagged tables, tag 0x0A, Use):
+    /// entries A[k] to B[k], an index at or above the entry count read as entry 0. None when k
+    /// names no path.
+    pub fn route(&self, k: i32) -> Option<Vec<[f32; 3]>> {
+        let &(a, b) = self.paths.get(usize::try_from(k).ok()?)?;
+        Some((a..=b).map(|i| self.entries.get(i as usize).or(self.entries.first()).map_or([0.0; 3], |e| e.0)).collect())
+    }
+
     /// Diagnostic: the placed objects' registered patch sets (patch id, object).
     pub fn object_sets(&self) -> Vec<(i32, usize)> {
         self.ground.as_ref().map(|g| g.object_sets()).unwrap_or_default()
@@ -516,6 +528,19 @@ impl World {
         }
         self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
     }
+}
+
+/// The patrol and path walks, simplified as the script walk: straight toward the point at the
+/// townsfolk walk speed (0.08337 a tick, move type 0) on the ground, steering with weight 0.3.
+/// The navigation mesh and root-motion travel are not used.
+fn walk_toward(c: &mut Character, to: [f32; 3], world: &World) {
+    let (dx, dz) = (to[0] - c.position[0], to[2] - c.position[2]);
+    let d = dx.hypot(dz).max(1e-6);
+    c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
+    let s = 0.083_37f32.min(d) / d;
+    let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
+    let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
+    c.position = [x, y.unwrap_or(c.position[1]), z];
 }
 
 /// A world point in an owner object's rest frame: rest x inverse(current) applied to p (the
@@ -616,6 +641,9 @@ pub struct Character {
     /// A script walk to a point (SPEC-0030 rows 106 and 108; SPEC-0056 classes 23 and 25), with
     /// the final facing of the orienting form.
     script_walk: Option<([f32; 3], Option<[f32; 3]>, f32)>,
+    /// The placement's path index (+0xB8) and a script path walk along it (class 35).
+    path_index: i32,
+    path_walk: Option<neopets_sim::npc::PathWalk>,
     /// SetAI_MovementType: 0 walk, 1 run, 2 fast run, 3 and 4 idle (SPEC-0040 Behavior 14D).
     move_type: u8,
     /// Under script control (PlayEntityAnim, LoopEntityAnim, script walks): its AI does not
@@ -1029,6 +1057,8 @@ pub struct Play {
     ixi_words: neopets_sim::ixi::Words,
     faerie_words: neopets_sim::darkest::Words,
     reserves: Vec<Reserve>,
+    /// The 1023 module's walk word (SPEC-0006 Cycle load): 1 while a cycle zone's walkers walk.
+    cycle_walk: bool,
     /// The embedded block of each resident world while streaming (SPEC-0006), and the caps
     /// SetMaxActiveAI set (default 6).
     blocks: HashMap<u32, Vec<StreamRec>>,
@@ -1837,6 +1867,7 @@ impl Play {
             ixi_words,
             faerie_words,
             reserves: Vec::new(),
+            cycle_walk: false,
             blocks: HashMap::new(),
             max_active: HashMap::new(),
             duel: [None; 4],
@@ -2416,10 +2447,46 @@ impl Play {
                 }
                 continue;
             }
+            if let Action::CyclePass { index, slot, candidates, next } = a {
+                for x in self.cycle_pass(index, slot, candidates, next).into_iter().rev() {
+                    self.threads[i].calls.push_front(x);
+                }
+                continue;
+            }
             if let Some(w) = self.execute(a, pack) {
                 self.threads[i].wait = Some(w);
             }
         }
+    }
+
+    /// One pass of a cycle zone's thread (SPEC-0006 Cycle load). With the hero gone from the
+    /// trigger: the release (the slot reset, the record freed). Otherwise, when the walk word is
+    /// 0, the reload: a wait while a dialogue is open, the slot reset, the candidate loaded
+    /// (an index above 2 or naming an empty candidate is 0), 150 ticks, the path walks; then on
+    /// every pass the wait while a dialogue is open, the walk check, one tick and the next pass.
+    /// This build also waits for the region's load before the 150 ticks (its loads are not
+    /// immediate). The borrowed-slot case (cycle word 0, the 1023 chase) is not built.
+    fn cycle_pass(&mut self, index: u16, slot: u8, candidates: [i32; 3], next: usize) -> Vec<Action> {
+        let pack = 1023;
+        if self.world.pack != pack || self.world.records.get(&index).is_none_or(|r| r.state == 0) {
+            return vec![Action::LoadRegion { slot, region: None }, Action::Bits { word: 30 + slot, set: 0, clear: 1 }];
+        }
+        let mut v = Vec::new();
+        let mut next = next;
+        if !self.cycle_walk {
+            let k = if next > 2 || candidates[next] < 0 { 0 } else { next };
+            v.extend([
+                Action::WaitDialog,
+                Action::LoadRegion { slot, region: None },
+                Action::LoadRegion { slot, region: Some(pack + 1 + candidates[k] as u32) },
+                Action::WaitLoads,
+                Action::Sleep { ticks: 150 },
+                Action::SlotPathWalks { slot },
+            ]);
+            next = k + 1;
+        }
+        v.extend([Action::WaitDialog, Action::CycleCheck { slot }, Action::Sleep { ticks: 1 }, Action::CyclePass { index, slot, candidates, next }]);
+        v
     }
 
     fn wait_done(&self, w: Wait) -> bool {
@@ -2428,7 +2495,7 @@ impl Play {
             Wait::Fade => !self.fade.moving(),
             Wait::Camera => self.cut.is_none_or(|c| !c.waiting()),
             Wait::HeroWalk => self.hero_walk.is_none(),
-            Wait::EntityWalk(pack, e) => !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && c.script_walk.is_some()),
+            Wait::EntityWalk(pack, e) => !self.characters.iter().any(|c| c.pack == pack && c.entity == Some(e) && (c.script_walk.is_some() || c.path_walk.is_some())),
             Wait::EntityWalks(pack, es) => !self.characters.iter().any(|c| c.pack == pack && c.entity.is_some_and(|e| es.contains(&e)) && c.script_walk.is_some()),
             Wait::EntityAnim(pack, e, anim) => self.characters.iter().find(|c| c.pack == pack && c.entity == Some(e)).is_none_or(|c| {
                 let k = c.anim.clip_state();
@@ -2679,7 +2746,28 @@ impl Play {
                     self.apply(&[Action::PlaySound { cue: if won { win } else { loss }, locator: None }]);
                     self.last_fx = format!("wheel stopped at {:.1} on cell {}: {} on tick {}", w.angle, w.cell(), if won { "win" } else { "loss" }, self.ticks);
                 }
-                Action::WheelRound => {}
+                Action::WheelRound | Action::CyclePass { .. } => {}
+                Action::SlotPathWalks { slot } => {
+                    let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
+                    for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.slot == slot && !c.inactive) {
+                        if let Some(r) = world.and_then(|w| w.route(c.path_index)) {
+                            c.path_walk = Some(neopets_sim::npc::PathWalk::new(r));
+                        }
+                    }
+                    self.cycle_walk = true;
+                }
+                Action::CycleCheck { slot } => {
+                    let mut any = false;
+                    for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.slot == slot && !c.inactive) {
+                        if c.path_walk.is_some() {
+                            any = true;
+                        } else {
+                            c.inactive = true;
+                            c.deactivated = true;
+                        }
+                    }
+                    self.cycle_walk = any;
+                }
                 Action::BurrowsRequest { .. } | Action::BurrowsClose { .. } => level::burrows_request(&mut self.state, a),
                 Action::BurrowsStagger => self.apply(&level::burrows_stagger()),
                 Action::ChestReward { group } => self.chest_reward(group as usize),
@@ -6535,6 +6623,12 @@ impl Play {
                 Some(h) => [pl.position[0], h, pl.position[2]],
                 None => pl.position,
             };
+            // SPEC-0056 Patrol: the route named by the placement's +0xB8.
+            let patrol = world.and_then(|w| w.route(pl.words[0] as i32)).map(|r| neopets_sim::npc::Patrol::new(r, pl.words));
+            if std::env::var_os("NEOPETS_TRACE_PATROL").is_some() {
+                let r = world.and_then(|w| w.route(pl.words[0] as i32));
+                eprintln!("PATROL bind pack {pack} {:?} code {} class {:?} path {} words {:?} points {} first {:?}", pl.name, pl.ai_code, row.and_then(|r| r.class), pl.words[0] as i32, pl.words, r.as_ref().map_or(0, |r| r.len()), r.as_ref().and_then(|r| r.first().copied()));
+            }
             self.characters.push(Character {
                 id: self.next_character,
                 pack,
@@ -6543,7 +6637,7 @@ impl Play {
                 name: pl.name,
                 position,
                 facing: pl.facing,
-                townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing)),
+                townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing).with_patrol(patrol)),
                 walker: row.filter(|r| matches!(r.class, Some(1 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
@@ -6565,6 +6659,8 @@ impl Play {
                 flash: 0,
                 root_step: [0.0; 3],
                 script_walk: None,
+                path_index: pl.words[0] as i32,
+                path_walk: None,
                 move_type: 0,
                 held: false,
                 inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
@@ -6702,6 +6798,8 @@ impl Play {
             flash: 0,
             root_step: [0.0; 3],
             script_walk: None,
+            path_index: -1,
+            path_walk: None,
             move_type: 0,
             held: false,
             inactive: false,
@@ -8693,6 +8791,7 @@ impl Play {
             self.monster_bar.tick(hp, max, &self.monster_words);
         }
         let world = &self.world;
+        let rng = &mut self.rng;
         for c in &mut self.characters {
             // SPEC-0056 Walk-to-point (classes 23 and 25), simplified: straight toward the
             // target at the townsfolk walk speed (0.08337 a tick, move type 0) on the ground,
@@ -8735,6 +8834,25 @@ impl Play {
                 c.root_step = c.anim.tick();
                 continue;
             }
+            // SPEC-0056 Path walk (class 35): it parks the townsfolk routine; walk id 1 at the
+            // townsfolk walk speed (move type 0; table variant B's slower speed is not used).
+            if let Some(step) = c.path_walk.as_mut().map(|w| w.begin()) {
+                match step {
+                    neopets_sim::npc::PathStep::End => c.path_walk = None,
+                    neopets_sim::npc::PathStep::Next => {}
+                    neopets_sim::npc::PathStep::Walk(to) => {
+                        walk_toward(c, to, world);
+                        if c.anim.clip_state().action != 1 {
+                            c.anim.play(1);
+                        }
+                        if let Some(w) = c.path_walk.as_mut() {
+                            w.moved(c.position);
+                        }
+                    }
+                }
+                c.root_step = c.anim.tick();
+                continue;
+            }
             if c.held {
                 c.root_step = c.anim.tick();
                 continue;
@@ -8742,9 +8860,13 @@ impl Play {
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
                 let clip = c.anim.clip_state();
-                let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress };
-                if let Some(id) = t.tick(&mut c.facing, view) {
-                    c.anim.play(id);
+                let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress, fidget_entry: c.anim.has(11) };
+                if let Some(id) = t.tick(&mut c.facing, view, rng) {
+                    // The patrol walk id 8 (speed code 6); a bank without it walks with id 1.
+                    c.anim.play(if id == 8 && !c.anim.has(8) { 1 } else { id });
+                }
+                if let Some(to) = t.walk_to {
+                    walk_toward(c, to, world);
                 }
             }
             c.root_step = c.anim.tick();
