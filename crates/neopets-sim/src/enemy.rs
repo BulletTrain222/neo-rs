@@ -592,6 +592,9 @@ pub struct Enemy {
     /// waits in state 8, 1 and 2 during the emerge and 2 afterwards; 0 keeps a flyer at its home
     /// height.
     pub ambush: i32,
+    /// The flyer's goal height as last set (SPEC-0040 Behavior 21: computed when a walk target
+    /// is set; sub-states that set none keep it). None until the first.
+    pub goal_y: Option<f32>,
     /// A navmesh re-pick is pending (passed out through the next act).
     repick: bool,
     /// DisableInvisibility (SPEC-0030 row 121; +0xE60): an invisible kind (Display in Default
@@ -680,6 +683,7 @@ impl Enemy {
             force: false,
             retarget: -1,
             ambush: -1,
+            goal_y: None,
             repick: false,
         };
         e.draw_distances(rng);

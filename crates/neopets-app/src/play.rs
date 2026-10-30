@@ -9165,8 +9165,12 @@ impl Play {
                 println!("      agro {name} tick {}: outer {} inner {} seq {} slot {:?} d {:.1} attackable {} recovery {}", self.ticks, e.outer, e.inner, e.seq, e.selected, (d[0] * d[0] + d[2] * d[2]).sqrt(), v.hero_attackable, e.recovery);
             }
             // The flyer's goal height (SPEC-0040 Behavior 21), with the ground under it.
-            // The ground floor term probes from 8.0 above the goal point.
-            let fly_y = e.airborne().then(|| e.fly_target(&v, world.ground_at(p[0], p[2], e.fly_target(&v, None) + 8.0)));
+            // The ground floor term probes from 8.0 above the goal point. The goal is set with a
+            // walk target (a step that moves the enemy); other steps keep the last one.
+            if e.airborne() && (act.go.is_some() || e.goal_y.is_none()) {
+                e.goal_y = Some(e.fly_target(&v, world.ground_at(p[0], p[2], e.fly_target(&v, None) + 8.0)));
+            }
+            let fly_y = if e.airborne() { e.goal_y } else { None };
             // NEOPETS_TRACE_DEFENCE: a defence starting (outers 5 to 8).
             if e.outer != outer_before && (5..=8).contains(&e.outer) && std::env::var_os("NEOPETS_TRACE_DEFENCE").is_some() {
                 println!("      defence: {name} enters outer {} (swing class {:?}) on tick {}", e.outer, v.hero_swing, self.ticks);
