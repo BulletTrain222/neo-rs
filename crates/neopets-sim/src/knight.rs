@@ -493,6 +493,44 @@ impl Knight {
         a
     }
 
+    /// The short readout of the F6 boss box (this build's tool): four lines, what the player
+    /// needs to act on: the phase and what to do, the weak points, the stun, and the next big
+    /// attack with what blocks it.
+    pub fn summary(&self, v: &View, w: &Words) -> Vec<String> {
+        let d = hdist(v.position, v.hero);
+        let to_hero = hdir(v.position, v.hero);
+        let p = self.parts;
+        let mark = |k: usize| if p[k] <= 0 { "X".to_string() } else if self.lit[k] { format!("{}!", p[k]) } else { p[k].to_string() };
+        let goal = match self.phase {
+            0 => "Phase 1/3: make his slow swing miss",
+            1 => "Phase 2/3: make his angry swing miss",
+            _ => "Phase 3/3: dodge his big attack, then hit the glowing spot",
+        };
+        let stun = if self.stun > 0 { format!("STUNNED {:.1}s  hit now: {}", self.stun as f32 / 60.0, if self.exposed { "YES" } else { "wrong side/move" }) } else { "not stunned".to_string() };
+        let knees = p[LEFT_KNEE] > 0 || p[RIGHT_KNEE] > 0;
+        let arms = p[LEFT_ARM] > 0 || p[RIGHT_ARM] > 0;
+        let charge = knees && charge_passes(&self.refs, to_hero[0], to_hero[2], w.charge_range);
+        let near = v.second_measure < 10.0;
+        let next = if charge {
+            "next: CHARGE (knees from the front)".to_string()
+        } else if arms && d < w.high_range && near {
+            "next: CHANDELIER SWING (armpits: jump-attack from the side)".to_string()
+        } else if p[BACK] > 0 {
+            let why = if !arms { String::new() } else if !near { format!("  [chandelier needs him near the middle: {:.0} away]", v.second_measure) } else { "  [chandelier: get closer]".to_string() };
+            format!("next: FLOOR STRIKE (back from behind){why}")
+        } else if p[..5].iter().all(|&x| x <= 0) {
+            "next: SWORD SPIN (neck: jump-attack from behind)".to_string()
+        } else {
+            "next: chandelier swing once he is near the middle".to_string()
+        };
+        vec![
+            goal.to_string(),
+            format!("knees {} {}  armpits {} {}  back {}  neck {}", mark(LEFT_KNEE), mark(RIGHT_KNEE), mark(LEFT_ARM), mark(RIGHT_ARM), mark(BACK), mark(NECK)),
+            stun,
+            next,
+        ]
+    }
+
     /// A readable account of the fight for the developer overlay (this build's tool): the
     /// state, the phase and the flags, each weak point's HP, the stun countdown, and for each
     /// phase-2 attack whether its conditions hold now (the same tests as `choose`).

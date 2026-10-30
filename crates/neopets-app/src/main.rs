@@ -868,6 +868,8 @@ fn main() {
             selected: if play_mode { play_pack } else { start_resource },
             typing: None,
         })
+        // NEOPETS_BOSS_BOX: the F6 boss box starts on (diagnostic, for screenshots).
+        .insert_resource(BossBoxOn(std::env::var_os("NEOPETS_BOSS_BOX").is_some()))
         .init_resource::<BrowserView>()
         .init_resource::<SceneSigs>()
         .init_resource::<TextureView>()
@@ -913,7 +915,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast), perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1754,9 +1756,47 @@ fn orbit_camera(
     }
 }
 
-/// F6 shows or hides the developer info panel (Tab is the game's Start key).
-fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<Hud>>) {
+/// The F6 boss box (this build's tool): a small box at the top right with the boss's short
+/// readout, while a boss controller writes one.
+#[derive(Component)]
+struct BossBox;
+
+/// Whether the F6 boss box is on.
+#[derive(Resource, Default)]
+struct BossBoxOn(bool);
+
+fn show_boss_box(mut commands: Commands, on: Res<BossBoxOn>, play: Option<Res<PlayState>>, mut boxes: Query<(Entity, &mut Text), With<BossBox>>) {
+    let lines = play.as_ref().map(|p| p.play.boss_info.join("\n")).filter(|l| !l.is_empty() && on.0);
+    match (lines, boxes.iter_mut().next()) {
+        (Some(l), Some((_, mut t))) => {
+            if t.0 != l {
+                t.0 = l;
+            }
+        }
+        (Some(l), None) => {
+            commands.spawn((
+                Text::new(l),
+                TextFont { font_size: bevy::text::FontSize::Px(17.0), ..default() },
+                TextColor(Color::srgb(1.0, 0.92, 0.6)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+                Node { position_type: PositionType::Absolute, top: px(12), right: px(12), max_width: px(560), padding: UiRect::all(px(8)), ..default() },
+                GlobalZIndex(1001),
+                BossBox,
+            ));
+        }
+        (None, Some((e, _))) => commands.entity(e).despawn(),
+        (None, None) => {}
+    }
+}
+
+/// F6 shows or hides the developer info panel (Tab is the game's Start key); during a boss
+/// fight it toggles the small boss box instead.
+fn toggle_hud(keys: Res<ButtonInput<KeyCode>>, mut huds: Query<&mut Node, With<Hud>>, play: Option<Res<PlayState>>, mut boss_box: ResMut<BossBoxOn>) {
     let _span = crate::perf::span("toggle_hud");
+    if keys.just_pressed(KeyCode::F6) && play.as_ref().is_some_and(|p| !p.play.boss_info.is_empty()) {
+        boss_box.0 = !boss_box.0;
+        return;
+    }
     if keys.just_pressed(KeyCode::F6) {
         for mut node in &mut huds {
             node.display = match node.display {
@@ -1771,11 +1811,7 @@ fn show_sim(driver: Res<SimDriver>, play: Option<Res<PlayState>>, mut texts: Que
     let _span = crate::perf::span("show_sim");
     let d = &*driver;
     let play_line = play
-        .map(|p| {
-            // A boss readout first, when a boss controller wrote one (F6; this build's tool).
-            let boss = if p.play.boss_info.is_empty() { String::new() } else { p.play.boss_info.join("\n") + "\n\n" };
-            format!("{boss}{}\n{}\n{}\n", p.play.status(), p.play.status_camera(), p.play.status_worlds())
-        })
+        .map(|p| format!("{}\n{}\n{}\n", p.play.status(), p.play.status_camera(), p.play.status_worlds()))
         .unwrap_or_default();
     for mut text in &mut texts {
         text.0 = play_line.clone() + &format!(

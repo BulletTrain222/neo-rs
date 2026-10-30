@@ -11248,7 +11248,7 @@ impl Play {
             let before = k.state;
             let act = k.tick(&v, &words, &mut self.rng);
             let after = k.state;
-            self.boss_info = k.describe(&v, &words);
+            self.boss_info = k.summary(&v, &words);
             // SPEC-0012 Blend: the six weak-point glow colours drive the knight's mesh colour
             // slots 1 to 6 (left knee, right knee, left under-arm, right under-arm, back, neck):
             // black while unlit, the magenta pulse while exposed. Taken as the slot's colour scale
