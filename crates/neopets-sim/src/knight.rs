@@ -799,7 +799,10 @@ impl Knight {
                         if self.stun_tick(v, &[RIGHT_ARM, LEFT_ARM], 46, false, a) {
                             a.clear_level.push(10);
                             4
-                        } else if self.parts[RIGHT_ARM] <= 0 {
+                        } else if self.parts[RIGHT_ARM] <= 0 && self.parts[LEFT_ARM] <= 0 {
+                            // G9: the part-loss recovery needs both under-arms at 0 (the end test
+                            // is made after the second part's test); with one left the stun runs
+                            // on to its countdown.
                             a.clear_level.push(10);
                             5
                         } else {
@@ -1079,6 +1082,30 @@ mod tests {
             put(at, x.to_bits());
         }
         Words::read(&b).unwrap()
+    }
+
+    #[test]
+    fn high_swing_stun_holds_with_one_under_arm_left() {
+        // The right under-arm broken earlier: the next high swing's stun runs on (the recovery
+        // needs both at 0) and keeps level state 10 set.
+        let w = words();
+        let mut rng = crate::rng::Rng::seeded(1);
+        let (no, miss, nosword): (&dyn Fn(u16) -> bool, &dyn Fn(usize) -> bool, &dyn Fn(Vec3) -> bool) = (&|_| false, &|_| false, &|_| false);
+        let mut k = Knight::new(&w);
+        k.counter = false;
+        k.parts[RIGHT_ARM] = 0;
+        k.state = State::HighSwing(3);
+        k.stun = 600;
+        let v = view(no, miss, nosword, 20.0);
+        for _ in 0..100 {
+            let a = k.tick(&v, &w, &mut rng);
+            assert!(a.clear_level.is_empty());
+        }
+        assert_eq!(k.state, State::HighSwing(3));
+        // Both at 0: the part-loss recovery (step 5) at once, level state 10 cleared.
+        k.parts[LEFT_ARM] = 0;
+        let a = k.tick(&v, &w, &mut rng);
+        assert_eq!((k.state, a.clear_level), (State::HighSwing(5), vec![10]));
     }
 
     fn view<'a>(level: &'a dyn Fn(u16) -> bool, part: &'a dyn Fn(usize) -> bool, sword: &'a dyn Fn(Vec3) -> bool, d: f32) -> View<'a> {
