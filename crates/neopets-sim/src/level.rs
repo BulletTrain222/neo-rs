@@ -2190,8 +2190,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set_word(pack, 4, 1);
             v
         }
-        // SPEC-0041 989 Init: objects 2 and 0 at their start. Thread A (Low in the spec) and the
-        // effect moves of Update are not built; thread B runs from Update.
+        // SPEC-0041 989 Init: objects 2 and 0 at their start. Thread A (object 2's loop on level
+        // state 10) and thread B run from Update; the effect moves of Update are not built.
         989 => vec![Action::InitObjOn { obj: 2, end: false }, Action::InitObjOn { obj: 0, end: false }],
         // SPEC-0044 893 Init: 46; triggers 4, 1, 5, 2 and 3; the main slot thread (193 clear: set 8;
         // 524 set, 525 clear, item 77 not held: 11; 524 and 525 set, 526 clear: 6; then with 47
@@ -11197,6 +11197,16 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // fight block once (value 2 for eW 78, entity 0 off, 51, 298 and 86, and the load of eW
         // 78 in place of movie 47); the pre-fight step's boss-fight refill (instance 7).
         989 => {
+            // SPEC-0041 989 thread A: while level state 10 is set (the knight's high-swing stun)
+            // object 2 loops at speed 1.0; when it clears the loop stops. Module word 2 stands for
+            // the "object 2 is animating" test.
+            if state.level(10) && state.word(pack, 2) == 0 {
+                state.set_word(pack, 2, 1);
+                out.push(Action::LoopAnim { obj: 2, speed: 1.0 });
+            } else if !state.level(10) && state.word(pack, 2) == 1 {
+                state.set_word(pack, 2, 0);
+                out.push(Action::StopAnim { obj: 2 });
+            }
             let l = |n| state.level(n);
             if l(2) && !l(3) {
                 state.queue_movie(46);

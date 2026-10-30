@@ -295,6 +295,8 @@ pub struct Act {
     /// A hit on the hero (unreduced) with its knock-back velocity.
     pub hero_damage: Option<(i32, Option<Vec3>)>,
     pub set_level: Vec<u16>,
+    /// Level states cleared this tick (state 10 when the high-swing stun ends).
+    pub clear_level: Vec<u16>,
     /// A weak-point hit: the part (effect 305 at its frame).
     pub part_effect: Option<usize>,
     pub consume_shot: bool,
@@ -304,6 +306,9 @@ pub struct Act {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Knight {
+    /// The knight's start point (its position on its first tick), for the high swing's test of
+    /// its own distance from it (SPEC-0012 G6 item 6).
+    pub start: Option<Vec3>,
     pub state: State,
     pub phase: u8,
     pub speed: f32,
@@ -354,6 +359,7 @@ impl Knight {
     /// The per-fight record at its start.
     pub fn new(w: &Words) -> Self {
         Self {
+            start: None,
             state: State::Idle,
             phase: 0,
             speed: 1.0,
@@ -780,6 +786,9 @@ impl Knight {
                         a.anim = Some(35);
                         if ended(35) {
                             self.stun = ticks(w.high_stun);
+                            // G9: level state 10 on the arm-open gate tick (the arena loops object
+                            // 2 while it is set; SPEC-0041 989 thread A).
+                            a.set_level.push(10);
                             3
                         } else {
                             2
@@ -788,8 +797,10 @@ impl Knight {
                     3 => {
                         a.anim = Some(36);
                         if self.stun_tick(v, &[RIGHT_ARM, LEFT_ARM], 46, false, a) {
+                            a.clear_level.push(10);
                             4
                         } else if self.parts[RIGHT_ARM] <= 0 {
+                            a.clear_level.push(10);
                             5
                         } else {
                             3

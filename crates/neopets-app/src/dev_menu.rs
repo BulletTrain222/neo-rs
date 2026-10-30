@@ -450,6 +450,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         dev.open |= v.contains("menu");
         perf.on |= v.contains("perf");
         dev.warp = v.split(',').find_map(|t| t.trim().strip_prefix("warp=")?.parse().ok());
+        // "roberta": select Roberta (the developer menu's hero switch).
+        if v.split(',').any(|t| t.trim() == "roberta") && play.play.hero_index == 0 {
+            play.play.trace_select_hero(1);
+        }
         // "row=K" and "flag=N": the menu cursor on row K and the story flag row at N (screenshots).
         if let Some(k) = v.split(',').find_map(|t| t.trim().strip_prefix("row=")?.parse::<usize>().ok()) {
             dev.cursor = k.min(ENTRIES.len() - 1);

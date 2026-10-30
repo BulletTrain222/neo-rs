@@ -11228,7 +11228,8 @@ impl Play {
                 part_hit: &part_hit,
                 part_shot: &part_shot,
                 hero_damage,
-                second_measure: hd,
+                // G6 item 6: the knight's own horizontal distance from its start point.
+                second_measure: c.knight.as_ref().and_then(|k| k.start).map_or(0.0, |s| (c.position[0] - s[0]).hypot(c.position[2] - s[2])),
                 ground: world.ground_at(c.position[0], c.position[2], c.position[1] + 8.0),
                 // Attachment point 0, the hand grip: the sword's attach and return point
                 // (SPEC-0012 Bone table and attachment points).
@@ -11238,6 +11239,7 @@ impl Play {
                 level: &level,
             };
             let Some(k) = c.knight.as_mut() else { continue };
+            k.start.get_or_insert(c.position);
             let before = k.state;
             let act = k.tick(&v, &words, &mut self.rng);
             let after = k.state;
@@ -11286,6 +11288,9 @@ impl Play {
             let from = c.position;
             for &f in &act.set_level {
                 self.state.set_level(f, true);
+            }
+            for &f in &act.clear_level {
+                self.state.set_level(f, false);
             }
             if act.consume_shot && !self.hero_shots.is_empty() {
                 self.hero_shots.remove(0);
@@ -14528,9 +14533,13 @@ impl Play {
             v.quests[slot] = *id as i32;
         }
         v.motes = self.equipment.motes[self.hero_index].map(|m| m.map_or(-1, |id| id as i32));
+        // The active hero's pages and equipment (SPEC-0035 section 14.4: the hero index picks
+        // the item-screen records; the entries are per hero).
+        let h = self.hero_index.min(1);
+        v.hero = h;
         let e = &self.equipment.entries;
-        v.equipped = [e[0][0].is_some(), e[2][0].is_some(), e[1][0].is_some()];
-        v.equipped_ids = [e[0][0], e[2][0], e[1][0]].map(|x| x.map_or(-1, |id| id as i32));
+        v.equipped = [e[0][h].is_some(), e[2][h].is_some(), e[1][h].is_some()];
+        v.equipped_ids = [e[0][h], e[2][h], e[1][h]].map(|x| x.map_or(-1, |id| id as i32));
         v.cloak = count(126) > 0;
         v.mote_counts = std::array::from_fn(|k| count(160 + k as i32));
         v.mote_selection = self.mote_panel.selection;

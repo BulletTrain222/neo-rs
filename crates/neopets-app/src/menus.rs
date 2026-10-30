@@ -452,11 +452,17 @@ impl Flow {
         (n, m)
     }
 
+    /// The first item-screen record of the active hero (SPEC-0035 section 14.4): Roberta's pages
+    /// are records 3 to 5 (codes 0x3C, 0x50, 0x64), Tor's 6 to 8.
+    pub fn items(&self) -> usize {
+        if self.view.hero == 1 { 3 } else { ITEMS }
+    }
+
     /// The item screen's predicate inputs for this pass.
     fn item_pc(&self) -> ItemPc {
         let v = &self.view;
         let grid = std::array::from_fn(|k| if v.grid_counts[k] > 0 { self.grid_ids[k] } else { 0 });
-        let tab = self.current.saturating_sub(ITEMS).min(2);
+        let tab = self.current.saturating_sub(self.items()).min(2);
         let (cursor, selected) = match tab {
             0 => (self.item_cursor, if v.grid_counts[self.item_cursor] > 0 { self.grid_ids[self.item_cursor] } else { -1 }),
             1 => (self.charm_cursor, if v.mote_selection < 14 && v.mote_counts[v.mote_selection as usize] > 0 { 160 + v.mote_selection as i32 } else { -1 }),
@@ -486,12 +492,12 @@ impl Flow {
         if buttons & L1 != 0 {
             self.sounds.push(0x98);
             self.item_tab = (tab + 2) % 3;
-            return Some(ITEMS + self.item_tab);
+            return Some(self.items() + self.item_tab);
         }
         if buttons & R1 != 0 {
             self.sounds.push(0x99);
             self.item_tab = (tab + 1) % 3;
-            return Some(ITEMS + self.item_tab);
+            return Some(self.items() + self.item_tab);
         }
         let (up, down, left, right) = (edge & UP != 0, edge & DOWN != 0, edge & LEFT != 0, edge & RIGHT != 0);
         match tab {
@@ -632,7 +638,7 @@ impl Flow {
         } else if let Some(tab) = page.strip_prefix("items") {
             // "items", "items1" or "items2": the item page's tab.
             self.item_tab = tab.parse::<usize>().unwrap_or(0).min(2);
-            self.enter(fe, ITEMS + self.item_tab, &ctx);
+            self.enter(fe, self.items() + self.item_tab, &ctx);
         } else if page == "journal" {
             self.map.area = self.map_view.hero_area;
             self.enter(fe, JOURNAL, &ctx);
@@ -889,7 +895,7 @@ impl Flow {
                     result = Some(PAUSE);
                 } else if (edge | second) & START != 0 {
                     // SPEC-0035: Start opens the item screen on its current tab (Tor's records).
-                    result = Some(ITEMS + self.item_tab);
+                    result = Some(self.items() + self.item_tab);
                 } else if ctx.shortcuts && ctx.dpad & LEFT != 0 {
                     // Section 6: D-pad Left opens the map of the hero map area (cue 0x9A even
                     // when the area is negative and play stays).
@@ -985,10 +991,10 @@ impl Flow {
                     }
                 } else if second & L2 != 0 {
                     self.sounds.push(0x99);
-                    result = self.open_map(self.map_view.hero_area).or(Some(ITEMS + self.item_tab));
+                    result = self.open_map(self.map_view.hero_area).or(Some(self.items() + self.item_tab));
                 } else if second & R2 != 0 {
                     self.sounds.push(0x98);
-                    result = Some(ITEMS + self.item_tab);
+                    result = Some(self.items() + self.item_tab);
                 }
             }
             // SPEC-0051 section 4: the map page of the selected area.
@@ -1011,14 +1017,14 @@ impl Flow {
                     self.sounds.push(0x98);
                     result = Some(JOURNAL);
                 } else if second & L2 != 0 {
-                    result = Some(ITEMS + self.item_tab);
+                    result = Some(self.items() + self.item_tab);
                 }
             }
             8..=10 => {
-                if self.pass == 0 && self.current == ITEMS && self.view.grid_counts[self.item_cursor] == 0 {
+                if self.pass == 0 && self.current == self.items() && self.view.grid_counts[self.item_cursor] == 0 {
                     self.item_cursor = 0;
                 }
-                if self.pass == 0 && self.current == ITEMS + 2 {
+                if self.pass == 0 && self.current == self.items() + 2 {
                     self.quest_cursor = 0;
                 }
                 result = self.item_screen(state as usize - 8, edge, second, &mut command);
@@ -1593,7 +1599,7 @@ pub fn credits_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
 /// and its description, at the two value-text nodes of the record's group at (63, 388), in each
 /// node's font and colour. The lines' texts come from the host (`lines`).
 pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw> {
-    if !(ITEMS..ITEMS + 3).contains(&flow.current) {
+    if !(flow.items()..flow.items() + 3).contains(&flow.current) {
         return Vec::new();
     }
     // The group with key 0xC2 (cells, frames, counts and the action box) is a library group of
@@ -1605,7 +1611,7 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
     // own. The Quest-items tab shows its owned category-7 entries in at most 20 cells (section
     // 14.1) without saying how they are drawn: this build draws the 0xC2 cells with the page of
     // 20 entries that holds the cursor as their ids (each shown once, no count).
-    let tab = flow.current - ITEMS;
+    let tab = flow.current - flow.items();
     let mut pc = flow.pc();
     if tab == 2 {
         let page = 0;
