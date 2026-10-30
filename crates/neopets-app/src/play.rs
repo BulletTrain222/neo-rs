@@ -214,8 +214,8 @@ impl World {
             flat: Some(0.0),
             boxes: crate::stage_view::wall_boxes(),
             all_boxes: crate::stage_view::wall_boxes().into_iter().map(|b| (0, b)).collect(),
-            push_spheres: Vec::new(),
-            all_spheres: Vec::new(),
+            push_spheres: crate::stage_view::rock_spheres(),
+            all_spheres: crate::stage_view::rock_spheres().into_iter().map(|(c, r)| (0, c, r)).collect(),
             collis_mask: 0,
             neighbours: Neighbours::default(),
             planes: Vec::new(),
@@ -9055,6 +9055,8 @@ impl Play {
             // Juppie and Plague Serpent arenas); otherwise the ring.
             let w = &self.world;
             let tagged: Vec<([f32; 3], [f32; 3])> = (101..=106).filter_map(|k| w.tags.iter().position(|&t| t == k).and_then(|i| w.entries.get(i)).copied()).collect();
+            // The test stage has its own fixed uneven ring round its centre (`stage_view`).
+            let ring = if pack == STAGE_PACK { crate::stage_view::arena_points() } else { ring };
             let ring = <[([f32; 3], [f32; 3]); 6]>::try_from(tagged).unwrap_or(ring);
             self.cloud_arena = Some((pack, ring));
             let at = ring[0].0;
@@ -9182,7 +9184,12 @@ impl Play {
         let shots: Vec<([f32; 3], [f32; 3])> = if self.hero_index == 1 { self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect() } else { Vec::new() };
         let world = &self.world;
         let ground = |x: f32, z: f32, c: f32| world.ground_at(x, z, c).unwrap_or(0.0);
+        let stage = world.pack == STAGE_PACK;
         let wall = |a: [f32; 3], e: [f32; 3]| -> Option<(f32, [f32; 3])> {
+            // The test stage's pillars turn the bolts as its walls would (this build's stage).
+            if stage {
+                return crate::stage_view::rock_hit(a, e);
+            }
             let g = world.ground.as_ref()?;
             if g.segment_clear(a, e, false) {
                 return None;
