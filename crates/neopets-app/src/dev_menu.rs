@@ -460,8 +460,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         if let Some(k) = v.split(',').find_map(|t| t.trim().strip_prefix("speed=")?.parse::<usize>().ok()) {
             dev.speed = k.min(SPEEDS.len() - 1);
         }
-        // "view=NAME" (or "view=NAME:D"): the free camera D units (default 4) in front of the
-        // named character, looking at its chest.
+    }
+    // "view=NAME" (or "view=NAME:D"): the free camera D units (default 4) in front of the named
+    // character, looking at its chest; tried at frame 30 and again at frame 400 (after a
+    // developer boss fight has loaded its world).
+    if *frames == 30 || (*frames == 400 && dev.free.is_none()) {
+        let v = std::env::var("NEOPETS_DEV").unwrap_or_default();
         if let Some(arg) = v.split(',').find_map(|t| t.trim().strip_prefix("view=")) {
             let (name, d) = arg.split_once(':').map_or((arg, 4.0), |(n, d)| (n, d.parse().unwrap_or(4.0)));
             if let Some(c) = play.play.characters.iter().find(|c| c.name == name) {
@@ -472,6 +476,9 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
                 dev.free = Some(FreeCam { pos, yaw: to.x.atan2(to.z), pitch: (to.y / to.length()).asin() });
             }
         }
+    }
+    if *frames == 30 {
+        let v = std::env::var("NEOPETS_DEV").unwrap_or_default();
         if v.contains("free") && dev.free.is_none() {
             toggle_free(&mut dev);
             if let Some(fc) = dev.free.as_mut() {

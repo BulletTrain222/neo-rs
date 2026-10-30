@@ -3645,6 +3645,21 @@ pub(crate) fn part_assets(
         .iter()
         .enumerate()
         .map(|(i, part)| {
+            // SPEC-0046 (R-0128): program 6 draws with texture function highlight 2, so its
+            // vertex alpha is an additive highlight, never the opacity: a program-6 part is solid
+            // wherever its texture is (the Black Knight's armour and legs had alpha 0 and were
+            // cut away). The highlight itself is not drawn.
+            let solid;
+            let part = if part.program == Some(6) && part.colors.iter().any(|c| c[3] < 1.0) {
+                let mut q = part.clone();
+                for c in &mut q.colors {
+                    c[3] = 1.0;
+                }
+                solid = q;
+                &solid
+            } else {
+                part
+            };
             // A scrolling part (level water, SPEC-0046) has its own blended material, whose UV
             // offset moves every frame.
             let scrolling = match (part.scroll, part.texture) {
@@ -4556,6 +4571,20 @@ fn play_trace(
                     let g = m.and_then(|m| play.world.ground_at(m[12], m[14], m[13] + 10.0));
                     let walls = m.map_or(0, |m| play.world.object_wall_count(m[12], m[14]));
                     println!("      obj {i}: drawn at {:?}, anim {st:?}, patch set {set:?}, owner pose {}, ground from 10 above {g:?}, object walls in its cell {walls}", m.map(|m| [m[12], m[13], m[14]]), play.world.owner_poses.contains_key(&i));
+                }
+            }
+        }
+        // NEOPETS_TRACE_BONES="tick,name": that character's posed bones (model space) and its
+        // bind pose, on that tick (diagnostic).
+        if let Some((t, name)) = std::env::var("NEOPETS_TRACE_BONES").ok().and_then(|v| v.split_once(',').map(|(a, b)| (a.trim().parse::<u64>().ok(), b.trim().to_string()))) {
+            if t == Some(play.ticks) {
+                if let Some(c) = play.characters.iter().find(|c| c.name == name) {
+                    let st = c.anim.clip_state();
+                    println!("      bones of {name}: action {} progress {:.2}", st.action, st.progress);
+                    for (k, f) in c.anim.bone_frames().iter().enumerate() {
+                        let rest = c.anim.bones().rest_position.get(k).copied();
+                        println!("        bone {k}: parent {:?} posed {:?} rest {:?}", c.anim.bones().parents.get(k), f.t.map(|v| (v * 100.0).round() / 100.0), rest.map(|r| r.map(|v| (v * 100.0).round() / 100.0)));
+                    }
                 }
             }
         }

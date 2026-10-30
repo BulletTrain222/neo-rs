@@ -266,7 +266,12 @@ pub fn region_character(
     // table size (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_RIG").is_some() {
         let f: Vec<(u8, i16, usize)> = families.iter().map(|(r, d)| (*r, placement.skeletons[*r as usize], d.def.len())).collect();
-        println!("      rig {}: bones {}, families (role, skeleton, joints) {f:?}", placement.name, bones.len());
+        println!("      rig {}: bones {}, families (role, skeleton, joints) {f:?}, tree roles {roles:?}, body parts {}, attachments {:?}", placement.name, bones.len(), model.parts.len(), model.attachments.iter().map(|(k, m)| (*k, m.parts.len())).collect::<Vec<_>>());
+        for (i, p) in model.parts.iter().enumerate() {
+            let bmax = p.bones.iter().flat_map(|b| b.iter()).max();
+            println!("        part {i}: layout {:?} verts {} tex {:?} prog {:?} group {:?} lit {} pass1 {:?} env {} bones max {:?} weights0 {:?} box {:?}", p.layout, p.positions.len(), p.texture, p.program, p.group, p.lit, p.pass1.as_ref().map(|q| q.texture), p.env_map, bmax, p.weights.first(), p.positions.iter().fold(([f32::MAX; 3], [f32::MIN; 3]), |(a, b), v| (std::array::from_fn(|k| a[k].min(v[k])), std::array::from_fn(|k| b[k].max(v[k])))));
+        }
+        println!("        textures {}", model.textures.len());
     }
     let mut anim = crate::character::HeroAnim::with_roles(bones, families);
     anim.set_scale_set(placement.scale_set);
