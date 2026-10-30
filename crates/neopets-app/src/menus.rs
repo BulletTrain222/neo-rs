@@ -319,6 +319,8 @@ pub struct Flow {
     pub item_cursor: usize,
     pub charm_cursor: usize,
     pub quest_cursor: usize,
+    /// The Quest-items tab's scroll offset (entries; a multiple of 5).
+    pub quest_scroll: usize,
     pub grid_ids: [i32; 20],
     pub view: ItemView,
     /// The Display page (this build's display settings, not a disc page): its focused row, and
@@ -393,7 +395,7 @@ impl Default for ItemView {
 impl Flow {
     /// Front-end start-up: a direct set of record 0 (the card state).
     pub fn new(fe: &Frontend) -> Self {
-        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
+        let mut f = Self { current: CARD, movies: Vec::new(), stack: vec![CARD], pass: 0, focus: 0, attract_visits: 0, idle: 0, picker: Picker::default(), rows: RowWords::default(), card: None, quit_box: false, messages: Vec::new(), slots: Vec::new(), busy_hold: 120, sounds: Vec::new(), came_from: None, options: Default::default(), held: 0, title_seen: false, bank_override: None, credit_rows: Vec::new(), credit_colours: Vec::new(), credit_words: None, roll: None, credits_shown: Vec::new(), credits_pending: false, item_tab: 0, item_cursor: 0, charm_cursor: 0, quest_cursor: 0, quest_scroll: 0, grid_ids: [-1; 20], view: ItemView::default(), map_data: MapData::default(), map_view: MapView::default(), map: MapState::default(), book: None, book_words: (1.2, 0.12), page_words: None, display_focus: 0, display_requests: Vec::new(), controls_request: false, display_back: false };
         f.default_focus(fe, &Ctx::default());
         f
     }
@@ -534,7 +536,7 @@ impl Flow {
             _ => {
                 let n = v.quests.iter().take_while(|&&c| c >= 0).count();
                 if n >= 2 {
-                    self.quest_cursor = neopets_sim::inventory::grid_move(self.quest_cursor, up, down, left, right).min(n - 1);
+                    (self.quest_cursor, self.quest_scroll) = quest_move(self.quest_cursor, self.quest_scroll, n, (up, down, left, right));
                 }
                 if buttons & (CROSS | CIRCLE) != 0 {
                     self.sounds.push(0xA2);
@@ -1014,6 +1016,7 @@ impl Flow {
                 }
                 if self.pass == 0 && self.current == ITEMS + 2 {
                     self.quest_cursor = 0;
+                    self.quest_scroll = 0;
                 }
                 result = self.item_screen(state as usize - 8, edge, second, &mut command);
                 generic = false;
@@ -1348,6 +1351,36 @@ pub struct Ctx {
     pub box_busy: bool,
 }
 
+/// The Quest-items tab's cursor move (SPEC-0035 section 14.1 gives the 20 cells and the scroll
+/// offset, not how the offset moves; R-0130). This build's choice: Left and Right move within the
+/// row (wrapping), Up and Down move a row; past the last shown row (or above the first) the
+/// offset scrolls one row of 5, and the cursor stays on an entry (at most n - 1). Returns the
+/// cursor and the offset.
+pub fn quest_move(cursor: usize, scroll: usize, n: usize, (up, down, left, right): (bool, bool, bool, bool)) -> (usize, usize) {
+    let (mut cursor, mut scroll) = (cursor, scroll);
+    let col = cursor % 5;
+    if left {
+        cursor = cursor - col + (col + 4) % 5;
+    }
+    if right {
+        cursor = cursor - col + (col + 1) % 5;
+    }
+    if down && cursor + 5 < n.div_ceil(5) * 5 {
+        cursor += 5;
+    }
+    if up && cursor >= 5 {
+        cursor -= 5;
+    }
+    cursor = cursor.min(n.saturating_sub(1));
+    if cursor >= scroll + 20 {
+        scroll = cursor / 5 * 5 - 15;
+    }
+    if cursor < scroll {
+        scroll = cursor / 5 * 5;
+    }
+    (cursor, scroll)
+}
+
 /// Predicate table A (section 9c), the slots this build implements: 0, 2 and 56 always 1;
 /// 12, 27, 39 and 40 always 0; 66 to 68 the option words (Vibration, Invert Left-Right, Invert
 /// Up-Down); 72 the game-over page's pass count above twice the tick rate. Other slots read 0.
@@ -1570,9 +1603,9 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
     let tab = flow.current - ITEMS;
     let mut pc = flow.pc();
     if tab == 2 {
-        let page = flow.quest_cursor / 20 * 20;
+        let page = flow.quest_scroll;
         pc.items.tab = 0;
-        pc.items.cursor = flow.quest_cursor % 20;
+        pc.items.cursor = flow.quest_cursor.saturating_sub(page).min(19);
         pc.items.grid = std::array::from_fn(|k| pc.items.view.quests.get(page + k).copied().filter(|&id| id >= 0).unwrap_or(0));
         pc.items.view.grid_counts = pc.items.grid.map(|id| u32::from(id > 0));
         pc.items.view.marker = -1;
@@ -2052,6 +2085,18 @@ mod tests {
         f.targets.insert(3, Target { target: -3, state: -1 });
         f.targets.insert(4, Target { target: 11, state: -1 });
         f
+    }
+
+    #[test]
+    fn quest_tab_scrolls_by_rows() {
+        // 27 entries: Down from row 3 (cursor 17) scrolls one row; Up from the top row scrolls back.
+        assert_eq!(quest_move(17, 0, 27, (false, true, false, false)), (22, 5));
+        assert_eq!(quest_move(22, 5, 27, (false, true, false, false)), (26, 10));
+        assert_eq!(quest_move(26, 10, 27, (false, true, false, false)), (26, 10));
+        assert_eq!(quest_move(10, 10, 27, (true, false, false, false)), (5, 5));
+        // Left and Right wrap within the row, kept on an entry.
+        assert_eq!(quest_move(0, 0, 27, (false, false, true, false)), (4, 0));
+        assert_eq!(quest_move(26, 10, 27, (false, false, false, true)), (26, 10));
     }
 
     #[test]
