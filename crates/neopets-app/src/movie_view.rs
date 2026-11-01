@@ -10,7 +10,7 @@
 //! W (Playback steps 2, 6 and 7) is not (the world stays loaded and the hero keeps their place). The original stops the game's sound before the queue plays and the reload
 //! restarts it; without the reload, the sound is paused here and resumes after the queue.
 //!
-//! The skip prompt in the bottom right corner of the 512 x 448 canvas is this build's addition, not in the
+//! The skip prompt in the window's bottom right corner is this build's addition, not in the
 //! original: the words in the disc's prompt font round the Cross icon, or the chosen Button
 //! pictures' A.
 use bevy::audio::{AudioPlayer, ChannelCount, Decodable, PlaybackSettings, SampleRate, Source};
@@ -220,7 +220,7 @@ const SKIP_WORDS: [&[u8]; 2] = [b"Press", b"to Skip"];
 /// The prompt's font and spacing, as the dialogue box's prompt row (SPEC-0022).
 const SKIP_FONT: usize = 1;
 const SKIP_SPACING: i32 = -1;
-/// The prompt's colour (128 is full) and its margins from the canvas's right and bottom edges to
+/// The prompt's colour (128 is full) and its margins from the window's right and bottom edges to
 /// its right end and middle, in canvas units.
 const SKIP_COLOUR: [u8; 4] = [128, 128, 128, 128];
 const SKIP_MARGIN: (f32, f32) = (5.0, 18.0);
@@ -427,10 +427,9 @@ pub fn sync_skip(
     }
     let (ww, wh) = (window.width(), window.height());
     let s = (ww / 512.0).min(wh / 448.0);
-    let right = (ww + 512.0 * s) / 2.0;
     let total: f32 = list.iter().map(|p| p.1).sum();
-    let centre = (wh + 448.0 * s) / 2.0 - SKIP_MARGIN.1 * s;
-    let mut x = right - (total + SKIP_MARGIN.0) * s;
+    let centre = wh - SKIP_MARGIN.1 * s;
+    let mut x = ww - (total + SKIP_MARGIN.0) * s;
     let mut at = [0.0; 3];
     for (k, p) in list.iter().enumerate() {
         at[k] = x;
