@@ -93,8 +93,10 @@ volume_material!(ShadowAdd);
 #[derive(Component)]
 pub struct VolumeMesh(bool);
 
+/// One degenerate triangle: Bevy's mesh allocator skips a mesh of no vertices but still copies its
+/// data, and logs "Use-after-free" for it.
 fn empty_mesh() -> Mesh {
-    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default()).with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, Vec::<[f32; 3]>::new())
+    Mesh::new(PrimitiveTopology::TriangleList, RenderAssetUsages::default()).with_inserted_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0f32; 3]; 3])
 }
 
 /// Each frame: the hero's shadow volume rebuilt into the two meshes, at the Display page's
@@ -154,7 +156,10 @@ pub fn sync_shadows(
             continue;
         }
         if let Some(mut m) = meshes.get_mut(&mesh.0) {
-            let positions: Vec<[f32; 3]> = tris.iter().flatten().copied().collect();
+            let mut positions: Vec<[f32; 3]> = tris.iter().flatten().copied().collect();
+            if positions.is_empty() {
+                positions = vec![[0.0; 3]; 3];
+            }
             m.insert_attribute(Mesh::ATTRIBUTE_POSITION, positions);
         }
     }

@@ -2382,6 +2382,7 @@ fn sync_worlds(
     mut shown: Local<Vec<WorldPart>>,
     mut built: Local<std::collections::HashMap<WorldPart, scene_merge::Built>>,
     mut sigs: ResMut<SceneSigs>,
+    mut pending_fresh: Local<Vec<WorldPart>>,
 ) {
     let _span = crate::perf::span("sync_worlds");
     let (Some(state), Some(mut archive)) = (play, archive) else { return };
@@ -2424,14 +2425,26 @@ fn sync_worlds(
         }
     }
     built.retain(|k, _| want.contains(k));
-    let mut fresh: Vec<WorldPart> = Vec::new();
+    pending_fresh.retain(|k| want.contains(k));
+    let mut fresh: Vec<WorldPart> = std::mem::take(&mut *pending_fresh);
     let Archive { disc, index } = &mut *archive;
+    // World parts are built until this frame's budget is spent and the rest on later frames, so
+    // a load is several short frames rather than one long one.
+    let started = std::time::Instant::now();
+    let mut done: Vec<WorldPart> = shown.iter().copied().filter(|k| want.contains(k)).collect();
+    let mut deferred = false;
     for part in &want {
         if shown.contains(part) {
             continue;
         }
+        if started.elapsed().as_secs_f32() * 1000.0 > WORLD_BUILD_BUDGET_MS {
+            deferred = true;
+            break;
+        }
+        done.push(*part);
         if let WorldPart::Objects(pack, layers) = *part {
             let world = [&p.world].into_iter().chain(p.other.as_ref()).find(|w| w.pack == pack);
+            let _load = crate::perf::span("load:objects");
             let built = index.read(disc, pack).and_then(|bytes| {
                 let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
                 let mut out = Vec::new();
@@ -2535,6 +2548,7 @@ fn sync_worlds(
             continue;
         }
         if let WorldPart::Foliage(pack) = *part {
+            let _load = crate::perf::span("load:foliage");
             match foliage_view::models(disc, index, p, pack) {
                 Ok(models) => {
                     let n = foliage_view::spawn(&mut commands, p, pack, &models, *part, &mut meshes, &mut materials, &mut pass1_materials, &mut images);
@@ -2551,12 +2565,13 @@ fn sync_worlds(
         };
         let model = match *part {
             WorldPart::Scene(..) if streamed.is_some() => Ok(streamed),
-            WorldPart::Scene(pack, layers) => index
-                .read(disc, pack)
-                .and_then(|bytes| {
+            WorldPart::Scene(pack, layers) => {
+                let _load = crate::perf::span("load:scene_read");
+                index.read(disc, pack).and_then(|bytes| {
                     let chain = neopets_data::resource::walk_chunks(&bytes, None)?;
                     archive_view::world_scene(disc, index, pack, &bytes, &chain.chunks, false, layers)
-                }),
+                })
+            }
             WorldPart::Dome(d) => archive_view::dome(disc, index, d),
             WorldPart::Foliage(_) | WorldPart::Objects(..) | WorldPart::Stage => Ok(None),
         };
@@ -2565,6 +2580,7 @@ fn sync_worlds(
             // other drawn scenes are known.
             Ok(Some(m)) if matches!(*part, WorldPart::Scene(..)) => {
                 if let WorldPart::Scene(pack, _) = *part {
+                    let _load = crate::perf::span("load:scene_textures");
                     built.insert(*part, scene_merge::Built::new(m, pack, &mut materials, &mut images));
                     fresh.push(*part);
                 }
@@ -2641,6 +2657,13 @@ fn sync_worlds(
             Err(e) => error!("{part:?} could not be built: {e}"),
         }
     }
+    // The scenes wait until every wanted part is built, so a scene is not spawned once and again
+    // when its neighbour's twins arrive a frame later.
+    if deferred {
+        *shown = done;
+        *pending_fresh = fresh;
+        return;
+    }
     // Spawn the new scenes, and spawn again an older scene in which a new scene found twins (its
     // twins must be separate entities for the duplicate rule of sync_zones).
     let keys: Vec<WorldPart> = built.keys().copied().collect();
@@ -2666,12 +2689,17 @@ fn sync_worlds(
         for (s, t) in b.shared.iter_mut().zip(twins) {
             *s |= t;
         }
+        let _load = crate::perf::span("load:scene_spawn");
         let n = scene_merge::spawn(&mut commands, k, pack, b, &mut meshes, &mut materials, &mut pass1_materials, &mut images);
         sigs.0.insert(pack, b.sigs.clone());
         info!("scene of {pack}: {} parts in {n} entities ({} twins)", b.model.parts.len(), b.shared.iter().filter(|&&s| s).count());
     }
     *shown = want;
 }
+
+/// How long one frame may spend building world parts, in milliseconds (a part in progress
+/// finishes).
+const WORLD_BUILD_BUDGET_MS: f32 = 6.0;
 
 /// The parts with their flipbooks: a flipbook part gets its own copy of the material, which
 /// the flipbook steps.
@@ -2753,7 +2781,10 @@ struct DrawCull(Vec3, f32);
 /// containment, 4 and the cover by several parts. Levels 3 and 4 hid 696's own canyon walls
 /// beside 1023 (the user's F8 views 1 and 2), so they are off.
 pub fn dup_level() -> u8 {
-    std::env::var("NEOPETS_DUP_LEVEL").ok().and_then(|v| v.parse().ok()).unwrap_or(2)
+    // Read once: the part comparisons call this for every pair, hundreds of thousands of times
+    // when a world loads beside another.
+    static LEVEL: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *LEVEL.get_or_init(|| std::env::var("NEOPETS_DUP_LEVEL").ok().and_then(|v| v.parse().ok()).unwrap_or(2))
 }
 
 /// Every built scene's part signatures by pack, merged parts included (the duplicate rule of
