@@ -214,6 +214,20 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
 
 /// Canvas position and scale of a node (SPEC-0035 Node transform; row spacing over all
 /// siblings, alignment by the node's width), with x and width overrides.
+/// The window-edge shift for a HUD piece at canvas coordinate `c` along an axis of canvas
+/// length `len`: the first third keeps its distance from the window's near edge, the last third
+/// from the far edge, and the middle stays centred (`margin` is the canvas's margin in the
+/// window on that axis).
+fn edge_shift(c: f32, len: f32, margin: f32) -> f32 {
+    if c < len / 3.0 {
+        -margin
+    } else if c > 2.0 * len / 3.0 {
+        margin
+    } else {
+        0.0
+    }
+}
+
 fn place(f: &Frontend, n: usize, xs: &HashMap<usize, i32>, ws: &HashMap<usize, i32>, ov: &HashMap<usize, (i32, i32, f32)>) -> (f32, f32, f32, f32) {
     let node = f.nodes[n];
     let (px, py, psx, psy) = match node.parent {
@@ -671,19 +685,43 @@ pub fn sync_hud(
             // The fill is drawn with its x scale reset to 1.0.
             sx = 1.0;
         }
+        // Each HUD group keeps its distance from its own window edge rather than from the
+        // centred 4:3 canvas, so it stays at that side at any aspect ratio (this build's choice;
+        // the canvas is the PS2's whole screen): the Mote panel and the button prompts stay
+        // centred, the hero-swap portraits go right, the other named groups left, and anything
+        // else (the bars group) by the third of the canvas its left edge lies in, so a long fill
+        // stays with its frame.
+        // Vertically the same way: the Mote panel stays centred, the button prompts, the D-pad
+        // hint, the journal icon and the monster bar go to the bottom edge, the other named
+        // groups to the top.
+        let shift = if in_mote || top == prompts.unwrap_or(usize::MAX) {
+            0.0
+        } else if in_swing {
+            ox
+        } else if top != bars {
+            -ox
+        } else {
+            edge_shift(x, 512.0, ox)
+        };
+        let shift_y = if in_mote {
+            0.0
+        } else if in_dpad || in_journal || in_monster(n) || top == prompts.unwrap_or(usize::MAX) {
+            oy
+        } else if top != bars {
+            -oy
+        } else {
+            edge_shift(y, 448.0, oy)
+        };
         // The health and pool fills' right edge and vertical centre, for the loss effects
         // (SPEC-0023 section 3), as fractions of the window.
         if let Some(k) = [HEALTH_FILL, POOL_FILL].iter().position(|&key| f.key(key) == Some(n)) {
             let (ww, wh) = (window.width().max(1.0), window.height().max(1.0));
-            let ex = ox + (x + w as f32 * sx) * s;
-            let ey = oy + (y + h as f32 * sy / 2.0) * s;
+            let ex = ox + shift + (x + w as f32 * sx) * s;
+            let ey = oy + shift_y + (y + h as f32 * sy / 2.0) * s;
             fill_points[k] = Some(([ex / ww, ey / wh], ww / wh));
         }
-        // The D-pad hint keeps its canvas x from the window's left edge, not the centred 4:3
-        // canvas, so it stays at the left side at any aspect ratio (this build's choice; the
-        // canvas is the PS2's whole screen).
-        node.left = Val::Px(if in_dpad { x * s - ox } else { x * s });
-        node.top = Val::Px(y * s);
+        node.left = Val::Px(x * s + shift);
+        node.top = Val::Px(y * s + shift_y);
         node.width = Val::Px(w as f32 * sx * s);
         node.height = Val::Px(h as f32 * sy * s);
         let base = f.sprite(n).map_or([128; 4], |sp| sp.colour);
@@ -729,8 +767,9 @@ pub fn sync_hud(
             }
             if let Some((_, handle, w, h, base)) = name_image.as_ref() {
                 let (x, y, sx, sy) = place(f, nn, &xs, &ws, &ov);
-                node.left = Val::Px(x * s);
-                node.top = Val::Px((y - *base as f32 * sy) * s);
+                // With the monster bar at the window's left edge.
+                node.left = Val::Px(x * s - ox);
+                node.top = Val::Px((y - *base as f32 * sy) * s + oy);
                 node.width = Val::Px(*w as f32 * sx * s);
                 node.height = Val::Px(*h as f32 * sy * s);
                 image.image = handle.clone();
@@ -751,7 +790,8 @@ pub fn sync_hud(
                 }
                 if let Some((_, handle, w, h, base)) = caption_image.as_ref() {
                     node.left = Val::Px(327.0 * s);
-                    node.top = Val::Px((395 - base) as f32 * s);
+                    // With the button prompts at the window's bottom edge.
+                    node.top = Val::Px((395 - base) as f32 * s + oy);
                     node.width = Val::Px(*w as f32 * s);
                     node.height = Val::Px(*h as f32 * s);
                     image.image = handle.clone();
@@ -787,8 +827,9 @@ pub fn sync_hud(
             }
             match value_images.get(&key) {
                 Some((handle, w, h, base)) => {
-                    node.left = Val::Px((436.0 - *w as f32) * s);
-                    node.top = Val::Px((77 - base) as f32 * s);
+                    // At the window's right edge, like the hero-swap portraits beside it.
+                    node.left = Val::Px((436.0 - *w as f32) * s + ox);
+                    node.top = Val::Px((77 - base) as f32 * s - oy);
                     node.width = Val::Px(*w as f32 * s);
                     node.height = Val::Px(*h as f32 * s);
                     image.image = handle.clone();
@@ -822,8 +863,8 @@ pub fn sync_hud(
         match value_images.get(&key) {
             Some((handle, w, h, base)) => {
                 let y = if line.0 == 0 { 115 } else { 140 };
-                node.left = Val::Px((410.0 - *w as f32) * s);
-                node.top = Val::Px((y - base) as f32 * s);
+                node.left = Val::Px((410.0 - *w as f32) * s + ox);
+                node.top = Val::Px((y - base) as f32 * s - oy);
                 node.width = Val::Px(*w as f32 * s);
                 node.height = Val::Px(*h as f32 * s);
                 image.image = handle.clone();
@@ -891,8 +932,17 @@ pub fn sync_hud(
         }
         let Some((handle, w, h, base)) = value_images.get(&key) else { continue };
         let (x, y, sx, sy) = place(f, n, &xs, &ws, &ov);
-        node.left = Val::Px(x * s);
-        node.top = Val::Px((y - *base as f32 * sy) * s);
+        // With its panel: the Mote panel's stays centred, a panel's goes to the left edge, and
+        // one outside a panel by the third of the canvas it lies in.
+        let (shift, shift_y) = if top == 392 {
+            (0.0, 0.0)
+        } else if top != n {
+            (-ox, -oy)
+        } else {
+            (edge_shift(x, 512.0, ox), edge_shift(y, 448.0, oy))
+        };
+        node.left = Val::Px(x * s + shift);
+        node.top = Val::Px((y - *base as f32 * sy) * s + shift_y);
         node.width = Val::Px(*w as f32 * sx * s);
         node.height = Val::Px(*h as f32 * sy * s);
         image.image = handle.clone();
