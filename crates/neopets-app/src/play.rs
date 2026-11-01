@@ -6243,11 +6243,13 @@ impl Play {
             }
             hits.push((i, damage, own));
         }
-        // The knight's block (SPEC-0012 G15): the impact cue and, for Tor, the sword bounce.
+        // The knight's block (SPEC-0012 G15): the impact cue and, for Tor, the sword bounce
+        // (attack sub-state 13) when the swing is a combo step (sub-states 2, 3, 4, 6, 11 and
+        // 12; SPEC-0012 and SPEC-0029 Behavior 6 Hero actions); Roberta never recoils.
         if knight_block {
             self.sound.play(neopets_sim::sound::WEAPON, 34, neopets_sim::sound::Play { emitter: Some(hero_at), ..Default::default() });
             if self.hero_index == 0 {
-                if let Some(a) = self.attack.as_mut() {
+                if let Some(a) = self.attack.as_mut().filter(|a| matches!(a.sub, 2 | 3 | 4 | 6 | 11 | 12)) {
                     a.recoil();
                 }
             }
