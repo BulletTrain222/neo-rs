@@ -173,7 +173,7 @@ pub fn sync_sun(mut commands: Commands, state: Option<Res<crate::PlayState>>, se
         commands.spawn((
             // Smaller biases than Bevy's (0.02 depth, 1.8 normal texels) keep a character's
             // shadow at its feet with the finer map.
-            DirectionalLight { illuminance: crate::graphics::sun_illuminance(), shadow_maps_enabled: true, shadow_depth_bias: 0.01, shadow_normal_bias: 0.9, ..default() },
+            DirectionalLight { illuminance: crate::graphics::sun_illuminance(), shadow_maps_enabled: std::env::var_os("NEOPETS_SUN_NOSHADOW").is_none(), shadow_depth_bias: 0.01, shadow_normal_bias: 0.9, ..default() },
             bevy::light::CascadeShadowConfigBuilder { num_cascades: 3, maximum_distance: 200.0, first_cascade_far_bound: 20.0, ..default() }.build(),
             Transform::default(),
             Visibility::Hidden,
@@ -219,11 +219,13 @@ fn sun_override() -> Option<(f32, f32, f32, f32)> {
 
 /// The Shadow quality levels: each cascade's map size, the cascade count and the shadow
 /// distance. High is the 4096 map that keeps the characters' shadows crisp; Medium halves the
-/// map; Low quarters it and draws two cascades over a shorter distance.
+/// map; Low quarters it and draws two cascades over a shorter distance; Very Low is half of Low
+/// in each: half the map size, one cascade and half the distance.
 fn quality(level: usize) -> (f32, f32, f32) {
     match level {
-        0 => (1024.0, 2.0, 150.0),
-        1 => (2048.0, 3.0, 200.0),
+        0 => (512.0, 1.0, 75.0),
+        1 => (1024.0, 2.0, 150.0),
+        2 => (2048.0, 3.0, 200.0),
         _ => (4096.0, 3.0, 200.0),
     }
 }

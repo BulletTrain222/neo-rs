@@ -30,7 +30,7 @@ pub const ROWS: usize = 17;
 pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Detailed"];
 
 /// The sun shadow quality (shadow_view.rs: the map size and cascades of each level).
-pub const SHADOW_QUALITY: [&str; 3] = ["Low", "Medium", "High"];
+pub const SHADOW_QUALITY: [&str; 4] = ["Very Low", "Low", "Medium", "High"];
 
 /// The graphics presets (`DisplaySettings::apply_preset`).
 pub const PRESETS: [&str; 3] = ["Low", "Medium", "High"];
@@ -75,7 +75,7 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 1, movies: true, xbox_buttons: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, movies: true, xbox_buttons: false }
     }
 }
 
@@ -108,7 +108,9 @@ impl DisplaySettings {
                 "original foliage" => s.original_foliage = v == "true",
                 "character shadows" => s.char_shadows = v.parse().unwrap_or(s.char_shadows).min(CHAR_SHADOWS.len() - 1),
                 "world shadows" => s.world_shadows = v == "true",
-                "shadow quality" => s.shadow_quality = v.parse().unwrap_or(s.shadow_quality).min(SHADOW_QUALITY.len() - 1),
+                "shadow level" => s.shadow_quality = v.parse().unwrap_or(s.shadow_quality).min(SHADOW_QUALITY.len() - 1),
+                // The older key counted from Low, before Very Low was added.
+                "shadow quality" => s.shadow_quality = v.parse::<usize>().map_or(s.shadow_quality, |q| q + 1).min(SHADOW_QUALITY.len() - 1),
                 "movies" => s.movies = v != "false",
                 "button pictures" => s.xbox_buttons = v == "xbox",
                 _ => {}
@@ -119,7 +121,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow quality = {}\nmovies = {}\nbutton pictures = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nmovies = {}\nbutton pictures = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -153,7 +155,7 @@ impl DisplaySettings {
             if let Some(&w) = n.get(1) {
                 s.world_shadows = w != 0;
             }
-            // An optional third value: the shadow quality (0 Low, 1 Medium, 2 High).
+            // An optional third value: the shadow quality (0 Very Low, 1 Low, 2 Medium, 3 High).
             if let Some(&q) = n.get(2) {
                 s.shadow_quality = q.min(SHADOW_QUALITY.len() - 1);
             }
@@ -199,9 +201,9 @@ impl DisplaySettings {
     /// The other options (colour, textures, foliage, character shadows) are left as they are.
     fn preset_values(p: usize) -> (usize, usize, bool, bool, usize) {
         match p {
-            0 => (3, 0, false, false, 0),
-            1 => (2, 1, true, false, 1),
-            _ => (2, 1, true, true, 2),
+            0 => (3, 0, false, false, 1),
+            1 => (2, 1, true, false, 2),
+            _ => (2, 1, true, true, 3),
         }
     }
 
@@ -667,9 +669,9 @@ mod tests {
         // The new-player options are the Medium preset.
         assert_eq!((s.preset(), s.rows()[5].1.as_str()), (Some(1), "Medium"));
         s.change(5, 1, &sizes);
-        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(2), 2, 1, true, true, 2));
+        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(2), 2, 1, true, true, 3));
         s.change(5, 1, &sizes);
-        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(0), 3, 0, false, false, 0));
+        assert_eq!((s.preset(), s.aa, s.bloom, s.ao, s.world_shadows, s.shadow_quality), (Some(0), 3, 0, false, false, 1));
         // Changing an option below shows Custom; Right from Custom goes to Low.
         s.change(10, 1, &sizes);
         assert_eq!(s.rows()[5].1, "Custom");
@@ -700,8 +702,11 @@ mod tests {
         assert_eq!(s.rows()[14].1, "Medium");
         s.change(14, 1, &sizes);
         s.change(14, 1, &sizes);
-        assert_eq!((s.shadow_quality, s.rows()[14].1.as_str()), (0, "Low"), "wraps to Low");
+        assert_eq!((s.shadow_quality, s.rows()[14].1.as_str()), (0, "Very Low"), "wraps to Very Low");
         assert_eq!(DisplaySettings::parse(&s.text()), s);
+        // A settings file from before Very Low keeps its level.
+        assert_eq!(SHADOW_QUALITY[DisplaySettings::parse("shadow quality = 1").shadow_quality], "Medium");
+        assert_eq!(SHADOW_QUALITY[DisplaySettings::parse("shadow quality = 0").shadow_quality], "Low");
         assert_eq!(s.rows()[3].1, "150%");
         assert_eq!(DisplaySettings::parse("scale = 33\nmode = 9\n").mode, 2, "bad values clamp or keep");
         // A size off the list steps to its neighbours.

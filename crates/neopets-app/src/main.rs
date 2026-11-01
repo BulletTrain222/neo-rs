@@ -12,6 +12,7 @@ mod perf;
 mod scene_merge;
 mod effect_view;
 mod foliage_view;
+mod fast_lit;
 mod graphics;
 mod pass1;
 mod shadow_view;
@@ -921,6 +922,7 @@ fn main() {
         .init_resource::<perf::PerfOverlay>()
         .insert_resource(display::DisplaySettings::load())
         .add_plugins(graphics::GraphicsPlugin)
+        .add_plugins(fast_lit::FastLitPlugin)
         .add_plugins(pass1::Pass1Plugin)
         .add_plugins(shadow_view::ShadowPlugin)
         .init_resource::<display::SceneTarget>()
