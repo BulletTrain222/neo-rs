@@ -6147,7 +6147,7 @@ impl Play {
                     return false;
                 }
                 let wf = cplace.mul(f);
-                let cap = neopets_sim::combat::Cylinder::from_base(wf.apply(base), unit(wf.cols[1]), radius, length);
+                let cap = neopets_sim::combat::Cylinder::from_base(wf.apply(base), wf.cols[1], radius, length);
                 neopets_sim::combat::finite_overlap(&weapon, &cap)
                     || d2.is_some_and(|d2| {
                         let (b, cc) = (add(p0, scale(axis, l)), add(p0, scale(d2, l)));
@@ -10234,7 +10234,7 @@ impl Play {
             .filter(|(h, _)| h.1 > 0.0)
             .map(|(&(base, length, radius), f)| {
                 let w = hplace.mul(f);
-                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
         let bands = enemy::band_factors(self.loco.state, &self.bands.0, &self.bands.1);
@@ -10345,7 +10345,7 @@ impl Play {
                 let Some(bw) = frames.get(bone) else { return false };
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (radius, length) = weapons[n];
-                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                let weapon = Cylinder { center: w.t, axis: w.cols[2], radius, length };
                 caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             let clip = anim.clip_state();
@@ -11443,7 +11443,7 @@ impl Play {
             .filter(|(h, _)| h.1 > 0.0)
             .map(|(&(base, length, radius), f)| {
                 let w = hplace.mul(f);
-                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
         let (st, guarding_now) = (self.loco.state, self.hero_guarding());
@@ -11471,7 +11471,7 @@ impl Play {
                 let Some(bw) = frames.get(b) else { return false };
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (r, length) = c.weapons[n];
-                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius: r, length };
+                let weapon = Cylinder { center: w.t, axis: w.cols[2], radius: r, length };
                 caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             // The navmesh pick (SPEC-0029 Behavior 2): the first ground mesh holding the boss,
@@ -11746,7 +11746,7 @@ impl Play {
             .filter(|(h, _)| h.1 > 0.0)
             .map(|(&(base, length, radius), f)| {
                 let w = hplace.mul(f);
-                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
         // The hero body cylinder (SPEC-0012, R-0097): radius 1.0, length W + 2.0 by the weapon
@@ -11783,7 +11783,7 @@ impl Play {
                 let Some(bw) = frames.get(b) else { return false };
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (radius, length) = c.weapons[n];
-                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                let weapon = Cylinder { center: w.t, axis: w.cols[2], radius, length };
                 caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             // The weak points: (joint, radius, length) by part, the selectors 37, 34, 24, 9, 4 and
@@ -11980,7 +11980,7 @@ impl Play {
             .filter(|(h, _)| h.1 > 0.0)
             .map(|(&(base, length, radius), f)| {
                 let w = hplace.mul(f);
-                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
         let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
@@ -12008,7 +12008,7 @@ impl Play {
             let weapon_touch = bits & 1 != 0
                 && c.anim.bones().attach.first().and_then(|&(bone, angles, offset)| Some(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)))).is_some_and(|w| {
                     let (radius, length) = c.weapons[0];
-                    let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                    let weapon = Cylinder { center: w.t, axis: w.cols[2], radius, length };
                     caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
                 });
             let off = [c.position[0] - hero[0], 0.0, c.position[2] - hero[2]];
@@ -12026,7 +12026,7 @@ impl Play {
                 .filter(|(h, _)| h.2 > 0.0)
                 .map(|(&(base, length, radius), f)| {
                     let w = place.mul(f);
-                    Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                    Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
                 })
                 .collect();
             let missile_threat = shots.iter().any(|&(p, v, _)| bones.iter().any(|b| neopets_sim::combat::segment_meets(p, add(p, scale(v, 180.0)), b)));
@@ -12429,7 +12429,7 @@ impl Play {
             .filter(|(h, _)| h.1 > 0.0)
             .map(|(&(base, length, radius), f)| {
                 let w = hplace.mul(f);
-                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
         let swing = self.weapon_segment();
@@ -12478,7 +12478,7 @@ impl Play {
                 let Some(bw) = frames.get(b) else { return false };
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (radius, length) = c.weapons[n];
-                let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                let weapon = Cylinder { center: w.t, axis: w.cols[2], radius, length };
                 caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             // The mouth is bone 52; the beam test is the segment from it to the moving end point
@@ -12839,7 +12839,7 @@ impl Play {
             .filter(|(h, _)| h.1 > 0.0)
             .map(|(&(base, length, radius), f)| {
                 let w = hplace.mul(f);
-                Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
+                Cylinder::from_base(w.apply(base), w.cols[1], radius, length)
             })
             .collect();
         let world = &self.world;
@@ -12876,7 +12876,7 @@ impl Play {
                     let bw = frames.get(b?)?;
                     let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                     let (radius, length) = c.weapons[2];
-                    let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
+                    let weapon = Cylinder { center: w.t, axis: w.cols[2], radius, length };
                     Some(caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap)))
                 }) == Some(true);
             let clip = c.anim.clip_state();
