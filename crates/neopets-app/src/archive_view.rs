@@ -266,7 +266,7 @@ pub fn region_character(
     // table size (diagnostic).
     if std::env::var_os("NEOPETS_TRACE_RIG").is_some() {
         let f: Vec<(u8, i16, usize)> = families.iter().map(|(r, d)| (*r, placement.skeletons[*r as usize], d.def.len())).collect();
-        println!("      rig {}: bones {}, families (role, skeleton, joints) {f:?}, tree roles {roles:?}, body parts {}, attachments {:?}", placement.name, bones.len(), model.parts.len(), model.attachments.iter().map(|(k, m)| (*k, m.parts.len())).collect::<Vec<_>>());
+        println!("      rig {}: scale set {}, bones {}, families (role, skeleton, joints) {f:?}, tree roles {roles:?}, body parts {}, attachments {:?}", placement.name, placement.scale_set, bones.len(), model.parts.len(), model.attachments.iter().map(|(k, m)| (*k, m.parts.len())).collect::<Vec<_>>());
         for (i, p) in model.parts.iter().enumerate() {
             let bmax = p.bones.iter().flat_map(|b| b.iter()).max();
             let n = p.colors.len().max(1) as f32;

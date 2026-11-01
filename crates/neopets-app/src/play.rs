@@ -1007,6 +1007,9 @@ pub struct Play {
     /// The party's weapon-drawn and shield-raised flags (SPEC-0040 Behavior 29), shared by both
     /// heroes.
     pub weapon_drawn: bool,
+    /// The hero's guard timer (+0x1574; SPEC-0036 Guard timer and per-attacker block): set to
+    /// 40 by the idle threat sense, down 1 a tick; above 0 the hero guards.
+    pub guard_timer: u32,
     pub shield_raised: bool,
     pub weapon: Option<u16>,
     /// The equipped shield (item id; Tor's shields are type 5, SPEC-0036).
@@ -1880,6 +1883,7 @@ impl Play {
             rope_pack: 0,
             rope_aim: None,
             weapon_drawn: false,
+            guard_timer: 0,
             shield_raised: false,
             weapon: None,
             shield: None,
@@ -3024,6 +3028,11 @@ impl Play {
                     let c = self.entity_mut(pack, entity)?;
                     c.held = false;
                     c.script_walk = None;
+                    // SPEC-0016 Start of the fight: the serpent's controller starts here, in its
+                    // initial state.
+                    if c.serpent.is_some() {
+                        c.serpent = Some(neopets_sim::serpent::Serpent::default());
+                    }
                     // ReleaseEntityControl (row 107) requests no animation; ReturnEntityAnimToIdle
                     // (row 110) asks for the entity's own idle, which is animation 0 for
                     // townsfolk. A boss's controller picks its own clips (the Juppie's 0 is a
@@ -4006,7 +4015,7 @@ impl Play {
         // The hero's aim point for deflected shots, and the hero's guard (state 20 or Roberta's
         // spin, sub-states 6 and 7).
         let hero_aim = [hero[0], hero[1] + 0.5 * neopets_sim::motion::HERO_HEIGHT, hero[2]];
-        let hero_guards = self.loco.state == hero_states::GUARD || (self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 6 | 7)));
+        let hero_guards = self.hero_guarding();
         // The deflect flags: the knight's parry and deflect stance, the Gelert's deflect clip.
         for c in &mut self.characters {
             let knight = c.knight.as_ref().is_some_and(|k| matches!(k.state, neopets_sim::knight::State::Parry | neopets_sim::knight::State::Deflect(..)));
@@ -4217,7 +4226,7 @@ impl Play {
                 if let Some(s) = shot {
                     if std::env::var_os("NEOPETS_TRACE_SHOTS").is_some() {
                         let groups: Vec<_> = [0, 1].map(|j| s.s.effects[j]).into_iter().filter(|&e| e != -1).map(|e| (e, self.effect_table.find(e))).collect();
-                        eprintln!("SHOT tick {} slot {k} kind {} visual {} effects {:?} groups {groups:?}", self.ticks, s.s.kind, s.s.visual, s.s.effects);
+                        eprintln!("SHOT tick {} slot {k} kind {} visual {} at {:?} effects {:?} groups {groups:?}", self.ticks, s.s.kind, s.s.visual, s.position, s.s.effects);
                     }
                     let objects = [0, 1].map(|j| {
                         (s.s.effects[j] != -1).then(|| self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, s.s.effects[j], s.position, neopets_sim::effect::IDENTITY)))
@@ -5630,6 +5639,39 @@ impl Play {
 
     /// The weapon-drawn flag; a change plays the weapon slot's unsheathe (cue 0) or sheathe
     /// (cue 1) sound (SPEC-0040 Behavior 29; SPEC-0031 Weapon slot uses).
+    /// SPEC-0036 Guard timer: the timer counts down in the hero update; then, only in the idle
+    /// state with weapons drawn and a shield equipped, the threat sense sets it to 40 for a live
+    /// enemy projectile in front of the hero, or an attack-active character (event bits 0x1 to
+    /// 0x10 on its current frame) within 10 horizontally in front; in front is a dot above 0.5
+    /// of the unit horizontal direction to the threat with the facing.
+    fn guard_step(&mut self) {
+        self.guard_timer = self.guard_timer.saturating_sub(1);
+        if self.loco.state != hero_states::STANCE || !self.weapon_drawn || self.shield.is_none() {
+            return;
+        }
+        let (p, f) = (self.loco.position(), self.loco.facing);
+        let ahead = |q: [f32; 3]| {
+            let (dx, dz) = (q[0] - p[0], q[2] - p[2]);
+            let d = dx.hypot(dz);
+            (d > 1e-6 && (dx * f[0] + dz * f[2]) / d > 0.5).then_some(d)
+        };
+        let shot = self.shots.slots.iter().flatten().any(|s| ahead(s.position).is_some());
+        let attacker = || {
+            self.characters.iter().any(|c| {
+                c.pack == self.world.pack && c.hp > 0 && !c.inactive && c.row.is_some() && c.anim.frame_bits() & 0x1F != 0 && ahead(c.position).is_some_and(|d| d <= 10.0)
+            })
+        };
+        if shot || attacker() {
+            self.guard_timer = 40;
+        }
+    }
+
+    /// SPEC-0036 Guard predicate: the hero is in state 20, or Roberta is in attack sub-state 6
+    /// or 7 (the spin), or the guard timer is above 0.
+    pub fn hero_guarding(&self) -> bool {
+        self.loco.state == hero_states::GUARD || (self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| matches!(a.sub, 6 | 7))) || self.guard_timer > 0
+    }
+
     fn set_weapon_drawn(&mut self, on: bool) {
         if self.weapon_drawn != on && self.weapon.is_some() {
             self.sound.play(neopets_sim::sound::WEAPON, if on { 0 } else { 1 }, neopets_sim::sound::Play::default());
@@ -7236,7 +7278,9 @@ impl Play {
                 path_index: pl.words[0] as i32,
                 path_walk: None,
                 move_type: 0,
-                held: false,
+                // SPEC-0016 Start of the fight (rewrite choice): the Plague Serpent's controller
+                // starts at the intro's release with its initial values, so it is held from load.
+                held: row.is_some_and(|r| r.class == Some(2)),
                 inactive: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 deactivated: self.entity_of(pack, region, pl.ordinal).is_some_and(|e| self.pending_off.contains(&(pack, e))),
                 // SPEC-0015 Variant: the spit flag from the Act 3 marker (story flag 0x53).
@@ -8858,12 +8902,15 @@ impl Play {
         }
         self.loco.shield = self.shield.is_some();
         self.status_step();
+        self.guard_step();
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.hold_step(&input);
         self.pending_step();
         // While a conversation runs the emote consumer owns the hero's main id.
         if !self.dialogue_open {
-            self.hero.request(self.loco.action(), force);
+            // While the guard timer runs the idle hero holds the shield up (animation 63).
+            let id = if self.loco.state == hero_states::STANCE && self.guard_timer > 0 { 63 } else { self.loco.action() };
+            self.hero.request(id, force);
         }
         self.hero.set_rate(self.loco.rate);
         let (world, other) = (&self.world, self.other.as_ref());
@@ -9310,8 +9357,8 @@ impl Play {
             .map(|&(_, slot)| (slot, self.characters.iter().filter(|c| c.pack == pack && c.slot == slot && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|x| x.is_dead()) && c.hp > 0).count()))
             .collect();
         self.state.animating = self.world.object_anims.iter().enumerate().filter(|(_, a)| a.animating()).map(|(i, _)| i).collect();
-        // Dead characters disappear when their countdown ends.
-        for c in &mut self.characters {
+        // Dead characters disappear when their countdown ends (the Plague Serpent's never runs).
+        for c in self.characters.iter_mut().filter(|c| c.serpent.is_none()) {
             if let Some(t) = c.dying.as_mut() {
                 *t = t.saturating_sub(1);
             }
@@ -9817,7 +9864,7 @@ impl Play {
             hero_height: HERO_HEIGHT,
             variant: self.hero_index.min(1) as u8,
             in_attack: self.hero_index == 0 && self.attack.as_ref().is_some_and(|a| (2..=12).contains(&a.sub)),
-            guard: self.loco.state == hero_states::GUARD,
+            guard: self.hero_guarding(),
             fog: self.equipment.motes[self.hero_index.min(1)][1] == Some(166),
             shots: &shots,
             companion: companion.map(|k| add(self.characters[k].position, [0.0, 0.6, 0.0])),
@@ -10175,7 +10222,7 @@ impl Play {
         let hero_swing = swing_sub.and_then(|s| enemy::swing_class(self.hero_index, s));
         let hero_recover = self.hero.frame_bits() & 0x800 != 0;
         let shot_paths: Vec<([f32; 3], [f32; 3])> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed / 60.0))).collect();
-        let guarding = self.loco.state == hero_states::GUARD;
+        let guarding = self.hero_guarding();
         // SPEC-0007 Hit reaction and invulnerability / SPEC-0036 Hittable predicate: no common
         // enemy picks an attack (and its cooldowns wait) while the hero is not hittable: in
         // states 16, 17, 25, 33, 36, 48, 50 to 55, 57, 59 and 60, in Roberta's leap and landing
@@ -11374,7 +11421,7 @@ impl Play {
                 Cylinder::from_base(w.apply(base), unit(w.cols[1]), radius, length)
             })
             .collect();
-        let st = self.loco.state;
+        let (st, guarding_now) = (self.loco.state, self.hero_guarding());
         let attacking = self.attack.is_some() || self.r_attack.is_some();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
@@ -11422,7 +11469,7 @@ impl Play {
                 hero,
                 hero_facing: hf,
                 hero_attacking: attacking,
-                hero_guard: st == hero_states::GUARD,
+                hero_guard: guarding_now,
                 hero_state: st,
                 hp: c.hp,
                 max_hp: c.row.map_or(1, |r| r.hit_points as i32),
@@ -11662,7 +11709,7 @@ impl Play {
         let e_factor = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
         let hero_damage = neopets_sim::mote::melee(1.0, stat_a as f32, None, -1, 1.0, e_factor, 0.0, self.statuses.damage_scale()).0;
         let hero_mesh = neopets_sim::nav::closest(&self.world.navmeshes, hero, 1);
-        let (hero_index, attacking, guarding) = (self.hero_index as u8, self.loco.state == hero_states::ATTACK, self.loco.state == hero_states::GUARD);
+        let (hero_index, attacking, guarding) = (self.hero_index as u8, self.loco.state == hero_states::ATTACK, self.hero_guarding());
         // SPEC-0012 G9, the strike-active predicate: Tor in the attack state with sub-state 11 or
         // 12 or in jump state 7 in air phase 8 or 9; Roberta in the attack state with 5 or 12.
         let striking = match self.hero_index {
@@ -11886,7 +11933,7 @@ impl Play {
             .collect();
         let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
         let attacking = self.attack.is_some();
-        let guarding = self.loco.state == hero_states::GUARD;
+        let guarding = self.hero_guarding();
         let hero_anim = self.hero.clip_state().action;
         let ratio = self.hero_hp as f32 / self.hero_max.max(1) as f32;
         let clones_alive = self.characters.iter().filter(|c| c.pack == pack && c.gelert.as_ref().is_some_and(|g| g.clone && g.state != ge::State::CloneWait)).count();
@@ -12330,7 +12377,7 @@ impl Play {
             })
             .collect();
         let swing = self.weapon_segment();
-        let guarding = self.loco.state == hero_states::GUARD;
+        let guarding = self.hero_guarding();
         let mote = self.equipment.motes[0][1];
         let reflects = [
             mote.is_some_and(|m| matches!(m, 160..=161 | 172..=173)),
@@ -12531,7 +12578,7 @@ impl Play {
         let hf = self.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.faerie.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
         let swing = self.weapon_segment();
-        let guarding = self.loco.state == hero_states::GUARD;
+        let guarding = self.hero_guarding();
         let kind = neopets_sim::darkest::attack_kind(self.equipment.motes[self.hero_index.min(1)][1]);
         let attacking = if self.hero_index == 0 { self.attack.is_some() } else { self.r_attack.is_some() };
         let form2 = if self.hero_index == 0 { self.attack.as_ref().is_some_and(|a| matches!(a.sub, 4 | 7 | 8 | 12)) } else { self.r_attack.as_ref().is_some_and(|a| a.sub == 4) };
@@ -12707,9 +12754,10 @@ impl Play {
 
     /// SPEC-0016 per tick for the Plague Serpent (class 2) in the current world: the anchors are
     /// the world's locators of the anchor ids, the lunge's hit is weapon 3 of the monster weapon
-    /// test (event bit 0x4) against the hero's bone capsules, the stun strike is any hero hit
-    /// that reaches it (the head cylinder is not tested), and the mouth is taken 2.5 above its
-    /// position (the head bone is not given). A landed lunge is unreduced damage with the hit
+    /// test (event bit 0x4) against the hero's bone capsules with the serpent posed at its size
+    /// selector (twice the clip's size), a block is the shared guard predicate (state 20,
+    /// Roberta's spin or the guard timer), the stun strike is any hero hit that reaches it (the
+    /// head cylinder is not tested), and the mouth is the posed head joint 18. A landed lunge is unreduced damage with the hit
     /// flash 222 at the hero; the hero's reaction state 0x36 is not built (the neck look is).
     fn serpent_step(&mut self) {
         use neopets_sim::combat::Cylinder;
@@ -12737,7 +12785,7 @@ impl Play {
         let world = &self.world;
         let locator = |k: usize| world.tags.iter().position(|&t| t as usize == k).and_then(|i| world.entries.get(i)).map(|e| e.0);
         let anchors = neopets_sim::serpent::ANCHORS.map(|ids| ids.map(locator));
-        let (code, blocking, stunned) = (self.loco.state, self.loco.state == hero_states::GUARD, self.statuses.active(neopets_sim::status::STUN));
+        let (code, blocking, stunned) = (self.loco.state, self.hero_guarding(), self.statuses.active(neopets_sim::status::STUN));
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let level_flags = self.state.level_flags.clone();
@@ -12745,19 +12793,18 @@ impl Play {
             let world = &self.world;
             let ground = |x: f32, z: f32, from: f32| world.ground_at(x, z, from);
             let c = &mut self.characters[i];
-            // SPEC-0016 9 and 11C, Defeat: health 0 (a stun strike) runs the shared death hook:
-            // base state 16 with the 510-tick death countdown, and the controller is no longer
-            // stepped (its phase check would otherwise start a change at 0 HP). The corpse loops
-            // the idle clip and sinks 1/180 a tick until the countdown ends; the dead AI is what
-            // 735's victory scene waits for (level state 11).
+            // SPEC-0016 9, Defeat: health 0 (a stun strike) runs the shared death hook (base
+            // state 16), and the controller is never stepped again. The corpse's action 58 has no
+            // entry in the serpent's table, so it loops clip 0 (the idle's clip), never sinks, and
+            // the death countdown never runs (it waits for that action's clip to reach 0.95): the
+            // serpent stands, unhittable and unmoving, until the victory scene unloads it. The
+            // dead AI is what 735's victory scene waits for (level state 11).
             if c.hp <= 0 || c.dying.is_some() {
                 if c.dying.is_none() {
-                    c.dying = Some(510);
+                    c.dying = Some(u32::MAX);
                     c.anim.play(5);
                     let t = self.ticks;
                     self.last_boss = format!("Plague Serpent defeated on tick {t}");
-                } else {
-                    c.position[1] -= 1.0 / 180.0;
                 }
                 continue;
             }
@@ -12787,7 +12834,8 @@ impl Play {
                 ground: &ground,
                 lunge_contact,
                 strike: c.serpent_hit.take(),
-                mouth: add(c.position, [0.0, 2.5, 0.0]),
+                // SPEC-0016 7: the mouth point is the head joint (joint 18) of the posed serpent.
+                mouth: frames.get(18).map_or(add(c.position, [0.0, 9.1, 0.0]), |m| place.mul(m).t),
                 clip: (clip.action, clip.progress >= 0.99),
                 frame_bits: bits,
                 level: &level,
