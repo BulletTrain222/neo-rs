@@ -11168,6 +11168,10 @@ impl Play {
             l1.1 = 180;
             self.cue(165);
             self.last_pickup = format!("picked up coin {} (+{value} NP, wallet {}) on tick {}", it.id, self.state.neopoints, self.ticks);
+            // The world-item pickup starts the showcase for coins too (SPEC-0021 Item showcase;
+            // SPEC-0023 section 36): with no text it is the small form, a grow to 0.4 and a
+            // shrink.
+            self.start_showcase(it.id, pack);
         } else {
             if it.id == level::TREASURE_MAP {
                 // A map pickup's number is the placement byte +0x2C plus 1; the pickup is
@@ -15040,13 +15044,14 @@ impl Play {
     }
 
     /// Developer menu: a 141 NP coin split (one coin of each denomination) and the chosen item,
-    /// dropped as a drop action would drop them, 6 units in front of the hero. Returns how many
+    /// dropped as a drop action would drop them, `ahead` units in front of the hero (no item for
+    /// id 0). Returns how many
     /// world items were spawned.
-    pub fn dev_drop(&mut self, item: u16) -> usize {
+    pub fn dev_drop(&mut self, item: u16, ahead: f32) -> usize {
         let pack = self.world.pack;
         let p = self.loco.position();
         let f = self.loco.facing;
-        let at = [p[0] + 6.0 * f[0], p[1] + 1.0, p[2] + 6.0 * f[2]];
+        let at = [p[0] + ahead * f[0], p[1] + 1.0, p[2] + ahead * f[2]];
         let spawn = |id: u16, charm: bool| neopets_sim::items::Spawn {
             id,
             point: at,
@@ -15064,6 +15069,9 @@ impl Play {
         let mut n = 0;
         for id in neopets_sim::items::coin_split(141, &self.coins.0, &self.coins.1) {
             n += self.spawn_item(pack, spawn(id, false)) as usize;
+        }
+        if item == 0 {
+            return n;
         }
         let charm = self.item_kind(item) == 17;
         n + self.spawn_item(pack, spawn(item, charm)) as usize

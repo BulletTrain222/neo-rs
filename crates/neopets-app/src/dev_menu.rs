@@ -509,9 +509,30 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         }
         info!("Developer quest items: {ids:?}");
     }
+    // NEOPETS_DEV_NP=n: the wallet set to n Neopoints ten seconds in, after a boss fight's setup
+    // (diagnostic, for the item screens' balance).
+    if *frames == 600 {
+        if let Some(n) = std::env::var("NEOPETS_DEV_NP").ok().and_then(|v| v.trim().parse::<i32>().ok()) {
+            play.play.state.neopoints = n;
+        }
+    }
     // NEOPETS_DEV="drop": the coin drop (with item 160) a second after the options apply.
-    if *frames == 90 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drop")) {
-        info!("Developer drop: {} world items", play.play.dev_drop(160));
+    if *frames == 90 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drop") && !v.contains("drophere")) {
+        info!("Developer drop: {} world items", play.play.dev_drop(160, 6.0));
+    }
+    // NEOPETS_DEV="drophere": the drop's coins alone at the hero's feet fifteen seconds in, after
+    // a boss fight's setup (diagnostic, for the coin pickup showcase and caption).
+    if *frames == 900 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drophere")) {
+        info!("Developer drop: {} world items", play.play.dev_drop(0, 0.0));
+    }
+    if std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drophere")) {
+        static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+        if let Ok(mut last) = LAST.lock() {
+            if *last != play.play.last_pickup {
+                last.clone_from(&play.play.last_pickup);
+                info!("Developer drop: {last}");
+            }
+        }
     }
     dev.swallow = false;
     let pad = |b: GamepadButton| gamepads.iter().any(|g| g.just_pressed(b));
@@ -741,7 +762,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             dev.swallow = true;
             format!("Starting the {} fight (world pack {})", b.name, b.pack)
         }
-        Entry::Drop => format!("Dropped {} world items", p.dev_drop(dev.item)),
+        Entry::Drop => format!("Dropped {} world items", p.dev_drop(dev.item, 6.0)),
         Entry::Start => {
             if p.dev_go_start(dev.start) { format!("To start point {}", dev.start) } else { "No start points here".into() }
         }

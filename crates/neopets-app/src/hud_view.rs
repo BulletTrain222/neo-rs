@@ -694,7 +694,8 @@ pub fn sync_hud(
         // Vertically the same way: the Mote panel stays centred, the button prompts, the D-pad
         // hint, the journal icon and the monster bar go to the bottom edge, the other named
         // groups to the top.
-        let shift = if in_mote || top == prompts.unwrap_or(usize::MAX) {
+        // On the item screens the bars belong to the centred page and do not move.
+        let shift = if items_open || in_mote || top == prompts.unwrap_or(usize::MAX) {
             0.0
         } else if in_swing {
             ox
@@ -703,7 +704,7 @@ pub fn sync_hud(
         } else {
             edge_shift(x, 512.0, ox)
         };
-        let shift_y = if in_mote {
+        let shift_y = if items_open || in_mote {
             0.0
         } else if in_dpad || in_journal || in_monster(n) || top == prompts.unwrap_or(usize::MAX) {
             oy

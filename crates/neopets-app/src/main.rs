@@ -2996,7 +2996,8 @@ fn sync_items(
     archive: Option<ResMut<Archive>>,
     mut markers: Query<(Entity, &ItemMarker, &mut Transform, &mut Visibility, Option<&Children>), Without<ShowcaseMarker>>,
     mut showcases: Query<(Entity, &ShowcaseMarker, &mut Transform, &mut Visibility), Without<ItemMarker>>,
-    cameras: Query<&GlobalTransform, With<Camera3d>>,
+    cameras: Query<(&Camera, &GlobalTransform), With<Camera3d>>,
+    windows: Query<&Window>,
     parts: Query<&MeshMaterial3d<StandardMaterial>, With<ItemPart>>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
@@ -3049,22 +3050,47 @@ fn sync_items(
     // scaled by s.
     let show: Option<(u16, u32, Transform)> = p.showcase_item().map(|(id, pack, at, angle)| (id, pack, Transform::from_translation(Vec3::from(at)).with_rotation(Quat::from_rotation_y(angle)))).or_else(|| {
         let c = p.corner?;
-        let g = cameras.iter().next()?;
+        let (_, g) = cameras.iter().next()?;
         let k = c.z / 512.0;
         let origin = g.translation() + g.forward() * c.z + g.right() * (640.0 * (c.x - 0.5) * k) + g.up() * (480.0 * (c.y - 0.5) * k);
         let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(c.angle + std::f32::consts::PI);
         Some((c.id, c.pack, Transform { translation: origin, rotation: rot, scale: Vec3::splat(c.s.max(1e-4)) }))
     });
+    // SPEC-0035 section 15.2: while price caption line 1 shows (its counter above 0, both quick
+    // panels closed) the one-Neopoint coin model (item 135) spins near the caption. Its place,
+    // size and spin rate are not given (R-0155); this build's choice: centred at canvas (426,
+    // 108), just right of the caption's right edge at x 410, with the caption at the window's
+    // top-right edge (hud_view), 5 units in front of the camera at scale 0.25, turning at the
+    // showcase rate of 2 pi / 5 rad/s.
+    let caption_coin: Option<Transform> = (p.price_lines[0].1 > 0 && !p.quick.open && !p.mote_panel.open && !p.menu_open)
+        .then(|| {
+            let (cam, g) = cameras.iter().next()?;
+            let w = windows.iter().next()?;
+            let (ww, wh) = (w.width(), w.height());
+            let sc = (ww / 512.0).min(wh / 448.0);
+            let ox = (ww - 512.0 * sc) / 2.0;
+            // As fractions of the window, then of the camera's own viewport (which can be a
+            // render target of another size).
+            let at = Vec2::new((2.0 * ox + 426.0 * sc) / ww, 108.0 * sc / wh) * cam.logical_viewport_size()?;
+            let ray = cam.viewport_to_world(g, at).ok()?;
+            let depth = 5.0 / ray.direction.dot(g.forward().into()).max(1e-3);
+            let angle = (p.ticks as f32 * 1.2566372 / 60.0) % std::f32::consts::TAU;
+            let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(angle + std::f32::consts::PI);
+            Some(Transform { translation: ray.get_point(depth), rotation: rot, scale: Vec3::splat(0.25) })
+        })
+        .flatten();
+    // (marker key, item model id, pack, transform); the caption coin's key is not an item id.
+    let wanted: Vec<(u16, u16, u32, Transform)> = show.map(|(id, pack, t)| (id, id, pack, t)).into_iter().chain(caption_coin.map(|t| (CAPTION_COIN, 135, 0, t))).collect();
     for (e, s, mut t, mut vis) in &mut showcases {
-        match show {
-            Some((id, _, tr)) if id == s.0 => {
+        match wanted.iter().find(|w| w.0 == s.0) {
+            Some(&(_, _, _, tr)) => {
                 set_if(&mut t, tr);
                 set_if(&mut vis, Visibility::Visible);
             }
-            _ => commands.entity(e).despawn(),
+            None => commands.entity(e).despawn(),
         }
     }
-    if let Some((id, pack, at)) = show.filter(|(id, ..)| !showcases.iter().any(|(_, s, ..)| s.0 == *id)) {
+    for &(marker, id, pack, at) in wanted.iter().filter(|w| !showcases.iter().any(|(_, s, ..)| s.0 == w.0)) {
         let id = id as u32;
         let key = (id, if matches!(id, 50..=59 | 98..=190) { 0 } else { pack });
         if !models.contains_key(&key) {
@@ -3081,7 +3107,7 @@ fn sync_items(
             models.insert(key, list);
         }
         if let Some(list) = &models[&key] {
-            commands.spawn((ShowcaseMarker(id as u16), at, Visibility::Visible)).with_children(|c| {
+            commands.spawn((ShowcaseMarker(marker), at, Visibility::Visible)).with_children(|c| {
                 for (mesh, mat, flip) in list {
                     let mut e = c.spawn((Mesh3d(mesh.clone()), MeshMaterial3d(materials.add(mat.clone())), Transform::IDENTITY));
                     if let Some(f) = flip {
@@ -3143,7 +3169,11 @@ fn sync_items(
     }
 }
 
-/// The floating item of the full showcase (SPEC-0021 Item showcase), by item id.
+/// The showcase marker key of the coin beside the price caption.
+const CAPTION_COIN: u16 = u16::MAX;
+
+/// The floating item of the full showcase (SPEC-0021 Item showcase), by item id, or the coin
+/// beside the price caption (`CAPTION_COIN`).
 #[derive(Component)]
 struct ShowcaseMarker(u16);
 
@@ -4450,7 +4480,7 @@ fn play_trace(
         // NEOPETS_TRACE_DROP_ITEM=id picks the item; NEOPETS_TRACE_DROP takes a list of ticks.
         if std::env::var("NEOPETS_TRACE_DROP").unwrap_or_default().split(',').filter_map(|t| t.trim().parse::<u64>().ok()).any(|k| k == play.ticks) {
             let id = std::env::var("NEOPETS_TRACE_DROP_ITEM").ok().and_then(|v| v.parse().ok()).unwrap_or(160);
-            let n = play.dev_drop(id);
+            let n = play.dev_drop(id, 6.0);
             println!("      developer drop on tick {}: {n} world items", play.ticks);
         }
         if quit_at.is_some_and(|k| k == play.ticks) || std::mem::take(&mut play.teardown_wanted) {
