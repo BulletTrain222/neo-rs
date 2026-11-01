@@ -4787,7 +4787,7 @@ fn play_trace(
             }
         }
         // NEOPETS_TRACE_DUEL="limit": the duel trace's plan replaces the fight goal and buttons.
-        let duel_plan = play.duel_step();
+        let duel_plan = play.duel_step().filter(|_| std::env::var_os("NEOPETS_TRACE_DUEL_PASSIVE").is_none());
         let fight = if play.fight_duel.is_some() { duel_plan.map(|p| (p.goal, p.close)) } else { to.is_some_and(|t| t[1] == 3.0).then(|| play.fight_goal()).flatten() };
         // NEOPETS_TRACE_MICE: while carrying a Miamouse, walk to the cage's middle; otherwise
         // sneak (Square held) up behind the nearest catchable one.

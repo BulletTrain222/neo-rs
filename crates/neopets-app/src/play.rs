@@ -6939,7 +6939,9 @@ impl Play {
             let l = dx.hypot(dz);
             let (ux, uz) = if l > 0.1 { (dx / l, dz / l) } else { (1.0, 0.0) };
             // The probe starts just above its height, so a floor below is not taken instead.
-            self.place_at(at[0] + 5.0 * ux, at[2] + 5.0 * uz, at[1] + 1.5);
+            // NEOPETS_TRACE_DUEL_PASSIVE=d: placed d away, and the hero then stands still.
+            let away = std::env::var("NEOPETS_TRACE_DUEL_PASSIVE").ok().and_then(|v| v.parse::<f32>().ok()).unwrap_or(5.0);
+            self.place_at(at[0] + away * ux, at[2] + away * uz, at[1] + 1.5);
             self.face_point(at[0], at[2]);
         }
         let k = duel.current?;
@@ -10535,7 +10537,29 @@ impl Play {
             v.missile_threat = shot_paths.iter().any(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body));
             let outer_before = e.outer;
             let before = (e.outer, e.inner, e.seq, e.selected);
+            let state_before = e.state;
             let act = e.tick(&v, &mut self.rng);
+            // NEOPETS_TRACE_ATTACKS: each notice, attack choice, strike and shot of a common enemy
+            // with the distance to the hero (3D, as the slot's band reads it) and the row's values
+            // (diagnostic; scripts/enemy_check.py groups them by enemy).
+            if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
+                let (to, h) = (sub_v(hero, p), (hero[0] - p[0]).hypot(hero[2] - p[2]));
+                let d = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt();
+                if e.state == 2 && state_before != 2 {
+                    println!("ATK notice \"{name}\" d {d:.2} near {:.2} far {:.2} state {state_before} always {} bands {:.2} {:.2} alarm {:?}", e.p.range_near, e.p.range_far, e.p.always_sight, v.bands.0, v.bands.1, e.spawn.alarm);
+                }
+                if let Some(k) = e.selected.filter(|&k| before.3 != Some(k)) {
+                    let s = &e.p.slots[k];
+                    println!("ATK select \"{name}\" slot {k} kind {} d {d:.2} band {:.2} {:.2} arc {:.3} damage {:.1} flags {:#x}", s.kind, s.trigger_min, s.trigger_max, s.arc, s.damage, s.flags);
+                }
+                if let Some(s) = act.strike {
+                    println!("ATK strike \"{name}\" slot {} d {d:.2} h {h:.2} radius {:.2} damage {:.1} blocked {}", s.slot, row.radius, s.damage, s.blocked);
+                }
+                if let Some(q) = act.shot {
+                    let m = &e.p.slots[q.slot].missile;
+                    println!("ATK shot \"{name}\" slot {} d {d:.2} speed {:.3} range {:.2} flight {} damage {:.1} band {:.2} {:.2}", q.slot, m.speed, m.range, m.flight, m.damage, e.p.slots[q.slot].trigger_min, e.p.slots[q.slot].trigger_max);
+                }
+            }
             // NEOPETS_TRACE_AGRO: each change of an enemy's agro sub-states (diagnostic).
             if std::env::var("NEOPETS_TRACE_AGRO").as_deref() == Ok("clip") && e.outer == 2 && self.ticks % 5 == 0 {
                 println!("      agro clip {name} tick {}: seq {} clip {} progress {:.3} finished {} window {:?}", self.ticks, e.seq, v.clip.action, v.clip.progress, v.clip.finished, anim.layer0_window());
