@@ -7833,12 +7833,52 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.set_word(pack, 21, 1);
             }
         }
-        // 1397 G (triggers 9 to 11): marks AI 5, 6 or 7 for the respawn thread (words 40 to 42);
-        // trigger 11 also places block 2 again on its height patch.
-        (1397, 9) if call.object && (9..=11).contains(&call.index) => {
-            state.set_word(pack, 40 + (call.index - 9) as u8, 1);
-            if call.index == 11 {
-                out.actions.push(Action::ReacquireBlock { block: 2, ceiling: 1.0 });
+        // SPEC-0042 1397 handler G (triggers 9 to 11), the block-plate lift scene: only a block's
+        // fire, not while a scene runs (word 43), and only the plate's own block (11 block 3, 10
+        // block 1, 9 block 2; trigger 11 also needs its once-word clear). The once-word (words 40
+        // to 42, also the AI respawn thread's word) is set; the scene: control held, the plate's
+        // camera, 1 s, sound 11, its two effects, 2 s, the lift object played at 0.2, 4 s, the
+        // effects stopped a second apart, then with a floor object objects 32 to 34 off, the
+        // floor on and blocks 2, 1 and 3 placed again (ceiling 3.0, so they take the new floor
+        // as their footprint), sound 11 killed, the normal camera, 1 s, the busy word cleared.
+        // Not built: the scene's hold of entities 5 to 7 (no entity-grab action here).
+        (1397, 9) if call.object && call.block >= 0 && call.state == 1 && (9..=11).contains(&call.index) && state.word(pack, 43) == 0 => {
+            let (block, lift, track, effects, floor) = match call.index {
+                11 => (3, 29, 2, (0, 1), Some(33)),
+                10 => (1, 30, 3, (4, 5), Some(34)),
+                _ => (2, 31, 4, (8, 9), None),
+            };
+            let once = 40 + (call.index - 9) as u8;
+            if call.block == block && !(call.index == 11 && state.word(pack, once) != 0) {
+                state.set_word(pack, once, 1);
+                state.set_word(pack, 43, 1);
+                out.actions.extend([
+                    Action::HoldHero,
+                    Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 },
+                    wait(1.0),
+                    Action::PlaySound { cue: 11, locator: None },
+                    Action::StartEffect { slot: effects.0, camera: false },
+                    Action::StartEffect { slot: effects.1, camera: false },
+                    wait(2.0),
+                    Action::PlayAnim { obj: lift, speed: 0.2, wait: false },
+                    wait(4.0),
+                    wait(1.0),
+                    Action::StopEffect { slot: effects.0 },
+                    wait(1.0),
+                    Action::StopEffect { slot: effects.1 },
+                    wait(1.0),
+                ]);
+                if let Some(f) = floor {
+                    out.actions.extend([32, 33, 34].map(|obj| Action::DeactivateObj { obj }));
+                    out.actions.push(Action::InitObjOn { obj: f, end: false });
+                    out.actions.extend([2, 1, 3].map(|block| Action::ReacquireBlock { block, ceiling: 3.0 }));
+                }
+                out.actions.extend([
+                    Action::KillSound { cue: 11, locator: None },
+                    Action::ReturnCamera { preset: -1, release: true },
+                    wait(1.0),
+                    Action::Bits { word: 43, set: 0, clear: 1 },
+                ]);
             }
         }
         // 1397 E12 (entering): the movie-63 scene (counted), object 35 off, effect 12, 102 and
@@ -15266,16 +15306,22 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     // SPEC-0039 880 handler 7 and 1230 handler 4, the map shop: the first map not held is
     // offered with its prompt (its index kept in word 4 for the answer); with every map held,
     // lines 11, 12 and 13 in rotation (word 5).
-    // SPEC-0045 1023 routine 72: with the cloak worn and 304 clear, prompts 881 to 883 in
-    // turn (word 21); else with 216 lines 887 to 889 in turn (word 22); else the map shop
-    // (prompts 890 to 895 for the first map not held, kept in word 4; line 896 when all are
-    // held), answered as routine 73.
+    // SPEC-0045 1023 routine 72 (entities 72, 75 and 94): with the cloak worn and 304 clear,
+    // prompt 881 on the first talk, then 882 and 883 in turn (word 21; it restarts at 881
+    // whenever another branch last ran); else with 216 lines 887 to 889 in turn (word 22); else
+    // the map shop (prompts 890 to 895 for the first map not held, kept in word 4; line 896
+    // when all are held), answered as routine 73.
     if (pack, routine) == (1023, 72) {
         if state.cloak_worn && !state.flag(304) {
-            let r = state.word(pack, 21).rem_euclid(3);
-            state.set_word(pack, 21, r + 1);
-            return vec![Action::Prompt { line: 881 + r as u16, routine: 72 }];
+            let line = match state.word(pack, 21) {
+                1 => 882,
+                2 => 883,
+                _ => 881,
+            };
+            state.set_word(pack, 21, if line == 882 { 2 } else { 1 });
+            return vec![Action::Prompt { line, routine: 72 }];
         }
+        state.set_word(pack, 21, 0);
         if state.flag(216) {
             let r = state.word(pack, 22).rem_euclid(3);
             state.set_word(pack, 22, r + 1);
@@ -18188,6 +18234,18 @@ mod tests {
         let init = on_init(1397, &mut s);
         assert!(init.contains(&Action::RegisterTrigger { index: 21, routine: 21 }) && init.contains(&Action::MoveEntity { entity: 6, locator: 78, face: true }));
         let at = |i, square| TriggerCall { index: i, state: 1, object: true, square, block: -1 };
+        // The plate lift scene (handler G): a hero's fire and block 1 on plate 11 do nothing;
+        // block 3 there raises lift 29, swaps in floor 33 and places blocks 2, 1 and 3 again.
+        let plate = |b| TriggerCall { index: 11, state: 1, object: true, square: false, block: b };
+        assert!(on_trigger(1397, 9, plate(-1), &mut s).actions.is_empty());
+        assert!(on_trigger(1397, 9, plate(1), &mut s).actions.is_empty());
+        let scene = on_trigger(1397, 9, plate(3), &mut s).actions;
+        assert!(scene.contains(&Action::PlayAnim { obj: 29, speed: 0.2, wait: false }) && scene.contains(&Action::InitObjOn { obj: 33, end: false }));
+        let order: Vec<usize> = scene.iter().filter_map(|a| if let Action::ReacquireBlock { block, ceiling } = a { assert_eq!(*ceiling, 3.0); Some(*block) } else { None }).collect();
+        assert_eq!(order, vec![2, 1, 3]);
+        assert!(on_trigger(1397, 9, plate(3), &mut s).actions.is_empty(), "busy while the scene runs");
+        s.set_word(1397, 43, 0);
+        assert!(on_trigger(1397, 9, plate(3), &mut s).actions.is_empty(), "plate 11 runs once");
         // The spec's button vector: 2, 1, 4, 3, 6: AI 0 at 19, AI 1 at 18; 699 after the 6.
         let presses: Vec<Vec<Action>> = [2, 1, 4, 3, 6].into_iter().map(|i| on_trigger(1397, 1, at(i, true), &mut s).actions).collect();
         assert!(presses[0].contains(&Action::MoveEntity { entity: 0, locator: 19, face: true }) && presses[2].contains(&Action::MoveEntity { entity: 1, locator: 18, face: true }));
@@ -19166,6 +19224,13 @@ mod tests {
         assert_eq!(proximity_routine(1023, 94), Some(r));
         assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 881, routine: 72 }]);
         assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 882, routine: 72 }]);
+        // Later talks alternate 882 and 883; another branch restarts the sequence at 881.
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 883, routine: 72 }]);
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 882, routine: 72 }]);
+        s.cloak_worn = false;
+        on_talk(1023, r, &mut s);
+        s.cloak_worn = true;
+        assert_eq!(on_talk(1023, r, &mut s), vec![Action::Prompt { line: 881, routine: 72 }]);
         assert_eq!(on_answer(1023, 72, true, &mut s), vec![Action::Talk { line: 884 }]);
         assert!(s.flag(13) && s.neopoints == 200);
         assert_eq!(on_teleport(1023, 9, &mut s)[0], Action::ReplaceExterior { slot: 114, plane: -1 });
