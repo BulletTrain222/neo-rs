@@ -22,9 +22,9 @@ pub struct FastLitPlugin;
 
 impl Plugin for FastLitPlugin {
     fn build(&self, app: &mut App) {
-        // NEOPETS_FAST_LIT: opt in (diagnostic; its look has not been compared with Bevy's full
-        // lighting, so play keeps Bevy's).
-        if std::env::var_os("NEOPETS_FAST_LIT").is_some() {
+        // NEOPETS_FULL_PBR: keep Bevy's full lighting (diagnostic; a screenshot pair at 934 differs
+        // by 0.16 of 255 on average, 0.01 percent of pixels by more than 12).
+        if std::env::var_os("NEOPETS_FULL_PBR").is_none() {
             app.add_systems(Update, replace_shader);
         }
     }

@@ -552,6 +552,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         let p = &play.play;
         let list: Vec<String> = p.characters.iter().map(|c| format!("{} {}{}", c.name, c.pack, if c.inactive || c.deactivated { " (off)" } else { "" })).collect();
         let flags: Vec<String> = [2, 3, 4, 5, 6, 124, 126, 143, 145, 146, 148, 149].iter().map(|&f| format!("{f}:{}", u8::from(p.state.flag(f)))).collect();
+        info!("Developer ticks: {} after {} frames", p.ticks, *frames);
         info!("Developer chars: world {} other {:?} hero {:?} flags [{}]: {}", p.world.pack, p.other.as_ref().map(|w| w.pack), p.loco.position(), flags.join(" "), list.join(", "));
     }
     // With "objnear": the drawn objects near the hero logged ten seconds in (diagnostic).

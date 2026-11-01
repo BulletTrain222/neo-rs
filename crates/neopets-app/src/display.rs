@@ -24,13 +24,17 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 17;
+pub const ROWS: usize = 19;
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
 /// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
 pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Detailed"];
 
 /// The sun shadow quality (shadow_view.rs: the map size and cascades of each level).
 pub const SHADOW_QUALITY: [&str; 4] = ["Very Low", "Low", "Medium", "High"];
+/// How far from the camera the sun's shadows reach, in world units (shadow_view.rs).
+pub const SHADOW_DISTANCES: [f32; 5] = [50.0, 100.0, 150.0, 200.0, 300.0];
+/// The frame rate limits, frames per second; 0 is uncapped.
+pub const FPS_LIMITS: [u32; 4] = [30, 60, 120, 0];
 
 /// The graphics presets (`DisplaySettings::apply_preset`).
 pub const PRESETS: [&str; 3] = ["Low", "Medium", "High"];
@@ -65,6 +69,10 @@ pub struct DisplaySettings {
     pub world_shadows: bool,
     /// The sun shadow quality (index into SHADOW_QUALITY): this build's option.
     pub shadow_quality: usize,
+    /// How far the sun's shadows reach (index into SHADOW_DISTANCES): this build's option.
+    pub shadow_distance: usize,
+    /// The frame rate limit (index into FPS_LIMITS): this build's option.
+    pub fps: usize,
     /// Movie cutscenes played (on) or passed over at once, as if skipped (this build's testing
     /// option, not in the original).
     pub movies: bool,
@@ -75,7 +83,7 @@ pub struct DisplaySettings {
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, movies: true, xbox_buttons: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false }
     }
 }
 
@@ -111,6 +119,8 @@ impl DisplaySettings {
                 "shadow level" => s.shadow_quality = v.parse().unwrap_or(s.shadow_quality).min(SHADOW_QUALITY.len() - 1),
                 // The older key counted from Low, before Very Low was added.
                 "shadow quality" => s.shadow_quality = v.parse::<usize>().map_or(s.shadow_quality, |q| q + 1).min(SHADOW_QUALITY.len() - 1),
+                "shadow distance" => s.shadow_distance = v.parse().unwrap_or(s.shadow_distance).min(SHADOW_DISTANCES.len() - 1),
+                "frame rate" => s.fps = v.parse().unwrap_or(s.fps).min(FPS_LIMITS.len() - 1),
                 "movies" => s.movies = v != "false",
                 "button pictures" => s.xbox_buttons = v == "xbox",
                 _ => {}
@@ -121,7 +131,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nmovies = {}\nbutton pictures = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -137,6 +147,8 @@ impl DisplaySettings {
             self.char_shadows,
             self.world_shadows,
             self.shadow_quality,
+            self.shadow_distance,
+            self.fps,
             self.movies,
             if self.xbox_buttons { "xbox" } else { "playstation" }
         )
@@ -155,10 +167,18 @@ impl DisplaySettings {
             if let Some(&w) = n.get(1) {
                 s.world_shadows = w != 0;
             }
-            // An optional third value: the shadow quality (0 Very Low, 1 Low, 2 Medium, 3 High).
+            // An optional third value: the shadow quality (0 Very Low, 1 Low, 2 Medium, 3 High);
+            // a fourth: the shadow distance index.
             if let Some(&q) = n.get(2) {
                 s.shadow_quality = q.min(SHADOW_QUALITY.len() - 1);
             }
+            if let Some(&d) = n.get(3) {
+                s.shadow_distance = d.min(SHADOW_DISTANCES.len() - 1);
+            }
+        }
+        // NEOPETS_FPS=index: the frame rate limit for this run (diagnostic).
+        if let Some(i) = std::env::var("NEOPETS_FPS").ok().and_then(|v| v.trim().parse::<usize>().ok()) {
+            s.fps = i.min(FPS_LIMITS.len() - 1);
         }
         // NEOPETS_SCALE=percent: the render scale for this run (diagnostic).
         if let Some(i) = std::env::var("NEOPETS_SCALE").ok().and_then(|v| v.trim().parse::<u32>().ok()).and_then(|p| SCALES.iter().position(|&x| x == p)) {
@@ -234,6 +254,8 @@ impl DisplaySettings {
             ("Character shadows".into(), CHAR_SHADOWS[self.char_shadows].into()),
             ("World shadows".into(), if self.world_shadows { "On".into() } else { "Off".into() }),
             ("Shadow quality".into(), SHADOW_QUALITY[self.shadow_quality].into()),
+            ("Shadow distance".into(), format!("{}", SHADOW_DISTANCES[self.shadow_distance])),
+            ("Frame rate limit".into(), match FPS_LIMITS[self.fps] { 0 => "Uncapped".into(), n => format!("{n}") }),
             ("Movie cutscenes".into(), if self.movies { "On".into() } else { "Off".into() }),
             ("Button pictures".into(), if self.xbox_buttons { "Xbox".into() } else { "PlayStation".into() }),
         ]
@@ -275,11 +297,43 @@ impl DisplaySettings {
             12 => self.char_shadows = step(self.char_shadows, CHAR_SHADOWS.len()),
             13 => self.world_shadows = !self.world_shadows,
             14 => self.shadow_quality = step(self.shadow_quality, SHADOW_QUALITY.len()),
-            15 => self.movies = !self.movies,
-            16 => self.xbox_buttons = !self.xbox_buttons,
+            15 => self.shadow_distance = step(self.shadow_distance, SHADOW_DISTANCES.len()),
+            16 => self.fps = step(self.fps, FPS_LIMITS.len()),
+            17 => self.movies = !self.movies,
+            18 => self.xbox_buttons = !self.xbox_buttons,
             _ => {}
         }
     }
+}
+
+/// The frame rate limit: the frame waits out the rest of its time (the last millisecond by
+/// spinning, as a sleep can overrun). Runs last in the frame; the game's ticks are timed apart
+/// from it.
+pub fn limit_frame(settings: Res<DisplaySettings>, mut windows: Query<&mut Window, With<PrimaryWindow>>, mut next: Local<Option<std::time::Instant>>) {
+    let limit = FPS_LIMITS[settings.fps];
+    // The limit is this timer alone, vsync off: measured exact at 30, 60 and 120, where vsync held
+    // this laptop at about 30 whatever the limit (with its lid closed; not tested open).
+    for mut w in &mut windows {
+        if w.present_mode != bevy::window::PresentMode::AutoNoVsync {
+            w.present_mode = bevy::window::PresentMode::AutoNoVsync;
+        }
+    }
+    if limit == 0 || std::env::var_os("NEOPETS_PERF_NOVSYNC").is_some() {
+        *next = None;
+        return;
+    }
+    let period = std::time::Duration::from_secs_f64(1.0 / limit as f64);
+    let now = std::time::Instant::now();
+    let due = next.filter(|&d| d > now);
+    if let Some(d) = due {
+        if let Some(rest) = d.checked_duration_since(now + std::time::Duration::from_millis(1)) {
+            std::thread::sleep(rest);
+        }
+        while std::time::Instant::now() < d {
+            std::hint::spin_loop();
+        }
+    }
+    *next = Some(due.unwrap_or(now) + period);
 }
 
 /// The game viewport inside a window of size (w, h): the largest rectangle of the aspect ratio,
@@ -502,7 +556,9 @@ const HELP: [&str; ROWS + 1] = [
     "Full keeps trees, bushes and props in 3D at any distance; Original turns far trees into sprites, fades distant plants out and hides props past their draw distance, as the PS2 game.",
     "Original is the game's own faint, blocky hero shadow; Detailed casts every character's real shape from the area's main light.",
     "Shadows cast by everything, trees and buildings too, from the area's main light. Not in the original game.",
-    "How sharp the shadows from the area's main light are (World shadows and Detailed character shadows). Lower is faster and softer.",
+    "How sharp the shadows from the area's main light are (World shadows and Detailed character shadows). Lower is faster.",
+    "How far from the camera those shadows reach. Shorter is faster; shadows end at this distance.",
+    "The most frames drawn each second; Uncapped draws as fast as it can. Exclusive full screen may tear. The game's speed does not change.",
     "Off passes over every movie cutscene at once, as if skipped (for testing). Not in the original game.",
     "The button pictures in boxes and menus: the game's PlayStation ones, or Xbox A, B, X and Y.",
     "Back to Options.",
@@ -695,10 +751,19 @@ mod tests {
         assert_eq!(SCALES[s.scale], 150);
         s.change(4, 1, &sizes);
         assert!(!s.smooth);
+        s.change(18, 1, &sizes);
+        assert!(s.xbox_buttons && s.rows()[18].1 == "Xbox");
+        s.change(17, 1, &sizes);
+        assert!(!s.movies && s.rows()[17].1 == "Off", "Movie cutscenes off");
+        // The frame rate limit wraps 120, Uncapped, 30; the distance steps down from 150 to 100.
+        assert_eq!(s.rows()[16].1, "120");
         s.change(16, 1, &sizes);
-        assert!(s.xbox_buttons && s.rows()[16].1 == "Xbox");
-        s.change(15, 1, &sizes);
-        assert!(!s.movies && s.rows()[15].1 == "Off", "Movie cutscenes off");
+        assert_eq!(s.rows()[16].1, "Uncapped");
+        s.change(16, 1, &sizes);
+        assert_eq!(s.rows()[16].1, "30");
+        assert_eq!(s.rows()[15].1, "150");
+        s.change(15, -1, &sizes);
+        assert_eq!(s.rows()[15].1, "100");
         assert_eq!(s.rows()[14].1, "Medium");
         s.change(14, 1, &sizes);
         s.change(14, 1, &sizes);

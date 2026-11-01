@@ -950,6 +950,7 @@ fn main() {
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     app.add_systems(Update, button_style::apply);
+    app.add_systems(Last, display::limit_frame);
     // NEOPETS_PERF_GPU: Bevy's render diagnostics (CPU and GPU time per render pass), logged
     // every 4 seconds (diagnostic).
     if std::env::var_os("NEOPETS_PERF_GPU").is_some() {

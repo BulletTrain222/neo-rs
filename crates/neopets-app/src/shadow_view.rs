@@ -222,33 +222,56 @@ fn sun_override() -> Option<(f32, f32, f32, f32)> {
     })
 }
 
-/// The Shadow quality levels: each cascade's map size, the cascade count and the shadow
-/// distance. High is the 4096 map that keeps the characters' shadows crisp; Medium halves the
-/// map; Low quarters it and draws two cascades over a shorter distance; Very Low is half of Low
-/// in each: half the map size, one cascade and half the distance.
-fn quality(level: usize) -> (f32, f32, f32) {
+/// The Shadow quality levels set the sharpness: each cascade's map size and the most cascades.
+/// High is the 4096 map that keeps the characters' shadows crisp and the only one with the soft
+/// filter; Medium halves the map; Low quarters it; Very Low halves that again with one cascade.
+fn quality(level: usize) -> (f32, usize) {
     match level {
-        0 => (512.0, 1.0, 75.0),
-        1 => (1024.0, 2.0, 150.0),
-        2 => (2048.0, 3.0, 200.0),
-        _ => (4096.0, 3.0, 200.0),
+        0 => (512.0, 1),
+        1 => (1024.0, 2),
+        2 => (2048.0, 3),
+        _ => (4096.0, 3),
     }
+}
+
+/// The cascades the Shadow distance setting needs: one layer to 50 units, two to 150, three past
+/// that, each capped by the quality level.
+fn cascades_for(distance: f32, most: usize) -> usize {
+    (if distance <= 50.0 { 1 } else if distance <= 150.0 { 2 } else { 3 }).min(most)
 }
 
 /// The Shadow quality setting, applied to the shadow map and the sun's cascades when it
 /// changes (and once the sun exists).
-fn apply_quality(settings: Res<crate::display::DisplaySettings>, mut map: ResMut<bevy::light::DirectionalLightShadowMap>, mut suns: Query<&mut bevy::light::CascadeShadowConfig, With<Sun>>, mut last: Local<Option<usize>>) {
-    let level = settings.shadow_quality;
-    if *last == Some(level) || suns.is_empty() {
+fn apply_quality(
+    settings: Res<crate::display::DisplaySettings>,
+    mut map: ResMut<bevy::light::DirectionalLightShadowMap>,
+    mut suns: Query<&mut bevy::light::CascadeShadowConfig, With<Sun>>,
+    mut filters: Query<&mut bevy::light::ShadowFilteringMethod, With<Camera3d>>,
+    mut last: Local<Option<(usize, usize)>>,
+) {
+    let key = (settings.shadow_quality, settings.shadow_distance);
+    if *last == Some(key) || suns.is_empty() {
         return;
     }
-    *last = Some(level);
-    let (size, cascades, distance) = sun_override().map_or(quality(level), |t| (t.0, t.1, t.2));
+    *last = Some(key);
+    let (size, most) = quality(key.0);
+    let distance = crate::display::SHADOW_DISTANCES[key.1];
+    let (size, cascades, distance) = sun_override().map_or((size, cascades_for(distance, most), distance), |t| (t.0, t.1 as usize, t.2));
     if map.size != size as usize {
         map.size = size as usize;
     }
     for mut c in &mut suns {
-        *c = bevy::light::CascadeShadowConfigBuilder { num_cascades: cascades as usize, maximum_distance: distance, first_cascade_far_bound: 20.0, ..default() }.build();
+        // A smaller overlap samples two cascades on fewer pixels.
+        *c = bevy::light::CascadeShadowConfigBuilder { num_cascades: cascades, maximum_distance: distance, first_cascade_far_bound: (0.15 * distance).max(10.0), overlap_proportion: 0.1, ..default() }.build();
+    }
+    // The soft filter takes many more samples of the map per pixel: High only.
+    if std::env::var_os("NEOPETS_SHADOW_FILTER").is_none() {
+        let method = if key.0 >= 3 { bevy::light::ShadowFilteringMethod::Gaussian } else { bevy::light::ShadowFilteringMethod::Hardware2x2 };
+        for mut f in &mut filters {
+            if *f != method {
+                *f = method;
+            }
+        }
     }
 }
 

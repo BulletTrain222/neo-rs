@@ -235,12 +235,12 @@ fn apply_camera(mut commands: Commands, settings: Res<DisplaySettings>, cameras:
         } else if sun_on(&settings) {
             c.remove::<(ScreenSpaceAmbientOcclusion, NormalPrepass)>();
             c.insert(AmbientLight { color: Color::WHITE, brightness: ambient(&settings), affects_lightmapped_meshes: true });
-            // Performance: a depth prepass, so the lit main pass shades each pixel about once
-            // instead of every overlapping surface (NEOPETS_NO_PREPASS: none, for comparison).
-            if std::env::var_os("NEOPETS_NO_PREPASS").is_some() {
-                c.remove::<DepthPrepass>();
-            } else {
+            // No depth prepass: measured at 2560 x 1600 it cost about 1 ms under MSAA and gained
+            // nothing under SMAA (NEOPETS_SUN_PREPASS: with one, for comparison).
+            if std::env::var_os("NEOPETS_SUN_PREPASS").is_some() {
                 c.insert(DepthPrepass);
+            } else {
+                c.remove::<DepthPrepass>();
             }
         } else {
             c.remove::<(ScreenSpaceAmbientOcclusion, DepthPrepass, NormalPrepass, AmbientLight)>();
