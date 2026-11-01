@@ -9,6 +9,10 @@
 //! camera and screen-effect reset is built (`ended`; `Play::after_movies`); the reload of world
 //! W (Playback steps 2, 6 and 7) is not (the world stays loaded and the hero keeps their place). The original stops the game's sound before the queue plays and the reload
 //! restarts it; without the reload, the sound is paused here and resumes after the queue.
+//!
+//! The skip prompt in the bottom right corner of the 512 x 448 canvas is this build's addition, not in the
+//! original: the words in the disc's prompt font round the Cross icon, or the chosen Button
+//! pictures' A.
 use bevy::audio::{AudioPlayer, ChannelCount, Decodable, PlaybackSettings, SampleRate, Source};
 use bevy::prelude::*;
 use neopets_data::bink;
@@ -207,6 +211,20 @@ pub struct MovieScreen;
 #[derive(Component)]
 pub struct MovieCaption;
 
+/// One part of the skip prompt: 0 and 2 the words, 1 the button icon.
+#[derive(Component)]
+pub struct MovieSkipPart(usize);
+
+/// The skip prompt's words either side of the icon.
+const SKIP_WORDS: [&[u8]; 2] = [b"Press", b"to Skip"];
+/// The prompt's font and spacing, as the dialogue box's prompt row (SPEC-0022).
+const SKIP_FONT: usize = 1;
+const SKIP_SPACING: i32 = -1;
+/// The prompt's colour (128 is full) and its margins from the canvas's right and bottom edges to
+/// its right end and middle, in canvas units.
+const SKIP_COLOUR: [u8; 4] = [128, 128, 128, 128];
+const SKIP_MARGIN: (f32, f32) = (5.0, 18.0);
+
 /// The picture: an image node sized to 4:3 inside the black screen.
 #[derive(Component)]
 pub struct MoviePicture;
@@ -322,6 +340,9 @@ pub fn spawn_screen(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
                 TextColor(Color::srgb(0.55, 0.55, 0.55)),
                 TextLayout::justify(Justify::Center),
             ));
+            for k in 0..3 {
+                c.spawn((MovieSkipPart(k), ImageNode::default(), Node { position_type: PositionType::Absolute, ..default() }, Visibility::Hidden));
+            }
         });
 }
 
@@ -359,6 +380,73 @@ pub fn sync_screen(
             if c.0 != t {
                 c.0 = t.clone();
             }
+        }
+    }
+}
+
+/// The skip prompt, while a movie plays. Its images are made once, and again when the button
+/// pictures change.
+pub fn sync_skip(
+    movies: Option<Res<Movies>>,
+    art: Option<Res<crate::hud_view::HudArt>>,
+    mut images: ResMut<Assets<Image>>,
+    windows: Query<&Window>,
+    mut parts: Query<(&MovieSkipPart, &mut Node, &mut ImageNode, &mut Visibility)>,
+    mut made: Local<Option<(u32, Vec<(Handle<Image>, f32, f32, f32)>)>>,
+) {
+    let _span = crate::perf::span("sync_skip");
+    let playing = movies.is_some_and(|m| m.current.is_some());
+    let (Some(art), Some(window), true) = (art.as_deref(), windows.iter().next(), playing) else {
+        for (.., mut v) in &mut parts {
+            if *v != Visibility::Hidden {
+                *v = Visibility::Hidden;
+            }
+        }
+        return;
+    };
+    if made.as_ref().is_none_or(|(style, _)| *style != art.style) {
+        let crate::hud_view::HudArtParts { f, mem } = art.parts();
+        // (image, width, height, top above the centre line); the words are centred on their
+        // capitals' height, as the icon on its middle.
+        let cap = f.fonts.get(SKIP_FONT).and_then(|ft| ft.glyph(b'P')).map_or(0, |g| g.height as i32);
+        let word = |t: &[u8]| f.text_image(mem, SKIP_FONT, t, SKIP_SPACING, SKIP_COLOUR).map(|(i, base)| (i, (base - cap / 2) as f32));
+        let icon = (0..f.nodes.len()).find(|&n| f.sprite(n).is_some_and(|s| s.asset == crate::button_style::CROSS_ASSET)).and_then(|n| f.sprite_image(mem, n, 32, 32)).map(|i| (i, 16.0));
+        let list: Vec<_> = [word(SKIP_WORDS[0]), icon, word(SKIP_WORDS[1])]
+            .into_iter()
+            .flatten()
+            .map(|(i, top)| {
+                let (w, h) = (i.width as f32, i.height as f32);
+                (images.add(crate::rgba_image(i.width, i.height, i.rgba)), w, h, top)
+            })
+            .collect();
+        *made = Some((art.style, list));
+    }
+    let Some((_, list)) = made.as_ref() else { return };
+    if list.len() != 3 {
+        return;
+    }
+    let (ww, wh) = (window.width(), window.height());
+    let s = (ww / 512.0).min(wh / 448.0);
+    let right = (ww + 512.0 * s) / 2.0;
+    let total: f32 = list.iter().map(|p| p.1).sum();
+    let centre = (wh + 448.0 * s) / 2.0 - SKIP_MARGIN.1 * s;
+    let mut x = right - (total + SKIP_MARGIN.0) * s;
+    let mut at = [0.0; 3];
+    for (k, p) in list.iter().enumerate() {
+        at[k] = x;
+        x += p.1 * s;
+    }
+    for (part, mut node, mut image, mut v) in &mut parts {
+        let (handle, w, h, top) = &list[part.0];
+        if image.image != *handle {
+            image.image = handle.clone();
+        }
+        node.left = Val::Px(at[part.0]);
+        node.top = Val::Px(centre - top * s);
+        node.width = Val::Px(w * s);
+        node.height = Val::Px(h * s);
+        if *v != Visibility::Inherited {
+            *v = Visibility::Inherited;
         }
     }
 }

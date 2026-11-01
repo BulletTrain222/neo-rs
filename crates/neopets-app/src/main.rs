@@ -945,7 +945,7 @@ fn main() {
     app.add_systems(Update, sync_uv_flip);
     app.add_systems(Startup, (setup_movies, movie_view::spawn_screen));
     app.init_resource::<HeroItemFrames>();
-    app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::sync_sound, movie_view::hush).chain().after(step_sim));
+    app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::sync_skip, movie_view::sync_sound, movie_view::hush).chain().after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));

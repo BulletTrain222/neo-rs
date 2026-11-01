@@ -321,6 +321,7 @@ pub fn sync_hud(
     mut values: Query<(&HudValue, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
     mut caption_image: Local<Option<(Vec<u8>, Handle<Image>, u32, u32, i32)>>,
     mut value_images: Local<HashMap<(usize, String), (Handle<Image>, u32, u32, i32)>>,
+    settings: Res<crate::display::DisplaySettings>,
     mut prices: Query<(&HudPrice, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudSprite>, Without<HudText>, Without<HudCaption>, Without<HudValue>)>,
 ) {
     let _span = crate::perf::span("sync_hud");
@@ -639,7 +640,7 @@ pub fn sync_hud(
         // flag is set.
         if in_journal || in_dpad {
             let busy = p.bars.height() > 0.0 || p.fade.moving() || p.fade.opacity() > 0.0;
-            ok &= !p.quick.open && !p.mote_panel.open && !busy && (!in_journal || hud.journal);
+            ok &= !p.quick.open && !p.mote_panel.open && !busy && (!in_journal || hud.journal) && (!in_dpad || settings.dpad_hud);
         }
         let top = if in_mote {
             mote_root.unwrap_or(bars)

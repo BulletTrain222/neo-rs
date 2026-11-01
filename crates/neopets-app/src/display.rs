@@ -24,7 +24,14 @@ const MODES: [&str; 3] = ["Windowed", "Borderless", "Fullscreen"];
 /// Window sizes offered when the monitor lists no video modes.
 const FALLBACK_SIZES: [(u32, u32); 8] = [(3840, 2160), (2560, 1440), (1920, 1200), (1920, 1080), (1600, 900), (1280, 960), (1280, 720), (1024, 768)];
 /// The Display page's rows.
-pub const ROWS: usize = 19;
+pub const ROWS: usize = 20;
+/// The rows on the Gameplay page, which shares the Display page's window and settings file; the
+/// other rows are the Display page's.
+pub const GAMEPLAY_ROWS: [usize; 3] = [17, 18, 19];
+/// The rows of the Display page (false) or the Gameplay page (true).
+pub fn page_rows(gameplay: bool) -> Vec<usize> {
+    (0..ROWS).filter(|k| GAMEPLAY_ROWS.contains(k) == gameplay).collect()
+}
 /// Character shadows: off, the original volumes as the game draws them (blocky hulls, a drop of
 /// 8 of 255), or this build's detailed ones (each character's own shape, cast by the sun).
 pub const CHAR_SHADOWS: [&str; 3] = ["Off", "Original", "Detailed"];
@@ -79,11 +86,13 @@ pub struct DisplaySettings {
     /// Button pictures: the game's PlayStation icons (default) or Xbox-style A, B, X and Y
     /// (button_style.rs; this build's option).
     pub xbox_buttons: bool,
+    /// The HUD's D-pad hint drawn (default) or hidden (this build's option, not in the original).
+    pub dpad_hud: bool,
 }
 
 impl Default for DisplaySettings {
     fn default() -> Self {
-        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false }
+        Self { mode: 0, size: (1000, 600), aspect: 0, scale: 4, smooth: true, aa: 2, sharp_textures: true, bloom: 1, colour: 1, ao: true, original_foliage: false, char_shadows: 1, world_shadows: false, shadow_quality: 2, shadow_distance: 2, fps: 2, movies: true, xbox_buttons: false, dpad_hud: true }
     }
 }
 
@@ -123,6 +132,7 @@ impl DisplaySettings {
                 "frame rate" => s.fps = v.parse().unwrap_or(s.fps).min(FPS_LIMITS.len() - 1),
                 "movies" => s.movies = v != "false",
                 "button pictures" => s.xbox_buttons = v == "xbox",
+                "dpad hud" => s.dpad_hud = v != "false",
                 _ => {}
             }
         }
@@ -131,7 +141,7 @@ impl DisplaySettings {
 
     pub fn text(&self) -> String {
         format!(
-            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\n",
+            "mode = {}\nsize = {}x{}\naspect = {}\nscale = {}\nfilter = {}\nantialiasing = {}\nsharp textures = {}\nbloom = {}\ncolour = {}\nambient occlusion = {}\noriginal foliage = {}\ncharacter shadows = {}\nworld shadows = {}\nshadow level = {}\nshadow distance = {}\nframe rate = {}\nmovies = {}\nbutton pictures = {}\ndpad hud = {}\n",
             self.mode,
             self.size.0,
             self.size.1,
@@ -150,7 +160,8 @@ impl DisplaySettings {
             self.shadow_distance,
             self.fps,
             self.movies,
-            if self.xbox_buttons { "xbox" } else { "playstation" }
+            if self.xbox_buttons { "xbox" } else { "playstation" },
+            self.dpad_hud
         )
     }
 
@@ -258,6 +269,7 @@ impl DisplaySettings {
             ("Frame rate limit".into(), match FPS_LIMITS[self.fps] { 0 => "Uncapped".into(), n => format!("{n}") }),
             ("Movie cutscenes".into(), if self.movies { "On".into() } else { "Off".into() }),
             ("Button pictures".into(), if self.xbox_buttons { "Xbox".into() } else { "PlayStation".into() }),
+            ("D-pad HUD".into(), if self.dpad_hud { "On".into() } else { "Off".into() }),
         ]
     }
 
@@ -301,6 +313,7 @@ impl DisplaySettings {
             16 => self.fps = step(self.fps, FPS_LIMITS.len()),
             17 => self.movies = !self.movies,
             18 => self.xbox_buttons = !self.xbox_buttons,
+            19 => self.dpad_hud = !self.dpad_hud,
             _ => {}
         }
     }
@@ -520,6 +533,8 @@ pub fn sync_scene(
 #[derive(Component)]
 pub struct DispWindow;
 #[derive(Component)]
+pub struct DispTitle;
+#[derive(Component)]
 pub struct DispRow(usize);
 #[derive(Component)]
 pub struct DispLabel(usize);
@@ -561,6 +576,7 @@ const HELP: [&str; ROWS + 1] = [
     "The most frames drawn each second; Uncapped draws as fast as it can. Exclusive full screen may tear. The game's speed does not change.",
     "Off passes over every movie cutscene at once, as if skipped (for testing). Not in the original game.",
     "The button pictures in boxes and menus: the game's PlayStation ones, or Xbox A, B, X and Y.",
+    "The D-pad picture on the HUD during play. Off hides it; the D-pad still works.",
     "Back to Options.",
 ];
 
@@ -589,7 +605,7 @@ pub fn spawn_window(mut commands: Commands) {
             DispWindow,
         ))
         .with_children(|ui| {
-            ui.spawn((Text::new("Display"), font(22.0), TextColor(GOLD)));
+            ui.spawn((Text::new("Display"), font(22.0), TextColor(GOLD), DispTitle));
             ui.spawn((Text::new("Up and down pick, left and right or a click change. Esc or B go back."), font(12.0), TextColor(DIM), Node { margin: UiRect::bottom(px(8)), ..default() }));
             for k in 0..=ROWS {
                 let back = k == ROWS;
@@ -661,11 +677,12 @@ pub fn show_window(
     menu: Option<Res<crate::menu_view::Menu>>,
     settings: Res<DisplaySettings>,
     mut windows: Query<&mut Node, With<DispWindow>>,
-    mut rows: Query<(&Interaction, &DispRow, &mut BackgroundColor), Without<DispStep>>,
+    mut rows: Query<(&Interaction, &DispRow, &mut BackgroundColor, &mut Node), (Without<DispStep>, Without<DispWindow>)>,
     mut steps: Query<(&Interaction, &mut BackgroundColor), (With<DispStep>, Without<DispRow>)>,
-    mut labels: Query<(&DispLabel, &mut Text, &mut TextColor), (Without<DispValue>, Without<DispHelp>)>,
-    mut values: Query<(&DispValue, &mut Text), (Without<DispLabel>, Without<DispHelp>)>,
-    mut help: Query<&mut Text, (With<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
+    mut labels: Query<(&DispLabel, &mut Text, &mut TextColor), (Without<DispValue>, Without<DispHelp>, Without<DispTitle>)>,
+    mut values: Query<(&DispValue, &mut Text), (Without<DispLabel>, Without<DispHelp>, Without<DispTitle>)>,
+    mut help: Query<&mut Text, (With<DispHelp>, Without<DispLabel>, Without<DispValue>, Without<DispTitle>)>,
+    mut titles: Query<&mut Text, (With<DispTitle>, Without<DispHelp>, Without<DispLabel>, Without<DispValue>)>,
 ) {
     let _span = crate::perf::span("show_window");
     let flow = menu.as_ref().map(|m| &m.flow);
@@ -679,8 +696,19 @@ pub fn show_window(
     let Some(flow) = flow.filter(|_| open) else { return };
     let focus = flow.display_focus.min(ROWS);
     let shown = settings.rows();
-    for (i, r, mut bg) in &mut rows {
+    let page = page_rows(flow.display_gameplay);
+    for (i, r, mut bg, mut node) in &mut rows {
         bg.0 = if r.0 == focus { ROW_CURSOR } else if *i == Interaction::Hovered { ROW_HOVER } else { ROW };
+        let d = if r.0 == ROWS || page.contains(&r.0) { Display::Flex } else { Display::None };
+        if node.display != d {
+            node.display = d;
+        }
+    }
+    let title = if flow.display_gameplay { "Gameplay" } else { "Display" };
+    for mut t in &mut titles {
+        if t.0 != title {
+            t.0 = title.to_string();
+        }
     }
     for (i, mut bg) in &mut steps {
         bg.0 = if *i == Interaction::None { ARROW } else { ARROW_HOVER };
@@ -712,6 +740,9 @@ mod tests {
     #[test]
     fn viewport_fits_the_aspect() {
         assert_eq!(viewport(1920.0, 1080.0, None), (0.0, 0.0, 1920.0, 1080.0));
+        // The two pages share the rows between them.
+        assert_eq!(page_rows(true), [17, 18, 19]);
+        assert_eq!(page_rows(false), (0..17).collect::<Vec<_>>());
         // 4:3 in a 16:9 window: pillarbox 1440 wide.
         assert_eq!(viewport(1920.0, 1080.0, Some(4.0 / 3.0)), (240.0, 0.0, 1440.0, 1080.0));
         // 21:9 in a 16:9 window: letterbox 823 high.
@@ -755,6 +786,9 @@ mod tests {
         assert!(s.xbox_buttons && s.rows()[18].1 == "Xbox");
         s.change(17, 1, &sizes);
         assert!(!s.movies && s.rows()[17].1 == "Off", "Movie cutscenes off");
+        s.change(19, 1, &sizes);
+        assert!(!s.dpad_hud && s.rows()[19].1 == "Off", "D-pad HUD off");
+        assert!(!DisplaySettings::parse(&s.text()).dpad_hud, "the choice is saved");
         // The frame rate limit wraps 120, Uncapped, 30; the distance steps down from 150 to 100.
         assert_eq!(s.rows()[16].1, "120");
         s.change(16, 1, &sizes);

@@ -18,6 +18,9 @@ const FACE: [(u32, char, [u8; 3]); 4] = [
     (33, 'Y', [250, 200, 50]), // Triangle: top
 ];
 
+/// The Cross (Xbox A) icon's sheet asset.
+pub const CROSS_ASSET: u32 = FACE[0].0;
+
 /// The icon size drawn (the sheet's icons are 32 x 32; larger requests scale it).
 const SIZE: u32 = 64;
 
