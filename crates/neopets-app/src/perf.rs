@@ -258,7 +258,16 @@ pub fn perf_last(
     log.frame += dt;
     log.main += main;
     log.worst = log.worst.max(dt);
-    for (k, v) in take_spans() {
+    let frame_spans = take_spans();
+    // A slow frame (over 20 ms) is logged on its own with its costliest spans and the main
+    // world's time, to find what causes hitches.
+    if dt > 20.0 && log.frames > 0 {
+        let mut top: Vec<(&&str, &f32)> = frame_spans.iter().collect();
+        top.sort_by(|a, b| b.1.total_cmp(a.1));
+        let list: Vec<String> = top.iter().take(6).map(|(k, v)| format!("{k} {v:.1}")).collect();
+        info!("perf spike: frame {dt:.1} ms, main {main:.1} ms: {}", list.join(", "));
+    }
+    for (k, v) in frame_spans {
         *log.spans.entry(k).or_default() += v;
     }
     if log.frames >= 120 {
