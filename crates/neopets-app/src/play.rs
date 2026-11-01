@@ -2092,6 +2092,10 @@ impl Play {
         for &f in flags {
             play.state.set(f, true);
         }
+        // The resident transition world (T, loaded first) runs its Init at load completion too
+        // (SPEC-0026; SPEC-0025 Loading): before, it did not, so the road module of 691 next to
+        // the farm never loaded its bandits.
+        play.init_other();
         let mut init = level::on_init(play.world.pack, &mut play.state);
         init.extend(play.group_setup());
         play.apply(&init);
@@ -2258,6 +2262,9 @@ impl Play {
         self.kinds.insert(world.pack, world.kind);
         self.state.reload_module(world.pack);
         let resident = self.world.pack == world.pack || self.other.as_ref().is_some_and(|o| o.pack == world.pack);
+        if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
+            println!("      install {} (current {}, other {:?}): resident {resident}, streams {}", world.pack, self.world.pack, self.other.as_ref().map(|o| o.pack), self.streams(world.kind));
+        }
         if !resident && self.streams(world.kind) {
             self.other = Some(world);
             self.init_other();
@@ -2466,6 +2473,9 @@ impl Play {
         if let Some(o) = self.other.take() {
             let current = std::mem::replace(&mut self.world, o);
             let mut init = level::on_init(self.world.pack, &mut self.state);
+            if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
+                println!("      Init of other world {}: {} actions", self.world.pack, init.len());
+            }
             init.extend(self.group_setup());
             self.apply(&init);
             self.entity_setup();
@@ -8102,8 +8112,12 @@ impl Play {
                 self.fade_in_after_load = Some(0);
             }
             Job::ReloadTransition(_) => {
+                // SPEC-0026 (the world reload): the reloaded pack's Init runs at load
+                // completion; before, it did not, so leaving the farmhouse brought the road (691)
+                // back without its bandits.
                 if self.world.buffer == Buffer::Exterior {
                     self.other = Some(world);
+                    self.init_other();
                 }
             }
         }
@@ -15023,6 +15037,8 @@ impl Play {
         let (w, _) = World::load(disc, index, &self.boot, pack)?;
         self.kinds.insert(w.pack, w.kind);
         self.other = Some(w);
+        // Its Init runs at load completion, like a streamed neighbour's (SPEC-0026).
+        self.init_other();
         Ok(())
     }
 

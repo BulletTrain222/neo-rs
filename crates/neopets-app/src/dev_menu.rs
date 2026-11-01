@@ -547,6 +547,13 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     if *frames == 900 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drophere")) {
         info!("Developer drop: {} world items", play.play.dev_drop(0, 0.0));
     }
+    // With "chars": the world and its characters (name, pack, active) logged ten seconds in.
+    if *frames == 600 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("chars")) {
+        let p = &play.play;
+        let list: Vec<String> = p.characters.iter().map(|c| format!("{} {}{}", c.name, c.pack, if c.inactive || c.deactivated { " (off)" } else { "" })).collect();
+        let flags: Vec<String> = [2, 3, 4, 5, 6, 124, 126, 143, 145, 146, 148, 149].iter().map(|&f| format!("{f}:{}", u8::from(p.state.flag(f)))).collect();
+        info!("Developer chars: world {} other {:?} hero {:?} flags [{}]: {}", p.world.pack, p.other.as_ref().map(|w| w.pack), p.loco.position(), flags.join(" "), list.join(", "));
+    }
     // With "objnear": the drawn objects near the hero logged ten seconds in (diagnostic).
     if *frames == 600 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("objnear")) {
         info!("Developer objects: {}", play.play.objects_near());

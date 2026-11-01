@@ -208,16 +208,29 @@ fn load_game_from(disc: &mut Disc, index: &ArchiveIndex, old: &play::Play, slot:
     };
     let (t, e) = (pack_of(0), pack_of(1));
     let current = e.or(t).unwrap_or(old.world.pack);
-    let mut play = play::Play::load(disc, index, current, PLAY_OUTFIT)?;
+    if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
+        println!("      save load: keys {} and {}, T {t:?}, E {e:?}", slot.key(0), slot.key(1));
+    }
+    // SPEC-0026 Load game and SPEC-0025 Loading: the slot's progress flags are restored first,
+    // then T and E load and each runs its Init at load completion, so both Inits see the saved
+    // flags (before, E's Init ran with a new game's flags and T's never ran, so the road
+    // module of 691 never loaded its bandits).
+    let saved: Vec<u16> = (0..neopets_sim::save::FLAGS).filter(|&n| slot.flag(n)).collect();
+    let mut play = play::Play::load_with_flags(disc, index, current, PLAY_OUTFIT, &saved)?;
     if let Some(t) = t.filter(|&t| t != current && play.other.as_ref().is_none_or(|o| o.pack != t)) {
         play.load_other(disc, index, t)?;
     }
+    // Flags the Inits set themselves (not the new-game marker 707) outlive the slot's restore.
+    let by_init: Vec<u16> = play.state.flags.iter().copied().filter(|&f| f != 707 && !slot.flag(f)).collect();
     // The hero and the characters are drawn again from the new game (its hero may be the
     // other one, and its character ids start again).
     play.generation = old.generation + 1;
     play.cheats = old.cheats;
     play.snapshot = Some(slot.clone());
     play.apply_slot(slot);
+    for f in by_init {
+        play.state.flags.insert(f);
+    }
     Ok(play)
 }
 
