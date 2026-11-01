@@ -96,6 +96,151 @@ pub fn overlap(a: &Cylinder, b: &Cylinder) -> bool {
     segment_distance(a0, a1, b0, b1) <= a.radius + b.radius
 }
 
+/// The line against cylinder routine of SPEC-0018 (Finite cylinder tests): the parameters at
+/// which the line p + t D (t along D normalised in the cylinder's frame) meets the flat-ended
+/// cylinder c, at most two, with the axis used as stored.
+fn line_cylinder(p: Vec3, d: Vec3, c: &Cylinder) -> Vec<f32> {
+    let a = c.axis;
+    let u = if a[1].abs() <= a[0].abs() {
+        let k = (a[0] * a[0] + a[2] * a[2]).sqrt();
+        if k == 0.0 {
+            return Vec::new();
+        }
+        [-a[2] / k, 0.0, a[0] / k]
+    } else {
+        let k = (a[1] * a[1] + a[2] * a[2]).sqrt();
+        if k == 0.0 {
+            return Vec::new();
+        }
+        [0.0, a[2] / k, -a[1] / k]
+    };
+    let v = cross(a, u);
+    let q = sub(p, c.center);
+    let (x0, y0, z0) = (dot(u, q), dot(v, q), dot(a, q));
+    let dc = [dot(u, d), dot(v, d), dot(a, d)];
+    let dl = len(dc);
+    if dl == 0.0 {
+        return Vec::new();
+    }
+    let (dx, dy, dz) = (dc[0] / dl, dc[1] / dl, dc[2] / dl);
+    let (r, h2) = (c.radius, 0.5 * c.length);
+    let circle = || -> Vec<f32> {
+        let a2 = dx * dx + dy * dy;
+        let b = x0 * dx + y0 * dy;
+        let cc = x0 * x0 + y0 * y0 - r * r;
+        let disc = b * b - a2 * cc;
+        if a2 == 0.0 || disc < 0.0 {
+            Vec::new()
+        } else if disc == 0.0 {
+            vec![-b / a2]
+        } else {
+            let s = disc.sqrt();
+            vec![(-b - s) / a2, (-b + s) / a2]
+        }
+    };
+    if dz.abs() >= 0.99999 {
+        if x0 * x0 + y0 * y0 > r * r {
+            return Vec::new();
+        }
+        return vec![(h2 - z0) / dz, (-h2 - z0) / dz];
+    }
+    if dz.abs() <= 0.00001 {
+        return if z0.abs() > h2 { Vec::new() } else { circle() };
+    }
+    let caps = [(h2 - z0) / dz, (-h2 - z0) / dz];
+    let inside = |t: f32| (x0 + t * dx).powi(2) + (y0 + t * dy).powi(2) <= r * r;
+    let kept: Vec<f32> = caps.iter().copied().filter(|&t| inside(t)).collect();
+    if kept.len() == 2 {
+        return kept;
+    }
+    let walls = circle();
+    if walls.is_empty() {
+        return Vec::new();
+    }
+    let (lo, hi) = (caps[0].min(caps[1]), caps[0].max(caps[1]));
+    let mut out = kept;
+    out.extend(walls.into_iter().filter(|&t| t >= lo && t <= hi));
+    out.truncate(2);
+    out
+}
+
+/// The static overlap routine of SPEC-0018 (Finite cylinder tests): shape A a flat-ended
+/// cylinder; when the axes are nearly parallel the radii and axial intervals decide; otherwise B
+/// is the card through its axis that faces A's centre, and the crossings of its two end edges
+/// and its far long edge decide. Axes are used as stored. In the monster weapon strike A is the
+/// weapon and B each hurt capsule of the target.
+pub fn finite_overlap(a: &Cylinder, b: &Cylinder) -> bool {
+    let d = sub(a.center, b.center);
+    let reach = |c: &Cylinder| (c.radius * c.radius + 0.25 * c.length * c.length).sqrt();
+    if len(d) > reach(a) + reach(b) {
+        return false;
+    }
+    let ab = b.axis;
+    if len(ab) == 0.0 {
+        return false;
+    }
+    let bu = unit(ab);
+    if dot(a.axis, ab).abs() > 0.99 {
+        let along = dot(d, ab);
+        let lateral = len(sub(d, scale(bu, dot(d, bu))));
+        return along.abs() <= 0.5 * (a.length + b.length) && lateral <= a.radius + b.radius;
+    }
+    let perp = sub(d, scale(bu, dot(d, bu)));
+    if len(perp) == 0.0 {
+        return false;
+    }
+    let n = unit(perp);
+    let half = scale(ab, 0.5 * b.length);
+    // T and U: the end edges at +h/2 and -h/2, from the -n corner toward +n; S: the long edge on
+    // the +n side from the -h/2 end toward +h/2.
+    let t_start = sub(add(b.center, half), scale(n, b.radius));
+    let u_start = sub(sub(b.center, half), scale(n, b.radius));
+    let s_start = add(sub(b.center, half), scale(n, b.radius));
+    let crosses = |start: Vec3, dir: Vec3, length: f32| -> (bool, Vec<f32>) {
+        let roots = line_cylinder(start, dir, a);
+        (roots.iter().any(|&t| t > 0.0 && t < length), roots)
+    };
+    let (tc, _) = crosses(t_start, n, 2.0 * b.radius);
+    let (uc, _) = crosses(u_start, n, 2.0 * b.radius);
+    let (sc, s_roots) = crosses(s_start, ab, b.length);
+    if tc && uc {
+        return true;
+    }
+    if sc && (tc || uc) {
+        return true;
+    }
+    if tc || uc {
+        // S starts inside A: two roots, one negative and one positive.
+        return s_roots.len() == 2 && s_roots.iter().any(|&t| t < 0.0) && s_roots.iter().any(|&t| t > 0.0);
+    }
+    if sc {
+        if !(s_roots.len() == 2 && s_roots.iter().all(|&t| t > 0.0 && t < b.length)) {
+            return false;
+        }
+        let au = unit(a.axis);
+        let far = |t: f32| dot(sub(add(s_start, scale(bu, t)), a.center), au).abs() > 0.99 * 0.5 * a.length;
+        return !(far(s_roots[0]) && far(s_roots[1]));
+    }
+    // No edge crosses: one shape wholly inside the other (strictly smaller in both sizes), each
+    // of four rays from the inner centre meeting the outer at a positive parameter.
+    let rays_meet = |from: Vec3, axis: Vec3, side: Vec3, outer: &Cylinder| {
+        [axis, scale(axis, -1.0), side, scale(side, -1.0)].iter().all(|&dir| line_cylinder(from, dir, outer).iter().any(|&t| t > 0.0))
+    };
+    if b.radius < a.radius && b.length < a.length {
+        return rays_meet(b.center, ab, n, a);
+    }
+    if a.radius < b.radius && a.length < b.length {
+        let dm = sub(b.center, a.center);
+        let au = unit(a.axis);
+        let mp = sub(dm, scale(au, dot(dm, au)));
+        if len(mp) == 0.0 {
+            return false;
+        }
+        return rays_meet(a.center, a.axis, unit(mp), b);
+    }
+    false
+}
+
 /// A segment meets a finite cylinder (approximation; R-0014).
 pub fn segment_meets(s0: Vec3, s1: Vec3, c: &Cylinder) -> bool {
     let (c0, c1) = c.ends();
@@ -154,6 +299,32 @@ pub fn swept(a: Vec3, b_tip: Vec3, c_tip: Vec3, cap: &Cylinder) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn cyl(r: f32, h: f32, c: Vec3, a: Vec3) -> Cylinder {
+        Cylinder { center: c, axis: a, radius: r, length: h }
+    }
+
+    #[test]
+    fn finite_cylinder_vectors() {
+        // SPEC-0018 Finite cylinder tests, the synthetic vectors (A first, then B).
+        let y = [0.0, 1.0, 0.0];
+        let b = cyl(0.5, 2.0, [0.0, 1.0, 0.0], y);
+        assert!(finite_overlap(&cyl(1.0, 3.5, [1.2, 1.0, 0.0], y), &b), "parallel, lateral 1.2");
+        assert!(!finite_overlap(&cyl(1.0, 3.5, [1.6, 1.0, 0.0], y), &b));
+        assert!(!finite_overlap(&cyl(1.0, 3.5, [0.0, 4.0, 0.0], y), &b), "axial 3 > 2.75");
+        assert!(finite_overlap(&cyl(1.0, 3.5, [0.0, 2.7, 0.0], y), &b));
+        let b = cyl(0.5, 1.0, [0.0, 0.5, 0.0], y);
+        let x = [1.0, 0.0, 0.0];
+        assert!(finite_overlap(&cyl(2.0, 1.0, [0.9, 0.5, 0.0], x), &b), "both end edges cross");
+        assert!(!finite_overlap(&cyl(2.0, 1.0, [1.1, 0.5, 0.0], x), &b));
+        assert!(!finite_overlap(&cyl(2.0, 2.0, [0.9, 2.0, 0.5], [0.0, 0.0, 1.0]), &b), "solid overlap that still misses");
+        assert!(finite_overlap(&cyl(3.0, 1.0, [1.2, 0.0, 0.0], [0.0, 0.0, 1.0]), &cyl(0.5, 0.9, [0.0, 0.5, 0.0], y)), "wholly inside");
+        assert!(!finite_overlap(&cyl(3.0, 1.0, [1.2, 0.0, 0.0], [0.0, 0.0, 1.0]), &cyl(0.5, 1.0, [0.0, 0.5, 0.0], y)));
+        assert!(!finite_overlap(&cyl(2.0, 1.0, [1.02, 0.5, 0.0], x), &b), "axis length 1.0");
+        assert!(finite_overlap(&cyl(2.0, 1.0, [1.02, 0.5, 0.0], [0.95, 0.0, 0.0]), &b), "axis length 0.95");
+        // Flat ends: centres 5 apart on a shared axis, half-heights summing to 4.
+        assert!(!finite_overlap(&cyl(1.0, 4.0, [0.0, 2.0, 0.0], y), &cyl(1.0, 4.0, [0.0, 7.0, 0.0], y)));
+    }
 
     const A: Vec3 = [0.0, 0.0, 0.0];
     const B: Vec3 = [2.0, 0.0, 0.0];

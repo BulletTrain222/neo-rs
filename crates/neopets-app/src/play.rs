@@ -6131,18 +6131,24 @@ impl Play {
                     let wf = cplace.mul(f);
                     neopets_sim::combat::Cylinder::from_base(wf.t, unit(wf.cols[1]), 6.0, 10.0)
                 });
-                if !(sp.strikeable() && head.is_some_and(|h| neopets_sim::combat::overlap(&weapon, &h))) {
+                let swept = |h: &neopets_sim::combat::Cylinder| {
+                    d2.is_some_and(|d2| {
+                        let (b, cc) = (add(p0, scale(axis, l)), add(p0, scale(d2, l)));
+                        b != cc && neopets_sim::combat::swept(p0, b, cc, h)
+                    })
+                };
+                if !(sp.strikeable() && head.is_some_and(|h| neopets_sim::combat::finite_overlap(&weapon, &h) || swept(&h))) {
                     continue;
                 }
             }
             let own_body = c.hit_body(false);
-            let hit = c.serpent.is_some() || own_body.is_some_and(|b| neopets_sim::combat::overlap(&weapon, &b)) || own_body.is_none() && c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
+            let hit = c.serpent.is_some() || own_body.is_some_and(|b| neopets_sim::combat::finite_overlap(&weapon, &b)) || own_body.is_none() && c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
                 if length <= 0.0 {
                     return false;
                 }
                 let wf = cplace.mul(f);
                 let cap = neopets_sim::combat::Cylinder::from_base(wf.apply(base), unit(wf.cols[1]), radius, length);
-                neopets_sim::combat::overlap(&weapon, &cap)
+                neopets_sim::combat::finite_overlap(&weapon, &cap)
                     || d2.is_some_and(|d2| {
                         let (b, cc) = (add(p0, scale(axis, l)), add(p0, scale(d2, l)));
                         b != cc && neopets_sim::combat::swept(p0, b, cc, &cap)
@@ -10340,7 +10346,7 @@ impl Play {
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (radius, length) = weapons[n];
                 let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
-                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+                caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             let clip = anim.clip_state();
             let has = |id: u32| anim.has(id);
@@ -11466,7 +11472,7 @@ impl Play {
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (r, length) = c.weapons[n];
                 let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius: r, length };
-                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+                caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             // The navmesh pick (SPEC-0029 Behavior 2): the first ground mesh holding the boss,
             // again whenever the stored one no longer holds it.
@@ -11778,7 +11784,7 @@ impl Play {
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (radius, length) = c.weapons[n];
                 let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
-                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+                caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             // The weak points: (joint, radius, length) by part, the selectors 37, 34, 24, 9, 4 and
             // 7 in the order left knee, right knee, left under-arm, right under-arm, back, neck
@@ -12003,7 +12009,7 @@ impl Play {
                 && c.anim.bones().attach.first().and_then(|&(bone, angles, offset)| Some(place.mul(frames.get(bone?)?).mul(&attach_rotation(offset, angles)))).is_some_and(|w| {
                     let (radius, length) = c.weapons[0];
                     let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
-                    caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+                    caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
                 });
             let off = [c.position[0] - hero[0], 0.0, c.position[2] - hero[2]];
             let dist = off[0].hypot(off[2]);
@@ -12473,7 +12479,7 @@ impl Play {
                 let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                 let (radius, length) = c.weapons[n];
                 let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
-                caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap))
+                caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap))
             });
             // The mouth is bone 52; the beam test is the segment from it to the moving end point
             // against a vertical cylinder around the hero raised 1.5 (height 1.75, radius 5.0).
@@ -12871,7 +12877,7 @@ impl Play {
                     let w = place.mul(bw).mul(&attach_rotation(offset, angles));
                     let (radius, length) = c.weapons[2];
                     let weapon = Cylinder { center: w.t, axis: unit(w.cols[2]), radius, length };
-                    Some(caps.iter().any(|cap| neopets_sim::combat::overlap(&weapon, cap)))
+                    Some(caps.iter().any(|cap| neopets_sim::combat::finite_overlap(&weapon, cap)))
                 }) == Some(true);
             let clip = c.anim.clip_state();
             let v = neopets_sim::serpent::View {
