@@ -194,6 +194,8 @@ fn condition(f: &Frontend, n: usize, p: &Inputs) -> bool {
         37 => p.mote_open,
         15 => node.arg < 100 && p.mote_selection == node.arg || node.arg == 255 && p.mote_selection == 255,
         16 => p.mote_counts.get(node.arg as usize).is_some_and(|&c| c > 0),
+        62 => p.hint,
+        65 => p.journal,
         57 => p.available[0],
         59 => p.available[1],
         58 => p.dead.get(node.arg as usize).copied().unwrap_or(false),
@@ -245,6 +247,10 @@ fn place(f: &Frontend, n: usize, xs: &HashMap<usize, i32>, ws: &HashMap<usize, i
 
 /// The values the HUD's predicates read this frame.
 struct Inputs {
+    /// Predicate slot 62 (SPEC-0035 9c): no quick panel open, slot 41 false and the busy test
+    /// false (the D-pad hint); slot 65: slot 62 and the journal-notification word.
+    hint: bool,
+    journal: bool,
     c: i32,
     g0: i32,
     mp_max: i32,
@@ -293,7 +299,8 @@ pub fn sync_hud(
     art: Option<ResMut<HudArt>>,
     mut images: ResMut<Assets<Image>>,
     windows: Query<&Window>,
-    mut canvas: Query<(Entity, &mut Node), With<HudCanvas>>,
+    mut canvas: Query<(Entity, &mut Node, &mut GlobalZIndex), With<HudCanvas>>,
+    menu: Option<Res<crate::menu_view::Menu>>,
     mut sprites: Query<(&HudSprite, &mut Node, &mut ImageNode, &mut Visibility), (Without<HudCanvas>, Without<HudText>)>,
     mut texts: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudText>, Without<HudCanvas>, Without<HudSprite>, Without<HudCaption>)>,
     mut captions: Query<(&mut Node, &mut ImageNode, &mut Visibility), (With<HudCaption>, Without<HudCanvas>, Without<HudSprite>, Without<HudText>)>,
@@ -408,7 +415,7 @@ pub fn sync_hud(
         subtree(f, r, &mut panel_nodes);
     }
     nodes.extend(panel_nodes.iter().copied());
-    let Ok((root, mut root_node)) = canvas.single_mut() else {
+    let Ok((root, mut root_node, mut root_z)) = canvas.single_mut() else {
         let root = commands
             .spawn((Node { position_type: PositionType::Absolute, ..default() }, HudCanvas, GlobalZIndex(10)))
             .id();
@@ -445,9 +452,28 @@ pub fn sync_hud(
     let mb = &p.monster_bar;
     // The owned count of an item id (0 for -1 or an item not held).
     let count = |id: i32| u16::try_from(id).ok().and_then(|id| p.state.items.get(&id)).map_or(0, |&n| n as i32);
+    // SPEC-0035 section 14 HUD lines: the item screen's tab states draw the HUD bars group too,
+    // with a draw offset of (60, 23) on its top node, fully visible (they hold the timers at
+    // 240); the HUD then draws over the item page.
+    let items_open = p.spawned && menu.as_ref().is_some_and(|m| (m.flow.items()..m.flow.items() + 3).contains(&m.flow.current));
+    *root_z = GlobalZIndex(if items_open { 100_000 } else { 10 });
+    let in_bars = |n: usize| {
+        let mut at = Some(n);
+        while let Some(i) = at {
+            if i == bars {
+                return true;
+            }
+            at = f.nodes[i].parent;
+        }
+        false
+    };
+    // SPEC-0035 9c slot 62 (the busy test of SPEC-0023 section 4.1: the letterbox or a screen
+    // fade is up).
+    let busy = p.bars.height() > 0.0 || p.fade.moving() || p.fade.opacity() > 0.0;
+    let hint_ok = !p.quick.open && !(mb.t != 0 && !p.quick.open) && !busy;
     let inputs = Inputs {
-        c: hud.c,
-        g0: hud.g0,
+        c: if items_open { 240 } else { hud.c },
+        g0: if items_open { 240 } else { hud.g0 },
         mp_max: p.hero_mp_max,
         health_dividers: hud.health.dividers,
         pool_dividers: hud.pool.dividers,
@@ -471,6 +497,8 @@ pub fn sync_hud(
         available: hud.swing.available,
         dead: p.state.hero.dead,
         words: std::array::from_fn(|w| p.equipment.motes[p.hero_index.min(1)][w].map_or(-1, i32::from)).map(count),
+        hint: hint_ok,
+        journal: hint_ok && hud.journal,
     };
     let key = |k: u32| f.key(k).unwrap_or(usize::MAX);
     let node_x = |k: u32| f.key(k).map_or(0, |n| f.nodes[n].x as i32);
@@ -553,7 +581,7 @@ pub fn sync_hud(
     for (sprite, mut node, mut image, mut vis) in &mut sprites {
         let n = sprite.0;
         // Visible when every node from the sprite up to the bars group passes its condition.
-        let mut ok = shown;
+        let mut ok = shown || (items_open && in_bars(n));
         let in_prompts = |n: usize| {
             let mut at = Some(n);
             while let Some(i) = at {
@@ -634,7 +662,11 @@ pub fn sync_hud(
             continue;
         }
         let art = art.unwrap_or(n);
-        let (x, y, mut sx, sy) = place(f, n, &xs, &ws, &ov);
+        let (mut x, mut y, mut sx, sy) = place(f, n, &xs, &ws, &ov);
+        if items_open {
+            x += 60.0;
+            y += 23.0;
+        }
         if Some(n) == f.key(MONSTER_FILL) {
             // The fill is drawn with its x scale reset to 1.0.
             sx = 1.0;
@@ -670,7 +702,7 @@ pub fn sync_hud(
         } else if panel.is_some() {
             group_alpha(f, n, &hud.panel_alpha)
         } else {
-            hud.bars_alpha
+            if items_open { 128 } else { hud.bars_alpha }
         };
         image.color = Color::srgba(c(rgb[0]), c(rgb[1]), c(rgb[2]), c(a).min(1.0));
         match cache.get(&(art, w as u32, h as u32)) {

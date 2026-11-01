@@ -15197,6 +15197,7 @@ impl Play {
         let count = |id: i32| u16::try_from(id).ok().and_then(|id| self.state.items.get(&id)).copied().unwrap_or(0);
         let mut v = crate::menus::ItemView { marker: self.quick.marker, ..Default::default() };
         v.grid_counts = grid.map(count);
+        v.neopoints = self.state.neopoints;
         let mut held: Vec<u16> = self.state.items.iter().filter(|e| *e.1 > 0).map(|e| *e.0).collect();
         held.sort_unstable();
         for (slot, id) in held.iter().filter(|&&id| self.design.item_category(id) == Some(8)).take(14).enumerate() {

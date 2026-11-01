@@ -374,6 +374,9 @@ pub struct ItemPc {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct ItemView {
     pub grid_counts: [u32; 20],
+    /// The party's Neopoints balance (party word +0x14), shown by the value text under element
+    /// 0xBF (SPEC-0023 section 34).
+    pub neopoints: i32,
     pub charms: [i32; 14],
     pub quests: [i32; 60],
     pub marker: i32,
@@ -393,7 +396,7 @@ pub struct ItemView {
 
 impl Default for ItemView {
     fn default() -> Self {
-        Self { grid_counts: [0; 20], charms: [-1; 14], quests: [-1; 60], marker: -1, hero: 0, motes: [-1; 3], equipped: [false; 3], equipped_ids: [-1; 3], cloak: false, mote_counts: [0; 14], mote_selection: 255, mote_table: [255; 120] }
+        Self { grid_counts: [0; 20], neopoints: 0, charms: [-1; 14], quests: [-1; 60], marker: -1, hero: 0, motes: [-1; 3], equipped: [false; 3], equipped_ids: [-1; 3], cloak: false, mote_counts: [0; 14], mote_selection: 255, mote_table: [255; 120] }
     }
 }
 
@@ -1595,6 +1598,18 @@ pub fn credits_draws(fe: &Frontend, flow: &Flow) -> Vec<Draw> {
         .collect()
 }
 
+/// Whether node `n` is node `root` or lies under it.
+fn under(fe: &Frontend, n: usize, root: usize) -> bool {
+    let mut at = Some(n);
+    while let Some(i) = at {
+        if i == root {
+            return true;
+        }
+        at = fe.nodes[i].parent;
+    }
+    false
+}
+
 /// The item screen's two text lines (SPEC-0035 section 14.1): the selected entry's name line
 /// and its description, at the two value-text nodes of the record's group at (63, 388), in each
 /// node's font and colour. The lines' texts come from the host (`lines`).
@@ -1733,6 +1748,20 @@ pub fn item_draws(fe: &Frontend, flow: &Flow, lines: &[Vec<u8>; 2]) -> Vec<Draw>
     if let Some(parent) = fe.nodes[g].parent {
         for c in fe.children(parent).into_iter().filter(|&c| c != g) {
             walk(fe, c, &mut nodes);
+        }
+    }
+    // SPEC-0035 G.12: each cell whose owned count is above 1 shows the count, font 1, neutral
+    // colour, centred on the icon centre x (its left edge not left of 16), baseline 8 under the
+    // icon (icon top + 40).
+    if tab == 0 {
+        if let Some(font) = fe.fonts.get(1) {
+            for (k, &n) in pc.items.view.grid_counts.iter().enumerate().filter(|&(_, &n)| n > 1) {
+                let text = n.to_string().into_bytes();
+                let w = font.measure(&text, 0) as f32;
+                let cx = 208.0 + 51.0 * (k % 5) as f32;
+                let top = [141.0, 188.0, 237.0, 286.0][k / 5];
+                out.push(Draw::Text { font: 1, text, spacing: 0, x: (cx - w / 2.0).round().max(16.0), y: top + 40.0, colour: [128, 128, 128, 128] });
+            }
         }
     }
     // The name and description lines are the last two (the pair at (63, 388)).
@@ -2034,12 +2063,17 @@ fn draw_node(fe: &Frontend, n: usize, t: (f32, f32, f32, f32), focused: bool, fo
         // A value-text node (section K): the map's Treasures numbers (variables 16 and 17) as
         // decimals in the record's font, spacing and colour; other variables are not drawn.
         6 => {
-            if let Some(v) = fe.values.get(&node.data).filter(|v| v.gate != 0 && v.format == 1) {
+            if let Some(v) = fe.values.get(&node.data).filter(|v| v.gate != 0 && matches!(v.format, 0 | 1)) {
                 let value = match v.variable {
                     16 => Some(pc.treasures.0),
                     17 => Some(pc.treasures.1),
                     _ => None,
                 };
+                // Format 0, variable 0 under element 0xBF: the item screens' Neopoints balance,
+                // formatted each tick in 9 cells (SPEC-0023 sections 15 and 34).
+                if v.variable == 0 && fe.key(0xBF).is_some_and(|b| under(fe, n, b)) {
+                    out.push(Draw::Text { font: v.font as usize, text: neopets_sim::shop::number_field(pc.items.view.neopoints, 9), spacing: v.spacing as i32, x, y, colour: v.colour });
+                }
                 if let Some(value) = value {
                     out.push(Draw::Text { font: v.font as usize, text: value.to_string().into_bytes(), spacing: v.spacing as i32, x, y, colour: v.colour });
                 }

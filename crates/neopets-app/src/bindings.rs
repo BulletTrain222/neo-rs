@@ -394,6 +394,44 @@ pub fn read_pad(keys: Res<ButtonInput<KeyCode>>, mouse: Res<ButtonInput<MouseBut
             }
         }
     }
+    // NEOPETS_DEV_KEYS="ms:BUTTON;..." (diagnostic, for screenshots of the menus): a press of
+    // that virtual-pad button (CROSS, CIRCLE, SQUARE, TRIANGLE, START, SELECT, UP, DOWN, LEFT,
+    // RIGHT, L1, R1, L2, R2) on the first frame at or past that many milliseconds from the
+    // first read.
+    if let Ok(v) = std::env::var("NEOPETS_DEV_KEYS") {
+        static T0: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
+        static DONE: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+        let ms = T0.get_or_init(std::time::Instant::now).elapsed().as_millis() as u64;
+        for (k, e) in v.split(';').enumerate() {
+            let Some((f, name)) = e.split_once(':') else { continue };
+            let Ok(mut done) = DONE.lock() else { continue };
+            if f.trim().parse::<u64>().map_or(true, |f| ms < f) || done.contains(&k) {
+                continue;
+            }
+            done.push(k);
+            let a = match name.trim() {
+                "CROSS" => CROSS,
+                "CIRCLE" => CIRCLE,
+                "SQUARE" => SQUARE,
+                "TRIANGLE" => TRIANGLE,
+                "START" => START,
+                "SELECT" => SELECT,
+                "UP" => UP,
+                "DOWN" => DOWN,
+                "LEFT" => LEFT,
+                "RIGHT" => RIGHT,
+                "L1" => L1,
+                "R1" => R1,
+                "L2" => L2,
+                "R2" => R2,
+                _ => continue,
+            };
+            pad.held |= 1 << a;
+            pad.pressed |= 1 << a;
+            pad.held_no_mouse |= 1 << a;
+            pad.pressed_no_mouse |= 1 << a;
+        }
+    }
     let held = *pad;
     let axis = |neg: usize, pos: usize| held.held(pos) as i32 as f32 - held.held(neg) as i32 as f32;
     pad.movement = Vec2::new(axis(MOVE_LEFT, MOVE_RIGHT), axis(MOVE_DOWN, MOVE_UP));
