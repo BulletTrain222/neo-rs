@@ -1623,6 +1623,15 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([reg(0, 30), reg(1, 31), reg(2, 32)]);
                 v.push(Action::LoadRegion { slot: 1, region: Some(if state.flag(248) { 946 } else { 940 }) });
             }
+            // SPEC-0045 934 threads 18 to 20 (R-0156): the flags tested in the order 5, 4, 3 pick
+            // at most one load, at once and never reset: flag 5 or flag 3 set 8 (region 943, the
+            // Thieves and Bandits), flag 4 set 7 (region 942, the Minions). The slot store's
+            // third slot is slot 2 here; flag 4's only slot is slot 2 as well.
+            if state.flag(5) || (!state.flag(4) && state.flag(3)) {
+                v.push(Action::LoadRegion { slot: 2, region: Some(935 + 8) });
+            } else if state.flag(4) {
+                v.push(Action::LoadRegion { slot: 2, region: Some(935 + 7) });
+            }
             // Threads 13 and 14, the two ambush waves (flags 5, 4 and 3 clear): set 6 into its own
             // slot (4 here) while 372 is clear, set 4 into slot 5 while 378 is clear; Update
             // resets each slot and sets its flag once all of its characters are dead.
@@ -18678,6 +18687,22 @@ mod tests {
         assert_eq!(on_talk(951, 2, &mut s), vec![Action::Message { line: 58 }]);
         assert_eq!(on_talk(951, 0, &mut s), vec![Action::Message { line: 4 }]);
         assert_eq!(on_teleport(951, 0, &mut s), vec![Action::LeaveInterior { slot: 5 }]);
+    }
+
+    #[test]
+    fn farm_road_threads_18_to_20() {
+        // SPEC-0045 934, the test vector: the flags tested in the order 5, 4, 3.
+        let loads = |flags: &[u16]| {
+            let mut s = GameState::default();
+            for &f in flags {
+                s.set(f, true);
+            }
+            on_init(934, &mut s).iter().filter_map(|a| if let Action::LoadRegion { slot: 2, region } = a { *region } else { None }).collect::<Vec<u32>>()
+        };
+        assert_eq!(loads(&[5, 4]), [943]);
+        assert_eq!(loads(&[4]), [942]);
+        assert_eq!(loads(&[3]), [943]);
+        assert!(loads(&[]).is_empty() && loads(&[2]).is_empty());
     }
 
     #[test]

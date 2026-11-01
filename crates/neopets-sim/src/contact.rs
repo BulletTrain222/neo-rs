@@ -104,6 +104,32 @@ pub fn resolve(p: &mut Vec3, boxes: &[BoxShape], r: f32) -> bool {
     hit
 }
 
+/// The finite cylinder test's parallel branch and the slide response's move for an upright owner
+/// body (feet `p`, radius `owner_r`, height `owner_h`) against an upright cylinder (base centre,
+/// length, radius), SPEC-0018 Breakable cylinders against characters and Tree trunks against the
+/// hero: contact when the horizontal distance L is at most r + owner_r and the two centres are
+/// within half the summed heights. The move puts the owner on the circle of r + owner_r. When L
+/// is below owner_r and the axial overlap is at most 0.4 the end-cap rule uses the vertical
+/// axis instead, moving the owner toward the volume by the overlap. Returns the move and the
+/// unit normal from the owner toward the volume.
+pub fn upright_cylinder_push(p: Vec3, owner_r: f32, owner_h: f32, base: Vec3, length: f32, radius: f32) -> Option<(Vec3, Vec3)> {
+    let (dx, dz) = (base[0] - p[0], base[2] - p[2]);
+    let l = dx.hypot(dz);
+    let reach = radius + owner_r;
+    let offset = (p[1] + 0.5 * owner_h) - (base[1] + 0.5 * length);
+    let overlap = 0.5 * (length + owner_h) - offset.abs();
+    if l > reach || overlap < 0.0 {
+        return None;
+    }
+    if l < owner_r && overlap <= 0.4 {
+        let down = if offset > 0.0 { -1.0 } else { 1.0 };
+        return Some(([0.0, down * overlap, 0.0], [0.0, down, 0.0]));
+    }
+    let n = if l > 1e-4 { [dx / l, 0.0, dz / l] } else { [1.0, 0.0, 0.0] };
+    let depth = l - reach;
+    Some(([n[0] * depth, 0.0, n[2] * depth], n))
+}
+
 /// A wall edge (a frame record, SPEC-0018 and SPEC-0033 Behavior 37): the face plane (unit
 /// normal, offset), the run plane, the top plane, the length L and the height value H.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -288,6 +314,25 @@ mod tests {
         assert_eq!(push([5.0, 1.0, -4.0], &b, 1.25), None);
         // At v = eV - 0.1 or above there is no hit (strict upper bound, no growth).
         assert_eq!(push([12.0, 5.9, -4.0], &b, 1.25), None);
+    }
+
+    #[test]
+    fn chest_cylinder_vectors() {
+        // SPEC-0018 Breakable cylinders against characters, pack 951's breakable 28 as numbers.
+        let (base, len, r) = ([-14.9674, 11.9709, -24.7527], 2.0594, 2.5929);
+        let push = |x, y, z| upright_cylinder_push([x, y, z], 1.0, 3.5, base, len, r);
+        let (d, n) = push(-14.967, 11.971, -21.5).unwrap();
+        assert!((-21.5 + d[2] - -21.1598).abs() < 1e-3 && (n[2] - -1.0).abs() < 1e-3, "{d:?} {n:?}");
+        let (d, _) = push(-13.0, 11.971, -22.5).unwrap();
+        assert!((-13.0 + d[0] - -12.604).abs() < 1e-3 && (-22.5 + d[2] - -22.0465).abs() < 1e-3, "{d:?}");
+        assert!(push(-14.967, 11.971, -20.7).is_none(), "L = 4.0527");
+        let (d, _) = push(-12.967, 14.0, -24.753).unwrap();
+        assert!((-12.967 + d[0] - -11.3744).abs() < 1e-3, "{d:?}");
+        let (d, n) = push(-14.4674, 13.9, -24.7527).unwrap();
+        assert!((d[1] - -0.1303).abs() < 1e-3 && n[1] == -1.0, "the end cap: {d:?}");
+        // The feet range ends at b - 3.5 and b + H.
+        assert!(push(-13.0, 8.46, -24.7).is_none() && push(-13.0, 14.04, -24.7).is_none());
+        assert!(push(-13.0, 8.48, -24.7).is_some() && push(-13.0, 14.02, -24.7).is_some());
     }
 
     #[test]

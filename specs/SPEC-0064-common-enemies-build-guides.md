@@ -1,6 +1,6 @@
 # SPEC-0064: Common enemy build guides
 
-- Answers: proactive (weapon box); proactive (common enemy AI); proactive (open close-out); R-0124, R-0127; proactive (patrol paths); proactive (combat core pass 3); proactive (timing pass); proactive (enemy reach pass); proactive (reach pass 2); proactive (movement pass); proactive (enemy sweep); R-0146 (Park Shrine Drackonacks are undamageable); R-0149 (player's answer per ranged kind)
+- Answers: proactive (weapon box); proactive (common enemy AI); proactive (open close-out); R-0124, R-0127; proactive (patrol paths); proactive (combat core pass 3); proactive (timing pass); proactive (enemy reach pass); proactive (reach pass 2); proactive (movement pass); proactive (enemy sweep); R-0146 (Park Shrine Drackonacks are undamageable); R-0149 (player's answer per ranged kind), R-0156 (when the Farm Road Thieves and Bandits load)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: High for the row values, animation tables, clip gate ticks, attack arithmetic and the notice, wake, hidden and alarm rules. Medium-High for the idle states (wander, patrol, sentry), the tick offsets of the sequencer and the grab machine. Medium for weapon contact geometry, hurt-shape geometry and the places a section marks Medium. Each kind states its own confidence.
@@ -1680,6 +1680,8 @@ Placements in play (reached packs and confirmed slot loads; unreached test block
 | Rogue (field) | 16 | 4 | 6 | 0 | 3 | 3 | Bandit Caves 8, Farm Road 3, Western Brightvale 2 |
 
 Cut placements (unreached packs, never-loaded regions): Thief 7, Bandit 5, Thug 6, Rogue 9, Drackonack 1, Giant Drackonack 1. They are not described.
+
+When the Farm Road Thieves and Bandits exist (High): the Farm Road exterior (the pack with the find-the-petpet game, SPEC-0045) loads them from its region set 8 (region 943, the Thieves and Bandits of the road) at once when the area starts, in two story stages: whenever flag 5 is set, and when flags 5 and 4 are clear and flag 3 is set. When flag 5 is clear and flag 4 is set, it loads region set 7 (region 942, the Minion group) instead and no set 8 is loaded, so the road then holds Minions and no Thieves or Bandits from that load. With flags 5, 4 and 3 all clear neither set loads. The load needs no trigger and no area entry, it is never reset, and the characters stay until the exterior unloads (SPEC-0045, threads 18 to 20). A placement count that includes the Farm Road Thieves and Bandits therefore counts them only in the flag-5 and flag-3 stages. Default if unresolved (rewrite choice): none needed; a rewrite that omits these loads shows no Thieves or Bandits on the road after the farm.
 
 Word meanings of the spawn record's seven-word block (offsets +0xBC to +0xD4) depend on the default state (SPEC-0038 open question 20; SPEC-0056, Placement values). The block values on disc for these kinds:
 

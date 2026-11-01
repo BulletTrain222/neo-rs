@@ -3091,6 +3091,8 @@ fn sync_items(
     mut assets: Local<Option<(Handle<Mesh>, [Handle<StandardMaterial>; 3])>>,
     mut models: Local<std::collections::HashMap<(u32, u32), Option<Vec<(Handle<Mesh>, StandardMaterial, Option<neopets_data::material::Flipbook>)>>>>,
     mut boot: Local<Option<(Vec<u8>, Vec<neopets_data::resource::Chunk>)>>,
+    time: Res<Time>,
+    mut coin_time: Local<f32>,
 ) {
     let _span = crate::perf::span("sync_items");
     let Some(state) = state else { return };
@@ -3142,12 +3144,12 @@ fn sync_items(
         let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(c.angle + std::f32::consts::PI);
         Some((c.id, c.pack, Transform { translation: origin, rotation: rot, scale: Vec3::splat(c.s.max(1e-4)) }))
     });
-    // SPEC-0035 section 15.2: while price caption line 1 shows (its counter above 0, both quick
-    // panels closed) the one-Neopoint coin model (item 135) spins near the caption. Its place,
-    // size and spin rate are not given (R-0155); this build's choice: centred at canvas (426,
-    // 108), just right of the caption's right edge at x 410, with the caption at the window's
-    // top-right edge (hud_view), 5 units in front of the camera at scale 0.25, turning at the
-    // showcase rate of 2 pi / 5 rad/s.
+    // SPEC-0035 section 15.2 (R-0155): while price caption line 1 shows (its counter above 0, both
+    // quick panels closed) the one-Neopoint coin model (item 135) is drawn centred at canvas
+    // (332.8, 107.5), 6.0 ahead of the camera, scale 0.5886, depth tested, turning at 1 rad/s about
+    // the camera's up axis; the angle moves only on drawn frames and is never reset. In a window
+    // wider than the canvas it stays with the caption at the window's top-right edge (hud_view;
+    // this build's choice, the canvas being the PS2's whole screen).
     let caption_coin: Option<Transform> = (p.price_lines[0].1 > 0 && !p.quick.open && !p.mote_panel.open && !p.menu_open)
         .then(|| {
             let (cam, g) = cameras.iter().next()?;
@@ -3157,12 +3159,12 @@ fn sync_items(
             let ox = (ww - 512.0 * sc) / 2.0;
             // As fractions of the window, then of the camera's own viewport (which can be a
             // render target of another size).
-            let at = Vec2::new((2.0 * ox + 426.0 * sc) / ww, 108.0 * sc / wh) * cam.logical_viewport_size()?;
+            let at = Vec2::new((2.0 * ox + 332.8 * sc) / ww, 107.5 * sc / wh) * cam.logical_viewport_size()?;
             let ray = cam.viewport_to_world(g, at).ok()?;
-            let depth = 5.0 / ray.direction.dot(g.forward().into()).max(1e-3);
-            let angle = (p.ticks as f32 * 1.2566372 / 60.0) % std::f32::consts::TAU;
-            let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(angle + std::f32::consts::PI);
-            Some(Transform { translation: ray.get_point(depth), rotation: rot, scale: Vec3::splat(0.25) })
+            let depth = 6.0 / ray.direction.dot(g.forward().into()).max(1e-3);
+            *coin_time = (*coin_time - time.delta_secs()) % std::f32::consts::TAU;
+            let rot = g.to_scale_rotation_translation().1 * Quat::from_rotation_y(*coin_time);
+            Some(Transform { translation: ray.get_point(depth), rotation: rot, scale: Vec3::splat(0.5886) })
         })
         .flatten();
     // (marker key, item model id, pack, transform); the caption coin's key is not an item id.
@@ -3288,6 +3290,7 @@ fn sync_hero_items(
     mut images: ResMut<Assets<Image>>,
     mut models: Local<std::collections::HashMap<u32, Option<([f32; 3], [f32; 3])>>>,
     mut frames: ResMut<HeroItemFrames>,
+    mut lit: Local<std::collections::HashMap<u32, (neopets_data::model::ModelData, Vec<(Handle<Mesh>, usize)>)>>,
 ) {
     let _span = crate::perf::span("sync_hero_items");
     frames.0.clear();
@@ -3295,6 +3298,13 @@ fn sync_hero_items(
     let items = state.play.hero_items();
     let mut archive = archive;
     let mut shown = std::collections::HashSet::new();
+    // SPEC-0046 Light slots and the lit draw: the focus hero's held items are lit from his own
+    // light state, following their rotation.
+    for (res, frame, _) in &items {
+        if let Some((m, handles)) = lit.get(res) {
+            relight_model(m, handles, frame, &state.play.lights(None, frame.t), &mut meshes);
+        }
+    }
     for (res, frame, scale) in &items {
         if !models.contains_key(res) {
             let built = match archive.as_deref_mut() {
@@ -3312,6 +3322,8 @@ fn sync_hero_items(
                 let parts = part_assets(&m, &mut meshes, &mut materials, &mut images);
                 // The held model's render pass 1 (the blade and metal shine; pass1.rs).
                 let second = pass1_assets(&m, &mut meshes, &mut pass1_materials, &mut images);
+                let handles: Vec<(Handle<Mesh>, usize)> = parts.iter().filter(|(k, ..)| m.parts[*k].lit).map(|(k, mesh, _)| (mesh.clone(), *k)).collect();
+                lit.insert(*res, (m, handles));
                 commands.spawn((HeroItemRoot(*res), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
                     for (_, mesh, material) in parts {
                         c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
@@ -3467,12 +3479,22 @@ fn sync_attachments(
     mut pass1_materials: ResMut<Assets<pass1::Pass1Material>>,
     mut images: ResMut<Assets<Image>>,
     mut spawned: Local<std::collections::HashSet<(u64, u8)>>,
+    mut lit: Local<std::collections::HashMap<u64, Vec<(Handle<Mesh>, usize)>>>,
 ) {
     let _span = crate::perf::span("sync_attachments");
     let Some(state) = state else { return };
     let p = &state.play;
     let frames: std::collections::HashMap<(u64, u8), neopets_data::anim::Affine> = p.character_attachments().into_iter().map(|(id, slot, f)| ((id, slot), f)).collect();
     let live: std::collections::HashSet<u64> = p.characters.iter().map(|c| c.id).collect();
+    lit.retain(|id, _| live.contains(id));
+    // SPEC-0046 Light slots and the lit draw: a world-table character's main attachment (slot 0)
+    // is lit from the character's own light state; the other slots pass no context and keep the
+    // scene default lights.
+    for c in &p.characters {
+        if let (Some(handles), Some(f), Some((_, m))) = (lit.get(&c.id), frames.get(&(c.id, 0)), c.model.attachments.iter().find(|(slot, _)| *slot == 0)) {
+            relight_model(m, handles, f, &p.lights(Some(c.id), f.t), &mut meshes);
+        }
+    }
     for (e, root, mut t, mut vis) in &mut roots {
         if !live.contains(&root.0) {
             commands.entity(e).despawn();
@@ -3495,6 +3517,9 @@ fn sync_attachments(
             }
             let parts = part_assets(m, &mut meshes, &mut materials, &mut images);
             let second = pass1_assets(m, &mut meshes, &mut pass1_materials, &mut images);
+            if *slot == 0 {
+                lit.insert(c.id, parts.iter().filter(|(k, ..)| m.parts[*k].lit).map(|(k, mesh, _)| (mesh.clone(), *k)).collect());
+            }
             commands.spawn((AttachmentRoot(c.id, *slot), Transform::IDENTITY, Visibility::Hidden)).with_children(|ch| {
                 for (_, mesh, material) in parts {
                     ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY));
@@ -4030,6 +4055,18 @@ fn tinted(part: &neopets_data::model::MeshPart, lit: Option<Vec<[f32; 4]>>, tint
 
 /// Relight a lit part from its skinned normals turned into world space by `rotation`, with a
 /// light block in world space (SPEC-0046), as linear vertex colours. None for unlit parts.
+/// A held model's lit parts recoloured from a light state at its frame's rotation.
+fn relight_model(m: &neopets_data::model::ModelData, handles: &[(Handle<Mesh>, usize)], frame: &neopets_data::anim::Affine, lights: &neopets_data::light::Lights, meshes: &mut Assets<Mesh>) {
+    let col = |k: usize| Vec3::from(frame.cols[k]).normalize_or_zero();
+    let rotation = Quat::from_mat3(&Mat3::from_cols(col(0), col(1), col(2)));
+    for (handle, k) in handles {
+        let part = &m.parts[*k];
+        if let (Some(colours), Some(mut mesh)) = (relight(part, &part.normals, rotation, lights), meshes.get_mut(handle)) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+        }
+    }
+}
+
 fn relight(part: &neopets_data::model::MeshPart, normals: &[[f32; 3]], rotation: Quat, lights: &neopets_data::light::Lights) -> Option<Vec<[f32; 4]>> {
     if !part.lit {
         return None;

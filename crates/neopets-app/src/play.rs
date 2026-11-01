@@ -16,7 +16,7 @@ use neopets_sim::hero::{self as hero_states, HeroInput, Locomotion};
 use neopets_sim::level::{self, Action, GameState};
 use neopets_sim::motion::HERO_HEIGHT;
 use neopets_sim::travel::{self as buffers, Buffer};
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 
 mod autopilot;
@@ -502,6 +502,21 @@ impl World {
         g.object_frames_at(x, z, &|o| self.owner_poses.get(&o).copied())
             .into_iter()
             .map(|(pose, f)| (pose, f.into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect()))
+            .collect()
+    }
+
+    /// The state 1 or 3 breakables' upright cylinder volumes within `reach` of `at` horizontally:
+    /// (base, length, radius, trigger number). The loader's flags 9 make each a solid.
+    fn breakable_cylinders(&self, at: [f32; 3], reach: f32) -> Vec<([f32; 3], f32, f32, u16)> {
+        self.breakables
+            .iter()
+            .filter(|b| matches!(b.state, 1 | 3))
+            .filter_map(|b| b.volume)
+            .filter(|v| v.kind == 3 && v.axis[1].abs() >= 0.99 && (v.centre[0] - at[0]).hypot(v.centre[2] - at[2]) < reach)
+            .map(|v| {
+                let low = if v.axis[1] * v.height < 0.0 { v.centre[1] - v.height.abs() } else { v.centre[1] };
+                ([v.centre[0], low, v.centre[2]], v.height.abs(), v.radius, v.number)
+            })
             .collect()
     }
 
@@ -1039,6 +1054,12 @@ pub struct Play {
     line_cooldown: u32,
     /// The hero's touched flag from the last motion step (see `record_tick`'s contact pass).
     touched: bool,
+    /// The characters whose touch latch the hero's push set this tick and on the tick before
+    /// (SPEC-0040 A boss and the hero in the character push): a boss's update runs before the
+    /// hero's there and so reads the earlier tick's.
+    hero_touch: (Vec<u64>, Vec<u64>),
+    /// The trigger numbers of the breakable volumes the hero's body touched this tick.
+    breakable_hits: Vec<u16>,
     /// The ledge state (30, 35 or 47) and its held edge (SPEC-0033 Behavior 51).
     ledge: Option<neopets_sim::ledge::Ledge>,
     climb: Option<neopets_sim::block::Climb>,
@@ -1927,6 +1948,8 @@ impl Play {
             line_hang: None,
             line_cooldown: 0,
             touched: false,
+            hero_touch: Default::default(),
+            breakable_hits: Vec::new(),
             climb: None,
             ladder: None,
             grab_cooldown: 0,
@@ -2378,6 +2401,57 @@ impl Play {
         self.cut_target = None;
         self.held = false;
         self.hero_walk = None;
+    }
+
+    /// SPEC-0018 Breakable cylinders against characters, for the region characters and enemies of
+    /// the current world (the petpet does not walk the list): the fixed 1.0 by 3.5 body, out to
+    /// r + 1.0 (Medium-High in the spec).
+    fn breakable_push_characters(&mut self) {
+        let pack = self.world.pack;
+        let pet = self.pet_char;
+        let cylinders = self.world.breakable_cylinders(self.loco.position(), f32::MAX);
+        if cylinders.is_empty() {
+            return;
+        }
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && Some(c.id) != pet) {
+            let mut moved = false;
+            for &(base, length, radius, _) in &cylinders {
+                if let Some((d, _)) = contact::upright_cylinder_push(c.position, 1.0, 3.5, base, length, radius) {
+                    for k in 0..3 {
+                        c.position[k] += d[k];
+                    }
+                    moved = true;
+                }
+            }
+            if moved {
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.body.position = c.position;
+                }
+            }
+        }
+    }
+
+    /// The drawn placed objects' solid upright cylinders within their radius 50 of `at`, moved
+    /// with their objects: (base, length, radius).
+    fn object_cylinders(&self, at: [f32; 3]) -> Vec<([f32; 3], f32, f32)> {
+        let w = &self.world;
+        let mut out = Vec::new();
+        for (i, h) in w.headers.iter().enumerate() {
+            let Some(h) = h else { continue };
+            for v in h.volumes.iter().filter(|v| v.kind == 3 && v.flags & 1 != 0 && v.flags & 0x000E == 0) {
+                let neopets_data::trigger::Shape::Cylinder { base, axis, length, radius } = v.shape else { continue };
+                if axis[1].abs() < 0.99 {
+                    continue;
+                }
+                let (Some(m), Some(Some(o))) = (self.object_matrix(w.pack, i), w.objects.get(i)) else { continue };
+                let b = [base[0] + m[12] - o.rest[12], base[1] + m[13] - o.rest[13], base[2] + m[14] - o.rest[14]];
+                let low = if axis[1] * length < 0.0 { b[1] - length.abs() } else { b[1] };
+                if (b[0] - at[0]).powi(2) + (low - at[1]).powi(2) + (b[2] - at[2]).powi(2) < 2500.0 {
+                    out.push(([b[0], low, b[2]], length.abs(), radius));
+                }
+            }
+        }
+        out
     }
 
     /// The current world's Init (a world loaded by a door job).
@@ -8130,6 +8204,9 @@ impl Play {
         let frame = self.ticks as i64;
         let p = self.loco.position();
         let mut fired: Vec<u16> = self.world.volumes.iter().filter(|v| v.touches(p)).map(|v| v.index).collect();
+        // SPEC-0018 Breakable cylinders: a flag-9 volume fires its number on a body contact (a
+        // chest's is a stale number that starts nothing).
+        fired.extend(std::mem::take(&mut self.breakable_hits));
         // SPEC-0028 Book station: on each tick the body overlaps one, the pending book index
         // takes its book value.
         for (v, value) in &self.world.books {
@@ -8970,20 +9047,32 @@ impl Play {
         // SPEC-0040 Behavior 11, character-to-character push: the hero (not in action state 33
         // or 53) against each active, living character of a drawn world within 20 units whose
         // vertical body cylinder (its row's radius and height) overlaps the hero's, pushed out
-        // along the horizontal overlap direction. The collidable word (+0x284) and the
-        // candidate-side cases (the hero's states 50, 52, 21 and 41, the class callback) are
-        // not built: the hero is always the one moved.
+        // along the horizontal overlap direction, and the candidate's touch latch set. The hero is
+        // moved, unless he is in state 50, 52, 21 or 41 or already touched something earlier in
+        // this driver: then the candidate takes the same full overlap (SPEC-0040, A boss and the
+        // hero in the character push; R-0154). The collidable word (+0x284) and the class
+        // callback (a common enemy's attack mode 2) are not built.
         let hero_at = self.loco.position();
-        let bodies: Vec<([f32; 3], f32, f32)> = if noclip || matches!(hero_state, 33 | 53) {
+        let touch_ids = RefCell::new(Vec::new());
+        let shoved = RefCell::new(Vec::new());
+        let breakable_hits = RefCell::new(Vec::new());
+        let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || matches!(hero_state, 33 | 53) {
             Vec::new()
         } else {
             self.characters
                 .iter()
                 .filter(|c| self.pack_drawn(c.pack) && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && Some(c.id) != self.pet_char)
-                .filter_map(|c| c.row.map(|r| (c.position, r.radius, r.height)))
+                .filter_map(|c| c.row.map(|r| (c.position, r.radius, r.height, c.id)))
                 .filter(|(q, ..)| (q[0] - hero_at[0]).powi(2) + (q[1] - hero_at[1]).powi(2) + (q[2] - hero_at[2]).powi(2) < 400.0)
                 .collect()
         };
+        // SPEC-0018 Breakable cylinders against characters (the list B walk; a cell's list only
+        // narrows the same set): each state 1 or 3 breakable with an upright cylinder volume.
+        let breakable_cylinders = if noclip { Vec::new() } else { self.world.breakable_cylinders(hero_at, 40.0) };
+        // SPEC-0033 Behavior 43 for the placed objects' solid upright cylinders (the sealed
+        // chests' object 0), with the hero's own body radius. The other primitives of an
+        // object's header and the double turn of a rotated object are not built.
+        let object_cylinders: Vec<([f32; 3], f32, f32)> = if noclip { Vec::new() } else { self.object_cylinders(hero_at) };
         self.loco.record_tick(
             self.root_step,
             |x, z, c| {
@@ -9000,6 +9089,7 @@ impl Play {
                 (hit.height, hit.normal)
             },
             |p, vel| {
+                let entry = *p;
                 // SPEC-0040 Behavior 14A driver branch 0, in order: the cell's frame records
                 // (walls), then the box primitives, each with the hero radius. Not implemented:
                 // cell lists A and B as such, cylinders, spheres, the ledge tests, the shared
@@ -9056,8 +9146,36 @@ impl Play {
                 if !noclip {
                     contact::resolve_spheres(p, &world.push_spheres);
                 }
+                let slide = |p: &mut [f32; 3], vel: &mut [f32; 3], (d, n): ([f32; 3], [f32; 3])| {
+                    for k in 0..3 {
+                        p[k] += d[k];
+                    }
+                    let into = vel[0] * n[0] + vel[1] * n[1] + vel[2] * n[2];
+                    if into > 0.0 {
+                        for k in 0..3 {
+                            vel[k] -= into * n[k];
+                        }
+                    }
+                };
+                for &(base, length, radius, number) in &breakable_cylinders {
+                    let Some(hit) = contact::upright_cylinder_push(*p, 1.0, HERO_HEIGHT, base, length, radius) else { continue };
+                    breakable_hits.borrow_mut().push(number);
+                    // SPEC-0036 Hero collision-kind contact tests: a falling hero in a jump state
+                    // within 1.5 of the top is handled by the landing break and not pushed that
+                    // tick (the break or the chest's recoil is not built).
+                    if matches!(hero_state, 7..=11 | 43..=46) && vel[1] < 0.0 && base[1] + length - 1.5 < p[1] {
+                        continue;
+                    }
+                    slide(p, vel, hit);
+                }
+                for &(base, length, radius) in &object_cylinders {
+                    if let Some(hit) = contact::upright_cylinder_push(*p, contact::HERO_RADIUS, HERO_HEIGHT, base, length, radius) {
+                        slide(p, vel, hit);
+                    }
+                }
                 let mut pushed = false;
-                for &(q, r, h) in &bodies {
+                let mut latch = (0..3).any(|k| (p[k] - entry[k]).abs() > 1e-5) || matches!(hero_state, 50 | 52 | 21 | 41);
+                for &(q, r, h, id) in &bodies {
                     if p[1] >= q[1] + h || q[1] >= p[1] + HERO_HEIGHT {
                         continue;
                     }
@@ -9066,9 +9184,15 @@ impl Play {
                     let min = contact::HERO_RADIUS + r;
                     if d < min {
                         let (ux, uz) = if d > 1e-4 { (dx / d, dz / d) } else { (1.0, 0.0) };
-                        p[0] = q[0] + ux * min;
-                        p[2] = q[2] + uz * min;
-                        pushed = true;
+                        touch_ids.borrow_mut().push(id);
+                        if latch {
+                            shoved.borrow_mut().push((id, [-ux * (min - d), -uz * (min - d)]));
+                        } else {
+                            p[0] = q[0] + ux * min;
+                            p[2] = q[2] + uz * min;
+                            pushed = true;
+                            latch = true;
+                        }
                     }
                 }
                 // A body push is followed by the walls again, so a character cannot shove the
@@ -9086,6 +9210,17 @@ impl Play {
             },
         );
         self.touched = touched.get();
+        self.breakable_hits = breakable_hits.into_inner();
+        self.hero_touch = (touch_ids.into_inner(), std::mem::take(&mut self.hero_touch.0));
+        for (id, d) in shoved.into_inner() {
+            if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
+                c.position[0] += d[0];
+                c.position[2] += d[1];
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.body.position = c.position;
+                }
+            }
+        }
         // The side-touch latch the next hero update reads (SPEC-0033 Behavior 15A).
         self.side_touch = side_touch.get();
         // SPEC-0055 8A: the deadly-ground kill (kind 2, gap 0.085 or less; no health change),
@@ -9483,6 +9618,7 @@ impl Play {
         self.knight_step();
         self.gelert_step();
         self.ixi_step();
+        self.breakable_push_characters();
         self.sisters_step();
         self.draik_step();
         self.faerie_step();
@@ -11450,6 +11586,7 @@ impl Play {
     fn ixi_step(&mut self) {
         use neopets_sim::combat::Cylinder;
         let pack = self.world.pack;
+        let hero_touch = self.hero_touch.1.clone();
         let hero = self.loco.position();
         let hf = self.loco.facing;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.ixi.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
@@ -11531,9 +11668,9 @@ impl Play {
                 clip: (clip.action, clip.progress >= 0.99),
                 blocked: c.walker.as_ref().is_some_and(|wk| wk.blocked),
                 hero_knocked: st == hero_states::LONG_FALL,
-                // SPEC-0014 Run-past body contact: the body cylinders meet (the character push
-                // keeps the hero at the two radii, so a small margin is allowed).
-                touching: c.row.is_some_and(|r| (hero[0] - c.position[0]).hypot(hero[2] - c.position[2]) <= r.radius + contact::HERO_RADIUS + 0.05),
+                // SPEC-0014 Run-past body contact (R-0154): the touch latch the hero's push set on
+                // the previous tick (a boss's update runs before the hero's in the original).
+                touching: hero_touch.contains(&c.id),
                 valid: &valid,
                 level: &level,
             };
@@ -13189,9 +13326,9 @@ impl Play {
             self.cue(if self.hero_index == 0 { 22 } else { 28 });
         }
         // Behavior 8: a key-4 patch within 100 units of the eye moves its solid cylinder (height
-        // 25, radius 5.5 x the tree's scale) to each tree in turn and tests the hero against it;
-        // here as a horizontal push of the hero's body out of the cylinder (the shared cylinder
-        // contact response of SPEC-0018 is not built).
+        // 25, radius 5.5 x the tree's scale) to each tree in turn and tests the hero against it in
+        // every hero state (SPEC-0018 Tree trunks against the hero; R-0153): the slide response
+        // moves him out to 5.5 K + 1.175 and clips his velocity into the trunk.
         let pack = self.world.pack;
         let trunks: Vec<([f32; 3], f32)> = self
             .foliage
@@ -13204,14 +13341,17 @@ impl Play {
             .collect();
         for (base, radius) in trunks {
             let pos = self.loco.position();
-            let (dx, dz) = (pos[0] - base[0], pos[2] - base[2]);
-            let d = (dx * dx + dz * dz).sqrt();
-            let r = radius + contact::HERO_RADIUS;
-            if d < r && d > 1e-4 && pos[1] >= base[1] - 1.0 && pos[1] <= base[1] + 25.0 {
-                let k = (r - d) / d;
-                let b = &mut self.loco.body.position;
-                b[0] += dx * k;
-                b[2] += dz * k;
+            if let Some((d, n)) = contact::upright_cylinder_push(pos, contact::HERO_RADIUS, HERO_HEIGHT, base, 25.0, radius) {
+                let b = &mut self.loco.body;
+                for k in 0..3 {
+                    b.position[k] += d[k];
+                }
+                let into = b.velocity[0] * n[0] + b.velocity[1] * n[1] + b.velocity[2] * n[2];
+                if into > 0.0 {
+                    for k in 0..3 {
+                        b.velocity[k] -= into * n[k];
+                    }
+                }
             }
         }
         for (pack, at, ids) in drops {

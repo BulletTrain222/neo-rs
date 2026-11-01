@@ -198,6 +198,8 @@ pub struct Volume {
     pub axis: [f32; 3],
     pub axes: [[f32; 3]; 3],
     pub extents: [f32; 3],
+    /// The trigger number (+0x1C) a body contact fires (SPEC-0018 Breakable cylinders).
+    pub number: u16,
 }
 
 /// A world breakable, an entry of the type-29 second list (SPEC-0048 Breakable entry).
@@ -266,6 +268,7 @@ pub fn breakables(bytes: &[u8], top: &[Chunk]) -> Vec<Breakable> {
                     axis: v3(r + 0x40)?,
                     axes: [v3(r + 0x60)?, v3(r + 0x50)?, v3(r + 0x40)?],
                     extents: v3(r + 0x24)?,
+                    number: u16::from_le_bytes([*p.get(r + 0x1C)?, *p.get(r + 0x1D)?]),
                 })
             });
             Some(Breakable {
