@@ -6123,8 +6123,20 @@ impl Play {
             let cframes = c.anim.bone_frames();
             // The Cloud Beast stand-in has no rig: its body is a cylinder of the row's radius and
             // height around the floating cloud (stand-in hurt shape).
+            // SPEC-0016 Hero actions: the serpent is never a hit candidate except in its stun,
+            // when the swing's weapon touching the head cylinder (radius 6.0, length 10.0 along
+            // joint 18 from joint 18) counts as the strike.
+            if let Some(sp) = c.serpent.as_ref() {
+                let head = cframes.get(18).map(|f| {
+                    let wf = cplace.mul(f);
+                    neopets_sim::combat::Cylinder::from_base(wf.t, unit(wf.cols[1]), 6.0, 10.0)
+                });
+                if !(sp.strikeable() && head.is_some_and(|h| neopets_sim::combat::overlap(&weapon, &h))) {
+                    continue;
+                }
+            }
             let own_body = c.hit_body(false);
-            let hit = own_body.is_some_and(|b| neopets_sim::combat::overlap(&weapon, &b)) || own_body.is_none() && c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
+            let hit = c.serpent.is_some() || own_body.is_some_and(|b| neopets_sim::combat::overlap(&weapon, &b)) || own_body.is_none() && c.anim.bones().hurt.iter().zip(&cframes).any(|(&(base, length, radius), f)| {
                 if length <= 0.0 {
                     return false;
                 }

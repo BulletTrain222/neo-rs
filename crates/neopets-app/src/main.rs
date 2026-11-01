@@ -4568,6 +4568,19 @@ fn play_trace(
                 println!("      diagnostic: level flag {f} set on tick {k}");
             }
         }
+        // NEOPETS_TRACE_WARP="tick:x,z,y": the hero placed on the ground found below y at (x, z)
+        // on that tick, facing kept (diagnostic: reaching ground that is drawn only later).
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_WARP") {
+            if let Some((t, p)) = v.split_once(':') {
+                let n: Vec<f32> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+                if t.trim().parse::<u64>().ok() == Some(play.ticks) && n.len() == 3 {
+                    let y = play.world.ground_at(n[0], n[1], n[2]).unwrap_or(n[2]);
+                    let f = play.loco.facing;
+                    play.loco.teleport([n[0], y, n[1]], f);
+                    println!("      hero warped to ({:.2}, {y:.2}, {:.2}) on tick {}", n[0], n[1], play.ticks);
+                }
+            }
+        }
         // NEOPETS_BOSS_HP="tick:hp;tick:hp": every boss of the current world set to that health on
         // that tick (diagnostic: reaching the health stages of a fight).
         if let Ok(v) = std::env::var("NEOPETS_BOSS_HP") {
@@ -5010,11 +5023,15 @@ fn play_trace(
             square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()) && !(play.loco.state == neopets_sim::hero::BLOCK && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some()))
                 || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
-            // NEOPETS_TRACE_GUARD=n: the guard is held on every tick from tick n (diagnostic).
+            // NEOPETS_TRACE_GUARD=n (or "n-m"): the guard is held on every tick from tick n (up to
+            // tick m) (diagnostic).
             // NEOPETS_TRACE_GUARD_ORB: the guard is held while one of the Darkest Faerie's
             // projectiles is within 30 units of the hero.
             guard: (guard && fight.is_some_and(|f| f.1))
-                || std::env::var("NEOPETS_TRACE_GUARD").ok().and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|n| play.ticks >= n)
+                || std::env::var("NEOPETS_TRACE_GUARD").ok().is_some_and(|v| {
+                    let (a, b) = v.split_once('-').unwrap_or((v.as_str(), ""));
+                    a.trim().parse::<u64>().is_ok_and(|n| play.ticks >= n) && b.trim().parse::<u64>().map_or(true, |m| play.ticks <= m)
+                })
                 || (std::env::var_os("NEOPETS_TRACE_GUARD_ORB").is_some() && {
                     let h = play.loco.position();
                     play.characters.iter().filter_map(|c| c.faerie.as_ref()).flat_map(|f| f.slots.iter().flatten()).any(|s| (0..3).map(|k| (s.position[k] - h[k]).powi(2)).sum::<f32>() < 900.0)

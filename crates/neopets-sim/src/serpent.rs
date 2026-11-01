@@ -199,6 +199,11 @@ fn airborne(code: u8) -> bool {
 }
 
 impl Serpent {
+    /// The stun window that takes the one strike (SPEC-0016 Hero actions: sub 7, not yet struck).
+    pub fn strikeable(&self) -> bool {
+        matches!(self.state, State::Bite(Bite::Stun { .. })) && !self.struck
+    }
+
     fn free(&self) -> bool {
         matches!(self.state, State::Idle | State::Belch { .. })
     }
