@@ -968,11 +968,30 @@ fn screenshot_and_exit(
     mut commands: Commands,
     time: Res<Time<Real>>,
     path: Res<ScreenshotPath>,
+    state: Option<Res<PlayState>>,
     mut taken: Local<bool>,
+    mut seen: Local<Option<f32>>,
     mut exit: MessageWriter<AppExit>,
 ) {
     use bevy::render::view::screenshot::{Screenshot, save_to_disk};
     let elapsed = time.elapsed_secs();
+    // NEOPETS_SHOT_ON="text:ms" (diagnostic): the capture is taken ms after the boss or pickup
+    // line first contains the text, instead of at the fixed time (which then only bounds the
+    // wait at 120 s).
+    let on = std::env::var("NEOPETS_SHOT_ON").ok().and_then(|v| {
+        let (text, ms) = v.rsplit_once(':')?;
+        Some((text.to_string(), ms.trim().parse::<f32>().ok()? / 1000.0))
+    });
+    let at = match &on {
+        Some((text, delay)) => {
+            if seen.is_none() && state.as_ref().is_some_and(|s| s.play.last_boss.contains(text.as_str()) || s.play.last_pickup.contains(text.as_str())) {
+                *seen = Some(elapsed);
+            }
+            seen.map_or(120.0, |t| t + delay)
+        }
+        None => path.1,
+    };
+    let path = ScreenshotPath(path.0.clone(), at);
     // NEOPETS_SHOT_SERIES=n: n captures on consecutive frames, saved as <path>.<k>.png
     // (diagnostic, for flicker).
     let series = std::env::var("NEOPETS_SHOT_SERIES").ok().and_then(|v| v.parse::<usize>().ok());
@@ -2874,15 +2893,25 @@ struct ShotMarker(usize);
 #[derive(Component)]
 struct RopeStrand;
 
-/// Enemy projectiles are drawn as small plain markers at their positions: the flight effects
-/// of SPEC-0034 are not implemented, so this is a diagnostic stand-in, not the game's visual.
+/// A pool shot's trail model part (SPEC-0029 Visual update): pool slot, owner and table entry.
+#[derive(Component)]
+struct ShotTrail(usize, u64, i32);
+
+/// Enemy projectiles of visual kind below 5 draw their trail model part, the owner's extra
+/// model part of the shot's table entry, at the shot position with the shot's frame (its
+/// forward axis and the world up vector); a shot with flight effects is drawn by them. A shot
+/// of visual kind below 5 with neither is drawn as a small plain marker, a diagnostic stand-in
+/// (on disc it draws nothing).
+#[allow(clippy::too_many_arguments)]
 fn sync_shots(
     mut commands: Commands,
     state: Option<Res<PlayState>>,
-    mut markers: Query<(&ShotMarker, &mut Transform, &mut Visibility), Without<RopeStrand>>,
-    mut strand: Query<(&mut Transform, &mut Visibility), (With<RopeStrand>, Without<ShotMarker>)>,
+    mut markers: Query<(&ShotMarker, &mut Transform, &mut Visibility), (Without<RopeStrand>, Without<ShotTrail>)>,
+    mut strand: Query<(&mut Transform, &mut Visibility), (With<RopeStrand>, Without<ShotMarker>, Without<ShotTrail>)>,
+    mut trails: Query<(Entity, &ShotTrail, &mut Transform, &mut Visibility), (Without<RopeStrand>, Without<ShotMarker>)>,
     mut meshes: ResMut<Assets<Mesh>>,
     mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
     mut made: Local<bool>,
 ) {
     let _span = crate::perf::span("sync_shots");
@@ -2916,7 +2945,49 @@ fn sync_shots(
             None => *vis = Visibility::Hidden,
         }
     }
+    // The trail parts: (slot, owner, entry, position, velocity) of each live shot that has one.
+    let p = &state.play;
+    let part = |owner: u64, entry: i32| p.characters.iter().find(|c| c.id == owner).and_then(|c| c.model.attachments.iter().find(|(k, _)| *k as i32 == entry)).map(|(_, m)| m);
+    let wanted: Vec<(usize, u64, i32, [f32; 3], [f32; 3])> = p
+        .shots
+        .slots
+        .iter()
+        .enumerate()
+        .filter_map(|(i, s)| {
+            let s = s.as_ref()?;
+            let owner = s.s.owner?;
+            (s.s.visual < 5 && s.s.trail >= 0 && part(owner, s.s.trail).is_some()).then_some((i, owner, s.s.trail, s.position, s.velocity))
+        })
+        .collect();
+    let frame = |at: [f32; 3], v: [f32; 3]| {
+        let fwd = Vec3::from(v).normalize_or_zero();
+        let t = Transform::from_translation(Vec3::from(at));
+        if fwd.length_squared() == 0.0 { t } else { t.looking_to(-fwd, Vec3::Y) }
+    };
+    for (e, tr, mut t, mut vis) in &mut trails {
+        match wanted.iter().find(|w| (w.0, w.1, w.2) == (tr.0, tr.1, tr.2)) {
+            Some(&(_, _, _, at, v)) => {
+                set_if(&mut t, frame(at, v));
+                set_if(&mut vis, Visibility::Visible);
+            }
+            None => commands.entity(e).despawn(),
+        }
+    }
+    for &(i, owner, entry, at, v) in wanted.iter().filter(|w| !trails.iter().any(|(_, tr, ..)| (tr.0, tr.1, tr.2) == (w.0, w.1, w.2))) {
+        let Some(m) = part(owner, entry) else { continue };
+        let parts = part_assets(m, &mut meshes, &mut materials, &mut images);
+        commands.spawn((ShotTrail(i, owner, entry), frame(at, v), Visibility::Visible)).with_children(|c| {
+            for (_, mesh, material) in parts {
+                c.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY, bevy::light::NotShadowCaster));
+            }
+        });
+    }
     for (m, mut t, mut vis) in &mut markers {
+        // A shot drawn by its trail part has no marker.
+        if wanted.iter().any(|w| w.0 == m.0) {
+            set_if(&mut vis, Visibility::Hidden);
+            continue;
+        }
         // A shot drawn by its flight effects, and the spits (drawn by their effects), have no
         // marker. SPEC-0029 Visual update: a shot draws only its flight effects and, for visual
         // kinds below 5, a trail model part, so one of visual kind 5 or more with both flight

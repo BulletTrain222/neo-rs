@@ -1331,6 +1331,8 @@ pub struct Play {
     killed: std::collections::HashSet<(u32, usize)>,
     /// Placed records with their active flag set (the switch path; SPEC-0028 section 9).
     placed_on: std::collections::HashSet<(u32, usize)>,
+    /// The resident worlds whose placed records were bound (made active) on their load.
+    placed_bound: std::collections::HashSet<u32>,
     /// The zone manager (SPEC-0006 Zone manager); its grid is the current world's.
     pub zones: neopets_sim::zone::Zones,
     /// The prize wheel's running spin (its pack) and each world's display mask word
@@ -1867,6 +1869,7 @@ impl Play {
             shake: Default::default(),
             shake_now: None,
             placed_on: Default::default(),
+            placed_bound: Default::default(),
             killed: Default::default(),
             zones: Default::default(),
             wheel_spin: None,
@@ -10419,6 +10422,9 @@ impl Play {
                 if let Some(mut setup) = neopets_sim::projectile::spawn(&slot.missile, e.p.element, *id, launch, hero, (out_of_cone, self.attack_mgr.waits(*id)), &mut self.rng) {
                     // Behavior 13: the damage times the enemy damage scale (curse, strength).
                     setup.damage = (setup.damage * e.shot_scale()).max(0.0);
+                    if setup.visual < 5 {
+                        setup.trail = neopets_sim::projectile::trail_entry(slot.missile.flight, req.counter);
+                    }
                     self.shots.submit(setup);
                 }
             }
@@ -12179,6 +12185,9 @@ impl Play {
                         ignore_world: false,
                         status: (-1, 0, 0),
                         effects: [-1; 6],
+                        // SPEC-0013 item 37: entry 1 of the boss's extra model parts, the
+                        // dagger (its code-11 mesh child).
+                        trail: 1,
                     });
                 }
             }
@@ -14128,11 +14137,73 @@ impl Play {
         on.sort_unstable();
         on.iter()
             .map(|&(p, k)| {
-                let live = self.placed_fx.get(&(p, k)).and_then(|&h| self.effects.objects.get(h)).and_then(|o| o.as_ref()).map_or(0, |o| o.slots.iter().flatten().count());
-                format!("{p}:{k} ({live} live)")
+                let obj = self.placed_fx.get(&(p, k)).and_then(|&h| self.effects.objects.get(h)).and_then(|o| o.as_ref());
+                let live = obj.map_or(0, |o| o.slots.iter().flatten().count());
+                // The first live particle of the record's spawners: position, size and colour.
+                let first = obj.and_then(|o| self.effects.particles.iter().flatten().find(|q| o.slots.iter().flatten().any(|&sp| sp == q.spawner)));
+                let at = first.map_or(String::new(), |q| {
+                    let node = &self.effect_table.nodes[q.node];
+                    let group = node.material.map(|g| (g, self.effect_images.get(g).is_some_and(|i| i.image.is_some())));
+                    format!(" first at ({:.1}, {:.1}, {:.1}) size {:?} half {:?} life {:.2}/{:.2} colour {:?} light {} group {group:?}", q.position[0], q.position[1], q.position[2], q.size, q.half, q.elapsed, q.life, q.bytes(), self.effect_table.a[node.a].light)
+                });
+                let pos = obj.map_or(String::new(), |o| format!(" at ({:.1}, {:.1}, {:.1})", o.position[0], o.position[1], o.position[2]));
+                format!("{p}:{k} ({live} live{pos}{at})")
             })
             .collect::<Vec<_>>()
             .join(", ")
+    }
+
+    /// Diagnostic: the current world's placed records with their zone, cull, zone-query result
+    /// and the camera eye.
+    pub fn placed_gates(&self) -> String {
+        let w = &self.world;
+        let eye = self.camera.eye;
+        let list: Vec<String> = w
+            .placed_effects
+            .iter()
+            .enumerate()
+            .map(|(k, r)| {
+                let d = ((r.position[0] - eye[0]).powi(2) + (r.position[1] - eye[1]).powi(2) + (r.position[2] - eye[2]).powi(2)).sqrt();
+                let def = self.effect_table.find(r.id).map(|i| &self.effect_table.definitions[i]);
+                let (near, cull, cone) = def.map_or((0.0, 0.0, false), |d| (d.threshold.max(0.0).sqrt(), d.cull, d.cone));
+                format!("{k}: id {} zone {} cull {:.1} (definition near {near:.1}, cull {cull:.1}, cone {cone}) dist {d:.1} query {}", r.id, r.zone & 0xFF, r.cull, self.zones.query(w.zones.as_ref(), (r.zone & 0xFF) as i32, w.world_id))
+            })
+            .collect();
+        format!("eye ({:.1}, {:.1}, {:.1}) [{}]", eye[0], eye[1], eye[2], list.join("; "))
+    }
+
+    /// Diagnostic: the current world's drawn objects within 12 units of the hero, with their
+    /// inline type-11 volumes (kind and flags) and their walls at the hero's cell.
+    pub fn objects_near(&self) -> String {
+        let w = &self.world;
+        let h = self.loco.position();
+        let walls = w.object_wall_count(h[0], h[2]);
+        let list: Vec<String> = (0..w.objects.len())
+            .filter_map(|i| {
+                let m = self.object_matrix(w.pack, i)?;
+                let d = (m[12] - h[0]).hypot(m[14] - h[2]);
+                (d < 12.0).then(|| {
+                    let vols: Vec<String> = w.headers.get(i).and_then(|o| o.as_ref()).map(|hd| hd.volumes.iter().map(|v| format!("k{} f{:#x}", v.kind, v.flags)).collect()).unwrap_or_default();
+                    let parts = w.objects.get(i).and_then(|o| o.as_ref()).map_or((false, false), |o| (o.model_set.is_some(), o.header.is_some()));
+                    format!("{i} at ({:.1}, {:.1}, {:.1}) d {d:.1} vols [{}] (model set, header) {parts:?} walls at it {}", m[12], m[13], m[14], vols.join(" "), w.object_wall_count(m[12], m[14]))
+                })
+            })
+            .collect();
+        // The world's solid volumes within 12 units.
+        let near = |c: [f32; 3]| (c[0] - h[0]).hypot(c[2] - h[2]) < 12.0;
+        let solids: Vec<String> = w
+            .solids
+            .iter()
+            .filter_map(|v| {
+                let (at, what) = match v.shape {
+                    neopets_sim::trigger::Shape::Sphere { centre, radius } => (centre, format!("sphere r {radius:.2}")),
+                    neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } => (base, format!("cylinder axis {axis:?} len {length:.2} r {radius:.2}")),
+                    neopets_sim::trigger::Shape::Rectangle { origin, extents, .. } => (origin, format!("rect ext {extents:?}")),
+                };
+                near(at).then(|| format!("k{} f{:#x} m{:#x} {what} at ({:.1}, {:.1}, {:.1})", v.kind, v.flags, v.mask, at[0], at[1], at[2]))
+            })
+            .collect();
+        format!("hero ({:.1}, {:.1}, {:.1}) object walls here {walls}: {}; solids: {}", h[0], h[1], h[2], list.join("; "), solids.join("; "))
     }
 
     /// Whether patch `i` of world `pack` passed its zone gate this pass.
@@ -14228,6 +14299,20 @@ impl Play {
         let table = self.effect_table.clone();
         let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
         self.placed_on.retain(|(p, _)| resident.contains(p));
+        self.placed_bound.retain(|p| resident.contains(p));
+        // SPEC-0034 section 6 (R-0081): the type-39 load bind copies each record's definition,
+        // whose active word (+0x48) is 1 for every definition, so every placed record with a
+        // valid id is active from its world's load (the pack 951 fireplace among them); the
+        // zone pass then updates or stops it, and a switch off clears it.
+        for w in [&self.world].into_iter().chain(self.other.as_ref()) {
+            if self.placed_bound.insert(w.pack) {
+                for (k, r) in w.placed_effects.iter().enumerate() {
+                    if r.id >= 0 && table.find(r.id).is_some() {
+                        self.placed_on.insert((w.pack, k));
+                    }
+                }
+            }
+        }
         self.killed.retain(|(p, _)| resident.contains(p));
         let gone: Vec<(u32, usize)> = self.placed_fx.keys().filter(|(p, _)| !resident.contains(p)).copied().collect();
         for k in gone {

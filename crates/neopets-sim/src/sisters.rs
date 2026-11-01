@@ -284,6 +284,7 @@ fn shot(kind: i32, visual: i32, element: i32, damage: i32, status: (i32, i32), l
         ignore_world: false,
         status: (status.0, status.1, -1),
         effects: [flight, -1, -1, -1, -1, -1],
+        trail: -1,
     }
 }
 

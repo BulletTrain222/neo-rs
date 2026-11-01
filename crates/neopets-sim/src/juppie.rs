@@ -88,6 +88,7 @@ pub fn spit_setup(mouth: Vec3, hero: Vec3, damage: f32, owner: u64) -> crate::pr
         ignore_world: false,
         status: (-1, 0, 0),
         effects: [1400, 1400, 1399, -1, 1399, 1399],
+        trail: -1,
     }
 }
 

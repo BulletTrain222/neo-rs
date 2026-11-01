@@ -39,6 +39,20 @@ pub struct Setup {
     pub status: (i32, i32, i32),
     /// The six effect ids (flight 0 and 1, blocked, expiry, world impact, hit; -1 none).
     pub effects: [i32; 6],
+    /// The trail model part (SPEC-0029 Visual update): the index into the owner's table of 11
+    /// extra model parts (its model set's mesh children with codes 10 to 20, entry code - 10),
+    /// drawn at the shot for visual kinds below 5; -1 for none.
+    pub trail: i32,
+}
+
+/// SPEC-0029 Behavior 13, trail model part: the table entry a missile slot's shot requests.
+/// Flight modes 0 and 2 request entries 1, 7, 8, 9 and 10 for shot counters 0 to 4 and entry 1
+/// for other counters; mode 1 always requests entry 1.
+pub fn trail_entry(flight: i32, counter: u32) -> i32 {
+    match (flight, counter) {
+        (0 | 2, 0..=4) => [1, 7, 8, 9, 10][counter as usize],
+        _ => 1,
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -168,6 +182,7 @@ pub fn fire_mote(start: Vec3, target: Vec3, speed: f32) -> Setup {
         ignore_world: false,
         status: (-1, 0, 0),
         effects: [528, -1, 991, -1, 991, 991],
+        trail: -1,
     }
 }
 
@@ -455,6 +470,7 @@ pub fn spawn(m: &Missile, element: i32, owner: u64, launch: Vec3, hero: Vec3, (o
         ignore_world: m.flags & 0x10 != 0 && straight,
         status: (m.status, m.status_chance as i32, status_value),
         effects: m.effects,
+        trail: -1,
     };
     let life = |v: f32| if v > 0.0 { (m.range / v) as i32 } else { 0 };
     if lobbed {
@@ -523,7 +539,7 @@ mod tests {
         // within 6.0 of an unpoisoned hero the status (2 for 15 s); at 6.0 nothing.
         let (o, g, w) = (|_| true, |_: f32, _: f32, _: f32| Some(0.0), |_, _| false);
         let mut pool = Pool::default();
-        let cloud = Setup { kind: 9, visual: 15, element: 0, owner: None, start: [0.0, 3.0, 0.0], velocity: [0.0, 0.0, 2.0], lifetime: 300, damage: 0.0, radius: 1.0, spin: 0.0, area_radius: 6.0, area_duration: 0, key: 0, ignore_world: true, status: (2, 100, 15), effects: [414, -1, -1, -1, -1, -1] };
+        let cloud = Setup { kind: 9, visual: 15, element: 0, owner: None, start: [0.0, 3.0, 0.0], velocity: [0.0, 0.0, 2.0], lifetime: 300, damage: 0.0, radius: 1.0, spin: 0.0, area_radius: 6.0, area_duration: 0, key: 0, ignore_world: true, status: (2, 100, 15), effects: [414, -1, -1, -1, -1, -1], trail: -1 };
         pool.submit(cloud);
         let ev = pool.tick(&env([0.0, 0.0, 6.1], &o, &g, &w));
         let c = pool.slots[0].unwrap().position;
@@ -652,6 +668,7 @@ mod tests {
             ignore_world: false,
             status: (-1, 0, 0),
             effects: [-1; 6],
+            trail: -1,
         };
         for _ in 0..SLOTS {
             assert!(pool.submit(s));

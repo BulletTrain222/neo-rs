@@ -470,6 +470,23 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     // developer boss fight has loaded its world).
     if *frames == 30 || (*frames == 400 && dev.free.is_none()) {
         let v = std::env::var("NEOPETS_DEV").unwrap_or_default();
+        // "fx=k[:d[:yaw]]": the free camera d units (default 8) out from placed effect record
+        // k along its direction (or the given yaw), 1.5 up, looking at it.
+        if let Some(arg) = v.split(',').find_map(|t| t.trim().strip_prefix("fx=")) {
+            let mut it = arg.split(':');
+            let k = it.next().unwrap_or("0");
+            let d: f32 = it.next().and_then(|d| d.parse().ok()).unwrap_or(8.0);
+            // An optional third field: the view direction's yaw in degrees (default: the
+            // record's third frame row).
+            let yaw: Option<f32> = it.next().and_then(|a| a.parse::<f32>().ok()).map(f32::to_radians);
+            if let Some(r) = k.parse::<usize>().ok().and_then(|k| play.play.world.placed_effects.get(k)) {
+                let p = Vec3::from(r.position);
+                let dir = yaw.map_or_else(|| Vec3::new(r.frame[2][0], 0.0, r.frame[2][2]).normalize_or(Vec3::Z), |a| Vec3::new(a.sin(), 0.0, a.cos()));
+                let pos = p + dir * d + Vec3::Y * 1.5;
+                let to = p - pos;
+                dev.free = Some(FreeCam { pos, yaw: to.x.atan2(to.z), pitch: (to.y / to.length()).asin() });
+            }
+        }
         if let Some(arg) = v.split(',').find_map(|t| t.trim().strip_prefix("view=")) {
             let (name, d) = arg.split_once(':').map_or((arg, 4.0), |(n, d)| (n, d.parse().unwrap_or(4.0)));
             if let Some(c) = play.play.characters.iter().find(|c| c.name == name) {
@@ -487,10 +504,15 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             toggle_free(&mut dev);
             if let Some(fc) = dev.free.as_mut() {
                 let f = fc.forward();
-                // "freehigh" backs much further away and looks down more, for overviews.
-                let (back, up, tilt) = if v.contains("freehigh") { (90.0, 70.0, 0.6) } else { (25.0, 15.0, 0.35) };
-                fc.pos += -f * back + Vec3::Y * up;
-                fc.pitch -= tilt;
+                // "freehigh" backs much further away and looks down more, for overviews;
+                // "freeturn" stays at the camera and looks the other way (for rooms).
+                if v.contains("freeturn") {
+                    fc.yaw += std::f32::consts::PI;
+                } else {
+                    let (back, up, tilt) = if v.contains("freehigh") { (90.0, 70.0, 0.6) } else { (25.0, 15.0, 0.35) };
+                    fc.pos += -f * back + Vec3::Y * up;
+                    fc.pitch -= tilt;
+                }
             }
         }
     }
@@ -525,12 +547,26 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     if *frames == 900 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drophere")) {
         info!("Developer drop: {} world items", play.play.dev_drop(0, 0.0));
     }
-    if std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drophere")) {
-        static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+    // With "objnear": the drawn objects near the hero logged ten seconds in (diagnostic).
+    if *frames == 600 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("objnear")) {
+        info!("Developer objects: {}", play.play.objects_near());
+    }
+    // With "placed": the active placed records logged ten seconds in (diagnostic).
+    if *frames == 600 && std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("placed")) {
+        info!("Developer placed: {}", play.play.placed_summary());
+        info!("Developer placed gates: {}", play.play.placed_gates());
+    }
+    // With "drophere" or "log": each new pickup and boss state change logged (diagnostic).
+    if std::env::var("NEOPETS_DEV").is_ok_and(|v| v.contains("drophere") || v.contains("log")) {
+        static LAST: std::sync::Mutex<(String, String)> = std::sync::Mutex::new((String::new(), String::new()));
         if let Ok(mut last) = LAST.lock() {
-            if *last != play.play.last_pickup {
-                last.clone_from(&play.play.last_pickup);
-                info!("Developer drop: {last}");
+            if last.0 != play.play.last_pickup {
+                last.0.clone_from(&play.play.last_pickup);
+                info!("Developer log: {}", last.0);
+            }
+            if last.1 != play.play.last_boss {
+                last.1.clone_from(&play.play.last_boss);
+                info!("Developer log: {}", last.1);
             }
         }
     }

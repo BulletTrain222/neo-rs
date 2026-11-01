@@ -230,6 +230,7 @@ impl Serpent {
             ignore_world: true,
             status: (2, 100, w.poison_time as i32),
             effects: [414, -1, -1, -1, -1, -1],
+            trail: -1,
         }
     }
 
