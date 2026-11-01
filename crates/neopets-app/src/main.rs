@@ -4568,6 +4568,22 @@ fn play_trace(
                 println!("      diagnostic: level flag {f} set on tick {k}");
             }
         }
+        // NEOPETS_BOSS_HP="tick:hp;tick:hp": every boss of the current world set to that health on
+        // that tick (diagnostic: reaching the health stages of a fight).
+        if let Ok(v) = std::env::var("NEOPETS_BOSS_HP") {
+            for e in v.split(';') {
+                let Some((t, h)) = e.split_once(':') else { continue };
+                if let (Ok(t), Ok(h)) = (t.trim().parse::<u64>(), h.trim().parse::<i32>()) {
+                    if t == play.ticks {
+                        let pack = play.world.pack;
+                        for c in play.characters.iter_mut().filter(|c| c.pack == pack && play::Play::is_boss(c)) {
+                            c.hp = h;
+                        }
+                        println!("      boss health set to {h} on tick {t}");
+                    }
+                }
+            }
+        }
         // NEOPETS_BOSS_DEFEAT="tick" (or "tick,every" to repeat every 300 ticks after it): the
         // developer menu's defeat of every enemy and boss on that tick; from then on, and with
         // NEOPETS_TRACE_SCENE=n every n ticks from the start, a line of what could hold the

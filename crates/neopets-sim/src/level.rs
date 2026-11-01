@@ -4188,34 +4188,36 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
         v
     };
     if !l(s, 0) && b & 1 != 0 {
-        // Level state 0, which releases the boss (SPEC-0013 G1), is set once camera 25 has
-        // finished (SPEC-0041 985 CB6 stage 0); the busy word keeps the stage from rerunning.
-        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 9 }, Action::BossFight { instance: 5 }, Action::FadeIn { seconds: FADE, wait: true }, Action::HoldHero, cam(25, true), Action::LevelState { flag: 0, on: true }, anim(25)]);
+        // Level state 0, which releases the boss (SPEC-0013 G1 and G9), is the opening scene's
+        // last call, after the dialogue, camera 29 and the releases (SPEC-0013 Arena build guide
+        // 4 and item 6); the busy word keeps the stage from rerunning meanwhile.
+        v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, Action::MoveHero { locator: 9 }, Action::BossFight { instance: 5 }, Action::FadeIn { seconds: FADE, wait: true }, Action::HoldHero, cam(25, true), anim(25)]);
         for (line, track) in (0..=5).zip([26, 27, 28, 29, 30, 33]) {
             v.extend([cam(track, false), Action::Converse { entity: 0, line }]);
         }
-        v.extend([anim(1), anim(3), anim(4), anim(2), Action::Equip { on: true }, wait(0.5), Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }, Action::ReleaseEntity { entity: 0 }]);
+        v.extend([anim(1), anim(3), anim(4), anim(2), Action::Equip { on: true }, wait(0.5), Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::ReturnCamera { preset: -1, release: true }, Action::ReleaseEntity { entity: 0 }, Action::LevelState { flag: 0, on: true }]);
         busy(s, &mut v);
     } else if l(s, 1) && !l(s, 2) {
-        s.set_level(2, true);
+        // Stages 1, 3 and 5: the boss waits in its stance until the scene's last call sets the
+        // stage's level state (SPEC-0013 Arena build guide 4, item 3).
         v.extend(scene(&[(8, 0)], 4, 23));
+        v.push(Action::LevelState { flag: 2, on: true });
         busy(s, &mut v);
     } else if l(s, 3) && !l(s, 4) {
-        s.set_level(4, true);
         v.extend(scene(&[(9, 0)], 5, 23));
+        v.push(Action::LevelState { flag: 4, on: true });
         busy(s, &mut v);
     } else if l(s, 5) && !l(s, 6) {
-        s.set_level(6, true);
         v.extend(scene(&[(10, 0), (11, 32), (12, 26)], 6, 23));
+        v.push(Action::LevelState { flag: 6, on: true });
         busy(s, &mut v);
     } else if l(s, 7) && !l(s, 8) {
-        s.set_level(8, true);
         s.set(284, true);
         s.set(301, true);
         v.extend([Action::LetterBox { on: true, seconds: 1.0, wait: false }, anim(7), Action::Converse { entity: 0, line: 13 }, anim(24), Action::FadeOut { seconds: FADE, wait: true }, Action::ReturnCamera { preset: -1, release: true }]);
         v.extend((0..=4).map(|entity| Action::DeactivateEntity { entity }));
         v.extend((7..=12).map(|slot| Action::StopEffect { slot }));
-        v.extend([Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::FadeIn { seconds: FADE, wait: true }]);
+        v.extend([Action::LetterBox { on: false, seconds: 1.0, wait: false }, Action::FadeIn { seconds: FADE, wait: true }, Action::LevelState { flag: 8, on: true }]);
         busy(s, &mut v);
     } else if l(s, 0) && s.flag(284) {
         if b & 2 != 0 && b & 4 == 0 {
@@ -16620,21 +16622,24 @@ mod tests {
         s.set_word(985, 4, 0);
         on_trigger(985, 2, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
         assert!(on_update(985, &mut s, false).contains(&Action::ReplaceExterior { slot: 74, plane: -1 }) && s.flag(64));
-        // The 281 branch: the intro sets level state 0 once camera 25 has finished (an action
-        // of the scene, after the camera); level states 7 then the end with item 30.
+        // The 281 branch: the intro sets level state 0 with its last call, after the boss's
+        // release; level states 7 then the end with item 30.
         let mut s = GameState::default();
         s.set(281, true);
         on_init(985, &mut s);
         on_activate(985, &mut s);
         let intro = on_update(985, &mut s, false);
         assert!(intro.contains(&Action::Converse { entity: 0, line: 5 }) && !s.level(0));
-        let cam = intro.iter().position(|a| matches!(a, Action::PlayCamera { track: 25, .. })).unwrap();
-        assert_eq!(intro[cam + 1], Action::LevelState { flag: 0, on: true });
+        let release = intro.iter().position(|a| *a == Action::ReleaseEntity { entity: 0 }).unwrap();
+        assert_eq!(intro[release + 1], Action::LevelState { flag: 0, on: true });
         s.set_level(0, true);
         s.set_word(985, 4, 0);
         s.set_level(7, true);
-        on_update(985, &mut s, false);
-        assert!(s.flag(284));
+        let finale = on_update(985, &mut s, false);
+        assert!(s.flag(284) && finale.last() == Some(&Action::Bits { word: 4, set: 0, clear: 1 }));
+        assert!(finale.contains(&Action::LevelState { flag: 8, on: true }));
+        // The scene's last call (applied by the host).
+        s.set_level(8, true);
         s.set_word(985, 4, 0);
         on_trigger(985, 5, TriggerCall { index: 4, state: 1, object: true, square: false, block: -1 }, &mut s);
         on_update(985, &mut s, false);
