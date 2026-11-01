@@ -1,6 +1,6 @@
 # SPEC-0051: Map page (area pictures, area selection, icons, cursor, pulses, hero marker, return to the journal)
 
-- Answers: proactive, none requested; R-0047 (in part: the icon art source, Open question 12); R-0070 (icon and marker anchors, marker rotation, overlay root, area-name and label fonts: sections 4, 7 and 8, Open question 26)
+- Answers: proactive (UI pass: map page build guide, section 11; journal-to-map pending target correction in section 6), none requested; R-0047 (in part: the icon art source, Open question 12); R-0070 (icon and marker anchors, marker rotation, overlay root, area-name and label fonts: sections 4, 7 and 8, Open question 26); proactive (open close-out)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (check: resource 533 tables, resources 601 to 677 each holding one texture chunk, and the boot program data words listed under Where it lives)
 - Confidence: High for the map pictures, the area selection, the icon list, the cursor, the exits, the pulses, the overlay gate and the treasure table layouts; High for the button bit names and press edges (SPEC-0033 Controller map); High for the projection shape; High for the hero marker angle rule (facing minus yaw plus pi), Medium for the side on which the facing is negated; High for the dig sites, the dig sequence and the treasure rewards (section 10), Medium for the exact tick on which a dig starts; High for the projection table's address, record count, stride, layout and values (the values are given in Layout by user decision)
@@ -179,7 +179,7 @@ The pending return target is a runtime reference to a quest row or to a treasure
   - to the hero map area by View Map on the pause page (Cross), by D-pad Left in play, by L2 on the journal and by R2 on the item screen;
   - to the row's scene id (quest row +0x20) when that is 0 or more, else to the treasure's area (+0x0C) when that is 0 or more, by Cross on a journal row.
 - The map page opened is record 31 + the selected area, and its displayed area is the selected area. If the selected area is negative the map does not open: View Map and D-pad Left stay where they are, R2 on the item screen goes to the journal instead, and L2 on the journal goes to the item screen instead (High).
-- Disc census (type-1001 chunks of the 192 world packs): 124 packs carry an area id, 67 carry -1, and pack 532 has no such chunk. Areas 36, 39, 50, 51 and 52 belong to no pack; 50, 51 and 52 (Meridell Castle 3rd to 5th Floor) are reached only through the RegisterTransitionMap calls of pack 1122. Five level modules call RegisterTransitionMap from triggers, with areas 5, 7, 21, 37, 43, 48, 49, 50, 51, 52, 54, 64 and 73. Area 36 is reached by neither route and no quest row or treasure names it, so its page is never shown (Medium-High). Area 39 is shown only from the journal row whose scene is 39.
+- Disc survey (type-1001 chunks of the 192 world packs): 124 packs carry an area id, 67 carry -1, and pack 532 has no such chunk. Areas 36, 39, 50, 51 and 52 belong to no pack; 50, 51 and 52 (Meridell Castle 3rd to 5th Floor) are reached only through the RegisterTransitionMap calls of pack 1122. Five level modules call RegisterTransitionMap from triggers, with areas 5, 7, 21, 37, 43, 48, 49, 50, 51, 52, 54, 64 and 73. Area 36 is reached by neither route and no quest row or treasure names it, so its page is never shown (Medium-High). Area 39 is shown only from the journal row whose scene is 39.
 - Quirk: the map page of area 17 has, besides its picture, a second fixed text label with the area's name in its own node tree; the other 76 pages have only the picture.
 
 ### 2. Building the icon list
@@ -235,7 +235,7 @@ Test vectors:
 
 ### 6. Return from the journal
 
-- The journal sets a pending target before it opens a map: Cross on a journal row makes that row (quest row or treasure record) pending; Cross or R2 on the map makes the current icon's reference pending before the journal opens.
+- Cross or R2 on the map makes the current icon's reference pending before the journal opens (one setter: the quest row when the icon has one, else the treasure). Cross on a journal row opens the map, but the journal sets the row target and then the treasure target in one step, and the second setter clears the first. So only a treasure row hands the map a pending target; Cross on a quest row leaves nothing pending and the map cursor starts on icon 0 (quirk, reproduce; High).
 - When the map list is built with a pending reference, the cursor is set to the index (0-based, its own position in the list) of the first icon whose quest reference, or treasure reference, is the same reference (compared by identity, not by id). There is no off-by-one. If no icon matches, or none is pending, the cursor stays at icon 0 (High).
 
 ### 7. Projection and hero marker
@@ -340,7 +340,7 @@ The collected flag is written only at step 13, at the very end. The animation le
 
 **Reward (High).** A dig gives a reward. The reward placement is a kind-8 placement of the same pack with flag 4 (never spawned at region load; SPEC-0021), placed at the site. It goes through the drop action, not through the item add. Key 0 or more drops that item. Key -1 pays the placement's drop group money roll when the group is valid and the roll succeeds, otherwise its fixed count, as coins (100, 25, 10, 5, 1). Because a direction is given, each coin starts 0.4 s after the one before. The luck gate and the region-load vetoes do not apply. The reward items are dropped, not placed, so they expire: 11.2 s, or 15.2 s for a charm such as a Mote, unless picked up. Important items are range-collected after 0.4 L and given at expiry (SPEC-0021).
 
-Reward census (the 44 real treasures; High):
+Reward survey (the 44 real treasures; High):
 - 25 item rewards: Supernova Mote 10, Kauvara's Potion 4, Fyora's Potion 3, Starry Negg 3, Red Negg 2, Four-Leaf Clover 2, Codex of Protection 1. The Codex of Protection is the reward of treasure 8 (Meriload Mine) and has no other source on disc.
 - 19 Neopoint rewards: 16 with drop group -1 and a fixed count from 653 to 4,118 NP; 3 (treasures 3, 37 and 41) with drop group 3 and a fixed fallback: a 30 % chance of a whole amount from 400 to 1,000 NP, otherwise the fixed count. The fixed counts total 33,499 NP.
 - The two dead sites hold a Red Negg (key 247) and an empty placement (key 165: group -1, count 0).
@@ -351,7 +351,7 @@ Reward census (the 44 real treasures; High):
 
 **The map after a dig (High).** The map is not used up: item 175 is not kept as an inventory item, and the held flag stays set. Nothing clears it except the new-game reset. The map page icon and the journal row disappear because the treasure is now collected (section 2). Map sellers skip held maps, so a dug map is never offered again.
 
-**Census (High).** There are 47 kind-6 entries in 28 world packs. 45 are live sites for the 44 real treasures; treasure 16 has a site in each of two variant packs (956 and 970). Two sites can never be dug:
+**Survey (High).** There are 47 kind-6 entries in 28 world packs. 45 are live sites for the 44 real treasures; treasure 16 has a site in each of two variant packs (956 and 970). Two sites can never be dug:
 - Key 247 in pack 1230: treasure row 47 is a sentinel and no map 47 exists, so no map value makes it diggable. Its Red Negg is unreachable.
 - Key 165 in pack 1091: the held test reads row 165 for this key, which is outside the 48 rows, so the site is never held. Its marker uses effect 976.
 
@@ -366,6 +366,10 @@ Reward census (the 44 real treasures; High):
 - Re-entering pack 880 after the dig: object [2] at its start, object [1] at its end, marker off. Entering the sphere does nothing.
 - Pack 1230, key 247: no map value from 1 to 46 makes it diggable.
 
+### 11. Build guide pointer
+
+The element tables, draw order, exits and a worked example for the map page are in SPEC-0035, section G.16 (Screen build guide). Added here: the page draws no frame, fade or transition; the overlay group is drawn only on passes on which the page stays; on the pass that Select leaves the page nothing but the picture is drawn (and the four music overrides are cleared); on the pass that Cross (icon with items), R2 or L2 leaves it, the marker and icons are drawn but the area name and overlay are not. Default if unresolved (rewrite choice): draw the previous pass's frame until the next page appears.
+
 ## Edge cases and error handling
 
 - Selected map area negative (hero pack area -1 and no transition map set): the map does not open; see section 1 for where each route goes instead.
@@ -375,6 +379,7 @@ Reward census (the 44 real treasures; High):
 - Empty icon list: cursor 0, no cursor icon, Cross does nothing, R2 opens the journal with no pending target, L2 goes to the item screen.
 - Icon with both reference fields zero: Cross does nothing and the map stays open.
 - Pending reference with no matching icon: the cursor stays at icon 0.
+- Journal Cross on a quest row whose area has a matching quest icon: no pending target, so the cursor stays at icon 0; Cross on a treasure row: the cursor starts on that treasure's icon.
 - Quest rows with a nonzero stage but scene -1 (39 rows on disc) never get an icon.
 - A treasure row with area -1 is never listed, whether or not its map is held.
 - Area 36's page exists but no route on disc data reaches it.
@@ -421,7 +426,7 @@ Numbers of removed questions are not reused.
 7. Resolved: direction bit names are fixed by SPEC-0033, Controller map: 0x1000 Up, 0x2000 Right, 0x4000 Down, 0x8000 Left (High).
 8. Resolved: the float pulse scales the hero marker's colour (brightness 102 to 192); the integer pulse scales the cursor icon.
 9. Resolved: yaw sign and angle unit. The yaw offset is subtracted: marker angle = hero facing - yaw offset + pi, and the facing is an angle in radians (section 7). This matches the pictures: on the two rotated pictures (areas 23 and 42) the angle of (a, b) is the negative of the yaw offset, so subtracting the yaw turns the marker by the same rotation as the projection. **[High]**
-11. Whether the overflow report for a 33rd icon is written in the shipped build. Disc data never reaches the cap, so this matters only for modified data.
+11. Resolved as a default: the overflow report for a 33rd icon is a debug report with no gameplay effect, and disc data never reaches the cap. Default (rewrite choice): drop the 33rd icon silently (needs a runtime check; same as SPEC-0035 item 74).
 12. Resolved (R-0047, part 3; High): the map's art comes from four nodes of the front-end database (SPEC-0035, sections C, E and J; the key is looked up in section C and gives a section J node). (a) The three icon arts are the first three children of the group node with key 210 (node 1176): kind 0 primary quest, 26 x 32, sprite record 711 (sheet asset 263); kind 1 secondary quest, 26 x 29, sprite record 712 (asset 264); kind 2 treasure spot, 31 x 31, sprite record 713 (asset 265). The map opens by storing these three sprite records in order and draws an icon by its kind number, so the child order is the kind order. (b) The hero locator is the sprite node with key 26 (node 938): 32 x 32, sprite record 505 (sheet asset 134). It is the sprite whose colour bytes the pulse rewrites and which the marker draw rotates; the earlier statement that key 26 holds the icon art was wrong. (c) The overlay group is the node with key 214 (node 1180), drawn every tick of the map page. Its children in order: the Triangle hint sprite (32 x 32 at (359, 400), sprite record 714, asset 33; always drawn) with its caption node (the string "Exit", at (393, 423)); a group gated by predicate slot 26 with mode 2 that holds the Cross hint sprite (32 x 32 at (65, 400), sprite record 715, asset 30) and its caption (the string "View Quest", at (100, 423)); the "Treasures: n of m" group at (322, 60), gated by predicate slot 73 (three value and text nodes: the word "Treasures:", the count, "of" and the total); a group holding the area name text node (key 215, centred at (256, 40), whose text pointer and colour the page overwrites each tick); and the L2 and R2 tab hint group at (0, 181) with two 42 x 60 sprites, the left one at (0, 0) (sprite record 716, asset 42) and the right one at (469, 0) (sprite record 717, asset 43). The Triangle and Cross sprites use the same button-glyph sheet assets (33 and 30) as the hints of the other front-end pages. Test vector: a kind-2 icon at the projected point (105, 77) draws sprite record 713 (31 x 31) centred there; the same page with the cursor icon of kind 0 draws record 711 at scale 4096 times the pulse.
 14. Resolved: the cursor is set to the matched icon's own 0-based index; there is no off-by-one.
 16. Answered: the front-end sound slots (select 0x98, back 0x99, focus moves 0x9A) are filled once at start-up; see SPEC-0035 Behavior 1b. The map's own cursor moves play no cue.

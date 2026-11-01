@@ -1,6 +1,6 @@
 # SPEC-0061: What the rewrite does not need (code and data with no effect in shipped play)
 
-- Answers: proactive, none requested
+- Answers: proactive, none requested; proactive (verify pass)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00
 - Confidence: per entry (High or Medium-High only; lower-confidence claims in the source specs are left out on purpose)
@@ -26,7 +26,8 @@ Each group is a table with the columns: what it is, why it never matters, pointe
 | Cloud Beast boss (monster class 9) and its companion (class 10) | No record places either monster type, no script spawns them, no model or animation set exists for them. The cloud wall on the story path is passed with a magic, not a fight. | SPEC-0010 (Placement and reachability); SPEC-0029 (Class inventory on disc); SPEC-0049 (cloud wall) | High |
 | Spyder Nest encounter: nest controller (class 3) and its valves (class 4) | No placement record of the nest or valve types exists in any pack, and no run-time route selects them. | SPEC-0017 (Summary); SPEC-0029 (Class inventory on disc) | High |
 | Monster classes that no row places (3, 4, 9, 10 on unplaced rows; 22 and 27 to 31 named by no row) | No spawn path names them, so their behavior code is unreachable. | SPEC-0029 (Class inventory on disc; Behavior 1) | High |
-| World packs not enterable from a new game (17 of the 191 world packs, among them the unused copy of one pack that only shares its module) | No door, script load or cell route in the static graph leads to them (an upper bound on reach, so a route that depends on run-time data could in principle still exist). Resources that only they use never load. | SPEC-0006 (Reach); SPEC-0058 (open question 7, pack 1077) | Medium-High |
+| World packs not enterable from a new game (17 of the 191 world packs, among them the unused copy of one pack that only shares its module) | No door, script load or cell route in the static graph leads to them (an upper bound on reach, so a route that depends on run-time data could in principle still exist). Resources that only they use never load. | SPEC-0006 (Reach); SPEC-0058 (open question 7, pack 1077); SPEC-0066 (contents, classes and load recipes of all 17) | Medium-High |
+| Character regions that no level script loads (697, 698, 700, 701, 729, 731, 773, 894, 899, 1325, 1326, 1331 and 1349) and the item-point region 815 | A character region appears only when a level script loads it, and no level script names these; the reached packs that own them play complete without them. | SPEC-0066 (the region sections); SPEC-0006 (Region slots) | Medium-High |
 | Attract-loop movie 87 | It is in the movie table but no queue caller ever asks for it. | SPEC-0026 (Movies) | High |
 | Outfit entry of item 134 | The item can only go to the general list, so its body-slot outfit offset is never used. | SPEC-0021 (Outfit items) | High |
 | Drop sub-table 7 | No drop group names it. | SPEC-0021 (Drop placements) | High |
@@ -151,8 +152,8 @@ Each group is a table with the columns: what it is, why it never matters, pointe
 | Random-number statistics dump and vector-unit self-test | Developer leftovers with no play use. | SPEC-0008 (Developer and test leftovers) | High |
 | Debug colour tuner and its run-time colour table | The tuner has no caller, so the table stays zero. | SPEC-0040 (Behavior 26, item 7) | High |
 | Debug colour editor for kind-8 menu nodes | No page has such a node. | SPEC-0035 (Edge cases; Open question 71) | High |
-| Start-point chooser screen (container 854, page 858, nine items) | It is marked debug-only and nothing opens it. The new-game and start-point confirm state that its items would target is a different matter and is live through the title screen. | SPEC-0035 (Behavior 2 census) | High |
-| Lead-in page stepper and front-end records 15, 16, 21 and 24 to 29 (states 27 and 28) | Nothing enters them. | SPEC-0035 (reach census) | High |
+| Start-point chooser screen (container 854, page 858, nine items) | It is marked debug-only and nothing opens it. The new-game and start-point confirm state that its items would target is a different matter and is live through the title screen. | SPEC-0035 (Behavior 2 survey) | High |
+| Lead-in page stepper and front-end records 15, 16, 21 and 24 to 29 (states 27 and 28) | Nothing enters them. | SPEC-0035 (reach survey) | High |
 | Spatial-search menu pages 858 and 896 | Neither page is entered. | SPEC-0035 (Page table; section 9d Focus) | High |
 | Menu colour tracks (records 12 and 13) | No animation slot reaches them. | SPEC-0035 (section 17.5) | Medium-High |
 | Percent gauge (arc or bar), its label font block and label words | The gauge update has no caller, so no gauge is ever drawn. | SPEC-0023 (section 16; Open questions 34, 35, 37) | High |
@@ -199,7 +200,7 @@ Each group is a table with the columns: what it is, why it never matters, pointe
 
 ## Behavior
 
-Entry counts per group: Cut content 10; Hero states and moves 14; Enemies and bosses 18; World and objects 12; Level scripts and flags 17; Effects and rendering 23; UI and debug 18; Audio 9; Data fields to ignore 12. The list of things that look dormant but run has 17 entries.
+Entry counts per group: Cut content 11; Hero states and moves 14; Enemies and bosses 18; World and objects 12; Level scripts and flags 17; Effects and rendering 23; UI and debug 18; Audio 9; Data fields to ignore 12. The list of things that look dormant but run has 17 entries.
 
 ### Things that look dormant but do run (do not skip these)
 

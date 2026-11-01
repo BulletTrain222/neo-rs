@@ -1,6 +1,6 @@
 # SPEC-0063: Arena fighters
 
-- Answers: proactive (arena fighter AI); R-0124
+- Answers: proactive (weapon box); proactive (arena fighter AI); R-0124; proactive (enemy claim check pass 3); proactive (timing pass); proactive (reach pass 2); proactive (enemy reach pass); proactive (movement pass); proactive (enemy sweep); proactive (open close-out)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
 - Confidence: High for the Rogue's row and clip values, the wake rule, the attack chooser, the counter and defence rules, the phase skips and the clip gate ticks. Medium-High for exact tick offsets (they depend on the request-then-animation order of SPEC-0038 Behavior 1 and 48). Medium for weapon contact geometry, facing while circling and the order of the intro hand-off. Rounds 1 to 4 (Ixi Henchman, Sludgy, Skeleton Fighter, Werelupe Elite) give their own confidence per section; their tick timelines come from rule models of the original behaviour and are Medium-High.
@@ -45,6 +45,47 @@ The other four rounds use the same start: every opponent's spawn record has defa
 
 - All five are class-17 enemies and follow SPEC-0038 exactly (think loop, pre-step, sequencer, attack manager). Only their rows and tables differ. The attack manager has a single member, so no opponent ever waits in line (the first entry never waits).
 - Hero damage to an opponent, hit reaction and the damage doubling rule: SPEC-0036 (Damage) and SPEC-0038 Behavior 37. Enemy damage to the hero (armour, shield, status scale): SPEC-0036, Enemy attack damage to a hero.
+
+### Timing table (all five rounds; timing pass)
+
+Confidence: High for the units, the start chains and the clip gates; Medium for the first-touch ticks (weapon-versus-body collision uses SPEC-0018; Tor idle and level, straight in front). Units, the attack phases and the rules for what counts down are those of the common-enemy timing table (SPEC-0064, Shared field behaviour: Timing table and units). One tick is 1/60 s; every opponent clip in these rounds has speed byte 2 (4 ticks per key at rate 1.0) unless its row says otherwise.
+
+| Round | From the wake tick (tick 0) to agro | First possible attack choice | Main attacks: window opens, hit tick on a still hero in front, end path (ticks after the request s, or c8 for a charge strike) |
+| --- | --- | --- | --- |
+| 0 Rogue | no emerge clip: agro on tick 1, strafe from tick 2 | tick 3 | slot 3: s + 16 / 40 / 60, hits s + 17 / 41 / 61, end s + 82; slot 0: s + 20, hit s + 26, end s + 60; slot 2 bite: c0 + 36, hit c0 + 38, end c0 + 82 |
+| 1 Ixi Henchman | emerge requested tick 1, agro tick 78 | tick 80 | jab: s + 20, no touch on a still level hero straight ahead at the 3.175-unit chase stop (weapon reach table below), end s + 58; lunge: c8 + 24, hit c8 + 28, end c8 + 86 |
+| 2 Sludgy | emerge requested tick 1, agro tick 42 | tick 44 | swipe: s + 32, hit s + 36, end s + 82; slam: s + 19, hit s + 21 (3 to 4 units) or s + 22 (5 to 9), end s + 91 after a hit on s + 21, s + 90 after s + 22, s + 68 on a whiff; lob: release s + 84 |
+| 3 Skeleton Fighter | emerge requested tick 1, agro tick 181 | tick 183 | slot 0: s + 36, hit s + 40, end s + 54; slot 1: s + 28, hit s + 29, end s + 66; lunge: s + 29 window; first touch of a still level hero straight ahead with the chase stop in force: s + 34 (1.5 units), s + 33 (2.0–2.5), s + 32 (3.0), s + 33 (3.5–8.0), s + 34 (8.5), s + 35 (9.0–9.75), then s + 36–44 to 13.0 (no touch at 1.0). Without the chase stop the same samples miss at 1.0–6.0 and touch at s + 33 (6.5), s + 32 (7.0), s + 33 (7.5–8.0), s + 34 (8.5), s + 35 (9.0–9.75). These are fixed-pose results for a hero who does not move, not a live chase timeline. |
+| 4 Werelupe Elite | emerge requested tick 1, agro tick 105 | tick 107 | slot 0: s + 20, hit s + 20, end s + 58; slot 2: s + 28 / 52 / 76, hits s + 29 / 53 / 77, end s + 109; charge strike: c8 + 4, hit c8 + 4, end c8 + 26 |
+
+**Exchange timeline (round 3, Tor holding a weapon, idle 20 units in front of the hidden Fighter, never guarding).** Tick numbers as in Round 3 Vector A.
+
+| Tick | What happens |
+| --- | --- |
+| 0 | Wake test passes (20 is below 28); sub-state 1 |
+| 1 | Emerge clip requested |
+| 181 | Emerge gate; agro entry (cooldowns 0, recovery 0) |
+| 183 | First chooser tick; d = 20, no slot in band |
+| 225 | d = 9.75: slot 2 (lunge) chosen with 99 of 100 |
+| 226 | Lunge clip requested (this pass at 1.0, later passes of state 2 at 0.7) |
+| 255 | Window opens; the weapon does not reach Tor yet |
+| 261 | First touching tick: 50 damage before armour; Tor is hurt in the same tick and his flinch clip (36 ticks) starts on tick 261; the pass of 261 still runs at 0.7 |
+| 262 to 298 | The Fighter's think (which runs before Tor's update) sees Tor hurt: its cooldowns stop counting and it can choose nothing |
+| 289 | Lunge gate (the passes after the contact tick run at 1.0) |
+| 290 | End path: recovery int[15, 30]; slot 2 cooldown 180 drawn again |
+| 298 | Tor's flinch done test passes in his update: back in state 1 |
+| 299 | The Fighter sees Tor attackable again; its cooldowns resume |
+| 305 to 320 | The recovery has run out; the next choice is possible (slot 1 or 0) (Tor is attackable again from 299) |
+| h | Tor presses a normal swing (sub-state 2) with the Fighter within 8 and in front |
+| h + 1 | The Fighter sees the swing edge and rolls once: block 35 of 100 (it then guards until the swing ends) |
+| h + 8 to h + 23 | Tor's swing window: unblocked, the first touching tick damages the Fighter, restarts its reaction clip 57 (65 ticks) and cancels any swing it was making |
+
+**What a port most likely gets wrong in the arena (timing).**
+1. Hitting on the window start. Every round has a later first-touch tick (table above); the Henchman's jab may not touch a still hero at all.
+2. Starting the round on release. Each opponent waits for the 40 x F1 wake test and then plays its emerge clip (77, 41, 180 or 104 ticks; none for the Rogue).
+3. Letting cooldowns run while Tor is hurt (36 ticks with a weapon, 40 unarmed) or knocked down: they stop; only the recovery countdown runs.
+4. Keeping the strike word after contact: the lunge and the slam play at 1.0 from the tick after contact, so their end path moves with the hit tick.
+5. Giving the hero invulnerability after a hit: a three-hit swing can land all three hits on a hero who is already hurt.
 
 ## Round 0: the Rogue
 
@@ -94,7 +135,7 @@ Animation ids the AI uses and what the Rogue's table gives them:
 | 9 | hide pick (state 8) | none: a direct request of a missing id starts clip 0 |
 | 10 | emerge | none, so the emerge step is skipped |
 | 28 | gait 0 (walk, run, charge) | clip 40 (10 keys, loops; root travel 7.27 units per 40 ticks, 10.9 units per second) |
-| 32 | gait 3 (back step) | clip 4 (12 keys, one-shot; moves 5.01 units back over 48 ticks, then stands) |
+| 32 | gait 3 (back step) | clip 4 (12 keys, one-shot; 4.6 units back over its first 44 ticks, then held: twice its last key every tick, 12.5 units per second back and 3.1 sideways, for as long as id 32 stays requested; Movement rules) |
 | 29 | gait 6 slot word 6 (right circle) | clip 20 (8 keys, loops, 3.45 units sideways per 32 ticks) |
 | 30 | gait 5 slot word 5 (left circle) | clip 21 (8 keys, loops, 3.51 units per 32 ticks) |
 | 31 | strafe hold | clip 5 (23 keys, one-shot: plays once, then holds its last pose) |
@@ -157,11 +198,11 @@ Ticks are relative to the tick s in which the state requests its clip; "gate" is
 | Strafe hold (outer 4, inner 10) | 31 -> clip 5 | 23, one-shot | 1.0 | Hold timer int[60, 180]; distance rules below |
 | Strafe approach (inner 7) | 28 -> clip 40 | 10, loops | 1.0 | Ends when d is below the desired distance |
 | Circle left / right (inner 8, 9) | 30 -> clip 21 / 29 -> clip 20 | 8, loops | 1.0 | Hold timer; d above 20 gives inner 7, d below 6 gives inner 11 |
-| Back off (inner 11) | 32 -> clip 4 | 12, one-shot | 1.0 | Ends when d is above the desired distance (clip ends after 48 ticks and stops moving) |
-| Slot 3 swing (outer 2) | 49 -> clip 38 | 21, one-shot | 1.0 | Hits at s+16, s+41, s+61; gate s+81; end path s+82 |
-| Slot 0 swing | 34 -> clip 8 | 15, loops | 1.0 | One hit at s+20; gate s+59; end path s+60 |
+| Back off (inner 11) | 32 -> clip 4 | 12, one-shot | 1.0 | Ends when d is above the desired distance (the one-shot clip finishes after 44 ticks and is then held at twice its last key, so he keeps backing away; Movement rules) |
+| Slot 3 swing (outer 2) | 49 -> clip 38 | 21, one-shot | 1.0 | Windows open s+16, s+40, s+60; hits on a hero standing in front at s+17, s+41, s+61; gate s+81; end path s+82 |
+| Slot 0 swing | 34 -> clip 8 | 15, loops | 1.0 | Window opens s+20; one hit, on a hero standing in front at s+26; gate s+59; end path s+60 |
 | Slot 2 charge run (sequencer 7) | 44 -> clip 40 | 10, loops | 1.0 | Until the hero is within 5.0, or the charge distance is travelled |
-| Slot 2 strike (sequencer 8) | 45 -> clip 39 | 21, one-shot | 1.0 | Hit at c0+36; gate c0+81; end path c0+82 (c0 = tick the strike clip is requested) |
+| Slot 2 strike (sequencer 8) | 45 -> clip 39 | 21, one-shot | 1.0 | Window opens c0+36; hit on a hero 4.5 to 6.0 units ahead at c0+38 (c0+39 at 3.5 units or closer, c0+40 from 6.5); gate c0+81; end path c0+82 (c0 = tick the strike clip is requested) |
 | Melee dodge (outer 5) | 55 -> clip 15 | 20, one-shot | 1.0 | Gate s+77, then the defence exit |
 | Missile dodge (outer 6) | 53 -> clip 16 or 54 -> clip 17 (int[0, 1]) | 13 or 12 | 1.0 | Gate s+49 or s+45, then the defence exit |
 | Hit reaction kind 0 (outer 10) | 57 -> clip 3 | 14, one-shot | 1.0 | Gate s+53, then outer 0 |
@@ -177,12 +218,30 @@ Defence exit: outer 0, base state 1, defence hold int[0, 0] = 0.
 - Inner 10: the hold timer goes down by 1 each tick. While it is above 0 the Rogue stands still, faces the hero (blend 0.9) and plays id 31; if d > 20 it switches to inner 7, and if d < 6 and the strafe lock is 0 it switches to inner 11. When the timer is 0 or below: r = int[1, 3]: 1 stays in hold, 2 starts a left circle, 3 a right circle (a circle is refused while the lock is above 0), then the timer is redrawn as int[60, 180] and the distance tests run.
 - Inner 8 and 9 (circle): gait 6 or 5, steering to a point 2 units to his left or right of his own position; the timer goes down by 1 and at 0 the state returns to inner 10; a wall contact ends it and sets the lock to 120 ticks; the same distance tests apply. Circling moves him sideways at about 6.5 units per second, so over a long circle the distance to a still hero grows.
 - Inner 7 (approach): gait 0, steering at the hero, until d is below the desired distance (6 + 14 x int[20, 80] / 100, so 8.8 to 17.2, redrawn after every attack choice). He starts approaching only when d exceeds 20.
-- Inner 11 (back off): gait 3, steering to a point behind him; it uses the one-shot clip 4, so he can retreat at most about 5 units per request and then stands still; ends when d exceeds the desired distance.
+- Inner 11 (back off): gait 3, steering to a point behind him; ends when d exceeds the desired distance. Corrected (movement pass; High for the rule, Medium-High for how long a back-off lasts): id 32 is the one-shot clip 4 (12 keys), which is not restarted while id 32 stays requested. For its first 44 ticks it moves him 0.1043 per tick backward (4.6 units); from then on the clip is finished and held, and a held one-shot's root step is twice its last key's every tick (SPEC-0005, Layer step), so he keeps backing away at 0.2086 per tick (12.5 u/s) with 0.052 per tick (3.1 u/s) sideways for as long as the back-off lasts. He does not stand still. The clip restarts only after another id has played in between (the next back-off after a hold or a circle starts fresh).
 - So inside the 6 to 20 band the Rogue does not close in by himself; he holds, circles, and attacks by the chooser. The sequencer does the closing.
 - Sequencer state 0 (slots 0 and 3): while d is above the melee range 5.0, gait 0 toward the hero (clip 40, about 10.9 units per second, 0.18 per tick); the step is dropped on any tick where the distance is within the sum of the two body radii (2.0 + the hero's 1.175). When d is 5.0 or less the state becomes 1 on the next tick. Turning is the steering blend only.
 - The hero outruns him: the hero walks at 13.5 and runs at 19.3 units per second (SPEC-0033); the Rogue's 10.9 is slower. His charge (clip 40 again) is no faster.
 - Strike lunge: the swing clips carry forward root motion (clip 38 3.84 units, clip 8 2.59 per 60 ticks, clip 39 6.56 units) so he closes a little during a swing. The chase-stop rule applies only in sequencer states 0 to 3, not in the charge states 7 and 8.
 - Knockback on the hero is 0 on every slot; a hit never pushes the hero.
+- Body push (movement pass): the steal charge (slot 2) is charge kind 2, so the Rogue's body stays solid through its run and its hit clip (SPEC-0065, Movement rules for every kind, item 10). The run stops at the 5.0 range test, before the bodies touch (2.0 + 1.175 = 3.175), but the hit clip C (clip 39) carries him 6.56 units further forward over 84 ticks, so a hero who stands still in front of him is shoved ahead by the body during the swing.
+
+Movement table (movement pass; row 153; speed byte 2; 60 ticks per second):
+
+| Mode | Source | u/t | u/s | Turn | Clip (id: clip, keys, loop) | Exits |
+|---|---|---|---|---|---|---|
+| Hidden at home (state 8) | none | 0 | 0 | none | 9 | wake |
+| Decloak (alarm or wake, id 82) | root forward | 11.10 units over the clip | 11.1 | none | 82: clip 36, 15, one-shot | gate |
+| Alert (id 18) | root forward | 4.21 units over the clip | 3.2 | none | 18: clip 32, 20, one-shot | gate |
+| Strafe approach (inner 7), sequencer approach, charge run | root | 0.1817 average; per key 0.142 to 0.242 | 10.90 | steering 0.3 / 0.1 (the run does not steer) | 28, 44: clip 40, 10, loop | d below desired (8.8 to 17.2), the 5.0 range, or the charge distance 15 to 25 |
+| Circle left / right | root sideways | 30: 0.1096 (-x); 29: 0.1079 (+x) | 6.58; 6.47 | faces the hero | 30: clip 21; 29: clip 20; 8, loop | hold count, wall, distance tests |
+| Back off (inner 11) | root backward, one-shot then held | 0.1043 for 44 ticks, then 0.2086 (and 0.052 sideways) | 6.26, then 12.5 | faces the hero | 32: clip 4, 12, one-shot | d above desired |
+| Strafe hold (inner 10) | none | 0 | 0 | aim 0.9 | 31 | hold count, distance tests |
+| Dodges 53, 54; 55 | root | 10.6 sideways (49 ticks); 10.04 backward (77 ticks) | - | none | clips 16, 17; 15 | gate |
+| Hit reaction kind 0 | root backward | 2.84 units over the clip's 56 ticks (gate 53) | 3.04 | snapped to the attacker | 57: clip 3, 14 | gate |
+| Death | none | 0 | 0 | none | 58: clip 24 | removal |
+
+Worked example (back-off). Hero walks up to 4 units from a holding Rogue whose desired distance is 14: inner 11 starts; ticks 1 to 44 of the clip carry him 4.6 units back (d = 8.6 if the hero stops), and from then on 0.2086 per tick: the remaining 5.4 units take 26 ticks, so he reaches d 14 about 71 ticks after the back-off began, with about 1.4 units of sideways drift.
 
 ### Hit and hurt windows
 
@@ -190,14 +249,28 @@ Strike test (SPEC-0038 Behavior 13, Strike test): each tick in sequencer state 2
 
 | Attack | Strike windows (AI ticks after the request tick s) | Hits | Damage per hit (before the hero's armour and shield) |
 |---|---|---|---|
-| Slot 3 (clip 38) | s+16 to s+31, s+40 to s+51, s+60 to s+71 | at s+16, s+41, s+61 (the second and third re-enter state 2 one tick after the window reopens) | 10 each, unblockable |
-| Slot 0 (clip 8) | s+20 to s+51 | one hit at s+20 | 6, blockable |
-| Slot 2 (clip 39, c0 = request tick) | c0+36 to c0+43 | one hit at c0+36 | 1, blockable, steal roll |
+| Slot 3 (clip 38) | s+16 to s+31, s+40 to s+51, s+60 to s+71 | on a hero standing 1.5 to 9.0 units in front: s+17, s+41, s+61 (from 9.5 to 10.5 units the first blow misses and the other two land on s+41 and s+61; at 11.0 to 11.5 units one blow lands, on s+62). The weapon already touches such a hero on s+40 and s+60, but after each hit the sequencer is in its follow-through state and re-enters the strike state only one tick after the next window opens, so the second and third blows are first tested on s+41 and s+61. A blow whose predecessor missed is tested while the strike state is still running and lands on its touching tick | 10 each, unblockable |
+| Slot 0 (clip 8) | s+20 to s+51 | one hit, on a level hero standing straight ahead at s+26 from 3.0 to 4.5 units, s+27 at 5.0 | 6, blockable |
+| Slot 2 (clip 39, c0 = request tick) | c0+36 to c0+43 | one hit, at c0+38 for a hero 4.5 to 6.0 units ahead (the run stops at 5.0 or less, so this is the usual case), c0+39 at 3.5 units or closer, c0+40 from 6.5 to 12.0; a still level hero at exactly 4.0 is not touched | 1, blockable, steal roll |
 
-- All windows assume the hero is inside the weapon volume at the moment; the volume is a cylinder of radius 6.0 and height 1.0 on the right hand, tested against the hero's body capsules (SPEC-0040 Behavior 12A). Because the sequencer starts the swing only when d is 5.0 or less, a hero standing still in front of him is struck at every window.
+- The window start is not the hit tick: a strike lands on the first window tick when weapon 1 (radius 6.0, full height 1.0, on the right hand) passes SPEC-0018's asymmetric weapon-versus-body test against a hero body capsule (SPEC-0040 Behavior 12A). These hit ticks are for Tor idle and level, straight in front; with the chase stop, slot 0 first touches at s+26 from 3.0 to 4.5 units and s+27 at 5.0. The exact rule and its geometric limits are in SPEC-0064; Medium. A hero standing still in front of him is struck in every window.
 - The hurt side: he can be struck while hidden, walking, circling, holding, attacking, recovering, in hit reaction, or fetching coins. He cannot be struck during a melee dodge or a missile dodge (outer sub-states 5 and 6), while dead, or while script-held. A hit he takes while attacking cancels the attack (see counters).
 - A hero who is hurt, knocked down or dead is not attackable: the Rogue picks no new attack and slot cooldowns stop, but an attack already running keeps going and keeps landing (there is no hurt invulnerability on the hero, so a three-hit swing can land all three hits).
-- Damage on the hero: SPEC-0036 (Enemy attack damage to a hero). With no armour, slot 3 deals 10 per hit and slot 0 deals 6. Slot 2's base damage of 1.0 becomes 0 after any body armour (the result is truncated, with no minimum), and a steal needs a strike result of at least 1 (SPEC-0029 Behavior 11a), so heroes wearing armour are never robbed by the Rogue.
+- Damage on the hero: SPEC-0036 (Enemy attack damage to a hero). With no armour, slot 3 deals 10 per hit and slot 0 deals 6. Slot 2's base damage of 1.0 becomes 0 after any body armour (the result is truncated, with no minimum), and a steal needs a strike result of at least 1 (SPEC-0029 Behavior 11a), so heroes wearing armour are never robbed by the Rogue. A strike whose damage comes to 0 does nothing at all: no take-hit, no hit effect and no hit-list entry.
+
+### Weapon reach
+
+Conventions are those of "Weapon reach tables" in SPEC-0064 (shared field behaviour). Medium. The hit ticks above are authoritative (they are for a hero straight in front at the start distance); the level-contact column is the first tick on which any position of an idle level hero is touched. Weapon 1 has radius 6.0 and height 1.0, on the right hand. "sC" is the tick the steal clip is requested.
+
+| Slot (phase, clip) | Window ticks (level contact) | Centre forward / up / side | Tor ahead, at the tick | Tor ahead, from the start | Tor feet vs origin |
+|---|---|---|---|---|---|
+| 0 (B, clip 8) | s+20 to s+51 (s+20 to s+51) | -0.4 to 2.8 / 0.8 to 1.5 / -2.0 to -0.7 | -1.8 to 4.0 | -1.1 to 6.4 | -8.0 to 7.0 |
+| 2 steal (C, clip 39) | sC+36 to sC+43 (sC+38 to sC+43) | -0.3 to 3.6 / 2.4 to 6.7 / -3.2 to 1.5 | -2.4 to 9.0 | 0.8 to 12.4 | -6.5 to 12.0 |
+| 3 first blow (B, clip 38) | s+16 to s+31 (s+16 to s+31) | 0.2 to 2.1 / 2.3 to 2.9 / -1.5 to 1.8 | -4.2 to 8.6 | -3.5 to 9.4 | -6.0 to 8.5 |
+| 3 second blow (B, clip 38) | s+40 to s+51 (s+40 to s+51) | -1.6 to 2.2 / 1.8 to 2.2 / -2.4 to -0.5 | -3.8 to 8.4 | -1.6 to 10.6 | -7.0 to 7.5 |
+| 3 third blow (B, clip 38) | s+60 to s+71 (s+60 to s+71) | 0.9 to 2.0 / 1.9 to 2.0 / -1.7 to 1.2 | -4.4 to 8.2 | -1.0 to 11.7 | -7.0 to 8.0 |
+
+For slot 3 the level-contact column starts at s+16, while the first touch of an idle hero straight in front at the start distance is s+17. In the second and third rows the level-contact start (s+40, s+60) is the tick on which the weapon first touches such a hero; the blow lands one tick later (s+41, s+61) whenever the previous blow hit, because the sequencer re-enters its strike state one tick after each window opens (SPEC-0038 Behavior 13, State 3). The three-hit swing touches a level hero up to 8.6 ahead at the tick and the steal swing up to 9.0; slot 0 is short (4.0 ahead at most). Slots without a row have no weapon test.
 
 ### Defence and counter rules
 
@@ -248,7 +321,7 @@ Counter attack (trigger 6, chance 25; slots 0 and 3):
 
 ### Edge cases for implementers
 
-- The wake test and the emerge step use the hero's distance on the ground plane; the ring is flat, so 3D and horizontal distances agree unless the hero is airborne (not settled).
+- The wake test and the emerge step use the hero's distance on the ground plane; the height difference is dropped, so an airborne hero counts as standing on the spot. Resolved (High): the shared distance helper that every common-enemy test calls (wake, attack choice, band, hold and exit tests) zeroes the height lane before it takes the length; only the chase stop and the weapon tests use 3D shapes.
 - The Rogue's first agro tick after the wake is a set-up tick (outer 0): no attack can be chosen on it. The earliest attack choice is the fourth tick after the wake test (relative to the wake test at tick 0: sub 1 at 0, agro at 1, outer 4 at 2, first choice at 3, counting the wake test as tick 0).
 - The sequencer reads the hero's position and the Rogue's own facing every tick. If the hero leaves the Rogue's band during state 0 (running away), the Rogue keeps chasing at 10.9 units per second until the swing starts; there is no abort. If the hero leaves while the Rogue is already swinging, the swing plays out and misses.
 - Cooldowns count only while the hero is attackable and only down to 0. The end path redraws the chosen slot's cooldown a second time, so slot 0 is unavailable for 30 to 60 ticks after the swing ends, and slot 2 for 60 to 120.
@@ -272,19 +345,19 @@ Counter attack (trigger 6, chance 25; slots 0 and 3):
 9. Forgetting the doubling: the first hit that finds him not in agro (hidden, coin fetch) does double damage.
 10. Missing the coin detour and the return to hiding. After he steals and the hero is more than 10 units away he runs to the coins, deletes them and goes home.
 11. Treating the steal as always on. It needs a damaging strike (armoured heroes take 0 from slot 2, so no steal) and a 50 in 101 roll.
-12. Recomputing speeds from a table. His run is the root travel of clip 40 (10.9 units per second), the back step has only 5 units of travel, and the sideways circle is 6.5 units per second.
+12. Recomputing speeds from a table. His run is the root travel of clip 40 (10.9 units per second), the back step is a one-shot that moves 4.6 units and then keeps moving him at twice its last key (12.5 units per second) while the back-off lasts, and the sideways circle is 6.5 units per second.
 13. Hit points and drop: 80 hit points, no drop, no carried Neopoints; the corpse is irrelevant because the script ends the round one second after death.
 
 ### Default if unresolved (rewrite choices)
 
-- If the order of the intro hand-off is uncertain, start him in the hidden state with the hero in action state 1 (wake distance 28). This is Medium; if the original instead lets his think loop run once before the script grabs him, the only difference is that a hero in an unlisted action state (factor 1.0, wake distance 40) would wake him during the intro. The original script gives the player no input during the intro, so the result is the same.
-- Weapon contact: treat a strike window as hitting when the hero's centre is within 6.0 units of the Rogue's centre and the hero is not dodging out of range. The weapon cylinder (radius 6.0, height 1.0) on the right hand and the hero's capsules decide the real answer; the sequencer only starts a swing when d is 5.0 or less, so a standing hero is always struck.
-- Facing while circling and holding: treat the facing as aimed at the hero (dot 1.0) for the arc tests.
-- Hero distance in the wake and attack tests: horizontal distance.
+- Intro hand-off order (needs a runtime check): the slot's characters are set up when its read completes and the next streaming pass binds them, while the script grab is a script step at the end of a tick, so the fighter's think loop may run for at most the one pass in which it is bound, with the hero in whatever action state he holds then. Default if unresolved (rewrite choice): start him in the hidden state with the hero in action state 1 (wake distance 28). If the original instead lets his think loop run once before the script grabs him, the only difference is that a hero in an unlisted action state (factor 1.0, wake distance 40) would wake him during the intro. The original script gives the player no input during the intro, so the result is the same.
+- Weapon contact: resolved by the general rule (SPEC-0064, Shared field behaviour: Weapon contact and the hero's hurt shape): weapon 1 (radius 6.0, height 1.0, right hand) against the hero's capsules, with the first touching ticks of the Hit and hurt windows table; stand-in only for a port without attachment frames: the "at the tick" range of the Weapon reach table (slot 0 1.8 behind to 4.0 ahead, slot 3 about 4.2 behind to 8.6 ahead, the steal swing 2.4 behind to 9.0 ahead). The sequencer starts a swing only when d is 5.0 or less, so a standing hero is always struck.
+- Facing while circling and holding: resolved (Medium-High): the facing follows the turn blends of SPEC-0038 Behavior 48 (0.9 in the hold, 0.1 or 1.0 for the side gaits, 0.3 for the others), so it is close to but not exactly aimed at the hero; a port that does not model the blends may treat the facing as aimed (dot 1.0) for the arc tests.
+- Hero distance in the wake and attack tests: resolved (High): horizontal distance, with the height difference dropped.
 
 ## Round 1: Ixi Henchman
 
-Pack 1176, arena round r = 1 (flag 381 set, flag 382 clear). Opponent entity 13, loaded from region 1180, character record 0. Confidence: High for the row, clips, attack arithmetic and defence rules; Medium-High for the start sequence (one tick of offset either way); Medium for strike reach geometry and for anything that depends on attachment frames. All times are ticks (60 per second). Every clip of this fighter has speed byte 2, so at play rate 1.0 a key lasts 4 ticks and a one-shot clip of F keys passes its 0.99 gate 4(F - 1) + 1 ticks after the tick that requested it. "s" is the tick on which a request is made.
+Pack 1176, arena round r = 1 (flag 381 set, flag 382 clear). Opponent entity 13, loaded from region 1180, character record 0. Confidence: High for the row, clips, attack arithmetic and defence rules; Medium-High for the start sequence (one tick of offset either way); Medium for strike reach geometry and for anything that depends on attachment frames. All times are ticks (60 per second). Every clip of this fighter has speed byte 2, so at play rate 1.0 a key lasts 4 ticks and a one-shot clip of F keys passes its 0.99 gate 4(F - 1) + 1 ticks after the tick that requested it, one tick earlier from F = 25 keys (SPEC-0005). "s" is the tick on which a request is made.
 
 ### Fight AI build guide
 
@@ -364,11 +437,11 @@ Slot 1 ids (38 to 42) exist only as B 39 (clip 13, 20 keys); the slot is never c
 
 Runs every agro tick in outer 1, 3, 4 or 11 while the recovery countdown is below 1 and the hero is attackable (not dead, not in hurt state 17 or knockback state 48, not in a held or script state). While the hero is not attackable the four cooldowns do not count down. Slots are tested k = 3, 2, 1, 0 and the first to pass wins: type not unused, cooldown below 1, band strict on both ends, facing cosine above the slot's arc, one roll int[1, 100] below int(chance), charge rule (a charge slot needs a route to the hero; the jab needs a route or d below 10.0, which always holds in the ring). In practice slot 2 is tried first at 24 % per tick whenever its cooldown is spent, then slot 0 at 24 % (so 18 % when slot 2 failed its roll) when d is under 10.
 
-On a choice: the slot's cooldown is drawn; the attack sequencer starts (state 6 for the lunge, state 0 for the jab); the desired, retreat and charge distances are redrawn (the lunge's charge distance is therefore a draw from 10 to 50, uniform, made on the choice tick before the run starts). The cooldown is drawn again at the end path. After the sequencer's end path the fighter is in outer 0 with a recovery countdown of int[30, 180]; no new choice before it is spent. A hit reaction abandons an attack without running the end path (no recovery countdown), so after a reaction the next choice waits only for the cooldown drawn at the choice.
+On a choice: the slot's cooldown is drawn; the attack sequencer starts (state 6 for the lunge, state 0 for the jab); the distances are redrawn in this order: the retreat distance first (only for an approach-3 enemy), then the desired distance, then the charge floats (the lunge's charge distance is therefore a draw from 10 to 50, uniform, made on the choice tick before the run starts). The cooldown is drawn again at the end path. After the sequencer's end path the fighter is in outer 0 with a recovery countdown of int[30, 180]; no new choice before it is spent. A hit reaction abandons an attack without running the end path (no recovery countdown), so after a reaction the next choice waits only for the cooldown drawn at the choice.
 
-Jab (slot 0): tick c choice, state 0. With d above 4.0 the fighter walks forward with gait 28; at d of 4.0 or less (and both the hero and the steer point on the walk mesh) it goes to state 1 on the next tick (s). On s: A is missing, B 34 is requested and state 2 begins in the same tick. Strike window: ticks s + 20 to s + 39 (frames 5 to 9 carry weapon bit 1). One hit, 15 damage, at s + 20; the clip passes its gate on s + 57 and the end path runs on s + 58, with or without a hit (rate stays 1.0). A strike the hero blocks plays D (3 keys, gate 9) and then ends. The clip carries about 3.4 units/s of forward root travel (the step is dropped when it would bring the fighter within the sum of the two body radii of the hero while the sequencer is in states 0 to 3).
+Jab (slot 0): tick c choice, state 0. With d above 4.0 the fighter walks forward with gait 28; at d of 4.0 or less (and both the hero and the steer point on the walk mesh) it goes to state 1 on the next tick (s). On s: A is missing, B 34 is requested and state 2 begins in the same tick. Strike window: ticks s + 20 to s + 39 (frames 5 to 9 carry weapon bit 1). One hit, 15 damage, on the first window tick the weapon touches the hero (not necessarily s + 20). For a still level hero straight ahead, the exact weapon-versus-body test gives a maximum reach of 2.8 units from the fighter's centre, while the chase stop keeps the centres 3.175 apart (radius 2.0 + 1.175); the jab therefore misses at the chase stop. A hero standing 2.5 units away when the jab starts is touched on s + 24. Resolved: the still-hero-at-chase-stop question is closed for a level hero straight ahead; oblique, moving, or non-level targets can differ under SPEC-0018's asymmetric test. The clip passes its gate on s + 57 and the end path runs on s + 58, with or without a hit (rate stays 1.0). A strike the hero blocks plays D (3 keys, gate 9) and then ends. The clip carries about 3.4 units/s of forward root travel (the step is dropped when it would bring the fighter within the sum of the two body radii of the hero while the sequencer is in states 0 to 3).
 
-Lunge (slot 2, charge kind 2): on tick c state 6 aims at the hero, finds A missing, requests B 44 (the 20.0 units/s run clip) and moves to state 7 in the same tick. State 7 runs from c + 1: each tick it counts, and when d is 5.0 or less it goes to state 8 on the next tick; otherwise when the distance travelled since tick c has reached the drawn charge distance it goes to state 12. There is no steering and no strike test during the run: the fighter runs straight along its facing. State 8 requests C 45 on its first tick (c8): the strike test runs every tick; weapon 1 (radius 4.0) is open on ticks c8 + 24 to c8 + 47 (frames 6 to 11); one hit (35 damage, knockback 1.0) at c8 + 24; the gate passes on c8 + 85, state 12 follows, E is missing and the end path runs on c8 + 86. If the drawn charge distance is shorter than the gap to the hero, the fighter stops where the distance runs out (state 12 at once) and the lunge whiffs; with the hero at distance D0 above 5, the run reaches the hero for charge distances of at least D0 - 5, so a hero 25 units away is reached with probability 75 %.
+Lunge (slot 2, charge kind 2): on tick c state 6 aims at the hero, finds A missing, requests B 44 (the 20.0 units/s run clip) and moves to state 7 in the same tick. State 7 runs from c + 1: each tick it counts, and when d is 5.0 or less it goes to state 8 on the next tick; otherwise when the distance travelled since tick c has reached the drawn charge distance it goes to state 12. There is no steering and no strike test during the run: the fighter runs straight along its facing. State 8 requests C 45 on its first tick (c8): the strike test runs every tick; weapon 1 (radius 4.0) is open on ticks c8 + 24 to c8 + 47 (frames 6 to 11); one hit (35 damage, knockback 1.0) on the first touching tick: c8 + 28 for an idle level hero 4 to 7 units ahead when C starts (the usual case, since state 8 begins at d of 5.0 or less), c8 + 27 at 3.5 units, c8 + 24 at 3 units or closer (no chase stop in the charge states); the gate passes on c8 + 85, state 12 follows, E is missing and the end path runs on c8 + 86. If the drawn charge distance is shorter than the gap to the hero, the fighter stops where the distance runs out (state 12 at once) and the lunge whiffs; with the hero at distance D0 above 5, the run reaches the hero for charge distances of at least D0 - 5, so a hero 25 units away is reached with probability 75 %.
 
 **6. Movement rules (approach routine 4)**
 
@@ -378,11 +451,23 @@ Desired distance = 10 + 10 f, f = int[20, 80] / 100 (12 to 18), drawn at creatio
 - Inners 8 and 9: sidestep (left for 8, right for 9, facing the hero), hold down by one, below 1 -> inner 10; a blocked flag (wall) -> inner 10 with lock 120; then the same distance tests.
 - Inner 11: walk backward away from the hero; d above desired, or blocked (lock 120) -> hold 0, inner 10.
 Consequence: after every swing the fighter, now 4 to 8 units from the hero, backs off until d exceeds its desired distance (12 to 18) unless it attacks first. With the hero standing still at 20 units or less it holds and attacks in place. The ring wall stops steering (blocked flag).
+
+Movement table (movement pass; row 160 uses the Ixi spear rig of SPEC-0065, Ixi Spearman Movement table; speed byte 2): strafe approach (inner 7) and sequencer approach id 28 = clip 22, 0.0945 per tick (5.67 u/s); circles id 29 (+x) and 30 (-x), 0.0945 per tick sideways, facing the hero (the travel goes to the side opposite to the steering point, SPEC-0038 Behavior 51); back off id 32 = clip 29, 0.1593 per tick (9.56 u/s); hold id 31, aim weight 1.0; the slot-2 lunge run id 44 = clip 6, 0.3334 per tick (20.0 u/s), solid (charge kind 2), no steering; melee dodge 55 = 7.39 units backward over 61 ticks; hit reaction 57 = 2.93 units backward over 49 ticks. Turning while moving is the steering blend (0.3 / 0.1). The navigation mesh of the ring (32 triangles) confines it; it never meets a 2.0 drop.
+Worked example (start). The hero stands 24.2 units ahead at the first agro tick: d above 20.0 gives inner 7, the walk clip is requested and its first step lands one tick later; with the desired distance drawn at 15.0 it covers 9.2 units in 98 ticks, sees d below 15 and holds after one more step, unless the slot-2 lunge (band 0 to 50) starts first, which it usually does.
 The fighter never leaves agro in the arena (route flag is true; sight line is clear).
 
 **7. Hit and hurt windows**
 
 Attack windows are given above (jab s + 20 to s + 39, lunge c8 + 24 to c8 + 47, one hit per window). The hit list (one entry per target) is cleared at the attack start and at the start of each separate open window. It is hittable by the hero except when: in outer 5 or 6; base state 16; script-held. It is hittable while blocking (outer 7), but the hero's swing is judged by the guard rule below. Damage dealt to the hero: row value x 1.0, then shield and armour (SPEC-0036 Enemy attack damage to a hero); a blocked strike (hero guarding with the hero's facing dot the fighter's facing at most -0.5) still deals the reduced damage, plays D and ends the swing; damage above 0 on a living hero knocks it back by the slot's knockback (35-damage lunge: 1.0) into state 48.
+
+**Weapon reach.** Conventions are those of "Weapon reach tables" in SPEC-0064 (shared field behaviour). Row 160, Medium. The tick text above and in the test vectors is authoritative for the hit ticks (the lunge window opens on c8 + 24 and the hit lands on the first touching tick); "sC" is the tick the lunge clip is requested. Weapon 1 has radius 4.0 and height 2.0.
+
+| Slot (phase, clip) | Window ticks (level contact) | Centre forward / up / side | Tor ahead, at the tick | Tor ahead, from the start | Tor feet vs origin |
+|---|---|---|---|---|---|
+| 0 jab (B, clip 0) | s+20 to s+39 (s+20 to s+39) | 0.6 to 1.2 / 2.6 to 3.6 / -1.1 to -0.7 | -1.6 to 2.8 | 1.3 to 6.3 | -4.5 to 7.5 |
+| 2 lunge (C, clip 4) | sC+24 to sC+47 (sC+24 to sC+39) | 0.0 to 2.7 / 2.2 to 2.6 / -1.7 to 3.4 | -2.4 to 5.6 | -1.9 to 6.1 | -4.5 to 6.5 |
+
+The jab is short (2.8 ahead at most at the tick, 6.3 from where the fighter stood). The lunge reaches 5.8 ahead. Slot 1 (charge kind 0, drawn distance 0 to 0) ends its state 7 on the first tick, so its jab windows are not reached.
 
 **8. Defence and counter rules**
 
@@ -433,20 +518,21 @@ There are no counter-attacks.
 Tick R is the release tick; tick 0 is the tick on which the hero first satisfies the trigger (stance F1 = 0.7).
 
 1. Trigger thresholds: stance, hero at 27.9 units: passes; at 28.0: does not (strict). Slow walk at 29.9: passes; at 30.0 does not. Walk (state 3) at 59.9: passes. At the arena start (30.19), stance or slow walk: nothing happens for any number of ticks.
-2. Start timeline, hero standing still 24.2 units ahead after the trigger, rolls passing on the first tick, timers at their minimum (reference run): tick 0 sub-state 1; tick 1 request animation 10; tick 78 class state 19; tick 79 outer 4, inner 10; tick 80 choice slot 2 (cooldown 60), B requested; tick 139 d is 4.86 (5.0 or less) -> state 8; tick 140 C requested; tick 164 lunge hit (35 damage, knockback 1.0); tick 225 C gate; tick 226 end path (recovery 30, slot 2 cooldown 60); tick 227 outer 4; tick 228 d is 4.2 so back off (inner 11); tick 256 choice slot 0 (d 8.34); tick 305 d is 3.96, state 1; tick 306 B requested; tick 326 jab hit (15 damage); tick 363 gate; tick 364 end path (recovery 30, cooldown 30); tick 394 choice slot 2 (d 8.0); tick 405 d is 4.84 -> state 8; tick 406 C; tick 430 hit (35); tick 492 end path; tick 522 slot 0; tick 592 jab hit; tick 660 slot 2; tick 696 hit. The choice on tick 80 happens on tick 80 + G where G is geometric with probability 0.24 per tick (mean 3.2); everything in the chain shifts by G.
-3. Same start, slow draws (recovery 180, cooldowns 120, rolls failing about three ticks each): lunge hit on tick 164 (+G); end path on tick 226; back-off ends at tick 317 (d above 18); next choice on tick 408 (d about 18.4, charge run 42 ticks, hit on tick 475); end path tick 537. Hits land every 300 to 310 ticks. Range over all draws for the gap between two lunge hits: 30 + 146 (end path) to 180 + 146 ticks plus the run time.
+2. Partial start timeline, hero standing still 24.2 units ahead after the trigger, rolls passing on the first tick, timers at their minimum: tick 0 sub-state 1; tick 1 request animation 10; tick 78 class state 19; tick 79 outer 4, inner 10; tick 80 choice slot 2 (cooldown 60), B requested; tick 139 d is 4.86 (5.0 or less) -> state 8; tick 140 C requested. For a still, level Tor at d = 4.86 the exact weapon test first touches on c8 + 28 = tick 168 (35 damage, knockback 1.0); the gate is tick 225 and the end path tick 226. The charge has solid body collision and may push Tor before C starts, so a live fight with a displaced Tor can differ; the stationary figure is the reference. The choice on tick 80 happens on tick 80 + G where G is geometric with probability 0.24 per tick (mean 3.2); every later tick of this vector shifts by G.
+3. Same start, slow draws (recovery 180, cooldowns 120, rolls failing about three ticks each): lunge hit on tick 168 (+G); end path on tick 226; back-off ends at tick 317 (d above 18); next choice on tick 408 (d about 18.4, charge run 42 ticks, hit on tick 479); end path tick 537. Hits land every 300 to 310 ticks. Range over all draws for the gap between two lunge hits: 30 + 146 (end path) to 180 + 146 ticks plus the run time.
 4. Hero attacks first, hero 6 units ahead, fighter already in strafe hold: Tor presses a swing (sub-state 2, window ticks h + 8 to h + 23, recover bits h + 28 to h + 47) at tick h. On tick h + 1 the fighter sees the swing and rolls. Block (80 %): outer 7, hold 60, animation 56; the swing is blocked on its first window tick (no damage); the fighter stays in the block until the hero's swing ends (about h + 48), then defence exit with hold int[60, 240]: it cannot defend again before h + 109 to h + 289. Dodge (15.8 %): outer 5 from h + 1, unhittable until h + 62, the swing whiffs. No defence (4.2 %): hit on the first window tick, 4 damage with sword 98, fighter at 61 HP, hit reaction (animation 57, ends h + 59), attack choices resume after the cooldown and the recovery countdown.
 5. Hit while hiding: Tor swing at the fighter in state 8 with sword 98: damage 8 (doubled), the fighter is in agro with outer 10 kind 0 at once and the emerge never plays.
 6. Damage arithmetic on the hero: lunge 35, no shield, no armour: 35; with a body item of stat A 20: trunc(35 x 0.8) = 28.
 
 ### Open questions
 
-1. Weapon reach geometry. The strike windows assume the hero is inside the weapon volume. The volumes are cylinders on attachment frames of the model; the distance at which a jab (range 4.0) or lunge (range 5.0) actually touches the hero depends on those frames. Default if unresolved (rewrite choice): treat the strike as touching when the horizontal distance to the hero is at most the slot's melee range plus the hero's body radius.
-2. Hit count per window for the kind 2 lunge: assumed one hit per open window through the hit list (Medium). Default: one.
-3. Root motion of the intro clip (animation 13 averages non-zero root travel). Default: the fighter ends the intro at locator 2 (the script moves it to the same point before the intro, and the first state-8 tick returns it to its home point if displaced more than 0.35).
-4. Distance metric of the hide trigger (three-dimensional or horizontal); the ring is flat, so both give the same result in the arena.
-5. Ring-edge behaviour of the back-off: default, the blocked flag ends the back-off and sets the 120-tick lock.
-6. The exact one-tick offsets of the start chain (Medium).
+1. Weapon reach geometry. The strike windows assume the hero is inside the weapon volume. The volumes are cylinders on attachment frames of the model; the distance at which a jab (range 4.0) or lunge (range 5.0) actually touches the hero depends on those frames. Resolved by the general rule (SPEC-0064, Shared field behaviour: Weapon contact and the hero's hurt shape); the distances are in the Weapon reach table of this round; stand-in only for a port without attachment frames: treat the strike as touching when a level hero is inside the "at the tick" range of the slot's row (1.6 behind to 2.8 ahead for the jab, 2.4 behind to 5.8 ahead for the lunge).
+2. Hit count per window for the kind 2 lunge. Resolved (High; proactive (open close-out)): the swing's hit list is cleared at the start of each separate open window and holds one entry per target, so the lunge hits a given target at most once per window.
+3. Root motion of the intro clip. Resolved (High; proactive (open close-out)): the intro clip (id 13, clip 35, 56 keys) is a frame-stored clip whose root record is zero at every key, so it carries no root travel; the fighter ends the intro at locator 2 (the script moves it there before the intro, and the first state-8 tick returns it to its home point if displaced more than 0.35).
+4. Distance metric of the hide trigger. Resolved (High; proactive (open close-out)): horizontal, with the height difference dropped (SPEC-0038 Behavior 40).
+5. Ring-edge behaviour of the back-off. Resolved (High; proactive (open close-out)): a region character is confined to its navigation mesh and a border edge acts as a wall that sets the blocked flag and a blocked timer of 120 ticks (SPEC-0056, Navmesh confinement step); the blocked flag ends the back-off and starts the 120-tick lock.
+6. The exact one-tick offsets of the start chain. Resolved (proactive (open close-out)): they follow the per-tick order of SPEC-0038 Behavior 50 (each active enemy runs its update, motion and animation pass in list order, and the script step comes last); the only runtime-only part is the intro hand-off order given under the Rogue's defaults (needs a runtime check).
+7. Jab against a still hero (timing pass). Resolved for a still level hero straight ahead at the chase stop: the exact weapon-versus-body result (SPEC-0018 Finite cylinder tests; High) reaches at most 2.85 units straight ahead (checked in 0.025 steps over every window tick) while the chase stop keeps the centres 3.175 apart, so the jab misses by 0.33. It touches on s + 26 at 2.7 units, s + 28 at 2.8 and s + 24 at 2.5. A hero standing 3 units to the weapon side of the facing line can be touched out to about 4.4 units of distance, but the fighter faces the hero when the jab starts. The same holds for the Henchman and Dark Ixi Spearman jabs (same weapon). Oblique, moving or non-level target outcomes follow the asymmetric collision rule in SPEC-0018 and are not represented by this straight-ahead example.
 
 ## Round 2: Sludgy
 
@@ -502,7 +588,7 @@ As in round 1 (think loop, pre-step, class-19 machine in the order recovery, bas
 | Back off (inner 2) | 23 -> clip 19, loop | 10 keys, 9.0 units/s backward | none | d above desired -> inner 1 |
 | Slot 0 lob | A 33 skipped; B 34 -> clip 10; C, E skipped; D 36 -> clip 20 | B 30 keys | B 116 | end path |
 | Slot 1 swipe | A skipped; B 39 -> clip 11; C skipped; D 41 -> clip 20; E skipped | B 21 keys | B 81, D 53 | end path |
-| Slot 2 slam | A skipped; B 44 -> clip 12; C skipped; D 46 -> clip 20; E skipped | B 26 keys | B 67 at rate 1.5, 91 when it slows to 1.0 after a hit | end path |
+| Slot 2 slam | A skipped; B 44 -> clip 12; C skipped; D 46 -> clip 20; E skipped | B 26 keys | B 67 at rate 1.5 with no contact; after a hit it slows to 1.0: 90 for a hit on s + 21, 89 for s + 22 | end path |
 | Melee or missile dodge (outer 5, 6) | 55, 53, 54 -> clip 13 | 23 keys | 89 | defence exit |
 | Hit reaction (outer 10 kind 0) | 57 -> clip 14 | 20 keys | 77 | outer 0 |
 | Victory pose | 73 -> clip 3 | 44 keys | 172 | class 0 then 8 |
@@ -517,23 +603,35 @@ Same rules as round 1 (tested k = 3, 2, 1, 0; first pass wins; the choice is mad
 
 Lob (slot 0): choice on tick c, state 0 (missile: goes on once the hero and the steer point are on the walk mesh), s = c + 1: A is missing, B 34 is requested and state 2 begins on s. The release bit 0x20 is carried only by frame 21: the projectile is created on tick s + 84 (the first tick on which the bit is seen; the bit stays for four ticks but the spawn count is 1). Emit point 0. State 3 waits for the B gate on s + 116, state 5 follows and the end path (recovery int[15, 120], slot 0 cooldown int[120, 480]) runs on s + 117. So the lob leaves 84 ticks after the swing starts and the whole action lasts 118 ticks. Aim point: the hero's position (feet) plus a random horizontal scatter e = U[0, 2.0], plus 5.0 when the fighter is outside the camera cone, plus 3.0 when waiting in line. Flight: ballistic, speed s_v = 1.0 - 0.5 u squared with u = 1 - (d - 10) / 90 (unclamped), flight time T = d / s_v ticks (d = horizontal distance to the aim point: 27 ticks at 15 units, 38 at 25, 51 at 40, 82 at 80, 100 at 100), lifetime trunc(60 T) + 1, so the shot always lands before it expires. On contact with the hero's body in flight: hero takes trunc of the reduced damage (20 minus shield or armour), the status roll (draw 0 to 100 at most 0) is a 1-in-101 stun of 0 seconds, the effect 1461 plays. A blocked hit (hero guarding with the shot heading against the hero's facing) deals max(1, a quarter of the reduced damage). On landing the shot enters area mode with duration 0 and ends on the next tick, so the ground does no damage: only a direct flight contact hurts.
 
-Swipe (slot 1): s = first tick of state 1 (the tick after state 0 sees d at or under 5.0; above 5.0 the fighter first walks with gait 0). B 39 requested on s; weapon 1 open on ticks s + 32 to s + 43 (frames 8 to 10); one hit, 25 damage, at s + 32; gate s + 81 (rate 1.0 throughout), end path s + 82. If blocked by the hero's guard: D 41 plays (gate 53), then the end path.
+Swipe (slot 1): s = first tick of state 1 (the tick after state 0 sees d at or under 5.0; above 5.0 the fighter first walks with gait 0). B 39 requested on s; weapon 1 open on ticks s + 32 to s + 43 (frames 8 to 10); one hit, 25 damage, on the first window tick the weapon touches the hero: the exact asymmetric contact samples confirm s + 36 for a stationary level hero straight ahead from 3.0 to 7.0 units (the window start s + 32 is not the hit tick); gate s + 81 (rate 1.0 throughout), end path s + 82. If blocked by the hero's guard: D 41 plays (gate 53), then the end path.
 
-Slam (slot 2): the pursuit range is 9.0, so when the slam is chosen at d above 9.0 the fighter first walks (gait 0 plays the rush walk) until d is 9.0 or less; s is the following tick. On s state 1 stores the wind-up word 1.3 (A is missing, so it affects only the first pass), requests B 44 and begins state 2 at the strike rate 1.5. Weapons 1 and 2 are open on ticks s + 19 to s + 29 (frames 7 to 10); one hit, 30 damage, knockback 7.0, stun roll, at s + 19. After a hit the sequencer moves to state 3, where no row word replaces the play rate, so the rest of the clip runs at 1.0: gate s + 91, end path s + 92. With no contact: gate s + 67, end path s + 68. Blocked by the hero: D 46 (gate 53) then end path; the damage, knockback and stun roll still apply.
+Slam (slot 2): the pursuit range is 9.0, so when the slam is chosen at d above 9.0 the fighter first walks (gait 0 plays the rush walk) until d is 9.0 or less; s is the following tick. On s state 1 stores the wind-up word 1.3 (A is missing, so it affects only the first pass), requests B 44 and begins state 2 at the strike rate 1.5. Weapons 1 and 2 are open on ticks s + 19 to s + 29 (frames 7 to 10); one hit, 30 damage, knockback 7.0, stun roll, on the first window tick a weapon touches the hero: s + 21 for a stationary level hero straight ahead from 3.0 to 4.0 units, s + 22 from 4.5 to 9.0 (the window begins at s + 19; these exact-helper samples miss at s + 19 and s + 20). After a hit the sequencer moves to state 3, where no row word replaces the play rate; the pass of the hit tick still runs at 1.5 and the rest of the clip at 1.0: gate s + 90 for a hit on s + 21, s + 89 for s + 22 (s + 91 for the earliest possible hit on s + 19), end path one tick later. With no contact: gate s + 67, end path s + 68. Blocked by the hero: D 46 (gate 53) then end path; the damage, knockback and stun roll still apply.
 
 **6. Movement rules (approach routine 1)**
 
-Desired distance = 3.5 + 1.5 f, f = int[20, 80] / 100 (3.8 to 4.7), drawn at creation and after every normal choice. Outer 1 begins in inner 1 (hold). Inner 1: d below 3.5 -> inner 2; d above 5.0 -> inner 0. Inner 0: walk toward the hero (gait 2 when d is over 10.0 and gait 0 otherwise: the same clip), d below desired -> inner 1. Inner 2: back off to the point 7.0 units from the hero along the line, d above desired -> inner 1. The fighter holds while the hero stays in 3.5 to 5.0, facing it with weight 0.2. During the sequencer states 0 to 3 its steps are dropped when they would bring it within the sum of the radii of the hero (about 3.0). With a route it never runs the no-route branch.
+Desired distance = 3.5 + 1.5 f, f = int[20, 80] / 100 (3.8 to 4.7), drawn at creation and after every normal choice. Outer 1 begins in inner 1 (hold). Inner 1: d below 3.5 -> inner 2; d above 5.0 -> inner 0. Inner 0: walk toward the hero (gait 2 when d is over 10.0 and gait 0 otherwise: the same clip), d below desired -> inner 1. Inner 2: back off to the point 7.0 units from the hero along the line, d above desired -> inner 1. The fighter holds while the hero stays in 3.5 to 5.0, facing it with weight 0.2. During the sequencer states 0 to 3 its step is dropped on every tick on which it is within the sum of the radii of the hero (2.0 + 1.175 = 3.175, 3D distance). With a route it never runs the no-route branch.
+
+Movement table (movement pass; row 231; speed byte 2): rush walk (inner 0, gaits 0 and 2) and sequencer approach id 21 = clip 8, 10 keys, 0.15 per tick on every key (9.0 u/s); back off (inner 2) id 23 = clip 19, 0.15 per tick backward (9.0 u/s), facing the hero; field walk ids 2 and 4 = clip 0, 0.0625 per tick (3.75 u/s; not used in the arena); hold id 22 with aim weight 0.2 (a fifth of the remaining angle per tick: from 90 degrees off it needs about 10 ticks to come within 10 degrees); confused id 69, 1.11 u/s; the attack clips carry no root travel worth counting, so the slam and the lob are thrown from where it stands. Turning while it walks is the steering blend (0.3 / 0.1); because the step goes along the current facing, a hero who circles it quickly at 4 units makes it walk in arcs. Worked example: hero standing 25 away at release, desired 4.25: inner 1 sees d above 5.0 and goes to inner 0; 20.75 units at 0.15 per tick take 139 ticks, then it holds, unless the lob (band 10 to 100, 74 percent per tick) starts first, which it does on its first chooser tick in almost every run.
 
 **7. Hit and hurt windows**
 
-Lob release: tick s + 84. Swipe: s + 32 to s + 43. Slam: s + 19 to s + 29 (rate 1.5). All one hit per window. The fighter is not hittable in outer 5 and 6 (dodging), nor in base state 16, nor when script-held; it is hittable in every other state, including the slam's wind-up and the hit reaction.
+Lob release: tick s + 84. Swipe: s + 32 to s + 43 (first touch of an idle level hero in front s + 36). Slam: s + 19 to s + 29 (rate 1.5; first touch s + 21 at 3 to 4 units, s + 22 at 5 to 9). All one hit per window, on the first touching tick, not on the window start. The fighter is not hittable in outer 5 and 6 (dodging), nor in base state 16, nor when script-held; it is hittable in every other state, including the slam's wind-up and the hit reaction.
+
+**Weapon reach.** Conventions are those of "Weapon reach tables" in SPEC-0064 (shared field behaviour). Row 231, Medium. The first-touch ticks above are authoritative; the table adds where the hero must stand.
+
+| Slot (phase, clip) | Weapon | Window ticks (level contact) | Centre forward / up / side | Tor ahead, at the tick | Tor ahead, from the start | Tor feet vs origin |
+|---|---|---|---|---|---|---|
+| 1 swipe (B, clip 11) | w1 (3.0 x 2.0) | s+32 to s+43 (s+32 to s+43) | -2.8 to 4.8 / 0.8 to 1.8 / -4.2 to 3.3 | -3.2 to 8.4 | -3.2 to 8.4 | -4.0 to 4.0 |
+| 2 slam (B, clip 12) | w1 (3.0 x 2.0) | s+19 to s+29 (s+21 to s+29) | -2.0 to 5.8 / 0.4 to 6.4 / -1.6 to 0.0 | 2.2 to 9.4 | 2.2 to 9.4 | -4.0 to 8.5 |
+| 2 slam (B, clip 12) | w2 (3.0 x 1.5) | s+19 to s+29 (s+22 to s+29) | -4.9 to 8.2 / 0.0 to 7.8 / -1.8 to 3.4 | 3.8 to 11.8 | 3.8 to 11.8 | -6.0 to 9.5 |
+
+The swipe covers 3.2 behind to 8.4 ahead. The slam touches nothing closer than 2.2 ahead (weapon 1) or 4.0 ahead (weapon 2) and reaches 9.4 and 11.8; the trigger distance of 9.0 is therefore not the reach, and the weapon 2 volume reaches farther than that. Sludgy does not move during either blow.
 
 **8. Defence and counter rules**
 
 - Melee dodge: same trigger as round 1 (once per hero swing, first fighter tick that sees the hero swing; hold below 1; not in outer 10; in outer 2 only in sequencer states 0, 1 and 5; fighter within 8.0 units and 60 degrees of the hero's facing). r1 can never be at most 0, so it never blocks; r2 = int[1, 100] below 100 -> dodge: 99 % of swings. The hold is then 120; the dodge animation (clip 13) lasts 89 ticks; the defence exit (outer 0, base state 1) sets the hold to int[0, 10]. So a continuous Tor combo is dodged: swing 1 starts the dodge (the fighter is unhittable for about 90 ticks), swing 2 (started while the hold is still high) finds it unhittable, swing 3 usually starts after the exit with the hold at or under 1 and is dodged again. The hero's power step has no swing class and is never dodged; a swing outside the 60 degree arc, or one started while the fighter is in the sequencer's states 2 to 4 (strike), 6 to 15, or in a hit reaction, is not dodged.
 - Missile dodge (hero shots): hold 120 look-ahead; first roll below 75 -> dodge (outer 6, animation 53 or 54, clip 13, 89 ticks): 74 %. The block roll never passes (chance 0).
-- Counter code 2 (slot 1): while the fighter is in outer 5 or 6 and any hero clip shows the recover bit (Tor's swings carry it on their last frames: ordinary first swing frames 7 to 11, ticks about 28 to 47 after the press; second swing frames 8 to 15; finisher frames 9 to 12), slot 1 is eligible when d is between 0 and 7, the facing is above 0.707 and its cooldown is below 1 (always). One roll int[0, 100] per tick; below 75 (75 of 101) starts the swipe at once, which ends the dodge (outer 2). So a Tor swing at close range is dodged and punished: swipe request at about h + 29, hit (25 damage) at about h + 61. Roberta never opens the recover bit, so against her the counter never fires.
+- Counter code 2 (slot 1): while the fighter is in outer 5 or 6 and any hero clip shows the recover bit (Tor's swings carry it on their last frames: ordinary first swing frames 7 to 11, ticks about 28 to 47 after the press; second swing frames 8 to 15; finisher frames 9 to 12), slot 1 is eligible when d is between 0 and 7, the facing is above 0.707 and its cooldown is below 1 (always). One roll int[0, 100] per tick; below 75 (75 of 101) starts the swipe at once, which ends the dodge (outer 2). So a Tor swing at close range is dodged and punished: swipe request at about h + 29, hit (25 damage) on its first touching tick s + 36, about h + 65. Roberta never opens the recover bit, so against her the counter never fires.
 - Counter code 6 (slot 2): while in hit reaction (outer 10), band 0 to 15, facing above 0.9239, cooldown below 1: roll int[0, 100] below 80 starts the slam at once (the same roll rule). The slot cooldown int[15, 60] is drawn then. In the other slots' order the later eligible slot wins (slot 2 over slot 1).
 - The counters ignore the recovery countdown and the hero-attackable test and do not count cooldowns down.
 
@@ -559,8 +657,8 @@ Lob release: tick s + 84. Swipe: s + 32 to s + 43. Slam: s + 19 to s + 29 (rate 
 - The slam drops from 1.5 to 1.0 after a hit: a landed slam lasts 92 ticks and a missed one 68.
 - The lob's lifetime unit slip is irrelevant (the shot lands first).
 - A hit reaction interrupts an attack without the end path, so the slot cooldown drawn at the choice is the only wait.
-- The stun is applied after the take-hit (which clears an existing stun), so a fresh stun survives; the knockback follows and sets the hero to state 48; the stun forces state 1 each tick (open).
-- The fighter's map search is on (see Open questions).
+- The stun is applied after the take-hit (which clears an existing stun), so a fresh stun survives; the knockback follows and sets the hero to state 48; the stun forces state 1 each tick, before the state switch, so state 48 never runs while the stun lasts (Open question 4).
+- The fighter's map search is on but never finds a target in the arena (Open question 3).
 
 **11. What a port most likely gets wrong**
 
@@ -576,21 +674,21 @@ Lob release: tick s + 84. Swipe: s + 32 to s + 43. Slam: s + 19 to s + 29 (rate 
 ### Test vectors
 
 1. Start (as round 1): trigger at tick 0 (hero 25.0 units ahead, stance): tick 1 request 10; tick 42 class state 19; tick 43 outer 1; tick 44 first choice.
-2. Standing hero 25 units away, rolls passing at once, minimum timers (reference run, rounds of the chain shift by the geometric wait G with probability 0.74, 0.64 or 0.49 per tick): tick 44 choice slot 0 (cooldown 120), tick 45 B requested, tick 129 lob created (d 25: speed 0.653, flight about 38 ticks, lands about tick 167), tick 161 gate, tick 162 end path (recovery 15, cooldown 120), tick 163 outer 1, tick 164 d above 5.0 so it walks at 0.15 per tick; tick 233 choice slot 2 at d 14.95; walk on to d 9.0; tick 274 request B 44; tick 293 slam hit window opens (30 damage); tick 365 gate; tick 366 end path (recovery 15, cooldown 15); tick 381 next slam choice (d 7.15). The slam hits only if the volume reaches the hero from 9 units (open question 1).
-3. Same with slow draws (recovery 120, slam cooldown 60, lob cooldown 480): lob on 44 (+G), end path 162, recovery runs to 282, slam choice 282 at d 7.6, hit window 302, end path 375, next slam 495.
-4. Hero 6 units ahead, stance, trigger at tick 0: tick 44 choice slot 2 (64 % per tick; slot 1 49 % otherwise), tick 45 request B (the fighter is within 9.0), tick 64 hit (30 damage, knockback 7.0, stun roll), tick 136 gate, tick 137 end path, next choice about tick 152 (recovery 15 to 120, cooldown 15 to 60). Landed slam cycle: 92 + N + wait; missed slam: 68 + N + wait.
-5. Hero attacks: hero at 4 units, Tor presses a swing at tick h (window ticks h + 8 to h + 23, recover bit ticks h + 28 to h + 47). Tick h + 1: the fighter sees the swing; 99 %: dodge, outer 5, hold 120, animation 55, unhittable until h + 91; the swing whiffs. At h + 28 the first counter roll (75 of 101); with probability 0.743 per tick the swipe starts, so by h + 30 almost surely: outer 2, state 1 on h + 29 or h + 30, B requested, hit at about h + 61 to h + 62 (25 damage minus armour). The 1 % no-dodge case: hit at h + 9, 4 damage (sword 98), hit reaction, slam counter with 80 % on the first tick (30 damage, stun 50 %).
+2. Standing hero 25 units away, rolls passing at once, minimum timers (reference run, rounds of the chain shift by the geometric wait G with probability 0.74, 0.64 or 0.49 per tick): tick 44 choice slot 0 (cooldown 120), tick 45 B requested, tick 129 lob created (d 25: speed 0.653, flight about 38 ticks, lands about tick 167), tick 161 gate, tick 162 end path (recovery 15, cooldown 120), tick 163 outer 1, tick 164 d above 5.0 so it walks at 0.15 per tick; tick 233 choice slot 2 at d 14.95; walk on to d 9.0; tick 274 request B 44; tick 293 slam window opens; tick 296 the slam touches the stationary level hero 9 units away (s + 22; 30 damage, knockback 7.0, stun roll; exact first-touch sample with chase stop); tick 363 gate (s + 89); tick 364 end path (recovery 15, cooldown 15); tick 379 next slam choice. With a whiff the gate is tick 341 and the end path tick 342.
+3. Same with slow draws (recovery 120, slam cooldown 60, lob cooldown 480): lob on 44 (+G), end path 162, recovery runs to 282, slam choice 282 at d 7.6, B requested 283, window 302, hit 305 (s + 22), gate 372, end path 373, next slam 493.
+4. Hero 6 units ahead, stance, trigger at tick 0: tick 44 choice slot 2 (64 % per tick; slot 1 49 % otherwise), tick 45 request B (the fighter is within 9.0), window from tick 64, hit on tick 67 (s + 22, the first touching tick at 6 units; 30 damage, knockback 7.0, stun roll), tick 134 gate, tick 135 end path, next choice about tick 150 (recovery 15 to 120, cooldown 15 to 60). Landed slam cycle: 92 + N + wait; missed slam: 68 + N + wait.
+5. Hero attacks: hero at 4 units, Tor presses a swing at tick h (window ticks h + 8 to h + 23, recover bit ticks h + 28 to h + 47). Tick h + 1: the fighter sees the swing; 99 %: dodge, outer 5, hold 120, animation 55, unhittable until h + 91; the swing whiffs. At h + 28 the first counter roll (75 of 101); with probability 0.743 per tick the swipe starts, so by h + 30 almost surely: outer 2, state 1 on h + 29 or h + 30, B requested, hit on the first touching tick s + 36, about h + 65 to h + 66 (25 damage minus armour). The 1 % no-dodge case: hit at h + 9, 4 damage (sword 98), hit reaction, slam counter with 80 % on the first tick (30 damage, stun 50 %).
 6. Stun duration draw: draw 60 to 119 -> 1 s (60 ticks); 120 to 179 -> 2 s; 180 to 239 -> 3 s; 240 -> 4 s.
 7. Lob speeds: d 15 -> 0.554 (T 27); d 25 -> 0.653 (T 38); d 40 -> 0.778 (T 51); d 80 -> 0.975 (T 82).
 
 ### Open questions
 
-1. Weapon reach geometry (as round 1). Default if unresolved (rewrite choice): touching when the horizontal distance to the hero is at most the slot's melee range (5.0 swipe, 9.0 slam) plus the hero's body radius; this makes the slam reach nine units, which is probably too generous; a safer default is the radius sum plus 3.0 (weapon radius).
-2. Lob contact: the hero's body radius (about 1.0) and the scatter U[0, 2.0] (plus 5.0 outside the camera cone) decide how often a standing hero is hit; about 60 % inside the cone. Default: test the sphere against the hero's body cylinder each tick as specified.
-3. Map search: the row looks for objects of kind 0x91 within 100 units on 50 % per search with a 30 to 60 tick timer and leaves agro for the map-search state when it finds one with the hero over 10.0 away. The ring is assumed to hold no such object. Default: not modelled.
-4. Knockback state 48 versus the stun forcing state 1 on the same strike: unresolved ordering of the hero's states. Default: apply the knockback velocity, then the stun for its duration.
-5. Hero's recover window sampling tick (whether the fighter sees the bit on the first tick of the frame or one tick later): +-1 tick.
-6. Intro and start offsets: as round 1.
+1. Weapon reach geometry (as round 1). Resolved by the general rule (SPEC-0064, Shared field behaviour: Weapon contact and the hero's hurt shape); the distances are in the Weapon reach table of this round; stand-in only for a port without attachment frames: touching when a level hero is inside the "at the tick" range of the slot's row (3.2 behind to 8.4 ahead for the swipe; 2.2 to 9.4 ahead for the slam, weapon 2 reaching 4.0 to 11.8).
+2. Lob contact: the hero's body radius (about 1.0) and the scatter U[0, 2.0] (plus 5.0 outside the camera cone) decide how often a standing hero is hit; about 60 % inside the cone. Resolved (proactive (open close-out)): test the sphere against the hero's body cylinder each tick as specified (SPEC-0029 Behavior 9).
+3. Map search: the row looks for an item of kind 145 on 50 % per search with a 30 to 60 tick timer and leaves agro for the map-search state when it finds one with the hero over 10.0 away. Resolved (High; proactive (open close-out)): the search never finds a target in the arena, because neither pack 1176 nor its five character regions has an item placement and every round loads the world afresh, so the world item pool is empty (the Sludgy has no drop, and the hero cannot leave an item there). Do not model the search.
+4. Knockback state 48 versus the stun forcing state 1 on the same strike. Resolved (High for the order; proactive (open close-out)): the strike runs in the enemy loop before the hero's update of the same tick, and the hero's status step (stun forces state 1 and the speed scale 0 every tick) runs before the hero's state switch, so on every tick of the stun the hero is in state 1 and state 48 never runs; the knockback velocity written by the strike is kept and carries the hero as an idle body. How far the slide goes under state 1 is a physics result (needs a runtime check).
+5. Hero's recover window sampling tick. Resolved (proactive (open close-out)): the fighter's think runs before the hero's update of the same tick (SPEC-0038 Behavior 50), so it reads the event bit left by the hero's previous animation pass; the offsets in the tables already use that order.
+6. Intro and start offsets: as round 1 (the hand-off order is runtime-only, see the Rogue's defaults).
 
 ## Round 3: Skeleton Fighter
 
@@ -642,7 +740,7 @@ All clips have speed byte 2 (0.25 keys per tick at play rate 1). Slot ranges: sl
 | Missile dodge (never used, dodge chance 0) | 53 / 54 | clips 7 / 8, 13 / 15 keys | 49 / 57 | 6 to the right / left |
 | Victory pose (state 10) and arena intro | 73 | clip 20, 36 keys | 140 | none |
 | Arena victory pose after a hero death | 22 | clip 19, 32 keys | 124 | none |
-| Death (class state 16, countdown phase) | 58 | clip 13, 56 keys, speed byte 1 (0.5 keys per tick) | 110 | not applied to the corpse (Low) |
+| Death (class state 16, countdown phase) | 58 | clip 13, 56 keys, speed byte 1 (0.5 keys per tick) | 110 | -0.82 (back) and 0.16 to the side over 112 ticks (frame-stored root, mode 0; SPEC-0005); last key 0, so nothing is held |
 | Rise (not reachable in the arena) | 85 | clip 14, 39 keys, speed byte 1 | 77 | small |
 
 ### Arena start sequence
@@ -688,19 +786,35 @@ Counter-attack choice (runs after the normal choice, all outer sub-states, no re
 
 ### Phase timing for each slot (tick 0 = tick in which the sequencer requests the strike clip; the choice happened one tick earlier)
 
-| Slot | Window (event bit 0x1, weapon 1) | First hit tick if the hero is inside the volume | Gate tick | End path tick | Damage |
-| --- | --- | --- | --- | --- | --- |
-| 0 | keys 9 to 12 -> ticks 36 to 51 | 36 | 53 | 54 | 50 |
-| 1 | keys 7 to 8 -> ticks 28 to 35 | 28 | 65 | 66 | 60 |
-| 2 | keys 5 to 13 -> from tick 29 (strike speed 0.7 until the first contact) | 29 | 61 with contact at 29; 74 without any contact | gate + 1 | 50 |
+| Slot | Window (event bit 0x1, weapon 1) | Earliest tick a level hero can be touched | First touch of a level hero straight ahead (the usual hit tick) | Gate tick | End path tick | Damage |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0 | keys 9 to 12 -> ticks 36 to 51 | 36 | 40 (start distance 3.0 to 8.5); 42 at 9.0 | 53 | 54 | 50 |
+| 1 | keys 7 to 8 -> ticks 28 to 35 | 29 | 29 (start distance 3.5 to 7) | 65 | 66 | 60 |
+| 2 | keys 5 to 13 -> from tick 29 (strike speed 0.7 until the first contact) | 32 | with the chase stop: 34 at 1.5; 33 at 2.0 to 2.5; 32 at 3.0; 33 at 3.5 to 8.0; 34 at 8.5; 35 at 9.0 to 9.75 (no touch at 1.0); without the stop: no touch at 1.0 to 6.0, 33 at 6.5, 32 at 7.0, 33 at 7.5 to 8.0, 34 at 8.5, 35 at 9.0 to 9.75 | 62 with contact at 32; 63 with contact at 33 to 35 (61 at 29); 74 without any contact | gate + 1 | 50 |
 
-Slot 2 with first contact at tick h (h between 29 and 70): the clip returns to rate 1.0 after contact, so the gate tick is 61, 62, 64, 65, 66, 68, 71 and 74 for h = 29, 32, 36, 40, 45, 50, 60 and 70. Each slot hits at most once per swing (one window; the hit list holds the hero until the next attack start). The strike test needs the hero's body inside the weapon-1 cylinder (radius 2.0, length 2.0 at the attachment frame 0 anchor, SPEC-0029 weapon volumes).
+The window start is not the hit tick: a swing hits on the first window tick on which the weapon volume touches a hero capsule under the asymmetric rule of SPEC-0018. The "straight ahead" column counts the clip's root travel and the chase stop (the fighter's travel is dropped while it is within 2.0 + 1.175 = 3.175 of Tor), with Tor idle, level and stationary. Without the chase stop this lunge would miss a stationary target closer than 6.5 units (its weapon passes through a near-distance gap, then touches again farther ahead); with the stop the fighter cannot move into that gap and a hero from 1.5 units on is touched. A level hero is touched by slot 0 only on ticks 36 to 44.
 
-Reach (Medium to Low): slot 0's clip moves the fighter forward 3.5 in total and slot 1's 5.5, most of it in the keys just before and inside the window. Slot 2's clip moves the fighter 9.6 forward: keys 0 to 4 add only 1.65, keys 5 to 9 add about 7.7 (ticks 29 to 57 of the lunge at 0.175 keys per tick). The chase stop discards the root step on any tick of states 0 to 3 in which the fighter is within the sum of the two body radii of the hero, so the lunge stops against the hero's body. A hero standing in place 9.75 units away is reached by the lunge from about the middle of the window (tick 35 to 40), not at tick 29. A hero who steps backward during the first 28 ticks (the part with little travel) avoids the whole swing.
+Slot 2 with first contact at tick h: the pass of the contact tick still runs at 0.7, then the clip plays at rate 1.0 from the next tick. For the sampled exact contacts, the gate is tick 61 for h=29, 62 for h=32, and 63 for h=33 to 35; with no contact, the gate is tick 74. These examples use the event-progress gate rule in SPEC-0005. Each slot hits at most once per swing (one window; the hit list holds the hero until the next attack start).
+
+Reach (Medium to Low): slot 0's clip moves the fighter forward 3.5 in total and slot 1's 5.5, most of it in the keys just before and inside the window. Slot 2's clip moves the fighter 9.6 forward: keys 0 to 4 add only 1.65, keys 5 to 9 add about 7.7 (ticks 29 to 57 of the lunge at 0.175 keys per tick). Exact stationary samples with the chase stop in force first touch at tick 34 (1.5), tick 33 (2.0–2.5), tick 32 (3.0), tick 33 (3.5–8.0), tick 34 (8.5), tick 35 (9.0–9.75) and ticks 36–44 across 10.0–13.0; without the stop they miss at 1.0–6.0 and first touch at tick 33 (6.5), tick 32 (7.0), tick 33 (7.5–8.0), tick 34 (8.5), and ticks 35–44 across 9.0–13.0. The non-monotone result invalidates the old broad 2–8 unit claim. The separate 4.86-unit fight example first touches on tick 33 with the chase stop (and misses without it). A hero who steps backward during the first 28 ticks also changes displacement and contact timing.
+
+### Weapon reach
+
+Conventions are those of "Weapon reach tables" in SPEC-0064 (shared field behaviour). Row 227, Medium. The phase table above is authoritative for the first-touch ticks; this table adds where the hero must stand. Weapon 1 has radius 2.0 and height 2.0 in every row.
+
+| Slot (phase, clip) | Window ticks (level contact) | Centre forward / up / side | Tor ahead, at the tick | Tor ahead, from the start | Tor feet vs origin |
+|---|---|---|---|---|---|
+| 0 (B, clip 4) | s+36 to s+51 (s+36 to s+44) | -1.5 to 3.6 / 0.9 to 3.8 / -2.3 to 3.0 | -2.8 to 6.0 | -0.4 to 9.1 | -3.5 to 5.5 |
+| 1 (B, clip 3) | s+28 to s+35 (s+29 to s+35) | 2.2 to 3.3 / 0.5 to 4.8 / -0.4 to 1.0 | 0.6 to 5.6 | 3.1 to 7.7 | -4.5 to 6.0 |
+| 2 lunge (B, clip 21) | s+29 to s+74 (s+32 to s+74) | -0.1 to 3.7 / 1.8 to 4.5 / -2.4 to -0.6 | 1.6 to 5.6 | 6.7 to 14.7 | -3.0 to 6.0 |
+
+The lunge figures assume strike speed 0.7 for the whole clip; the real clip drops to 1.0 after the first contact, a small effect on the far end. Measured from where the fighter began, the lunge touches a level hero 6.7 to 14.7 ahead, consistent with the reach paragraph above.
 
 ### Movement rules
 
 Rush archetype (approach 1). With a route to the hero (always true on the ring): inner 0 walks toward the hero using animation 21; d below the desired distance gives inner 1. Inner 1 stands facing the hero (turn weight from the row, 1.0) in animation 22: d below 3.5 gives inner 2, d above 5.0 gives inner 0. Inner 2 walks backward (animation 23, aim point hero - dir x 7.0) until d exceeds the desired distance, then inner 1. The fighter therefore hovers between about 3.5 and 5 units from a standing hero, attacking from there; it chatters between approach and back-off when the hero stands still at the band edge. The ring wall keeps it on the arena mesh; a blocked move is not special for the rush outer sub-state. Leash: no effect while a route exists (always on the ring).
+
+Movement table (movement pass; row 227; speed byte 2): rush approach (inner 0) and sequencer approach id 21 = clip 24, 11 keys, 0.2501 per tick on every key (15.01 u/s); back off (inner 2) id 23 = clip 12, 0.2909 per tick backward (17.45 u/s), facing the hero; field walk ids 2, 4, 11 = clip 2, 0.0518 per tick (3.11 u/s, per key 0.002 to 0.102; not used in the arena); hold id 22, aim 1.0; missile dodges 53 and 54 = 6.07 units sideways (never used: dodge chance 0) over 49 and 57 ticks; hit reaction 57 = 5.72 units backward over 65 ticks; the slot-2 lunge clip 21 carries it 9.6 forward (see Weapon reach); the death clip 58 (clip 13, a frame-stored clip, mode 0) moves 0.82 units backward over 112 ticks and is then held; its last key is 0, so the held clip adds nothing and the corpse lies still. Worked example: released 30 units from the hero with desired 4.25: inner 0 covers 25.75 units at 0.2501 per tick in 103 ticks and holds after one more step; a walking hero (13.5 u/s) is slower than this approach, a running hero (19.29) faster.
 
 ### Defence and counter rules
 
@@ -766,9 +880,10 @@ Vector A (hero idle, 20 units from the fighter on its facing line, hero never ac
 | 225 | AI sees d = 9.75 (below 10; at tick 224 it is exactly 10.00, which fails the strict test): slot 2 chosen with 99 % per tick (slot 1 39 %, slot 0 59 % if the slot 2 roll fails); the sequencer runs state 0 in this tick and state 1 in the next |
 | 226 | Strike clip 44 requested (this tick runs at the wind-up word 1.0, later ticks of the strike at 0.7) |
 | 255 | Window opens (tick 29 of the swing); the lunge has moved about 1.8 units, so a hero 9.75 units away is still out of reach |
-| 260 to 270 | The weapon reaches that hero (contact estimate, Medium to Low); the first hit is 50 damage before armour |
-| about 290 to 293 | Gate passes (gate tick 63 to 66 after the request for contact at 35 to 45) and the end path runs one tick later; recovery int[15, 30]; the slot 2 cooldown restarts at 180 |
-| about 305 to 323 | Next choice possible: slot 1 (39 %), else slot 0 (36 %), else none (25 %) per tick; the fighter stands at about 3 to 4 units after the lunge |
+| 261 | The weapon first touches that hero, 35 ticks after the request (Medium: SPEC-0018 weapon-versus-body test); the hit is 50 damage before armour; the pass of tick 261 still runs at 0.7, later passes at 1.0 |
+| 289 | Gate passes (63 ticks after the request for contact at 35) |
+| 290 | End path; recovery int[15, 30]; the slot 2 cooldown restarts at 180 |
+| 305 to 320 | Next choice possible: slot 1 (39 %), else slot 0 (36 %), else none (25 %) per tick; the fighter stands at about 3 to 4 units after the lunge |
 
 In the first 600 ticks after the agro entry, with every swing connecting and the hero always attackable: 7 to 8 swings, start-to-start spacing 70 to 111 ticks (mean 85), slot use about 39 % slot 2, 31 % slot 0, 30 % slot 1. The first normal choice happens at tick 225 to 226 for a hero 20 units away, and at tick 183 to 184 for a hero already inside 10 units.
 
@@ -776,11 +891,11 @@ Vector B (hero attacks). Tor, normal swing, lands a hit on the fighter at tick H
 
 ### Open questions
 
-1. Hit geometry. The exact placement of the weapon-1 cylinder (attachment frame 0 anchor and axis) decides the first contact tick of each swing. Default if unresolved (rewrite choice): count a contact on a window tick when the horizontal distance between the fighter and the hero's centre is at most 5.0 and the hero is in front of the fighter (dot at least 0.5).
-2. Whether the sequencer's state 0 runs in the tick of the choice or the tick after: all tick offsets in this section may shift by one tick together. Default: same tick.
-3. The facing, route and sight tests assume nothing on the ring blocks the line to the hero; if a scene object does, the lost-sight search (outer 9) would start. Default: never blocked.
-4. How many think ticks run between creation and the script's grab (zero or one). No visible difference for the fighter.
-5. Whether the hero's talk state is cleared before the fighter's first think tick (this section assumes it is, so F1 = 0.7).
+1. Hit geometry. The exact placement of the weapon-1 cylinder (attachment frame 0 anchor and axis) decides the first contact tick of each swing. Resolved by the general rule (SPEC-0064, Shared field behaviour: Weapon contact and the hero's hurt shape); the distances are in the Weapon reach table of this round; stand-in only for a port without attachment frames: count a contact on a window tick when a level hero is inside the "at the tick" range of the slot's row (2.8 behind to 6.0 ahead for slot 0, 0.6 to 5.6 ahead for slot 1, 1.6 to 5.6 ahead for the lunge).
+2. Whether the sequencer's state 0 runs in the tick of the choice or the tick after. Resolved (High; proactive (open close-out)): the same tick; the normal choice starts the sequencer in state 0 and the outer switch of that tick runs it (SPEC-0038 Behavior 50), so the offsets in this section stand.
+3. The facing, route and sight tests assume nothing on the ring blocks the line to the hero; if a scene object does, the lost-sight search (outer 9) would start. Default if unresolved (rewrite choice): never blocked, because both ends of the line lie inside the ring wall (needs a runtime check).
+4. How many think ticks run between creation and the script's grab (zero or one). Runtime-only (needs a runtime check); no visible difference for the fighter, whichever it is. Default as for the Rogue's hand-off.
+5. Whether the hero's talk state is cleared before the fighter's first think tick. Resolved (High; proactive (open close-out)): yes. The release, the return to the normal camera (which puts the hero in action state 1) and the idle animation are one script step at the end of a tick, and the fighter's first think runs on the next tick before the hero's update, so F1 = 0.7 (Start sequence, step 4).
 
 ## Round 4: Werelupe Elite
 
@@ -871,15 +986,45 @@ Attack chooser (shared rules; slot order 2, 1, 0; all cooldowns 0 on agro entry)
 
 Charge (slot 1, kind 2). Sequencer state 6 starts in the choice tick c: A (id 38) requested at c; its gate passes in tick c + 37; B (id 39, loop) is requested in the same tick and state 7 runs from c + 38. The charge distance used is a fresh float from [10, 50) drawn in the choice tick itself (the redraw after the choice happens before the sequencer first reads it; only slots that have a charge type get a draw, and the draw uses the range of the slot just chosen). Each tick of state 7: travelled distance t is measured from the start point; if the hero is within 3.5 units, state 8; else if t is at least the charge distance, state 12. There is no strike test during the run (kind 2), no chase stop (it only applies in states 0 to 3), and the run is 0.469 units per tick. State 8: C (id 40) requested; the weapon-3 window is keys 1 to 3, ticks 4 to 15 after the request, one hit (35 damage, knockback 4.0 which puts the hero into the long-fall state 48); C finishes at tick 25 after the request; state 12 next tick; E absent: end path in that tick. A charge that ends by distance without reaching the hero costs the fighter the whole cycle (37 + travel ticks) and ends with the end path (recovery int[15, 60], slot cooldown int[60, 120] again).
 
+Movement table (movement pass; row 242, the Werelupe rig of SPEC-0065; speed byte 2):
+
+| Mode | Source | u/t | u/s | Turn | Clip (id: clip, keys, loop) | Exits |
+|---|---|---|---|---|---|---|
+| Walk home (after the victory pose) | root | 0.1259 average; per key 0.105 to 0.146 | 7.56 | steering 0.3 / 0.1 | 2: clip 0, 11, loop | home reached |
+| Strafe approach (inner 7) and melee approach (sequencer state 0) | root | 0.1259 | 7.56 | steering | 28: clip 0 (the walk clip) | d below desired (12 to 18) or 5.0 |
+| Circles (inners 8, 9) | root sideways | 0.0674 | 4.04 | faces the hero (the travel goes to the side opposite to the steering point, SPEC-0038 Behavior 51) | 30: clip 13 (-x); 29: clip 12 (+x); 10, loop | hold count, wall |
+| Back off (inner 11) | root backward | 0.393 | 23.58 | faces the hero | 32: clip 11, 8, loop | d above desired; point 20 from the hero |
+| Charge run (state 7) | root | 0.469 | 28.14 | none; solid | 39: clip 41, 8, loop | hero within 3.5 or travelled 10 to 50 |
+| Charge hit (state 8) | root | 3.05 units over the clip's 28 ticks (gate 25) | 6.54 | none; solid (pushes a hero it overlaps) | 40: clip 28, 7 | clip end |
+| Melee dodge 55 | root backward | about 12 units over about 31 ticks | 23.58 | none | clip 11 (the back-run loop) | gate |
+| Missile dodges 53, 54 | root sideways | 5.99 units over the clip's 52 ticks (gate 49) | 6.91 | none | clip 29 and its mirror | gate |
+| Hit reaction kind 0 | root backward | 3.47 units over the clip's 36 ticks (gate 33) | 5.78 | snapped to the attacker | 57: clip 4, 9 | gate |
+
+Worked example (back-off). After a three-hit swing the Elite stands about 4 units from the hero; d below 10 sends it to inner 11 and it sprints backward at 0.393 per tick: with desired 15 it needs 11 units, 28 ticks, then holds (one more step after the decision, so about 15.4).
+
 ### Hit/hurt windows (tick 0 = the tick the sequencer requests the strike)
 
 | Slot | Windows | Hits | Gate | End path | Damage |
 | --- | --- | --- | --- | --- | --- |
 | 0 (clip 8, weapon 1) | keys 5 to 7: ticks 20 to 31 | 1, at tick 20 or the first contact tick | 57 | 58 | 35 |
-| 2 (clip 7) | weapon 1 keys 7 to 10: ticks 28 to 43; weapon 2 keys 13 to 14: ticks 52 to 59; weapon 1 keys 19 to 20: ticks 76 to 83 | up to 3: first contact in each window, earliest ticks 28, 53, 77 (a window re-opens the strike state one tick before its hit) | 108 | 109 | 40 each, unblockable, 120 in all |
+| 2 (clip 7) | weapon 1 keys 7 to 10: ticks 28 to 43; weapon 2 keys 13 to 14: ticks 52 to 59; weapon 1 keys 19 to 20: ticks 76 to 83 | up to 3: first contact in each window; for the first window, an idle level hero straight ahead at start distance 3.0–4.5 touches at tick 28 and at 5.0 touches at 29 (exact geometry, no chase stop). Tick 53 and 77 remain the 3–5-unit reference only when later windows are reached at their expected separations; moving-target/push effects can change them. | 108 | 109 | 40 each, unblockable, 120 in all |
 | 1 charge hit (clip 28, weapon 3) | keys 1 to 3: ticks 4 to 15 after the C request | 1 | 25 | next tick | 35 (+ knockback 4.0) |
 
 If the first contact of slot 2 comes late, later windows still hit independently (contact at tick 52: hits at 52 and 77; contact at 70: one hit at 76). The enemy strike test does not consult the hero's hittable state, so the second and third hits of slot 2 land on a hero already in the hurt state.
+
+### Weapon reach
+
+Conventions are those of "Weapon reach tables" in SPEC-0064 (shared field behaviour). Row 242, Medium. The hit ticks above are authoritative (they are for a hero straight in front at the start distance); "sC" is the tick the charge-hit clip is requested. Weapon radius and height are 2.0 by 2.0 in every row.
+
+| Slot (phase, clip) | Weapon | Window ticks (level contact) | Centre forward / up / side | Tor ahead, at the tick | Tor ahead, from the start | Tor feet vs origin |
+|---|---|---|---|---|---|---|
+| 0 jab (B, clip 8) | w1 | s+20 to s+31 (s+20 to s+31) | 0.4 to 2.5 / 1.6 to 3.0 / -1.6 to 1.9 | -1.4 to 5.0 | 1.9 to 8.1 | -2.0 to 3.5 |
+| 1 charge hit (C, clip 28) | w3 | sC+4 to sC+15 (sC+4 to sC+15) | 2.0 to 3.0 / 1.7 to 2.7 / -0.2 to 0.0 | 0.8 to 4.8 | 1.9 to 8.2 | -3.5 to 4.5 |
+| 2 three-hit swing, first (B, clip 7) | w1 | s+28 to s+43 (s+28 to s+43) | 0.2 to 2.9 / 1.2 to 3.0 / -2.1 to 3.0 | -1.0 to 5.4 | 1.7 to 9.0 | -2.0 to 4.0 |
+| 2 three-hit swing, second (B, clip 7) | w2 | s+52 to s+59 (s+52 to s+59) | 0.9 to 2.4 / 2.2 to 2.6 / -2.2 to 2.5 | 0.2 to 5.0 | 7.0 to 11.9 | -2.5 to 4.0 |
+| 2 three-hit swing, third (B, clip 7) | w1 | s+76 to s+83 (s+76 to s+83) | 0.3 to 2.1 / 0.8 to 4.8 / -1.6 to 0.0 | -0.8 to 4.8 | 9.1 to 16.3 | -4.0 to 6.5 |
+
+Every blow reaches 4.8 to 5.4 ahead at the tick; the three-hit swing carries the Elite forward, so the second and third blows land 7 to 16 units ahead of where it started. The same figures hold for the Werelupe Basher and Bone Thrower (SPEC-0065).
 
 ### Defence and counter rules
 
@@ -913,7 +1058,7 @@ Death uses the ordinary death hook: base state 16, death clip 58 (77 ticks); the
 - The charge distance is drawn fresh at the choice from [10, 50): a charge stops short of a farther hero.
 - Slot 2's three windows hit independently and the third window can hit while the hero is down.
 - The Elite never has a wind-up for slots 0 and 2: the strike clip is requested one tick after the choice.
-- The charge has no strike test during the run, so a hero who steps out of the line is missed; a hero who guards does not stop the charge (no block branch for kind 2).
+- The charge has no strike test during the run, so a hero who steps out of the line is missed; a hero who guards facing it blocks the hit (the strike test of state 8 takes its blocked path: reduced damage, block reaction), but the sequencer ignores the result for kind 2: no state 9, C plays to its end and state 12 follows.
 - Cooldowns freeze while the hero is hurt or knocked back.
 - Defence hold: after any defence the Elite cannot defend again for 60 to 240 ticks.
 
@@ -944,17 +1089,101 @@ Vector A (hero idle 25 units away on the Elite's facing line). T0 = first think 
 | about 191 + G | State 8: C requested; window ticks 195 + G to 206 + G; hit 35 damage and knockback 4.0 |
 | about 216 + G | C gate; state 12 next tick; end path at about 217 + G; recovery int[15, 60]; slot 1 cooldown int[60, 120] |
 
-Vector B (hero standing toe to toe, d at most 5, always attackable, every swing connecting): slot 2 or 0 at the first chooser tick T0 + 107 (slot 2 39 %, slot 0 36 %, none 25 % per tick); slot 0 swing hits at +20 and ends at +58; slot 2 swing hits at +28, +53, +77 and ends at +109; over 600 ticks 4 to 6 swings (mean 5.4), start-to-start spacing 74 to 174 ticks (mean 120), slot 0 and slot 2 used about equally.
+Vector B (hero standing toe to toe, d at most 5, always attackable, every swing connecting): slot 2 or 0 at the first chooser tick T0 + 107 (slot 2 39 %, slot 0 36 %, none 25 % per tick); slot 0 swing hits at +20 and ends at +58; slot 2 swing hits at +29, +53, +77 and ends at +109; over 600 ticks 4 to 6 swings (mean 5.4), start-to-start spacing 74 to 174 ticks (mean 120), slot 0 and slot 2 used about equally.
 
 Vector C (hero attacks). A Tor hit at tick H: animation 57 restarts (33-tick gate), any swing or charge is cancelled, outer 0 at H + 33, strafe resumes. The block roll of a hero swing that starts at tick S with the Elite within 8 units, in front and with the hold at 0: normal swing 75 % block (outer 7 at S; the hero's hits during it deal 0), 9.8 % dodge (outer 5 at S, hop back 12.6 units over 31 ticks, not hittable), 15.3 % neither. After the defence ends the hold is int[60, 240] ticks.
 
 ### Open questions
 
-1. Hit geometry (same as round 3). Default if unresolved (rewrite choice): count a contact on a window tick when the horizontal distance between the Elite and the hero's centre is at most 5.0 for slots 0 and 2 and at most 4.0 for the charge hit, with the hero in front (dot at least 0.5).
-2. Whether sequencer state 0 or 6 runs in the choice tick: all offsets shift together. Default: same tick.
-3. Whether the charge continues through the hero's guard (no block branch is described for kind 2). Default: the charge hit lands as a normal blockable strike with the shared blocked-hit rules.
-4. How the circle segments interact with the ring wall: a blocked move sets the lock. Default: use the ring mesh edge as the block.
-5. Whether a hero-state change between release and the first think tick changes the emerge test (the same as Round 3 question 5).
+1. Hit geometry (same as round 3). Resolved by the general rule (SPEC-0064, Shared field behaviour: Weapon contact and the hero's hurt shape); the distances are in the Weapon reach table of this round; stand-in only for a port without attachment frames: count a contact on a window tick when a level hero is inside the "at the tick" range of the slot's row (1.4 behind to 5.0 ahead for the jab, 0.8 to 4.8 ahead for the charge hit, up to 5.4 ahead for the three-hit swing).
+2. Whether sequencer state 0 or 6 runs in the choice tick. Resolved (High; proactive (open close-out)): the same tick, as in Round 3 question 2; the offsets stand.
+3. Resolved: in state 8 a kind-2 charge runs the ordinary strike test each tick, so a guarding hero facing it blocks the hit (reduced damage, block reaction, the hero enters the hit list), but the sequencer does not act on the result: it never goes to state 9, C plays to its end and state 12 follows (High).
+4. How the circle segments interact with the ring wall. Resolved (High; proactive (open close-out)): a move into a mesh border edge sets the blocked flag and a 120-tick timer (SPEC-0056, Navmesh confinement step), which is the lock; the ring mesh edge is the block.
+5. Whether a hero-state change between release and the first think tick changes the emerge test. Resolved (High; proactive (open close-out)): no; the hero's state is set in the release step and the first think runs before the hero's next update (Round 3 question 5).
+
+## Distances and ranged reach (all five fighters)
+
+Confidence: High for the row values and the rules; Medium-High for the emit point and the hit ticks of Sludgy's lob (posed clip, flat ground, hero standing still and level).
+
+**Reading the tables.** d is the distance from the fighter to the selected hero, as the agro machine measures it. The notice band is the row's near and far range; a hero standing still scales both by 0.7 and a running hero by 1.75 (SPEC-0038 Behavior 18); through a wall it is scaled by F2 instead (0 for a standing hero) unless the row sees through walls. The sight cone only halves the notice chance outside it; it is not a hard edge. "Walk-in target" is the drawn desired distance (min + (max - min) x f, f from 0.2 to 0.8), redrawn after every normal attack choice. A slot is chosen only while its band holds strictly and the hero is inside its arc; a melee slot then walks in until d is at most its close-in distance. Shared by every fighter and not repeated in the tables: holds and circles face the hero every tick with the row's turn weight; the strafe circle steers to a point 2.0 to the side every tick, so it keeps roughly the current d and drifts outward; the only leash is 181 ticks with no route while the walk waypoint is 15.0 or more from the hero (in the closed arena ring a route always exists, so an arena fighter never gives up); the lost-sight search goes to the last-seen point ("last seen + x" means moved x further along the fighter-to-hero line) and gives up after 121 ticks there; the chase stop is the fighter's radius + 1.175 (the hero's body radius, both heroes); a confused fighter may attack at radius + 1.425.
+
+**Sludgy's lob (slot 0, the only missile of the five).** Fires when 10 < d < 100, anywhere in front, at 74 percent per tick. One lob per attack, released on s + 84 (s = the tick the strike clip B is requested, c + 1), from emit point 0, which is 1.60 to one side, 2.54 up and 3.12 in front of Sludgy's feet on that tick. Flight mode 1: a gravity arc aimed at the hero's feet plus a horizontal scatter of up to 2.0 units, launch speed ramped from 0.5 per tick (at d = 10) to 1.0 (at d = 100), no lead, no homing. Radius 0.2 against the hero's body cylinder (radius 1.175, height 3.5, both heroes). It ends on the hero, on a guard (a quarter of 20), or on the ground; its area values are 0. Worked example, hero standing still and level, scatter 0: at 11 units it hits on s + 97, at 30 on s + 122, at 60 on s + 146, at 99 on s + 178. With the scatter the lob misses a standing hero whenever the sideways part of the scatter exceeds about 1.3 (11 units), 1.1 (30 units) or 0.9 (60 units), so about half of the far lobs land beside him.
+
+**Henchman (row 160) slot 1 never connects.** Its trigger chance is 0 and its counter code is -1, so neither the normal choice nor the counter choice can select it; it is never started. If a port forced it, its charge distance range is 0 to 0, so sequencer state 7 would end on its first tick and the jab windows of the strike clip would still never be reached. A port must not give it a reach.
+
+#### Rogue (row 153)
+
+| Distance (units) | Value |
+|---|---|
+| Notice band (x0.7 standing, x1.75 running) | 10 to 60 (7 to 42; 17.5 to 105) |
+| Sight cone half-angle | 22.5 deg |
+| Strafe: circle band; walk-in target; back-off point | 6 to 20; 8.8 to 17.2; 20 |
+| Slot 0 | melee, 0 < d < 10, within 22.5 deg, closes to 5 |
+| Slot 2 | melee, 5 < d < 20, within 22.5 deg, charge run 15 to 25 (ends early when d <= 5) |
+| Slot 3 | melee, 5 < d < 15, in front, closes to 5 |
+| Lost-sight search point | last seen + 6 |
+| Wait-in-line square | 10 |
+| Map search distance; greedy range | 100; 10 |
+| Chase stop; confused strike | 3.17; 3.42 |
+
+#### Ixi Henchman (row 160)
+
+| Distance (units) | Value |
+|---|---|
+| Notice band (x0.7 standing, x1.75 running) | 5 to 40 (3.5 to 28; 8.75 to 70) |
+| Sight cone half-angle | 45 deg |
+| Strafe: circle band; walk-in target; back-off point | 10 to 20; 12 to 18; 20 |
+| Slot 0 | melee, 0 < d < 10, within 22.5 deg, closes to 4 |
+| Slot 1 | never chosen (chance 0, no counter); band 7 < d < 12 within 45 deg, charge run 0 to 0 |
+| Slot 2 | melee, 0 < d < 50, within 15 deg, charge run 10 to 50 (ends early when d <= 5) |
+| Lost-sight search point | last seen + 10 |
+| Wait-in-line square | 10 |
+| Chase stop; confused strike | 3.17; 3.42 |
+
+#### Sludgy (row 231)
+
+| Distance (units) | Value |
+|---|---|
+| Notice band (x0.7 standing, x1.75 running) | 4 to 17 (2.8 to 11.9; 7 to 29.75) |
+| Sight cone half-angle | 45 deg |
+| Rush: hold band; walk-in target; back-off point | 3.5 to 5; 3.8 to 4.7; 7 |
+| Slot 0 | missile, 10 < d < 100, in front (lob above) |
+| Slot 1 | melee, 0 < d < 7, within 45 deg, closes to 5 |
+| Slot 2 | melee, 0 < d < 15, within 22.5 deg, closes to 9 |
+| Lost-sight search point | last seen |
+| Wait-in-line square | 10 |
+| Map search distance; greedy range | 100; 10 |
+| Chase stop; confused strike | 3.17; 3.42 |
+
+#### Skeleton Fighter (row 227)
+
+| Distance (units) | Value |
+|---|---|
+| Notice band (x0.7 standing, x1.75 running) | 3 to 5 (2.1 to 3.5; 5.25 to 8.75) |
+| Sight cone half-angle | 22.5 deg |
+| Rush: hold band; walk-in target; back-off point | 3.5 to 5; 3.8 to 4.7; 7 |
+| Slot 0 | melee, 0 < d < 10, within 45 deg, closes to 7 |
+| Slot 1 | melee, 0 < d < 10, within 45 deg, closes to 7 |
+| Slot 2 | melee, 0 < d < 10, in front, close-in distance 50 (starts at once) |
+| Lost-sight search point | last seen |
+| Wait-in-line square | 12 |
+| Chase stop; confused strike | 3.17; 3.42 |
+
+#### Werelupe Elite (row 242)
+
+| Distance (units) | Value |
+|---|---|
+| Notice band (x0.7 standing, x1.75 running) | 1 to 100 (0.7 to 70; 1.75 to 175) |
+| Sight cone half-angle | 45 deg |
+| Strafe: circle band; walk-in target; back-off point | 10 to 20; 12 to 18; 20 |
+| Slot 0 | melee, 0 < d < 10, within 22.5 deg, closes to 5 |
+| Slot 1 | melee, 10 < d < 50, within 15 deg, charge run 10 to 50 (ends early when d <= 3.5) |
+| Slot 2 | melee, 0 < d < 10, within 45 deg, closes to 5 |
+| Lost-sight search point | last seen + 10 |
+| Wait-in-line square | 10 |
+| Chase stop; confused strike | 2.35; 2.6 |
+
+**What a port most likely gets wrong (distances).** A leash radius (none exists while a route exists); a hard-edged view cone; aiming Sludgy's lob with lead or without the 2.0 scatter; testing the lob against the bone capsules instead of the body cylinder; giving the Henchman's slot 1 a reach.
 
 ## Test vectors
 
@@ -962,23 +1191,23 @@ All tick counts are think-loop ticks (60 per second). "Wake tick" is the tick in
 
 1. Hero stands still at the start (distance 30.19, action state 1). Wake distance 28. For 600 ticks: nothing. The Rogue stays hidden (class 8, sub 0), playing clip 0. No attack, no cooldown, no state change.
 2. Wake thresholds (distance to the Rogue's home; strict "below"): hero standing, 27.9: wakes; 28.0: does not. Slow walk (state 2): 29.9 wakes, 30.0 does not. Walk (state 3): 59.9 wakes. Run (state 4): 69.9 wakes. Hero attacking (state 13, factor 1.0): 39.9 wakes. A hit on the hidden Rogue from any distance: wakes him, damage doubled.
-3. Timeline from the wake, hero standing still 12 units in front, all slots off cooldown. Tick 0: wake test, sub-state 1. Tick 1: agro entry. Tick 2: outer 0 becomes outer 4 (strafe, hold). Tick 3: first possible choice. Example run (one random sequence): tick 3 no choice (hold roll, hold timer 92); tick 4 slot 3 chosen (cooldown 0), sequencer state 0, gait 0 starts; ticks 5 to 43 he runs 7 units to d = 5.0; tick 44 state 0 ends (d 4.97), state becomes 1; tick 45 the strike clip 38 is requested and state 2 starts (s = 45); tick 61 hit 1 (key 4); tick 85 window reopens, tick 86 hit 2; tick 105 reopens, tick 106 hit 3; tick 125 the strike clip's gate is almost reached; tick 126 (s+81) the gate passes, state 5; tick 127 (s+82) end path: recovery 27, slot 3 cooldown 0; tick 128 outer 0 becomes outer 4; tick 154 (recovery over) the next choice. Next attack starts 83 to 159 ticks after the previous one began in a run of 1,500 seeds, median 119.
+3. Timeline from the wake, hero standing still 12 units in front, all slots off cooldown. Tick 0: wake test, sub-state 1. Tick 1: agro entry. Tick 2: outer 0 becomes outer 4 (strafe, hold). Tick 3: first possible choice. Example run (one random sequence): tick 3 no choice (hold roll, hold timer 92); tick 4 slot 3 chosen (cooldown 0), sequencer state 0, gait 0 starts; ticks 5 to 43 he runs 7 units to d = 5.0; tick 44 state 0 ends (d 4.97), state becomes 1; tick 45 the strike clip 38 is requested and state 2 starts (s = 45); tick 61 window opens (key 4); tick 62 hit 1 (first touching tick of an idle level hero in front); tick 85 window reopens, tick 86 hit 2; tick 105 reopens, tick 106 hit 3; tick 125 the strike clip's gate is almost reached; tick 126 (s+81) the gate passes, state 5; tick 127 (s+82) end path: recovery 27, slot 3 cooldown 0; tick 128 outer 0 becomes outer 4; tick 154 (recovery over) the next choice. Next attack starts 83 to 159 ticks after the previous one began in a run of 1,500 seeds, median 119.
 4. Ranges over many random sequences, hero standing still in front of him (a model of the rules above that assumes each strike window hits when d is 6.0 or less; 600 ticks after the wake test): first attack chosen: tick 3 to 13 at d = 6, 12 or 18, tick 36 to 45 at d = 25 (he walks in first). First hit: tick 28 to 53 (d = 6), 60 to 89 (d = 12), 115 to 125 (d = 18, slot 2 charge), 155 (d = 25). Hits landed in 600 ticks: 5 to 15 (mean about 9) at d = 6, 5 to 15 (mean about 9) at 12, 5 to 13 at 18, 4 to 11 at 25. Attack starts per run by slot: about 1.4 to 1.7 for slot 0, about 2.1 for slot 2, 1.5 to 2.1 for slot 3.
-5. Slot 2 charge, hero standing 12 units in front: chosen at tick c (cooldown int[60, 120]); the same tick the sequencer starts the run (clip 40, state 7) with the charge distance drawn float[15, 25); the Rogue runs until the hero is within 5.0 (about 7 units, 39 ticks); then state 8 starts clip 39 at c0; hit (damage 1, steal roll) at c0+36; the gate passes at c0+81; end path c0+82. Roughly 120 ticks from choice to end path.
+5. Slot 2 charge, hero standing 12 units in front: chosen at tick c (cooldown int[60, 120]); the same tick the sequencer starts the run (clip 40, state 7) with the charge distance drawn float[15, 25); the Rogue runs until the hero is within 5.0 (about 7 units, 39 ticks); then state 8 starts clip 39 at c0; window from c0+36; hit (damage 1, steal roll) at c0+38 (the hero is about 5 units ahead; no chase stop in the charge states); the gate passes at c0+81; end path c0+82. Roughly 120 ticks from choice to end path.
 6. Melee defence. The hero (Tor) begins a normal swing (sub-state 2) in the hero update of tick h; the Rogue is 6 units away and in front, hold 0, in outer 4. At tick h+1 the latch is set; rolls r1 = 70, r2 = 20: block no (chance 0); dodge yes (20 < 25). Outer 5, hold 60, clip 15 requested at tick h+1 (s = h+1); unhittable from h+1; gate h+78; outer 0 at h+78, outer 4 at h+79. With r2 = 25 or more: no dodge and the latch stays set until the swing ends. With the hero at 8.0 units or more, or at a dot of 0.5 or less, no rolls are drawn at all and the latch is still set.
-7. Hit reaction and counter. The hero's swing hits the Rogue (hold, d = 4, slot 0 cooldown 0, slot 3 cooldown 0) in the hero update of tick H. At tick H+1 outer is 10. Slot 3 is not eligible (d must be above 5); slot 0 is: roll int[0, 100] below 25 (probability 25/101) at H+1 starts slot 0 at once (outer 2, state 0; d <= 5 so state 1 next tick; B requested at H+2; hit at H+22; gate H+61; end path H+62). If the roll fails, tick H+1 requests clip 3 (s = H+1), and every following tick draws another roll; if none succeeds the reaction ends at H+54, outer 0, then outer 4 at H+55. The same hit with the hero at d = 8: slot 3 and slot 0 are both eligible; slot 3 wins; the swing starts at the first success (hits at s+16, s+41, s+61).
+7. Hit reaction and counter. The hero's swing hits the Rogue (hold, d = 4, slot 0 cooldown 0, slot 3 cooldown 0) in the hero update of tick H. At tick H+1 outer is 10. Slot 3 is not eligible (d must be above 5); slot 0 is: roll int[0, 100] below 25 (probability 25/101) at H+1 starts slot 0 at once (outer 2, state 0; d <= 5 so state 1 next tick; B requested at H+2; window from H+22; hit at H+28; gate H+61; end path H+62). If the roll fails, tick H+1 requests clip 3 (s = H+1), and every following tick draws another roll; if none succeeds the reaction ends at H+54, outer 0, then outer 4 at H+55. The same hit with the hero at d = 8: slot 3 and slot 0 are both eligible; slot 3 wins; the swing starts at the first success (windows from s+16, s+40, s+60; hits at s+17, s+41, s+61).
 8. First hit on a hidden Rogue: hero hit of base damage 4 before doubling: damage 8 (80 hit points to 72); the next hit at 4 (72 to 68).
 9. Steal. Slot 2 hit on a hero with no body armour and 300 Neopoints: one roll int[0, 100]; 0 to 49 succeeds (49.5 percent); amount int[10, 100]; the amount is spawned as coins at the hero; on the next tick the Rogue's map search rolls int[1, 100] below 50 for each coin kind that exists, but the hero is within 10.0 so nothing starts. When the hero retreats beyond 10.0 the Rogue fetches the coins with 49 percent per tick per kind, deletes them, and walks home.
 10. Death: the Rogue at 3 hit points takes a hit of 5; hit points 0; base state 16; clip 24 starts in the same tick; the arena watcher sees the dead test true at its next pass and starts its 1-second wait.
 
 ## Open questions
 
-Default if unresolved (rewrite choices): see "Default if unresolved" in the Rogue section above (hidden start with the hero in action state 1; contact when the hero is within 6.0 units; facing aimed at the hero; horizontal distance).
+Default if unresolved (rewrite choices): see "Default if unresolved" in the Rogue section above (hidden start with the hero in action state 1, which is runtime-only and needs a runtime check; the facing blends and the horizontal distance are settled rules there). Weapon contact is no longer a rewrite choice (Rogue section, Weapon reach).
 
-1. Weapon contact geometry. The reach of the Rogue's weapon volume (radius 6.0, height 1.0 on the right hand) against the hero's capsules is not modelled; the swing windows are exact, the contact test is the rewrite choice above. (Medium-Low.)
-2. Intro order. Whether the Rogue's think loop takes a step between its binding and the script's grab, and in which hero action state. The default is the hidden start. (Medium.)
-3. Facing during circling and holding is assumed aimed at the hero. The turn blends are 0.9 in the hold, 0.1 or 1.0 for the side gaits and 0.3 for the others (SPEC-0038 Behavior 48). (Medium.)
-4. Hero distance metric of the wake and attack tests (horizontal or 3D) only matters when the hero is airborne. (Medium.)
-5. One-tick request-to-step latency of root motion (SPEC-0038 Behavior 48) shifts the Rogue's approach by one tick at most. (Medium-High.)
-6. Whether a charge-kind-2 strike clip adds the hero to the struck list per window, as the other melee slots do, is assumed yes. (Medium.)
+1. Resolved: weapon contact geometry follows the general rule (SPEC-0064, Shared field behaviour: Weapon contact and the hero's hurt shape); the first touching ticks are in the Rogue's Hit and hurt windows table and the distances in its Weapon reach table (Medium).
+2. Intro order. Whether the Rogue's think loop takes a step between its binding and the script's grab, and in which hero action state. Runtime-only (needs a runtime check); the default is the hidden start (Rogue defaults).
+3. Facing during circling and holding. Resolved (Medium-High; proactive (open close-out)): the facing follows the turn blends 0.9 in the hold, 0.1 or 1.0 for the side gaits and 0.3 for the others (SPEC-0038 Behavior 48); aimed at the hero (dot 1.0) is only the fallback for a port without the blends.
+4. Hero distance metric of the wake and attack tests. Resolved (High; proactive (open close-out)): horizontal, with the height difference dropped, whether or not the hero is airborne.
+5. One-tick request-to-step latency of root motion (SPEC-0038 Behavior 48). Resolved (High; proactive (open close-out)): fixed by the per-tick order (the animation pass stores the next root step and the next tick's motion applies it), so the latency is exactly one tick, as the tables already count.
+6. Whether a charge-kind-2 strike clip adds the hero to the struck list per window, as the other melee slots do. Resolved (High; proactive (open close-out)): yes; the list is cleared at the start of each separate open window and holds one entry per target (Round 4 question 3 gives the blocked case).
 7. Rounds 1 to 4: see the Open questions inside each round's section.

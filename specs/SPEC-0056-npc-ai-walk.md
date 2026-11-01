@@ -1,6 +1,6 @@
 # SPEC-0056: NPC AI modes, walk-to-point routines and proximity items
 
-- Answers: none (new topic; the script calls that drive these routines are specified in SPEC-0030); R-0079 (the block contact pass for region characters: place in the tick and response); R-0088 (navigation containment and fresh-block arrival as used by the Ixi Chief); R-0127 (where a path comes from, how the path walk starts and ends)
+- Answers: none (new topic; the script calls that drive these routines are specified in SPEC-0030); R-0079 (the block contact pass for region characters: place in the tick and response); R-0088 (navigation containment and fresh-block arrival as used by the Ixi Chief); R-0127 (where a path comes from, how the path walk starts and ends); proactive (path walkers: every way a non-enemy character walks, walking speeds, walkers on the disc, port checklist); proactive (NPC pass: the NPC build guide, hero contact, hit and status rules for townsfolk, and the non-fighting creatures); proactive (placement-facing survey and NPC orientation lifecycle); proactive (timing pass); proactive (verify pass: placement facing write-back, bin convention); proactive (verify pass: facing decode, runtime overrides, port faults and test vectors)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (boot program and level modules; no fingerprint check is stated in this spec, see SPEC-0001)
 - Confidence: per section. Mode numbers: High. Mode names: labels only (the number-to-name map is not established). Townsfolk class, the mode-from-code rule and the per-character values: High. Walk and path arrival distances: High. All distances are horizontal (ground-plane) distances: High for the walk, hold, greeting and villager tests, Medium-High for the navigation arrival test. Steering weights and final orientation: High. Hold branch and greeting: High. Villager timer ranges: High in ticks and in seconds (60 ticks per second, set once at start-up; see SPEC-0007). Pairing rules: High, and no pair forms on disc. Base states and script control: High; the park-and-resume of a script walk and the script hold during a walk: Medium-High. Talk facing: High. Travel by root motion and facing: High. Place of the AI step in the tick and the one-tick delay from clip request to first root displacement: High. Townsfolk speeds at R = 1: High. Movement-type to animation mapping in the walk classes: Medium-High. Proximity items: High that some callbacks give items; Medium for their gates; High for the 5.8 firing distance and the Action press, Medium for which characters can be the hero's candidate. Wall collision of region characters (navmesh confinement, its edge-reach quirk and the off-mesh restore): High; the blocked flag's setter, clearers and readers: High. Route table: High for the layout and for the read by the navigation step, Medium-High for its meaning (the next edge on a shortest route). Route step through the chosen edge: Low. Spawn point search, its retry rule, its cursor quirk and its callers: High. Movable-block contact pass: High for the block selection, Medium-High for the push. Values marked "(confirmed on disc)" match the boot program's code and data.
@@ -13,7 +13,7 @@ Separately, a character runs one **behavior class** at a time. The walk calls of
 
 Level scripts also register proximity callbacks. Eleven callbacks in ten level modules can give the hero an item on approach, and most of them give it only when a story flag or a prompt answer passes.
 
-Apart from the arrival step of walk classes 23 and 25 (Behavior classes), none of these routines moves the character itself. A walking NPC travels by the root motion of the locomotion animation it plays, exactly as the heroes do: the routines choose the animation and steer, and the motion record turns the animation's root step into a displacement each tick. Townsfolk walk at 5.00 units/s and run at 13.50 units/s.
+Apart from the arrival step of walk classes 23 and 25 (Behavior classes), none of these routines moves the character itself. A walking NPC travels by the root motion of the locomotion animation it plays, exactly as the heroes do: the routines choose the animation and steer, and the motion record turns the animation's root step into a displacement each tick. Townsfolk walk at 5.00 units/s (1.71 for the 214 of 666 townsfolk placements whose animation table names the slower walk clip on id 1; patrol always uses a 5.00 clip), run at 13.50 and fast-run at 19.30 units/s.
 
 A walking character on a navigation mesh finds its way by a route table that is stored with the mesh: for each pair of triangles it names the edge to leave by. There is no run-time route search.
 
@@ -73,7 +73,7 @@ Offsets inside the runtime character record are not part of this spec. The offse
 
 | Offset | Type | Meaning |
 | --- | --- | --- |
-| +0x10 | vector | Placement facing. Mode 0 with code 0 turns toward it. |
+| +0x10 | vector | Placement facing: a direction vector with lanes x (+0x10), y (+0x14, up) and z (+0x18), heading = atan2(x, z) degrees from +Z toward +X (decode rule: SPEC-0006, "Character placement: position and facing decode"). Mode 0 with code 0 turns toward it. A release of the character writes its current facing back here (see the orientation survey below). Which rules show it and which replace it: "Authored facing: where it shows and what replaces it". |
 | +0x84 | signed 16-bit int | Behavior code. |
 | +0xB8 | signed 32-bit int | Path index: the number of a path in the area's path list (SPEC-0006, Tagged tables, tag 0x0A), -1 for none. It is the patrol route of mode 6 and the route of a script path walk (class 35), which overwrites it. Outside the AI block, so SetAI_Behavior does not change it. |
 | +0xBC | 32-bit float (wander) or signed 32-bit int (patrol) | Wander: radius r. Patrol: loop mode (0 loop, any other value back-and-forth). |
@@ -84,9 +84,106 @@ Offsets inside the runtime character record are not part of this spec. The offse
 | +0xD0 | signed 32-bit int | Patrol: shortest random stop, ticks. |
 | +0xD4 | signed 32-bit int | Patrol: longest random stop, ticks. |
 
+#### Authored orientation survey (class 6, High)
+
+The facing in each character placement is its own unit vector, separate from the world's entry-0 hero spawn facing. In the 666 class-6 placements across 100 world packs and 328 character resources, the horizontal projection of facing occupies all 24 fifteen-degree heading bins; 8 vectors also have a nonzero vertical component. Farm world 909 has 20 records containing 12 distinct facing vectors. World 1023 has 48 records across its region resources containing 37 distinct vectors (rounded to four decimal places) and 22 five-degree heading bins (bins centred on multiples of 5 degrees; 23 with bins that start at multiples of 5). Heading is measured from +Z toward +X, and the 48 vectors are all horizontal. Some characters recur in multiple region resources, so record counts are not counts of unique visible actors. Runtime AI can replace the current heading as described below; these counts describe authored placement data. The facing that a code-0 character turns back to is the facing held in its record at that moment: the disc vector at the first bind and after any reload of its region, but a release of the character (distance more than 280 units from the hero in a streaming block, or a cell-flag release) writes its current position and facing into the record unless its AI mode is 7, so the next bind of the same record starts from and turns back to that written-back facing (SPEC-0006, Release and rebind; High for the write-back, Medium-High for its effect on the idle target).
+
 Every range draw is a whole number drawn uniformly with both ends included. The two ends may be stored in either order.
 
-### Monster row values (High)
+#### Authored facing: where it shows and what replaces it (class 6, High)
+
+The decode of the vector is in SPEC-0006 ("Character placement: position and facing decode") and SPEC-0040 ("Character facing: how to read it"). Heading below means atan2(x, z) in degrees from +Z toward +X.
+
+| Situation | Heading of the townsperson |
+| --- | --- |
+| Bind (every mode, every code) | Exactly the record's facing (y dropped). Nothing turns the character on the bind tick. |
+| Mode 0 with record code 0 (idle) | Stays at the authored heading. Every tick it blends toward the record's facing with weight 0.05 (v = 0.05 t + 0.95 c, then normalised); the turn never ends, so any displaced heading returns: from 90 degrees away it is within 10 degrees on tick 48 and at a dot product of 0.99 on tick 52; from 170 degrees, on ticks 93 and 97. The test is on the record's code word at that moment (the word SetAI_Behavior writes), not on a saved copy; a character whose code was changed to 5, 6 or 7 never turns back. t is the record's current +0x10, which a release may have overwritten (see the survey above). |
+| Mode 13 (greeting) | No turn. The character keeps its heading and plays idle clips; it does not face the hero. |
+| Modes 7 and 9 (statues that greet) | Bodies are empty: the bind heading is kept for good, except for a talk turn, which is never undone. |
+| Modes 10 and 12 (seated, lying) | No turn of any kind, no greeting, no talk turn (pose flag). The authored heading is the pose's heading. |
+| Mode 5 (wander) and 6 (patrol) while walking | The move direction (steering weight 0.1 per tick). The authored heading is visible only before the first step. During pauses the last move direction stays. They never turn back to the record's facing. |
+| Base state 25 with the hero as partner and no pose | Turns toward the horizontal direction to the hero with weight 0.3 per tick (within 10 degrees from 90 on tick 7). With no partner (SetConversationTarget argument 0, or a LevelMsg line alone) or in a pose, it does not turn. After the talk: code 0 turns back at 0.05; code 5 or 6 resumes walking; code 7 or 9 stays facing where the talk left it. |
+| Script walks (classes 23, 24 and 35) | The move direction. At the end the heading is the last move direction; a code-0 character then turns back at 0.05. |
+| WalkEntityAndOrient (classes 25, 26) | After arrival, turns at weight 0.1 until the dot product with the locator's flattened direction is at least 0.99. |
+| MoveEntity, locator form | Face option on: takes the locator record's facing. Off: keeps the heading. Coordinate form: keeps the heading. |
+| Base states 33 and 55 (script hold, scripted loop) | Heading kept (no turn). |
+| Release and rebind | A release outside default mode 7 stores the current heading in the record; a rebind starts from it. Mode 7 characters rebind at the disc heading. |
+
+There is no script call that sets or aims a character's heading directly: no SetFacing or LookAt exists for characters. The animated-object rotation calls rotate scene objects, not characters, and the head look-at (SPEC-0040, Behavior 23A) is used by the hero and the Plague Serpent only. Townsfolk never look at the hero with their heads.
+
+#### Why every townsperson faces the same way (port faults and their symptoms)
+
+Authored data does not have one heading: farm pack 909 has 12 distinct headings in 20 townsfolk records and pack 1023 has 37 in 48. About a third of class-6 records (203 of 666) face within 0.0005 of +Z or −Z on every lane, so groups of neighbours with one heading (a shop interior, a council hall) are normal. If a build shows one heading across unrelated places, check these in order:
+
+1. Facing field ignored at bind: every character keeps the body's default heading (+Z, or +X for a body whose reset facing is +X). Symptom: one heading everywhere, including characters that never turn.
+2. Turn-back target taken from the wrong source (the hero's spawn facing, the world's entry-0 facing, the camera): code-0 characters drift to that one heading in about 50 ticks and stay there; patrol and wander characters look fine. Symptom: right at bind, wrong a second later.
+3. Wrong record offset (position lanes read as facing, the 16-byte chunk header added to the base, or the name bytes at +0x20): vectors point along the position or are noise. Neighbours then share one heading (they point from the origin toward themselves).
+4. Wrong lanes: atan2(z, x) mirrors and rotates every heading by 90 degrees (distinct but wrong); atan2(y, x), atan2(x, y) or a w lane give only 0, 90, 180 or 270 because y and w are 0. Symptom for the latter: everyone faces one of two or four directions.
+5. Vector treated as an angle (lane x used as radians or degrees): every heading is within about 1 radian or 1 degree of +Z, so everyone looks the same.
+6. Degrees against radians: atan2 output in radians fed to a degree API gives headings within ±3.14 degrees (all near +Z); degrees fed to a radian API gives scrambled but never-matching headings.
+7. Basis built from world axes (side row fixed at (1, 0, 0), or a look-at toward the hero): ignores the vector entirely.
+8. Turn-back weight used as an angle (yaw = 0.05 or yaw += 0.05) instead of a vector blend v = 0.05 t + 0.95 c: all idle characters collapse to a heading near 0.
+9. Handedness flip on import (z negated): every yaw becomes 180 − yaw (Hawker Gamzan 12.90 becomes 167.10; +Z shopkeepers face away from their counters). An x flip gives 360 − yaw.
+10. The summon placeholder (1, 0, 0), position zero, applied to ordinary records: everyone faces +X.
+11. Release before the first tick writing a default heading back: after the first stream-out and rebind every character shares it. The write-back is the current forward row, which for a bound character equals the authored heading until something turns it.
+12. Idle or pose code that snaps to the move direction every tick: a standing character has a zero move direction, so it falls to the default.
+
+A quick self-test: decode all 666 class-6 records; there must be 24 occupied 15-degree bins, and pack 909 must show 12 distinct headings among its 20 records.
+
+#### Facing test vectors (class 6, High)
+
+Columns: pack; region resource (emb = the pack's embedded block); entity id in the pack's entity table; name; default behaviour code (record +0x84); facing lanes (x, y, z); stored position (x, y, z); yaw in degrees; look direction (dominant axis, then the lesser one). Packs: 1023 Meridell, 909 Farm, 1098 Brightvale, 1300 Faerieland. The side row is (z, 0, −x) over √(x² + z²).
+
+| Pack | Region | Entity | Name | Code | Facing (x, y, z) | Position | Yaw | Looks toward |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| 1023 | 1035 | 65 | Hawker Gamzan | 0 | (0.2232, 0.0000, 0.9748) | (99.30, 27.54, 366.55) | 12.90 | +Z (+X) |
+| 1023 | 1035 | 66 | Shanra | 0 | (-0.1192, 0.0000, 0.9929) | (176.62, 27.54, 372.20) | 353.15 | +Z (-X) |
+| 1023 | 1031 | 57 | Sir Aldwin | 6 | (0.0000, 0.0000, 1.0000) | (-86.44, 27.54, 493.93) | 0.00 | +Z |
+| 1023 | 1026 | 4 | Guardsman Ulfric | 6 | (0.4664, 0.0000, -0.8846) | (-21.56, 27.47, 797.25) | 152.20 | -Z (+X) |
+| 1023 | 1026 | 2 | Guardsman Darol | 0 | (-1.0000, 0.0000, -0.0085) | (18.87, 29.64, 603.06) | 269.51 | -X |
+| 1023 | 1024 | 0 | Meerouladen | 0 | (-0.6581, 0.0000, -0.7529) | (-34.94, 29.38, 634.24) | 221.16 | -Z (-X) |
+| 1023 | 1033 | 61 | Bermund | 0 | (0.6751, 0.0000, 0.7377) | (-121.44, 27.49, 486.09) | 42.46 | +Z (+X) |
+| 909 | 914 | 31 | Lucy | 0 | (-0.2421, 0.0000, 0.9702) | (-1860.44, 45.51, 1131.45) | 345.99 | +Z (-X) |
+| 909 | 916 | 33 | Lucy | 0 | (-0.4465, 0.0000, 0.8948) | (-1887.32, 45.51, 1166.39) | 333.48 | +Z (-X) |
+| 909 | 919 | 36 | Lucy | 0 | (0.3606, 0.0000, 0.9327) | (-1835.18, 50.00, 1182.70) | 21.14 | +Z (+X) |
+| 909 | 923 | 40 | Patricia | 7 | (0.9632, 0.0000, 0.2687) | (-1877.73, 50.00, 1176.79) | 74.41 | +X (+Z) |
+| 909 | 924 | 41 | Patricia | 6 | (-0.7718, 0.0000, -0.6358) | (-1938.15, 50.00, 1165.28) | 230.52 | -X (-Z) |
+| 909 | 927 | 44 | Hubert | 0 | (0.9885, 0.0000, 0.1512) | (-1961.99, 45.51, 1064.68) | 81.30 | +X (+Z) |
+| 909 | 920 | 37 | Patricia | 0 | (0.0000, 0.0000, 1.0000) | (-1937.53, 50.00, 1170.61) | 0.00 | +Z |
+| 1098 | 1101 | 12 | Sir Earwobble | 0 | (0.9991, 0.0000, -0.0416) | (-74.22, -106.20, 67.63) | 92.39 | +X |
+| 1098 | 1101 | 13 | Master Tailwag | 0 | (-0.0246, 0.0000, -0.9997) | (-69.85, -106.16, 71.91) | 181.41 | -Z |
+| 1098 | 1101 | 14 | Lord Fatbat | 0 | (-0.9999, 0.0000, 0.0102) | (-65.95, -106.12, 67.65) | 270.58 | -X |
+| 1098 | 1101 | 15 | Lord Adelheit | 6 | (-1.0000, 0.0000, 0.0000) | (-98.61, -107.88, -37.30) | 270.00 | -X |
+| 1098 | 1105 | 19 | King Skarl | 0 | (0.0000, 0.0000, -1.0000) | (0.00, -124.24, 100.79) | 180.00 | -Z |
+| 1098 | 1106 | 20 | Sir Lawrence | 0 | (1.0000, 0.0000, 0.0000) | (-9.04, -128.05, 73.10) | 90.00 | +X |
+| 1098 | 1104 | 18 | Squire Grayson | 0 | (0.6840, 0.0000, 0.7295) | (95.76, -126.21, 95.52) | 43.16 | +Z (+X) |
+| 1300 | 1305 | 8 | Seradar | 0 | (-0.7619, 0.0000, -0.6477) | (174.29, 1531.21, -48.19) | 229.63 | -X (-Z) |
+| 1300 | 1308 | 11 | Council Herald Kekou | 0 | (-0.9726, 0.0000, 0.2324) | (4.02, 1536.38, -216.40) | 283.44 | -X (+Z) |
+| 1300 | 1309 | 12 | Council Herald Kekou | 0 | (-0.0262, 0.0000, 0.9997) | (-3.17, 1536.38, -213.05) | 358.50 | +Z |
+| 1300 | 1310 | 13 | Council Herald Kekou | 0 | (0.9847, 0.0000, -0.1742) | (-92.47, 1533.35, -102.14) | 100.03 | +X (-Z) |
+| 1300 | 1314 | 17 | Old Lady | 0 | (0.9838, 0.0000, -0.1793) | (-92.47, 1533.35, -102.14) | 100.33 | +X (-Z) |
+| 1300 | 1322 | 74 | Old Lady | 0 | (-0.0872, 0.0000, -0.9962) | (3.00, 1523.72, 223.00) | 185.00 | -Z (-X) |
+| 855 | emb | 0 | Ingmar the Armourer | 6 | (0.0000, 0.0000, 1.0000) | (-1.20, -0.22, -30.14) | 0.00 | +Z |
+| 880 | 881 | 3 | Gord the Merchant | 6 | (0.0000, 0.0000, 1.0000) | (1824.80, 164.70, -937.69) | 0.00 | +Z |
+| 1131 | emb | 0 | Armourer Inga | 0 | (0.0000, 0.0000, 1.0000) | (0.17, 0.00, -7.83) | 0.00 | +Z |
+| 1407 | 1408 | 0 | Smithy Magnar | 0 | (0.9998, 0.0000, 0.0175) | (-4.92, 0.00, -4.31) | 89.00 | +X |
+| 1405 | 1406 | 0 | Armourer Tharbad | 0 | (0.8677, 0.0000, 0.4971) | (-7.22, 1.90, -0.90) | 60.19 | +X (+Z) |
+| 1020 | 1021 | 0 | Alchemist Joku | 6 | (-0.7697, 0.0000, -0.6384) | (7.63, 2.64, 12.62) | 230.33 | -X (-Z) |
+| 1150 | emb | 0 | Pat the Bartender | 0 | (-0.9998, 0.0000, -0.0184) | (4.54, 0.00, -6.33) | 268.95 | -X |
+| 1417 | 1418 | 0 | Potion-Maker Symond | 0 | (0.4976, 0.0000, 0.8674) | (-8.60, 0.00, -7.06) | 29.84 | +Z (+X) |
+| 956 | 958 | 1 | Illusen the Earth Faerie | 7 | (-0.6034, 0.0000, -0.7974) | (-582.57, 121.48, -493.09) | 217.11 | -Z (-X) |
+| 1251 | emb | 0 | Sophie the Swamp Witch | 0 | (0.9767, 0.0000, -0.2147) | (-22.29, 0.00, 5.61) | 102.40 | +X (-Z) |
+| 678 | 679 | 3 | Kell the Beggar | 0 | (0.4918, 0.0000, 0.8707) | (-1596.08, 49.32, 1092.96) | 29.46 | +Z (+X) |
+| 1122 | 1123 | 0 | King Skarl | 0 | (0.9707, 0.0000, 0.2404) | (18.55, -25.30, -197.13) | 76.09 | +X (+Z) |
+| 842 | 844 | 19 | Mayor Jurgin | 7 | (-0.8676, 0.0000, -0.4973) | (40.87, 103.86, 1724.19) | 240.18 | -X (-Z) |
+| 1350 | 1352 | 29 | Tharius the Sage | 6 | (-0.7024, 0.0000, -0.7118) | (108.34, 0.00, -300.71) | 224.62 | -Z (-X) |
+| 1411 | 1412 | 4 | King Altador | 0 | (0.9325, 0.0000, -0.3613) | (-44.09, 129.63, 54.32) | 111.18 | +X (-Z) |
+| 1411 | 1412 | 3 | Fauna the Petpet Handler | 0 | (-0.4758, 0.0000, -0.8795) | (-31.42, 129.63, 68.75) | 208.41 | -Z (-X) |
+| 1176 | 1177 | 2 | Dorf | 7 | (-0.3714, -0.0049, -0.9285) | (214.50, 32.41, 345.27) | 201.80 | -Z (-X) |
+| 1176 | 1177 | 4 | Jeffrey | 7 | (-0.9419, 0.0029, 0.3360) | (226.43, 33.68, 301.20) | 289.63 | -X (+Z) |
+| 1327 | 1333 | 43 | Seradar | 7 | (-0.9923, -0.0294, -0.1200) | (3.42, 4.86, 10.94) | 263.10 | -X (-Z) |
+
+Notes on the vectors. Position y is the stored value; a ground walker's bind may replace it with the probed ground height. Characters with the same name in two regions (Kekou and the Old Lady at the same spot in pack 1300) are alternative loads, not two people. Rows with a small y lane (Dorf, Jeffrey, Seradar in 1327) have a flat steering heading: for Dorf the flat vector is (-0.3714, 0, -0.9285) over its length 1.0000 (yaw unchanged at 201.80). Basis check for Hawker Gamzan: forward (0.2232, 0, 0.9748), side (0.9748, 0, -0.2232), up (0, 1, 0). Mirror check: a flipped z gives yaw 167.10 for Gamzan; a flipped x gives 347.10.
 
 | Source | Type | Meaning |
 | --- | --- | --- |
@@ -116,7 +213,7 @@ Names are this spec's labels. The boot program holds debug names for twelve mode
 | 9 | FOLLOW | Nothing. The character keeps the animation it is playing. |
 | 10 | (no name here) | Requests id 65 every tick (a seated pose for townsfolk). |
 | 11 | (no name here) | Requests id 97 every tick (lying). |
-| 12 | (no name here) | Requests id 98 every tick (lying) and applies status 2 (SPEC-0036) to itself every tick, which keeps that status's 120-second timer full (Medium for the effect of the status). |
+| 12 | (no name here) | Requests id 98 every tick (lying) and applies status 2 (poison; SPEC-0036) to itself every tick. The shared status apply accepts it for a townsfolk character: the timer is set to 7200 ticks (120 seconds) on every tick, so it never runs down, and the status visual of poison is started. No hit points are lost: the poison damage test never fires while the timer is refreshed every tick, and the damage would go through the take-hit, which a townsfolk ignores (High for the timer and the absence of damage; Medium for how the visual looks). |
 | 13 | (no name here) | Greeting pause (see "Greeting"). |
 | 14 to 23 | (no name here) | Nothing (confirmed on disc). |
 
@@ -159,6 +256,8 @@ What reads the townsfolk flag:
 - The walk animations. The townsfolk walk slots pick the townsfolk animation ids by speed code. The walk classes 23 to 26 give a character without the flag walk slot 2 (see "Walk speed and movement type"). (High)
 - The pose test. For a flagged character, modes 10 to 12 count as poses for the greeting. (High)
 - Take-hit. The NPC take-hit returns at once for a flagged character, so townsfolk ignore hits. (High)
+- Hit candidate. The hit-candidate query answers "no" for a flagged character, so the hero's swing, Roberta's shots and the Mote walks never select a townsfolk character: no impact cue, no hit-list entry, no on-hit hook and no magic cost for the swing. The class-6 routine also makes its character invulnerable (the invulnerable word +0x7F0 is set to 1 before the first tick and the class never clears it) and removes it from lock-on, so the flag is not the only reason. (High)
+- Status apply. Nothing in the shared status apply tests the flag. A townsfolk character accepts every status; see mode 12 and the stun note in Edge cases. (High)
 - The class-17 target filter (SPEC-0038) excludes flagged characters. (High)
 - The Juppie death sequence (SPEC-0015) spares flagged characters: its damage goes only to the other characters whose flag is clear. (High)
 - The variant set-up. At bind, a flagged character's variant set-up word is set to 1 when progress flag 216 is on and the world's variant key check gives 1 (SPEC-0022, Variant key check). The world's variant key is the pack's sound selector word (the third word of its type-1001 record, 0 to 11 on disc; SPEC-0009, Area to music row), so the check passes in the same story span as the alternate music of that selector. What it changes on screen: the character's two skin colours are replaced by the purple pair of SPEC-0040, Behavior 26 (High).
@@ -408,12 +507,12 @@ Townsfolk speeds at R = 1, flat ground (S = 3 for every locomotion clip; per tic
 | 3, 4 | 3 (idle) | 0 | 0 |
 | carry walk | 59 | 0.02084 | 1.25 |
 
-Table variant B is the townsfolk animation table used by 198 character records; its id 1 names the slower walk clip. The existing character-bank census associates these records with monster types 16, 18, 20, 22, 24, 27, 28, 32, 35, 41, 43 and 47; it does not enumerate individual placement records. The walk, run and fast-run speeds equal the heroes' slow walk, walk and run speeds (SPEC-0040, Behavior 14C). At another rate R the speed scales by R.
+Table variant B is the 148-entry townsfolk animation table (named by the placement's main-table word at +0x9E) whose id 1 names the slower walk clip (7 keys, root 175 per key, 1.197 units per 0.7 s pass); its id 8 still names the 5.00 clip, and its ids 118 and 119 have no clip. It is used by every placement of monster types 16, 18, 20, 22, 24, 27, 28, 32, 35, 41, 43 and 47: 214 of the 666 townsfolk placements (117 of code 0, 41 of code 6, 24 of code 5, 25 of code 7). The other tables give id 1 the clips 104 (types 25, 26, 44, 45 and 21, 23, 30, 33, 37, 50) or 107 (female types 17, 19, 34 and most type 29), both at 5.00. So script walks, path walks and wander of variant B characters run at 1.71 units/s, and their patrols at 5.00. Patrol uses id 8 only for movement class 0; with move type 1 or 2 a patrolling character uses the run or fast-run clip (the three Cogham villagers, entities 3, 5 and 7 of pack 842, patrol at 19.30 units/s). The walk, run and fast-run speeds equal the heroes' slow walk, walk and run speeds (SPEC-0040, Behavior 14C). At another rate R the speed scales by R.
 
 ### Path walk (class 35)
 
 - Route (High). The path is path number +0xB8 of the character's placement in the area's path list (SPEC-0006, Tagged tables, tag 0x0A): a run of entry records of the pack's entry list. A walk call with a path index of 0 or more first writes that index into the placement word (SPEC-0030 row 111); a negative index leaves the placement's own value, which is how a script walks a character along the path its placement names. The route is valid when 0 ≤ index < the path count: the first point is entry A[index] and the point count is B[index] − A[index] + 1. A route is set up once in the life of a character (the NPC reset clears it): a later walk call with another index changes the placement word but not the route already set up (Medium-High).
-- Start (High). The point index starts at 0 and the reached flag is clear, so the first target is point 0 (unlike the patrol of mode 6, whose first target is point 1). A character that stands elsewhere first walks to point 0. The class uses movement type 0 (townsfolk walk id 1; 5.00 units per second at R = 1, 1.71 for table variant B; see Walk speed and movement type), and the animation requests are those of the other walk classes.
+- Start (High). The point index starts at 0 and the reached flag is clear, so the first target is point 0 (unlike the patrol of mode 6, whose first target is point 1). A character that stands elsewhere first walks to point 0. The class does not set the movement class itself (unlike classes 23 to 26): it keeps the one the townsfolk routine or the previous walk class last set, which is the character's move type (0 unless a script called SetAI_MovementType). With move type 0 it plays townsfolk walk id 1: 5.00 units per second at R = 1, 1.71 for table variant B (see Walk speed and movement type).
 - Each tick that is not a hold (High). With the reached flag clear, the navigation target is the current point, the navigation step runs, and when the horizontal distance to the point is then below 0.5 the reached flag is set. With the reached flag set at the start of the tick: if the current point is the last one, the class ends (End, below); otherwise the index goes up by 1, the flag is cleared and the navigation target becomes the new point (the navigation step runs from the next tick). The loop word +0xBC is not read by the path walk: loop and back-and-forth placements walk alike. There is no pause at a point, no random stop and no position snap.
 - End (Medium-High). On the tick after the last point is reached the class ends with no further animation request (unlike the classes 23 and 25, it does not snap or play an idle): the character's class and priority reset to 0 and the parked townsfolk class resumes (Class requests have priorities, below). From then on IsEntityWalkToPointActive is false for it and a WAIT loop of the walk call stops waiting. A path of one point is walked to and ends the same way. The character is not removed: the cycle zones of pack 1023 deactivate their finished walkers (SPEC-0006, Cycle load).
 - No route (Medium-Low). With an invalid index no route is set up, the reached flag stays clear, and the class steers toward entry 0 of the pack's entry list (a point past the list also reads entry 0), never advances and never ends. No shipped walk call names an invalid path.
@@ -454,10 +553,10 @@ These timing values are the same spawn-record block, +0xC4 to +0xD4, that the cl
 
 1. Each tick: request the townsfolk walk animations for speed code 6 (walk id 8). The route is started once, if it is valid (the placement's +0xB8 names a path of the area's path list: the first point is the path's first entry and the count is its point count; SPEC-0006, Tagged tables, tag 0x0A), and the reached flag is set to 1. If the pause timer is above 0, it drops by 1.
 2. When the reached flag is set, the path step advances the index and the new point becomes the target. The first step happens on the start tick, so a patrol's first target is route point 1, not point 0. In loop mode, the index goes up by 1 and wraps to 0 after the last point. In back-and-forth mode, it starts forward, runs to the last point, then back to point 0, then forward again.
-3. Walking (pause timer below 1): the navigation step runs toward the point. When the horizontal distance is below 0.5, the reached flag is set, and the pause timer and the fidget timer draw from the point-pause range. Otherwise each walking tick makes a roll from 1 to 100. If the roll is below the random-stop chance, both timers draw from the random-stop range.
+3. Walking (pause timer below 1): the navigation step runs toward the point. When the horizontal distance is below 0.5, the reached flag is set, and the pause timer and the fidget timer draw from the point-pause range. Otherwise a roll from 1 to 100 is made, only on a tick on which the character's awareness gate word is 0 (the roll is skipped while it is not); if the roll is below the random-stop chance, both timers draw from the random-stop range (+0xD0 to +0xD4). A random stop does not set the reached flag, so the same point stays the target afterwards. A pause draw P holds the walker for P - 1 ticks, because the timer drops by 1 at the start of the next tick. The next point is chosen on the first tick after arrival (the index advances while the pause runs), so the pause only delays the walk. With an invalid path index no route is set up and the walker steers to entry 0 of the pack's entry list and rests there (Medium-Low). The facing does not change during a pause.
 4. Pausing: as wander step 4, with fidget id 11 in place of id 2. After the fidget's clip reaches progress 0.99, the fidget timer is drawn again from the point-pause range. On body 526, id 11 names clip 48, so the fidget is a no-op as in wander. Id 7 is never requested, because its gate is only ever cleared.
 
-On disc there are 121 code-6 placements, and every one has a route index of 0 or more. 87 loop and 34 go back and forth. 61 have all timing values 0, so they never pause. Point pauses of a few seconds are typical, for example 300 to 450 ticks or 120 to 300 ticks. 13 placements have a random-stop chance, from 5 to 50.
+On disc there are 121 code-6 placements, and every one has a route index of 0 or more. 87 loop and 34 go back and forth. 63 have every timing value (+0xC4 to +0xD4) 0, so they never pause (61 if the unused +0xC0 word is counted too). Patrol walking is id 8 at 5.00 units per second in every table variant (clip root 512 per key, 8 keys of 6 ticks, 4.002 units per 0.8 s). Point pauses of a few seconds are typical, for example 300 to 450 ticks or 120 to 300 ticks. 13 placements have a random-stop chance, from 5 to 50.
 
 ### Villager pair (mode 3) (High)
 
@@ -553,13 +652,57 @@ Modules that register a proximity callback but give no item on approach:
 - Modules 722 and 758: their callback trees contain no item call.
 - Module 678: its item calls come from debug-mode and button-gated routines, not from its proximity callback.
 
+### Every way a non-enemy character moves (High unless marked)
+
+- Path walk, class 35 (WalkEntityAlongPath): the Meridell and Brightvale cycle-zone villagers (28 walkers in pack 1023, 3 in pack 758) and five scripted walkers of pack 1300. Speed: walk id 1 (5.00 or 1.71 units/s). Ends after the last point (Path walk).
+- Walk to a locator, classes 23 to 26 (WalkEntity, WalkEntityAndOrient): 76 and 67 call sites in 38 and 34 modules, and the waypoint walks of the shared entity-control routine of 27 modules (stop radius 1.1, so class 24 or 26). Speed: the movement class's walk id. Interior townsfolk of packs 1008, 1011, 1014 and 1020 are also mode-6 patrollers; a script walk parks the patrol and the patrol goes on afterwards.
+- MoveEntity: places the character at once (116 call sites, 26 modules); no walk.
+- Autonomous: wander (mode 5, 51 placements), patrol (mode 6, 121), greeting hold (mode 13). The villager pair never forms. Codes 7, 9, 10 and 12 stand or pose.
+- Followers: only the three Ixi Spearmen of Cogham Village (class-17 state 9, SPEC-0038), which follow the villagers Rose, Gershwin and Giovanni the Explorer at a stay distance of 5.0 and copy their gait. Those three villagers patrol at fast run (move type 2 set once by the pack's slot thread). Townsfolk follow nobody. The petpet follows the hero (SPEC-0047, class 34).
+- Heroes in cutscenes: WalkHero and WalkHeroAndOrient walk at the slow-walk speed (5.0 units/s), RunHero at the run speed (19.29); arrival below 0.25 (SPEC-0033).
+- There is no acceleration or deceleration, no run-versus-walk switch by distance (only SetAI_MovementType changes the gait), no teleport-if-far and no escort.
+
+### Walker interruptions and navigation limits (High)
+
+- Mesh. A townsfolk character gets its navigation mesh once, when its townsfolk routine first runs: the first mesh of kind 1, in the world's list order, with a triangle that contains its position (x and z only). A character outside every kind-1 mesh keeps no mesh and never walks (2 of the 172 wander and patrol placements). All 28 cycle walkers and the 9 plain-zone patrollers of Meridell Village stand inside a kind-1 mesh, and every point of their paths lies in the same mesh.
+- Hero in front: a class 23 to 26 or 35 walker stops (idle for 180 ticks, then the id 30 gesture, which has no root travel) while the hero is within 6.0 horizontally and in its front half, and goes on toward the same point when the hero is farther than 12.0 or behind it (dot below -0.1). A hero behind a walker never stops it.
+- Conversation: SetConversationTarget puts the character in base state 25. Its walk routine is not stepped, it requests idle id 0 every tick (the walk clip's last root step is applied once), and it turns toward the hero with weight 0.3. After EndConversation the routine resumes where it yielded, with the same point index.
+- Script hold (base state 33): as in Base states and script control.
+- Other characters and the hero: the character push moves a region character out of any overlapping character, the hero included, along the overlap direction; it does not stop or re-route. Doors and walls obey Wall confinement.
+
+### Path end by caller (Medium-High)
+
+- Cycle-zone threads (packs 758, 1023): the thread's next pass sees the walk as finished and deactivates the villager; when none is left the next candidate group loads.
+- Pack 1300 scripted walks: the walker stays at the last point; a code-0 character then idles and turns back to its placement facing at 0.05 per tick.
+- A code-6 or code-5 character goes back to its patrol or wander. Classes 23 and 25 snap to the target, 24 and 26 do not (Behavior classes).
+
+### Walkers on the disc (High for counts)
+
+- 666 townsfolk placements: code 0 in 414, code 5 in 51, code 6 in 121 (87 loop, 34 back and forth), code 7 in 67, code 9 in 5, code 10 in 6, code 12 in 2. Patrol speed: 120 at 5.00. Wander speed: 23 at 5.00, 24 at 1.71, 4 on other banks.
+- Pack 1023 cycle walkers: 14 at 5.00 and 14 at 1.71 (SPEC-0045 lists each). A 1.71 walker needs up to 239 s for its route (Grizwuld, 408.4 units); a 5.00 walker 27 to 71 s, a 1.71 walker 107 to 239 s.
+- Pack 758: the one cycle zone loads region 762 (Lilly, path 4, 11 points, 216.0 units, 5.00; Corwill, path 5, 9 points, 226.3 units, 1.71, standing 1.4 from point 0) or region 763 (Minerva, path 7, 15 points, 231.3 units, 5.00). Lilly and Corwill are also patrollers.
+- Pack 1300: Seradar (path 1, 4 points, 23.1 units) and four Old Ladies (paths 6, 7, 9 and 10: 2, 3, 3 and 3 points; 11.5, 26.9, 17.7 and 17.9 units), all 5.00 units/s, set walking by the scenes of that pack.
+
+### What a port most likely gets wrong (Meridell townsfolk)
+
+1. No path list: the villager's own path number (placement +0xB8) must index the pack's path list; WalkEntityAlongPath with -1 uses it.
+2. IsEntityWalkToPointActive must be true in the same script tick as the walk call, before the walker's next AI step. The cycle thread asks right after issuing the walks, and a false answer deactivates the villager at once.
+3. The class must end after the last point (class back to 0), or the group never reloads; it must not end earlier and must not loop.
+4. The first target is point 0 (the patrol starts at point 1). Loop mode is ignored by the path walk.
+5. The 150-tick idle before the walks, and the single start of all walkers of the group together.
+6. No mesh: without the kind-1 containment rule nobody has a mesh and nobody moves.
+7. Speed: root motion of walk id 1, which is 1.71 for 14 of the 28 Meridell walkers; id 8 (5.00) for patrols; do not use the heroes' speed or one speed for all; move type changes the gait only through SetAI_MovementType.
+8. The hold: villagers stop in front of a hero within 6.0 and go on once the hero is beyond 12.0 or behind; a hold that never ends looks like a frozen village.
+9. Only cycle-zone villagers (spheres 31 to 34) walk paths by script; the plain-zone villagers stand, wander or patrol by their codes.
+10. One-tick lag between a clip request and the first root step.
+
 ## Edge cases and error handling
 
 - Mode 0 remap: a mode 0 request through the mode setter, with a nonzero code, gives mode 23 only on a monster row whose remap switch is 0. No townsfolk row has that, so townsfolk get mode 0 and then their code.
 - Modes with no per-tick body: nothing happens per tick, and the character keeps the animation it is playing. Townsfolk with code 7 or 9 therefore stand in their current animation.
 - A hero standing within 6.0 in front of a townsfolk character restarts the greeting counter on every tick, so id 30 is never requested while the hero stays there.
 - The greeting runs in every mode except 10 to 12, including wander and patrol, and on exit the character goes back to its code's mode on the next tick.
-- The status-0 stun path in SPEC-0036 does not set townsfolk mode 4: other characters ignore that status-apply call, and the enemy-specific stun writes enemy class state. A bounded census of direct writes and recovered mode-setter call sites found no separate class-6 mode-4 writer; no on-disc SetAI_Behavior code selects 4. Unresolved indirect or unrecovered writes are not ruled out (High for the status-path distinction; Medium-High for the bounded writer census; see Open question 26).
+- Stun and mode 4. The mode word of a townsfolk character is the same word as the class state of the common enemies. The shared status apply (the one every region character uses) would therefore set mode 4 for status 0 on a townsfolk character, and the status tick would freeze its clip rate (factor 0) every tick while the timer runs. Nothing reaches it on disc: the hero's swing, shots and Mote walks skip townsfolk (they are not hit candidates), no level-script call applies a status to a character, and no on-disc SetAI_Behavior code selects 4. Once in mode 4 a townsfolk character would stay there, because no class-6 body leaves it. A rewrite that never applies stun to townsfolk matches the disc (High for the shared apply and the shared word; High that no source exists; see Open question 26).
 - Villager pairs never form on disc, because the pair radius is 0.0 and the distance test is strict.
 - Arrival tests are strict. A distance exactly equal to the threshold does not arrive.
 - The timer ranges are 5 to 12 and 10 to 30 times the rate variable (confirmed on disc). At 60 ticks per second they are the integers 300 to 720 and 600 to 1800.
@@ -590,6 +733,9 @@ Synthetic values; they are not copied from the disc.
 - TV-0056-1a (class 23 arrival): character at (10.0, 2.0, 5.0), walk target (10.5, 2.0, 5.5): horizontal distance 0.707 is below 1.0, so the character is set to (10.5, 2.0, 5.5) and the class ends. The same walk with class 24 and stop radius 1.1 ends with the character still at (10.0, 2.0, 5.0).
 - TV-0056-R127a (path walk, disc values from pack 1023; High): Wymond (placement +0xB8 = 8) is walked with path -1. Path 8 is entries 146 to 156, 11 points. The first target is point 0 at (-8.57, 29.37, 655.11), the point he stands on (horizontal distance 0, below 0.5), so on the next tick the reached flag is seen set, the index goes to 1 and the target becomes (-25.10, 29.37, 654.89). He covers 173.3 units of segments (horizontal) at 5.00 units per second, about 34.7 s plus the turns of the navigation route, and when point 10 is reached the class ends one tick later and IsEntityWalkToPointActive turns false.
 - TV-0056-R127b (patrol start; High): a Skeleton Archer of pack 790 (default state 6, +0xB8 = 4, +0xBC = 1) has a route of 2 points (entries 27 and 28). The start tick sets the reached flag, so the first step moves the index from 0 to 1 and the first target is point 1 at (2154.02, 56.42, -940.91), not point 0 at (2237.60, 56.42, -941.08). On reaching it the index goes back to 0, then 1, and so on (back and forth). With +0xBC = 0 it would go 1, 0, 1, 0.
+- TV-0056-R127c (path walk timeline, pack 1023, straight-line model; Medium): Wymond stands at (-8.573, 27.474, 655.108), 0.004 from point 0. Tick 0 is the first step of the walk class: the flag is set at once. Tick 1: the index goes to 1 (target (-25.10, 29.37, 654.89), 16.53 away). Tick 2: first navigation step, walk clip requested. Tick 3: first displacement 0.08337. Points 1 to 10 are flagged on ticks 196, 606, 880, 998, 1021, 1038, 1156, 1431, 1841 and 2035; tick 2036 ends the class (33.9 s). Steering arcs add a few ticks.
+- TV-0056-R127d (scripted path walk, pack 1300, straight-line model; Medium): an Old Lady placed at (-92.474, 1533.348, -102.140), facing (0.984, 0, -0.179), is sent along path 10 with WAIT: points (-83.719, 1535.248, -107.290), (-84.944, 1535.248, -117.876), (-91.995, 1535.248, -119.354). Flagged on ticks 117, 242 and 325; the class ends on tick 326 (5.4 s) and the script resumes. Variant B contrast: the same 28.0 units take 982 ticks at 1.71.
+- TV-0056-R127e (patrol speed): a type 20 guard (table variant B) walks a script walk at 0.02850 per tick (1.71) and patrols at 0.08337 (5.00).
 - TV-0056-2 (class 24, stop radius 1.1): distance 1.09: arrived. Distance 1.11: keeps walking.
 - TV-0056-3 (class 35): point distance 0.49: reached. Distance 0.50: not reached.
 - TV-0056-4 (steering on the mesh, w = 0.3): facing c = (0, 0, 1), direction t = (1, 0, 0). v = (0.3, 0, 0.7), so facing = (0.39392, 0, 0.91915).
@@ -672,9 +818,187 @@ A complete route over one real navigation mesh: the type-21 mesh 1 of the first 
 - There is no teleport-if-far. A walk changes the walk target and the navigation state only. The only script call that sets a position is MoveEntity (SPEC-0030).
 - In the level modules that call the game-over call, the condition reads the hero's state. None reads an NPC's death (SPEC-0053, section 3.11, says the same of the parked hero).
 
+## NPC build guide (townsfolk, shopkeepers, quest givers, villagers and the creatures that do not fight)
+
+Confidence: High unless marked. This guide gathers, in the order a rewrite needs them, the rules above and the rules of the non-fighting creature sections of SPEC-0029 and SPEC-0047. It adds the contact rules (what the hero's blows, status effects, enemies and pushes do to an NPC), the state tables, the placement counts and four worked examples. The enemy kinds (class 17 and the bosses) are not covered here.
+
+### 1. Kinds and placement counts
+
+| Kind | Class | Row | Hit points | Placed on disc | Moves by |
+| --- | --- | --- | --- | --- | --- |
+| Townsfolk, shopkeepers, quest givers, guards, officials, Illusen | 6 | companion row 531 (monster row gives none) | not used (hits ignored) | 666 placements, 280 names (123 placements unnamed) | modes 0, 5, 6, 7, 9, 10, 11, 12, 13 below; script walks |
+| Whinny | 7 | 253 | 7 | 17 in play plus 4 plausible | SPEC-0029 Behavior 5 |
+| Mortog | 39 | 249 | 20 | 21 | SPEC-0029 Behavior 3 |
+| Miamouse | 21 | 248 | 5 | 21 (resources 538, 759, 1164, 1281, 1400) | SPEC-0029 Behavior 28 |
+| Target Dummy | 36 | 254 | 50 | 7 (all in the castle courtyard pack) | SPEC-0029 Behavior 29 |
+| Wild petpets | 33 | 244, 245, 247, 250, 251 | 5, 5, 5, 20, 5 | 8, 8, 5, 7, 5 | SPEC-0047 |
+| Second petpet kind | 20 | 252 | 20 | 5 plus 1 plausible | SPEC-0047, Class 20 |
+| Queen Fyora | 38 | 132 | 50 (not used) | 4 records, 2 named | SPEC-0029 Behavior 30 (finale and duel only) |
+
+Townsfolk by code (666 placements): code 0 stand 414 (299 named, 115 unnamed), code 5 wander 51, code 6 patrol 121 (87 loop, 34 back and forth), code 7 guard-stand 67, code 9 stand 5, code 10 seated 6, code 12 lying 2. Code 7 holds guards, officials and some villagers: Mayor Jurgin (5), the Cogham villagers Stanley, Rose, Giovanni the Explorer, Ingmar Anvilmaster and Serene, Guardsmen Marrok and Dubric, Tiff, Jeffrey and Dorf in the arena pack, and Illusen in three packs. Code 9 is Ruffie (3, Cogham), Cinthia (1) and Lucy (1, the farm). Code 10 is Lord Cormac, Sir Harlag, Guardsman Henry, Lord Darius and Lady Anabel (the court pack) and Seradar. Code 12 is Arken and Hank. No placement uses code 11 or any code above 12. The clip behind walk id 1 is the 5.00 units/s clip for 378 placements (268 on clip 104, 110 on clip 107) and the 1.71 units/s clip for 214; the other 74 are on the other families. Shopkeepers are ordinary townsfolk placements: the stock is world items bought through the Buy prompt (SPEC-0050), and there is no counter object and no shop-specific NPC behavior.
+
+### 2. One tick of a townsfolk character
+
+Order inside the world tick: the NPC update (re-time of the playing clip, status tick, then the class routine through the arbiter when the base state allows it), the motion-record tick, the animation pass. The class routine does the following in this order every tick it is allowed to run (base state 1, or 17 or 31; frozen in 16, 25, 33, 36, 42, 53 and 55):
+
+1. Update the navigation index; on the very first run of a character with no mesh, search for one (kind 1 mesh containing the position).
+2. Pre-step: the greeting entry test (all modes except 10, 11, 12); in mode 0 set mode := code; in modes 5 and 6 the pair search (never matches on disc).
+3. Set the movement class from the move type.
+4. Run the body of the current mode (table below).
+5. Yield.
+
+Before the very first tick the class start makes the character invulnerable and removes it from lock-on; it makes no animation request, so the first clip is whatever the animation player holds after bind (idle id 0 is the default if a rewrite needs one).
+
+### 3. Mode state tables (what each mode does on every tick)
+
+| Mode | How a character gets there | Body, each tick | Timers and numbers | Leaves by |
+| --- | --- | --- | --- | --- |
+| 0, code 0 | bind; end of a greeting; SetAI_Behavior with a new code | idle id 0; turn toward the placement facing with weight 0.05 | none; the turn never "finishes" | greeting entry; SetAI_Behavior |
+| 0, code not 0 | same | none: the pre-step has already set mode := code in this tick | one tick at most | the pre-step |
+| 5 wander | code 5 | walk id 1 (move type 0) or the move-type clip; pick a point; walk or pause (Wander) | pause 1 to Pmax ticks; arrival 1.5; chance roll 1 to 100 below the chance | greeting; SetAI_Behavior |
+| 6 patrol | code 6 | walk id 8 (the move type's clip when not 0); route from point 1; point pauses; random stops (Patrol) | arrival 0.5; pause ranges from the record | greeting; SetAI_Behavior |
+| 7 | code 7 | nothing; keeps its clip and facing | none | greeting (it comes back to 7) |
+| 9 | code 9 | nothing; same as 7 | none | greeting |
+| 10 | code 10 | request id 65 (seated) | none; no greeting test | SetAI_Behavior only |
+| 11 | no placement | request id 97 | none | SetAI_Behavior only |
+| 12 | code 12 | request id 98 (lying); apply poison to itself | status timer 7200 re-set each tick | SetAI_Behavior only |
+| 13 greeting | the entry test | idle picker for 180 ticks, id 30 once, idle picker; no turn | counter 0 to 180 | hero beyond 12.0, or dot below -0.1 |
+| 1, 2, 4, 8, 14 to 23 | not reachable on disc | nothing | none | none |
+| 3 pair | not reached on disc | Villager pair | talk timer 300 to 720, cooldown 600 to 1800 | pair end |
+
+Notes. A mode 7 or 9 character is only a statue that greets: it never turns on its own. A character in modes 10 to 12 never greets and never turns. Mode 5 and mode 6 characters walk by root motion at the clip speeds of Walk speed and movement type; there is no run-or-walk choice except SetAI_MovementType. No mode reads the awareness word except the patrol's random-stop roll.
+
+Greeting window. The entry test needs the hero within 6.0 and in the front half. While those hold, the counter restarts every tick, so the id 30 gesture is never reached. The gesture plays only after 180 ticks in which the entry test fails but the exit test has not fired: the hero between 6.0 and 12.0 away in any direction with the dot at least -0.1, or within 6.0 with the dot between -0.1 and 0. The clip for id 30 has no root travel and lasts 144 ticks at R = 1. On exit the mode is 0 and the next tick restores the code's mode.
+
+### 4. Base states, scripts and cutscenes
+
+| Base state | Set by | AI routine | Clip | Facing | Hits |
+| --- | --- | --- | --- | --- | --- |
+| 1 | bind; ReleaseEntityControl; walk calls; arrival; end of conversation (restores the saved state) | runs | by mode | by mode | ignored |
+| 25 | SetConversationTarget | frozen where it yielded (mode, counters and hold counter keep their values) | idle id 0 each tick (the last walk root step still applies once), or no request for a pose | turns toward the hero with weight 0.3 when the hero is its partner (call argument 1) and it is not in a pose | ignored |
+| 33 | GrabEntityControl; PlayEntityAnim; MoveEntity with control; end of LoopEntityAnim | frozen | the playing clip keeps its drift until its progress is 0.99, then the default idle | kept | ignored |
+| 55 | LoopEntityAnim | frozen | the scripted loop | kept | ignored |
+| 16 | a script kill only | none | death clip | kept | ignored |
+| 42 | bind slot, release, reset | none; not drawn | none | none | ignored |
+
+Cutscenes use only these states: a scene grabs the actor (33), places it with MoveEntity or walks it (classes 23 to 26, 35), plays clips (33, 55) and releases it (1). The NPC's AI does not run in 25, 33 and 55, so a patrol or wander stops during a talk or a scene and resumes where it stopped (TV-0056-30). A scene that releases a code-0 character leaves it turning back to its placement facing at 0.05 per tick.
+
+### 5. Turning times (steering, 90 and 170 degree turns)
+
+Remaining angle after n ticks, with v = w t + (1 - w) c each tick (the table gives the first tick at which a threshold is passed):
+
+| Weight and use | Start angle | After tick 1 | After tick 10 | Below 10 degrees | Dot 0.99 (8.11 degrees) | Below 1 degree |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.3, talk turn | 90 | 66.80 | 2.86 | tick 7 | tick 8 | tick 13 |
+| 0.3, talk turn | 170 | 162.66 | 15.24 | tick 12 | tick 12 | tick 18 |
+| 0.1, walk and route turns | 90 | 83.66 | 37.36 | tick 23 | tick 25 | tick 45 |
+| 0.1, walk and route turns | 170 | 168.76 | 148.40 | tick 44 | tick 46 | tick 66 |
+| 0.05, idle turn back to the placement facing | 90 | 86.99 | 61.31 | tick 48 | tick 52 | tick 93 |
+| 0.05, idle turn back | 170 | 169.45 | 162.92 | tick 93 | tick 97 | tick 138 |
+
+An exactly opposite direction gets the side nudge of Steering and turn rate. A walker travels along its facing while it turns (root motion along the facing), so a 90-degree turn at walking pace with weight 0.1 sweeps an arc: about 23 ticks of the 5.00 clip, 1.9 units, before the heading is within 10 degrees.
+
+### 6. Contact rules (hero, enemies, hits, status)
+
+- Hero blows. A townsfolk character is not a hit candidate (the query answers no, and the class makes it invulnerable): the swing, quick shots, full-release shots and the Mote walks pass through it with no cue, no flash, no hit-list entry and no cost. Its take-hit would also return at once.
+- Status effects. The shared status apply accepts them, but no source reaches townsfolk except the mode 12 self-poison (no damage).
+- Pushing. Region characters push themselves out of any overlapping character (centre distance below 20, body cylinders overlap), the hero included; the hero's own push moves the hero because the townsfolk flag cancels the "push the other one" choice. So a hero walking into a townsfolk character is stopped by the pair of pushes without either stopping its routine. Two townsfolk push each other apart the same way, without re-routing.
+- Enemies. Enemies take the selected hero as the only target, their weapon cylinders test only the hero's bone capsules, and the class-17 target filter excludes townsfolk. Enemy projectiles and boss effects do not test townsfolk (Medium-High). Townsfolk therefore never react to a fight, never flee and never take damage; the Juppie death sequence spares them.
+- Lock-on. A townsfolk character is never on the lock-on list; it is on the talker list (within 20.0 and in the hero's front half, cosine above 0.5) and can be the talk candidate (SPEC-0022).
+- Sounds. Townsfolk make none: no footsteps, no barks, no greeting voice (SPEC-0031). The talk emote voice clips belong to the dialogue box (SPEC-0009).
+- Head. No head look-at: only the heroes and the Plague Serpent request one (SPEC-0040). A greeting changes the clip only.
+
+### 7. Draw, release and streaming
+
+A bound townsfolk character is drawn whenever its base state is not 42 and its parts pass the frustum test; there is no fade and no distance fade. It is released when the hero is more than 280 units away (squared distance above 78,400, SPEC-0006), and bound again from its placement when the hero comes back within 280: position back at the placement, mode 0, route and fidget state cleared (the NPC reset), patrol index at its start, no memory of an earlier wander point. A walker mid-path that is released therefore starts again at the placement (High for the release rule; Medium-High that a rebound character carries no state).
+
+### 8. Non-fighting creatures: contact summary
+
+| Kind | Hit by the hero? | What a hit does | Notes |
+| --- | --- | --- | --- |
+| Whinny | yes (base hit-candidate rule) | shared take-hit: first damaging hit doubled, hit points 7 minus the damage, face the attacker once, at zero hit points the death hook (base state 16, loop frozen, corpse 510 ticks) | no undamageable call in the farm pack; a dead Whinny cannot be herded (Open question 35) |
+| Mortog | yes | same; hit points 20; its state lives in its own block, so the class-state write of the hit does not disturb it | a Mortog killed while holding leaves the zone count raised |
+| Miamouse | yes unless carried (base state 33) | same; hit points 5 | the pack that needs all five does not protect them |
+| Target Dummy | yes | the shared take-hit runs, but the courtyard script makes all seven undamageable every tick, so hit points never fall; the dummy faces the hero and its own routine resets hit points and the twitch counter | worked example 4 |
+| Wild petpet (class 33) | no (pet type rule) | none | feeding is the only interaction |
+| Class 20 creature | no (pet type rule) | none | reacts to the hero's attack state and shots (SPEC-0047) |
+| Queen Fyora | no controller reaction | her orbs and deflect follow the duel controller only | no talk, walk or idle behavior of her own |
+
+### 9. Worked examples
+
+Example 1: a Meridell villager talked to mid-walk (pack 1023 path walker at 5.00 units/s, class 35, hero approaching from the front).
+
+1. The villager walks at 0.08337 per tick along its path, facing +z. The hero comes within 6.0 in the villager's front half on tick h. The hold test fires on tick h: counter 0, no steering, idle id 0 requested. The previous tick's walk step still moves the villager once (0.08337), then it stands.
+2. While the hero stays within 6.0 in front, the counter restarts every tick. The hero presses Square within 5.8: the talk callback calls SetConversationTarget. Base state 25 on tick h + k: the walk routine is frozen inside its hold branch with its counter kept; the villager requests idle id 0 every tick and turns toward the hero with weight 0.3 (from 20 degrees off, dot 0.99 on tick 3; from 90 degrees, on tick 8).
+3. EndConversation restores base state 1 on the end tick. The routine resumes inside the hold branch. The villager now faces the hero, so the dot is near 1: the hold continues (the hero is nearer than 12.0) with the counter continuing from its old value. The gesture id 30 plays only if the counter reaches 180 without a restart (the hero stays 6.0 to 12.0 away).
+4. When the hero is more than 12.0 away or goes behind (dot below -0.1), the hold ends on that tick and walking resumes on the next tick toward the same path point. The route and the point index are untouched. The villager first turns from the hero direction to the route direction with weight 0.1 while walking along its facing: for a 90-degree difference the heading is within 10 degrees after 23 ticks, with about 1.9 units of arc.
+5. Variant: the hero talks from behind. The villager keeps walking (the hold needs the hero in its front half) until base state 25 starts on tick s. On tick s the walk clip's last step (0.08337) still applies once, then idle. The villager turns toward the hero from 170 degrees with weight 0.3: 162.66 degrees after tick 1, below 10 degrees on tick 12, dot 0.99 on tick 12. After the talk the hold test starts at once (hero within 6.0 and now in front).
+6. A 1.71 units/s villager (table variant B) behaves the same; only its step is 0.02850 per tick, and a villager released beyond 280 units starts at its placement again (the cycle zones of pack 1023 deactivate their finished walkers instead).
+
+Example 2: a Whinny fleeing (SPEC-0029 Behavior 5, farm pack). The Whinny at (-1845.754, 1143.807) stands in wander. The hero comes within 5.0: flee, run clip (13.51 units/s, 0.2252 per tick, first step on the tick after the request). Sub-step A plans a point 4.0 directly away from the hero, runs at most 15 ticks or until within 2.5 (about 7 ticks in practice), then plans again; when the point is off its mesh it takes sub-step B (a random far triangle centroid at least 10 from the hero, run at most 25 ticks or until within 2). The entrance test runs at the top of every flee tick: the first tick the Whinny stands in the pen's entrance area (about tick 23 with a hero 4 behind it) it becomes lead, runs to the pen point, and when within 3.0 of the pen point and inside the inner mesh becomes penned, then walks (4.16 units/s) to random points and idles 120 to 400 ticks between them. If the hero's blow lands on it first, the Whinny takes the shared hit (7 hit points, first damaging hit doubled), faces the hero for one steer and goes on running its own routine until its hit points reach 0; then it falls into base state 16 and stays.
+
+Example 3: a Mortog hold (SPEC-0029 Behavior 3, the zone puzzle; there is no race). Zone centre A = (0, 0, 0), L = 100 (a zone of radius 10). Mortog idles 2 to 8 seconds, then wanders to a random point. The hero comes within 5.0 (squared 25): flee. On the first flee tick the zone test runs first: Mortog at (6, 0, 5) has squared distance 61, below 100, so it enters hold with round(60 x 27.3) = 1638 ticks (hold range 25 to 30 seconds in the puzzle pack) and the zone count goes 0 to 1; the same tick the flee step still runs (hero within 15: it moves toward a point 8 away). Hold plays idle clip 0 and counts down. At the end it draws k from 4 to 8, takes the goal k x unit(P - A) (a point within 8 units of the world origin, not beside Mortog), goes to wander and the count falls by one. The puzzle pack widens the range by 5 seconds at each odd rise of the count and, when the count reaches 4, sets the range to 0 and 0: no hold ends and the count stays at 4. A Mortog the hero kills while it holds (20 hit points) leaves the count raised.
+
+Example 4: the Target Dummy taking a hit (courtyard pack). The dummy's counter is 237 and its interval is 650 (drawn from 400 to 800). On tick T the hero's swing resolves in the hero update (after the NPC update of tick T). The swing passes the hit-candidate query and the dummy is added to the swing's hit list. The shared take-hit runs: damage doubled once (the class state word becomes 19), no hit points lost because the script sets the dummy undamageable every tick, the dummy is steered to face the hero with weight 1.0, the pending-hit flag is set. Tick T + 1, the dummy routine: hit branch: animation 3, current hit points set to the maximum (50), counter 1, a new interval is drawn. While animation 3 plays the counter does not move. When it ends, each tick adds 1; the twitch (animation 1) starts on the tick the counter equals the interval, about 650 ticks later. A second hit during animation 3 sets the flag again: counter back to 1, a new interval, and the clip is not restarted (same id requested). The dummy keeps the facing of its last attacker (Medium-High: nothing turns it back).
+
+### 10. Edge cases for implementers
+
+- A townsfolk character with code 7 or 9 never changes clip until a greeting; after a greeting it plays id 0 and stays on id 0 (a seated or lying code-7 character does not exist; poses are codes 10 and 12).
+- Greeting and conversation are different things: the greeting never turns the character, the conversation does (weight 0.3, hero as partner only).
+- The hold counter and the gesture belong to the walk routine and to mode 13 alike; a conversation freezes both.
+- Talk freezes the AI, not the position: the last walk root step still applies once on the first tick of base state 25.
+- Wander and patrol pause timers do not run in base states 25, 33 and 55.
+- A code-0 character turns back toward its placement facing for as long as it stands in mode 0, also after a script walk that moved it; the turn never ends.
+- Clip speed is re-timed every update, so a status that slows or hastens a clip changes a walker's speed at once.
+- Release beyond 280 resets everything except the character's record (no state is saved).
+- No townsfolk is ever hit, stunned, poisoned for damage, knocked back, lock-on targeted or attacked; do not add reactions.
+- Mode 12 characters show poison and take no damage; their poison timer is 7200 ticks and is re-set every tick.
+- A hero-versus-townsfolk push moves both; neither stops walking its routine.
+
+### 11. What a port most likely gets wrong (NPC)
+
+1. Letting the hero's swing hit townsfolk (a cue, a flash or a magic cost). They are not hit candidates.
+2. Turning townsfolk toward the hero in the greeting. Only the conversation turns them.
+3. Treating modes 7 and 9 as guard or follow. They are statues that greet.
+4. Playing fidget clips or idle variants. A townsfolk idle is id 0 forever; only Warren's pause shows a different clip.
+5. Missing the 180-tick rule: the gesture needs a hero who stays 6 to 12 units away.
+6. Stopping the walk for a hero behind the walker, or never ending the hold.
+7. Forgetting that a code-0 character turns back to its placement facing at 0.05 per tick after any talk or script walk.
+8. Running wander and patrol timers during a talk or scene.
+9. Giving townsfolk voices, footsteps or head tracking.
+10. Using one walking speed for everyone (1.71 for 214 placements, 5.00 patrol on every table).
+11. Making Whinnies, Mortogs and Miamice immune to the hero (they are killable in the original), and the Target Dummy mortal (the courtyard makes it undamageable).
+12. Releasing a character by distance with any state kept.
+
+### 12. Open guess points and defaults
+
+Default if unresolved (rewrite choice): the first clip of a code 7 or 9 character before any greeting is idle id 0. The poison visual of a mode 12 character is the ordinary poison status visual of enemies. A dead Whinny, Mortog or Miamouse stays dead for the visit and nothing in the level script is adjusted; the courtyard dummies are undamageable only while the courtyard script runs.
+
+### 13. Timing table (timing pass)
+
+Confidence: High (from the mode tables, the turning table and SPEC-0007). Units: ticks of 1/60 s. A townsfolk routine runs once per tick in the region pass (item 6 of SPEC-0007), before the hero and before the level script; its counters (greeting counter, pause and fidget timers, pair talk and cooldown timers, poison timer of mode 12) are whole ticks lowered once per run. None runs while the character is frozen (base states 16, 25, 33, 36, 42, 53, 55) or while the world is paused, so a talk or a scene stops every NPC timer where it is.
+
+| Item | Timing |
+| --- | --- |
+| Turn to the hero in a conversation | starts on the tick after the script's conversation call (the script runs after the NPC in the same tick): weight 0.3 per tick, 90 degrees reach a dot of 0.99 after 8 ticks and 1 degree after 13; 170 degrees after 12 and 18 |
+| Turn back to the placement facing (code 0) | weight 0.05 per tick: 52 ticks from 90 degrees, 97 from 170 to a dot of 0.99 |
+| Walk and route turns | weight 0.1 per tick: 25 ticks from 90 degrees, 46 from 170 |
+| Greeting | entry: hero within 6.0 and in the front half; the gesture id 30 needs 180 consecutive ticks of the window state (the entry test restarts the counter every tick it holds); gesture clip 144 ticks; no turn |
+| Wander pause | pause and fidget timers drawn together from the record's [shortest, longest] pause in ticks when a point is reached and the roll (1 to 100) is below the chance; the fidget is a no-op on the townsfolk body (the standing idle loop, 132 ticks) |
+| Patrol | point pauses and random stops drawn from the record's ranges in ticks |
+| Villager pair (not reached on disc) | talk 300 to 720, cooldown 600 to 1800 |
+| Lying (mode 12) | its poison timer is set to 7200 every tick |
+| Flee or react to hits | none for townsfolk (hits are ignored; mode 1 does nothing); Whinny and Mortog flee per SPEC-0029, the first flee step on the tick after the request |
+
+Worked timeline (a code-0 shopkeeper facing 90 degrees away from the hero; the level script calls the conversation start on tick T): T the NPC has already run (idle, turning back to its placement facing at 0.05); the script writes base state 25 in item 10. T + 1 the NPC's update sees base state 25 and turns at 0.3 (66.8 degrees left). T + 8 its facing is within a dot of 0.99 of the hero. When the conversation ends on tick E (base state restored by the script), the NPC turns back at 0.05 from E + 1 and is within 0.99 of its placement facing 52 ticks later.
+
+What a port most likely gets wrong (timing): turning the NPC on the same tick as the script call; running pause or greeting counters during a talk; counting the greeting from the first tick the hero is near (the entry test holds the counter at 0 while the hero stays within 6.0 in front).
+
 ## Open questions
 
 Default if unresolved (rewrite choice): a class 35 walk with an invalid path index steers toward entry 0 of the entry list and never ends, as in Path walk, No route.
+
+Default if unresolved (rewrite choice): a townsfolk character with no mesh stays where it is; steering of the real route is approximated by the route step, so arrival ticks may differ from the straight-line vectors by a few ticks.
 
 1. Resolved: the townsfolk pre-step sets the mode to the code whenever the mode is 0, in the same tick (see "Mode from code"); the mode 8 or 0 setters and the animation-81 wait belong to class 17 (SPEC-0038).
 2. Resolved: townsfolk never enter mode 23, because every townsfolk row has remap switch 1; mode 23 is the class-17 wait for animation 81.
@@ -693,7 +1017,7 @@ Default if unresolved (rewrite choice): a class 35 walk with an invalid path ind
 15. Answered: the frame rate word is 60.0, written once at start-up; see SPEC-0007. The seconds conversions in this spec hold for that value.
 16. Resolved: the 1.0 threshold is a fixed constant of the plain walk-target setter, compared horizontally and strictly. It is skipped when the new point lies inside the stored target triangle, and what it resets is the goal locate's scan position ("Walk target setters"; High).
 17. Move type 7 is used once in a level script on a ground character. It names an unset animation slot, so the character should keep its current clip and its travel; this is not confirmed in play.
-18. Narrowed: 198 townsfolk records use table variant B, across monster types 16, 18, 20, 22, 24, 27, 28, 32, 35, 41, 43 and 47 (Walk speed). The individual placement-record identities are not enumerated in that census.
+18. Resolved: table variant B is used by every placement of monster types 16, 18, 20, 22, 24, 27, 28, 32, 35, 41, 43 and 47 (214 of 666 townsfolk placements; Walk speed and movement type). The 28 Meridell cycle walkers split 14 and 14 (SPEC-0045).
 19. Resolved: a region character with no navigation-mesh index runs only the timer countdown of the confinement step (see "Region characters with no navigation mesh").
 20. The effect of the owner hook run for a block top 1 to 5 above the reference, and the readers of the nearest-block index and distance. Answered: the closing step of the region-character branch is the movable-block contact pass (see "Movable-block contact pass").
 21. Resolved: the readers of the blocked flag and their rules are in "Blocked flag"; its only setter is the confinement step (timer 120).
@@ -701,7 +1025,7 @@ Default if unresolved (rewrite choice): a class 35 walk with an invalid path ind
 23. Resolved: the bind stores the placement position as the home point, ground-snapped for characters that do not fly; a release in guard mode moves it to the current position (High; Layout row "Home point", TV-0056-41).
 24. Resolved (High): code 0 is normal play with no pending rule; code 1 holds while the six-pass wait that follows a loaded save or a new game runs (SPEC-0026, flag G); code 2 holds for at most one pass after a game-over request. The greeting can start in any of these three, provided no rule of a higher code (3 to 9, the priority table of SPEC-0026) matches first. So a townsperson greets the hero during the six passes after a load, and during the single pass after a game-over request, as in ordinary play. Test vector: a hero in state 1 within 6.0 units in front of a townsperson, game-state code 1 on the pass after a load: the greeting starts; with code 4 (a dialogue box up) it does not.
 25. Resolved: base state 13 is the hero's state 13 (SPEC-0033); every routine that sets it is a hero routine, and the script calls set an entity only to 1, 25 or 33. The greeting gate on the character's own base state therefore never blocks a townsperson in play (Medium-High).
-26. Resolved (High for the documented routes; Medium-High for the writer census): status 0 cannot set class-6 mode 4 through the status-apply route, because other characters ignore that callback and the enemy stun writes enemy class state (SPEC-0036, SPEC-0029). A bounded census of direct mode-word writes and recovered setter calls found no separate class-6 mode-4 writer. On-disc class-6 placement codes are 0, 5, 6, 7, 9, 10 and 12; the level-script SetAI_Behavior calls use 0, 5, 6 and 8. Neither source supplies mode 4. Residual limit: unresolved indirect or unrecovered writes are not excluded.
+26. Resolved (High): the status apply is one shared routine for every region character and has no townsfolk test, so status 0 on a townsfolk character would set mode 4 (the mode word and the enemy class state are one word). No source applies a status to a townsfolk character on disc except the mode 12 self-poison, because the hero's hit paths skip townsfolk and no script call applies a status. On-disc class-6 placement codes are 0, 5, 6, 7, 9, 10 and 12; the level-script SetAI_Behavior calls use 0, 5, 6 and 8. So mode 4 never occurs on a townsfolk character.
 27. Resolved: eligible NPC class coroutines are stepped by the per-character arbiter in the NPC update, before that character's motion-record tick and animation pass. The later global schedulers do not admit these auto-run-disabled coroutines with their zero mask. Steering changes can affect the current motion-record tick; a requested clip starts in the current animation pass and its first root step moves the character next tick (Travel, items 2 and 6; SPEC-0040, Behavior 3; High).
 28. Resolved (Medium for the pose label): Warren's clip 1 is a bow; it is a 30-frame one-shot with a 116-tick duration at R = 1. Its root x, y and z are zero on all keys, so Warren does not drift during the fidget. The exact style has not been confirmed in an in-game preview (see "Wander", Warren's exception).
 29. Resolved: the variant set-up word turns on the colour override of SPEC-0040, Behavior 26: the two skin colours become RGB (155, 123, 193) and (101, 81, 126) and the other colours keep their placement values. It is set at bind when progress flag 216 is on (after the Gnarfas aftermath, walkthrough step 20, never cleared) and the pack's sound selector passes its story-span test (SPEC-0009 table of selectors). The variant key of SPEC-0022 is that selector word; no run-time code writes it. Test vector: pack 1217 (selector 1) with flags 216 and 83 on and flag 5 off: every character of a block loaded there takes the purple skin (SPEC-0040, Behavior 26); with flag 5 on, or flag 216 off, none does. Packs with selector 0 (58 of the 192) never do (High).
@@ -710,3 +1034,6 @@ Default if unresolved (rewrite choice): a class 35 walk with an invalid path ind
 32. Narrowed: counted over directed links in meshes of 2 to 60 triangles (420,890 reachable pairs), the share of pairs on a shortest route is 420,408 by 3D centroid distance, 420,440 by horizontal centroid distance, 415,734 by centroid-to-edge-midpoint-to-centroid distance and 414,430 by step count. 14 of the 27,813 neighbour links are one-way. No tested cost explains every pair. This does not matter to a clean side that reads the table.
 33. Resolved: arrival calls the character's set-state method with 1, the same method that sets base state 33 for a held Miamouse (High).
 34. Resolved (R-0127): a path is a run of entry records of the pack's entry list, named by the placement's +0xB8 (SPEC-0006, Tagged tables). The path walk starts at point 0, steps one point each time the point is reached (within 0.5 horizontal) with no pause, ends after the last point, and then reads as not walking; the mode 6 patrol is the looping or back-and-forth version with pauses (High).
+35. Resolved for the rules (Medium-High; proactive (open close-out)): a Whinny, Mortog or Miamouse can be killed by the hero, and the pen, zone and cage counts do not account for a dead creature; the code has no exemption. How the farm level script behaves when a Whinny is dead is a script-flow question that only play can show (needs a runtime check). Default if unresolved (rewrite choice): reproduce, with the counts unchanged by deaths.
+36. Resolved (High): townsfolk are not hit candidates (the query answers no for the townsfolk flag, and the class start sets the invulnerable word and clears lock-on), the shared status apply accepts every status for them, and no on-disc source applies one except the mode 12 self-poison (NPC build guide, Contact rules).
+37. Runtime-only (proactive (open close-out); needs a runtime check): the clip a code 7 or 9 townsfolk character shows before its first greeting. The class start and the NPC reset make no clip request, so it depends on the animation player's start clip. Default if unresolved (rewrite choice): idle id 0.

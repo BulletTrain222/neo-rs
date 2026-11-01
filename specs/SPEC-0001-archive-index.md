@@ -1,6 +1,6 @@
 # SPEC-0001: GAMEFILE.DAT archive index
 
-- Answers: R-0001
+- Answers: R-0001; proactive (open close-out)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00. Check before trusting fixed locations:
   - `SCUS_973.67` SHA-256 = `a8cc770cf6157f7a67672eea71ed1b631bf780e7d684802956ccab24b71d8f25` (required)
@@ -82,4 +82,4 @@ Synthetic, not taken from the disc:
 ## Open questions
 
 - Answered: resource numbers map to world-pack slots and character-region runs in SPEC-0006, model and character asset resources in SPEC-0004, and music banks and streams in SPEC-0009 (bank and sound-block formats in SPEC-0031). This spec covers the archive index itself.
-- Partly answered: the boot effect-group loader skips item-stream index 2, which would map to empty resource 8; in that route it reads resources 7 and 9. This does not rule out reads through other callers. Whether any code asks for empty resources 4, 5, 6 or 8 through other direct or data-driven archive-read routes remains open. Answered: the run 275–346 holds the slots of cut stingers, which are never loaded (Edge cases; SPEC-0024, table 14).
+- Resolved (boot route) / default (other routes): the boot effect-group loader skips item-stream index 2, which would map to empty resource 8; in that route it reads resources 7 and 9. This does not rule out reads through other callers. No request for empty resources 4, 5, 6 or 8 is known, but a data-driven number cannot be excluded from the program alone. Default if unresolved (rewrite choice): a read of any empty entry returns no bytes and is not an error for the caller (needs a runtime check). Answered: the run 275–346 holds the slots of cut stingers, which are never loaded (Edge cases; SPEC-0024, table 14).

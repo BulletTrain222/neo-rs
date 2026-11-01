@@ -1,6 +1,6 @@
 # SPEC-0053: Hero switching and the party state
 
-- Answers: R-0042 (in part; the Act 2 start module 1174 is in SPEC-0044); extends the hero rows of SPEC-0030: rows 51, 162, 167, 173, 178, 180, 186, 187
+- Answers: R-0042 (in part; the Act 2 start module 1174 is in SPEC-0044); extends the hero rows of SPEC-0030: rows 51, 162, 167, 173, 178, 180, 186, 187; proactive (open close-out)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). The HUD portrait words in section 2.5 and the hero resource table in section 2.6 were read from the boot program's data.
 - Confidence: per section (High, Medium-High, Medium, Low).
@@ -37,12 +37,12 @@ Tor's record is the first record of the hero table. Roberta's record starts 0x16
 | +0x144 | u32 | integer | Action state (see SPEC-0033 and SPEC-0036 for the state numbers). | per hero | High |
 | +0x154 | s32 | integer | Current hit points. | per hero | High |
 | +0x158 | s32 | integer | Maximum hit points. | per hero | High |
-| +0x15C, +0x160 | s32 | integer | A pair of words. The per-hero reset copies the second to the first. Meaning not established. | per hero | Medium |
+| +0x15C, +0x160 | s32 | integer | Current and maximum magic pool (the second pool beside health; SPEC-0036, Magic pool). The per-hero reset copies the maximum to the current. The HUD magic bar reads both words and is hidden when the maximum is 0. | per hero | High |
 | +0x164 | pointer | table | Class method table. Used slots: set state, the dead test (true when the action state equals 16, the death state), a one-shot cue (object, cue id), and a hit-point-to-maximum hook. | per hero | High |
 | +0x168 | pointer | record | Party inventory (one record shared by both heroes; SPEC-0021). Not a sound object. | same record in both | High |
 | +0x16C | pointer | record | Placement and motion record: position and facing vectors; +0x24 height above the ground; +0x150 grounded word (set on landings, cleared on take-offs; SPEC-0040). | per hero | High (use), Medium (field names) |
 | +0x170 | pointer | record | Locomotion sub-object. Its 64-byte block at +0x290 is the model matrix (rotation rows and position) that the draw hook uses; it is carried to the incoming hero on a switch. The locomotion enable word is at +0xFA0 (decimal 4000) of the hero record. | per hero | Medium-High |
-| +0x3D0 | u32 | integer | Set from a flag argument of the hero-animation helper. Meaning not established. | per hero | Low |
+| +0x3D0 | u32 | integer | End-of-action flag: 1 when the third argument of a script hero-animation call (play or loop) equals 1, else 0; scripted hero moves store their own argument; 1 after hero construction. The action-end resolver reads it: nonzero returns the hero to state 1, zero sends it to state 33 (SPEC-0033, Behavior 3A). | per hero | High |
 | +0x7B4 | s16 | integer | Area key. Compared with the world's current key in mode 4. | per hero | Medium |
 | +0x7B8 | pointer | record | Area resource pointer, set with the area key. | per hero | Medium |
 | +0x7CC | block | record | Locomotion block (SPEC-0033): +0x0C stick speed value v, +0x40 heading. | per hero | High |
@@ -199,7 +199,7 @@ Notes:
 - The 0.7 is a single-precision code constant. The 60 ticks per second come from the game tick (SPEC-0007), read as the single-precision tick-rate word.
 - The request has an optional fifth argument (fade in from black with the guards skipped). No caller passes it.
 
-Confidence: High for the order of waits and writes; Medium for the steps that call helpers whose meaning is not established.
+Confidence: High for the order of waits and writes; Medium for the attack-pool reset of step 2 (what each of the 17 pools holds is in SPEC-0036) and for the repeated start sound of step 3 (whether the second play is audible needs a runtime check; the rewrite plays it).
 
 ### 3.5 The two boolean flags
 
@@ -236,7 +236,7 @@ The hook is the camera's set-eye step (the pull-in of SPEC-0027): it refreshes t
 
 On a switch the hook does not run, so the eye is not moved. The attach point is computed into the camera's work vectors, but the reset then runs the eye's collision pass on the current eye and copies the current eye over those work vectors; the yaw words are recomputed from the current eye and focus. So the eye stays where it was on the tick before the selection, and the normal follow resumes from there. Since step 7 put the incoming hero on the outgoing hero's spot and facing, the view does not jump: there is no cut, no turn and no blend, with either flag setting. The white flash (section 3.5) hides only the change of model.
 
-Confidence: High for the steps and for which word the reset copies; Low for the hook's probe and pull rule; Medium for the visible result.
+Confidence: High for the steps and for which word the reset copies; the hook's probe and pull rule are skipped on a switch and so do not affect the result (their detail belongs to SPEC-0027); Medium for the visible result (needs a runtime check of the on-screen look).
 
 ### 3.7 Act-start setup by stage (TriggerActStart)
 
@@ -333,7 +333,7 @@ The chord passes only when all of these hold for the selected hero (S) and the o
 - The story flag 368 is clear. Pack 1300 (world 151, the epilogue) sets it in play: its script trigger 3, registered by the pack's init on every load, fades out, plays movie 83 and sets flag 368 when flag 367 is set and 368 is clear. On the next play pass the in-play state tests flag 368 before it reaches the chord and opens the credits instead (SPEC-0026), and the world teardown clears the flag. So in play this guard never refuses a chord (High for the setter, Medium-High for the order in the pass).
 - No dialogue box is active.
 - The quick-item panel is closed.
-- The in-play state reaches the chord. Some earlier returns in that state send it elsewhere, on paths not yet described (Open questions 16 and 17).
+- The in-play state reaches the chord. Earlier returns in that state go to the credits, book reader, game-over, item-screen and pause openers described in section 3.8 c (Resolved: Open questions 16 and 17).
 - The in-play controls gate of section 3.13 passes. During a swap the game-state code is 5, so this fails for the whole swap, including the 41-tick hold.
 - S is not under script control. Group A (states 0x21, 0x30, 0x32 to 0x35 and 0x37) holds the scripted states: grab (0x21) and the one-shot lock (0x33) block the chord.
 - S is in state 1 (idle) or 0x14 (20, stance steering). Every other state fails. Because state 0x14 passes, an L1 press that the hero's button chain turns into state 0x14 earlier in the same tick does not block the chord. This excludes walking, attacking, the leap (0x1C), the timed hop (0x38), state 0x17, the action states (0x2B to 0x2E) and all busy states.
@@ -448,7 +448,7 @@ Numbers of removed questions are not reused.
 26. Resolved: the chord is tested in the front-end in-play handler after the hero's button chain of the same tick (SPEC-0033, Behavior 1A), and the switch-ready gate accepts the state 0x14 that an L1 press can set (High for the order; Medium for the consequence).
 28. Resolved for recorded normal routes (High): only three level modules write mode 3 or 5. Pack 1394 (the timed lever course) sets mode 3 in its Init and after each lever's scripted switch (one lever also writes 5 and then 2); its shrine trigger and its exit-open trigger set mode 2. Pack 1371 (the round fight) sets mode 3 after the switch that follows a hero's death and mode 2 when the round is won or lost. Pack 1432 (the final fight) sets mode 3 at entry and after each of the director's swaps. In each case the lock is part of the scene: the chord is refused while the area runs and is freed by the same module's own mode-2 write. In pack 1394, the only recorded load out requires a room flag set by the shrine sequence, which writes mode 2 first; the exit-open sequence also writes mode 2, and the pack's cell records have no outbound transition. Thus no recorded normal route leaves pack 1394 with mode 3 active. Out-of-bounds movement, glitches or an unmodeled external transition have not been tested.
 30. Resolved (High for the definitions; Medium for the look on screen): the three ids are visual effect definitions of SPEC-0034's table (effect ids 4025, 4026 and 4027), not sounds. An instance has room for five live spawners, but these definitions use 3, 1 and 4. All three have the near/far threshold 100 units, no cull distance and motion scale 1.0. 0xFB9 (4025, started at step 2) has a model node (the common-object model with index 9 + 283), a one-shot burst of 40 sprites of shader material 22 (start size 1.6, life 3 s plus or minus 1 s) and a point-light emitter (size 15, one burst, life 2 s, following the effect). 0xFBA (4026) is one repeating burst of 3 sprites of material 28 every 0.2 s with no end count (start size 4.07, life 2 s plus or minus 1 s); it is never started (Edge cases). 0xFBB (4027, started at step 10) has two model nodes (common-object models 1 + 283 and 9 + 283, life 1.5 s), a one-shot burst of 40 sprites of material 22 (start size 0.6, life 5 s plus or minus 1 s) and the same light emitter. On screen: a light flash and a sparkle burst at the outgoing hero's place when the swap starts, and a smaller, longer-lasting sparkle burst at the same place at the end. Test vector: at step 10 the 40-sprite burst of 0xFBB is born at the place stored at step 2, so with the outgoing hero at (10, 0, 5) the effect is placed at (10, 0, 5); the spawn ring radius of its nodes is 0.
-31. Resolved: the hook is the camera's set-eye step with the pull-in. A switch skips it, so the eye stays where it was and the follow resumes from there (section 3.6b; High for the skip, Low for the pull rule). Bears on SPEC-0027 Open question 56.
+31. Resolved: the hook is the camera's set-eye step with the pull-in. A switch skips it, so the eye stays where it was and the follow resumes from there (section 3.6b; High for the skip; the pull rule does not run on a switch, so it does not matter here). Bears on SPEC-0027 Open question 56.
 32. Resolved: the 15 records are the hero's target list (section 2.1 and section 3.9; Medium for the field meanings, High for the layout).
 33. Resolved: nothing can hit the parked hero; every attack, target finder and damage zone uses the selected hero (section 3.9; Medium-High). Bears on SPEC-0055 Open question 2.
 34. Resolved: step 5 waits until the sound command channel is idle for 10 fields in a row, with no yield and no timeout; at least about 0.17 s of frozen picture when sound is on (Medium-High).

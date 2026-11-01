@@ -1,9 +1,9 @@
 # SPEC-0009: Audio clips, music streams and music selection
 
-- Answers: proactive
+- Answers: proactive; proactive (open close-out)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001)
-- Confidence: World-item records (below): High that they are the world-item pool of SPEC-0021 and play no sound; timed queue Medium-Low. VAG one-shots: High. Emote voice banks (resources 144 and 145): layout, directory positions and table values High; roll rule and directory lookup High; hero shift High; character stride and voice sets High; emote clip playback High; census of reachable clips High (character reach in play Medium); emote requests are described in SPEC-0022. Stereo streams: Medium-High (layout and decoding), Medium (exact end). Music selection: music row to sound bank, stream and sound block Medium-High; the level-script override (value 64 starts bank 74, -1 clears it) High for value and path; the override clears High (screen names Medium); interactive segments (setup child, command-driven switching, looping, templates on disc) High; the game's two intensity inputs (register 2 and the global excite) High, the hero excite target Medium-High (bosses never counting Medium-High), the adventure zones High; the same-tick order of children High; the missed-combat quirk Medium-High; the world-load audio reset High; the controller on front-end passes High; the music register setter High; reverb pairs High (effect mode names Medium-High); the run-time flag Medium for its story meaning and High for its rule; the per-tick controller Medium-High (High for the order of its steps); the area-to-row rule Medium-High for packs with a type-1001 record and Medium for the fallback; volume ramps and stop fades High; stream crossfade Medium-High; the 21 banks that no known code selects Medium (banks 18 and 35 are reached by the front-end bank overrides, High). Stingers: the clip mapping (table 14) High; the bound on indices High; one-at-a-time, cooldown and music ducking Medium-High. Track selector for tracks 163 to 166: not reached in known code (Medium). The SetMusic host call: no script call site (Medium-High). Track selector fade pair, wait and stop: Medium-Low; per-track flags: Low. Default cue volume and the area-slot users: High. Gain chain (Music, Sound-effects and Voice gains, start-up gains 1.0, emote-clip volume): High. Pause level and stream gate: High. Sound banks and sound blocks: SPEC-0031. Player audio slots: none exist; the routines once listed there are the trigger fire step (SPEC-0030) and movie-library code (SPEC-0008): High.
+- Confidence: World-item records (below): High that they are the world-item pool of SPEC-0021 and play no sound; timed queue Medium-Low. VAG one-shots: High. Emote voice banks (resources 144 and 145): layout, directory positions and table values High; roll rule and directory lookup High; hero shift High; character stride and voice sets High; emote clip playback High; survey of reachable clips High (character reach in play Medium); emote requests are described in SPEC-0022. Stereo streams: Medium-High (layout and decoding), Medium (exact end). Music selection: music row to sound bank, stream and sound block Medium-High; the level-script override (value 64 starts bank 74, -1 clears it) High for value and path; the override clears High (screen names Medium); interactive segments (setup child, command-driven switching, looping, templates on disc) High; the game's two intensity inputs (register 2 and the global excite) High, the hero excite target Medium-High (bosses never counting Medium-High), the adventure zones High; the same-tick order of children High; the missed-combat quirk Medium-High; the world-load audio reset High; the controller on front-end passes High; the music register setter High; reverb pairs High (effect mode names Medium-High); the run-time flag Medium for its story meaning and High for its rule; the per-tick controller Medium-High (High for the order of its steps); the area-to-row rule Medium-High for packs with a type-1001 record and Medium for the fallback; volume ramps and stop fades High; stream crossfade Medium-High; the 21 banks that no known code selects Medium (banks 18 and 35 are reached by the front-end bank overrides, High). Stingers: the clip mapping (table 14) High; the bound on indices High; one-at-a-time, cooldown and music ducking Medium-High. Track selector for tracks 163 to 166: not reached in known code (Medium). The SetMusic host call: no script call site (Medium-High). Track selector fade pair, wait and stop: Medium-Low; per-track flags: Low. Default cue volume and the area-slot users: High. Gain chain (Music, Sound-effects and Voice gains, start-up gains 1.0, emote-clip volume): High. Pause level and stream gate: High. Sound banks and sound blocks: SPEC-0031. Player audio slots: none exist; the routines once listed there are the trigger fire step (SPEC-0030) and movie-library code (SPEC-0008): High.
 
 ## Summary
 
@@ -203,6 +203,7 @@ The combat segment exists only in the interactive template. A fight in a pack wh
 - Plain loop banks (no reaction to register 2 or G): pack 985, Illusen's Glade (banks 31 / 98; the Gnarfas, Werelupe King and Gelert Assassin arenas); pack 989, the Black Knight arena (39 / 106); pack 1096, the Meridell Treasure Vault (23 / 90; Slorg, Giant Slorg and Undead Draik fights); pack 1174, Meridell Castle 1st Floor (30 / 97; any fight there); pack 1217, the Juppie arena (51 / 118); pack 1299, Fyora's Library (55 / 122; the Evil Harris fights); pack 1411, the Hall of Heroes (59 / 126; the gladiator fights); and packs 1323 and 1427 to 1433, Fyora's Tower and the final arenas (30 / 97; Minion Grunt, Minion Warrior, Vorsh and the Darkest Faerie).
 - Two-layer bank 70 / 137: packs 1253 to 1256 (Werelupe Sinkholes and Werelupe Woods; Spyder and Slorg fights). A fight there holds G at 100, so child 2 (G 50 to 100) sounds, but no combat segment exists.
 - Stop rows (music faded out): packs 797 (Brightvale Outskirts), 799 (Rathbone Family Crypts), 1082 (Meridell Village), 1089 (Ancient Castle Spires) and 1370 (Altador). Fights there are silent of music.
+- Pack 989 (Black Knight arena, music row during the fight): the alternate row is stream 221, bank 106, block 417. It switches to the plain row when flag 298 is set just before movie 47.
 - Pack 703 (Brightvale Outskirts, selector 6): bank 15 is interactive, but with the run-time flag on the row gives bank 82, whose layers are driven by G only, so a fight there has no combat segment while the flag is on.
 - Boss-only fights in an interactive pack: no boss enters state 19 (Intensity inputs), so only class-17 adds start the combat segment.
 - A fight that carries on across a bank change: see Transitions.
@@ -364,6 +365,8 @@ How to derive the row:
 1. Chunk key to row: the row is the index of the first value-table slot whose 32-bit value equals the key. If no slot matches, the row is 193 (the default row). The key matches for all 191 packs that have a chunk.
    - Example: pack 678 has key 11. Key 11 is found in slot 5, so its row is 5.
    - Example: pack 1077 gives row 109; pack 1432 gives row 191.
+   - Example: pack 735 (key 207, selector 5) gives row 22, whose table 4 entry is stream 2, bank 2, block 2. That gives bank 79, stream 203 and block 397 while bit 74 is set and bit 263 clear, and bank 12, stream 148 after.
+   - Rows 187 and 191 are identical (stream 173, bank 30, block kept, selector 0); pack 1428 uses row 187 and pack 1432 uses row 191.
 2. The chunk row replaces any row that the area key set earlier in the same load. Ten packs have a chunk row that differs from their area-key row, for example pack 678 (area-key row 0, chunk row 5).
 3. Area-key fallback (only used when the pack has no chunk, which on disc is pack 532 only): the area id is looked up in the area key table. The row is the index k of the first slot holding that id. An id that is not in the table gives row 193. Pack 532 is not in the table, so its row is 193 (default: bank offset 1, stream kept, block 1). Its selector is 0, so the flag is never set for it.
 
@@ -391,7 +394,7 @@ The routine handles tracks 163 to 166. Its inputs are a request record. Tracks a
 
 Inputs:
 
-- State word: the integer at +8 of the request record. The requesting trigger fills it, and its meaning (area, stage or combat state) is open.
+- State word: the integer at +8 of the request record. The requesting trigger fills it; the routine never runs, so its meaning is moot.
 - Cue value: the integer at +0xC of the request record. Zero means no cue.
 - Hero index: a runtime value in the hero object at +0x14C. 0 is Tor and 1 is Roberta.
 
@@ -408,15 +411,15 @@ Track choice. The ranges do not overlap, so the order of the rows does not chang
 
 Steps:
 
-1. Both per-track flags on the playback handle (a field of the hero object at +0x168) are set to 0. The pair 0.945 and 10.0 is sent to a helper at the start, before the track is chosen. Its arguments' roles are open. The handle value is used here and released at the end.
+1. Both per-track flags on the playback handle (a field of the hero object at +0x168) are set to 0. The pair 0.945 and 10.0 is sent to a helper at the start, before the track is chosen. The routine never runs, so the roles of these arguments have no effect. The handle value is used here and released at the end.
 2. The track is chosen from the table above.
 3. The start depends on the track:
    - 0xA4, 0xA5 and 0xA6 (the non-default rows): for 0xA4 and 0xA6 both per-track flags are set to 1; 0xA5 leaves them at 0. The release helper runs on the handle value. Then a volume call with volume 1.0 runs with sub-id 8 (for 0xA4) or 6 (for 0xA5 and 0xA6). The track is then started by start helper A with first argument 0.
    - Default (163) with cue value zero: the track is started by start helper A with first argument 0. No volume call is made.
    - Default with cue value nonzero (the cue path): a volume call with volume 1.0 runs with sub-id 7. The track is then started by start helper B with first argument 1.0.
 4. Cue name. If the cue value is nonzero, for any track, a request is sent with the cue value, a name and a runtime index, through a helper with a zero second argument. The name is the hero name Tor when the hero index is 0 and Roberta otherwise. The index is a runtime value that is 4 higher for Roberta.
-5. Wait. Let T0 be the timer reading taken after step 4. The loop runs while the timer is below T0 + 2.0, or while the cue query returns nonzero. Each pass calls start helper B with first argument 0 for the track, reads the timer again, and yields one tick. The loop ends when the timer is at least T0 + 2.0 and the cue query returns zero. The timer's unit is not confirmed, so the 2.0 is in the timer's own units, not confirmed as seconds. The cue query is taken to return nonzero while the cue is still playing (Medium-Low).
-6. End. A stop call runs with arguments minus one and one. Then the handle is released, a clear step runs, and a final step runs. Their roles are open.
+5. Wait. Let T0 be the timer reading taken after step 4. The loop runs while the timer is below T0 + 2.0, or while the cue query returns nonzero. Each pass calls start helper B with first argument 0 for the track, reads the timer again, and yields one tick. The loop ends when the timer is at least T0 + 2.0 and the cue query returns zero. The timer's unit and the cue query's exact meaning do not matter because the routine never runs (a clean build omits it).
+6. End. A stop call runs with arguments minus one and one. Then the handle is released, a clear step runs, and a final step runs. Their roles have no effect because the routine never runs.
 
 ### Effect and stinger index
 
@@ -429,7 +432,7 @@ Classes 19 to 65 of table 14 hold multiple records, but the stinger caller rejec
 Stinger and emote-clip playback (High; the ducking test Medium-High):
 
 - Stingers and emote clips share one playback handle, so only one of them plays at a time: an emote clip cannot start while a stinger or another emote clip is still playing, and the other way round.
-- Stinger 4 does not start again within 40 s of its last start. The last-start time begins at clock 0, so no class-4 stinger plays in the first 40 s of the game clock.
+- Stinger 4 does not start again within 40 s of its last start. The last-start time begins at clock 0, so no class-4 stinger plays in the first 40 s of the game clock. A group-alarm wake of an enemy whose cue word is 0 is also a caller of stinger 4 (SPEC-0038, Behavior 3), rate-limited to once per 40 s.
 - The stinger volume is trunc(trunc(f x 1024) x Sound-effects gain), with the caller's factor f = 1.0 at every known call.
 - The emote-clip player (Emote clip lookup) plays a clip at trunc(trunc(f x 1024) x Voice gain), with f = 1.0 at both known call sites (1,024 at gain 1.0, 768 at 0.75, 409 at 0.4). It plays only while the bank music is active.
 - Hero voice cues (blocks 348 and 349) are not emote clips. They are sound-block cues at the default cue volume, so they follow the Sound-effects gain and not the Voice gain (SPEC-0031, Hero voice slot uses).
@@ -465,7 +468,7 @@ Test vectors (from SPEC-0021 rules):
 - A dropped Black Feather (item 78, important) that expires: the party inventory gains 1 Black Feather; no sound call is made.
 - Price multiplier 0.5 on a slot with price 1000 gives 500; 2.0 on 20000 gives 32767.
 
-### Timed queue of 7-word entries (Medium-Low)
+### Timed queue of 7-word entries (High)
 
 A separate queue holds entries of seven 32-bit words each (28 bytes). Its header holds the entry count at offset 0 and a serial counter at offset 8. Entries start at byte offset 12. Entry fields, from the start of an entry: +0 value; +4 type byte; +8 duration; +12 and +16 two parameters; +20 valid flag; +24 serial number.
 
@@ -530,7 +533,7 @@ Confidence: High.
 - Body and face on the same tick: if a new body emote and a new face emote both have clips on the same tick, only the face clip plays.
 - Lines carry no spoken dialogue. The only audio a dialogue line can start is these emote clips, short gesture vocalisations: about 1.1 to 1.2 s at the median, 10.7 s at most in the character bank and 6.6 s at most in the hero bank (SPEC-0022).
 
-### Emote clip census
+### Emote clip survey
 
 Confidence: High for the bank counts; Medium for the character reach in play.
 
@@ -544,14 +547,14 @@ Test vectors for this section are under Test vectors.
 
 - World-item records: their edge cases (infinite lifetime, double give, price cap) are in SPEC-0021; none of them affects sound (High).
 - Timed queue: append does not check the index against the capacity. Removing an index at or above the count does nothing (High).
-- Resources 144 and 145 hold VAG-headed mono clips in the layout under Emote voice banks. They decode with the PS-ADPCM frame rules above. Whether the original plays them through the one-shot VAG path or the stream path is not confirmed (see Open questions).
+- Resources 144 and 145 hold VAG-headed mono clips in the layout under Emote voice banks. They decode with the PS-ADPCM frame rules above. Resolved: the original plays them through the shared stream path with the entry length as a sector count (SPEC-0024, Open questions 14 and 23); the rewrite decodes the VAG-headed clip with the PS-ADPCM rules above and plays it as a one-shot (Medium).
 - Hero emote for Roberta with a row clip index of 178 and a +1 step: position 362, the largest reachable hero position.
 - Zero-length positions 9 to 11 of the hero directory are reached by the face request of row 124 (SPEC-0022, kind 0x18), and play nothing. Positions 41 to 43 and 103 to 105 are not reached by any row of table 8.
 - The hero directory lookup accepts a position equal to its entry count (367), one past the last entry, and then reads bytes outside the directory. No reachable input gives that position.
 - Character emote with no voice set (c = -1): the position is the clip index minus 74. Below 74 it is negative and the unsigned bound rejects it, so the clip is silent and the gesture still plays. Clip index 74 gives position 0 and plays the first clip of the bank (High).
 - Body and face clips due on the same tick: only the face clip plays; the body clip is not retried later (High).
 - A VAG with a filter index above 4 in any frame: stop decoding at that frame.
-- Table 4 value of -1: keep the current music. Values of -3600 and -6000: stop the music. The behavior for values outside 0 to 66 and the three special values is not known (Low).
+- Table 4 value of -1: keep the current music. Values of -3600 and -6000: stop the music. No record on the disc holds any other value (SPEC-0024, Table 4), so the behavior for values outside 0 to 66 and these three never arises; a clean build may treat any other value as keep.
 - The bank override is not reset by the per-tick controller, but it is cleared on every area activation, on every pass of the pause page and the Resume Game focus, and on the front-end returns listed under Overrides. A dialogue choice that does not call the override with -1 leaves the bank choice in force only until the next of those (High). The level, reverb type and reverb volume overrides are one-shot and are cleared at the end of each tick.
 - Reverb type values above 4 (table value 5) are clamped to 4, so such a row selects the same effect as value 4. There is no lower clamp. An effect return volume of 0x8000 or more is sent as 0 (High).
 - Adventure zone, hero past the outer radius while the listener is still inside the gate: the factor is 1, not 0, so C jumps to 100 (High). Reproduce.
@@ -655,7 +658,7 @@ Synthetic:
 - Resolved: Music, cap. Row Cap is the stream fade-in ceiling, multiplied by the Sound-effects gain (Streams) (High).
 - Resolved: Music, row Scale (+0x14). It sets the default cue volume each tick to trunc(Scale x Sound-effects gain) (Default cue volume and the area slot) (High).
 - Resolved: Default cue volume in the front end. Front-end cues get trunc(Scale x Sound-effects gain) once the title has been shown, and 1,024 before (Default cue volume and the area slot; Per-tick controller, Pass gate) (High). This also answers SPEC-0035 Open question 5b.
-- Movie audio: whether the movie player applies any option gain is not established.
+- Resolved: Movie audio. The movie player applies no option gain: its tracks start at unity level and the start-up path has no caller that changes them (SPEC-0008, Movie audio internals). Default if unresolved (rewrite choice): play movie audio at full level regardless of the Music, Sound-effects and Voice sliders (needs a runtime check for any master gain in the sound processor).
 - Resolved: Music, order of children in one sequencer tick. One active list in start order is walked each 1/240 s tick; child 4 always runs before child 5 (Interactive segments, Same-tick order of children) (High).
 - Resolved: Music, missed combat. A fight whose 43-tick window holds no child-1 beat never enters combat (Interactive segments, Missed combat) (Medium-High). Reproduce.
 - Resolved: Music, register 2 at a bank change. Either order gives the same result: a fight past its first 43 ticks sends 2, which child 1 ignores, and a value that arrives before the setup is cleared and not sent again. So the new bank stays in exploration until the fight ends (Transitions) (Medium-High).
@@ -673,19 +676,18 @@ Synthetic:
 - Resolved: Music, excite counter. It is the adventure counter C, reloaded to 100 on every tick with E >= 1 and counting down by 1 otherwise (Intensity inputs) (High).
 - Resolved: Music, adventure level 0. The level is not a divisor; SetMidiAdventureLevel(0) gives C = 49 (Intensity inputs) (High).
 - Music, track selector and SetMusic. Resolved: neither is ever called (SetMusic host call; Track selector). No level module imports SetMusic, and the boot code has no call to either routine and no pointer to the selector. The 21 banks in Banks not selected by known code are therefore never played by these paths (High).
-- Event-to-clip mappings for effects (which event uses which index).
+- Resolved: Event-to-clip mappings for effects. The index of each event is held in the callers' own data: the progress-flag cue table (SPEC-0024, Table 2), the item showcase (SPEC-0021) and the script effect calls (SPEC-0030); only indices 0 to 18 ever play (Effect and stinger index; Medium-High).
 - Resolved: Stinger chooser, reachable classes. Classes 0–18 each have one record with weight 100, so class k always maps to resource 256 + k. The stinger caller rejects indices 19 and above. Multi-record chooser defects and the offset class starts affect only rejected classes (Effect and stinger index) (High).
 - Table 14 classes 19 to 65: any reader of these classes outside the stinger chooser (none is known). Answered: callers do compute indices of 19 or more (SPEC-0021 treasure-map add and item showcase, hero gameplay voice events), and the bound drops every one, so none plays (Edge cases; High; the showcase player is SPEC-0021 Open question 132).
-- Track selector: the meanings of the two arguments of the fade pair (0.945 and 10.0; a level and a time, or something else), and whether the 2.0 wait is in seconds.
-- Track selector: the meaning of the cue query (taken as "cue still playing") and of the per-track flags and handle values.
+- Resolved: Track selector internals (the fade pair 0.945 and 10.0, the units of the 2.0 wait, the cue query, the per-track flags and handle values). The selector never runs in any play path (see "Track selector reach" below), so none of these affects play; a clean build omits the routine (High that it never runs).
 - Track selector reach. Resolved: the selector never runs, so tracks 163 to 166 are never reached in play (Track selector) (High).
 - Track selector and per-tick controller. Resolved: they are separate paths and only the per-tick controller runs (Track selector) (High).
 - Resolved: Emote triggers. The emote control records sit only in dialogue line text and run when the line reveal reaches them (SPEC-0022); idle, hit, pickup, bark and greeting voices do not exist (SPEC-0031). Per line record there are 8,998 / 923 / 293 / 10 requests of kinds 0x10 / 0x17 / 0x18 / 0x16, of which 2,861 / 358 / 131 / 7 are in lines named by a live call in reached packs (High).
 - Resolved: Hero record for body requests. Kinds 0x17 and 0x18 and the Roberta shift use the selected (controlled) hero (High).
-- Random source: the generator behind the roll and step draws is not described in this spec.
+- Resolved: Random source. The roll and step draws use the gameplay generator, one Mersenne Twister shared with all gameplay draws (SPEC-0007; SPEC-0008, Two random sources); they do not use the sound driver's own generator (SPEC-0031).
 - Resolved: Emote character stride. The stride is 74 over voice sets 0 to 15 (16 x 74 + 1 = 1,185 directory positions); offsets 44, 45 and 70 to 73 are empty in 15 of the 16 blocks, set 7 (positions 518 to 591) holds no clip, and clip index 74 of set c is clip index 0 of set c + 1 (High).
-- Emote playback format: whether the stream path decodes the VAG-headed emote clips directly is not established.
+- Resolved: Emote playback format. The stream path is given the clip's sector range and plays the VAG-headed clip as stored; the rewrite decodes it with the PS-ADPCM rules (Edge cases; Medium).
 - Resolved: Emote character index. It is the voice set c of the talk partner's villager row, -1 or 0 to 15 (Emote clip lookup, step 7) (High).
-- Emote partner per line: which conversation, and so which talk partner and voice set, each kind-0x10 line belongs to. The reachable character positions in play (523 to 788, Emote clip census) depend on it. Speaker names often differ from placement names, for example "Papa Hubert" against the placement "Hubert" (Medium).
+- Emote partner per line: which conversation, and so which talk partner and voice set, each kind-0x10 line belongs to. The reachable character positions in play (523 to 788, Emote clip survey) depend on it. Speaker names often differ from placement names, for example "Papa Hubert" against the placement "Hubert" (Medium). This changes only the survey count: the rewrite follows the play-time rule (the talk partner's voice set), so the count does not affect behavior.
 
 
