@@ -31,6 +31,8 @@ pub const ARRIVAL: u8 = 59;
 /// script-control state it can end in (0x21).
 pub const ONE_SHOT: u8 = 51;
 pub const SCRIPTED: u8 = 33;
+/// Held by an enemy's grab (SPEC-0040 state 53; the host's `held_step` runs it).
+pub const HELD: u8 = 53;
 /// SPEC-0047 Feeding a petpet: state 49 with clip 138 (0x8A); at progress 0.99 (word
 /// 0x2DD854) the hero returns to state 1.
 pub const FEED: u8 = 49;
@@ -638,6 +640,11 @@ impl Locomotion {
                 return;
             }
             SCRIPTED => return,
+            // State 53 requests animation 143 every tick (SPEC-0040).
+            HELD => {
+                self.request = 143;
+                return;
+            }
             FEED => {
                 if clip.action == self.request && clip.progress >= 0.99 {
                     self.state = STANCE;

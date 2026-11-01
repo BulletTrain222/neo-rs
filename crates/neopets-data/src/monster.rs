@@ -68,6 +68,8 @@ pub struct AttackSlot {
     pub charge_min: f32,
     pub damage: f32,
     pub knockback: f32,
+    /// The grab-and-throw's throw speed (row 0x41C + 4k; SPEC-0038 Behavior 15).
+    pub throw_speed: f32,
     pub flags: u32,
     pub spawn_cap: u16,
     pub loopable: bool,
@@ -258,6 +260,7 @@ impl MonsterTable {
             charge_min: f(0x26C + 4 * k),
             damage: f(0x34C + 4 * k),
             knockback: f(0x35C + 4 * k),
+            throw_speed: f(0x41C + 4 * k),
             flags: w(0x3AC + 4 * k),
             spawn_cap: u(0x3D4 + 2 * k),
             loopable: w(0x49C + 4 * k) != 0,

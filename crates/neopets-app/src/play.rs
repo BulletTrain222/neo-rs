@@ -1060,6 +1060,8 @@ pub struct Play {
     hero_touch: (Vec<u64>, Vec<u64>),
     /// The trigger numbers of the breakable volumes the hero's body touched this tick.
     breakable_hits: Vec<u16>,
+    /// Where a grab holds the hero (SPEC-0038 Behavior 15: he stays where he was seized).
+    held_at: Option<[f32; 3]>,
     /// The ledge state (30, 35 or 47) and its held edge (SPEC-0033 Behavior 51).
     ledge: Option<neopets_sim::ledge::Ledge>,
     climb: Option<neopets_sim::block::Climb>,
@@ -1950,6 +1952,7 @@ impl Play {
             touched: false,
             hero_touch: Default::default(),
             breakable_hits: Vec::new(),
+            held_at: None,
             climb: None,
             ladder: None,
             grab_cooldown: 0,
@@ -2401,6 +2404,21 @@ impl Play {
         self.cut_target = None;
         self.held = false;
         self.hero_walk = None;
+    }
+
+    /// SPEC-0040 state 53 (SPEC-0038 Behavior 15): the held hero stays while any enemy answers yes (in its sequencer, outer 2, in the strike state, 2,
+    /// with a flag 0x08 slot, whichever enemy it is); on the first tick none does he returns to
+    /// state 1. A hit that reaches the grabber ends its strike state, so it frees him.
+    fn held_step(&mut self) {
+        if self.loco.state != hero_states::HELD {
+            self.held_at = None;
+            return;
+        }
+        let holding = self.characters.iter().any(|c| c.enemy.as_ref().is_some_and(|e| e.outer == 2 && e.seq == 2 && e.selected.is_some_and(|k| e.p.slots[k].flags & 0x08 != 0)));
+        if !holding {
+            self.loco.state = hero_states::STANCE;
+            self.held_at = None;
+        }
     }
 
     /// SPEC-0018 Breakable cylinders against characters, for the region characters and enemies of
@@ -9025,6 +9043,7 @@ impl Play {
         self.status_step();
         self.guard_step();
         self.loco.update(&input, forward, left, self.hero.clip_state());
+        self.held_step();
         self.hold_step(&input);
         self.pending_step();
         // While a conversation runs the emote consumer owns the hero's main id.
@@ -9212,6 +9231,10 @@ impl Play {
             },
         );
         self.touched = touched.get();
+        if let Some(at) = self.held_at.filter(|_| self.loco.state == hero_states::HELD) {
+            self.loco.body.position = at;
+            self.loco.body.velocity = [0.0; 3];
+        }
         self.breakable_hits = breakable_hits.into_inner();
         self.hero_touch = (touch_ids.into_inner(), std::mem::take(&mut self.hero_touch.0));
         for (id, d) in shoved.into_inner() {
@@ -9398,6 +9421,9 @@ impl Play {
         }
         self.prompt_shown = self.door_prompt.take();
         self.root_step = self.hero.tick();
+        if self.loco.state == hero_states::HELD {
+            self.root_step = [0.0; 3];
+        }
         self.head_look_step();
         let (at, facing) = (self.loco.position(), self.loco.facing);
         if std::env::var_os("NEOPETS_NO_CHAINS").is_none() {
@@ -10448,6 +10474,8 @@ impl Play {
         let world_items: Vec<(usize, u16, [f32; 3])> = self.pools.get(&world.pack).map(|pool| pool.slots.iter().enumerate().filter_map(|(i, s)| s.as_ref().map(|it| (i, it.id, it.position))).collect()).unwrap_or_default();
         let mut consumed = Vec::new();
         let mut strikes = Vec::new();
+        let mut grabs = Vec::new();
+        let (hero_is_held, hero_is_stunned) = (self.loco.state == hero_states::HELD, self.statuses.active(neopets_sim::status::STUN));
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
             let Character { id, name, enemy: Some(e), walker: Some(wk), anim, row: Some(row), weapons, position, facing, root_step, hp, .. } = c else { continue };
@@ -10516,6 +10544,9 @@ impl Play {
             // facing) at most -0.5.
             let wf = wk.facing;
             v.hero_blocks = guarding && hero_facing[0] * wf[0] + hero_facing[1] * wf[1] + hero_facing[2] * wf[2] <= -0.5;
+            v.hero_held = hero_is_held;
+            v.hero_stunned = hero_is_stunned;
+            v.hero_attackable = v.hero_attackable && !hero_is_held;
             // The missile defence: each live hero shot's path from its position to position +
             // velocity x the defend time (ticks) against the enemy's body capsule.
             v.hero_swing = hero_swing;
@@ -10648,6 +10679,12 @@ impl Play {
             wk.motion_tick(step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
             *position = wk.position();
             *facing = wk.facing;
+            if let Some(g) = act.grab {
+                if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
+                    println!("ATK grab \"{name}\" {g:?} d {:.2} tick {}", (hero[0] - p[0]).hypot(hero[2] - p[2]), self.ticks);
+                }
+                grabs.push(g);
+            }
             if let Some(s) = act.strike {
                 let m = e.p.slots[s.slot].missile;
                 strikes.push((*id, s, wk.facing, (m.status, m.status_chance, m.status_range), e.strike_scale(), e.status(11)));
@@ -10771,6 +10808,7 @@ impl Play {
             }
         }
         self.shot_effects_step();
+        let grabs_after_strikes = grabs;
         for (at, s, f, status, g, poison_attack) in strikes {
             // SPEC-0036 Enemy attack damage to a hero: the shield block, the armour Mote and the
             // body item, by the attack's damage alignment (no petpet).
@@ -10839,6 +10877,25 @@ impl Play {
                         anim.request(id, false);
                     }
                 }
+            }
+        }
+        // SPEC-0029 Behavior 23: the seize and the throw, after the take-hit of damage 0 (the throw
+        // is what leaves him in state 48).
+        for g in grabs_after_strikes {
+            match g {
+                enemy::Grab::Seize if !matches!(self.loco.state, hero_states::DEAD | hero_states::HELD) => {
+                    self.attack = None;
+                    self.ledge = None;
+                    self.hold = None;
+                    self.held_at = Some(self.loco.position());
+                    self.loco.state = hero_states::HELD;
+                    self.loco.body.velocity = [0.0; 3];
+                }
+                enemy::Grab::Throw(velocity) if self.loco.state != hero_states::DEAD => {
+                    self.held_at = None;
+                    self.knock_hero(velocity);
+                }
+                _ => {}
             }
         }
     }
@@ -15786,6 +15843,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         charge_min: s.charge_min,
         damage: s.damage,
         knockback: s.knockback,
+        throw_speed: s.throw_speed,
         flags: s.flags,
         spawn_cap: s.spawn_cap,
         loopable: s.loopable,
@@ -15903,6 +15961,8 @@ fn enemy_view<'a>(
         gap: 0.0,
         contact,
         hero_blocks: false,
+        hero_held: false,
+        hero_stunned: false,
         hero_swing: None,
         hero_recover: false,
         l1_held: false,

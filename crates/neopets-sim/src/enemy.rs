@@ -15,10 +15,15 @@
 //! Not covered: the group alert (Behavior 10), socialize, the global AI pause (state 20; its
 //! word has no known writer), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target
 //! state 9 (it stands and notices), the alarm emerge's camera and cue, wandering in states 5 to
-//! 7 (they stand and notice), the grab-and-throw,
+//! 7 (they stand and notice),
 //! theft and Mote drain, ghosts and the carried Neopoints of a theft (the drops are the host's
 //! pay_out; reanimation, state 16 of rows 224, 226 and 227, is built). The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
+//!
+//! The grab-and-throw (SPEC-0038 Behavior 15, SPEC-0029 Behavior 23): a flag 0x08 slot's strike
+//! state runs the machine in `grab`. Not covered: the grab point choice (the hero is not moved to
+//! it), the hold's touched-flag and path release, the rumble (the build has none) and setting
+//! the hero to state 1 when the seize's stun or path test fails.
 //!
 //! Flyers (SPEC-0038 "Flyer", Behaviors 2 step 4, 34 step 2, 37 step 7, 41, 44 and 48; SPEC-0040
 //! Behavior 14D item 7 and Behavior 21): the airborne test, the retarget countdown with the
@@ -57,6 +62,8 @@ pub struct Slot {
     pub charge_min: f32,
     pub damage: f32,
     pub knockback: f32,
+    /// The grab-and-throw's throw speed (row 0x41C + 4k).
+    pub throw_speed: f32,
     pub flags: u32,
     pub spawn_cap: u16,
     pub loopable: bool,
@@ -222,6 +229,9 @@ pub struct View<'a> {
     pub contact: bool,
     /// The hero guards and faces this enemy (dot of the facings at most -0.5).
     pub hero_blocks: bool,
+    /// The hero is held by a grab (state 53) and his stun word is set (SPEC-0029 Behavior 23).
+    pub hero_held: bool,
+    pub hero_stunned: bool,
     /// The hero's melee swing class while it swings (swing_class), None otherwise.
     pub hero_swing: Option<u8>,
     /// The active hero's recover window: table-B bit 0x800 on one of its playing clips this tick
@@ -294,6 +304,15 @@ pub struct ShotRequest {
     pub counter: u32,
 }
 
+/// What the grab machine asks of the hero (SPEC-0029 Behavior 23).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Grab {
+    /// Into the held state 53, where he stands.
+    Seize,
+    /// Thrown with this velocity (state 48).
+    Throw(Vec3),
+}
+
 /// A strike on the hero by slot k (Behavior 13, strike test or loop damage).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Strike {
@@ -317,6 +336,8 @@ pub struct Act {
     /// Turn toward a point with a weight.
     pub face: Option<(Vec3, f32)>,
     pub strike: Option<Strike>,
+    /// The grab machine's request to the host (SPEC-0029 Behavior 23).
+    pub grab: Option<Grab>,
     pub shot: Option<ShotRequest>,
     /// Discard this tick's root step (chase stop).
     pub stop: bool,
@@ -521,6 +542,9 @@ pub struct Enemy {
     pub alarmed: bool,
     /// The alarm-group check countdown (+0xC88) and the last group broadcast seen.
     alarm_timer: i32,
+    /// The grab machine's state word (SPEC-0029 Behavior 23): 1 choose, 2 strike, 3 recover, 4
+    /// done; entering the sequencer sets 1.
+    grab: u8,
     alarm_seen: u32,
     /// The reanimation countdown (+0xD14; -1 idle; Behavior 34 and 35).
     pub reanim: i32,
@@ -638,6 +662,7 @@ impl Enemy {
             seq: 0,
             alarmed: false,
             alarm_timer: 0,
+            grab: 0,
             alarm_seen: 0,
             reanim: -1,
             joined: false,
@@ -1911,6 +1936,7 @@ impl Enemy {
             self.line_point = self.stand_off(self.p.standoff, v, rng);
         } else {
             self.enter(2, start);
+            self.grab = 1;
         }
     }
 
@@ -2076,8 +2102,9 @@ impl Enemy {
             self.defence_hold -= 1;
         }
         self.defend(v, rng);
-        // Lost-sight test (no grab-and-throw slots run here).
-        if self.outer != 9 && !v.sight {
+        // Lost-sight test; it does not run during a grab-and-throw attack (Behavior 15).
+        let grabbing = self.outer == 2 && self.selected.is_some_and(|k| self.p.slots[k].flags & 0x08 != 0);
+        if self.outer != 9 && !v.sight && !grabbing {
             self.outer = 9;
             self.last_seen = v.hero;
             self.counter = 0;
@@ -2380,6 +2407,45 @@ impl Enemy {
         true
     }
 
+    /// SPEC-0029 Behavior 23 from the strike state of a flag 0x08 slot. Choose: within the melee
+    /// range, facing cosine above 0.5, stun word clear and the path clear, the hero is seized and
+    /// the follow-through clip C replaces B; otherwise recover through clip E with no contact.
+    /// Strike: C plays until a frame with event bit 0x20 throws a held hero with
+    /// normalize(15 facing + 8 up) x the throw speed and a take-hit of damage 0, and the rest of C
+    /// plays at rate 1.0 (state 3 here); the sequencer's state 5 skips the recovery clip.
+    fn grab_step(&mut self, k: usize, d: f32, cos: f32, v: &View, a: &mut Act) {
+        let s = self.p.slots[k];
+        let (kc, ke) = (slot_anim(k, 2), slot_anim(k, 4));
+        a.rate = Some(s.strike_speed);
+        if self.grab == 1 {
+            if cos > 0.5 && d < s.range && !v.hero_stunned && v.sight {
+                a.grab = Some(Grab::Seize);
+                self.grab = 2;
+                self.through(kc, v, a);
+            } else {
+                self.grab = 3;
+            }
+            return;
+        }
+        if self.grab == 2 {
+            let done = self.through(kc, v, a);
+            if v.hero_held && v.spawn_bits & 0x20 != 0 {
+                let aim = unit([15.0 * v.facing[0], 15.0 * v.facing[1] + 8.0, 15.0 * v.facing[2]]);
+                a.grab = Some(Grab::Throw(aim.map(|c| c * s.throw_speed)));
+                a.strike = Some(Strike { slot: k, damage: 0.0, knockback: 0.0, unblockable: true, force_blocked: false, blocked: false });
+                self.grab = 4;
+                self.seq = 3;
+            } else if done {
+                self.seq = 5;
+            }
+            return;
+        }
+        a.rate = Some(s.recover_speed);
+        if !(v.has)(ke) || self.through(ke, v, a) {
+            self.seq = 5;
+        }
+    }
+
     /// Behavior 13: the attack sequencer (outer 2).
     fn sequencer(&mut self, d: f32, v: &View, rng: &mut Rng, a: &mut Act) {
         let Some(k) = self.selected else {
@@ -2436,6 +2502,7 @@ impl Enemy {
                     }
                 }
             }
+            2 if s.flags & 0x08 != 0 && s.kind == MELEE => self.grab_step(k, d, cos, v, a),
             2 => {
                 a.rate = Some(s.strike_speed);
                 let done = self.through(kb, v, a);
@@ -2654,6 +2721,8 @@ mod tests {
             gap: 0.0,
             contact: false,
             hero_blocks: false,
+            hero_held: false,
+            hero_stunned: false,
             hero_swing: None,
             hero_recover: false,
             l1_held: false,
@@ -3087,6 +3156,46 @@ mod tests {
             e.counter_choose(&v, &mut rng);
         }
         assert_eq!(e.selected, None);
+    }
+
+    #[test]
+    fn grab_seizes_holds_and_throws() {
+        // SPEC-0029 Behavior 23 with the Minion Brute's numbers: range 12, throw speed 17.
+        let has = |_| true;
+        let mut rng = Rng::seeded(3);
+        let mut p = skeleton();
+        p.slots[0] = Slot { kind: MELEE, flags: 0x08, range: 12.0, throw_speed: 17.0, damage: 50.0, strike_speed: 1.0, recover_speed: 1.0, trigger_max: 20.0, charge: -1, ..p.slots[0] };
+        let start = |p: &Params, rng: &mut Rng| {
+            let mut e = Enemy::new(p.clone(), Spawn::default(), rng);
+            e.state = 19;
+            e.selected = Some(0);
+            e.enter(2, 2);
+            e.grab = 1;
+            e
+        };
+        let (kc, ke) = (slot_anim(0, 2), slot_anim(0, 4));
+        let mut e = start(&p, &mut rng);
+        let mut v = view([2.0, 0.0, 0.0], &has);
+        // The seize requests C in the same tick and deals nothing.
+        let act = e.tick(&v, &mut rng);
+        assert_eq!((act.grab, act.anim, act.strike), (Some(Grab::Seize), Some(kc), None));
+        // The hold: no strike until the release bit.
+        v.hero_held = true;
+        v.clip = Clip { action: kc, progress: 0.3, finished: false };
+        let act = e.tick(&v, &mut rng);
+        assert_eq!((act.grab, e.seq), (None, 2));
+        // The throw: damage 0, speed 17 along normalize(15 f + 8 up).
+        v.spawn_bits = 0x20;
+        let act = e.tick(&v, &mut rng);
+        assert_eq!(act.strike.map(|s| s.damage), Some(0.0));
+        let Some(Grab::Throw(t)) = act.grab else { panic!("{:?}", act.grab) };
+        assert!((len(t) - 17.0).abs() < 1e-3 && (t[1] / len(t) - 8.0 / 17.0).abs() < 1e-3, "{t:?}");
+        assert_eq!(e.seq, 3);
+        // Out of range: no seize; the recovery clip E instead.
+        let mut e = start(&p, &mut rng);
+        let v = view([12.5, 0.0, 0.0], &has);
+        assert_eq!(e.tick(&v, &mut rng).grab, None);
+        assert_eq!(e.tick(&v, &mut rng).anim, Some(ke));
     }
 
     #[test]
