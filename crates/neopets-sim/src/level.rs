@@ -4396,16 +4396,21 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
         }
         return v;
     }
+    // The fight start step (rule 6; SPEC-0054 Arena build guide A2 and open question 45): camera
+    // 4 (no keys) and the fade-in without waiting, effects 3 and 4, 30 ticks, the hero moved
+    // from the alcove to the hall centre (locator 1), the letterbox off, 60 ticks, the normal
+    // camera (control at about tick 90).
     if f(9) && !f(10) {
         state.set_word(P, 2, 1);
         return vec![
             Action::LetterBox { on: true, seconds: 0.0, wait: false },
-            Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
+            Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
             Action::BossFight { instance: 13 },
-            Action::FadeIn { seconds: 0.5, wait: true },
+            Action::FadeIn { seconds: 0.5, wait: false },
             Action::StartEffect { slot: 3, camera: false },
             Action::StartEffect { slot: 4, camera: false },
             wait(0.5),
+            Action::MoveHero { locator: 1 },
             Action::LetterBox { on: false, seconds: 0.7, wait: false },
             wait(1.0),
             Action::ReturnCamera { preset: -1, release: true },
@@ -17109,8 +17114,10 @@ mod tests {
         assert!(s.flag(364) && s.flag(358) && v.contains(&Action::RegisterTrigger { index: 1, routine: 1 }));
         on_activate(1432, &mut s);
         assert!(s.level(10));
-        // Rule 6, the fight start step, once.
-        assert!(run(on_update(1432, &mut s, false), &mut s).contains(&Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }));
+        // Rule 6, the fight start step, once: camera 4 without waiting, and the hero moved to the
+        // hall centre (locator 1).
+        let start = run(on_update(1432, &mut s, false), &mut s);
+        assert!(start.contains(&Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }) && start.contains(&Action::MoveHero { locator: 1 }));
         assert!(on_update(1432, &mut s, false).is_empty());
         // Trigger 1 before the window: nothing. Trigger 0, then the entry: the clock at 180,
         // level 11 on and 10 off, movie 78.
