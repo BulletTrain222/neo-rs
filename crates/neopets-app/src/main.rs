@@ -1526,7 +1526,7 @@ fn step_sim(
             };
             // The autopilot (F7; this build's test tool) plays in the player's place.
             play.play.autopilot_input(&mut input);
-            // NEOPETS_DEV_SCRIPT=1 (diagnostic): the trace's NEOPETS_TRACE_STICK, _FACE and _CROSS
+            // NEOPETS_DEV_SCRIPT=1 (diagnostic): the trace's NEOPETS_TRACE_STICK, _FACE, _CROSS and _SQUARE
             // scripts drive the window's hero by play tick, so a traced moment can be pictured.
             if std::env::var_os("NEOPETS_DEV_SCRIPT").is_some() {
                 dev_script(&mut play.play, &mut input);
@@ -4301,6 +4301,7 @@ fn play_trace(
     let mut last_swap = String::new();
     let mut last_fx = String::new();
     let mut last_block = String::new();
+    let mut moving_before: Vec<bool> = Vec::new();
     let cross_at: Vec<u64> = std::env::var("NEOPETS_TRACE_CROSS").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let switch_at: Vec<u64> = std::env::var("NEOPETS_TRACE_SWITCH").unwrap_or_default().split(',').filter_map(|t| t.trim().parse().ok()).collect();
     let mut flags_seen = play.state.flags.clone();
@@ -4411,6 +4412,16 @@ fn play_trace(
             for line in play.block_survey() {
                 println!("      {line}");
             }
+        }
+        // NEOPETS_TRACE_BLOCK: each block's centre when a move ends, at full precision.
+        if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
+            let now: Vec<bool> = play.world.blocks.iter().map(|b| b.moving).collect();
+            for (k, b) in play.world.blocks.iter().enumerate() {
+                if moving_before.get(k) == Some(&true) && !b.moving {
+                    println!("      block {k} rests at ({:.4}, {:.4}) on tick {}", b.position[0], b.position[2], play.ticks);
+                }
+            }
+            moving_before = now;
         }
         // NEOPETS_TRACE_BLOCK: the hero's block state and the held block whenever they change.
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
@@ -4640,7 +4651,19 @@ fn play_trace(
         // NEOPETS_TRACE_BLOCK: in the block state the stick points into the held face (centred
         // during the approach), so the hero pushes; the Square prompts are pressed as usual.
         if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() && play.loco.state == neopets_sim::hero::BLOCK {
-            (forward, side) = play.block_trace_stick().unwrap_or((0.0, 0.0));
+            // NEOPETS_TRACE_BLOCK_MOVE="tick:t;tick:t": from each tick on the stick turns t
+            // quarter turns from the held face (0 push, 2 pull, 1 and 3 the side moves; "-"
+            // centred).
+            let mut turn = Some(0);
+            if let Ok(v) = std::env::var("NEOPETS_TRACE_BLOCK_MOVE") {
+                for e in v.split(';') {
+                    let Some((k, t)) = e.trim().split_once(':') else { continue };
+                    if k.parse::<u64>().is_ok_and(|k| k <= play.ticks) {
+                        turn = t.trim().parse::<i32>().ok();
+                    }
+                }
+            }
+            (forward, side) = turn.and_then(|t| play.block_trace_stick_toward(t)).unwrap_or((0.0, 0.0));
         }
         // NEOPETS_TRACE_BLOCK_AT="tick:x,z": block 0 moved to (x, z) (diagnostic).
         if let Some((k, x, z)) = std::env::var("NEOPETS_TRACE_BLOCK_AT").ok().and_then(|v| {
@@ -4968,7 +4991,7 @@ fn play_trace(
             // NEOPETS_TRACE_CLIMB: the grab-block (10) and stop-climbing (18) prompts are not pressed, so the hero keeps
             // walking into the block.
             // NEOPETS_TRACE_NOAUTO: prompts are not pressed (only NEOPETS_TRACE_SQUARE presses).
-            square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()))
+            square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()) && !(play.loco.state == neopets_sim::hero::BLOCK && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some()))
                 || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             // NEOPETS_TRACE_GUARD=n: the guard is held on every tick from tick n (diagnostic).
@@ -5582,7 +5605,7 @@ fn sync_fade(
 }
 
 /// The window's dev script (NEOPETS_DEV_SCRIPT): the trace's stick (raw forward and side, from
-/// each listed tick on), facing (turned toward a point on a listed tick) and Cross press
+/// each listed tick on), facing (turned toward a point on a listed tick), Cross and Square press
 /// (on listed ticks) scripts, applied to this tick's input.
 fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     let t = play.ticks;
@@ -5613,5 +5636,8 @@ fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     }
     if std::env::var("NEOPETS_TRACE_CROSS").is_ok_and(|v| v.split(',').any(|x| x.trim().parse::<u64>().ok() == Some(t))) {
         input.jump = true;
+    }
+    if std::env::var("NEOPETS_TRACE_SQUARE").is_ok_and(|v| v.split(',').any(|x| x.trim().parse::<u64>().ok() == Some(t))) {
+        input.square = true;
     }
 }

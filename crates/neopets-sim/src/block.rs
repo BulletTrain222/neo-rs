@@ -4,8 +4,10 @@
 //! and the hero's block state 18 (walk to the grab spot, then push, pull or move the block
 //! sideways by the stick).
 //!
-//! Not covered: the footprint step (no block has a footprint word on disc), the predicted-position
-//! second contact test, the block-slide cue and the side-touch latch, the trigger-volume fires of a
+//! The push start's footprint step (SPEC-0048 Push start step 2; R-0131) reads the floor patch
+//! the placement's ground probe chose, through the caller's `Footing`.
+//!
+//! Not covered: the predicted-position second contact test, the block-slide cue and the side-touch latch, the trigger-volume fires of a
 //! moving block, the attached effects and the sound index, the climb onto a block (state 58) and
 //! the block-edge hang (state 19).
 
@@ -71,11 +73,64 @@ pub struct Block {
     /// tests the volumes (while moving and on the tick the flag clears).
     pub last_fired: Option<u16>,
     pub testing: bool,
+    /// +0x9C, the footprint patch: the ground patch the last placement's probe chose (the
+    /// accepted candidate or the last rejected one), as (patch id, entry index); None when the
+    /// probe returned early. It limits every later push (SPEC-0048 Placement step 1).
+    pub footprint: Option<Patch>,
+}
+
+/// A ground patch: the patch id of its model set and the entry's index (SPEC-0018).
+pub type Patch = (i32, u32);
+
+/// What a placement's ground probe gives: the height found (None keeps the corner's) and the
+/// patch it chose.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Floor {
+    pub height: Option<f32>,
+    pub patch: Option<Patch>,
+}
+
+impl From<Option<f32>> for Floor {
+    fn from(height: Option<f32>) -> Self {
+        Floor { height, patch: None }
+    }
+}
+
+/// The world the footprint step reads (SPEC-0048 Push start step 2): the list test of a patch
+/// at (x, z), the full ground probe (x, z, ceiling; None for no ground) and the selected hero's
+/// position.
+pub struct Footing<'a> {
+    pub inside: &'a dyn Fn(Patch, f32, f32) -> bool,
+    pub ground: &'a dyn Fn(f32, f32, f32) -> Option<f32>,
+    pub hero: Vec3,
+}
+
+/// The step limit of the hero-point test (ELF data word 0x2EB2C0).
+pub const STEP_LIMIT: f32 = 0.75;
+
+/// The footprint step for block `b` toward direction `d`: the block front F = position + D (L +
+/// 0.5 S + 0.1) must pass the patch's list test; then the hero point H = hero + D (L + 0.75) 1.1
+/// passes when it is inside the patch, or else when the ground at the block's position and at H
+/// (each probed from its own height + 8.0) differ by no more than 0.75. A block with no patch
+/// skips the step.
+pub fn footprint_allows(b: &Block, d: i32, footing: &Footing) -> bool {
+    let (Some(patch), Some(u)) = (b.footprint, b.direction(d)) else { return true };
+    let front = add(b.position, scale(u, b.step + 0.5 * b.size + 0.1));
+    if !(footing.inside)(patch, front[0], front[2]) {
+        return false;
+    }
+    let h = add(footing.hero, scale(u, (b.step + 0.75) * 1.1));
+    if (footing.inside)(patch, h[0], h[2]) {
+        return true;
+    }
+    let at_block = (footing.ground)(b.position[0], b.position[2], b.position[1] + 8.0);
+    let at_hero = (footing.ground)(h[0], h[2], h[1] + 8.0);
+    matches!((at_block, at_hero), (Some(g0), Some(g1)) if (g0 - g1).abs() <= STEP_LIMIT)
 }
 
 impl Block {
     /// The record built at world load, then placed (SPEC-0048 Source and Placement).
-    pub fn new(size: f32, height: f32, corner: Vec3, box_axes: [Vec3; 3], extents: [f32; 3], probe: impl Fn(f32, f32, f32) -> Option<f32>) -> Self {
+    pub fn new<F: Into<Floor>>(size: f32, height: f32, corner: Vec3, box_axes: [Vec3; 3], extents: [f32; 3], probe: impl Fn(f32, f32, f32) -> F) -> Self {
         let mut b = Self {
             home: [0.0; 3],
             a: box_axes[0],
@@ -96,6 +151,7 @@ impl Block {
             loaded_top: corner[1] + extents[0],
             last_fired: None,
             testing: false,
+            footprint: None,
         };
         b.place(probe);
         b
@@ -104,16 +160,19 @@ impl Block {
     /// Placement: the corner's height from the ground probe (ceiling corner + 3.0), the axes
     /// copied, the position and the home at corner + 0.5 S A + 0.5 S B, all four directions
     /// allowed, not moving, both counters 0, the direction -1, active 1 and L = 0.5 S. A probe
-    /// that finds nothing keeps the corner's height.
-    pub fn place(&mut self, probe: impl Fn(f32, f32, f32) -> Option<f32>) {
+    /// that finds nothing keeps the corner's height. The footprint patch becomes the probe's
+    /// chosen patch.
+    pub fn place<F: Into<Floor>>(&mut self, probe: impl Fn(f32, f32, f32) -> F) {
         self.place_with(probe, PLACE_CEILING);
     }
 
     /// The placement with the probe's ceiling `ceiling` above the block's height.
-    fn place_with(&mut self, probe: impl Fn(f32, f32, f32) -> Option<f32>, ceiling: f32) {
-        if let Some(y) = probe(self.corner[0], self.corner[2], self.corner[1] + ceiling) {
+    fn place_with<F: Into<Floor>>(&mut self, probe: impl Fn(f32, f32, f32) -> F, ceiling: f32) {
+        let floor: Floor = probe(self.corner[0], self.corner[2], self.corner[1] + ceiling).into();
+        if let Some(y) = floor.height {
             self.corner[1] = y;
         }
+        self.footprint = floor.patch;
         self.a = self.box_axes[0];
         self.b = self.box_axes[1];
         self.up = self.box_axes[2];
@@ -130,7 +189,7 @@ impl Block {
 
     /// Move to locator: the corner becomes X - 0.5 S (second axis) - 0.5 S (first axis), then
     /// the block is placed again.
-    pub fn move_to(&mut self, x: Vec3, probe: impl Fn(f32, f32, f32) -> Option<f32>) {
+    pub fn move_to<F: Into<Floor>>(&mut self, x: Vec3, probe: impl Fn(f32, f32, f32) -> F) {
         let half = 0.5 * self.size;
         self.corner = sub(sub(x, scale(self.box_axes[1], half)), scale(self.box_axes[0], half));
         self.place(probe);
@@ -138,7 +197,7 @@ impl Block {
 
     /// Reacquire height patch (SPEC-0048): centred on its own position and placed again, the
     /// ground probed from the block's height + `ceiling` (the script's float).
-    pub fn reacquire(&mut self, probe: impl Fn(f32, f32, f32) -> Option<f32>, ceiling: f32) {
+    pub fn reacquire<F: Into<Floor>>(&mut self, probe: impl Fn(f32, f32, f32) -> F, ceiling: f32) {
         let half = 0.5 * self.size;
         let x = self.position;
         self.corner = sub(sub(x, scale(self.box_axes[1], half)), scale(self.box_axes[0], half));
@@ -224,10 +283,19 @@ fn in_way(p: &Block, q: &Block, d: i32, f: i32) -> bool {
 
 /// The push start (SPEC-0048): block k toward d from face f over n ticks. Accepted when the
 /// block is not moving, d is a direction (all four are always allowed) and no other block is in
-/// the way; then moving, i = 0, D = d and n stored as a signed byte.
+/// the way; then moving, i = 0, D = d and n stored as a signed byte. No footprint step (see
+/// `push_start_on`).
 pub fn push_start(blocks: &mut [Block], k: usize, d: i32, f: i32, n: i32) -> bool {
+    push_start_on(blocks, k, d, f, n, None)
+}
+
+/// The push start with the footprint step (step 2) read through `footing`.
+pub fn push_start_on(blocks: &mut [Block], k: usize, d: i32, f: i32, n: i32, footing: Option<&Footing>) -> bool {
     let Some(p) = blocks.get(k) else { return false };
     if p.moving || !(0..4).contains(&d) {
+        return false;
+    }
+    if footing.is_some_and(|w| !footprint_allows(p, d, w)) {
         return false;
     }
     if blocks.iter().enumerate().any(|(j, q)| j != k && in_way(p, q, d, f)) {
@@ -538,6 +606,11 @@ impl Hold {
     /// One tick of state 18. `stick` is the camera-relative stick direction scaled by its
     /// length (zero when centred).
     pub fn tick(&mut self, blocks: &mut [Block], hero: Vec3, facing: Vec3, stick: Vec3, clip: HoldClip) -> HoldStep {
+        self.tick_on(blocks, hero, facing, stick, clip, None)
+    }
+
+    /// One tick of state 18 with the push start's footprint step read through `footing`.
+    pub fn tick_on(&mut self, blocks: &mut [Block], hero: Vec3, facing: Vec3, stick: Vec3, clip: HoldClip, footing: Option<&Footing>) -> HoldStep {
         let Some(b) = blocks.get(self.block) else { return HoldStep::default() };
         let m = self.face as i32;
         let Some(normal) = b.direction(m) else { return HoldStep::default() };
@@ -583,7 +656,7 @@ impl Hold {
             if request == ANIM_PUSH {
                 n = (n as f32 / 0.5) as i32;
             }
-            step.pushed = push_start(blocks, self.block, d, m, n);
+            step.pushed = push_start_on(blocks, self.block, d, m, n, footing);
         }
         step
     }
@@ -597,6 +670,35 @@ mod tests {
 
     fn block(x: f32, z: f32, s: f32) -> Block {
         Block::new(s, s, [x, 0.0, z], AXES, [s, s, s], |_, _, _| Some(0.0))
+    }
+
+    #[test]
+    fn footprint_step_limits_the_farm_crate() {
+        // SPEC-0048 Farm crate: S 2.7587 on a rectangular outline x -1941.2573 to -1928.0925, z
+        // 1071.3424 to 1084.5123; the front point F = centre + D (S + 0.1).
+        let mut v = vec![Block::new(2.7587, 2.7409, [-1940.2667, 45.46, 1074.2885], AXES, [2.7409, 2.7587, 2.7587], |_, _, _| Floor { height: Some(45.4599), patch: Some((0, 132)) })];
+        assert_eq!(v[0].footprint, Some((0, 132)));
+        let inside = |_: Patch, x: f32, z: f32| (-1941.2573..=-1928.0925).contains(&x) && z > 1071.3424 && z < 1084.5123;
+        let flat = |_: f32, _: f32, _: f32| Some(45.46);
+        let hero = [-1938.8873, 45.46, 1072.7886];
+        let footing = Footing { inside: &inside, ground: &flat, hero };
+        // West (-B) refused at the start column: F x = -1941.7459.
+        assert!(!footprint_allows(&v[0], 3, &footing));
+        // North (+A) accepted, with the hero point (inside the block) on the tile.
+        assert!(footprint_allows(&v[0], 0, &footing));
+        assert!(push_start_on(&mut v, 0, 0, 0, 38, Some(&footing)));
+        // Off the tile the hero point passes on a step of 0.75 or less, and is refused above.
+        let b = Block { moving: false, ..v[0].clone() };
+        let far = [-1938.8873, 45.46, 1067.0];
+        let low = |_: f32, _: f32, _: f32| Some(45.46);
+        let off = Footing { inside: &inside, ground: &low, hero: far };
+        assert!(footprint_allows(&b, 0, &off));
+        let step = |_: f32, z: f32, _: f32| Some(if z < 1071.0 { 44.6 } else { 45.46 });
+        let steep = Footing { inside: &inside, ground: &step, hero: far };
+        assert!(!footprint_allows(&b, 0, &steep));
+        // A block with no patch skips the step.
+        let free = Block { footprint: None, ..b };
+        assert!(footprint_allows(&free, 3, &footing));
     }
 
     #[test]

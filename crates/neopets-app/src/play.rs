@@ -430,8 +430,7 @@ impl World {
             .iter()
             .map(|s| {
                 neopets_sim::block::Block::new(s.size, s.height, s.corner, s.axes, s.extents, |x, z, c| {
-                    let h = world.probe(x, z, c);
-                    h.found.then_some(h.height)
+                    world.block_floor(x, z, c)
                 })
             })
             .collect();
@@ -524,12 +523,19 @@ impl World {
         self.ground.as_ref().map(|g| g.object_sets()).unwrap_or_default()
     }
 
+    /// A block placement's ground probe (SPEC-0048 Placement step 1): the height found and the
+    /// patch the probe chose, kept as the block's footprint.
+    fn block_floor(&self, x: f32, z: f32, c: f32) -> neopets_sim::block::Floor {
+        let h = self.probe(x, z, c);
+        neopets_sim::block::Floor { height: h.found.then_some(h.height), patch: h.patch.map(|p| (p.owner, p.index)) }
+    }
+
     fn probe(&self, x: f32, z: f32, c: f32) -> ProbeHit {
         // The test stage: one level floor everywhere, found from at or above it.
         if let Some(h) = self.flat.filter(|&h| c >= h - 0.5) {
-            return ProbeHit { height: h, normal: UP, kind: None, found: true, respawn: None, surface: None, zone: None };
+            return ProbeHit { height: h, normal: UP, kind: None, found: true, respawn: None, surface: None, zone: None, patch: None };
         }
-        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
+        self.ground.as_ref().map_or(ProbeHit { height: ground::MISS, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None, patch: None }, |g| g.probe_owned(x, z, c, &|o| self.owner_poses.get(&o).copied()))
     }
 }
 
@@ -2689,8 +2695,7 @@ impl Play {
                         let w = &mut self.world;
                         let mut b = w.blocks[block].clone();
                         b.move_to(x, |px, pz, c| {
-                            let h = w.probe(px, pz, c);
-                            h.found.then_some(h.height)
+                            w.block_floor(px, pz, c)
                         });
                         w.blocks[block] = b;
                     }
@@ -2702,8 +2707,7 @@ impl Play {
                         let mut b = w.blocks[block].clone();
                         b.reacquire(
                             |px, pz, c| {
-                                let h = w.probe(px, pz, c);
-                                h.found.then_some(h.height)
+                                w.block_floor(px, pz, c)
                             },
                             ceiling,
                         );
@@ -4682,7 +4686,17 @@ impl Play {
         let v = neopets_sim::hero::speed_value(input);
         let stick = self.loco.target.map(|c| c * v);
         let clip = self.hero.hold_clip();
-        let step = hold.tick(&mut self.world.blocks, self.loco.position(), self.loco.facing, stick, clip);
+        // SPEC-0048 Push start step 2: the footprint step reads the block's floor patch outline
+        // and the ground at the block and at the hero point.
+        let (ground, poses) = (&self.world.ground, &self.world.owner_poses);
+        let owner = |o: usize| poses.get(&o).copied();
+        let inside = |patch: neopets_sim::block::Patch, x: f32, z: f32| ground.as_ref().is_none_or(|g| g.patch_contains(ground::PatchId { owner: patch.0, index: patch.1 }, x, z, &owner));
+        let probe = |x: f32, z: f32, c: f32| ground.as_ref().and_then(|g| {
+            let h = g.probe_owned(x, z, c, &owner);
+            h.found.then_some(h.height)
+        });
+        let footing = neopets_sim::block::Footing { inside: &inside, ground: &probe, hero: self.loco.position() };
+        let step = hold.tick_on(&mut self.world.blocks, self.loco.position(), self.loco.facing, stick, clip, Some(&footing));
         self.hold = Some(hold);
         if let Some((dir, rate)) = step.steer {
             self.loco.steer_toward(dir, rate);
@@ -4843,8 +4857,7 @@ impl Play {
         let w = &mut self.world;
         let mut b = w.blocks.first()?.clone();
         b.move_to([x, b.position[1], z], |px, pz, cl| {
-            let h = w.probe(px, pz, cl);
-            h.found.then_some(h.height)
+            w.block_floor(px, pz, cl)
         });
         w.blocks[0] = b;
         Some(w.blocks[0].top())
@@ -4865,9 +4878,12 @@ impl Play {
         self.loco.enter_state(hero_states::LADDER, 93);
     }
 
-    pub fn block_trace_stick(&self) -> Option<(f32, f32)> {
+    /// Diagnostic (NEOPETS_TRACE_BLOCK): the camera-relative stick (forward, side) for a hero
+    /// holding a block, toward the held face's direction turned by `turn` quarter turns (0 into
+    /// the face: a push; 2 away from it: a pull; 1 and 3 the side moves).
+    pub fn block_trace_stick_toward(&self, turn: i32) -> Option<(f32, f32)> {
         let h = self.hold.filter(|h| h.latched)?;
-        let n = self.world.blocks.get(h.block)?.direction(h.face as i32)?;
+        let n = self.world.blocks.get(h.block)?.direction((h.face as i32 + turn).rem_euclid(4))?;
         let (f, l) = self.camera.rows();
         let fl = (f[0] * f[0] + f[2] * f[2]).sqrt().max(1e-6);
         Some(((n[0] * f[0] + n[2] * f[2]) / fl, n[0] * l[0] + n[2] * l[2]))
@@ -4884,8 +4900,7 @@ impl Play {
         let w = &mut self.world;
         let mut nb = b;
         nb.move_to(x, |px, pz, cl| {
-            let h = w.probe(px, pz, cl);
-            h.found.then_some(h.height)
+            w.block_floor(px, pz, cl)
         });
         w.blocks[0] = nb;
         Some((id, p))

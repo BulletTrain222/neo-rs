@@ -263,6 +263,26 @@ impl Ground {
         }
     }
 
+    /// The candidate list test of a patch (SPEC-0018 Ground probe step 3) at (x, z): its outline
+    /// records, an empty outline passing (SPEC-0048 Push start step 2, the footprint step). A
+    /// placed object's patch is tested in the object's rest frame while `owner` gives its pose;
+    /// a patch that cannot be found passes.
+    pub fn patch_contains(&self, patch: PatchId, x: f32, z: f32, owner: &dyn Fn(usize) -> Option<OwnerPose>) -> bool {
+        if patch.owner == 0 {
+            return match self.patches.get(patch.index as usize) {
+                Some(Some(p)) => list_test_in(&self.set, p, x, z),
+                _ => true,
+            };
+        }
+        let Some(o) = self.owned.iter().find(|o| o.id == patch.owner) else { return true };
+        let Some(Some(p)) = o.patches.get(patch.index as usize) else { return true };
+        let (sx, sz) = owner(o.object).map_or((x, z), |q| {
+            let (a, b, _) = q.map(x, z);
+            (a, b)
+        });
+        list_test_in(&o.set, p, sx, sz)
+    }
+
     /// The registered patch ids and their objects.
     pub fn object_sets(&self) -> Vec<(i32, usize)> {
         self.owned.iter().map(|o| (o.id, o.object)).collect()
@@ -274,7 +294,7 @@ impl Ground {
     /// into the object's rest frame and the height raised by the frames' height difference.
     pub fn probe_owned(&self, x: f32, z: f32, c: f32, owner: &dyn Fn(usize) -> Option<OwnerPose>) -> ProbeHit {
         const UP: [f32; 3] = [0.0, 1.0, 0.0];
-        let none = |height| ProbeHit { height, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None };
+        let none = |height| ProbeHit { height, normal: UP, kind: None, found: false, respawn: None, surface: None, zone: None, patch: None };
         let Some(rec) = self.cell_at(x, z) else {
             return none(0.0);
         };
@@ -321,6 +341,7 @@ impl Ground {
                 respawn: set.get(p.at + 0x0D).copied(),
                 surface: set.get(p.at + 0x40..p.at + 0x42).map(|b| u16::from_le_bytes([b[0], b[1]])),
                 zone: set.get(p.at + 0x0C).copied(),
+                patch: Some(PatchId { owner: id, index: index as u32 }),
             };
             if h > best.height && h <= c {
                 best = hit;
@@ -780,6 +801,18 @@ pub struct ProbeHit {
     pub surface: Option<u16>,
     /// The entry's zone number z: the low byte of its header word +0x0C (SPEC-0006 Zones).
     pub zone: Option<u8>,
+    /// The chosen candidate (the accepted one, or the last rejected one when none is
+    /// accepted; SPEC-0018 Ground probe step 8): what a block placement keeps as its footprint
+    /// patch (SPEC-0048 Placement step 1). None when no candidate was sampled.
+    pub patch: Option<PatchId>,
+}
+
+/// A ground patch: the patch id of its model set (0 the pack's own, else a placed object's)
+/// and the entry's index in that set.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct PatchId {
+    pub owner: i32,
+    pub index: u32,
 }
 
 /// A frame record (0x70 bytes): a wall edge named by a grid cell's entry items (SPEC-0018,
