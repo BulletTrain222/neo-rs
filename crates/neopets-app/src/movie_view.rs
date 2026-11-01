@@ -37,6 +37,8 @@ pub struct Movies {
     /// The playing movie's sound: the queue its voice reads, its rate and channels; a new voice
     /// is due when `voice` is set.
     pub sound: Arc<Mutex<VecDeque<i16>>>,
+    /// The playing movie's 48 kHz mixer stage.
+    mixer: Option<bink::Mixer>,
     pub voice: Option<(u32, u16)>,
 }
 
@@ -70,8 +72,13 @@ impl Movies {
         while c.decoded <= c.shown && (c.decoded as usize) < mv.frames() {
             match mv.decode(file, c.decoded as usize, t) {
                 Ok(f) => {
+                    // SPEC-0008 Movie audio internals: the 48 kHz mixer stage.
+                    let pcm = match self.mixer.as_mut() {
+                        Some(m) => m.convert(&f.samples),
+                        None => f.samples,
+                    };
                     if let Ok(mut q) = self.sound.lock() {
-                        q.extend(f.samples);
+                        q.extend(pcm);
                     }
                     fresh = true;
                 }
@@ -125,7 +132,9 @@ impl Movies {
             if let Ok(mut q) = self.sound.lock() {
                 q.clear();
             }
-            self.voice = stream.as_ref().and_then(|(_, m)| m.audio_format());
+            let format = stream.as_ref().and_then(|(_, m)| m.audio_format());
+            self.mixer = format.map(|(rate, channels)| bink::Mixer::new(rate, channels));
+            self.voice = format.map(|(_, channels)| (bink::MIX_RATE, channels));
             self.picture = None;
             self.started = Some(index);
             self.current = Some(Current {

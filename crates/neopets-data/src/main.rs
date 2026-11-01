@@ -151,6 +151,9 @@ fn run() -> Result<(), String> {
         let out = root.join("private").join("movies");
         std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
         let (mut exact, mut samples) = (0usize, 0usize);
+        // The 48 kHz mixer stage's output length, against the play time.
+        let mut mixer = mv.audio_format().map(|(r, c)| neopets_data::bink::Mixer::new(r, c));
+        let mut mixed = 0usize;
         let t0 = std::time::Instant::now();
         for i in 0..n {
             let f = mv.decode(&file, i, &tables).map_err(|e| format!("frame {i}: {e}"))?;
@@ -161,12 +164,19 @@ fn run() -> Result<(), String> {
                 println!("frame {i}: Y ends {} (U at {}), V ends {} of {len}", f.plane_ends[0], f.u_start, f.plane_ends[2]);
             }
             samples += f.samples.len();
+            if let Some(m) = mixer.as_mut() {
+                mixed += m.convert(&f.samples).len();
+            }
             if [0, 30, 90, n - 1].contains(&i) {
                 let png = neopets_data::png::encode_rgba(mv.header.width, mv.header.height, &mv.picture.rgba())?;
                 std::fs::write(out.join(format!("movie{m}-{i}.png")), png).map_err(|e| e.to_string())?;
             }
         }
         println!("movie {m} ({name}): {n} frames decoded in {:.1} s, {exact} with every plane ending exactly; {samples} audio samples in {} packets ({} ending exactly); format {:?}", t0.elapsed().as_secs_f64(), mv.audio_packets.0, mv.audio_packets.1, mv.audio_format());
+        if let Some((rate, channels)) = mv.audio_format() {
+            let c = channels.max(1) as f64;
+            println!("  audio {:.3} s at {rate} Hz; mixed {:.3} s at {} Hz; {n} frames play {:.3} s", samples as f64 / c / rate as f64, mixed as f64 / c / neopets_data::bink::MIX_RATE as f64, neopets_data::bink::MIX_RATE, n as f64 / mv.header.fps());
+        }
     }
     if !(monster_word.is_some() || monster_row.is_some() || groups.is_some() || shadow.is_some() || !parts_of.is_empty() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());

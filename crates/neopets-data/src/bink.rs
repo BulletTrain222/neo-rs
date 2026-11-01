@@ -966,9 +966,80 @@ impl AudioState {
     }
 }
 
+/// The movie library's 48 kHz mixer stage (SPEC-0008 Movie audio internals): decoded PCM of
+/// one track becomes 48 kHz output. A 48 kHz track passes through unchanged; another rate takes
+/// output frame k from source frame floor(k x rate / 48,000), repeating or skipping frames (no
+/// interpolation), with the position carried across calls. A single track's signed-16 samples
+/// need no saturation (the stage saturates only sums of tracks).
+#[derive(Clone, Debug)]
+pub struct Mixer {
+    rate: u64,
+    channels: usize,
+    /// Output frames produced so far and source frames dropped from `pending`.
+    out: u64,
+    dropped: u64,
+    pending: Vec<i16>,
+}
+
+/// The mixer's output rate.
+pub const MIX_RATE: u32 = 48_000;
+
+impl Mixer {
+    pub fn new(rate: u32, channels: u16) -> Self {
+        Self { rate: rate.max(1) as u64, channels: channels.max(1) as usize, out: 0, dropped: 0, pending: Vec::new() }
+    }
+
+    /// The 48 kHz frames for this block of interleaved source frames.
+    pub fn convert(&mut self, input: &[i16]) -> Vec<i16> {
+        if self.rate == MIX_RATE as u64 {
+            return input.to_vec();
+        }
+        let c = self.channels;
+        self.pending.extend_from_slice(input);
+        let have = (self.pending.len() / c) as u64;
+        let mut output = Vec::new();
+        loop {
+            let src = self.out * self.rate / MIX_RATE as u64;
+            let Some(at) = src.checked_sub(self.dropped).filter(|&at| at < have) else { break };
+            let at = at as usize * c;
+            output.extend_from_slice(&self.pending[at..at + c]);
+            self.out += 1;
+        }
+        // Keep the frames a later output frame can still select.
+        let next = self.out * self.rate / MIX_RATE as u64;
+        let drop = next.saturating_sub(self.dropped).min(have);
+        self.pending.drain(..drop as usize * c);
+        self.dropped += drop;
+        output
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn mixer_rate_conversion() {
+        // 48 kHz passes through.
+        let mut m = Mixer::new(48_000, 2);
+        assert_eq!(m.convert(&[1, 2, 3, 4]), vec![1, 2, 3, 4]);
+        // 44.1 kHz mono: 441 source frames give 480 output frames, frame k from floor(k 441 /
+        // 480), the same whether the block is fed whole or in pieces.
+        let src: Vec<i16> = (0..441).collect();
+        let whole = Mixer::new(44_100, 1).convert(&src);
+        assert_eq!(whole.len(), 480);
+        assert!(whole.iter().enumerate().all(|(k, &v)| v as usize == k * 441 / 480));
+        let mut m = Mixer::new(44_100, 1);
+        let mut pieces = Vec::new();
+        for chunk in src.chunks(37) {
+            pieces.extend(m.convert(chunk));
+        }
+        assert_eq!(pieces, whole);
+        // Stereo frames stay together.
+        let mut m = Mixer::new(44_100, 2);
+        let out = m.convert(&[10, -10, 20, -20]);
+        assert!(out.chunks(2).all(|f| f[0] == -f[1]));
+    }
 
     #[test]
     fn dequantise_vectors() {
