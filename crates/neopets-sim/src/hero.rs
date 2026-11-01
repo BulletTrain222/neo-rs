@@ -599,6 +599,7 @@ impl Locomotion {
             SLOW_WALK | WALK | RUN => self.state as u32,
             JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => self.request,
             ARRIVAL => 175,
+            HELD => 143,
             SNEAK => 87,
             SNEAK_WALK => 85,
             SNEAK_REVERSE => 82,
@@ -639,12 +640,7 @@ impl Locomotion {
                 }
                 return;
             }
-            SCRIPTED => return,
-            // State 53 requests animation 143 every tick (SPEC-0040).
-            HELD => {
-                self.request = 143;
-                return;
-            }
+            SCRIPTED | HELD => return,
             FEED => {
                 if clip.action == self.request && clip.progress >= 0.99 {
                     self.state = STANCE;
