@@ -679,7 +679,10 @@ pub fn sync_hud(
             let ey = oy + (y + h as f32 * sy / 2.0) * s;
             fill_points[k] = Some(([ex / ww, ey / wh], ww / wh));
         }
-        node.left = Val::Px(x * s);
+        // The D-pad hint keeps its canvas x from the window's left edge, not the centred 4:3
+        // canvas, so it stays at the left side at any aspect ratio (this build's choice; the
+        // canvas is the PS2's whole screen).
+        node.left = Val::Px(if in_dpad { x * s - ox } else { x * s });
         node.top = Val::Px(y * s);
         node.width = Val::Px(w as f32 * sx * s);
         node.height = Val::Px(h as f32 * sy * s);
