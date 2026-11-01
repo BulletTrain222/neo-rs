@@ -424,6 +424,11 @@ impl Gnarfas {
                 if !hit && v.clip.0 == id {
                     if let Some(tip) = v.chain_hit {
                         hit = true;
+                        // The strike count rises on each whip and rapid strike hit, blocked or
+                        // not (SPEC-0020 Phase hub, the strike count).
+                        if id != 0x15 {
+                            self.strikes += 1;
+                        }
                         a.spark = Some(tip);
                         // The chain power has no guard test; the others block with full damage.
                         let blocked = id != 0x15 && v.hero_blocks;
@@ -684,7 +689,9 @@ mod tests {
         v.hero_blocks = true;
         let a = g.tick(&v, &w, &mut rng);
         assert_eq!((a.hero_damage, a.spark), (Some((15, true, 0.0)), Some(33)));
+        assert_eq!(g.strikes, 1, "a blocked whip hit still counts as a strike");
         assert!(g.tick(&v, &w, &mut rng).hero_damage.is_none());
+        assert_eq!(g.strikes, 1, "once per attack");
         v.clip = (0x13, 1.0, true);
         g.tick(&v, &w, &mut rng);
         assert_eq!(g.state, State::Idle);

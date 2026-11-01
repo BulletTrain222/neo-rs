@@ -6220,10 +6220,11 @@ impl Play {
             let t = c.row.map_or(0, |r| r.target_type as i32);
             // The bosses with their own hit checks are skipped by the swing resolver that pays the
             // magic and Mote charge and sends the power step's status (SPEC-0011 and SPEC-0020
-            // Hero actions); their routines take the hit. A Faerie Sister's takes the power step
-            // at power 1.0 (the attack power table is not used); Gnarfas's uses the table.
+            // Hero actions); their routines take the hit. A Faerie Sister's and Gnarfas's take
+            // the power step at power 1.0 (the attack power table is not used; the Mote adds only
+            // its element bonus).
             let own = c.own_hit_check();
-            let power = if c.sister.is_some() || c.serpent.is_some() { 1.0 } else { power };
+            let power = if c.sister.is_some() || c.serpent.is_some() || c.gnarfas.is_some() { 1.0 } else { power };
             let (damage, absorbed) = neopets_sim::mote::melee(power, stat_a as f32, mote, t, d_factor, e_factor, c.row.map_or(0.0, |r| r.defence), g);
             if (damage > 0 || absorbed) && !own {
                 landed += 1;
