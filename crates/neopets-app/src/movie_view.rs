@@ -1,15 +1,20 @@
-//! The movie player shell (SPEC-0026 Movies, Movie skip; SPEC-0008 Movie files): the queue in
-//! the order the level scripts add to it, one movie at a time at its own frame rate, the skip
-//! check once per frame, and the game loop suspended while a movie plays.
+//! The movie player (SPEC-0026 Movies, Movie skip; SPEC-0008 Movie files and Movie decoder build
+//! guide): the queue in the order the level scripts add to it, one movie at a time at its own
+//! frame rate, the skip check once per frame, and the game loop suspended while a movie plays.
+//! Each presented frame is decoded from the disc file by `neopets_data::bink` (the file is read
+//! whole when the movie starts) and shown at 4:3; its audio is streamed to a voice of its own.
+//! A movie that cannot be read or decoded shows a black screen with its name for its play time.
 //!
-//! Not covered: the picture and sound. No spec describes the Bink stream yet (R-0112), so each
-//! movie is a black screen with its name for its real play time. Of the hand-off only step 3's
+//! Of the hand-off only step 3's
 //! camera and screen-effect reset is built (`ended`; `Play::after_movies`); the reload of world
 //! W (Playback steps 2, 6 and 7) is not (the world stays loaded and the hero keeps their place). The original stops the game's sound before the queue plays and the reload
 //! restarts it; without the reload, the sound is paused here and resumes after the queue.
+use bevy::audio::{AudioPlayer, ChannelCount, Decodable, PlaybackSettings, SampleRate, Source};
 use bevy::prelude::*;
+use neopets_data::bink;
 use neopets_data::movie::{self, Header};
 use std::collections::VecDeque;
+use std::sync::{Arc, Mutex};
 
 #[derive(Resource, Default)]
 pub struct Movies {
@@ -25,6 +30,14 @@ pub struct Movies {
     /// The Display page's "Movie cutscenes" is Off: each queued movie is passed over at once,
     /// as a skip on its first frame would (its played word is still set).
     pub off: bool,
+    /// The decoder's fixed tables (read from the boot program at load).
+    tables: Option<bink::Tables>,
+    /// The latest decoded picture as RGBA, waiting to be shown (taken by `sync_screen`).
+    pub picture: Option<Vec<u8>>,
+    /// The playing movie's sound: the queue its voice reads, its rate and channels; a new voice
+    /// is due when `voice` is set.
+    pub sound: Arc<Mutex<VecDeque<i16>>>,
+    pub voice: Option<(u32, u16)>,
 }
 
 struct Current {
@@ -34,6 +47,9 @@ struct Current {
     shown: u32,
     carry_ns: u64,
     skip: neopets_sim::movie::Skip,
+    /// The file and its decoder, and the frames decoded so far (None: black screen only).
+    stream: Option<(Vec<u8>, bink::Movie)>,
+    decoded: u32,
 }
 
 impl Movies {
@@ -41,22 +57,51 @@ impl Movies {
         let boot = neopets_data::archive::verified_boot_program(disc)?;
         let names = movie::names(&boot)?;
         let table = names.into_iter().map(|n| Header::read(disc, &n).ok().map(|h| (n, h))).collect();
-        Ok(Self { table, ..Default::default() })
+        let tables = bink::Tables::read(&boot).map_err(|e| error!("Movie decoder tables: {e}")).ok();
+        Ok(Self { table, tables, ..Default::default() })
+    }
+
+    /// Decode the current movie up to the frame being shown: its picture (the last one) and
+    /// every frame's sound. A decode error stops the picture (the movie keeps its play time).
+    fn catch_up(&mut self) {
+        let Some(c) = self.current.as_mut() else { return };
+        let (Some((file, mv)), Some(t)) = (c.stream.as_mut(), self.tables.as_ref()) else { return };
+        let mut fresh = false;
+        while c.decoded <= c.shown && (c.decoded as usize) < mv.frames() {
+            match mv.decode(file, c.decoded as usize, t) {
+                Ok(f) => {
+                    if let Ok(mut q) = self.sound.lock() {
+                        q.extend(f.samples);
+                    }
+                    fresh = true;
+                }
+                Err(e) => {
+                    error!("movie {}: frame {}: {e}", c.index, c.decoded);
+                    c.stream = None;
+                    return;
+                }
+            }
+            c.decoded += 1;
+        }
+        if fresh {
+            self.picture = Some(mv.picture.rgba());
+        }
     }
 
 
     /// Advance by `elapsed_ns` with Cross or Start `held`. Returns true while a movie plays (the
     /// game loop is suspended for the whole frame).
-    pub fn step(&mut self, elapsed_ns: u64, held: bool) -> bool {
+    pub fn step(&mut self, elapsed_ns: u64, held: bool, disc: Option<&mut neopets_data::Disc>) -> bool {
         let busy = self.current.is_some() || !self.queue.is_empty();
-        let playing = self.step_queue(elapsed_ns, held);
+        let playing = self.step_queue(elapsed_ns, held, disc);
+        self.catch_up();
         if busy && self.current.is_none() && self.queue.is_empty() {
             self.ended = true;
         }
         playing
     }
 
-    fn step_queue(&mut self, elapsed_ns: u64, held: bool) -> bool {
+    fn step_queue(&mut self, elapsed_ns: u64, held: bool, disc: Option<&mut neopets_data::Disc>) -> bool {
         if self.current.is_none() {
             let Some(index) = self.queue.pop_front() else { return false };
             if self.off {
@@ -68,7 +113,20 @@ impl Movies {
                 eprintln!("movie {index}: not in the table or unreadable; skipped");
                 return !self.queue.is_empty();
             };
-            println!("movie {index} ({name}): {} frames at {:.3} fps, {:.1} s (picture not decoded)", h.frames, h.fps(), h.seconds());
+            // The whole file, and its decoder; without either the movie is a black screen.
+            let stream = disc.and_then(|d| d.read(&movie::disc_path(&name)).map_err(|e| error!("movie {index}: {e}")).ok()).and_then(|file| match bink::Movie::open(&file) {
+                Ok(m) => Some((file, m)),
+                Err(e) => {
+                    error!("movie {index}: {e}");
+                    None
+                }
+            });
+            println!("movie {index} ({name}): {} frames at {:.3} fps, {:.1} s{}", h.frames, h.fps(), h.seconds(), if stream.is_some() { "" } else { " (not decoded)" });
+            if let Ok(mut q) = self.sound.lock() {
+                q.clear();
+            }
+            self.voice = stream.as_ref().and_then(|(_, m)| m.audio_format());
+            self.picture = None;
             self.started = Some(index);
             self.current = Some(Current {
                 index,
@@ -77,6 +135,8 @@ impl Movies {
                 shown: 0,
                 carry_ns: 0,
                 skip: Default::default(),
+                stream,
+                decoded: 0,
             });
             return true;
         }
@@ -88,6 +148,9 @@ impl Movies {
             // The skip check runs once per presented frame; the last frame ends the movie.
             if c.skip.frame(held) || c.shown >= c.frames {
                 self.current = None;
+                if let Ok(mut q) = self.sound.lock() {
+                    q.clear();
+                }
                 break;
             }
         }
@@ -99,10 +162,14 @@ impl Movies {
             // Queued this frame: the screen goes black at once; the movie starts next frame.
             return (!self.queue.is_empty()).then(String::new);
         };
+        // A decoded movie shows its picture alone.
+        if c.stream.is_some() {
+            return Some(String::new());
+        }
         let (name, _) = self.table.get(c.index as usize)?.as_ref()?;
         let left = c.frames.saturating_sub(c.shown) as f64 * c.period_ns as f64 / 1e9;
         Some(format!(
-            "Movie {}: {}   {:.0} s\n\nMovie pictures and sound are not built yet (the Bink decoder waits on a spec).\nHold Cross or Start to skip.",
+            "Movie {}: {}   {:.0} s\n\nThis movie could not be decoded.\nHold Cross or Start to skip.",
             c.index,
             name.trim_end_matches(".BIK").replace('\\', "/"),
             left.ceil()
@@ -131,7 +198,97 @@ pub struct MovieScreen;
 #[derive(Component)]
 pub struct MovieCaption;
 
-pub fn spawn_screen(mut commands: Commands) {
+/// The picture: an image node sized to 4:3 inside the black screen.
+#[derive(Component)]
+pub struct MoviePicture;
+
+/// The movie's voice.
+#[derive(Component)]
+pub struct MovieVoice;
+
+/// The playing movie's sound as an endless source: the samples the decoder queued, silence when
+/// it has none yet.
+#[derive(Asset, TypePath, Clone)]
+pub struct MovieSound {
+    queue: Arc<Mutex<VecDeque<i16>>>,
+    rate: u32,
+    channels: u16,
+}
+
+pub struct MovieSoundDecoder {
+    sound: MovieSound,
+    buffer: Vec<i16>,
+    at: usize,
+}
+
+impl Iterator for MovieSoundDecoder {
+    type Item = bevy::audio::Sample;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.at >= self.buffer.len() {
+            self.buffer.clear();
+            self.at = 0;
+            if let Ok(mut q) = self.sound.queue.lock() {
+                let n = q.len().min(1024) / self.sound.channels as usize * self.sound.channels as usize;
+                self.buffer.extend(q.drain(..n));
+            }
+            if self.buffer.is_empty() {
+                self.buffer.resize(self.sound.channels as usize * 64, 0);
+            }
+        }
+        let s = self.buffer[self.at];
+        self.at += 1;
+        Some(s as f32 / 32768.0)
+    }
+}
+
+impl Source for MovieSoundDecoder {
+    fn current_span_len(&self) -> Option<usize> {
+        None
+    }
+
+    fn channels(&self) -> ChannelCount {
+        ChannelCount::new(self.sound.channels).unwrap_or(ChannelCount::MIN)
+    }
+
+    fn sample_rate(&self) -> SampleRate {
+        SampleRate::new(self.sound.rate).unwrap_or(SampleRate::MIN)
+    }
+
+    fn total_duration(&self) -> Option<std::time::Duration> {
+        None
+    }
+}
+
+impl Decodable for MovieSound {
+    type Decoder = MovieSoundDecoder;
+
+    fn decoder(&self) -> Self::Decoder {
+        MovieSoundDecoder { sound: self.clone(), buffer: Vec::new(), at: 0 }
+    }
+}
+
+/// Start the movie's voice when a movie with sound starts, and end it when the queue is done.
+pub fn sync_sound(mut commands: Commands, movies: Option<ResMut<Movies>>, mut sources: ResMut<Assets<MovieSound>>, voices: Query<Entity, With<MovieVoice>>) {
+    let Some(mut mv) = movies else { return };
+    if let Some((rate, channels)) = mv.voice.take() {
+        for e in &voices {
+            commands.entity(e).despawn();
+        }
+        let h = sources.add(MovieSound { queue: mv.sound.clone(), rate, channels: channels.max(1) });
+        commands.spawn((AudioPlayer(h), PlaybackSettings::LOOP, MovieVoice));
+    } else if mv.current.is_none() && mv.queue.is_empty() {
+        for e in &voices {
+            commands.entity(e).despawn();
+        }
+    }
+}
+
+pub fn spawn_screen(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
+    // Smooth filtering: the 512 × 448 picture is scaled up to the window.
+    let mut image = crate::rgba_image(512, 448, vec![0; 512 * 448 * 4]);
+    image.sampler = bevy::image::ImageSampler::linear();
+    let picture = images.add(image);
     commands
         .spawn((
             MovieScreen,
@@ -142,6 +299,14 @@ pub fn spawn_screen(mut commands: Commands) {
         ))
         .with_children(|c| {
             c.spawn((
+                MoviePicture,
+                ImageNode::new(picture),
+                // 4:3 at the window's height (the 512 × 448 picture was shown stretched to the TV
+                // frame; SPEC-0008).
+                Node { position_type: PositionType::Absolute, height: Val::Vh(100.0), width: Val::Vh(133.333), ..default() },
+                Visibility::Hidden,
+            ));
+            c.spawn((
                 MovieCaption,
                 Text::new(""),
                 TextFont { font_size: bevy::text::FontSize::Px(18.0), ..default() },
@@ -151,9 +316,29 @@ pub fn spawn_screen(mut commands: Commands) {
         });
 }
 
-pub fn sync_screen(movies: Option<Res<Movies>>, mut screen: Query<&mut Visibility, With<MovieScreen>>, mut caption: Query<&mut Text, With<MovieCaption>>) {
+pub fn sync_screen(
+    mut movies: Option<ResMut<Movies>>,
+    mut screen: Query<&mut Visibility, (With<MovieScreen>, Without<MoviePicture>)>,
+    mut pictures: Query<(&ImageNode, &mut Visibility), With<MoviePicture>>,
+    mut images: ResMut<Assets<Image>>,
+    mut caption: Query<&mut Text, With<MovieCaption>>,
+) {
     let _span = crate::perf::span("sync_screen");
     let text = movies.as_deref().and_then(Movies::caption);
+    // The decoded picture, shown while its movie plays.
+    let fresh = movies.as_deref_mut().and_then(|m| m.picture.take());
+    let decoding = movies.as_deref().is_some_and(|m| m.current.as_ref().is_some_and(|c| c.stream.is_some() && c.decoded > 0));
+    for (node, mut v) in &mut pictures {
+        if let Some(rgba) = fresh.as_ref() {
+            if let Some(mut img) = images.get_mut(&node.image) {
+                img.data = Some(rgba.clone());
+            }
+        }
+        let want = if decoding { Visibility::Inherited } else { Visibility::Hidden };
+        if *v != want {
+            *v = want;
+        }
+    }
     for mut v in &mut screen {
         let want = if text.is_some() { Visibility::Inherited } else { Visibility::Hidden };
         if *v != want {
@@ -170,7 +355,7 @@ pub fn sync_screen(movies: Option<Res<Movies>>, mut screen: Query<&mut Visibilit
 }
 
 /// While a movie plays every game sound is paused; when the queue is done they resume.
-pub fn hush(movies: Option<Res<Movies>>, mut sinks: Query<&mut bevy::audio::AudioSink>, mut was: Local<bool>) {
+pub fn hush(movies: Option<Res<Movies>>, mut sinks: Query<&mut bevy::audio::AudioSink, Without<MovieVoice>>, mut was: Local<bool>) {
     let _span = crate::perf::span("hush");
     use bevy::audio::AudioSinkPlayback;
     let now = movies.is_some_and(|m| m.current.is_some() || !m.queue.is_empty());

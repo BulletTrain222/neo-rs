@@ -5,6 +5,7 @@ pub mod archive;
 pub mod audio;
 pub mod bank;
 pub mod block;
+pub mod bink;
 pub mod book;
 mod elf;
 pub mod design;

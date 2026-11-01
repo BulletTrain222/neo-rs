@@ -45,6 +45,7 @@ fn run() -> Result<(), String> {
     let mut object_headers = false;
     let mut groups: Option<u32> = None;
     let mut shadow: Option<u32> = None;
+    let mut movie: Option<(usize, usize)> = None;
     let mut parts_of: Vec<u32> = Vec::new();
     while let Some(arg) = args.next() {
         match arg.as_str() {
@@ -66,6 +67,14 @@ fn run() -> Result<(), String> {
             "--parts" => {
                 let n = args.next().ok_or("--parts needs a pack")?;
                 parts_of.push(n.parse().map_err(|_| format!("Bad pack {n}"))?);
+            }
+            "--movie" => {
+                // `--movie INDEX [FRAMES]`: decode movie INDEX of the name table, check each
+                // plane ends where the next begins, and write frames 0, 30, 90 and the last as
+                // PNG files under private/movies.
+                let n = args.next().ok_or("--movie needs a movie index")?;
+                let f = args.next().and_then(|v| v.parse().ok()).unwrap_or(usize::MAX);
+                movie = Some((n.parse().map_err(|_| format!("Bad movie index {n}"))?, f));
             }
             "--shadow" => {
                 let n = args.next().ok_or("--shadow needs a resource")?;
@@ -130,6 +139,34 @@ fn run() -> Result<(), String> {
         for (k, w) in neopets_data::archive::boot_u32_table(&boot, a, n)?.into_iter().enumerate() {
             println!("{:#08x}: {w:#010x} i32 {} f32 {}", a + 4 * k as u32, w as i32, f32::from_bits(w));
         }
+    }
+    if let Some((m, limit)) = movie {
+        let boot = neopets_data::archive::verified_boot_program(&mut disc)?;
+        let tables = neopets_data::bink::Tables::read(&boot)?;
+        let names = neopets_data::movie::names(&boot)?;
+        let name = names.get(m).ok_or("No such movie index")?;
+        let file = disc.read(&neopets_data::movie::disc_path(name))?;
+        let mut mv = neopets_data::bink::Movie::open(&file)?;
+        let n = mv.frames().min(limit);
+        let out = root.join("private").join("movies");
+        std::fs::create_dir_all(&out).map_err(|e| e.to_string())?;
+        let (mut exact, mut samples) = (0usize, 0usize);
+        let t0 = std::time::Instant::now();
+        for i in 0..n {
+            let f = mv.decode(&file, i, &tables).map_err(|e| format!("frame {i}: {e}"))?;
+            let len = (mv.offsets[i + 1] - mv.offsets[i]) as usize;
+            if f.plane_ends[0] == f.u_start && f.plane_ends[2] == len {
+                exact += 1;
+            } else if i < 5 || exact + 5 > i {
+                println!("frame {i}: Y ends {} (U at {}), V ends {} of {len}", f.plane_ends[0], f.u_start, f.plane_ends[2]);
+            }
+            samples += f.samples.len();
+            if [0, 30, 90, n - 1].contains(&i) {
+                let png = neopets_data::png::encode_rgba(mv.header.width, mv.header.height, &mv.picture.rgba())?;
+                std::fs::write(out.join(format!("movie{m}-{i}.png")), png).map_err(|e| e.to_string())?;
+            }
+        }
+        println!("movie {m} ({name}): {n} frames decoded in {:.1} s, {exact} with every plane ending exactly; {samples} audio samples in {} packets ({} ending exactly); format {:?}", t0.elapsed().as_secs_f64(), mv.audio_packets.0, mv.audio_packets.1, mv.audio_format());
     }
     if !(monster_word.is_some() || monster_row.is_some() || groups.is_some() || shadow.is_some() || !parts_of.is_empty() || object_headers || panels || blocks || aim || lights || effects || survey || coverage || materials || meshes || clips || ground || areas || !show.is_empty() || !textures.is_empty() || !scenes.is_empty() || !registries.is_empty()) {
         return Ok(());

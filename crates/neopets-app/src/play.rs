@@ -19,6 +19,9 @@ use neopets_sim::travel::{self as buffers, Buffer};
 use std::cell::Cell;
 use std::collections::HashMap;
 
+mod autopilot;
+pub use autopilot::Autopilot;
+
 const UP: [f32; 3] = [0.0, 1.0, 0.0];
 /// The slot number used here for a world's embedded region.
 const EMBEDDED_SLOT: u8 = 255;
@@ -1061,6 +1064,8 @@ pub struct Play {
     pub fight_target: Option<String>,
     /// The duel trace (diagnostic; NEOPETS_TRACE_DUEL).
     pub fight_duel: Option<Duel>,
+    /// The autopilot (this build's test tool; F7, `--autoplay`, NEOPETS_TRACE_AUTO).
+    pub autopilot: Option<Autopilot>,
     shot_rows: neopets_sim::roberta::Rows,
     /// Forced binds waiting for the embedded region: (pack, ordinal).
     rebind: Vec<(u32, usize)>,
@@ -1888,6 +1893,7 @@ impl Play {
             lock: None,
             fight_target: None,
             fight_duel: None,
+            autopilot: None,
             shot_rows,
             hero_index: 0,
             parked,
@@ -2116,6 +2122,12 @@ impl Play {
     /// is walkable when both ends have ground in either world, the ground rises at most 1.5
     /// and no frame record of the current world crosses it 1.5 above the ground.
     pub fn route_to(&self, max_nodes: usize, goal: Goal) -> Option<Vec<[f32; 2]>> {
+        self.route_avoiding(max_nodes, goal, &std::collections::HashSet::new())
+    }
+
+    /// `route_to` with lattice cells (x / 4 and z / 4, rounded) to stay out of: the autopilot's
+    /// memory of steps that turned out blocked by something the ground search does not see.
+    pub fn route_avoiding(&self, max_nodes: usize, goal: Goal, avoid: &std::collections::HashSet<(i32, i32)>) -> Option<Vec<[f32; 2]>> {
         let o = self.other.as_ref();
         let p = self.loco.position();
         let step = 4.0;
@@ -2149,7 +2161,7 @@ impl Play {
                     continue;
                 }
                 let n = key(nx, nz, h);
-                if came.contains_key(&n) {
+                if came.contains_key(&n) || avoid.contains(&(n.0, n.1)) {
                     continue;
                 }
                 let a = [x, y + 1.5, z];
@@ -6640,6 +6652,54 @@ impl Play {
         Vec::new()
     }
 
+    /// The trace fighter's rules for one tick against a common enemy (diagnostic; the duel trace
+    /// and the autopilot): an enemy waiting hidden (state 8) is walked up to inside its emerge
+    /// distance; one in its attack sequence (outer 2) is guarded against while it comes in and a
+    /// third of the time at arm's length; one blocking is circled to its back; a flyer more than
+    /// 2.5 above is jumped at with the attack pressed in the air; otherwise the hero closes to
+    /// its reach (3.5, or the body radius + 2.5) and presses attack every 18 ticks, running to
+    /// one more than 8 away.
+    pub fn fight_rules(&self, c: &Character) -> FightPlan {
+        let hero = self.loco.position();
+        let Some(e) = c.enemy.as_ref() else {
+            return FightPlan { goal: [c.position[0], c.position[2]], ..Default::default() };
+        };
+        let d = (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]);
+        // Close enough to swing: 3.5, or the body radius + 2.5 for a big enemy (a Giant Slorg's
+        // body holds the hero at about 4.2).
+        let reach = (c.row.map_or(1.0, |r| r.radius) + 2.5).max(3.5);
+        let height = c.position[1] - hero[1];
+        let attacking = e.state == 19 && e.outer == 2 && d < reach + 5.5;
+        let blocking = e.blocking || (e.state == 19 && matches!(e.outer, 7 | 8));
+        let t = self.ticks;
+        let mut plan = FightPlan { goal: [c.position[0], c.position[2]], close: d < reach, ..Default::default() };
+        if e.state == 8 {
+            // Inside its emerge distance (3D; a short one asks the hero to stand at its feet).
+            let d3 = (0..3).map(|k| (c.position[k] - hero[k]).powi(2)).sum::<f32>().sqrt();
+            plan.close = d3 < (0.8 * e.spawn.emerge_distance).clamp(0.5, 2.0);
+        } else if attacking && (d > reach || t % 90 < 30) {
+            // Guard facing it while it comes in; at arm's length a third of the time, so a
+            // caster or archer in its wind-up still gets hit.
+            plan.guard = true;
+            plan.close = true;
+        } else if blocking {
+            // Round to its back.
+            let f = c.facing;
+            plan.goal = [c.position[0] - 3.0 * f[0], c.position[2] - 3.0 * f[2]];
+            plan.close = ((plan.goal[0] - hero[0]).hypot(plan.goal[1] - hero[2])) < 1.0;
+            plan.attack = plan.close && t % 18 == 0;
+        } else if e.airborne() && height > 2.5 && d < 6.0 {
+            plan.close = true;
+            plan.jump = t % 50 == 0;
+            plan.attack = matches!(self.loco.state, 7..=11) && t % 6 == 0;
+        } else if plan.close {
+            plan.attack = t % 18 == 0;
+            plan.attack_held = t % 18 < 4;
+        }
+        plan.run = !plan.close && !plan.guard && d > 8.0;
+        plan
+    }
+
     /// The duel trace's step (diagnostic): keeps the current target (or picks the nearest
     /// unvisited living hostile common enemy and places the hero 5 units from it), records its
     /// state, and returns this tick's fight plan. The rules: an enemy waiting hidden (state 8)
@@ -6719,41 +6779,13 @@ impl Play {
         if c.position[1] < e.spawn.home[1] - 30.0 {
             r.fell = true;
         }
-        // Close enough to swing: 3.5, or the body radius + 2.5 for a big enemy (a Giant Slorg's
-        // body holds the hero at about 4.2).
-        let reach = (c.row.map_or(1.0, |r| r.radius) + 2.5).max(3.5);
-        let height = c.position[1] - hero[1];
-        let attacking = e.state == 19 && e.outer == 2 && d < reach + 5.5;
         let blocking = e.blocking || (e.state == 19 && matches!(e.outer, 7 | 8));
         if blocking {
             r.blocks += 1;
         }
+        let height = c.position[1] - hero[1];
         let t = self.ticks;
-        let mut plan = FightPlan { goal: [c.position[0], c.position[2]], close: d < reach, ..Default::default() };
-        if e.state == 8 {
-            // Inside its emerge distance (3D; a short one asks the hero to stand at its feet).
-            let d3 = (0..3).map(|k| (c.position[k] - hero[k]).powi(2)).sum::<f32>().sqrt();
-            plan.close = d3 < (0.8 * e.spawn.emerge_distance).clamp(0.5, 2.0);
-        } else if attacking && (d > reach || t % 90 < 30) {
-            // Guard facing it while it comes in; at arm's length a third of the time, so a
-            // caster or archer in its wind-up still gets hit.
-            plan.guard = true;
-            plan.close = true;
-        } else if blocking {
-            // Round to its back.
-            let f = c.facing;
-            plan.goal = [c.position[0] - 3.0 * f[0], c.position[2] - 3.0 * f[2]];
-            plan.close = ((plan.goal[0] - hero[0]).hypot(plan.goal[1] - hero[2])) < 1.0;
-            plan.attack = plan.close && t % 18 == 0;
-        } else if e.airborne() && height > 2.5 && d < 6.0 {
-            plan.close = true;
-            plan.jump = t % 50 == 0;
-            plan.attack = matches!(self.loco.state, 7..=11) && t % 6 == 0;
-        } else if plan.close {
-            plan.attack = t % 18 == 0;
-            plan.attack_held = t % 18 < 4;
-        }
-        plan.run = !plan.close && !plan.guard && d > 8.0;
+        let plan = self.fight_rules(c);
         // NEOPETS_TRACE_DUEL_STEP: the plan and both sides once a second.
         if t % 60 == 0 && std::env::var_os("NEOPETS_TRACE_DUEL_STEP").is_some() {
             println!("      duel tick {t}: {} d {d:.1} height {height:.1} enemy state {} outer {} seq {} clip {} hp {} | hero state {} action {} | plan {:?}", c.name, e.state, e.outer, e.seq, clip.action, c.hp, self.loco.state, self.loco.action(), plan);

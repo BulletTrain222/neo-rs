@@ -611,6 +611,7 @@ fn main() {
     // `--title`: start at the front end's card state (logo, legal screen, title) instead of in
     // play.
     let mut title = false;
+    let mut autoplay = false;
     let mut start: Option<[f32; 3]> = None;
     while let Some(arg) = args.next() {
         if arg == "--iso" {
@@ -701,6 +702,8 @@ fn main() {
             save_test = true;
         } else if arg == "--title" {
             title = true;
+        } else if arg == "--autoplay" {
+            autoplay = true;
         } else if arg == "--seed" {
             seed = args.next().and_then(|v| v.parse::<u32>().ok());
         } else if arg == "--flag" {
@@ -870,6 +873,8 @@ fn main() {
         })
         // NEOPETS_BOSS_BOX: the F6 boss box starts on (diagnostic, for screenshots).
         .insert_resource(BossBoxOn(std::env::var_os("NEOPETS_BOSS_BOX").is_some()))
+        // `--autoplay`: the autopilot turns on once play has started.
+        .insert_resource(AutoplayStart(autoplay))
         .init_resource::<BrowserView>()
         .init_resource::<SceneSigs>()
         .init_resource::<TextureView>()
@@ -913,9 +918,9 @@ fn main() {
             Update,
             (
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
-                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud),
+                (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box), perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -925,7 +930,7 @@ fn main() {
     app.add_systems(Update, sync_uv_flip);
     app.add_systems(Startup, (setup_movies, movie_view::spawn_screen));
     app.init_resource::<HeroItemFrames>();
-    app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::hush).chain().after(step_sim));
+    app.add_systems(Update, (movie_view::collect, movie_view::sync_screen, movie_view::sync_sound, movie_view::hush).chain().after(step_sim));
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
@@ -1184,7 +1189,7 @@ fn step_sim(
     // SPEC-0026 Movies: the movies queued last frame play now, and while one plays the whole
     // game loop waits (no ticks, no input to the game).
     if let Some(mv) = movies.as_deref_mut() {
-        let playing = mv.step(elapsed, vpad.held(bindings::CROSS) || vpad.held(bindings::START));
+        let playing = mv.step(elapsed, vpad.held(bindings::CROSS) || vpad.held(bindings::START), archive.as_deref_mut().map(|a| &mut a.disc));
         // The played word is set as each movie starts, whoever queued it.
         if let (Some(m), Some(p)) = (mv.started.take(), play.as_deref_mut()) {
             p.play.state.movies.insert(m);
@@ -1519,6 +1524,8 @@ fn step_sim(
                 r3_held,
                 r3_pressed: std::mem::take(&mut play.play.r3_latch),
             };
+            // The autopilot (F7; this build's test tool) plays in the player's place.
+            play.play.autopilot_input(&mut input);
             play.play.tick(&input, pad);
             // A save point's Square press opens the save screen (a direct set of record 18).
             if std::mem::take(&mut play.play.save_open) {
@@ -1758,6 +1765,47 @@ fn orbit_camera(
         let step = orbit.distance * 0.75 * boost * time.delta_secs();
         orbit.fly(fly * step);
         *transform = orbit.transform();
+    }
+}
+
+/// `--autoplay`: turn the autopilot on once play has started.
+#[derive(Resource)]
+struct AutoplayStart(bool);
+
+/// F7 turns the autopilot (this build's test tool) on or off.
+fn toggle_autopilot(keys: Res<ButtonInput<KeyCode>>, play: Option<ResMut<PlayState>>, mut start: ResMut<AutoplayStart>) {
+    let Some(mut play) = play else { return };
+    if keys.just_pressed(KeyCode::F7) || std::mem::take(&mut start.0) {
+        play.play.toggle_autopilot();
+        info!("Autopilot {}", if play.play.autopilot.is_some() { "on" } else { "off" });
+    }
+}
+
+/// The autopilot's line at the bottom left while it plays.
+#[derive(Component)]
+struct AutoBox;
+
+fn show_auto_box(mut commands: Commands, play: Option<Res<PlayState>>, mut boxes: Query<(Entity, &mut Text), With<AutoBox>>) {
+    let line = play.as_ref().and_then(|p| p.play.autopilot_line());
+    match (line, boxes.iter_mut().next()) {
+        (Some(l), Some((_, mut t))) => {
+            if t.0 != l {
+                t.0 = l;
+            }
+        }
+        (Some(l), None) => {
+            commands.spawn((
+                Text::new(l),
+                TextFont { font_size: bevy::text::FontSize::Px(16.0), ..default() },
+                TextColor(Color::srgb(0.7, 1.0, 0.75)),
+                BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.55)),
+                Node { position_type: PositionType::Absolute, bottom: px(12), left: px(12), padding: UiRect::all(px(6)), ..default() },
+                GlobalZIndex(1001),
+                AutoBox,
+            ));
+        }
+        (None, Some((e, _))) => commands.entity(e).despawn(),
+        (None, None) => {}
     }
 }
 
@@ -3964,6 +4012,10 @@ fn play_trace(
     if std::env::var_os("NEOPETS_TRACE_GOD").is_some() {
         play.cheats.god = true;
     }
+    // NEOPETS_TRACE_AUTO: the autopilot plays the trace (its line every 300 ticks).
+    if std::env::var_os("NEOPETS_TRACE_AUTO").is_some() {
+        play.toggle_autopilot();
+    }
     // NEOPETS_TRACE_DUEL="limit": the duel trace, each enemy given at most `limit` ticks
     // (default 2400); its report is printed at the end.
     if let Ok(v) = std::env::var("NEOPETS_TRACE_DUEL") {
@@ -4517,6 +4569,11 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_FACING: each character's heading (atan2(x, z), degrees) on ticks 1 and 120.
+        if (play.ticks == 1 || play.ticks == 120) && std::env::var_os("NEOPETS_TRACE_FACING").is_some() {
+            let h: Vec<String> = play.characters.iter().filter(|c| c.pack == play.world.pack).map(|c| format!("{} {:.0}", c.name, c.facing[0].atan2(c.facing[2]).to_degrees())).collect();
+            println!("      FACING tick {}: {}", play.ticks, h.join(", "));
+        }
         // NEOPETS_TRACE_BOX=n: the F6 boss box's lines every n ticks.
         if let Some(n) = std::env::var("NEOPETS_TRACE_BOX").ok().and_then(|v| v.trim().parse::<u64>().ok()).filter(|&n| n > 0) {
             if play.ticks % n == 0 {
@@ -4930,6 +4987,14 @@ fn play_trace(
             ..Default::default()
         };
         let mut input = input;
+        if play.autopilot.is_some() {
+            play.autopilot_input(&mut input);
+            if play.ticks % 300 == 0 {
+                if let Some(l) = play.autopilot_line() {
+                    println!("      AUTO tick {} world {}: {l}", play.ticks, play.world.pack);
+                }
+            }
+        }
         if let Some(p) = duel_plan {
             input.guard = p.guard;
             input.attack = p.attack;

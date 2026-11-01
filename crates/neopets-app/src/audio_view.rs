@@ -73,6 +73,7 @@ pub fn register(app: &mut App) {
     app.add_audio_source::<Pcm>();
     app.add_audio_source::<MusicSource>();
     app.add_audio_source::<EffectsSource>();
+    app.add_audio_source::<crate::movie_view::MovieSound>();
 }
 
 /// A sound block for the sim's cue engine: cues, commands and the voices the commands name,
