@@ -11313,7 +11313,7 @@ impl Play {
             let after = g.state;
             if let Some(a) = act.anim {
                 if clip.action != a || (clip.progress >= 0.99 && std::mem::discriminant(&before) != std::mem::discriminant(&after)) {
-                    c.anim.play(a);
+                    c.anim.request(a, clip.action == a);
                 }
             }
             if let Some(rate) = act.face {
@@ -11496,7 +11496,7 @@ impl Play {
             let after = k.state;
             if let Some(a) = act.anim {
                 if clip.action != a || (clip.progress >= 0.99 && std::mem::discriminant(&before) != std::mem::discriminant(&after)) {
-                    c.anim.play(a);
+                    c.anim.request(a, clip.action == a);
                 }
             }
             if let Some(rate) = act.face {
@@ -11560,7 +11560,12 @@ impl Play {
         let pack = self.world.pack;
         let hero = self.loco.position();
         let hf = self.loco.facing;
+        // SPEC-0019 G15: a King under script control (the phase scenes) plays at R = 1.0.
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.king.is_some() && c.held) {
+            c.anim.set_rate(1.0);
+        }
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.king.is_some() && !c.held && !c.inactive).map(|c| c.id).collect();
+        let guarding = self.hero_guarding();
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let world = &self.world;
@@ -11580,7 +11585,7 @@ impl Play {
                 facing: c.facing,
                 hero,
                 hero_facing: hf,
-                hero_guarding: st == 20,
+                hero_guarding: guarding,
                 hero_down: st == hero_states::DEAD || matches!(st, 7..=11 | 0x2B..=0x2E),
                 hero_attacking: attacking,
                 hero_attack_state: st == 13,
@@ -11590,7 +11595,21 @@ impl Play {
                 clip: (clip.action, clip.progress, clip.progress >= 0.99),
                 hp: c.hp,
                 max_hp: c.row.map_or(1, |r| r.hit_points as i32),
-                hand: add(add(c.position, [0.0, 3.0, 0.0]), scale(fwd, 1.1)),
+                // SPEC-0019 item 11: the boomerang's release point is attachment point 0 (bone 24
+                // with its offset) of the posed King, plus 1.1 along that frame's Z axis.
+                hand: {
+                    let place = placement(c.position, c.facing);
+                    let frames = c.anim.bone_frames();
+                    c.anim
+                        .bones()
+                        .attach
+                        .first()
+                        .and_then(|&(b, angles, offset)| {
+                            let w = place.mul(frames.get(b?)?).mul(&attach_rotation(offset, angles));
+                            Some(add(w.t, scale(unit(w.cols[2]), 1.1)))
+                        })
+                        .unwrap_or(add(add(c.position, [0.0, 5.0, 0.0]), scale(fwd, 1.1)))
+                },
                 ground: &ground,
             };
             let Some(k) = c.king.as_mut() else { continue };
@@ -11599,9 +11618,12 @@ impl Play {
             let after = k.state;
             if let Some(a) = act.anim {
                 if clip.action != a || (clip.progress >= 0.99 && std::mem::discriminant(&before) != std::mem::discriminant(&after)) {
-                    c.anim.play(a);
+                    c.anim.request(a, clip.action == a);
                 }
             }
+            // SPEC-0019 G15: the controller's speed word, 1.0, 1.2 and 1.4 in phases 1 to 3, is
+            // the play rate.
+            c.anim.set_rate([1.0, 1.2, 1.4][k.phase.min(2)]);
             if let Some(rate) = act.face {
                 let to = [hero[0] - c.position[0], 0.0, hero[2] - c.position[2]];
                 c.facing = neopets_sim::hero::steer(c.facing, to, rate);
