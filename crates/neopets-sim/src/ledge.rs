@@ -222,6 +222,8 @@ pub struct Step {
     pub rate: Option<f32>,
     /// State 37's end: go to state 30 with this edge.
     pub hang: bool,
+    /// The hang moved onto its next (true, link 1) or previous (false, link 3) edge.
+    pub took: Option<bool>,
 }
 
 /// One ledge state with its held edge.
@@ -232,6 +234,53 @@ pub struct Ledge {
     pub sub: u8,
     /// State 37: the walk state it was entered from.
     pub from: u8,
+    /// The held edge's linked records (SPEC-0018 Climb and hang data), set by the caller each
+    /// tick: link 1 (the next record, from its end) and link 3 (the previous one).
+    pub next: Option<Edge>,
+    pub prev: Option<Edge>,
+}
+
+/// The hang point's distance in front of the face (SPEC-0033 Behavior 51A item 6).
+pub const HANG_FRONT: f32 = 0.475;
+/// States 35 and 47 approach a point r − 0.5 = 0.675 in front of the face (Behavior 51).
+pub const CLIMB_FRONT: f32 = 0.675;
+/// A shimmy's along limit at an end that does not continue (Behavior 51A item 7).
+pub const SHIMMY_LIMIT: f32 = 1.5;
+
+/// A joint continues when the two normals have a dot product above 0.4.
+/// The edge offer of the hero's wall contact (SPEC-0033 Behavior 51A item 2, Behavior 49): the
+/// record touches the hero at `pos` (one-sided except type 6: in front within reach r, which
+/// after the contact's push is a = r; −r ≤ s ≤ L + r; the wall span t − depth − H < y < t − 0.3)
+/// and is offered when its type is not 3 or 6 and the hero is in its middle part (r < s < L − r)
+/// or, outside it, its link 3 continues (`prev_continues`). The offer is ranked by
+/// [`Edge::offer_score`]; the air chooser of the next tick reads the best one.
+pub fn offered(e: &Edge, pos: Vec3, r: f32, prev_continues: bool) -> bool {
+    if matches!(e.kind, 3 | 6) || e.normal()[1].abs() > 0.2 || e.top[1] == 0.0 || e.length <= 0.0 {
+        return false;
+    }
+    let a = plane(e.face, pos);
+    if !(a >= 0.0 && a <= r + 1e-3) {
+        return false;
+    }
+    let s = e.along(pos);
+    if !(-r..=e.length + r).contains(&s) {
+        return false;
+    }
+    let t = e.h(pos);
+    if !(pos[1] < t - 0.3 && pos[1] > t - e.height - HERO_HEIGHT) {
+        return false;
+    }
+    (s > r && s < e.length - r) || prev_continues
+}
+
+/// The air chooser's class gates before the class test (Behavior 51A item 3): the hero faces into
+/// the face within 60 degrees (forward · −n > 0.5) and his centre is in front of it (a > 0.25).
+pub fn faces_into(e: &Edge, pos: Vec3, forward: Vec3) -> bool {
+    -dot(forward, e.normal()) > 0.5 && plane(e.face, pos) > 0.25
+}
+
+pub fn continues(a: &Edge, b: Option<&Edge>) -> bool {
+    b.is_some_and(|b| dot(a.normal(), b.normal()) > 0.4)
 }
 
 fn approach(hero: Vec3, target: Vec3, len: f32, snap: f32) -> (Vec3, bool) {
@@ -246,12 +295,12 @@ fn approach(hero: Vec3, target: Vec3, len: f32, snap: f32) -> (Vec3, bool) {
 
 impl Ledge {
     pub fn new(state: u8, edge: Edge) -> Self {
-        Self { state, edge, sub: 0, from: 0 }
+        Self { state, edge, sub: 0, from: 0, next: None, prev: None }
     }
 
     /// State 37 entered from walk state `from`.
     pub fn drop_from(edge: Edge, from: u8) -> Self {
-        Self { state: DROP, edge, sub: 0, from }
+        Self { state: DROP, edge, sub: 0, from, next: None, prev: None }
     }
 
     /// State 37 (Behavior 51), phases 0 to 3. `facing` is the hero's facing and `deep` the
@@ -261,8 +310,12 @@ impl Ledge {
     /// Phase 2: request 73 (action 1 instead, with no turn, while the ground gap `gap` is 0 or
     /// below), the facing blended 0.25 toward the inward face direction each tick (the shared
     /// steering blend), done when the updated facing is within 0.99 of it. Phase 3: state 30
-    /// (`Step::hang`). Phase 1 faces out at rate 1.0. The outward walk is taken along the face
-    /// normal (the spec's run-plane direction and its neighbouring-edge walk are Medium).
+    /// (`Step::hang`). Phase 1 faces out at rate 1.0; past 0.15 in front of the face it goes on
+    /// to phase 2 when the gap is above 0.25, else to the slow walk (state 2). Phase 2 (Behavior
+    /// 51, R-0134 update): with d = y − (t − H − 0.1), while d > −0.01 the hero is lowered 0.2 a
+    /// tick (state 1 when the gap is then 0 or below); the turn to the wall blends 0.25 a tick and
+    /// the phase ends only on a tick with no lowering and the facing within 0.99 of −n. (Setting
+    /// the height exactly would keep d at 0 and never end the phase.)
     pub fn drop_tick(&mut self, hero: Vec3, facing: Vec3, deep: bool, gap: f32) -> Step {
         let n = self.edge.normal();
         let (out, inward) = ([n[0], 0.0, n[2]], [-n[0], 0.0, -n[2]]);
@@ -282,18 +335,27 @@ impl Ledge {
                 step.rate = Some(1.0);
                 step.request = Some(2);
                 if plane(self.edge.face, hero) > 0.15 {
-                    self.sub = 2;
+                    if gap > 0.25 {
+                        self.sub = 2;
+                    } else {
+                        step.exit = Some(2);
+                    }
                 }
             }
             2 => {
-                if gap <= 0.0 {
-                    step.request = Some(1);
-                    return step;
+                step.request = Some(73);
+                let d = hero[1] - (self.edge.h(hero) - HERO_HEIGHT - 0.1);
+                let lowered = d > -0.01;
+                if lowered {
+                    step.place = Some([hero[0], hero[1] - 0.2, hero[2]]);
+                    if gap - 0.2 <= 0.0 {
+                        step.exit = Some(1);
+                        return step;
+                    }
                 }
                 step.facing = Some(inward);
                 step.rate = Some(0.25);
-                step.request = Some(73);
-                if dot(crate::hero::steer(facing, inward, 0.25), inward) > 0.99 {
+                if !lowered && dot(crate::hero::steer(facing, inward, 0.25), inward) > 0.99 {
                     self.sub = 3;
                 }
             }
@@ -310,11 +372,11 @@ impl Ledge {
         match self.state {
             HANG => self.hang(&mut step, hero, side, forward, gap, clip),
             CLIMB_FALL => {
-                let target = self.edge.target(hero, 0.5, -0.75);
+                let target = self.edge.target(hero, -CLIMB_FRONT, -0.75);
                 self.climb(&mut step, hero, target, 0.25, 0.25, 75, forward, clip);
             }
             _ => {
-                let target = self.edge.target(hero, 0.5, -1.1);
+                let target = self.edge.target(hero, -CLIMB_FRONT, -1.1);
                 self.climb(&mut step, hero, target, 0.2, 0.2, 134, forward, clip);
                 // A non-positive gap ends the approach.
                 if self.sub < 2 && gap <= 0.0 {
@@ -358,16 +420,30 @@ impl Ledge {
         }
     }
 
+    /// State 30 (Behavior 51A): 0 the grab (72), 1 the move to the hang point (0.25 a tick
+    /// toward 0.475 in front of the face at t − H − 0.1, set there within 0.25 or at progress
+    /// 0.99; then 71), 2 (73), 3 the hang: the hold (0.475 in front, feet t − H + 0.1) and,
+    /// between steps, the stick: toward the wall the pull-up (not on type 5), toward +run (side
+    /// negative) a step of 61, toward −run (side positive) a step of 60. A step reaching 1.5
+    /// from an end goes on round a continuing joint (sub-mode 6 toward +run, 5 toward −run, no
+    /// hold) and is cut at an end that does not continue; in 5 and 6 the held edge becomes the
+    /// linked one on the first between-step tick past the joint. 4 the pull-up to progress 0.95.
+    /// Every sub-mode faces the wall. The ground under the hanging hero reaching his feet ends
+    /// the hang (state 1). Not built:
+    /// the obstacle probe, the pull-up's early run-out from frame 37.
     fn hang(&mut self, step: &mut Step, hero: Vec3, side: f32, forward: bool, gap: f32, clip: Clip) {
-        // On the ground (gap 0 or below) only the pull-up runs. The gate is applied from
-        // sub-mode 2 on: on the approach from a ledge top (state 37) the top is still within the
-        // probe's 2.5 reach and would stop the hero at once (this build's choice; R-0106).
-        if gap <= 0.0 && self.sub >= 2 && self.sub != 4 {
+        if gap <= 0.0 && matches!(self.sub, 3 | 5 | 6) {
+            step.exit = Some(1);
             return;
         }
+        // Every sub-mode faces the wall (the held edge's −n).
+        let n = self.edge.normal();
+        step.facing = Some([-n[0], 0.0, -n[2]]);
         let s = self.edge.along(hero);
         let l = self.edge.length;
         let pull = forward && self.edge.kind != 5;
+        let stepping = matches!(clip.action, 60 | 61) && clip.progress < 0.95;
+        let (on_next, on_prev) = (continues(&self.edge, self.next.as_ref()), continues(&self.edge, self.prev.as_ref()));
         match self.sub {
             0 => {
                 self.sub = 1;
@@ -378,7 +454,7 @@ impl Ledge {
                 if clip.action != 72 {
                     return;
                 }
-                let target = self.edge.target(hero, 0.7, 0.1 - HERO_HEIGHT);
+                let target = self.edge.target(hero, -HANG_FRONT, -0.1 - HERO_HEIGHT);
                 let (p, snapped) = approach(hero, target, 0.25, 0.25);
                 if !snapped && clip.progress < 0.99 {
                     step.place = Some(p);
@@ -393,23 +469,30 @@ impl Ledge {
                 step.request = Some(73);
             }
             3 => {
-                // A shimmy runs to its along limit: 61 (side negative) toward s 0.25, 60 (side
-                // positive) toward L; at the limit, sub-modes 5 and 6.
-                if clip.action == 61 && s <= 0.25 {
-                    self.sub = 5;
-                } else if clip.action == 60 && s >= l {
-                    self.sub = 6;
-                } else if !matches!(clip.action, 60 | 61) || side == 0.0 {
-                    if pull {
-                        self.sub = 4;
-                        step.request = Some(59);
-                    } else if side < 0.0 && s > 0.25 {
-                        step.request = Some(61);
-                    } else if side > 0.0 && s < l {
-                        step.request = Some(60);
-                    } else {
-                        step.request = Some(73);
+                step.place = Some(self.edge.target(hero, -HANG_FRONT, 0.1 - HERO_HEIGHT));
+                if stepping {
+                    if clip.action == 61 && s >= l - SHIMMY_LIMIT {
+                        if on_next {
+                            self.sub = 6;
+                        } else {
+                            step.request = Some(73);
+                        }
+                    } else if clip.action == 60 && s <= SHIMMY_LIMIT {
+                        if on_prev {
+                            self.sub = 5;
+                        } else {
+                            step.request = Some(73);
+                        }
                     }
+                } else if pull {
+                    self.sub = 4;
+                    step.request = Some(59);
+                } else if side < 0.0 && (s < l - SHIMMY_LIMIT || on_next) {
+                    step.request = Some(61);
+                } else if side > 0.0 && (s > SHIMMY_LIMIT || on_prev) {
+                    step.request = Some(60);
+                } else {
+                    step.request = Some(73);
                 }
             }
             4 => {
@@ -419,33 +502,35 @@ impl Ledge {
                 }
             }
             sub => {
+                // 6 goes on toward +run onto link 1, 5 toward −run onto link 3.
+                let ahead = if sub == 6 { self.next } else { self.prev };
+                if stepping {
+                    return;
+                }
+                if let Some(n) = ahead {
+                    let past = if sub == 6 { n.along(hero) > 0.0 } else { n.along(hero) < n.length };
+                    if past {
+                        self.edge = n;
+                        self.sub = 3;
+                        step.took = Some(sub == 6);
+                        step.request = Some(73);
+                        return;
+                    }
+                }
                 if pull {
                     self.sub = 4;
                     step.request = Some(59);
-                    return;
-                }
-                if let Some(back) = shimmy_end(sub, side, s, l) {
-                    step.request = Some(back);
+                } else if (sub == 6 && side < 0.0) || (sub == 5 && side > 0.0) {
+                    step.request = Some(if sub == 6 { 61 } else { 60 });
+                } else if side != 0.0 {
+                    // Back the other way on the same edge.
                     self.sub = 3;
+                    step.request = Some(if side < 0.0 { 61 } else { 60 });
                 } else {
                     step.request = Some(73);
                 }
             }
         }
-    }
-}
-
-/// Sub-modes 5 and 6 (Behavior 51, test vector 183): the request that returns to sub-mode 3,
-/// or None while the hero stays at the end. Sub-mode 5: side negative returns (61) when
-/// s > 0.25, side positive (60) when s < -0.25; sub-mode 6: side negative when s > 0, side
-/// positive when s < L.
-pub fn shimmy_end(sub: u8, side: f32, s: f32, l: f32) -> Option<u32> {
-    match (sub, side < 0.0, side > 0.0) {
-        (5, true, _) => (s > 0.25).then_some(61),
-        (5, _, true) => (s < -0.25).then_some(60),
-        (6, true, _) => (s > 0.0).then_some(61),
-        (6, _, true) => (s < l).then_some(60),
-        _ => None,
     }
 }
 
@@ -478,12 +563,14 @@ mod tests {
         let e = edge();
         let p = [1.5, 0.0, 0.0];
         assert!((e.h(p) - 9.75).abs() < 1e-6);
-        let t30 = e.target(p, 0.7, 0.1 - HERO_HEIGHT);
-        assert!((t30[0] + 0.7).abs() < 1e-6 && (t30[1] - 6.35).abs() < 1e-5);
-        let t35 = e.target(p, 0.5, -0.75);
-        assert!((t35[0] + 0.5).abs() < 1e-6 && (t35[1] - 9.0).abs() < 1e-5);
-        let t47 = e.target(p, 0.5, -1.1);
-        assert!((t47[0] + 0.5).abs() < 1e-6 && (t47[1] - 8.65).abs() < 1e-5);
+        // The hang hold 0.475 in front of the face at t − H + 0.1; states 35 and 47 0.675 in
+        // front at t − 0.75 and t − 1.1 (Behaviors 51 and 51A).
+        let t30 = e.target(p, -HANG_FRONT, 0.1 - HERO_HEIGHT);
+        assert!((t30[0] - 0.475).abs() < 1e-6 && (t30[1] - 6.35).abs() < 1e-5);
+        let t35 = e.target(p, -CLIMB_FRONT, -0.75);
+        assert!((t35[0] - 0.675).abs() < 1e-6 && (t35[1] - 9.0).abs() < 1e-5);
+        let t47 = e.target(p, -CLIMB_FRONT, -1.1);
+        assert!((t47[0] - 0.675).abs() < 1e-6 && (t47[1] - 8.65).abs() < 1e-5);
     }
 
     #[test]
@@ -514,26 +601,52 @@ mod tests {
         assert_eq!(d.drop_tick([0.1, 9.8, 2.0], out, true, 5.0).request, Some(2));
         d.drop_tick([0.2, 9.8, 2.0], out, true, 5.0);
         assert_eq!(d.sub, 2);
-        // Phase 2 on the ground: action 1, no turn. Facing out (opposite the target), the blend
-        // with the side push takes more than one tick to come within 0.99.
-        let s = d.drop_tick([0.2, 9.8, 2.0], out, true, 0.0);
-        assert_eq!((s.request, s.facing, d.sub), (Some(1), None, 2));
-        let s = d.drop_tick([0.2, 9.8, 2.0], out, true, 5.0);
-        assert_eq!((s.request, s.rate, d.sub), (Some(73), Some(0.25), 2));
-        d.drop_tick([0.2, 9.8, 2.0], [-1.0, 0.0, 0.0], true, 5.0);
-        assert!(d.drop_tick([0.2, 9.8, 2.0], [-1.0, 0.0, 0.0], true, 5.0).hang);
+        // Phase 2 on the ground: the lowering puts the feet on it, state 1.
+        let s0 = d.clone().drop_tick([0.2, 9.8, 2.0], out, true, 0.0);
+        assert_eq!(s0.exit, Some(1));
+        // Phase 2 in the air: 0.2 a tick down until the feet are 0.01 to 0.21 below
+        // t − H − 0.1 = 6.15, turning meanwhile; it ends only on a tick with no lowering.
+        let (mut hero, mut facing) = ([0.2f32, 9.8, 2.0], out);
+        let mut ticks = 0;
+        loop {
+            let s = d.drop_tick(hero, facing, true, 5.0);
+            if let Some(p) = s.place {
+                hero = p;
+            }
+            if let Some(f) = s.facing {
+                facing = crate::hero::steer(facing, f, s.rate.unwrap_or(0.5));
+            }
+            ticks += 1;
+            if s.hang || ticks > 60 {
+                break;
+            }
+        }
+        assert!(ticks < 60, "phase 2 never ended");
+        assert!(hero[1] < 6.15 - 0.01 && hero[1] >= 6.15 - 0.21, "{}", hero[1]);
     }
 
     #[test]
-    fn shimmy_bounds() {
-        // Vector 183.
-        assert_eq!(shimmy_end(5, -1.0, 0.20, 4.0), None);
-        assert_eq!(shimmy_end(5, -1.0, 0.26, 4.0), Some(61));
-        assert_eq!(shimmy_end(6, -1.0, 0.01, 4.0), Some(61));
-        assert_eq!(shimmy_end(6, -1.0, 0.0, 4.0), None);
-        assert_eq!(shimmy_end(6, 1.0, 3.99, 4.0), Some(60));
-        assert_eq!(shimmy_end(6, 1.0, 4.0, 4.0), None);
-        assert_eq!(shimmy_end(5, 1.0, -0.26, 4.0), Some(60));
+    fn shimmy_follows_continuing_links_and_stops_at_corners() {
+        // Edge along +z from z 0 to 4; the next edge carries on from z 4 (a 0.9 dot turn), the
+        // previous one meets it at a right angle (dot 0).
+        let e = edge();
+        let next = Edge { start: [0.0, 10.0, 4.0], face: [0.9, 0.0, -0.436, 1.744], run: [0.436, 0.0, 0.9, -3.6], ..e };
+        let prev = Edge { start: [0.0, 10.0, 0.0], face: [0.0, 0.0, -1.0, 0.0], run: [1.0, 0.0, 0.0, 0.0], ..e };
+        let mut l = Ledge { sub: 3, next: Some(next), prev: Some(prev), ..Ledge::new(HANG, e) };
+        let hang = |z: f32| [0.475, 6.35, z];
+        // Toward +run (side negative) from the middle: a step of 61.
+        assert_eq!(l.tick(hang(2.0), -1.0, false, 5.0, Clip { action: 73, progress: 0.0 }).request, Some(61));
+        // A step reaching 1.5 from the end goes on round the continuing joint (sub-mode 6).
+        l.tick(hang(2.6), -1.0, false, 5.0, Clip { action: 61, progress: 0.5 });
+        assert_eq!(l.sub, 6);
+        // Past the joint, between steps: the held edge is the next one.
+        let s = l.tick([0.6, 6.35, 4.3], -1.0, false, 5.0, Clip { action: 61, progress: 0.96 });
+        assert_eq!((s.took, l.sub, l.edge), (Some(true), 3, next));
+        // Toward −run near the start, the right-angle corner cuts the step and starts none.
+        let mut l = Ledge { sub: 3, next: Some(next), prev: Some(prev), ..Ledge::new(HANG, e) };
+        assert_eq!(l.tick(hang(1.2), 1.0, false, 5.0, Clip { action: 60, progress: 0.4 }).request, Some(73));
+        assert_eq!(l.tick(hang(1.2), 1.0, false, 5.0, Clip { action: 73, progress: 0.0 }).request, Some(73));
+        assert_eq!(l.sub, 3);
     }
 
     #[test]
@@ -565,7 +678,8 @@ mod tests {
             }
         }
         assert_eq!(l.sub, 2);
-        assert!((hero[0] + 0.7).abs() < 1e-5 && (hero[1] - 6.35).abs() < 1e-5);
+        // The approach point: 0.475 in front of the face at t − H − 0.1 = 6.15.
+        assert!((hero[0] - 0.475).abs() < 1e-5 && (hero[1] - 6.15).abs() < 1e-5);
         l.tick(hero, 0.0, false, 5.0, Clip { action: 71, progress: 0.0 });
         let s = l.tick(hero, 0.0, true, 5.0, Clip { action: 73, progress: 0.0 });
         assert_eq!((s.request, l.sub), (Some(59), 4));

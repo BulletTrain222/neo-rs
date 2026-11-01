@@ -801,6 +801,15 @@ pub struct FrameRecord {
     /// The surface byte (+0x4D) a hero shot's world contact reads for its cue (SPEC-0036 World
     /// contact, second list).
     pub surface: u8,
+    /// Where it lives (SPEC-0018 Climb and hang data): the patch id of its model set (0 the
+    /// pack's own), the entry's offset in the set, its own offset from the entry, and its links:
+    /// link 1 (+0x54) the next record (its start is this one's end) and link 3 (+0x5C) the
+    /// previous one, as offsets from the entry (0 for none).
+    pub patch: i32,
+    pub entry: u32,
+    pub own: u32,
+    pub next: u32,
+    pub prev: u32,
 }
 
 impl FrameRecord {
@@ -834,7 +843,40 @@ impl FrameRecord {
     }
 }
 
+/// The frame record at `own` from the entry at `entry` of a model set.
+fn frame_record(set: &[u8], entry: usize, own: u32, gate: u16, patch: i32) -> Option<FrameRecord> {
+    let r = entry + own as usize;
+    let v = |o: usize| Some([f32_at(set, r + o)?, f32_at(set, r + o + 4)?, f32_at(set, r + o + 8)?, f32_at(set, r + o + 12)?]);
+    let (start, face, run, top) = (v(0x00)?, v(0x10)?, v(0x20)?, v(0x30)?);
+    Some(FrameRecord {
+        kind: *set.get(r + 0x4C)? as i8,
+        gate,
+        start: [start[0], start[1], start[2]],
+        face,
+        run,
+        top,
+        length: f32_at(set, r + 0x40)?,
+        height: f32_at(set, r + 0x44)?,
+        surface: set.get(r + 0x4D).copied().unwrap_or(0),
+        patch,
+        entry: entry as u32,
+        own,
+        next: u32_at(set, r + 0x54).unwrap_or(0),
+        prev: u32_at(set, r + 0x5C).unwrap_or(0),
+    })
+}
+
 impl Ground {
+    /// A record's link (SPEC-0018 Climb and hang data): the next record (link 1) or the previous
+    /// one (link 3) of the same entry, for the pack's own model set; None for no link.
+    pub fn frame_link(&self, from: &FrameRecord, next: bool) -> Option<FrameRecord> {
+        let off = if next { from.next } else { from.prev };
+        if off == 0 || from.patch != 0 {
+            return None;
+        }
+        frame_record(&self.set, from.entry as usize, off, from.gate, 0)
+    }
+
     /// The frame records named by the items of the cell containing (x, z), for the pack's own
     /// model set (patch id 0).
     pub fn frames_at(&self, x: f32, z: f32) -> Vec<FrameRecord> {
@@ -883,13 +925,8 @@ impl Ground {
             let mut frames = Vec::new();
             for k in 0..n {
                 let Some(item) = u32_at(&self.grid, items + 4 * k) else { break };
-                let r = entry + item as usize;
-                let v = |o: usize| Some([f32_at(set, r + o)?, f32_at(set, r + o + 4)?, f32_at(set, r + o + 8)?, f32_at(set, r + o + 12)?]);
-                if let (Some(start), Some(face), Some(run), Some(top), Some(length), Some(height), Some(kind)) =
-                    (v(0x00), v(0x10), v(0x20), v(0x30), f32_at(set, r + 0x40), f32_at(set, r + 0x44), set.get(r + 0x4C).copied())
-                {
-                    let surface = set.get(r + 0x4D).copied().unwrap_or(0);
-                    frames.push(FrameRecord { kind: kind as i8, gate, start: [start[0], start[1], start[2]], face, run, top, length, height, surface });
+                if let Some(f) = frame_record(set, entry, item, gate, id) {
+                    frames.push(f);
                 }
             }
             out.push((id, frames));
@@ -915,6 +952,11 @@ mod frame_tests {
             length: 10.0,
             height: 5.0,
             surface: 0,
+            patch: 0,
+            entry: 0,
+            own: 0,
+            next: 0,
+            prev: 0,
         }
     }
 

@@ -870,7 +870,7 @@ impl Locomotion {
         &mut self,
         root_step: Vec3,
         probe: impl Fn(f32, f32, f32) -> (f32, Vec3),
-        contacts: impl FnOnce(&mut Vec3) -> bool,
+        contacts: impl FnOnce(&mut Vec3, &mut Vec3) -> bool,
     ) {
         let start = self.body.position;
         self.body.measure(probe);
@@ -887,7 +887,7 @@ impl Locomotion {
         self.body.gravity();
         // The driver clears the floor-contact flag, then a floor contact sets it.
         self.body.floor = inside;
-        if contacts(&mut self.body.position) {
+        if contacts(&mut self.body.position, &mut self.body.velocity) {
             self.body.floor_contact();
         }
         self.body.integrate();
@@ -931,7 +931,7 @@ mod tests {
     /// One tick on flat ground with no root motion: hero update, then the record tick.
     fn tick(h: &mut Locomotion, input: &HeroInput, probe: impl Fn(f32, f32, f32) -> (f32, Vec3)) {
         h.update(input, FWD, LEFT, ClipState::default());
-        h.record_tick([0.0; 3], probe, |_| false);
+        h.record_tick([0.0; 3], probe, |_, _| false);
     }
 
     fn angle(a: Vec3, b: Vec3) -> f32 {

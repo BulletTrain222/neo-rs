@@ -113,6 +113,8 @@ pub struct WallEdge {
     pub top: [f32; 4],
     pub length: f32,
     pub height: f32,
+    /// The record's type byte (+0x4C): type 6 touches from both sides (SPEC-0033 Behavior 51A).
+    pub kind: i8,
 }
 
 fn plane(q: [f32; 4], p: Vec3) -> f32 {
@@ -152,6 +154,64 @@ impl WallEdge {
         let d = (r - a.abs()) * side;
         Some([n[0] * d, 0.0, n[2] * d])
     }
+}
+
+impl WallEdge {
+    /// The hero's per-record wall contact (SPEC-0033 Behavior 51A item 2; SPEC-0018): a record
+    /// touches when the body is within r in front of its face (one-sided; type 6 from either
+    /// side), within −r ≤ s ≤ L + r along it, and its wall span holds the feet (the top, less
+    /// 0.25, more than 0.3 above them; the feet less than the hero height below its bottom). The
+    /// push puts the body r in front of the face. A body that crossed the face from the front
+    /// during this step (`from` in front, `p` less than r behind) is put back in front (this
+    /// build's guard against stepping through a wall in one tick).
+    pub fn hero_push(&self, p: Vec3, r: f32, from: Vec3) -> Option<Vec3> {
+        let n = [self.face[0], self.face[1], self.face[2]];
+        if n[1].abs() > 0.2 || self.length <= 0.0 || self.top[1] == 0.0 {
+            return None;
+        }
+        let a = plane(self.face, p);
+        let s = plane(self.run, p);
+        if !(-r..=self.length + r).contains(&s) || a >= r || a <= -r {
+            return None;
+        }
+        let t = self.edge_height(p);
+        if p[1] >= t - 0.3 || p[1] <= t - self.height - crate::climb::HEIGHT {
+            return None;
+        }
+        let side = if self.kind == 6 {
+            if a < 0.0 { -1.0 } else { 1.0 }
+        } else if a >= 0.0 || plane(self.face, from) >= 0.0 {
+            1.0
+        } else {
+            return None;
+        };
+        let d = side * r - a;
+        Some([n[0] * d, 0.0, n[2] * d])
+    }
+}
+
+/// The hero's wall contact over a list of records (`WallEdge::hero_push`), in order, with the
+/// slide response's velocity clip (SPEC-0018 Slide response step 3): a velocity `v` into a
+/// pushing face loses its component along the face normal. Reports whether any record pushed.
+pub fn resolve_hero_walls(p: &mut Vec3, v: &mut Vec3, walls: &[WallEdge], r: f32, from: Vec3) -> bool {
+    let mut hit = false;
+    for w in walls {
+        if let Some(d) = w.hero_push(*p, r, from) {
+            p[0] += d[0];
+            p[2] += d[2];
+            let len = d[0].hypot(d[2]);
+            if len > 1e-6 {
+                let n = [d[0] / len, 0.0, d[2] / len];
+                let vn = n[0] * v[0] + n[2] * v[2];
+                if vn < 0.0 {
+                    v[0] -= vn * n[0];
+                    v[2] -= vn * n[2];
+                }
+            }
+            hit = true;
+        }
+    }
+    hit
 }
 
 /// As `resolve_walls`, but each wall pushes toward the side of its face plane that `from` (the
@@ -261,7 +321,35 @@ mod tests {
 
     /// A wall at x = 0 facing +x, running along z from z = 0 for 10, top plane y with H = 5.
     fn wall() -> WallEdge {
-        WallEdge { face: [1.0, 0.0, 0.0, 0.0], run: [0.0, 0.0, 1.0, 0.0], top: [0.0, 1.0, 0.0, 0.0], length: 10.0, height: 5.0 }
+        WallEdge { face: [1.0, 0.0, 0.0, 0.0], run: [0.0, 0.0, 1.0, 0.0], top: [0.0, 1.0, 0.0, 0.0], length: 10.0, height: 5.0, kind: 0 }
+    }
+
+    #[test]
+    fn hero_wall_contact_is_one_sided() {
+        // In front within r: out to r. Behind the face (a parallel record the hero stands
+        // behind): no push, unless the step crossed the face from the front. Type 6 both sides.
+        let w = wall();
+        let r = 1.175;
+        let p = w.hero_push([0.5, 0.0, 5.0], r, [0.5, 0.0, 5.0]).unwrap();
+        assert!((p[0] - 0.675).abs() < 1e-6);
+        assert_eq!(w.hero_push([-0.5, 0.0, 5.0], r, [-0.5, 0.0, 5.0]), None);
+        let back = w.hero_push([-0.5, 0.0, 5.0], r, [0.3, 0.0, 5.0]).unwrap();
+        assert!((back[0] - 1.675).abs() < 1e-6, "crossed this step: back in front");
+        let six = WallEdge { kind: 6, ..w }.hero_push([-0.5, 0.0, 5.0], r, [-0.5, 0.0, 5.0]).unwrap();
+        assert!((six[0] + 0.675).abs() < 1e-6);
+        // Lateral reach −r to L + r; the top must be 0.55 above the feet; the feet less than H
+        // below the bottom.
+        assert!(w.hero_push([0.5, 0.0, 11.0], r, [0.5, 0.0, 11.0]).is_some());
+        assert!(w.hero_push([0.5, 0.0, 11.2], r, [0.5, 0.0, 11.2]).is_none());
+        assert!(w.hero_push([0.5, 4.2, 5.0], r, [0.5, 4.2, 5.0]).is_some());
+        assert!(w.hero_push([0.5, 4.5, 5.0], r, [0.5, 4.5, 5.0]).is_none());
+        assert!(w.hero_push([0.5, -3.0, 5.0], r, [0.5, -3.0, 5.0]).is_some());
+        assert!(w.hero_push([0.5, -9.0, 5.0], r, [0.5, -9.0, 5.0]).is_none());
+        // The velocity into the face is clipped; along it is kept.
+        let (mut p, mut v) = ([0.5, 0.0, 5.0], [-3.0, 1.0, 2.0]);
+        let from = p;
+        assert!(resolve_hero_walls(&mut p, &mut v, &[w], r, from));
+        assert_eq!(v, [0.0, 1.0, 2.0]);
     }
 
     #[test]

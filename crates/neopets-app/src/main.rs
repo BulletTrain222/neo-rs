@@ -1526,6 +1526,11 @@ fn step_sim(
             };
             // The autopilot (F7; this build's test tool) plays in the player's place.
             play.play.autopilot_input(&mut input);
+            // NEOPETS_DEV_SCRIPT=1 (diagnostic): the trace's NEOPETS_TRACE_STICK, _FACE and _CROSS
+            // scripts drive the window's hero by play tick, so a traced moment can be pictured.
+            if std::env::var_os("NEOPETS_DEV_SCRIPT").is_some() {
+                dev_script(&mut play.play, &mut input);
+            }
             play.play.tick(&input, pad);
             // A save point's Square press opens the save screen (a direct set of record 18).
             if std::mem::take(&mut play.play.save_open) {
@@ -5485,9 +5490,8 @@ fn play_frame(
             });
         }
     }
-    let off = state.play.hero_draw_offset();
     for mut t in &mut heroes {
-        t.translation = Vec3::from(p) + Vec3::from(off);
+        t.translation = Vec3::from(p);
         t.rotation = rotation;
     }
     // Performance: the hero's skin is rebuilt once per game tick (and when its flash or model
@@ -5574,5 +5578,40 @@ fn sync_fade(
         *vis = if a > 0.0 { Visibility::Inherited } else { Visibility::Hidden };
         let c = f.colour.map(|v| v as f32 / 255.0);
         colour.0 = Color::srgba(c[0], c[1], c[2], a);
+    }
+}
+
+/// The window's dev script (NEOPETS_DEV_SCRIPT): the trace's stick (raw forward and side, from
+/// each listed tick on), facing (turned toward a point on a listed tick) and Cross press
+/// (on listed ticks) scripts, applied to this tick's input.
+fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
+    let t = play.ticks;
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_STICK") {
+        let mut set = None;
+        for e in v.split(';') {
+            let Some((k, fs)) = e.trim().split_once(':') else { continue };
+            if k.parse::<u64>().is_ok_and(|k| k <= t) {
+                set = fs.split_once(',').and_then(|(f, s)| Some((f.trim().parse::<f32>().ok()?, s.trim().parse::<f32>().ok()?)));
+            }
+        }
+        if let Some((f, s)) = set {
+            input.forward = f / 87.5;
+            input.side = s / 87.5;
+        }
+    }
+    if let Ok(v) = std::env::var("NEOPETS_TRACE_FACE") {
+        for e in v.split(';') {
+            let Some((k, p)) = e.split_once(':') else { continue };
+            let n: Vec<f32> = p.split(',').filter_map(|x| x.trim().parse().ok()).collect();
+            if k.trim().parse::<u64>().ok() == Some(t) && n.len() >= 2 {
+                let h = play.loco.position();
+                let (dx, dz) = (n[0] - h[0], n[1] - h[2]);
+                let l = dx.hypot(dz).max(1e-6);
+                play.loco.facing = [dx / l, 0.0, dz / l];
+            }
+        }
+    }
+    if std::env::var("NEOPETS_TRACE_CROSS").is_ok_and(|v| v.split(',').any(|x| x.trim().parse::<u64>().ok() == Some(t))) {
+        input.jump = true;
     }
 }

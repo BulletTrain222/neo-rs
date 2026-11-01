@@ -502,7 +502,7 @@ impl World {
         let Some(g) = &self.ground else { return Vec::new() };
         g.object_frames_at(x, z, &|o| self.owner_poses.get(&o).copied())
             .into_iter()
-            .map(|(pose, f)| (pose, f.into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height }).collect()))
+            .map(|(pose, f)| (pose, f.into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect()))
             .collect()
     }
 
@@ -1064,6 +1064,8 @@ pub struct Play {
     pub fight_target: Option<String>,
     /// The duel trace (diagnostic; NEOPETS_TRACE_DUEL).
     pub fight_duel: Option<Duel>,
+    /// The frame record the ledge state holds (its links lead the shimmy round the loop).
+    ledge_record: Option<ground::FrameRecord>,
     /// The autopilot (this build's test tool; F7, `--autoplay`, NEOPETS_TRACE_AUTO).
     pub autopilot: Option<Autopilot>,
     shot_rows: neopets_sim::roberta::Rows,
@@ -1893,6 +1895,7 @@ impl Play {
             lock: None,
             fight_target: None,
             fight_duel: None,
+            ledge_record: None,
             autopilot: None,
             shot_rows,
             hero_index: 0,
@@ -4819,7 +4822,7 @@ impl Play {
         }
         if let Some(g) = &self.world.ground {
             for f in g.frames_at(p[0], p[2]) {
-                let w = WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height };
+                let w = WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind };
                 if w.push(p, contact::HERO_RADIUS + 0.3).is_some() {
                     out.push(format!("frame gate {} entry-mask {} kind {} start {:?} face {:?} L {} H {}", f.gate, g.mask, f.kind, f.start, f.face, f.length, f.height));
                 }
@@ -5226,20 +5229,41 @@ impl Play {
         }
         if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
             let Some(g) = &self.world.ground else { return false };
-            let (f, v) = (self.loco.facing, self.loco.body.velocity);
+            let f = self.loco.facing;
             let toward = |e: &Edge| -(e.face[0] * f[0] + e.face[2] * f[2]);
-            let edge = g
+            // The held edge: the record the hero's wall contact offers (Behavior 51A item 2; the
+            // contact ran at the end of the last tick, so the hero's position now is where it left
+            // him), the one facing him most; ties keep the first.
+            let offers: Vec<(Edge, ground::FrameRecord)> = g
                 .frames_at(hero[0], hero[2])
                 .into_iter()
-                .map(|r| Edge { start: r.start, face: r.face, run: r.run, top: r.top, length: r.length, height: r.height, kind: r.kind })
-                .filter(|e| e.accepts(hero, f, v, contact::HERO_RADIUS, self.loco.state))
-                .max_by(|a, b| toward(a).total_cmp(&toward(b)));
-            let Some(edge) = edge else { return false };
+                .filter_map(|r| {
+                    let e = edge_of(&r);
+                    let prev = g.frame_link(&r, false);
+                    ledge::offered(&e, hero, contact::HERO_RADIUS, ledge::continues(&e, prev.as_ref().map(edge_of).as_ref())).then_some((e, r))
+                })
+                .collect();
+            let mut found: Option<(Edge, ground::FrameRecord)> = None;
+            for o in offers {
+                if found.as_ref().is_none_or(|b| toward(&o.0) > toward(&b.0)) {
+                    found = Some(o);
+                }
+            }
+            let Some((edge, record)) = found else { return false };
             let ground = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0).unwrap_or(ground::MISS);
+            // NEOPETS_TRACE_LEDGE_PICK: the held edge and the chooser's inputs.
+            if std::env::var_os("NEOPETS_TRACE_LEDGE_PICK").is_some() {
+                let a = edge.face[0] * hero[0] + edge.face[1] * hero[1] + edge.face[2] * hero[2] + edge.face[3];
+                println!("      pick tick {}: kind {} a {:.3} s {:.2}/{:.2} t {:.3} y {:.3} g {:.3} facing·n {:.3}", self.ticks, edge.kind, a, edge.along(hero), edge.length, edge.h(hero), hero[1], ground, edge.face[0] * f[0] + edge.face[2] * f[2]);
+            }
+            if !ledge::faces_into(&edge, hero, f) {
+                return false;
+            }
+            self.ledge_record = Some(record);
             let Some(class) = ledge::choose(edge.h(hero), hero[1], ground, self.loco.body.normal[1], true) else { return false };
             let (state, request) = match class {
                 Class::Hang => (ledge::HANG, 72),
-                Class::Climb if v[1] > 0.0 => (ledge::CLIMB_RISE, 134),
+                Class::Climb if self.loco.body.velocity[1] > 0.0 => (ledge::CLIMB_RISE, 134),
                 Class::Climb => (ledge::CLIMB_FALL, 75),
             };
             self.ledge = Some(Ledge::new(state, edge));
@@ -5251,6 +5275,15 @@ impl Play {
         // both points makes the edge deep.
         let f = self.loco.facing;
         let deep = [2.0, 2.5].iter().all(|&k| self.world.ground_at(hero[0] + f[0] * k, hero[2] + f[2] * k, hero[1] + 1.0).is_none_or(|g| hero[1] - g > 4.5));
+        // SPEC-0018 Climb and hang data: the held record's links, for the hang's shimmy.
+        let (next, prev) = match (self.ledge_record.as_ref(), self.world.ground.as_ref()) {
+            (Some(r), Some(g)) => (g.frame_link(r, true), g.frame_link(r, false)),
+            _ => (None, None),
+        };
+        if let Some(l) = self.ledge.as_mut() {
+            l.next = next.as_ref().map(edge_of);
+            l.prev = prev.as_ref().map(edge_of);
+        }
         let Some(step) = self.ledge.as_mut().map(|l| {
             if l.state == ledge::DROP {
                 l.drop_tick(hero, f, deep, self.loco.body.gap)
@@ -5262,7 +5295,7 @@ impl Play {
             return true;
         };
         if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
-            println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?} bone0 {:?} facing {:?}", self.ticks, self.ledge.map(|l| l.sub), c.action, c.progress, self.loco.body.gap, step.place, self.hero.main_translations().first(), self.loco.facing);
+            println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?} bone0 {:?} facing {:?} record {:?} s {:.2}", self.ticks, self.ledge.map(|l| l.sub), c.action, c.progress, self.loco.body.gap, step.place, self.hero.main_translations().first(), self.loco.facing, self.ledge_record.map(|r| (r.own, r.next, r.prev)), self.ledge.map_or(0.0, |l| l.edge.along(hero)));
         }
         self.loco.body.no_gravity = true;
         self.loco.body.velocity = [0.0; 3];
@@ -5278,6 +5311,10 @@ impl Play {
         }
         if let Some(r) = step.request {
             self.loco.block_request(r);
+        }
+        // The hang moved onto a linked record: it is the held one now.
+        if let Some(n) = step.took {
+            self.ledge_record = if n { next } else { prev };
         }
         if step.hang {
             if let Some(l) = self.ledge.as_mut() {
@@ -5302,11 +5339,11 @@ impl Play {
     /// edge offer's boosted jump, the camera side-offset event and states 5 and 6 (not entered in
     /// this build).
     fn drop_check(&mut self) -> bool {
-        use neopets_sim::ledge::{self, Edge, Ledge};
+        use neopets_sim::ledge::{self, Ledge};
         let Some(g) = &self.world.ground else { return false };
         let (hero, f, v, state) = (self.loco.position(), self.loco.facing, self.loco.body.velocity, self.loco.state);
         for r in g.frames_at(hero[0], hero[2]) {
-            let e = Edge { start: r.start, face: r.face, run: r.run, top: r.top, length: r.length, height: r.height, kind: r.kind };
+            let e = edge_of(&r);
             let Some(negative) = e.drop_gates(hero, v, f, contact::HERO_RADIUS, state) else { continue };
             let accepted = negative || {
                 let g0 = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0).unwrap_or(ground::MISS);
@@ -5324,6 +5361,7 @@ impl Play {
                 return false;
             }
             if (toward || state == 1) && !matches!(e.kind, 3 | 6) {
+                self.ledge_record = Some(r);
                 self.ledge = Some(Ledge::drop_from(e, state));
                 self.loco.enter_state(ledge::DROP, 0);
                 self.trace_edge("drop", state as usize, 0);
@@ -5332,20 +5370,6 @@ impl Play {
             return false;
         }
         false
-    }
-
-    /// The drawn hero's offset from its position while hanging from a ledge (state 30): 1.4
-    /// along the edge's outward normal, easing to 0 over the pull-up (clip 59). The spec's hang
-    /// point is 0.7 behind the face, which draws the body inside the wall (playtest); the
-    /// motion keeps the spec's point (the pull-up then lands well onto the top) and only the
-    /// drawing moves out (this build's choice; R-0108).
-    pub fn hero_draw_offset(&self) -> [f32; 3] {
-        let Some(l) = self.ledge.filter(|l| l.state == neopets_sim::ledge::HANG && self.loco.state == hero_states::LEDGE) else { return [0.0; 3] };
-        let n = l.edge.normal();
-        let len = n[0].hypot(n[2]).max(1e-6);
-        let c = self.hero.clip_state();
-        let w = if c.action == 59 { (1.0 - c.progress).clamp(0.0, 1.0) } else { 1.0 };
-        [1.4 * w * n[0] / len, 0.0, 1.4 * w * n[2] / len]
     }
 
     /// Diagnostic: frame records whose top is 1.75 to 6.5 above the ground 1.5 out from the
@@ -8871,13 +8895,14 @@ impl Play {
                 }
                 (hit.height, hit.normal)
             },
-            |p| {
+            |p, vel| {
                 // SPEC-0040 Behavior 14A driver branch 0, in order: the cell's frame records
                 // (walls), then the box primitives, each with the hero radius. Not implemented:
                 // cell lists A and B as such, cylinders, spheres, the ledge tests, the shared
-                // contact response (pushes move the position only) and recovery.
+                // contact response (pushes move the position only, except that the walls clip
+                // the velocity into them, SPEC-0018 Slide response step 3) and recovery.
                 if let (Some(g), true) = (&world.ground, wall_contact) {
-                    let walls_at = |x: f32, z: f32| -> Vec<WallEdge> { g.frames_at(x, z).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height }).collect() };
+                    let walls_at = |x: f32, z: f32| -> Vec<WallEdge> { g.frames_at(x, z).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect() };
                     // A long horizontal step this tick (a knockback: the Black Knight's swing
                     // moves Tor 2.35 in one tick) is walked in sub-steps of at most 0.5 with the
                     // walls tested at each, so it cannot pass through a wall (this build's
@@ -8891,13 +8916,13 @@ impl Play {
                             q[0] += dx / n as f32;
                             q[2] += dz / n as f32;
                             let w = walls_at(q[0], q[2]);
-                            contact::resolve_walls_from(&mut q, &w, contact::HERO_RADIUS, from);
+                            contact::resolve_hero_walls(&mut q, vel, &w, contact::HERO_RADIUS, from);
                         }
                         p[0] = q[0];
                         p[2] = q[2];
                     }
                     let w = walls_at(p[0], p[2]);
-                    contact::resolve_walls_from(p, &w, contact::HERO_RADIUS, hero_at);
+                    contact::resolve_hero_walls(p, vel, &w, contact::HERO_RADIUS, hero_at);
                     // A drawn placed object's own walls: the position is taken into the
                     // object's rest frame, pushed there and the push taken back to world space.
                     for (pose, walls) in if std::env::var_os("NEOPETS_NO_OBJ_WALLS").is_some() { Vec::new() } else { world.object_walls(p[0], p[2]) } {
@@ -8946,8 +8971,8 @@ impl Play {
                 // hero through a wall (this build's order; the Black Knight pushed Tor off the
                 // edge of the 989 balcony, past the wall at its end, into the void).
                 if let (true, Some(g), true) = (pushed, &world.ground, wall_contact) {
-                    let walls: Vec<WallEdge> = g.frames_at(p[0], p[2]).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height }).collect();
-                    contact::resolve_walls_from(p, &walls, contact::HERO_RADIUS, hero_at);
+                    let walls: Vec<WallEdge> = g.frames_at(p[0], p[2]).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect();
+                    contact::resolve_hero_walls(p, vel, &walls, contact::HERO_RADIUS, hero_at);
                 }
                 let moved = (0..3).any(|k| (p[k] - before[k]).abs() > 1e-5);
                 if moved || c.floor || c.side_touch {
@@ -13076,7 +13101,7 @@ impl Play {
         let mut v = sh::Volume::default();
         let hulls = &self.shadow_hulls[self.hero_index.min(1)];
         let (eye, ..) = self.view();
-        let p = add(self.loco.position(), self.hero_draw_offset());
+        let p = self.loco.position();
         let d = sub(p, eye);
         if hulls.is_empty() || sh::choose(&[d[0] * d[0] + d[1] * d[1] + d[2] * d[2]]).is_empty() {
             return v;
@@ -15527,7 +15552,7 @@ fn push_eye(world: &World, e: &mut [f32; 3]) {
             .frames_at(e[0], e[2])
             .into_iter()
             .filter(|f| f.kind != 6)
-            .map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height })
+            .map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind })
             .collect();
         contact::resolve_walls(e, &walls, camera::EYE_RADIUS);
     }
@@ -15689,6 +15714,11 @@ fn light_record(r: &neopets_data::light::LightRecord) -> neopets_sim::charlight:
         zone: x.zone,
     };
     neopets_sim::charlight::Record { gate: r.gate != 0, a: r.a.iter().map(e).collect(), b: r.b.iter().map(e).collect(), c: r.c.iter().map(e).collect() }
+}
+
+/// A frame record as the ledge rules read it.
+fn edge_of(r: &ground::FrameRecord) -> neopets_sim::ledge::Edge {
+    neopets_sim::ledge::Edge { start: r.start, face: r.face, run: r.run, top: r.top, length: r.length, height: r.height, kind: r.kind }
 }
 
 /// The world id of `pack` in the area table (SPEC-0006), or -1.
