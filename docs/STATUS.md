@@ -559,6 +559,7 @@
 
 ## Not implemented / not verified
 
+- **For later (user's call, 2026-11-01): GPU character skinning.** Characters are skinned and relit on the CPU (`character::skin_part`, `relight`, `tinted`), about 3,400 mesh uploads a second on the Farm Road and up to about 1.5 ms a frame. Bevy's built-in skinning would change the look, so this needs a custom shader with SPEC-0004's first-bone normals, the character lights and the tints. Keep it only if measurements improve; it matters most on light settings and in crowded scenes.
 - No mod UI yet; audio is partial (streams, bank music, hero, creature, item, menu and placed cues, stingers) (specs for all of these are approved). Textures and models decode, but only the parts of SPEC-0003 and SPEC-0004 listed above.
 - SPEC-0003's description of the upload segment's buffer-width bits does not match the disc (R-0008); the decoder uses width / 64, which the decoded images confirm.
 - Nested chunk walking (type-8 and type-32 children) is not surveyed yet; only top-level chains are.
