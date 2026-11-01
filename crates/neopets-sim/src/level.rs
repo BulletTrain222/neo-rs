@@ -89,8 +89,11 @@ pub enum Action {
     HoldHero,
     /// WalkHero or WalkHeroAndOrient (rows 158 and 159) to a locator.
     WalkHero { locator: usize, wait: bool, orient: bool },
-    /// MoveEntity(entity, locator, probe, CTL, face) (row 112), probe on.
+    /// MoveEntity(entity, locator, probe, CTL, face) (row 112), probe on, CTL 0: the entity is
+    /// left under script control (base state 33).
     MoveEntity { entity: usize, locator: usize, face: bool },
+    /// The same with CTL 1: the entity is left free (base state 1).
+    MoveEntityFree { entity: usize, locator: usize, face: bool },
     /// WalkEntity or WalkEntityAndOrient (rows 106 and 108): stop 0 or less arrives within 1.0
     /// (classes 23 and 25), a positive stop within that radius (24 and 26).
     WalkEntity { entity: usize, locator: usize, wait: bool, orient: bool, stop: f32 },
@@ -4130,7 +4133,7 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
             s.queue_movie(12);
             s.set(213, true);
             s.set_level(1, true);
-            v.extend([Action::MoveHero { locator: 10 }, Action::MoveEntity { entity: 7, locator: 12, face: true }, Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 30 }, Action::Message { line: 14 }]);
+            v.extend([Action::MoveHero { locator: 10 }, Action::MoveEntityFree { entity: 7, locator: 12, face: true }, Action::ReturnCamera { preset: -1, release: true }, Action::Sleep { ticks: 30 }, Action::Message { line: 14 }]);
             busy(s, &mut v);
         } else if l(s, 2) && a & 1 == 0 {
             s.set(214, true);
@@ -4159,7 +4162,7 @@ fn thread_985(s: &mut GameState) -> Vec<Action> {
             }
         } else if s.word(p, 3) != 0 {
             s.set_word(p, 3, 0);
-            v.extend([Action::Sleep { ticks: 1 }, Action::MoveEntity { entity: 7, locator: 11, face: true }, Action::EntityAnim { entity: 8, anim: 0, looped: false, wait: false }]);
+            v.extend([Action::Sleep { ticks: 1 }, Action::MoveEntityFree { entity: 7, locator: 11, face: true }, Action::EntityAnim { entity: 8, anim: 0, looped: false, wait: false }]);
         }
         return v;
     }

@@ -322,6 +322,11 @@ pub struct Knight {
     en_garde: bool,
     stun: i32,
     hit: bool,
+    /// A state was just selected: its clip has not restarted yet, so the previous clip's end
+    /// (the same id, still at its last key) is not this state's end. The original requests the
+    /// clip on selection, which restarts it (the worked exchange: a second slow swing chosen on
+    /// T + 109 runs its full 108 ticks).
+    fresh: bool,
     orbit_side: u8,
     orbit_timer: i32,
     parry: i32,
@@ -373,6 +378,7 @@ impl Knight {
             en_garde: false,
             stun: 0,
             hit: false,
+            fresh: false,
             orbit_side: 0,
             orbit_timer: 30,
             parry: 0,
@@ -393,6 +399,7 @@ impl Knight {
     fn select(&mut self, s: State) {
         self.hit = false;
         self.state = s;
+        self.fresh = true;
     }
 
     /// One tick (SPEC-0012 Per-tick order).
@@ -693,7 +700,11 @@ impl Knight {
 
     #[allow(clippy::too_many_arguments)]
     fn run(&mut self, v: &View, w: &Words, _d: f32, to_hero: Vec3, rng: &mut Rng, a: &mut Act) {
-        let ended = |n: u32| v.clip.0 == n && v.clip.1;
+        if !v.clip.1 {
+            self.fresh = false;
+        }
+        let fresh = self.fresh;
+        let ended = |n: u32| v.clip.0 == n && v.clip.1 && !fresh;
         let window = |n: u32, k: usize| v.clip.0 == n && v.frame_bits & (1 << k) != 0 && v.weapons[k];
         let blocked = |v: &View| v.hero_guard && v.hero_facing[0] * v.facing[0] + v.hero_facing[2] * v.facing[2] < -0.5;
         let ticks = |s: f32| (s * 60.0) as i32;

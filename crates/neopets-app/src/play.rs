@@ -2930,13 +2930,15 @@ impl Play {
                     self.held = true;
                     return wait.then_some(Wait::HeroWalk);
                 }
-                Action::MoveEntity { entity, locator, face } => {
+                Action::MoveEntity { entity, locator, face } | Action::MoveEntityFree { entity, locator, face } => {
+                    let free = matches!(a, Action::MoveEntityFree { .. });
                     let (l, g) = self.locator(pack, locator)?;
                     let y = self.ground_in(pack, l[0], l[2], l[1] + 4.0).unwrap_or(l[1]);
                     let c = self.entity_mut(pack, entity)?;
                     c.position = [l[0], y, l[2]];
                     c.script_walk = None;
-                    c.held = true;
+                    // CTL 1 leaves the entity free (SPEC-0030 row 112).
+                    c.held = !free;
                     if face {
                         c.facing = g;
                     }
@@ -7908,8 +7910,10 @@ impl Play {
             let act = boss.tick(&v, &self.juppie_words, &mut self.rng);
             let after = boss.top;
             if let Some(a) = act.anim {
+                // A state change onto the clip that just finished restarts it (the original's
+                // state entry requests the clip anew).
                 if clip.action != a || (clip.progress >= 0.99 && before != after) {
-                    c.anim.play(a);
+                    c.anim.request(a, clip.action == a);
                 }
             }
             if let Some(rate) = act.face {
@@ -11829,8 +11833,10 @@ impl Play {
                 c.slots[i + 1] = *g;
             }
             if let Some(a) = act.anim {
+                // A state change onto the clip that just finished restarts it (the original's
+                // state entry requests the clip anew).
                 if clip.action != a || (clip.progress >= 0.99 && before != after) {
-                    c.anim.play(a);
+                    c.anim.request(a, clip.action == a);
                 }
             }
             if let Some(rate) = act.face {
@@ -12029,8 +12035,10 @@ impl Play {
             let is_clone = g.clone;
             c.anim.set_rate(act.rate);
             if let Some(a) = act.anim {
+                // A state change onto the clip that just finished restarts it (the original's
+                // state entry requests the clip anew).
                 if clip.action != a || (clip.progress >= 0.99 && before != after) {
-                    c.anim.play(a);
+                    c.anim.request(a, clip.action == a);
                 }
             }
             if let Some(rate) = act.face {
@@ -12226,8 +12234,10 @@ impl Play {
             let step = self.drain.as_mut().map(|(d, ..)| d.tick(&self.drain_words, &mut self.rng));
             let after = s.state;
             if let Some(n) = act.anim {
+                // A state change onto the clip that just finished restarts it (the original's
+                // state entry requests the clip anew).
                 if clip.action != n || (clip.progress >= 0.99 && before != after) {
-                    c.anim.play(n);
+                    c.anim.request(n, clip.action == n);
                 }
             }
             c.anim.set_rate(act.rate);
@@ -12636,8 +12646,10 @@ impl Play {
             let act = if duel { f.loop_b(&v, &self.faerie_words, partner, &mut self.duel, summons_alive, &mut self.rng) } else { f.tick(&v, &self.faerie_words, &mut self.rng) };
             let after = if duel { 20 + f.b_state } else { f.code };
             if let Some(n) = act.anim {
+                // A state change onto the clip that just finished restarts it (the original's
+                // state entry requests the clip anew).
                 if clip.action != n || (clip.progress >= 0.99 && before != after) {
-                    c.anim.play(n);
+                    c.anim.request(n, clip.action == n);
                 }
             }
             if let Some(w) = act.face {
@@ -12728,8 +12740,10 @@ impl Play {
             let act = q.tick(&v, &mut self.duel, &self.duel_words, &mut self.rng);
             let after = q.state;
             if let Some(n) = act.anim {
+                // A state change onto the clip that just finished restarts it (the original's
+                // state entry requests the clip anew).
                 if clip.action != n || (clip.progress >= 0.99 && before != after) {
-                    c.anim.play(n);
+                    c.anim.request(n, clip.action == n);
                 }
             }
             if let Some(f) = act.face {
@@ -12863,8 +12877,10 @@ impl Play {
                 println!("NECK tick {} state {:?} angles {:?}", self.ticks, sp.state, sp.neck);
             }
             if let Some(n) = act.anim {
+                // A state change onto the clip that just finished restarts it (the original's
+                // state entry requests the clip anew).
                 if clip.action != n || (clip.progress >= 0.99 && before != after) {
-                    c.anim.play(n);
+                    c.anim.request(n, clip.action == n);
                 }
             }
             c.anim.set_rate(act.rate);
