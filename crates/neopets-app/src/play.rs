@@ -11487,6 +11487,9 @@ impl Play {
                 clip: (clip.action, clip.progress >= 0.99),
                 blocked: c.walker.as_ref().is_some_and(|wk| wk.blocked),
                 hero_knocked: st == hero_states::LONG_FALL,
+                // SPEC-0014 Run-past body contact: the body cylinders meet (the character push
+                // keeps the hero at the two radii, so a small margin is allowed).
+                touching: c.row.is_some_and(|r| (hero[0] - c.position[0]).hypot(hero[2] - c.position[2]) <= r.radius + contact::HERO_RADIUS + 0.05),
                 valid: &valid,
                 level: &level,
             };

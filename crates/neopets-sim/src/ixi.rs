@@ -206,6 +206,9 @@ pub struct View<'a> {
     /// The run past is blocked; the hero is in its knocked state.
     pub blocked: bool,
     pub hero_knocked: bool,
+    /// The boss's body touches the hero this tick (the touched flag of its motion record; this
+    /// build reads the two bodies' cylinders meeting horizontally).
+    pub touching: bool,
     pub valid: &'a dyn Fn(Vec3) -> bool,
     pub level: &'a dyn Fn(u16) -> bool,
 }
@@ -671,7 +674,7 @@ impl Ixi {
                 a.travel = Some((0, [v.position[0] + v.facing[0], v.position[1], v.position[2] + v.facing[2]]));
                 if d > 7.5 || v.blocked {
                     fail(self, rng);
-                } else if !v.hero_knocked && d < 2.0 {
+                } else if !v.hero_knocked && v.touching {
                     a.push = Some(push(to_hero, 5.0));
                 }
             }
@@ -740,6 +743,7 @@ mod tests {
             clip: (7, false),
             blocked: false,
             hero_knocked: false,
+            touching: false,
             valid,
             level,
         }
