@@ -586,6 +586,101 @@ fn world_vector(pose: &ground::OwnerPose, v: [f32; 3]) -> [f32; 3] {
     std::array::from_fn(|k| l[0] * c[k] + l[1] * c[4 + k] + l[2] * c[8 + k])
 }
 
+/// The route search's margin round the hero's body, beyond its radius.
+const ROUTE_MARGIN: f32 = 0.3;
+/// The grid cell of `RouteSolids`, in world units.
+const ROUTE_CELL: f32 = 8.0;
+
+/// What the autopilot's route search keeps the hero's body clear of, by grid cell: the current
+/// world's upright cylinders (breakables, placed objects' solid ones and tree trunks; base,
+/// length, radius), its pushing spheres and boxes. Walls come from the ground grid by cell. Not
+/// here: what moves (characters, blocks), which the walker meets as it goes.
+struct RouteSolids {
+    cylinders: Vec<([f32; 3], f32, f32)>,
+    spheres: Vec<([f32; 3], f32)>,
+    boxes: Vec<BoxShape>,
+    cells: HashMap<(i32, i32), (Vec<usize>, Vec<usize>, Vec<usize>)>,
+}
+
+impl RouteSolids {
+    fn of(play: &Play) -> Self {
+        let w = &play.world;
+        let at = play.loco.position();
+        let mut cylinders: Vec<([f32; 3], f32, f32)> = w.breakable_cylinders(at, f32::MAX).into_iter().map(|(b, l, r, _)| (b, l, r)).collect();
+        cylinders.extend(play.all_object_cylinders());
+        if let Some(patches) = play.foliage.get(&w.pack) {
+            let trees = patches.iter().filter(|p| p.kind.family == neopets_sim::foliage::Family::Tree && p.kind.near == Some(200) && p.kind.far.is_none());
+            cylinders.extend(trees.flat_map(|p| p.plants.iter().map(|q| (q.position, 25.0, 5.5 * q.scale))));
+        }
+        let spheres = w.push_spheres.clone();
+        let boxes = w.boxes.clone();
+        let reach = contact::HERO_RADIUS + ROUTE_MARGIN;
+        let mut cells: HashMap<(i32, i32), (Vec<usize>, Vec<usize>, Vec<usize>)> = HashMap::new();
+        let mut cover = |lo: [f32; 2], hi: [f32; 2], mut put: Box<dyn FnMut(&mut (Vec<usize>, Vec<usize>, Vec<usize>)) + '_>| {
+            let c = |v: f32| (v / ROUTE_CELL).floor() as i32;
+            for x in c(lo[0] - reach)..=c(hi[0] + reach) {
+                for z in c(lo[1] - reach)..=c(hi[1] + reach) {
+                    put(cells.entry((x, z)).or_default());
+                }
+            }
+        };
+        for (i, (b, _, r)) in cylinders.iter().enumerate() {
+            cover([b[0] - r, b[2] - r], [b[0] + r, b[2] + r], Box::new(move |e| e.0.push(i)));
+        }
+        for (i, (c, r)) in spheres.iter().enumerate() {
+            cover([c[0] - r, c[2] - r], [c[0] + r, c[2] + r], Box::new(move |e| e.1.push(i)));
+        }
+        for (i, b) in boxes.iter().enumerate() {
+            let (mut lo, mut hi) = ([b.origin[0], b.origin[2]], [b.origin[0], b.origin[2]]);
+            for mask in 1..8 {
+                let (mut x, mut z) = (b.origin[0], b.origin[2]);
+                for k in 0..3 {
+                    if mask & (1 << k) != 0 {
+                        x += b.axes[k][0] * b.extents[k];
+                        z += b.axes[k][2] * b.extents[k];
+                    }
+                }
+                lo = [lo[0].min(x), lo[1].min(z)];
+                hi = [hi[0].max(x), hi[1].max(z)];
+            }
+            cover(lo, hi, Box::new(move |e| e.2.push(i)));
+        }
+        Self { cylinders, spheres, boxes, cells }
+    }
+
+    /// Whether a body with its feet at `p` would touch a cylinder, sphere or box.
+    fn hits_shapes(&self, p: [f32; 3]) -> bool {
+        let key = ((p[0] / ROUTE_CELL).floor() as i32, (p[2] / ROUTE_CELL).floor() as i32);
+        let Some((cyl, sph, bxs)) = self.cells.get(&key) else { return false };
+        let r = contact::HERO_RADIUS + ROUTE_MARGIN;
+        cyl.iter().any(|&i| {
+            let (b, l, rad) = self.cylinders[i];
+            contact::upright_cylinder_push(p, r, HERO_HEIGHT, b, l, rad).is_some()
+        }) || sph.iter().any(|&i| {
+            let (c, rad) = self.spheres[i];
+            let mid = [p[0] - c[0], p[1] + 0.5 * HERO_HEIGHT - c[1], p[2] - c[2]];
+            (mid[0] * mid[0] + mid[1] * mid[1] + mid[2] * mid[2]).sqrt() < rad + r
+        }) || bxs.iter().any(|&i| contact::push(p, &self.boxes[i], r).is_some())
+    }
+
+    /// As `hits_shapes`, and the map's walls and the drawn objects' walls at the hero's own
+    /// contact rule.
+    fn hits(&self, world: &World, p: [f32; 3]) -> bool {
+        if self.hits_shapes(p) {
+            return true;
+        }
+        let r = contact::HERO_RADIUS + ROUTE_MARGIN;
+        let edge = |f: &neopets_data::ground::FrameRecord| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind };
+        if world.ground.as_ref().is_some_and(|g| g.frames_at(p[0], p[2]).iter().any(|f| edge(f).hero_push(p, r, p).is_some())) {
+            return true;
+        }
+        world.object_walls(p[0], p[2]).iter().any(|(pose, walls)| {
+            let q = rest_point(pose, p);
+            walls.iter().any(|w| w.hero_push(q, r, q).is_some())
+        })
+    }
+}
+
 /// Diagnostic route goals for the trace.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Goal {
@@ -2174,6 +2269,15 @@ impl Play {
     /// `route_to` with lattice cells (x / 4 and z / 4, rounded) to stay out of: the autopilot's
     /// memory of steps that turned out blocked by something the ground search does not see.
     pub fn route_avoiding(&self, max_nodes: usize, goal: Goal, avoid: &std::collections::HashSet<(i32, i32)>) -> Option<Vec<[f32; 2]>> {
+        // First a route the hero's body fits along; failing that, the plain one (a tight gap or a
+        // goal inside something; the test tool's walker then finds out).
+        let solids = RouteSolids::of(self);
+        self.route_search(max_nodes, goal, avoid, Some(&solids)).or_else(|| self.route_search(max_nodes, goal, avoid, None))
+    }
+
+    /// The breadth-first route search; with `solids`, a step needs its end point and its middle
+    /// clear of them for the hero's body (except the first steps away from where he stands).
+    fn route_search(&self, max_nodes: usize, goal: Goal, avoid: &std::collections::HashSet<(i32, i32)>, solids: Option<&RouteSolids>) -> Option<Vec<[f32; 2]>> {
         let o = self.other.as_ref();
         let p = self.loco.position();
         let step = 4.0;
@@ -2217,6 +2321,12 @@ impl Play {
                 });
                 if blocked {
                     continue;
+                }
+                if let Some(s) = solids {
+                    let near_start = (k.0 - start.0).abs() + (k.1 - start.1).abs() < 2;
+                    if !near_start && (s.hits(&self.world, [nx, h, nz]) || s.hits_shapes([0.5 * (x + nx), 0.5 * (y + h), 0.5 * (z + nz)])) {
+                        continue;
+                    }
                 }
                 came.insert(n, (k, h));
                 let reached = match goal {
@@ -2452,6 +2562,11 @@ impl Play {
     /// The drawn placed objects' solid upright cylinders within their radius 50 of `at`, moved
     /// with their objects: (base, length, radius).
     fn object_cylinders(&self, at: [f32; 3]) -> Vec<([f32; 3], f32, f32)> {
+        self.all_object_cylinders().into_iter().filter(|(b, ..)| (b[0] - at[0]).powi(2) + (b[1] - at[1]).powi(2) + (b[2] - at[2]).powi(2) < 2500.0).collect()
+    }
+
+    /// All the drawn placed objects' solid upright cylinders.
+    fn all_object_cylinders(&self) -> Vec<([f32; 3], f32, f32)> {
         let w = &self.world;
         let mut out = Vec::new();
         for (i, h) in w.headers.iter().enumerate() {
@@ -2464,9 +2579,7 @@ impl Play {
                 let (Some(m), Some(Some(o))) = (self.object_matrix(w.pack, i), w.objects.get(i)) else { continue };
                 let b = [base[0] + m[12] - o.rest[12], base[1] + m[13] - o.rest[13], base[2] + m[14] - o.rest[14]];
                 let low = if axis[1] * length < 0.0 { b[1] - length.abs() } else { b[1] };
-                if (b[0] - at[0]).powi(2) + (low - at[1]).powi(2) + (b[2] - at[2]).powi(2) < 2500.0 {
-                    out.push(([b[0], low, b[2]], length.abs(), radius));
-                }
+                out.push(([b[0], low, b[2]], length.abs(), radius));
             }
         }
         out

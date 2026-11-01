@@ -58,6 +58,8 @@ pub struct Autopilot {
     doors: HashMap<(u32, usize), u64>,
     /// Route lattice cells found blocked, by world.
     blocked: HashMap<u32, HashSet<(i32, i32)>>,
+    /// Ticks at a Talk prompt with no conversation opening yet.
+    talk_wait: u32,
     /// A sideways back-off in progress: until this tick, with this stick.
     backoff: Option<(u64, (f32, f32))>,
     /// The end point of the route chosen for `Onward`, and the worlds where none was found.
@@ -141,6 +143,7 @@ impl Play {
             if let Some(n) = self.talk_partner.clone() {
                 a.talked.insert((pack, n), self.state.flags.len());
             }
+            a.talk_wait = 0;
             a.doing = format!("reading{}", self.talk_partner.as_ref().map_or(String::new(), |n| format!(" ({n})")));
             input.square = t % 10 == 0;
             return;
@@ -291,6 +294,14 @@ impl Play {
         // Talk: the Talk label is up and the target is within talking range (5.8), facing it, so
         // press Square (the talk is counted when the conversation opens with them).
         if matches!(a.target, Target::Talk(_)) && self.talk_prompt && (goal[0] - hero[0]).hypot(goal[2] - hero[2]) < 4.5 {
+            // Someone with nothing to say shows the prompt and opens nothing: give up on them.
+            a.talk_wait += 1;
+            if a.talk_wait > 240 {
+                a.talk_wait = 0;
+                a.skip.insert((pack, a.target), t + 3600);
+                a.target = Target::None;
+                return;
+            }
             input.square = t % 15 == 0;
             if t % 15 != 0 {
                 (input.forward, input.side) = self.stick_toward(goal[0], goal[2]);
@@ -340,6 +351,9 @@ impl Play {
         let reached = match a.target {
             Target::Door(_) => dw < 0.6,
             Target::Onward => d < 4.0,
+            // A spot's or place's point can lie inside something solid: close by and getting no
+            // nearer counts as there.
+            Target::Spot(_) | Target::Place(_) => dw < 1.5 || (dw < 4.5 && t > a.progress_at + 30),
             _ => dw < 1.5,
         };
         if a.route.len() == 1 && reached {
@@ -372,7 +386,7 @@ impl Play {
         self.autopilot_unstick(a, input, dw + 4.0 * a.route.len() as f32);
     }
 
-    /// Progress toward the target: 1.0 nearer within 2 s, or a jump (up to three), then the
+    /// Progress toward the target: 1.0 nearer within 1 s, or a jump (up to three), then the
     /// target is given up.
     fn autopilot_unstick(&mut self, a: &mut Autopilot, input: &mut HeroInput, distance: f32) {
         let t = self.ticks;
@@ -386,7 +400,7 @@ impl Play {
             a.progress_at = t;
             return;
         }
-        if t > a.progress_at + 120 {
+        if t > a.progress_at + 60 {
             if a.jumps < 3 {
                 a.jumps += 1;
                 a.progress_at = t;
