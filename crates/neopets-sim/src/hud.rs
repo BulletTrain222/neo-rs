@@ -270,12 +270,14 @@ impl Hud {
         if self.d >= 30 { 128 } else { round_away(self.d as f32 * 96.0 * 0.033_333_335 + 32.0).clamp(0, 255) as u8 }
     }
 
-    /// Section 8: y = -|phase| / 2 pi, t = |(round(y) - y) - 0.5| - 0.25, alpha =
-    /// round(64 (1 + P(t))) with the truncated sine series (it is inaccurate as t nears 0.75, so
-    /// the bottom of each cycle stays near 14 to 25).
+    /// Section 8: f the fraction of |phase| / 2 pi (a floor: the original's rounding trick floors
+    /// on the console's truncating adder), t = |f - 0.5| - 0.25, always in -0.25 to 0.25, alpha
+    /// = round(64 (1 + P(t))) with the truncated sine series, so 64 (1 + cos(phase)): it falls
+    /// to 0 at the bottom of each cycle (the earlier round-to-nearest reading was withdrawn).
     pub fn journal_alpha(&self) -> u8 {
-        let y = -self.journal_phase.abs() / std::f32::consts::TAU;
-        let t = ((y.round() - y) - 0.5).abs() - 0.25;
+        let y = self.journal_phase.abs() / std::f32::consts::TAU;
+        let f = y - y.floor();
+        let t = (f - 0.5).abs() - 0.25;
         let t2 = t * t;
         let (c1, c3, c5, c7, c9) = (6.283185f32, 41.34167f32, 81.60223f32, 76.57496f32, 39.71066f32);
         let p = t * (c1 - t2 * (c3 - t2 * (c5 - t2 * (c7 - t2 * c9))));
@@ -551,10 +553,11 @@ mod tests {
         h.notify_journal();
         assert_eq!(h.journal_alpha(), 128);
         h.tick_icons();
-        assert!((h.journal_phase - 0.15).abs() < 1e-6 && h.journal_alpha() < 128);
-        // The series quirk: where t wraps to 0.75 the alpha runs 25, 18, 15, 14, 17.
-        let seq: Vec<u8> = (0..44).map(|_| { h.tick_icons(); h.journal_alpha() }).collect();
-        assert!(seq.windows(5).any(|w| w == [25, 18, 15, 14, 17]), "{seq:?}");
+        assert!((h.journal_phase - 0.15).abs() < 1e-6 && h.journal_alpha() == 127);
+        // The spec's vector: tick 2 gives 125; ticks 17 to 25 give 11, 6, 3, 1, 0, 1, 3, 7, 11.
+        let seq: Vec<u8> = (2..=25).map(|_| { h.tick_icons(); h.journal_alpha() }).collect();
+        assert_eq!(seq[0], 125);
+        assert_eq!(&seq[15..], &[11, 6, 3, 1, 0, 1, 3, 7, 11], "{seq:?}");
     }
 
     const MW: MonsterWords = MonsterWords { divisor: 1.5, max: 250, min: 64, margin: 24, cap: -5, plate: -5 };

@@ -289,12 +289,14 @@ impl Uniform for Midpoint {
     }
 }
 
-/// The folded power series of section 12: P(fold(t)), close to sin t (and not exact near the
-/// phase 3 pi / 2, a quirk to keep).
+/// The folded power series of section 12: P(fold(t)), sin t to about 5e-8 at every angle. The
+/// fold takes the fraction of m = |t - pi/2| / 2 pi by flooring (the original's add-and-subtract
+/// rounding trick floors on the console's truncating adder) and x = |f - 0.5| - 0.25, always in
+/// -0.25 to 0.25 (the earlier round-to-nearest reading was withdrawn).
 pub fn series_sin(t: f32) -> f32 {
     let m = (t - std::f32::consts::FRAC_PI_2).abs() / std::f32::consts::TAU;
-    let k = m.round();
-    let x = k + 0.25 - m;
+    let f = m - m.floor();
+    let x = (f - 0.5).abs() - 0.25;
     let x2 = x * x;
     let (c1, c3, c5, c7, c9) = (6.283185f32, 41.34167f32, 81.60223f32, 76.57496f32, 39.71066f32);
     x * (c1 - x2 * (c3 - x2 * (c5 - x2 * (c7 - x2 * c9))))
@@ -1111,6 +1113,13 @@ mod tests {
         assert!((series_sin(0.5) - 0.479426).abs() < 1e-5);
         assert!((series_cos(0.5) - 0.877583).abs() < 1e-5);
         assert!(series_sin(0.0).abs() < 1e-6 && (series_cos(0.0) - 1.0).abs() < 1e-6);
+        // Every angle, the phase 3 pi / 2 included: the true sine to about 5e-8 (plus float
+        // rounding of the angle).
+        for k in -400..=400 {
+            let t = k as f32 * 0.0471;
+            assert!((series_sin(t) - t.sin()).abs() < 2e-6, "t {t}");
+        }
+        assert!((series_sin(3.0 * std::f32::consts::FRAC_PI_2) + 1.0).abs() < 1e-5);
     }
 
     fn put(b: &mut [u8], at: usize, v: &[u8]) {
