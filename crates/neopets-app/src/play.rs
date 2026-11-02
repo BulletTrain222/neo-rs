@@ -9558,7 +9558,7 @@ impl Play {
                 .map(|&h| (h, (0..self.world.headers.get(h).and_then(|x| x.as_ref()).map_or(0, |x| x.locators.len())).filter_map(|k| self.anim_locator(pack, h, k, 0)).collect()))
                 .collect();
             // The 1096 dispensers' draw (the module's random-draw routine is not given).
-            if matches!(pack, 1096 | 1397 | 1023 | 722 | 776 | 1363) {
+            if matches!(pack, 1096 | 1397 | 1023 | 722 | 776 | 1363 | 1419) {
                 self.state.trigger_raw = self.rng.next_u32();
             }
             self.state.cloak_worn = self.cloak_worn;
@@ -14283,6 +14283,9 @@ impl Play {
     /// routines and cues; SPEC-0048 Element gate on hits).
     fn breakable_contact(&mut self, test: impl Fn(&neopets_data::world::Volume) -> bool) {
         let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
+        let pack = self.world.pack;
+        let first_group: Vec<i32> = self.world.groups.first().map_or(Vec::new(), |g| g.breakables.iter().map(|&b| b as i32).collect());
+        let mut hooks = Vec::new();
         let mut broken = Vec::new();
         let mut chained = Vec::new();
         let mut cues = Vec::new();
@@ -14309,6 +14312,15 @@ impl Play {
         for (i, b) in self.world.breakables.iter_mut().enumerate() {
             let Some(v) = b.volume else { continue };
             if !matches!(b.state, 1 | 3) || !test(&v) {
+                continue;
+            }
+            // SPEC-0048 Break routes step 1: a script hook takes the hit: no break and no cue. 1081's
+            // handler B (flag 41 clear) on breakable group 0 has no calls.
+            if let Some(mut out) = level::on_breakable(pack, b.script, i, &mut self.state) {
+                hooks.append(&mut out);
+                continue;
+            }
+            if pack == 1081 && !self.state.flag(41) && first_group.contains(&(i as i32)) {
                 continue;
             }
             // SPEC-0048 Element gate on hits: the chest body's hook only recoils Tor; the seal's
@@ -14347,6 +14359,7 @@ impl Play {
                 cues.push(break_cue(b.material));
             }
         }
+        self.apply(&hooks);
         for gi in seals {
             self.seal_open(gi);
         }

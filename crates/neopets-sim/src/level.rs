@@ -7047,8 +7047,9 @@ fn gate_1405(pack: u32, s: &GameState) -> bool {
 }
 
 /// Their entity-0 routines: 1407 in full (the hand-in, then 8 to 10 with 102 and 104, else 11 to
-/// 13); for 1417, 1419 and 1425 the item-33 hand-ins only (their other branches are Medium in
-/// the spec and show nothing here); 1405's routine is not reproduced (Medium).
+/// 13); 1417, 1419 and 1425 the item-33 hand-ins, then lines 4 and 7 by their two flags (1419: 10
+/// on a random 1), each the listed first line (the rotation is not given; R-0186); 1405 with 611
+/// line 14, its hand-in by 685 giving the same line (Medium).
 fn hall_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
     if !gate_1405(pack, s) {
         return Vec::new();
@@ -7058,6 +7059,7 @@ fn hall_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
         1417 => (606, 680, 10),
         1419 => (608, 682, 13),
         1425 => (610, 684, 10),
+        1405 => (611, 685, 14),
         _ => return Vec::new(),
     };
     if s.flag(need) && !s.flag(done) {
@@ -7065,8 +7067,12 @@ fn hall_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
         s.set(done, true);
         return vec![Action::Talk { line }];
     }
-    if pack != 1407 {
-        return Vec::new();
+    match pack {
+        1405 => return if s.flag(611) { vec![Action::Talk { line: 14 }] } else { Vec::new() },
+        1417 => return vec![Action::Talk { line: if s.flag(100) && s.flag(106) { 4 } else { 7 } }],
+        1419 => return vec![Action::Talk { line: if s.trigger_raw % 3 == 0 { 10 } else if s.flag(102) && s.flag(104) { 4 } else { 7 } }],
+        1425 => return vec![Action::Talk { line: if s.flag(102) && s.flag(104) { 4 } else { 7 } }],
+        _ => {}
     }
     let key = (pack, 0);
     let mut rot = s.rotations.get(&key).copied().unwrap_or_default();
@@ -15374,10 +15380,42 @@ pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
     vec![Action::Message { line }]
 }
 
+/// RegisterScriptBreakable (SPEC-0030 row 267; SPEC-0048 Break routes, step 1): Some when a script
+/// hook takes a hit on the entry with this script index, in place of the default break and cue.
+/// `id` is its index in the world's list. 735's shared routine for 4 to 31 is empty, so only its
+/// breaker scenes break them. SPEC-0044 1056's Crokabek nests: with 174 set and 179 clear a nest
+/// whose flag is clear marks it, breaks and advances the count (175: line 72; 176 to 178: lines 73
+/// to 75; else 179 and line 76).
+pub fn on_breakable(pack: u32, script: i16, id: usize, s: &mut GameState) -> Option<Vec<Action>> {
+    match (pack, script) {
+        (735, 4..=31) => Some(Vec::new()),
+        (1056, 24 | 27 | 30 | 33 | 36) => {
+            let flag = 625 + (script as u16 - 24) / 3;
+            if !s.flag(174) || s.flag(179) || s.flag(flag) {
+                return Some(Vec::new());
+            }
+            s.set(flag, true);
+            let (step, line) = [(175, 72), (176, 73), (177, 74), (178, 75)].into_iter().find(|&(f, _)| !s.flag(f)).unwrap_or((179, 76));
+            s.set(step, true);
+            Some(vec![Action::Break { id }, Action::Message { line }])
+        }
+        _ => None,
+    }
+}
+
 /// The answer to a LevelPrompt made by a routine of a pack (yes = Circle).
 pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Action> {
     let line = |line| Action::Message { line };
     match (pack, routine, yes) {
+        // SPEC-0044 1056 the knights' prompts: yes removes one item 72 and sets 503 (Sir Lawrence,
+        // routine 38) or 504 (Sir Cadmere, 39), and 505.
+        (1056, 38 | 39, true) => {
+            s.take(72, 1);
+            s.set(if routine == 38 { 503 } else { 504 }, true);
+            s.set(505, true);
+            Vec::new()
+        }
+        (1056, 38 | 39, false) => Vec::new(),
         // SPEC-0044 722 the bet: a yes with 50 Neopoints takes them, stores the pick and starts
         // the race; with fewer line 75. The marks clear after 1.0 s.
         (722, 0..=2, yes) => {
@@ -15929,6 +15967,9 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (1163, 15) => Some(15),
         // SPEC-0044 1056: the trainer of the current stage (entity 5, 10, 12 or 24).
         (1056, 5 | 10 | 12 | 24) => Some(0),
+        (1056, 0) => Some(43),
+        (1056, 38 | 41) => Some(38),
+        (1056, 39 | 42) => Some(39),
         // SPEC-0045 1023 villagers (routine numbers: the index in VILLAGERS, 100 + k).
         (1023, e) => villager(e).map(|k| 100 + k as u8),
         _ => None,
@@ -15948,6 +15989,26 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if matches!(pack, 748 | 776 | 859 | 1005 | 1008 | 1011 | 1014 | 1020 | 1131 | 1136 | 1140 | 1143 | 1172) {
         return talk_interior(pack, routine, state);
+    }
+    // SPEC-0044 1056: Lady Prunella (entity 0) with 179 set and 204, 501, 503 and 504 clear sets
+    // 501; Sir Lawrence and Sir Cadmere (entities 38 and 41, 39 and 42) with 502 set and 503 and 504
+    // clear ask their prompts in turn. Which line Prunella shows and the rest of these routines'
+    // tables are not given (R-0186): she shows her group's first line and they say nothing else.
+    if pack == 1056 && routine == 43 {
+        if state.flag(179) && !state.flag(204) && !state.flag(501) && !state.flag(503) && !state.flag(504) {
+            state.set(501, true);
+            return vec![Action::Talk { line: 143 }];
+        }
+        return Vec::new();
+    }
+    if pack == 1056 && matches!(routine, 38 | 39) {
+        if state.flag(502) && !state.flag(503) && !state.flag(504) {
+            let base = if routine == 38 { 110 } else { 85 };
+            let c = state.word(1056, 20 + routine - 38).rem_euclid(3);
+            state.set_word(1056, 20 + routine - 38, (c + 1) % 3);
+            return vec![Action::Prompt { line: base + c as u16, routine }];
+        }
+        return Vec::new();
     }
     // SPEC-0044 956: entities 1 and 47 give line 2 with flag 59, else 12. The other entities'
     // line mapping is not given (R-0183).
@@ -17822,6 +17883,32 @@ mod tests {
         assert!(on_init(1098, &mut GameState::default()).iter().take(3).eq([reg(0, 1), reg(7, 7), reg(8, 8)].iter()));
         on_trigger(1098, 8, call, &mut s);
         assert_eq!(s.transition_map, Some(49));
+    }
+
+    #[test]
+    fn module_1056_nests_and_knights() {
+        let mut s = GameState::default();
+        // Before 174, and not the listed nests: a hook with no effect, or none.
+        assert_eq!(on_breakable(1056, 24, 3, &mut s), Some(Vec::new()));
+        assert_eq!(on_breakable(1056, 25, 3, &mut s), None);
+        assert!(on_breakable(735, 4, 1, &mut s).is_some() && on_breakable(735, 3, 1, &mut s).is_none());
+        s.set(174, true);
+        for (script, flag, line) in [(24, 625, 72), (27, 626, 73), (30, 627, 74), (33, 628, 75), (36, 629, 76)] {
+            assert_eq!(on_breakable(1056, script, 9, &mut s), Some(vec![Action::Break { id: 9 }, Action::Message { line }]));
+            assert!(s.flag(flag));
+        }
+        assert!(s.flag(179));
+        // Prunella then sets 501, once.
+        assert_eq!(on_talk(1056, proximity_routine(1056, 0).unwrap(), &mut s), vec![Action::Talk { line: 143 }]);
+        assert!(s.flag(501));
+        assert!(on_talk(1056, 43, &mut s).is_empty());
+        // With 502 a knight asks; yes takes the charm and shuts the other out.
+        s.set(502, true);
+        s.give(72, 1);
+        assert_eq!(on_talk(1056, proximity_routine(1056, 41).unwrap(), &mut s), vec![Action::Prompt { line: 110, routine: 38 }]);
+        on_answer(1056, 38, true, &mut s);
+        assert!(s.flag(503) && s.flag(505) && !s.has_item(72));
+        assert!(on_talk(1056, 39, &mut s).is_empty());
     }
 
     #[test]
