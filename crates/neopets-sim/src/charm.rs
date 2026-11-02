@@ -164,6 +164,20 @@ const NOVA_LIFT: f32 = 1.5;
 const SPHERE_RADIUS: f32 = 10.0;
 const SHADOW_TICKS: u32 = 30;
 const SUN_TICKS: u32 = 174;
+pub const SUN_RING_TICKS: u32 = 42;
+
+/// Tor's plain weapon effects (SPEC-0036 Object pairing): no hits, stopped when he leaves sub-state 10.
+pub fn weapon_effect(id: u16) -> Option<i32> {
+    match id {
+        160 => Some(530),
+        162 => Some(551),
+        164 => Some(552),
+        166 => Some(554),
+        168 => Some(556),
+        170 => Some(558),
+        _ => None,
+    }
+}
 const BEAM_LENGTH: f32 = 20.0;
 const BEAM_HALF: f32 = 1.0;
 /// A Leaf entry never expires.
@@ -244,8 +258,8 @@ pub fn spawn_roberta(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale
     vec![o]
 }
 
-/// The effect definitions an object plays (SPEC-0036 Effect definitions; bank 3). Tor's Sun also holds 568,
-/// the ring it rescales, which is not played here.
+/// The effect definitions an object plays (SPEC-0036 Effect definitions; bank 3). Tor's Sun clears its third,
+/// the ring, when its second effect's particle expires (`SUN_RING_TICKS`).
 pub fn definitions(hero: usize, id: u16) -> &'static [i32] {
     match (hero, id) {
         (0, 161) => &[420],
@@ -253,7 +267,7 @@ pub fn definitions(hero: usize, id: u16) -> &'static [i32] {
         (0, 165) => &[553, 562],
         (0, 167) => &[555],
         (0, 169) => &[557],
-        (0, 171) => &[559, 566],
+        (0, 171) => &[559, 566, 568],
         (0, 172) => &[560],
         (0, 173) => &[561],
         (1, 161) => &[415],

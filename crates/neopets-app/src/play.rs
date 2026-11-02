@@ -1374,6 +1374,8 @@ pub struct Play {
     mote_objects: Vec<neopets_sim::charm::Object>,
     /// A family handler's Mote kind during a Mote object's breakable walk.
     break_family: Option<i32>,
+    /// Tor's plain weapon effect in sub-state 10.
+    power_fx: Option<usize>,
     /// The ended Fog cloud's point, in its pack, with the pulse countdown.
     fog_after: Option<(u32, [f32; 3], u32)>,
     /// The Supernova's bolts in flight.
@@ -2166,6 +2168,7 @@ impl Play {
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
             break_family: None,
+            power_fx: None,
             fog_after: None,
             bolts: Vec::new(),
             orbit_angle_r: 0.0,
@@ -7442,6 +7445,13 @@ impl Play {
                     o.fx.push(h);
                 }
             }
+            // Tor's Sun clears its ring when the second effect's particle expires.
+            if (o.hero, o.id) == (0, 171) && o.fx.len() == 3 && o.life + neopets_sim::charm::SUN_RING_TICKS <= 174 {
+                if let Some(h) = o.fx.pop() {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
+            }
             for &h in &o.fx {
                 if live {
                     self.effects.set_position(h, o.centre);
@@ -7657,6 +7667,14 @@ impl Play {
                 self.last_mote = format!("Mote {id} power-attack object x{} (scale {scale}, {} ticks) on tick {}", spawned.len(), o.life, self.ticks);
             }
             self.mote_objects.extend(spawned);
+            // The plain weapon effects play while sub-state 10 lasts.
+            if let Some(def) = neopets_sim::charm::weapon_effect(id) {
+                let table = self.effect_table.clone();
+                let frame = [[f[2], 0.0, -f[0]], [0.0, 1.0, 0.0], f];
+                let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, def, at, frame));
+                self.effects.update(&table, h, None, &mut self.rng);
+                self.power_fx = Some(h);
+            }
         }
         self.pay_mp(cost);
     }
@@ -10126,6 +10144,18 @@ impl Play {
             }
         }
         self.power_ready_step();
+        if let Some(h) = self.power_fx {
+            if self.attack.as_ref().is_some_and(|a| a.sub == 10) {
+                let f = self.loco.facing;
+                let (p, w) = (self.loco.position(), self.weapon_reach());
+                self.effects.set_position(h, [p[0] + f[0] * w, p[1], p[2] + f[2] * w]);
+            } else {
+                let table = self.effect_table.clone();
+                self.effects.stop(&table, h);
+                self.effects.release(h);
+                self.power_fx = None;
+            }
+        }
         if let Some(sub) = self.attack.as_ref().filter(|a| a.cleared).map(|a| a.sub) {
             if sub == 10 {
                 self.power_release();
