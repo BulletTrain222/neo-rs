@@ -3575,6 +3575,14 @@ impl Play {
                     self.hero.request(anim, true);
                     return Some(if wait { Wait::HeroOneShot } else { Wait::Ticks(1) });
                 }
+                Action::PayCoins { amount } => {
+                    let mut left = amount;
+                    while left > 0 {
+                        let (id, value) = [(139, 100), (138, 25), (137, 10), (136, 5), (135, 1)].into_iter().find(|&(_, v)| v <= left).unwrap_or((135, 1));
+                        self.party_add(id, 1);
+                        left -= value;
+                    }
+                }
                 Action::HeroLoop { anim, seconds, control } => {
                     // SPEC-0030 Seconds to ticks; a negative time is one tick and it does not wait.
                     let ticks = if seconds < 0.0 { 1 } else { (seconds * 60.0) as i32 };

@@ -288,6 +288,8 @@ pub enum Action {
     /// AddItemToWorld, the locator form (SPEC-0030 row 364): the item at the locator, snapped,
     /// placed and never expiring.
     AddItem { locator: usize, item: u16 },
+    /// SPEC-0059 Pay n NP: the largest coin at most n, repeatedly, each through the party add.
+    PayCoins { amount: i32 },
     /// ItemDeactivate (SPEC-0030 row 204): the live items of a slot placement leave the world.
     ItemDeactivate { slot: u8, ordinal: usize },
     /// LoopHeroAnim (row 168): the hero loops the animation for the seconds; it does not wait.
@@ -429,12 +431,11 @@ pub fn wheel_round(pack: u32, s: &mut GameState) -> Vec<Action> {
         (0, _) => vec![Action::Prompt { line: c.start_prompt, routine: 60 }],
         (1, r) if r < 4 => vec![Action::Prompt { line: c.go_on_prompts[r as usize], routine: 61 }],
         (1, _) => {
-            s.neopoints += c.payouts[4];
             if let Some(f) = c.flags {
                 s.set(f[2], true);
             }
             end(s, &mut w);
-            vec![Action::Message { line: c.five_win }, release_camera()]
+            vec![Action::PayCoins { amount: c.payouts[4] }, Action::Message { line: c.five_win }, release_camera()]
         }
         (_, r) => {
             if let Some(f) = c.flags {
@@ -3521,8 +3522,8 @@ fn chase(state: &GameState) -> Vec<Action> {
 }
 
 /// SPEC-0045 1023 trigger 17, the chase start (step 1, the cutscene; step 2, the chase). The
-/// Meerca's set (set 1) is loaded into slot 1 for the scene and released after it. PlayHeroAnim,
-/// the movement types, object 4, the navmesh assignment and the quick fades are not reproduced.
+/// Meerca's set (set 1) is loaded into slot 1 for the scene and released after it. Object 4's
+/// move to locator 498 is not built (no MoveObj here).
 fn chase_start(state: &mut GameState) -> Vec<Action> {
     use Action::*;
     let cam = |track| PlayCamera { track, wait: false, end: 1, speed: 1.0 };
@@ -3532,20 +3533,24 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     state.set(7, true);
     // The thief (entity 0, region 1024 record 0 per SPEC-0058 step 6) and Heermedjet (entity 1,
     // region 1025) for the scene; which set the slot-swap thread loads is R-0028.
-    let mut v = vec![HoldHero, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 1, region: Some(1023 + 1 + 1) }, LoadRegion { slot: 2, region: Some(1024) }, WaitLoads];
+    let quick = |ticks: u32| [FadeOut { seconds: ticks as f32 / 60.0, wait: true }, FadeIn { seconds: 0.0, wait: false }];
+    let mut v = vec![HoldHero, HeroAnim { anim: 0, wait: false }, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 1, region: Some(1023 + 1 + 1) }, LoadRegion { slot: 2, region: Some(1024) }, WaitLoads];
     // SetAI_MovementType: entity 1 runs fast for its walk to 495, entity 0 for its walk to 500,
     // and walks again for 502 (the scene's calls), then step 2 sets entity 0 to fast run for the
     // chase.
-    v.extend([MoveHero { locator: 488 }, FadeIn { seconds: 1.0, wait: false }, cam(8), WalkHero { locator: 489, wait: false, orient: false }, wait(2.8)]);
+    v.extend([MoveHero { locator: 488 }, Equip { on: false }, FadeIn { seconds: 1.0, wait: false }, cam(8), WalkHero { locator: 489, wait: false, orient: false }, wait(2.8)]);
     v.extend(cut(9));
-    v.extend([MoveHero { locator: 490 }, WalkHero { locator: 491, wait: true, orient: true }]);
+    v.extend([MoveHero { locator: 490 }, WalkHero { locator: 491, wait: true, orient: true }, HeroAnim { anim: 158, wait: true }]);
     v.extend(cut(10));
     v.extend([wait(2.5), cam(11), anim(1, 41, true), anim(1, 49, true), PlayCamera { track: 12, wait: true, end: 1, speed: 1.0 }, wait(1.0)]);
     v.extend([cam(13), anim(0, 49, true), anim(0, 41, true)]);
     v.extend(cut(14));
-    v.extend([MoveHero { locator: 492 }, WalkHero { locator: 493, wait: true, orient: true }, MoveType { entity: 1, kind: 2 }, walk(1, 495), wait(1.0), cam(15), wait(0.3), cam(16)]);
-    // Object 4 is activated and played (speed 0.45, wait); its reset to time 0 at locator 498
-    // (a MoveObj call) is not built.
+    v.extend([MoveHero { locator: 492 }, WalkHero { locator: 493, wait: true, orient: true }, MoveType { entity: 1, kind: 2 }, walk(1, 495), HeroAnim { anim: 109, wait: false }, wait(1.0), cam(15)]);
+    v.extend(quick(3));
+    v.extend([HeroAnim { anim: 32, wait: false }, wait(0.3), cam(16)]);
+    // One parcel taken if held; object 4 is activated and played (speed 0.45, wait); its reset to
+    // time 0 at locator 498 (a MoveObj call) is not built.
+    state.take(32, 1);
     v.extend([MoveEntity { entity: 1, locator: 496, face: true }, InitObjOn { obj: 4, end: false }, PlayAnim { obj: 4, speed: 0.45, wait: true }]);
     v.extend([PlaySound { cue: 12, locator: None }, MoveHero { locator: 493 }]);
     v.extend(cut(17));
@@ -3553,12 +3558,14 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     v.extend(cut(19));
     v.extend([Message { line: 25 }, cam(20), Converse { entity: 1, line: 26 }]);
     v.extend(cut(18));
-    v.extend([MoveEntity { entity: 0, locator: 499, face: true }, MoveType { entity: 0, kind: 2 }, wait(0.2), walk(0, 500), wait(0.6), DeactivateObj { obj: 4 }, cam(21), Converse { entity: 1, line: 27 }]);
+    v.extend([MoveEntity { entity: 0, locator: 499, face: true }, MoveType { entity: 0, kind: 2 }, wait(0.2), walk(0, 500), wait(0.6)]);
+    v.extend(quick(2));
+    v.extend([DeactivateObj { obj: 4 }, cam(21), Converse { entity: 1, line: 27 }]);
     v.extend([walk(1, 499), wait(1.0), cam(22), MoveEntity { entity: 0, locator: 501, face: true }, MoveType { entity: 0, kind: 0 }, walk(0, 502), wait(1.5)]);
     v.extend([FadeOut { seconds: 2.0, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, MoveEntity { entity: 0, locator: 477, face: true }]);
     v.extend([EntityAnim { entity: 0, anim: 48, looped: true, wait: false }, ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 1.0, wait: true }]);
     // Step 2: SetAI_MovementType(0, 2), the parcel is taken and the chase starts.
-    v.push(MoveType { entity: 0, kind: 2 });
+    v.extend([MoveType { entity: 0, kind: 2 }, NavmeshAssign { entity: 0, mesh: 6 }]);
     state.remove_all(32);
     state.set(127, true);
     v.extend(chase(state));
@@ -15869,14 +15876,13 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             let c = crate::wheel::copy_of(pack);
             let mut w = wheel_of(pack, s);
             let r = (w.r as usize).min(3);
-            s.neopoints += c.payouts[r];
             if let Some(f) = c.flags {
                 s.set(f[1], true);
             }
             w.g = 0;
             w.r = 0;
             set_wheel(pack, s, &w);
-            vec![Action::Message { line: c.cash_out[r] }, release_camera()]
+            vec![Action::PayCoins { amount: c.payouts[r] }, Action::Message { line: c.cash_out[r] }, release_camera()]
         }
         // 1148 prompt 43: buy item 42 for 100 Neopoints.
         (1148, 0, true) if s.neopoints >= 100 => {
