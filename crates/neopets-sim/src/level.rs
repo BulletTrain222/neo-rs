@@ -12317,8 +12317,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // 8, 10 and 11, and the finale on 12: camera 5, the shake, entity 0 and object 0 off,
         // sound 7, objects 2 to 5, 45 and 316, level state 14); with 45 set, 15 set and 16 clear
         // the camera step (cameras 4, 6 and 7, object 1, level state 16 and flag 317). The item
-        // dispensers run first while they are enabled (word 40, set by the arrival); SetTargetActive
-        // is not built.
+        // dispensers run first while they are enabled (word 40, set by the arrival).
         1096 => {
             if !state.flag(45) && state.word(pack, 40) != 0 && state.slot_alive.contains_key(&0) {
                 out.extend(dispensers_1096(state));
@@ -12355,11 +12354,17 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set_level(16, true);
                 state.set(317, true);
                 out.extend([
-                    Action::PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 },
-                    Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
-                    Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
+                    wait(0.7),
+                    Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
                     Action::PlayAnim { obj: 1, speed: 1.0, wait: false },
+                    wait(4.0),
+                    Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
+                    Action::Sleep { ticks: 60 },
+                    Action::PlayCamera { track: 7, wait: true, end: 1, speed: 1.0 },
+                    Action::Sleep { ticks: 60 },
                     Action::ReturnCamera { preset: -1, release: true },
+                    // R-0192: the Rope Gun anchor comes back after the item 117 scene.
+                    Action::TargetActive { target: 1, on: true },
                 ]);
             }
         }
@@ -14045,6 +14050,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.queue_movie(51);
             let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1097) }];
             v.extend((0..=5).map(|obj| Action::InitObjOn { obj, end: false }));
+            // R-0192: aim target 1, a Rope Gun anchor, is off for the fight.
+            v.push(Action::TargetActive { target: 1, on: false });
             v.extend([Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 10 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 14 }, Action::ActivateEntity { entity: 0 }, Action::BossFight { instance: 6 }]);
             // The two item dispensers of CB7 enabled: nothing placed or picked yet.
             state.set_word(1096, 40, 1);
