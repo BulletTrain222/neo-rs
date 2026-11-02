@@ -113,6 +113,11 @@ impl Climb {
         Self { sub: 1, target, queued: None, partner: None, ret: 0, first: false }
     }
 
+    /// State 38's hand-over: the top-edge hang of the panel (sub-mode 17).
+    pub fn from_drop(target: usize) -> Self {
+        Self { sub: 17, target, queued: None, partner: None, ret: 0, first: false }
+    }
+
     /// The panel hold: along n until n . (p, 1) = r, steering to -n.
     fn hold(t: &Panel, p: Vec3, step: &mut Step) -> Vec3 {
         let n = t.n();

@@ -937,13 +937,14 @@ impl Character {
     /// The guard query (base state 20; SPEC-0029 Open question 171): a blocking common enemy
     /// (outer 7 or 8), the Black Knight outside an open stun gate, the guarding Undead Draik and
     /// Werelupe King, and the Ixi Chief in idle, hold, the stage transition and its blocks. A hero
-    /// shot meets such a target as a guarding target. (Gnarfas's missile block removes the shot
-    /// in its own check instead, SPEC-0020.)
+    /// shot meets such a target as a guarding target, and so does Gnarfas in his block (R-0172: a quick
+    /// shot bounces and flies on; SPEC-0020 Guard path).
     pub fn guards(&self) -> bool {
         use neopets_sim::ixi::State as Ixi;
         self.enemy.as_ref().is_some_and(|e| e.blocking)
             || self.knight.as_ref().is_some_and(|k| !k.exposed && !k.defeated())
             || self.draik.as_ref().is_some_and(|d| d.guarding())
+            || self.gnarfas.as_ref().is_some_and(|g| g.state == neopets_sim::gnarfas::State::BlockMissile)
             || self.king.as_ref().is_some_and(|k| k.guarding())
             || self.ixi.as_ref().is_some_and(|x| matches!(x.state, Ixi::Idle | Ixi::Hold | Ixi::Transition | Ixi::BlockMelee | Ixi::BlockMissile))
             || (self.gelert.as_ref().is_some_and(|g| g.state == neopets_sim::gelert::State::Deflect) && self.anim.clip_state().action == 21)
@@ -1358,6 +1359,8 @@ pub struct Play {
     pub debris: neopets_sim::debris::Pool,
     /// The attacker's point while an attack contact breaks things.
     break_from: Option<[f32; 3]>,
+    /// State 38: the type-10 record of the drop in progress.
+    drop_panel: Option<usize>,
     /// The item showcase's effect object.
     showcase_fx: Option<usize>,
     /// The motion record's +0x23C: state 37's refusal of the ledge-drop test (R-0193).
@@ -2143,6 +2146,7 @@ impl Play {
             grab_rumble: -1,
             drop_refuse: 0,
             showcase_fx: None,
+            drop_panel: None,
             debris: Default::default(),
             break_from: None,
             summon_owner: None,
@@ -3123,6 +3127,11 @@ impl Play {
                     self.open_line(line);
                     return Some(Wait::Dialog);
                 }
+                Action::MessageNoWait { line } => {
+                    self.talk_partner = None;
+                    self.talk_with = None;
+                    self.open_line(line);
+                }
                 Action::Talk { line } => {
                     self.open_line(line);
                     return Some(Wait::Dialog);
@@ -3288,6 +3297,16 @@ impl Play {
                 Action::DigStep { group, step } => self.dig_thread_step(group as usize, step),
                 Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
                 Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
+                Action::MoveObjLocator { obj, locator } => {
+                    if let Some((at, _)) = self.locator(pack, locator) {
+                        let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                        if let Some(Some(o)) = w.and_then(|w| w.objects.get_mut(obj)) {
+                            o.rest[12] = at[0];
+                            o.rest[13] = at[1];
+                            o.rest[14] = at[2];
+                        }
+                    }
+                }
                 Action::AttachObj { obj, host, locator } => {
                     let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
                     if let Some(w) = w.filter(|w| obj < w.objects.len() && w.headers.get(host).and_then(|h| h.as_ref()).is_some_and(|h| locator < h.locators.len())) {
@@ -4436,6 +4455,8 @@ impl Play {
             }
             let target = if row.homing <= 1 { self.lock } else { self.shot_target() };
             let aim = target.and_then(|id| self.aim_point(id)).unwrap_or_else(|| default_aim(p, f));
+            // SPEC-0030 row 90: the override is tested and cleared for each shot; the target stays.
+            let aim = self.state.external_missile.take().and_then(|k| self.locator(self.world.pack, k)).map_or(aim, |l| l.0);
             let mut dir = launch_dir(anchor, aim);
             if (2..=5).contains(&row.homing) {
                 let (r1, r2) = (fan_draw(&mut self.rng), fan_draw(&mut self.rng));
@@ -5744,6 +5765,20 @@ impl Play {
     fn ledge_step(&mut self, side: f32, forward: bool) -> bool {
         use neopets_sim::ledge::{self, Class, Edge, Ledge};
         let hero = self.loco.position();
+        // SPEC-0033 Behavior 51 state 30, step 1 (R-0193): the ladder check, first on every tick; the
+        // let-go exit, state 41 and both item-manager flags cleared.
+        if self.loco.state == ledge::HANG && self.grab_cooldown <= 0 && !self.world.rails.is_empty() {
+            let v = (self.loco.target[0].hypot(self.loco.target[2]) > 0.0) as u8 as f32;
+            if let Some(k) = neopets_sim::ladder::grab(&self.world.rails, hero, self.loco.facing, self.loco.target, v, true) {
+                self.leave_ledge(hero_states::STANCE);
+                self.ladder = Some(neopets_sim::ladder::Ladder::new(k));
+                self.loco.enter_state(hero_states::LADDER, 93);
+                if self.weapon_drawn {
+                    self.set_weapon_drawn(false);
+                }
+                return true;
+            }
+        }
         if !matches!(self.loco.state, ledge::HANG | ledge::CLIMB_FALL | ledge::CLIMB_RISE | ledge::DROP) {
             self.ledge = None;
             self.loco.body.no_snap = false;
@@ -5813,7 +5848,7 @@ impl Play {
             l.next = next.as_ref().map(edge_of);
             l.prev = prev.as_ref().map(edge_of);
         }
-        let Some(step) = self.ledge.as_mut().map(|l| {
+        let Some(mut step) = self.ledge.as_mut().map(|l| {
             if l.state == ledge::DROP {
                 l.drop_tick(hero, f, deep, self.loco.body.gap, touched, c.action)
             } else {
@@ -5824,6 +5859,30 @@ impl Play {
             self.leave_ledge(hero_states::STANCE);
             return true;
         };
+        // SPEC-0033 Behavior 51: the obstacle probes. State 30: while 60 or 61 runs, 0.25 to the moving
+        // side, a hit requests 73. States 35 and 47, sub-mode 2 (47 also 1): at the hero, a hit ends in
+        // state 1; state 47 also kicks the velocity by -2.0 along the facing.
+        let (ledge_state, ledge_sub) = self.ledge.as_ref().map_or((0, 0), |l| (l.state, l.sub));
+        if ledge_state == ledge::HANG {
+            let action = step.request.filter(|a| matches!(a, 60 | 61)).unwrap_or(c.action);
+            if matches!(action, 60 | 61) {
+                let sign = if action == 60 { 0.25 } else { -0.25 };
+                // The side row: up x facing.
+                let q = [hero[0] + sign * f[2], hero[1], hero[2] - sign * f[0]];
+                if self.edge_obstacle(q) {
+                    step.request = Some(73);
+                }
+            }
+        } else if (ledge_state == ledge::CLIMB_FALL && ledge_sub == 2) || (ledge_state == ledge::CLIMB_RISE && matches!(ledge_sub, 1 | 2)) {
+            if self.edge_obstacle(hero) {
+                if ledge_state == ledge::CLIMB_RISE {
+                    self.loco.body.velocity[0] -= 2.0 * f[0];
+                    self.loco.body.velocity[2] -= 2.0 * f[2];
+                }
+                self.leave_ledge(hero_states::STANCE);
+                return true;
+            }
+        }
         if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
             println!("      ledge tick {} sub {:?} clip {} {:.2} gap {:.2} place {:?} bone0 {:?} facing {:?} record {:?} s {:.2}", self.ticks, self.ledge.map(|l| l.sub), c.action, c.progress, self.loco.body.gap, step.place, self.hero.main_translations().first(), self.loco.facing, self.ledge_record.map(|r| (r.own, r.next, r.prev)), self.ledge.map_or(0.0, |l| l.edge.along(hero)));
         }
@@ -5861,6 +5920,14 @@ impl Play {
         if let Some(n) = step.took {
             self.ledge_record = if n { next } else { prev };
         }
+        // State 38's stage 3: state 21, sub-mode 17, with the panel as the target.
+        if let Some(k) = self.drop_panel.filter(|_| step.hang) {
+            self.drop_panel = None;
+            self.leave_ledge(hero_states::STANCE);
+            self.panel = Some(neopets_sim::climb::Climb::from_drop(k));
+            self.loco.enter_state(hero_states::PANEL, 73);
+            return true;
+        }
         if step.hang {
             if let Some(l) = self.ledge.as_mut() {
                 *l = Ledge::new(ledge::HANG, l.edge);
@@ -5887,6 +5954,33 @@ impl Play {
         use neopets_sim::ledge::{self, Ledge};
         let Some(g) = &self.world.ground else { return false };
         let (hero, f, v, state) = (self.loco.position(), self.loco.facing, self.loco.body.velocity, self.loco.state);
+        self.drop_panel = None;
+        // SPEC-0033 Drop onto a panel (state 38): the drop test on a type-10 record whose V is near
+        // vertical, in state 1 or 2 (the air and running branches are the frame records').
+        if matches!(state, 1 | 2) && self.drop_refuse <= 0 {
+            for (k, p) in self.world.panels.iter().enumerate().filter(|(_, p)| matches!(p.kind, -2 | -3) && p.v[1] > 0.95) {
+                let e = neopets_sim::ledge::Edge { start: [0.0; 3], face: p.normal, run: p.u, top: p.v, length: p.lu, height: p.lv, kind: p.kind };
+                let toward = e.face[0] * f[0] + e.face[2] * f[2] > 0.0;
+                if !toward && state != 1 {
+                    continue;
+                }
+                let Some(negative) = e.drop_gates(hero, v, f, contact::HERO_RADIUS, state) else { continue };
+                if !negative {
+                    let g0 = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0).unwrap_or(ground::MISS);
+                    let q = e.drop_probe();
+                    let hit = self.world.probe(q[0], q[2], hero[1] + 6.0);
+                    if !ledge::drop_rule(g0, hit.found.then_some((hit.height, hit.kind))) {
+                        continue;
+                    }
+                }
+                self.drop_panel = Some(k);
+                self.ledge_record = None;
+                self.ledge = Some(Ledge::drop_from(e, state));
+                self.loco.enter_state(ledge::DROP, 0);
+                self.trace_edge("drop panel", k, 0);
+                return true;
+            }
+        }
         for r in g.frames_at(hero[0], hero[2]) {
             let e = edge_of(&r);
             // SPEC-0033 Behavior 49 gate 1: the refusal counter of state 37's landing exit, in state 1.
@@ -5919,6 +6013,47 @@ impl Play {
             return false;
         }
         false
+    }
+
+    /// SPEC-0044 864 threads 5 to 7, one per crusher chain (objects 0 to 3, 4 to 8, 9 to 14): 10 damage with
+    /// the hero within about 2.0 of an object's locator, then 0.3 s. Not built: their camera shake
+    /// (its parameter set is not given) and keeping an effect on each object.
+    fn chains_864(&mut self) {
+        const P: u32 = 864;
+        if self.world.pack != P {
+            return;
+        }
+        let hero = self.loco.position();
+        for (k, objs) in [0..=3usize, 4..=8, 9..=14].into_iter().enumerate() {
+            let w = 90 + k as u8;
+            let ready = self.ticks as i32 >= self.state.word_of(P, w);
+            if ready && objs.into_iter().any(|o| self.anim_locator(P, o, 0, 0).is_some_and(|l| sub(l, hero).iter().map(|v| v * v).sum::<f32>() <= 4.0)) {
+                self.state.set_word(P, w, self.ticks as i32 + 18);
+                let f = self.loco.facing;
+                self.hero_hit(10.0, 0.0, false, f, "a crusher".into());
+            }
+        }
+    }
+
+    /// SPEC-0033 Behavior 51's obstacle probe at q: a frame record of the hero's cell, other than the held
+    /// one and its links, within reach r with its wall span over the feet (2H band). It blocks unless it
+    /// has the held record's entry and its start lies within 4.0 of the held start. No model set blocks.
+    fn edge_obstacle(&self, q: [f32; 3]) -> bool {
+        let Some(g) = &self.world.ground else { return true };
+        let Some(held) = self.ledge_record.as_ref() else { return false };
+        let r = contact::HERO_RADIUS;
+        let plane = |m: [f32; 4]| m[0] * q[0] + m[1] * q[1] + m[2] * q[2] + m[3];
+        g.frames_at(q[0], q[2]).into_iter().any(|x| {
+            let same = x.entry == held.entry;
+            if same && (x.own == held.own || x.own == held.next || x.own == held.prev) {
+                return false;
+            }
+            let (a, s, t) = (plane(x.face), plane(x.run), plane(x.top));
+            // t is 0 at the wall's bottom and H at its top edge: top - depth - 2H < y < top - 0.3.
+            let hit = a.abs() <= r && (-r..=x.length + r).contains(&s) && t < x.height - 0.3 && t > -2.0 * HERO_HEIGHT;
+            let d = [x.start[0] - held.start[0], x.start[1] - held.start[1], x.start[2] - held.start[2]];
+            hit && !(same && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= 16.0)
+        })
     }
 
     /// Diagnostic: frame records whose top is 1.75 to 6.5 above the ground 1.5 out from the
@@ -10434,6 +10569,7 @@ impl Play {
         self.wild_step();
         self.drop_refuse = (self.drop_refuse - 1).max(0);
         self.debris.step();
+        self.chains_864();
         let (a, b) = (self.world.pack, self.other.as_ref().map(|o| o.pack));
         self.debris.retain_packs(|p| p == a || Some(p) == b);
         self.ghost_step();

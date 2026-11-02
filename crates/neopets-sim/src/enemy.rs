@@ -3373,6 +3373,25 @@ mod tests {
         assert_eq!(e.quiet, 420);
     }
 
+    /// R-0199: row 212's bolt fires on the spawn bit; the flag word's 0x80 plays no part.
+    #[test]
+    fn a_missile_with_flag_0x80_fires_on_the_spawn_bit() {
+        let mut p = Params::default();
+        p.slots[0].kind = MISSILE;
+        p.slots[0].flags = 0x80;
+        p.slots[0].spawn_count = 1;
+        let mut r = Rng::seeded(1);
+        let mut e = Enemy::new(p, Spawn::default(), &mut r);
+        let has = |_: u32| true;
+        let mut v = view([0.0; 3], &has);
+        v.spawn_bits = 0x02;
+        let mut a = Act::default();
+        assert!(!e.missile_step(0, &v, &mut a) && a.shot.is_none());
+        v.spawn_bits = 0x20;
+        let mut a = Act::default();
+        assert!(e.missile_step(0, &v, &mut a) && a.shot.is_some());
+    }
+
     #[test]
     fn map_search_casts_at_a_candidate() {
         let mut p = Params::default();

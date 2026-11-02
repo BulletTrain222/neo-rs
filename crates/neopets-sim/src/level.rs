@@ -46,6 +46,8 @@ pub enum Action {
     MoveHero { locator: usize },
     /// LevelMsg: show dialogue line n of the current world.
     Message { line: u16 },
+    /// LevelMsg with no wait: the thread goes on with the box open.
+    MessageNoWait { line: u16 },
     /// The proximity talk frame around a line: SetConversationTarget(entity, 1), LevelMsg(line,
     /// wait 1), EndConversation(entity).
     Talk { line: u16 },
@@ -392,6 +394,8 @@ pub enum Action {
     /// RegisterScriptAnimatedTrigger (row 266): record `index` of host object `host`'s inline
     /// trigger list to `routine`; the volume moves with the host's pose.
     RegisterAnimTrigger { host: usize, index: u16, routine: u8 },
+    /// MoveObjToLocator (link false): the object's rest translation becomes the locator's point, once.
+    MoveObjLocator { obj: usize, locator: usize },
     /// The next step of a plate scene (`plate_step`): the host reads the plate's live state words.
     PlateStep { routine: u8, phase: u8 },
 }
@@ -536,6 +540,8 @@ pub struct GameState {
     pub act1_map: Vec<(u16, bool)>,
     /// DFS_Act1_SetIndices' four stored words (-1 until the first switch; SPEC-0044 1174 Checkpoints).
     pub act1_indices: [i32; 4],
+    /// SetExternalMissileTarget: a one-shot aim override for the hero's next shot, a locator (SPEC-0030 row 90).
+    pub external_missile: Option<usize>,
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
     /// each tick: a bound character's dead test, else its kill memory of this load.
     pub ai_dead: BTreeSet<usize>,
@@ -2136,6 +2142,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.extend((4..10).map(|t| reg(t, 40)));
             v.extend((17..=28).chain(70..=92).map(|obj| Action::InitObjOn { obj, end: false }));
             v.extend((29..=34).map(|obj| Action::DeactivateObj { obj }));
+            // Threads 2 and 3: the crusher chains (speed 5.0) and the lava-field groups (0.2), looped with
+            // staggered times (their exact times are not listed, so each is drawn). The bubble thread's
+            // carriers 35 to 55 are looped the same way while the fight is not active, their spheres
+            // on routine 41 (50 damage, then 100 ticks).
+            for (objs, speed) in [(0..=14usize, 5.0f32), (61..=69, 0.2), (93..=158, 0.2), (35..=55, 1.0)] {
+                v.extend(objs.flat_map(|obj| [Action::InitObjOn { obj, end: false }, Action::SetObjTimeRandom { obj }, Action::LoopAnim { obj, speed }]));
+            }
+            v.extend((35..=55).map(|host| Action::RegisterAnimTrigger { host, index: 0, routine: 41 }));
             let done = state.flag(58);
             v.extend([15, 16].map(|obj| Action::InitObjOn { obj, end: done }));
             v.extend([(4, 34), (2, 32), (5, 35), (3, 33)].map(|(group, routine)| Action::RegisterGroupTriggers { group, routine }));
@@ -3567,7 +3581,7 @@ fn chase(state: &GameState) -> Vec<Action> {
 
 /// SPEC-0045 1023 trigger 17, the chase start (step 1, the cutscene; step 2, the chase). The
 /// Meerca's set (set 1) is loaded into slot 1 for the scene and released after it. Object 4's
-/// move to locator 498 is not built (no MoveObj here).
+/// move to locator 498 is built.
 fn chase_start(state: &mut GameState) -> Vec<Action> {
     use Action::*;
     let cam = |track| PlayCamera { track, wait: false, end: 1, speed: 1.0 };
@@ -3577,7 +3591,7 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     state.set(7, true);
     // The thief (entity 0, region 1024 record 0 per SPEC-0058 step 6) and Heermedjet (entity 1,
     // region 1025) for the scene; which set the slot-swap thread loads is R-0028.
-    let quick = |ticks: u32| [FadeOut { seconds: ticks as f32 / 60.0, wait: true }, FadeIn { seconds: 0.0, wait: false }];
+    let quick = |ticks: u32| [FadeColour { out: true, colour: [255, 255, 255], seconds: ticks as f32 / 60.0, wait: true }, FadeColour { out: false, colour: [255, 255, 255], seconds: 0.0, wait: false }];
     let mut v = vec![HoldHero, HeroAnim { anim: 0, wait: false }, FadeOut { seconds: 1.0, wait: true }, LoadRegion { slot: 1, region: Some(1023 + 1 + 1) }, LoadRegion { slot: 2, region: Some(1024) }, WaitLoads];
     // SetAI_MovementType: entity 1 runs fast for its walk to 495, entity 0 for its walk to 500,
     // and walks again for 502 (the scene's calls), then step 2 sets entity 0 to fast run for the
@@ -3592,12 +3606,13 @@ fn chase_start(state: &mut GameState) -> Vec<Action> {
     v.extend([MoveHero { locator: 492 }, WalkHero { locator: 493, wait: true, orient: true }, MoveType { entity: 1, kind: 2 }, walk(1, 495), HeroAnim { anim: 109, wait: false }, wait(1.0), cam(15)]);
     v.extend(quick(3));
     v.extend([HeroAnim { anim: 32, wait: false }, wait(0.3), cam(16)]);
-    // One parcel taken if held; object 4 is activated and played (speed 0.45, wait); its reset to
-    // time 0 at locator 498 (a MoveObj call) is not built.
+    // One parcel taken if held; object 4 is activated and played (speed 0.45, wait).
     state.take(32, 1);
     v.extend([MoveEntity { entity: 1, locator: 496, face: true }, InitObjOn { obj: 4, end: false }, PlayAnim { obj: 4, speed: 0.45, wait: true }]);
     v.extend([PlaySound { cue: 12, locator: None }, MoveHero { locator: 493 }]);
     v.extend(cut(17));
+    // Object 4's reset (R-0192): to time 0, its rest point at locator 498, time 0 again; it stays stopped.
+    v.extend([SetObjTime { obj: 4, seconds: 0.0 }, MoveObjLocator { obj: 4, locator: 498 }, SetObjTime { obj: 4, seconds: 0.0 }]);
     v.push(wait(1.0));
     v.extend(cut(19));
     v.extend([Message { line: 25 }, cam(20), Converse { entity: 1, line: 26 }]);
@@ -8366,6 +8381,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
         }
+        // SPEC-0044 864 the bubble carriers' shared callback: 50 damage, then 100 ticks (word 17).
+        (864, 41) if call.state != 0 && state.hero.tick as i32 >= state.word(pack, 17) => {
+            state.set_word(pack, 17, state.hero.tick as i32 + 100);
+            out.actions.push(Action::DamageHero { amount: 50 });
+        }
         // SPEC-0044 864 the vents' inside words.
         (864, 40) if call.object => {
             let bit = 1 << (call.index as i32 - 4);
@@ -8544,10 +8564,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.set_word(pack, 20, now + 60 + wait);
             }
         }
+        // CB6 (trigger 3; R-0192): with 327 set and 328 clear the hero's next shot aims at locator 4.
+        (1428, 6) if call.object && call.state != 0 && state.flag(327) && !state.flag(328) => state.external_missile = Some(4),
         // CB5 (trigger 0, 330 set): S5.
         (1428, 5) if call.object && state.flag(330) => state.set_word(pack, 1, state.word(pack, 1) | 32),
         // CB7 to CB9 (triggers 6 to 8, the switches; 329 set, 330 clear, none pending): context
-        // 4; a press sets S2, S3 or S4. CB6's SetExternalMissileTarget is not built.
+        // 4; a press sets S2, S3 or S4.
         (1428, 7..=9) if call.object && state.flag(329) && !state.flag(330) && state.word(pack, 1) & 0b11100 == 0 => {
             if call.square && !state.talking {
                 state.set_word(pack, 1, state.word(pack, 1) | (4 << (routine - 7)));
@@ -9683,9 +9705,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1301 + j) }]);
             }
         }
-        // Routine 35 (trigger 1, entering, 222 clear): the council arrival (entities 10, 11 and
-        // 14, cameras 7 to 19, lines 178 to 184, threads T1 and T2's set loads), then 222 and
-        // 396. The entities' path walks are not built.
+        // Routine 35 (trigger 1, entering, 222 clear; R-0192): the council arrival (entities 10, 11 and
+        // 14, cameras 7 to 19, lines 178 to 184), threads T1 and T2 in line, 222 and 396.
         (1300, 35) if call.object && call.state == 1 && !state.flag(222) => {
             state.set(222, true);
             state.set(396, true);
@@ -9719,27 +9740,46 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 wait(0.4),
                 Action::Converse { entity: 10, line: 182 },
                 Action::Sleep { ticks: 30 },
-                Action::FadeOut { seconds: FADE, wait: true },
+                // Thread T1 (the routine waits for it): entity 8 of set 4 walks path 1 under line 183.
+                Action::FadeOut { seconds: 1.0, wait: true },
                 Action::LoadRegion { slot: 3, region: None },
                 Action::LoadRegion { slot: 3, region: Some(1305) },
                 cam(15),
-                Action::FadeIn { seconds: FADE, wait: true },
-                Action::Message { line: 183 },
+                Action::WaitLoads,
+                wait(0.5),
+                Action::FadeIn { seconds: 1.0, wait: false },
+                Action::MessageNoWait { line: 183 },
+                Action::WalkPath { entity: 8, path: 1, wait: true },
+                Action::FadeOut { seconds: 1.0, wait: true },
                 Action::LoadRegion { slot: 3, region: None },
-                Action::Sleep { ticks: 3 },
-                Action::FadeIn { seconds: 1.0, wait: true },
+                Action::ReturnCamera { preset: -1, release: true },
+                Action::Sleep { ticks: 2 },
+                Action::FadeIn { seconds: 1.0, wait: false },
                 Action::MoveEntity { entity: 14, locator: 38, face: true },
                 cam(10),
-                Action::WalkHero { locator: 36, wait: true, orient: true },
+                Action::WalkHero { locator: 36, wait: false, orient: true },
                 Action::WalkEntity { entity: 14, locator: 39, wait: true, orient: true, stop: 1.0 },
                 Action::Converse { entity: 14, line: 184 },
+                // Thread T2, run on after the routine: entity 14 walks path 6, then 15 of set 11 path 7.
+                Action::FadeOut { seconds: 1.0, wait: true },
                 cam(18),
+                Action::FadeIn { seconds: 1.0, wait: false },
+                Action::WalkPath { entity: 14, path: 6, wait: false },
                 wait(3.0),
+                Action::FadeOut { seconds: 1.0, wait: true },
+                Action::LoadRegion { slot: 4, region: None },
                 Action::LoadRegion { slot: 4, region: Some(1312) },
                 cam(19),
-                Action::LoadRegion { slot: 4, region: Some(1313) },
-                Action::Sleep { ticks: 2 },
+                Action::WaitLoads,
+                wait(0.5),
+                Action::FadeIn { seconds: 1.0, wait: false },
+                Action::WalkPath { entity: 15, path: 7, wait: true },
+                Action::FadeOut { seconds: 1.0, wait: true },
                 Action::ReturnCamera { preset: -1, release: true },
+                Action::LoadRegion { slot: 4, region: None },
+                Action::LoadRegion { slot: 4, region: Some(1313) },
+                Action::WaitLoads,
+                Action::FadeIn { seconds: 1.0, wait: false },
             ]);
         }
         // SPEC-0043 1335 shared trigger (0 to 3, entering, 92 clear): set 3 + index into slot 0
@@ -12087,6 +12127,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     state.set_word(pack, 6, 1);
                     state.set_word(pack, 13, 1);
                     let tint = [255, 64, 32];
+                    // The bubble thread ends once the fight is active.
+                    out.extend((35..=55).map(|obj| Action::StopAnim { obj }));
                     out.extend([
                         Action::HoldHero,
                         Action::PlayStinger { id: 4, volume: 1.0 },
@@ -12158,6 +12200,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                         Action::ReturnCamera { preset: -1, release: true },
                         Action::Bits { word: 13, set: 0, clear: 1 },
                     ]);
+                    // The lava bubble thread starts again.
+                    out.extend((35..=55).map(|obj| Action::LoopAnim { obj, speed: 1.0 }));
                     // The "32-object" sequence: placed effects 18 to 49, started in one tick.
                     out.extend((18..=49).map(|slot| Action::StartEffect { slot, camera: false }));
                     out.extend([Action::SetFlag { flag: 293, on: true }, Action::Bits { word: 6, set: 0, clear: 1 }]);

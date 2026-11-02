@@ -882,6 +882,36 @@ mod tests {
         assert_eq!(beam_length(3.4, 1.2, 1.0), 1.2);
     }
 
+    /// SPEC-0029 Forcing the wind and the stomp (R-0180): stage 3's vectors; stage 1 has neither.
+    #[test]
+    fn wind_and_stomp_by_stage() {
+        let w = Words::read(&block()).unwrap();
+        let mut rng = Rng::seeded(3);
+        let no = |_: u16| false;
+        let never = |_: Vec3, _: Vec3| false;
+        let mut k = Draik::new(&w, &mut rng);
+        k.stage = 3;
+        k.state = State::Idle;
+        k.cooldown = [200; COOLDOWNS];
+        (k.cooldown[SPIT], k.cooldown[WIND], k.cooldown[STOMP]) = (40, 0, 150);
+        k.tick(&view(&no, &never, 8.0), &w, 1, &mut rng);
+        assert!(matches!(k.state, State::Wind { .. }), "{:?}", k.state);
+        let mut k = Draik::new(&w, &mut rng);
+        k.stage = 3;
+        k.state = State::Idle;
+        k.cooldown = [200; COOLDOWNS];
+        k.cooldown[STOMP] = 0;
+        k.tick(&view(&no, &never, 3.0), &w, 1, &mut rng);
+        assert!(matches!(k.state, State::Stomp { .. }), "{:?}", k.state);
+        // Stage 1 has neither, with both ready.
+        let mut k = Draik::new(&w, &mut rng);
+        k.state = State::Idle;
+        k.cooldown = [200; COOLDOWNS];
+        (k.cooldown[WIND], k.cooldown[STOMP]) = (0, 0);
+        k.tick(&view(&no, &never, 3.0), &w, 1, &mut rng);
+        assert!(!matches!(k.state, State::Wind { .. } | State::Stomp { .. }));
+    }
+
     #[test]
     fn breath_hits_and_reflection() {
         let w = Words::read(&block()).unwrap();

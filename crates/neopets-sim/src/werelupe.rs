@@ -807,6 +807,26 @@ mod tests {
         assert!(k.tick(&view([0.0, 0.0, 15.0], 0), &w, &mut rng).set_flag.contains(&273));
     }
 
+    /// SPEC-0062 Forcing the rarely seen states (R-0180): King, Swing: phase 1, idle, ready, swing
+    /// counter 601, hero 6.0 away: within a few draws state 10 starts with 0x17 and the counter clears.
+    #[test]
+    fn the_swing_vector() {
+        let w = words();
+        let mut rng = Rng::seeded(4);
+        let mut k = King::new([0.0; 3]);
+        (k.state, k.ready, k.started) = (State::Idle, true, true);
+        k.counters = [0; 5];
+        k.counters[SWING_C] = 601;
+        for _ in 0..40 {
+            k.tick(&view([6.0, 0.0, 0.0], 100), &w, &mut rng);
+            if matches!(k.state, State::Swing(_)) {
+                break;
+            }
+        }
+        assert_eq!(k.state, State::Swing(0x17));
+        assert_eq!(k.counters[SWING_C], 0);
+    }
+
     #[test]
     fn rings_and_jump_and_side() {
         // The ring growth vector (life 0.8 s).

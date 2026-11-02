@@ -3,10 +3,9 @@
 //! the ledge-drop edge test, and the hero states 30 (hang from a ledge), 35 (climb up from a
 //! fall), 37 (drop off an edge into a hang) and 47 (climb up while rising).
 //!
-//! Not built: the ladder check of state 30, the touched-flag branch of state 47 (the wall contact is
-//! off in these states), the obstacle probe of sub-modes 1 and 2 of states 35 and 47 (taken as
-//! passing), state 38 (the drop onto a climb panel), the busy gate of the drop test, and the edge
-//! offer's replace rule beyond the facing test.
+//! The host runs state 30's ladder check, the obstacle probes and state 38's hand-over. Not built: the
+//! touched-flag branch of state 47 (the wall contact is off in these states), the busy gate of the
+//! drop test, and the edge offer's replace rule beyond the facing test.
 
 use crate::hero::Vec3;
 use crate::motion::HERO_HEIGHT;
@@ -472,8 +471,7 @@ impl Ledge {
     /// hold) and is cut at an end that does not continue; in 5 and 6 the held edge becomes the
     /// linked one on the first between-step tick past the joint. 4 the pull-up to progress 0.95.
     /// Every sub-mode faces the wall. The ground under the hanging hero reaching his feet ends
-    /// the hang (state 1). Not built:
-    /// the obstacle probe, the pull-up's early run-out from frame 37.
+    /// the hang (state 1). Not built: the pull-up's early run-out from frame 37.
     fn hang(&mut self, step: &mut Step, hero: Vec3, side: f32, forward: bool, gap: f32, clip: Clip) {
         if gap <= 0.0 && matches!(self.sub, 3 | 5 | 6) {
             step.exit = Some(1);
