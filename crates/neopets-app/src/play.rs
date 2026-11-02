@@ -574,14 +574,11 @@ fn walk_toward(c: &mut Character, to: [f32; 3], speed: f32, hero: [f32; 3], worl
     let gait = wk.nav_step(&world.navmeshes, to, hero);
     let moving = root[0].hypot(root[2]) > 1e-4;
     let ground = &world.ground;
-    // An arrival (a fresh block is one) stands this tick. Standing against the edge must not read
-    // as a new block, or the walk never goes on (this build's reading; R-0194).
+    // SPEC-0056 Walkers held at a mesh edge: an arrival requests idle, and the motion step of the
+    // next tick still uses the stored root step. A settled walker held at a reach edge stays held.
     let idle = gait == neopets_sim::walker::Gait::Idle;
-    let step = if idle { [0.0; 3] } else if moving { root } else { [0.0, 0.0, speed] };
+    let step = if moving { root } else if idle { [0.0; 3] } else { [0.0, 0.0, speed] };
     wk.motion_tick(step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
-    if idle && wk.fresh_block() {
-        wk.blocked_timer = 119;
-    }
     c.position = wk.position();
     c.facing = wk.facing;
 }
@@ -2662,10 +2659,25 @@ impl Play {
             self.held_at = None;
             return;
         }
-        let holding = self.characters.iter().any(|c| c.enemy.as_ref().is_some_and(|e| e.outer == 2 && e.seq == 2 && e.selected.is_some_and(|k| e.p.slots[k].flags & 0x08 != 0)));
-        if !holding {
+        let holder = self.characters.iter().find(|c| c.enemy.as_ref().is_some_and(|e| e.outer == 2 && e.seq == 2 && e.selected.is_some_and(|k| e.p.slots[k].flags & 0x08 != 0)));
+        let Some(holder) = holder else {
             self.loco.state = hero_states::STANCE;
             self.held_at = None;
+            return;
+        };
+        // SPEC-0005 Attach points and carrying (R-0158): he is carried at the enemy's attach point k,
+        // chosen by the first of the frame's bits 0x2 to 0x10; he is not held where he stands.
+        let bits = holder.anim.frame_bits();
+        let k = (1..5).find(|&n| bits & (1 << n) != 0).unwrap_or(0);
+        if let Some(m) = Self::attach_frame(holder, k) {
+            let d = m.cols[2].map(|v| -v);
+            let (rows, at) = enemy::carry_place(d, m.cols[1], m.t);
+            self.held_at = Some(at);
+            self.loco.body.position = at;
+            let f = rows[2];
+            if f[0].hypot(f[2]) > 1e-4 {
+                self.loco.facing = [f[0], 0.0, f[2]];
+            }
         }
     }
 
@@ -10378,13 +10390,7 @@ impl Play {
                         c.root_step = c.anim.tick();
                         continue;
                     }
-                    c.walk_ticks += 1;
-                    if c.walk_ticks > 900 {
-                        c.position = t;
-                        if let Some(wk) = c.walker.as_mut() {
-                            wk.place(t);
-                        }
-                    } else if c.townsfolk.is_some() {
+                    if c.townsfolk.is_some() {
                         walk_toward(c, t, speed, hero, world);
                     } else {
                         c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
@@ -10422,15 +10428,7 @@ impl Play {
                     neopets_sim::npc::PathStep::Next => c.walk_ticks = 0,
                     neopets_sim::npc::PathStep::Walk(to) => {
                         if !walk_held(c, hero, scene_held) {
-                            c.walk_ticks += 1;
-                            if c.walk_ticks > 900 {
-                                c.position = to;
-                                if let Some(wk) = c.walker.as_mut() {
-                                    wk.place(to);
-                                }
-                            } else {
-                                walk_toward(c, to, 0.083_37, hero, world);
-                            }
+                            walk_toward(c, to, 0.083_37, hero, world);
                             if c.anim.clip_state().action != 1 {
                                 c.anim.play(1);
                             }
@@ -10451,25 +10449,14 @@ impl Play {
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
                 let clip = c.anim.clip_state();
                 let mesh = c.walker.as_ref().and_then(|w| w.mesh).and_then(|m| world.navmeshes.get(m));
-                let arrived = c.walker.as_ref().is_some_and(|w| w.arrived);
+                let arrived = c.walker.as_ref().is_some_and(|w| w.wander_edge(&world.navmeshes));
                 let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress, fidget_entry: c.anim.has(11), wander_fidget: c.anim.has(2), arrived };
                 if let Some(id) = t.tick_on(&mut c.facing, view, rng, mesh) {
                     // The patrol walk id 8 (speed code 6); a bank without it walks with id 1.
                     c.anim.play(if id == 8 && !c.anim.has(8) { 1 } else { id });
                 }
                 if let Some(to) = t.walk_to {
-                    let from = c.position;
                     walk_toward(c, to, 0.083_37, hero, world);
-                    // This build's guard (R-0194): a route point the walker cannot get any nearer
-                    // to for 180 ticks counts as reached.
-                    let moved = (c.position[0] - from[0]).hypot(c.position[2] - from[2]);
-                    c.walk_ticks = if moved < 0.01 { c.walk_ticks + 1 } else { 0 };
-                    if c.walk_ticks > 180 {
-                        c.walk_ticks = 0;
-                        if let Some(p) = c.townsfolk.as_mut().and_then(|t| t.patrol.as_mut()) {
-                            p.point_stuck();
-                        }
-                    }
                 }
             }
             c.root_step = c.anim.tick();
@@ -10566,10 +10553,14 @@ impl Play {
 
     /// Render attachment point n of a character in the world.
     fn attach_point(c: &Character, n: usize) -> Option<[f32; 3]> {
+        Self::attach_frame(c, n).map(|m| m.t)
+    }
+
+    /// The world frame of attachment point n (SPEC-0005 Attach points and carrying).
+    fn attach_frame(c: &Character, n: usize) -> Option<neopets_data::anim::Affine> {
         let &(Some(bone), angles, offset) = c.anim.bones().attach.get(n)? else { return None };
         let frames = c.anim.bone_frames();
-        let m = placement(c.position, c.facing).mul(frames.get(bone)?).mul(&attach_rotation(offset, angles));
-        Some(m.t)
+        Some(placement(c.position, c.facing).mul(frames.get(bone)?).mul(&attach_rotation(offset, angles)))
     }
 
     /// SPEC-0036 Roberta shot launch step 1 for homing modes 2 to 5: the first ten hittable

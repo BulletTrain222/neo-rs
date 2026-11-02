@@ -46,15 +46,12 @@ pub struct Wander {
     asked: bool,
     /// This tick the character walks.
     pub walking: bool,
-    /// Ticks on one point (this build's guard: 600 ticks count as reached, so a character whose
-    /// route is blocked by something the mesh does not hold does not walk in place for ever).
-    spent: u32,
 }
 
 impl Wander {
     pub fn new(home: Vec3, words: [u32; 8]) -> Self {
         let (a, b) = (words[2] as i32, words[3] as i32);
-        Self { home, radius: f32::from_bits(words[1]), pause_range: (a.min(b), a.max(b)), chance: words[4] as i32, point: None, pause: 0, fidget: 0, asked: false, walking: false, spent: 0 }
+        Self { home, radius: f32::from_bits(words[1]), pause_range: (a.min(b), a.max(b)), chance: words[4] as i32, point: None, pause: 0, fidget: 0, asked: false, walking: false }
     }
 
     /// Form H of the spawn point search (SPEC-0056): a whole-number point in the square of side
@@ -89,12 +86,10 @@ impl Wander {
         }
         if self.point.is_none() {
             self.point = Some(self.pick(m, v.position, rng));
-            self.spent = 0;
         }
         if self.pause < 1 {
             let point = self.point.unwrap_or(self.home);
-            self.spent += 1;
-            if horizontal(v.position, point).0 < 1.5 || v.arrived || self.spent >= 600 {
+            if horizontal(v.position, point).0 < 1.5 || v.arrived {
                 self.point = None;
                 if rng.range(1, 100) < self.chance {
                     self.pause = rng.range(self.pause_range.0, self.pause_range.1);
@@ -191,11 +186,6 @@ impl Patrol {
             return (None, Some(self.stop));
         }
         (Some(target), None)
-    }
-
-    /// This build's guard: the point cannot be reached, so go on to the next.
-    pub fn point_stuck(&mut self) {
-        self.reached = true;
     }
 
     /// The route point now targeted.
@@ -335,7 +325,7 @@ pub struct View {
     pub fidget_entry: bool,
     /// The animation table has an entry for the wander fidget (id 2).
     pub wander_fidget: bool,
-    /// The last navigation step arrived (the settled arrival, or a fresh block).
+    /// Wander step 3: settled within 2.5 of a boundary edge plane, or the goal latch cleared.
     pub arrived: bool,
 }
 

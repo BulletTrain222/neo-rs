@@ -1,6 +1,6 @@
 # SPEC-0053: Hero switching and the party state
 
-- Answers: R-0042 (in part; the Act 2 start module 1174 is in SPEC-0044); extends the hero rows of SPEC-0030: rows 51, 162, 167, 173, 178, 180, 186, 187; proactive (open close-out)
+- Answers: R-0042 (in part; the Act 2 start module 1174 is in SPEC-0044); extends the hero rows of SPEC-0030: rows 51, 162, 167, 173, 178, 180, 186, 187; proactive (open close-out); R-0178 (swap mode across a Continue)
 - Status: Draft
 - Disc build: SCUS-97367 v1.00 (same fingerprint as SPEC-0001). The HUD portrait words in section 2.5 and the hero resource table in section 2.6 were read from the boot program's data.
 - Confidence: per section (High, Medium-High, Medium, Low).
@@ -72,7 +72,7 @@ One run-time block holds the swap state. It is the game-globals record at data a
 
 | Offset | Size | Meaning | Confidence |
 | --- | --- | --- | --- |
-| +0x08 | u32 | Swap mode (section 3.1). The first use of the object sets it to 2, but the boot set-up then sets it by rule M below, so play starts in mode 0. Rule M, run at boot and at every new-game and start-point world load: story flag 220 clear gives mode 0; flag 220 set and flag 248 clear gives mode 1; both set give mode 2. A load sets the mode from save word 0x307C (SPEC-0025). Level scripts (SetHeroSwapMode) and the act-start setup write it at other times. | High |
+| +0x08 | u32 | Swap mode (section 3.1). The first use of the object sets it to 2, but the boot set-up then sets it by rule M below, so play starts in mode 0. Rule M, run at boot and at every new-game and start-point world load: story flag 220 clear gives mode 0; flag 220 set and flag 248 clear gives mode 1; both set give mode 2. A load sets the mode from save word 0x307C (SPEC-0025); so does the Continue after a game over when a save or load is pending, which re-applies the session snapshot, so a boss fight that had changed the mode (a locked mode, for example) does not carry its mode over a Continue (SPEC-0055, section 4). Level scripts (SetHeroSwapMode) and the act-start setup write it at other times. | High |
 | +0x20 | u32 | Flag D: set when a box or list picker ran this pass (it gives game-state code 4, SPEC-0026). Read by the in-play controls gate (section 3.13). | High |
 | +0x44 | u32 | In-progress flag: 1 from acceptance of a request until the swap task ends, else 0. It gives game-state code 5 (SPEC-0026). | High |
 | +0x4C | u32 | Set to 0 together with +0x44 when a request is accepted and when the swap ends. It is one of the accumulators of the per-pass status update, which adds dt to it on every pass unless it holds -1, so it counts seconds since the last accept or swap end (High for the update; Medium for the meaning). | Medium |

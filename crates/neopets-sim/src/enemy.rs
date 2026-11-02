@@ -513,6 +513,28 @@ fn unit(a: Vec3) -> Vec3 {
     if l > 0.0 { a.map(|c| c / l) } else { a }
 }
 
+/// SPEC-0040 Behavior 8c, the carry placement: from the attach frame's direction `d`, up `u` and
+/// point `p`, the carried character's three basis rows and its position.
+pub fn carry_place(d: Vec3, u: Vec3, p: Vec3) -> ([Vec3; 3], Vec3) {
+    let cross = |a: Vec3, b: Vec3| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let d = unit(d);
+    let (b1, b2) = if dot(d, u) > 0.9999 {
+        let b1 = unit(cross([0.0, 1.0, 0.0], d));
+        (b1, unit(cross(d, b1)))
+    } else {
+        let b2 = unit(cross(d, u));
+        (unit(cross(b2, d)), b2)
+    };
+    ([b1, b2, d], [p[0] - 1.25 * b2[0], p[1] - 1.25 * b2[1], p[2] - 1.25 * b2[2]])
+}
+
+/// The horizontal unit vector from `a` to `b` (zero when one is directly above the other).
+fn hdir(a: Vec3, b: Vec3) -> Vec3 {
+    let (x, z) = (b[0] - a[0], b[2] - a[2]);
+    let l = x.hypot(z);
+    if l > 1e-6 { [x / l, 0.0, z / l] } else { [0.0; 3] }
+}
+
 fn hdist(a: Vec3, b: Vec3) -> f32 {
     (a[0] - b[0]).hypot(a[2] - b[2])
 }
@@ -865,6 +887,16 @@ impl Enemy {
             }
             _ => {}
         }
+        // SPEC-0040 Mode entry setup: the state's gait words. They stay until the next load, so an
+        // enemy hit straight out of its patrol walks its attack approach with them.
+        let fly = self.p.can_fly != 0;
+        match s {
+            1 => self.gaits[0] = if fly { 154 } else { 20 },
+            5 | 7 | 8 => (self.gaits[0], self.gaits[2]) = (if fly { 98 } else { 2 }, 21),
+            6 => (self.gaits[0], self.gaits[2]) = (if fly { 99 } else { 4 }, 21),
+            9 => (self.gaits[0], self.gaits[2]) = (if fly { 100 } else { 11 }, 21),
+            _ => {}
+        }
         if s == 8 {
             self.emerge = 0;
             self.ambush = 0;
@@ -893,7 +925,7 @@ impl Enemy {
         let sel = self.spawn.selector;
         match self.emerge {
             0 => {
-                if len(sub(v.hero, v.position)) < self.spawn.emerge_distance * v.bands.0 {
+                if hdist(v.hero, v.position) < self.spawn.emerge_distance * v.bands.0 {
                     self.emerge = 1;
                     self.ambush = 1;
                 }
@@ -2113,8 +2145,9 @@ impl Enemy {
         if self.outer == 11 && hdist(v.position, v.hero) > v.radii + 0.25 {
             return;
         }
-        let d = len(sub(v.hero, v.position));
-        let cos = dot(v.facing, unit(sub(v.hero, v.position)));
+        // R-0198: horizontal, the height difference dropped before the length and the normalisation.
+        let d = hdist(v.hero, v.position);
+        let cos = dot(v.facing, hdir(v.position, v.hero));
         for k in (0..4).rev() {
             let s = self.p.slots[k];
             if s.kind == UNUSED || self.cooldown[k] >= 1 {
@@ -2173,8 +2206,8 @@ impl Enemy {
     /// starts the sequencer (state 0, or 6 with a charge type); the distances are not redrawn.
     /// Code 5: the sequencer in state 4 with L1 held in pad slot 0 (R-0117).
     fn counter_choose(&mut self, v: &View, rng: &mut Rng) {
-        let d = len(sub(v.hero, v.position));
-        let cos = dot(v.facing, unit(sub(v.hero, v.position)));
+        let d = hdist(v.hero, v.position);
+        let cos = dot(v.facing, hdir(v.position, v.hero));
         let mut win = None;
         for k in 0..4 {
             let s = self.p.slots[k];
@@ -2390,7 +2423,7 @@ impl Enemy {
         }
         self.choose(v, rng);
         self.counter_choose(v, rng);
-        let d = len(sub(v.hero, v.position));
+        let d = hdist(v.hero, v.position);
         // Behavior 24, the distance-hide gate: in the rush (outer 1), with the row's flag, beyond
         // its hide distance and a roll int[0, 100] below its chance, state 14.
         if self.outer == 1 && self.state != 14 && self.p.distance_hide && d > self.p.hide_distance && (rng.range(0, 100) as f32) < self.p.hide_chance {
@@ -2398,7 +2431,7 @@ impl Enemy {
             self.set(14, v, rng, a);
             return;
         }
-        let dir = unit(sub(v.hero, v.position));
+        let dir = hdir(v.position, v.hero);
         let near_waypoint = hdist(v.position, v.waypoint) <= 1.0;
         match self.outer {
             0 => {
@@ -2745,7 +2778,7 @@ impl Enemy {
         if s.orient && (1..=3).contains(&self.seq) {
             a.face = Some((v.hero, 1.0));
         }
-        let cos = dot(v.facing, unit(sub(v.hero, v.position)));
+        let cos = dot(v.facing, hdir(v.position, v.hero));
         let strike = |e: &mut Self, a: &mut Act| -> Option<bool> {
             if v.contact && !e.hit {
                 e.hit = true;
@@ -2957,6 +2990,28 @@ impl Enemy {
         if self.outer == 2 && self.seq <= 3 && d < v.radii {
             a.stop = true;
         }
+    }
+}
+
+#[cfg(test)]
+mod carry_tests {
+    use super::*;
+
+    /// SPEC-0040 Behavior 8c's placement example.
+    #[test]
+    fn the_carried_character_sits_off_the_attach_point() {
+        let (rows, at) = carry_place([0.0, 0.0, 1.0], [0.0, 1.0, 0.0], [10.0, 3.0, -4.0]);
+        assert_eq!(rows, [[0.0, 1.0, 0.0], [-1.0, 0.0, 0.0], [0.0, 0.0, 1.0]]);
+        assert_eq!(at, [11.25, 3.0, -4.0]);
+    }
+
+    /// R-0198: a hero at (4, 3, 0) from an enemy at the origin is 4.0 away, straight ahead.
+    #[test]
+    fn the_facing_test_drops_the_height() {
+        let (o, h) = ([0.0, 0.0, 0.0], [4.0, 3.0, 0.0]);
+        assert_eq!(hdist(h, o), 4.0);
+        assert_eq!(dot([1.0, 0.0, 0.0], hdir(o, h)), 1.0);
+        assert_eq!(hdir(o, [0.0, 3.0, 0.0]), [0.0; 3]);
     }
 }
 

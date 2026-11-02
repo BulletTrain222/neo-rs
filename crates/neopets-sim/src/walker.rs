@@ -154,6 +154,25 @@ impl Walker {
         }
     }
 
+    /// SPEC-0056 Wander step 3: the walker is settled (its goal in its own triangle) within 2.5 of the
+    /// plane of one of that triangle's boundary edges, or the goal latch has cleared.
+    pub fn wander_edge(&self, meshes: &[NavMesh]) -> bool {
+        let (Some(m), Some(c)) = (self.mesh.and_then(|i| meshes.get(i)), self.current) else { return false };
+        if !self.latch {
+            return true;
+        }
+        if self.c0 != Some(c) || self.t0 != Some(c) {
+            return false;
+        }
+        let (tri, p) = (m.triangles[c], self.position());
+        (0..3).any(|k| {
+            let (v0, v1) = (tri[k], tri[(k + 1) % 3]);
+            let (ex, ez) = (v1[0] - v0[0], v1[2] - v0[2]);
+            let l = ex.hypot(ez);
+            m.neighbours[c][k] < 0 && l > 0.0 && ((p[0] - v0[0]) * -ez + (p[2] - v0[2]) * ex) / l < 2.5
+        })
+    }
+
     /// One navigation step toward walk target w (SPEC-0056 Navigation step). Returns the gait
     /// to play; sets `arrived` on arrival. With no mesh the character steers straight at w.
     pub fn nav_step(&mut self, meshes: &[NavMesh], w: Vec3, hero: Vec3) -> Gait {
@@ -286,14 +305,22 @@ impl Walker {
             let n = [-ez / len, 0.0, ex / len];
             let signed = |q: Vec3| (q[0] - v0[0]) * n[0] + (q[2] - v0[2]) * n[2];
             let along = |q: Vec3| ((q[0] - v0[0]) * ex + (q[2] - v0[2]) * ez) / len;
-            let rho = if signed(opp) >= 2.0 * r && v0[0] * n[0] + v0[2] * n[2] >= r { r } else { 0.0 };
+            // The reach's three tests (R-0194): the opposite vertex, v0 and the second vertex with the
+            // next edge's neighbour index as its w.
+            let outside = v0[0] * n[0] + v0[2] * n[2];
+            let next = m.neighbours[c][(k + 1) % 3] as f32;
+            let rho = if signed(opp) >= 2.0 * r && outside >= r && outside * (1.0 - next) >= 2.0 * r { r } else { 0.0 };
             let p = self.position();
             let (d, u) = (signed(p), along(p));
             if d <= rho && (0.0..=len).contains(&u) {
                 let depth = (d - rho).abs();
-                self.body.position[0] += n[0] * depth;
-                self.body.position[2] += n[2] * depth;
-                self.remove_into_wall(n);
+                let v = self.body.velocity;
+                // Within 0.05 with nothing moving into the wall, the response changes nothing.
+                if depth > 0.05 || step[0] * n[0] + step[2] * n[2] < 0.0 || v[0] * n[0] + v[2] * n[2] < 0.0 {
+                    self.body.position[0] += n[0] * depth;
+                    self.body.position[2] += n[2] * depth;
+                    self.remove_into_wall(n);
+                }
                 self.blocked = true;
                 self.blocked_timer = 120;
             } else if (step[0] * step[0] + step[2] * step[2]).sqrt() > 0.1 {
@@ -333,6 +360,21 @@ impl Walker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// TV-0056-R194e: a reach needs the next edge too.
+    #[test]
+    fn reach_needs_the_next_edge() {
+        for (next, pushed) in [(-1, true), (0, true), (1, false), (3, false)] {
+            let m = NavMesh { neighbours: vec![[-1, next, -1]], triangles: vec![[[100.0, 0.0, 100.0], [200.0, 0.0, 100.0], [100.0, 0.0, 200.0]]], ..square() };
+            let meshes = [m];
+            let mut w = Walker::new([150.0, 0.0, 100.5], [0.0, 0.0, 1.0], 1.175, 1.0, 0);
+            w.mesh = Some(0);
+            w.current = Some(0);
+            w.confine(&meshes, [0.0; 3]);
+            assert_eq!(w.blocked, pushed, "next {next}");
+            assert_eq!(w.position()[2] > 101.0, pushed, "next {next}");
+        }
+    }
 
     fn square() -> NavMesh {
         NavMesh {
