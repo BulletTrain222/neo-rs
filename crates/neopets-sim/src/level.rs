@@ -1578,7 +1578,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0041 1371 Init, branch B (a normal visit): effect 0 stopped, Z0 to Z2 on triggers
         // 0 to 4, object 1 at its start, the wave word (1) at -1. Branch A (an arena round from
-        // pack 1350, value 20 for eW 157) is not built: pack 1350 is not.
+        // pack 1350, value 20 for eW 157) is below.
         // Branch A (value 20 for eW 157, posted by pack 1350's arena master): objects 10, 9 and 4
         // at their start, a 0.1 s fade out, the arena-round word (4); thread T loads Sevaric (set
         // 5, region 1377) into slot 1 and the round's set t (4 to 0 by flags 599 to 596, region
@@ -2932,7 +2932,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         908 => [4, 0, 1, 2].map(|obj| Action::InitObjOn { obj, end: false }).to_vec(),
         // SPEC-0037 906 Init: the button routine on trigger 2, L0 and L1 on 0 and 1, and thread
         // T's load of set 0 (region 907). The per-tick navmesh pass runs in Update
-        // (DisableVillagerSocialize is not built).
+        // (DisableVillagerSocialize has no effect: the villager pair is never formed on disc).
         906 => vec![reg(2, 2), reg(0, 0), reg(1, 1), Action::LoadRegion { slot: 0, region: Some(907) }],
         // SPEC-0037 837 Init: with 636 clear object 0 at its start, breakable 3 disabled and masks
         // 1, else masks 2.
@@ -4492,7 +4492,7 @@ const NAV_TABLE: usize = 150;
 /// The per-tick navigation pass of 906, 956 and 986 (SPEC-0037 906; SPEC-0043 956; SPEC-0042
 /// 986): each of the first n entities whose table entry is unassigned asks for its closest mesh
 /// (the host's answer lands for the next tick), and each assigned one is assigned that mesh
-/// every tick. DisableVillagerSocialize is not built.
+/// every tick. DisableVillagerSocialize is left out: the villager pair is never formed on disc.
 fn nav_pass(state: &GameState, pack: u32, n: usize) -> Vec<Action> {
     let mut v = Vec::new();
     for e in 0..n {
@@ -9695,7 +9695,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // Routine 39 (trigger 4, entering, 222 set, 397 clear): 397, 396, line 177, 398; entity 0
         // to locator 33 and the hero to 34; entity 16's line 169; thread T3 (cameras 20 and 21,
-        // set 13 into slot 4 and out again). The entities' path walks are not built.
+        // set 13 into slot 4 and out again), with the entities' path walks.
         (1300, 39) if call.object && call.state == 1 && state.flag(222) && !state.flag(397) => {
             for f in [397, 396, 398] {
                 state.set(f, true);
@@ -12151,7 +12151,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // bit 2 and level state 0 (the boss's event) bit 3 and 293. Words: 12 a chain to start next
         // tick, 13 fight active, 14 the burst word, 15 the decals done, 16 the vents the hero is in.
         // While the fight is active the module stops effects 18 to 49 on every tick, so the chain's
-        // effects never show and are left out. Not built: the crusher and lava bubble threads.
+        // effects never show and are left out.
         864 => {
             let b = state.word(pack, 1);
             let has = |n: u32| b & (1 << n) != 0;
@@ -14621,7 +14621,7 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 state.set(706, true);
                 actions.extend([Action::WaitLoads, Action::FadeIn { seconds: 1.0, wait: false }]);
             }
-            // Its stage events (the stage-6 scene is not covered).
+            // Its stage events (the stage-6 scene is `rope_gun_scene`, above).
             match state.stage() {
                 // Stage 1 with 122 set and 123 clear: hero to locator 13, camera 10, entity 47
                 // says line 168 and entity 39 line 169, entities 47, 39 and 33 to locators 10,
@@ -17656,7 +17656,7 @@ fn farm_routine_c(s: &mut GameState, rot: &mut Rotation) -> Option<u16> {
 /// SPEC-0045 909 activation thread: the slot loads by story stage s (the highest of flags 1 to
 /// 6). Slot 0 is the fourth slot (regions 910 to 913); slots 1, 2 and 3 are P (914 to 919),
 /// Q (920 to 925) and R (926 to 933). The arrival step, stage events and talk thread that
-/// follow are not covered.
+/// follow are the callers'.
 fn farm_slots(state: &GameState, entry_10: bool) -> Vec<Action> {
     let s = state.stage();
     let f = |n| state.flag(n);

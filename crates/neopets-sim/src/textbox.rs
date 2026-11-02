@@ -6,7 +6,7 @@
 //! Triangle 0, on the complete last page) and the substitution codes (Substitution codes).
 //!
 //! Not covered: the instant flag, the box owner's action beyond the override clear, the
-//! same-text reopen, and the emote, give-items and progress-flag codes (they are stepped over).
+//! same-text reopen. The emote, give-items and progress-flag codes are the caller's to take.
 
 const RATE: f32 = 10.0;
 const STEP: f32 = 1.0 / 30.0;
