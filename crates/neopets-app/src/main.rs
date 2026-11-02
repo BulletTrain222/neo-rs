@@ -4675,6 +4675,15 @@ fn play_trace(
         if std::env::var_os("NEOPETS_TRACE_CASTERS").is_some() && play.ticks == 1000 {
             println!("CASTERS {:?}", play.diag_casters());
         }
+        // NEOPETS_TRACE_ROUTINES: every pack and entity with a talk routine (for a check against the specs).
+        if std::env::var_os("NEOPETS_TRACE_ROUTINES").is_some() && play.ticks == 1 {
+            for pack in 600..1500u32 {
+                let v: Vec<usize> = (0..256).filter(|&e| neopets_sim::level::proximity_routine(pack, e).is_some()).collect();
+                if !v.is_empty() {
+                    println!("ROUTINES {pack} {v:?}");
+                }
+            }
+        }
         // NEOPETS_TRACE_STATUPS: the items the stat-up rule accepts.
         if std::env::var_os("NEOPETS_TRACE_STATUPS").is_some() && play.ticks == 1 {
             println!("STATUPS {:?}", play.stat_up_list());

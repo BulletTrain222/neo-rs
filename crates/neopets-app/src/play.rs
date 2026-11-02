@@ -9928,6 +9928,7 @@ impl Play {
             self.state.hero.attack_mote = self.equipment.motes[0][2];
             self.state.hero.hp = self.hero_hp;
             self.state.hero.hp_max = self.hero_max;
+            self.state.hero.pet_kind = self.petpet.as_ref().map(|p| p.kind);
             self.state.miamice_caged = self.catch.count;
             self.state.hero.shield_mote = self.equipment.motes[0][1];
             self.state.hero.square_held = self.square_held;

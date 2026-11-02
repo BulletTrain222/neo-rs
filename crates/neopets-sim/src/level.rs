@@ -749,6 +749,8 @@ pub fn hazard_hit_1089(l: [f32; 3], hero: [f32; 3]) -> bool {
 /// The hero as the lesson Update reads it this tick.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HeroView {
+    /// The live petpet's kind (GetPlayerPetPetType; SPEC-0047 Script query), None with no petpet.
+    pub pet_kind: Option<u8>,
     /// Tor's attack sub-state (0: no melee attack).
     pub sub: u8,
     /// The entities of the current world the hero's swing hit this tick.
@@ -6854,6 +6856,32 @@ fn brightvale_talk(routine: u8, s: &mut GameState) -> Vec<Action> {
         }
         19 => talk(u(s, 105)),
         31 => talk(u(s, 123)),
+        // SPEC-0045 758 entities 27 and 30, Cinthia ("Cynthia's Noil"): 540: line 0; 539 clear: 539
+        // and line 12; else by the live petpet: kind 6 sets 540 with line 1; none 2; kinds 1, 3
+        // and 7 lines 3, 4 and 5; any other kind by hero, Tor 6 to 8 and Roberta 9 to 11 in turn.
+        27 => {
+            if s.flag(540) {
+                talk(0)
+            } else if !s.flag(539) {
+                s.set(539, true);
+                talk(12)
+            } else {
+                match s.hero.pet_kind {
+                    Some(6) => {
+                        s.set(540, true);
+                        talk(1)
+                    }
+                    None => talk(2),
+                    Some(1) => talk(3),
+                    Some(3) => talk(4),
+                    Some(7) => talk(5),
+                    Some(_) => {
+                        let b = if rob { 9 } else { 6 };
+                        talk(b + step(s, 3))
+                    }
+                }
+            }
+        }
         18 | 23 | 11 => {
             let (f, g, item, q, tor, robl, ub) = match routine {
                 18 => (449, 450, 66, 182, 178, 175, 183),
@@ -9213,6 +9241,8 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (1078, 0) if call.object && state.flag(310) && state.word(pack, 1) == 0 => {
             if call.square && !state.talking {
                 if state.flag(312) || state.has_item(18) {
+                    // SPEC-0058 goal 424: the opening sets 312, so later loads need no item.
+                    state.set(312, true);
                     state.set_word(pack, 1, 1);
                     out.actions.extend([
                         Action::DeactivateObj { obj: 1 },
@@ -9353,6 +9383,21 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             } else {
                 out.actions.push(Action::Message { line: 185 });
             }
+        }
+        // Routine 2 (trigger 5, the petpet ritual; 594 clear, a live kind-3 petpet): object 1 off
+        // and 0 on, hero animation 0, a fade to locator 10, camera 5, the ritual word.
+        (1300, 2) if call.object && call.state == 1 && !state.flag(594) && state.hero.pet_kind == Some(3) && state.word(pack, W1300_RITUAL) == 0 => {
+            state.set_word(pack, W1300_RITUAL, 1);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::DeactivateObj { obj: 1 },
+                Action::InitObjOn { obj: 0, end: false },
+                Action::HeroAnim { anim: 0, wait: false },
+                fade_out(),
+                Action::MoveHero { locator: 10 },
+                fade_in(),
+                Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+            ]);
         }
         // Routine 39 (trigger 4, entering, 222 set, 397 clear): 397, 396, line 177, 398; entity 0
         // to locator 33 and the hero to 34; entity 16's line 169; thread T3 (cameras 20 and 21,
@@ -12470,12 +12515,25 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
             out.extend(practice_1327(state));
         }
-        // SPEC-0045 1300 Update: items 11, 10 and 62 held set 225, 226 and 227. The petpet
-        // ritual's colour ramp (routine 2) is not built.
+        // SPEC-0045 1300 Update: items 11, 10 and 62 held set 225, 226 and 227. The petpet ritual:
+        // while its word runs, object 2 fades in over 5.0 s (SPEC-0047) and at full 594 is set and
+        // the trigger's end runs. The colour multiplier itself is not drawn (the object just shows).
         1300 => {
             for (item, flag) in [(11, 225), (10, 226), (62, 227)] {
                 if state.has_item(item) && !state.flag(flag) {
                     state.set(flag, true);
+                }
+            }
+            let n = state.word(pack, W1300_RITUAL);
+            if n > 0 {
+                state.set_word(pack, W1300_RITUAL, n + 1);
+                if n == 1 {
+                    out.push(Action::InitObjOn { obj: 2, end: false });
+                }
+                if n >= RITUAL_TICKS {
+                    state.set_word(pack, W1300_RITUAL, 0);
+                    state.set(594, true);
+                    out.extend([fade_out(), Action::ReturnCamera { preset: -1, release: true }, fade_in()]);
                 }
             }
         }
@@ -14554,6 +14612,11 @@ fn kitchen_update(state: &mut GameState) -> Vec<Action> {
     Vec::new()
 }
 
+/// SPEC-0045 1300's petpet-ritual word (ticks since it started, 0 off) and the ramp's length,
+/// 5.0 s by the system clock (SPEC-0047 Level-script pet branches).
+const W1300_RITUAL: u8 = 50;
+const RITUAL_TICKS: i32 = 300;
+
 /// SPEC-0045 1163 Serving scene. Each guest's Random(0, 1) locator comes from one roll of this
 /// talk, a bit per guest. The hero is held through it; the spec's list has no hold or release,
 /// which its moves imply.
@@ -14630,6 +14693,23 @@ fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
                 v.extend(serving_1163(s.talk_roll));
             }
             v
+        }
+        // SPEC-0045 1163 entities 8, 6, 14, 13 and 9: Template W from their own base line. Entity 13
+        // talks with no conversation once 183 is set.
+        8 | 6 | 14 | 13 | 9 => {
+            let b = match r {
+                8 => 129,
+                6 => 111,
+                14 => 93,
+                13 => 66,
+                _ => 147,
+            };
+            let line = template_w(b, s, rot);
+            if r == 13 && s.flag(183) {
+                line.map(|line| vec![Action::Message { line }]).unwrap_or_default()
+            } else {
+                talk(line)
+            }
         }
         15 => {
             if s.flag(200) {
@@ -15274,24 +15354,29 @@ fn castle_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
             rot.pick(4, &three(380))
         }),
         _ => {
-            // Template W (18 lines from b).
             let Some(&(_, b)) = CASTLE_W.get((r as usize).wrapping_sub(20)) else { return Vec::new() };
-            talk(if s.flag(29) {
-                rot.pick(0, &three(b))
-            } else if s.flag(28) {
-                Some(b + 3)
-            } else if s.flag(27) {
-                rot.pick(1, &three(b + 4))
-            } else if s.flag(153) {
-                if s.talk_roll == 1 {
-                    Some([(26, 7), (25, 17), (24, 8), (23, 9)].iter().find(|(f, _)| s.flag(*f)).map_or(b + 10, |&(_, o)| b + o))
-                } else {
-                    rot.pick(2, &three(b + 11))
-                }
-            } else {
-                rot.pick(3, &three(b + 14))
-            })
+            talk(template_w(b, s, rot))
         }
+    }
+}
+
+/// SPEC-0045 1098 Template W (18 lines from b), which 1163's guests share.
+fn template_w(b: u16, s: &GameState, rot: &mut Rotation) -> Option<u16> {
+    let three = |b: u16| cycle(&[b, b + 1, b + 2]);
+    if s.flag(29) {
+        rot.pick(0, &three(b))
+    } else if s.flag(28) {
+        Some(b + 3)
+    } else if s.flag(27) {
+        rot.pick(1, &three(b + 4))
+    } else if s.flag(153) {
+        if s.talk_roll == 1 {
+            Some([(26, 7), (25, 17), (24, 8), (23, 9)].iter().find(|(f, _)| s.flag(*f)).map_or(b + 10, |&(_, o)| b + o))
+        } else {
+            rot.pick(2, &three(b + 11))
+        }
+    } else {
+        rot.pick(3, &three(b + 14))
     }
 }
 
@@ -16102,6 +16187,7 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0045 758: one routine per entity of the line tables (shared entities share one).
         (758, 20 | 21 | 36 | 33 | 34 | 35 | 32 | 17 | 14 | 16 | 19 | 31 | 18 | 15 | 22) => Some(entity as u8),
         (758, 10 | 12) => Some(10),
+        (758, 27 | 30) => Some(27),
         (758, 23 | 25) => Some(23),
         (758, 11 | 13) => Some(11),
         (758, 26 | 28) => Some(26),
@@ -16129,6 +16215,10 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // 19 are Medium in the spec and not routed).
         (1358, 20) => Some(1),
         (1358, 21) => Some(2),
+        (1358, 16) => Some(3),
+        (1358, 17) => Some(4),
+        (1358, 19) => Some(5),
+        (1358, 18) => Some(6),
         // SPEC-0044 745: routines A to D on entities 3, 0, 1 and 2; SPEC-0043 1173: routine 4 on 0.
         (745, 0..=3) => Some(entity as u8),
         (1173, 0) => Some(4),
@@ -16235,9 +16325,14 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         // SPEC-0045 1163: the Miamice keeper (entities 0 and 10), entity 7 and Sir Harlag (15).
         (1163, 0 | 10) => Some(0),
         (1163, 7) => Some(7),
+        (1163, 6) => Some(6),
+        (1163, 8) => Some(8),
+        (1163, 9) => Some(9),
+        (1163, 13) => Some(13),
+        (1163, 14) => Some(14),
         (1163, 15) => Some(15),
         // SPEC-0044 1056: the trainer of the current stage (entity 5, 10, 12 or 24).
-        (1056, 5 | 10 | 12 | 24) => Some(0),
+        (1056, 5 | 10 | 12 | 22 | 24) => Some(0),
         (1056, 0) => Some(43),
         (1056, 38 | 41) => Some(38),
         (1056, 39 | 42) => Some(39),
@@ -16472,6 +16567,27 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if (pack, routine) == (1358, 2) {
         return vec![Action::Talk { line: 90 }];
+    }
+    // SPEC-0043 1358 entities 16 to 19 (Medium for the pairing): with 105 set a Random(1, 4) of 1
+    // takes the first line set and any other value the second; 105 clear takes the third. The sets
+    // are taken as three lines each, in turn, as the bases three apart suggest.
+    if pack == 1358 && (3..=6).contains(&routine) {
+        let [a, b, c] = match routine {
+            3 => [75, 78, 81],
+            4 => [63, 66, 69],
+            5 => [39, 42, 45],
+            _ => [51, 54, 57],
+        };
+        let base: u16 = if !state.flag(105) {
+            c
+        } else if state.talk_raw % 4 == 0 {
+            a
+        } else {
+            b
+        };
+        let k = state.word(pack, 40 + routine).rem_euclid(3);
+        state.set_word(pack, 40 + routine, (k + 1) % 3);
+        return vec![Action::Talk { line: base + k as u16 }];
     }
     if (pack, routine) == (1358, 1) {
         return delivery_talk(state);
@@ -16749,6 +16865,70 @@ fn farm_slots(state: &GameState, entry_10: bool) -> Vec<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_1163_guests_use_template_w() {
+        let mut s = GameState::default();
+        // SPEC-0045: entity 6 with 29 set shows 111, 112, 113 in turn; entity 13 with 29, 28, 27 and
+        // 153 clear shows 80, 81, 82, with no conversation once 183 is set.
+        s.set(29, true);
+        let six = proximity_routine(1163, 6).unwrap();
+        for line in [111, 112, 113] {
+            assert_eq!(on_talk(1163, six, &mut s), vec![Action::Talk { line }]);
+        }
+        s.set(29, false);
+        let thirteen = proximity_routine(1163, 13).unwrap();
+        assert_eq!(on_talk(1163, thirteen, &mut s), vec![Action::Talk { line: 80 }]);
+        s.set(183, true);
+        assert_eq!(on_talk(1163, thirteen, &mut s), vec![Action::Message { line: 81 }]);
+    }
+
+    #[test]
+    fn the_1358_watchers_talk() {
+        let mut s = GameState::default();
+        let r = proximity_routine(1358, 16).unwrap();
+        assert_eq!(on_talk(1358, r, &mut s), vec![Action::Talk { line: 81 }], "105 clear");
+        s.set(105, true);
+        s.talk_raw = 4;
+        assert_eq!(on_talk(1358, r, &mut s), vec![Action::Talk { line: 76 }], "a draw of 1, in turn");
+        s.talk_raw = 5;
+        assert_eq!(on_talk(1358, r, &mut s), vec![Action::Talk { line: 80 }]);
+        assert!(proximity_routine(1056, 22).is_some());
+    }
+
+    #[test]
+    fn cinthia_wants_a_kind_6_petpet() {
+        let mut s = GameState::default();
+        let r = proximity_routine(758, 27).unwrap();
+        assert_eq!(proximity_routine(758, 30), Some(r));
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 12 }]);
+        assert!(s.flag(539));
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 2 }], "no petpet");
+        s.hero.pet_kind = Some(3);
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 4 }]);
+        s.hero.pet_kind = Some(0);
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 6 }], "another kind, Tor in turn");
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 7 }]);
+        s.hero.pet_kind = Some(6);
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 1 }]);
+        assert!(s.flag(540));
+        assert_eq!(on_talk(758, r, &mut s), vec![Action::Talk { line: 0 }]);
+    }
+
+    #[test]
+    fn the_1300_ritual_sets_594_after_its_ramp() {
+        let mut s = GameState::default();
+        s.set_word(1300, W1300_RITUAL, 1);
+        let first = on_update(1300, &mut s, false);
+        assert!(first.contains(&Action::InitObjOn { obj: 2, end: false }));
+        for _ in 0..RITUAL_TICKS - 2 {
+            on_update(1300, &mut s, false);
+            assert!(!s.flag(594));
+        }
+        let end = on_update(1300, &mut s, false);
+        assert!(s.flag(594) && end.contains(&Action::ReturnCamera { preset: -1, release: true }));
+        assert_eq!(s.word(1300, W1300_RITUAL), 0);
+    }
 
     fn talks(pack: u32, routine: u8, s: &mut GameState, n: usize) -> Vec<u16> {
         (0..n)
