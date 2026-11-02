@@ -167,6 +167,8 @@ pub struct FollowCamera {
     pub manual: f32,
     pub manual_flag: bool,
     side_offset: f32,
+    /// The blended transition (mode 8), while it runs.
+    pub blend: Option<Blend>,
     /// The hold counter, and the hero's target (the host's point; SPEC-0027 Hold and lean terms).
     hold: u32,
     pub target_point: Option<Vec3>,
@@ -194,6 +196,7 @@ impl FollowCamera {
             manual: 0.0,
             manual_flag: false,
             side_offset: 0.0,
+            blend: None,
             hold: 0,
             target_point: None,
             r3_latch: false,
@@ -244,6 +247,43 @@ impl FollowCamera {
 
     /// Target distance: profile distance × (1 − 0.65 sin² e) + side offset; e ≤ 0 drops the
     /// 0.65 term.
+    /// SPEC-0027 Blended transition, the entry: the pivot is the follow focus; no placement, no pivot step.
+    pub fn start_blend(&mut self, radius: f32, offset: f32, height: f32, fraction: f32) {
+        self.blend = Some(Blend { pivot: self.focus, distance: (radius * radius + height * height).sqrt(), offset, elevation: (height / radius).asin(), fraction, latched: false });
+    }
+
+    /// Mode 8's update: the contact pass (a push latches the camera in place), then distance, yaw and
+    /// elevation each blended by the fraction toward the hero's forward row plus the offset.
+    pub fn blend_step(&mut self, facing: Vec3, push: impl Fn(&mut Vec3)) {
+        let Some(mut b) = self.blend else { return };
+        if b.latched {
+            return;
+        }
+        let before = self.eye;
+        push(&mut self.eye);
+        if self.eye != before {
+            b.latched = true;
+            self.blend = Some(b);
+            return;
+        }
+        let c = polar(sub(self.eye, b.pivot));
+        let k = b.fraction;
+        let mut yaw = facing[2].atan2(facing[0]) + b.offset;
+        // The sign test, not a shortest arc: opposite signs shift the desired yaw by a full turn.
+        if (c[1] < 0.0) != (yaw < 0.0) {
+            yaw += if yaw < 0.0 { std::f32::consts::TAU } else { -std::f32::consts::TAU };
+        }
+        let mix = |old: f32, want: f32, snap: f32| {
+            let new = old * (1.0 - k) + want * k;
+            if (new - want).abs() < snap { want } else { new }
+        };
+        let now = [mix(c[0], b.distance, 0.1), mix(c[1], yaw, 1e-6), mix(c[2], b.elevation, 1e-6)];
+        self.eye = add(b.pivot, sphere(now));
+        self.focus = b.pivot;
+        self.velocity = [0.0; 3];
+        self.blend = Some(b);
+    }
+
     pub fn target_distance(&self, e: f32) -> f32 {
         let shrink = if e > 0.0 { 1.0 - DISTANCE_SHRINK * e.sin() * e.sin() } else { 1.0 };
         self.profile.distance * shrink + self.side_offset
@@ -457,6 +497,17 @@ impl FollowCamera {
     }
 }
 
+/// The blended transition's stored values (SPEC-0027 mode 8).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Blend {
+    pub pivot: Vec3,
+    distance: f32,
+    offset: f32,
+    elevation: f32,
+    fraction: f32,
+    latched: bool,
+}
+
 /// SPEC-0027 Hold and lean terms: the side lean (1 - d) / 2 x 2.5, negated when the target lies on the first
 /// row's side, and the side target (|s| - 2.0, at most 10.0, while d is below 0.5). No target: both 0.
 fn lean_terms(hero: Vec3, target: Option<Vec3>, forward: Vec3, first: Vec3) -> (f32, f32) {
@@ -506,6 +557,20 @@ mod tests {
     #[test]
     fn projection_is_64_by_50_degrees() {
         assert!((vertical_fov().to_degrees() - 50.2).abs() < 0.05);
+    }
+
+    /// SPEC-0055: the death camera's distance 15.0748 and elevation 5.74 degrees (asin of 0.1) settle in.
+    #[test]
+    fn blend_settles() {
+        let hero = still(2.0);
+        let mut c = camera_at([0.0, 2.0, -10.0], &hero);
+        c.start_blend(15.0, 0.0, 1.5, 0.01);
+        for _ in 0..1500 {
+            c.blend_step([0.0, 0.0, 1.0], |_| {});
+        }
+        let p = polar(sub(c.eye, c.blend.unwrap().pivot));
+        assert!((p[0] - 15.0748).abs() < 1e-3 && (p[2] - 0.1f32.asin()).abs() < 1e-3, "{p:?}");
+        assert!(p[1].abs() > 0.0);
     }
 
     /// SPEC-0027's vectors: hero at the origin, camera forward +z, first row +x.

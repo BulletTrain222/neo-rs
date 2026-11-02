@@ -9976,6 +9976,17 @@ impl Play {
         self.camera.negate_elevation = self.loco.state == hero_states::PANEL && self.panel.is_some_and(|c| c.sub == 4);
         // The hero's target, the nearest noticed enemy: the lock's head record.
         self.camera.target_point = self.lock.and_then(|id| self.characters.iter().find(|c| c.id == id && c.pack == w.pack)).map(|c| c.position);
+        // SPEC-0027 Death camera: once timer E runs, mode 8 on the dying hero; it ends with the page.
+        if self.death.timer_e.running() && self.camera.blend.is_none() {
+            self.camera.start_blend(15.0, 0.0, 1.5, 0.01);
+        }
+        if self.camera.blend.is_some() && !self.death.timer_e.running() && !self.death.flag_e {
+            self.camera.blend = None;
+        }
+        if self.camera.blend.is_some() {
+            let f = self.loco.facing;
+            self.camera.blend_step(f, |e| push_eye(w, e));
+        } else {
         self.camera.update(
             &followed(&self.loco, w),
             pad,
@@ -9983,6 +9994,7 @@ impl Play {
             |e| push_eye(w, e),
             |a, c| w.ground.as_ref().is_none_or(|g| g.segment_clear(a, c, true)),
         );
+        }
         // SPEC-0027 Scripted cameras: the play is sampled and its end mode acts.
         if let Some(cut) = self.cut.as_mut() {
             if let neopets_sim::scene::PlayUpdate::Ended { idle, release } = cut.update(&self.world.tracks) {
