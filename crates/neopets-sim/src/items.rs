@@ -572,6 +572,37 @@ pub fn luck_passes(luck: i32, r: i32) -> bool {
     ((luck as f32 * 4.166667) as i32) > r
 }
 
+/// SPEC-0034 3.15, the item effect mapping: sixteen ids, the Motes 160 to 173 as 951 to 964, no effect for
+/// item 139, and the default 792 for every other id.
+pub fn effect_id(item: u16) -> Option<i32> {
+    Some(match item {
+        13 => 778,
+        14 => 783,
+        19 => 776,
+        20 => 777,
+        31 => 786,
+        57 => 771,
+        58 => 772,
+        59 => 773,
+        62 => 780,
+        135 => 761,
+        136 => 760,
+        137 => 759,
+        138 => 767,
+        147 => 770,
+        151 => 775,
+        154 => 774,
+        160..=173 => 951 + (item as i32 - 160),
+        139 => return None,
+        _ => 792,
+    })
+}
+
+/// SPEC-0021 Starlight Potion: the Minion-corps spawn keys, 2801 to 2807 and so on up to 2871 to 2877.
+pub fn minion_corps(key: i32) -> bool {
+    (2801..=2877).contains(&key) && (1..=7).contains(&(key % 10)) && key % 100 / 10 <= 7
+}
+
 #[cfg(test)]
 mod tests {
     #[test]

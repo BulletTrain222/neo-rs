@@ -715,7 +715,6 @@ pub struct Enemy {
     talk: i32,
     chat_with: Option<u64>,
     chat_clip: Option<u32>,
-    chat_walk: u32,
     /// The active hero wore the Tattered Cloak on the last tick: invisible kinds are shown to him
     /// (SPEC-0036 Invisible-kind rule; SPEC-0038 Edge cases).
     pub hero_cloak: bool,
@@ -816,7 +815,6 @@ impl Enemy {
             talk: -1,
             chat_with: None,
             chat_clip: None,
-            chat_walk: 0,
         };
         e.draw_distances(rng);
         e.idle_timer = rng.range(120, 600);
@@ -1961,7 +1959,8 @@ impl Enemy {
     /// Behavior 10: the quiet countdown goes down (a zero one goes negative and scans at once); once
     /// below 1, the first peer with the flag, not in states 1, 2, 3, 19 or 21, with its own quiet
     /// countdown below 1, within the sum of both pair distances and on the same navmesh. A hidden
-    /// peer in state 8 is not pulled (SPEC-0038's five ways out of state 8; R-0184).
+    /// peer in state 8 is pulled out with no emerge (route 6; R-0184); the host lists no script-held
+    /// peer (R-0201).
     fn socialize(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
         let Some(so) = self.p.social else { return };
         if self.airborne() {
@@ -1972,7 +1971,7 @@ impl Enemy {
             return;
         }
         let peer = v.peers.iter().find(|p| {
-            p.id != v.self_id && !matches!(p.state, 1 | 2 | 3 | 8 | 19 | 21) && p.quiet < 1 && p.mesh == v.mesh_id && hdist(p.position, v.position) <= so.pair + p.pair
+            p.id != v.self_id && !matches!(p.state, 1 | 2 | 3 | 19 | 21) && p.quiet < 1 && p.mesh == v.mesh_id && hdist(p.position, v.position) <= so.pair + p.pair
         });
         if let Some(p) = peer {
             a.chat = Some(p.id);
@@ -1987,35 +1986,43 @@ impl Enemy {
         self.quiet = rng.frange(so.quiet.0, so.quiet.1) as i32;
         self.chat_with = Some(with);
         self.chat_clip = None;
-        self.chat_walk = 0;
         self.previous = self.state;
         self.state = 3;
         self.through = None;
     }
 
-    /// State 3: walk toward the partner with the wander gait, stop within 6.0 and turn to it, and
-    /// play the chat clip (14 on a draw of 0, 111 to 114 on 1 to 4; the idle pick when the table
-    /// lacks it) for the talk time, then back to the default state. A partner gone, or still out
-    /// of reach after 600 ticks (this build's limit), ends it.
+    /// State 3: walk toward the partner with the wander gait; below the fixed 6.0 stop, draw the talk
+    /// time and the chat clip (14 on a draw of 0, 111 to 114 on 1 to 4; the idle pick when the table
+    /// lacks it), then back to the default state with both countdowns drawn. A partner gone or no
+    /// longer in state 3 breaks the pairing with the same draws. No walk limit (R-0194).
     fn chat_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
-        let partner = self.chat_with.and_then(|id| v.peers.iter().find(|p| p.id == id));
+        let so = self.p.social;
+        let end = |e: &mut Self, rng: &mut Rng, a: &mut Act| {
+            e.set(0, v, rng, a);
+            if let Some(so) = so {
+                e.talk = rng.frange(so.talk.0, so.talk.1) as i32;
+                e.quiet = rng.frange(so.quiet.0, so.quiet.1) as i32;
+            }
+        };
+        let partner = self.chat_with.and_then(|id| v.peers.iter().find(|p| p.id == id)).filter(|p| p.state == 3);
         let Some(at) = partner.map(|p| p.position) else {
-            self.set(0, v, rng, a);
+            end(self, rng, a);
             return;
         };
-        if hdist(at, v.position) >= 6.0 {
-            self.chat_walk += 1;
-            if self.chat_walk >= 600 {
-                self.set(0, v, rng, a);
-                return;
-            }
+        if self.chat_clip.is_none() && hdist(at, v.position) >= 6.0 {
             a.anim = Some(2);
             a.go = Some(Go::Toward(at));
             return;
         }
         a.face = Some((at, 0.1));
+        // The pair has stopped: the talk time and the clip are drawn now.
+        if self.chat_clip.is_none() {
+            if let Some(so) = so {
+                self.talk = rng.frange(so.talk.0, so.talk.1) as i32;
+            }
+        }
         if self.talk < 1 {
-            self.set(0, v, rng, a);
+            end(self, rng, a);
             return;
         }
         self.talk -= 1;
@@ -3326,10 +3333,10 @@ mod tests {
         let has = |id: u32| id == 14 || (111..=114).contains(&id);
         let mut v = view([500.0, 0.0, 0.0], &has);
         v.self_id = 1;
-        // A peer already chatting, one hidden, one too far, one on another mesh: no pair; the
+        // A peer already chatting, one too far, one on another mesh: no pair; the
         // zero quiet countdown goes negative and keeps scanning.
         let at = |id, x: f32, state, mesh| Peer { id, position: [x, 0.0, 0.0], state, quiet: 0, pair: 20.0, mesh };
-        let none = [at(2, 10.0, 3, None), at(3, 10.0, 8, None), at(4, 41.0, 5, None), at(5, 10.0, 5, Some(1))];
+        let none = [at(2, 10.0, 3, None), at(4, 41.0, 5, None), at(5, 10.0, 5, Some(1))];
         v.peers = &none;
         let mut a = Act::default();
         e.socialize(&v, &mut r, &mut a);
@@ -3343,6 +3350,8 @@ mod tests {
         assert_eq!((a.chat, e.state, e.talk), (Some(2), 3, 120));
         assert_eq!(e.quiet, 420);
         // Far: it walks. The notice ranges are halved meanwhile.
+        let list = [at(2, 30.0, 3, None)];
+        v.peers = &list;
         let mut a = Act::default();
         e.chat_step(&v, &mut r, &mut a);
         assert_eq!((a.anim, a.go), (Some(2), Some(Go::Toward([30.0, 0.0, 0.0]))));
@@ -3359,7 +3368,7 @@ mod tests {
         assert!(clips.iter().all(|&c| c == clips[0] && has(c)));
         let mut a = Act::default();
         e.chat_step(&v, &mut r, &mut a);
-        assert_eq!((e.state, e.chat_with, e.talk), (0, None, -1));
+        assert_eq!((e.state, e.chat_with, e.talk), (0, None, 120));
         // The quiet countdown drawn on entering the chat still runs.
         assert_eq!(e.quiet, 420);
     }

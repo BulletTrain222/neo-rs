@@ -837,6 +837,8 @@ pub struct Character {
     pub boss: Option<neopets_sim::juppie::Juppie>,
     /// The Miamouse routine (class 21, SPEC-0029 Behavior 28).
     pub miamouse: Option<neopets_sim::miamouse::Miamouse>,
+    /// The kind-3 record's key (s16 +0xAC).
+    pub record_key: i16,
     /// The enemy that spawned this one (SPEC-0029 Behavior 31), for the summon cap.
     pub summoner: Option<u64>,
     /// The ghost phases of a row with the Ghost Flag (SPEC-0029 Behavior 33).
@@ -1352,10 +1354,14 @@ pub struct Play {
     faerie_glow: Option<usize>,
     /// The summoner of the next spawn-by-key request (SPEC-0029 Behavior 31).
     summon_owner: Option<u64>,
+    /// The item showcase's effect object.
+    showcase_fx: Option<usize>,
+    /// The motion record's +0x23C: state 37's refusal of the ledge-drop test (R-0193).
+    drop_refuse: i32,
     /// The grab rumble's one shared countdown (word 0x2DD54C; SPEC-0029 Behavior 23), -1 at rest.
     grab_rumble: i32,
     /// The Starlight Potion's item-effect object: its two effects and timer (SPEC-0021 item 57).
-    starlight: Option<(usize, usize, i32)>,
+    starlight: Option<Starlight>,
     /// Sisters a navmesh edge turned back last tick (SPEC-0011 the blocked word).
     sisters_blocked: std::collections::HashSet<u64>,
     mote_objects: Vec<neopets_sim::charm::Object>,
@@ -2131,6 +2137,8 @@ impl Play {
             npc_audit: Default::default(),
             faerie_glow: None,
             grab_rumble: -1,
+            drop_refuse: 0,
+            showcase_fx: None,
             summon_owner: None,
             starlight: None,
             sisters_blocked: Default::default(),
@@ -4082,7 +4090,8 @@ impl Play {
                 None => (p.eye, p.rows[2], p.rows[1], p.focal),
             },
             None => {
-                let (e, f) = (self.camera.eye, self.camera.focus);
+                let f = self.camera.focus;
+                let e = self.showcase.as_ref().map_or([self.camera.eye[0], self.camera.eye[1], self.camera.eye[2]], |s| s.eye);
                 ([e[0], e[1], e[2]], [f[0] - e[0], f[1] - e[1], f[2] - e[2]], [0.0, 1.0, 0.0], neopets_sim::camera::FOCAL)
             }
         };
@@ -4260,7 +4269,7 @@ impl Play {
 
     /// SPEC-0021 Panel visibility and clears, item 5, and SPEC-0023 section 4.1, the HUD reset:
     /// both quick panels closed, the prompts and every HUD timer cleared, and the monster bar's.
-    fn hud_reset(&mut self) {
+    pub fn hud_reset(&mut self) {
         self.quick.open = false;
         self.mote_panel.open = false;
         self.talk_prompt = false;
@@ -5793,13 +5802,14 @@ impl Play {
             _ => (None, None),
         };
         let bits = self.hero.frame_bits();
+        let touched = self.touched;
         if let Some(l) = self.ledge.as_mut() {
             l.next = next.as_ref().map(edge_of);
             l.prev = prev.as_ref().map(edge_of);
         }
         let Some(step) = self.ledge.as_mut().map(|l| {
             if l.state == ledge::DROP {
-                l.drop_tick(hero, f, deep, self.loco.body.gap)
+                l.drop_tick(hero, f, deep, self.loco.body.gap, touched, c.action)
             } else {
                 l.frame_bits = bits;
                 l.tick(hero, side, forward, self.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })
@@ -5817,6 +5827,21 @@ impl Play {
         // ground constraint; the no-snap flag keeps it there (this build's choice: the spec does
         // not name the flag's writer; R-0106).
         self.loco.body.no_snap = self.loco.state == ledge::HANG;
+        if step.voice {
+            self.sound.play(neopets_sim::sound::VOICE, 9, neopets_sim::sound::Play { emitter: Some(hero), do_not_restart: true, ..Default::default() });
+        }
+        if step.push {
+            let p = &mut self.loco.body.position;
+            p[0] += 0.01 * f[0];
+            p[2] += 0.01 * f[2];
+        }
+        if step.refuse {
+            self.drop_refuse = 120;
+        }
+        if step.sheathe && self.weapon_drawn {
+            self.set_weapon_drawn(false);
+            self.drop_refuse = 0;
+        }
         if let Some(d) = step.facing {
             self.loco.steer_toward(d, step.rate.unwrap_or(0.5));
         }
@@ -5858,6 +5883,10 @@ impl Play {
         let (hero, f, v, state) = (self.loco.position(), self.loco.facing, self.loco.body.velocity, self.loco.state);
         for r in g.frames_at(hero[0], hero[2]) {
             let e = edge_of(&r);
+            // SPEC-0033 Behavior 49 gate 1: the refusal counter of state 37's landing exit, in state 1.
+            if state == 1 && self.drop_refuse > 0 {
+                continue;
+            }
             let Some(negative) = e.drop_gates(hero, v, f, contact::HERO_RADIUS, state) else { continue };
             let accepted = negative || {
                 let g0 = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0).unwrap_or(ground::MISS);
@@ -6337,6 +6366,7 @@ impl Play {
         if self.showcase.is_none() {
             self.count_announcement(id);
             self.corner = Some(Corner { id, pack, mode: 1, x: 0.5, y: 0.6, z: 5.0, s: 0.0, timer: 0.0, angle: 0.0 });
+            self.showcase_effect(id);
         }
     }
 
@@ -6499,6 +6529,7 @@ impl Play {
         let Some(text) = text.filter(|_| !busy) else {
             // Mode 1 (grow) at (0.5, 0.6, 5.0) with scale 0.
             self.corner = Some(Corner { id, pack, mode: 1, x: 0.5, y: 0.6, z: 5.0, s: 0.0, timer: 0.0, angle: 0.0 });
+            self.showcase_effect(id);
             return;
         };
         self.corner = None;
@@ -6507,7 +6538,7 @@ impl Play {
         let (pose, stinger, floating) = match id {
             98..=105 if tor => (0xA4, Some(8), false),
             111..=118 if !tor => (0xA4, Some(8), false),
-            106..=110 if tor => (0xA6, None, false),
+            106..=110 if tor => (0xA6, Some(6), false),
             119..=125 if tor => (0xA5, Some(6), false),
             127..=134 if !tor => (0xA5, Some(6), false),
             _ => (0xA3, Some(7), true),
@@ -6521,16 +6552,68 @@ impl Play {
         }
         self.loco.play_one_shot(pose, true);
         self.hero.request(pose, true);
-        self.showcase = Some(Showcase { id, pack, pose, floating, text, ticks: 0, opened: None, angle: 0.0 });
+        self.showcase_effect(id);
+        let eye = self.camera.eye;
+        self.showcase = Some(Showcase { id, pack, pose, floating, text, ticks: 0, opened: None, angle: 0.0, eye: [eye[0], eye[1], eye[2]] });
     }
 
     /// The full-showcase task, each tick: the pose re-requested (code 0xA3 with text holds 1.0 s
     /// before the text box opens; the other codes open it at once), the text box with the item
     /// text titled with the hero's name, and the end once 2.0 s have passed since the box opened
     /// and it is closed: the hero back to state 1.
+    fn showcase_effect(&mut self, id: u16) {
+        self.showcase_effect_stop();
+        if let Some(effect) = neopets_sim::items::effect_id(id) {
+            let table = self.effect_table.clone();
+            let at = self.loco.position();
+            self.showcase_fx = Some(self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, effect, at, neopets_sim::effect::IDENTITY)));
+        }
+    }
+
+    fn showcase_effect_stop(&mut self) {
+        if let Some(h) = self.showcase_fx.take() {
+            let table = self.effect_table.clone();
+            self.effects.stop(&table, h);
+            self.effects.release(h);
+        }
+    }
+
+    /// The showcase effect at the item: mode 4 at the floating point; modes 1 to 3 at the screen-anchored
+    /// point (SPEC-0021 Draw, with S = 512).
+    fn showcase_effect_step(&mut self) {
+        let Some(h) = self.showcase_fx else { return };
+        let (p, f) = (self.loco.position(), self.loco.facing);
+        let at = if self.showcase.is_some() {
+            [p[0] + 1.1 * f[0], p[1] + 2.8, p[2] + 1.1 * f[2]]
+        } else if let Some(c) = self.corner.as_ref() {
+            let (eye, forward, up, _) = self.view();
+            let l = (forward[0] * forward[0] + forward[1] * forward[1] + forward[2] * forward[2]).sqrt().max(1e-6);
+            let fw = forward.map(|v| v / l);
+            let right = [fw[1] * up[2] - fw[2] * up[1], fw[2] * up[0] - fw[0] * up[2], fw[0] * up[1] - fw[1] * up[0]];
+            let (dx, dy) = (640.0 * (c.x - 0.5) * c.z / 512.0, 480.0 * (c.y - 0.5) * c.z / 512.0);
+            std::array::from_fn(|k| eye[k] + c.z * fw[k] - dx * right[k] - dy * up[k])
+        } else {
+            self.showcase_effect_stop();
+            return;
+        };
+        self.effects.set_position(h, at);
+        if let Some(Some(o)) = self.effects.objects.get_mut(h) {
+            o.position = at;
+        }
+        let table = self.effect_table.clone();
+        self.effects.update(&table, h, None, &mut self.rng);
+    }
+
     fn showcase_step(&mut self) {
+        self.showcase_effect_step();
         let Some(mut s) = self.showcase.take() else { return };
         s.ticks += 1;
+        // Task step 1 (R-0188): SetHeroSceneCamera(0.9425, 10.0): the eye closes 1 percent a tick on the
+        // pivot plus (10 along the forward row turned by 0.9425, 1.5 up).
+        let (focus, f) = (self.camera.focus, self.loco.facing);
+        let (sn, cs) = 0.9425f32.sin_cos();
+        let goal = [focus[0] + 10.0 * (f[0] * cs - f[2] * sn), focus[1] + 1.5, focus[2] + 10.0 * (f[2] * cs + f[0] * sn)];
+        s.eye = std::array::from_fn(|k| s.eye[k] + 0.01 * (goal[k] - s.eye[k]));
         // The angle advances 2 pi / 5 rad per second and wraps.
         s.angle = (s.angle + 1.2566372 / 60.0) % std::f32::consts::TAU;
         let hold = if s.pose == 0xA3 { 60 } else { 0 };
@@ -7987,6 +8070,7 @@ impl Play {
                 miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
                 dummy: row.filter(|r| r.class == Some(36)).map(|_| neopets_sim::dummy::Dummy::new(&mut self.rng)),
                 summoner: None,
+                record_key: pl.key,
                 ghost: row.and_then(|r| r.ghost).map(|(s, g, o, v)| neopets_sim::ghost::Ghost::new(neopets_sim::ghost::Words { solid: (s[0], s[1]), ghost: (g[0], g[1]), opacity: (o[0], o[1]), reveal: (v[0], v[1]) })),
                 gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
                 pending_hit: None,
@@ -8035,10 +8119,14 @@ impl Play {
     /// SetMaxActiveAI changes it, 15 for a slot; at most 15 objects) is passed over. The summoner
     /// id is stored on it for the summon cap.
     fn summon(&mut self, pack: u32, block: Option<u8>, key: i16, at: [f32; 3], facing: [f32; 3], drop: Option<u16>, arrive: bool) -> Option<u64> {
-        let live: std::collections::HashSet<u64> = self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())).map(|c| c.id).collect();
-        // SPEC-0064 Spore Monster: reserved records are used in record order and not again after a
-        // death (a record stays bound).
-        let _ = live;
+        let live: std::collections::HashSet<u64> = self.characters.iter().map(|c| c.id).collect();
+        // SPEC-0029 Behavior 31 Reuse (R-0202): a reserved record is unavailable only while a character
+        // is bound to it; it binds again once the corpse is released.
+        for r in &mut self.reserves {
+            if r.bound.is_some_and(|id| !live.contains(&id)) {
+                r.bound = None;
+            }
+        }
         let owner = self.summon_owner.take();
         let blocks: Vec<u8> = match block {
             Some(s) => vec![s],
@@ -8139,6 +8227,7 @@ impl Play {
             miamouse: None,
             dummy: None,
             summoner: None,
+            record_key: 0,
             ghost: None,
             gnarfas: None,
             pending_hit: None,
@@ -9398,6 +9487,8 @@ impl Play {
             return;
         }
         if self.death.flag_e {
+            // SPEC-0021 Panel visibility item 5: the quit-hold state's first pass.
+            self.hud_reset();
             self.death.hand_over();
             return;
         }
@@ -10335,6 +10426,7 @@ impl Play {
         }
         self.feed_finish();
         self.wild_step();
+        self.drop_refuse = (self.drop_refuse - 1).max(0);
         self.ghost_step();
         self.class20_step();
         self.dummy_step();
@@ -11230,7 +11322,7 @@ impl Play {
                     position: c.position,
                     action: c.anim.clip_state().action,
                     wounded: c.row.is_some_and(|r| c.hp < r.hit_points as i32),
-                    filter: !c.held && !c.pet_like() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)),
+                    filter: !c.held && !c.pet_like() && c.townsfolk.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)),
                     reanimating: c.enemy.as_ref().is_some_and(|e| e.reanimating()),
                 })
                 .collect()
@@ -11259,7 +11351,7 @@ impl Play {
             .filter_map(|c| {
                 let e = c.enemy.as_ref()?;
                 let so = e.p.social?;
-                (!e.is_dead()).then(|| enemy::Peer { id: c.id, position: c.position, state: e.state, quiet: e.quiet, pair: so.pair, mesh: c.walker.as_ref().and_then(|w| w.mesh) })
+                (!e.is_dead() && !c.held).then(|| enemy::Peer { id: c.id, position: c.position, state: e.state, quiet: e.quiet, pair: so.pair, mesh: c.walker.as_ref().and_then(|w| w.mesh) })
             })
             .collect();
         let mut chats: Vec<(u64, u64)> = Vec::new();
@@ -11655,16 +11747,18 @@ impl Play {
                             }
                             // SPEC-0029 run-time variant re-pick and SPEC-0040 Behavior 26 item 3:
                             // p from 1 to 6, the variant p - 1 and the row of (type, variant), HP
-                            // and class unchanged; preset p into the colour slots. A character
-                            // that is not a common enemy takes only the colours here.
+                            // and class unchanged; preset p into the colour slots, on whatever
+                            // the spell reaches (R-0185); townsfolk are kept out of its candidates.
                             (6, e) => {
                                 let p = self.rng.range(1, 6) as usize;
                                 if let Some(&preset) = self.colour_presets.get(p - 1) {
                                     c.slots = preset;
                                 }
                                 let picked = self.monster_table.as_ref().and_then(|t| t.row(c.monster_type, p as u16 - 1).zip(t.tuning(c.monster_type, p as u16 - 1)));
-                                if let (Some(e), Some((row, tuning))) = (e, picked) {
-                                    e.p = params(&row, &tuning);
+                                if let Some((row, tuning)) = picked {
+                                    if let Some(e) = e {
+                                        e.p = params(&row, &tuning);
+                                    }
                                     c.row = Some(row);
                                 }
                             }
@@ -11909,19 +12003,16 @@ impl Play {
     /// voice id is above the hero bank's 12 cues, so it is silent (SPEC-0031). What the object does
     /// beyond its effects is not given (R-0196).
     fn use_starlight(&mut self) {
-        let busy = self.starlight.is_some_and(|(main, _, timer)| timer > 0 || self.effects.objects.get(main).and_then(|o| o.as_ref()).is_some_and(|o| o.live()));
+        let busy = self.starlight.is_some();
         if busy {
             self.cue(0xA2);
             self.last_pickup = format!("use of item 57 refused on tick {}", self.ticks);
             return;
         }
         self.starlight_free();
-        let (p, f) = (self.loco.position(), self.loco.facing);
-        let at = [p[0] + 2.0 * f[0], p[1], p[2] + 2.0 * f[2]];
-        let table = self.effect_table.clone();
-        let main = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 4020, at, neopets_sim::effect::IDENTITY));
-        let second = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 568, at, neopets_sim::effect::IDENTITY));
-        self.starlight = Some((main, second, 60));
+        // SPEC-0021 57: the point 2.0 above the hero, stored once; the effects start in 60 ticks.
+        let p = self.loco.position();
+        self.starlight = Some(Starlight { at: [p[0], p[1] + 2.0, p[2]], timer: 60, age: 0, objects: None, hits: Vec::new() });
         self.cue(0xA0);
         let left = {
             let n = self.state.items.entry(57).or_insert(0);
@@ -11933,7 +12024,7 @@ impl Play {
     }
 
     fn starlight_free(&mut self) {
-        if let Some((main, second, _)) = self.starlight.take() {
+        if let Some(Starlight { objects: Some((main, second)), .. }) = self.starlight.take() {
             let table = self.effect_table.clone();
             for h in [main, second] {
                 self.effects.stop(&table, h);
@@ -11942,23 +12033,58 @@ impl Play {
         }
     }
 
-    /// The Starlight object's tick: its effects update; when the timer ends the second one stops,
-    /// and once the main one has also ended the object is free.
+    /// SPEC-0021 Starlight Potion: 60 ticks with no hit volume; then both effects start, the hit list
+    /// clears and a vertical cylinder (4.0 high, centred on the point) grows as R = 0.5 + 14.5 x age /
+    /// 0.7 for 41 ticks. A character in it is listed for 60 ticks; one with a Minion-corps key also
+    /// takes 100 with no attacker. Intact breakables in it break.
     fn starlight_step(&mut self) {
-        let Some((main, second, timer)) = self.starlight else { return };
+        let Some(mut st) = self.starlight.take() else { return };
         let table = self.effect_table.clone();
+        st.hits.retain_mut(|h| {
+            h.1 -= 1;
+            h.1 > 0
+        });
+        if st.timer >= 0 {
+            st.timer -= 1;
+            if st.timer < 0 {
+                let main = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 4020, st.at, neopets_sim::effect::IDENTITY));
+                let second = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 568, st.at, neopets_sim::effect::IDENTITY));
+                st.objects = Some((main, second));
+                st.hits.clear();
+            }
+            self.starlight = Some(st);
+            return;
+        }
+        let Some((main, second)) = st.objects else { return };
         self.effects.update(&table, main, None, &mut self.rng);
-        if timer > 0 {
-            self.effects.update(&table, second, None, &mut self.rng);
-        }
-        let timer = timer - 1;
-        if timer == 0 {
-            self.effects.stop(&table, second);
-        }
-        self.starlight = Some((main, second, timer.max(0)));
-        if timer <= 0 && !self.effects.objects.get(main).and_then(|o| o.as_ref()).is_some_and(|o| o.live()) {
+        self.effects.update(&table, second, None, &mut self.rng);
+        let age = st.age as f32 / 60.0;
+        st.age += 1;
+        if age + 1.0 / 60.0 >= 0.7 {
+            self.starlight = Some(st);
             self.starlight_free();
+            return;
         }
+        let r = 0.5 + 14.5 * age / 0.7;
+        let (lo, hi) = (st.at[1] - 2.0, st.at[1] + 2.0);
+        let pack = self.world.pack;
+        let mut hurt = Vec::new();
+        for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none()) {
+            let Some(row) = c.row else { continue };
+            let d = (c.position[0] - st.at[0]).hypot(c.position[2] - st.at[2]);
+            if d <= row.radius + r && c.position[1] <= hi && c.position[1] + row.height >= lo && !st.hits.iter().any(|h| h.0 == c.id) && st.hits.len() < 10 {
+                st.hits.push((c.id, 60));
+                if neopets_sim::items::minion_corps(c.record_key as i32) {
+                    hurt.push(i);
+                }
+            }
+        }
+        for i in hurt {
+            self.character_take_hit(i, 100, st.at, "the Starlight Potion");
+        }
+        let at = st.at;
+        self.breakable_contact(move |v| v.kind == 3 && (v.centre[0] - at[0]).hypot(v.centre[2] - at[2]) <= r + v.radius && v.centre[1] <= hi && v.centre[1] + v.height.abs() >= lo);
+        self.starlight = Some(st);
     }
 
     /// The quick panel's use step (forced): refused for a dead hero; a consumable heals pool A
@@ -16964,6 +17090,19 @@ pub enum HeroItemScale {
     Weapon,
 }
 
+/// The Starlight Potion's object (SPEC-0021 item 57).
+#[derive(Clone, Debug)]
+struct Starlight {
+    at: [f32; 3],
+    /// Ticks to the effects' start; -1 once they have started.
+    timer: i32,
+    /// Ticks since they started.
+    age: i32,
+    objects: Option<(usize, usize)>,
+    /// The ten-slot hit list: (character, ticks left).
+    hits: Vec<(u64, i32)>,
+}
+
 /// The mesh a sister's goals use: in pack 1174 the current checkpoint's section (SPEC-0044, the largest
 /// stored word: below 29 mesh 1, to 40 mesh 2, to 52 mesh 3, else mesh 4).
 fn sister_mesh(pack: u32, state: &level::GameState, meshes: &[neopets_sim::nav::NavMesh], at: [f32; 3]) -> i32 {
@@ -17422,6 +17561,8 @@ pub struct Corner {
 /// The full item showcase in progress (SPEC-0021 Item showcase).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Showcase {
+    /// The scene camera's eye (the follow camera runs on beneath it and takes over at the end).
+    pub eye: [f32; 3],
     pub id: u16,
     pub pack: u32,
     pub pose: u32,

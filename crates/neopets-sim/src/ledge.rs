@@ -3,12 +3,10 @@
 //! the ledge-drop edge test, and the hero states 30 (hang from a ledge), 35 (climb up from a
 //! fall), 37 (drop off an edge into a hang) and 47 (climb up while rising).
 //!
-//! Not built: the ladder check and the global-index flag of state 30, the pull-up's effect 9, the
-//! touched-flag branch of state 47 (the wall contact is off in these states), the helper tests
-//! of sub-modes 1 and 2 of states 35 and 47 (taken as passing), the 0.75 push of state 35, the
-//! state 38 (the drop onto a climb panel), state 37's landing-flag exit and its neighbouring-edge
-//! walk, the busy gate of the drop test, and the edge offer's replace rule beyond the facing
-//! test.
+//! Not built: the ladder check of state 30, the touched-flag branch of state 47 (the wall contact is
+//! off in these states), the obstacle probe of sub-modes 1 and 2 of states 35 and 47 (taken as
+//! passing), state 38 (the drop onto a climb panel), the busy gate of the drop test, and the edge
+//! offer's replace rule beyond the facing test.
 
 use crate::hero::Vec3;
 use crate::motion::HERO_HEIGHT;
@@ -223,6 +221,14 @@ pub struct Step {
     pub hang: bool,
     /// The hang moved onto its next (true, link 1) or previous (false, link 3) edge.
     pub took: Option<bool>,
+    /// The pull-up's hero voice cue 9 (quick exert) at the hero, do-not-restart (R-0193).
+    pub voice: bool,
+    /// State 35's push of 0.01 along the facing.
+    pub push: bool,
+    /// Phase 3 of state 37: with the weapon drawn, both item-manager flags and the refusal counter clear.
+    pub sheathe: bool,
+    /// Phase 0's landing exit arms the drop test's refusal counter (120 ticks).
+    pub refuse: bool,
 }
 
 /// One ledge state with its held edge.
@@ -306,7 +312,9 @@ impl Ledge {
 
     /// State 37 (Behavior 51), phases 0 to 3. `facing` is the hero's facing and `deep` the
     /// depth check's result (the ground 2.0 and 2.5 ahead more than 4.5 below, or none).
-    /// Phase 0: from a walk state 2 to 6 a shallow edge returns to the walk state; else the hero
+    /// `touched` is the motion record's touched flag and `action` the current clip's action. The
+    /// touched flag ends phases 0 to 2 in state 1 (phase 0 arms the refusal counter). Phase 0: with
+    /// action 2 to 6 a shallow edge returns to the state of that number (R-0193); else the hero
     /// turns out over the edge at rate 0.1. Phase 1: walk request 2 until 0.15 past the face.
     /// Phase 2: request 73 (action 1 instead, with no turn, while the ground gap `gap` is 0 or
     /// below), the facing blended 0.25 toward the inward face direction each tick (the shared
@@ -317,14 +325,19 @@ impl Ledge {
     /// tick (state 1 when the gap is then 0 or below); the turn to the wall blends 0.25 a tick and
     /// the phase ends only on a tick with no lowering and the facing within 0.99 of −n. (Setting
     /// the height exactly would keep d at 0 and never end the phase.)
-    pub fn drop_tick(&mut self, hero: Vec3, facing: Vec3, deep: bool, gap: f32) -> Step {
+    pub fn drop_tick(&mut self, hero: Vec3, facing: Vec3, deep: bool, gap: f32, touched: bool, action: u32) -> Step {
         let n = self.edge.normal();
         let (out, inward) = ([n[0], 0.0, n[2]], [-n[0], 0.0, -n[2]]);
         let mut step = Step { rate: Some(0.1), ..Step::default() };
+        if touched && self.sub <= 2 {
+            step.refuse = self.sub == 0;
+            step.exit = Some(1);
+            return step;
+        }
         match self.sub {
             0 => {
-                if (2..=6).contains(&self.from) && !deep {
-                    step.exit = Some(self.from);
+                if (2..=6).contains(&action) && !deep {
+                    step.exit = Some(action as u8);
                 } else {
                     step.facing = Some(out);
                     step.request = Some(0);
@@ -335,8 +348,23 @@ impl Ledge {
                 step.facing = Some(out);
                 step.rate = Some(1.0);
                 step.request = Some(2);
-                if plane(self.edge.face, hero) > 0.15 {
+                let a = plane(self.edge.face, hero);
+                if a > 0.15 {
                     if gap > 0.25 {
+                        // The neighbouring-edge walk: the face distance past this edge's length
+                        // hands the hold to link 1, with no dot product test (R-0193).
+                        if self.edge.length < a {
+                            match self.next {
+                                Some(e) => {
+                                    self.edge = e;
+                                    step.took = Some(true);
+                                }
+                                None => {
+                                    step.exit = Some(1);
+                                    return step;
+                                }
+                            }
+                        }
                         self.sub = 2;
                     } else {
                         step.exit = Some(2);
@@ -360,7 +388,10 @@ impl Ledge {
                     self.sub = 3;
                 }
             }
-            _ => step.hang = true,
+            _ => {
+                step.hang = true;
+                step.sheathe = true;
+            }
         }
         step
     }
@@ -412,10 +443,21 @@ impl Ledge {
                     self.sub = 2;
                 }
             }
+            // Sub-mode 2 (R-0193): the clip's action test, 0.95 ends in state 1; before that, state 35
+            // pushes 0.01 along the facing from progress 0.75, and event bit 0x40 with the stick
+            // forward runs out to state 4.
             _ => {
-                step.request = Some(anim);
-                if clip.action == anim && clip.progress >= 0.95 {
-                    step.exit = Some(if forward { 4 } else { 1 });
+                if clip.action != anim {
+                    step.request = Some(anim);
+                } else if clip.progress >= 0.95 {
+                    step.exit = Some(1);
+                } else {
+                    if self.state == CLIMB_FALL && clip.progress >= 0.75 {
+                        step.push = true;
+                    }
+                    if forward && self.frame_bits & 0x40 != 0 {
+                        step.exit = Some(4);
+                    }
                 }
             }
         }
@@ -488,6 +530,7 @@ impl Ledge {
                 } else if pull {
                     self.sub = 4;
                     step.request = Some(59);
+                    step.voice = clip.action != 59;
                 } else if side < 0.0 && (s < l - SHIMMY_LIMIT || on_next) {
                     step.request = Some(61);
                 } else if side > 0.0 && (s > SHIMMY_LIMIT || on_prev) {
@@ -500,6 +543,7 @@ impl Ledge {
             // state 4; at 0.95 it ends in state 1 (SPEC-0033 sub-mode 4).
             4 => {
                 step.request = Some(59);
+                step.voice = clip.action != 59;
                 if clip.action == 59 && clip.progress < 0.95 && forward && self.frame_bits & 0x40 != 0 {
                     step.exit = Some(4);
                 } else if clip.action == 59 && clip.progress >= 0.95 {
@@ -600,21 +644,21 @@ mod tests {
         // State 37 from a slow walk: a shallow edge returns to the walk; a deep one goes out past
         // the face, turns back and hangs.
         let mut d = Ledge::drop_from(e, 2);
-        assert_eq!(d.drop_tick([-0.1, 9.8, 2.0], out, false, 5.0).exit, Some(2));
+        assert_eq!(d.drop_tick([-0.1, 9.8, 2.0], out, false, 5.0, false, 2).exit, Some(2));
         let mut d = Ledge::drop_from(e, 2);
-        d.drop_tick([-0.1, 9.8, 2.0], out, true, 5.0);
-        assert_eq!(d.drop_tick([0.1, 9.8, 2.0], out, true, 5.0).request, Some(2));
-        d.drop_tick([0.2, 9.8, 2.0], out, true, 5.0);
+        d.drop_tick([-0.1, 9.8, 2.0], out, true, 5.0, false, 2);
+        assert_eq!(d.drop_tick([0.1, 9.8, 2.0], out, true, 5.0, false, 2).request, Some(2));
+        d.drop_tick([0.2, 9.8, 2.0], out, true, 5.0, false, 2);
         assert_eq!(d.sub, 2);
         // Phase 2 on the ground: the lowering puts the feet on it, state 1.
-        let s0 = d.clone().drop_tick([0.2, 9.8, 2.0], out, true, 0.0);
+        let s0 = d.clone().drop_tick([0.2, 9.8, 2.0], out, true, 0.0, false, 2);
         assert_eq!(s0.exit, Some(1));
         // Phase 2 in the air: 0.2 a tick down until the feet are 0.01 to 0.21 below
         // t − H − 0.1 = 6.15, turning meanwhile; it ends only on a tick with no lowering.
         let (mut hero, mut facing) = ([0.2f32, 9.8, 2.0], out);
         let mut ticks = 0;
         loop {
-            let s = d.drop_tick(hero, facing, true, 5.0);
+            let s = d.drop_tick(hero, facing, true, 5.0, false, 2);
             if let Some(p) = s.place {
                 hero = p;
             }

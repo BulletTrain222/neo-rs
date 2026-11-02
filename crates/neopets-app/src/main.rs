@@ -1511,11 +1511,11 @@ fn step_sim(
                 if m.flow.current == menus::JOURNAL {
                     play.play.hud.journal = false;
                 }
+                // SPEC-0021 Panel visibility item 5 (R-0195): the Select and Start openers run the HUD reset.
+                if frozen && !play.play.menu_open {
+                    play.play.hud_reset();
+                }
                 if m.flow.current == menus::PAUSE && !play.play.menu_open {
-                    play.play.hud.hide_all();
-                    // Section 9: D is cleared when the pause page opens.
-                    play.play.hud.d = 0;
-                    play.play.monster_bar.t = 0;
                     // SPEC-0031: pause and unpause cues (148, 149).
                     play.play.cue(148);
                 } else if m.flow.current == menus::PLAY && play.play.menu_open && m.flow.stack_was_pause() {
@@ -3743,10 +3743,7 @@ fn sync_characters(
                 // SPEC-0046 Drawable test: the visibility predicate hides a waiting enemy with cue
                 // word 0 and an invisible kind in its default state or state 21 before clip 82.
                 // SPEC-0010 Vanishing: the Cloud Beast's bodies during the gust's travel.
-                // SPEC-0029 Behavior 33: a ghost's alpha is not drawn yet; below 0.25 it is not drawn
-                // and above that it is solid (this build's stand-in).
-                let faded = c.ghost.as_ref().is_some_and(|g| g.opacity < 0.25);
-                let hidden = c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)) || p.cloud_hidden(c) || faded;
+                let hidden = c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)) || p.cloud_hidden(c);
                 set_if(&mut vis, if p.pack_drawn(c.pack) && !c.inactive && !hidden { Visibility::Visible } else { Visibility::Hidden });
             }
         }
@@ -3826,7 +3823,11 @@ fn sync_characters(
                         }
                         let id = match env.get(&i) {
                             Some(m) => ch.spawn((Mesh3d(mesh), MeshMaterial3d(m.clone()), Transform::IDENTITY)).id(),
-                            None => ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY)).id(),
+                            None => {
+                                // A ghost's parts blend at its level (R-0202).
+                                let material = if c.ghost.is_some() { blend_twin(&mut materials, &material) } else { material };
+                                ch.spawn((Mesh3d(mesh), MeshMaterial3d(material), Transform::IDENTITY)).id()
+                            }
                         };
                         spawned.push(id);
                     }
@@ -3879,7 +3880,12 @@ fn sync_characters(
             let part = &c.model.parts[*i];
             let (pos, nrm) = character::skin_part(&matrices, &part.positions, &part.normals, &part.weights, &part.bones);
             let slots = if c.flash > 0 { &play::FLASH_COLOUR } else { &c.slots };
-            let colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, Some(slots));
+            let mut colours = tinted(part, relight(part, &nrm, rotation, &lights), tint, Some(slots));
+            // SPEC-0029 Behavior 33 (R-0202): a ghost blends at its level / 128 (level = opacity x 128).
+            if let (Some(g), Some(col)) = (c.ghost.as_ref(), colours.as_mut()) {
+                let level = ((g.opacity * 128.0) as i32).clamp(0, 128) as f32 / 128.0;
+                col.iter_mut().for_each(|q| q[3] *= level);
+            }
             if let Some(mut mesh) = meshes.get_mut(handle) {
                 mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, pos);
                 mesh.insert_attribute(Mesh::ATTRIBUTE_NORMAL, nrm);

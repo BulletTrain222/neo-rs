@@ -12707,7 +12707,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                         Action::HeroAnim { anim: 182, wait: false },
                         Action::Message { line },
                         Action::Sleep { ticks: 1 },
-                        Action::ReplaceExterior { slot: 90, plane: 0 },
+                        Action::HudReset, Action::ReplaceExterior { slot: 90, plane: 0 },
                     ]);
                 }
             }
