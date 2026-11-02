@@ -144,9 +144,24 @@ pub struct Params {
     pub map_search: Option<MapSearch>,
 }
 
-/// A row's map search (Behavior 9; the enemy-target types 2 to 8 are not built).
+/// One character a caster's map search may pick (SPEC-0038 Behavior 43's picker inputs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Candidate {
+    pub id: u64,
+    pub position: Vec3,
+    pub action: u32,
+    /// Current HP below maximum.
+    pub wounded: bool,
+    /// Not hidden, not script-held, not a petpet.
+    pub filter: bool,
+    /// A positive reanimation countdown.
+    pub reanimating: bool,
+}
+
+/// A row's map search (Behavior 9): types 0 and 1 look for items, 2 to 8 for a spell's target.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct MapSearch {
+    pub distance: f32,
     pub chance: f32,
     pub timer: (i32, i32),
     pub kind: u32,
@@ -243,6 +258,12 @@ pub struct View<'a> {
     /// any hero shot is live.
     pub missile_threat: bool,
     pub hero_shot_live: bool,
+    /// The characters a caster may pick, this enemy's id, whether it is wounded, and the sight
+    /// test from it to a point (Behavior 43).
+    pub candidates: &'a [Candidate],
+    pub self_id: u64,
+    pub wounded: bool,
+    pub sees: Option<&'a dyn Fn(Vec3) -> bool>,
     /// Event bits on the current frame: 0x20 is the release event (the missile slot's spawn
     /// event, SPEC-0005 table B), and 0x1 to 0x10 on that frame pick emit points 0 to 4.
     pub spawn_bits: u32,
@@ -354,6 +375,8 @@ pub struct Act {
     pub snap: Option<Vec3>,
     /// Remove this world item (pool index): the map search's arrival (Behavior 39).
     pub consume: Option<usize>,
+    /// A spell fires this tick: its target and attack sub-type (Behavior 43).
+    pub cast: Option<(u64, u8)>,
 }
 
 /// SPEC-0040 Behavior 21, the flyer goal height. `ambush` is the ambush word (+0xBC0); while it
@@ -624,6 +647,9 @@ pub struct Enemy {
     pub goal_y: Option<f32>,
     /// A navmesh re-pick is pending (passed out through the next act).
     repick: bool,
+    /// State 18's target and the sub-type fired flag (Behaviors 42 and 43).
+    cast_target: Option<u64>,
+    cast_fired: bool,
     /// DisableInvisibility (SPEC-0030 row 121; +0xE60): an invisible kind (Display in Default
     /// 0) loses its hit and lock veto, and SetAI_Agro enters state 2, not 21.
     pub visible: bool,
@@ -714,6 +740,8 @@ impl Enemy {
             ambush: -1,
             goal_y: None,
             repick: false,
+            cast_target: None,
+            cast_fired: false,
         };
         e.draw_distances(rng);
         e.idle_timer = rng.range(120, 600);
@@ -1190,6 +1218,19 @@ impl Enemy {
         self.disappear = self.p.disappear;
     }
 
+    /// A corpse whose reanimation countdown runs (the raising spell's target).
+    pub fn reanimating(&self) -> bool {
+        self.state == 16 && self.reanim > 0
+    }
+
+    /// The raising spell's contact (Behavior 43 sub-type 0): the countdown word becomes -1, so the
+    /// next tick passes to the rise step.
+    pub fn raise(&mut self) {
+        if self.state == 16 {
+            self.reanim = -1;
+        }
+    }
+
     /// The dead test (streaming's kill bit, the scripts' AI-dead watches, the live counts): a
     /// corpse, or a reanimating enemy while its countdown is above 0.
     pub fn is_dead(&self) -> bool {
@@ -1558,6 +1599,7 @@ impl Enemy {
             }
             8 => self.hide_handler(v, &mut a),
             17 => self.fetch_step(v, rng, &mut a),
+            18 => self.cast_step(v, rng, &mut a),
             // State 6 with no route stands (the spec's steer toward entry 0 is not built).
             0 | 3 | 6 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
@@ -1762,7 +1804,7 @@ impl Enemy {
         let ids: &[u16] = match m.kind {
             0 => &[145],
             1 => &[135, 136, 137, 138, 139],
-            _ => return,
+            _ => return self.cast_search(m, v, rng),
         };
         let mut target = None;
         for &id in ids {
@@ -1783,6 +1825,76 @@ impl Enemy {
             self.map_target = Some(t);
             self.state = 17;
             self.through = None;
+        }
+    }
+
+    /// Behaviors 9 and 43, types 2 to 8: a candidate by the type's picker inputs, within the search
+    /// distance and in view, one of at most ten at random; the chance roll (type 7 instead runs
+    /// only while the caster is wounded); the recovery countdown below 1; then state 18.
+    fn cast_search(&mut self, m: MapSearch, v: &View, rng: &mut Rng) {
+        if !self.p.display_default && self.hidden(v.clip.action) {
+            return;
+        }
+        if m.kind == 7 && !v.wounded {
+            return;
+        }
+        let eligible = |c: &&Candidate| {
+            c.id != v.self_id
+                && match m.kind {
+                    2 => c.reanimating,
+                    3 => c.action != 4 && c.filter,
+                    4 => c.action != 11 && c.filter,
+                    5 => c.action != 5 && c.filter,
+                    6 => c.wounded && c.filter,
+                    7 => c.action != 0 && c.filter,
+                    8 => c.filter,
+                    _ => false,
+                }
+                && hdist(v.position, c.position) < m.distance
+                && v.sees.is_some_and(|f| f(c.position))
+        };
+        let list: Vec<u64> = v.candidates.iter().filter(eligible).take(10).map(|c| c.id).collect();
+        if list.is_empty() {
+            return;
+        }
+        if m.kind != 7 && rng.range(1, 100) as f32 >= m.chance {
+            return;
+        }
+        if self.recovery >= 1 {
+            return;
+        }
+        self.cast_target = Some(list[rng.range(0, list.len() as i32 - 1) as usize]);
+        self.cast_fired = false;
+        self.state = 18;
+        self.through = None;
+        self.map_cooldown = rng.range(m.timer.0.min(m.timer.1), m.timer.0.max(m.timer.1));
+    }
+
+    /// Behavior 42, state 18: animation 137 plays and aims at the target; its first frame with
+    /// event bit 0x20 fires the spell once; at its end the recovery is drawn and agro follows.
+    /// A table with no 137 goes straight to agro.
+    fn cast_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        if !(v.has)(137) {
+            self.set(19, v, rng, a);
+            return;
+        }
+        if v.clip.action != 137 {
+            a.anim = Some(137);
+            return;
+        }
+        if v.clip.progress >= 0.99 {
+            self.set(19, v, rng, a);
+            self.recovery = rng.range(self.p.attack_timer_min as i32, self.p.attack_timer_max as i32);
+            return;
+        }
+        let target = self.cast_target.and_then(|t| v.candidates.iter().find(|c| c.id == t));
+        if let Some(t) = target {
+            a.face = Some((t.position, 0.1));
+            if v.spawn_bits & 0x20 != 0 && !self.cast_fired {
+                self.cast_fired = true;
+                let sub = self.p.map_search.map_or(0, |m| m.kind.clamp(2, 8) - 2) as u8;
+                a.cast = Some((t.id, sub));
+            }
         }
     }
 
@@ -2728,6 +2840,10 @@ mod tests {
             l1_held: false,
             missile_threat: false,
             hero_shot_live: false,
+            candidates: &[],
+            self_id: 0,
+            wounded: false,
+            sees: None,
             spawn_bits: 0,
             radii: 2.0,
             clip: Clip::default(),
@@ -2922,6 +3038,58 @@ mod tests {
     }
 
     #[test]
+    fn map_search_casts_at_a_candidate() {
+        let mut p = Params::default();
+        p.attack_timer_min = 30.0;
+        p.attack_timer_max = 30.0;
+        p.map_search = Some(MapSearch { distance: 120.0, chance: 101.0, timer: (120, 120), kind: 2, greedy: 0.0 });
+        let mut r = Rng::seeded(1);
+        let mut e = Enemy::new(p, Spawn::default(), &mut r);
+        e.state = 5;
+        let sees = |_: Vec3| true;
+        let has = |id: u32| id == 137;
+        let corpse = Candidate { id: 7, position: [10.0, 0.0, 0.0], action: 58, wounded: true, filter: true, reanimating: true };
+        let living = Candidate { id: 8, position: [5.0, 0.0, 0.0], action: 0, wounded: true, filter: true, reanimating: false };
+        let list = [living, corpse];
+        let mut v = view([100.0, 0.0, 0.0], &has);
+        v.self_id = 1;
+        v.candidates = &list;
+        v.sees = Some(&sees);
+        // Type 2 picks only the corpse.
+        e.map_search(&v, &mut r);
+        assert_eq!((e.state, e.cast_target), (18, Some(7)));
+        assert_eq!(e.map_cooldown, 120);
+        // The clip requested, then the release frame fires once and the end goes to agro.
+        let mut a = Act::default();
+        e.cast_step(&v, &mut r, &mut a);
+        assert_eq!(a.anim, Some(137));
+        v.clip = Clip { action: 137, progress: 0.5, ..v.clip };
+        v.spawn_bits = 0x20;
+        let mut a = Act::default();
+        e.cast_step(&v, &mut r, &mut a);
+        assert_eq!(a.cast, Some((7, 0)));
+        let mut a = Act::default();
+        e.cast_step(&v, &mut r, &mut a);
+        assert_eq!(a.cast, None);
+        v.clip = Clip { action: 137, progress: 0.995, ..v.clip };
+        let mut a = Act::default();
+        e.cast_step(&v, &mut r, &mut a);
+        assert_eq!((e.state, e.recovery), (19, 30));
+        // The contact: a corpse's countdown becomes -1.
+        let mut c = Enemy::new(Params::default(), Spawn::default(), &mut r);
+        c.state = 16;
+        c.reanim = 500;
+        assert!(c.reanimating());
+        c.raise();
+        assert_eq!(c.reanim, -1);
+        // No candidate in reach: nothing.
+        let mut e = Enemy::new(Params { map_search: Some(MapSearch { distance: 2.0, chance: 101.0, timer: (1, 1), kind: 2, greedy: 0.0 }), ..Params::default() }, Spawn::default(), &mut r);
+        e.state = 5;
+        e.map_search(&v, &mut r);
+        assert_eq!(e.state, 5);
+    }
+
+    #[test]
     fn map_search_fetches_coins() {
         // SPEC-0038 Behaviors 9 and 39 (the Rogue's type 1, greedy range 10): a coin and the
         // hero farther than 10 send the enemy to state 17; it runs to the coin, consumes it on
@@ -2930,7 +3098,7 @@ mod tests {
         let has = |_: u32| true;
         let mut rng = Rng::seeded(3);
         let mut p = skeleton();
-        p.map_search = Some(MapSearch { chance: 101.0, timer: (15, 120), kind: 1, greedy: 10.0 });
+        p.map_search = Some(MapSearch { distance: 0.0, chance: 101.0, timer: (15, 120), kind: 1, greedy: 10.0 });
         let items = [(4usize, 137u16, [6.0, 0.0, 0.0]), (2, 200, [1.0, 0.0, 0.0])];
         let mut v = view([-20.0, 0.0, 0.0], &has);
         v.items = &items;

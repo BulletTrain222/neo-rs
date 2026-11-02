@@ -3,8 +3,7 @@
 //! the per-tick update (owner check, area mode, lifetime, motion with gravity and homing, the
 //! hero hit test, the ground test), and the straight, homing, ballistic and lobbed launches.
 //!
-//! Not covered: the effects and trails (SPEC-0034), the hold word, spells (kinds 2 to 7 never
-//! touch a character here), the mote eater's drain (built by the host from the event), the
+//! Not covered: the effects and trails (SPEC-0034), the hold word, the mote eater's drain (built by the host from the event), the
 //! status roll (no statuses yet), the summon of a lobbed shot (Behavior 31), the owner's own block query after a reflection (enemies do not guard
 //! here), the shield Mote's charge, and the world
 //! test against static meshes, primitives and moving objects: the build tests the segment
@@ -81,6 +80,8 @@ pub enum Event {
     Status { code: i32, chance: i32, seconds: i32 },
     /// A reflected shot hits its owner for trunc(damage).
     Owner { id: u64, damage: f32 },
+    /// A spell (kinds 2 to 7) touched its target, stored in the key (SPEC-0038 Behavior 43).
+    SpellHit { kind: i32, target: u64 },
     /// A kind-8 release: the keyed summon (not spawned yet).
     Summon { key: i32, at: Vec3 },
     /// One of the shot's effect ids plays at a point (ids 2 to 5; -1 is not sent).
@@ -113,6 +114,8 @@ pub struct Env<'a> {
     pub owner_exists: &'a dyn Fn(u64) -> bool,
     /// An owner's body: position, motion-record radius and height.
     pub owner_body: &'a dyn Fn(u64) -> Option<(Vec3, f32, f32)>,
+    /// A spell target's body, as the owner's.
+    pub target_body: &'a dyn Fn(u64) -> Option<(Vec3, f32, f32)>,
     /// Ground height under (x, z), probed from a ceiling.
     pub ground: &'a dyn Fn(f32, f32, f32) -> Option<f32>,
     /// A wall lies on the segment.
@@ -155,6 +158,33 @@ pub fn sphere_meets_body(c: Vec3, r: f32, base: Vec3, rb: f32, hb: f32) -> bool 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Pool {
     pub slots: [Option<Shot>; SLOTS],
+}
+
+/// SPEC-0038 Behavior 43: the spell of attack sub-type `sub` (0 to 6) at target `key`: straight at
+/// 1.0 unit per tick, lifetime trunc(distance) + 5, damage word 3.0 (unused), radius 1.0, visual
+/// kind 23.
+pub fn spell(subtype: u8, owner: u64, element: i32, launch: Vec3, aim: Vec3, key: u64) -> Setup {
+    let (kind, first) = [(2, 0x848), (3, 0x849), (7, 0x84E), (4, 0x84A), (5, 0x84B), (5, 0x84C), (6, 0x84D)][subtype.min(6) as usize];
+    let d = sub(aim, launch);
+    Setup {
+        kind,
+        visual: 23,
+        element,
+        owner: Some(owner),
+        start: launch,
+        velocity: unit(d),
+        lifetime: len(d) as i32 + 5,
+        damage: 3.0,
+        radius: 1.0,
+        spin: 0.0,
+        area_radius: 0.0,
+        area_duration: 0,
+        key: key as i32,
+        ignore_world: false,
+        status: (-1, 0, 0),
+        effects: [first, -1, 412, -1, 412, 412],
+        trail: -1,
+    }
 }
 
 /// LaunchFireMote (SPEC-0044 1056 Shield lesson; SPEC-0030): behaviour kind 0, visual 23, fire
@@ -293,6 +323,17 @@ impl Pool {
             }
             for k in 0..3 {
                 p.position[k] += p.velocity[k];
+            }
+            // A spell touches only its target (SPEC-0038 Behavior 43).
+            if matches!(p.s.kind, 2..=7) {
+                if let Some((base, rb, hb)) = (env.target_body)(p.s.key as u64) {
+                    if sphere_meets_body(p.position, p.s.radius, base, rb, hb) {
+                        out.push(Event::SpellHit { kind: p.s.kind, target: p.s.key as u64 });
+                        effect(p, 5, p.position, &mut out);
+                        *slot = None;
+                        continue;
+                    }
+                }
             }
             // Character hit test: the hero (hit selector 1) or, after a reflection, the owner;
             // spells and lobbed shots skip it.
@@ -528,6 +569,7 @@ mod tests {
             poisoned: false,
             owner_exists: owner,
             owner_body: &|_| Some(([0.0; 3], 0.5, 3.0)),
+            target_body: &|_| None,
             ground,
             wall,
         }
@@ -688,6 +730,7 @@ mod tests {
             poisoned: false,
             owner_exists: &o,
             owner_body: &|_| None,
+            target_body: &|_| None,
             ground: &g,
             wall: &w,
         };

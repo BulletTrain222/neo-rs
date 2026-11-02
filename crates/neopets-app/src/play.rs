@@ -7492,6 +7492,7 @@ impl Play {
             };
             // SPEC-0056 Patrol: the route named by the placement's +0xB8.
             let patrol = world.and_then(|w| w.route(pl.words[0] as i32)).map(|r| neopets_sim::npc::Patrol::new(r, pl.words));
+            let wander = (pl.ai_code == 5).then(|| neopets_sim::npc::Wander::new(neopets_sim::walker::Walker::new(position, pl.facing, row.map_or(1.0, |r| r.radius), 1.0, self.next_character as u32), pl.words));
             if std::env::var_os("NEOPETS_TRACE_PATROL").is_some() {
                 let r = world.and_then(|w| w.route(pl.words[0] as i32));
                 eprintln!("PATROL bind pack {pack} {:?} code {} class {:?} path {} words {:?} points {} first {:?}", pl.name, pl.ai_code, row.and_then(|r| r.class), pl.words[0] as i32, pl.words, r.as_ref().map_or(0, |r| r.len()), r.as_ref().and_then(|r| r.first().copied()));
@@ -7504,7 +7505,11 @@ impl Play {
                 name: pl.name,
                 position,
                 facing: pl.facing,
-                townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing).with_patrol(patrol.clone())),
+                townsfolk: row.and_then(|r| r.class).filter(|&c| c == 6).map(|_| {
+                    let mut t = neopets_sim::npc::Townsfolk::new(pl.ai_code, pl.facing).with_patrol(patrol.clone());
+                    t.wander = wander.clone();
+                    t
+                }),
                 walker: row.filter(|r| matches!(r.class, Some(1 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
@@ -9496,7 +9501,7 @@ impl Play {
                 .map(|&h| (h, (0..self.world.headers.get(h).and_then(|x| x.as_ref()).map_or(0, |x| x.locators.len())).filter_map(|k| self.anim_locator(pack, h, k, 0)).collect()))
                 .collect();
             // The 1096 dispensers' draw (the module's random-draw routine is not given).
-            if matches!(pack, 1096 | 1397 | 1023 | 722 | 776) {
+            if matches!(pack, 1096 | 1397 | 1023 | 722 | 776 | 1363) {
                 self.state.trigger_raw = self.rng.next_u32();
             }
             self.state.cloak_worn = self.cloak_worn;
@@ -9883,13 +9888,24 @@ impl Play {
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
                 let clip = c.anim.clip_state();
-                let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress, fidget_entry: c.anim.has(11) };
-                if let Some(id) = t.tick(&mut c.facing, view, rng) {
+                let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress, fidget_entry: c.anim.has(11), wander_fidget: c.anim.has(2) };
+                if let Some(id) = t.tick_on(&mut c.facing, view, rng, &world.navmeshes) {
                     // The patrol walk id 8 (speed code 6); a bank without it walks with id 1.
                     c.anim.play(if id == 8 && !c.anim.has(8) { 1 } else { id });
                 }
+                // SPEC-0056 Wander: the walker's motion tick at the townsfolk walk speed (move
+                // type 0; table variant B's slower speed is not used, as for the patrol).
+                let wandered = t.wander.as_mut().filter(|w| w.walking).map(|w| {
+                    let ground = &world.ground;
+                    w.walker.motion_tick([0.0, 0.0, 0.083_37], &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+                    (w.walker.position(), w.walker.facing)
+                });
                 if let Some(to) = t.walk_to {
                     walk_toward(c, to, world);
+                }
+                if let Some((p, f)) = wandered {
+                    c.position = p;
+                    c.facing = f;
                 }
             }
             c.root_step = c.anim.tick();
@@ -10609,6 +10625,25 @@ impl Play {
         let mut consumed = Vec::new();
         let mut strikes = Vec::new();
         let mut grabs = Vec::new();
+        // SPEC-0038 Behavior 43: the picker's inputs, only where this world has a caster.
+        let casters = self.characters.iter().any(|c| c.pack == world.pack && c.enemy.as_ref().is_some_and(|e| e.p.map_search.is_some_and(|m| m.kind >= 2)));
+        let candidates: Vec<enemy::Candidate> = if casters {
+            self.characters
+                .iter()
+                .filter(|c| c.pack == world.pack && !c.inactive)
+                .map(|c| enemy::Candidate {
+                    id: c.id,
+                    position: c.position,
+                    action: c.anim.clip_state().action,
+                    wounded: c.row.is_some_and(|r| c.hp < r.hit_points as i32),
+                    filter: !c.held && !c.pet_like() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action)),
+                    reanimating: c.enemy.as_ref().is_some_and(|e| e.reanimating()),
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        let mut casts: Vec<(u64, u64, u8, i32, [f32; 3], i32)> = Vec::new();
         let (hero_is_held, hero_is_stunned) = (self.loco.state == hero_states::HELD, self.statuses.active(neopets_sim::status::STUN));
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
@@ -10697,6 +10732,19 @@ impl Play {
             v.mesh = mesh;
             v.items = &world_items;
             v.hero_shot_live = !shot_paths.is_empty();
+            v.candidates = &candidates;
+            v.self_id = *id;
+            v.wounded = *hp < row.hit_points as i32;
+            // The three sight lines: from 1.5 above the caster to the candidate's aim point, and
+            // two parallel lines 1.0 to each side.
+            let sees = |to: [f32; 3]| {
+                let a = [p[0], p[1] + 1.5, p[2]];
+                let b = [to[0], to[1] + 1.5, to[2]];
+                let d = unit([b[0] - a[0], 0.0, b[2] - a[2]]);
+                let side = [-d[2], 0.0, d[0]];
+                [0.0, 1.0, -1.0].iter().all(|&o| world.ground.as_ref().is_none_or(|g| g.segment_clear(add(a, scale(side, o)), add(b, scale(side, o)), true)))
+            };
+            v.sees = Some(&sees);
             let body = Cylinder::from_base(p, [0.0, 1.0, 0.0], row.radius, row.height);
             let look = e.p.defence.hold.max(0) as f32;
             v.missile_threat = shot_paths.iter().any(|&(s, vel)| neopets_sim::combat::segment_meets(s, add(s, scale(vel, look)), &body));
@@ -10831,6 +10879,21 @@ impl Play {
                 dots.push((*id, amount));
             }
             consumed.extend(act.consume);
+            if let Some((target, sub)) = act.cast {
+                if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
+                    println!("CAST {name} tick {}: sub-type {sub} at character {target}", self.ticks);
+                }
+                casts.push((*id, target, sub, e.p.element, [p[0], p[1] + 0.5 * row.height, p[2]], row.hit_points as i32 - *hp));
+            }
+        }
+        // SPEC-0038 Behavior 43: each spell goes into the enemy pool, aimed 1.5 above its target.
+        // Sub-type 5 first deals the caster's missing HP to the target, if a slot is free.
+        for (owner, target, sub, element, launch, missing) in casts {
+            let Some(i) = self.characters.iter().position(|c| c.id == target) else { continue };
+            let at = self.characters[i].position;
+            if self.shots.submit(neopets_sim::projectile::spell(sub, owner, element, launch, [at[0], at[1] + 1.5, at[2]], target)) && sub == 5 {
+                self.character_take_hit(i, missing, launch, "a spell ");
+            }
         }
         if let Some(pool) = self.pools.get_mut(&self.world.pack) {
             for i in consumed {
@@ -10865,6 +10928,7 @@ impl Play {
                 poisoned: self.statuses.active(neopets_sim::status::POISON),
                 owner_exists: &owner_exists,
                 owner_body: &owner_body,
+                target_body: &owner_body,
                 ground: &ground,
                 wall: &wall,
             };
@@ -10909,6 +10973,35 @@ impl Play {
                     let r = self.rng.range(0, 100);
                     if r <= chance && !(code == 0 && self.statuses.active(neopets_sim::status::STUN)) {
                         self.hero_status(code, seconds);
+                    }
+                }
+                // SPEC-0038 Behavior 43 contact effects: 2 raises a corpse, 3 strength (status 4),
+                // 7 status 11, 4 speed (status 5), 5 full HP. Kind 6's run-time variant re-pick
+                // (only the Minion Wizard, whose targets keep their class and HP) is not built.
+                neopets_sim::projectile::Event::SpellHit { kind, target } => {
+                    if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
+                        println!("SPELL kind {kind} touched character {target} on tick {}", self.ticks);
+                    }
+                    if let Some(c) = self.characters.iter_mut().find(|c| c.id == target) {
+                        let full = c.row.map(|r| r.hit_points as i32);
+                        match (kind, c.enemy.as_mut()) {
+                            (2, Some(e)) => e.raise(),
+                            (3, Some(e)) => {
+                                e.apply_status(4, -1, 0, 0);
+                            }
+                            (7, Some(e)) => {
+                                e.apply_status(11, -1, 0, 0);
+                            }
+                            (4, Some(e)) => {
+                                e.apply_status(5, -1, 0, 0);
+                            }
+                            (5, _) => {
+                                if let Some(f) = full {
+                                    c.hp = f;
+                                }
+                            }
+                            _ => {}
+                        }
                     }
                 }
                 neopets_sim::projectile::Event::Summon { key, at } => {
@@ -16060,7 +16153,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         element: t.element as i32,
         slots: t.slots.each_ref().map(slot),
         defence: enemy::Defence { hold: t.defend_time, missile: t.missile_defence, block: t.melee_block, dodge: t.melee_dodge, exit: t.defence_timer, angle: t.blocking_angle },
-        map_search: t.map_search.map(|m| enemy::MapSearch { chance: m.chance, timer: m.timer, kind: m.kind, greedy: m.greedy }),
+        map_search: t.map_search.map(|m| enemy::MapSearch { distance: m.distance, chance: m.chance, timer: m.timer, kind: m.kind, greedy: m.greedy }),
     }
 }
 
@@ -16102,6 +16195,10 @@ fn enemy_view<'a>(
         l1_held: false,
         missile_threat: false,
         hero_shot_live: false,
+        candidates: &[],
+        self_id: 0,
+        wounded: false,
+        sees: None,
         spawn_bits: 0,
         radii: 0.0,
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },

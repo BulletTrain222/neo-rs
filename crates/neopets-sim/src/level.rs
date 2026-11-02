@@ -13232,6 +13232,8 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         return Vec::new();
     }
     match pack {
+        // SPEC-0045 934's activate-world routine: objects 10 and 11 again.
+        934 => vec![Action::InitObjOn { obj: 10, end: false }, Action::InitObjOn { obj: 11, end: false }],
         // SPEC-0044 722 arrival: value 10 to 50 for eW 20 moves the hero to locator 110 to 106
         // with the normal camera; with 76 and 562 2 s, new odds and the racers at locators 1 to 3.
         722 => {
@@ -15794,6 +15796,8 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (758, 23 | 25) => Some(23),
         (758, 11 | 13) => Some(11),
         (758, 26 | 28) => Some(26),
+        (956, 1 | 47) => Some(1),
+        (1363, 37..=42) => Some(entity as u8),
         // SPEC-0044 722: R0 to R7 on their entities.
         (722, 14) => Some(0),
         (722, 10 | 13 | 6) => Some(1),
@@ -15944,6 +15948,18 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     }
     if matches!(pack, 748 | 776 | 859 | 1005 | 1008 | 1011 | 1014 | 1020 | 1131 | 1136 | 1140 | 1143 | 1172) {
         return talk_interior(pack, routine, state);
+    }
+    // SPEC-0044 956: entities 1 and 47 give line 2 with flag 59, else 12. The other entities'
+    // line mapping is not given (R-0183).
+    if (pack, routine) == (956, 1) {
+        return vec![Action::Talk { line: if state.flag(59) { 2 } else { 12 } }];
+    }
+    // SPEC-0041 1363 ids 37 to 42: with 101 and 103 a random pick of the routine's three lines;
+    // the fallback when either is clear is not fully given (R-0183): the first line stands in.
+    if pack == 1363 && (37..=42).contains(&routine) {
+        let lines = [[48, 51, 54], [39, 42, 45], [21, 24, 27], [30, 33, 36], [12, 15, 18], [3, 6, 9]][routine as usize - 37];
+        let k = if state.flag(101) && state.flag(103) { draw(state, pack, 0, 2) as usize } else { 0 };
+        return vec![Action::Talk { line: lines[k] }];
     }
     // SPEC-0039 880 handler 7 and 1230 handler 4, the map shop: the first map not held is
     // offered with its prompt (its index kept in word 4 for the answer); with every map held,
