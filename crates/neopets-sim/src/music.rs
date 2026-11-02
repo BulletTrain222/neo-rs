@@ -155,6 +155,11 @@ impl BankMusic {
         }
     }
 
+    /// SPEC-0009 World-load audio reset: nothing plays, so the row's bank starts again from child 0.
+    pub fn restart(&mut self) {
+        *self = Self::default();
+    }
+
     /// The volume sent to the driver: min(127, trunc(V x 127 / 1024)).
     pub fn sent(&self) -> i32 {
         (self.volume * 127 / 1024).min(127)

@@ -166,8 +166,10 @@ pub enum Action {
     Bits { word: u8, set: i32, clear: i32 },
     /// PlayHeroAnim.
     HeroAnim { anim: u32, wait: bool },
-    /// The hero's equipment display on or off.
+    /// SetHeroEquippedState: the weapon-ready word, with its cue when it changes.
     Equip { on: bool },
+    /// The HUD reset (FrontendHUDReset; SPEC-0021 Panel visibility and clears, item 5).
+    HudReset,
     /// StartExteriorReplacementLoad of an eW slot, arriving on a plane (-1: entry record 0).
     ReplaceExterior { slot: usize, plane: i32 },
     /// SetMaxActiveAI (SPEC-0030 row 62): the embedded block's active cap, clamped to 15.

@@ -165,6 +165,77 @@ impl TargetList {
     }
 }
 
+/// The talker list's range, cone and leader hold (SPEC-0022 Interaction range and target choice).
+pub const TALK_RANGE: f32 = 20.0;
+pub const TALK_CONE: f32 = 0.5;
+pub const TALK_HOLD: u32 = 90;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Talker {
+    id: u64,
+    d: f32,
+    eligible: bool,
+}
+
+/// The hero's talker list (SPEC-0022 Candidate lists): up to 15 townsfolk. A leader that stays
+/// eligible is kept for up to 90 ticks even when a nearer one appears; otherwise the eligible
+/// entries go first, in their pairwise order with the 1.0 swap quirk.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TalkerList {
+    records: Vec<Talker>,
+    held: u32,
+    leader: Option<u64>,
+}
+
+impl TalkerList {
+    /// One tick; `chars` are the townsfolk (id, position) in character-list order. Returns the
+    /// leader and its distance when it is eligible.
+    pub fn tick(&mut self, chars: &[(u64, Vec3)], hero: Vec3, forward: Vec3) -> Option<(u64, f32)> {
+        self.records.retain(|r| chars.iter().any(|c| c.0 == r.id));
+        for &(id, _) in chars {
+            if self.records.len() < RECORDS && !self.records.iter().any(|r| r.id == id) {
+                self.records.push(Talker { id, ..Talker::default() });
+            }
+        }
+        for r in &mut self.records {
+            let Some(&(_, p)) = chars.iter().find(|c| c.0 == r.id) else { continue };
+            r.d = dist(p, hero);
+            let n = r.d.max(1e-6);
+            let dot = (forward[0] * (p[0] - hero[0]) + forward[1] * (p[1] - hero[1]) + forward[2] * (p[2] - hero[2])) / n;
+            r.eligible = r.d <= TALK_RANGE && dot >= TALK_CONE;
+        }
+        let kept = self.records.first().is_some_and(|r| r.eligible && Some(r.id) == self.leader) && self.held < TALK_HOLD;
+        if kept {
+            self.held += 1;
+        } else {
+            let (mut a, b): (Vec<Talker>, Vec<Talker>) = self.records.iter().partition(|r| r.eligible);
+            for i in 0..a.len() {
+                for j in i + 1..a.len() {
+                    if a[j].d < a[i].d + 1.0 {
+                        a.swap(i, j);
+                    }
+                }
+            }
+            a.extend(b);
+            self.records = a;
+            self.leader = self.records.first().map(|r| r.id);
+            self.held = 0;
+        }
+        self.records.first().filter(|r| r.eligible).map(|r| (r.id, r.d))
+    }
+}
+
+/// SPEC-0022 Talk candidate: the lock-on leader when it is eligible, unless the talker leader is
+/// eligible and strictly nearer; when only one is eligible, that one.
+pub fn talk_candidate(talker: Option<(u64, f32)>, lock_on: Option<(u64, f32)>) -> Option<u64> {
+    match (talker, lock_on) {
+        (Some(t), Some(l)) => Some(if t.1 < l.1 { t.0 } else { l.0 }),
+        (Some(t), None) => Some(t.0),
+        (None, Some(l)) => Some(l.0),
+        (None, None) => None,
+    }
+}
+
 /// The shared aim rule (SPEC-0040 Behavior 8) as the attack turn uses it (Behavior 20 item 7):
 /// from facing `f` toward the horizontal direction to `to` from `at`, weight 1.0 under 4.0
 /// (strictly) and 0.25 otherwise; when the two point opposite (dot below -0.99), 0.1 times the
@@ -199,6 +270,45 @@ pub fn aim(f: Vec3, at: Vec3, to: Vec3, ahead_only: bool) -> Option<Vec3> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn talker_leader_is_held_for_90_ticks() {
+        let (hero, f) = ([0.0; 3], [0.0, 0.0, 1.0]);
+        let mut l = TalkerList::default();
+        let far = (1, [0.0, 0.0, 10.0]);
+        assert_eq!(l.tick(&[far], hero, f), Some((1, 10.0)));
+        // A nearer talker appears: the leader stays until the hold runs out.
+        let near = (2, [0.0, 0.0, 3.0]);
+        for _ in 0..TALK_HOLD {
+            assert_eq!(l.tick(&[far, near], hero, f).unwrap().0, 1);
+        }
+        assert_eq!(l.tick(&[far, near], hero, f).unwrap().0, 2);
+        // A leader that leaves the cone gives way at once; none eligible gives none.
+        let behind = (2, [0.0, 0.0, -3.0]);
+        assert_eq!(l.tick(&[far, behind], hero, f).unwrap().0, 1);
+        let too_far = (1, [0.0, 0.0, 20.5]);
+        assert_eq!(l.tick(&[too_far, behind], hero, f), None);
+    }
+
+    #[test]
+    fn talker_reorder_swaps_within_one_unit() {
+        let (hero, f) = ([0.0; 3], [0.0, 0.0, 1.0]);
+        let mut l = TalkerList::default();
+        // Entry 1 is up to 1.0 farther and still swaps ahead (the quirk).
+        assert_eq!(l.tick(&[(1, [0.0, 0.0, 5.0]), (2, [0.0, 0.0, 5.5])], hero, f).unwrap().0, 2);
+        let mut l = TalkerList::default();
+        assert_eq!(l.tick(&[(1, [0.0, 0.0, 5.0]), (2, [0.0, 0.0, 6.5])], hero, f).unwrap().0, 1);
+    }
+
+    #[test]
+    fn talk_candidate_lock_on_steal() {
+        assert_eq!(talk_candidate(Some((1, 5.0)), Some((2, 5.0))), Some(2), "a tie goes to the lock-on leader");
+        assert_eq!(talk_candidate(Some((1, 4.9)), Some((2, 5.0))), Some(1));
+        assert_eq!(talk_candidate(Some((1, 6.0)), Some((2, 5.0))), Some(2));
+        assert_eq!(talk_candidate(None, Some((2, 5.0))), Some(2));
+        assert_eq!(talk_candidate(Some((1, 5.0)), None), Some(1));
+        assert_eq!(talk_candidate(None, None), None);
+    }
 
     #[test]
     fn engagement_range_and_order() {

@@ -250,6 +250,8 @@ pub struct View<'a> {
     pub bands: (f32, f32),
     /// The sight line to the hero is clear.
     pub sight: bool,
+    /// The active hero wears the Tattered Cloak (item 126).
+    pub cloak: bool,
     /// A navmesh route to the hero exists, and the hero is on the walk mesh.
     pub route: bool,
     pub hero_on_mesh: bool,
@@ -687,6 +689,9 @@ pub struct Enemy {
     chat_with: Option<u64>,
     chat_clip: Option<u32>,
     chat_walk: u32,
+    /// The active hero wore the Tattered Cloak on the last tick: invisible kinds are shown to him
+    /// (SPEC-0036 Invisible-kind rule; SPEC-0038 Edge cases).
+    pub hero_cloak: bool,
     /// DisableInvisibility (SPEC-0030 row 121; +0xE60): an invisible kind (Display in Default
     /// 0) loses its hit and lock veto, and SetAI_Agro enters state 2, not 21.
     pub visible: bool,
@@ -698,6 +703,7 @@ impl Enemy {
     pub fn new(p: Params, spawn: Spawn, rng: &mut Rng) -> Self {
         let default_state = spawn.default_state;
         let mut e = Self {
+            hero_cloak: false,
             visible: false,
             p,
             spawn,
@@ -998,7 +1004,8 @@ impl Enemy {
         }
     }
 
-    /// Behavior 3: the notice check (the alarm-group gate; no socialize halving, no cloak).
+    /// Behavior 3: the notice check (the alarm-group gate; a Tattered Cloak wearer is not noticed
+    /// with the sight line blocked, and halves the chance within the band).
     fn notice(&self, v: &View, rng: &mut Rng) -> bool {
         let p = &self.p;
         if !p.display_default && v.alarm_block {
@@ -1018,6 +1025,9 @@ impl Enemy {
             far *= 0.5;
         }
         if !v.sight && !p.always_sight {
+            if v.cloak {
+                return false;
+            }
             (near, far) = (p.range_near * f2, p.range_far * f2);
         }
         let d = len(sub(v.hero, v.position));
@@ -1030,6 +1040,9 @@ impl Enemy {
         let span = p.range_far - p.range_near;
         let mut chance = if span != 0.0 { p.chance_near + (p.chance_far - p.chance_near) * (d - p.range_near) / span } else { p.chance_near };
         if dot(v.facing, unit(sub(v.hero, v.position))) < p.view_angle {
+            chance *= 0.5;
+        }
+        if v.cloak {
             chance *= 0.5;
         }
         (rng.range(1, 100) as f32) < chance
@@ -1363,7 +1376,7 @@ impl Enemy {
     }
 
     fn cloaked(&self, clip: u32) -> bool {
-        !self.p.display_default && !self.visible && (self.state == self.default_state as u32 || (self.state == 21 && clip != 82))
+        !self.hero_cloak && !self.p.display_default && !self.visible && (self.state == self.default_state as u32 || (self.state == 21 && clip != 82))
     }
 
     /// The flyer test: can-fly 1 with the retarget countdown at most 0, or can-fly 2.
@@ -2973,6 +2986,7 @@ mod tests {
             hero_attackable: true,
             bands: (1.0, 0.5),
             sight: true,
+            cloak: false,
             route: true,
             hero_on_mesh: true,
             waypoint: [0.0; 3],
@@ -3902,6 +3916,20 @@ mod tests {
             e.tick(&v, &mut rng);
         }
         assert_eq!(e.tick(&v, &mut rng).go, Some(Go::Toward([0.0; 3])));
+    }
+
+    #[test]
+    fn the_tattered_cloak_shows_an_invisible_kind() {
+        let mut rng = Rng::seeded(5);
+        let mut e = Enemy::new(skeleton(), Spawn::default(), &mut rng);
+        e.p.display_default = false;
+        e.state = e.default_state as u32;
+        assert!(e.lock_vetoed(0), "hidden in its default state");
+        e.hero_cloak = true;
+        assert!(!e.lock_vetoed(0), "shown to a cloak wearer");
+        e.hero_cloak = false;
+        e.visible = true;
+        assert!(!e.lock_vetoed(0), "DisableInvisibility");
     }
 
     #[test]

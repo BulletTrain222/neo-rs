@@ -554,9 +554,6 @@ impl World {
     }
 }
 
-/// The patrol and path walks, simplified as the script walk: straight toward the point at the
-/// townsfolk walk speed (0.08337 a tick, move type 0) on the ground, steering with weight 0.3.
-/// The navigation mesh and root-motion travel are not used.
 /// One tick of an NPC's walk (SPEC-0056 Navigation step, Travel by root motion, Wall confinement):
 /// the navigation step over its mesh steers it, and the motion tick moves it by the walk clip's
 /// root step, kept on the mesh. A clip with no root travel moves at `speed` instead, so a walk
@@ -954,7 +951,7 @@ impl Character {
     pub fn unhittable(&self) -> bool {
         self.pet_like()
             || self.invulnerable
-            || self.enemy.as_ref().is_some_and(|e| e.lying() || e.hidden(self.anim.clip_state().action) || (e.state == 19 && matches!(e.outer, 5 | 6)) || (!self.held && matches!(self.anim.clip_state().action, 74..=76)))
+            || self.enemy.as_ref().is_some_and(|e| e.lying() || e.lock_vetoed(self.anim.clip_state().action) || (e.state == 19 && matches!(e.outer, 5 | 6)) || (!self.held && matches!(self.anim.clip_state().action, 74..=76)))
     }
 }
 
@@ -1257,6 +1254,9 @@ pub struct Play {
     pub hero_shots: Vec<neopets_sim::roberta::Shot>,
     /// The hero's candidate list and its lock (SPEC-0040 Behavior 20).
     pub candidates: neopets_sim::lock::Candidates,
+    /// The talker list (SPEC-0022) and its eligible leader with its distance.
+    talkers: neopets_sim::lock::TalkerList,
+    talker: Option<(u64, f32)>,
     /// The hero's target list (SPEC-0053 3.9), which the attack turn aims at.
     pub targets: neopets_sim::lock::TargetList,
     pub lock: Option<u64>,
@@ -2118,6 +2118,8 @@ impl Play {
             r_attack: None,
             hero_shots: Vec::new(),
             candidates: Default::default(),
+            talkers: Default::default(),
+            talker: None,
             targets: Default::default(),
             lock: None,
             fight_target: None,
@@ -2590,10 +2592,10 @@ impl Play {
     /// does not end here. Steps 2, 6 and 7 with no return world (a script's load is the return
     /// world here): the other resident world W reloads with its own pack, its Init running and
     /// no make-current callbacks, and the focus hero respawns where he stands with no heal
-    /// (state 1, velocity cleared, grab cooldown 60). Not built: the sound-slot reset, the
-    /// music restart and the stop of scripts' sound loops, and W's kills come back only if
-    /// they were not recorded (this build keeps one kill set).
+    /// (state 1, velocity cleared, grab cooldown 60). W's kills come back only if they were not
+    /// recorded (this build keeps one kill set).
     pub fn after_movies(&mut self) {
+        self.world_audio_reset();
         self.cut = None;
         self.cut_target = None;
         if self.job.is_none() {
@@ -3079,6 +3081,7 @@ impl Play {
                 Action::PlayCamera { track, wait, end, speed } => {
                     // A track outside the list does nothing; WAIT waits only on a keyed track.
                     let keyed = !self.world.tracks.get(track)?.keys.is_empty();
+                    self.hud_reset();
                     self.cut = Some(neopets_sim::scene::CameraPlay::new(track, end, speed));
                     self.cut_target = None;
                     self.held = true;
@@ -3086,6 +3089,7 @@ impl Play {
                 }
                 Action::PlayTarget { track, wait, end, speed, target } => {
                     let keyed = !self.world.tracks.get(track)?.keys.is_empty();
+                    self.hud_reset();
                     self.cut = Some(neopets_sim::scene::CameraPlay::new(track, end, speed));
                     self.cut_target = Some((pack, target));
                     self.held = true;
@@ -3526,7 +3530,8 @@ impl Play {
                     self.hero.request(anim, true);
                     return Some(if wait { Wait::HeroOneShot } else { Wait::Ticks(1) });
                 }
-                Action::Equip { .. } => {}
+                Action::Equip { on } => self.set_weapon_drawn(on),
+                Action::HudReset => self.hud_reset(),
                 Action::MaxActiveAi { cap } => {
                     self.max_active.insert(pack, cap.min(BLOCK_OBJECTS));
                 }
@@ -4133,25 +4138,36 @@ impl Play {
         self.dialogue_open = true;
     }
 
-    /// SPEC-0022 Interaction range and target choice, simplified: the nearest character of the
-    /// current world with a registered talk routine, at most 20.0 away and within the hero's
-    /// facing cone (cosine 0.5). The 90-tick leader hold, the reorder rule and the lock-on
-    /// list are not reproduced. Returns (index, distance, routine).
+    /// SPEC-0021 Panel visibility and clears, item 5, and SPEC-0023 section 4.1, the HUD reset:
+    /// both quick panels closed, the prompts and every HUD timer cleared, and the monster bar's.
+    fn hud_reset(&mut self) {
+        self.quick.open = false;
+        self.mote_panel.open = false;
+        self.talk_prompt = false;
+        self.hud.hide_all();
+        self.hud.d = 0;
+        self.monster_bar.t = 0;
+    }
+
+    /// SPEC-0009 World-load audio reset: the music state and both stream channels reset, and every
+    /// voice stopped, so the music starts again from child 0. The sound blocks stay loaded here.
+    fn world_audio_reset(&mut self) {
+        self.bank_music.restart();
+        self.music = Default::default();
+        self.sound.stop_all();
+    }
+
+    /// SPEC-0022 Interaction range and target choice: the talk candidate from the two lists' leaders
+    /// (the lists of the previous tick). A candidate with no talk routine gives no talk and blocks
+    /// nothing. Returns (index, distance, routine).
     fn talk_candidate(&self) -> Option<(usize, f32, u8)> {
-        let p = self.loco.position();
-        let f = self.loco.facing;
-        self.characters
-            .iter()
-            .enumerate()
-            .filter(|(_, c)| c.pack == self.world.pack && !c.inactive)
-            .filter_map(|(i, c)| {
-                let routine = level::proximity_routine(c.pack, c.entity?)?;
-                let d = [c.position[0] - p[0], c.position[1] - p[1], c.position[2] - p[2]];
-                let len = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
-                let cos = (d[0] * f[0] + d[2] * f[2]) / (d[0] * d[0] + d[2] * d[2]).sqrt().max(1e-6);
-                (len <= 20.0 && cos >= 0.5).then_some((i, len, routine))
-            })
-            .min_by(|a, b| a.1.total_cmp(&b.1))
+        let lock_on = self.targets.records.first().filter(|r| r.flag).map(|r| (r.id, r.d));
+        let id = neopets_sim::lock::talk_candidate(self.talker, lock_on)?;
+        let i = self.characters.iter().position(|c| c.id == id)?;
+        let c = &self.characters[i];
+        let routine = level::proximity_routine(c.pack, c.entity?)?;
+        let d = if self.talker.is_some_and(|t| t.0 == id) { self.talker?.1 } else { lock_on?.1 };
+        Some((i, d, routine))
     }
 
     /// The talk entry (SPEC-0022): within 5.8 the "Talk" label (8) is shown and Square starts
@@ -7731,7 +7747,9 @@ impl Play {
     /// first reserved record of the key not bound to a live character is bound at the point and
     /// facing, with the drop item as its direct drop, and starts in agro (state 19) or, for the
     /// minion keys and the arrival flag, with animation 82 in state 21. Returns the summoned
-    /// character. The block's free-object and cap tests and the summoner id are not built.
+    /// character. A block at its cap (SPEC-0006 Blocks: 6 for the embedded block unless
+    /// SetMaxActiveAI changes it, 15 for a slot; at most 15 objects) is passed over. The summoner
+    /// id is not built.
     fn summon(&mut self, pack: u32, block: Option<u8>, key: i16, at: [f32; 3], facing: [f32; 3], drop: Option<u16>, arrive: bool) -> Option<u64> {
         let live: std::collections::HashSet<u64> = self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())).map(|c| c.id).collect();
         for r in &mut self.reserves {
@@ -7748,7 +7766,13 @@ impl Play {
                 v
             }
         };
+        let streaming = std::env::var_os("NEOPETS_NO_STREAM").is_none();
         for s in blocks {
+            let cap = if s == EMBEDDED_SLOT { self.max_active.get(&pack).copied().unwrap_or(6) } else { BLOCK_OBJECTS }.min(BLOCK_OBJECTS);
+            let active = self.characters.iter().filter(|c| c.pack == pack && c.slot == s && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())).count();
+            if streaming && active >= cap {
+                continue;
+            }
             let recs: Vec<usize> = (0..self.reserves.len()).filter(|&i| self.reserves[i].pack == pack && self.reserves[i].slot == s).collect();
             let keyed: Vec<neopets_sim::summon::Reserved> = recs.iter().map(|&i| neopets_sim::summon::Reserved { key: self.reserves[i].pl.key, bound: self.reserves[i].bound.is_some() }).collect();
             let Some(k) = neopets_sim::summon::find(&keyed, key) else { continue };
@@ -8440,6 +8464,7 @@ impl Play {
         match job {
             Job::FromExterior { plane, reverse, .. } if world.kind == Kind::Transition => {
                 // E current, D a transition: it takes T and the hero lands on its door.
+                self.world_audio_reset();
                 self.other = Some(world);
                 let landed = self.land_in_other(plane, reverse, false);
                 self.last_door = format!("landed in transition {} at its door {plane}: {landed}", self.world.pack);
@@ -8462,6 +8487,7 @@ impl Play {
                 self.activated();
             }
             Job::Replace(_, plane) => {
+                self.world_audio_reset();
                 self.world = world;
                 self.other = None;
                 self.state.reset_levels();
@@ -8791,7 +8817,7 @@ impl Play {
 
     /// SPEC-0051 section 10, when a dig starts: a repeat fire (state 2) with a nonzero object
     /// value, object 0 active, the treasure not collected and its map held; then the dig
-    /// sequence as a script thread. Not built: SetHeroEquippedState 0 and the HUD reset (step 2).
+    /// sequence as a script thread.
     fn dig_step(&mut self, g: usize, rec: neopets_sim::trigger::Record) {
         let Some(group) = self.world.groups.get(g).cloned() else { return };
         let objs: Vec<usize> = group.objects.iter().filter_map(|&o| usize::try_from(o).ok()).filter(|&o| o < self.world.object_anims.len()).collect();
@@ -8812,7 +8838,7 @@ impl Play {
         let camera = |k: usize| group.cameras.get(k).and_then(|&c| usize::try_from(c).ok()).map(|track| Action::PlayCamera { track, wait: false, end: 0, speed: 1.0 });
         let table = self.effect_table.clone();
         self.effects.one_shot(&table, 4036, [p[0] + 2.9 * d[0], p[1] + 2.9 * d[1], p[2] + 2.9 * d[2]], neopets_sim::effect::IDENTITY, &mut self.rng);
-        let mut v: Vec<Action> = vec![Action::HoldHero, Action::Equip { on: false }];
+        let mut v: Vec<Action> = vec![Action::HoldHero, Action::Equip { on: false }, Action::HudReset];
         v.extend(camera(0));
         v.extend(group.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::SwitchEffect { slot, on: false }));
         // Step 6: the camera shake (2.0, 0.3, 25.0, 0.5, 0.8, 1.5708, 0.2).
@@ -10175,6 +10201,9 @@ impl Play {
         let mut targets = std::mem::take(&mut self.targets);
         targets.tick(&chars, hero, self.loco.facing, self.hero_index.min(1), clear);
         self.targets = targets;
+        // SPEC-0022 Candidate lists: the talker list, the townsfolk of the current world.
+        let talkers: Vec<(u64, [f32; 3])> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.townsfolk.is_some()).map(|c| (c.id, c.position)).collect();
+        self.talker = self.talkers.tick(&talkers, hero, self.loco.facing);
         // SPEC-0040 Behavior 20 item 7, the attack turn: while the hero attacks, toward the head
         // of the target list when it is a candidate; else, for Tor, toward the nearest intact
         // breakable ahead (dot above 0.5) within his reach of 12.0. Roberta never turns toward a
@@ -10872,6 +10901,11 @@ impl Play {
             Vec::new()
         };
         let mut casts: Vec<(u64, u64, u8, i32, [f32; 3], i32)> = Vec::new();
+        // SPEC-0036 Invisible-kind rule: the Tattered Cloak in the active hero's outfit slot.
+        let cloak = self.equipment.entries[2][self.hero_index] == Some(126);
+        for e in self.characters.iter_mut().filter_map(|c| c.enemy.as_mut()) {
+            e.hero_cloak = cloak;
+        }
         // SPEC-0038 Behavior 10: the socializing enemies, script-held ones left out (their
         // companion-row branch is not built).
         let peers: Vec<enemy::Peer> = self
@@ -10954,6 +10988,7 @@ impl Play {
             let has = |id: u32| anim.has(id);
             let speed = (root_step[0].powi(2) + root_step[2].powi(2)).sqrt();
             let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
+            v.cloak = cloak;
             v.radii = row.radius + contact::HERO_RADIUS;
             v.spawn_bits = bits;
             let ground = world.probe(p[0], p[2], p[1] + 2.5);
@@ -11310,7 +11345,7 @@ impl Play {
                 }
                 neopets_sim::projectile::Event::Leach => {
                     // SPEC-0011 Leach: effect 4039 at the hero's model point, then 50 MP drained
-                    // (not below 0; the MP-empty rule is not built).
+                    // (not below 0). The MP-empty hook's HUD re-arm is the HUD's change test.
                     let table = self.effect_table.clone();
                     let p = add(self.loco.position(), [0.0, 1.5, 0.0]);
                     self.effects.one_shot(&table, 4039, p, neopets_sim::effect::IDENTITY, &mut self.rng);
@@ -12979,13 +13014,6 @@ impl Play {
         }
     }
 
-    /// SPEC-0011 per tick for the Faerie Sisters in the current world: the group's recount (level
-    /// event 2 once at 0), then each sister's measurements (the hit, the hero shots whose next
-    /// 10 ticks pass within her body, the clip and its event bits), her controller tick and its
-    /// requests (the clip and its rate 2 - f, the turn toward the hero, the travel, the pool
-    /// launch, the effect and the level events). The travel moves her straight at the path
-    /// step's speed with her height kept (the route step, collision and the navmesh blocked flag
-    /// are not built, so she never flips on a block).
     /// NEOPETS_TRACE_NPCWALK: one tick of the walking audit of the current world's townsfolk.
     fn npc_audit_step(&mut self) {
         for c in self.characters.iter().filter(|c| c.pack == self.world.pack && !c.inactive && c.townsfolk.is_some()) {
@@ -13041,6 +13069,13 @@ impl Play {
         }
     }
 
+    /// SPEC-0011 per tick for the Faerie Sisters in the current world: the group's recount (level
+    /// event 2 once at 0), then each sister's measurements (the hit, the hero shots whose next
+    /// 10 ticks pass within her body, the clip and its event bits), her controller tick and its
+    /// requests (the clip and its rate 2 - f, the turn toward the hero, the travel, the pool
+    /// launch, the effect and the level events). The travel moves her straight at the path
+    /// step's speed with her height kept, refused off her mesh (the route step and collision are
+    /// not built).
     fn sisters_step(&mut self) {
         let pack = self.world.pack;
         let hero = self.loco.position();
@@ -14501,7 +14536,7 @@ impl Play {
     /// class 0 or 7, or the slot-2 Mote's kind), the break effect from state 1 and the contact
     /// cue by material; on an element mismatch Tor recoils (SPEC-0048 Element recoil: attack
     /// sub-state 13 with material 4). The break's spawn by key is in `break_one_with`. The
-    /// script hook, the piece spawns and the timed effect are not built.
+    /// piece spawns and the timed effect are not built.
     fn breakable_walk(&mut self, p0: [f32; 3], tip: [f32; 3], prev: [f32; 3]) {
         use neopets_sim::combat::{Cylinder, segment_distance, segment_meets};
         let edges = [(p0, tip), (p0, prev), (tip, prev)];
@@ -14648,8 +14683,7 @@ impl Play {
     /// and back to 0; effect 791 at X + 2.9 d, the body broken, object 1 hidden and object 0
     /// shown, hero animation 192; 3.3 s, camera 1, hero animation 186; the reward (the drop of
     /// pair 0, as a lock chest's) and the key row; 2.0 s and the normal camera. Not built: the
-    /// HUD reset, the reward's 2.2 d launch point (the lock chest's 2.4 d is used) and pair 1's
-    /// character.
+    /// reward's 2.2 d launch point (the lock chest's 2.4 d is used) and pair 1's character.
     fn seal_open(&mut self, gi: usize) {
         let Some(g) = self.world.groups.get(gi).cloned() else { return };
         let b = |k: usize| g.breakables.get(k).and_then(|&b| usize::try_from(b).ok());
@@ -14662,7 +14696,7 @@ impl Play {
         v.extend(b(0).map(|id| Action::SetBreakableActive { id, on: true }));
         v.extend(b(1).map(|id| Action::Break { id }));
         v.extend(g.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::StopEffect { slot }));
-        v.extend([Action::Equip { on: false }, secs(0.3)]);
+        v.extend([Action::HudReset, Action::Equip { on: false }, secs(0.3)]);
         v.extend(camera(0).map(|track| Action::PlayCamera { track, wait: true, end: 1, speed: 1.0 }));
         v.extend([Action::MainCue { cue: 182 }, secs(1.3)]);
         v.extend(o(0).map(|obj| Action::DeactivateObj { obj }));
@@ -16596,6 +16630,7 @@ fn enemy_view<'a>(
         hero,
         hero_facing,
         hero_attackable: attackable,
+        cloak: false,
         bands,
         sight,
         route,

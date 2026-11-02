@@ -231,6 +231,13 @@ impl SoundManager {
         }
     }
 
+    /// Stop every voice (SPEC-0009 World-load audio reset).
+    pub fn stop_all(&mut self) {
+        for v in std::mem::take(&mut self.voices) {
+            self.requests.push(Request::Stop { id: v.id });
+        }
+    }
+
     /// The per-pass voice update: drop voices the driver finished, count keep-alive voices down
     /// (stopped below 1), and resend each positioned voice's volume and pan (stopped out of
     /// range unless it loops).
