@@ -182,8 +182,18 @@ pub struct Tuning {
     /// f32 0x124, timer min and max ints 0x128 and 0x12C, type int 0x130 and the greedy hostile
     /// range f32 0x168 (the search distance f32 0x120 limits only the enemy-target types).
     pub map_search: Option<MapSearch>,
+    pub social: Option<Social>,
     /// Weapon N: (radius +4(N-1), full length +0x14 + 4(N-1)), clamped to 40.0.
     pub weapons: [(f32, f32); 5],
+}
+
+/// A row's socialize values (SPEC-0038 Behavior 10), when its flag (0x40) is set: the pair
+/// distance f32 0x44, the talk range f32 0x50 to 0x4C and the quiet range f32 0x58 to 0x54.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Social {
+    pub pair: f32,
+    pub talk: (f32, f32),
+    pub quiet: (f32, f32),
 }
 
 /// A row's map search values (SPEC-0038 Behavior 9).
@@ -341,6 +351,7 @@ impl MonsterTable {
             blocking_angle: f(0x10C),
             slots: std::array::from_fn(slot),
             map_search: (w(0x11C) != 0).then(|| MapSearch { distance: f(0x120), chance: f(0x124), timer: (w(0x128) as i32, w(0x12C) as i32), kind: w(0x130), greedy: f(0x168) }),
+            social: (w(0x40) != 0).then(|| Social { pair: f(0x44), talk: (f(0x50), f(0x4C)), quiet: (f(0x58), f(0x54)) }),
             weapons: std::array::from_fn(|n| (f(4 * n).min(40.0), f(0x14 + 4 * n).min(40.0))),
         })
     }

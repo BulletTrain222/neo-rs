@@ -10644,6 +10644,19 @@ impl Play {
             Vec::new()
         };
         let mut casts: Vec<(u64, u64, u8, i32, [f32; 3], i32)> = Vec::new();
+        // SPEC-0038 Behavior 10: the socializing enemies, script-held ones left out (their
+        // companion-row branch is not built).
+        let peers: Vec<enemy::Peer> = self
+            .characters
+            .iter()
+            .filter(|c| c.pack == world.pack && !c.inactive && !c.held && c.dying.is_none())
+            .filter_map(|c| {
+                let e = c.enemy.as_ref()?;
+                let so = e.p.social?;
+                (!e.is_dead()).then(|| enemy::Peer { id: c.id, position: c.position, state: e.state, quiet: e.quiet, pair: so.pair, mesh: c.walker.as_ref().and_then(|w| w.mesh) })
+            })
+            .collect();
+        let mut chats: Vec<(u64, u64)> = Vec::new();
         let (hero_is_held, hero_is_stunned) = (self.loco.state == hero_states::HELD, self.statuses.active(neopets_sim::status::STUN));
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
@@ -10733,6 +10746,8 @@ impl Play {
             v.items = &world_items;
             v.hero_shot_live = !shot_paths.is_empty();
             v.candidates = &candidates;
+            v.peers = &peers;
+            v.mesh_id = wk.mesh;
             v.self_id = *id;
             v.wounded = *hp < row.hit_points as i32;
             // The three sight lines: from 1.5 above the caster to the candidate's aim point, and
@@ -10879,11 +10894,26 @@ impl Play {
                 dots.push((*id, amount));
             }
             consumed.extend(act.consume);
+            if let Some(with) = act.chat {
+                if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
+                    println!("CHAT {name} tick {}: {} with {with}, {:.1} from it", self.ticks, *id, peers.iter().find(|q| q.id == with).map_or(0.0, |q| (q.position[0] - p[0]).hypot(q.position[2] - p[2])));
+                }
+                chats.push((with, *id));
+            }
             if let Some((target, sub)) = act.cast {
                 if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
                     println!("CAST {name} tick {}: sub-type {sub} at character {target}", self.ticks);
                 }
                 casts.push((*id, target, sub, e.p.element, [p[0], p[1] + 0.5 * row.height, p[2]], row.hit_points as i32 - *hp));
+            }
+        }
+        // SPEC-0038 Behavior 10: a passing peer goes to state 3 with its partner.
+        for (peer, with) in chats {
+            let rng = &mut self.rng;
+            if let Some(e) = self.characters.iter_mut().find(|c| c.id == peer).and_then(|c| c.enemy.as_mut()) {
+                if !matches!(e.state, 1 | 2 | 3 | 8 | 19 | 21) {
+                    e.join_chat(with, rng);
+                }
             }
         }
         // SPEC-0038 Behavior 43: each spell goes into the enemy pool, aimed 1.5 above its target.
@@ -16153,6 +16183,7 @@ fn params(r: &neopets_data::monster::Row, t: &neopets_data::monster::Tuning) -> 
         element: t.element as i32,
         slots: t.slots.each_ref().map(slot),
         defence: enemy::Defence { hold: t.defend_time, missile: t.missile_defence, block: t.melee_block, dodge: t.melee_dodge, exit: t.defence_timer, angle: t.blocking_angle },
+        social: t.social.map(|s| enemy::Social { pair: s.pair, talk: s.talk, quiet: s.quiet }),
         map_search: t.map_search.map(|m| enemy::MapSearch { distance: m.distance, chance: m.chance, timer: m.timer, kind: m.kind, greedy: m.greedy }),
     }
 }
@@ -16199,6 +16230,8 @@ fn enemy_view<'a>(
         self_id: 0,
         wounded: false,
         sees: None,
+        peers: &[],
+        mesh_id: None,
         spawn_bits: 0,
         radii: 0.0,
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },

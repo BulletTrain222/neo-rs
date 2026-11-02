@@ -12,7 +12,8 @@
 //!
 //! The alarm groups (Behavior 3: the notice gate and the alarm-group check).
 //!
-//! Not covered: the group alert (Behavior 10), socialize, the global AI pause (state 20; its
+//! Socialize (Behavior 10) is built without its companion-row branch for a script-held peer.
+//! Not covered: the global AI pause (state 20; its
 //! word has no known writer), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target
 //! state 9 (it stands and notices), the alarm emerge's camera and cue, wandering in states 5 to
 //! 7 (they stand and notice),
@@ -142,6 +143,27 @@ pub struct Params {
     /// The map search of the item types 0 and 1 (Behavior 9): chance, cooldown draw (min,
     /// max), type and the greedy hostile range; None when the row's flag is clear.
     pub map_search: Option<MapSearch>,
+    pub social: Option<Social>,
+}
+
+/// A row's socialize values (SPEC-0038 Behavior 10).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Social {
+    pub pair: f32,
+    pub talk: (f32, f32),
+    pub quiet: (f32, f32),
+}
+
+/// A common enemy a socializer may pair with (Behavior 10's peer test inputs).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Peer {
+    pub id: u64,
+    pub position: Vec3,
+    pub state: u32,
+    pub quiet: i32,
+    /// The peer's pair distance (its flag is set), and its navmesh.
+    pub pair: f32,
+    pub mesh: Option<usize>,
 }
 
 /// One character a caster's map search may pick (SPEC-0038 Behavior 43's picker inputs).
@@ -264,6 +286,9 @@ pub struct View<'a> {
     pub self_id: u64,
     pub wounded: bool,
     pub sees: Option<&'a dyn Fn(Vec3) -> bool>,
+    /// The socializing enemies of the world and this enemy's navmesh (Behavior 10).
+    pub peers: &'a [Peer],
+    pub mesh_id: Option<usize>,
     /// Event bits on the current frame: 0x20 is the release event (the missile slot's spawn
     /// event, SPEC-0005 table B), and 0x1 to 0x10 on that frame pick emit points 0 to 4.
     pub spawn_bits: u32,
@@ -377,6 +402,8 @@ pub struct Act {
     pub consume: Option<usize>,
     /// A spell fires this tick: its target and attack sub-type (Behavior 43).
     pub cast: Option<(u64, u8)>,
+    /// A socialize peer passed the test: it goes to state 3 with this enemy (Behavior 10).
+    pub chat: Option<u64>,
 }
 
 /// SPEC-0040 Behavior 21, the flyer goal height. `ambush` is the ambush word (+0xBC0); while it
@@ -650,6 +677,13 @@ pub struct Enemy {
     /// State 18's target and the sub-type fired flag (Behaviors 42 and 43).
     cast_target: Option<u64>,
     cast_fired: bool,
+    /// Behavior 10: the quiet countdown (0 at creation), the talk countdown (-1 at creation), the
+    /// partner, the chat clip chosen on stopping, and this build's limit on walking to a partner.
+    pub quiet: i32,
+    talk: i32,
+    chat_with: Option<u64>,
+    chat_clip: Option<u32>,
+    chat_walk: u32,
     /// DisableInvisibility (SPEC-0030 row 121; +0xE60): an invisible kind (Display in Default
     /// 0) loses its hit and lock veto, and SetAI_Agro enters state 2, not 21.
     pub visible: bool,
@@ -742,6 +776,11 @@ impl Enemy {
             repick: false,
             cast_target: None,
             cast_fired: false,
+            quiet: 0,
+            talk: -1,
+            chat_with: None,
+            chat_clip: None,
+            chat_walk: 0,
         };
         e.draw_distances(rng);
         e.idle_timer = rng.range(120, 600);
@@ -815,6 +854,17 @@ impl Enemy {
         if s == 8 {
             self.emerge = 0;
             self.ambush = 0;
+        }
+        // Behavior 10: entering an idle state from another redraws the quiet countdown (from 0,
+        // the creation pass, it stays 0, so the first scan runs on the first tick).
+        if matches!(s, 5..=7) && self.state != 0 {
+            if let Some(so) = self.p.social {
+                self.quiet = rng.frange(so.quiet.0, so.quiet.1) as i32;
+            }
+        }
+        if s != 3 {
+            self.talk = -1;
+            self.chat_with = None;
         }
         self.alerting = false;
         if s != self.state {
@@ -958,6 +1008,11 @@ impl Enemy {
         }
         let (f1, f2) = v.bands;
         let (mut near, mut far) = (p.range_near * f1, p.range_far * f1);
+        // Behavior 3: halved while the talk countdown is positive (the sight rule below discards it).
+        if self.talk > 0 {
+            near *= 0.5;
+            far *= 0.5;
+        }
         if !v.sight && !p.always_sight {
             (near, far) = (p.range_near * f2, p.range_far * f2);
         }
@@ -1560,6 +1615,8 @@ impl Enemy {
             3 | 5..=7 | 9 => {
                 if self.notice(v, rng) {
                     self.set(2, v, rng, &mut a);
+                } else if matches!(self.state, 5..=7) {
+                    self.socialize(v, rng, &mut a);
                 }
             }
             10 => {
@@ -1601,6 +1658,7 @@ impl Enemy {
             17 => self.fetch_step(v, rng, &mut a),
             18 => self.cast_step(v, rng, &mut a),
             // State 6 with no route stands (the spec's steer toward entry 0 is not built).
+            3 if self.chat_with.is_some() => self.chat_step(v, rng, &mut a),
             0 | 3 | 6 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
         }
@@ -1826,6 +1884,74 @@ impl Enemy {
             self.state = 17;
             self.through = None;
         }
+    }
+
+    /// Behavior 10: the quiet countdown goes down (a zero one goes negative and scans at once); once
+    /// below 1, the first peer with the flag, not in states 1, 2, 3, 19 or 21, with its own quiet
+    /// countdown below 1, within the sum of both pair distances and on the same navmesh. A hidden
+    /// peer in state 8 is not pulled (SPEC-0038's five ways out of state 8; R-0184).
+    fn socialize(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let Some(so) = self.p.social else { return };
+        if self.airborne() {
+            return;
+        }
+        self.quiet -= 1;
+        if self.quiet >= 1 {
+            return;
+        }
+        let peer = v.peers.iter().find(|p| {
+            p.id != v.self_id && !matches!(p.state, 1 | 2 | 3 | 8 | 19 | 21) && p.quiet < 1 && p.mesh == v.mesh_id && hdist(p.position, v.position) <= so.pair + p.pair
+        });
+        if let Some(p) = peer {
+            a.chat = Some(p.id);
+            self.join_chat(p.id, rng);
+        }
+    }
+
+    /// Into state 3 with a partner: the talk and quiet countdowns are drawn.
+    pub fn join_chat(&mut self, with: u64, rng: &mut Rng) {
+        let Some(so) = self.p.social else { return };
+        self.talk = rng.frange(so.talk.0, so.talk.1) as i32;
+        self.quiet = rng.frange(so.quiet.0, so.quiet.1) as i32;
+        self.chat_with = Some(with);
+        self.chat_clip = None;
+        self.chat_walk = 0;
+        self.previous = self.state;
+        self.state = 3;
+        self.through = None;
+    }
+
+    /// State 3: walk toward the partner with the wander gait, stop within 6.0 and turn to it, and
+    /// play the chat clip (14 on a draw of 0, 111 to 114 on 1 to 4; the idle pick when the table
+    /// lacks it) for the talk time, then back to the default state. A partner gone, or still out
+    /// of reach after 600 ticks (this build's limit), ends it.
+    fn chat_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let partner = self.chat_with.and_then(|id| v.peers.iter().find(|p| p.id == id));
+        let Some(at) = partner.map(|p| p.position) else {
+            self.set(0, v, rng, a);
+            return;
+        };
+        if hdist(at, v.position) >= 6.0 {
+            self.chat_walk += 1;
+            if self.chat_walk >= 600 {
+                self.set(0, v, rng, a);
+                return;
+            }
+            a.anim = Some(2);
+            a.go = Some(Go::Toward(at));
+            return;
+        }
+        a.face = Some((at, 0.1));
+        if self.talk < 1 {
+            self.set(0, v, rng, a);
+            return;
+        }
+        self.talk -= 1;
+        let clip = *self.chat_clip.get_or_insert_with(|| match rng.range(0, 4) {
+            0 => 14,
+            k => 110 + k as u32,
+        });
+        a.anim = Some(if (v.has)(clip) { clip } else { self.idle(false, v, rng) });
     }
 
     /// Behaviors 9 and 43, types 2 to 8: a candidate by the type's picker inputs, within the search
@@ -2844,6 +2970,8 @@ mod tests {
             self_id: 0,
             wounded: false,
             sees: None,
+            peers: &[],
+            mesh_id: None,
             spawn_bits: 0,
             radii: 2.0,
             clip: Clip::default(),
@@ -3035,6 +3163,55 @@ mod tests {
         let mut wind = Act { rate: Some(1.0), go: Some(Go::Toward([5.0, 0.0, 0.0])), ..Act::default() };
         e.apply_status_rate(&mut wind);
         assert_eq!(wind.rate, Some(1.0));
+    }
+
+    #[test]
+    fn socialize_pairs_walks_chats_and_returns() {
+        let mut p = Params::default();
+        p.social = Some(Social { pair: 20.0, talk: (120.0, 121.0), quiet: (420.0, 421.0) });
+        p.display_default = true;
+        let mut r = Rng::seeded(1);
+        let mut e = Enemy::new(p, Spawn { default_state: 7, ..Spawn::default() }, &mut r);
+        e.state = 7;
+        let has = |id: u32| id == 14 || (111..=114).contains(&id);
+        let mut v = view([500.0, 0.0, 0.0], &has);
+        v.self_id = 1;
+        // A peer already chatting, one hidden, one too far, one on another mesh: no pair; the
+        // zero quiet countdown goes negative and keeps scanning.
+        let at = |id, x: f32, state, mesh| Peer { id, position: [x, 0.0, 0.0], state, quiet: 0, pair: 20.0, mesh };
+        let none = [at(2, 10.0, 3, None), at(3, 10.0, 8, None), at(4, 41.0, 5, None), at(5, 10.0, 5, Some(1))];
+        v.peers = &none;
+        let mut a = Act::default();
+        e.socialize(&v, &mut r, &mut a);
+        assert_eq!((a.chat, e.state), (None, 7));
+        assert!(e.quiet < 1);
+        // A peer within the sum of the pair distances (40): both are in state 3.
+        let list = [at(2, 30.0, 5, None)];
+        v.peers = &list;
+        let mut a = Act::default();
+        e.socialize(&v, &mut r, &mut a);
+        assert_eq!((a.chat, e.state, e.talk), (Some(2), 3, 120));
+        assert_eq!(e.quiet, 420);
+        // Far: it walks. The notice ranges are halved meanwhile.
+        let mut a = Act::default();
+        e.chat_step(&v, &mut r, &mut a);
+        assert_eq!((a.anim, a.go), (Some(2), Some(Go::Toward([30.0, 0.0, 0.0]))));
+        // Within 6.0: it faces its partner and plays a chat clip for the talk time, then returns.
+        let list = [at(2, 5.0, 3, None)];
+        v.peers = &list;
+        let mut clips = Vec::new();
+        for _ in 0..120 {
+            let mut a = Act::default();
+            e.chat_step(&v, &mut r, &mut a);
+            assert_eq!(a.face, Some(([5.0, 0.0, 0.0], 0.1)));
+            clips.push(a.anim.unwrap());
+        }
+        assert!(clips.iter().all(|&c| c == clips[0] && has(c)));
+        let mut a = Act::default();
+        e.chat_step(&v, &mut r, &mut a);
+        assert_eq!((e.state, e.chat_with, e.talk), (0, None, -1));
+        // The quiet countdown drawn on entering the chat still runs.
+        assert_eq!(e.quiet, 420);
     }
 
     #[test]
