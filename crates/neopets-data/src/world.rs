@@ -213,6 +213,8 @@ pub struct Breakable {
     /// near mesh of record +0x48 of the first type-20 chunk.
     pub mesh: Option<Range<usize>>,
     pub pieces: u32,
+    /// The piece records (SPEC-0048 Piece record), in order.
+    pub debris: Vec<DebrisPiece>,
     pub spawn_key: i16,
     pub drop: i16,
     pub script: i16,
@@ -221,6 +223,18 @@ pub struct Breakable {
     pub element: u8,
     pub start_mode: u8,
     pub volume: Option<Volume>,
+}
+
+/// A piece record of a breakable (0x70 bytes): its type word, its material group or model chunk, its
+/// sprite half-extent factors (lanes x, y, z from +0x6C, +0x6E, +0x6A; 8.8) and the total count of
+/// its timing record (+0x60 of the record linked at +0x54).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DebrisPiece {
+    pub kind: u16,
+    pub material: i32,
+    pub model: Option<Range<usize>>,
+    pub half: [f32; 3],
+    pub count: u32,
 }
 
 impl Breakable {
@@ -271,11 +285,24 @@ pub fn breakables(bytes: &[u8], top: &[Chunk]) -> Vec<Breakable> {
                     number: u16::from_le_bytes([*p.get(r + 0x1C)?, *p.get(r + 0x1D)?]),
                 })
             });
+            let pieces = u32_at(p, e + 0x4C)?;
+            let array = u32_at(p, e + 0x50).filter(|&o| o != 0).map_or(0, |o| e + o as usize);
+            let debris = (0..pieces as usize)
+                .filter(|_| array != 0)
+                .filter_map(|k| {
+                    let r = array + k * 0x70;
+                    let s16 = |o: usize| p.get(r + o..r + o + 2).map(|b| i16::from_le_bytes([b[0], b[1]]) as f32 / 256.0);
+                    let model = u32_at(p, r + 0x60).filter(|&o| o != 0).and_then(|o| inline_chunk(p, array + o as usize)).map(|m| base + m.start..base + m.end);
+                    let count = u32_at(p, r + 0x54).filter(|&o| o != 0).and_then(|o| u32_at(p, array + o as usize + 0x60)).unwrap_or(1);
+                    Some(DebrisPiece { kind: u16::from_le_bytes([*p.get(r + 0x64)?, *p.get(r + 0x65)?]), material: u32_at(p, r + 0x5C)? as i32, model, half: [s16(0x6C)?, s16(0x6E)?, s16(0x6A)?], count })
+                })
+                .collect();
             Some(Breakable {
                 matrix,
                 state: u32_at(p, e + 0x40)? as i32,
                 mesh,
-                pieces: u32_at(p, e + 0x4C)?,
+                pieces,
+                debris,
                 spawn_key: i16_at(0x54)?,
                 drop: i16_at(0x56)?,
                 script: i16_at(0x58)?,

@@ -1354,6 +1354,10 @@ pub struct Play {
     faerie_glow: Option<usize>,
     /// The summoner of the next spawn-by-key request (SPEC-0029 Behavior 31).
     summon_owner: Option<u64>,
+    /// The breakables' flying pieces (SPEC-0048 Piece flight).
+    pub debris: neopets_sim::debris::Pool,
+    /// The attacker's point while an attack contact breaks things.
+    break_from: Option<[f32; 3]>,
     /// The item showcase's effect object.
     showcase_fx: Option<usize>,
     /// The motion record's +0x23C: state 37's refusal of the ledge-drop test (R-0193).
@@ -2139,6 +2143,8 @@ impl Play {
             grab_rumble: -1,
             drop_refuse: 0,
             showcase_fx: None,
+            debris: Default::default(),
+            break_from: None,
             summon_owner: None,
             starlight: None,
             sisters_blocked: Default::default(),
@@ -10427,6 +10433,9 @@ impl Play {
         self.feed_finish();
         self.wild_step();
         self.drop_refuse = (self.drop_refuse - 1).max(0);
+        self.debris.step();
+        let (a, b) = (self.world.pack, self.other.as_ref().map(|o| o.pack));
+        self.debris.retain_packs(|p| p == a || Some(p) == b);
         self.ghost_step();
         self.class20_step();
         self.dummy_step();
@@ -15162,6 +15171,13 @@ impl Play {
     /// The hero route's contact rule on every active breakable the test picks (SPEC-0036 Contact
     /// routines and cues; SPEC-0048 Element gate on hits).
     fn breakable_contact(&mut self, test: impl Fn(&neopets_data::world::Volume) -> bool) {
+        // SPEC-0048 Break routes step 3: an attack contact gives the pieces their push.
+        self.break_from = Some(self.loco.position());
+        self.breakable_contact_inner(test);
+        self.break_from = None;
+    }
+
+    fn breakable_contact_inner(&mut self, test: impl Fn(&neopets_data::world::Volume) -> bool) {
         let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
         let pack = self.world.pack;
         let first_group: Vec<i32> = self.world.groups.first().map_or(Vec::new(), |g| g.breakables.iter().map(|&b| b as i32).collect());
@@ -15336,6 +15352,32 @@ impl Play {
         self.break_one_with(i, true);
     }
 
+    /// Diagnostic: the hero 8 from the nearest intact breakable with pieces, and it breaks.
+    pub fn diag_break_nearest(&mut self) {
+        let h = self.loco.position();
+        let far = |p: [f32; 3]| (p[0] - h[0]).hypot(p[2] - h[2]);
+        let near = self.world.breakables.iter().enumerate().filter(|(_, b)| matches!(b.state, 1 | 3) && !b.debris.is_empty()).min_by(|a, b| far(a.1.position()).total_cmp(&far(b.1.position()))).map(|(i, b)| (i, b.position()));
+        if let Some((i, p)) = near {
+            let f = self.loco.facing;
+            let at = [p[0] - 8.0 * f[0], p[1] + 1.0, p[2] - 8.0 * f[2]];
+            self.loco.teleport(at, f);
+            self.diag_break_attack(i);
+        }
+    }
+
+    /// Diagnostic: break breakable i as an attack from the hero, and list its pieces.
+    pub fn diag_break_attack(&mut self, i: usize) {
+        if let Some(b) = self.world.breakables.get(i) {
+            for d in &b.debris {
+                println!("      piece type {} material {} model {:?} half {:?} count {}", d.kind, d.material, d.model, d.half, d.count);
+            }
+        }
+        self.break_from = Some(self.loco.position());
+        self.break_one_with(i, true);
+        self.break_from = None;
+        println!("      debris live {}", self.debris.pieces.len());
+    }
+
     fn break_one_with(&mut self, i: usize, with_cue: bool) {
         let pack = self.world.pack;
         let Some(b) = self.world.breakables.get_mut(i) else { return };
@@ -15346,6 +15388,17 @@ impl Play {
         }
         let (at, drop, cue) = (b.position(), b.drop, break_cue(b.material));
         let (key, facing) = (b.spawn_key, unit([b.matrix[8], b.matrix[9], b.matrix[10]]));
+        // Step 4: one emitter per piece record, from the entry's position and rows; an attack contact
+        // pushes along the direction from the attacker to the entry (R-0187).
+        let rows = [0, 4, 8].map(|k| [b.matrix[k], b.matrix[k + 1], b.matrix[k + 2]]);
+        let records: Vec<neopets_sim::debris::Record> = b
+            .debris
+            .iter()
+            .enumerate()
+            .map(|(piece, d)| neopets_sim::debris::Record { kind: d.kind, piece, model: d.material < 0, count: d.count, half: d.half })
+            .collect();
+        let push = self.break_from.map(|from| unit(sub(at, from)));
+        self.debris.start(pack, i, at, rows, push, &records, &mut self.rng);
         // The drop id is a placement id: entry p of the placement-id table (tag 0x13) names the
         // block and the ordinal among its item records (SPEC-0006, SPEC-0048 Placed drops on
         // break). Only the embedded block (0xFF) is resolved.
