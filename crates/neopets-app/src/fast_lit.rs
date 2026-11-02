@@ -122,7 +122,9 @@ fn fast_lit(pbr_input: pbr_types::PbrInput) -> vec4<f32> {
             ), pbr_input.world_position);
             shadow = shadows::fetch_directional_shadow(0u, pbr_input.world_position, pbr_input.world_normal, view_z, pbr_input.frag_coord.xy);
         }
-        lit += SUN_SHARE * burley * NdotL * shadow;
+        // Near grazing the map cannot resolve the surface against itself (stripes and blocks on steep
+        // cliffs at any bias), and the sun adds little there: the shadow fades out.
+        lit += SUN_SHARE * burley * NdotL * mix(1.0, shadow, smoothstep(0.0, 0.6, NdotL));
     }
     return vec4<f32>(base.rgb * lit, base.a);
 }

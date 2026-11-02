@@ -223,8 +223,7 @@ fn sun_override() -> Option<(f32, f32, f32, f32)> {
 }
 
 /// The Shadow quality levels set the sharpness: each cascade's map size and the most cascades.
-/// High is the 4096 map that keeps the characters' shadows crisp and the only one with the soft
-/// filter; Medium halves the map; Low quarters it; Very Low halves that again with one cascade.
+/// High is the 4096 map that keeps the characters' shadows crisp; Medium halves the map; Low quarters it; Very Low halves that again with one cascade.
 fn quality(level: usize) -> (f32, usize) {
     match level {
         0 => (512.0, 1),
@@ -264,9 +263,10 @@ fn apply_quality(
         // A smaller overlap samples two cascades on fewer pixels.
         *c = bevy::light::CascadeShadowConfigBuilder { num_cascades: cascades, maximum_distance: distance, first_cascade_far_bound: (0.15 * distance).max(10.0), overlap_proportion: 0.1, ..default() }.build();
     }
-    // The soft filter takes many more samples of the map per pixel: High only.
+    // The soft filter at every level: the 2x2 filter below High drew stripes and blocks on steep
+    // surfaces such as cliffs, whatever the bias (user's F8 views 8 and 9 in pack 934).
     if std::env::var_os("NEOPETS_SHADOW_FILTER").is_none() {
-        let method = if key.0 >= 3 { bevy::light::ShadowFilteringMethod::Gaussian } else { bevy::light::ShadowFilteringMethod::Hardware2x2 };
+        let method = bevy::light::ShadowFilteringMethod::Gaussian;
         for mut f in &mut filters {
             if *f != method {
                 *f = method;

@@ -147,7 +147,7 @@ fn sun_factor(in: VertexOutput) -> f32 {
         let toward = select(-n, n, dot(n, (*light).direction_to_light) >= 0.0);
         shadow = fetch_directional_shadow(0u, in.world_position, toward, view_z, in.position.xy);
     }
-    return (1.0 - SUN_SHARE) + SUN_SHARE * ndl * shadow;
+    return (1.0 - SUN_SHARE) + SUN_SHARE * ndl * mix(1.0, shadow, smoothstep(0.0, 0.6, ndl));
 }
 
 struct Pass1 {
