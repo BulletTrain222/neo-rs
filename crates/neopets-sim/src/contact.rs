@@ -280,6 +280,41 @@ pub fn resolve_walls(p: &mut Vec3, walls: &[WallEdge], r: f32) -> bool {
     hit
 }
 
+/// SPEC-0036 Hero collision-kind contact tests, the landing break's gate and its cylinder test: a
+/// falling hero in a jump state (7 to 11, 43 to 46) whose box (radius r, height h, standing on p)
+/// overlaps the cylinder, with the top less than 1.5 above his position. Rectangles use the same
+/// gate through `landing_gate` with their own shape test.
+pub fn landing_gate(state: u8, vy: f32, top: f32, y: f32) -> bool {
+    matches!(state, 7..=11 | 43..=46) && vy < 0.0 && top - 1.5 < y
+}
+
+/// The cylinder's overlap for `landing_gate` (base, unit axis, radius, length).
+pub fn landing_cylinder(p: [f32; 3], r: f32, h: f32, base: [f32; 3], axis: [f32; 3], radius: f32, length: f32) -> bool {
+    let top = base[1] + axis[1] * length;
+    let (low, high) = (base[1].min(top), base[1].max(top));
+    (p[0] - base[0]).hypot(p[2] - base[2]) <= r + radius && p[1] <= high && p[1] + h >= low
+}
+
+#[cfg(test)]
+mod landing_tests {
+    use super::*;
+
+    #[test]
+    fn landing_break_vectors() {
+        // SPEC-0036's vectors: R 1, H 3, cylinder base at the origin, up, radius 1.2, length 2.4.
+        let shape = |y: f32| landing_cylinder([0.0, y, 0.0], 1.0, 3.0, [0.0; 3], [0.0, 1.0, 0.0], 1.2, 2.4);
+        assert!(shape(2.0) && landing_gate(8, -2.0, 2.4, 2.0));
+        // Position y 0.9: the boxes overlap but 0.9 is not below 0.9.
+        assert!(shape(0.9) && !landing_gate(8, -2.0, 2.4, 0.9));
+        // Velocity 0 or above, or state 13 or 2: no hit.
+        assert!(!landing_gate(8, 0.0, 2.4, 2.0) && !landing_gate(13, -2.0, 2.4, 2.0) && !landing_gate(2, -2.0, 2.4, 2.0));
+        // Beside it: no overlap.
+        assert!(!landing_cylinder([3.0, 2.0, 0.0], 1.0, 3.0, [0.0; 3], [0.0, 1.0, 0.0], 1.2, 2.4));
+        // SPEC-0033's top gate: top 12, y 10.6 passes and y 10.5 does not.
+        assert!(landing_gate(9, -1.0, 12.0, 10.6) && !landing_gate(9, -1.0, 12.0, 10.5));
+    }
+}
+
 #[cfg(test)]
 mod tests {
 

@@ -2513,11 +2513,24 @@ impl Play {
     /// played, the camera returns to normal (ReturnToNormalCamera(-1, true): the follow camera
     /// behind the hero) and the screen effect is reset (bars and fade cleared). This build's
     /// hold flag is kept: it also stands for a running script scene's hold, which the movie
-    /// does not end here. Not built: the reload of world W (steps 2, 6 and 7) and the
-    /// sound-slot reset.
+    /// does not end here. Steps 2, 6 and 7 with no return world (a script's load is the return
+    /// world here): the other resident world W reloads with its own pack, its Init running and
+    /// no make-current callbacks, and the focus hero respawns where he stands with no heal
+    /// (state 1, velocity cleared, grab cooldown 60). Not built: the sound-slot reset, the
+    /// music restart and the stop of scripts' sound loops, and W's kills come back only if
+    /// they were not recorded (this build keeps one kill set).
     pub fn after_movies(&mut self) {
         self.cut = None;
         self.cut_target = None;
+        if self.job.is_none() {
+            if let Some(pack) = self.other.as_ref().map(|o| o.pack) {
+                self.job = Some(Job::ReloadTransition(pack));
+            }
+            let (at, facing) = (self.loco.position(), self.loco.facing);
+            self.loco.teleport(at, facing);
+            self.loco.state = hero_states::STANCE;
+            self.grab_cooldown = 60;
+        }
         let f = followed(&self.loco, &self.world);
         self.camera.place_behind(&f);
         self.fade = Default::default();
@@ -8367,7 +8380,9 @@ impl Play {
                 // SPEC-0026 (the world reload): the reloaded pack's Init runs at load
                 // completion; before, it did not, so leaving the farmhouse brought the road (691)
                 // back without its bandits.
-                if self.world.buffer == Buffer::Exterior {
+                // Also the movie hand-off's reload of the exterior behind a transition or an
+                // interior (SPEC-0026 step 2).
+                if self.world.buffer == Buffer::Exterior || world.buffer == Buffer::Exterior {
                     self.other = Some(world);
                     self.init_other();
                 }
@@ -9355,7 +9370,7 @@ impl Play {
                     breakable_hits.borrow_mut().push(number);
                     // SPEC-0036 Hero collision-kind contact tests: a falling hero in a jump state
                     // within 1.5 of the top is handled by the landing break and not pushed that
-                    // tick (the break or the chest's recoil is not built).
+                    // tick (`landing_break`).
                     if matches!(hero_state, 7..=11 | 43..=46) && vel[1] < 0.0 && base[1] + length - 1.5 < p[1] {
                         continue;
                     }
@@ -9522,6 +9537,7 @@ impl Play {
                     println!("      credits opened from play (flag 368) on tick {}", self.ticks);
                 }
             }
+            self.landing_break();
             self.trigger_step();
             let pack = self.world.pack;
             self.state.entity_hp = self.characters.iter().filter(|c| c.pack == pack).filter_map(|c| Some((c.entity?, c.hp.max(0)))).collect();
@@ -14227,8 +14243,46 @@ impl Play {
     /// script hook, the piece spawns and the timed effect are not built.
     fn breakable_walk(&mut self, p0: [f32; 3], tip: [f32; 3], prev: [f32; 3]) {
         use neopets_sim::combat::{Cylinder, segment_distance, segment_meets};
-        let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
         let edges = [(p0, tip), (p0, prev), (tip, prev)];
+        self.breakable_contact(|v| match v.kind {
+            1 => edges.iter().any(|&(a, c)| segment_distance(a, c, v.centre, v.centre) <= v.radius),
+            3 => {
+                let cyl = Cylinder::from_base(v.centre, unit(v.axis), v.radius, v.height);
+                edges.iter().any(|&(a, c)| segment_meets(a, c, &cyl))
+            }
+            4 | 7 => edges.iter().any(|&(a, c)| segment_box(a, c, v.centre, v.axes, v.extents)),
+            _ => false,
+        });
+    }
+
+    /// SPEC-0036 Hero collision-kind contact tests: the landing break. A falling hero in a jump
+    /// state meets a breakable's cylinder or rectangle from above; it takes the hero route's
+    /// contact rule. (The motion step skips the solid response for such a hero.)
+    fn landing_break(&mut self) {
+        let p = self.loco.position();
+        let (state, vy) = (self.loco.state, self.loco.body.velocity[1]);
+        if !matches!(state, 7..=11 | 43..=46) || vy >= 0.0 {
+            return;
+        }
+        self.breakable_contact(|v| match v.kind {
+            3 => {
+                let top = v.centre[1] + unit(v.axis)[1] * v.height;
+                neopets_sim::contact::landing_gate(state, vy, top, p[1]) && neopets_sim::contact::landing_cylinder(p, 1.0, HERO_HEIGHT, v.centre, unit(v.axis), v.radius, v.height)
+            }
+            4 | 7 => {
+                let a = unit(v.axes[0]);
+                let top = v.centre[1] + a[1] * v.extents[0];
+                let head = [p[0], p[1] + HERO_HEIGHT, p[2]];
+                neopets_sim::contact::landing_gate(state, vy, top, p[1]) && segment_box(p, head, v.centre, v.axes, v.extents)
+            }
+            _ => false,
+        });
+    }
+
+    /// The hero route's contact rule on every active breakable the test picks (SPEC-0036 Contact
+    /// routines and cues; SPEC-0048 Element gate on hits).
+    fn breakable_contact(&mut self, test: impl Fn(&neopets_data::world::Volume) -> bool) {
+        let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
         let mut broken = Vec::new();
         let mut chained = Vec::new();
         let mut cues = Vec::new();
@@ -14254,19 +14308,7 @@ impl Play {
             .collect();
         for (i, b) in self.world.breakables.iter_mut().enumerate() {
             let Some(v) = b.volume else { continue };
-            if !matches!(b.state, 1 | 3) {
-                continue;
-            }
-            let hit = match v.kind {
-                1 => edges.iter().any(|&(a, c)| segment_distance(a, c, v.centre, v.centre) <= v.radius),
-                3 => {
-                    let cyl = Cylinder::from_base(v.centre, unit(v.axis), v.radius, v.height);
-                    edges.iter().any(|&(a, c)| segment_meets(a, c, &cyl))
-                }
-                4 | 7 => edges.iter().any(|&(a, c)| segment_box(a, c, v.centre, v.axes, v.extents)),
-                _ => false,
-            };
-            if !hit {
+            if !matches!(b.state, 1 | 3) || !test(&v) {
                 continue;
             }
             // SPEC-0048 Element gate on hits: the chest body's hook only recoils Tor; the seal's
