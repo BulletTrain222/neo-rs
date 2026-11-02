@@ -4,8 +4,8 @@
 //! the R3 recentre, plus the load placement with the pull-in setter.
 //! Profiles are selected by the ground kind under the hero; the line-of-sight timer and the
 //! recentre's line test use the caller's segment query (`clear`).
-//! Not covered: the script override profile, the hold and lean
-//! terms (no targets yet), the spring's contact-normal exception, the eye pass failure flag and
+//! The hold and the side lean frame the hero's target (the host's point). Not covered: the script
+//! override profile, the turn leans of states 0x12 and 0x17, the spring's contact-normal exception, the eye pass failure flag and
 //! stuck timer, the camera visibility test, scripted plays, shakes, the fade ramp and modes
 //! other than 0.
 
@@ -167,6 +167,9 @@ pub struct FollowCamera {
     pub manual: f32,
     pub manual_flag: bool,
     side_offset: f32,
+    /// The hold counter, and the hero's target (the host's point; SPEC-0027 Hold and lean terms).
+    hold: u32,
+    pub target_point: Option<Vec3>,
     r3_latch: bool,
     profile_index: Option<usize>,
     /// Consecutive ticks with the eye-to-focus line blocked.
@@ -191,6 +194,8 @@ impl FollowCamera {
             manual: 0.0,
             manual_flag: false,
             side_offset: 0.0,
+            hold: 0,
+            target_point: None,
             r3_latch: false,
             profile_index: None,
             blocked: 0,
@@ -271,7 +276,22 @@ impl FollowCamera {
         // Step 3: stick value s and spin input D (no leans yet).
         let s = -converter_a(pad.right_y) / 87.5;
         let b = -converter_a(pad.right_x) / 87.5;
-        let mut d = b * b.abs();
+        // The hold: a pushed stick re-arms it for 150 ticks, the side offset and lean cleared meanwhile.
+        let base = b * b.abs();
+        if base != 0.0 {
+            self.hold = 150;
+        }
+        let mut lean = 0.0;
+        if self.hold >= 1 {
+            self.hold -= 1;
+            self.side_offset = 0.0;
+        } else {
+            let (forward, first) = self.rows();
+            let (l, side) = lean_terms(hero.position, self.target_point, forward, first);
+            lean = l;
+            self.side_offset += (side - self.side_offset).clamp(-0.1, 0.1);
+        }
+        let mut d = base + lean;
         d *= d.abs();
         if d > 0.99 {
             d = 1.3;
@@ -437,6 +457,24 @@ impl FollowCamera {
     }
 }
 
+/// SPEC-0027 Hold and lean terms: the side lean (1 - d) / 2 x 2.5, negated when the target lies on the first
+/// row's side, and the side target (|s| - 2.0, at most 10.0, while d is below 0.5). No target: both 0.
+fn lean_terms(hero: Vec3, target: Option<Vec3>, forward: Vec3, first: Vec3) -> (f32, f32) {
+    let Some(t) = target else { return (0.0, 0.0) };
+    let v = [t[0] - hero[0], 0.0, t[2] - hero[2]];
+    let l = (v[0] * v[0] + v[2] * v[2]).sqrt().max(1e-6);
+    let u = [v[0] / l, 0.0, v[2] / l];
+    let dot3 = |a: Vec3, b: Vec3| a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    let d = dot3(u, forward);
+    let mut lean = (1.0 - d) / 2.0 * 2.5;
+    if dot3(u, first) > 0.0 {
+        lean = -lean;
+    }
+    let s = dot3(v, first).abs();
+    let side = if d < 0.5 && s > 2.0 { (s - 2.0).min(10.0) } else { 0.0 };
+    (lean, side)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -468,6 +506,17 @@ mod tests {
     #[test]
     fn projection_is_64_by_50_degrees() {
         assert!((vertical_fov().to_degrees() - 50.2).abs() < 0.05);
+    }
+
+    /// SPEC-0027's vectors: hero at the origin, camera forward +z, first row +x.
+    #[test]
+    fn lean_vectors() {
+        let (f, x) = ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let (l, s) = lean_terms([0.0; 3], Some([3.0, 0.0, 4.0]), f, x);
+        assert!((l + 0.25).abs() < 1e-5 && s == 0.0);
+        let (l, s) = lean_terms([0.0; 3], Some([5.0, 0.0, 1.0]), f, x);
+        assert!((l + 1.004855).abs() < 1e-4 && (s - 3.0).abs() < 1e-5, "{l} {s}");
+        assert_eq!(lean_terms([0.0; 3], None, f, x), (0.0, 0.0));
     }
 
     #[test]

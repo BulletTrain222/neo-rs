@@ -4386,7 +4386,11 @@ impl Play {
     fn roberta_step(&mut self, input: &HeroInput) {
         use neopets_sim::roberta::*;
         // The locked target's distance picks the swats (SPEC-0036 Attack router; Roberta air attack choice).
-        let locked = self.targets.records.first().filter(|r| r.flag).map(|r| r.d);
+        let hero_at = self.loco.position();
+        let locked = self.lock.and_then(|id| self.characters.iter().find(|c| c.id == id)).map(|c| {
+            let d = sub_v(c.position, hero_at);
+            (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt()
+        });
         if self.r_attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
             self.r_attack = Some(if self.gesture.mode == 0 && locked.is_some_and(|d| d < 5.0) { RobertaAttack::start_at(5) } else { RobertaAttack::start_with(self.gesture.mode) });
             self.draw_items(true);
@@ -9970,6 +9974,8 @@ impl Play {
         // SPEC-0027 Update order: the camera runs first, from the hero's previous pose.
         let w = &self.world;
         self.camera.negate_elevation = self.loco.state == hero_states::PANEL && self.panel.is_some_and(|c| c.sub == 4);
+        // The hero's target, the nearest noticed enemy: the lock's head record.
+        self.camera.target_point = self.lock.and_then(|id| self.characters.iter().find(|c| c.id == id && c.pack == w.pack)).map(|c| c.position);
         self.camera.update(
             &followed(&self.loco, w),
             pad,
