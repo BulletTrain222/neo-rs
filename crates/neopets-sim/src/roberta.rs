@@ -64,6 +64,10 @@ pub struct RobertaAttack {
     pub cleared: bool,
     /// The held ticks at the release (the stored power is F / 120).
     pub held: u32,
+    /// A Mote object is live (the host's word; sub-state 14 waits for it).
+    pub object_live: bool,
+    /// Sub-state 14's Mote animation has ended: request 63.
+    pub waiting: bool,
 }
 
 impl RobertaAttack {
@@ -142,9 +146,13 @@ impl RobertaAttack {
                 }
             }
             14 => {
-                // The Mote animation, then 63 until the Mote object ends (no object: done).
-                if done(self, release_anim(mote)) {
-                    self.go(0);
+                // The Mote animation, then 63 (loop) until no Mote object is live (no object: done).
+                if self.waiting || done(self, release_anim(mote)) {
+                    self.waiting = true;
+                    if !self.object_live {
+                        self.waiting = false;
+                        self.go(0);
+                    }
                 }
             }
             6 | 7 => {
@@ -181,6 +189,7 @@ impl RobertaAttack {
                 if clip.action == end || (clip.action == spin && clip.progress >= 0.99) { end } else { spin }
             }
             8 => LEAP,
+            14 if self.waiting => 63,
             9 | 14 => release_anim(mote),
             _ => RAPID,
         };

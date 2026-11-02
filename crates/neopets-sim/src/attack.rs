@@ -4,8 +4,8 @@
 //! each sub-state makes. Sub-states end when their clip reaches progress 0.99.
 //! The gesture starts (SPEC-0036 Attack router: gesture mode 1 the flick lunge, sub-state 9; 2
 //! the clockwise attack, 7; 3 the counter-clockwise attack, 8) wait for their clip's end.
-//! Not covered: the stick step of sub-states 7, 8 and 10 (the hero's move along the stick while
-//! the attack window is on), the Mote choice of the power clip (no Mote: 0x1B), Roberta.
+//! The stick step of sub-states 7, 8 and 10 is `hero::StickStep`, set by the host.
+//! Not covered: Roberta.
 
 /// Animation ids Tor requests (main family).
 pub const HOLD_START: u32 = 22;
@@ -48,6 +48,20 @@ pub struct TorAttack {
     restart: bool,
     /// The hit list is cleared on every transition (the caller reads and resets this).
     pub cleared: bool,
+    /// The Mote in word 2, which picks the power clip (the host's word).
+    pub mote: Option<u16>,
+}
+
+/// SPEC-0036 Attack animation choice, Tor.
+pub fn power_clip(mote: Option<u16>) -> u32 {
+    match mote {
+        Some(161 | 167) => 0x1C,
+        Some(162) => 0x12,
+        Some(163 | 165) => 0x1E,
+        Some(169 | 171) => 0x1D,
+        Some(172 | 173) => 0x1F,
+        _ => POWER_NO_MOTE,
+    }
 }
 
 impl TorAttack {
@@ -134,7 +148,7 @@ impl TorAttack {
                 }
             }
             10 => {
-                if done(self, POWER_NO_MOTE) {
+                if done(self, power_clip(self.mote)) {
                     self.go(0);
                 }
             }
@@ -175,7 +189,7 @@ impl TorAttack {
             8 => COUNTER_CLOCKWISE,
             9 => LUNGE,
             13 => RECOIL,
-            _ => POWER_NO_MOTE,
+            _ => power_clip(self.mote),
         };
         Some(Request { action, restart: std::mem::take(&mut self.restart) })
     }

@@ -1372,6 +1372,10 @@ pub struct Play {
     /// Sisters a navmesh edge turned back last tick (SPEC-0011 the blocked word).
     sisters_blocked: std::collections::HashSet<u64>,
     mote_objects: Vec<neopets_sim::charm::Object>,
+    /// A family handler's Mote kind during a Mote object's breakable walk.
+    break_family: Option<i32>,
+    /// Roberta's orbit angle, kept from one Supernova to the next.
+    orbit_angle_r: f32,
     charm_words: neopets_sim::charm::Words,
     /// The Lava orbit's angle, 0 at the first activation and continuing across spawns.
     orbit_angle: f32,
@@ -1772,6 +1776,10 @@ impl Play {
                 nova_radius: float(NOVA_RADIUS)?,
                 wind_radius: float(WIND_RADIUS)?,
                 wind_height: float(WIND_HEIGHT)?,
+                r_orbit_radius: float(R_ORBIT_RADIUS)?,
+                r_orbit_seconds: float(R_ORBIT_SECONDS)?,
+                beam_seconds: float(BEAM_SECONDS)?,
+                leaf: [float(LEAF[0])?, float(LEAF[1])?, float(LEAF[2])?, float(LEAF[3])?, float(LEAF[4])?],
             }
         };
         let bw = words(neopets_sim::petpet::BONUS_AT, 4)?;
@@ -2153,6 +2161,8 @@ impl Play {
             starlight: None,
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
+            break_family: None,
+            orbit_angle_r: 0.0,
             orbit_angle: 0.0,
             charm_words,
             last_status: String::new(),
@@ -4395,11 +4405,30 @@ impl Play {
             }
             self.pay_mp(cost);
         }
+        // SPEC-0036 Power attack and full release, Roberta: the object of the word-2 Mote.
+        if before == 1 && matches!(a.sub, 9 | 14) {
+            if let Some(id) = mote {
+                let hero = self.loco.position();
+                let f = self.loco.facing;
+                let w = self.weapon_reach();
+                let at = [hero[0] + f[0] * w, hero[1], hero[2] + f[2] * w];
+                let wa = self.weapon.and_then(|i| self.items.get(i)).filter(|i| i.is_weapon()).map_or(0.0, |i| i.stats[0] as f32);
+                let b = neopets_sim::mote::one_plus_percent(self.items.get(id).map_or(0.0, |i| i.stats[5] as f32));
+                let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
+                let scale = neopets_sim::charm::scale(wa, 1.5, b, self.statuses.damage_scale(), e);
+                let spawned = neopets_sim::charm::spawn_roberta(id, &self.charm_words, at, hero, self.orbit_angle_r, scale);
+                if let Some(o) = spawned.first() {
+                    self.last_mote = format!("Mote {id} Roberta object (scale {scale}, {} ticks) on tick {}", o.life, self.ticks);
+                }
+                self.mote_objects.extend(spawned);
+            }
+        }
+        a.object_live = !self.mote_objects.is_empty();
         // The power-ready check from F = 7 with a Mote in word 2.
         if a.sub == 1 && a.f >= 7 {
             if let Some(id) = mote {
                 let held = self.state.items.get(&id).copied().unwrap_or(0) > 0;
-                if !(self.weapon.is_some() && held && self.hero_mp >= self.magic.roberta_full(mote).0) {
+                if !(self.mote_objects.is_empty() && self.weapon.is_some() && held && self.hero_mp >= self.magic.roberta_full(mote).0) {
                     a.f = 0;
                 }
             }
@@ -5077,7 +5106,11 @@ impl Play {
             Some(neopets_sim::swap::Step::Start { flash, effects }) => {
                 // Step 2: the hero attack pools are reset; the first flag plays sound 0xB0 and
                 // starts the first swap effect (4025) at the outgoing hero.
-                self.mote_objects.clear();
+                let table = self.effect_table.clone();
+                for h in self.mote_objects.drain(..).flat_map(|o| o.fx) {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
                 self.hero_shots.clear();
                 self.r_attack = None;
                 if effects {
@@ -6955,11 +6988,12 @@ impl Play {
     /// test), skipping the hit list; a hit deals the melee damage of SPEC-0036 (no Mote, no
     /// petpet or status factors). Uses this tick's poses (the original reads the previous pass).
     fn hero_swing(&mut self) {
-        let (Some(a), true) = (self.attack.as_ref(), self.hero.frame_bits() & 1 != 0) else {
+        // The air slash and the plunge run the same scan with their sub-states (SPEC-0033 Air attacks).
+        let air = self.loco.air_sub;
+        let (Some(sub), true) = (self.attack.as_ref().map(|a| a.sub).or((air != 0).then_some(air)), self.hero.frame_bits() & 1 != 0) else {
             self.last_axis = None;
             return;
         };
-        let sub = a.sub;
         let p = self.loco.position();
         let place = placement(p, self.loco.facing);
         let frames = self.hero.bone_frames();
@@ -7324,15 +7358,45 @@ impl Play {
         let mut objects = std::mem::take(&mut self.mote_objects);
         // Wind's centre: the ground probed from 8 above the hero.
         let ground = self.world.ground_at(hero[0], hero[2], hero[1] + 8.0);
+        let facing = self.loco.facing;
+        let table = self.effect_table.clone();
         objects.retain_mut(|o| {
             let live = o.tick(hero, ground);
-            if o.id == 161 {
+            o.aim(neopets_sim::roberta::anchor(hero, facing), facing);
+            if o.id == 161 && o.hero == 0 {
                 self.orbit_angle = o.angle;
+            }
+            if o.id == 173 && o.hero == 1 {
+                self.orbit_angle_r = o.angle;
+            }
+            // SPEC-0036 Effect definitions: each object's definitions play at its centre.
+            if live && !o.fx_started && o.segment().is_some() {
+                o.fx_started = true;
+                let frame = [[facing[2], 0.0, -facing[0]], [0.0, 1.0, 0.0], facing];
+                for &id in neopets_sim::charm::definitions(o.hero, o.id) {
+                    if std::env::var_os("NEOPETS_TRACE_FX").is_some() {
+                        eprintln!("[fx] Mote {} object: definition {id} found {}", o.id, table.find(id).is_some());
+                    }
+                    let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, o.centre, frame));
+                    self.effects.update(&table, h, None, &mut self.rng);
+                    o.fx.push(h);
+                }
+            }
+            for &h in &o.fx {
+                if live {
+                    self.effects.set_position(h, o.centre);
+                    if let neopets_sim::charm::Shape::Beam { end, .. } = o.shape {
+                        self.effects.set_target(h, end);
+                    }
+                } else {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
             }
             live
         });
         for o in objects.iter_mut() {
-            let p = neopets_sim::mote::power_index(0, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
+            let p = neopets_sim::mote::power_index(o.hero, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
             let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
             let mut hits = Vec::new();
             for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && !c.unhittable() && !c.own_hit_check()) {
@@ -7346,13 +7410,23 @@ impl Play {
                 let (damage, _) = neopets_sim::charm::damage(o.scale, cf, r.defence, p);
                 hits.push((i, damage));
             }
-            // Tor's Lava orbit sends fire with Tor's Lava values (SPEC-0029 Behavior 27.1).
-            let request = (o.id == 161).then(|| neopets_sim::mote::status_request(0, 161, |k| self.design.attack_power(k))).flatten();
+            // SPEC-0036 Charm attack hits: Lava of both heroes, Tor's Water, Shadow and Sun and Roberta's Leaf
+            // send their status (SPEC-0029 Behavior 27.1); the Leaf deals no damage.
+            let sends = matches!((o.hero, o.id), (0, 161 | 163 | 169 | 171) | (1, 161 | 164));
+            let request = sends.then(|| neopets_sim::mote::status_request(o.hero, o.id, |k| self.design.attack_power(k))).flatten();
             for (i, damage) in hits {
-                self.character_take_hit(i, damage, hero, &format!("Mote {} object ", o.id));
+                if (o.hero, o.id) != (1, 164) {
+                    self.character_take_hit(i, damage, hero, &format!("Mote {} object ", o.id));
+                }
                 if let Some(r) = request {
                     self.character_status(i, r);
                 }
+            }
+            // Then the breakable walk (Attack sweeps), by the family's kind.
+            if let (Some((a, b, r)), Some(kind)) = (o.segment(), o.breakable_kind()) {
+                self.break_family = Some(kind);
+                self.breakable_contact(|v| volume_meets_segment(v, a, b, r));
+                self.break_family = None;
             }
         }
         self.mote_objects = objects;
@@ -9888,6 +9962,7 @@ impl Play {
         let mut force = false;
         if let Some(a) = self.attack.as_mut() {
             let c = self.hero.clip_state();
+            a.mote = self.equipment.motes[0][2];
             match a.tick(input.attack_held, input.attack, neopets_sim::attack::Clip { action: c.action, progress: c.progress }) {
                 Some(r) => {
                     self.loco.set_attack(Some(r.action));
@@ -9977,7 +10052,28 @@ impl Play {
         self.starlight_step();
         self.guard_step();
         self.loco.p1 = self.weapon_drawn;
+        self.loco.air_ok = self.hero_index == 0 && self.equipment.entries[2][self.hero_index] != Some(126);
+        // SPEC-0036 the stick step: Tor's 7, 8 and 10 in the attack window; Roberta's spins until the end
+        // clip, and her sub-state 14's turn.
+        self.loco.stick_step = {
+            use neopets_sim::hero::StickStep::*;
+            let action = self.hero.clip_state().action;
+            match (self.attack.as_ref().map(|a| a.sub), self.r_attack.as_ref().map(|a| a.sub)) {
+                (Some(7 | 8 | 10), _) if self.hero.frame_bits() & 1 != 0 => Clear,
+                (_, Some(6)) if action != neopets_sim::roberta::SPIN_CW_END => Horizontal,
+                (_, Some(7)) if action != neopets_sim::roberta::SPIN_CCW_END => Horizontal,
+                (_, Some(14)) => Turn,
+                _ => Off,
+            }
+        };
+        let air_before = self.loco.air_sub;
         self.loco.update(&input, forward, left, self.hero.clip_state());
+        // An air attack's start: the hit list cleared and the weapon drawn.
+        if air_before == 0 && self.loco.air_sub != 0 {
+            self.hit_list.clear();
+            self.swing_serial = self.swing_serial.wrapping_add(1);
+            self.set_weapon_drawn(true);
+        }
         self.held_step();
         self.hold_step(&input);
         self.pending_step();
@@ -15018,7 +15114,7 @@ impl Play {
     /// The hero's weapon segment as a thin cylinder while the attack window is open (frame bit
     /// 1; SPEC-0036), from the weapon attach point along its axis over the weapon reach.
     fn weapon_segment(&self) -> Option<neopets_sim::combat::Cylinder> {
-        if self.attack.is_none() || self.hero.frame_bits() & 1 == 0 {
+        if (self.attack.is_none() && self.loco.air_sub == 0) || self.hero.frame_bits() & 1 == 0 {
             return None;
         }
         let place = placement(self.loco.position(), self.loco.facing);
@@ -15336,7 +15432,9 @@ impl Play {
     }
 
     fn breakable_contact_inner(&mut self, test: impl Fn(&neopets_data::world::Volume) -> bool) {
-        let kind = neopets_sim::mote::element(self.equipment.motes[0][2]);
+        // A family handler's kind: on a mismatch it does nothing (no recoil), and 7 passes all.
+        let family = self.break_family;
+        let kind = family.unwrap_or_else(|| neopets_sim::mote::element(self.equipment.motes[0][2]));
         let pack = self.world.pack;
         let first_group: Vec<i32> = self.world.groups.first().map_or(Vec::new(), |g| g.breakables.iter().map(|&b| b as i32).collect());
         let mut hooks = Vec::new();
@@ -15386,13 +15484,16 @@ impl Play {
                     if b.state == 1 && !seals.contains(&gi) {
                         seals.push(gi);
                     }
-                } else if i == body || i == seal {
+                } else if (i == body || i == seal) && family.is_none() {
                     recoil = true;
                 }
                 continue;
             }
             let e = b.element as i32;
-            if !(e == 0 || e == 7 || e == kind) {
+            if family.is_some_and(|k| !(e == 0 || e == k || k == 7)) {
+                continue;
+            }
+            if family.is_none() && !(e == 0 || e == 7 || e == kind) {
                 // A mismatch: Tor recoils with material 4, with no break and no cue.
                 recoil = true;
                 if std::env::var_os("NEOPETS_TRACE_BREAK").is_some() {
@@ -17829,6 +17930,21 @@ fn break_cue(material: i16) -> i32 {
         3 => 145,
         4 => 146,
         _ => 144,
+    }
+}
+
+/// A Mote object's volume (a segment of radius r) against a breakable's volume record: the pair tests of SPEC-0036
+/// Attack sweeps (the sphere and cylinder families, in one form).
+fn volume_meets_segment(v: &neopets_data::world::Volume, a: [f32; 3], b: [f32; 3], r: f32) -> bool {
+    use neopets_sim::combat::segment_distance;
+    match v.kind {
+        1 => segment_distance(a, b, v.centre, v.centre) <= r + v.radius,
+        3 => {
+            let top = add(v.centre, scale(unit(v.axis), v.height));
+            segment_distance(a, b, v.centre, top) <= r + v.radius
+        }
+        4 | 7 => segment_box(a, b, v.centre, v.axes, v.extents.map(|e| e + r)),
+        _ => false,
     }
 }
 

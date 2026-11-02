@@ -4,7 +4,7 @@
 //! The motion record (SPEC-0040 Behavior 14A, `motion::Body`) carries the hero: gravity, the
 //! walk-off fall (SPEC-0033 9A) and the jumps, air phases, steering and landings of Behavior 50.
 //! Strafe is state 32 with its jumps 43 to 46 (Behaviors 4 and 11). Not covered here: reverse walk
-//! (state 6) and the backward jump 11, air attacks and the plunge, the landing
+//! (state 6) and the backward jump 11, the plunge's effect within 12.0 of the ground, the landing
 //! event windows (Cross chain, L1 guard, the hard landing's early exit), the floor-contact flag,
 //! the in-air ledge and block-edge choosers, and the displayed-height lag of Behavior 7.
 
@@ -149,6 +149,22 @@ fn flatten(v: Vec3) -> Vec3 {
 
 /// One pass of controller input: the left stick after the dead zone, `side` positive to the
 /// left and `forward` positive up, each in [-1, 1]; `run` is R1.
+/// A full stick push over the stick scale 87.5 (SPEC-0036 Tor's sub-states 7 and 8).
+const STICK_FULL: f32 = 127.5 / 87.5;
+
+/// What the stick does in state 13 this tick; the attack driver of the host sets it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub enum StickStep {
+    #[default]
+    Off,
+    /// Tor: the velocity cleared in all three parts and set.
+    Clear,
+    /// Roberta's spins: only x and z.
+    Horizontal,
+    /// Roberta's sub-state 14: a facing turn.
+    Turn,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct HeroInput {
     pub side: f32,
@@ -259,6 +275,16 @@ pub struct Locomotion {
     pub phase: i8,
     /// The weapon-out flag P1 (the host sets it each pass).
     pub p1: bool,
+    /// The host's Tor with no Tattered Cloak: air attacks may start.
+    pub air_ok: bool,
+    /// The stick step of state 13 this tick.
+    pub stick_step: StickStep,
+    /// The air attack's sub-state word: 11 the slash, 12 the plunge, 0 none.
+    pub air_sub: u8,
+    air_used: bool,
+    air_armed: bool,
+    air_hold: u32,
+    root_y: f32,
     /// State 32's requested clip and stick (side, forward), and a strafe jump's direction.
     strafe_id: u32,
     strafe_stick: Option<(f32, f32)>,
@@ -353,6 +379,13 @@ impl Locomotion {
             rate: 1.0,
             phase: 0,
             p1: false,
+            air_ok: false,
+            stick_step: StickStep::Off,
+            air_sub: 0,
+            air_used: false,
+            air_armed: false,
+            air_hold: 0,
+            root_y: 0.0,
             strafe_id: 0,
             strafe_stick: None,
             jump_dir: [0.0; 3],
@@ -485,6 +518,24 @@ impl Locomotion {
             }
             None if self.state == ATTACK => self.state = STANCE,
             None => {}
+        }
+    }
+
+    /// SPEC-0036 the stick step (Tor's sub-states 7, 8 and 10 in the attack window; Roberta's spins), with
+    /// the stick off centre: the pair's length L uncapped (a full push is 127.5 / 87.5), the velocity
+    /// the stick direction x L x 0.25 x 30. Tor's clears all three parts, Roberta's only x and z. Her
+    /// sub-state 14 turns the facing toward the stick at rate 0.35 and writes no velocity.
+    fn attack_step(&mut self, input: &HeroInput) {
+        let l = (input.side * input.side + input.forward * input.forward).sqrt() * STICK_FULL;
+        let d = self.target.map(|t| t * l * 0.25 * 30.0);
+        match self.stick_step {
+            StickStep::Off => {}
+            StickStep::Clear => self.body.velocity = d,
+            StickStep::Horizontal => self.set_horizontal(d),
+            StickStep::Turn => {
+                let f = self.facing;
+                self.facing = normalise(std::array::from_fn(|k| f[k] + 0.35 * (self.target[k] - f[k])));
+            }
         }
     }
 
@@ -720,8 +771,14 @@ impl Locomotion {
             self.target = normalise([z * c[0] + x * left[0], 0.0, z * c[2] + x * left[2]]);
         }
         match self.state {
-            // The attack step owns the hero: no stick movement or turning.
-            ATTACK | DEAD => return,
+            // The attack step owns the hero: no stick movement or turning, but for the host's stick step.
+            ATTACK => {
+                if v > 0.0 {
+                    self.attack_step(input);
+                }
+                return;
+            }
+            DEAD => return,
             HURT => {
                 // State 17: at progress 0.99 request 0 and go to state 1 (the L2 strafe exit is
                 // not covered).
@@ -835,6 +892,7 @@ impl Locomotion {
                 _ => 10,
             });
         }
+        self.air_attack(input);
         self.air(v > 0.0, clip);
     }
 
@@ -868,7 +926,75 @@ impl Locomotion {
     }
 
     /// The state setter's entry to the jump states: launch pending.
+    /// SPEC-0033 Behavior 50 Air attacks, Tor (`air_ok`: the host's Tor with no Tattered Cloak). States 7
+    /// to 11: the input gives the plunge when rising or 1.5 or more up. Strafe jumps, phases 2 to 5:
+    /// the first tick arms, more than 10 further ticks give the plunge, a release gives the slash.
+    fn air_attack(&mut self, input: &HeroInput) {
+        let pressed = input.attack || input.circle_held;
+        if self.air_used || !self.air_ok {
+            return;
+        }
+        if (43..=46).contains(&self.state) {
+            if !(2..=5).contains(&self.phase) {
+                return;
+            }
+            if pressed {
+                if self.air_armed {
+                    self.air_hold += 1;
+                    if self.air_hold > 10 {
+                        self.plunge_start();
+                    }
+                } else {
+                    (self.air_armed, self.air_hold) = (true, 0);
+                }
+            } else if self.air_armed {
+                self.air_armed = false;
+                self.air_used = true;
+                self.air_sub = 11;
+                self.request = 25;
+            }
+        } else if pressed && !matches!(self.phase, 7..=9) && (self.body.velocity[1] > 0.0 || self.body.gap >= 1.5) {
+            self.plunge_start();
+        }
+    }
+
+    fn plunge_start(&mut self) {
+        (self.phase, self.air_used, self.air_armed, self.air_sub) = (8, true, false, 12);
+        self.set_horizontal([0.0; 3]);
+    }
+
+    /// The plunge (phases 8 and 9): clip 23's root motion while it rises, then a fall at -8.0 at gain 0.3;
+    /// within 1.0 of the ground phase 9 with clip 24, ending in state 1.
+    fn plunge(&mut self, clip: ClipState) {
+        if self.phase == 8 {
+            self.request = 23;
+            if clip.action != 23 || self.root_y > 0.0 {
+                self.body.no_gravity = true;
+                self.body.velocity = [0.0; 3];
+                return;
+            }
+            self.body.no_gravity = false;
+            self.body.gain = 0.3;
+            if self.body.velocity[1] > -8.0 {
+                self.body.velocity[1] = -8.0;
+            }
+            if self.body.gap <= 1.0 {
+                self.phase = 9;
+            }
+            return;
+        }
+        self.request = 24;
+        self.body.velocity = [0.0; 3];
+        if clip.action == 24 && clip.progress >= 0.99 {
+            self.state = STANCE;
+            self.body.gain = 1.0;
+            self.air_sub = 0;
+            self.air_used = false;
+        }
+    }
+
     fn enter_air(&mut self, state: u8) {
+        (self.air_used, self.air_armed, self.air_hold, self.air_sub) = (false, false, 0, 0);
         self.state = state;
         self.phase = -1;
         self.start_height = self.body.position[1];
@@ -886,6 +1012,14 @@ impl Locomotion {
     /// The air routine of Behavior 50 for one pass.
     fn air(&mut self, stick: bool, clip: ClipState) {
         let playing = |id: u32| clip.action == id;
+        if matches!(self.phase, 8 | 9) {
+            return self.plunge(clip);
+        }
+        // The slash ends at progress 0.99 of its clip; the hero goes on falling.
+        if self.air_sub == 11 && playing(25) && clip.progress >= 0.99 {
+            self.air_sub = 0;
+            self.request = ANIM_FALL_MOVE;
+        }
         if self.phase == -1 {
             // Launch: gain 1.0, velocity cleared, vertical 8.75, horizontal facing times S.
             self.body.gain = 1.0;
@@ -1049,6 +1183,7 @@ impl Locomotion {
             }
             None => root_step,
         };
+        self.root_y = root_step[1];
         let step = if dot(self.target, self.facing) < 0.0 && !matches!(self.state, PANEL | 23 | LADDER | STRAFE) { [0.0; 3] } else { root_step };
         let [b1, b2, b3] = basis(self.facing);
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
@@ -1068,6 +1203,74 @@ impl Locomotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SPEC-0036's vector: pair length 1.0 with the camera along +z gives (0, 0, 7.5). A centred stick
+    /// leaves the velocity alone; Roberta's keeps the vertical part.
+    #[test]
+    fn attack_stick_step() {
+        let mut h = Locomotion::spawn([0.0; 3], FWD);
+        h.state = ATTACK;
+        h.stick_step = StickStep::Clear;
+        h.body.velocity = [1.0, -3.0, 1.0];
+        let (c, left) = ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        h.update(&HeroInput::default(), c, left, ClipState::default());
+        assert_eq!(h.body.velocity, [1.0, -3.0, 1.0]);
+        let one = HeroInput { forward: 1.0 / STICK_FULL, ..HeroInput::default() };
+        h.update(&one, c, left, ClipState::default());
+        assert!(h.body.velocity[0].abs() < 1e-5 && h.body.velocity[1] == 0.0 && (h.body.velocity[2] - 7.5).abs() < 1e-4, "{:?}", h.body.velocity);
+        h.stick_step = StickStep::Horizontal;
+        h.body.velocity[1] = -3.0;
+        h.update(&one, c, left, ClipState::default());
+        assert_eq!(h.body.velocity[1], -3.0);
+    }
+
+    /// SPEC-0033 Behavior 50 Air attacks: the plunge from a jump; the slash on a strafe jump's release.
+    #[test]
+    fn plunge_and_air_slash() {
+        let mut h = Locomotion::spawn([0.0, 10.0, 0.0], FWD);
+        h.air_ok = true;
+        h.state = JUMP;
+        h.phase = 2;
+        h.body.gap = 5.0;
+        let press = HeroInput { attack: true, ..HeroInput::default() };
+        let c = [0.0, 0.0, 1.0];
+        let left = [1.0, 0.0, 0.0];
+        h.update(&press, c, left, ClipState::default());
+        h.update(&HeroInput::default(), c, left, ClipState::default());
+        assert_eq!((h.phase, h.air_sub, h.request), (8, 12, 23));
+        // Clip 23 playing, its root no longer rising: the fall at -8.0, then phase 9 within 1.0.
+        let clip = ClipState { action: 23, progress: 0.5, finished: false };
+        h.update(&HeroInput::default(), c, left, clip);
+        assert_eq!(h.body.velocity[1], -8.0);
+        h.body.gap = 0.9;
+        h.update(&HeroInput::default(), c, left, clip);
+        assert_eq!(h.phase, 9);
+        h.update(&HeroInput::default(), c, left, ClipState { action: 24, progress: 1.0, finished: true });
+        assert_eq!((h.state, h.air_sub), (STANCE, 0));
+        // A strafe jump: armed by the press, the slash on release.
+        let mut h = Locomotion::spawn([0.0, 10.0, 0.0], FWD);
+        h.air_ok = true;
+        h.state = 46;
+        h.phase = 3;
+        h.body.gap = 5.0;
+        h.update(&press, c, left, ClipState::default());
+        assert_eq!(h.air_sub, 0);
+        h.update(&HeroInput::default(), c, left, ClipState::default());
+        assert_eq!((h.air_sub, h.request), (11, 25));
+        // Held: the 12th tick gives the plunge.
+        let mut h = Locomotion::spawn([0.0, 10.0, 0.0], FWD);
+        h.air_ok = true;
+        h.state = 46;
+        h.phase = 3;
+        h.body.gap = 50.0;
+        let held = HeroInput { circle_held: true, ..HeroInput::default() };
+        for _ in 0..11 {
+            h.update(&held, c, left, ClipState::default());
+            assert_ne!(h.phase, 8);
+        }
+        h.update(&held, c, left, ClipState::default());
+        assert_eq!(h.phase, 8);
+    }
 
     /// SPEC-0033 Behavior 4 and its test vector, and Behavior 11's jump.
     #[test]
