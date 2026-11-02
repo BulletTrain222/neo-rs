@@ -4554,8 +4554,21 @@ impl Play {
                 }
                 self.pay_mp(cost);
             }
-            let target = if row.homing <= 1 { self.lock } else { self.shot_target() };
-            let aim = target.and_then(|id| self.aim_point(id)).unwrap_or_else(|| default_aim(p, f));
+            // SPEC-0036 Launch: in right-stick aim mode, mode 0 drops the target; with none the aim is the
+            // stored point: camera eye + 150 x forward (the scan's character candidates are not specified).
+            let aiming = self.aim.on;
+            let target = if row.homing == 0 && aiming {
+                None
+            } else if row.homing <= 1 {
+                self.lock
+            } else {
+                self.shot_target()
+            };
+            let stored = {
+                let (forward, _) = self.camera.rows();
+                add(self.camera.eye, forward.map(|v| v * 150.0))
+            };
+            let aim = target.and_then(|id| self.aim_point(id)).unwrap_or_else(|| if aiming { stored } else { default_aim(p, f) });
             // SPEC-0030 row 90: the override is tested and cleared for each shot; the target stays.
             let aim = self.state.external_missile.take().and_then(|k| self.locator(self.world.pack, k)).map_or(aim, |l| l.0);
             let mut dir = launch_dir(anchor, aim);
@@ -10372,7 +10385,9 @@ impl Play {
         let touch_ids = RefCell::new(Vec::new());
         let shoved = RefCell::new(Vec::new());
         let breakable_hits = RefCell::new(Vec::new());
-        let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || matches!(hero_state, 33 | 53) {
+        // SPEC-0036 Leap, step 1: in the leap Roberta is left out of the character body contacts.
+        let leaping = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| a.sub == 8);
+        let bodies: Vec<([f32; 3], f32, f32, u64)> = if noclip || leaping || matches!(hero_state, 33 | 53) {
             Vec::new()
         } else {
             self.characters
@@ -15284,7 +15299,8 @@ impl Play {
             }
         }
         let has = self.state.has_item(rp::ITEM);
-        let scan = self.aim.step(self.loco.state, None, self.rope_y, input.r2_held, input.circle_held);
+        let attack_sub = if self.hero_index == 0 { self.attack.as_ref().map(|a| a.sub) } else { self.r_attack.as_ref().map(|a| a.sub) };
+        let scan = self.aim.step(self.loco.state, attack_sub, self.rope_y, input.r2_held, input.circle_held);
         if self.loco.state != rp::STATE {
             self.rope_hero = None;
             if scan && has {
