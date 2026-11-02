@@ -1001,7 +1001,7 @@ fn screenshot_and_exit(
     });
     let at = match &on {
         Some((text, delay)) => {
-            if seen.is_none() && state.as_ref().is_some_and(|s| s.play.last_boss.contains(text.as_str()) || s.play.last_pickup.contains(text.as_str())) {
+            if seen.is_none() && state.as_ref().is_some_and(|s| s.play.last_mote.contains(text.as_str()) || s.play.last_boss.contains(text.as_str()) || s.play.last_pickup.contains(text.as_str())) {
                 *seen = Some(elapsed);
             }
             seen.map_or(120.0, |t| t + delay)
@@ -6066,6 +6066,41 @@ fn sync_fade(
 /// (on listed ticks) scripts, applied to this tick's input.
 fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     let t = play.ticks;
+    // NEOPETS_DEV_ATTACK="from:to": the attack pressed on that tick and held to the other, with _CHEATS, _GIVE,
+    // _MOTE_AT, _ROBERTA and _CEILING as in the trace, so a move can be pictured (diagnostic).
+    if let Some((a, b)) = std::env::var("NEOPETS_DEV_ATTACK").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.parse::<u64>().ok()?, b.parse::<u64>().ok()?))) {
+        input.attack = t == a;
+        input.attack_held = (a..=b).contains(&t);
+    }
+    if t == 5 {
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_CHEATS") {
+            play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip") };
+        }
+        if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
+            play.trace_select_hero(1);
+        }
+    }
+    for g in std::env::var("NEOPETS_TRACE_GIVE").unwrap_or_default().split(',') {
+        let n: Vec<i64> = g.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+        if let [k, id, count] = n[..] {
+            if k as u64 == t {
+                play.diag_give(id as u16, count as i32);
+            }
+        }
+    }
+    for e in std::env::var("NEOPETS_TRACE_MOTE_AT").unwrap_or_default().split(';') {
+        let n: Vec<u64> = e.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+        if let [k, word, id] = n[..] {
+            if k == t {
+                play.item_command(&menus::Command::EquipMote { word: word as usize, id: id as u16 });
+            }
+        }
+    }
+    if let Some((k, c)) = std::env::var("NEOPETS_TRACE_CEILING").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.parse::<u64>().ok()?, b.parse::<usize>().ok()?))) {
+        if k == t {
+            play.diag_ceiling(c);
+        }
+    }
     if let Ok(v) = std::env::var("NEOPETS_TRACE_STICK") {
         let mut set = None;
         for e in v.split(';') {
