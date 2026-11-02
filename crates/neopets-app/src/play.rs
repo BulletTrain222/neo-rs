@@ -1374,6 +1374,9 @@ pub struct Play {
     mote_objects: Vec<neopets_sim::charm::Object>,
     /// A family handler's Mote kind during a Mote object's breakable walk.
     break_family: Option<i32>,
+    /// The leap and lunge point, and Roberta's landing direction (SPEC-0036).
+    leap_point: [f32; 3],
+    landing_dir: [f32; 3],
     /// Tor's plain weapon effect in sub-state 10.
     power_fx: Option<usize>,
     /// The ended Fog cloud's point, in its pack, with the pulse countdown.
@@ -2168,6 +2171,8 @@ impl Play {
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
             break_family: None,
+            leap_point: [0.0; 3],
+            landing_dir: [0.0, 0.0, 1.0],
             power_fx: None,
             fog_after: None,
             bolts: Vec::new(),
@@ -4380,13 +4385,55 @@ impl Play {
     /// the first shot, or at release for ids 162, 169 and 171).
     fn roberta_step(&mut self, input: &HeroInput) {
         use neopets_sim::roberta::*;
+        // The locked target's distance picks the swats (SPEC-0036 Attack router; Roberta air attack choice).
+        let locked = self.targets.records.first().filter(|r| r.flag).map(|r| r.d);
         if self.r_attack.is_none() && input.attack && (1..=6).contains(&self.loco.state) {
-            self.r_attack = Some(RobertaAttack::start_with(self.gesture.mode));
+            self.r_attack = Some(if self.gesture.mode == 0 && locked.is_some_and(|d| d < 5.0) { RobertaAttack::start_at(5) } else { RobertaAttack::start_with(self.gesture.mode) });
+            self.draw_items(true);
+        }
+        // The air attack: in states 7 to 11, not phases 6, 7 or 9, used once a jump, with no Tattered Cloak
+        // and a wand in her own entry.
+        if self.r_attack.is_none()
+            && (input.attack || input.circle_held)
+            && (7..=11).contains(&self.loco.state)
+            && !matches!(self.loco.phase, 6 | 7 | 9)
+            && self.loco.air_free()
+            && self.equipment.entries[2][1] != Some(126)
+            && self.equipment.entries[0][1].is_some()
+        {
+            self.loco.use_air();
+            self.hit_list.clear();
+            self.swing_serial = self.swing_serial.wrapping_add(1);
+            self.r_attack = Some(RobertaAttack::start_at(if locked.is_some_and(|d| d < 8.0) { 12 } else { 11 }));
             self.draw_items(true);
         }
         let mote = self.equipment.motes[1][2];
         let Some(mut a) = self.r_attack.take() else { return };
         let c = self.hero.clip_state();
+        // SPEC-0036 the leap: its point, kept while the touched flag is clear; a contact puts her back on it
+        // and ends the leap. Entering it stores the point; cue 17 on its first tick.
+        if a.sub == 8 {
+            let p = self.loco.position();
+            if a.f == 0 {
+                self.leap_point = p;
+                self.sound.play(neopets_sim::sound::WEAPON, 17, neopets_sim::sound::Play { emitter: Some(p), ..Default::default() });
+            }
+            if self.touched && a.f > 0 {
+                self.loco.body.position = self.leap_point;
+                a.end_leap();
+            } else {
+                self.leap_point = p;
+            }
+        }
+        // The landing turns back the way she leapt, at rate 0.25.
+        if a.sub == 13 {
+            let (f, l) = (self.loco.facing, self.landing_dir);
+            if f[0] * l[0] + f[1] * l[1] + f[2] * l[2] > 0.98 {
+                a.end_landing();
+            } else {
+                self.loco.steer_toward(l, 0.25);
+            }
+        }
         let before = a.sub;
         match a.tick(input.attack_held, input.attack, mote, Clip { action: c.action, progress: c.progress }) {
             Some((action, restart)) => {
@@ -4399,6 +4446,10 @@ impl Play {
                 self.loco.set_attack(None);
                 return;
             }
+        }
+        if a.sub == 13 && before == 8 {
+            let f = self.loco.facing;
+            self.landing_dir = [-f[0], -f[1], -f[2]];
         }
         if a.cleared {
             a.cleared = false;
@@ -7032,7 +7083,10 @@ impl Play {
     fn hero_swing(&mut self) {
         // The air slash and the plunge run the same scan with their sub-states (SPEC-0033 Air attacks).
         let air = self.loco.air_sub;
-        let (Some(sub), true) = (self.attack.as_ref().map(|a| a.sub).or((air != 0).then_some(air)), self.hero.frame_bits() & 1 != 0) else {
+        // Roberta's melee window, in any sub-state but the leap (SPEC-0036 Roberta's arm table).
+        let roberta = self.hero_index == 1;
+        let r_sub = self.r_attack.as_ref().filter(|a| roberta && a.sub != 8).map(|a| a.sub);
+        let (Some(sub), true) = (r_sub.or(self.attack.as_ref().map(|a| a.sub)).or((air != 0).then_some(air)), self.hero.frame_bits() & 1 != 0) else {
             self.last_axis = None;
             return;
         };
@@ -7052,10 +7106,10 @@ impl Play {
         let g = self.statuses.damage_scale();
         // SPEC-0036 Damage: the attack Mote in word 2 gives B and C; P is the attack power table
         // value only in the power step (sub-state 10).
-        let mote_id = self.equipment.motes[0][2];
+        let mote_id = self.equipment.motes[self.hero_index.min(1)][2];
         let mote = mote_id.and_then(|id| self.items.get(id)).map(|i| neopets_sim::mote::AttackMote { f: i.stats[5] as f32, g: i.stats[6] as f32, kind: neopets_sim::mote::element(mote_id) });
         let power = match mote_id {
-            Some(id) if sub == 10 => neopets_sim::mote::power_index(0, id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0),
+            Some(id) if sub == 10 && !roberta => neopets_sim::mote::power_index(0, id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0),
             _ => 1.0,
         };
         let mut landed = 0;
@@ -7117,7 +7171,7 @@ impl Play {
             // landed; otherwise the swing has no effect at all and the target stays out of the
             // hit list, so a later window tick can still be blocked.
             let hf = self.loco.facing;
-            let power_hit = sub == 10 && mote_id.is_some();
+            let power_hit = sub == 10 && mote_id.is_some() && !roberta;
             // SPEC-0012 G15: the Black Knight is unhittable and guarding on every tick its stun
             // gate does not pass: the swing is blocked whatever the facing (Blocking Angle 1.0):
             // no damage, impact cue 34, one block per swing, the magic paid as for a landed hit,
@@ -7184,6 +7238,7 @@ impl Play {
             // SPEC-0036 Damage: x = P A B C D E (P, B, C, E are 1 without a Mote or petpet), y = x
             // − defence, truncated; D by sub-state.
             let d_factor = match sub {
+                _ if roberta => self.r_attack.as_ref().map_or(1.0, |a| a.step_factor()),
                 4 | 12 => 2.0,
                 5 | 6 => 0.75,
                 _ => 1.0,
@@ -7231,7 +7286,7 @@ impl Play {
         self.breakable_walk(p0, tip, prev);
         // SPEC-0036 Damage, take-hit: in the power step a status request of the word-2 Mote
         // also goes to the target (SPEC-0029 Behavior 27.1).
-        let request = mote_id.filter(|_| sub == 10).and_then(|id| neopets_sim::mote::status_request(0, id, |k| self.design.attack_power(k)));
+        let request = mote_id.filter(|_| sub == 10 && !roberta).and_then(|id| neopets_sim::mote::status_request(0, id, |k| self.design.attack_power(k)));
         for &(i, _, _) in &hits {
             if let Some(e) = self.characters.get(i).and_then(|c| c.entity) {
                 self.state.hero.hits.push(e);
@@ -7244,7 +7299,7 @@ impl Play {
             }
         }
         // A landed Tor hit outside the power step pays the level-0 cost, then uses word-2 charge.
-        if sub != 10 {
+        if sub != 10 && !roberta {
             for _ in 0..landed {
                 let (cost, q) = self.magic.tor_swing(mote_id);
                 self.pay_mp(cost);
@@ -10129,6 +10184,15 @@ impl Play {
             self.draw_items(true);
         }
         let mut force = false;
+        // SPEC-0036 Tor's flick lunge: the point is kept while the touched flag is clear; on contact he is held
+        // on it and the lunge goes on.
+        if self.attack.as_ref().is_some_and(|a| a.sub == 9) {
+            if self.touched {
+                self.loco.body.position = self.leap_point;
+            } else {
+                self.leap_point = self.loco.position();
+            }
+        }
         if let Some(a) = self.attack.as_mut() {
             let c = self.hero.clip_state();
             a.mote = self.equipment.motes[0][2];
@@ -10233,6 +10297,7 @@ impl Play {
         self.starlight_step();
         self.guard_step();
         self.loco.p1 = self.weapon_drawn;
+        self.loco.roberta = self.hero_index == 1;
         self.loco.air_ok = self.hero_index == 0 && self.equipment.entries[2][self.hero_index] != Some(126);
         // SPEC-0036 the stick step: Tor's 7, 8 and 10 in the attack window; Roberta's spins until the end
         // clip, and her sub-state 14's turn.
@@ -15300,7 +15365,8 @@ impl Play {
     /// The hero's weapon segment as a thin cylinder while the attack window is open (frame bit
     /// 1; SPEC-0036), from the weapon attach point along its axis over the weapon reach.
     fn weapon_segment(&self) -> Option<neopets_sim::combat::Cylinder> {
-        if (self.attack.is_none() && self.loco.air_sub == 0) || self.hero.frame_bits() & 1 == 0 {
+        let roberta = self.hero_index == 1 && self.r_attack.as_ref().is_some_and(|a| a.sub != 8);
+        if (self.attack.is_none() && self.loco.air_sub == 0 && !roberta) || self.hero.frame_bits() & 1 == 0 {
             return None;
         }
         let place = placement(self.loco.position(), self.loco.facing);
@@ -17844,7 +17910,8 @@ fn followed(loco: &Locomotion, world: &World) -> Followed {
     let shown = [p[0], loco.follow.shown, p[2]];
     // SPEC-0027 follow step 5: the height is a quarter in hero state 21.
     let height = if loco.state == hero_states::PANEL { 0.25 * HERO_HEIGHT } else { HERO_HEIGHT };
-    Followed { position: shown, facing: loco.facing, height, moving: loco.moved(), ground_kind }
+    let step = loco.last_step_length();
+    Followed { position: shown, facing: loco.facing, height, moving: loco.moved(), ground_kind, locked: loco.camera_locked(), step }
 }
 
 /// The eye wall push (SPEC-0027 Walls): the cell's frame records other than type 6, then the

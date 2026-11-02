@@ -279,6 +279,9 @@ pub struct Locomotion {
     pub air_ok: bool,
     /// The stick step of state 13 this tick.
     pub stick_step: StickStep,
+    /// L2 last tick, and whether this hero is Roberta (the camera-locked state test).
+    pub l2_held: bool,
+    pub roberta: bool,
     /// State 17 was entered from state 32.
     hurt_from_strafe: bool,
     /// The air attack's sub-state word: 11 the slash, 12 the plunge, 0 none.
@@ -383,6 +386,8 @@ impl Locomotion {
             p1: false,
             air_ok: false,
             stick_step: StickStep::Off,
+            l2_held: false,
+            roberta: false,
             hurt_from_strafe: false,
             air_sub: 0,
             air_used: false,
@@ -672,6 +677,10 @@ impl Locomotion {
         self.target = self.facing;
     }
 
+    pub fn last_step_length(&self) -> f32 {
+        dot(self.last_motion, self.last_motion).sqrt()
+    }
+
     pub fn moved(&self) -> bool {
         self.state != STANCE && self.last_motion != [0.0; 3]
     }
@@ -767,7 +776,23 @@ impl Locomotion {
     /// The hero update of one pass: stick direction from the camera's ground forward and
     /// screen-left vectors, then the state routine: on the ground the walk-off check, the jump
     /// chooser, the facing turn and the speed tiers; in the air the air routine.
+    /// SPEC-0027 Follow step 9, the camera-locked hero states: 32, 43 to 46, 17 and 20 from 32 (the guard is
+    /// not tracked here), and Roberta's state 13 with L2 held.
+    pub fn camera_locked(&self) -> bool {
+        self.state == STRAFE || (43..=46).contains(&self.state) || (self.state == HURT && self.hurt_from_strafe) || (self.state == ATTACK && self.roberta && self.l2_held)
+    }
+
+    /// The air-attack-used flag: Roberta's air shot takes it through the host.
+    pub fn air_free(&self) -> bool {
+        !self.air_used
+    }
+
+    pub fn use_air(&mut self) {
+        self.air_used = true;
+    }
+
     pub fn update(&mut self, input: &HeroInput, camera_forward: Vec3, camera_left: Vec3, clip: ClipState) {
+        self.l2_held = input.l2;
         let v = speed_value(input);
         self.rate = self.status_scale;
         if v > 0.0 {

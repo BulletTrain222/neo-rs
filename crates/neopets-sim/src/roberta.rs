@@ -5,11 +5,12 @@
 //! each sub-state, the launch classes and the shot rows, the six shot slots with their launch,
 //! homing, life and movement, and the damage scale.
 //!
-//! Not covered: the near-target swat start (no locked target), the leap's own steps (sub-states
-//! 8 and 13 request their clips and end with them), the spin replays, the fan and the random
-//! target finder of homing modes 2 to 5 (the launch aims at the auto-target or straight ahead),
-//! the bounce and deflect on guarding targets, hostile shots, world contact other than the
-//! ground, the shot aim override and the right-stick aim.
+//! The near-target swat, the air shot and swat, the spin replays and the leap's steps are here; the
+//! host holds the leap point and turns the landing.
+//!
+//! Not covered: the fan and the random target finder of homing modes 2 to 5 (the launch aims at the
+//! auto-target or straight ahead), world contact other than the ground, the shot aim override and the
+//! right-stick aim.
 
 use crate::hero::Vec3;
 use crate::rng::Rng;
@@ -23,6 +24,8 @@ pub const SHOT_1: u32 = 12;
 pub const SHOT_2: u32 = 13;
 pub const SHOT_3: u32 = 14;
 pub const SWAT: u32 = 16;
+pub const AIR_SHOT: u32 = 19;
+pub const AIR_SWAT: u32 = 20;
 pub const RAPID: u32 = 15;
 pub const SPIN_CW: u32 = 22;
 pub const SPIN_CCW: u32 = 21;
@@ -68,6 +71,10 @@ pub struct RobertaAttack {
     pub object_live: bool,
     /// Sub-state 14's Mote animation has ended: request 63.
     pub waiting: bool,
+    /// The spin's step flag, its replay count, and its end clip once chosen.
+    spin_step: bool,
+    spins: u8,
+    spin_ending: bool,
 }
 
 impl RobertaAttack {
@@ -81,6 +88,21 @@ impl RobertaAttack {
             _ => 1,
         };
         Self { sub, cleared: true, ..Default::default() }
+    }
+
+    /// A start that names its sub-state: the near-target swat (5), the air shot (11) or swat (12).
+    pub fn start_at(sub: u8) -> Self {
+        Self { sub, cleared: true, ..Default::default() }
+    }
+
+    /// The landing, from the leap's end or the host's contact test.
+    pub fn end_leap(&mut self) {
+        self.go(13);
+    }
+
+    /// The landing's end, when the facing is within dot 0.98 of the landing direction.
+    pub fn end_landing(&mut self) {
+        self.go(0);
     }
 
     fn go(&mut self, sub: u8) {
@@ -155,20 +177,60 @@ impl RobertaAttack {
                     }
                 }
             }
-            6 | 7 => {
-                let end = if self.sub == 6 { SPIN_CW_END } else { SPIN_CCW_END };
-                if done(self, end) {
+            5 => {
+                if done(self, SWAT) {
                     self.go(0);
                 }
             }
+            11 => {
+                if done(self, AIR_SHOT) {
+                    self.go(0);
+                }
+            }
+            12 => {
+                if done(self, AIR_SWAT) {
+                    self.go(0);
+                }
+            }
+            6 | 7 => {
+                let (spin, end) = if self.sub == 6 { (SPIN_CW, SPIN_CW_END) } else { (SPIN_CCW, SPIN_CCW_END) };
+                if clip.action == end {
+                    if done(self, end) {
+                        self.go(0);
+                    }
+                } else if clip.action == spin {
+                    // A press after progress 0.2 sets the step flag; below 0.2 and past the clip's
+                    // key count (4), the flag replays the cycle, ten times at most, else the end clip.
+                    if clip.progress >= 0.2 {
+                        self.spin_step |= pressed;
+                    } else if self.f > 4 {
+                        if self.spin_step && self.spins < 10 {
+                            self.f = 0;
+                            self.spin_step = false;
+                            self.spins += 1;
+                            self.cleared = true;
+                        } else {
+                            self.spin_ending = true;
+                        }
+                    }
+                }
+            }
             8 => {
+                // The leap launches no shot.
+                self.fired = true;
                 if done(self, LEAP) {
+                    self.go(13);
+                }
+            }
+            13 => {
+                self.f += 1;
+                if self.f > 10 {
                     self.go(0);
                 }
             }
             _ => self.go(0),
         }
-        if self.sub != 0 && self.sub != 1 {
+        if !matches!(self.sub, 0 | 1 | 13) {
             self.f += 1;
         }
         let action = match self.sub {
@@ -186,9 +248,13 @@ impl RobertaAttack {
             5 => SWAT,
             6 | 7 => {
                 let (spin, end) = if self.sub == 6 { (SPIN_CW, SPIN_CW_END) } else { (SPIN_CCW, SPIN_CCW_END) };
-                if clip.action == end || (clip.action == spin && clip.progress >= 0.99) { end } else { spin }
+                if clip.action == end || self.spin_ending { end } else { spin }
             }
             8 => LEAP,
+            11 => AIR_SHOT,
+            12 => AIR_SWAT,
+            // The landing's idle picker id.
+            13 => 0,
             14 if self.waiting => 63,
             9 | 14 => release_anim(mote),
             _ => RAPID,
@@ -570,6 +636,52 @@ mod tests {
     }
 
     use super::*;
+
+    /// SPEC-0036 the spin: a press after progress 0.2 replays the cycle at the next wrap; with none, the end clip.
+    #[test]
+    fn spin_replays_then_ends() {
+        let mut a = RobertaAttack::start_with(2);
+        let (mut replays, mut ended) = (0, false);
+        for t in 0..200u32 {
+            let progress = (t % 16) as f32 / 16.0;
+            let press = t == 8;
+            let (id, _) = a.tick(false, press, None, Clip { action: SPIN_CW, progress }).unwrap();
+            if std::mem::take(&mut a.cleared) && t > 0 {
+                replays += 1;
+                assert_eq!(a.f, 1);
+            }
+            if id == SPIN_CW_END {
+                ended = true;
+                assert!(t > 16, "only after a replayed cycle: {t}");
+                break;
+            }
+        }
+        assert!(ended);
+        assert_eq!(replays, 1);
+        // The end clip ends the attack.
+        a.tick(false, false, None, Clip { action: SPIN_CW_END, progress: 0.5 }).unwrap();
+        assert!(a.tick(false, false, None, Clip { action: SPIN_CW_END, progress: 0.99 }).is_none());
+    }
+
+    /// The leap's end goes to the landing, which asks for the idle id and lasts at most 11 ticks; the swats
+    /// and air attacks end with their clips.
+    #[test]
+    fn leap_landing_and_swats() {
+        let mut a = RobertaAttack::start_with(1);
+        assert_eq!(a.tick(false, false, None, Clip::default()).unwrap().0, LEAP);
+        assert!(a.fired);
+        assert_eq!(a.tick(false, false, None, Clip { action: LEAP, progress: 0.99 }).unwrap().0, 0);
+        assert_eq!(a.sub, 13);
+        for t in 1..=11 {
+            let live = a.tick(false, false, None, Clip::default());
+            assert_eq!(live.is_some(), t < 11, "tick {t}");
+        }
+        for (sub, id) in [(5, SWAT), (11, AIR_SHOT), (12, AIR_SWAT)] {
+            let mut a = RobertaAttack::start_at(sub);
+            assert_eq!(a.tick(false, false, None, Clip::default()).unwrap().0, id);
+            assert!(a.tick(false, false, None, Clip { action: id, progress: 0.99 }).is_none());
+        }
+    }
 
     #[test]
     fn shot_fan_vectors() {

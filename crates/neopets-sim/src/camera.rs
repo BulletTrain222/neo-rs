@@ -4,7 +4,7 @@
 //! the R3 recentre, plus the load placement with the pull-in setter.
 //! Profiles are selected by the ground kind under the hero; the line-of-sight timer and the
 //! recentre's line test use the caller's segment query (`clear`).
-//! Not covered: the script override profile, the camera-locked hero states, the hold and lean
+//! Not covered: the script override profile, the hold and lean
 //! terms (no targets yet), the spring's contact-normal exception, the eye pass failure flag and
 //! stuck timer, the camera visibility test, scripted plays, shakes, the fade ramp and modes
 //! other than 0.
@@ -138,6 +138,9 @@ pub struct Followed {
     pub moving: bool,
     /// Ground kind of the patch the hero stands on (None: no patch this tick).
     pub ground_kind: Option<u32>,
+    /// A camera-locked hero state (Follow camera step 9), and the hero's last step length.
+    pub locked: bool,
+    pub step: f32,
 }
 
 impl Followed {
@@ -263,6 +266,8 @@ impl FollowCamera {
         clear: impl Fn(Vec3, Vec3) -> bool,
     ) {
         self.select_profile(hero);
+        // The camera's back direction, from the previous tick's rows.
+        let back = sub(self.eye, self.focus);
         // Step 3: stick value s and spin input D (no leans yet).
         let s = -converter_a(pad.right_y) / 87.5;
         let b = -converter_a(pad.right_x) / 87.5;
@@ -291,9 +296,21 @@ impl FollowCamera {
         }
         // Step 8: the eye on its sphere (distance and elevation unchanged, yaw spun).
         self.eye = add(self.focus, sphere(c));
-        // Step 9: in normal states the target yaw is the eye's own yaw.
+        // Step 9: in normal states the target yaw is the eye's own yaw; in a camera-locked state, the yaw
+        // of the camera's back direction, and with no spin the eye moves rigidly with the hero.
         let v = sub(self.eye, self.focus);
         self.target[1] = v[2].atan2(v[0]);
+        if hero.locked {
+            self.target[1] = back[2].atan2(back[0]);
+            let far = add(self.focus, sphere([self.target[0] + 2.0, self.target[1], self.target[2]]));
+            if !clear(far, self.focus) && c[0] < self.target[0] {
+                self.target[0] = c[0] + hero.step.max(0.1);
+            }
+            if d == 0.0 {
+                self.eye = add(self.focus, sphere(self.target));
+                self.velocity = [0.0; 3];
+            }
+        }
         // Step 10: spring toward T = F + sphere(P).
         let t = add(self.focus, sphere(self.target));
         let (k, damping) = (p.stiffness, p.damping());
@@ -429,7 +446,7 @@ mod tests {
     }
 
     fn still(height: f32) -> Followed {
-        Followed { position: [0.0; 3], facing: [0.0, 0.0, 1.0], height, moving: false, ground_kind: None }
+        Followed { position: [0.0; 3], facing: [0.0, 0.0, 1.0], height, moving: false, ground_kind: None, locked: false, step: 0.0 }
     }
 
     fn camera_at(eye: Vec3, hero: &Followed) -> FollowCamera {
@@ -536,7 +553,7 @@ mod tests {
     fn pull_in_drops_to_focus_height_and_halves_under_high_ground() {
         // SPEC-0027 Placement: P (10, 0, 5), f (0.6, 0, 0.8), height H: the posed eye (4, ·, -3)
         // becomes (4, H, -3), or (7, H, 1) when the ground there is above H + 5.
-        let hero = Followed { position: [10.0, 0.0, 5.0], facing: [0.6, 0.0, 0.8], height: 3.5, moving: false, ground_kind: None };
+        let hero = Followed { locked: false, step: 0.0, position: [10.0, 0.0, 5.0], facing: [0.6, 0.0, 0.8], height: 3.5, moving: false, ground_kind: None };
         let mut c = FollowCamera::attach(&hero, none, |_| {});
         c.pull_in(&hero, [4.0, 2.5, -3.0], none, |_| {});
         assert!((c.eye[0] - 4.0).abs() < 1e-5 && c.eye[1] == 3.5 && (c.eye[2] + 3.0).abs() < 1e-5);
