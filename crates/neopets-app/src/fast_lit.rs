@@ -122,9 +122,12 @@ fn fast_lit(pbr_input: pbr_types::PbrInput) -> vec4<f32> {
             ), pbr_input.world_position);
             shadow = shadows::fetch_directional_shadow(0u, pbr_input.world_position, pbr_input.world_normal, view_z, pbr_input.frag_coord.xy);
         }
-        // Near grazing the map cannot resolve the surface against itself (stripes and blocks on steep
-        // cliffs at any bias), and the sun adds little there: the shadow fades out.
-        lit += SUN_SHARE * burley * NdotL * mix(1.0, shadow, smoothstep(0.0, 0.6, NdotL));
+        // The map cannot resolve a steep surface against itself (stripes and blocks on cliffs at any
+        // bias). The stored normals do not follow the true surface, so the test uses the triangle's own
+        // direction: the shadow fades out near grazing, and steep walls receive none.
+        let flat_n = normalize(cross(dpdx(pbr_input.world_position.xyz), dpdy(pbr_input.world_position.xyz)));
+        let receive = smoothstep(0.05, 0.5, abs(dot(flat_n, L))) * smoothstep(0.35, 0.7, abs(flat_n.y));
+        lit += SUN_SHARE * burley * NdotL * mix(1.0, shadow, receive);
     }
     return vec4<f32>(base.rgb * lit, base.a);
 }

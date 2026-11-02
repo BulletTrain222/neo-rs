@@ -141,13 +141,14 @@ fn sun_factor(in: VertexOutput) -> f32 {
     let light = &lights.directional_lights[0];
     let n = normalize(in.world_normal);
     let ndl = abs(dot(n, (*light).direction_to_light));
+    let flat_n = normalize(cross(dpdx(in.world_position.xyz), dpdy(in.world_position.xyz)));
     var shadow = 1.0;
     if ((*light).flags & DIRECTIONAL_LIGHT_FLAGS_SHADOWS_ENABLED_BIT) != 0u {
         let view_z = dot(vec4<f32>(view.view_from_world[0].z, view.view_from_world[1].z, view.view_from_world[2].z, view.view_from_world[3].z), in.world_position);
         let toward = select(-n, n, dot(n, (*light).direction_to_light) >= 0.0);
         shadow = fetch_directional_shadow(0u, in.world_position, toward, view_z, in.position.xy);
     }
-    return (1.0 - SUN_SHARE) + SUN_SHARE * ndl * mix(1.0, shadow, smoothstep(0.0, 0.6, ndl));
+    return (1.0 - SUN_SHARE) + SUN_SHARE * ndl * mix(1.0, shadow, smoothstep(0.05, 0.5, abs(dot(flat_n, (*light).direction_to_light))) * smoothstep(0.35, 0.7, abs(flat_n.y)));
 }
 
 struct Pass1 {
