@@ -159,6 +159,8 @@ pub struct FollowCamera {
     pub spin: f32,
     /// Elevation target t_e, manual elevation m and the sticky manual flag.
     pub elevation_target: f32,
+    /// The negation test of the elevation target (the host's word; SPEC-0027).
+    pub negate_elevation: bool,
     pub manual: f32,
     pub manual_flag: bool,
     side_offset: f32,
@@ -182,6 +184,7 @@ impl FollowCamera {
             velocity: [0.0; 3],
             spin: 0.0,
             elevation_target: 0.0,
+            negate_elevation: false,
             manual: 0.0,
             manual_flag: false,
             side_offset: 0.0,
@@ -320,7 +323,8 @@ impl FollowCamera {
     }
 
     fn chase_step(&mut self, s: f32, moving: bool) {
-        let goal = self.profile.elevation + s;
+        // The target is negated while the hero hangs under a panel (state 21, sub-mode 4).
+        let goal = (self.profile.elevation + s) * if self.negate_elevation { -1.0 } else { 1.0 };
         let step = if s.abs() > 0.99 { 0.0175 } else { 0.01 };
         let diff = goal - self.elevation_target;
         self.elevation_target = if diff.abs() < step { goal } else { self.elevation_target + step * diff.signum() };

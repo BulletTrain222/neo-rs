@@ -4463,6 +4463,13 @@ fn play_trace(
     if let Some((sl, r)) = std::env::var("NEOPETS_TRACE_REGION").ok().and_then(|v| { let (a, b) = v.split_once(',')?; Some((a.trim().parse::<u8>().ok()?, b.trim().parse::<u32>().ok()?)) }) {
         play.diag_load_region(sl, r);
     }
+    // NEOPETS_TRACE_CEILINGS: the world's ceiling panels with their middle points and links (diagnostic).
+    if std::env::var_os("NEOPETS_TRACE_CEILINGS").is_some() {
+        for (k, r) in play.world.panels.iter().enumerate().filter(|(_, r)| r.normal[1] < -0.99) {
+            let mid: [f32; 3] = std::array::from_fn(|j| -r.normal[3] * r.normal[j] + (0.5 * r.lu - r.u[3]) * r.u[j] + (0.5 * r.lv - r.v[3]) * r.v[j]);
+            println!("      ceiling {k}: middle {mid:?} U {:?} LU {} LV {} links {:?}", r.u, r.lu, r.lv, r.links);
+        }
+    }
     // NEOPETS_TRACE_ROBERTA=1: the trace starts as Roberta (diagnostic; her attack fires shots).
     if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
         play.trace_select_hero(1);
@@ -4668,6 +4675,12 @@ fn play_trace(
         }
         // Once: the new game's tick count starts again. A game-over exit with nothing pending
         // tears the world down the same way.
+        // NEOPETS_TRACE_CEILING="tick:k": the hero grabs ceiling panel k on that tick (diagnostic).
+        if let Some((t, k)) = std::env::var("NEOPETS_TRACE_CEILING").ok().and_then(|v| Some((v.split(':').next()?.parse::<u64>().ok()?, v.split(':').nth(1)?.parse::<usize>().ok()?))) {
+            if t == play.ticks {
+                play.diag_ceiling(k);
+            }
+        }
         // NEOPETS_TRACE_GIVE="tick:id:n[,tick:id:n...]": the party add on those ticks.
         if let Ok(v) = std::env::var("NEOPETS_TRACE_GIVE") {
             for g in v.split(',') {
@@ -5397,7 +5410,7 @@ fn play_trace(
                 let (fx, fz) = (fx / l, fz / l);
                 let (dx, dz) = (x - h[0], z - h[2]);
                 let d = dx.hypot(dz).max(1e-6);
-                (forward, side) = ((dx * fx + dz * fz) / d, (dx * -fz + dz * fx) / d);
+                (forward, side) = ((dx * fx + dz * fz) / d, (dx * fz - dz * fx) / d);
             }
         }
         // NEOPETS_TRACE_STICK="tick:f,s;tick:f,s;...": from each tick on, the raw stick values

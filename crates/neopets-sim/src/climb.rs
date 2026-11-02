@@ -4,12 +4,16 @@
 //! top-edge hang and the climb over the top (17 and 7), the corners (8, 9, 11 and 12) and the
 //! step off (0). The climb clips' root motion moves the hero.
 //!
-//! Not covered: the ceiling grab and sub-mode 18, the overhang and top-face paths (sub-modes 3
-//! to 6: an up or down hand-off that would enter them requests 49 instead), sub-mode 10, the
-//! sideways moves inside a stacked straddle and the vertical moves inside a side-by-side one.
-//! Interpretations (the spec gives these as Medium or leaves them open): the approach holds the
-//! hero on the panel and plays 121 to its end; a corner ends with the hero's position along the
-//! new panel clamped into [r, LU - r].
+//! The ceiling grab and hang (18 and 4), the overhang paths (3, 5 and 6) and the straddles' other axis
+//! are here too.
+//!
+//! Not covered: sub-mode 10 (the approach's branch with the hero's back to the panel, which the grab's
+//! facing test refuses). Interpretations (the spec gives these as Medium or leaves them open): the
+//! approach holds the hero on the panel and plays 121 to its end; a corner ends with the hero's position
+//! along the new panel clamped into [r, LU - r]. In sub-mode 4 (R-0207) a hand-off is taken at the edge of
+//! the grab's window that the heading crosses, a neighbour in the same plane becomes the target, an edge
+//! with no way on keeps the hero inside the window, the heading steers at rate 0.5, and sub-mode 6 ends
+//! with Q as the target.
 
 use crate::hero::Vec3;
 
@@ -66,6 +70,17 @@ pub fn grab_wall(panels: &[Panel], hero: Vec3, facing: Vec3, stick: Vec3, speed:
     })
 }
 
+/// The ceiling-panel grab (Behavior 22A; every air tick): the first record whose normal's vertical part is
+/// below -0.99 with 0 < d < H + 1.0, a to LU - b along U and -1.0 to LV - 1.0 along V. No facing or stick test.
+pub fn grab_ceiling(panels: &[Panel], hero: Vec3) -> Option<usize> {
+    panels.iter().position(|r| {
+        let a = if r.links[0].is_some() { -1.0 } else { 1.0 };
+        let b = if r.links[3].is_some() { -1.0 } else { 1.0 };
+        let (d, x, y) = (plane(r.normal, hero), plane(r.u, hero), plane(r.v, hero));
+        r.normal[1] < -0.99 && 0.0 < d && d < HEIGHT + 1.0 && a <= x && x <= r.lu - b && -1.0 <= y && y <= r.lv - 1.0
+    })
+}
+
 /// What the climb asks of the hero this tick.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Step {
@@ -93,6 +108,10 @@ pub struct View {
     pub gap: f32,
     pub clip: (u32, f32),
     pub cooldown: u32,
+    /// Sub-mode 4: the hero's forward row, the stick's heading and its speed value (0 in the dead zone).
+    pub facing: Vec3,
+    pub heading: Vec3,
+    pub speed: f32,
 }
 
 /// State 21: the sub-mode (the shared word +0x9BC), the target T, the queued panel Q, the
@@ -111,6 +130,11 @@ impl Climb {
     /// The wall grab's entry: sub-mode 1 on the panel.
     pub fn new(target: usize) -> Self {
         Self { sub: 1, target, queued: None, partner: None, ret: 0, first: false }
+    }
+
+    /// The ceiling grab's entry: sub-mode 18 on the panel.
+    pub fn ceiling(target: usize) -> Self {
+        Self { sub: 18, target, queued: None, partner: None, ret: 0, first: false }
     }
 
     /// State 38's hand-over: the top-edge hang of the panel (sub-mode 17).
@@ -183,6 +207,8 @@ impl Climb {
                                 // A top face: hang from T's top edge (Q stays queued).
                                 step.cooldown = Some(20);
                                 self.enter(17);
+                            } else if ny(q) < 0.95 {
+                                self.enter(3);
                             }
                         }
                     } else if ht > 0.5 && v.gap > 0.0 {
@@ -198,6 +224,9 @@ impl Climb {
                         } else if ny(q) > 0.95 {
                             self.enter(0);
                             step.leave = true;
+                        } else if ny(q) < 0.95 {
+                            self.queued = Some(q);
+                            self.enter(6);
                         }
                     }
                 } else if s > 0.0 {
@@ -227,6 +256,111 @@ impl Climb {
                         self.enter(if cross_y(t.n(), panels[q].n()) <= 0.0 { 11 } else { 8 });
                     }
                 }
+            }
+            3 => {
+                // Back off from the overhang along nT, then the queued panel is the target (kept queued).
+                let d = plane(t.normal, p);
+                let along = (1.25 - d).max(0.0) + 0.05;
+                let n = t.n();
+                step.place = Some(std::array::from_fn(|k| p[k] + along * n[k]));
+                step.request = Some(49);
+                if let Some(q) = self.queued {
+                    self.target = q;
+                }
+                step.cooldown = Some(120);
+                self.enter(4);
+            }
+            4 => {
+                // The stick-steered move under the panel: clip 46 moves the hero along his forward row.
+                if v.speed <= 0.0 {
+                    step.request = Some(48);
+                    return step;
+                }
+                step.facing = Some((v.heading, 0.5));
+                step.request = Some(46);
+                step.rate = v.speed.max(0.3);
+                let b = v.facing;
+                let (bu, bv) = (dot3(b, v3(t.u)), dot3(b, v3(t.v)));
+                // The grab's window is the room under the panel: 1.0 inside each end along U, -1.0 to LV - 1.0 along V.
+                let (low_u, top_u, low_h, top_h) = (1.0, t.lu - 1.0, -1.0, t.lv - 1.0);
+                let edge = if ut < low_u && bu < 0.0 {
+                    Some((3, t.u, low_u - ut))
+                } else if ut > top_u && bu > 0.0 {
+                    Some((1, t.u, top_u - ut))
+                } else if ht < low_h && bv < 0.0 {
+                    Some((0, t.v, low_h - ht))
+                } else if ht > top_h && bv > 0.0 {
+                    Some((2, t.v, top_h - ht))
+                } else {
+                    None
+                };
+                if let Some((k, axis, back)) = edge {
+                    // No way on: the hero slides along the edge.
+                    let clamped = Some(std::array::from_fn(|j| p[j] + back * axis[j]));
+                    let Some(q) = link(&t, k) else {
+                        step.place = clamped;
+                        return step;
+                    };
+                    let along = dot3(b, panels[q].n());
+                    if along > 0.75 {
+                        self.queued = Some(q);
+                        self.enter(5);
+                        step.request = Some(57);
+                    } else if along < -0.75 {
+                        self.target = q;
+                        self.queued = None;
+                        Self::hold(&panels[q], p, &mut step);
+                        step.request = Some(49);
+                        step.cooldown = Some(120);
+                        self.enter(2);
+                    } else if ndot(q, self.target) > 0.99 {
+                        self.target = q;
+                    } else {
+                        step.place = clamped;
+                    }
+                }
+            }
+            5 => {
+                // Down over the top edge onto Q: raised while below it, then the free climb on it.
+                step.request = Some(57);
+                let Some(q) = self.queued else {
+                    self.enter(4);
+                    return step;
+                };
+                let r = panels[q];
+                if action == 57 {
+                    if plane(r.v, p) < 0.0 {
+                        step.place = Some([p[0], p[1] + 0.05, p[2]]);
+                    } else if progress >= 0.99 {
+                        self.target = q;
+                        self.queued = None;
+                        Self::hold(&r, p, &mut step);
+                        step.request = Some(49);
+                        step.cooldown = Some(120);
+                        self.enter(2);
+                    }
+                }
+            }
+            6 => {
+                // Under the wall's lower edge: clip 54 past progress 0.95, then 48 on Q.
+                step.request = Some(54);
+                if action == 54 && progress > 0.95 {
+                    step.request = Some(48);
+                    if let Some(q) = self.queued {
+                        self.target = q;
+                    }
+                    step.cooldown = Some(120);
+                    self.enter(4);
+                }
+            }
+            18 => {
+                // The ceiling entry's one-shot correction: N . P becomes H.
+                let d = plane(t.normal, p) - HEIGHT;
+                let n = t.n();
+                step.place = Some(std::array::from_fn(|k| p[k] - d * n[k]));
+                step.request = Some(48);
+                step.cooldown = Some(120);
+                self.enter(4);
             }
             7 => {
                 // The climb over the top: 59 to progress 0.95, then off to state 1.
@@ -286,8 +420,51 @@ impl Climb {
                     step.request = Some(56);
                 } else if s.abs() < f.abs() && f < 0.0 {
                     step.request = Some(45);
-                } else {
+                } else if s == 0.0 {
                     step.request = Some(49);
+                } else {
+                    // Sideways: while inside T, move; at the edge both panels need a neighbour on that side.
+                    let toward_zero = s > 0.0;
+                    let (k, clip) = if toward_zero { (3, 52) } else { (1, 53) };
+                    let inside = if toward_zero { ut > RADIUS } else { ut < t.lu - RADIUS };
+                    step.rate = s.abs().max(0.3);
+                    if inside {
+                        step.request = Some(clip);
+                        return step;
+                    }
+                    step.request = Some(49);
+                    let (Some(q), Some(q2)) = (link(&t, k), link(&pr, k)) else {
+                        self.queued = None;
+                        return step;
+                    };
+                    if ndot(q2, q).abs() < 0.95 {
+                        self.queued = None;
+                        return step;
+                    }
+                    if ndot(q, self.target) > 0.25 {
+                        self.queued = None;
+                        let before = if toward_zero { ut >= 0.0 } else { ut <= t.lu };
+                        if before {
+                            step.request = Some(clip);
+                        } else {
+                            self.target = q;
+                            self.partner = Some(q2);
+                            Self::hold(&panels[q], p, &mut step);
+                        }
+                    } else {
+                        // A corner, with the return word 13.
+                        self.queued = Some(q);
+                        self.partner = Some(q2);
+                        self.ret = 13;
+                        let cy = cross_y(t.n(), panels[q].n());
+                        self.enter(if toward_zero {
+                            if cy >= 0.0 { 12 } else { 9 }
+                        } else if cy <= 0.0 {
+                            11
+                        } else {
+                            8
+                        });
+                    }
                 }
             }
             15 | 16 => {
@@ -312,8 +489,50 @@ impl Climb {
                 } else if f.abs() < s.abs() {
                     step.request = Some(if s > 0.0 { 52 } else { 53 });
                     step.rate = s.abs().max(0.3);
-                } else {
+                } else if f == 0.0 {
                     step.request = Some(49);
+                } else {
+                    // Up or down, while inside T; at its end both panels need a neighbour on that side.
+                    let up = f > 0.0;
+                    let inside = if up { ht < t.lv - HEIGHT } else { ht > 0.5 && v.gap > 0.0 };
+                    let clip = if up { 56 } else { 45 };
+                    step.rate = f.abs().max(0.3);
+                    if inside {
+                        step.request = Some(clip);
+                        return step;
+                    }
+                    let k = if up { 2 } else { 0 };
+                    step.request = Some(49);
+                    let Some(q) = link(&t, k).filter(|_| v.cooldown == 0) else { return step };
+                    let Some(q2) = pr.and_then(|pr| link(&pr, k)) else {
+                        self.queued = None;
+                        step.request = None;
+                        return step;
+                    };
+                    self.queued = Some(q);
+                    if ndot(q2, q) < 0.95 {
+                        self.queued = None;
+                        return step;
+                    }
+                    if ndot(q, self.target) <= 0.99 {
+                        if ny(q) > 0.95 {
+                            if up {
+                                self.enter(17);
+                            } else {
+                                self.enter(0);
+                                step.leave = true;
+                            }
+                        } else if ny(q) < 0.95 {
+                            self.enter(if up { 3 } else { 6 });
+                        }
+                    } else {
+                        step.request = Some(clip);
+                        if if up { ht < t.lv } else { ht < 0.0 } {
+                            self.target = q;
+                            self.partner = Some(q2);
+                        }
+                        self.queued = None;
+                    }
                 }
             }
             17 => {
@@ -370,7 +589,7 @@ impl Climb {
                 }
             }
             _ => {
-                // Sub-modes not covered here: back to the free climb.
+                // Sub-mode 10 is not covered: back to the free climb.
                 self.sub = 2;
                 step.request = Some(49);
             }
@@ -392,8 +611,41 @@ mod tests {
         ]
     }
 
+    /// Behavior 22A's ceiling window, the entry's correction, then a walk to the linked wall (pack 1080's
+    /// shape: a ceiling at y 20, its link 1 a wall the hero meets facing it).
+    #[test]
+    fn ceiling_grab_and_hand_off() {
+        let ceil = Panel { normal: [0.0, -1.0, 0.0, 20.0], u: [1.0, 0.0, 0.0, 0.0], v: [0.0, 0.0, 1.0, 0.0], lu: 50.0, lv: 4.0, kind: -2, links: [None, Some(1), None, None] };
+        let wall = Panel { normal: [-1.0, 0.0, 0.0, 50.0], u: [0.0, 0.0, 1.0, 0.0], v: [0.0, 1.0, 0.0, -10.0], lu: 4.0, lv: 10.0, kind: -2, links: [None; 4] };
+        let panels = [ceil, wall];
+        assert_eq!(grab_ceiling(&panels, [10.0, 15.6, 2.0]), Some(0));
+        assert_eq!(grab_ceiling(&panels, [10.0, 15.4, 2.0]), None, "more than H + 1.0 below");
+        assert_eq!(grab_ceiling(&panels, [10.0, 15.6, 3.5]), None, "past LV - 1.0");
+        let mut c = Climb::ceiling(0);
+        let hero = [10.0, 15.6, 2.0];
+        let step = c.tick(&panels, view(hero, 0.0, 0.0, (0, 0.0)));
+        assert_eq!((c.sub, step.request, step.cooldown), (4, Some(48), Some(120)));
+        assert!((step.place.unwrap()[1] - 16.5).abs() < 1e-5, "{:?}", step.place);
+        let mut go = view([10.0, 16.5, 2.0], 1.0, 0.0, (48, 0.0));
+        go.facing = [1.0, 0.0, 0.0];
+        go.heading = [1.0, 0.0, 0.0];
+        go.speed = 1.0;
+        let step = c.tick(&panels, go);
+        assert_eq!((c.sub, step.request), (4, Some(46)));
+        go.hero = [49.5, 16.5, 2.0];
+        let step = c.tick(&panels, go);
+        assert_eq!((c.sub, c.target, step.request, step.cooldown), (2, 1, Some(49), Some(120)));
+        // No way on: the hero stays inside the window, still moving.
+        let mut c = Climb::ceiling(0);
+        c.sub = 4;
+        go.facing = [-1.0, 0.0, 0.0];
+        go.hero = [0.5, 16.5, 2.0];
+        let step = c.tick(&panels, go);
+        assert_eq!((step.request, step.place), (Some(46), Some([1.0, 16.5, 2.0])));
+    }
+
     fn view(hero: Vec3, f: f32, s: f32, clip: (u32, f32)) -> View {
-        View { hero, f, s, gap: 1.0, clip, cooldown: 0 }
+        View { hero, f, s, gap: 1.0, clip, cooldown: 0, facing: [0.0, 0.0, 1.0], heading: [0.0; 3], speed: 0.0 }
     }
 
     #[test]

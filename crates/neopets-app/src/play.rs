@@ -5581,6 +5581,16 @@ impl Play {
     /// SPEC-0033 Behaviors 22A and 51: the wall-panel grab from the ground and while jumping
     /// (the cooldown 0), and state 21 each tick: no gravity, the motion cleared, the climb's
     /// hold, requests, clip rate and exits.
+    /// Diagnostic: the ceiling grab of panel k from its middle, the hero's feet 1.0 under the entry's height.
+    pub fn diag_ceiling(&mut self, k: usize) {
+        let Some(r) = self.world.panels.get(k).copied() else { return };
+        let mid: [f32; 3] = std::array::from_fn(|j| -r.normal[3] * r.normal[j] + (0.5 * r.lu - r.u[3]) * r.u[j] + (0.5 * r.lv - r.v[3]) * r.v[j]);
+        self.loco.body.position = [mid[0], mid[1] - 4.0, mid[2]];
+        self.panel = Some(neopets_sim::climb::Climb::ceiling(k));
+        self.loco.enter_state(hero_states::PANEL, 48);
+        self.grab_cooldown = 0;
+    }
+
     fn panel_step(&mut self, input: &HeroInput) {
         let hero = self.loco.position();
         if self.loco.state != hero_states::PANEL {
@@ -5591,10 +5601,18 @@ impl Play {
                 return;
             }
             let v = neopets_sim::hero::speed_value(input);
-            let Some(k) = neopets_sim::climb::grab_wall(&self.world.panels, hero, self.loco.facing, self.loco.target, v) else { return };
-            self.panel = Some(neopets_sim::climb::Climb::new(k));
-            self.loco.enter_state(hero_states::PANEL, 121);
-            self.trace_edge("panel", k, 1);
+            // Behavior 22A: the wall grab first; the air routine's ceiling grab while in a jump state.
+            if let Some(k) = neopets_sim::climb::grab_wall(&self.world.panels, hero, self.loco.facing, self.loco.target, v) {
+                self.panel = Some(neopets_sim::climb::Climb::new(k));
+                self.loco.enter_state(hero_states::PANEL, 121);
+                self.trace_edge("panel", k, 1);
+            } else if let Some(k) = neopets_sim::climb::grab_ceiling(&self.world.panels, hero).filter(|_| jumping) {
+                self.panel = Some(neopets_sim::climb::Climb::ceiling(k));
+                self.loco.enter_state(hero_states::PANEL, 48);
+                self.trace_edge("ceiling", k, 18);
+            } else {
+                return;
+            }
         }
         let Some(mut c) = self.panel else {
             self.leave_ladder();
@@ -5617,7 +5635,15 @@ impl Play {
                 s = w[0] * h[2] - w[2] * h[0];
             }
         }
-        let view = neopets_sim::climb::View { hero, f, s, gap: self.loco.body.gap, clip: (clip.action, clip.progress), cooldown: self.grab_cooldown };
+        // Sub-mode 4's heading: the camera-relative stick direction.
+        let speed = neopets_sim::hero::speed_value(input);
+        let heading = {
+            let (cf, cl) = self.camera.rows();
+            let flat = |v: [f32; 3]| unit([v[0], 0.0, v[2]]);
+            let (cf, cl) = (flat(cf), flat(cl));
+            unit(std::array::from_fn(|k| input.forward * cf[k] + input.side * cl[k]))
+        };
+        let view = neopets_sim::climb::View { facing: self.loco.facing, heading, speed, hero, f, s, gap: self.loco.body.gap, clip: (clip.action, clip.progress), cooldown: self.grab_cooldown };
         let sub = c.sub;
         let step = c.tick(&self.world.panels, view);
         self.panel = Some(c);
@@ -9746,6 +9772,7 @@ impl Play {
         }
         // SPEC-0027 Update order: the camera runs first, from the hero's previous pose.
         let w = &self.world;
+        self.camera.negate_elevation = self.loco.state == hero_states::PANEL && self.panel.is_some_and(|c| c.sub == 4);
         self.camera.update(
             &followed(&self.loco, w),
             pad,
@@ -17656,7 +17683,9 @@ fn followed(loco: &Locomotion, world: &World) -> Followed {
     // SPEC-0033 Behavior 7: the camera follows the drawn copy, whose height lags the world
     // height (so the 0.1 ground-constraint steps on a slope do not shake it).
     let shown = [p[0], loco.follow.shown, p[2]];
-    Followed { position: shown, facing: loco.facing, height: HERO_HEIGHT, moving: loco.moved(), ground_kind }
+    // SPEC-0027 follow step 5: the height is a quarter in hero state 21.
+    let height = if loco.state == hero_states::PANEL { 0.25 * HERO_HEIGHT } else { HERO_HEIGHT };
+    Followed { position: shown, facing: loco.facing, height, moving: loco.moved(), ground_kind }
 }
 
 /// The eye wall push (SPEC-0027 Walls): the cell's frame records other than type 6, then the
