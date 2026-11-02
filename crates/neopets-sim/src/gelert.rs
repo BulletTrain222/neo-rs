@@ -515,7 +515,7 @@ impl Gelert {
                 }
             } else if d >= w.at(0x002D_ACA8) as f32 {
                 if !matches!(self.state, State::BackUp | State::StrafeLeft | State::StrafeRight) {
-                    self.state = if rng.range(0, 1) == 0 { State::StrafeLeft } else { State::StrafeRight };
+                    self.state = if rng.range(0, 1) == 0 { State::StrafeRight } else { State::StrafeLeft };
                 }
             } else if self.state != State::BackUp {
                 if self.t_backup == 0 {
@@ -524,7 +524,7 @@ impl Gelert {
                         self.enter(State::BackUp);
                     }
                 } else if matches!(self.state, State::Idle | State::Approach) {
-                    self.state = if rng.range(0, 1) == 0 { State::StrafeLeft } else { State::StrafeRight };
+                    self.state = if rng.range(0, 1) == 0 { State::StrafeRight } else { State::StrafeLeft };
                 }
             }
             if !self.clone && (self.slip_latch || (self.t_slip == 0 && self.scripted && !self.invisible && !self.clone_mode)) {

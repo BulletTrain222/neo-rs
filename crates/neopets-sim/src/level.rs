@@ -94,6 +94,8 @@ pub enum Action {
     MoveEntity { entity: usize, locator: usize, face: bool },
     /// The same with CTL 1: the entity is left free (base state 1).
     MoveEntityFree { entity: usize, locator: usize, face: bool },
+    /// The same with probe off and face on: the entity stays at the locator's own height.
+    MoveEntityAir { entity: usize, locator: usize },
     /// WalkEntity or WalkEntityAndOrient (rows 106 and 108): stop 0 or less arrives within 1.0
     /// (classes 23 and 25), a positive stop within that radius (24 and 26).
     WalkEntity { entity: usize, locator: usize, wait: bool, orient: bool, stop: f32 },
@@ -4293,8 +4295,7 @@ fn nav_pass(state: &GameState, pack: u32, n: usize) -> Vec<Action> {
 /// finale), rule 3 (flag 2 with 3 clear: the timeout ending), rule 4 (flag 0 with 1 clear: the
 /// entry sequence), rule 5 (level state 11: the director) and rule 6 (11 clear, 9 set, 10 clear:
 /// the fight start step). The sequences hold the thread (word 2) until their last step. Movies 78,
-/// 85 and 80 are counted as played; the finale loads eW 151 in place of movie 85; the hero move of the fight start step (no locator is given) and control
-/// thread B (the Minion Grunts) are not built.
+/// 85 and 80 are counted as played; the finale loads eW 151 in place of movie 85.
 fn fight_1432(state: &mut GameState) -> Vec<Action> {
     const P: u32 = 1432;
     let b = state.word(P, 1);
@@ -4428,6 +4429,42 @@ fn fight_1432(state: &mut GameState) -> Vec<Action> {
         ];
     }
     Vec::new()
+}
+
+/// SPEC-0054 1432's control thread B, one tick: walks entities 7, 6 and 5. An entry goes ahead with
+/// level state 11, flag 6 and level state 12 clear and Roberta active, and when its marker is set
+/// only if its Grunt is dead. It waits 480 ticks and, if 12 is still clear and Roberta still
+/// active, places the Grunt at locator 4 and sets the marker. Words: 4 the entry, 5 the wait, 6 to
+/// 8 the markers. The entity is activated before the move: a forced bind reads the record at once
+/// here, and the move would find nothing to place before it.
+fn grunts_1432(state: &mut GameState) -> Vec<Action> {
+    const P: u32 = 1432;
+    const ENTRIES: [usize; 3] = [7, 6, 5];
+    let mut v = Vec::new();
+    let mut k = state.word(P, 4) as usize;
+    let n = state.word(P, 5);
+    if n > 0 {
+        state.set_word(P, 5, n - 1);
+        if n > 1 {
+            return v;
+        }
+        if !state.level(12) && state.hero.selected == 1 {
+            v.extend([Action::ActivateEntity { entity: ENTRIES[k] }, Action::MoveEntityAir { entity: ENTRIES[k], locator: 4 }]);
+            state.set_word(P, 6 + k as u8, 1);
+        }
+        k += 1;
+    }
+    while k < ENTRIES.len() {
+        let open = state.level(11) && state.word(P, 1) & 1 << 6 == 0 && !state.level(12) && state.hero.selected == 1;
+        if open && (state.word(P, 6 + k as u8) == 0 || state.entity_dead(ENTRIES[k])) {
+            state.set_word(P, 4, k as i32);
+            state.set_word(P, 5, 480);
+            return v;
+        }
+        k += 1;
+    }
+    state.set_word(P, 4, 0);
+    v
 }
 
 /// SPEC-0044 1174 thread W1, one helper a tick in the spec's order.
@@ -10972,12 +11009,16 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
-        // SPEC-0044 864 the stage thread: level states 1 and 2 mark bits 5 and 6; bit 0 (the
-        // fight start: cameras 8, 10, 11 and 7, line 6, level state 3 cleared; bits 1 and 2); bit
-        // 3 (the fight end: camera 10, entity 44 off, camera 15, 668; bit 4, bit 2 cleared; 293);
-        // with bit 2 and level state 0 (the boss's event) bit 3 and 293; the fight start's
-        // boss-fight refill (instance 8). The camera shakes (their values are not given), the
-        // second thread's cameras and the 32-object loop are not built.
+        // SPEC-0044 864 the stage thread and SPEC-0014 Start positions and Script timeline: level
+        // states 1 and 2 mark bits 5 and 6; bit 0 (the fight start: stinger 4 and the fade, the
+        // hero at locator 45 and the Chieftain at 46, the boss-fight refill of instance 8, cameras
+        // 8, 10, 11 and 7, line 6, level state 3 cleared; bits 1 and 2); bit 3 (the fight end: level
+        // state 3 held, the hero at 47 and the Chieftain at 46, camera 10, his animations 1 then 2,
+        // entity 44 off, camera 15, 668, cameras 5 and 6; bit 4, bit 2 cleared; 293); with bit 2 and
+        // level state 0 (the boss's event) bit 3 and 293. Cameras 5 and 6 run in turn on this thread
+        // and both animations wait (the spec gives neither's waits). The camera shakes (their values
+        // are not given), the effect at the spot (its id is not given) and the 32-object loop are
+        // not built.
         864 => {
             let b = state.word(pack, 1);
             let has = |n: u32| b & (1 << n) != 0;
@@ -10996,25 +11037,43 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                     // Level state 3, which holds the boss, clears once camera 11 has ended
                     // (SPEC-0014 Encounter flow, pack 864).
                     out.extend([
+                        Action::HoldHero,
+                        Action::PlayStinger { id: 4, volume: 1.0 },
+                        Action::FadeOut { seconds: FADE, wait: true },
+                        Action::MoveHero { locator: 45 },
+                        // The boss stays free: level state 3 is what holds it.
+                        Action::MoveEntityFree { entity: 44, locator: 46, face: true },
                         Action::BossFight { instance: 8 },
+                        Action::LetterBox { on: true, seconds: 0.0, wait: false },
                         Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 },
+                        Action::FadeIn { seconds: FADE, wait: true },
                         Action::Message { line: 6 },
                         Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
                         Action::PlayCamera { track: 11, wait: true, end: 1, speed: 1.0 },
                         Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
-                        Action::LevelState { flag: 3, on: false },
+                        Action::LetterBox { on: false, seconds: 1.0, wait: false },
                         Action::ReturnCamera { preset: -1, release: true },
+                        Action::LevelState { flag: 3, on: false },
                         Action::Bits { word: 6, set: 0, clear: 1 },
                     ]);
                 } else if has(3) && !has(4) {
                     state.set_word(pack, 1, (b | 16) & !4);
                     state.set_word(pack, 6, 1);
-                    state.set(668, true);
                     state.set(293, true);
                     out.extend([
+                        Action::HoldHero,
+                        Action::LevelState { flag: 3, on: true },
+                        Action::MoveHero { locator: 47 },
+                        Action::MoveEntity { entity: 44, locator: 46, face: true },
                         Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                        Action::EntityAnim { entity: 44, anim: 1, looped: false, wait: true },
+                        Action::EntityAnim { entity: 44, anim: 2, looped: false, wait: true },
                         Action::DeactivateEntity { entity: 44 },
+                        Action::LevelState { flag: 3, on: false },
                         Action::PlayCamera { track: 15, wait: true, end: 1, speed: 1.0 },
+                        Action::SetFlag { flag: 668, on: true },
+                        Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 },
+                        Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
                         Action::ReturnCamera { preset: -1, release: true },
                         Action::Bits { word: 6, set: 0, clear: 1 },
                     ]);
@@ -11303,8 +11362,12 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend([Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }, Action::Message { line: 4 }, Action::LoadRegion { slot: 0, region: None }, Action::ReturnCamera { preset: -1, release: true }]);
             }
         }
-        // SPEC-0054 1432 the fight control thread (the first rule that applies takes the tick).
-        1432 => out.extend(fight_1432(state)),
+        // SPEC-0054 1432 the fight control thread (the first rule that applies takes the tick)
+        // and control thread B beside it.
+        1432 => {
+            out.extend(fight_1432(state));
+            out.extend(grunts_1432(state));
+        }
         // SPEC-0037 906 Update: the navigation pass over entities 0 to 17.
         906 => out.extend(nav_pass(state, pack, 18)),
         // SPEC-0042 986 Update: the navigation pass over 28 entities.
@@ -12456,6 +12519,8 @@ pub fn entity_step(pack: u32, state: &mut GameState, talking: &dyn Fn(usize) -> 
 pub fn admits(pack: u32, ordinal: usize, s: &GameState) -> Option<bool> {
     match pack {
         985 => Some(if s.flag(281) { ordinal <= 4 || ordinal == 6 } else { matches!(ordinal, 5 | 7 | 8) }),
+        // SPEC-0054 Activation: the effective filter refuses the three Minion Grunts.
+        1432 => Some(!matches!(ordinal, 5..=7)),
         _ => None,
     }
 }
@@ -16650,6 +16715,12 @@ mod tests {
         on_trigger(864, 1, inside(1), &mut s);
         let start = on_update(864, &mut s, false);
         assert!(start.contains(&Action::Message { line: 6 }) && s.level(3));
+        // SPEC-0014 Start positions: the placements under the fade, before the cameras.
+        let at = |v: &[Action], a: Action| v.iter().position(|x| *x == a).unwrap();
+        let fade = at(&start, Action::FadeOut { seconds: FADE, wait: true });
+        assert!(at(&start, Action::HoldHero) < fade && start.contains(&Action::PlayStinger { id: 4, volume: 1.0 }));
+        let placed = at(&start, Action::MoveEntityFree { entity: 44, locator: 46, face: true });
+        assert!(fade < at(&start, Action::MoveHero { locator: 45 }) && placed < at(&start, Action::FadeIn { seconds: FADE, wait: true }));
         let cam = start.iter().position(|a| matches!(a, Action::PlayCamera { track: 11, .. })).unwrap();
         assert!(start[cam..].contains(&Action::LevelState { flag: 3, on: false }));
         s.set_level(3, false);
@@ -16657,7 +16728,16 @@ mod tests {
         s.set_level(0, true);
         on_update(864, &mut s, false);
         assert!(s.flag(293));
-        assert!(on_update(864, &mut s, false).contains(&Action::DeactivateEntity { entity: 44 }) && s.flag(668));
+        // SPEC-0014 Script timeline: the hold, the moves, animations 1 then 2, then entity 44 off
+        // and 668 after camera 15.
+        let end = on_update(864, &mut s, false);
+        let hold = at(&end, Action::LevelState { flag: 3, on: true });
+        let moved = at(&end, Action::MoveEntity { entity: 44, locator: 46, face: true });
+        let first = at(&end, Action::EntityAnim { entity: 44, anim: 1, looped: false, wait: true });
+        let second = at(&end, Action::EntityAnim { entity: 44, anim: 2, looped: false, wait: true });
+        let off = at(&end, Action::DeactivateEntity { entity: 44 });
+        assert!(hold < at(&end, Action::MoveHero { locator: 47 }) && hold < moved && moved < first && first < second && second < off);
+        assert!(off < at(&end, Action::SetFlag { flag: 668, on: true }));
         // The story exit: flags 58 and 288 to 292 and the load of eW 50.
         assert!(on_trigger(864, 22, inside(22), &mut s).actions.contains(&Action::ReplaceExterior { slot: 50, plane: -1 }));
         assert!(s.flag(58) && s.flag(290));
@@ -17147,6 +17227,47 @@ mod tests {
         assert!(on_init(1098, &mut GameState::default()).iter().take(3).eq([reg(0, 1), reg(7, 7), reg(8, 8)].iter()));
         on_trigger(1098, 8, call, &mut s);
         assert_eq!(s.transition_map, Some(49));
+    }
+
+    #[test]
+    fn module_1432_control_thread_b() {
+        // SPEC-0054 test vector: rules passing from tick T with all markers clear place entity 7
+        // at T+480, 6 at T+960 and 5 at T+1440. The filter refuses the Grunts' records only.
+        assert_eq!((admits(1432, 5, &GameState::default()), admits(1432, 7, &GameState::default()), admits(1432, 0, &GameState::default())), (Some(false), Some(false), Some(true)));
+        let mut s = GameState::default();
+        s.set_level(11, true);
+        s.hero.selected = 0;
+        assert!((0..1000).all(|_| grunts_1432(&mut s).is_empty()));
+        s.hero.selected = 1;
+        s.entity_hp.extend([(5, 50), (6, 50), (7, 50)]);
+        let mut placed = Vec::new();
+        for t in 0..=2000 {
+            for a in grunts_1432(&mut s) {
+                if let Action::MoveEntityAir { entity, locator: 4 } = a {
+                    placed.push((t, entity));
+                }
+            }
+        }
+        assert_eq!(placed, vec![(480, 7), (960, 6), (1440, 5)]);
+        // A live Grunt stays; a dead one comes back after 480 ticks.
+        s.entity_hp.insert(6, 0);
+        let mut back = Vec::new();
+        for t in 0..=480 {
+            for a in grunts_1432(&mut s) {
+                if let Action::MoveEntityAir { entity, .. } = a {
+                    back.push((t, entity));
+                }
+            }
+        }
+        assert_eq!(back, vec![(480, 6)]);
+        // Level state 12 during the wait: no move, and it stops the thread.
+        let mut s = GameState::default();
+        s.set_level(11, true);
+        s.hero.selected = 1;
+        grunts_1432(&mut s);
+        s.set_level(12, true);
+        assert!((0..2000).all(|_| grunts_1432(&mut s).is_empty()));
+        assert_eq!(s.word(1432, 6), 0);
     }
 
     #[test]

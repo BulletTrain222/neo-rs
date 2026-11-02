@@ -3165,6 +3165,18 @@ impl Play {
                         wk.facing = c.facing;
                     }
                 }
+                Action::MoveEntityAir { entity, locator } => {
+                    let (l, g) = self.locator(pack, locator)?;
+                    let c = self.entity_mut(pack, entity)?;
+                    c.position = l;
+                    c.script_walk = None;
+                    c.held = false;
+                    c.facing = g;
+                    if let Some(wk) = c.walker.as_mut() {
+                        wk.body.position = c.position;
+                        wk.facing = c.facing;
+                    }
+                }
                 Action::WalkEntity { entity, locator, wait, orient, stop } => {
                     let (l, g) = self.locator(pack, locator)?;
                     let y = self.ground_in(pack, l[0], l[2], l[1] + 6.0).unwrap_or(l[1]);
@@ -7350,7 +7362,8 @@ impl Play {
                 continue;
             }
             // The pack's AI-player activate callback refuses some embedded records.
-            if slot == EMBEDDED_SLOT && level::admits(pack, pl.ordinal, &self.state) == Some(false) {
+            // A forced bind ignores it (SPEC-0054 Activation).
+            if slot == EMBEDDED_SLOT && !rebind && level::admits(pack, pl.ordinal, &self.state) == Some(false) {
                 continue;
             }
             let drop = usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied());
