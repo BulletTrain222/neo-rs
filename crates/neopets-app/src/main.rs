@@ -935,7 +935,7 @@ fn main() {
                 (controls_page::page_mouse, controls_page::page_input, controls_page::grab_cursor, bindings::read_pad, dev_menu::dev_mouse, dev_menu::dev_input, read_input, step_sim, stream_worlds).chain(),
                 (browse_resources, cycle_textures, toggle_view, choose_action, orbit_camera, toggle_hud, toggle_autopilot),
                 (show_sim, show_browser),
-                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
+                (apply_texture, apply_model, skin_hero, sync_worlds, sync_zones, sync_uv_scroll, (play_frame, sync_hero_items, sync_hero_glows, sync_effect_models).chain(), (sync_characters, sync_attachments).chain(), (sync_shots, sync_cloud_fx, stage_view::drift_wisps, shadow_view::sync_shadows, shadow_view::sync_sun, shadow_view::mark_faint, shadow_view::sync_casters), (effect_view::sync_effects, effect_view::sync_trails), foliage_view::sync_bushes, sync_objects, sync_items, hud_view::sync_hud, hud_view::sync_textbox, menu_view::sync_menu, sync_fade, dev_menu::free_camera, (dev_menu::show_panel, dev_menu::show_toast, show_boss_box, show_auto_box), perf::perf_overlay).chain(),
             )
                 .chain(),
         );
@@ -1579,6 +1579,15 @@ fn step_sim(
                         if let Ok(h) = h.trim().parse::<i32>() {
                             play.play.diag_gelert_hp(h);
                         }
+                    }
+                }
+                // NEOPETS_SHOT_WARP="tick:x,z,y": the hero placed on the ground below y.
+                if let Some((k, r)) = std::env::var("NEOPETS_SHOT_WARP").ok().as_deref().and_then(|v| v.split_once(':')).map(|(a, b)| (a.to_string(), b.to_string())) {
+                    let n: Vec<f32> = r.split(',').filter_map(|t| t.trim().parse().ok()).collect();
+                    if k.trim().parse::<u64>().ok() == Some(play.play.ticks) && n.len() == 3 {
+                        let y = play.play.world.ground_at(n[0], n[1], n[2]).unwrap_or(n[2]);
+                        let f = play.play.loco.facing;
+                        play.play.loco.teleport([n[0], y, n[1]], f);
                     }
                 }
                 for (f, k) in std::env::var("NEOPETS_TRACE_LEVEL").unwrap_or_default().split(',').filter_map(|e| e.split_once('@')) {
@@ -3519,6 +3528,91 @@ fn sync_hero_glows(
     for (root, _, mut vis) in &mut roots {
         if !shown.contains(&root.0) {
             set_if(&mut vis, Visibility::Hidden);
+        }
+    }
+}
+
+/// One pooled model particle's drawn root: (resource-9 model, pool slot) and its materials.
+#[derive(Component)]
+struct EffectModelRoot(u16, usize, Vec<Handle<StandardMaterial>>);
+
+/// SPEC-0034 4.7: each live model particle draws its node's child model with the particle's draw
+/// frame, unlit, with colour channel 1 as its colour. A root is made per model the first time
+/// that many of it are live, then reused.
+#[allow(clippy::too_many_arguments)]
+fn sync_effect_models(
+    mut commands: Commands,
+    state: Option<Res<PlayState>>,
+    archive: Option<ResMut<Archive>>,
+    mut roots: Query<(&EffectModelRoot, &mut Transform, &mut Visibility)>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+    mut images: ResMut<Assets<Image>>,
+    mut built: Local<std::collections::HashMap<u16, Option<neopets_data::model::ModelData>>>,
+    mut made: Local<std::collections::HashSet<(u16, usize)>>,
+) {
+    let _span = crate::perf::span("sync_effect_models");
+    let Some(state) = state else { return };
+    let play = &state.play;
+    let mut archive = archive;
+    let mut counts: std::collections::HashMap<u16, usize> = std::collections::HashMap::new();
+    let mut shown: std::collections::HashMap<(u16, usize), (Mat4, [f32; 4])> = std::collections::HashMap::new();
+    for (model, at, rows, colour) in play.effects.models(&play.effect_table) {
+        let slot = counts.entry(model).or_insert(0);
+        let v = |r: [f32; 3], w: f32| Vec4::new(r[0], r[1], r[2], w);
+        shown.insert((model, *slot), (Mat4::from_cols(v(rows[0], 0.0), v(rows[1], 0.0), v(rows[2], 0.0), v(at, 1.0)), colour));
+        *slot += 1;
+    }
+    for &(model, slot) in shown.keys() {
+        if made.contains(&(model, slot)) {
+            continue;
+        }
+        let data = built.entry(model).or_insert_with(|| {
+            archive.as_deref_mut().and_then(|Archive { disc, index }| {
+                let b = index.read(disc, neopets_data::effect::RESOURCE).ok()?;
+                let c = neopets_data::resource::walk_chunks(&b, None).ok()?.chunks;
+                neopets_data::model::build_roles(&b, &c, None, Some(&[model])).ok().filter(|m| !m.parts.is_empty())
+            })
+        });
+        made.insert((model, slot));
+        if std::env::var_os("NEOPETS_TRACE_FX").is_some() {
+            println!("effect model {model} slot {slot}: {:?} parts", data.as_ref().map(|m| m.parts.len()));
+        }
+        let Some(m) = data.as_ref() else { continue };
+        let parts = part_assets(m, &mut meshes, &mut materials, &mut images);
+        let mut handles = Vec::new();
+        let mut children = Vec::new();
+        for (_, mesh, material) in parts {
+            let mut own = materials.get(&material).cloned().unwrap_or_default();
+            own.unlit = true;
+            own.cull_mode = None;
+            if own.alpha_mode == AlphaMode::Opaque {
+                own.alpha_mode = AlphaMode::Blend;
+            }
+            let h = materials.add(own);
+            handles.push(h.clone());
+            children.push((mesh, h));
+        }
+        commands.spawn((EffectModelRoot(model, slot, handles), Transform::IDENTITY, Visibility::Hidden)).with_children(|c| {
+            for (mesh, h) in children {
+                c.spawn((Mesh3d(mesh), MeshMaterial3d(h), Transform::IDENTITY, bevy::light::NotShadowCaster));
+            }
+        });
+    }
+    for (root, mut t, mut vis) in &mut roots {
+        let Some(&(m, c)) = shown.get(&(root.0, root.1)) else {
+            set_if(&mut vis, Visibility::Hidden);
+            continue;
+        };
+        set_if(&mut t, Transform::from_matrix(m));
+        set_if(&mut vis, Visibility::Visible);
+        let colour = Color::linear_rgba(c[0], c[1], c[2], c[3]);
+        for h in &root.2 {
+            if materials.get(h).is_some_and(|mat| mat.base_color != colour) {
+                if let Some(mut mat) = materials.get_mut(h) {
+                    mat.base_color = colour;
+                }
+            }
         }
     }
 }

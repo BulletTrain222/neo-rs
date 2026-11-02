@@ -1124,6 +1124,9 @@ pub struct Play {
     /// The hero's guard timer (+0x1574; SPEC-0036 Guard timer and per-attacker block): set to
     /// 40 by the idle threat sense, down 1 a tick; above 0 the hero guards.
     pub guard_timer: u32,
+    /// The box host's last state and whether the bars up are its own (SPEC-0035 state 23).
+    box_was_up: bool,
+    box_bars: bool,
     /// The monster table and the colour presets (the Minion Wizard's re-pick; SPEC-0029, SPEC-0040).
     monster_table: Option<neopets_data::monster::MonsterTable>,
     colour_presets: Vec<[[f32; 3]; 15]>,
@@ -2020,6 +2023,8 @@ impl Play {
             rope_aim: None,
             weapon_drawn: false,
             guard_timer: 0,
+            box_was_up: false,
+            box_bars: false,
             monster_table,
             colour_presets,
             shield_raised: false,
@@ -3444,6 +3449,7 @@ impl Play {
                     c.hp = (max as f32 * percent / 100.0) as i32;
                 }
                 Action::LetterBox { on, seconds, wait } => {
+                    self.box_bars = false;
                     let n = neopets_sim::scene::frames(seconds);
                     if on {
                         self.bars.on(n);
@@ -8851,6 +8857,20 @@ impl Play {
                 l.1 = l.1.saturating_sub(1);
             }
         }
+        // SPEC-0035 state 23, the box host: the box opening resets the screen effect's fade and asks
+        // for the bars over 10 frames unless a script holds them; its closing takes them down.
+        let box_up = self.dialogue_open && self.textbox.open;
+        if box_up && !self.box_was_up {
+            self.fade = Default::default();
+            if !self.bars.held {
+                self.bars.on(10);
+                self.box_bars = true;
+            }
+        } else if !box_up && self.box_was_up && self.box_bars {
+            self.bars.off(10);
+            self.box_bars = false;
+        }
+        self.box_was_up = box_up;
         // SPEC-0052 Screen effect: the bars' and the fade's per-pass update.
         self.bars.update();
         self.fade.update();

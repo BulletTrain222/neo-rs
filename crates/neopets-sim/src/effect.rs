@@ -5,7 +5,7 @@
 //!
 //! Light emitters publish their point lights (4.5) through `Effects::lights`.
 //!
-//! Not covered: model particles are stepped but have no draw (no child models), the swing trail, the pulse kind, presets (3.9), the per-character and
+//! Not covered: the swing trail, the pulse kind, presets (3.9), the per-character and
 //! per-world pools (only the shared pools of group 3). Birth modes 2 and 3 place particles along
 //! the segment from the spawner to its target (4.1 step 2); `set_target` writes the target.
 use ps2_float::fpu::{add, div, mul, sub};
@@ -387,9 +387,36 @@ pub struct Particle {
     pub spin: f32,
     pub half: V3,
     scale: f32,
+    /// A model particle's stored frame (the spawner's at birth) and its random spin axis (spin
+    /// axis code 0; SPEC-0034 4.2 step 3).
+    frame: [V3; 3],
+    axis: V3,
 }
 
 impl Particle {
+    /// SPEC-0034 4.2 step 3: a model particle's draw frame. With orientation mode 0 the stored
+    /// frame is turned by the spin angle about the axis of `code` (0 random, 1 X, 2 up, 3 Z, 4 to 6
+    /// the frame's rows); each row is scaled by the size times the owner scale.
+    fn draw_frame(&self, orient: u8, code: u8) -> [V3; 3] {
+        let mut rows = self.frame;
+        if orient == 0 && self.spin != 0.0 {
+            let k = match code {
+                1 => [1.0, 0.0, 0.0],
+                2 => [0.0, 1.0, 0.0],
+                3 => [0.0, 0.0, 1.0],
+                4..=6 => unit(self.frame[code as usize - 4]),
+                _ => self.axis,
+            };
+            let (s, c) = self.spin.sin_cos();
+            rows = rows.map(|v| {
+                let d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+                let x = cross(k, v);
+                std::array::from_fn(|i| v[i] * c + x[i] * s + k[i] * d * (1.0 - c))
+            });
+        }
+        std::array::from_fn(|i| v_scale(rows[i], self.size[i] * self.scale))
+    }
+
     /// The sprite colour bytes trunc(channel x 127) (4.1 step 7; 128 is 1.0).
     pub fn bytes(&self) -> [u8; 4] {
         self.colour.map(|c| mul(c, 127.0).max(0.0) as u8)
@@ -762,6 +789,8 @@ impl Effects {
             spin: 0.0,
             half,
             scale,
+            frame: s.frame,
+            axis: unit([r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0), r.uniform(-1.0, 1.0)]),
         });
         let s = self.spawners[si].as_mut().unwrap();
         s.live += 1;
@@ -794,6 +823,18 @@ impl Effects {
         // 3. Spin and move.
         if p.spin_rate != 0.0 {
             p.spin = add(p.spin, mul(p.spin_rate, DT));
+        }
+        // A velocity-following model particle (C +0x3C nonzero): row 1 takes a 10 percent step
+        // toward the velocity; rows 0 and 2 are rebuilt from it.
+        if node.material.is_none() && c.orient != 0 {
+            let speed = (p.velocity[0].powi(2) + p.velocity[1].powi(2) + p.velocity[2].powi(2)).sqrt();
+            if speed != 0.0 {
+                let d = v_scale(p.velocity, 1.0 / speed);
+                let row1 = unit(v_add(v_scale(p.frame[1], 0.9), v_scale(d, 0.1)));
+                let up = if d[1].abs() > 0.99 { [0.0, 0.0, 1.0] } else { [0.0, 1.0, 0.0] };
+                let row0 = unit(cross(row1, up));
+                p.frame = [row0, row1, unit(cross(row0, row1))];
+            }
         }
         p.position = v_add(p.position, v_scale(p.velocity, mul(DT, p.scale)));
         if a.follow {
@@ -863,6 +904,26 @@ impl Effects {
         })
     }
 
+    /// The drawable model particles (4.7): live particles of a node with no material, not of a
+    /// light emitter, whose child is a resource-9 model: (model index, position, the draw frame's
+    /// rows, colour channel 1). The child rule of 2.3: a byte +0x67 below 0x80 names common object
+    /// byte + 283 when it is 0x27 or less; else +0x60 from 0 to 49.
+    pub fn models<'a>(&'a self, table: &'a EffectTable) -> impl Iterator<Item = (u16, V3, [V3; 3], [f32; 4])> + 'a {
+        self.particles.iter().flatten().filter_map(move |p| {
+            let node = &table.nodes[p.node];
+            if table.a[node.a].light || node.material.is_some() {
+                return None;
+            }
+            let model = match node.child_gate {
+                g @ 0..=0x27 => g as u16,
+                0x28..=0x7F => return None,
+                _ => u16::try_from(node.child).ok().filter(|&c| c <= 49)?,
+            };
+            let c = &table.c[node.c];
+            Some((model, p.position, p.draw_frame(c.orient, c.spin_axis), p.colour))
+        })
+    }
+
     /// The pass's dynamic point lights (4.5; SPEC-0046 Character lights): each live particle of a
     /// light emitter whose node has a material writes its spawner's light entry (type 3 at the
     /// particle position, colour channel 1 x 255 with alpha 0, strength channel 1's alpha, radius
@@ -920,6 +981,21 @@ fn along_segment(s: V3, t: V3, r: &mut impl Uniform) -> V3 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn model_particle_draw_frame() {
+        let mut p = Particle { spawner: 0, node: 0, position: [0.0; 3], velocity: [0.0; 3], accel: [0.0; 3], drag: 0.0, life: 1.0, elapsed: 0.0, colour: [1.0; 4], size: [2.0, 3.0, 4.0, 1.0], rgb_key: 0, alpha_key: 0, kick_interval: -1.0, spin_rate: 0.0, spin: 0.0, half: [0.0; 3], scale: 0.5, frame: [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]], axis: [0.0, 1.0, 0.0] };
+        // No spin: the stored frame scaled by size x S.
+        assert_eq!(p.draw_frame(0, 2), [[1.0, 0.0, 0.0], [0.0, 1.5, 0.0], [0.0, 0.0, 2.0]]);
+        // A quarter turn about world up: row 0 goes to -Z, row 2 to +X; row 1 stays.
+        p.spin = std::f32::consts::FRAC_PI_2;
+        let f = p.draw_frame(0, 2);
+        assert!((f[0][2] + 1.0).abs() < 1e-5 && f[0][0].abs() < 1e-5);
+        assert!((f[2][0] - 2.0).abs() < 1e-5);
+        assert!((f[1][1] - 1.5).abs() < 1e-5);
+        // Orientation mode nonzero: the spin angle does not apply.
+        assert_eq!(p.draw_frame(1, 2)[0], [1.0, 0.0, 0.0]);
+    }
+
     #[test]
     fn birth_along_the_target_segment() {
         // SPEC-0034 4.1 test vector: S (0, 1, 0), T (3, 1, 4): t = 2 gives (1.2, 1, 1.6).

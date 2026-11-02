@@ -1,8 +1,8 @@
 //! Effect sprites (SPEC-0034 4.7): each frame the live sprite particles are drawn as
 //! camera-facing quads turned by their spin angle, one mesh per material group of the resource-9
 //! shader list, with the group's texture and its blend (alpha or additive). The vertex colour is
-//! the particle's colour bytes on the GS scale (128 is 1.0). Model particles and light emitters
-//! are not drawn.
+//! the particle's colour bytes on the GS scale (128 is 1.0). Light emitters are not drawn; model
+//! particles are `sync_effect_models` in main.
 use crate::PlayState;
 use bevy::asset::RenderAssetUsages;
 use bevy::mesh::{Indices, PrimitiveTopology};

@@ -963,8 +963,7 @@ impl Flow {
                 _ => {}
             },
             // The box host: the world runs while the box is up; when the box is idle it returns
-            // to play (its cue 0x97 is played by the box's close in play). Its entry and exit
-            // fades are not built.
+            // to play (its cue 0x97 and its bars are the box's open and close in play).
             23 => {
                 generic = false;
                 if !ctx.box_busy {
