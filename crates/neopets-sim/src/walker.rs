@@ -1,13 +1,67 @@
 //! NPC walking (SPEC-0056 Navigation step, Route step, Wall confinement, Blocked flag, Travel by
 //! root motion; SPEC-0029 Behavior 2b goal latch): steering toward a walk target over a
 //! navigation mesh, the navmesh confinement, and travel by the playing clip's root step.
-//! Not covered: the steering look-ahead's obstacles (SPEC-0029 2a; the goal is the walk target
-//! unchanged), the batched goal locate's 50-per-tick budget (the goal is located in full each
+//! The steering look-ahead (SPEC-0029 2a) shifts the goal around the host's `avoid` list.
+//! Not covered: the batched goal locate's 50-per-tick budget (the goal is located in full each
 //! tick), the occupancy quirk, cell list B, the character push and moving objects.
 
 use crate::hero::{Vec3, basis, steer};
 use crate::motion::Body;
 use crate::nav::NavMesh;
+
+/// An obstacle of the steering look-ahead: a vertical finite cylinder, with the character it is (0: none), which
+/// that character's own walk skips.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Obstacle {
+    pub point: Vec3,
+    pub radius: f32,
+    pub length: f32,
+    pub owner: u32,
+}
+
+/// The radius and length of a block's, or another character's, obstacle.
+pub const OBSTACLE_RADIUS: f32 = 5.0;
+pub const OBSTACLE_LENGTH: f32 = 20.0;
+
+/// A segment against a vertical cylinder centred on its point (flat ends).
+fn segment_meets(a: Vec3, b: Vec3, o: &Obstacle) -> bool {
+    let (dx, dz) = (b[0] - a[0], b[2] - a[2]);
+    let l = (dx * dx + dz * dz).max(1e-9);
+    let t = (((o.point[0] - a[0]) * dx + (o.point[2] - a[2]) * dz) / l).clamp(0.0, 1.0);
+    let (ex, ez) = (a[0] + t * dx - o.point[0], a[2] + t * dz - o.point[2]);
+    let y = a[1] + t * (b[1] - a[1]);
+    (ex * ex + ez * ez).sqrt() <= o.radius && (y - o.point[1]).abs() <= 0.5 * o.length
+}
+
+/// SPEC-0029 2a: the goal point for the walk target w. The two lanes one unit to each side of the straight line are
+/// tested against the obstacles; of the hits, the one nearest p is passed on the side given by the hero's position
+/// relative to it, by R + 5.0, on the mesh, or else w.
+pub fn look_ahead(p: Vec3, w: Vec3, hero: Vec3, avoid: &[Obstacle], own: u32, on_mesh: impl Fn(Vec3) -> bool) -> Vec3 {
+    let (dx, dz) = (w[0] - p[0], w[2] - p[2]);
+    let l = dx.hypot(dz);
+    if l <= 1e-6 {
+        return w;
+    }
+    // s = unit(d x up).
+    let s = [-dz / l, 0.0, dx / l];
+    let lane = |k: f32, q: Vec3| [q[0] + k * s[0], q[1], q[2] + k * s[2]];
+    let hit = avoid
+        .iter()
+        .filter(|o| o.owner != own || own == 0)
+        .filter(|o| segment_meets(lane(1.0, p), lane(1.0, w), o) || segment_meets(lane(-1.0, p), lane(-1.0, w), o))
+        .min_by(|a, b| hdist(a.point, p).total_cmp(&hdist(b.point, p)));
+    let Some(o) = hit else { return w };
+    let (ux, uz) = (o.point[0] - hero[0], o.point[2] - hero[2]);
+    let m = ux.hypot(uz).max(1e-6);
+    let n = [-uz / m, 0.0, ux / m];
+    let d = o.radius + 5.0;
+    let first = [o.point[0] + d * n[0], w[1], o.point[2] + d * n[2]];
+    if on_mesh(first) {
+        return first;
+    }
+    let second = [o.point[0] - d * n[0], w[1], o.point[2] - d * n[2]];
+    if on_mesh(second) { second } else { w }
+}
 
 /// What the navigation step asks of the character's animation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -25,6 +79,9 @@ pub struct Walker {
     /// Facing (B3) and the move direction the steering writes (the facing follows it).
     pub facing: Vec3,
     pub radius: f32,
+    /// The obstacles of the steering look-ahead this tick (the host's list), and its own id there.
+    pub avoid: std::sync::Arc<Vec<Obstacle>>,
+    pub avoid_id: u32,
     /// Navigation-mesh index (None: no mesh) and the triangles of the step.
     pub mesh: Option<usize>,
     current: Option<usize>,
@@ -83,6 +140,8 @@ impl Walker {
             reverse: false,
             saved: position,
             id,
+            avoid: Default::default(),
+            avoid_id: id,
         }
     }
 
@@ -199,6 +258,7 @@ impl Walker {
             }
             return Gait::Move;
         };
+        let w = if self.avoid.is_empty() { w } else { look_ahead(p, w, hero, &self.avoid, self.avoid_id, |q| m.locate(None, q).is_some()) };
         let (t, g) = self.goal(m, w);
         let Some(t) = t else { return Gait::Idle };
         let d = hdist(p, g);
@@ -390,6 +450,24 @@ mod tests {
 
     fn flat(_: f32, _: f32, _: f32) -> (f32, Vec3) {
         (0.0, [0.0, 1.0, 0.0])
+    }
+
+    /// SPEC-0029 2a: the side comes from the hero's position, and the mesh decides between the candidates.
+    #[test]
+    fn look_ahead_shifts_around_the_nearest_obstacle() {
+        let o = |x: f32, z: f32, owner: u32| Obstacle { point: [x, 0.0, z], radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner };
+        let (p, w, hero) = ([0.0; 3], [0.0, 0.0, 30.0], [0.0, 0.0, 40.0]);
+        // Clear lanes: w unchanged.
+        assert_eq!(look_ahead(p, w, hero, &[o(20.0, 15.0, 2)], 1, |_| true), w);
+        // Nearest of two; u = (0, -1) from the hero's side, n = (1, 0): the first candidate is O + 10 n.
+        assert_eq!(look_ahead(p, w, hero, &[o(0.0, 20.0, 2), o(0.0, 10.0, 3)], 1, |_| true), [10.0, 0.0, 10.0]);
+        // Off the mesh: the second, then w.
+        assert_eq!(look_ahead(p, w, hero, &[o(0.0, 10.0, 3)], 1, |q| q[0] < 0.0), [-10.0, 0.0, 10.0]);
+        assert_eq!(look_ahead(p, w, hero, &[o(0.0, 10.0, 3)], 1, |_| false), w);
+        // Its own entry is skipped; so is one above the lanes.
+        assert_eq!(look_ahead(p, w, hero, &[o(0.0, 10.0, 1)], 1, |_| true), w);
+        let high = Obstacle { point: [0.0, 30.0, 10.0], radius: 5.0, length: 20.0, owner: 2 };
+        assert_eq!(look_ahead(p, w, hero, &[high], 1, |_| true), w);
     }
 
     #[test]

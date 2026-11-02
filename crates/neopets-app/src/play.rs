@@ -1528,6 +1528,8 @@ pub struct Play {
     save_glow: Option<(u32, [usize; 2])>,
     /// Placed effect objects made by StartEffect, by (pack, slot).
     placed_fx: HashMap<(u32, usize), usize>,
+    /// The walkers' look-ahead obstacles, rebuilt once a tick.
+    avoid: std::sync::Arc<Vec<neopets_sim::walker::Obstacle>>,
     /// Roberta's hold effect and leap glow (SPEC-0036): their timers and effect objects.
     r_displays: neopets_sim::roberta::Displays,
     r_fx: [Option<usize>; 2],
@@ -2171,6 +2173,7 @@ impl Play {
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
             break_family: None,
+            avoid: Default::default(),
             leap_point: [0.0; 3],
             landing_dir: [0.0, 0.0, 1.0],
             power_fx: None,
@@ -7602,6 +7605,34 @@ impl Play {
         self.bolts_step();
     }
 
+    /// SPEC-0029 2a, the obstacles: the solid upright cylinders, each active movable block and each other character
+    /// of the world that is neither hidden nor dead. Not built: the grid entries of type 1 or 3 (the spec names no
+    /// reader for them here).
+    fn avoid_step(&mut self) {
+        use neopets_sim::walker::{OBSTACLE_LENGTH, OBSTACLE_RADIUS, Obstacle};
+        let pack = self.world.pack;
+        let mut list: Vec<Obstacle> = Vec::new();
+        for v in &self.world.solids {
+            if let neopets_sim::trigger::Shape::Cylinder { base, axis, length, radius } = v.shape {
+                if v.kind == 3 && axis[1].abs() >= 0.99 {
+                    let point = [base[0], base[1] + 0.5 * length * axis[1], base[2]];
+                    list.push(Obstacle { point, radius, length, owner: 0 });
+                }
+            }
+        }
+        list.extend(self.world.blocks.iter().filter(|b| b.active != 0).map(|b| Obstacle { point: b.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: 0 }));
+        list.extend(self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0).filter(|c| {
+            !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.hidden(c.anim.clip_state().action))
+        }).map(|c| Obstacle { point: c.position, radius: OBSTACLE_RADIUS, length: OBSTACLE_LENGTH, owner: c.walker.as_ref().map_or(0, |w| w.avoid_id) }));
+        let list = std::sync::Arc::new(list);
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack) {
+            if let Some(w) = c.walker.as_mut() {
+                w.avoid = list.clone();
+            }
+        }
+        self.avoid = list;
+    }
+
     /// SPEC-0036 Aimed timed object, step 3: once the cycle has ended, a countdown; below 1, every eligible actor
     /// within 10 units gets a Fog effect (definition 982, three copies) at its aim point, and with any the
     /// countdown is drawn again. It deals no damage: the spec finds no damage step in that effect.
@@ -10987,6 +11018,7 @@ impl Play {
         self.pet_step();
         self.food_fallback();
         self.boss_step();
+        self.avoid_step();
         self.gnarfas_step();
         self.king_step();
         self.knight_step();
