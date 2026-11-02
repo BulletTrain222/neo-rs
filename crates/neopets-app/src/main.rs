@@ -4478,7 +4478,11 @@ fn play_trace(
     play.fight_target = std::env::var("NEOPETS_TRACE_TARGET").ok().filter(|n| !n.is_empty());
     // NEOPETS_TRACE_CHEATS="god,magic,charge": the developer menu's cheats from the start.
     if let Ok(v) = std::env::var("NEOPETS_TRACE_CHEATS") {
-        play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip") };
+        play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip"), haste: 0 };
+    }
+    // NEOPETS_TRACE_HASTE=k: the developer menu's Hero Haste slider at step k (17 is 10x; diagnostic).
+    if let Some(k) = std::env::var("NEOPETS_TRACE_HASTE").ok().and_then(|v| v.parse::<u8>().ok()) {
+        play.cheats.haste = k;
     }
     // NEOPETS_TRACE_HP=n: the hero's starting hit points (diagnostic); a value above the
     // maximum raises the maximum too, so the boss-fight refills keep it.
@@ -6074,7 +6078,10 @@ fn dev_script(play: &mut play::Play, input: &mut neopets_sim::hero::HeroInput) {
     }
     if t == 5 {
         if let Ok(v) = std::env::var("NEOPETS_TRACE_CHEATS") {
-            play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip") };
+            play.cheats = play::Cheats { god: v.contains("god"), magic: v.contains("magic"), charge: v.contains("charge"), noclip: v.contains("noclip"), haste: play.cheats.haste };
+        }
+        if let Some(k) = std::env::var("NEOPETS_TRACE_HASTE").ok().and_then(|v| v.parse::<u8>().ok()) {
+            play.cheats.haste = k;
         }
         if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
             play.trace_select_hero(1);

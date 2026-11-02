@@ -149,6 +149,9 @@ fn flatten(v: Vec3) -> Vec3 {
 
 /// One pass of controller input: the left stick after the dead zone, `side` positive to the
 /// left and `forward` positive up, each in [-1, 1]; `run` is R1.
+/// Hero Haste's fastest clip rate: past it the legs would blur.
+const HASTE_LEGS: f32 = 2.5;
+
 /// A full stick push over the stick scale 87.5 (SPEC-0036 Tor's sub-states 7 and 8).
 const STICK_FULL: f32 = 127.5 / 87.5;
 
@@ -279,6 +282,8 @@ pub struct Locomotion {
     pub air_ok: bool,
     /// The stick step of state 13 this tick.
     pub stick_step: StickStep,
+    /// The developer menu's Hero Haste: how many times faster the hero covers ground (1.0 off). Not in the game.
+    pub haste: f32,
     /// L2 last tick, and whether this hero is Roberta (the camera-locked state test).
     pub l2_held: bool,
     pub roberta: bool,
@@ -386,6 +391,7 @@ impl Locomotion {
             p1: false,
             air_ok: false,
             stick_step: StickStep::Off,
+            haste: 1.0,
             l2_held: false,
             roberta: false,
             hurt_from_strafe: false,
@@ -1216,6 +1222,7 @@ impl Locomotion {
             None => root_step,
         };
         self.root_y = root_step[1];
+        let root_step = root_step.map(|v| v * self.haste_travel());
         let step = if dot(self.target, self.facing) < 0.0 && !matches!(self.state, PANEL | 23 | LADDER | STRAFE) { [0.0; 3] } else { root_step };
         let [b1, b2, b3] = basis(self.facing);
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
@@ -1229,12 +1236,52 @@ impl Locomotion {
         for k in 0..3 {
             self.body.position[k] += d[k];
         }
+        // Hero Haste in a jump: the flight's speed, kept as the same velocity so the air rules are unchanged.
+        if self.haste > 1.0 && self.airborne() {
+            let v = self.body.velocity;
+            let extra = (self.haste - 1.0) / 30.0;
+            self.body.position[0] += v[0] * extra;
+            self.body.position[2] += v[2] * extra;
+        }
+    }
+
+    /// Hero Haste splits between the legs and the ground covered: the clip plays up to 2.5 times as fast (its root
+    /// step with it), and the root step takes the rest.
+    pub fn haste_rate(&self) -> f32 {
+        if self.haste_moving() { self.haste.min(HASTE_LEGS) } else { 1.0 }
+    }
+
+    fn haste_travel(&self) -> f32 {
+        if self.haste_moving() { self.haste / self.haste_rate() } else { 1.0 }
+    }
+
+    fn haste_moving(&self) -> bool {
+        matches!(self.state, SLOW_WALK | WALK | RUN | STRAFE)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Hero Haste: the clip rate times the root step's factor is the setting; other states and off are unchanged.
+    #[test]
+    fn hero_haste() {
+        let mut h = Locomotion::spawn([0.0; 3], FWD);
+        h.state = RUN;
+        h.target = FWD;
+        h.haste = 10.0;
+        assert_eq!(h.haste_rate(), 2.5);
+        h.travel([0.0, 0.0, 1.0]);
+        assert!((h.position()[2] - 4.0).abs() < 1e-5, "{:?}", h.position());
+        h.haste = 2.0;
+        assert_eq!(h.haste_rate(), 2.0);
+        h.state = HURT;
+        assert_eq!(h.haste_rate(), 1.0);
+        let z = h.position()[2];
+        h.travel([0.0, 0.0, 1.0]);
+        assert!((h.position()[2] - z - 1.0).abs() < 1e-5);
+    }
 
     /// SPEC-0036 State 17: back to state 32 only with L2 held and state 32 before the hit.
     #[test]

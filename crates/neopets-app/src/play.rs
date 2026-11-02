@@ -10403,7 +10403,8 @@ impl Play {
             let id = if self.loco.state == hero_states::STANCE && self.guard_timer > 0 { 63 } else { self.loco.action() };
             self.hero.request(id, force);
         }
-        self.hero.set_rate(self.loco.rate);
+        self.loco.haste = self.cheats.haste_factor();
+        self.hero.set_rate(self.loco.rate * self.loco.haste_rate());
         let (world, other) = (&self.world, self.other.as_ref());
         let search_other = buffers::may_swap(world.buffer, self.boot.neighbour_ok(world.pack, world.kind, world.pack));
         let noclip = self.cheats.noclip;
@@ -18185,6 +18186,18 @@ pub struct Cheats {
     pub charge: bool,
     /// The developer menu's no clip: the hero's wall, box, block and sphere contacts are off.
     pub noclip: bool,
+    /// The developer menu's Hero Haste slider: 0 off, else 2x and up in half steps (`haste_factor`).
+    pub haste: u8,
+}
+
+impl Cheats {
+    /// The slider's top step: 10x.
+    pub const HASTE_TOP: u8 = 17;
+
+    /// How many times faster the hero covers ground: 1.0 off, then 2.0 to 10.0.
+    pub fn haste_factor(&self) -> f32 {
+        if self.haste == 0 { 1.0 } else { 1.5 + self.haste.min(Self::HASTE_TOP) as f32 * 0.5 }
+    }
 }
 
 /// The screen-anchored showcase (modes 1 grow, 2 hold, 3 shrink): the item, its screen

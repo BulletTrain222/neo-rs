@@ -45,6 +45,8 @@ pub struct DevMenu {
     pub toast: Option<(String, u32)>,
     /// The weapon list's cursor.
     weapon_at: usize,
+    /// The Hero Haste slider under the mouse button: its position, 0 at the left to 1.
+    haste_drag: Option<f32>,
     /// A mouse click this frame: apply the cursor's entry, or step its value.
     clicked: bool,
     click_step: i32,
@@ -64,7 +66,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -128,13 +130,14 @@ enum Entry {
     Maps,
     Weapon,
     Noclip,
+    Haste,
     CloudBeast,
     BossFight,
 }
 
 /// The menu's sections and their entries, in display order.
 const SECTIONS: [(&str, &[Entry]); 6] = [
-    ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Magic, Entry::Charge]),
+    ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
     ("TRAVEL", &[Entry::Warp, Entry::Start]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::BossFight, Entry::CloudBeast]),
@@ -142,9 +145,10 @@ const SECTIONS: [(&str, &[Entry]); 6] = [
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 21] = [
+const ENTRIES: [Entry; 22] = [
     Entry::God,
     Entry::Noclip,
+    Entry::Haste,
     Entry::Magic,
     Entry::Charge,
     Entry::Speed,
@@ -206,7 +210,7 @@ fn other_column(i: usize) -> usize {
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam => Kind::Toggle,
-        Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
+        Entry::Haste | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
         _ => Kind::Action,
     }
 }
@@ -278,6 +282,11 @@ pub struct DevWindow;
 /// A row of the menu by its entry index; its label, value and < > buttons.
 #[derive(Component)]
 pub struct DevRow(usize);
+/// The Hero Haste slider's track and the fill inside it.
+#[derive(Component)]
+pub struct DevSlider(usize);
+#[derive(Component)]
+pub struct DevSliderFill;
 #[derive(Component)]
 pub struct DevLabel(usize);
 #[derive(Component)]
@@ -345,7 +354,7 @@ pub fn spawn_panel(mut commands: Commands) {
             ui.spawn((Text::new("A test tool of this build, not part of the game"), font(13.0), TextColor(DIM)));
             ui.spawn((
                 Text::new("Keys: arrows pick and change (Shift x10), Tab other column, Enter apply, Esc/F1 close; F2 free camera, F4 pause, F5 step
-Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT other column, A apply, B close | Mouse: click rows and < >"),
+Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT other column, A apply, B close | Mouse: click rows and < >, drag the slider"),
                 font(12.0),
                 TextColor(DIM),
                 Node { margin: UiRect { top: px(4), bottom: px(4), ..default() }, ..default() },
@@ -378,6 +387,13 @@ Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT o
                                         b.spawn((Text::new(if d < 0 { "<" } else { ">" }), font(14.0), TextColor(TEXT)));
                                     });
                             };
+                            if e == Entry::Haste {
+                                right
+                                    .spawn((Button, Node { width: px(150), height: px(14), ..default() }, BackgroundColor(ARROW), bevy::ui::RelativeCursorPosition::default(), DevSlider(k)))
+                                    .with_children(|t| {
+                                        t.spawn((Node { width: percent(0), height: percent(100), ..default() }, BackgroundColor(GOLD), DevSliderFill));
+                                    });
+                            }
                             arrow(right, -1);
                             right.spawn((Text::default(), font(14.0), TextColor(GOLD), Node { min_width: px(44), justify_content: JustifyContent::Center, ..default() }, TextLayout::justify(Justify::Center).with_no_wrap(), DevValue(k)));
                             arrow(right, 1);
@@ -399,7 +415,7 @@ Pad: LB+L3+A (rebindable) open/close, D-pad pick and change (LB/RB x10), LT/RT o
 
 /// The mouse on the menu: hovering a row moves the cursor to it; a click applies it, and a
 /// click on < or > steps its value. Runs before `dev_input`, which acts on the click.
-pub fn dev_mouse(mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), Changed<Interaction>>, steps: Query<(&Interaction, &DevStep), Changed<Interaction>>) {
+pub fn dev_mouse(sliders: Query<(&Interaction, &bevy::ui::RelativeCursorPosition, &DevSlider)>, mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), Changed<Interaction>>, steps: Query<(&Interaction, &DevStep), Changed<Interaction>>) {
     let _span = crate::perf::span("dev_mouse");
     if !dev.open {
         return;
@@ -418,6 +434,14 @@ pub fn dev_mouse(mut dev: ResMut<DevMenu>, rows: Query<(&Interaction, &DevRow), 
         if *i == Interaction::Pressed {
             dev.cursor = s.0;
             dev.click_step = s.1;
+        }
+    }
+    // A slider follows the mouse while its button is held, past its ends too.
+    dev.haste_drag = None;
+    for (i, at, s) in &sliders {
+        if *i == Interaction::Pressed {
+            dev.cursor = s.0;
+            dev.haste_drag = at.normalized.map(|n| (n.x + 0.5).clamp(0.0, 1.0));
         }
     }
 }
@@ -700,8 +724,14 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         std::mem::take(&mut dev.click_step) * step
     };
     let entry = ENTRIES[dev.cursor];
+    if let Some(x) = dev.haste_drag.take() {
+        play.play.cheats.haste = (x * crate::play::Cheats::HASTE_TOP as f32).round() as u8;
+    }
     if delta != 0 {
         match entry {
+            Entry::Haste => {
+                play.play.cheats.haste = (play.play.cheats.haste as i32 + delta).clamp(0, crate::play::Cheats::HASTE_TOP as i32) as u8;
+            }
             Entry::Neopoints => dev.amount = (dev.amount as i32 + delta.signum()).clamp(0, AMOUNTS.len() as i32 - 1) as usize,
             Entry::Item => dev.item = (dev.item as i32 + delta).clamp(0, play.play.items.items.len().saturating_sub(1) as i32) as u16,
             Entry::Weapon => {
@@ -796,6 +826,10 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
             dev.speed = NORMAL;
             "Normal speed".into()
         }
+        Entry::Haste => {
+            p.cheats.haste = 0;
+            "Hero Haste off".into()
+        }
         Entry::Kill => format!("Defeated {} enemies here", p.dev_kill_enemies()),
         Entry::CloudBeast => p.dev_cloud_beast(),
         Entry::BossFight => {
@@ -885,6 +919,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
     match e {
         Entry::God => ("God mode".into(), on(p.cheats.god)),
         Entry::Noclip => ("No clip (walk through walls)".into(), on(p.cheats.noclip)),
+        Entry::Haste => ("Hero Haste".into(), if p.cheats.haste == 0 { "OFF".to_string() } else { format!("{}x", p.cheats.haste_factor()) }),
         Entry::Magic => ("Infinite magic".into(), on(p.cheats.magic)),
         Entry::Charge => ("Infinite Mote charge".into(), on(p.cheats.charge)),
         Entry::FreeCam => ("Free camera (F2)".into(), on(dev.free.is_some())),
@@ -997,6 +1032,7 @@ pub fn show_panel(
     mut notes: Query<&mut Text, (With<DevNote>, Without<DevLabel>, Without<DevValue>)>,
     mut details: Query<&mut Text, (With<DevDetail>, Without<DevNote>, Without<DevLabel>, Without<DevValue>, Without<DevText>)>,
     mut headers: Query<(&mut Text, &DevHeader), (Without<DevDetail>, Without<DevNote>, Without<DevLabel>, Without<DevValue>, Without<DevText>)>,
+    mut fills: Query<&mut Node, (With<DevSliderFill>, Without<DevPanel>, Without<DevWindow>)>,
     mut rows: Query<(&Interaction, &DevRow, &mut BackgroundColor), Without<DevStep>>,
     mut arrows: Query<(&Interaction, &mut BackgroundColor), (With<DevStep>, Without<DevRow>)>,
     // Each row's label and when it was first shown: a changed label scrolls from its start.
@@ -1034,6 +1070,12 @@ pub fn show_panel(
             };
             if t.0 != s {
                 t.0 = s;
+            }
+        }
+        let filled = percent(p.cheats.haste as f32 / crate::play::Cheats::HASTE_TOP as f32 * 100.0);
+        for mut n in &mut fills {
+            if n.width != filled {
+                n.width = filled;
             }
         }
         for (i, r, mut bg) in &mut rows {
