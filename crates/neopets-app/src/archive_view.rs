@@ -230,6 +230,9 @@ pub fn region_character(
         }
     }
     let nested = resource::walk_chunks(&bytes[set.payload.clone()], None)?;
+    if placement.key == 720 {
+        model.shadow = neopets_data::shadow::find(&bytes[set.payload.clone()], &nested.chunks).or_else(|| neopets_data::shadow::find(bytes, &chain)).unwrap_or_default();
+    }
     let flat = nested
         .chunks
         .iter()

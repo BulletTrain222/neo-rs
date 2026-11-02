@@ -3315,8 +3315,21 @@ impl Play {
                 }
                 Action::WaitWalks { entities } => return Some(Wait::EntityWalks(pack, entities)),
                 Action::SetFlag { flag, on } => self.state.set(flag, on),
-                Action::GiveItem { item, count } if item == level::TREASURE_MAP => self.map_held(count),
-                Action::GiveItem { item, count } => self.state.give(item, count),
+                Action::GiveItem { item, count } => {
+                    // SPEC-0030 row 190: the grants with the popup set are of these four ids.
+                    if matches!(item, 36 | 62 | 160 | 170) {
+                        self.item_popup(item, pack);
+                    }
+                    // A level grant of a fixed-value coin counts its calls: the add pays 136 to 139
+                    // whatever its n, and a race win of four items 139 is 400 NP (SPEC-0059).
+                    if matches!(item, 136..=139) {
+                        for _ in 0..count {
+                            self.party_add(item, 1);
+                        }
+                    } else {
+                        self.party_add(item, count as i32);
+                    }
+                }
                 Action::WaitHeroNear { locator, distance } => {
                     let (l, _) = self.locator(pack, locator)?;
                     return Some(Wait::HeroNear(l, distance));
@@ -3340,7 +3353,7 @@ impl Play {
                 Action::GiveWordItem { word, default } => {
                     let v = self.state.words.get(&(pack, word)).copied().unwrap_or(0);
                     let item = if v > 0 { v as u16 } else { default };
-                    self.state.give(item, 1);
+                    self.party_add(item, 1);
                 }
                 Action::LaunchFireMote { from, to, speed } => {
                     let Some((start, _)) = self.locator(pack, from) else { return None };
@@ -4102,7 +4115,7 @@ impl Play {
                     // A bought map is map +0x2C plus 1 (SPEC-0021 Treasure maps).
                     self.map_held(it.map as u32 + 1);
                 } else {
-                    self.state.give(it.id, if neopets_sim::mote::is_mote(it.id) { 100 } else { 1 });
+                    self.party_add(it.id, if neopets_sim::mote::is_mote(it.id) { 100 } else { 1 });
                 }
                 let taken = neopets_sim::shop::takes(it.id, self.item_kind(it.id));
                 if let Some(pool) = self.pools.get_mut(&pack) {
@@ -6211,11 +6224,85 @@ impl Play {
 
     /// The weapon reach W (SPEC-0021): Tor's table value for swords 98 to 108, Roberta's for
     /// 111 to 118, 1.5 with no valid weapon.
+    /// SPEC-0021 Item showcase, start with quiet 1: the screen-anchored popup (mode 1), unless the
+    /// full showcase is running.
+    fn item_popup(&mut self, id: u16, pack: u32) {
+        if self.showcase.is_none() {
+            self.corner = Some(Corner { id, pack, mode: 1, x: 0.5, y: 0.6, z: 5.0, s: 0.0, timer: 0.0, angle: 0.0 });
+        }
+    }
+
+    /// SPEC-0021 the party add (SPEC-0030 row 190; Coin pickups, Stat-up items, Treasure maps,
+    /// Inventory), shared by every give: below 1 nothing; a map marks its number; a coin goes to
+    /// the wallet with cue 0xA5 and the caption's running total; a once-per-area item already found
+    /// here is refused; a stat-up raises both heroes with cue 0x9F and is not stored; anything else
+    /// is stored, capped at its carry limit Q, and at Q the world items of that id in the current
+    /// level are removed. Returns whether anything was added.
+    fn party_add(&mut self, id: u16, n: i32) -> bool {
+        if n < 1 {
+            return false;
+        }
+        if id == level::TREASURE_MAP {
+            self.map_held(n as u32);
+            return true;
+        }
+        if let Some(gain) = neopets_sim::items::coin_gain(id, n) {
+            self.state.neopoints = self.state.neopoints.checked_add(gain).unwrap_or(0).max(0);
+            let l1 = &mut self.price_lines[0];
+            l1.0 = if l1.1 > 0 { l1.0 + gain } else { gain };
+            l1.1 = 180;
+            self.cue(165);
+            return true;
+        }
+        let pack = self.world.pack;
+        if matches!(id, 19 | 20 | 151 | 154 | 174) && !self.once.insert((id, pack)) {
+            return false;
+        }
+        let up = self.items.get(id).map_or_else(Default::default, |i| neopets_sim::items::stat_up(i.kind, i.stats, n));
+        if up.any() {
+            let tor = self.hero_index == 0;
+            let [hp_tor, hp_rob, mp_tor, mp_rob] = self.growth.gain;
+            let (hp_now, hp_other) = if tor { (hp_tor, hp_rob) } else { (hp_rob, hp_tor) };
+            let (mp_now, mp_other) = if tor { (mp_tor, mp_rob) } else { (mp_rob, mp_tor) };
+            if up.health {
+                self.hero_max += hp_now;
+                self.hero_hp = self.hero_max;
+                if let Some(p) = self.parked.as_mut() {
+                    p.hp_max += hp_other;
+                    p.hp = p.hp_max;
+                }
+            }
+            if up.magic {
+                self.hero_mp_max += mp_now;
+                self.hero_mp = self.hero_mp_max;
+                if let Some(p) = self.parked.as_mut() {
+                    p.mp_max += mp_other;
+                    p.mp = p.mp_max;
+                }
+            }
+            self.luck = neopets_sim::items::clamp_luck(self.luck + up.luck);
+            self.cue(159);
+            return true;
+        }
+        self.state.give(id, n as u32);
+        self.equipment_step();
+        let q = self.state.carry.get(id as usize).copied().unwrap_or(0);
+        if q > 0 && self.state.items.get(&id).is_some_and(|&held| held >= q) {
+            if let Some(pool) = self.pools.get_mut(&pack) {
+                let at_limit: Vec<usize> = pool.slots.iter().enumerate().filter(|(_, s)| s.is_some_and(|it| it.id == id)).map(|(i, _)| i).collect();
+                for i in at_limit {
+                    pool.take(i);
+                }
+            }
+        }
+        true
+    }
+
     /// SPEC-0021 Item showcase, start with quiet 0: when the item has showcase text and the
     /// hero is not busy, the full showcase (mode 4) and its pose task begin. Not built: the
-    /// showcase effect, the camera call (0.9425, 10.0), the dropped stinger request 42 / 66 and
-    /// the quiet starts of the two give paths. Without text, or with the hero busy, the
-    /// screen-anchored showcase of mode 1 starts instead.
+    /// showcase effect and the camera call (0.9425, 10.0) (R-0188); the stinger request 42 / 66 is
+    /// dropped by its player anyway. Without text, or with the hero busy, the screen-anchored
+    /// showcase of mode 1 starts instead.
     /// Diagnostic: the showcase started for item `id` in the current world.
     pub fn diag_showcase(&mut self, id: u16) {
         let pack = self.world.pack;
@@ -8038,8 +8125,7 @@ impl Play {
     /// while the hero's own petpet is within 2.5 units or a wild petpet within 4.5, in front of
     /// the hero (horizontal dot above 0.5); Square with a food item selected enters state 49,
     /// without one plays cue 0xA2. The food is the selected quick item (which item the feed
-    /// takes is not given; R-0094). The 4.5 own-petpet range while a timer is below 45 s and
-    /// the class-20 creatures (25 units) are not built.
+    /// takes is not given; R-0094).
     fn feed_step(&mut self) {
         if neopets_sim::hero::busy_state(self.loco.state) || !(1..=6).contains(&self.loco.state) {
             return;
@@ -8056,7 +8142,7 @@ impl Play {
         // reserved; wild petpets 4.5 (SPEC-0047 Prompt and meter).
         let own = if self.petpet.as_ref().is_some_and(|p| p.t < 2700) { 4.5 } else { 2.5 };
         let reserved = self.pet_reserve.food.is_some();
-        let near = self.characters.iter().any(|c| c.pack == pack && !c.inactive && ((Some(c.id) == pet && !reserved && front(c.position, own)) || (c.wild.is_some() && front(c.position, 4.5)) || (c.class20.is_some() && front(c.position, 25.0))));
+        let near = self.characters.iter().any(|c| c.pack == pack && !c.inactive && ((c.class20.is_some() && front(c.position, 25.0)) || (Some(c.id) == pet && !reserved && front(c.position, own)) || (c.wild.is_some() && front(c.position, 4.5)) || (c.class20.is_some() && front(c.position, 25.0))));
         if !near {
             return;
         }
@@ -8103,11 +8189,11 @@ impl Play {
         let best = self
             .characters
             .iter()
-            .filter(|c| c.pack == pack && !c.inactive && (Some(c.id) == pet || c.wild.is_some()))
-            .map(|c| (c.id, (c.position[0] - hero[0]).hypot(c.position[2] - hero[2])))
-            .filter(|&(_, d)| d <= 10.5)
+            .filter(|c| c.pack == pack && !c.inactive && (Some(c.id) == pet || c.wild.is_some() || c.class20.is_some()))
+            .map(|c| (c.id, (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]), c.class20.is_some()))
+            .filter(|&(_, d, far)| d <= if far { 25.0 } else { 10.5 })
             .min_by(|a, b| a.1.total_cmp(&b.1))
-            .map(|(id, _)| id);
+            .map(|(id, ..)| id);
         match best {
             Some(id) if Some(id) == pet => {
                 if let Some(p) = self.petpet.as_mut() {
@@ -8115,11 +8201,12 @@ impl Play {
                 }
             }
             Some(id) => {
+                // A class-20 creature has no fed rule of its own: it comes to the dropped food.
                 if let Some(w) = self.characters.iter_mut().find(|c| c.id == id).and_then(|c| c.wild.as_mut()) {
                     w.fed = true;
-                }
-                if let Some(p) = self.petpet.as_mut() {
-                    p.t = -1;
+                    if let Some(p) = self.petpet.as_mut() {
+                        p.t = -1;
+                    }
                 }
             }
             None => {}
@@ -8922,12 +9009,14 @@ impl Play {
 
     /// SPEC-0048 Lock chests step 6: the drop action on reward [0] (a placement id through the
     /// placement id table; the embedded region only) at A = X + 2.4 d + 0.4 up, and the
-    /// collected entry (step 7's mark, set here with the reward).
+    /// collected entry (step 7's mark, set here with the reward). An element-sealed chest (kind 2)
+    /// requests it at X + 2.2 d, launched along -d.
     fn chest_reward(&mut self, g: usize) {
         let Some(group) = self.world.groups.get(g).cloned() else { return };
         let locator = group.locators.first().and_then(|&k| usize::try_from(k).ok());
         let (x, d) = locator.and_then(|k| self.world.entries.get(k).copied()).unwrap_or((self.loco.position(), self.loco.facing));
-        let a = [x[0] + 2.4 * d[0], x[1] + 2.4 * d[1] + 0.4, x[2] + 2.4 * d[2]];
+        let sealed = group.kind == 2;
+        let a = if sealed { [x[0] + 2.2 * d[0], x[1] + 2.2 * d[1], x[2] + 2.2 * d[2]] } else { [x[0] + 2.4 * d[0], x[1] + 2.4 * d[1] + 0.4, x[2] + 2.4 * d[2]] };
         let point = group
             .drops
             .first()
@@ -8936,7 +9025,13 @@ impl Play {
             .filter(|(region, _)| *region == 0xFF)
             .and_then(|&(_, ord)| self.world.item_points.get(ord as usize).copied());
         let pack = self.world.pack;
+        if sealed {
+            self.dig_drop = Some([-d[0], -d[1], -d[2]]);
+        }
         self.pay_out(pack, a, point);
+        if sealed {
+            self.dig_drop = None;
+        }
         self.state.collected.insert(group.key);
         self.last_door = format!("chest group {g} opened (key {}), reward {:?}", group.key, point.map(|p| p.key));
     }
@@ -8978,6 +9073,11 @@ impl Play {
         } else {
             self.door_prompt = Some(if self.world.buffer == Buffer::Exterior { 13 } else { 26 });
         }
+    }
+
+    /// NEOPETS_TRACE_STATUPS: the items the stat-up rule accepts, for a check against the spec's list.
+    pub fn stat_up_list(&self) -> Vec<u16> {
+        self.items.items.iter().filter(|i| neopets_sim::items::stat_up(i.kind, i.stats, 1).any()).map(|i| i.id).collect()
     }
 
     /// One game tick in the hero order of SPEC-0040 Behavior 3: the camera, the hero update
@@ -11968,12 +12068,8 @@ impl Play {
                 return;
             }
             let count = if it.charm { 100 } else { 1 };
-            // The normal add, capped at the carry limit.
-            self.state.give(it.id, count);
-            if matches!(it.id, 19 | 20 | 151 | 154 | 174) {
-                self.once.insert((it.id, pack));
-            }
-            self.last_pickup = format!("picked up item {} (held {}) on tick {}", it.id, self.state.items[&it.id], self.ticks);
+            self.party_add(it.id, count);
+            self.last_pickup = format!("picked up item {} (held {}) on tick {}", it.id, self.state.items.get(&it.id).copied().unwrap_or(0), self.ticks);
             let hook = level::on_pickup(pack, it.id, &mut self.state);
             self.apply(&hook);
             // The world-item pickup starts the showcase with quiet 0.
@@ -14104,33 +14200,62 @@ impl Play {
         d
     }
 
-    /// SPEC-0046 Character shadow volumes for this frame: the hero is the one caster (the
-    /// Gnarfas, the other kind on disc, is not built), taken while within 50 units of the eye;
-    /// its hulls moved by its posed bones (the bank index taken as the skin index across the
-    /// families), its light direction from its character light context (straight down without
-    /// one) and the count signs from the camera eye.
+    /// SPEC-0046 Character shadow volumes for this frame: the casters are the hero and the current
+    /// world's characters of kind key 720 (the Gnarfas placements), the nearest three within 50
+    /// units of the eye; each one's hulls moved by its posed bones (the bank index taken as the skin
+    /// index across the families), its light direction from its character light context (straight
+    /// down without one) and the count signs from the camera eye.
     pub fn shadow_volume(&self) -> neopets_sim::shadow::Volume {
         use neopets_sim::shadow as sh;
         let mut v = sh::Volume::default();
-        let hulls = &self.shadow_hulls[self.hero_index.min(1)];
         let (eye, ..) = self.view();
-        let p = self.loco.position();
-        let d = sub(p, eye);
-        if hulls.is_empty() || sh::choose(&[d[0] * d[0] + d[1] * d[1] + d[2] * d[2]]).is_empty() {
-            return v;
+        let far = |p: [f32; 3]| {
+            let d = sub(p, eye);
+            d[0] * d[0] + d[1] * d[1] + d[2] * d[2]
+        };
+        // The hero is first; a caster with no hulls has nothing to cast.
+        let mut casters: Vec<Option<&Character>> = vec![None];
+        let mut distances = vec![if self.shadow_hulls[self.hero_index.min(1)].is_empty() { f32::MAX } else { far(self.loco.position()) }];
+        for c in self.characters.iter().filter(|c| c.pack == self.world.pack && !c.inactive && !c.model.shadow.is_empty()) {
+            casters.push(Some(c));
+            distances.push(far(c.position));
         }
-        let place = placement(p, self.loco.facing);
-        let frames = self.hero.bone_frames();
-        let slots: Vec<Option<sh::LightSlot>> = self.char_lights.get(&None).map_or(Vec::new(), |s| {
-            s.slots.iter().map(|x| x.entry.map(|e| sh::LightSlot { kind: e.kind, weight: x.weight, direction: e.direction, position: e.position })).collect()
-        });
-        let l = sh::light_direction(&slots, p, slots.is_empty()).unwrap_or([0.0, -1.0, 0.0]);
-        let frame = |b: u8| frames.get(b as usize).map(|f| {
-            let m = place.mul(f);
-            sh::Frame { cols: m.cols, t: m.t }
-        });
-        sh::volume(hulls, frame, l, eye, &mut v);
+        for k in sh::choose(&distances) {
+            let (key, p, facing, frames) = match casters[k] {
+                None => (None, self.loco.position(), self.loco.facing, self.hero.bone_frames()),
+                Some(c) => (Some(c.id), c.position, c.facing, c.anim.bone_frames()),
+            };
+            let place = placement(p, facing);
+            let slots: Vec<Option<sh::LightSlot>> = self.char_lights.get(&key).map_or(Vec::new(), |s| {
+                s.slots.iter().map(|x| x.entry.map(|e| sh::LightSlot { kind: e.kind, weight: x.weight, direction: e.direction, position: e.position })).collect()
+            });
+            let l = sh::light_direction(&slots, p, slots.is_empty()).unwrap_or([0.0, -1.0, 0.0]);
+            let frame = |b: u8| frames.get(b as usize).map(|f| {
+                let m = place.mul(f);
+                sh::Frame { cols: m.cols, t: m.t }
+            });
+            match casters[k] {
+                None => sh::volume(&self.shadow_hulls[self.hero_index.min(1)], frame, l, eye, &mut v),
+                Some(c) => {
+                    let hulls: Vec<sh::Hull> = c.model.shadow.iter().map(|u| sh::Hull { bank: u.bank, edges: u.edges.clone(), triangles: u.triangles.clone(), points: u.points.clone() }).collect();
+                    sh::volume(&hulls, frame, l, eye, &mut v);
+                }
+            }
+        }
         v
+    }
+
+    /// NEOPETS_TRACE_GIVE: the party add, and the pools, luck and wallet after it.
+    pub fn diag_give(&mut self, id: u16, n: i32) {
+        let added = self.party_add(id, n);
+        let parked = self.parked.as_ref().map(|p| (p.hp, p.hp_max, p.mp, p.mp_max));
+        println!("GIVE {id} x{n}: added {added}, hero {}/{} {}/{}, parked {parked:?}, luck {}, wallet {}, held {:?}, caption {:?}", self.hero_hp, self.hero_max, self.hero_mp, self.hero_mp_max, self.luck, self.state.neopoints, self.state.items.get(&id), self.price_lines[0]);
+    }
+
+    /// NEOPETS_TRACE_CASTERS: the characters casting a shadow (kind key 720), their hull counts and the
+    /// frame's volume triangles.
+    pub fn diag_casters(&self) -> Vec<(String, usize, usize)> {
+        self.characters.iter().filter(|c| c.pack == self.world.pack && !c.model.shadow.is_empty()).map(|c| (c.name.clone(), c.model.shadow.len(), { let v = self.shadow_volume(); v.toward.len() + v.away.len() })).collect()
     }
 
     /// The Rope Gun's muzzle M = T + 0.37F - S of weapon attach frame 0 (SPEC-0033 State 27),
@@ -14682,8 +14807,8 @@ impl Play {
     /// 1 shown and looped; 2.0 s, the display mask stepped 0x10000, 0x20000, 0x40000 (0.8 s each)
     /// and back to 0; effect 791 at X + 2.9 d, the body broken, object 1 hidden and object 0
     /// shown, hero animation 192; 3.3 s, camera 1, hero animation 186; the reward (the drop of
-    /// pair 0, as a lock chest's) and the key row; 2.0 s and the normal camera. Not built: the
-    /// reward's 2.2 d launch point (the lock chest's 2.4 d is used) and pair 1's character.
+    /// pair 0, as a lock chest's) and the key row; 2.0 s and the normal camera. Pair 1's character
+    /// is not activated (no chest on disc uses it).
     fn seal_open(&mut self, gi: usize) {
         let Some(g) = self.world.groups.get(gi).cloned() else { return };
         let b = |k: usize| g.breakables.get(k).and_then(|&b| usize::try_from(b).ok());
@@ -15483,10 +15608,12 @@ impl Play {
                         }
                     }
                 }
-                _ if a0 == 135 => self.state.neopoints += a1.max(0),
+                // SPEC-0022 table row 0x13: the quiet popup first, then the shared add.
                 _ => {
                     if let Ok(item) = u16::try_from(a0) {
-                        self.state.give(item, if a1 == 18 { 1 } else { a1.max(0) as u32 });
+                        let pack = self.world.pack;
+                        self.item_popup(item, pack);
+                        self.party_add(item, if a1 == 18 && item != 135 { 1 } else { a1 });
                     }
                 }
             }

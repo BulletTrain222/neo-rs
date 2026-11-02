@@ -45,6 +45,49 @@ impl CoinWords {
     }
 }
 
+/// SPEC-0021 Coin pickups: the wallet gain of adding `n` of a coin id (135 adds its count; 136 to
+/// 139 add 5, 10, 25 and 100 whatever the count); None for any other id (the Tal rows included,
+/// which fall through to the ordinary add).
+pub fn coin_gain(id: u16, n: i32) -> Option<i32> {
+    match id {
+        135 => Some(n),
+        136 => Some(5),
+        137 => Some(10),
+        138 => Some(25),
+        139 => Some(100),
+        _ => None,
+    }
+}
+
+/// SPEC-0021 Stat-up items, what one add does: the health and magic steps for both heroes, and
+/// the luck gained.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct StatUp {
+    pub health: bool,
+    pub magic: bool,
+    pub luck: i32,
+}
+
+impl StatUp {
+    pub fn any(&self) -> bool {
+        self.health || self.magic || self.luck != 0
+    }
+}
+
+/// Items 1 to 3 of Stat-up items: a flag needs type 0, or 7 or higher except 17, and its stat at
+/// least 1. Stat A is health, stat C magic, and stat B times the count is luck.
+pub fn stat_up(kind: i16, stats: [i16; 8], count: i32) -> StatUp {
+    if !(kind == 0 || (kind >= 7 && kind != 17)) {
+        return StatUp::default();
+    }
+    StatUp { health: stats[0] >= 1, magic: stats[2] >= 1, luck: if stats[1] >= 1 { stats[1] as i32 * count } else { 0 } }
+}
+
+/// Every write of the luck word clamps it to 0 to 24.
+pub fn clamp_luck(luck: i32) -> i32 {
+    luck.clamp(0, 24)
+}
+
 pub fn is_coin(id: u16) -> bool {
     (135..=144).contains(&id)
 }
@@ -563,6 +606,33 @@ mod tests {
     }
 
     use super::*;
+
+    #[test]
+    fn stat_up_flags_by_type_and_stat() {
+        let stats = |a: i16, b: i16, c: i16| [a, b, c, 0, 0, 0, 0, 0];
+        // Golden Negg: stat A 25 and stat C 15.
+        assert_eq!(stat_up(0, stats(25, 0, 15), 1), StatUp { health: true, magic: true, luck: 0 });
+        // Twelve-Leaf Clover: stat B 3 times the count.
+        assert_eq!(stat_up(0, stats(0, 3, 0), 2).luck, 6);
+        // Weapons, armour, shields and charms never qualify.
+        for kind in [1, 3, 5, 6, 17] {
+            assert!(!stat_up(kind, stats(25, 3, 15), 1).any());
+        }
+        assert!(stat_up(7, stats(1, 0, 0), 1).health);
+        assert!(!stat_up(0, stats(0, 0, 0), 1).any());
+        // SPEC-0021: luck 23 plus a Twelve-Leaf Clover is 24, and stays 24.
+        assert_eq!(clamp_luck(23 + 3), 24);
+        assert_eq!(clamp_luck(24 + 3), 24);
+    }
+
+    #[test]
+    fn coin_gains_are_fixed_except_135() {
+        assert_eq!(coin_gain(135, 40), Some(40));
+        assert_eq!(coin_gain(136, 9), Some(5));
+        assert_eq!(coin_gain(139, 3), Some(100));
+        assert_eq!(coin_gain(140, 1), None);
+        assert_eq!(coin_gain(19, 1), None);
+    }
 
     const COINS: CoinWords = CoinWords { launch: 16.0, gravity: -40.0, restitution: -0.65, stop: 1.0, rest: 0.6, damping: 0.98, spin_damping: 0.98, horizontal: 2.0 };
 

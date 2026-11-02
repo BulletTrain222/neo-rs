@@ -4649,6 +4649,25 @@ fn play_trace(
         }
         // Once: the new game's tick count starts again. A game-over exit with nothing pending
         // tears the world down the same way.
+        // NEOPETS_TRACE_GIVE="tick:id:n[,tick:id:n...]": the party add on those ticks.
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_GIVE") {
+            for g in v.split(',') {
+                let n: Vec<i64> = g.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+                if let [t, id, count] = n[..] {
+                    if t as u64 == play.ticks {
+                        play.diag_give(id as u16, count as i32);
+                    }
+                }
+            }
+        }
+        // NEOPETS_TRACE_CASTERS: the characters casting a shadow on tick 1000.
+        if std::env::var_os("NEOPETS_TRACE_CASTERS").is_some() && play.ticks == 1000 {
+            println!("CASTERS {:?}", play.diag_casters());
+        }
+        // NEOPETS_TRACE_STATUPS: the items the stat-up rule accepts.
+        if std::env::var_os("NEOPETS_TRACE_STATUPS").is_some() && play.ticks == 1 {
+            println!("STATUPS {:?}", play.stat_up_list());
+        }
         // NEOPETS_TRACE_NPCWALK="n": the townsfolk walking audit's report on tick n.
         if std::env::var("NEOPETS_TRACE_NPCWALK").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
             play.npc_audit_report();

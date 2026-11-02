@@ -181,6 +181,9 @@ pub struct ModelData {
     /// A character model set's attachment models by slot (children with role 10 + k; SPEC-0046
     /// Second walk and attachment slots), kept out of the body.
     pub attachments: Vec<(u8, ModelData)>,
+    /// The shadow hulls of a slot character that casts one (kind key 720; SPEC-0046 Character
+    /// shadow volumes).
+    pub shadow: Vec<crate::shadow::Unit>,
 }
 
 impl ModelData {
