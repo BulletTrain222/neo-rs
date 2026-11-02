@@ -1664,7 +1664,7 @@ impl Enemy {
             // State 6 with no route stands (the spec's steer toward entry 0 is not built).
             3 if self.chat_with.is_some() => self.chat_step(v, rng, &mut a),
             9 => self.follow_step(v, rng, &mut a),
-            0 | 3 | 6 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
+            0 | 3 | 6 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
         }
         // The alarm's animation (18, or the emerge) is the one requested on its tick.

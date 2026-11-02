@@ -3,8 +3,7 @@
 //! the ledge-drop edge test, and the hero states 30 (hang from a ledge), 35 (climb up from a
 //! fall), 37 (drop off an edge into a hang) and 47 (climb up while rising).
 //!
-//! Not built: the ladder check and the global-index flag of state 30, the pull-up's effect 9 and
-//! its event-bit 0x40 window (the forward exit is taken at 0.95, as the block hang does), the
+//! Not built: the ladder check and the global-index flag of state 30, the pull-up's effect 9, the
 //! touched-flag branch of state 47 (the wall contact is off in these states), the helper tests
 //! of sub-modes 1 and 2 of states 35 and 47 (taken as passing), the 0.75 push of state 35, the
 //! state 38 (the drop onto a climb panel), state 37's landing-flag exit and its neighbouring-edge
@@ -230,6 +229,8 @@ pub struct Step {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Ledge {
     pub state: u8,
+    /// The event bits of the hero clip's current frame (set by the host each tick).
+    pub frame_bits: u32,
     pub edge: Edge,
     pub sub: u8,
     /// State 37: the walk state it was entered from.
@@ -295,12 +296,12 @@ fn approach(hero: Vec3, target: Vec3, len: f32, snap: f32) -> (Vec3, bool) {
 
 impl Ledge {
     pub fn new(state: u8, edge: Edge) -> Self {
-        Self { state, edge, sub: 0, from: 0, next: None, prev: None }
+        Self { state, edge, sub: 0, from: 0, next: None, prev: None, frame_bits: 0 }
     }
 
     /// State 37 entered from walk state `from`.
     pub fn drop_from(edge: Edge, from: u8) -> Self {
-        Self { state: DROP, edge, sub: 0, from, next: None, prev: None }
+        Self { state: DROP, edge, sub: 0, from, next: None, prev: None, frame_bits: 0 }
     }
 
     /// State 37 (Behavior 51), phases 0 to 3. `facing` is the hero's facing and `deep` the
@@ -495,10 +496,14 @@ impl Ledge {
                     step.request = Some(73);
                 }
             }
+            // The pull-up: while the clip runs, event bit 0x40 with the stick forward runs out to
+            // state 4; at 0.95 it ends in state 1 (SPEC-0033 sub-mode 4).
             4 => {
                 step.request = Some(59);
-                if clip.action == 59 && clip.progress >= 0.95 {
-                    step.exit = Some(if forward { 4 } else { 1 });
+                if clip.action == 59 && clip.progress < 0.95 && forward && self.frame_bits & 0x40 != 0 {
+                    step.exit = Some(4);
+                } else if clip.action == 59 && clip.progress >= 0.95 {
+                    step.exit = Some(1);
                 }
             }
             sub => {

@@ -3382,8 +3382,8 @@ fn village_init(state: &mut GameState) -> Vec<Action> {
     let mut out: Vec<Action> = [6u16, 7, 8, 9, 10, 11, 12, 13, 4, 3, 14, 15, 16].into_iter().map(|i| reg(i, 1)).collect();
     out.extend([reg(1, 2), reg(2, 2), reg(0, 2), reg(17, 6)]);
     out.extend((27..=34).map(|i| reg(i, 4)));
-    // The prize wheel (routine 56) when flags 64 and 11 are clear (the walk-up greetings 37 to
-    // 40 are not built).
+    // The walk-up greetings (routines 54 and 55) and the prize wheel (routine 56) when flags 64 and
+    // 11 are clear.
     if !state.flag(64) && !state.flag(11) {
         out.extend([reg(37, 54), reg(39, 54), reg(38, 55), reg(40, 55), reg(36, 56)]);
     }

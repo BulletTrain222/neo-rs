@@ -1278,6 +1278,10 @@ pub struct Play {
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     /// The Undead Draik's spit flight effects (fire, ice).
     spit_fx: [Option<usize>; 2],
+    /// The Darkest Faerie's cast glow.
+    faerie_glow: Option<usize>,
+    /// Sisters a navmesh edge turned back last tick (SPEC-0011 the blocked word).
+    sisters_blocked: std::collections::HashSet<u64>,
     mote_objects: Vec<neopets_sim::charm::Object>,
     charm_words: neopets_sim::charm::Words,
     /// The Lava orbit's angle, 0 at the first activation and continuing across spawns.
@@ -2036,6 +2040,8 @@ impl Play {
             magic,
             last_mote: String::new(),
             spit_fx: [None; 2],
+            faerie_glow: None,
+            sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
             orbit_angle: 0.0,
             charm_words,
@@ -5582,6 +5588,7 @@ impl Play {
             (Some(r), Some(g)) => (g.frame_link(r, true), g.frame_link(r, false)),
             _ => (None, None),
         };
+        let bits = self.hero.frame_bits();
         if let Some(l) = self.ledge.as_mut() {
             l.next = next.as_ref().map(edge_of);
             l.prev = prev.as_ref().map(edge_of);
@@ -5590,6 +5597,7 @@ impl Play {
             if l.state == ledge::DROP {
                 l.drop_tick(hero, f, deep, self.loco.body.gap)
             } else {
+                l.frame_bits = bits;
                 l.tick(hero, side, forward, self.loco.body.gap, ledge::Clip { action: c.action, progress: c.progress })
             }
         }) else {
@@ -12895,7 +12903,7 @@ impl Play {
                 clip: (clip.action, clip.progress >= 0.99),
                 progress: clip.progress,
                 frame_bits: c.anim.frame_bits(),
-                blocked: false,
+                blocked: self.sisters_blocked.contains(&id),
                 level: &level,
                 far,
             };
@@ -12921,7 +12929,16 @@ impl Play {
                 let m = [p[0] - c.position[0], 0.0, p[2] - c.position[2]];
                 let l = m[0].hypot(m[2]);
                 if l > 1e-6 {
-                    c.position = add(c.position, scale(m, speed / l));
+                    // SPEC-0011: the motion step keeps her on her mesh and sets the blocked word,
+                    // which flips her orbit next tick.
+                    let to = add(c.position, scale(m, speed / l));
+                    let mesh = usize::try_from(neopets_sim::nav::closest(&self.world.navmeshes, c.position, 1)).ok().and_then(|k| self.world.navmeshes.get(k));
+                    if mesh.is_none_or(|m| m.first_holding(to).is_some()) {
+                        c.position = to;
+                        self.sisters_blocked.remove(&c.id);
+                    } else {
+                        self.sisters_blocked.insert(c.id);
+                    }
                 }
             }
             c.hp -= act.hp_loss;
@@ -13253,8 +13270,7 @@ impl Play {
     /// attack form 2 and weapon reach within 65.0 against her body cylinder, the armed hero shots)
     /// and her requests (the clip, the turn, her height, the shove, the orb hits, the level
     /// states, the absorbed shots and the impact effects). The launch point is taken 0.85 of her
-    /// height up (her mouth bone is not given); the summons by key, the slots' flight effects and
-    /// the cast glow are not built.
+    /// height up (her mouth bone is not given); the cast glow of the orb's kind follows it.
     fn faerie_step(&mut self) {
         let pack = self.world.pack;
         let hero = self.loco.position();
@@ -13315,6 +13331,7 @@ impl Play {
             let Some(f) = c.faerie.as_mut() else { continue };
             let duel = !progress && !level(18);
             let before = if duel { 20 + f.b_state } else { f.code };
+            let glow_at = v.mouth;
             let act = if duel { f.loop_b(&v, &self.faerie_words, partner, &mut self.duel, summons_alive, &mut self.rng) } else { f.tick(&v, &self.faerie_words, &mut self.rng) };
             let after = if duel { 20 + f.b_state } else { f.code };
             if let Some(n) = act.anim {
@@ -13349,6 +13366,32 @@ impl Play {
                 }
             }
             let table = self.effect_table.clone();
+            // SPEC-0054: the cast glow starts with the volley, moves with her mouth and stops.
+            match act.glow {
+                Some(Some(kind)) => {
+                    if let Some(h) = self.faerie_glow.take() {
+                        self.effects.stop(&table, h);
+                        self.effects.release(h);
+                    }
+                    if let Some(&id) = neopets_sim::darkest::GLOWS.get((kind as usize).wrapping_sub(1)) {
+                        let o = neopets_sim::effect::EffectObject::new(&table, id, glow_at, neopets_sim::effect::IDENTITY);
+                        let h = self.effects.add_object(o);
+                        self.effects.update(&table, h, None, &mut self.rng);
+                        self.faerie_glow = Some(h);
+                    }
+                }
+                Some(None) => {
+                    if let Some(h) = self.faerie_glow.take() {
+                        self.effects.stop(&table, h);
+                        self.effects.release(h);
+                    }
+                }
+                None => {}
+            }
+            if let Some(h) = self.faerie_glow {
+                self.effects.set_position(h, glow_at);
+                self.effects.update(&table, h, None, &mut self.rng);
+            }
             for &(fx, at) in &act.impacts {
                 self.effects.one_shot(&table, fx, at, neopets_sim::effect::IDENTITY, &mut self.rng);
             }
