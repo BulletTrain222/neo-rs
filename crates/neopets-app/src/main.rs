@@ -1401,7 +1401,8 @@ fn step_sim(
         }
         // --autojump also presses Square every 10 ticks while a dialogue box is open, as the
         // trace does (diagnostic, for screenshots past a scene's lines).
-        if autowalk.as_deref().is_some_and(|a| a.jump) && ticks > 0 && play.play.dialogue_open && play.play.ticks % 10 == 0 {
+        let shot_lines = std::env::var_os("NEOPETS_SHOT_BOSS").is_some() && play.play.ticks > 120;
+        if (autowalk.as_deref().is_some_and(|a| a.jump) || shot_lines) && ticks > 0 && play.play.dialogue_open && play.play.ticks % 10 == 0 {
             play.play.square_latch = true;
         }
         // A slot to apply after this frame's ticks (a load, or Continue with the snapshot).
@@ -1566,6 +1567,28 @@ fn step_sim(
             if std::env::var_os("NEOPETS_DEV_SCRIPT").is_some() {
                 dev_script(&mut play.play, &mut input);
             }
+            // NEOPETS_SHOT_BOSS's companions: NEOPETS_TRACE_AUTO, _BOSSHP and _LEVEL, as in the
+            // trace, on those play ticks (diagnostic).
+            if std::env::var_os("NEOPETS_SHOT_BOSS").is_some() {
+                play.play.cheats.god |= std::env::var_os("NEOPETS_TRACE_GOD").is_some();
+                if play.play.ticks == 5 && std::env::var_os("NEOPETS_TRACE_AUTO").is_some() && play.play.autopilot.is_none() {
+                    play.play.toggle_autopilot();
+                }
+                for (k, h) in std::env::var("NEOPETS_TRACE_BOSSHP").unwrap_or_default().split(';').filter_map(|e| e.split_once(':')) {
+                    if k.trim().parse::<u64>().ok() == Some(play.play.ticks) {
+                        if let Ok(h) = h.trim().parse::<i32>() {
+                            play.play.diag_gelert_hp(h);
+                        }
+                    }
+                }
+                for (f, k) in std::env::var("NEOPETS_TRACE_LEVEL").unwrap_or_default().split(',').filter_map(|e| e.split_once('@')) {
+                    if k.trim().parse::<u64>().ok() == Some(play.play.ticks) {
+                        if let Ok(f) = f.trim().parse() {
+                            play.play.state.set_level(f, true);
+                        }
+                    }
+                }
+            }
             play.play.tick(&input, pad);
             // A save point's Square press opens the save screen (a direct set of record 18).
             if std::mem::take(&mut play.play.save_open) {
@@ -1672,6 +1695,14 @@ fn step_sim(
                 Err(e) => error!("Warp to {pack} failed: {e}"),
             }
         }
+        // NEOPETS_SHOT_BOSS=n (diagnostic): the window starts as the developer menu's boss fight n,
+        // god mode with NEOPETS_TRACE_GOD, so a traced moment can be pictured.
+        static SHOT_BOSS: std::sync::Once = std::sync::Once::new();
+        SHOT_BOSS.call_once(|| {
+            if let Some(n) = std::env::var("NEOPETS_SHOT_BOSS").ok().and_then(|v| v.trim().parse::<usize>().ok()).filter(|&n| n < play::BOSSES.len()) {
+                dev.boss = Some(n);
+            }
+        });
         if let (Some(i), Some(archive)) = (dev.boss.take(), archive.as_deref_mut()) {
             let b = play::BOSSES[i];
             match boss_fight(&mut archive.disc, &archive.index, &play.play, &b) {
