@@ -1705,7 +1705,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 state.set_word(pack, 30 + k, up as i32);
             }
             v.extend((0..=15).map(|slot| Action::StopEffect { slot }));
-            v.extend([reg(18, 6), reg(16, 7), reg(17, 8), reg(0, 10)]);
+            v.extend([reg(18, 6), reg(16, 7), reg(17, 8), reg(0, 10), reg(2, 1), reg(1, 9)]);
             let mut snd = vec![(0, 8, 0.0), (1, 9, 0.7), (8, 8, 0.0), (10, 9, 0.0), (11, 5, 0.0), (12, 8, 0.2), (13, 6, 0.0), (14, 5, 0.0), (15, 8, 0.0), (16, 6, 0.0), (17, 9, 0.0), (18, 5, 0.0), (19, 8, 0.0), (20, 6, 0.0), (21, 9, 0.0), (22, 5, 0.0), (23, 8, 0.0), (24, 6, 0.0), (25, 9, 0.0)];
             snd.splice(2..2, (2..=7).map(|o| (o, 13, 0.0)));
             snd.extend((43..=48).map(|o| (o, 12, 0.5)));
@@ -1713,7 +1713,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0041 1247 Init: effect 0 stopped; with flag 78 set its 18 objects, else its 17 and
-        // CB7 on trigger 4 (the object-swap callbacks CB1 to CB6, Medium, are not reproduced);
+        // CB7 on trigger 4 (the object-swap callbacks: CB1 on 0, CB2 on 1, CB5 on 2, CB6 on 3);
         // the teleport and the arrival are fixed rules.
         1247 => {
             let mut v = vec![Action::StopEffect { slot: 0 }];
@@ -1721,7 +1721,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([1, 0, 7, 9, 11, 12, 15, 17, 19, 21, 23, 25, 27, 28, 31, 33, 35, 4].map(|obj| Action::InitObjOn { obj, end: false }));
             } else {
                 v.extend([2, 3, 7, 8, 10, 12, 15, 16, 18, 23, 24, 26, 29, 31, 32, 34, 5].map(|obj| Action::InitObjOn { obj, end: false }));
-                v.push(reg(4, 7));
+                v.extend([reg(4, 7), reg(0, 1), reg(1, 2), reg(2, 5), reg(3, 6)]);
             }
             // SPEC-0031 R-0111: the 32 object sounds after the flag-78 join, in site order.
             let pairs = [(2, 5), (3, 8), (6, 5), (7, 6), (8, 8), (10, 8), (11, 9), (11, 9), (22, 5), (23, 6), (24, 8), (26, 8), (29, 8), (25, 9), (27, 9), (28, 9), (30, 5), (31, 6), (32, 8), (34, 8), (33, 9), (35, 9), (13, 5), (12, 6), (14, 5), (15, 6), (16, 8), (18, 8), (17, 9), (19, 9), (5, 8), (4, 9)];
@@ -11239,6 +11239,85 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 }
             }
         }
+        // SPEC-0042 1184 triggers 2 to 6 (H2 to H6), thread C with a = 1 to 5: slot A reset and
+        // region 1185 + v, v from the list by a and the story set; while 512 is set and 513 clear
+        // the values 1, 5, 13, 21, 24 and 28 take the next value.
+        (1184, 12..=16) if first => {
+            const LIST: [[u32; 5]; 4] = [[0, 1, 3, 4, 5], [9, 10, 11, 12, 13], [17, 18, 19, 20, 21], [23, 24, 26, 27, 28]];
+            let v = LIST[state.word(pack, 1).clamp(0, 3) as usize][(routine - 12) as usize];
+            let v = if state.flag(512) && !state.flag(513) && matches!(v, 1 | 5 | 13 | 21 | 24 | 28) { v + 1 } else { v };
+            out.actions.extend([Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1185 + v) }]);
+        }
+        // E8 (220 set, 277 set): type 3 value 1 for eW 131, the fade, the hero to locator 44, the
+        // load of pack 1220 into T by the override, and the hero to 44 again.
+        (1184, 4) if first && state.flag(277) => {
+            state.blackboard.insert((3, 131), 1);
+            out.actions.extend([
+                Action::FadeOut { seconds: 0.25, wait: true },
+                Action::MoveHero { locator: 44 },
+                Action::LoadOverride { slot: 131 },
+                Action::WaitLoads,
+                Action::MoveHero { locator: 44 },
+            ]);
+        }
+        // SPEC-0041 1247's object swaps (Medium in the spec). CB1 (trigger 0, the hero, once): level
+        // state 0, objects 0 and 1 off, 3 and 2 on, effects 20 to 23 through animation 2, camera
+        // 4 and animation 3. CB2, CB5 and CB6 (triggers 1 to 3; nothing but a block or idle fire
+        // passes their gate): the swap, its effects and animation, then the swap back with its
+        // camera shots (the spec's re-read of the state is not made: the plate is taken as held).
+        (1247, 1) if call.object && call.state == 1 && !state.level(0) => {
+            state.set_level(0, true);
+            out.actions.extend(swap_1247(&[0, 1], &[3, 2], &[20, 21, 22, 23], &[20, 21, 22, 23], 2));
+            out.actions.extend([
+                Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                Action::PlayAnim { obj: 3, speed: 1.0, wait: true },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        (1247, 2) if !call.object && call.state == 1 && state.word(pack, 10) == 0 => {
+            state.set_word(pack, 10, 1);
+            out.actions.extend(swap_1247(&[9, 11, 7], &[8, 10, 6], &[13, 14, 15], &[12, 13, 14, 15], 6));
+            out.actions.extend(back_1247(6, 7, &[(5, 8), (5, 10)], &[8, 10], &[9, 11]));
+            out.actions.push(Action::Bits { word: 10, set: 0, clear: 1 });
+        }
+        (1247, 5) if !call.object && call.state == 1 && state.word(pack, 11) == 0 => {
+            state.set_word(pack, 11, 1);
+            out.actions.extend(swap_1247(&[25, 27, 28, 23], &[24, 26, 29, 22], &[16, 17, 18, 19], &[16, 17, 18, 19], 22));
+            out.actions.extend(back_1247(22, 23, &[(25, 24), (24, 26), (23, 29)], &[24, 26, 29], &[25, 27, 28]));
+            out.actions.push(Action::Bits { word: 11, set: 0, clear: 1 });
+        }
+        (1247, 6) if !call.object && call.state == 1 && state.word(pack, 12) == 0 => {
+            state.set_word(pack, 12, 1);
+            out.actions.extend(swap_1247(&[33, 35, 31], &[32, 34, 30], &[0, 1, 2, 3], &[0, 1, 2, 3], 30));
+            out.actions.extend(back_1247(30, 31, &[(10, 34), (10, 32)], &[32, 34], &[33, 35]));
+            out.actions.push(Action::Bits { word: 12, set: 0, clear: 1 });
+        }
+        // SPEC-0041 1249 CB1 (trigger 2, the door word clear): the door word, object 12 off, camera 5,
+        // the hero to locator 2, object 10 from time 0, 1 s, the normal camera. CB9 (trigger 1)
+        // clears the word: camera 7, object 12 off, object 10 on at time 0, the normal camera.
+        (1249, 1) if call.object && call.state == 1 && state.word(pack, 35) == 0 => {
+            state.set_word(pack, 35, 1);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::DeactivateObj { obj: 12 },
+                Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                Action::MoveHero { locator: 2 },
+                Action::InitObjOn { obj: 10, end: false },
+                Action::PlayAnim { obj: 10, speed: 1.0, wait: true },
+                wait(1.0),
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
+        (1249, 9) if call.object && call.state == 1 => {
+            state.set_word(pack, 35, 0);
+            out.actions.extend([
+                Action::HoldHero,
+                Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
+                Action::DeactivateObj { obj: 12 },
+                Action::InitObjOn { obj: 10, end: false },
+                Action::ReturnCamera { preset: -1, release: true },
+            ]);
+        }
         // SPEC-0042 1184 trigger 0 (E0): with 145 set, the first time (645), line 14.
         (1184, 1) if first && state.flag(145) && !state.flag(645) => {
             state.set(645, true);
@@ -11594,9 +11673,16 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             out = cloak_watch_1023(state);
         }
         // SPEC-0042 1184 thread B: while 512 is set and 513 clear, holding item 73 sets 513.
+        // SPEC-0042 1184 thread B (item 73 sets 513) and Update: the display and collision masks are
+        // 2 with 277 set, else 1 (written here when they change; word 2 holds the last, 0 none).
         1184 => {
             if state.flag(512) && !state.flag(513) && state.has_item(73) {
                 state.set(513, true);
+            }
+            let mask = if state.flag(277) { 2 } else { 1 };
+            if state.word(pack, 2) != mask as i32 {
+                state.set_word(pack, 2, mask as i32);
+                out.extend([Action::DisplayMask { mask }, Action::CollisMask { mask }]);
             }
         }
         1217 => out = burrows_fight(state, dialog),
@@ -14495,18 +14581,26 @@ fn walk_back(s: &GameState) -> Vec<Action> {
 }
 
 /// SPEC-0042 1184 Init: trigger 0 (and flag 661), the 220-dependent triggers 7 to 9 or 11, and
-/// thread A's slot-B load by the story set (regions 1215, 1200 or 1201, 1192 or 1193). Thread
-/// C's loads (triggers 2 to 6) read a 21-entry list in the module data that no spec gives
-/// (R-0036), so those triggers are not registered. Update's display and collision masks and E8's
-/// world-load override are not reproduced.
+/// thread A's slot-B load by the story set (regions 1215, 1200 or 1201, 1192 or 1193), with the
+/// set s in word 1 for thread C's zones on triggers 2 to 6 (slot 0).
 fn woods_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     let mut out = vec![reg(0, 1)];
     if !state.flag(661) {
         state.set(661, true);
     }
+    let s = if state.flag(84) {
+        3
+    } else if state.flag(83) {
+        2
+    } else {
+        state.flag(82) as i32
+    };
+    state.set_word(1184, 1, s);
+    state.set_word(1184, 2, 0);
+    out.extend((2..=6).map(|i| reg(i, 10 + i as u8)));
     if state.flag(220) {
-        out.extend([reg(7, 3), reg(9, 5)]);
+        out.extend([reg(7, 3), reg(8, 4), reg(9, 5)]);
     } else {
         out.push(reg(11, 6));
     }
@@ -14610,6 +14704,34 @@ fn kitchen_update(state: &mut GameState) -> Vec<Action> {
         }
     }
     Vec::new()
+}
+
+/// SPEC-0041 1247's swap: objects off and on, the effects started through an animation (wait) and
+/// the list stopped after it.
+fn swap_1247(off: &[usize], on: &[usize], start: &[usize], stop: &[usize], anim: usize) -> Vec<Action> {
+    let mut v = vec![Action::HoldHero];
+    v.extend(off.iter().map(|&obj| Action::DeactivateObj { obj }));
+    v.extend(on.iter().map(|&obj| Action::InitObjOn { obj, end: false }));
+    v.extend(start.iter().map(|&slot| Action::StartEffect { slot, camera: false }));
+    v.push(Action::PlayAnim { obj: anim, speed: 1.0, wait: true });
+    v.extend(stop.iter().map(|&slot| Action::StopEffect { slot }));
+    v
+}
+
+/// SPEC-0041 1247's way back: the switch object swapped and played, each camera and object
+/// animation, the normal camera, then the shown objects off and the rest on and played.
+fn back_1247(from: usize, to: usize, shots: &[(usize, usize)], off: &[usize], on: &[usize]) -> Vec<Action> {
+    let mut v = vec![Action::DeactivateObj { obj: from }, Action::InitObjOn { obj: to, end: false }, Action::PlayAnim { obj: to, speed: 1.0, wait: false }, Action::HeroAnim { anim: 0, wait: false }];
+    for &(track, obj) in shots {
+        v.extend([Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }, Action::PlayAnim { obj, speed: 1.0, wait: true }]);
+    }
+    v.push(Action::ReturnCamera { preset: -1, release: true });
+    v.extend(off.iter().map(|&obj| Action::DeactivateObj { obj }));
+    for &obj in on {
+        v.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]);
+    }
+    v.push(Action::Sleep { ticks: 1 });
+    v
 }
 
 /// SPEC-0045 1300's petpet-ritual word (ticks since it started, 0 off) and the ramp's length,
@@ -16865,6 +16987,31 @@ fn farm_slots(state: &GameState, entry_10: bool) -> Vec<Action> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn woods_zones_load_by_story_set() {
+        // SPEC-0042 test vector: flag 83 set (84 clear), 512 clear, trigger 3 (a = 2) loads 1203.
+        let mut s = GameState::default();
+        s.set(83, true);
+        let init = on_init(1184, &mut s);
+        for i in 2..=6u16 {
+            assert!(init.contains(&Action::RegisterTrigger { index: i, routine: 10 + i as u8 }));
+        }
+        let call = TriggerCall { index: 3, state: 1, object: true, square: false, block: -1 };
+        let out = on_trigger(1184, 13, call, &mut s);
+        assert!(out.actions.contains(&Action::LoadRegion { slot: 0, region: Some(1203) }));
+        // Set 0, a = 2 gives v 1, which 512 without 513 replaces by 2.
+        let mut s = GameState::default();
+        s.set(512, true);
+        on_init(1184, &mut s);
+        let out = on_trigger(1184, 13, call, &mut s);
+        assert!(out.actions.contains(&Action::LoadRegion { slot: 0, region: Some(1185 + 2) }));
+        // Update's masks, once per change.
+        assert!(on_update(1184, &mut s, false).contains(&Action::DisplayMask { mask: 1 }));
+        assert!(on_update(1184, &mut s, false).is_empty());
+        s.set(277, true);
+        assert!(on_update(1184, &mut s, false).contains(&Action::CollisMask { mask: 2 }));
+    }
 
     #[test]
     fn the_1163_guests_use_template_w() {

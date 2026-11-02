@@ -4684,6 +4684,26 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_INITS: the triggers each pack's Init registers, with no flags and with all set.
+        if std::env::var_os("NEOPETS_TRACE_INITS").is_some() && play.ticks == 1 {
+            for pack in 600..1500u32 {
+                let mut got = std::collections::BTreeSet::new();
+                for all in [false, true] {
+                    let mut st = neopets_sim::level::GameState::default();
+                    if all {
+                        for f in 0..800 {
+                            st.set(f, true);
+                        }
+                    }
+                    for a in neopets_sim::level::on_init(pack, &mut st) {
+                        if let neopets_sim::level::Action::RegisterTrigger { index, .. } = a {
+                            got.insert(index);
+                        }
+                    }
+                }
+                println!("INITS {pack} {got:?}");
+            }
+        }
         // NEOPETS_TRACE_STATUPS: the items the stat-up rule accepts.
         if std::env::var_os("NEOPETS_TRACE_STATUPS").is_some() && play.ticks == 1 {
             println!("STATUPS {:?}", play.stat_up_list());
