@@ -3575,6 +3575,22 @@ impl Play {
                     self.hero.request(anim, true);
                     return Some(if wait { Wait::HeroOneShot } else { Wait::Ticks(1) });
                 }
+                Action::HeroLoop { anim, seconds, control } => {
+                    // SPEC-0030 Seconds to ticks; a negative time is one tick and it does not wait.
+                    let ticks = if seconds < 0.0 { 1 } else { (seconds * 60.0) as i32 };
+                    self.loco.play_loop(anim, ticks, control);
+                    self.hero.request(anim, true);
+                }
+                Action::ItemDeactivate { slot, ordinal } => {
+                    if let Some(key) = self.slot_items.get(&(pack, slot)).and_then(|v| v.get(ordinal)).map(|p| p.key) {
+                        if let (Ok(id), Some(pool)) = (u16::try_from(key), self.pools.get_mut(&pack)) {
+                            let live: Vec<usize> = pool.slots.iter().enumerate().filter(|(_, s)| s.is_some_and(|it| it.id == id)).map(|(i, _)| i).collect();
+                            for i in live {
+                                pool.take(i);
+                            }
+                        }
+                    }
+                }
                 Action::Equip { on } => self.set_weapon_drawn(on),
                 Action::HudReset => self.hud_reset(),
                 Action::MaxActiveAi { cap } => {
@@ -6962,8 +6978,8 @@ impl Play {
                 c.hp -= damage;
                 if c.hp <= 0 && c.dying.is_none() {
                     c.dying = Some(c.row.map_or(60, |r| r.disappear.max(1) as u32));
-                    // A class-17 flyer (its AI is not built) still pays its drop placement on
-                    // death (SPEC-0021 enemy drops).
+                    // A class-17 row with no enemy AI here still pays its drop placement on death
+                    // (SPEC-0021 enemy drops).
                     if c.row.is_some_and(|r| r.class == Some(17)) {
                         self.payouts.push((c.pack, c.position, c.drop, std::mem::take(&mut c.carried_np)));
                     }
@@ -10259,7 +10275,10 @@ impl Play {
                 if let Some(wk) = c.walker.as_mut() {
                     wk.place(c.position);
                     wk.facing = c.facing;
-                    wk.assign_mesh(pick, &world.navmeshes);
+                    // A script's NavmeshAssign before the first walk stands.
+                    if wk.mesh.is_none() {
+                        wk.assign_mesh(pick, &world.navmeshes);
+                    }
                 }
             }
             // A script may have moved the character.
@@ -15933,7 +15952,7 @@ impl Play {
     /// SPEC-0009 Per-tick controller, the parts this build has: the current world's music row
     /// (its type-1001 key looked up in the value table; 193, the default row, when absent), the
     /// run-time flag, and the stream step with the ceiling trunc(Cap x Sound-effects gain). The
-    /// gains are 1.0 until options are applied (not implemented).
+    /// options' gains apply through `self.options`.
     fn music_step(&mut self) {
         let (key, selector) = self.world.music.unwrap_or((-1, 0));
         let row = self.world_keys.1.iter().position(|&v| v as i32 == key).unwrap_or(193);

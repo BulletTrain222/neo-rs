@@ -288,6 +288,10 @@ pub enum Action {
     /// AddItemToWorld, the locator form (SPEC-0030 row 364): the item at the locator, snapped,
     /// placed and never expiring.
     AddItem { locator: usize, item: u16 },
+    /// ItemDeactivate (SPEC-0030 row 204): the live items of a slot placement leave the world.
+    ItemDeactivate { slot: u8, ordinal: usize },
+    /// LoopHeroAnim (row 168): the hero loops the animation for the seconds; it does not wait.
+    HeroLoop { anim: u32, seconds: f32, control: bool },
     /// ItemActivate, the world form (SPEC-0030 row 198): the placement with this ordinal among
     /// the item placements of the region loaded in slot `slot`, added as a scripted add
     /// (SPEC-0021 Drop routes 3) with the two bools, the default lifetime and no overrides.
@@ -2751,7 +2755,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0045 842 Init: the slot thread's set by stage (59: 6, 58: 7, 57: 4, 56: 3, 55: 7,
         // 54: 1, else 0; region 843 + j); the AI-kill watch armed when 54 is clear (word 1);
         // triggers 0 to 4; object 0 by stage; 197; the signs 5 to 8; object 1 while 198 is
-        // clear. The AI movement types and villager socialising calls are not built.
+        // clear; after the load, movement type 2 for entities 3, 5 and 7 (the villagers the Ixi
+        // Spearmen follow). The villager socialising call does nothing here: no pair ever forms.
         842 => {
             let s = stage_842(state);
             let j = match s {
@@ -2773,6 +2778,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if !state.flag(198) {
                 v.push(Action::InitObjOn { obj: 1, end: false });
             }
+            v.push(Action::WaitLoads);
+            v.extend([3, 5, 7].map(|entity| Action::MoveType { entity, kind: 2 }));
             v
         }
         // SPEC-0044 1411 Init: 95 (with 99, 105, 101 and 103) on the first visit; 96 and 335 once
@@ -3091,10 +3098,14 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             v
         }
-        // SPEC-0037 1251 Init: the proximity and on-enter callbacks; thread A's slot load (with
-        // activate false) and its ItemActivate calls are not reproduced (the item slot is
-        // Medium in the spec); the item-ask callback never fires.
-        1251 => Vec::new(),
+        // SPEC-0037 1251 Init: the proximity and on-enter callbacks; thread A's slot load of set 0
+        // (region 1252, items only) and its ItemActivate: ordinal 0 with 460 set, else 1. "The item
+        // slot" is taken as that one slot (Medium in the spec). The item-ask callback never fires.
+        1251 => vec![
+            Action::LoadRegion { slot: 0, region: Some(1252) },
+            Action::WaitLoads,
+            Action::ItemActivate { slot: 0, ordinal: if state.flag(460) { 0 } else { 1 }, snap: false, placed: true },
+        ],
         // SPEC-0037 855, 856, 857, 858 and 1429 Init: the entry thread's line (argument 0: in
         // entity 0's conversation frame; 857's argument -1: none) and the normal camera. 856's
         // item-ask callbacks never fire (SPEC-0030 row 257); the buy callbacks are on_buy.
@@ -3614,7 +3625,8 @@ fn road_intro() -> Vec<Action> {
     v.extend([ReleaseEntity { entity: 3 }, ReleaseEntity { entity: 2 }, ReleaseEntity { entity: 1 }, ReleaseEntity { entity: 0 }]);
     v.extend([FadeOut { seconds: 0.7, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, MoveHero { locator: 3 }]);
     v.extend([ReturnCamera { preset: -1, release: true }, FadeIn { seconds: 0.7, wait: false }, Message { line: 22 }]);
-    v.extend([Agro { entity: 1 }, Agro { entity: 2 }, PlayStinger { id: 4, volume: 1.0 }]);
+    // SPEC-0056 SetAI_Behavior: entities 1 and 2 take code 7 after the scene, then aggression.
+    v.extend([AiBehavior { entity: 1, code: 7 }, AiBehavior { entity: 2, code: 7 }, Agro { entity: 1 }, Agro { entity: 2 }, PlayStinger { id: 4, volume: 1.0 }]);
     v
 }
 
@@ -3624,9 +3636,10 @@ fn road_end(pack: u32) -> Vec<Action> {
     let anim = |entity, anim| EntityAnim { entity, anim, looped: false, wait: false };
     let cam = |track| PlayCamera { track, wait: false, end: 1, speed: 1.0 };
     let walk = |entity, locator, wait| WalkEntity { entity, locator, wait, orient: false, stop: 0.0 };
-    let mut v = vec![HoldHero, FadeOut { seconds: FADE, wait: true }];
+    let mut v = vec![HoldHero, Equip { on: false }, FadeOut { seconds: FADE, wait: true }];
     v.extend([MoveEntity { entity: 0, locator: 6, face: true }, MoveEntity { entity: 1, locator: 11, face: true }, MoveEntity { entity: 2, locator: 13, face: true }]);
     v.extend([Sleep { ticks: 30 }, MoveHero { locator: 7 }, LetterBox { on: true, seconds: 0.0, wait: false }, cam(20)]);
+    v.extend([AiBehavior { entity: 1, code: 0 }, AiBehavior { entity: 2, code: 0 }, MoveType { entity: 1, kind: 2 }, MoveType { entity: 2, kind: 2 }]);
     v.extend([anim(1, 0), anim(2, 0), Sleep { ticks: 1 }, walk(1, 12, false), walk(2, 14, false), WalkHero { locator: 9, wait: false, orient: false }]);
     v.extend([FadeIn { seconds: FADE, wait: false }, Sleep { ticks: 30 }, anim(0, 3), Sleep { ticks: 30 }, cam(21), anim(0, 17)]);
     v.extend([Converse { entity: 0, line: 10 }, anim(0, 117), cam(22), Sleep { ticks: 20 }, walk(0, 4, true), FadeOut { seconds: FADE, wait: true }]);
@@ -7547,8 +7560,8 @@ fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
             talk(first + c as u16)
         }
         // 1251: 585 without 586 takes every item 84, sets 586, line 28; 460: 29 (273), 30 (270)
-        // or the pair 31, 32; 457 with item 49: 460 set, line 33 (270) or 34, every item 49
-        // taken (the ItemDeactivate and ItemActivate calls are not reproduced); 457: lines 35 to
+        // or the pair 31, 32; 457 with item 49: 460 set, every item 49 taken, thread A's item out
+        // and ordinal 0 in, then line 33 (270) or 34; 457: lines 35 to
         // 37; else 457 set and line 38 (273), 39 (270) or 40. Both rotations share set number
         // 2: the counter restarts only when the set word is not 2, and the pair gives no line at
         // counter 2.
@@ -7563,7 +7576,9 @@ fn outskirts_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
             s.set(460, true);
             let line = if f(s, 270) { 33 } else { 34 };
             s.remove_all(49);
-            talk(line)
+            let mut v = vec![Action::ItemDeactivate { slot: 0, ordinal: 1 }, Action::ItemActivate { slot: 0, ordinal: 0, snap: false, placed: true }];
+            v.extend(talk(line));
+            v
         }
         1251 if f(s, 460) || f(s, 457) => {
             if s.word(pack, 0) != 2 {
@@ -12046,12 +12061,13 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         906 => out.extend(nav_pass(state, pack, 18)),
         // SPEC-0042 986 Update: the navigation pass over 28 entities.
         986 => out.extend(nav_pass(state, pack, 28)),
-        // SPEC-0043 1335 Update: CharacterNavmeshAssign(36, 4) each tick (SetAI_MovementType is
-        // not built). The line-37 thread (Init starts it with 239 clear; it ends once 239 is
+        // SPEC-0043 1335 Update: CharacterNavmeshAssign(36, 4) and SetAI_MovementType(36, 1) each
+        // tick. The line-37 thread (Init starts it with 239 clear; it ends once 239 is
         // set): once movie 22 has played, line 37 every 3608 ticks (3600, the line, then 4 and
         // 4 more; word 30 counts).
         1335 => {
             out.push(Action::NavmeshAssign { entity: 36, mesh: 4 });
+            out.push(Action::MoveType { entity: 36, kind: 1 });
             if !state.flag(239) && state.movies.contains(&22) {
                 let n = state.word(pack, 30) + 1;
                 state.set_word(pack, 30, n);
@@ -12248,7 +12264,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // lost (380; the hero-death cutscene with the opponent's victory animation and line 61 - r;
         // the lost result for eW 90 and its load); the opponent's death wins it (the death
         // sequence with line 54, 55 or 56 by flags 202 and 150; the won result and the load).
-        // The HUD reset and LoopHeroAnim's 4 s loop are not reproduced.
+        // The HUD reset is the camera play's.
         1176 => {
             let opp = state.word(pack, 1);
             let r = state.word(pack, 4) as usize;
@@ -12266,7 +12282,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                         Action::MoveHero { locator: 0 },
                         Action::FadeIn { seconds: 0.7, wait: true },
                         Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
-                        Action::HeroAnim { anim: 190, wait: false },
+                        Action::HeroLoop { anim: 190, seconds: 4.0, control: false },
                         wait(3.0),
                         Action::FadeOut { seconds: FADE, wait: true },
                         Action::FadeIn { seconds: FADE, wait: true },
@@ -12976,6 +12992,14 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::PlaySound { cue: 5, locator: None });
                 out.extend([Action::PlayAnim { obj: 15, speed: 1.0, wait: false }, Action::PlayAnim { obj: 16, speed: 1.0, wait: false }]);
                 out.extend([Action::DeactivateObj { obj: 4 }, Action::InitObjOn { obj: 5, end: false }]);
+            }
+            // Word 40: flag 111 set and 112 clear give entity 31 movement type 1 once, unless the
+            // stage is 2 with flag 147 clear.
+            if state.flag(111) && !state.flag(112) && state.word(pack, 40) == 0 {
+                state.set_word(pack, 40, 1);
+                if !(state.stage() == Some(2) && !state.flag(147)) {
+                    out.push(Action::MoveType { entity: 31, kind: 1 });
+                }
             }
             if !state.flag(111) && state.has_item(6) && state.flag(110) {
                 state.set(111, true);
@@ -14523,8 +14547,34 @@ fn kitchen_update(state: &mut GameState) -> Vec<Action> {
     Vec::new()
 }
 
-/// SPEC-0045 1163 proximity routines: the keeper (0), entity 7 (lines only; its serving scene
-/// with flags 25 and 635 is not built) and Sir Harlag (15, with his cutscene as its lines).
+/// SPEC-0045 1163 Serving scene. Each guest's Random(0, 1) locator comes from one roll of this
+/// talk, a bit per guest. The hero is held through it; the spec's list has no hold or release,
+/// which its moves imply.
+fn serving_1163(roll: i32) -> Vec<Action> {
+    use Action::*;
+    let fade = |on: bool| if on { FadeIn { seconds: 0.7, wait: true } } else { FadeOut { seconds: 0.7, wait: true } };
+    let mut v = vec![HoldHero, fade(false)];
+    v.extend([2, 3].map(|slot| LoadRegion { slot, region: None }));
+    v.extend([LoadRegion { slot: 2, region: Some(1167) }, LoadRegion { slot: 3, region: Some(1168) }, WaitLoads]);
+    let guests = [8, 6, 14, 13, 15];
+    for (i, &entity) in guests.iter().enumerate() {
+        let locator = 2 * i + 1 + ((roll >> i) & 1) as usize;
+        v.extend([MoveEntity { entity, locator, face: true }, WalkEntity { entity, locator, wait: false, orient: true, stop: 1.1 }]);
+    }
+    v.extend([NavmeshAssign { entity: 7, mesh: 4 }, NavmeshAssign { entity: 9, mesh: 4 }, MoveType { entity: 9, kind: 2 }]);
+    v.extend([MoveEntity { entity: 7, locator: 21, face: true }, MoveEntity { entity: 9, locator: 24, face: true }, MoveHero { locator: 11 }, wait(1.0), fade(true), wait(20.0), fade(false)]);
+    v.extend([MoveHero { locator: 12 }, NavmeshAssign { entity: 7, mesh: 3 }, NavmeshAssign { entity: 9, mesh: 2 }, MoveType { entity: 9, kind: 0 }]);
+    for (entity, locator) in [(7, 14), (9, 13)] {
+        v.extend([MoveEntity { entity, locator, face: true }, WalkEntity { entity, locator, wait: false, orient: false, stop: 0.0 }]);
+    }
+    v.extend(guests.map(|entity| EntityAnim { entity, anim: 65, looped: true, wait: false }));
+    v.extend([2, 3].map(|slot| LoadRegion { slot, region: None }));
+    v.extend([fade(true), ReturnCamera { preset: -1, release: true }]);
+    v
+}
+
+/// SPEC-0045 1163 proximity routines: the keeper (0), entity 7 (with the serving scene under flags
+/// 25 and 635) and Sir Harlag (15, with his cutscene as its lines).
 fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
     let three = |b: u16| cycle(&[b, b + 1, b + 2]);
     let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
@@ -14547,23 +14597,33 @@ fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
                 talk(rot.pick(2, &three(9)))
             }
         }
-        7 => talk(if s.flag(29) {
-            rot.pick(0, &three(49))
-        } else if s.flag(28) {
-            Some(52)
-        } else if s.flag(27) {
-            rot.pick(1, &three(53))
-        } else if s.flag(25) && s.flag(635) {
-            if s.flag(185) {
-                rot.pick(2, &three(59))
-            } else if s.flag(183) {
-                rot.pick(3, &three(62))
+        7 => {
+            let serve = s.flag(25) && s.flag(635) && !s.flag(183) && !s.flag(185) && !s.flag(29) && !s.flag(28) && !s.flag(27);
+            let mut v = talk(if s.flag(29) {
+                rot.pick(0, &three(49))
+            } else if s.flag(28) {
+                Some(52)
+            } else if s.flag(27) {
+                rot.pick(1, &three(53))
+            } else if s.flag(25) && s.flag(635) {
+                if s.flag(185) {
+                    rot.pick(2, &three(59))
+                } else if s.flag(183) {
+                    rot.pick(3, &three(62))
+                } else {
+                    Some(65)
+                }
             } else {
-                Some(65)
+                rot.pick(4, &three(56))
+            });
+            // After the line, with 25 and 635 set and 183 and 185 clear: 183 and the serving scene.
+            if serve || (s.flag(25) && s.flag(635) && !s.flag(183) && !s.flag(185)) {
+                s.set(183, true);
+                v.push(Action::WaitDialog);
+                v.extend(serving_1163(s.talk_roll));
             }
-        } else {
-            rot.pick(4, &three(56))
-        }),
+            v
+        }
         15 => {
             if s.flag(200) {
                 talk(rot.pick(0, &cycle(&[85, 86])))

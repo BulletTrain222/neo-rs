@@ -30,6 +30,8 @@ pub const ARRIVAL: u8 = 59;
 /// The scripted one-shot animation (PlayHeroAnim; SPEC-0040 Behavior 15.3 route 51) and the
 /// script-control state it can end in (0x21).
 pub const ONE_SHOT: u8 = 51;
+/// LoopHeroAnim's state (SPEC-0030 row 168).
+pub const HERO_LOOP: u8 = 55;
 pub const SCRIPTED: u8 = 33;
 /// Held by an enemy's grab (SPEC-0040 state 53; the host's `held_step` runs it).
 pub const HELD: u8 = 53;
@@ -267,6 +269,8 @@ pub struct Locomotion {
     pub carry: u8,
     /// PlayHeroAnim's CTL: the one-shot ends in state 1 (set) or 33.
     pub one_shot_control: bool,
+    /// LoopHeroAnim's counter.
+    pub loop_ticks: i32,
     /// The displayed height and its follow (SPEC-0033 Behavior 7).
     pub follow: HeightFollow,
 }
@@ -345,6 +349,7 @@ impl Locomotion {
             status_scale: 1.0,
             carry: 0,
             one_shot_control: true,
+            loop_ticks: 0,
             follow: HeightFollow::at(position[1]),
         }
     }
@@ -438,6 +443,15 @@ impl Locomotion {
     pub fn feed(&mut self) {
         self.state = FEED;
         self.request = ANIM_FEED;
+    }
+
+    /// LoopHeroAnim (SPEC-0030 row 168): the clip for this many ticks; then state 1 with control,
+    /// otherwise the scripted state.
+    pub fn play_loop(&mut self, anim: u32, ticks: i32, control: bool) {
+        self.state = HERO_LOOP;
+        self.request = anim;
+        self.one_shot_control = control;
+        self.loop_ticks = ticks;
     }
 
     pub fn play_one_shot(&mut self, anim: u32, control: bool) {
@@ -597,7 +611,7 @@ impl Locomotion {
     pub fn action(&self) -> u32 {
         match self.state {
             SLOW_WALK | WALK | RUN => self.state as u32,
-            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => self.request,
+            JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | HERO_LOOP | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => self.request,
             ARRIVAL => 175,
             HELD => 143,
             SNEAK => 87,
@@ -636,6 +650,14 @@ impl Locomotion {
             // Route 51: at progress 0.99 of the clip, state 1 with the control flag set, else 33.
             ONE_SHOT => {
                 if clip.action == self.request && clip.progress >= 0.99 {
+                    self.state = if self.one_shot_control { STANCE } else { SCRIPTED };
+                }
+                return;
+            }
+            HERO_LOOP => {
+                if self.loop_ticks > 0 {
+                    self.loop_ticks -= 1;
+                } else {
                     self.state = if self.one_shot_control { STANCE } else { SCRIPTED };
                 }
                 return;
