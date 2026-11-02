@@ -45,6 +45,9 @@ pub struct DevMenu {
     pub toast: Option<(String, u32)>,
     /// The weapon list's cursor.
     weapon_at: usize,
+    /// The cut and developer teleport's cursor, and where a teleport to a world with no entry puts the hero.
+    extra_at: usize,
+    pub warp_point: Option<[f32; 3]>,
     /// The Hero Haste slider under the mouse button: its position, 0 at the left to 1.
     haste_drag: Option<f32>,
     /// A mouse click this frame: apply the cursor's entry, or step its value.
@@ -66,7 +69,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { extra_at: 0, warp_point: None, haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -109,6 +112,23 @@ pub struct DevText;
 
 const AMOUNTS: [i32; 4] = [100, 1_000, 10_000, 100_000];
 
+/// The developer and cut worlds a new game never enters (SPEC-0066, leaving out its duplicates and 683, which has
+/// no ground): pack, name, and the hero's point in the two with no entry record (x, y, z).
+const EXTRAS: [(u32, &str, Option<[f32; 3]>); 12] = [
+    (1259, "Dev showroom", None),
+    (1298, "Dev climbing course", None),
+    (1323, "Tower stairwell, 2nd build", None),
+    (742, "Cut Missing Kid scene", None),
+    (1170, "Cut castle room", None),
+    (879, "Cut Cogham Steppes area", None),
+    (1003, "Cut Market Town scenery", None),
+    (684, "Cut scenery, 2nd build", None),
+    (1055, "Cut gate crossing", None),
+    (720, "Unused empty room", Some([312.0, 55.0, 871.0])),
+    (1004, "Unused pad", None),
+    (1082, "Unused ramp and ladder", Some([80.0, 8.0, -211.0])),
+];
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Entry {
     God,
@@ -131,6 +151,7 @@ enum Entry {
     Weapon,
     Noclip,
     Haste,
+    Extra,
     CloudBeast,
     BossFight,
 }
@@ -139,13 +160,13 @@ enum Entry {
 const SECTIONS: [(&str, &[Entry]); 6] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
-    ("TRAVEL", &[Entry::Warp, Entry::Start]),
+    ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 22] = [
+const ENTRIES: [Entry; 23] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -156,6 +177,7 @@ const ENTRIES: [Entry; 22] = [
     Entry::ToCamera,
     Entry::Warp,
     Entry::Start,
+    Entry::Extra,
     Entry::Heal,
     Entry::Hero,
     Entry::Kill,
@@ -210,7 +232,7 @@ fn other_column(i: usize) -> usize {
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam => Kind::Toggle,
-        Entry::Haste | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
+        Entry::Haste | Entry::Extra | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
         _ => Kind::Action,
     }
 }
@@ -485,6 +507,11 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         if let Some(n) = v.split(',').find_map(|t| t.trim().strip_prefix("flag=")?.parse::<u16>().ok()) {
             dev.flag = n;
         }
+        // "extra=K": the cut and developer teleport to its entry K.
+        if let Some(&(pack, _, point)) = v.split(',').find_map(|t| t.trim().strip_prefix("extra=")?.parse::<usize>().ok()).and_then(|k| EXTRAS.get(k)) {
+            dev.warp = Some(pack);
+            dev.warp_point = point;
+        }
         if let Some(k) = v.split(',').find_map(|t| t.trim().strip_prefix("speed=")?.parse::<usize>().ok()) {
             dev.speed = k.min(SPEEDS.len() - 1);
         }
@@ -729,6 +756,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     }
     if delta != 0 {
         match entry {
+            Entry::Extra => dev.extra_at = (dev.extra_at as i32 + delta.signum()).rem_euclid(EXTRAS.len() as i32) as usize,
             Entry::Haste => {
                 play.play.cheats.haste = (play.play.cheats.haste as i32 + delta).clamp(0, crate::play::Cheats::HASTE_TOP as i32) as u8;
             }
@@ -825,6 +853,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         Entry::Speed => {
             dev.speed = NORMAL;
             "Normal speed".into()
+        }
+        Entry::Extra => {
+            let (pack, name, point) = EXTRAS[dev.extra_at];
+            dev.warp = Some(pack);
+            dev.warp_point = point;
+            format!("Teleporting to {name} (world pack {pack}); the Warp row brings you back")
         }
         Entry::Haste => {
             p.cheats.haste = 0;
@@ -925,6 +959,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::FreeCam => ("Free camera (F2)".into(), on(dev.free.is_some())),
         Entry::Speed => ("Game speed (apply: 1x)".into(), speed_label(dev.speed)),
         Entry::ToCamera => ("Hero to the free camera".into(), String::new()),
+        Entry::Extra => (format!("Teleport: {}", EXTRAS[dev.extra_at].1), format!("{} of {}", dev.extra_at + 1, EXTRAS.len())),
         Entry::Warp => {
             let w = worlds(p);
             let target = w.get(dev.warp_at).copied();

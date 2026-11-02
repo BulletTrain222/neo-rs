@@ -1708,6 +1708,10 @@ fn step_sim(
                         Ok(second) => commands.insert_resource(Streamer::start(second, archive.index.clone(), play.play.boot.clone())),
                         Err(e) => error!("No loader thread, streaming is off: {e}"),
                     }
+                    // A cut world with no entry record: the hero by hand (SPEC-0066).
+                    if let Some([x, y, z]) = dev.warp_point.take() {
+                        play.play.place_at(x, z, y + 8.0);
+                    }
                     info!("Warped to world pack {pack}");
                 }
                 Err(e) => error!("Warp to {pack} failed: {e}"),
