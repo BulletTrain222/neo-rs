@@ -1832,11 +1832,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0039 790 Init: objects 3, 0, 1, 2, 18 and 20 off; handlers 2 (trigger 14), 3 (15), 4
-        // (0) and 5 (8, and the kind-7 group 6's triggers 16 and 17). Trigger 1's handler 1
-        // branches on the trigger state in the middle of its sequence and is not reproduced.
+        // (0), 5 (8, and the kind-7 group 6's triggers 16 and 17) and 1 (trigger 1; `plate_step`).
         790 => {
             let mut v: Vec<Action> = [3, 0, 1, 2, 18, 20].into_iter().map(|obj| Action::InitObjOn { obj, end: false }).collect();
-            v.extend([reg(14, 2), reg(15, 3), reg(0, 4), reg(8, 5), Action::RegisterInstance { routine: 5, trigger: 0, group: 6 }]);
+            v.extend([reg(14, 2), reg(15, 3), reg(0, 4), reg(8, 5), reg(1, 1), Action::RegisterInstance { routine: 5, trigger: 0, group: 6 }]);
             v
         }
         // SPEC-0041 1353 Init: effect 0 stopped; Z2, Z1, Z0 and Z3 on triggers 2, 1, 0 and 3
@@ -11002,6 +11001,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             }
             state.set_level(2, true);
         }
+        // SPEC-0039 790 handler 1 (trigger 1; R-0192): the first fire, latch (word 40) clear.
+        (790, 1) if call.state == 1 && !state.shot_hits.contains(&call.index) && state.word(pack, 40) == 0 && state.word(pack, 61) == 0 => {
+            state.set_word(pack, 61, 1);
+            out.actions.push(Action::PlateStep { routine, phase: 0 });
+        }
         // SPEC-0039 790 handlers 2 and 3 (triggers 14 and 15, the body): the Square context 6; a
         // press plays the lever sequence (camera 9, the walk to locator 48 or 49, hero animation
         // 140, object 18 or 20 (wait), camera 6 or 7, object 1 or 2 (wait), the lever off, object
@@ -12166,8 +12170,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         // SPEC-0041 800 CB2 to CB4: after stage A, stage B once AIs 10 and 11 are dead (lines 7 and
         // 8, level state 0), stage C on level state 1 (set 7 into slot 3, lines 9 and 10, entities
         // 12 to 16 aggressive, level state 2), stage D on level state 3 (lines 11 and 12, object 0,
-        // flags 55 and 200). Level states 1 and 3 come from the raider fight (not built); stage
-        // D's item activation is not built (stage A's boss-fight refill is in CB5).
+        // flags 55 and 200). Level states 1 and 3 come from the Chieftain's controller (R-0164); stage
+        // D activates placement id 12, ordinal 0 of the slot holding set 5 (stage A's boss-fight refill is in CB5).
         800 => {
             let w = |s: &GameState, k| s.word(800, k);
             if w(state, 1) == 1 && w(state, 2) == 0 && state.ai_dead.contains(&10) && state.ai_dead.contains(&11) {
@@ -12200,7 +12204,7 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set(200, true);
                 out.extend([Action::FadeOut { seconds: 1.0, wait: true }, Action::MoveEntity { entity: 9, locator: 17, face: true }, Action::PlayCamera { track: 13, wait: false, end: 1, speed: 1.0 }, Action::FadeIn { seconds: FADE, wait: true }, Action::Converse { entity: 9, line: 11 }, Action::PlayCamera { track: 19, wait: false, end: 1, speed: 1.0 }, wait(1.0)]);
                 out.extend((12..=16).zip(27..=31).map(|(entity, locator)| Action::WalkEntity { entity, locator, wait: false, orient: false, stop: 1.1 }));
-                out.extend([wait(1.5), Action::Converse { entity: 9, line: 12 }, Action::Sleep { ticks: 55 }, Action::InitObjOn { obj: 0, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
+                out.extend([wait(1.5), Action::Converse { entity: 9, line: 12 }, Action::Sleep { ticks: 55 }, Action::ItemActivate { slot: 1, ordinal: 0, snap: true, placed: true }, Action::InitObjOn { obj: 0, end: false }, Action::ReturnCamera { preset: -1, release: true }]);
             }
         }
         // SPEC-0041 985 Update: the thread of the load's branch.
@@ -14991,6 +14995,7 @@ pub fn plate_triggers(pack: u32, routine: u8) -> (u16, Option<u16>) {
         (1247, 2) => (1, None),
         (1247, 5) => (2, None),
         (1247, 6) => (3, None),
+        (790, _) => (1, None),
         (1247, 3) => (5, Some(6)),
         (1247, 4) => (6, Some(5)),
         (_, 2) => (3, None),
@@ -15015,6 +15020,19 @@ pub fn plate_step(pack: u32, routine: u8, phase: u8, own: u8, other: u8, s: &mut
     let next = |phase: u8| Action::PlateStep { routine, phase };
     let done = Action::Bits { word: 60 + routine, set: 0, clear: 1 };
     let held = matches!(own, 1 | 2);
+    // SPEC-0039 790 handler 1: animation 3, then by the live state: left, animation 4; still inside,
+    // animation 0 and camera 5, the latch, the wait to leave, animation 4.
+    if pack == 790 {
+        let leave = wait_anim(4);
+        return match phase {
+            0 => vec![wait_anim(3), next(1)],
+            1 if held => {
+                s.set_word(pack, 40, 1);
+                vec![Action::PlayAnim { obj: 0, speed: 1.0, wait: false }, Action::PlayCamera { track: 5, wait: true, end: 0, speed: 1.0 }, normal, Action::WaitInside { index }, leave, done]
+            }
+            _ => vec![leave, done],
+        };
+    }
     let table: Option<PlateScene> = match (pack, routine) {
         (1247, 2) => Some(PlateScene { a_off: &[9, 11, 7], a_on: &[8, 10, 6], plate: 6, up: 7, fx: 13..=15, stop: 12..=15, inside: vec![look(5, 8), wait_anim(8), look(5, 10), wait_anim(10), normal], b_off: &[8, 10, 6], b_on: &[9, 11, 7], b_play: &[7, 9, 11] }),
         (1247, 5) => Some(PlateScene {
@@ -15130,7 +15148,6 @@ pub fn plate_step(pack: u32, routine: u8, phase: u8, own: u8, other: u8, s: &mut
             v.extend([normal, done]);
         }
     }
-    let _ = s;
     v
 }
 
