@@ -14,9 +14,7 @@
 //!
 //! Socialize (Behavior 10) is built without its companion-row branch for a script-held peer.
 //! Not covered: the global AI pause (state 20; its
-//! word has no known writer), the map search (Behaviors 9, 17, 18, 39, 42, 43), the named-target
-//! state 9 (it stands and notices), the alarm emerge's camera and cue, wandering in states 5 to
-//! 7 (they stand and notice),
+//! word has no known writer), state 9's +0xC4 branch (zero on every disc record),
 //! theft and Mote drain, ghosts and the carried Neopoints of a theft (the drops are the host's
 //! pay_out; reanimation, state 16 of rows 224, 226 and 227, is built). The alerted search
 //! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
@@ -289,6 +287,8 @@ pub struct View<'a> {
     /// The socializing enemies of the world and this enemy's navmesh (Behavior 10).
     pub peers: &'a [Peer],
     pub mesh_id: Option<usize>,
+    /// State 9's named target: its position and movement type, when it is present.
+    pub followed: Option<(Vec3, u8)>,
     /// Event bits on the current frame: 0x20 is the release event (the missile slot's spawn
     /// event, SPEC-0005 table B), and 0x1 to 0x10 on that frame pick emit points 0 to 4.
     pub spawn_bits: u32,
@@ -404,6 +404,9 @@ pub struct Act {
     pub cast: Option<(u64, u8)>,
     /// A socialize peer passed the test: it goes to state 3 with this enemy (Behavior 10).
     pub chat: Option<u64>,
+    /// The group alarm woke this waiting enemy with cue word 0: the shared stinger 4 (SPEC-0038
+    /// Behavior 40; no camera is started).
+    pub sting: bool,
 }
 
 /// SPEC-0040 Behavior 21, the flyer goal height. `ambush` is the ambush word (+0xBC0); while it
@@ -967,7 +970,7 @@ impl Enemy {
     /// Behavior 3, the alarm-group check: with a group and a broadcast for it not yet seen,
     /// states 0, 3, 5, 6, 7 and 14 go to the alerted search (2) with animation 18; a hidden
     /// enemy (state 8) plays its emerge (emerge sub-state 2), or goes to agro when it has none.
-    /// The camera and sound cue of the emerge (spawn word 0xC4 at 0) is not built.
+    /// With cue word (spawn word 0xC4) 0 the wake asks for stinger 4.
     fn alarm_check(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
         if self.spawn.alarm.is_none() || v.alarm_serial <= self.alarm_seen {
             return;
@@ -981,6 +984,7 @@ impl Enemy {
                 self.alerting = true;
             }
             8 => {
+                a.sting = self.spawn.int(0xC4) == 0;
                 let sel = self.spawn.selector;
                 let id = if self.p.can_fly != 0 { 165 } else if (1..=4).contains(&sel) { 132 + sel } else { 10 };
                 if (v.has)(id) {
@@ -1659,6 +1663,7 @@ impl Enemy {
             18 => self.cast_step(v, rng, &mut a),
             // State 6 with no route stands (the spec's steer toward entry 0 is not built).
             3 if self.chat_with.is_some() => self.chat_step(v, rng, &mut a),
+            9 => self.follow_step(v, rng, &mut a),
             0 | 3 | 6 | 9 | 20 => a.anim = Some(self.idle(false, v, rng)),
             _ => {}
         }
@@ -1883,6 +1888,23 @@ impl Enemy {
             self.map_target = Some(t);
             self.state = 17;
             self.through = None;
+        }
+    }
+
+    /// Behavior 40, state 9: the named target missing runs the wander body in place; else walk to it
+    /// while at least the stay distance (0xC0) away, in the idle pick inside it. The gait is
+    /// animation 11, flyers 100; a target at fast run is followed with class 2's id 21, as states
+    /// 5 to 8 use it (the spec gives only gait 0's id; R-0185).
+    fn follow_step(&mut self, v: &View, rng: &mut Rng, a: &mut Act) {
+        let Some((at, gait)) = v.followed else {
+            self.wander_step(v, rng, a);
+            return;
+        };
+        if hdist(at, v.position) >= self.spawn.emerge_distance {
+            a.anim = Some(if gait == 2 && (v.has)(21) { 21 } else { 11 });
+            a.go = Some(Go::Toward(at));
+        } else {
+            a.anim = Some(self.idle(false, v, rng));
         }
     }
 
@@ -2972,6 +2994,7 @@ mod tests {
             sees: None,
             peers: &[],
             mesh_id: None,
+            followed: None,
             spawn_bits: 0,
             radii: 2.0,
             clip: Clip::default(),
@@ -3163,6 +3186,48 @@ mod tests {
         let mut wind = Act { rate: Some(1.0), go: Some(Go::Toward([5.0, 0.0, 0.0])), ..Act::default() };
         e.apply_status_rate(&mut wind);
         assert_eq!(wind.rate, Some(1.0));
+    }
+
+    #[test]
+    fn state_9_follows_its_target() {
+        let mut r = Rng::seeded(1);
+        let mut p = Params::default();
+        p.display_default = true;
+        let mut e = Enemy::new(p, Spawn { default_state: 9, emerge_distance: 5.0, ..Spawn::default() }, &mut r);
+        e.state = 9;
+        let has = |id: u32| id == 11 || id == 21;
+        let mut v = view([500.0, 0.0, 0.0], &has);
+        v.followed = Some(([20.0, 0.0, 0.0], 0));
+        let mut a = Act::default();
+        e.follow_step(&v, &mut r, &mut a);
+        assert_eq!((a.anim, a.go), (Some(11), Some(Go::Toward([20.0, 0.0, 0.0]))));
+        // A target at fast run: class 2's id.
+        v.followed = Some(([20.0, 0.0, 0.0], 2));
+        let mut a = Act::default();
+        e.follow_step(&v, &mut r, &mut a);
+        assert_eq!(a.anim, Some(21));
+        // Inside the stay distance: no walk.
+        v.followed = Some(([4.0, 0.0, 0.0], 0));
+        let mut a = Act::default();
+        e.follow_step(&v, &mut r, &mut a);
+        assert_eq!(a.go, None);
+    }
+
+    #[test]
+    fn group_alarm_wakes_a_hidden_enemy_with_the_stinger() {
+        let mut r = Rng::seeded(1);
+        let has = |id: u32| id == 10;
+        let mut v = view([500.0, 0.0, 0.0], &has);
+        v.alarm_serial = 1;
+        for (cue, sting) in [(0u32, true), (1, false)] {
+            let mut words = [0u32; 8];
+            words[3] = cue;
+            let mut e = Enemy::new(Params::default(), Spawn { default_state: 8, alarm: Some(1), words, ..Spawn::default() }, &mut r);
+            e.state = 8;
+            let mut a = Act::default();
+            e.alarm_check(&v, &mut r, &mut a);
+            assert_eq!(a.sting, sting);
+        }
     }
 
     #[test]

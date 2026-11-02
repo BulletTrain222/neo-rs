@@ -744,6 +744,10 @@ pub struct Character {
     weapons: [(f32, f32); 5],
     /// The placement's colour bytes (the talk partner's frame colour).
     colour: [u8; 3],
+    /// The record's ordinal in its region and its monster type (SPEC-0038 state 9's lookup;
+    /// SPEC-0029 run-time variant re-pick).
+    ordinal: usize,
+    monster_type: u16,
     /// The 15 colour slots (SPEC-0040 Behavior 26): (red, green, blue) / 255 of the record's
     /// colour words; a part draws with the slot of its material group.
     pub slots: [[f32; 3]; 15],
@@ -1120,6 +1124,9 @@ pub struct Play {
     /// The hero's guard timer (+0x1574; SPEC-0036 Guard timer and per-attacker block): set to
     /// 40 by the idle threat sense, down 1 a tick; above 0 the hero guards.
     pub guard_timer: u32,
+    /// The monster table and the colour presets (the Minion Wizard's re-pick; SPEC-0029, SPEC-0040).
+    monster_table: Option<neopets_data::monster::MonsterTable>,
+    colour_presets: Vec<[[f32; 3]; 15]>,
     pub shield_raised: bool,
     pub weapon: Option<u16>,
     /// The equipped shield (item id; Tor's shields are type 5, SPEC-0036).
@@ -1801,10 +1808,18 @@ impl Play {
         let drain_words = neopets_sim::sisters::DrainWords::read(&words(neopets_sim::sisters::DRAIN_WORDS, 7)?, &words(neopets_sim::sisters::DRAIN_TABLE, 14)?).ok_or("The drain words are short")?;
         let thorn_radius = f32::from_bits(words(neopets_sim::thorn::RADIUS_WORD, 1)?[0]);
         // The Cloud Beast's rows and tuning words, read always so the developer menu can spawn it.
-        let cloud_rows = match (index.read(disc, 530), index.read(disc, 531)) {
-            (Ok(a), Ok(b)) => neopets_data::monster::MonsterTable::parse(&a, &b).ok().and_then(|t| t.row(1, 0).zip(t.row(2, 0))),
+        let monster_table = match (index.read(disc, 530), index.read(disc, 531)) {
+            (Ok(a), Ok(b)) => neopets_data::monster::MonsterTable::parse(&a, &b).ok(),
             _ => None,
         };
+        let cloud_rows = monster_table.as_ref().and_then(|t| t.row(1, 0).zip(t.row(2, 0)));
+        // SPEC-0040 Behavior 26: presets 1 to 6, each 15 RGB triples in a 0x30-byte block.
+        let colour_presets: Vec<[[f32; 3]; 15]> = words(0x0031_6D78, 72)
+            .map(|v| {
+                let bytes: Vec<u8> = v.iter().flat_map(|w| w.to_le_bytes()).collect();
+                bytes.chunks_exact(0x30).map(|b| std::array::from_fn(|k| [b[3 * k] as f32 / 255.0, b[3 * k + 1] as f32 / 255.0, b[3 * k + 2] as f32 / 255.0])).collect()
+            })
+            .unwrap_or_default();
         // This build's choice (the user's request, not the original): the bouncing balls travel
         // twice the disc's range (50 units, 0x2DA5C0), so 100 units and about 10 s.
         let cloud_words = neopets_sim::cloudbeast::Words::read(&words(neopets_sim::cloudbeast::BASE, neopets_sim::cloudbeast::WORDS)?).map(|w| neopets_sim::cloudbeast::Words { ball_range: 2.0 * w.ball_range, ..w });
@@ -2005,6 +2020,8 @@ impl Play {
             rope_aim: None,
             weapon_drawn: false,
             guard_timer: 0,
+            monster_table,
+            colour_presets,
             shield_raised: false,
             weapon: None,
             shield: None,
@@ -7532,6 +7549,8 @@ impl Play {
                 carried_np: 0,
                 carried_item: None,
                 colour: pl.colour,
+                ordinal: pl.ordinal,
+                monster_type: pl.monster_type,
                 slots: slot_colours(&pl.colours),
                 flash: 0,
                 root_step: [0.0; 3],
@@ -7673,6 +7692,8 @@ impl Play {
             carried_np: 0,
             carried_item: None,
             colour: pl.colour,
+            ordinal: pl.ordinal,
+            monster_type: pl.monster_type,
             slots: slot_colours(&pl.colours),
             flash: 0,
             root_step: [0.0; 3],
@@ -10657,6 +10678,15 @@ impl Play {
             })
             .collect();
         let mut chats: Vec<(u64, u64)> = Vec::new();
+        let mut sting = false;
+        // SPEC-0038 state 9: the followable records, the embedded block first, then the slots.
+        let followers = self.characters.iter().any(|c| c.pack == world.pack && c.enemy.as_ref().is_some_and(|e| e.state == 9));
+        let mut followable: Vec<(u8, usize, [f32; 3], u8)> = if followers {
+            self.characters.iter().filter(|c| c.pack == world.pack && !c.inactive && c.dying.is_none()).map(|c| (c.slot, c.ordinal, c.position, c.move_type)).collect()
+        } else {
+            Vec::new()
+        };
+        followable.sort_by_key(|f| (f.0 != EMBEDDED_SLOT, f.0));
         let (hero_is_held, hero_is_stunned) = (self.loco.state == hero_states::HELD, self.statuses.active(neopets_sim::status::STUN));
         let mut dots = Vec::new();
         for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && !c.held && !c.inactive) {
@@ -10721,9 +10751,8 @@ impl Play {
             v.spawn_bits = bits;
             let ground = world.probe(p[0], p[2], p[1] + 2.5);
             v.gap = if ground.found { (p[1] - ground.height).max(0.0) } else { f32::MAX };
-            // SPEC-0036 Guard timer and per-attacker block: the guard predicate (state 20; the
-            // 40-tick threat-sense timer is not implemented) and dot(hero facing, attacker
-            // facing) at most -0.5.
+            // SPEC-0036 Guard timer and per-attacker block: the guard predicate and dot(hero
+            // facing, attacker facing) at most -0.5.
             let wf = wk.facing;
             v.hero_blocks = guarding && hero_facing[0] * wf[0] + hero_facing[1] * wf[1] + hero_facing[2] * wf[2] <= -0.5;
             v.hero_held = hero_is_held;
@@ -10748,6 +10777,10 @@ impl Play {
             v.candidates = &candidates;
             v.peers = &peers;
             v.mesh_id = wk.mesh;
+            if e.state == 9 {
+                let target = e.spawn.words[1] as usize;
+                v.followed = followable.iter().find(|f| f.1 == target).map(|f| (f.2, f.3));
+            }
             v.self_id = *id;
             v.wounded = *hp < row.hit_points as i32;
             // The three sight lines: from 1.5 above the caster to the candidate's aim point, and
@@ -10894,6 +10927,7 @@ impl Play {
                 dots.push((*id, amount));
             }
             consumed.extend(act.consume);
+            sting |= act.sting;
             if let Some(with) = act.chat {
                 if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
                     println!("CHAT {name} tick {}: {} with {with}, {:.1} from it", self.ticks, *id, peers.iter().find(|q| q.id == with).map_or(0.0, |q| (q.position[0] - p[0]).hypot(q.position[2] - p[2])));
@@ -10906,6 +10940,9 @@ impl Play {
                 }
                 casts.push((*id, target, sub, e.p.element, [p[0], p[1] + 0.5 * row.height, p[2]], row.hit_points as i32 - *hp));
             }
+        }
+        if sting {
+            self.stinger(4);
         }
         // SPEC-0038 Behavior 10: a passing peer goes to state 3 with its partner.
         for (peer, with) in chats {
@@ -11006,8 +11043,7 @@ impl Play {
                     }
                 }
                 // SPEC-0038 Behavior 43 contact effects: 2 raises a corpse, 3 strength (status 4),
-                // 7 status 11, 4 speed (status 5), 5 full HP. Kind 6's run-time variant re-pick
-                // (only the Minion Wizard, whose targets keep their class and HP) is not built.
+                // 7 status 11, 4 speed (status 5), 5 full HP, 6 the variant re-pick.
                 neopets_sim::projectile::Event::SpellHit { kind, target } => {
                     if std::env::var_os("NEOPETS_TRACE_ATTACKS").is_some() {
                         println!("SPELL kind {kind} touched character {target} on tick {}", self.ticks);
@@ -11028,6 +11064,21 @@ impl Play {
                             (5, _) => {
                                 if let Some(f) = full {
                                     c.hp = f;
+                                }
+                            }
+                            // SPEC-0029 run-time variant re-pick and SPEC-0040 Behavior 26 item 3:
+                            // p from 1 to 6, the variant p - 1 and the row of (type, variant), HP
+                            // and class unchanged; preset p into the colour slots. A character
+                            // that is not a common enemy takes only the colours here.
+                            (6, e) => {
+                                let p = self.rng.range(1, 6) as usize;
+                                if let Some(&preset) = self.colour_presets.get(p - 1) {
+                                    c.slots = preset;
+                                }
+                                let picked = self.monster_table.as_ref().and_then(|t| t.row(c.monster_type, p as u16 - 1).zip(t.tuning(c.monster_type, p as u16 - 1)));
+                                if let (Some(e), Some((row, tuning))) = (e, picked) {
+                                    e.p = params(&row, &tuning);
+                                    c.row = Some(row);
                                 }
                             }
                             _ => {}
@@ -16232,6 +16283,7 @@ fn enemy_view<'a>(
         sees: None,
         peers: &[],
         mesh_id: None,
+        followed: None,
         spawn_bits: 0,
         radii: 0.0,
         clip: enemy::Clip { action: clip.action, progress: clip.progress, finished: clip.finished },
