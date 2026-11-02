@@ -11010,7 +11010,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
         }
         // SPEC-0044 864 the stage thread and SPEC-0014 Start positions and Script timeline: level
-        // states 1 and 2 mark bits 5 and 6; bit 0 (the fight start: stinger 4 and the fade, the
+        // states 1 and 2 run the six falling stones (objects 18 to 28, 20 ticks apart; the thread
+        // takes no other branch meanwhile) and mark bits 5 and 6; bit 0 (the fight start: stinger 4 and the fade, the
         // hero at locator 45 and the Chieftain at 46, the boss-fight refill of instance 8, cameras
         // 8, 10, 11 and 7, line 6, level state 3 cleared; bits 1 and 2); bit 3 (the fight end: level
         // state 3 held, the hero at 47 and the Chieftain at 46, camera 10, his animations 1 then 2,
@@ -11022,16 +11023,19 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         864 => {
             let b = state.word(pack, 1);
             let has = |n: u32| b & (1 << n) != 0;
-            if state.level(1) && !has(5) {
-                state.set_word(pack, 1, state.word(pack, 1) | 32);
-            }
-            if state.level(2) && !has(6) {
-                state.set_word(pack, 1, state.word(pack, 1) | 64);
-            }
-            let b = state.word(pack, 1);
-            let has = |n: u32| b & (1 << n) != 0;
             if state.word(pack, 6) == 0 {
-                if has(0) && !has(1) {
+                let stones = |state: &mut GameState, bit: i32| {
+                    state.set_word(pack, 1, b | bit);
+                    state.set_word(pack, 6, 1);
+                    let mut v: Vec<Action> = [18, 20, 22, 24, 26, 28].into_iter().flat_map(|obj| [Action::PlayAnim { obj, speed: 3.0, wait: false }, Action::Sleep { ticks: 20 }]).collect();
+                    v.push(Action::Bits { word: 6, set: 0, clear: 1 });
+                    v
+                };
+                if state.level(1) && !has(5) {
+                    out.extend(stones(state, 32));
+                } else if state.level(2) && !has(6) {
+                    out.extend(stones(state, 64));
+                } else if has(0) && !has(1) {
                     state.set_word(pack, 1, b | 6);
                     state.set_word(pack, 6, 1);
                     // Level state 3, which holds the boss, clears once camera 11 has ended
@@ -16738,6 +16742,17 @@ mod tests {
         let off = at(&end, Action::DeactivateEntity { entity: 44 });
         assert!(hold < at(&end, Action::MoveHero { locator: 47 }) && hold < moved && moved < first && first < second && second < off);
         assert!(off < at(&end, Action::SetFlag { flag: 668, on: true }));
+        // SPEC-0044: level state 2 starts the six stones once, 20 ticks apart, and holds the thread.
+        let mut t = GameState::default();
+        on_init(864, &mut t);
+        t.set_level(2, true);
+        t.set_level(0, true);
+        let stones = on_update(864, &mut t, false);
+        assert_eq!(stones.iter().filter_map(|a| if let Action::PlayAnim { obj, speed, wait: false } = a { (*speed == 3.0).then_some(*obj) } else { None }).collect::<Vec<_>>(), vec![18, 20, 22, 24, 26, 28]);
+        assert_eq!(stones[1], Action::Sleep { ticks: 20 });
+        assert!(on_update(864, &mut t, false).is_empty());
+        t.set_word(864, 6, 0);
+        assert!(!on_update(864, &mut t, false).iter().any(|a| matches!(a, Action::PlayAnim { .. })));
         // The story exit: flags 58 and 288 to 292 and the load of eW 50.
         assert!(on_trigger(864, 22, inside(22), &mut s).actions.contains(&Action::ReplaceExterior { slot: 50, plane: -1 }));
         assert!(s.flag(58) && s.flag(290));
