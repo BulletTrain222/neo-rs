@@ -1479,7 +1479,6 @@ pub struct Play {
     /// The screen-anchored showcase of modes 1 to 3 (SPEC-0021 Item showcase).
     pub corner: Option<Corner>,
     /// The ids picked up before, for the first-pickup text.
-    showcased: std::collections::HashSet<u16>,
     /// The swing-trail manager (SPEC-0034 3.8), the hero's held-weapon trail and each enemy's.
     pub trails: neopets_sim::trail::Trails,
     hero_trail: Option<usize>,
@@ -1530,6 +1529,15 @@ pub struct Play {
     /// Entities that died in a resident world this load (pack, entity id): the kill memory the
     /// IsAI_Dead test falls back on (cleared when the world is released).
     killed: std::collections::HashSet<(u32, usize)>,
+    /// SPEC-0006 Kill memory: the run-time table (a 33-byte block by pack; only stores change it),
+    /// the live kill bits of the resident worlds, and the packs whose block has been read in.
+    kill_table: HashMap<u32, [u8; 33]>,
+    kill_live: std::collections::HashSet<(u32, u16)>,
+    kills_loaded: std::collections::HashSet<u32>,
+    /// SPEC-0048 the persistent broken sets (saved in table T1), by pack.
+    broken_sets: HashMap<u32, [u8; 17]>,
+    /// SPEC-0025 Count table: how many times each item id below 191 has been announced.
+    item_counts: HashMap<u16, u8>,
     /// Placed records with their active flag set (the switch path; SPEC-0028 section 9).
     placed_on: std::collections::HashSet<(u32, usize)>,
     /// The resident worlds whose placed records were bound (made active) on their load.
@@ -2053,7 +2061,6 @@ impl Play {
             trails: Default::default(),
             showcase: None,
             corner: None,
-            showcased: Default::default(),
             hero_trail: None,
             enemy_trails: HashMap::new(),
             dust_ids,
@@ -2080,6 +2087,11 @@ impl Play {
             placed_on: Default::default(),
             placed_bound: Default::default(),
             killed: Default::default(),
+            kill_table: Default::default(),
+            kill_live: Default::default(),
+            kills_loaded: Default::default(),
+            broken_sets: Default::default(),
+            item_counts: Default::default(),
             zones: Default::default(),
             wheel_spin: None,
             display_mask: HashMap::new(),
@@ -2701,6 +2713,7 @@ impl Play {
 
     /// The current world's Init (a world loaded by a door job).
     fn run_init(&mut self) {
+        self.kills_load(self.world.pack);
         let mut init = level::on_init(self.world.pack, &mut self.state);
         init.extend(self.group_setup());
         self.apply(&init);
@@ -2791,6 +2804,7 @@ impl Play {
     fn init_other(&mut self) {
         if let Some(o) = self.other.take() {
             let current = std::mem::replace(&mut self.world, o);
+            self.kills_load(self.world.pack);
             let mut init = level::on_init(self.world.pack, &mut self.state);
             if std::env::var_os("NEOPETS_TRACE_BIND").is_some() {
                 println!("      Init of other world {}: {} actions", self.world.pack, init.len());
@@ -3530,6 +3544,9 @@ impl Play {
                     if r != 0xFF {
                         return None;
                     }
+                    // A forced bind clears the record's kill bit (SPEC-0006 Kill memory).
+                    self.killed.remove(&(pack, entity));
+                    self.kill_live.remove(&(pack, o as u16));
                     self.characters.retain(|c| !(c.pack == pack && c.entity == Some(entity)));
                     self.rebind.push((pack, o as usize));
                     self.slot_regions.insert((pack, REBIND_SLOT), pack);
@@ -6243,7 +6260,77 @@ impl Play {
     /// full showcase is running.
     fn item_popup(&mut self, id: u16, pack: u32) {
         if self.showcase.is_none() {
+            self.count_announcement(id);
             self.corner = Some(Corner { id, pack, mode: 1, x: 0.5, y: 0.6, z: 5.0, s: 0.0, timer: 0.0, angle: 0.0 });
+        }
+    }
+
+    /// SPEC-0025 Count table: one announcement of an item, stopping at 255 (ids of 191 or more are
+    /// ignored). Returns whether it is the first find.
+    fn count_announcement(&mut self, id: u16) -> bool {
+        if id >= neopets_sim::save::COUNTS as u16 {
+            return false;
+        }
+        let n = self.item_counts.entry(id).or_insert(0);
+        let first = *n == 0;
+        *n = n.saturating_add(1);
+        first
+    }
+
+    /// SPEC-0006 Kill memory: the bit of a record: an embedded record's kind-3 ordinal, or the index
+    /// of a slot record's first entry in the pack's entity table (none: never remembered).
+    fn kill_bit(&self, pack: u32, slot: u8, region: u32, ordinal: usize) -> Option<u16> {
+        if slot == EMBEDDED_SLOT || slot == REBIND_SLOT {
+            return u16::try_from(ordinal).ok().filter(|&b| b < 256);
+        }
+        self.entity_of(pack, region, ordinal).and_then(|e| u16::try_from(e).ok()).filter(|&b| b < 256)
+    }
+
+    /// A world load copies its row of the kill table into its live block, once while it stays
+    /// resident. The entities whose records are marked read as dead for IsAI_Dead.
+    fn kills_load(&mut self, pack: u32) {
+        if !self.kills_loaded.insert(pack) {
+            return;
+        }
+        self.kill_live.retain(|k| k.0 != pack);
+        self.killed.retain(|k| k.0 != pack);
+        let Some(row) = self.kill_table.get(&pack).copied() else { return };
+        for b in 0..256u16 {
+            if neopets_sim::save::bit_get(&row, b as usize) {
+                self.kill_live.insert((pack, b));
+            }
+        }
+        let Some(world) = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack) else { return };
+        let marked: Vec<usize> = world
+            .entities
+            .iter()
+            .enumerate()
+            .filter(|&(e, &(r, o))| {
+                let first = world.entities.iter().position(|&x| x == (r, o)).unwrap_or(e);
+                let b = if r == 0xFF { o as usize } else { first };
+                b < 256 && neopets_sim::save::bit_get(&row, b)
+            })
+            .map(|(e, _)| e)
+            .collect();
+        for e in marked {
+            self.killed.insert((pack, e));
+        }
+    }
+
+    /// The live kill block of a resident world as a table row (byte 32 stays 0).
+    fn kills_row(&self, pack: u32) -> [u8; 33] {
+        let mut row = [0u8; 33];
+        for &(_, b) in self.kill_live.iter().filter(|k| k.0 == pack) {
+            neopets_sim::save::bit_set(&mut row, b as usize, true);
+        }
+        row
+    }
+
+    /// SPEC-0006 Kill memory: a world released for a request that is not a game load stores its bits.
+    fn kills_store(&mut self, pack: u32) {
+        if self.kills_loaded.contains(&pack) {
+            let row = self.kills_row(pack);
+            self.kill_table.insert(pack, row);
         }
     }
 
@@ -6330,7 +6417,7 @@ impl Play {
         if self.showcase.is_some() {
             return;
         }
-        let first = self.showcased.insert(id);
+        let first = self.count_announcement(id);
         let flags = &self.state;
         let text = self.design.item_showcase_text(id, first, |f| flags.flag(f));
         let busy = neopets_sim::hero::busy_state(self.loco.state) || self.dialogue_open;
@@ -7606,6 +7693,11 @@ impl Play {
             if slot == EMBEDDED_SLOT && !rebind && level::admits(pack, pl.ordinal, &self.state) == Some(false) {
                 continue;
             }
+            // SPEC-0006 Kill memory: a record whose bit is set is never bound again (a row with the
+            // reanimation flag ignores it; a forced bind clears it first).
+            if !rebind && !tuning.as_ref().is_some_and(|t| t.reanimate.is_some()) && self.kill_bit(pack, slot, region, pl.ordinal).is_some_and(|b| self.kill_live.contains(&(pack, b))) {
+                continue;
+            }
             let drop = usize::try_from(pl.drop).ok().and_then(|i| items.get(i).copied());
             let ordinal = pl.ordinal;
             let id = self.bind_character(pack, slot, region, pl, (model, anim, row, tuning), drop);
@@ -7622,6 +7714,7 @@ impl Play {
     fn stream_step(&mut self) {
         let packs: Vec<u32> = self.blocks.keys().copied().collect();
         for pack in packs {
+            self.kills_load(pack);
             self.stream_pack(pack);
         }
     }
@@ -7673,7 +7766,7 @@ impl Play {
             if r.tuning.as_ref().is_some_and(|t| t.reanimate.is_some()) {
                 return true;
             }
-            let killed = entity.is_some_and(|e| self.killed.contains(&(pack, e)));
+            let killed = entity.is_some_and(|e| self.killed.contains(&(pack, e))) || self.kill_live.contains(&(pack, r.pl.ordinal as u16));
             !killed && live_type != Some(r.pl.key as i32)
         };
         let cap = self.max_active.get(&pack).copied().unwrap_or(6).min(recs.len().min(BLOCK_OBJECTS));
@@ -8590,6 +8683,11 @@ impl Play {
             }
             Job::Replace(_, plane) => {
                 self.world_audio_reset();
+                let released: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
+                for p in released {
+                    self.kills_store(p);
+                }
+                self.kills_loaded.remove(&world.pack);
                 self.world = world;
                 self.other = None;
                 self.state.reset_levels();
@@ -9560,10 +9658,9 @@ impl Play {
             |p, vel| {
                 let entry = *p;
                 // SPEC-0040 Behavior 14A driver branch 0, in order: the cell's frame records
-                // (walls), then the box primitives, each with the hero radius. Not implemented:
-                // cell lists A and B as such, cylinders, spheres, the ledge tests, the shared
-                // contact response (pushes move the position only, except that the walls clip
-                // the velocity into them, SPEC-0018 Slide response step 3) and recovery.
+                // (walls), then the box primitives, spheres and breakable and object cylinders,
+                // each with the hero radius. Not implemented: cell lists A and B as such, the
+                // shared contact response's other primitives and recovery.
                 if let (Some(g), true) = (&world.ground, wall_contact) {
                     let walls_at = |x: f32, z: f32| -> Vec<WallEdge> { g.frames_at(x, z).into_iter().map(|f| WallEdge { face: f.face, run: f.run, top: f.top, length: f.length, height: f.height, kind: f.kind }).collect() };
                     // A long horizontal step this tick (a knockback: the Black Knight's swing
@@ -9987,9 +10084,13 @@ impl Play {
         }
         // IsAI_Dead (SPEC-0030 row 45): a bound character's dead test, else the kill memory of
         // this load for its entity id.
-        for c in self.characters.iter().filter(|c| c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead())) {
-            if let Some(e) = c.entity {
-                self.killed.insert((c.pack, e));
+        let dead: Vec<(u32, Option<usize>, Option<u16>)> = self.characters.iter().filter(|c| c.dying.is_some() || c.enemy.as_ref().is_some_and(|e| e.is_dead())).map(|c| (c.pack, c.entity, if matches!(c.slot, EMBEDDED_SLOT | REBIND_SLOT) { u16::try_from(c.ordinal).ok() } else { c.entity.and_then(|e| u16::try_from(e).ok()) }.filter(|&b| b < 256))).collect();
+        for (p, e, b) in dead {
+            if let Some(e) = e {
+                self.killed.insert((p, e));
+            }
+            if let Some(b) = b {
+                self.kill_live.insert((p, b));
             }
         }
         let pack = self.world.pack;
@@ -14965,6 +15066,10 @@ impl Play {
         let pack = self.world.pack;
         let Some(b) = self.world.breakables.get_mut(i) else { return };
         b.state = 2;
+        // SPEC-0048 Break effect step 6: the persistent broken bit, for script indexes below 128.
+        if (0..128).contains(&b.script) {
+            neopets_sim::save::bit_set(self.broken_sets.entry(pack).or_default(), b.script as usize, true);
+        }
         let (at, drop, cue) = (b.position(), b.drop, break_cue(b.material));
         let (key, facing) = (b.spawn_key, unit([b.matrix[8], b.matrix[9], b.matrix[10]]));
         // The drop id is a placement id: entry p of the placement-id table (tag 0x13) names the
@@ -15435,7 +15540,10 @@ impl Play {
                 }
             }
         }
+        // A world gone without a store forgets its kills (SPEC-0006 Kill memory).
         self.killed.retain(|(p, _)| resident.contains(p));
+        self.kill_live.retain(|(p, _)| resident.contains(p));
+        self.kills_loaded.retain(|p| resident.contains(p));
         let gone: Vec<(u32, usize)> = self.placed_fx.keys().filter(|(p, _)| !resident.contains(p)).copied().collect();
         for k in gone {
             if let Some(h) = self.placed_fx.remove(&k) {
@@ -15881,8 +15989,8 @@ impl Play {
 
     /// Rebuild a slot from the live game (SPEC-0025 Saving, step 3): both heroes' pools and
     /// maxima, the equipped Motes, the party and the stash, the petpet, the sets and the live
-    /// options. The parked hero's status timers are written inactive, the status words -1, and
-    /// the per-world tables and count table empty (no live state for them yet).
+    /// options. The parked hero's status timers are written inactive (a hero switch clears them) and
+    /// the status words -1.
     pub fn write_slot(&self, s: &mut neopets_sim::save::Slot, date: &[u8]) {
         use neopets_sim::save::{self as sv, Group, at};
         let p = self.loco.position();
@@ -15992,7 +16100,18 @@ impl Play {
                 s.set_mote(h, i, self.equipment.motes[h][i].map_or(-1, i32::from));
             }
         }
+        // SPEC-0025 Per-world tables: T1 from the broken sets, T2 from the kill table with the resident
+        // worlds' live blocks flushed into their rows first.
         s.0[at::T1..at::ONCE].fill(0);
+        for (&pack, row) in &self.broken_sets {
+            s.set_broken_row(self.world_index(pack), row);
+        }
+        for (&pack, row) in &self.kill_table {
+            s.set_kill_row(self.world_index(pack), row);
+        }
+        for pack in [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).filter(|p| self.kills_loaded.contains(p)) {
+            s.set_kill_row(self.world_index(pack), &self.kills_row(pack));
+        }
         for set in 0..5 {
             for w in 0..sv::WORLDS {
                 s.set_once(set, w, false);
@@ -16009,6 +16128,9 @@ impl Play {
         s.set_date(date);
         s.0[at::TIER] = sv::tier(|n| self.state.flag(n));
         s.0[at::COUNTS..at::COUNTS + sv::COUNTS].fill(0);
+        for (&id, &n) in &self.item_counts {
+            s.0[at::COUNTS + id as usize] = n;
+        }
         s.set_u32(at::SWAP_MODE, self.swap_mode);
         let cloak = self.state.items.get(&126).is_some_and(|&n| n > 0);
         s.0[at::CLOAK..at::CLOAK + 3].copy_from_slice(&[cloak as u8, 0, 0]);
@@ -16021,8 +16143,8 @@ impl Play {
     /// (carry limit on the general and quest lists), the cloak, the once-per-area sets, the
     /// status restore, luck, maxima and current pools, the restart point and the hero's
     /// placement at vectors A and B, the options with their apply rule, the stash, the petpet,
-    /// both heroes' pools, the swap mode and the equipped Motes. Not applied: Roberta's status
-    /// timers and status words, the per-world tables and the count table.
+    /// both heroes' pools, the swap mode, the equipped Motes, the per-world tables and the count
+    /// table. The status words stay -1, as every saved slot holds.
     pub fn apply_slot(&mut self, s: &neopets_sim::save::Slot) {
         use neopets_sim::save::{self as sv, Group, at};
         self.state.flags.clear();
@@ -16087,10 +16209,6 @@ impl Play {
                 self.switch_placed(pack, slot, on);
             }
         }
-        self.statuses.clear_all();
-        for i in 0..14 {
-            self.statuses.apply(i as i32, sv::restore_seconds(s.status(0, i)));
-        }
         self.luck = sv::restore_luck(s.i32(at::LUCK));
         // SPEC-0047: the save load fills the pending petpet values for the next scene start.
         self.pet_pending = neopets_sim::petpet::Pending::load(s.i32(at::PET_TYPE), s.i32(at::PET_TIME), s.i32(at::PET_FULL));
@@ -16115,6 +16233,33 @@ impl Play {
         if s.u32(at::ACTIVE_HERO) == 1 {
             self.exchange_heroes();
         }
+        // SPEC-0025 Status timers: restored for the active hero once the heroes are settled (a switch
+        // clears them, and a parked hero's are saved inactive).
+        self.statuses.clear_all();
+        for i in 0..14 {
+            self.statuses.apply(i as i32, sv::restore_seconds(s.status(self.hero_index, i)));
+        }
+        // SPEC-0025 Per-world tables and Count table. The resident worlds read their rows again.
+        self.kill_table.clear();
+        self.broken_sets.clear();
+        for (w, &pack) in self.world_keys.0.iter().enumerate().take(sv::WORLDS) {
+            let row: [u8; 33] = s.kill_row(w).try_into().unwrap_or([0; 33]);
+            if row.iter().any(|&b| b != 0) {
+                self.kill_table.entry(pack).or_insert(row);
+            }
+            let broken: [u8; 17] = s.broken_row(w).try_into().unwrap_or([0; 17]);
+            if broken.iter().any(|&b| b != 0) {
+                self.broken_sets.entry(pack).or_insert(broken);
+            }
+        }
+        self.kill_live.clear();
+        self.killed.clear();
+        self.kills_loaded.clear();
+        let resident: Vec<u32> = [&self.world].into_iter().chain(self.other.as_ref()).map(|w| w.pack).collect();
+        for pack in resident {
+            self.kills_load(pack);
+        }
+        self.item_counts = (0..sv::COUNTS).filter(|&i| s.0[at::COUNTS + i] != 0).map(|i| (i as u16, s.0[at::COUNTS + i])).collect();
         // Loading step 12g: each hero's three Mote words through the equip setter with no cue;
         // a changed word re-arms its equipment-panel timer (240) for the active hero. Tor's Mote
         // follow-up (Medium) is not run.

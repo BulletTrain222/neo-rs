@@ -336,6 +336,24 @@ impl Slot {
         ((1..COLLECTED_ROWS).filter(|&i| bit(at::TREASURE, i)).map(|i| i as u32).collect(), (0..MAP_ROWS).filter(|&i| bit(at::MAPS, i)).map(|i| i as u32).collect())
     }
 
+    /// Table T2's row for a world index: its 33-byte kill block (SPEC-0025 Per-world tables).
+    pub fn kill_row(&self, world: usize) -> &[u8] {
+        &self.0[at::T2 + 33 * world..at::T2 + 33 * world + 33]
+    }
+
+    pub fn set_kill_row(&mut self, world: usize, row: &[u8; 33]) {
+        self.0[at::T2 + 33 * world..at::T2 + 33 * world + 33].copy_from_slice(row);
+    }
+
+    /// Table T1's row for a world index: its broken-breakable set in 17 bytes.
+    pub fn broken_row(&self, world: usize) -> &[u8] {
+        &self.0[at::T1 + 17 * world..at::T1 + 17 * world + 17]
+    }
+
+    pub fn set_broken_row(&mut self, world: usize, row: &[u8; 17]) {
+        self.0[at::T1 + 17 * world..at::T1 + 17 * world + 17].copy_from_slice(row);
+    }
+
     pub fn once(&self, s: usize, world: usize) -> bool {
         world < WORLDS && self.0[at::ONCE + 25 * s + (world >> 3)] & (1 << (world & 7)) != 0
     }
@@ -525,6 +543,21 @@ pub fn maxima(slot: &Slot, g: &Growth) -> [[i32; 2]; 2] {
 /// A live status timer as saved: ticks x 1/60 s (an inactive -1 writes -1/60). Computed as a
 /// division, which gives the spec's 1.5 for 90 ticks; a multiply by the f32 of 1/60 would give
 /// 1.5000001 (the original's rounding is not confirmed).
+/// Bit b of a kill block or broken set: byte b >> 3, mask 1 << (b & 7) (SPEC-0006 Kill memory).
+pub fn bit_set(row: &mut [u8], b: usize, on: bool) {
+    if let Some(v) = row.get_mut(b >> 3) {
+        if on {
+            *v |= 1 << (b & 7);
+        } else {
+            *v &= !(1 << (b & 7));
+        }
+    }
+}
+
+pub fn bit_get(row: &[u8], b: usize) -> bool {
+    row.get(b >> 3).is_some_and(|v| v & (1 << (b & 7)) != 0)
+}
+
 pub fn status_seconds(ticks: i32) -> f32 {
     ticks as f32 / 60.0
 }
@@ -640,6 +673,29 @@ impl SavePoints {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn per_world_rows_sit_at_their_offsets() {
+        let mut slot = Slot::default();
+        let mut row = [0u8; 33];
+        bit_set(&mut row, 255, true);
+        bit_set(&mut row, 9, true);
+        assert!(bit_get(&row, 255) && bit_get(&row, 9) && !bit_get(&row, 8));
+        // SPEC-0025: row n of T2 starts at 0x15D1 + 33n, of T1 at 0x900 + 17n.
+        slot.set_kill_row(2, &row);
+        assert_eq!(slot.0[0x15D1 + 66 + 31], 0x80);
+        assert_eq!(slot.0[0x15D1 + 66 + 1], 0x02);
+        assert_eq!(slot.kill_row(2), &row[..]);
+        let mut broken = [0u8; 17];
+        bit_set(&mut broken, 127, true);
+        slot.set_broken_row(192, &broken);
+        assert_eq!(slot.0[0x900 + 17 * 192 + 15], 0x80);
+        // The last rows end where the tables end.
+        assert_eq!(0x900 + 17 * WORLDS, 0x15D1);
+        assert_eq!(0x15D1 + 33 * WORLDS, 0x2EB2);
+        bit_set(&mut row, 255, false);
+        assert!(!bit_get(&row, 255));
+    }
 
     #[test]
     fn treasure_sets_vector() {
