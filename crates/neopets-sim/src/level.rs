@@ -135,6 +135,9 @@ pub enum Action {
     LetterBox { on: bool, seconds: f32, wait: bool },
     /// Sleep one tick at a time while any of these entities is still walking.
     WaitWalks { entities: [usize; 3] },
+    /// WalkEntityAlongPath(entity, path, WAIT, CTL) (SPEC-0030 row 111): class 35 on a path of the
+    /// area's path list.
+    WalkPath { entity: usize, path: i32, wait: bool },
     /// SetGameState and GiveItemToHero made by a thread at its point in the scene (not when
     /// the handler decides).
     SetFlag { flag: u16, on: bool },
@@ -742,6 +745,8 @@ pub struct HeroView {
     /// Tor's attack sub-state (0: no melee attack).
     pub sub: u8,
     /// The entities of the current world the hero's swing hit this tick.
+    /// The focus hero's hit points as a fraction (GetHitPointsPercentage).
+    pub hp_fraction: f32,
     pub hits: Vec<usize>,
     /// The hero is occupied (a busy state or a scripted hold).
     pub occupied: bool,
@@ -1483,8 +1488,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0037 947 Init: thread G loads slot 0 with set 0 (region 948) while 375 is clear
         // (its AI-3 watch is in Update); S0, S1 and S2 on triggers 0 to 2; teleport 0 (kind 0)
-        // does nothing. Thread H (flag 1: line 3 below 20 % hit points) and
-        // RegisterMovableBlockSoundIndex are not reproduced.
+        // does nothing. Thread H (flag 1: line 3 below 20 % hit points) is in Update.
         947 => {
             let mut v = vec![reg(0, 0), reg(1, 1), reg(2, 2)];
             if !state.flag(375) {
@@ -3120,8 +3124,22 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // arrival are fixed rules.
         1017 => {
             state.set(85, true);
-            state.set(297, true);
-            vec![Action::LoadRegion { slot: 0, region: Some(1018 + state.flag(86) as u32) }]
+            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1018 + state.flag(86) as u32) }];
+            // Thread K2, the opening cutscene (once, with 297 clear).
+            if !state.flag(297) {
+                state.set(297, true);
+                let cam = |track| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+                let walk = |entity, locator| Action::WalkEntity { entity, locator, wait: false, orient: true, stop: 1.1 };
+                v.extend([Action::WaitLoads, Action::HoldHero, Action::FadeOut { seconds: 0.7, wait: true }, Action::LetterBox { on: true, seconds: 1.0, wait: false }, cam(4), Action::FadeIn { seconds: 0.7, wait: false }, wait(2.5)]);
+                v.extend([walk(3, 7), walk(2, 6), walk(1, 4), Action::WaitWalks { entities: [3, 2, 1] }, cam(5)]);
+                v.extend([Action::EntityAnim { entity: 0, anim: 82, looped: false, wait: true }, cam(7), Action::WalkHero { locator: 8, wait: true, orient: false }, Action::EntityAnim { entity: 0, anim: 82, looped: false, wait: true }]);
+                for (k, (track, entity)) in [(8, 1), (9, 2), (10, 3), (6, 0), (8, 1), (9, 2), (10, 3), (6, 0)].into_iter().enumerate() {
+                    v.extend([cam(track), Action::Converse { entity, line: k as u16 }]);
+                }
+                v.extend([Action::ReturnCamera { preset: -1, release: true }, walk(1, 5), Action::LetterBox { on: false, seconds: 1.0, wait: false }]);
+                v.extend((1..=3).map(|entity| Action::ReleaseEntity { entity }));
+            }
+            v
         }
         // SPEC-0045 991 Init: flag 85; trigger routine A (8) on triggers 4 and 5 and on the
         // kind-7 group 0's instance trigger (the crowd zones); thread 2 loads slot 0 with set 3
@@ -9329,11 +9347,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::FadeIn { seconds: 1.0, wait: true },
                 Action::Converse { entity: 16, line: 169 },
                 Action::PlayCamera { track: 20, wait: false, end: 1, speed: 1.0 },
+                Action::WalkPath { entity: 16, path: 9, wait: false },
                 wait(3.0),
                 Action::LoadRegion { slot: 4, region: None },
                 Action::LoadRegion { slot: 6, region: None },
                 Action::LoadRegion { slot: 4, region: Some(1314) },
-                Action::PlayCamera { track: 21, wait: true, end: 1, speed: 1.0 },
+                Action::WaitLoads,
+                Action::PlayCamera { track: 21, wait: false, end: 1, speed: 1.0 },
+                Action::WalkPath { entity: 17, path: 10, wait: true },
                 Action::ReturnCamera { preset: -1, release: true },
                 Action::LoadRegion { slot: 4, region: None },
             ]);
@@ -9354,11 +9375,11 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::FadeIn { seconds: 1.0, wait: true },
             ]);
         }
-        // Routine 45 (trigger 3; 367 set, 368 clear): movie 83 and 368 (the credits follow the
-        // movie: it plays before the next tick). The fade out before it is not built.
-        (1300, 45) if call.object && call.state == 1 && state.flag(367) && !state.flag(368) => {
-            state.queue_movie(83);
-            state.set(368, true);
+        // Routine 45 (trigger 3; 367 set, 368 clear): the fade out, movie 83 and 368 (the credits
+        // follow the movie).
+        (1300, 45) if call.object && call.state == 1 && state.flag(367) && !state.flag(368) && state.word(pack, 45) == 0 => {
+            state.set_word(pack, 45, 1);
+            out.actions.extend([Action::FadeOut { seconds: FADE, wait: true }, Action::PlayFmv { movie: 83 }, Action::SetFlag { flag: 368, on: true }]);
         }
         // Routine 38 (triggers 6 to 9, entering, 94 set and 367 clear): 6: set 17; 7: 20; 8: 19
         // with 421; 9: 18 with 417 (region 1301 + j into slot 0).
@@ -11558,6 +11579,11 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
         }
         // SPEC-0037 947 thread G: while 375 is clear, AI 3 dead sets 375 and shows lines 1 and 2.
         947 => {
+            // SPEC-0037 947 thread H (flag 1): line 3 once when the hero's hit points fall below 20 %.
+            if state.flag(1) && state.word(pack, 30) == 0 && state.hero.hp_fraction < 0.2 {
+                state.set_word(pack, 30, 1);
+                out.push(Action::Message { line: 3 });
+            }
             if !state.flag(375) && state.ai_dead.contains(&3) {
                 state.set(375, true);
                 out.extend([Action::Message { line: 1 }, Action::Message { line: 2 }]);
@@ -13390,6 +13416,11 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
         // SPEC-0045 934's activate-world routine: objects 10 and 11 again.
         934 => vec![Action::InitObjOn { obj: 10, end: false }, Action::InitObjOn { obj: 11, end: false }],
+        // SPEC-0044 1411's arrival reads and resets its value for eW 178.
+        1411 => {
+            state.take_message(2, 178);
+            Vec::new()
+        }
         // SPEC-0044 722 arrival: value 10 to 50 for eW 20 moves the hero to locator 110 to 106
         // with the normal camera; with 76 and 562 2 s, new odds and the racers at locators 1 to 3.
         722 => {
@@ -15538,6 +15569,18 @@ pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
         _ => return Vec::new(),
     };
     vec![Action::Message { line }]
+}
+
+/// RegisterMovableBlockSoundIndex (SPEC-0030 row 226; SPEC-0031 block push): the area-slot cue a
+/// pack's pushed block plays.
+pub fn block_sound(pack: u32) -> Option<i32> {
+    match pack {
+        947 => Some(7),
+        1324 => Some(8),
+        1394 => Some(11),
+        1397 | 758 => Some(10),
+        _ => None,
+    }
 }
 
 /// RegisterScriptBreakable (SPEC-0030 row 267; SPEC-0048 Break routes, step 1): Some when a script
@@ -18046,6 +18089,23 @@ mod tests {
     }
 
     #[test]
+    fn module_1017_opening_once() {
+        let mut s = GameState::default();
+        let v = on_init(1017, &mut s);
+        assert!(s.flag(297) && v.contains(&Action::Converse { entity: 0, line: 7 }) && v.contains(&Action::Converse { entity: 1, line: 0 }));
+        assert_eq!(on_init(1017, &mut s).len(), 1, "no second run");
+        assert_eq!(block_sound(947), Some(7));
+        // 947's thread H: once below 20 %.
+        let mut s = GameState::default();
+        s.set(1, true);
+        s.hero.hp_fraction = 0.5;
+        assert!(!on_update(947, &mut s, false).contains(&Action::Message { line: 3 }));
+        s.hero.hp_fraction = 0.1;
+        assert!(on_update(947, &mut s, false).contains(&Action::Message { line: 3 }));
+        assert!(!on_update(947, &mut s, false).contains(&Action::Message { line: 3 }));
+    }
+
+    #[test]
     fn module_1174_floor_tiles() {
         let mut s = GameState::default();
         on_init(1174, &mut s);
@@ -19245,6 +19305,7 @@ mod tests {
     #[test]
     fn module_1017_guildmaster() {
         let mut s = GameState::default();
+        s.set(297, true);
         assert_eq!(on_init(1017, &mut s), vec![Action::LoadRegion { slot: 0, region: Some(1018) }]);
         // 297 is set at Init, so Marl's first lines are 99 to 101; then 298 gives 98 once.
         assert_eq!(on_talk(1017, 0, &mut s), vec![Action::Talk { line: 99 }]);

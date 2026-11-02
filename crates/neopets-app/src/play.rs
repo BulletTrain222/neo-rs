@@ -3102,6 +3102,12 @@ impl Play {
                     self.last_fx = format!("wheel stopped at {:.1} on cell {}: {} on tick {}", w.angle, w.cell(), if won { "win" } else { "loss" }, self.ticks);
                 }
                 Action::WheelRound | Action::CyclePass { .. } => {}
+                Action::WalkPath { entity, path, wait } => {
+                    let route = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack).and_then(|w| w.route(path));
+                    let c = self.entity_mut(pack, entity)?;
+                    c.path_walk = Some(neopets_sim::npc::PathWalk::new(route?));
+                    return wait.then_some(Wait::EntityWalk(pack, entity));
+                }
                 Action::SlotPathWalks { slot } => {
                     let world = [&self.world].into_iter().chain(self.other.as_ref()).find(|w| w.pack == pack);
                     for c in self.characters.iter_mut().filter(|c| c.pack == pack && c.slot == slot && !c.inactive) {
@@ -4985,6 +4991,10 @@ impl Play {
         self.loco.block_request(step.request);
         if step.pushed {
             self.cue(11);
+            // SPEC-0031 Block push: with the level's registered area-slot cue.
+            if let Some(cue) = level::block_sound(self.world.pack) {
+                self.sound.play(neopets_sim::sound::AREA, cue, neopets_sim::sound::Play::default());
+            }
             let voice = if self.hero_index == 0 { 33 } else { 57 };
             self.sound.play(neopets_sim::sound::VOICE, voice, neopets_sim::sound::Play::default());
             if std::env::var_os("NEOPETS_TRACE_BLOCK").is_some() {
@@ -7527,7 +7537,17 @@ impl Play {
                 None => pl.position,
             };
             // SPEC-0056 Patrol: the route named by the placement's +0xB8.
-            let patrol = world.and_then(|w| w.route(pl.words[0] as i32)).map(|r| neopets_sim::npc::Patrol::new(r, pl.words));
+            let mut patrol = world.and_then(|w| w.route(pl.words[0] as i32)).map(|r| neopets_sim::npc::Patrol::new(r, pl.words));
+            // SPEC-0038 Patrol: an invalid path index sends a common enemy to entry 0 of the pack,
+            // where it rests for ever.
+            if patrol.is_none() && pl.ai_code == 6 && row.is_some_and(|r| r.class == Some(17)) {
+                if let Some(&(at, _)) = world.and_then(|w| w.entries.first()) {
+                    let mut words = pl.words;
+                    words[3] = i32::MAX as u32;
+                    words[4] = i32::MAX as u32;
+                    patrol = Some(neopets_sim::npc::Patrol::new(vec![at, at], words));
+                }
+            }
             let wander = (pl.ai_code == 5).then(|| neopets_sim::npc::Wander::new(neopets_sim::walker::Walker::new(position, pl.facing, row.map_or(1.0, |r| r.radius), 1.0, self.next_character as u32), pl.words));
             if std::env::var_os("NEOPETS_TRACE_PATROL").is_some() {
                 let r = world.and_then(|w| w.route(pl.words[0] as i32));
@@ -8710,7 +8730,7 @@ impl Play {
         let camera = |k: usize| group.cameras.get(k).and_then(|&c| usize::try_from(c).ok()).map(|track| Action::PlayCamera { track, wait: false, end: 0, speed: 1.0 });
         let table = self.effect_table.clone();
         self.effects.one_shot(&table, 4036, [p[0] + 2.9 * d[0], p[1] + 2.9 * d[1], p[2] + 2.9 * d[2]], neopets_sim::effect::IDENTITY, &mut self.rng);
-        let mut v: Vec<Action> = vec![Action::HoldHero];
+        let mut v: Vec<Action> = vec![Action::HoldHero, Action::Equip { on: false }];
         v.extend(camera(0));
         v.extend(group.effects.first().and_then(|&e| usize::try_from(e).ok()).map(|slot| Action::SwitchEffect { slot, on: false }));
         // Step 6: the camera shake (2.0, 0.3, 25.0, 0.5, 0.8, 1.5708, 0.2).
@@ -9579,6 +9599,7 @@ impl Play {
                 self.state.trigger_raw = self.rng.next_u32();
             }
             self.state.cloak_worn = self.cloak_worn;
+            self.state.hero.hp_fraction = self.hero_hp as f32 / self.hero_max.max(1) as f32;
             let actions = level::on_update(self.world.pack, &mut self.state, self.dialogue_open);
             // NEOPETS_TRACE_WORDS: the current module's words, object 0's time and the hero
             // every 30 ticks.
