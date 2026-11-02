@@ -9496,7 +9496,7 @@ impl Play {
                 .map(|&h| (h, (0..self.world.headers.get(h).and_then(|x| x.as_ref()).map_or(0, |x| x.locators.len())).filter_map(|k| self.anim_locator(pack, h, k, 0)).collect()))
                 .collect();
             // The 1096 dispensers' draw (the module's random-draw routine is not given).
-            if matches!(pack, 1096 | 1397 | 1023) {
+            if matches!(pack, 1096 | 1397 | 1023 | 722 | 776) {
                 self.state.trigger_raw = self.rng.next_u32();
             }
             self.state.cloak_worn = self.cloak_worn;
@@ -9756,6 +9756,14 @@ impl Play {
                 self.last_boss = format!("Mortog {} {:?} -> {:?} (zone count {}) on tick {}", c.id, before, m.state, self.state.mortogs_on_target, self.ticks);
             }
             c.anim.play(id);
+            let ground = &world.ground;
+            wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+            c.position = wk.position();
+            c.facing = wk.facing;
+        }
+        // A Mortog under script control (the 722 race's PlayEntityAnim) moves by its clip's root.
+        for c in self.characters.iter_mut().filter(|c| c.pack == world.pack && c.held && !c.inactive && c.mortog.is_some()) {
+            let Some(wk) = c.walker.as_mut() else { continue };
             let ground = &world.ground;
             wk.motion_tick(c.root_step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
             c.position = wk.position();

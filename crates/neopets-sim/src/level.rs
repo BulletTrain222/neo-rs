@@ -899,6 +899,10 @@ pub fn teleport_context(pack: u32, door: usize) -> Option<u16> {
         (909, 0 | 1) => Some(13),
         (951, 0) => Some(26),
         (955, 0) => Some(13),
+        // SPEC-0044 722: the five interior doors.
+        (722, 0..=4) => Some(13),
+        // SPEC-0042 1005 and SPEC-0043 1008, 1011, 1014 and 1020.
+        (1005 | 1008 | 1011 | 1014 | 1020, 0) => Some(13),
         (1156 | 1159 | 1170, 0) => Some(13),
         (1397, 0 | 1) => Some(13),
         // SPEC-0045 1023: every teleport shows context 13 (index 10 shows 3 while flag 35 is
@@ -1203,6 +1207,14 @@ pub fn on_teleport(pack: u32, door: usize, state: &mut GameState) -> Vec<Action>
             let (v, _) = eastside_interior(pack).unwrap_or_default();
             state.blackboard.insert((2, 31), v);
             vec![Action::LeaveInterior { slot: 44 }, wait(3.0)]
+        }
+        // SPEC-0044 722 teleports 0 to 4: the interiors eW 25, 28, 26, 24 and 27.
+        (722, 0..=4) => vec![Action::EnterInterior { slot: [25, 28, 26, 24, 27][door] }, wait(3.0)],
+        // SPEC-0042 1005, SPEC-0043 1008, 1011, 1014, 1020: their value for eW 81 and the leave to
+        // eW 7 (pack 699), 3 s.
+        (1005 | 1008 | 1011 | 1014 | 1020, 0) => {
+            state.blackboard.insert((2, 81), market_value(pack).unwrap_or(-1));
+            vec![Action::LeaveInterior { slot: 7 }, wait(3.0)]
         }
         // SPEC-0044 1017 teleports 0 and 1: value 60 or 50 for eW 81 (type 2) and the exterior
         // load to eW 81 (pack 991).
@@ -2976,11 +2988,56 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.blackboard.insert((2, 20), 40);
             vec![Action::ReturnCamera { preset: -1, release: true }]
         }
-        748 | 752 => vec![Action::ReturnCamera { preset: -1, release: true }],
+        // SPEC-0043 748 and 752: value 20 or 30 for eW 20 and the normal camera.
+        748 | 752 => {
+            state.blackboard.insert((2, 20), if pack == 748 { 20 } else { 30 });
+            vec![Action::ReturnCamera { preset: -1, release: true }]
+        }
+        // SPEC-0044 722 Init: triggers 0 to 2 (the bets) and 3 to 7 (the signs); the slot-load
+        // thread (region 723 + set): with 76 set 3 into A, with 562 also 4 into B and 0 into E,
+        // with 569 5 into C; with 76 clear 2 (75 set) or 1 into A and 7 into D. Slots: A 0, B 1, C
+        // 2, D 3, E 4.
+        722 => {
+            let mut v: Vec<Action> = (0..=7).map(|i| reg(i, i as u8)).collect();
+            let mut load = |slot, set: u32| v.push(Action::LoadRegion { slot, region: Some(723 + set) });
+            if state.flag(76) {
+                load(0, 3);
+                if state.flag(562) {
+                    load(1, 4);
+                    load(4, 0);
+                }
+                if state.flag(569) {
+                    load(2, 5);
+                }
+            } else {
+                load(0, if state.flag(75) { 2 } else { 1 });
+                load(3, 7);
+            }
+            v
+        }
+        // SPEC-0041 859 thread A: set 0 (region 860) with 507; the normal camera.
+        859 => {
+            let mut v: Vec<Action> = state.flag(507).then_some(Action::LoadRegion { slot: 0, region: Some(860) }).into_iter().collect();
+            v.push(Action::ReturnCamera { preset: -1, release: true });
+            v
+        }
+        // SPEC-0039 1131 thread 1: set 0 (region 1132) with 203; the normal camera.
+        1131 => {
+            let mut v: Vec<Action> = state.flag(203).then_some(Action::LoadRegion { slot: 0, region: Some(1132) }).into_iter().collect();
+            v.push(Action::ReturnCamera { preset: -1, release: true });
+            v
+        }
+        // SPEC-0039 1136 and 1143 thread 1: set 1 with flag 10, else set 0; the normal camera.
+        1136 | 1143 => vec![Action::LoadRegion { slot: 0, region: Some(pack + 1 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }],
+        // SPEC-0039 1172 thread 1: the normal camera with flag 10.
+        1172 if state.flag(10) => vec![Action::ReturnCamera { preset: -1, release: true }],
         // SPEC-0037 776 Init: the proximity, teleport 0 (kind 13) and activate-world callbacks
         // are fixed rules (the proximity routine's two tests are not ordered in the spec: R-0061).
         776 => Vec::new(),
+        // SPEC-0044 722's arrival pairs values 10 to 50 with its five interiors; 750's section
+        // does not state its value, and 50 is the one left.
         750 => {
+            state.blackboard.insert((2, 20), 50);
             let mut v: Vec<Action> = (!state.flag(76)).then_some(Action::LoadRegion { slot: 0, region: Some(751) }).into_iter().collect();
             v.push(Action::ReturnCamera { preset: -1, release: true });
             v
@@ -3268,6 +3325,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0050 section 5: the Market Town shops' x4 prices until flag 298, once the
         // shopkeeper's set (1 with flag 86, else 0) has loaded with the stock.
         1005 | 1008 | 1011 | 1014 | 1020 => {
+            // SPEC-0042 1005's Init also posts its value 10 for eW 81.
+            if pack == 1005 {
+                state.blackboard.insert((2, 81), 10);
+            }
             let mut out = vec![Action::LoadRegion { slot: 0, region: Some(pack + 1 + state.flag(86) as u32) }, Action::WaitLoads];
             if !state.flag(298) {
                 out.push(Action::ScalePrices { factor: 4.0 });
@@ -3275,9 +3336,10 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             out
         }
         // SPEC-0050 section 4: pack 1140 registers its buy hook only when flag 10 is set.
+        // SPEC-0039 1140's threads: set 1 with flag 10, else set 0 (Medium); the normal camera.
         1140 => {
             state.set_word(pack, 0, state.flag(10) as i32);
-            Vec::new()
+            vec![Action::LoadRegion { slot: 0, region: Some(1141 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }]
         }
         // SPEC-0039 1148 thread 1: set 0 (region 1149) when flag 496 is set.
         1148 if state.flag(496) => vec![Action::LoadRegion { slot: 0, region: Some(1149) }],
@@ -4465,6 +4527,409 @@ fn grunts_1432(state: &mut GameState) -> Vec<Action> {
     }
     state.set_word(P, 4, 0);
     v
+}
+
+/// A draw of Random(lo, hi) for the modules whose routines make several in one tick: the host's
+/// raw value for this tick (`trigger_raw`), stirred by a running count (word 40).
+fn draw(s: &mut GameState, pack: u32, lo: i32, hi: i32) -> i32 {
+    let k = s.word(pack, 40) as u32;
+    s.set_word(pack, 40, k.wrapping_add(1) as i32);
+    let raw = s.trigger_raw.wrapping_add(k.wrapping_mul(2_654_435_761));
+    lo + ((raw >> 8) % (hi - lo + 1) as u32) as i32
+}
+
+/// SPEC-0044 722 odds: three distinct values from 1 to 4 (words 10 to 12) and their sum (13).
+fn odds_722(s: &mut GameState) {
+    let mut odds: [i32; 3] = [0; 3];
+    for i in 0..3 {
+        let mut v = draw(s, 722, 1, 4);
+        while odds[..i].contains(&v) {
+            v = draw(s, 722, 1, 4);
+        }
+        odds[i] = v;
+        s.set_word(722, 10 + i as u8, v);
+    }
+    s.set_word(722, 13, odds.iter().sum());
+}
+
+/// SPEC-0044 722 dialogue routines R0 to R7; each group is a three-line cycle.
+fn talk_722(routine: u8, s: &mut GameState) -> Vec<Action> {
+    let three = |a: u16| [a, a + 1, a + 2];
+    let f76 = s.flag(76);
+    match routine {
+        0 => {
+            let on = s.flag(562);
+            cycle_in(s, 722, 0, on as i32, &three(if on { 0 } else { 6 }))
+        }
+        1 if s.flag(562) => cycle_in(s, 722, 1, 0, &three(9)),
+        1 if s.flag(561) => cycle_in(s, 722, 1, 1, &three(15)),
+        1 if f76 => {
+            s.set(561, true);
+            vec![Action::Talk { line: 18 }]
+        }
+        1 => cycle_in(s, 722, 1, 2, &three(19)),
+        2 => cycle_in(s, 722, 2, 0, &three(22)),
+        3 => cycle_in(s, 722, 3, 0, &three(31)),
+        4 => cycle_in(s, 722, 4, f76 as i32, &three(if f76 { 34 } else { 37 })),
+        5 => cycle_in(s, 722, 5, 0, &three(47)),
+        6 => cycle_in(s, 722, 6, f76 as i32, &three(if f76 { 50 } else { 53 })),
+        7 => cycle_in(s, 722, 7, f76 as i32, &three(if f76 { 56 } else { 59 })),
+        _ => Vec::new(),
+    }
+}
+
+/// SPEC-0044 722 race thread (Medium), one tick. Words: 20 the phase (1 asked for, 2 running), 21
+/// busy, 22 to 24 the steps, 25 the last pick, 26 the cameras played, 27 the hero's pick. The
+/// entities' viewing points and entity 15's six reset locators are not given (R-0181): they stay
+/// where they stand, and 15 is released where it is.
+fn race_722(s: &mut GameState) -> Vec<Action> {
+    let p = 722;
+    if s.word(p, 21) != 0 {
+        return Vec::new();
+    }
+    let camera = |track| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+    let idle = Action::Bits { word: 21, set: 0, clear: 1 };
+    match s.word(p, 20) {
+        1 => {
+            s.set_word(p, 20, 2);
+            s.set_word(p, 21, 1);
+            for k in 22..=24 {
+                s.set_word(p, k, 0);
+            }
+            s.set_word(p, 25, -1);
+            s.set_word(p, 26, 0);
+            let mut table = crate::entityctl::Table::default();
+            let mut v = vec![Action::HoldHero, Action::FadeOut { seconds: 0.7, wait: true }];
+            v.extend((0..3).map(|e| Action::MoveEntity { entity: e, locator: e + 1, face: true }));
+            v.extend([Action::MoveHero { locator: 4 }, Action::HeroAnim { anim: 0, wait: false }]);
+            for e in [11, 12, 14, 13, 15] {
+                table.add(e, 36, (4.0, 7.0), (3.0, 4.0));
+                table.add_anim(e, 37, 2.5);
+                v.push(Action::EntityAnim { entity: e, anim: 36, looped: true, wait: false });
+            }
+            s.entity_tables.insert(p, table);
+            v.extend([Action::FadeIn { seconds: 0.7, wait: true }, camera(4), wait(4.5), Action::FadeOut { seconds: 0.7, wait: true }, Action::FadeIn { seconds: 0.7, wait: true }, camera(5), idle]);
+            v
+        }
+        2 => {
+            let last = s.word(p, 25);
+            let mut r = draw(s, p, 0, 2);
+            if r == last && draw(s, p, 1, 3) <= s.word(p, 10 + r as u8) {
+                r = draw(s, p, 0, 2);
+            }
+            s.set_word(p, 25, r);
+            let sum = s.word(p, 13);
+            if draw(s, p, 1, sum) <= s.word(p, 10 + r as u8) {
+                return Vec::new();
+            }
+            let steps = s.word(p, 22 + r as u8) + 1;
+            s.set_word(p, 22 + r as u8, steps);
+            s.set_word(p, 21, 1);
+            let mut v = vec![Action::EntityAnim { entity: r as usize, anim: 2, looped: false, wait: true }];
+            let played = s.word(p, 26);
+            if let Some((track, _)) = [(6, 5), (7, 10), (8, 14)].into_iter().enumerate().map(|(k, (t, at))| (t, (k as i32, at))).find(|&(_, (k, at))| k == played && steps >= at) {
+                s.set_word(p, 26, played + 1);
+                v.push(camera(track));
+            }
+            if steps >= 16 {
+                let won = s.word(p, 27) == r;
+                let prize = s.word(p, 10 + r as u8) as u32;
+                s.set_word(p, 20, 0);
+                s.entity_tables.insert(p, crate::entityctl::Table::default());
+                v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::Message { line: 71 + r as u16 }, Action::FadeOut { seconds: 0.7, wait: true }]);
+                v.extend([(11, 56), (12, 55), (13, 58), (14, 57)].map(|(entity, locator)| Action::MoveEntityFree { entity, locator, face: true }));
+                v.push(Action::ReleaseEntity { entity: 15 });
+                v.extend((0..3).map(|e| Action::MoveEntity { entity: e, locator: e + 1, face: true }));
+                v.push(Action::FadeIn { seconds: 0.7, wait: true });
+                if won {
+                    v.push(Action::GiveItem { item: 139, count: prize });
+                }
+                odds_722(s);
+            }
+            v.push(idle);
+            v
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The on-enter lines of the small interiors (SPEC-0041 859, SPEC-0042 1005, SPEC-0043 748, 1008,
+/// 1011, 1014, 1020, SPEC-0039 1131 and 1172), in entity 0's conversation frame where the spec
+/// brackets them. 1131's routine is also Init's thread 2; here it runs once on arrival. A
+/// counter word 3.
+fn enter_interior(pack: u32, s: &mut GameState) -> Vec<Action> {
+    let f = |s: &GameState, n| s.flag(n);
+    let say = |line| vec![Action::Converse { entity: 0, line }];
+    let turn = |s: &mut GameState, a: u16, n: i32| {
+        let c = s.word(pack, 3).rem_euclid(n);
+        s.set_word(pack, 3, (c + 1) % n);
+        vec![Action::Converse { entity: 0, line: a + c as u16 }]
+    };
+    match pack {
+        748 => {
+            if (f(s, 406) || f(s, 407)) && s.word(pack, 4) == 0 {
+                s.set_word(pack, 4, 1);
+                s.set_word(pack, 3, 0);
+            }
+            let a = if f(s, 406) || f(s, 407) { 0 } else if f(s, 405) { 2 } else if f(s, 76) { 4 } else { 6 };
+            turn(s, a, 2)
+        }
+        859 => say(if f(s, 48) { 0 } else if f(s, 47) { 2 } else if f(s, 507) { 4 } else if f(s, 506) { 6 } else { 8 }),
+        1005 | 1011 | 1020 => say(if f(s, 86) { 0 } else { 3 }),
+        1008 => {
+            let case = f(s, 86) as i32 + 1;
+            if s.word(pack, 4) != case {
+                s.set_word(pack, 4, case);
+                s.set_word(pack, 3, 0);
+            }
+            turn(s, if f(s, 86) { 0 } else { 3 }, 3)
+        }
+        1014 => {
+            let line = if f(s, 580) {
+                22
+            } else if f(s, 578) {
+                25
+            } else if f(s, 86) {
+                28
+            } else {
+                29
+            };
+            vec![Action::Message { line }]
+        }
+        1131 => {
+            if f(s, 301) && s.has_item(124) {
+                return say(35);
+            }
+            let a = if f(s, 301) { 0 } else if f(s, 216) { 2 } else if f(s, 202) { 4 } else if f(s, 150) { 6 } else { 8 };
+            turn(s, a, 2)
+        }
+        1172 => {
+            let line = if f(s, 301) { 0 } else if f(s, 216) { 2 } else if f(s, 202) { 4 } else if f(s, 150) { 6 } else if f(s, 7) { 7 } else { 8 };
+            vec![Action::Message { line }]
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The proximity routines of the small interiors. The specs of 1140, 1143 and 1172 list one first
+/// line for each case of their "pattern C" and do not say how it rotates, so each shows that line
+/// (R-0182); 1140's line when flag 481 is set by the talk is not given, and 33 stands in.
+fn talk_interior(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
+    let three = |a: u16| [a, a + 1, a + 2];
+    let talk = |line| vec![Action::Talk { line }];
+    let f = |s: &GameState, n| s.flag(n);
+    match pack {
+        // SPEC-0037 776: with Roberta active a draw of 1 takes the cycle; else the flag's line and
+        // the counter (word 1) goes to 1.
+        776 => {
+            if s.hero.selected == 1 && draw(s, pack, 1, 3) == 1 {
+                let c = s.word(pack, 1);
+                s.set_word(pack, 1, if c == 0 { 1 } else if c == 1 { 2 } else { 0 });
+                return talk(match c {
+                    0 => 14,
+                    1 => 15,
+                    _ => 16,
+                });
+            }
+            s.set_word(pack, 1, 1);
+            talk(if f(s, 68) { 8 } else { 11 })
+        }
+        // SPEC-0043 748 routine 2: one counter (word 1), set to 0 once on the first visit with 407.
+        748 => {
+            let turn = |s: &mut GameState, a: u16| {
+                let c = s.word(pack, 1).rem_euclid(3);
+                s.set_word(pack, 1, (c + 1) % 3);
+                vec![Action::Talk { line: a + c as u16 }]
+            };
+            if f(s, 407) {
+                if s.word(pack, 2) == 0 {
+                    s.set_word(pack, 2, 1);
+                    s.set_word(pack, 1, 0);
+                }
+                turn(s, 8)
+            } else if f(s, 405) {
+                if s.has_item(24) {
+                    s.take(24, 1);
+                    s.set(407, true);
+                    talk(11)
+                } else {
+                    turn(s, 12)
+                }
+            } else if f(s, 76) {
+                s.set(405, true);
+                talk(15)
+            } else {
+                turn(s, 16)
+            }
+        }
+        // SPEC-0041 859 handler P: the line, then the twelve-item count, whose line 13 replaces it.
+        859 => {
+            let chosen = if f(s, 423) && !f(s, 424) {
+                s.set(424, true);
+                talk(14)
+            } else if f(s, 48) {
+                cycle_in(s, pack, 0, 0, &three(17))
+            } else if f(s, 47) {
+                cycle_in(s, pack, 0, 1, &three(10))
+            } else if f(s, 507) {
+                cycle_in(s, pack, 0, 2, &three(27))
+            } else if f(s, 506) {
+                cycle_in(s, pack, 0, 3, &three(30))
+            } else {
+                s.set(506, true);
+                talk(33)
+            };
+            if f(s, 506) && !f(s, 507) && (160..=171).all(|i| s.has_item(i)) {
+                s.set(507, true);
+                return vec![Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(860) }, Action::Talk { line: 13 }];
+            }
+            chosen
+        }
+        // SPEC-0042 1005 handler P.
+        1005 => {
+            let on = f(s, 86);
+            cycle_in(s, pack, 0, on as i32, &three(if on { 10 } else { 13 }))
+        }
+        // SPEC-0043 1008, 1011 and 1020.
+        1008 => talk(if f(s, 86) { 12 } else { 15 }),
+        1011 | 1020 => talk(if f(s, 86) { 10 } else { 13 }),
+        // SPEC-0043 1014 routines 1 and 2 (Josh: 86 set with 578 and 580 clear starts the Pink
+        // Posies row).
+        1014 if routine == 1 => {
+            if f(s, 86) && !f(s, 578) && !f(s, 580) {
+                s.set(578, true);
+            }
+            talk(if f(s, 86) { 16 } else { 19 })
+        }
+        1014 => {
+            if f(s, 580) {
+                talk(1)
+            } else if f(s, 578) && f(s, 579) {
+                s.items.remove(&83);
+                s.set(580, true);
+                talk(3)
+            } else if f(s, 578) {
+                talk(4)
+            } else {
+                talk(if f(s, 86) { 7 } else { 10 })
+            }
+        }
+        // SPEC-0039 1131 handler 3.
+        1131 => {
+            if f(s, 301) && s.has_item(124) {
+                return talk(36);
+            }
+            let (case, a) = if f(s, 301) { (0, 20) } else if f(s, 216) { (1, 23) } else if f(s, 202) { (2, 26) } else if f(s, 150) { (3, 29) } else { (4, 32) };
+            cycle_in(s, pack, 0, case, &three(a))
+        }
+        // SPEC-0039 1136 handler 3.
+        1136 => {
+            if f(s, 301) {
+                cycle_in(s, pack, 0, 0, &three(13))
+            } else if f(s, 216) {
+                cycle_in(s, pack, 0, 1, &three(16))
+            } else if f(s, 492) {
+                if f(s, 202) {
+                    cycle_in(s, pack, 0, 2, &three(19))
+                } else if f(s, 150) {
+                    cycle_in(s, pack, 0, 3, &three(22))
+                } else if f(s, 7) {
+                    cycle_in(s, pack, 0, 4, &three(25))
+                } else {
+                    Vec::new()
+                }
+            } else if !f(s, 490) {
+                s.set(490, true);
+                talk(32)
+            } else if f(s, 491) {
+                s.set(492, true);
+                s.take(70, 5);
+                talk(28)
+            } else {
+                cycle_in(s, pack, 0, 5, &three(29))
+            }
+        }
+        // SPEC-0039 1140 handler 3 (Medium).
+        1140 => {
+            if f(s, 499) {
+                talk(38)
+            } else if f(s, 301) {
+                talk(19)
+            } else if f(s, 216) {
+                talk(22)
+            } else if f(s, 483) {
+                talk(25)
+            } else if f(s, 202) {
+                talk(28)
+            } else if f(s, 150) {
+                talk(35)
+            } else if !f(s, 481) {
+                s.set(481, true);
+                talk(33)
+            } else if s.has_item(69) {
+                s.set(483, true);
+                s.take(69, 1);
+                talk(31)
+            } else {
+                talk(32)
+            }
+        }
+        // SPEC-0039 1143 handler 3 (Medium): the order of its trade and its cases is not stated;
+        // the trade is taken before the story cases, as handler 2's cascade lists them.
+        1143 => {
+            if f(s, 301) {
+                talk(12)
+            } else if f(s, 216) {
+                talk(15)
+            } else if f(s, 387) {
+                talk(18)
+            } else if s.has_item(2) {
+                s.set(387, true);
+                s.take(2, 1);
+                talk(27)
+            } else if !f(s, 386) {
+                s.set(386, true);
+                talk(28)
+            } else if f(s, 202) {
+                talk(21)
+            } else if f(s, 150) {
+                talk(24)
+            } else {
+                talk(7)
+            }
+        }
+        // SPEC-0039 1172 handler 3 (Medium).
+        1172 => {
+            if f(s, 301) {
+                talk(10)
+            } else if f(s, 216) {
+                talk(13)
+            } else if !f(s, 136) {
+                talk(28)
+            } else if f(s, 202) {
+                talk(16)
+            } else if f(s, 193) {
+                talk(19)
+            } else if f(s, 150) {
+                talk(22)
+            } else {
+                talk(25)
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// SPEC-0043 and SPEC-0042: the type-2 value for eW 81 of the Market Town interiors.
+fn market_value(pack: u32) -> Option<i32> {
+    match pack {
+        1005 => Some(10),
+        1008 => Some(20),
+        1011 => Some(30),
+        1014 => Some(40),
+        1020 => Some(70),
+        _ => None,
+    }
 }
 
 /// SPEC-0044 1174 thread W1, one helper a tick in the spec's order.
@@ -7055,6 +7520,25 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         (950, 0) if call.object && call.state == 1 => {
             state.blackboard.insert((2, 68), 30);
             out.actions.extend([Action::FadeOut { seconds: 0.5, wait: true }, Action::LeaveInterior { slot: 5 }]);
+        }
+        // SPEC-0044 722 signs (triggers 3 to 7): the Square context 3; a press shows the sign.
+        (722, 3..=7) if call.object && call.state != 0 => {
+            out.prompt = Some(3);
+            if call.square && !state.talking {
+                out.actions.push(Action::Message { line: [66, 62, 63, 64, 65][routine as usize - 3] });
+            }
+        }
+        // SPEC-0044 722 bets (triggers 0 to 2, 562 set, no bet or race under way): the Square
+        // context 4; a press asks the prompt for the racer's odds (word 3 marks the bet).
+        (722, 0..=2) if call.object && call.state != 0 && state.flag(562) && state.word(722, 3) == 0 && state.word(722, 20) == 0 => {
+            let odds = state.word(722, 10 + routine);
+            if (1..=4).contains(&odds) {
+                out.prompt = Some(4);
+                if call.square && !state.talking {
+                    state.set_word(722, 3, 1);
+                    out.actions.push(Action::Prompt { line: 66 + odds as u16, routine });
+                }
+            }
         }
         // SPEC-0039 886 handler 1 (trigger 5), entered with 250 clear: line 6; handler 2
         // (trigger 2): the Square context 3, a press shows line 7; handler 4 (trigger 0),
@@ -11366,6 +11850,8 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.extend([Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 }, Action::Message { line: 4 }, Action::LoadRegion { slot: 0, region: None }, Action::ReturnCamera { preset: -1, release: true }]);
             }
         }
+        // SPEC-0044 722 the race thread, started by a bet.
+        722 => out.extend(race_722(state)),
         // SPEC-0054 1432 the fight control thread (the first rule that applies takes the tick)
         // and control thread B beside it.
         1432 => {
@@ -12422,6 +12908,13 @@ pub fn entity_setup(pack: u32, state: &mut GameState) -> Vec<crate::entityctl::C
     };
     let dwell = (3.0, 4.0);
     match pack {
+        // SPEC-0044 722: with 76 clear entities 7 to 10 (75 set) or 3 to 6.
+        722 if !state.flag(76) => {
+            let first = if state.flag(75) { 7 } else { 3 };
+            for e in first..first + 4 {
+                add(&mut t, e, 146, (4.0, 7.0), dwell, &[(147, 2.5)], &[]);
+            }
+        }
         750 => add(&mut t, 2, 0, (2.0, 5.0), (5.0, 7.0), &std3, &[]),
         749 => add(&mut t, 0, 0, (2.0, 5.0), (5.0, 7.0), &std3, &[]),
         748 => add(&mut t, 0, 0, (2.0, 5.0), (5.0, 7.0), &[(40, 2.5), (110, 2.5), (96, 2.5), (41, 1.3)], &[]),
@@ -12658,6 +13151,7 @@ pub fn on_exit(pack: u32, state: &mut GameState, active: &dyn Fn(usize) -> bool)
 /// world becomes current, right after the activate-world callback.
 pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
     match pack {
+        748 | 859 | 1005 | 1008 | 1011 | 1014 | 1020 | 1131 | 1172 => enter_interior(pack, state),
         // SPEC-0039 984 on-enter (handler 2): with 67 entity 0's line 0 in the conversation
         // frame; else line 2 (202), 4 (150) or 6.
         984 if state.flag(67) => vec![Action::Converse { entity: 0, line: 0 }],
@@ -12721,7 +13215,41 @@ pub fn on_enter(pack: u32, state: &mut GameState) -> Vec<Action> {
 }
 
 pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
+    // SPEC-0042 1005 and SPEC-0043 1008, 1011, 1014 and 1020: the pack's own value for eW 81 moves
+    // the hero to locator 0 with the normal camera; the value is reset.
+    if let Some(own) = market_value(pack) {
+        let v = state.blackboard.get(&(2, 81)).copied().unwrap_or(-1);
+        if v == own {
+            state.take_message(2, 81);
+            return vec![Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }];
+        }
+        if pack == 1014 {
+            state.take_message(2, 81);
+            if v != -1 {
+                return vec![Action::ReturnCamera { preset: -1, release: true }];
+            }
+        }
+        return Vec::new();
+    }
     match pack {
+        // SPEC-0044 722 arrival: value 10 to 50 for eW 20 moves the hero to locator 110 to 106
+        // with the normal camera; with 76 and 562 2 s, new odds and the racers at locators 1 to 3.
+        722 => {
+            let value = state.take_message(2, 20);
+            let mut v = Vec::new();
+            if matches!(value, 10 | 20 | 30 | 40 | 50) {
+                v.push(Action::MoveHero { locator: 110 - (value as usize / 10 - 1) });
+            }
+            if value != -1 {
+                v.push(Action::ReturnCamera { preset: -1, release: true });
+            }
+            if state.flag(76) && state.flag(562) {
+                odds_722(state);
+                v.push(wait(2.0));
+                v.extend((0..3).map(|e| Action::MoveEntity { entity: e, locator: e + 1, face: true }));
+            }
+            v
+        }
         // SPEC-0037 906 A (every activation): a black cut, the hero to locator 0, the normal
         // camera, a 1 s fade in.
         906 => vec![Action::FadeOut { seconds: 0.0, wait: true }, Action::MoveHero { locator: 0 }, Action::ReturnCamera { preset: -1, release: true }, Action::FadeIn { seconds: 1.0, wait: false }],
@@ -14848,6 +15376,20 @@ pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
 pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Action> {
     let line = |line| Action::Message { line };
     match (pack, routine, yes) {
+        // SPEC-0044 722 the bet: a yes with 50 Neopoints takes them, stores the pick and starts
+        // the race; with fewer line 75. The marks clear after 1.0 s.
+        (722, 0..=2, yes) => {
+            let mut v = Vec::new();
+            if yes && s.neopoints >= 50 {
+                s.neopoints -= 50;
+                s.set_word(722, 27, routine as i32);
+                s.set_word(722, 20, 1);
+            } else if yes {
+                v.push(line(75));
+            }
+            v.extend([wait(1.0), Action::Bits { word: 3, set: 0, clear: 1 }]);
+            v
+        }
         // SPEC-0039 880 map shop answers: declined line 16; too few Neopoints line 15; else the
         // map given (item 175 with the map number), the price taken and line 14.
         // SPEC-0045 991 entity 17 (the map seller): offer k = C - 1 (word 1); no shows 100 + k;
@@ -15252,6 +15794,22 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (758, 23 | 25) => Some(23),
         (758, 11 | 13) => Some(11),
         (758, 26 | 28) => Some(26),
+        // SPEC-0044 722: R0 to R7 on their entities.
+        (722, 14) => Some(0),
+        (722, 10 | 13 | 6) => Some(1),
+        (722, 17) => Some(2),
+        (722, 12) => Some(3),
+        (722, 8 | 15 | 4) => Some(4),
+        (722, 18) => Some(5),
+        (722, 9 | 16 | 5) => Some(6),
+        (722, 7 | 11 | 3) => Some(7),
+        // The small interiors' proximity routines on entity 0 (1005, 1008, 1011 and 1020 also 1);
+        // 1014: routine 0 on 0 and 2, routine 1 on 1 and 3. 1136 and 1143 use entity 1 with
+        // flag 10, which this table cannot read, so both are routed.
+        (748 | 776 | 859 | 1131 | 1140 | 1172, 0) => Some(0),
+        (1005 | 1008 | 1011 | 1020 | 1136 | 1143, 0 | 1) => Some(0),
+        (1014, 0 | 2) => Some(0),
+        (1014, 1 | 3) => Some(1),
         // SPEC-0041 1353: P16 to P24 on entities 16 to 24.
         (1353, 16..=24) => Some(entity as u8),
         // SPEC-0043 1358: the delivery giver on entity 20 and line 90 on entity 21 (entities 16 to
@@ -15381,6 +15939,12 @@ fn cycle(lines: &[u16]) -> Lines {
 /// Run a proximity routine: the first branch whose test holds picks a line (with its side
 /// effects); the talk frame (SetConversationTarget, LevelMsg, EndConversation) wraps it.
 pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
+    if pack == 722 {
+        return talk_722(routine, state);
+    }
+    if matches!(pack, 748 | 776 | 859 | 1005 | 1008 | 1011 | 1014 | 1020 | 1131 | 1136 | 1140 | 1143 | 1172) {
+        return talk_interior(pack, routine, state);
+    }
     // SPEC-0039 880 handler 7 and 1230 handler 4, the map shop: the first map not held is
     // offered with its prompt (its index kept in word 4 for the answer); with every map held,
     // lines 11, 12 and 13 in rotation (word 5).
@@ -17242,6 +17806,120 @@ mod tests {
         assert!(on_init(1098, &mut GameState::default()).iter().take(3).eq([reg(0, 1), reg(7, 7), reg(8, 8)].iter()));
         on_trigger(1098, 8, call, &mut s);
         assert_eq!(s.transition_map, Some(49));
+    }
+
+    #[test]
+    fn module_722_bogshot_village() {
+        let mut s = GameState::default();
+        s.set(76, true);
+        s.set(562, true);
+        let init = on_init(722, &mut s);
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(726) }) && init.contains(&Action::LoadRegion { slot: 1, region: Some(727) }) && init.contains(&Action::LoadRegion { slot: 4, region: Some(723) }));
+        let mut c = GameState::default();
+        c.set(75, true);
+        let init = on_init(722, &mut c);
+        assert!(init.contains(&Action::LoadRegion { slot: 0, region: Some(725) }) && init.contains(&Action::LoadRegion { slot: 3, region: Some(730) }));
+        // Doors, and the arrival from the apothecary.
+        assert_eq!(on_teleport(722, 3, &mut s)[0], Action::EnterInterior { slot: 24 });
+        assert_eq!(teleport_context(722, 4), Some(13));
+        s.blackboard.insert((2, 20), 10);
+        assert!(on_activate(722, &mut s).contains(&Action::MoveHero { locator: 110 }));
+        s.blackboard.insert((2, 20), 50);
+        assert!(on_activate(722, &mut s).contains(&Action::MoveHero { locator: 106 }));
+        // SPEC-0044 test vector: R1 with 562 and 561 clear and 76 set: line 18 and 561; then 15, 16, 17, 15.
+        let mut t = GameState::default();
+        t.set(76, true);
+        let r = proximity_routine(722, 10).unwrap();
+        assert_eq!(on_talk(722, r, &mut t), vec![Action::Talk { line: 18 }]);
+        assert!(t.flag(561));
+        for line in [15, 16, 17, 15] {
+            assert_eq!(on_talk(722, r, &mut t), vec![Action::Talk { line }]);
+        }
+        // SPEC-0044 test vector: a bet on racer 1 at odds (2, 3, 1), S = 6, with 120 Neopoints.
+        for (k, v) in [(10, 2), (11, 3), (12, 1), (13, 6)] {
+            s.set_word(722, k, v);
+        }
+        s.neopoints = 120;
+        let call = TriggerCall { index: 1, state: 2, object: true, square: true, block: -1 };
+        let bet = on_trigger(722, 1, call, &mut s);
+        assert_eq!(bet.prompt, Some(4));
+        assert_eq!(bet.actions, vec![Action::Prompt { line: 69, routine: 1 }]);
+        on_answer(722, 1, true, &mut s);
+        assert_eq!((s.neopoints, s.word(722, 27), s.word(722, 20)), (70, 1, 1));
+        assert!(on_update(722, &mut s, false).contains(&Action::MoveHero { locator: 4 }));
+        assert!(on_update(722, &mut s, false).is_empty(), "the scene holds the thread");
+        // Racer 1 wins: its 16th step ends the race with line 72 and 3 of item 139.
+        s.set_word(722, 21, 0);
+        s.set_word(722, 23, 15);
+        let mut end = Vec::new();
+        for raw in 0..2000u32 {
+            s.trigger_raw = raw.wrapping_mul(2_654_435_761);
+            s.set_word(722, 21, 0);
+            s.set_word(722, 22, 0);
+            s.set_word(722, 24, 0);
+            let v = on_update(722, &mut s, false);
+            if v.contains(&Action::Message { line: 72 }) {
+                end = v;
+                break;
+            }
+        }
+        assert!(end.contains(&Action::GiveItem { item: 139, count: 3 }));
+        assert_eq!(s.word(722, 20), 0);
+        // Too few Neopoints: line 75 and no race.
+        s.neopoints = 49;
+        assert_eq!(on_answer(722, 0, true, &mut s)[0], Action::Message { line: 75 });
+        assert_eq!(s.word(722, 20), 0);
+    }
+
+    #[test]
+    fn small_interiors_talk() {
+        // SPEC-0041 859's test vector.
+        let mut s = GameState::default();
+        for i in 160..=170 {
+            s.give(i, 1);
+        }
+        let r = proximity_routine(859, 0).unwrap();
+        assert_eq!(on_talk(859, r, &mut s), vec![Action::Talk { line: 33 }]);
+        assert!(s.flag(506));
+        for line in [30, 31, 32, 30] {
+            assert_eq!(on_talk(859, r, &mut s), vec![Action::Talk { line }]);
+        }
+        s.give(171, 1);
+        assert!(on_talk(859, r, &mut s).contains(&Action::Talk { line: 13 }) && s.flag(507));
+        assert_eq!(on_talk(859, r, &mut s), vec![Action::Talk { line: 27 }]);
+        // SPEC-0042 1005's test vector: entities 0, 1, 0, 1.
+        let mut s = GameState::default();
+        for (e, line) in [(0, 13), (1, 14), (0, 15), (1, 13)] {
+            assert_eq!(on_talk(1005, proximity_routine(1005, e).unwrap(), &mut s), vec![Action::Talk { line }]);
+        }
+        // SPEC-0043 748: 76 sets 405; item 24 then sets 407.
+        let mut s = GameState::default();
+        s.set(76, true);
+        assert_eq!(on_talk(748, 0, &mut s), vec![Action::Talk { line: 15 }]);
+        assert!(s.flag(405));
+        assert_eq!(on_talk(748, 0, &mut s), vec![Action::Talk { line: 12 }]);
+        s.give(24, 1);
+        assert_eq!(on_talk(748, 0, &mut s), vec![Action::Talk { line: 11 }]);
+        assert!(s.flag(407) && !s.has_item(24));
+        assert_eq!(on_talk(748, 0, &mut s), vec![Action::Talk { line: 8 }]);
+        // SPEC-0043 1014: Josh starts the Pink Posies row; routine 0 ends it with the item gone.
+        let mut s = GameState::default();
+        s.set(86, true);
+        on_talk(1014, proximity_routine(1014, 3).unwrap(), &mut s);
+        assert!(s.flag(578));
+        s.set(579, true);
+        s.give(83, 4);
+        assert_eq!(on_talk(1014, proximity_routine(1014, 0).unwrap(), &mut s), vec![Action::Talk { line: 3 }]);
+        assert!(s.flag(580) && !s.has_item(83));
+        // SPEC-0037 776 with Tor: the flag's line.
+        let mut s = GameState::default();
+        assert_eq!(on_talk(776, 0, &mut s), vec![Action::Talk { line: 11 }]);
+        // SPEC-0043 1008's door and arrival.
+        let mut s = GameState::default();
+        assert_eq!(on_teleport(1008, 0, &mut s)[0], Action::LeaveInterior { slot: 7 });
+        assert_eq!(s.blackboard.get(&(2, 81)), Some(&20));
+        assert!(on_activate(1008, &mut s).contains(&Action::MoveHero { locator: 0 }));
+        assert!(!s.blackboard.contains_key(&(2, 81)));
     }
 
     #[test]
