@@ -279,6 +279,8 @@ pub struct Locomotion {
     pub air_ok: bool,
     /// The stick step of state 13 this tick.
     pub stick_step: StickStep,
+    /// State 17 was entered from state 32.
+    hurt_from_strafe: bool,
     /// The air attack's sub-state word: 11 the slash, 12 the plunge, 0 none.
     pub air_sub: u8,
     air_used: bool,
@@ -381,6 +383,7 @@ impl Locomotion {
             p1: false,
             air_ok: false,
             stick_step: StickStep::Off,
+            hurt_from_strafe: false,
             air_sub: 0,
             air_used: false,
             air_armed: false,
@@ -541,6 +544,10 @@ impl Locomotion {
 
     /// SPEC-0036 Taking a hit, step 5: the hit-reaction state 17 with its clip.
     pub fn hurt(&mut self, armed: bool) {
+        // The previous state word: a repeat hit in state 17 keeps what it held.
+        if self.state != HURT {
+            self.hurt_from_strafe = self.state == STRAFE;
+        }
         self.state = HURT;
         self.request = if armed { ANIM_HURT } else { ANIM_HURT_UNARMED };
     }
@@ -780,10 +787,10 @@ impl Locomotion {
             }
             DEAD => return,
             HURT => {
-                // State 17: at progress 0.99 request 0 and go to state 1 (the L2 strafe exit is
-                // not covered).
+                // State 17: at progress 0.99 request 0 and go to state 1, or to state 32 when L2 is
+                // held and the previous state was 32.
                 if clip.action == self.request && clip.progress >= 0.99 {
-                    self.state = STANCE;
+                    self.state = if input.l2 && self.hurt_from_strafe { STRAFE } else { STANCE };
                 }
                 return;
             }
@@ -1203,6 +1210,22 @@ impl Locomotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SPEC-0036 State 17: back to state 32 only with L2 held and state 32 before the hit.
+    #[test]
+    fn hurt_returns_to_strafe() {
+        let (c, left) = ([0.0, 0.0, 1.0], [1.0, 0.0, 0.0]);
+        let end = |id| ClipState { action: id, progress: 0.99, finished: false };
+        for (from, l2, to) in [(STRAFE, true, STRAFE), (STRAFE, false, STANCE), (STANCE, true, STANCE)] {
+            let mut h = Locomotion::spawn([0.0; 3], FWD);
+            h.state = from;
+            h.hurt(true);
+            h.hurt(true);
+            let held = HeroInput { l2, ..HeroInput::default() };
+            h.update(&held, c, left, end(h.request));
+            assert_eq!(h.state, to);
+        }
+    }
 
     /// SPEC-0036's vector: pair length 1.0 with the camera along +z gives (0, 0, 7.5). A centred stick
     /// leaves the velocity alone; Roberta's keeps the vertical part.
