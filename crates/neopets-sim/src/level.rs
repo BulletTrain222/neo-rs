@@ -116,6 +116,8 @@ pub enum Action {
     /// PlayEntityAnim (row 105; WAIT waits for its end) or, with `looped`, LoopEntityAnim
     /// (row 104): the entity plays animation id `anim` under script control.
     EntityAnim { entity: usize, anim: u32, looped: bool, wait: bool },
+    /// GrabEntityControl (row 109): the script hold, the entity's clip left to finish.
+    GrabEntity { entity: usize },
     /// ReleaseEntityControl (row 107) or ReturnEntityAnimToIdle (row 110): base state 1, idle.
     ReleaseEntity { entity: usize },
     /// SetAI_Agro (row 115).
@@ -396,6 +398,8 @@ pub enum Action {
     RegisterAnimTrigger { host: usize, index: u16, routine: u8 },
     /// The hero returned to idle (state 1).
     HeroIdle,
+    /// AlignAxisToVectorToHero(obj, 2, t) (SPEC-0030 row 179): the object's Z column turns toward the hero.
+    AlignObj { obj: usize, t: f32 },
     /// MoveObjToLocator (link false): the object's rest translation becomes the locator's point, once.
     MoveObjLocator { obj: usize, locator: usize },
     /// The next step of a plate scene (`plate_step`): the host reads the plate's live state words.
@@ -5709,8 +5713,8 @@ fn plate_1393(i: usize, s: &mut GameState) -> Vec<Action> {
 /// gates not yet closed by an alarm (since the load or the room's last entry), which also stops
 /// the 10-tick thread from raising it again: sound 5, the guards aggressive and visible, the door closed if open,
 /// the gate-state word cleared, the even gate arrangement, the statue pair toggled (+0x10 on and
-/// played, +0x14 off) and, on the first alarm, the room camera for 2 s. Not built: the turn of
-/// +0x14 toward the hero (no object-alignment call in this build).
+/// played, +0x14 off), on the first alarm the room camera for 2 s, and the turn of +0x14 toward the hero
+/// (its rate is not given: `ALIGN_1393`).
 fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
     let r = &ROOMS_1393[i];
     if s.word(1393, W1393_GATE + i as u8) != 0 {
@@ -5734,8 +5738,12 @@ fn alarm_1393(i: usize, s: &mut GameState) -> Vec<Action> {
         s.set_word(1393, W1393_ALARMED + i as u8, 1);
         v.extend([camera(r.camera), wait(2.0), release_camera()]);
     }
+    v.push(Action::AlignObj { obj: r.statue.1, t: ALIGN_1393 });
     v
 }
+
+/// The statues' turn fraction a call: the spec names axis 2 only; pack 1246's one listed call uses 0.05.
+const ALIGN_1393: f32 = 0.05;
 
 /// SPEC-0044 1393 trigger callbacks (registered with the trigger index as the routine).
 fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
@@ -5800,8 +5808,17 @@ fn trigger_1393(call: TriggerCall, s: &mut GameState) -> Vec<Action> {
                 v
             }
         },
-        // Statue triggers 4, 11, 18 and 21 turn +0x14 toward the hero (not built; see
-        // `alarm_1393`). Triggers 3, 10 and 17 are registered; their bodies are not described.
+        // Statue triggers 4, 11, 18 and 21 turn +0x14 toward the hero. Triggers 3, 10 and 17 are registered;
+        // their bodies are not described.
+        4 | 11 | 18 | 21 => {
+            let i = match call.index {
+                4 => 0,
+                11 => 1,
+                18 => 2,
+                _ => 3,
+            };
+            vec![Action::AlignObj { obj: ROOMS_1393[i].statue.1, t: ALIGN_1393 }]
+        }
         _ => Vec::new(),
     }
 }
@@ -8866,7 +8883,6 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // effects stopped a second apart, then with a floor object objects 32 to 34 off, the
         // floor on and blocks 2, 1 and 3 placed again (ceiling 3.0, so they take the new floor
         // as their footprint), sound 11 killed, the normal camera, 1 s, the busy word cleared.
-        // Not built: the scene's hold of entities 5 to 7 (no entity-grab action here).
         (1397, 9) if call.object && call.block >= 0 && call.state == 1 && (9..=11).contains(&call.index) && state.word(pack, 43) == 0 => {
             let (block, lift, track, effects, floor) = match call.index {
                 11 => (3, 29, 2, (0, 1), Some(33)),
@@ -8879,6 +8895,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 state.set_word(pack, 43, 1);
                 out.actions.extend([
                     Action::HoldHero,
+                    Action::GrabEntity { entity: 5 },
+                    Action::GrabEntity { entity: 6 },
+                    Action::GrabEntity { entity: 7 },
                     Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 },
                     wait(1.0),
                     Action::PlaySound { cue: 11, locator: None },
@@ -8902,6 +8921,9 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     Action::KillSound { cue: 11, locator: None },
                     Action::ReturnCamera { preset: -1, release: true },
                     wait(1.0),
+                    Action::ReleaseEntity { entity: 5 },
+                    Action::ReleaseEntity { entity: 6 },
+                    Action::ReleaseEntity { entity: 7 },
                     Action::Bits { word: 43, set: 0, clear: 1 },
                 ]);
             }

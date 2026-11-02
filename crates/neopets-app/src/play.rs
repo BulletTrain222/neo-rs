@@ -3322,6 +3322,13 @@ impl Play {
                 Action::DigStep { group, step } => self.dig_thread_step(group as usize, step),
                 Action::WaitCage { index } => return Some(Wait::Cage(index as usize)),
                 Action::SleepRandom { lo, hi } => return Some(Wait::Ticks(self.rng.range(lo as i32, hi as i32).max(0) as u32)),
+                Action::AlignObj { obj, t } => {
+                    let hero = self.loco.position();
+                    let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
+                    if let Some(Some(o)) = w.and_then(|w| w.objects.get_mut(obj)) {
+                        o.rest = align_z_to(o.rest, hero, t.clamp(0.0, 1.0));
+                    }
+                }
                 Action::MoveObjLocator { obj, locator } => {
                     if let Some((at, _)) = self.locator(pack, locator) {
                         let w = if self.world.pack == pack { Some(&mut self.world) } else { self.other.as_mut().filter(|o| o.pack == pack) };
@@ -3515,6 +3522,11 @@ impl Play {
                     c.script_walk = None;
                     c.anim.play(anim);
                     return wait.then_some(Wait::EntityAnim(pack, entity, anim));
+                }
+                Action::GrabEntity { entity } => {
+                    let c = self.entity_mut(pack, entity)?;
+                    c.held = true;
+                    c.script_walk = None;
                 }
                 Action::ReleaseEntity { entity } => {
                     self.pending_holds.remove(&(pack, entity));
@@ -18220,6 +18232,28 @@ fn break_cue(material: i16) -> i32 {
         4 => 146,
         _ => 144,
     }
+}
+
+/// SPEC-0030 row 179 with axis 2: the Z column turns toward the point by fraction t (or becomes the direction once
+/// within 1 - 0.001 t^2), and X and Y are rebuilt keeping the old Y column's plane.
+fn align_z_to(m: [f32; 16], point: [f32; 3], t: f32) -> [f32; 16] {
+    let c = [m[8], m[9], m[10]];
+    let d = unit(sub_v(point, [m[12], m[13], m[14]]));
+    let u = unit(c);
+    let z = if u[0] * d[0] + u[1] * d[1] + u[2] * d[2] < 1.0 - 0.001 * t * t {
+        unit(std::array::from_fn(|k| t * d[k] + (1.0 - t) * c[k]))
+    } else {
+        d
+    };
+    let y0 = [m[4], m[5], m[6]];
+    let cross = |a: [f32; 3], b: [f32; 3]| [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
+    let x = unit(cross(y0, z));
+    let y = cross(z, x);
+    let mut out = m;
+    out[..3].copy_from_slice(&x);
+    out[4..7].copy_from_slice(&y);
+    out[8..11].copy_from_slice(&z);
+    out
 }
 
 /// A Supernova bolt in flight (SPEC-0036 Attack spawn).
