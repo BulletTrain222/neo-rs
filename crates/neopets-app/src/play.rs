@@ -1374,6 +1374,10 @@ pub struct Play {
     mote_objects: Vec<neopets_sim::charm::Object>,
     /// A family handler's Mote kind during a Mote object's breakable walk.
     break_family: Option<i32>,
+    /// The ended Fog cloud's point, in its pack, with the pulse countdown.
+    fog_after: Option<(u32, [f32; 3], u32)>,
+    /// The Supernova's bolts in flight.
+    bolts: Vec<Bolt>,
     /// Roberta's orbit angle, kept from one Supernova to the next.
     orbit_angle_r: f32,
     charm_words: neopets_sim::charm::Words,
@@ -2162,6 +2166,8 @@ impl Play {
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
             break_family: None,
+            fog_after: None,
+            bolts: Vec::new(),
             orbit_angle_r: 0.0,
             orbit_angle: 0.0,
             charm_words,
@@ -4416,7 +4422,14 @@ impl Play {
                 let b = neopets_sim::mote::one_plus_percent(self.items.get(id).map_or(0.0, |i| i.stats[5] as f32));
                 let e = self.pet_bonus.damage_factor(self.petpet.as_ref().map(|p| p.kind), self.petpet.as_ref().map_or(0, |p| p.t));
                 let scale = neopets_sim::charm::scale(wa, 1.5, b, self.statuses.damage_scale(), e);
-                let spawned = neopets_sim::charm::spawn_roberta(id, &self.charm_words, at, hero, self.orbit_angle_r, scale);
+                let spawned = match id {
+                    165 => neopets_sim::charm::spawn_rocks(at, f, scale, self.orbit_angle_r, &mut self.rng),
+                    166 => {
+                        let g = self.world.ground_at(at[0], at[2], at[1] + 8.0).unwrap_or(at[1]);
+                        vec![neopets_sim::charm::spawn_cloud([at[0], g + 3.5, at[2]], self.orbit_angle_r, scale)]
+                    }
+                    _ => neopets_sim::charm::spawn_roberta(id, &self.charm_words, at, hero, self.orbit_angle_r, scale),
+                };
                 if let Some(o) = spawned.first() {
                     self.last_mote = format!("Mote {id} Roberta object (scale {scale}, {} ticks) on tick {}", o.life, self.ticks);
                 }
@@ -7387,8 +7400,29 @@ impl Play {
         let facing = self.loco.facing;
         let table = self.effect_table.clone();
         objects.retain_mut(|o| {
-            let live = o.tick(hero, ground);
+            let mut live = o.tick(hero, ground);
             o.aim(neopets_sim::roberta::anchor(hero, facing), facing);
+            // The Rock shots' flight, and the Fog cloud's height toward trunc(ground + 3.5).
+            if matches!(o.shape, neopets_sim::charm::Shape::Rock(_)) {
+                o.rock_move();
+                let g = self.world.ground_at(o.centre[0], o.centre[2], o.centre[1] + 8.0);
+                let rng = &mut self.rng;
+                live = o.rock_land(g, || rng.frange(-0.1, 0.1));
+                if !live {
+                    // The rock's end effect (0x3AA).
+                    let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 938, o.centre, neopets_sim::effect::IDENTITY));
+                    self.effects.update(&table, h, None, &mut self.rng);
+                    self.effects.release(h);
+                }
+            } else if matches!(o.shape, neopets_sim::charm::Shape::Cloud) {
+                if let Some(g) = self.world.ground_at(o.centre[0], o.centre[2], o.centre[1] + 8.0) {
+                    o.centre[1] += 0.1 * ((g + 3.5).trunc() - o.centre[1]);
+                }
+                if !live {
+                    let n = neopets_sim::charm::fog_countdown(&mut self.rng);
+                    self.fog_after = Some((pack, o.centre, n));
+                }
+            }
             if o.id == 161 && o.hero == 0 {
                 self.orbit_angle = o.angle;
             }
@@ -7396,7 +7430,7 @@ impl Play {
                 self.orbit_angle_r = o.angle;
             }
             // SPEC-0036 Effect definitions: each object's definitions play at its centre.
-            if live && !o.fx_started && o.segment().is_some() {
+            if live && !o.fx_started && !o.waiting() {
                 o.fx_started = true;
                 let frame = [[facing[2], 0.0, -facing[0]], [0.0, 1.0, 0.0], facing];
                 for &id in neopets_sim::charm::definitions(o.hero, o.id) {
@@ -7425,6 +7459,16 @@ impl Play {
             let p = neopets_sim::mote::power_index(o.hero, o.id).and_then(|k| self.design.attack_power(k)).unwrap_or(1.0);
             let g = self.items.get(o.id).map_or(0.0, |i| i.stats[6] as f32);
             let mut hits = Vec::new();
+            // The Supernova's bolt (SPEC-0036 Hit volume re-arm), after the orbit step.
+            if o.hero == 1 && o.id == 173 {
+                if o.timer > 0 {
+                    o.timer -= 1;
+                } else if let Some(id) = self.shot_target_within(neopets_sim::charm::BOLT_REACH) {
+                    o.timer = neopets_sim::charm::BOLT_GAP;
+                    self.post_bolt(o.centre, id);
+                }
+            }
+            let rock = matches!(o.shape, neopets_sim::charm::Shape::Rock(_));
             for (i, c) in self.characters.iter().enumerate().filter(|(_, c)| c.pack == pack && !c.inactive && c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead()) && !c.unhittable() && !c.own_hit_check()) {
                 let Some(r) = c.row else { continue };
                 let base = c.stand_in_body().map_or(c.position, |b| [b.center[0], b.center[1] - 0.5 * b.length, b.center[2]]);
@@ -7435,6 +7479,10 @@ impl Play {
                 let cf = if neopets_sim::mote::matches(neopets_sim::mote::element(Some(o.id)), t) { neopets_sim::mote::one_plus_percent(g) } else { 1.0 };
                 let (damage, _) = neopets_sim::charm::damage(o.scale, cf, r.defence, p);
                 hits.push((i, damage));
+                // A rock's first hit ends its walk.
+                if rock {
+                    break;
+                }
             }
             // SPEC-0036 Charm attack hits: Lava of both heroes, Tor's Water, Shadow and Sun and Roberta's Leaf
             // send their status (SPEC-0029 Behavior 27.1); the Leaf deals no damage.
@@ -7456,6 +7504,82 @@ impl Play {
             }
         }
         self.mote_objects = objects;
+        self.fog_pulse_step();
+        self.bolts_step();
+    }
+
+    /// SPEC-0036 Aimed timed object, step 3: once the cycle has ended, a countdown; below 1, every eligible actor
+    /// within 10 units gets a Fog effect (definition 982, three copies) at its aim point, and with any the
+    /// countdown is drawn again. It deals no damage: the spec finds no damage step in that effect.
+    fn fog_pulse_step(&mut self) {
+        let Some((pack, at, n)) = self.fog_after else { return };
+        if pack != self.world.pack {
+            self.fog_after = None;
+            return;
+        }
+        if n >= 1 {
+            self.fog_after = Some((pack, at, n - 1));
+            return;
+        }
+        let reach = neopets_sim::charm::FOG_REACH;
+        let points: Vec<[f32; 3]> = self.characters.iter().filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0).filter(|c| {
+            let d = sub_v(c.position, at);
+            d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < reach * reach
+        }).map(|c| c.stand_in_body().map(|b| b.center).or_else(|| Self::attach_point(c, 7)).unwrap_or(c.position)).collect();
+        if points.is_empty() {
+            return;
+        }
+        let table = self.effect_table.clone();
+        for p in points {
+            for _ in 0..3 {
+                let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 982, p, neopets_sim::effect::IDENTITY));
+                self.effects.update(&table, h, None, &mut self.rng);
+                self.effects.release(h);
+            }
+        }
+        let n = neopets_sim::charm::fog_countdown(&mut self.rng);
+        self.fog_after = Some((pack, at, n));
+    }
+
+    /// The bolt's post: from the orbit point toward the target's aim point, for trunc(d / 2 + 10) ticks, with
+    /// its definitions along the path and the bank's cue at the orbit point. Its damage on arrival is R-0208.
+    fn post_bolt(&mut self, from: [f32; 3], target: u64) {
+        let Some(c) = self.characters.iter().find(|c| c.id == target) else { return };
+        let to = c.stand_in_body().map(|b| b.center).or_else(|| Self::attach_point(c, 7)).unwrap_or(c.position);
+        let d = sub_v(to, from);
+        let d = (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt();
+        let left = (d / 2.0 + 10.0) as i32;
+        let table = self.effect_table.clone();
+        let fx = [1113, 1510, 983, 983, 983].map(|id| {
+            let h = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, id, from, neopets_sim::effect::IDENTITY));
+            self.effects.update(&table, h, None, &mut self.rng);
+            h
+        });
+        self.bolts.push(Bolt { fx, from, to, left, total: left.max(1) });
+        self.sound.play(neopets_sim::sound::POWER, 1, neopets_sim::sound::Play { emitter: Some(from), ..Default::default() });
+    }
+
+    /// A pooled bolt: D + 1 updates along its path.
+    fn bolts_step(&mut self) {
+        let table = self.effect_table.clone();
+        let mut bolts = std::mem::take(&mut self.bolts);
+        bolts.retain_mut(|b| {
+            if b.left < 0 {
+                for &h in &b.fx {
+                    self.effects.stop(&table, h);
+                    self.effects.release(h);
+                }
+                return false;
+            }
+            let t = 1.0 - b.left as f32 / b.total as f32;
+            let p = add(b.from, scale(sub_v(b.to, b.from), t));
+            for &h in &b.fx {
+                self.effects.set_position(h, p);
+            }
+            b.left -= 1;
+            true
+        });
+        self.bolts = bolts;
     }
 
     /// Stat B (S) of Tor's weapon entry; 0 with no weapon.
@@ -10985,6 +11109,11 @@ impl Play {
     /// characters within 60 horizontally whose aim point is visible along three parallel rays
     /// (from the hero + 1.5 up, and 1.0 to each side), one chosen uniformly.
     fn shot_target(&mut self) -> Option<u64> {
+        self.shot_target_within(60.0)
+    }
+
+    /// The finder with its reach (the Supernova's bolt: 45.0).
+    fn shot_target_within(&mut self, reach: f32) -> Option<u64> {
         let pack = self.world.pack;
         let h = self.loco.position();
         let eye = add(h, [0.0, 1.5, 0.0]);
@@ -10993,7 +11122,7 @@ impl Play {
             if found.len() >= 10 {
                 break;
             }
-            if (c.position[0] - h[0]).hypot(c.position[2] - h[2]) >= 60.0 {
+            if (c.position[0] - h[0]).hypot(c.position[2] - h[2]) >= reach {
                 continue;
             }
             let at = c.stand_in_body().map(|b| b.center).or_else(|| Self::attach_point(c, 7)).unwrap_or(c.position);
@@ -17960,6 +18089,16 @@ fn break_cue(material: i16) -> i32 {
         4 => 146,
         _ => 144,
     }
+}
+
+/// A Supernova bolt in flight (SPEC-0036 Attack spawn).
+#[derive(Clone, Debug)]
+struct Bolt {
+    fx: [usize; 5],
+    from: [f32; 3],
+    to: [f32; 3],
+    left: i32,
+    total: i32,
 }
 
 /// A Mote object's volume (a segment of radius r) against a breakable's volume record: the pair tests of SPEC-0036

@@ -71,6 +71,80 @@ pub enum Shape {
     Ring { start: f32, top: f32, rate: f32, height: f32 },
     /// Family C: the segment from `centre` to `end`, of transverse half-width `half`.
     Beam { half: f32, end: Vec3 },
+    /// Roberta's Rock skipping shot: a sphere of the rock's scale, moved by `Object::rock_move`.
+    Rock(Rock),
+    /// Roberta's Fog cloud: no volume of its own (Aimed timed object).
+    Cloud,
+}
+
+/// A Rock skipping shot's fields (SPEC-0036): the flat direction, the speed in units a tick, the vertical
+/// speed, the contact count and limit, the flat distance and the previous point, and the effect scale.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Rock {
+    pub direction: Vec3,
+    speed: f32,
+    vy: f32,
+    contacts: u32,
+    limit: u32,
+    distance: f32,
+    previous: Vec3,
+    pub scale: f32,
+}
+
+/// The rock's gravity a tick, its flat range, the shrink a bounce and the smallest scale.
+const ROCK_GRAVITY: f32 = -0.1;
+const ROCK_RANGE: f32 = 250.0;
+const ROCK_SHRINK: f32 = 0.12;
+const ROCK_SMALLEST: f32 = 0.25;
+/// The Fog cloud's cycle (6 s).
+const CLOUD_TICKS: u32 = 360;
+/// A Fog pulse's reach and the Supernova's bolt reach and spacing (SPEC-0036 Hit volume re-arm).
+pub const FOG_REACH: f32 = 10.0;
+pub const BOLT_REACH: f32 = 45.0;
+pub const BOLT_GAP: u32 = 30;
+
+/// The Fog pulse's countdown: 24 to 35 ticks.
+pub fn fog_countdown(rng: &mut crate::rng::Rng) -> u32 {
+    ((0.5 + rng.frange(-0.1, 0.1)) * 60.0) as u32
+}
+
+/// `n = unit(d x U)` with U up, for a flat d.
+fn flat_side(d: Vec3) -> Vec3 {
+    let n = [-d[2], 0.0, d[0]];
+    let l = (n[0] * n[0] + n[2] * n[2]).sqrt().max(1e-6);
+    [n[0] / l, 0.0, n[2] / l]
+}
+
+/// `(1 - f) d + f n`, flat and renormalised.
+fn turned(d: Vec3, f: f32) -> Vec3 {
+    let n = flat_side(d);
+    let v = [(1.0 - f) * d[0] + f * n[0], 0.0, (1.0 - f) * d[2] + f * n[2]];
+    let l = (v[0] * v[0] + v[2] * v[2]).sqrt().max(1e-6);
+    [v[0] / l, 0.0, v[2] / l]
+}
+
+/// SPEC-0036 Three-spoke spawner: Roberta's Rock full release, three rocks from one point. Draws per rock: the
+/// blend fraction (rocks 1 and 2), the speed, the contact limit.
+pub fn spawn_rocks(start: Vec3, direction: Vec3, scale: f32, angle: f32, rng: &mut crate::rng::Rng) -> Vec<Object> {
+    (0..3)
+        .map(|k| {
+            let f = match k {
+                1 => rng.frange(0.2, 0.25),
+                2 => rng.frange(-0.25, -0.2),
+                _ => 0.0,
+            };
+            let direction = turned(direction, f);
+            let speed = 0.6 + rng.frange(-0.3, 0.3);
+            let limit = (8 - 2 + rng.index(5) as i32) as u32;
+            let rock = Rock { direction, speed, vy: 1.0, contacts: 0, limit, distance: 0.0, previous: start, scale: 1.0 };
+            Object { id: 165, shape: Shape::Rock(rock), centre: start, angle, life: u32::MAX, scale, list: [None; 10], delay: 0, age: 0, hero: 1, fx: Vec::new(), fx_started: false, timer: 0 }
+        })
+        .collect()
+}
+
+/// Roberta's Fog cloud at the release point, held at the ground + 3.5 by the host.
+pub fn spawn_cloud(centre: Vec3, angle: f32, scale: f32) -> Object {
+    Object { id: 166, shape: Shape::Cloud, centre, angle, life: CLOUD_TICKS, scale, list: [None; 10], delay: 0, age: 0, hero: 1, fx: Vec::new(), fx_started: false, timer: 0 }
 }
 
 /// The family A height and the particle lines (start, rate, life in seconds).
@@ -117,6 +191,8 @@ pub struct Object {
     /// The host's effect objects, once started.
     pub fx: Vec<usize>,
     pub fx_started: bool,
+    /// The Supernova's bolt timer.
+    pub timer: u32,
 }
 
 /// Tor's power attack objects for a word-2 Mote: none for the effect-only Motes (160, 162,
@@ -126,7 +202,7 @@ pub fn spawn_tor(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale: f3
     let ticks = |s: f32| (mul(s, 60.0) as i64).max(0) as u32;
     let particle = |s: f32| (s * 60.0).round() as u32;
     let grow = |(start, rate, life): (f32, f32, f32)| Shape::Grow { start, rate, life };
-    let one = |shape: Shape, centre: Vec3, life: u32, delay: u32| Object { id, shape, centre, angle, life, scale, list: [None; 10], delay, age: 0, hero: 0, fx: Vec::new(), fx_started: false };
+    let one = |shape: Shape, centre: Vec3, life: u32, delay: u32| Object { id, shape, centre, angle, life, scale, list: [None; 10], delay, age: 0, hero: 0, fx: Vec::new(), fx_started: false, timer: 0 };
     let mut v = match id {
         161 => vec![one(Shape::Orbit { radius: w.orbit_radius, sphere: ORBIT_SPHERE }, hero, ticks(w.orbit_seconds), 0)],
         167 => vec![one(Shape::Cylinder { radius: w.wind_radius, height: w.wind_height, follow: 2 }, at, ticks(CYLINDER_SECONDS), 0)],
@@ -149,8 +225,8 @@ pub fn spawn_tor(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale: f3
 }
 
 /// Roberta's full-release objects (SPEC-0036 Object pairing): Lava 161 (family A), the Leaf ring 164, the
-/// Shadow and Sun beams 169 and 171 (family C) and the Supernova orbit 173. Not built: the Bubble beam 162
-/// (R-0206), the Rock skipping shots 165, the Fog cloud 166 and the Supernova's bolts.
+/// Shadow and Sun beams 169 and 171 (family C) and the Supernova orbit 173. The Rock shots and the Fog cloud
+/// have their own spawns above. Not built: the Bubble beam 162 (R-0206).
 pub fn spawn_roberta(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale: f32) -> Vec<Object> {
     let ticks = |s: f32| (mul(s, 60.0) as i64).max(0) as u32;
     let (shape, centre, life) = match id {
@@ -163,7 +239,7 @@ pub fn spawn_roberta(id: u16, w: &Words, at: Vec3, hero: Vec3, angle: f32, scale
         173 => (Shape::Orbit { radius: w.r_orbit_radius, sphere: ORBIT_SPHERE }, hero, ticks(w.r_orbit_seconds)),
         _ => return Vec::new(),
     };
-    let mut o = Object { id, shape, centre, angle, life, scale, list: [None; 10], delay: 0, age: 0, hero: 1, fx: Vec::new(), fx_started: false };
+    let mut o = Object { id, shape, centre, angle, life, scale, list: [None; 10], delay: 0, age: 0, hero: 1, fx: Vec::new(), fx_started: false, timer: 0 };
     o.place(hero, None);
     vec![o]
 }
@@ -182,6 +258,8 @@ pub fn definitions(hero: usize, id: u16) -> &'static [i32] {
         (0, 173) => &[561],
         (1, 161) => &[415],
         (1, 164) => &[541],
+        (1, 165) => &[542, 563],
+        (1, 166) => &[544],
         (1, 169) => &[546],
         (1, 171) => &[548],
         (1, 173) => &[550],
@@ -214,7 +292,48 @@ impl Object {
             Shape::Sphere { radius } | Shape::Burst { radius } => radius,
             Shape::Ring { start, top, rate, .. } => add(start, mul(rate, self.age as f32 / 60.0)).min(top),
             Shape::Beam { half, .. } => half,
+            Shape::Rock(r) => r.scale,
+            Shape::Cloud => 0.0,
         }
+    }
+
+    /// The rock's flight, step 1: P + s d, the height by the old v, then v + g.
+    pub fn rock_move(&mut self) {
+        if let Shape::Rock(r) = &mut self.shape {
+            self.centre[0] = add(self.centre[0], mul(r.speed, r.direction[0]));
+            self.centre[2] = add(self.centre[2], mul(r.speed, r.direction[2]));
+            self.centre[1] = add(self.centre[1], r.vy);
+            r.vy = add(r.vy, ROCK_GRAVITY);
+        }
+    }
+
+    /// The rock's flight, steps 2 to 4: with v below 0, contact at P.y - scale <= h runs the bounce (`turn` draws
+    /// its t when one is taken); then the flat distance. False when the rock ends.
+    pub fn rock_land(&mut self, ground: Option<f32>, turn: impl FnOnce() -> f32) -> bool {
+        let centre = self.centre;
+        let Shape::Rock(r) = &mut self.shape else { return true };
+        if r.vy < 0.0 && ground.is_some_and(|h| sub(centre[1], r.scale) <= h) {
+            r.contacts += 1;
+            let small = sub(r.scale, ROCK_SHRINK);
+            if r.contacts >= r.limit || small < ROCK_SMALLEST {
+                return false;
+            }
+            r.scale = small;
+            r.direction = turned(r.direction, turn());
+            r.vy = 1.0;
+        }
+        let (dx, dz) = (centre[0] - r.previous[0], centre[2] - r.previous[2]);
+        r.distance += (dx * dx + dz * dz).sqrt();
+        if r.distance > ROCK_RANGE {
+            return false;
+        }
+        r.previous = centre;
+        true
+    }
+
+    /// The object's effects have started once it is past its delay.
+    pub fn waiting(&self) -> bool {
+        self.delay > 0
     }
 
     /// The beam rebuilt each live tick: from the hero's query point along the normalized aim.
@@ -227,7 +346,7 @@ impl Object {
 
     /// The Sun has only its first active tick: the tick after the spawn.
     fn active(&self) -> bool {
-        self.delay == 0 && (!matches!(self.shape, Shape::Burst { .. }) || self.age == 2)
+        self.delay == 0 && !matches!(self.shape, Shape::Cloud) && (!matches!(self.shape, Shape::Burst { .. }) || self.age == 2)
     }
 
     /// The volume as a segment and a radius, for the world breakables; none while it is not active.
@@ -290,6 +409,8 @@ impl Object {
         }
         match self.shape {
             Shape::Sphere { radius: r } | Shape::Burst { radius: r } => sphere_meets_body(self.centre, r, feet, radius, height),
+            Shape::Rock(rock) => sphere_meets_body(self.centre, rock.scale, feet, radius, height),
+            Shape::Cloud => false,
             Shape::Orbit { sphere, .. } => sphere_meets_body(self.centre, sphere, feet, radius, height),
             Shape::Cylinder { radius: r, height: h, .. } => cylinder_meets_body(self.centre, r, h, feet, radius, height),
             Shape::Grow { .. } => cylinder_meets_body(self.centre, self.radius(), GROW_HEIGHT, feet, radius, height),
@@ -394,6 +515,48 @@ mod tests {
         assert_eq!(hits(&s), (true, false));
         s.tick([0.0; 3], None);
         assert_eq!(hits(&s), (false, false));
+    }
+
+    /// SPEC-0036 Rock skipping shot's vectors: the first contact on the 21st tick from height 1.0, the scales
+    /// after each bounce, and the seventh contact the end.
+    #[test]
+    fn rock_flight() {
+        let mut rng = crate::rng::Rng::seeded(3);
+        let mut rocks = spawn_rocks([0.0, 1.0, 0.0], [0.0, 0.0, 1.0], 1.0, 0.0, &mut rng);
+        assert_eq!(rocks.len(), 3);
+        let mut o = rocks.remove(0);
+        let Shape::Rock(mut r) = o.shape else { panic!() };
+        assert_eq!(r.direction, [0.0, 0.0, 1.0]);
+        assert!((6..=10).contains(&r.limit) && (0.3..=0.9).contains(&r.speed), "{r:?}");
+        r.limit = 20;
+        r.speed = 0.0;
+        o.shape = Shape::Rock(r);
+        let mut first = None;
+        for t in 1..=25 {
+            o.rock_move();
+            let Shape::Rock(before) = o.shape else { panic!() };
+            if before.vy < 0.0 && o.centre[1] - before.scale <= 0.0 && first.is_none() {
+                first = Some(t);
+            }
+            if first.is_some() {
+                break;
+            }
+        }
+        assert_eq!(first, Some(21));
+        let mut scales = Vec::new();
+        for _ in 0..6 {
+            assert!(o.rock_land(Some(1000.0), || 0.0));
+            let Shape::Rock(r) = o.shape else { panic!() };
+            scales.push(r.scale);
+            if let Shape::Rock(r) = &mut o.shape {
+                r.vy = -1.0;
+            }
+        }
+        assert!((scales[0] - 0.88).abs() < 1e-5 && (scales[5] - 0.28).abs() < 1e-5, "{scales:?}");
+        assert!(!o.rock_land(Some(1000.0), || 0.0));
+        // The turn: t = 0.1 turns 6.34 degrees toward n, staying flat.
+        let d = turned([0.0, 0.0, 1.0], 0.1);
+        assert!((d[0].atan2(d[2]).to_degrees().abs() - 6.34).abs() < 0.01 && d[1] == 0.0, "{d:?}");
     }
 
     /// SPEC-0036: a target in Roberta's beam is hit on beam ticks 1, 61, 121, 181 and 241; the box spans -1.0
