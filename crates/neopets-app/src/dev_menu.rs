@@ -48,6 +48,9 @@ pub struct DevMenu {
     /// The cut and developer teleport's cursor, and where a teleport to a world with no entry puts the hero.
     extra_at: usize,
     pub warp_point: Option<[f32; 3]>,
+    /// The cut group row's cursor, and the region to load after its warp.
+    group_at: usize,
+    pub group: Option<u32>,
     /// The Hero Haste slider under the mouse button: its position, 0 at the left to 1.
     haste_drag: Option<f32>,
     /// A mouse click this frame: apply the cursor's entry, or step its value.
@@ -69,7 +72,7 @@ const NORMAL: usize = 3;
 
 impl Default for DevMenu {
     fn default() -> Self {
-        Self { extra_at: 0, warp_point: None, haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
+        Self { group_at: 0, group: None, extra_at: 0, warp_point: None, haste_drag: None, open: false, cursor: 0, amount: 0, item: 0, flag: 0, warp_at: 0, warp: None, boss_at: 0, boss: None, speed: NORMAL, step: false, start: 0, free: None, note: String::new(), toast: None, weapon_at: 0, clicked: false, click_step: 0, swallow: false, warp_names: Default::default(), quests: None }
     }
 }
 
@@ -152,6 +155,7 @@ enum Entry {
     Noclip,
     Haste,
     Extra,
+    Group,
     CloudBeast,
     BossFight,
 }
@@ -160,13 +164,13 @@ enum Entry {
 const SECTIONS: [(&str, &[Entry]); 6] = [
     ("CHEATS", &[Entry::God, Entry::Noclip, Entry::Haste, Entry::Magic, Entry::Charge]),
     ("TIME AND CAMERA", &[Entry::Speed, Entry::FreeCam, Entry::ToCamera]),
-    ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra]),
+    ("TRAVEL", &[Entry::Warp, Entry::Start, Entry::Extra, Entry::Group]),
     ("HERO", &[Entry::Heal, Entry::Hero, Entry::Kill, Entry::BossFight, Entry::CloudBeast]),
     ("ITEMS AND MONEY", &[Entry::Weapon, Entry::Item, Entry::Drop, Entry::Motes, Entry::Maps, Entry::Neopoints]),
     ("STORY", &[Entry::Flag]),
 ];
 
-const ENTRIES: [Entry; 23] = [
+const ENTRIES: [Entry; 24] = [
     Entry::God,
     Entry::Noclip,
     Entry::Haste,
@@ -178,6 +182,7 @@ const ENTRIES: [Entry; 23] = [
     Entry::Warp,
     Entry::Start,
     Entry::Extra,
+    Entry::Group,
     Entry::Heal,
     Entry::Hero,
     Entry::Kill,
@@ -232,7 +237,7 @@ fn other_column(i: usize) -> usize {
 fn kind(e: Entry) -> Kind {
     match e {
         Entry::God | Entry::Noclip | Entry::Magic | Entry::Charge | Entry::FreeCam => Kind::Toggle,
-        Entry::Haste | Entry::Extra | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
+        Entry::Haste | Entry::Extra | Entry::Group | Entry::Speed | Entry::Warp | Entry::Start | Entry::Weapon | Entry::Item | Entry::Neopoints | Entry::Flag | Entry::BossFight => Kind::Choice,
         _ => Kind::Action,
     }
 }
@@ -507,6 +512,11 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         if let Some(n) = v.split(',').find_map(|t| t.trim().strip_prefix("flag=")?.parse::<u16>().ok()) {
             dev.flag = n;
         }
+        // "group=K": the cut group row's entry K.
+        if let Some(&(_, pack, region)) = v.split(',').find_map(|t| t.trim().strip_prefix("group=")?.parse::<usize>().ok()).and_then(|k| crate::play::DEV_GROUPS.get(k)) {
+            dev.warp = Some(pack);
+            dev.group = Some(region);
+        }
         // "extra=K": the cut and developer teleport to its entry K.
         if let Some(&(pack, _, point)) = v.split(',').find_map(|t| t.trim().strip_prefix("extra=")?.parse::<usize>().ok()).and_then(|k| EXTRAS.get(k)) {
             dev.warp = Some(pack);
@@ -756,6 +766,7 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
     }
     if delta != 0 {
         match entry {
+            Entry::Group => dev.group_at = (dev.group_at as i32 + delta.signum()).rem_euclid(crate::play::DEV_GROUPS.len() as i32) as usize,
             Entry::Extra => dev.extra_at = (dev.extra_at as i32 + delta.signum()).rem_euclid(EXTRAS.len() as i32) as usize,
             Entry::Haste => {
                 play.play.cheats.haste = (play.play.cheats.haste as i32 + delta).clamp(0, crate::play::Cheats::HASTE_TOP as i32) as u8;
@@ -853,6 +864,12 @@ pub fn dev_input(keys: Res<ButtonInput<KeyCode>>, gamepads: Query<&Gamepad>, bin
         Entry::Speed => {
             dev.speed = NORMAL;
             "Normal speed".into()
+        }
+        Entry::Group => {
+            let (name, pack, region) = crate::play::DEV_GROUPS[dev.group_at];
+            dev.warp = Some(pack);
+            dev.group = Some(region);
+            format!("Going to the cut group {name} (world pack {pack}, region {region})")
         }
         Entry::Extra => {
             let (pack, name, point) = EXTRAS[dev.extra_at];
@@ -959,6 +976,7 @@ fn row_text(e: Entry, dev: &DevMenu, p: &crate::play::Play) -> (String, String) 
         Entry::FreeCam => ("Free camera (F2)".into(), on(dev.free.is_some())),
         Entry::Speed => ("Game speed (apply: 1x)".into(), speed_label(dev.speed)),
         Entry::ToCamera => ("Hero to the free camera".into(), String::new()),
+        Entry::Group => (format!("Cut group: {}", crate::play::DEV_GROUPS[dev.group_at].0), format!("{} of {}", dev.group_at + 1, crate::play::DEV_GROUPS.len())),
         Entry::Extra => (format!("Teleport: {}", EXTRAS[dev.extra_at].1), format!("{} of {}", dev.extra_at + 1, EXTRAS.len())),
         Entry::Warp => {
             let w = worlds(p);

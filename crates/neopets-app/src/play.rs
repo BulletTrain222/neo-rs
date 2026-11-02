@@ -29,6 +29,26 @@ const EMBEDDED_SLOT: u8 = 255;
 const PET_SLOT: u8 = 254;
 /// The slot a forced bind reloads the embedded region into (SPEC-0045 1217 Stage spawns).
 const REBIND_SLOT: u8 = 253;
+/// The developer menu's cut group: a slot of its own.
+const DEV_GROUP_SLOT: u8 = 252;
+
+/// The cut character groups the developer menu can load (SPEC-0066; no level script loads these regions): the
+/// name, the owner pack and the region. A test tool of this build, not part of the game.
+pub const DEV_GROUPS: [(&str, u32, u32); 13] = [
+    ("Prince Tourin", 772, 773),
+    ("Eleanor", 722, 729),
+    ("Swamp group, Tentacles", 722, 731),
+    ("18 Biting Spellbooks", 1327, 1331),
+    ("Six Crokabeks", 893, 894),
+    ("Gershwin and Lodestone", 893, 899),
+    ("Drackonack Fang", 809, 815),
+    ("Six Poison Spyders", 696, 697),
+    ("Two Flying Minions", 699, 700),
+    ("Minion Magician", 699, 701),
+    ("Minion squad", 1324, 1325),
+    ("Minion Archers, Grunts", 1324, 1326),
+    ("Darkest Faerie, Warriors", 1344, 1349),
+];
 /// SPEC-0006 Default start: pack 691 in T and 909 in E, the exterior current.
 const START_EXTERIOR: u32 = 909;
 const START_TRANSITION: u32 = 691;
@@ -1528,6 +1548,9 @@ pub struct Play {
     save_glow: Option<(u32, [usize; 2])>,
     /// Placed effect objects made by StartEffect, by (pack, slot).
     placed_fx: HashMap<(u32, usize), usize>,
+    /// The developer menu's cut group on its way in, and the tick it was asked for.
+    dev_group: Option<u64>,
+    dev_item: Option<[f32; 3]>,
     /// The walkers' look-ahead obstacles, rebuilt once a tick.
     avoid: std::sync::Arc<Vec<neopets_sim::walker::Obstacle>>,
     /// Roberta's hold effect and leap glow (SPEC-0036): their timers and effect objects.
@@ -2173,6 +2196,8 @@ impl Play {
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
             break_family: None,
+            dev_group: None,
+            dev_item: None,
             avoid: Default::default(),
             leap_point: [0.0; 3],
             landing_dir: [0.0, 0.0, 1.0],
@@ -11020,6 +11045,7 @@ impl Play {
         self.food_fallback();
         self.boss_step();
         self.avoid_step();
+        self.dev_group_step();
         self.gnarfas_step();
         self.king_step();
         self.knight_step();
@@ -12827,6 +12853,9 @@ impl Play {
     /// and the once-per-area and held vetoes, then the flag test (0 or 1 spawn, placed, with the
     /// key as the id: a negative key is refused by the spawn).
     fn region_items(&mut self, pack: u32, items: &[neopets_data::region::ItemPoint]) {
+        if self.dev_group.is_some() {
+            self.dev_item = items.first().map(|i| i.position).or(self.dev_item);
+        }
         for p in items {
             if p.luck != 0 {
                 let r = self.rng.range(0, 100);
@@ -17287,6 +17316,38 @@ impl Play {
     }
 
     /// Developer menu: the current world's start points, and a move to start point k.
+    /// The developer menu: load a cut region into this world, and take the hero to it once it has bound.
+    pub fn dev_load_group(&mut self, region: u32) {
+        self.apply(&[Action::LoadRegion { slot: DEV_GROUP_SLOT, region: Some(region) }]);
+        self.dev_group = Some(self.ticks);
+    }
+
+    /// The hero goes 6 units from the group's first character, or its first item point, when it has bound; a group
+    /// that never binds gives up after ten seconds.
+    fn dev_group_step(&mut self) {
+        let Some(asked) = self.dev_group else { return };
+        let pack = self.world.pack;
+        let first = self.characters.iter().find(|c| c.pack == pack && c.slot == DEV_GROUP_SLOT).map(|c| c.position);
+        let item = self.dev_item.take();
+        if let Some(p) = first.or(item) {
+            self.dev_group = None;
+            // A point with no real ground under it (SPEC-0066: the Fang's lies outside its pack's terrain, and a miss
+            // reads as height 0): the hero stays at the entry, and an item comes to him.
+            let ground = self.world.ground_at(p[0] + 6.0, p[2], p[1] + 8.0).filter(|g| (g - p[1]).abs() < 30.0);
+            if ground.is_some() {
+                self.place_at(p[0] + 6.0, p[2], p[1] + 8.0);
+            } else if first.is_none() {
+                let (h, f) = (self.loco.position(), self.loco.facing);
+                let near = [h[0] + 3.0 * f[0], h[1], h[2] + 3.0 * f[2]];
+                if let Some(i) = self.pools.get_mut(&pack).and_then(|q| q.slots.iter_mut().flatten().find(|i| i.position[0] == p[0] && i.position[2] == p[2])) {
+                    i.position = near;
+                }
+            }
+        } else if self.ticks > asked + 600 {
+            self.dev_group = None;
+        }
+    }
+
     pub fn dev_start_points(&self) -> usize {
         self.world.entries.len()
     }

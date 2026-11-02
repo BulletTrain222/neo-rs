@@ -1712,6 +1712,10 @@ fn step_sim(
                     if let Some([x, y, z]) = dev.warp_point.take() {
                         play.play.place_at(x, z, y + 8.0);
                     }
+                    // A cut character group into its owner world.
+                    if let Some(region) = dev.group.take() {
+                        play.play.dev_load_group(region);
+                    }
                     info!("Warped to world pack {pack}");
                 }
                 Err(e) => error!("Warp to {pack} failed: {e}"),
@@ -4473,6 +4477,10 @@ fn play_trace(
             let mid: [f32; 3] = std::array::from_fn(|j| -r.normal[3] * r.normal[j] + (0.5 * r.lu - r.u[3]) * r.u[j] + (0.5 * r.lv - r.v[3]) * r.v[j]);
             println!("      ceiling {k}: middle {mid:?} U {:?} LU {} LV {} links {:?}", r.u, r.lu, r.lv, r.links);
         }
+    }
+    // NEOPETS_TRACE_GROUP=region: the developer menu's cut group loaded in the trace's world (diagnostic).
+    if let Some(r) = std::env::var("NEOPETS_TRACE_GROUP").ok().and_then(|v| v.parse::<u32>().ok()) {
+        play.dev_load_group(r);
     }
     // NEOPETS_TRACE_ROBERTA=1: the trace starts as Roberta (diagnostic; her attack fires shots).
     if std::env::var("NEOPETS_TRACE_ROBERTA").is_ok_and(|v| v == "1") {
