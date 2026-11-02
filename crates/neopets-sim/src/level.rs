@@ -3135,9 +3135,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // item-ask callbacks never fire (SPEC-0030 row 257); thread 7 returns the normal camera.
         984 => vec![Action::ReturnCamera { preset: -1, release: true }],
         // SPEC-0044 1017 Init: flag 85; thread K1 loads slot 0 with set 1 (flag 86) or 0 (region
-        // 1018 + set); 297 set when clear (thread K2, the opening cutscene, is not reproduced:
-        // R-0056; thread K3 neither). Proximity routines, teleports 0 and 1 (context 13) and the
-        // arrival are fixed rules.
+        // 1018 + set); 297 set when clear, with thread K2's opening cutscene; with 298 set and 300
+        // clear thread K3's scene (R-0056). Proximity routines, teleports 0 and 1 (context 13) and
+        // the arrival are fixed rules.
         1017 => {
             state.set(85, true);
             let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1018 + state.flag(86) as u32) }];
@@ -3154,6 +3154,21 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 }
                 v.extend([Action::ReturnCamera { preset: -1, release: true }, walk(1, 5), Action::LetterBox { on: false, seconds: 1.0, wait: false }]);
                 v.extend((1..=3).map(|entity| Action::ReleaseEntity { entity }));
+            }
+            // Thread K3: the guild's celebration after the Black Knight (the default idle 24 of
+            // entities 4 to 7 is not stored: their animations follow one another here).
+            if state.flag(298) && !state.flag(300) {
+                state.set(300, true);
+                let cam = |track| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+                let anim = |entity, anim, wait| Action::EntityAnim { entity, anim, looped: false, wait };
+                v.extend([Action::WaitLoads, Action::HoldHero, Action::FadeOut { seconds: 0.7, wait: true }, Action::LetterBox { on: true, seconds: 0.0, wait: false }, Action::FadeIn { seconds: 0.7, wait: false }]);
+                v.extend((4..=7).map(|entity| anim(entity, 24, false)));
+                v.extend([Action::Sleep { ticks: 1 }, cam(7)]);
+                v.extend([anim(5, 64, false), anim(6, 36, false), anim(4, 30, false), anim(7, 37, true), anim(5, 37, false), anim(6, 43, false), anim(4, 30, false), anim(7, 30, true)]);
+                v.extend([cam(5), anim(4, 30, true), cam(6), anim(4, 50, true), anim(4, 64, true)]);
+                v.extend([Action::FadeOut { seconds: 0.7, wait: true }, Action::ReturnCamera { preset: -1, release: true }, Action::LetterBox { on: false, seconds: 0.0, wait: false }]);
+                v.extend([Action::MoveEntity { entity: 5, locator: 5, face: true }, Action::MoveHero { locator: 4 }, Action::FadeIn { seconds: 0.7, wait: false }, Action::WalkHero { locator: 9, wait: true, orient: false }]);
+                v.extend((5..=7).map(|entity| Action::ReleaseEntity { entity }));
             }
             v
         }
