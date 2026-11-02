@@ -9976,6 +9976,7 @@ impl Play {
         self.status_step();
         self.starlight_step();
         self.guard_step();
+        self.loco.p1 = self.weapon_drawn;
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.held_step();
         self.hold_step(&input);
@@ -16148,7 +16149,7 @@ impl Play {
             }
         }
         // Jump take-off: voice cue 10.
-        if !airborne(self.last_state) && (hero_states::JUMP..=hero_states::JUMP_RUN).contains(&state) {
+        if !airborne(self.last_state) && ((hero_states::JUMP..=hero_states::JUMP_RUN).contains(&state) || (43..=46).contains(&state)) {
             self.sound.play(snd::VOICE, 10, Play::default());
         }
         self.last_state = state;

@@ -1694,8 +1694,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0045 758 Init: flags 68 and 251; the signs (34) on triggers 32 to 35, 6 to 10 and
         // 0; objects 2, 6 and 3; the prize wheel (56) on trigger 3; slot 0 loads set 0 (region
         // 759; the original keeps one random character of it active, here all are) and slot 1
-        // set 12 (771); the wheel's first pattern. The time trial (triggers 13 to 15 and the
-        // keeper), the breakable routine, the group threads and their zone loads (Low) and the
+        // set 12 (771); the wheel's first pattern. The group threads and their zone loads (Low) and the
         // prompt routines of triggers 1 and 2 (Low) are not reproduced.
         758 => {
             state.set(68, true);
@@ -1713,7 +1712,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0041 1249 Init: by flag 80 the levers' up objects (47, 43, 45) or down objects (48,
         // 44, 46) with the other object sets of each branch; effects 0 to 15 stopped; the levers
         // CB6 to CB8 on triggers 18, 16 and 17 and CB10 on 0; the 31 object sounds after the join
-        // (SPEC-0031 R-0111). The object-swap callbacks CB1 to CB5 (Medium) are not reproduced.
+        // (SPEC-0031 R-0111), and the plate scenes CB2 to CB5 on 3, 5, 4 and 6 (`plate_step`).
         1249 => {
             let up = state.flag(80);
             let objs: &[usize] = if up { &[13, 16, 20, 24, 10, 17, 21, 25, 47, 43, 45, 9, 1, 5, 7, 6] } else { &[13, 16, 20, 24, 10, 15, 19, 23, 48, 44, 46, 8, 0, 2, 4, 3] };
@@ -2325,10 +2324,24 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             }
             vec![reg(4, 0), reg(3, 0), reg(4, 1), reg(5, 1), reg(0, 2), reg(1, 2)]
         }
-        // SPEC-0042 696, partly: the transition-map triggers (4: 64; 5 and 8: 73; 6: 21; 7: 37),
-        // registered on every path. Not built: trigger 0's line, object 0, the prompt trigger 9,
-        // triggers 1 to 3 and the effect stops.
-        696 => vec![reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)],
+        // SPEC-0042 696 Init: with 137 clear T0 on trigger 0 and object 0; the prompt on 9; with 220 set
+        // and 301 clear F on 1 to 3; with 301 and 284 clear effects 0 to 16 stopped; the transition-map
+        // triggers (4: 64; 5 and 8: 73; 6: 21; 7: 37).
+        696 => {
+            let mut v = Vec::new();
+            if !state.flag(137) {
+                v.extend([reg(0, 10), Action::InitObjOn { obj: 0, end: false }]);
+            }
+            v.push(reg(9, 9));
+            if state.flag(220) && !state.flag(301) {
+                v.extend([reg(1, 1), reg(2, 1), reg(3, 1)]);
+            }
+            if !state.flag(301) && !state.flag(284) {
+                v.extend((0..=16).map(|slot| Action::StopEffect { slot }));
+            }
+            v.extend([reg(4, 4), reg(5, 5), reg(8, 5), reg(6, 6), reg(7, 7)]);
+            v
+        }
         // SPEC-0042 1397 Init: solved (687) objects 7 (start), 3, 0 and 2 (end) and trigger 0;
         // unsolved: effects 0 to 12 stopped, blocks 1 to 3 activated, entities 0 to 4 off, 5 to 7
         // at locators 77 to 79, trigger 0 (the solve), and each sub-puzzle while its flag is
@@ -8381,6 +8394,22 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 if c >= 0 {
                     out.actions.push(Action::LoadRegion { slot: 2, region: Some(865 + c as u32) });
                 }
+            }
+        }
+        // SPEC-0042 696 T0 (trigger 0): line 4 on entry. P9 (trigger 9): the prompt, line 3. F (1 to 3): 301,
+        // movie 48, line 5, and with flag 5 clear line 6.
+        (696, 10) if call.object && call.state == 1 => out.actions.push(Action::Message { line: 4 }),
+        (696, 9) if call.object && call.state != 0 => {
+            out.prompt = Some(3);
+            if call.square {
+                out.actions.push(Action::Message { line: 3 });
+            }
+        }
+        (696, 1) if call.object && call.state == 1 && !state.flag(301) => {
+            state.set(301, true);
+            out.actions.extend([Action::PlayFmv { movie: 48 }, Action::Sleep { ticks: 30 }, Action::Message { line: 5 }]);
+            if !state.flag(5) {
+                out.actions.extend([Action::Sleep { ticks: 30 }, Action::Message { line: 6 }]);
             }
         }
         // SPEC-0044 864 the bubble carriers' shared callback: 50 damage, then 100 ticks (word 17).
@@ -15338,8 +15367,7 @@ fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
 
 /// SPEC-0044 1056 Init: the lesson flags (23 from 158, 24 from 167, 26 from 180 or 185), triggers
 /// 0 and 1 and the zone triggers 5, 6, 7, 9, 10, 11, 12 and 14, and the setup thread's slot
-/// loads and trainer choice. The breakables, the other dialogue routines (their entities come
-/// from a module table) and the prompt routines are not built.
+/// loads and trainer choice.
 fn yard_init(state: &mut GameState) -> Vec<Action> {
     let reg = |index, routine| Action::RegisterTrigger { index, routine };
     if state.flag(158) {

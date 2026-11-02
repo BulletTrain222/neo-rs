@@ -1275,6 +1275,7 @@ fn step_sim(
             attack: false,
             r2_held: vpad.held(bindings::R2),
             circle_held: vpad.held(bindings::CIRCLE),
+            l2: vpad.held(bindings::L2),
         };
         // The attack button (Circle or R2): its press edge, kept for the next tick when this
         // frame runs none.
@@ -5421,6 +5422,8 @@ fn play_trace(
         let input = neopets_sim::hero::HeroInput {
             forward,
             side,
+            // NEOPETS_TRACE_L2=n: L2 held from tick n (diagnostic).
+            l2: std::env::var("NEOPETS_TRACE_L2").ok().and_then(|v| v.trim().parse::<u64>().ok()).is_some_and(|n| play.ticks >= n),
             // An open dialogue box gets a Square press every 10 ticks (skip, Next, Finish).
             // With NEOPETS_TRACE_MICE the drop prompt is pressed only inside the cage, and a
             // stalk starts the sneak with one press.

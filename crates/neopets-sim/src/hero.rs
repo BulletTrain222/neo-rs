@@ -3,8 +3,8 @@
 //! turn, and travel by the root step of the playing clip turned by the facing basis.
 //! The motion record (SPEC-0040 Behavior 14A, `motion::Body`) carries the hero: gravity, the
 //! walk-off fall (SPEC-0033 9A) and the jumps, air phases, steering and landings of Behavior 50.
-//! Not covered: status factors, strafe (state 32) and strafe jumps, reverse walk (state 6) and
-//! the backward jump 11, air attacks and the plunge, grabs and traversal states, the landing
+//! Strafe is state 32 with its jumps 43 to 46 (Behaviors 4 and 11). Not covered here: reverse walk
+//! (state 6) and the backward jump 11, air attacks and the plunge, the landing
 //! event windows (Cross chain, L1 guard, the hard landing's early exit), the floor-contact flag,
 //! the in-air ledge and block-edge choosers, and the displayed-height lag of Behavior 7.
 
@@ -24,6 +24,8 @@ pub const ATTACK: u8 = 13;
 pub const DEAD: u8 = 16;
 pub const HURT: u8 = 17;
 pub const LONG_FALL: u8 = 48;
+/// Strafe: walk and turn while L2 is held (SPEC-0033 Behavior 4).
+pub const STRAFE: u8 = 32;
 /// The get-up after the Plague Serpent's landed lunge (SPEC-0016, R-0189).
 pub const GET_UP: u8 = 54;
 /// SPEC-0055 death-end states: 59 arrival or return (clip 175), 60 respawn after deadly ground
@@ -168,6 +170,8 @@ pub struct HeroInput {
     pub circle_held: bool,
     /// Cross held (the dialogue box's faster reveal).
     pub cross_held: bool,
+    /// L2 held (strafe, Behavior 4).
+    pub l2: bool,
 }
 
 /// The hero's playing clip as the animation pass left it on the previous tick.
@@ -253,6 +257,12 @@ pub struct Locomotion {
     pub rate: f32,
     /// Air phase word of Behavior 50 (-1 launch pending).
     pub phase: i8,
+    /// The weapon-out flag P1 (the host sets it each pass).
+    pub p1: bool,
+    /// State 32's requested clip and stick (side, forward), and a strafe jump's direction.
+    strafe_id: u32,
+    strafe_stick: Option<(f32, f32)>,
+    jump_dir: Vec3,
     /// Take-off height stored by the jump chooser or the walk-off.
     start_height: f32,
     /// Position change of the last record tick (+0x160).
@@ -342,6 +352,10 @@ impl Locomotion {
             target: f,
             rate: 1.0,
             phase: 0,
+            p1: false,
+            strafe_id: 0,
+            strafe_stick: None,
+            jump_dir: [0.0; 3],
             start_height: position[1],
             last_motion: [0.0; 3],
             extra: [0.0; 3],
@@ -605,14 +619,82 @@ impl Locomotion {
     }
 
     pub fn airborne(&self) -> bool {
-        (JUMP..=JUMP_RUN).contains(&self.state)
+        (JUMP..=JUMP_RUN).contains(&self.state) || (43..=46).contains(&self.state)
+    }
+
+    /// SPEC-0033 Behavior 4, the state-32 handler: the release, the jumps, the heading after the camera
+    /// and the walk-and-turn codes; the stick re-aims the root step (`travel`).
+    fn strafe(&mut self, input: &HeroInput, v: f32, camera_forward: Vec3) {
+        self.strafe_stick = None;
+        if !input.l2 {
+            self.state = STANCE;
+            self.strafe_id = 0;
+            return;
+        }
+        let (f, s) = (input.forward, input.side);
+        let p1 = self.p1;
+        // Item 9: h = normalise(0.75 h + 0.25 C), with a tie-break when they are nearly opposite.
+        let c = flatten(camera_forward);
+        let mut h: Vec3 = std::array::from_fn(|k| 0.75 * self.facing[k] + 0.25 * c[k]);
+        if dot(self.facing, c) < -0.99 {
+            let right = cross(self.facing, [0.0, 1.0, 0.0]);
+            h = std::array::from_fn(|k| h[k] + 0.1 * right[k]);
+        }
+        self.facing = normalise(h);
+        self.strafe_id = if v == 0.0 {
+            0
+        } else if f.abs() * 0.25 < s.abs() {
+            match (s < 0.0, f > 0.0, p1) {
+                (true, true, false) => 151,
+                (true, false, false) => 98,
+                (true, true, true) => 153,
+                (true, false, true) => 99,
+                (false, true, false) => 154,
+                (false, false, false) => 152,
+                (false, true, true) => 101,
+                (false, false, true) => 38,
+            }
+        } else if f > 0.0 {
+            match (input.run, p1) {
+                (true, false) => 4,
+                (true, true) => 9,
+                (false, false) => 3,
+                (false, true) => 8,
+            }
+        } else if p1 {
+            11
+        } else {
+            6
+        };
+        if v > 0.0 {
+            self.strafe_stick = Some((s, f));
+        }
+        // Behavior 50, in strafe mode: pushed, the strafe jump by the current action; centred, state 7.
+        if input.jump && self.body.normal[1] >= 0.82 {
+            self.strafe_stick = None;
+            if v > 0.0 {
+                self.jump_dir = self.target;
+                let state = match self.strafe_id {
+                    6 | 11 => 45,
+                    36 | 38 | 100 | 101 | 152 | 154 => 44,
+                    37 | 39 | 98 | 99 | 151 | 153 => 43,
+                    _ => 46,
+                };
+                self.enter_air(state);
+            } else {
+                self.enter_air(JUMP);
+            }
+        }
     }
 
     /// The animation id requested this pass. Ground states 2 to 4 play ids 2 to 4 and the
     /// stance the base idle 0 (SPEC-0033 5.1); the air states request their own.
     pub fn action(&self) -> u32 {
         match self.state {
-            SLOW_WALK | WALK | RUN => self.state as u32,
+            // Ids 7, 8 and 9 with the weapon out (P1; SPEC-0033 5.1).
+            SLOW_WALK | WALK | RUN => self.state as u32 + if self.p1 { 5 } else { 0 },
+            STRAFE => self.strafe_id,
+            43..=46 => self.request,
             JUMP..=JUMP_RUN | ATTACK | DEAD | HURT | LONG_FALL | GUARD | CARRY | ONE_SHOT | HERO_LOOP | FEED | BLOCK | HANG | CLIMB | LADDER | PANEL | LEDGE | LEDGE_UP | LEDGE_RISE | LEDGE_DROP | LINE | ROPE => self.request,
             ARRIVAL => 175,
             HELD => 143,
@@ -706,6 +788,12 @@ impl Locomotion {
             if input.guard && self.shield {
                 self.state = GUARD;
                 return self.guard(input, v > 0.0, clip);
+            }
+            // Behavior 4: L2 held in idle enters state 32; the state-32 handler ends it.
+            if self.state == STRAFE || (self.state == STANCE && input.l2) {
+                self.state = STRAFE;
+                self.strafe(input, v, camera_forward);
+                return;
             }
             // Behavior 50 jump chooser: Cross on walkable ground (normal y at least 0.82).
             if !(input.jump && self.body.normal[1] >= 0.82) {
@@ -801,14 +889,28 @@ impl Locomotion {
         if self.phase == -1 {
             // Launch: gain 1.0, velocity cleared, vertical 8.75, horizontal facing times S.
             self.body.gain = 1.0;
+            // Behavior 11: a strafe jump flies at 9.0 along the stored direction.
+            if (43..=46).contains(&self.state) {
+                let d = self.jump_dir;
+                self.body.velocity = [d[0] * 9.0, LAUNCH, d[2] * 9.0];
+                self.request = match self.state {
+                    43 => 102,
+                    44 => 104,
+                    45 => 65,
+                    _ => 70,
+                };
+                self.phase = 1;
+                return;
+            }
             let s = jump_speed(self.state);
             let f = self.facing;
             self.body.velocity = [f[0] * s, LAUNCH, f[2] * s];
             (self.phase, self.request) = if s > 0.01 { (1, ANIM_JUMP_MOVE) } else { (0, ANIM_JUMP_STILL) };
             return;
         }
-        // Air steering in phases 0 to 5: drag, then the stick push below the speed cap.
-        if (0..=5).contains(&self.phase) {
+        // Air steering in phases 0 to 5: drag, then the stick push below the speed cap. Strafe jumps
+        // run none.
+        if (0..=5).contains(&self.phase) && !(43..=46).contains(&self.state) {
             let h = self.horizontal();
             let len = dot(h, h).sqrt();
             let mut h2 = h;
@@ -869,9 +971,10 @@ impl Locomotion {
                 }
             }
             7 => {
-                // Moving landing: the state field becomes 4 directly with request 4.
+                // Moving landing: the state field becomes 4 directly with request 4 (a strafe jump
+                // writes state 32).
                 self.set_horizontal([0.0; 3]);
-                self.state = RUN;
+                self.state = if (43..=46).contains(&self.state) { STRAFE } else { RUN };
             }
             10 => {
                 self.request = ANIM_HARD_LAND;
@@ -937,7 +1040,16 @@ impl Locomotion {
     pub fn travel(&mut self, root_step: Vec3) {
         // The step is kept with the stick behind the facing in states 21, 23 and 41 (SPEC-0033
         // Behavior 14C).
-        let step = if dot(self.target, self.facing) < 0.0 && !matches!(self.state, PANEL | 23 | LADDER) { [0.0; 3] } else { root_step };
+        // SPEC-0033 Behavior 4 item 9: in state 32 the stick re-aims the step, keeping its length.
+        let root_step = match self.strafe_stick.filter(|_| self.state == STRAFE) {
+            Some((s, f)) => {
+                let l = dot(root_step, root_step).sqrt();
+                let d = (s * s + f * f).sqrt().max(1e-6);
+                [s / d * l, 0.0, f / d * l]
+            }
+            None => root_step,
+        };
+        let step = if dot(self.target, self.facing) < 0.0 && !matches!(self.state, PANEL | 23 | LADDER | STRAFE) { [0.0; 3] } else { root_step };
         let [b1, b2, b3] = basis(self.facing);
         let mut d: Vec3 = std::array::from_fn(|k| step[0] * b1[k] + step[1] * b2[k] + step[2] * b3[k]);
         // In the edge states the clips' root motion lifts the hero (the pull-up 59 rises 3.7 and
@@ -956,6 +1068,44 @@ impl Locomotion {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// SPEC-0033 Behavior 4 and its test vector, and Behavior 11's jump.
+    #[test]
+    fn strafe_codes_heading_and_jump() {
+        let mut h = Locomotion::spawn([0.0; 3], FWD);
+        h.body.normal = [0.0, 1.0, 0.0];
+        let clip = ClipState::default();
+        let c = [1.0, 0.0, 0.0];
+        let left = [0.0, 0.0, 1.0];
+        let input = HeroInput { l2: true, forward: 0.25, side: 0.5, ..HeroInput::default() };
+        h.update(&input, c, left, clip);
+        assert_eq!((h.state, h.action()), (STRAFE, 154));
+        // The heading follows the camera, not the stick.
+        for _ in 0..40 {
+            h.update(&input, c, left, clip);
+        }
+        assert!(dot(h.facing, c) > 0.99);
+        // The stick re-aims the step: a sideways push moves it sideways at the clip's length.
+        h.facing = FWD;
+        h.travel([0.0, 0.0, 0.2252]);
+        let moved = h.body.position;
+        assert!((dot(moved, moved).sqrt() - 0.2252).abs() < 1e-3);
+        // A pushed Cross takes the strafe jump chosen by the action: 9.0 along the stick, no steering.
+        let jump = HeroInput { jump: true, ..input };
+        h.update(&jump, c, left, clip);
+        assert_eq!(h.state, 44);
+        h.update(&HeroInput { l2: true, ..HeroInput::default() }, c, left, clip);
+        let v = h.body.velocity;
+        assert!((v[0].hypot(v[2]) - 9.0).abs() < 1e-3 && v[1] > 8.0);
+        assert_eq!(h.action(), 104);
+        // Released: back to idle.
+        let mut h = Locomotion::spawn([0.0; 3], FWD);
+        h.body.normal = [0.0, 1.0, 0.0];
+        h.update(&HeroInput { l2: true, ..HeroInput::default() }, c, left, clip);
+        assert_eq!((h.state, h.action()), (STRAFE, 0));
+        h.update(&HeroInput::default(), c, left, clip);
+        assert_eq!(h.state, STANCE);
+    }
 
     const FWD: Vec3 = [0.0, 0.0, 1.0];
     const LEFT: Vec3 = [1.0, 0.0, 0.0];
