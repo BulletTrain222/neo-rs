@@ -356,6 +356,16 @@ impl Townsfolk {
         Self { patrol, ..self }
     }
 
+    /// SetAI_Behavior (SPEC-0030 row 119): a new code is stored and the mode goes to 0 directly, so
+    /// the next tick's pre-step sets it; the same code changes nothing here.
+    pub fn set_code(&mut self, code: i16) {
+        if self.code != code {
+            self.code = code;
+            self.mode = 0;
+            self.walk_to = None;
+        }
+    }
+
     /// One tick with no navigation mesh (a wander then stands).
     pub fn tick(&mut self, facing: &mut Vec3, v: View, rng: &mut Rng) -> Option<u32> {
         self.tick_on(facing, v, rng, None)
@@ -499,6 +509,25 @@ mod tests {
         }
         assert_eq!(walked, 1);
         assert_eq!(t.walk_to, Some([5.0, 0.0, 10.0]));
+    }
+
+    #[test]
+    fn set_code_takes_effect_on_the_next_tick() {
+        // TV-0056-7: a character in mode 5 receives code 6: mode 0 at once, 6 on the next tick.
+        let mut t = Townsfolk::new(5, [0.0, 0.0, 1.0]);
+        t.patrol = Some(Patrol::new(vec![[0.0; 3], [0.0, 0.0, 10.0]], [0; 8]));
+        let (mut f, mut r) = ([0.0, 0.0, 1.0], Rng::seeded(1));
+        let far = [100.0, 0.0, 100.0];
+        let v = View { position: [0.0; 3], hero: far, action: 0, progress: 0.0, fidget_entry: true, wander_fidget: true, arrived: false };
+        t.tick(&mut f, v, &mut r);
+        assert_eq!(t.mode, 5);
+        t.set_code(6);
+        assert_eq!((t.code, t.mode), (6, 0));
+        t.tick(&mut f, v, &mut r);
+        assert_eq!(t.mode, 6);
+        // The same code leaves the mode alone.
+        t.set_code(6);
+        assert_eq!(t.mode, 6);
     }
 
     #[test]

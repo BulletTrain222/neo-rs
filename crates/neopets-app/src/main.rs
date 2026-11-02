@@ -4660,6 +4660,17 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_USE="tick:id[,tick:id...]": the item use step on those ticks.
+        if let Ok(v) = std::env::var("NEOPETS_TRACE_USE") {
+            for g in v.split(',') {
+                let n: Vec<u64> = g.split(':').filter_map(|x| x.trim().parse().ok()).collect();
+                if let [t, id] = n[..] {
+                    if t == play.ticks {
+                        play.diag_use(id as u16);
+                    }
+                }
+            }
+        }
         // NEOPETS_TRACE_CASTERS: the characters casting a shadow on tick 1000.
         if std::env::var_os("NEOPETS_TRACE_CASTERS").is_some() && play.ticks == 1000 {
             println!("CASTERS {:?}", play.diag_casters());

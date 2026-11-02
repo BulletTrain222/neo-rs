@@ -1347,6 +1347,8 @@ pub struct Play {
     npc_audit: HashMap<u64, ([f32; 3], u32, f32, u32, u32, u32, u32)>,
     /// The Darkest Faerie's cast glow.
     faerie_glow: Option<usize>,
+    /// The Starlight Potion's item-effect object: its two effects and timer (SPEC-0021 item 57).
+    starlight: Option<(usize, usize, i32)>,
     /// Sisters a navmesh edge turned back last tick (SPEC-0011 the blocked word).
     sisters_blocked: std::collections::HashSet<u64>,
     mote_objects: Vec<neopets_sim::charm::Object>,
@@ -2109,6 +2111,7 @@ impl Play {
             spit_fx: [None; 2],
             npc_audit: Default::default(),
             faerie_glow: None,
+            starlight: None,
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
             orbit_angle: 0.0,
@@ -3096,12 +3099,15 @@ impl Play {
                     return (wait && keyed).then_some(Wait::Camera);
                 }
                 Action::ReturnCamera { preset, release } => {
-                    // The follow camera takes over behind the hero (the preset's pull-in to a
-                    // locator is not reproduced).
-                    let _ = preset;
+                    // The follow camera takes over behind the hero; a preset inside the locator
+                    // table places the camera at that locator (SPEC-0030 row 35).
                     self.cut = None;
                     let f = followed(&self.loco, &self.world);
                     self.camera.place_behind(&f);
+                    if let Some((at, _)) = usize::try_from(preset).ok().and_then(|k| self.locator(pack, k)) {
+                        self.camera.eye = at;
+                        self.camera.reset();
+                    }
                     if release {
                         self.held = false;
                         self.hero_walk = None;
@@ -3462,12 +3468,21 @@ impl Play {
                     let line = format!("bagguss {index} broken at {:.1},{:.1},{:.1} (item 145 spawned: {spawned}) on tick {}", l[0], y, l[2], self.ticks);
                     self.last_fx = if self.last_fx.starts_with("bagguss") { format!("{}; {line}", self.last_fx) } else { line };
                 }
-                Action::AiBehavior { entity, code: _ } => {
+                // SPEC-0030 row 119: a new code goes to the mode word's next pre-step; a townsfolk's
+                // mode is the code, and an enemy's state 0 steps to its default state, which is the
+                // same word. The data block of the call is not passed here.
+                Action::AiBehavior { entity, code } => {
                     let c = self.entity_mut(pack, entity)?;
                     c.held = false;
                     c.script_walk = None;
+                    if let Some(t) = c.townsfolk.as_mut() {
+                        t.set_code(code);
+                    }
                     if let Some(e) = c.enemy.as_mut() {
-                        e.calm();
+                        if e.default_state != code as u16 {
+                            e.default_state = code as u16;
+                            e.calm();
+                        }
                     }
                 }
                 Action::MainCue { cue } => self.cue(cue),
@@ -9473,6 +9488,7 @@ impl Play {
         }
         self.loco.shield = self.shield.is_some();
         self.status_step();
+        self.starlight_step();
         self.guard_step();
         self.loco.update(&input, forward, left, self.hero.clip_state());
         self.held_step();
@@ -11643,10 +11659,68 @@ impl Play {
         }
     }
 
+    /// SPEC-0021 item 57, the Starlight Potion: the one item-effect object, placed 2.0 ahead of the
+    /// hero with effects 4020 and 568 and a 60-tick timer. While its main effect plays or its timer
+    /// runs the use is refused (cue 0xA2) and nothing is consumed. Success plays cue 0xA0; its
+    /// voice id is above the hero bank's 12 cues, so it is silent (SPEC-0031). What the object does
+    /// beyond its effects is not given (R-0196).
+    fn use_starlight(&mut self) {
+        let busy = self.starlight.is_some_and(|(main, _, timer)| timer > 0 || self.effects.objects.get(main).and_then(|o| o.as_ref()).is_some_and(|o| o.live()));
+        if busy {
+            self.cue(0xA2);
+            self.last_pickup = format!("use of item 57 refused on tick {}", self.ticks);
+            return;
+        }
+        self.starlight_free();
+        let (p, f) = (self.loco.position(), self.loco.facing);
+        let at = [p[0] + 2.0 * f[0], p[1], p[2] + 2.0 * f[2]];
+        let table = self.effect_table.clone();
+        let main = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 4020, at, neopets_sim::effect::IDENTITY));
+        let second = self.effects.add_object(neopets_sim::effect::EffectObject::new(&table, 568, at, neopets_sim::effect::IDENTITY));
+        self.starlight = Some((main, second, 60));
+        self.cue(0xA0);
+        let left = {
+            let n = self.state.items.entry(57).or_insert(0);
+            *n = n.saturating_sub(1);
+            *n
+        };
+        self.quick.used(57, left);
+        self.last_pickup = format!("used item 57 on tick {} ({left} left)", self.ticks);
+    }
+
+    fn starlight_free(&mut self) {
+        if let Some((main, second, _)) = self.starlight.take() {
+            let table = self.effect_table.clone();
+            for h in [main, second] {
+                self.effects.stop(&table, h);
+                self.effects.release(h);
+            }
+        }
+    }
+
+    /// The Starlight object's tick: its effects update; when the timer ends the second one stops,
+    /// and once the main one has also ended the object is free.
+    fn starlight_step(&mut self) {
+        let Some((main, second, timer)) = self.starlight else { return };
+        let table = self.effect_table.clone();
+        self.effects.update(&table, main, None, &mut self.rng);
+        if timer > 0 {
+            self.effects.update(&table, second, None, &mut self.rng);
+        }
+        let timer = timer - 1;
+        if timer == 0 {
+            self.effects.stop(&table, second);
+        }
+        self.starlight = Some((main, second, timer.max(0)));
+        if timer <= 0 && !self.effects.objects.get(main).and_then(|o| o.as_ref()).is_some_and(|o| o.live()) {
+            self.starlight_free();
+        }
+    }
+
     /// The quick panel's use step (forced): refused for a dead hero; a consumable heals pool A
     /// (health) and pool B (magic) by SPEC-0021 Consumable healing and is consumed when a pool
-    /// changes. Charms run the equipped slot routine and the status and revive items their own
-    /// effects, which are not implemented: their use is refused.
+    /// changes; the status, revive and Starlight items have their own effects below. Charms run the
+    /// equipped slot routine, which is not implemented: their use is refused.
     fn use_item(&mut self, id: u16) {
         if self.loco.state == hero_states::DEAD {
             return;
@@ -11681,6 +11755,10 @@ impl Play {
             return;
         }
         let Some(item) = self.items.get(id).copied() else { return };
+        if id == 57 {
+            self.use_starlight();
+            return;
+        }
         use neopets_sim::status as st;
         // SPEC-0021 Consumable effects by item id: the buffs and immunities apply only while
         // inactive; the cure needs one of curse, poison or slow; 58 and 59 apply their
@@ -14243,6 +14321,12 @@ impl Play {
             }
         }
         v
+    }
+
+    /// NEOPETS_TRACE_USE: the use step, and the Starlight object's state after it.
+    pub fn diag_use(&mut self, id: u16) {
+        self.use_item(id);
+        println!("USE {id}: {}, held {:?}, starlight {:?}, live particles {}", self.last_pickup, self.state.items.get(&id), self.starlight, self.effects.live_particles());
     }
 
     /// NEOPETS_TRACE_GIVE: the party add, and the pools, luck and wallet after it.
