@@ -26,6 +26,9 @@ fn i16_at(b: &[u8], at: usize) -> Option<i16> {
 /// The row fields used so far (offsets in SPEC-0029 section 4).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Row {
+    /// The ghost words (+0x138 to +0x158; SPEC-0029 Behavior 33) when the Ghost Flag is set: solid
+    /// and ghost phase ranges, opacity range and reveal range.
+    pub ghost: Option<([i32; 2], [i32; 2], [f32; 2], [i32; 2])>,
     pub radius: f32,
     pub height: f32,
     pub hit_points: u16,
@@ -369,7 +372,13 @@ impl MonsterTable {
         }
         let own = i16_at(&self.rows, r + 0x36)?;
         let class = if own >= 0 { Some(own) } else { i16_at(&self.companions, c + 0x10).filter(|&k| k >= 0) };
+        let ghost = (u32_at(&self.rows, r + 0x138)? != 0).then(|| {
+            let i = |o: usize| u32_at(&self.rows, r + o).unwrap_or(0) as i32;
+            let f = |o: usize| f32_at(&self.rows, r + o).unwrap_or(0.0);
+            ([i(0x13C), i(0x140)], [i(0x144), i(0x148)], [f(0x14C), f(0x150)], [i(0x154), i(0x158)])
+        });
         Some(Row {
+            ghost,
             voice_set: i16_at(&self.companions, c + 0x14).unwrap_or(-1),
             target_type: i16_at(&self.rows, r + 0x3C)?,
             radius: f32_at(&self.rows, r + 0x28)?,

@@ -840,6 +840,10 @@ pub struct Character {
     pub boss: Option<neopets_sim::juppie::Juppie>,
     /// The Miamouse routine (class 21, SPEC-0029 Behavior 28).
     pub miamouse: Option<neopets_sim::miamouse::Miamouse>,
+    /// The enemy that spawned this one (SPEC-0029 Behavior 31), for the summon cap.
+    pub summoner: Option<u64>,
+    /// The ghost phases of a row with the Ghost Flag (SPEC-0029 Behavior 33).
+    pub ghost: Option<neopets_sim::ghost::Ghost>,
     /// The Target Dummy (class 36; SPEC-0029 Behavior 29).
     pub dummy: Option<neopets_sim::dummy::Dummy>,
     /// The Gnarfas boss controller (behaviour class 14; SPEC-0020) and the hero's hit on it this
@@ -1349,6 +1353,8 @@ pub struct Play {
     npc_audit: HashMap<u64, ([f32; 3], u32, f32, u32, u32, u32, u32)>,
     /// The Darkest Faerie's cast glow.
     faerie_glow: Option<usize>,
+    /// The summoner of the next spawn-by-key request (SPEC-0029 Behavior 31).
+    summon_owner: Option<u64>,
     /// The grab rumble's one shared countdown (word 0x2DD54C; SPEC-0029 Behavior 23), -1 at rest.
     grab_rumble: i32,
     /// The Starlight Potion's item-effect object: its two effects and timer (SPEC-0021 item 57).
@@ -2128,6 +2134,7 @@ impl Play {
             npc_audit: Default::default(),
             faerie_glow: None,
             grab_rumble: -1,
+            summon_owner: None,
             starlight: None,
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
@@ -6894,6 +6901,11 @@ impl Play {
     /// attacker), then the death hook at 0 HP; SPEC-0056, a townsfolk take-hit returns at once.
     fn character_take_hit(&mut self, i: usize, damage: i32, from: [f32; 3], by: &str) {
         let hero_at = from;
+        // SPEC-0029 Behavior 33 Hit rule: a ghost-phase hit is absorbed and reveals the character.
+        let rng = &mut self.rng;
+        if self.characters.get_mut(i).and_then(|c| c.ghost.as_mut()).is_some_and(|g| g.absorb(rng)) {
+            return;
+        }
         // SPEC-0046 step 6: a hit through the enemy class's hit method starts the 14-frame flash.
         if let Some(c) = self.characters.get_mut(i) {
             c.flash = HIT_FLASH;
@@ -7935,6 +7947,8 @@ impl Play {
                 }),
                 miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
                 dummy: row.filter(|r| r.class == Some(36)).map(|_| neopets_sim::dummy::Dummy::new(&mut self.rng)),
+                summoner: None,
+                ghost: row.and_then(|r| r.ghost).map(|(s, g, o, v)| neopets_sim::ghost::Ghost::new(neopets_sim::ghost::Words { solid: (s[0], s[1]), ghost: (g[0], g[1]), opacity: (o[0], o[1]), reveal: (v[0], v[1]) })),
                 gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
                 pending_hit: None,
                 king: row.filter(|r| r.class == Some(32)).map(|_| neopets_sim::werelupe::King::new(position)),
@@ -7980,14 +7994,13 @@ impl Play {
     /// minion keys and the arrival flag, with animation 82 in state 21. Returns the summoned
     /// character. A block at its cap (SPEC-0006 Blocks: 6 for the embedded block unless
     /// SetMaxActiveAI changes it, 15 for a slot; at most 15 objects) is passed over. The summoner
-    /// id is not built.
+    /// id is stored on it for the summon cap.
     fn summon(&mut self, pack: u32, block: Option<u8>, key: i16, at: [f32; 3], facing: [f32; 3], drop: Option<u16>, arrive: bool) -> Option<u64> {
         let live: std::collections::HashSet<u64> = self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())).map(|c| c.id).collect();
-        for r in &mut self.reserves {
-            if r.bound.is_some_and(|id| !live.contains(&id)) {
-                r.bound = None;
-            }
-        }
+        // SPEC-0064 Spore Monster: reserved records are used in record order and not again after a
+        // death (a record stays bound).
+        let _ = live;
+        let owner = self.summon_owner.take();
         let blocks: Vec<u8> = match block {
             Some(s) => vec![s],
             None => {
@@ -8017,6 +8030,9 @@ impl Play {
             let drop = drop.map(|id| neopets_data::region::ItemPoint { position: at, facing, flags: 0, group: -1, key: id as i16, luck: 0, count: 0, map: 0, snap: false });
             let id = self.bind_character(pack, s, region, pl, parts, drop);
             self.reserves[i].bound = Some(id);
+            if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
+                c.summoner = owner;
+            }
             let hero = self.loco.position();
             let rng = &mut self.rng;
             if let Some(c) = self.characters.iter_mut().find(|c| c.id == id) {
@@ -8083,6 +8099,8 @@ impl Play {
             boss: None,
             miamouse: None,
             dummy: None,
+            summoner: None,
+            ghost: None,
             gnarfas: None,
             pending_hit: None,
             king: None,
@@ -8380,6 +8398,22 @@ impl Play {
     /// SPEC-0047 class 20 for each such creature of the current world: the nearest world item
     /// other than the anchor within 25 units is approached and consumed (removed); the seek
     /// sets the reservation's slow flag; otherwise it wanders about its spawn point.
+    /// SPEC-0029 Behavior 33: each ghost's phase, before its status and AI step.
+    fn ghost_step(&mut self) {
+        let pack = self.world.pack;
+        let rng = &mut self.rng;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive) {
+            let (mut attacking, mut hidden) = (false, false);
+            if let Some(e) = c.enemy.as_ref() {
+                attacking = e.state == 19 && e.outer == 2 && matches!(e.seq, 0..=3 | 14);
+                hidden = e.state == 14 || (e.state == 8 && e.emerge != 0);
+            }
+            if let Some(g) = c.ghost.as_mut() {
+                g.tick(attacking, hidden, rng);
+            }
+        }
+    }
+
     /// SPEC-0029 Behavior 29: the Target Dummies of the current world.
     fn dummy_step(&mut self) {
         let pack = self.world.pack;
@@ -10253,6 +10287,7 @@ impl Play {
         }
         self.feed_finish();
         self.wild_step();
+        self.ghost_step();
         self.class20_step();
         self.dummy_step();
         self.pet_step();
@@ -10452,7 +10487,7 @@ impl Play {
         let chars: Vec<(u64, [f32; 3])> = self
             .characters
             .iter()
-            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable())
+            .filter(|c| c.pack == pack && !c.inactive && c.dying.is_none() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.is_dead() || e.lock_vetoed(c.anim.clip_state().action)) && c.townsfolk.is_none() && c.row.is_some() && !c.unhittable() && c.ghost.as_ref().is_none_or(|g| g.targetable))
             .map(|c| (c.id, c.position))
             .collect();
         let attacking = self.loco.state == hero_states::ATTACK;
@@ -11176,6 +11211,13 @@ impl Play {
             Vec::new()
         };
         let mut casts: Vec<(u64, u64, u8, i32, [f32; 3], i32)> = Vec::new();
+        // SPEC-0038 Behavior 7 step 5e: each enemy's live summons.
+        let mut summons: HashMap<u64, u32> = HashMap::new();
+        for c in self.characters.iter().filter(|c| c.dying.is_none() && !c.enemy.as_ref().is_some_and(|e| e.is_dead())) {
+            if let Some(by) = c.summoner {
+                *summons.entry(by).or_insert(0) += 1;
+            }
+        }
         // SPEC-0036 Invisible-kind rule: the Tattered Cloak in the active hero's outfit slot.
         let cloak = self.equipment.entries[2][self.hero_index] == Some(126);
         for e in self.characters.iter_mut().filter_map(|c| c.enemy.as_mut()) {
@@ -11264,6 +11306,7 @@ impl Play {
             let speed = (root_step[0].powi(2) + root_step[2].powi(2)).sqrt();
             let mut v = enemy_view(p, wk, hero, hero_facing, bands, attackable, sight, (route, on_mesh), contact, speed, clip, &has);
             v.cloak = cloak;
+            v.summons_alive = summons.get(id).copied().unwrap_or(0);
             v.radii = row.radius + contact::HERO_RADIUS;
             v.spawn_bits = bits;
             let ground = world.probe(p[0], p[2], p[1] + 2.5);
@@ -11602,7 +11645,8 @@ impl Play {
                         }
                     }
                 }
-                neopets_sim::projectile::Event::Summon { key, at } => {
+                neopets_sim::projectile::Event::Summon { key, at, owner } => {
+                    self.summon_owner = owner;
                     // SPEC-0029 Behavior 31 source 3: a world-level request at the landing point,
                     // facing the hero (the shot's forward axis is not kept).
                     let to = [hero[0] - at[0], 0.0, hero[2] - at[2]];
@@ -17060,6 +17104,7 @@ fn enemy_view<'a>(
         hero_facing,
         hero_attackable: attackable,
         cloak: false,
+        summons_alive: 0,
         bands,
         sight,
         route,

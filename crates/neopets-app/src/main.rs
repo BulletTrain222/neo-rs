@@ -3743,7 +3743,10 @@ fn sync_characters(
                 // SPEC-0046 Drawable test: the visibility predicate hides a waiting enemy with cue
                 // word 0 and an invisible kind in its default state or state 21 before clip 82.
                 // SPEC-0010 Vanishing: the Cloud Beast's bodies during the gust's travel.
-                let hidden = c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)) || p.cloud_hidden(c);
+                // SPEC-0029 Behavior 33: a ghost's alpha is not drawn yet; below 0.25 it is not drawn
+                // and above that it is solid (this build's stand-in).
+                let faded = c.ghost.as_ref().is_some_and(|g| g.opacity < 0.25);
+                let hidden = c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)) || p.cloud_hidden(c) || faded;
                 set_if(&mut vis, if p.pack_drawn(c.pack) && !c.inactive && !hidden { Visibility::Visible } else { Visibility::Hidden });
             }
         }

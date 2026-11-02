@@ -83,7 +83,7 @@ pub enum Event {
     /// A spell (kinds 2 to 7) touched its target, stored in the key (SPEC-0038 Behavior 43).
     SpellHit { kind: i32, target: u64 },
     /// A kind-8 release: the keyed summon (not spawned yet).
-    Summon { key: i32, at: Vec3 },
+    Summon { key: i32, at: Vec3, owner: Option<u64> },
     /// One of the shot's effect ids plays at a point (ids 2 to 5; -1 is not sent).
     Effect { id: i32, at: Vec3 },
     /// After a leach hit on the hero (kind 15, blocked or not): the leach extra (SPEC-0011).
@@ -258,7 +258,7 @@ impl Pool {
             let Some(p) = slot.as_mut() else { continue };
             let release = |p: &Shot, out: &mut Vec<Event>| {
                 if p.s.kind == 8 {
-                    out.push(Event::Summon { key: p.s.key, at: p.position });
+                    out.push(Event::Summon { key: p.s.key, at: p.position, owner: p.s.owner });
                 }
             };
             if p.s.owner.is_some_and(|o| !(env.owner_exists)(o)) {

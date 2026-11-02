@@ -29,6 +29,7 @@ pub mod dummy;
 pub mod enemy;
 pub mod entityctl;
 pub mod foliage;
+pub mod ghost;
 pub mod hero;
 pub mod lock;
 pub mod look;

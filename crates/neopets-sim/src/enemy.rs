@@ -251,6 +251,8 @@ pub struct View<'a> {
     pub sight: bool,
     /// The active hero wears the Tattered Cloak (item 126).
     pub cloak: bool,
+    /// The enemies this one has spawned that are still alive.
+    pub summons_alive: u32,
     /// A navmesh route to the hero exists, and the hero is on the walk mesh.
     pub route: bool,
     pub hero_on_mesh: bool,
@@ -1162,7 +1164,7 @@ impl Enemy {
         self.through = None;
     }
 
-    /// The take-hit hook (Behavior 37; no ghost absorb, no hit lock, no stun): returns the
+    /// The take-hit hook (Behavior 37; a ghost's absorb is the host's, no hit lock, no stun): returns the
     /// damage to subtract and the point to face (the attacker), and sets the force-start.
     pub fn take_hit(&mut self, damage: i32, attacker: Vec3, rng: &mut Rng) -> (i32, Vec3) {
         if self.dead {
@@ -2131,8 +2133,9 @@ impl Enemy {
             if rng.range(1, 100) >= threshold {
                 continue;
             }
-            // Summons are not spawned here: the live count is 0.
-            if s.flags & 0x02 != 0 && s.spawn_cap == 0 {
+            // Behavior 7 step 5e: a summoning slot needs fewer live summons of this enemy than its
+            // cap (SPEC-0064: 4 Grunts a Wizard, 5 plants a Spore Monster).
+            if s.flags & 0x02 != 0 && v.summons_alive >= s.spawn_cap as u32 {
                 continue;
             }
             // Trigger special: 1 only while airborne, 2 only while not.
@@ -2999,6 +3002,7 @@ mod tests {
             bands: (1.0, 0.5),
             sight: true,
             cloak: false,
+            summons_alive: 0,
             route: true,
             hero_on_mesh: true,
             waypoint: [0.0; 3],
