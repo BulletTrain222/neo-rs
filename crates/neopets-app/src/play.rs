@@ -8420,6 +8420,23 @@ impl Play {
         for &i in &shot {
             self.world.records.entry(i).or_default().fire(frame, false, -1);
         }
+        // SPEC-0028 World projectile step: an enemy shot fires only indices the act-1 trigger map
+        // holds, with object 0, and ends.
+        if !self.state.act1_map.is_empty() {
+            for slot in self.shots.slots.iter_mut() {
+                let Some(s) = slot.as_ref() else { continue };
+                let (at, radius) = (s.position, s.s.radius);
+                let map = &self.state.act1_map;
+                let hit = self.world.shot_volumes.iter().find(|v| v.shot_hits(at, radius) && map.iter().any(|p| p.0 == v.index && p.1)).map(|v| v.index);
+                if let Some(i) = hit {
+                    self.world.records.entry(i).or_default().fire(frame, false, -1);
+                    shot.push(i);
+                    *slot = None;
+                }
+            }
+            shot.sort_unstable();
+            shot.dedup();
+        }
         self.state.shot_hits = shot.iter().copied().collect();
         fired.extend(shot.iter().filter(|i| !fired.contains(i)).copied().collect::<Vec<_>>());
         // SPEC-0048 Trigger volumes: a block that moved this tick (or stopped on it) clears its

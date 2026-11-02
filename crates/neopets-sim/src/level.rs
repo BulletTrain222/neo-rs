@@ -515,6 +515,8 @@ pub struct GameState {
     pub timer: crate::timer::Timer,
     /// The shared entity-control tables of the level modules, by pack (SPEC-0043).
     pub entity_tables: HashMap<u32, crate::entityctl::Table>,
+    /// The act-1 trigger map (DFS_Act1_SetTriggerData, SPEC-0030 row 81): (index, value).
+    pub act1_map: Vec<(u16, bool)>,
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
     /// each tick: a bound character's dead test, else its kill memory of this load.
     pub ai_dead: BTreeSet<usize>,
@@ -2146,6 +2148,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             state.set(218, true);
             state.set_level(0, true);
             let mut v = vec![reg(1, 1), reg(2, 2), reg(3, 2), reg(4, 2)];
+            v.extend((36..=53).map(|i| reg(i, 36)));
+            v.extend((22..=29).map(|i| reg(i, 22)));
             v.extend((9..=14).map(|slot| Action::StopEffect { slot }));
             v.push(Action::LoadRegion { slot: 0, region: Some(1175) });
             v
@@ -4932,6 +4936,126 @@ fn market_value(pack: u32) -> Option<i32> {
     }
 }
 
+/// SPEC-0044 1174's floor tile i (36 to 53): solid object, pieces, the piece that stays (long) or
+/// the fallen object (short), whether it is short, its sound (id, time) and its fade start.
+fn tile_1174(i: u16) -> (usize, std::ops::RangeInclusive<usize>, usize, bool, (i32, f32), f32) {
+    let late = i >= 46;
+    let long = |s: usize| {
+        let sound = (8, if i == 53 { 0.05 } else if late { 0.55 } else { 0.85 });
+        (s, s + 1..=s + 11, s + 1, false, sound, if late { 1.0 } else { 0.9 })
+    };
+    match i {
+        36..=41 => long(37 + 12 * (i as usize - 36)),
+        42 => (109, 110..=118, 119, true, (7, 0.9), 1.1),
+        43 => (120, 121..=131, 132, true, (7, 2.25), 1.1),
+        44 | 45 => long(133 + 12 * (i as usize - 44)),
+        46 => (157, 158..=166, 167, true, (8, 0.05), 1.0),
+        47..=52 => long(168 + 12 * (i as usize - 47)),
+        _ => (240, 26..=36, 26, false, (8, 0.05), 1.0),
+    }
+}
+
+/// DFS_Act1_SetTriggerData's update form (SPEC-0030 row 81).
+fn act1_update(s: &mut GameState, index: u16, value: bool) {
+    if let Some(p) = s.act1_map.iter_mut().find(|p| p.0 == index) {
+        p.1 = value;
+    }
+}
+
+/// SPEC-0044 1174 entering section k: the map holds that section's solid tiles, its two-hit object
+/// (section 0) and its intact breakables (section 3).
+fn section_1174(s: &mut GameState, k: usize) {
+    let (tiles, breakables): (std::ops::RangeInclusive<u16>, std::ops::Range<u16>) = match k {
+        0 => (36..=39, 0..0),
+        1 => (40..=45, 0..0),
+        2 => (46..=49, 0..0),
+        _ => (50..=53, 22..30),
+    };
+    s.act1_map.clear();
+    if k == 0 {
+        s.act1_map.push((5, true));
+    }
+    for t in tiles {
+        let solid = s.word(1174, 100 + (t - 36) as u8) == 0;
+        s.act1_map.push((t, solid));
+    }
+    for b in breakables {
+        let intact = s.word(1174, 165 + (b - 22) as u8) == 0;
+        s.act1_map.push((b, intact));
+    }
+}
+
+/// A tile's crumble entry (state 1 short, 3 long): the solid object off, the pieces on and played,
+/// its effect and sound 7, the map entry cleared, the clock stamped.
+fn tile_fire(s: &mut GameState, i: u16) -> Vec<Action> {
+    let k = (i - 36) as u8;
+    let (solid, pieces, fallen, short, _, _) = tile_1174(i);
+    s.set_word(1174, 100 + k, if short { 1 } else { 3 });
+    s.set_word(1174, 120 + k, s.hero.tick as i32);
+    s.set_word(1174, 140 + k, 0);
+    act1_update(s, i, false);
+    let mut v = vec![Action::DeactivateObj { obj: solid }];
+    if short {
+        v.push(Action::DeactivateObj { obj: fallen });
+    }
+    for obj in pieces {
+        v.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: if short { 1.2 } else { 1.0 }, wait: false }]);
+    }
+    v.extend([Action::StartEffect { slot: 92 + k as usize, camera: false }, Action::PlaySound { cue: 7, locator: Some(73 + k as usize) }]);
+    v
+}
+
+/// SPEC-0044 1174 thread W2, the floor tiles: the timed sounds and the end of each crumble (only
+/// the rest piece or the fallen object stays; the fade's alpha ramp is not drawn, the pieces go at
+/// its end), and the links: tile 43 adds 4 to the collision mask and stage bit 8, and drops tile 42
+/// 1.7 s on; tile 53 closes object 17; tile 42 starts object 6's timer record.
+fn tiles_1174(s: &mut GameState) -> Vec<Action> {
+    let mut v = Vec::new();
+    let now = s.hero.tick as i32;
+    for i in 36..=53u16 {
+        let k = (i - 36) as u8;
+        let state = s.word(1174, 100 + k);
+        if !matches!(state, 1 | 3) {
+            continue;
+        }
+        let t = (now - s.word(1174, 120 + k)) as f32 / 60.0;
+        let (_, pieces, stays, short, (cue, at), fade) = tile_1174(i);
+        if t > at && s.word(1174, 140 + k) == 0 {
+            s.set_word(1174, 140 + k, 1);
+            v.push(Action::PlaySound { cue, locator: Some(73 + k as usize) });
+            if !short {
+                v.push(Action::PlaySound { cue: 7, locator: Some(73 + k as usize) });
+            }
+        }
+        if i == 43 {
+            if s.word(1174, 1) & 1 << 8 == 0 {
+                s.set_word(1174, 1, s.word(1174, 1) | 1 << 8);
+                v.push(Action::CollisMask { mask: 4 });
+            }
+            if t > 1.7 && s.word(1174, 100 + 6) == 0 {
+                v.extend(tile_fire(s, 42));
+            }
+        }
+        // The crumble lasts past its timed sound (the pieces are still playing then).
+        if t >= (fade + 0.5).max(at + 0.02) {
+            s.set_word(1174, 100 + k, state + 1);
+            v.extend(pieces.filter(|&obj| obj != stays).map(|obj| Action::DeactivateObj { obj }));
+            if short {
+                v.push(Action::InitObjOn { obj: stays, end: false });
+            }
+        }
+    }
+    if s.word(1174, 100 + 17) != 0 && s.word(1174, 160) == 0 {
+        s.set_word(1174, 160, 1);
+        v.extend([Action::PlayAnim { obj: 17, speed: 1.0, wait: true }, Action::DeactivateObj { obj: 17 }]);
+    }
+    if s.word(1174, 100 + 6) != 0 && s.word(1174, 161) == 0 {
+        s.set_word(1174, 161, 1);
+        v.extend([Action::PlayAnim { obj: 6, speed: 1.0, wait: false }, Action::PlaySound { cue: 8, locator: Some(79) }]);
+    }
+    v
+}
+
 /// SPEC-0044 1174 thread W1, one helper a tick in the spec's order.
 fn stage_1174(s: &mut GameState) -> Vec<Action> {
     let p = 1174;
@@ -4957,6 +5081,12 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
         return v;
     }
     let lvl4 = |on: bool| Action::LevelState { flag: 4, on };
+    if has(8) && !has(9) {
+        set(s, 9);
+        s.set_word(p, 2, 1);
+        v.extend([lvl4(true), Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 }, Action::ReturnCamera { preset: -1, release: true }, Action::DeactivateObj { obj: 8 }, lvl4(false), Action::Bits { word: 2, set: 0, clear: 1 }]);
+        return v;
+    }
     if has(6) && !has(7) {
         set(s, 7);
         for g in [0, 1, 6] {
@@ -8069,8 +8199,25 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // The section triggers (2, 3, 4; the hero's own contact): bits 6, 10 and 12, once each.
         (1174, 2) if call.object => {
-            let bit = [6, 10, 12][(call.index as usize).saturating_sub(2).min(2)];
-            state.set_word(pack, 1, state.word(pack, 1) | 1 << bit);
+            let k = (call.index as usize).saturating_sub(2).min(2);
+            let bit = [6, 10, 12][k];
+            // Each section record counts once.
+            if state.word(pack, 1) & 1 << bit == 0 {
+                state.set_word(pack, 1, state.word(pack, 1) | 1 << bit);
+                section_1174(state, k + 1);
+            }
+        }
+        // SPEC-0044 1174 floor tiles: a fire with object 0 while solid starts the crumble.
+        (1174, 36) if !call.object && call.state != 0 && (36..=53).contains(&call.index) && state.word(pack, 100 + (call.index - 36) as u8) == 0 => {
+            out.actions.extend(tile_fire(state, call.index));
+        }
+        // SPEC-0044 1174 breakables 3 to 10 (triggers 22 to 29), fired with object 0 while intact:
+        // active, broken, sound 9 at locator 65 to 72, the map entry cleared.
+        (1174, 22) if !call.object && call.state != 0 && (22..=29).contains(&call.index) && state.word(pack, 165 + (call.index - 22) as u8) == 0 => {
+            let k = (call.index - 22) as usize;
+            state.set_word(pack, 165 + k as u8, 1);
+            act1_update(state, call.index, false);
+            out.actions.extend([Action::SetBreakableActive { id: 3 + k, on: true }, Action::Break { id: 3 + k }, Action::PlaySound { cue: 9, locator: Some(65 + k) }]);
         }
         // A raised barrier group's trigger (30 to 35): 3 damage at most once every 1.5 s.
         (1174, 30) if call.object && call.state != 0 => {
@@ -11730,7 +11877,10 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
             }
         }
         // SPEC-0044 1174 Update: thread W1 (the stage thread).
-        1174 => out.extend(stage_1174(state)),
+        1174 => {
+            out.extend(tiles_1174(state));
+            out.extend(stage_1174(state));
+        }
         // SPEC-0041 1428 Update (322 set): the update helper and THREAD-A.
         1428 if state.flag(322) => out.extend(arena_1428(state)),
         // SPEC-0042 1381 Update: the timed objects switch on for 2 s and off for 4 s together
@@ -13389,11 +13539,21 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             v.push(Action::FadeIn { seconds: FADE, wait: false });
             v
         }
-        // SPEC-0044 1174 arrival: effects 15 to 21 stopped, the normal camera, the hero at locator
-        // 0, stage bit 0 (the record set-ups are not built).
+        // SPEC-0044 1174 arrival: the floor tiles (solid on, pieces off), section 0 current, effects
+        // 15 to 21 stopped, objects 17 and 8, the normal camera, the hero at locator 0, stage bit 0.
+        // The two-hit object's and objects 20 to 25's records are not given in full (R-0191).
         1174 => {
             state.set_word(1174, 1, state.word(1174, 1) | 1);
             let mut v: Vec<Action> = (15..=21).map(|slot| Action::StopEffect { slot }).collect();
+            for i in 36..=53 {
+                let (solid, pieces, stays, _, _, _) = tile_1174(i);
+                v.push(Action::InitObjOn { obj: solid, end: false });
+                v.extend(pieces.map(|obj| Action::DeactivateObj { obj }));
+                v.push(Action::DeactivateObj { obj: stays });
+            }
+            v.extend((92..=109).map(|slot| Action::StopEffect { slot }));
+            v.extend([Action::InitObjOn { obj: 17, end: false }, Action::InitObjOn { obj: 8, end: false }]);
+            section_1174(state, 0);
             v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
             v
         }
@@ -15388,7 +15548,7 @@ pub fn on_buy(pack: u32, item: u16, s: &GameState) -> Vec<Action> {
 /// to 75; else 179 and line 76).
 pub fn on_breakable(pack: u32, script: i16, id: usize, s: &mut GameState) -> Option<Vec<Action>> {
     match (pack, script) {
-        (735, 4..=31) => Some(Vec::new()),
+        (735, 4..=31) | (1174, 3..=10) => Some(Vec::new()),
         (1056, 24 | 27 | 30 | 33 | 36) => {
             let flag = 625 + (script as u16 - 24) / 3;
             if !s.flag(174) || s.flag(179) || s.flag(flag) {
@@ -17883,6 +18043,52 @@ mod tests {
         assert!(on_init(1098, &mut GameState::default()).iter().take(3).eq([reg(0, 1), reg(7, 7), reg(8, 8)].iter()));
         on_trigger(1098, 8, call, &mut s);
         assert_eq!(s.transition_map, Some(49));
+    }
+
+    #[test]
+    fn module_1174_floor_tiles() {
+        let mut s = GameState::default();
+        on_init(1174, &mut s);
+        s.set_word(1174, 1, 3);
+        on_activate(1174, &mut s);
+        assert!(s.act1_map.contains(&(5, true)) && s.act1_map.contains(&(36, true)) && !s.act1_map.iter().any(|p| p.0 == 40));
+        // SPEC-0044's vector: tile 36 fired at clock 10.0: object 37 off, 38 to 48 on and playing,
+        // effect 92, sound 7 at locator 73.
+        s.hero.tick = 600;
+        let call = |index| TriggerCall { index, state: 1, object: false, square: false, block: -1 };
+        let out = on_trigger(1174, 36, call(36), &mut s).actions;
+        assert_eq!(out[0], Action::DeactivateObj { obj: 37 });
+        assert!(out.contains(&Action::PlayAnim { obj: 48, speed: 1.0, wait: false }) && out.contains(&Action::StartEffect { slot: 92, camera: false }));
+        assert!(out.contains(&Action::PlaySound { cue: 7, locator: Some(73) }));
+        assert!(s.act1_map.contains(&(36, false)));
+        // A second fire does nothing; the hero's body fires nothing.
+        assert!(on_trigger(1174, 36, call(36), &mut s).actions.is_empty());
+        assert!(on_trigger(1174, 36, TriggerCall { object: true, ..call(37) }, &mut s).actions.is_empty());
+        // At 10.85+ sounds 7 and 8; after 1.4 s only piece 38 stays.
+        s.hero.tick = 652;
+        let v = tiles_1174(&mut s);
+        assert!(v.contains(&Action::PlaySound { cue: 8, locator: Some(73) }) && v.contains(&Action::PlaySound { cue: 7, locator: Some(73) }));
+        s.hero.tick = 685;
+        let v = tiles_1174(&mut s);
+        assert!(v.contains(&Action::DeactivateObj { obj: 39 }) && !v.contains(&Action::DeactivateObj { obj: 38 }));
+        assert_eq!(s.word(1174, 100), 4);
+        // Tile 43 fired at 20.0 drops tile 42 on the first pass after 21.7 and asks for bit 8.
+        section_1174(&mut s, 1);
+        s.hero.tick = 1200;
+        on_trigger(1174, 36, call(43), &mut s);
+        s.hero.tick = 1300;
+        assert!(tiles_1174(&mut s).contains(&Action::CollisMask { mask: 4 }));
+        assert_eq!(s.word(1174, 106), 0);
+        s.hero.tick = 1303;
+        assert!(tiles_1174(&mut s).contains(&Action::DeactivateObj { obj: 109 }));
+        assert_eq!(s.word(1174, 106), 1);
+        // A section record counts once.
+        let enter = TriggerCall { index: 3, state: 1, object: true, square: false, block: -1 };
+        on_trigger(1174, 2, enter, &mut s);
+        assert!(s.act1_map.iter().any(|p| p.0 == 46));
+        // A breakable by object 0.
+        let out = on_trigger(1174, 22, call(24), &mut s).actions;
+        assert!(out.contains(&Action::Break { id: 5 }) && out.contains(&Action::PlaySound { cue: 9, locator: Some(67) }));
     }
 
     #[test]
