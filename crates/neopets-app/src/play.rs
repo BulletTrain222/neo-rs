@@ -2915,6 +2915,15 @@ impl Play {
             let Some(a) = self.threads[i].calls.pop_front() else { return };
             let pack = self.threads[i].pack;
             // The wheel's round step continues this thread with its calls (SPEC-0059).
+            if let Action::PlateStep { routine, phase } = a {
+                let (own, other) = level::plate_triggers(pack, routine);
+                let read = |t: u16| self.world.records.get(&t).map_or(0, |r| r.state);
+                let (own, other) = (read(own), other.map_or(0, read));
+                for x in level::plate_step(pack, routine, phase, own, other, &mut self.state).into_iter().rev() {
+                    self.threads[i].calls.push_front(x);
+                }
+                continue;
+            }
             if a == Action::WheelRound {
                 for x in level::wheel_round(pack, &mut self.state).into_iter().rev() {
                     self.threads[i].calls.push_front(x);
@@ -8875,6 +8884,11 @@ impl Play {
             for slot in self.shots.slots.iter_mut() {
                 let Some(s) = slot.as_ref() else { continue };
                 let (at, radius) = (s.position, s.s.radius);
+                // Only the breaks-objects ball, past 2.0 from its start (R-0191).
+                let d = sub(at, s.s.start);
+                if !neopets_sim::sisters::breaks_objects(&s.s) || d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= 4.0 {
+                    continue;
+                }
                 let map = &self.state.act1_map;
                 let hit = self.world.shot_volumes.iter().find(|v| v.shot_hits(at, radius) && map.iter().any(|p| p.0 == v.index && p.1)).map(|v| v.index);
                 if let Some(i) = hit {
@@ -13493,6 +13507,8 @@ impl Play {
             self.state.set_level(2, true);
         }
         let shots: Vec<([f32; 3], [f32; 3], f32)> = self.hero_shots.iter().map(|s| (s.position, scale(s.dir, s.speed), s.radius)).collect();
+        // SPEC-0044 1174 Checkpoints: the fourth word is a locator for 40 percent of the balls.
+        let aim_point = usize::try_from(self.state.act1_indices[3]).ok().filter(|_| pack == 1174).and_then(|k| self.locator(pack, k)).map(|l| l.0);
         for id in ids {
             let Some(i) = self.characters.iter().position(|c| c.id == id) else { continue };
             let level_flags = self.state.level_flags.clone();
@@ -13508,7 +13524,7 @@ impl Play {
             let close = (c.position[0] - hero[0]).hypot(c.position[2] - hero[2]) < 5.0;
             let far = if close && c.sister.as_ref().is_some_and(|s| s.alternate && s.avoid.is_none()) {
                 let meshes = &self.world.navmeshes;
-                usize::try_from(neopets_sim::nav::closest(meshes, c.position, 1)).ok().and_then(|m| meshes.get(m)).and_then(|m| m.far_centroid(hero, 10.0, &mut self.rng))
+                usize::try_from(sister_mesh(pack, &self.state, meshes, c.position)).ok().and_then(|m| meshes.get(m)).and_then(|m| m.far_centroid(hero, 10.0, &mut self.rng))
             } else {
                 None
             };
@@ -13525,6 +13541,7 @@ impl Play {
                 blocked: self.sisters_blocked.contains(&id),
                 level: &level,
                 far,
+                aim_point,
             };
             let Some(s) = c.sister.as_mut() else { continue };
             let before = s.state;
@@ -13551,7 +13568,7 @@ impl Play {
                     // SPEC-0011: the motion step keeps her on her mesh and sets the blocked word,
                     // which flips her orbit next tick.
                     let to = add(c.position, scale(m, speed / l));
-                    let mesh = usize::try_from(neopets_sim::nav::closest(&self.world.navmeshes, c.position, 1)).ok().and_then(|k| self.world.navmeshes.get(k));
+                    let mesh = usize::try_from(sister_mesh(pack, &self.state, &self.world.navmeshes, c.position)).ok().and_then(|k| self.world.navmeshes.get(k));
                     if mesh.is_none_or(|m| m.first_holding(to).is_some()) {
                         c.position = to;
                         self.sisters_blocked.remove(&c.id);
@@ -16945,6 +16962,20 @@ pub enum HeroItemScale {
     None,
     Shield,
     Weapon,
+}
+
+/// The mesh a sister's goals use: in pack 1174 the current checkpoint's section (SPEC-0044, the largest
+/// stored word: below 29 mesh 1, to 40 mesh 2, to 52 mesh 3, else mesh 4).
+fn sister_mesh(pack: u32, state: &level::GameState, meshes: &[neopets_sim::nav::NavMesh], at: [f32; 3]) -> i32 {
+    if pack == 1174 {
+        return match state.act1_indices[1] {
+            i32::MIN..=28 => 1,
+            29..=40 => 2,
+            41..=52 => 3,
+            _ => 4,
+        };
+    }
+    neopets_sim::nav::closest(meshes, at, 1)
 }
 
 /// A character's placement: translation to its position, turned so +Z is its facing.

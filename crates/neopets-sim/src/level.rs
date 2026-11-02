@@ -392,6 +392,8 @@ pub enum Action {
     /// RegisterScriptAnimatedTrigger (row 266): record `index` of host object `host`'s inline
     /// trigger list to `routine`; the volume moves with the host's pose.
     RegisterAnimTrigger { host: usize, index: u16, routine: u8 },
+    /// The next step of a plate scene (`plate_step`): the host reads the plate's live state words.
+    PlateStep { routine: u8, phase: u8 },
 }
 
 /// The prize wheel's module words in pack 1023: G, r, the angle A (f32 bits) and the lit cells.
@@ -532,6 +534,8 @@ pub struct GameState {
     pub entity_tables: HashMap<u32, crate::entityctl::Table>,
     /// The act-1 trigger map (DFS_Act1_SetTriggerData, SPEC-0030 row 81): (index, value).
     pub act1_map: Vec<(u16, bool)>,
+    /// DFS_Act1_SetIndices' four stored words (-1 until the first switch; SPEC-0044 1174 Checkpoints).
+    pub act1_indices: [i32; 4],
     /// IsAI_Dead for the current world's entity ids (SPEC-0030 row 45), filled by the host
     /// each tick: a bound character's dead test, else its kill memory of this load.
     pub ai_dead: BTreeSet<usize>,
@@ -1710,7 +1714,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 state.set_word(pack, 30 + k, up as i32);
             }
             v.extend((0..=15).map(|slot| Action::StopEffect { slot }));
-            v.extend([reg(18, 6), reg(16, 7), reg(17, 8), reg(0, 10), reg(2, 1), reg(1, 9)]);
+            v.extend([reg(18, 6), reg(16, 7), reg(17, 8), reg(0, 10), reg(2, 1), reg(1, 9), reg(3, 2), reg(5, 3), reg(4, 4), reg(6, 5)]);
             let mut snd = vec![(0, 8, 0.0), (1, 9, 0.7), (8, 8, 0.0), (10, 9, 0.0), (11, 5, 0.0), (12, 8, 0.2), (13, 6, 0.0), (14, 5, 0.0), (15, 8, 0.0), (16, 6, 0.0), (17, 9, 0.0), (18, 5, 0.0), (19, 8, 0.0), (20, 6, 0.0), (21, 9, 0.0), (22, 5, 0.0), (23, 8, 0.0), (24, 6, 0.0), (25, 9, 0.0)];
             snd.splice(2..2, (2..=7).map(|o| (o, 13, 0.0)));
             snd.extend((43..=48).map(|o| (o, 12, 0.5)));
@@ -1726,7 +1730,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([1, 0, 7, 9, 11, 12, 15, 17, 19, 21, 23, 25, 27, 28, 31, 33, 35, 4].map(|obj| Action::InitObjOn { obj, end: false }));
             } else {
                 v.extend([2, 3, 7, 8, 10, 12, 15, 16, 18, 23, 24, 26, 29, 31, 32, 34, 5].map(|obj| Action::InitObjOn { obj, end: false }));
-                v.extend([reg(4, 7), reg(0, 1), reg(1, 2), reg(2, 5), reg(3, 6)]);
+                v.extend([reg(4, 7), reg(0, 1), reg(1, 2), reg(2, 5), reg(3, 6), reg(5, 3), reg(6, 4)]);
             }
             // SPEC-0031 R-0111: the 32 object sounds after the flag-78 join, in site order.
             let pairs = [(2, 5), (3, 8), (6, 5), (7, 6), (8, 8), (10, 8), (11, 9), (11, 9), (22, 5), (23, 6), (24, 8), (26, 8), (29, 8), (25, 9), (27, 9), (28, 9), (30, 5), (31, 6), (32, 8), (34, 8), (33, 9), (35, 9), (13, 5), (12, 6), (14, 5), (15, 6), (16, 8), (18, 8), (17, 9), (19, 9), (5, 8), (4, 9)];
@@ -1836,8 +1840,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0041 1353 Init: effect 0 stopped; Z2, Z1, Z0 and Z3 on triggers 2, 1, 0 and 3
-        // unless flags 353 and 104 are both set; Z78 on 7 and 8 (Z4 to Z6's prompts are partly
-        // known and not reproduced); thread X loads slot 0 with set 2 (region 1356) under 104, else
+        // unless flags 353 and 104 are both set; Z78 on 7 and 8; the shop signs Z4 to Z6 on 4 to 6;
+        // thread X loads slot 0 with set 2 (region 1356) under 104, else
         // set 0 (1354); thread Z sets up the statues (objects 2, 1 and 0 at 270, 90 and 45
         // degrees, or 0 with flag 694) and the door (solved with 694 unless 353 and 104 are set).
         // The proximity routines, teleport 0 and the arrival are fixed rules.
@@ -1846,7 +1850,7 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             if !(state.flag(353) && state.flag(104)) {
                 v.extend([reg(2, 0), reg(1, 0), reg(0, 0), reg(3, 3)]);
             }
-            v.extend([reg(7, 7), reg(8, 7)]);
+            v.extend([reg(7, 7), reg(8, 7), reg(4, 4), reg(5, 4), reg(6, 4)]);
             v.push(Action::LoadRegion { slot: 0, region: Some(if state.flag(104) { 1356 } else { 1354 }) });
             let solved = state.flag(694);
             for (k, (obj, start)) in [(2usize, 270), (1, 90), (0, 45)].into_iter().enumerate() {
@@ -2161,11 +2165,13 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0044 1174 Init: level states 18 and 0, flag 218, trigger 1 (the Act 2 start), the
-        // section triggers 2 to 4, effects 9 to 14 stopped, and thread W4's character set 0
-        // (region 1175). The floor tiles, checkpoints, breakables and two-hit object (fired by
-        // shots and the act-1 primitive path, with the DFS_Act1 calls) are not built. Words: 1
-        // the stage bits, 2 W1 busy, 10 + g the barrier group raised, 20 + i the barrier damage
-        // tick.
+        // section triggers 2 to 4, the two-hit object (5), the checkpoints (6 to 21), the tiles
+        // and breakables, effects 9 to 14 stopped, and thread W4's character set 0 (region 1175).
+        // Words: 1 the stage bits, 2 W1 busy, 10 + g the barrier group raised, 20 + i the barrier
+        // damage tick, 173 the two-hit count, 174 its stage (1 broken, 2 finished), 175 its stamp,
+        // 177 and 178 the current and pending checkpoint (+ 1), 179 W3's stamp, 180 the current
+        // section, 182 + j gate pair j's state (0 rest, 1 closing, 2 closed), 184 + j its stamp, 186 + j
+        // its sound done, 190 the object 17 scene, 191 the collision bits.
         1174 => {
             state.set_level(18, true);
             state.set(218, true);
@@ -2173,6 +2179,8 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             let mut v = vec![reg(1, 1), reg(2, 2), reg(3, 2), reg(4, 2)];
             v.extend((36..=53).map(|i| reg(i, 36)));
             v.extend((22..=29).map(|i| reg(i, 22)));
+            v.push(reg(5, 38));
+            v.extend((6..=21).map(|i| reg(i, 37)));
             v.extend((9..=14).map(|slot| Action::StopEffect { slot }));
             v.push(Action::LoadRegion { slot: 0, region: Some(1175) });
             v
@@ -3058,9 +3066,17 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
             v
         }
         // SPEC-0039 1136 and 1143 thread 1: set 1 with flag 10, else set 0; the normal camera.
-        1136 | 1143 => vec![Action::LoadRegion { slot: 0, region: Some(pack + 1 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }],
+        1136 | 1143 => {
+            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(pack + 1 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }];
+            v.extend(arrival_line(pack, state));
+            v
+        }
         // SPEC-0039 1172 thread 1: the normal camera with flag 10.
-        1172 if state.flag(10) => vec![Action::ReturnCamera { preset: -1, release: true }],
+        1172 => {
+            let mut v = if state.flag(10) { vec![Action::ReturnCamera { preset: -1, release: true }] } else { Vec::new() };
+            v.extend(arrival_line(pack, state));
+            v
+        }
         // SPEC-0037 776 Init: the proximity, teleport 0 (kind 13) and activate-world callbacks
         // are fixed rules (the proximity routine's two tests are not ordered in the spec: R-0061).
         776 => Vec::new(),
@@ -3402,7 +3418,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0039 1140's threads: set 1 with flag 10, else set 0 (Medium); the normal camera.
         1140 => {
             state.set_word(pack, 0, state.flag(10) as i32);
-            vec![Action::LoadRegion { slot: 0, region: Some(1141 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }]
+            let mut v = vec![Action::LoadRegion { slot: 0, region: Some(1141 + state.flag(10) as u32) }, Action::ReturnCamera { preset: -1, release: true }];
+            v.extend(arrival_line(pack, state));
+            v
         }
         // SPEC-0039 1148 thread 1: set 0 (region 1149) when flag 496 is set.
         1148 if state.flag(496) => vec![Action::LoadRegion { slot: 0, region: Some(1149) }],
@@ -4703,13 +4721,16 @@ fn race_722(s: &mut GameState) -> Vec<Action> {
             let mut v = vec![Action::HoldHero, Action::FadeOut { seconds: 0.7, wait: true }];
             v.extend((0..3).map(|e| Action::MoveEntity { entity: e, locator: e + 1, face: true }));
             v.extend([Action::MoveHero { locator: 4 }, Action::HeroAnim { anim: 0, wait: false }]);
-            for e in [11, 12, 14, 13, 15] {
+            // R-0181: the spectators are placed on their viewing locators under the black screen.
+            for (e, locator) in [(11, 5), (12, 6), (14, 8), (13, 7), (15, 10)] {
+                v.push(Action::MoveEntity { entity: e, locator, face: true });
                 table.add(e, 36, (4.0, 7.0), (3.0, 4.0));
                 table.add_anim(e, 37, 2.5);
                 v.push(Action::EntityAnim { entity: e, anim: 36, looped: true, wait: false });
             }
+            v.push(Action::AiBehavior { entity: 15, code: 0 });
             s.entity_tables.insert(p, table);
-            v.extend([Action::FadeIn { seconds: 0.7, wait: true }, camera(4), wait(4.5), Action::FadeOut { seconds: 0.7, wait: true }, Action::FadeIn { seconds: 0.7, wait: true }, camera(5), idle]);
+            v.extend([Action::FadeIn { seconds: 0.7, wait: false }, camera(4), wait(4.5), Action::FadeOut { seconds: 0.7, wait: true }, Action::FadeIn { seconds: 0.7, wait: true }, camera(5), idle]);
             v
         }
         2 => {
@@ -4738,10 +4759,12 @@ fn race_722(s: &mut GameState) -> Vec<Action> {
                 s.set_word(p, 20, 0);
                 s.entity_tables.insert(p, crate::entityctl::Table::default());
                 v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::Message { line: 71 + r as u16 }, Action::FadeOut { seconds: 0.7, wait: true }]);
-                v.extend([(11, 56), (12, 55), (13, 58), (14, 57)].map(|(entity, locator)| Action::MoveEntityFree { entity, locator, face: true }));
-                v.push(Action::ReleaseEntity { entity: 15 });
+                v.extend([(11, 56), (12, 55), (13, 58), (14, 57)].map(|(entity, locator)| Action::MoveEntity { entity, locator, face: true }));
+                // Entity 15 goes to one of locators 20 to 25 and wanders again.
+                let locator = 20 + draw(s, p, 0, 5) as usize;
+                v.extend([Action::MoveEntity { entity: 15, locator, face: true }, Action::AiBehavior { entity: 15, code: 6 }, Action::ReleaseEntity { entity: 15 }]);
                 v.extend((0..3).map(|e| Action::MoveEntity { entity: e, locator: e + 1, face: true }));
-                v.push(Action::FadeIn { seconds: 0.7, wait: true });
+                v.push(Action::FadeIn { seconds: 0.7, wait: false });
                 if won {
                     v.push(Action::GiveItem { item: 139, count: prize });
                 }
@@ -4812,9 +4835,26 @@ fn enter_interior(pack: u32, s: &mut GameState) -> Vec<Action> {
     }
 }
 
-/// The proximity routines of the small interiors. The specs of 1140, 1143 and 1172 list one first
-/// line for each case of their "pattern C" and do not say how it rotates, so each shows that line
-/// (R-0182); 1140's line when flag 481 is set by the talk is not given, and 33 stands in.
+/// SPEC-0039 thread 2 of 1136, 1140, 1143 and 1172: one line on arrival, the first line of the first
+/// matching branch (the counters start at 0 on every entry). 1172's has no talk partner.
+fn arrival_line(pack: u32, s: &GameState) -> Vec<Action> {
+    let f = |n| s.flag(n);
+    let line = match pack {
+        1136 => [(f(301), 0), (f(216), 2), (f(491) && !f(492), 4), (f(490) && !f(491), 5), (f(202), 7), (f(150), 9), (f(7), 11)].iter().find(|c| c.0).map(|c| c.1),
+        1140 => [(f(301), 36), (f(216), 1), (f(481) && !f(483), 3), (f(202), 5), (f(150), 7), (f(7), 9)].iter().find(|c| c.0).map(|c| c.1),
+        1143 => [(f(301), 0), (f(216), 2), (f(386) && !f(387), 4), (f(202), 6), (f(150), 8), (f(7), 10)].iter().find(|c| c.0).map(|c| c.1),
+        _ => [(f(301), 0), (f(216), 2), (f(202), 4), (f(150), 6), (f(7), 8)].iter().find(|c| c.0).map(|c| c.1),
+    };
+    let Some(line) = line else { return Vec::new() };
+    let entity = if matches!(pack, 1136 | 1143) && f(10) { 1 } else { 0 };
+    if pack == 1172 {
+        vec![Action::WaitLoads, Action::Message { line }]
+    } else {
+        vec![Action::WaitLoads, Action::Converse { entity, line }]
+    }
+}
+
+/// The proximity routines of the small interiors. "Pattern C" is the ordinary line rotation (R-0182).
 fn talk_interior(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
     let three = |a: u16| [a, a + 1, a + 2];
     let talk = |line| vec![Action::Talk { line }];
@@ -4950,71 +4990,78 @@ fn talk_interior(pack: u32, routine: u8, s: &mut GameState) -> Vec<Action> {
                 cycle_in(s, pack, 0, 5, &three(29))
             }
         }
-        // SPEC-0039 1140 handler 3 (Medium).
+        // SPEC-0039 1140 handler 3 (R-0182).
         1140 => {
             if f(s, 499) {
-                talk(38)
+                cycle_in(s, pack, 0, 0, &three(16))
             } else if f(s, 301) {
-                talk(19)
+                cycle_in(s, pack, 0, 1, &[38, 36, 36])
             } else if f(s, 216) {
-                talk(22)
+                cycle_in(s, pack, 0, 2, &three(19))
             } else if f(s, 483) {
-                talk(25)
-            } else if f(s, 202) {
-                talk(28)
-            } else if f(s, 150) {
-                talk(35)
+                if f(s, 202) {
+                    cycle_in(s, pack, 0, 3, &three(22))
+                } else if f(s, 150) {
+                    cycle_in(s, pack, 0, 4, &three(25))
+                } else if f(s, 7) {
+                    cycle_in(s, pack, 0, 5, &three(28))
+                } else {
+                    Vec::new()
+                }
             } else if !f(s, 481) {
                 s.set(481, true);
-                talk(33)
+                talk(35)
             } else if s.has_item(69) {
                 s.set(483, true);
                 s.take(69, 1);
                 talk(31)
             } else {
-                talk(32)
+                cycle_in(s, pack, 0, 6, &three(32))
             }
         }
-        // SPEC-0039 1143 handler 3 (Medium): the order of its trade and its cases is not stated;
-        // the trade is taken before the story cases, as handler 2's cascade lists them.
+        // SPEC-0039 1143 handler 3 (R-0182).
         1143 => {
             if f(s, 301) {
-                talk(12)
+                cycle_in(s, pack, 0, 0, &three(12))
             } else if f(s, 216) {
-                talk(15)
+                cycle_in(s, pack, 0, 1, &three(15))
             } else if f(s, 387) {
-                talk(18)
+                if f(s, 202) {
+                    cycle_in(s, pack, 0, 2, &three(18))
+                } else if f(s, 150) {
+                    cycle_in(s, pack, 0, 3, &three(21))
+                } else if f(s, 7) {
+                    cycle_in(s, pack, 0, 4, &three(24))
+                } else {
+                    Vec::new()
+                }
+            } else if !f(s, 386) {
+                s.set(386, true);
+                talk(31)
             } else if s.has_item(2) {
                 s.set(387, true);
                 s.take(2, 1);
                 talk(27)
-            } else if !f(s, 386) {
-                s.set(386, true);
-                talk(28)
-            } else if f(s, 202) {
-                talk(21)
-            } else if f(s, 150) {
-                talk(24)
             } else {
-                talk(7)
+                cycle_in(s, pack, 0, 5, &three(28))
             }
         }
-        // SPEC-0039 1172 handler 3 (Medium).
+        // SPEC-0039 1172 handler 3 (R-0182).
         1172 => {
             if f(s, 301) {
-                talk(10)
+                cycle_in(s, pack, 0, 0, &three(10))
             } else if f(s, 216) {
-                talk(13)
+                cycle_in(s, pack, 0, 1, &three(13))
             } else if !f(s, 136) {
                 talk(28)
             } else if f(s, 202) {
-                talk(16)
+                cycle_in(s, pack, 0, 2, &three(16))
             } else if f(s, 193) {
-                talk(19)
+                cycle_in(s, pack, 0, 3, &three(19))
             } else if f(s, 150) {
-                talk(22)
+                cycle_in(s, pack, 0, 4, &three(22))
             } else {
-                talk(25)
+                cycle_in(s, pack, 0, 5, &three(25))
             }
         }
         _ => Vec::new(),
@@ -5062,6 +5109,7 @@ fn act1_update(s: &mut GameState, index: u16, value: bool) {
 /// SPEC-0044 1174 entering section k: the map holds that section's solid tiles, its two-hit object
 /// (section 0) and its intact breakables (section 3).
 fn section_1174(s: &mut GameState, k: usize) {
+    s.set_word(1174, 180, k as i32);
     let (tiles, breakables): (std::ops::RangeInclusive<u16>, std::ops::Range<u16>) = match k {
         0 => (36..=39, 0..0),
         1 => (40..=45, 0..0),
@@ -5080,6 +5128,13 @@ fn section_1174(s: &mut GameState, k: usize) {
         let intact = s.word(1174, 165 + (b - 22) as u8) == 0;
         s.act1_map.push((b, intact));
     }
+}
+
+/// SPEC-0042 Pack 1174 mask bits: 1 the two-hit barrier, 2 the section 3 gates, 4 tile 43.
+fn mask_1174(s: &mut GameState, set: i32, clear: i32) -> Action {
+    let bits = (s.word(1174, 191) | set) & !clear;
+    s.set_word(1174, 191, bits);
+    Action::CollisMask { mask: bits as u32 }
 }
 
 /// A tile's crumble entry (state 1 short, 3 long): the solid object off, the pieces on and played,
@@ -5105,7 +5160,8 @@ fn tile_fire(s: &mut GameState, i: u16) -> Vec<Action> {
 /// SPEC-0044 1174 thread W2, the floor tiles: the timed sounds and the end of each crumble (only
 /// the rest piece or the fallen object stays; the fade's alpha ramp is not drawn, the pieces go at
 /// its end), and the links: tile 43 adds 4 to the collision mask and stage bit 8, and drops tile 42
-/// 1.7 s on; tile 53 closes object 17; tile 42 starts object 6's timer record.
+/// 1.7 s on; tile 53 starts the object 17 scene; tile 42 starts object 6's timer record. Then the
+/// two-hit barrier's finish, the gates and thread W3.
 fn tiles_1174(s: &mut GameState) -> Vec<Action> {
     let mut v = Vec::new();
     let now = s.hero.tick as i32;
@@ -5127,7 +5183,7 @@ fn tiles_1174(s: &mut GameState) -> Vec<Action> {
         if i == 43 {
             if s.word(1174, 1) & 1 << 8 == 0 {
                 s.set_word(1174, 1, s.word(1174, 1) | 1 << 8);
-                v.push(Action::CollisMask { mask: 4 });
+                v.push(mask_1174(s, 4, 0));
             }
             if t > 1.7 && s.word(1174, 100 + 6) == 0 {
                 v.extend(tile_fire(s, 42));
@@ -5142,14 +5198,76 @@ fn tiles_1174(s: &mut GameState) -> Vec<Action> {
             }
         }
     }
-    if s.word(1174, 100 + 17) != 0 && s.word(1174, 160) == 0 {
-        s.set_word(1174, 160, 1);
-        v.extend([Action::PlayAnim { obj: 17, speed: 1.0, wait: true }, Action::DeactivateObj { obj: 17 }]);
+    // The object 17 group: the wall object 7 goes and the pieces stay at their end poses.
+    if s.word(1174, 100 + 17) != 0 && s.word(1174, 190) == 0 {
+        s.set_word(1174, 190, 1);
+        v.extend((17..=19).flat_map(|obj| [Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]));
+        v.push(Action::DeactivateObj { obj: 7 });
+        v.extend((15..=21).map(|slot| Action::StartEffect { slot, camera: false }));
     }
-    if s.word(1174, 100 + 6) != 0 && s.word(1174, 161) == 0 {
-        s.set_word(1174, 161, 1);
-        v.extend([Action::PlayAnim { obj: 6, speed: 1.0, wait: false }, Action::PlaySound { cue: 8, locator: Some(79) }]);
+    // Tile 42's timer record: object 6 for 0.85 s, then sound 8 at locator 79.
+    if s.word(1174, 100 + 6) != 0 {
+        if s.word(1174, 160) == 0 {
+            s.set_word(1174, 160, now);
+            v.push(Action::PlayAnim { obj: 6, speed: 1.0, wait: false });
+        } else if s.word(1174, 161) == 0 && now - s.word(1174, 160) > 51 {
+            s.set_word(1174, 161, 1);
+            v.push(Action::PlaySound { cue: 8, locator: Some(79) });
+        }
     }
+    // The two-hit barrier: past 2.5 s from the break (the longest piece ends at 2.133 s), stage bit
+    // 17 and all four objects hidden. The alpha ramp is not drawn.
+    if s.word(1174, 174) == 1 && now - s.word(1174, 175) > 150 {
+        s.set_word(1174, 174, 2);
+        s.set_word(1174, 1, s.word(1174, 1) | 1 << 17);
+        v.extend((13..=16).map(|obj| Action::DeactivateObj { obj }));
+    }
+    // The section 3 gate pairs: (delay to the sound, the helper's length, gate, closed look, helper).
+    for (j, (delay, ends, gate, look, helper)) in [(144, 176, 22, 23, 20), (198, 236, 24, 25, 21)].into_iter().enumerate() {
+        let j = j as u8;
+        if s.word(1174, 182 + j) != 1 {
+            continue;
+        }
+        let t = now - s.word(1174, 184 + j);
+        if t > delay && s.word(1174, 186 + j) == 0 {
+            s.set_word(1174, 186 + j, 1);
+            v.push(Action::PlaySound { cue: 9, locator: None });
+        }
+        if t > ends {
+            s.set_word(1174, 182 + j, 2);
+            v.extend([Action::DeactivateObj { obj: gate }, Action::InitObjOn { obj: look, end: false }, Action::InitObjOn { obj: helper, end: true }]);
+            v.push(mask_1174(s, 2, 0));
+        }
+    }
+    // Thread W3: more than 3.0 s since its last switch, the pending checkpoint becomes current.
+    let pending = s.word(1174, 178);
+    if pending != 0 && (s.word(1174, 177) == 0 || now - s.word(1174, 179) > 180) {
+        let k = pending - 1;
+        s.set_word(1174, 177, pending);
+        s.set_word(1174, 178, 0);
+        s.set_word(1174, 179, now);
+        let fourth = if k < 4 { 1 } else if matches!(36 + k, 42 | 43 | 46) { 73 + k } else { -1 };
+        s.act1_indices = [17 + 3 * k, 19 + 3 * k, 18 + 3 * k, fourth];
+    }
+    v
+}
+
+/// SPEC-0044 1174 gate pairs, a request: 1 closes (the gate and helper played from their start, bit 2
+/// cleared, stamped); 0 reopens (rest look).
+fn gates_1174(s: &mut GameState, close: bool) -> Vec<Action> {
+    let now = s.hero.tick as i32;
+    let mut v = Vec::new();
+    for (j, (gate, look, helper)) in [(22, 23, 20), (24, 25, 21)].into_iter().enumerate() {
+        let j = j as u8;
+        s.set_word(1174, 182 + j, close as i32);
+        s.set_word(1174, 184 + j, now);
+        s.set_word(1174, 186 + j, 0);
+        v.extend([Action::InitObjOn { obj: gate, end: false }, Action::InitObjOn { obj: helper, end: false }, Action::DeactivateObj { obj: look }]);
+        if close {
+            v.extend([Action::PlayAnim { obj: gate, speed: 1.0, wait: false }, Action::PlayAnim { obj: helper, speed: 1.0, wait: false }]);
+        }
+    }
+    v.push(mask_1174(s, 0, 2));
     v
 }
 
@@ -5192,6 +5310,7 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
     } else if has(10) && !has(11) {
         set(s, 11);
         v.extend([lvl4(true), Action::HoldHero, Action::FadeOut { seconds: 0.0, wait: true }]);
+        v.extend(gates_1174(s, false));
         for g in [0, 1, 6] {
             v.extend(barrier_1174(s, g, false));
         }
@@ -5227,6 +5346,7 @@ fn stage_1174(s: &mut GameState) -> Vec<Action> {
         for g in 0..7 {
             v.extend(barrier_1174(s, g, g == 5));
         }
+        v.extend(gates_1174(s, true));
         v.extend([Action::HeroAnim { anim: 32, wait: true }]);
         v.extend((1..=3).map(|entity| Action::EntityAnim { entity, anim: 4, looped: false, wait: false }));
         v.extend([wait(0.5), wait(4.5), Action::ReturnCamera { preset: -1, release: true }, Action::LetterBox { on: false, seconds: 1.0, wait: false }, lvl4(false)]);
@@ -7310,10 +7430,9 @@ fn gate_1405(pack: u32, s: &GameState) -> bool {
     }
 }
 
-/// Their entity-0 routines: 1407 in full (the hand-in, then 8 to 10 with 102 and 104, else 11 to
-/// 13); 1417, 1419 and 1425 the item-33 hand-ins, then lines 4 and 7 by their two flags (1419: 10
-/// on a random 1), each the listed first line (the rotation is not given; R-0186); 1405 with 611
-/// line 14, its hand-in by 685 giving the same line (Medium).
+/// Their entity-0 routines (R-0186): the item-33 hand-in, then a three-line rotation of one counter
+/// with no marker, so a change of flags keeps the position (1407 keeps its marker rotation; 1419
+/// draws first on every talk).
 fn hall_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
     if !gate_1405(pack, s) {
         return Vec::new();
@@ -7326,17 +7445,24 @@ fn hall_talk(pack: u32, s: &mut GameState) -> Vec<Action> {
         1405 => (611, 685, 14),
         _ => return Vec::new(),
     };
+    // 1419's draw is made on every talk, before the hand-in test.
+    let roll = if pack == 1419 { draw(s, pack, 1, 3) } else { 0 };
     if s.flag(need) && !s.flag(done) {
         s.remove_all(33);
         s.set(done, true);
         return vec![Action::Talk { line }];
     }
-    match pack {
-        1405 => return if s.flag(611) { vec![Action::Talk { line: 14 }] } else { Vec::new() },
-        1417 => return vec![Action::Talk { line: if s.flag(100) && s.flag(106) { 4 } else { 7 } }],
-        1419 => return vec![Action::Talk { line: if s.trigger_raw % 3 == 0 { 10 } else if s.flag(102) && s.flag(104) { 4 } else { 7 } }],
-        1425 => return vec![Action::Talk { line: if s.flag(102) && s.flag(104) { 4 } else { 7 } }],
-        _ => {}
+    let base = match pack {
+        1405 => Some(if s.flag(100) && s.flag(106) { 8 } else { 11 }),
+        1417 => Some(if s.flag(100) && s.flag(106) { 4 } else { 7 }),
+        1419 => Some(if roll == 1 { 10 } else if s.flag(102) && s.flag(104) { 4 } else { 7 }),
+        1425 => Some(if s.flag(102) && s.flag(104) { 4 } else { 7 }),
+        _ => None,
+    };
+    if let Some(base) = base {
+        let c = s.word(pack, 30);
+        s.set_word(pack, 30, (c + 1) % 3);
+        return vec![Action::Talk { line: base + c as u16 }];
     }
     let key = (pack, 0);
     let mut rot = s.rotations.get(&key).copied().unwrap_or_default();
@@ -8347,6 +8473,28 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
             if state.word(pack, 1) & 1 << bit == 0 {
                 state.set_word(pack, 1, state.word(pack, 1) | 1 << bit);
                 section_1174(state, k + 1);
+            }
+        }
+        // SPEC-0044 1174 the two-hit barrier (object word 0 only): hit 2 breaks it, any other wobbles.
+        (1174, 38) if !call.object && call.state != 0 => {
+            let hits = state.word(pack, 173) + 1;
+            state.set_word(pack, 173, hits);
+            let sound = |cue| Action::PlaySound { cue, locator: Some(1) };
+            if hits == 2 {
+                state.set_word(pack, 174, 1);
+                state.set_word(pack, 175, state.hero.tick as i32);
+                act1_update(state, 5, false);
+                let mask = mask_1174(state, 0, 1);
+                out.actions.extend([Action::DeactivateObj { obj: 13 }, Action::DeactivateObj { obj: 14 }, Action::InitObjOn { obj: 15, end: false }, Action::InitObjOn { obj: 16, end: false }, Action::PlayAnim { obj: 15, speed: 1.0, wait: false }, Action::PlayAnim { obj: 16, speed: 1.0, wait: false }, Action::StartEffect { slot: 4, camera: true }, mask, sound(6), sound(8)]);
+            } else {
+                out.actions.extend([Action::InitObjOn { obj: 13, end: false }, Action::InitObjOn { obj: 14, end: false }, Action::PlayAnim { obj: 13, speed: 1.0, wait: false }, Action::PlayAnim { obj: 14, speed: 1.0, wait: false }, sound(8), sound(5)]);
+            }
+        }
+        // SPEC-0044 1174 checkpoints: one of the current section that is not current goes pending.
+        (1174, 37) if call.state != 0 && (6..=21).contains(&call.index) => {
+            let k = call.index as i32 - 6;
+            if k / 4 == state.word(pack, 180) && state.word(pack, 177) != k + 1 {
+                state.set_word(pack, 178, k + 1);
             }
         }
         // SPEC-0044 1174 floor tiles: a fire with object 0 while solid starts the crumble.
@@ -10926,6 +11074,14 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         }
         // Z78 (triggers 7 and 8, entering, flag 104): thread Y reloads slot 0 with set 1 (7) or
         // 3 (8) when the argument differs from the last one (word 15 holds it).
+        // SPEC-0041 1353 Z4 to Z6, the shop signs (R-0192): the prompt in the hero's body volume; the
+        // press shows the sign's name (index 4 line 3, 5 line 2, 6 line 1).
+        (1353, 4) if call.object && call.state != 0 => {
+            out.prompt = Some(3);
+            if call.square {
+                out.actions.push(Action::Message { line: 7 - call.index });
+            }
+        }
         (1353, 7) if call.state == 1 && state.flag(104) => {
             let arg = if call.index == 8 { 3 } else { 1 };
             if state.word(pack, 15) != arg {
@@ -11335,37 +11491,27 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::MoveHero { locator: 44 },
             ]);
         }
-        // SPEC-0041 1247's object swaps (Medium in the spec). CB1 (trigger 0, the hero, once): level
-        // state 0, objects 0 and 1 off, 3 and 2 on, effects 20 to 23 through animation 2, camera
-        // 4 and animation 3. CB2, CB5 and CB6 (triggers 1 to 3; nothing but a block or idle fire
-        // passes their gate): the swap, its effects and animation, then the swap back with its
-        // camera shots (the spec's re-read of the state is not made: the plate is taken as held).
+        // SPEC-0041 1247 CB1 (trigger 0, the hero, once): level state 0, objects 0 and 1 off, 3 and 2
+        // on, effects 20 to 23 through animation 2, camera 4 and animation 3; panel 3 stays up.
         (1247, 1) if call.object && call.state == 1 && !state.level(0) => {
             state.set_level(0, true);
-            out.actions.extend(swap_1247(&[0, 1], &[3, 2], &[20, 21, 22, 23], &[20, 21, 22, 23], 2));
+            out.actions.extend(off(&[0, 1]));
+            out.actions.extend(on(&[3, 2]));
+            out.actions.extend((20..=23).map(|slot| Action::StartEffect { slot, camera: false }));
+            out.actions.push(Action::PlayAnim { obj: 2, speed: 1.0, wait: true });
+            out.actions.extend((20..=23).map(|slot| Action::StopEffect { slot }));
             out.actions.extend([
-                Action::PlayCamera { track: 4, wait: false, end: 1, speed: 1.0 },
+                Action::PlayCamera { track: 4, wait: false, end: 0, speed: 1.0 },
                 Action::PlayAnim { obj: 3, speed: 1.0, wait: true },
                 Action::ReturnCamera { preset: -1, release: true },
             ]);
         }
-        (1247, 2) if !call.object && call.state == 1 && state.word(pack, 10) == 0 => {
-            state.set_word(pack, 10, 1);
-            out.actions.extend(swap_1247(&[9, 11, 7], &[8, 10, 6], &[13, 14, 15], &[12, 13, 14, 15], 6));
-            out.actions.extend(back_1247(6, 7, &[(5, 8), (5, 10)], &[8, 10], &[9, 11]));
-            out.actions.push(Action::Bits { word: 10, set: 0, clear: 1 });
-        }
-        (1247, 5) if !call.object && call.state == 1 && state.word(pack, 11) == 0 => {
-            state.set_word(pack, 11, 1);
-            out.actions.extend(swap_1247(&[25, 27, 28, 23], &[24, 26, 29, 22], &[16, 17, 18, 19], &[16, 17, 18, 19], 22));
-            out.actions.extend(back_1247(22, 23, &[(25, 24), (24, 26), (23, 29)], &[24, 26, 29], &[25, 27, 28]));
-            out.actions.push(Action::Bits { word: 11, set: 0, clear: 1 });
-        }
-        (1247, 6) if !call.object && call.state == 1 && state.word(pack, 12) == 0 => {
-            state.set_word(pack, 12, 1);
-            out.actions.extend(swap_1247(&[33, 35, 31], &[32, 34, 30], &[0, 1, 2, 3], &[0, 1, 2, 3], 30));
-            out.actions.extend(back_1247(30, 31, &[(10, 34), (10, 32)], &[32, 34], &[33, 35]));
-            out.actions.push(Action::Bits { word: 12, set: 0, clear: 1 });
+        // SPEC-0041 the plate scenes of 1247 (CB2 to CB6) and 1249 (CB2 to CB5), started on the first
+        // tick of contact by the hero or a block; a hero shot on its own does not start them. One
+        // thread at a time per plate (word 60 + routine).
+        (1247, 2..=6) | (1249, 2..=5) if call.state == 1 && !state.shot_hits.contains(&call.index) && state.word(pack, 60 + routine) == 0 => {
+            state.set_word(pack, 60 + routine, 1);
+            out.actions.push(Action::PlateStep { routine, phase: 0 });
         }
         // SPEC-0041 1249 CB1 (trigger 2, the door word clear): the door word, object 12 off, camera 5,
         // the hero to locator 2, object 10 from time 0, 1 s, the normal camera. CB9 (trigger 1)
@@ -13864,7 +14010,6 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0044 1174 arrival: the floor tiles (solid on, pieces off), section 0 current, effects
         // 15 to 21 stopped, objects 17 and 8, the normal camera, the hero at locator 0, stage bit 0.
-        // The two-hit object's and objects 20 to 25's records are not given in full (R-0191).
         1174 => {
             state.set_word(1174, 1, state.word(1174, 1) | 1);
             let mut v: Vec<Action> = (15..=21).map(|slot| Action::StopEffect { slot }).collect();
@@ -13875,7 +14020,13 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.push(Action::DeactivateObj { obj: stays });
             }
             v.extend((92..=109).map(|slot| Action::StopEffect { slot }));
-            v.extend([Action::InitObjOn { obj: 17, end: false }, Action::InitObjOn { obj: 8, end: false }]);
+            v.extend((17..=19).chain([7, 8]).map(|obj| Action::InitObjOn { obj, end: false }));
+            // The two-hit object's pair and its collision bit; the gates at rest.
+            v.extend([Action::InitObjOn { obj: 13, end: false }, Action::InitObjOn { obj: 14, end: false }, Action::DeactivateObj { obj: 15 }, Action::DeactivateObj { obj: 16 }]);
+            v.push(mask_1174(state, 1, 0));
+            v.extend(gates_1174(state, false));
+            state.set_word(1174, 177, 0);
+            state.act1_indices = [-1; 4];
             section_1174(state, 0);
             v.extend([Action::ReturnCamera { preset: -1, release: true }, Action::MoveHero { locator: 0 }]);
             v
@@ -14822,32 +14973,178 @@ fn kitchen_update(state: &mut GameState) -> Vec<Action> {
     Vec::new()
 }
 
-/// SPEC-0041 1247's swap: objects off and on, the effects started through an animation (wait) and
-/// the list stopped after it.
-fn swap_1247(off: &[usize], on: &[usize], start: &[usize], stop: &[usize], anim: usize) -> Vec<Action> {
-    let mut v = vec![Action::HoldHero];
-    v.extend(off.iter().map(|&obj| Action::DeactivateObj { obj }));
-    v.extend(on.iter().map(|&obj| Action::InitObjOn { obj, end: false }));
-    v.extend(start.iter().map(|&slot| Action::StartEffect { slot, camera: false }));
-    v.push(Action::PlayAnim { obj: anim, speed: 1.0, wait: true });
-    v.extend(stop.iter().map(|&slot| Action::StopEffect { slot }));
+fn off(objs: &[usize]) -> Vec<Action> {
+    objs.iter().map(|&obj| Action::DeactivateObj { obj }).collect()
+}
+
+fn on(objs: &[usize]) -> Vec<Action> {
+    objs.iter().map(|&obj| Action::InitObjOn { obj, end: false }).collect()
+}
+
+fn play(objs: &[usize]) -> Vec<Action> {
+    objs.iter().map(|&obj| Action::PlayAnim { obj, speed: 1.0, wait: false }).collect()
+}
+
+/// The plate of a scene routine's trigger, and for 1247's CB3 and CB4 the other plate's.
+pub fn plate_triggers(pack: u32, routine: u8) -> (u16, Option<u16>) {
+    match (pack, routine) {
+        (1247, 2) => (1, None),
+        (1247, 5) => (2, None),
+        (1247, 6) => (3, None),
+        (1247, 3) => (5, Some(6)),
+        (1247, 4) => (6, Some(5)),
+        (_, 2) => (3, None),
+        (_, 3) => (5, None),
+        (_, 4) => (4, None),
+        _ => (6, None),
+    }
+}
+
+/// SPEC-0041's plate scenes, flat call lists. `own` and `other` are the live state words of the plate's
+/// record and of the other plate. Phase 0 the start and Part A, 1 the re-read after the first
+/// animation (released, 3 or 0, is a contact of at most 18 ticks: the quick exit), 2 Part B after the
+/// wait. Not built: the hero-to-idle call of 1247's inside parts.
+pub fn plate_step(pack: u32, routine: u8, phase: u8, own: u8, other: u8, s: &mut GameState) -> Vec<Action> {
+    let cam = |track: usize| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 };
+    let look = |track: usize, obj: usize| Action::PlayTarget { track, wait: false, end: 1, speed: 1.0, target: CameraTarget::Object(obj) };
+    let wait_anim = |obj: usize| Action::PlayAnim { obj, speed: 1.0, wait: true };
+    let normal = Action::ReturnCamera { preset: -1, release: true };
+    let (index, _) = plate_triggers(pack, routine);
+    let fx = |r: std::ops::RangeInclusive<usize>| r.map(|slot| Action::StartEffect { slot, camera: false }).collect::<Vec<_>>();
+    let stop = |r: std::ops::RangeInclusive<usize>| r.map(|slot| Action::StopEffect { slot }).collect::<Vec<_>>();
+    let next = |phase: u8| Action::PlateStep { routine, phase };
+    let done = Action::Bits { word: 60 + routine, set: 0, clear: 1 };
+    let held = matches!(own, 1 | 2);
+    let table: Option<PlateScene> = match (pack, routine) {
+        (1247, 2) => Some(PlateScene { a_off: &[9, 11, 7], a_on: &[8, 10, 6], plate: 6, up: 7, fx: 13..=15, stop: 12..=15, inside: vec![look(5, 8), wait_anim(8), look(5, 10), wait_anim(10), normal], b_off: &[8, 10, 6], b_on: &[9, 11, 7], b_play: &[7, 9, 11] }),
+        (1247, 5) => Some(PlateScene {
+            a_off: &[25, 27, 28, 23],
+            a_on: &[24, 26, 29, 22],
+            plate: 22,
+            up: 23,
+            fx: 16..=19,
+            stop: 16..=19,
+            inside: vec![Action::PlayCamera { track: 25, wait: false, end: 1, speed: 0.8 }, wait_anim(24), Action::PlayCamera { track: 24, wait: false, end: 1, speed: 0.6 }, wait_anim(26), Action::PlayCamera { track: 23, wait: true, end: 1, speed: 0.5 }, wait_anim(29), normal],
+            b_off: &[24, 26, 29, 22],
+            b_on: &[25, 27, 28, 23],
+            b_play: &[23, 25, 27, 28],
+        }),
+        (1247, 6) => Some(PlateScene { a_off: &[33, 35, 31], a_on: &[32, 34, 30], plate: 30, up: 31, fx: 0..=3, stop: 0..=3, inside: vec![cam(10), Action::PlayAnim { obj: 34, speed: 1.0, wait: false }, wait_anim(32), normal], b_off: &[32, 34, 30], b_on: &[33, 35, 31], b_play: &[31, 33, 35] }),
+        (1249, 2) => Some(PlateScene { a_off: &[10, 13, 1], a_on: &[0, 12, 11], plate: 11, up: 13, fx: 12..=15, stop: 12..=15, inside: vec![look(5, 12), wait_anim(12), look(4, 0), wait_anim(0), normal], b_off: &[12, 11, 0], b_on: &[10, 13, 1], b_play: &[13, 10, 1] }),
+        (1249, 4) => Some(PlateScene { a_off: &[17, 16], a_on: &[15, 14], plate: 14, up: 16, fx: 8..=11, stop: 8..=11, inside: vec![look(4, 15), wait_anim(15), normal], b_off: &[15, 14], b_on: &[17, 16], b_play: &[16, 17] }),
+        (1249, 3) => Some(PlateScene { a_off: &[21, 20], a_on: &[19, 18], plate: 18, up: 20, fx: 4..=7, stop: 4..=7, inside: vec![look(4, 19), wait_anim(19), normal], b_off: &[19, 18], b_on: &[21, 20], b_play: &[20, 21] }),
+        (1249, 5) => Some(PlateScene { a_off: &[25, 24], a_on: &[23, 22], plate: 22, up: 24, fx: 0..=3, stop: 0..=3, inside: vec![look(4, 23), wait_anim(23), normal], b_off: &[23, 22], b_on: &[25, 24], b_play: &[24, 25] }),
+        _ => None,
+    };
+    let wait_then_b = |v: &mut Vec<Action>| v.extend([Action::WaitInside { index }, next(2)]);
+    let mut v = Vec::new();
+    if let Some(t) = table {
+        match phase {
+            0 => {
+                if own != 1 {
+                    wait_then_b(&mut v);
+                    return v;
+                }
+                v.extend(off(t.a_off));
+                v.extend(on(t.a_on));
+                v.extend(fx(t.fx.clone()));
+                v.push(wait_anim(t.plate));
+                v.extend(stop(t.stop.clone()));
+                v.push(next(1));
+            }
+            1 if held => {
+                v.extend(t.inside);
+                wait_then_b(&mut v);
+            }
+            1 => {
+                v.extend(off(&[t.plate]));
+                v.extend(on(&[t.up]));
+                v.extend(play(&[t.up]));
+                v.push(done);
+            }
+            _ => {
+                v.extend(off(t.b_off));
+                v.extend(on(t.b_on));
+                v.extend(play(t.b_play));
+                v.push(normal);
+                v.push(done);
+            }
+        }
+        return v;
+    }
+    // 1247's CB3 and CB4: two plates that share panels 16 and 18 (twins 17 and 19). Word 40 + routine
+    // keeps whether this thread took the long branch's start (the branch is chosen once).
+    let (up, pressed) = if routine == 3 { (12, 13) } else { (15, 14) };
+    match phase {
+        0 => {
+            if own != 1 {
+                wait_then_b(&mut v);
+            } else if other != 0 {
+                v.extend(off(&[up]));
+                v.extend(on(&[pressed]));
+                if routine == 3 {
+                    v.extend(fx(4..=7));
+                    v.push(wait_anim(pressed));
+                    v.extend(stop(4..=7));
+                } else {
+                    v.extend(fx(8..=11));
+                    v.push(wait_anim(pressed));
+                    v.extend(stop(8..=11));
+                }
+                wait_then_b(&mut v);
+            } else {
+                v.extend(off(&[17, 19, up]));
+                v.extend(on(&[16, 18, pressed]));
+                if routine == 3 {
+                    v.extend(fx(4..=7));
+                    v.push(wait_anim(pressed));
+                    v.extend(stop(4..=7));
+                } else {
+                    // CB4 starts these after its animation and never stops them.
+                    v.push(wait_anim(pressed));
+                    v.extend(fx(4..=7));
+                }
+                v.push(next(1));
+            }
+        }
+        1 if held => {
+            v.extend([cam(9), wait_anim(16), Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 }, wait_anim(18), normal]);
+            wait_then_b(&mut v);
+        }
+        1 => {
+            v.extend(off(&[pressed]));
+            v.extend(on(&[up]));
+            v.extend(play(&[up]));
+            v.push(done);
+        }
+        _ => {
+            if other == 0 {
+                v.extend(off(&[16, 18, pressed]));
+                v.extend(on(&[17, 19, up]));
+                v.extend(play(&[up, 17, 19]));
+            } else {
+                v.extend(off(&[pressed]));
+                v.extend(on(&[up]));
+                v.extend(play(&[up]));
+            }
+            v.extend([normal, done]);
+        }
+    }
+    let _ = s;
     v
 }
 
-/// SPEC-0041 1247's way back: the switch object swapped and played, each camera and object
-/// animation, the normal camera, then the shown objects off and the rest on and played.
-fn back_1247(from: usize, to: usize, shots: &[(usize, usize)], off: &[usize], on: &[usize]) -> Vec<Action> {
-    let mut v = vec![Action::DeactivateObj { obj: from }, Action::InitObjOn { obj: to, end: false }, Action::PlayAnim { obj: to, speed: 1.0, wait: false }, Action::HeroAnim { anim: 0, wait: false }];
-    for &(track, obj) in shots {
-        v.extend([Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 }, Action::PlayAnim { obj, speed: 1.0, wait: true }]);
-    }
-    v.push(Action::ReturnCamera { preset: -1, release: true });
-    v.extend(off.iter().map(|&obj| Action::DeactivateObj { obj }));
-    for &obj in on {
-        v.extend([Action::InitObjOn { obj, end: false }, Action::PlayAnim { obj, speed: 1.0, wait: false }]);
-    }
-    v.push(Action::Sleep { ticks: 1 });
-    v
+struct PlateScene {
+    a_off: &'static [usize],
+    a_on: &'static [usize],
+    plate: usize,
+    up: usize,
+    fx: std::ops::RangeInclusive<usize>,
+    stop: std::ops::RangeInclusive<usize>,
+    inside: Vec<Action>,
+    b_off: &'static [usize],
+    b_on: &'static [usize],
+    b_play: &'static [usize],
 }
 
 /// SPEC-0045 1300's petpet-ritual word (ticks since it started, 0 off) and the ramp's length,
@@ -16043,9 +16340,9 @@ pub fn on_answer(pack: u32, routine: u8, yes: bool, s: &mut GameState) -> Vec<Ac
             s.take(72, 1);
             s.set(if routine == 38 { 503 } else { 504 }, true);
             s.set(505, true);
-            Vec::new()
+            vec![Action::Talk { line: if routine == 38 { 113 } else { 88 } }]
         }
-        (1056, 38 | 39, false) => Vec::new(),
+        (1056, 38 | 39, false) => vec![Action::Talk { line: if routine == 38 { 114 } else { 89 } }],
         // SPEC-0044 722 the bet: a yes with 50 Neopoints takes them, stores the pick and starts
         // the race; with fewer line 75. The marks clear after 1.0 s.
         (722, 0..=2, yes) => {
@@ -16465,6 +16762,7 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (758, 11 | 13) => Some(11),
         (758, 26 | 28) => Some(26),
         (956, 1 | 47) => Some(1),
+        (956, 5 | 45 | 46 | 48..=51) => Some(entity as u8),
         (1363, 37..=42) => Some(entity as u8),
         // SPEC-0044 722: R0 to R7 on their entities.
         (722, 14) => Some(0),
@@ -16609,10 +16907,160 @@ pub fn proximity_routine(pack: u32, entity: usize) -> Option<u8> {
         (1056, 0) => Some(43),
         (1056, 38 | 41) => Some(38),
         (1056, 39 | 42) => Some(39),
+        (1056, 40 | 43) => Some(40),
+        (1056, 2) => Some(44),
+        (1056, 1) => Some(45),
+        (1056, 6 | 11 | 13 | 23) => Some(46),
         // SPEC-0045 1023 villagers (routine numbers: the index in VILLAGERS, 100 + k).
         (1023, e) => villager(e).map(|k| 100 + k as u8),
         _ => None,
     }
+}
+
+/// SPEC-0043 956's proximity routines (R-0183).
+fn talk_956(routine: u8, s: &mut GameState) -> Vec<Action> {
+    const P: u32 = 956;
+    let w = 60 + routine % 8;
+    let turn = |s: &mut GameState, r: u16| {
+        let c = s.word(P, w);
+        s.set_word(P, w, (c + 1) % 3);
+        vec![Action::Talk { line: r + c as u16 }]
+    };
+    match routine {
+        45 => turn(s, 28),
+        // Entity 5: 55 on the first talk with 211, then 56 and 57 in turn; else 58 to 60 by 208. A
+        // change of branch restarts the counter (word 70 the branch).
+        5 => {
+            let branch = if s.flag(211) { 1 } else if s.flag(208) { 2 } else { return Vec::new() };
+            if s.word(P, 70) != branch {
+                s.set_word(P, 70, branch);
+                s.set_word(P, w, 0);
+            }
+            if branch == 2 {
+                return turn(s, 58);
+            }
+            let c = s.word(P, w);
+            s.set_word(P, w, if c == 1 { 2 } else { 1 });
+            vec![Action::Talk { line: 55 + c as u16 }]
+        }
+        _ => {
+            let (p, q, r) = match routine {
+                49 => (6, 7, 8),
+                51 => (31, 32, 33),
+                46 => (37, 38, 39),
+                50 => (43, 44, 45),
+                48 => (49, 50, 51),
+                _ => (0, 1, 2),
+            };
+            if draw(s, P, 1, 2) == 1 {
+                let b = draw(s, P, 1, 2);
+                if b == 1 && !s.flag(59) {
+                    return vec![Action::Talk { line: p }];
+                }
+                if b == 2 && !s.flag(86) {
+                    return vec![Action::Talk { line: q }];
+                }
+            }
+            turn(s, r)
+        }
+    }
+}
+
+/// SPEC-0044 1056's other dialogue routines (R-0186): the first set flag picks the branch; a rotation
+/// restarts when its branch changes. Routine numbers: 38 and 39 the knights, 40 entities 40 and 43,
+/// 43 Prunella, 44 Jarvesald, 45 Jarvesund, 46 entities 6, 11, 13 and 23.
+fn talk_1056(routine: u8, s: &mut GameState) -> Option<Vec<Action>> {
+    const P: u32 = 1056;
+    let f = |s: &GameState, n: u16| s.flag(n);
+    let three = |a: u16| [a, a + 1, a + 2];
+    let one = |line: u16| vec![Action::Talk { line }];
+    Some(match routine {
+        46 => {
+            if f(s, 25) {
+                if f(s, 182) { cycle_in(s, P, 46, 0, &three(186)) } else { one(189) }
+            } else if f(s, 24) {
+                if f(s, 173) { cycle_in(s, P, 46, 1, &three(190)) } else { one(193) }
+            } else if f(s, 23) {
+                // The branch checks its marker twice with two numbers, so 195 and 196 never show.
+                if f(s, 161) { one(194) } else { one(197) }
+            } else if f(s, 155) {
+                cycle_in(s, P, 46, 2, &three(198))
+            } else {
+                one(201)
+            }
+        }
+        38 | 39 => {
+            // (own-flag rotation, other's rotation, prompt, and the rest), as 38 and 39 list them.
+            let (mine, other, a, b, prompt, rest) = if routine == 38 { (503, 504, 104, 107, 110, 115) } else { (504, 503, 79, 82, 85, 90) };
+            if f(s, other) {
+                cycle_in(s, P, routine, 0, &three(a))
+            } else if f(s, mine) {
+                cycle_in(s, P, routine, 1, &three(b))
+            } else if f(s, 502) {
+                let v = cycle_in(s, P, routine, 2, &three(prompt));
+                let Some(Action::Talk { line }) = v.first().cloned() else { return Some(v) };
+                vec![Action::Prompt { line, routine }]
+            } else if f(s, 501) {
+                cycle_in(s, P, routine, 3, &three(rest))
+            } else if f(s, 179) {
+                cycle_in(s, P, routine, 4, &three(rest + 3))
+            } else if f(s, 174) {
+                cycle_in(s, P, routine, 5, &three(rest + 6))
+            } else if f(s, 173) {
+                one(rest + 9)
+            } else if f(s, 169) {
+                one(rest + 10)
+            } else {
+                cycle_in(s, P, routine, 6, &three(rest + 11))
+            }
+        }
+        40 => {
+            if f(s, 193) {
+                cycle_in(s, P, 40, 0, &three(129))
+            } else if f(s, 179) {
+                cycle_in(s, P, 40, 1, &three(132))
+            } else if f(s, 174) {
+                cycle_in(s, P, 40, 2, &three(135))
+            } else if f(s, 173) {
+                one(138)
+            } else if f(s, 169) {
+                one(139)
+            } else {
+                cycle_in(s, P, 40, 3, &three(140))
+            }
+        }
+        43 => {
+            if f(s, 204) {
+                one(if f(s, 504) { 143 } else if f(s, 503) { 144 } else { 145 })
+            } else if f(s, 503) {
+                cycle_in(s, P, 43, 0, &three(146))
+            } else if f(s, 504) {
+                cycle_in(s, P, 43, 1, &three(149))
+            } else if f(s, 501) {
+                cycle_in(s, P, 43, 2, &three(152))
+            } else if f(s, 179) {
+                s.set(501, true);
+                one(155)
+            } else if f(s, 174) {
+                cycle_in(s, P, 43, 3, &three(156))
+            } else {
+                cycle_in(s, P, 43, 4, &three(159))
+            }
+        }
+        44 | 45 => {
+            let b = if routine == 44 { 162 } else { 174 };
+            if f(s, 204) {
+                cycle_in(s, P, routine, 0, &three(b))
+            } else if f(s, 179) {
+                cycle_in(s, P, routine, 1, &three(b + 3))
+            } else if f(s, 169) {
+                cycle_in(s, P, routine, 2, &three(b + 6))
+            } else {
+                cycle_in(s, P, routine, 3, &three(b + 9))
+            }
+        }
+        _ => return None,
+    })
 }
 
 /// One cycle branch: (flag, lines).
@@ -16629,37 +17077,29 @@ pub fn on_talk(pack: u32, routine: u8, state: &mut GameState) -> Vec<Action> {
     if matches!(pack, 748 | 776 | 859 | 1005 | 1008 | 1011 | 1014 | 1020 | 1131 | 1136 | 1140 | 1143 | 1172) {
         return talk_interior(pack, routine, state);
     }
-    // SPEC-0044 1056: Lady Prunella (entity 0) with 179 set and 204, 501, 503 and 504 clear sets
-    // 501; Sir Lawrence and Sir Cadmere (entities 38 and 41, 39 and 42) with 502 set and 503 and 504
-    // clear ask their prompts in turn. Which line Prunella shows and the rest of these routines'
-    // tables are not given (R-0186): she shows her group's first line and they say nothing else.
-    if pack == 1056 && routine == 43 {
-        if state.flag(179) && !state.flag(204) && !state.flag(501) && !state.flag(503) && !state.flag(504) {
-            state.set(501, true);
-            return vec![Action::Talk { line: 143 }];
+    if pack == 1056 {
+        if let Some(v) = talk_1056(routine, state) {
+            return v;
         }
-        return Vec::new();
     }
-    if pack == 1056 && matches!(routine, 38 | 39) {
-        if state.flag(502) && !state.flag(503) && !state.flag(504) {
-            let base = if routine == 38 { 110 } else { 85 };
-            let c = state.word(1056, 20 + routine - 38).rem_euclid(3);
-            state.set_word(1056, 20 + routine - 38, (c + 1) % 3);
-            return vec![Action::Prompt { line: base + c as u16, routine }];
-        }
-        return Vec::new();
+    if pack == 956 && matches!(routine, 1 | 5 | 45 | 46 | 48..=51) {
+        return talk_956(routine, state);
     }
-    // SPEC-0044 956: entities 1 and 47 give line 2 with flag 59, else 12. The other entities'
-    // line mapping is not given (R-0183).
-    if (pack, routine) == (956, 1) {
-        return vec![Action::Talk { line: if state.flag(59) { 2 } else { 12 } }];
-    }
-    // SPEC-0041 1363 ids 37 to 42: with 101 and 103 a random pick of the routine's three lines;
-    // the fallback when either is clear is not fully given (R-0183): the first line stands in.
+    // SPEC-0041 1363 ids 37 to 42 (R-0183): three sets of three lines, chosen by two draws under flags
+    // 101 and 103, with one counter per id shared by the sets.
     if pack == 1363 && (37..=42).contains(&routine) {
-        let lines = [[48, 51, 54], [39, 42, 45], [21, 24, 27], [30, 33, 36], [12, 15, 18], [3, 6, 9]][routine as usize - 37];
-        let k = if state.flag(101) && state.flag(103) { draw(state, pack, 0, 2) as usize } else { 0 };
-        return vec![Action::Talk { line: lines[k] }];
+        let sets = [[48, 51, 54], [39, 42, 45], [21, 24, 27], [30, 33, 36], [12, 15, 18], [3, 6, 9]][routine as usize - 37];
+        let k = if state.flag(101) && draw(state, pack, 1, 3) == 1 {
+            0
+        } else if state.flag(103) && draw(state, pack, 1, 3) == 1 {
+            1
+        } else {
+            2
+        };
+        let w = 50 + routine - 37;
+        let c = state.word(pack, w);
+        state.set_word(pack, w, (c + 1) % 3);
+        return vec![Action::Talk { line: sets[k] + c as u16 }];
     }
     // SPEC-0039 880 handler 7 and 1230 handler 4, the map shop: the first map not held is
     // offered with its prompt (its index kept in word 4 for the answer); with every map held,
@@ -18687,7 +19127,7 @@ mod tests {
         s.hero.tick = 1200;
         on_trigger(1174, 36, call(43), &mut s);
         s.hero.tick = 1300;
-        assert!(tiles_1174(&mut s).contains(&Action::CollisMask { mask: 4 }));
+        assert!(tiles_1174(&mut s).contains(&Action::CollisMask { mask: 5 }));
         assert_eq!(s.word(1174, 106), 0);
         s.hero.tick = 1303;
         assert!(tiles_1174(&mut s).contains(&Action::DeactivateObj { obj: 109 }));
@@ -18715,16 +19155,18 @@ mod tests {
         }
         assert!(s.flag(179));
         // Prunella then sets 501, once.
-        assert_eq!(on_talk(1056, proximity_routine(1056, 0).unwrap(), &mut s), vec![Action::Talk { line: 143 }]);
+        assert_eq!(on_talk(1056, proximity_routine(1056, 0).unwrap(), &mut s), vec![Action::Talk { line: 155 }]);
         assert!(s.flag(501));
-        assert!(on_talk(1056, 43, &mut s).is_empty());
+        for line in [152, 153, 154, 152] {
+            assert_eq!(on_talk(1056, 43, &mut s), vec![Action::Talk { line }]);
+        }
         // With 502 a knight asks; yes takes the charm and shuts the other out.
         s.set(502, true);
         s.give(72, 1);
         assert_eq!(on_talk(1056, proximity_routine(1056, 41).unwrap(), &mut s), vec![Action::Prompt { line: 110, routine: 38 }]);
-        on_answer(1056, 38, true, &mut s);
+        assert_eq!(on_answer(1056, 38, true, &mut s), vec![Action::Talk { line: 113 }]);
         assert!(s.flag(503) && s.flag(505) && !s.has_item(72));
-        assert!(on_talk(1056, 39, &mut s).is_empty());
+        assert_eq!(on_talk(1056, 39, &mut s), vec![Action::Talk { line: 79 }]);
     }
 
     #[test]

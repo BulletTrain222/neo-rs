@@ -181,6 +181,8 @@ pub struct View<'a> {
     /// The alternate loops' avoid point: the far centroid pick of her mesh, 10 from the hero
     /// (SPEC-0056; SPEC-0011 Movement speed), offered while the hero is within 5.0.
     pub far: Option<Vec3>,
+    /// The point of DFS_Act1_SetIndices' fourth word (a locator), when it is not -1.
+    pub aim_point: Option<Vec3>,
 }
 
 /// What a sister asks for this tick.
@@ -228,6 +230,8 @@ pub struct Sister {
     /// The damage-taken sum (read only by the unreachable dome start).
     pub taken: i32,
     pub alternate: bool,
+    /// The next alternate ball's aim, when its target roll took the locator.
+    aim_at: Option<Vec3>,
     /// The controller start has run, and the group-attack interval it drew (the dome never
     /// starts, so nothing reads it).
     started: bool,
@@ -296,7 +300,7 @@ impl Sister {
             16 => 2,
             _ => 0,
         };
-        Self { class, kind, state: State::Idle, energy: 0, status: 0, special: 0, dodge: 0, radius: None, dir: 1.0, taken: 0, alternate: false, started: false, group: 0, avoid: None }
+        Self { class, kind, state: State::Idle, energy: 0, status: 0, special: 0, dodge: 0, radius: None, dir: 1.0, taken: 0, alternate: false, aim_at: None, started: false, group: 0, avoid: None }
     }
 
     /// The controller start (R-0065): energy, status, group and special drawn in that order by
@@ -510,8 +514,8 @@ impl Sister {
         }
         if matches!(self.state, State::Idle | State::Move) {
             if self.energy < 1 {
-                // The target roll (a target entity is not built, so the flag has no use here).
-                let _ = rng.range(0, 100);
+                // The target roll: below 40 the ball goes to the fourth word's locator.
+                self.aim_at = v.aim_point.filter(|_| rng.range(0, 100) < 40);
                 self.state = State::Ball { fired: false };
             } else {
                 if self.state != State::Move {
@@ -530,7 +534,14 @@ impl Sister {
                 a.anim = Some(17);
                 a.face = Some(0.25);
                 if v.clip.0 == 17 && v.frame_bits & 0x20 != 0 && !fired {
-                    a.launch = Some(shot(10, 16, 6, w.ball_damage, (-1, 0), 240, 460, w.projectile_speed[0], owner, v));
+                    let mut ball = shot(10, 16, 6, w.ball_damage, (-1, 0), 240, 460, w.projectile_speed[0], owner, v);
+                    if let Some(p) = self.aim_at {
+                        let to = [p[0] - ball.start[0], p[1] - ball.start[1], p[2] - ball.start[2]];
+                        let l = (to[0] * to[0] + to[1] * to[1] + to[2] * to[2]).sqrt().max(1e-6);
+                        let speed = (ball.velocity[0].powi(2) + ball.velocity[1].powi(2) + ball.velocity[2].powi(2)).sqrt();
+                        ball.velocity = to.map(|c| c / l * speed);
+                    }
+                    a.launch = Some(ball);
                     self.state = State::Ball { fired: true };
                 }
                 if v.clip.0 == 17 && v.clip.1 {
@@ -549,6 +560,12 @@ impl Sister {
 
 /// The Mote-eater drain words (SPEC-0034 3.13): 7 from 0x2DCAC8 and the 14-word per-Mote
 /// effect table at 0x2DCAE8.
+/// SPEC-0044 World projectiles: the one spawner with the breaks-objects flag, the alternate-loop ball
+/// (kind 10, element 6), which alone fires the act-1 boxes.
+pub fn breaks_objects(s: &Setup) -> bool {
+    s.kind == 10 && s.element == 6
+}
+
 pub const DRAIN_WORDS: u32 = 0x002D_CAC8;
 pub const DRAIN_TABLE: u32 = 0x002D_CAE8;
 
@@ -680,7 +697,7 @@ mod tests {
     }
 
     fn view(level: &dyn Fn(u16) -> bool, hp: i32) -> View<'_> {
-        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), progress: 0.0, frame_bits: 0, blocked: false, level, far: None }
+        View { position: [20.0, 0.0, 0.0], hero: [0.0; 3], hp, max_hp: 100, hit: None, missiles_near: 0, clip: (1, false), progress: 0.0, frame_bits: 0, blocked: false, level, far: None, aim_point: None }
     }
 
     #[test]
