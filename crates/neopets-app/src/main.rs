@@ -3740,9 +3740,10 @@ fn sync_characters(
                     want.scale = Vec3::splat(s);
                 }
                 set_if(&mut t, want);
-                // SPEC-0038 Behavior 40: a hiding enemy with cue word 0 is not drawn.
+                // SPEC-0046 Drawable test: the visibility predicate hides a waiting enemy with cue
+                // word 0 and an invisible kind in its default state or state 21 before clip 82.
                 // SPEC-0010 Vanishing: the Cloud Beast's bodies during the gust's travel.
-                let hidden = c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action)) || p.cloud_hidden(c);
+                let hidden = c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)) || p.cloud_hidden(c);
                 set_if(&mut vis, if p.pack_drawn(c.pack) && !c.inactive && !hidden { Visibility::Visible } else { Visibility::Hidden });
             }
         }
@@ -3848,7 +3849,7 @@ fn sync_characters(
         // Performance: the skin is rebuilt only for a drawn character (not inactive or
         // hiding), when one of its meshes was on screen last frame (or it has never been
         // skinned), and when a game tick has run or its flash changed since the last skin.
-        let hidden = c.inactive || c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action));
+        let hidden = c.inactive || c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action));
         let Some((children, stamp)) = kids.get_mut(&c.id) else { continue };
         let now = (p.ticks, c.flash > 0);
         let on_screen = children.iter().any(|&k| seen.get(k).is_ok_and(|v| v.get()));

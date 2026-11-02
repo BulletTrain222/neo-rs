@@ -13,16 +13,15 @@
 //! The alarm groups (Behavior 3: the notice gate and the alarm-group check).
 //!
 //! Socialize (Behavior 10) is built without its companion-row branch for a script-held peer.
-//! Not covered: the global AI pause (state 20; its
-//! word has no known writer), state 9's +0xC4 branch (zero on every disc record),
-//! theft and Mote drain, ghosts and the carried Neopoints of a theft (the drops are the host's
-//! pay_out; reanimation, state 16 of rows 224, 226 and 227, is built). The alerted search
-//! (state 2) only aims at the last-seen point until its countdown ends (R-0015).
+//! Not covered: the global AI pause (state 20; its word has no known writer) and state 9's +0xC4
+//! branch (zero on every disc record). Theft is the host's; reanimation, state 16 of rows 224,
+//! 226 and 227, is built. The alerted search (state 2) aims at the last-seen point and does not
+//! walk, as the spec says.
 //!
 //! The grab-and-throw (SPEC-0038 Behavior 15, SPEC-0029 Behavior 23): a flag 0x08 slot's strike
-//! state runs the machine in `grab`. Not covered: the grab point choice (the hero is not moved to
-//! it), the hold's touched-flag and path release, the rumble (the build has none) and setting
-//! the hero to state 1 when the seize's stun or path test fails.
+//! state runs the machine in `grab`. The aim point of the grab point choice moves nothing, so it is
+//! not computed. Not covered: the hold's touched-flag and path release (the host pins a held hero,
+//! so neither can happen here; R-0158).
 //!
 //! Flyers (SPEC-0038 "Flyer", Behaviors 2 step 4, 34 step 2, 37 step 7, 41, 44 and 48; SPEC-0040
 //! Behavior 14D item 7 and Behavior 21): the airborne test, the retarget countdown with the
@@ -355,6 +354,10 @@ pub struct ShotRequest {
 /// What the grab machine asks of the hero (SPEC-0029 Behavior 23).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Grab {
+    /// A strike-state tick of a hold (the rumble countdown).
+    Hold,
+    /// The seize failed its stun or path test: the hero is put in base state 1.
+    Refuse,
     /// Into the held state 53, where he stands.
     Seize,
     /// Thrown with this velocity (state 48).
@@ -2691,10 +2694,16 @@ impl Enemy {
         let (kc, ke) = (slot_anim(k, 2), slot_anim(k, 4));
         a.rate = Some(s.strike_speed);
         if self.grab == 1 {
-            if cos > 0.5 && d < s.range && !v.hero_stunned && v.sight {
-                a.grab = Some(Grab::Seize);
-                self.grab = 2;
-                self.through(kc, v, a);
+            if cos > 0.5 && d < s.range {
+                if !v.hero_stunned && v.sight {
+                    a.grab = Some(Grab::Seize);
+                    self.grab = 2;
+                    self.through(kc, v, a);
+                } else {
+                    // The stun word or the path test fails: he is put in base state 1, not held.
+                    a.grab = Some(Grab::Refuse);
+                    self.grab = 3;
+                }
             } else {
                 self.grab = 3;
             }
@@ -2702,6 +2711,9 @@ impl Enemy {
         }
         if self.grab == 2 {
             let done = self.through(kc, v, a);
+            if v.hero_held {
+                a.grab = Some(Grab::Hold);
+            }
             if v.hero_held && v.spawn_bits & 0x20 != 0 {
                 let aim = unit([15.0 * v.facing[0], 15.0 * v.facing[1] + 8.0, 15.0 * v.facing[2]]);
                 a.grab = Some(Grab::Throw(aim.map(|c| c * s.throw_speed)));
@@ -3607,7 +3619,7 @@ mod tests {
         v.hero_held = true;
         v.clip = Clip { action: kc, progress: 0.3, finished: false };
         let act = e.tick(&v, &mut rng);
-        assert_eq!((act.grab, e.seq), (None, 2));
+        assert_eq!((act.grab, e.seq), (Some(Grab::Hold), 2));
         // The throw: damage 0, speed 17 along normalize(15 f + 8 up).
         v.spawn_bits = 0x20;
         let act = e.tick(&v, &mut rng);

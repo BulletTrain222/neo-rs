@@ -25,6 +25,7 @@ pub mod emote;
 pub mod gesture;
 pub mod darkest;
 pub mod draik;
+pub mod dummy;
 pub mod enemy;
 pub mod entityctl;
 pub mod foliage;

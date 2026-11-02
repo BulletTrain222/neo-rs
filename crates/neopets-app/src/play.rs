@@ -840,6 +840,8 @@ pub struct Character {
     pub boss: Option<neopets_sim::juppie::Juppie>,
     /// The Miamouse routine (class 21, SPEC-0029 Behavior 28).
     pub miamouse: Option<neopets_sim::miamouse::Miamouse>,
+    /// The Target Dummy (class 36; SPEC-0029 Behavior 29).
+    pub dummy: Option<neopets_sim::dummy::Dummy>,
     /// The Gnarfas boss controller (behaviour class 14; SPEC-0020) and the hero's hit on it this
     /// tick, which the boss takes through its own flinch.
     pub gnarfas: Option<neopets_sim::gnarfas::Gnarfas>,
@@ -1347,6 +1349,8 @@ pub struct Play {
     npc_audit: HashMap<u64, ([f32; 3], u32, f32, u32, u32, u32, u32)>,
     /// The Darkest Faerie's cast glow.
     faerie_glow: Option<usize>,
+    /// The grab rumble's one shared countdown (word 0x2DD54C; SPEC-0029 Behavior 23), -1 at rest.
+    grab_rumble: i32,
     /// The Starlight Potion's item-effect object: its two effects and timer (SPEC-0021 item 57).
     starlight: Option<(usize, usize, i32)>,
     /// Sisters a navmesh edge turned back last tick (SPEC-0011 the blocked word).
@@ -2123,6 +2127,7 @@ impl Play {
             spit_fx: [None; 2],
             npc_audit: Default::default(),
             faerie_glow: None,
+            grab_rumble: -1,
             starlight: None,
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
@@ -6893,6 +6898,12 @@ impl Play {
         if let Some(c) = self.characters.get_mut(i) {
             c.flash = HIT_FLASH;
         }
+        // SPEC-0029 Behavior 29: every hit restores a Target Dummy's hit points, so it cannot die.
+        if let Some(c) = self.characters.get_mut(i).filter(|c| c.dummy.is_some()) {
+            c.hp = c.row.map_or(c.hp, |r| r.hit_points as i32);
+            c.pending_hit = Some(damage);
+            return;
+        }
         // The script's undamageable entities (SPEC-0044 1056 Update) take no damage.
         let pack = self.world.pack;
         // SPEC-0019: the Werelupe King takes the damage at once and flinches on its next tick; its
@@ -7923,6 +7934,7 @@ impl Play {
                     j
                 }),
                 miamouse: row.filter(|r| r.class == Some(21)).map(|_| neopets_sim::miamouse::Miamouse::new(position)),
+                dummy: row.filter(|r| r.class == Some(36)).map(|_| neopets_sim::dummy::Dummy::new(&mut self.rng)),
                 gnarfas: row.filter(|r| r.class == Some(14)).map(|_| neopets_sim::gnarfas::Gnarfas::new(&self.gnarfas_words, &mut self.rng)),
                 pending_hit: None,
                 king: row.filter(|r| r.class == Some(32)).map(|_| neopets_sim::werelupe::King::new(position)),
@@ -8070,6 +8082,7 @@ impl Play {
             deactivated: false,
             boss: None,
             miamouse: None,
+            dummy: None,
             gnarfas: None,
             pending_hit: None,
             king: None,
@@ -8367,6 +8380,22 @@ impl Play {
     /// SPEC-0047 class 20 for each such creature of the current world: the nearest world item
     /// other than the anchor within 25 units is approached and consumed (removed); the seek
     /// sets the reservation's slow flag; otherwise it wanders about its spawn point.
+    /// SPEC-0029 Behavior 29: the Target Dummies of the current world.
+    fn dummy_step(&mut self) {
+        let pack = self.world.pack;
+        let rng = &mut self.rng;
+        for c in self.characters.iter_mut().filter(|c| c.pack == pack && !c.inactive && !c.held) {
+            let hit = c.dummy.is_some() && c.pending_hit.take().is_some();
+            let clip = c.anim.clip_state();
+            let Some(d) = c.dummy.as_mut() else { continue };
+            if let Some(a) = d.tick(hit, neopets_sim::dummy::Clip { action: clip.action, done: clip.progress >= 0.99 }, rng) {
+                if clip.action != a {
+                    c.anim.play(a);
+                }
+            }
+        }
+    }
+
     fn class20_step(&mut self) {
         let pack = self.world.pack;
         let ids: Vec<u64> = self.characters.iter().filter(|c| c.pack == pack && c.class20.is_some() && !c.inactive && !c.held).map(|c| c.id).collect();
@@ -10225,6 +10254,7 @@ impl Play {
         self.feed_finish();
         self.wild_step();
         self.class20_step();
+        self.dummy_step();
         self.pet_step();
         self.food_fallback();
         self.boss_step();
@@ -11138,7 +11168,7 @@ impl Play {
                     position: c.position,
                     action: c.anim.clip_state().action,
                     wounded: c.row.is_some_and(|r| c.hp < r.hit_points as i32),
-                    filter: !c.held && !c.pet_like() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.hidden(c.anim.clip_state().action)),
+                    filter: !c.held && !c.pet_like() && c.hp > 0 && !c.enemy.as_ref().is_some_and(|e| e.lock_vetoed(c.anim.clip_state().action)),
                     reanimating: c.enemy.as_ref().is_some_and(|e| e.reanimating()),
                 })
                 .collect()
@@ -11298,10 +11328,10 @@ impl Play {
                 }
                 if let Some(k) = e.selected.filter(|&k| before.3 != Some(k)) {
                     let s = &e.p.slots[k];
-                    println!("ATK select \"{name}\" slot {k} kind {} d {d:.2} band {:.2} {:.2} arc {:.3} damage {:.1} flags {:#x}", s.kind, s.trigger_min, s.trigger_max, s.arc, s.damage, s.flags);
+                    println!("ATK select \"{name}\" slot {k} kind {} t {} d {d:.2} band {:.2} {:.2} arc {:.3} damage {:.1} flags {:#x}", s.kind, self.ticks, s.trigger_min, s.trigger_max, s.arc, s.damage, s.flags);
                 }
                 if let Some(s) = act.strike {
-                    println!("ATK strike \"{name}\" slot {} d {d:.2} h {h:.2} radius {:.2} damage {:.1} blocked {}", s.slot, row.radius, s.damage, s.blocked);
+                    println!("ATK strike \"{name}\" slot {} t {} d {d:.2} h {h:.2} radius {:.2} damage {:.1} blocked {}", s.slot, self.ticks, row.radius, s.damage, s.blocked);
                 }
                 if let Some(q) = act.shot {
                     let m = &e.p.slots[q.slot].missile;
@@ -11685,9 +11715,23 @@ impl Play {
                     self.held_at = Some(self.loco.position());
                     self.loco.state = hero_states::HELD;
                     self.loco.body.velocity = [0.0; 3];
+                    // SPEC-0033 Behavior 1C source 3: preset 0, 1.0 s, magnitude 0.7, with the
+                    // shared countdown loaded with 60.
+                    self.rumble.request(&self.rumble_presets, 0, 1.0, 0.7);
+                    self.grab_rumble = 60;
                 }
+                // Each strike-state tick of a hold: at 0 the rumble again and 60; then down by 1.
+                enemy::Grab::Hold => {
+                    if self.grab_rumble == 0 {
+                        self.grab_rumble = 60;
+                        self.rumble.request(&self.rumble_presets, 0, 1.0, 0.7);
+                    }
+                    self.grab_rumble -= 1;
+                }
+                enemy::Grab::Refuse if self.loco.state != hero_states::DEAD => self.loco.state = hero_states::STANCE,
                 enemy::Grab::Throw(velocity) if self.loco.state != hero_states::DEAD => {
                     self.held_at = None;
+                    self.grab_rumble = -1;
                     self.knock_hero(velocity);
                 }
                 _ => {}
