@@ -24,6 +24,8 @@ pub const ATTACK: u8 = 13;
 pub const DEAD: u8 = 16;
 pub const HURT: u8 = 17;
 pub const LONG_FALL: u8 = 48;
+/// The get-up after the Plague Serpent's landed lunge (SPEC-0016, R-0189).
+pub const GET_UP: u8 = 54;
 /// SPEC-0055 death-end states: 59 arrival or return (clip 175), 60 respawn after deadly ground
 /// (clip 137).
 pub const ARRIVAL: u8 = 59;
@@ -647,6 +649,15 @@ impl Locomotion {
                 return;
             }
             LONG_FALL => return self.long_fall(clip),
+            // SPEC-0016 Hero get-up state 54: only clip 137 to 0.99, then state 1. No movement of its
+            // own, no invulnerability.
+            GET_UP => {
+                self.request = ANIM_LONG_LAND;
+                if clip.action == ANIM_LONG_LAND && clip.progress >= 0.99 {
+                    self.state = STANCE;
+                }
+                return;
+            }
             // Route 51: at progress 0.99 of the clip, state 1 with the control flag set, else 33.
             ONE_SHOT => {
                 if clip.action == self.request && clip.progress >= 0.99 {

@@ -3119,6 +3119,14 @@ impl Play {
                     self.fade.fade_in([0; 3], neopets_sim::scene::frames(seconds));
                     return wait.then_some(Wait::Fade);
                 }
+                Action::FadeColour { out, colour, seconds, wait } => {
+                    if out {
+                        self.fade.out(colour, neopets_sim::scene::frames(seconds));
+                    } else {
+                        self.fade.fade_in(colour, neopets_sim::scene::frames(seconds));
+                    }
+                    return wait.then_some(Wait::Fade);
+                }
                 Action::PlayCamera { track, wait, end, speed } => {
                     // A track outside the list does nothing; WAIT waits only on a keyed track.
                     let keyed = !self.world.tracks.get(track)?.keys.is_empty();
@@ -3273,6 +3281,16 @@ impl Play {
                                 if let Some(Some(o)) = self.effects.objects.get_mut(h) {
                                     o.position = at;
                                 }
+                            }
+                        }
+                    }
+                }
+                Action::EffectsToObjLocators { count, host } => {
+                    for k in 0..count {
+                        if let (Some(at), Some(h)) = (self.anim_locator(pack, host, k, 0), self.placed_object(pack, k)) {
+                            self.effects.set_position(h, at);
+                            if let Some(Some(o)) = self.effects.objects.get_mut(h) {
+                                o.position = at;
                             }
                         }
                     }
@@ -8681,9 +8699,13 @@ impl Play {
             }
             if let Some((damage, push)) = act.hero_damage {
                 self.hero_hit(damage as f32, push, false, [-hf[0], 0.0, -hf[2]], "the Juppie's head slam".into());
-                // The shared hit flash 222, detached, at the impact point (SPEC-0015; SPEC-0029).
+            }
+            // R-0167: the shared hit flash 222 belongs to a counted hit of the stun loop, at the point
+            // where the hero's weapon touched the hit shape. The slam starts none.
+            if act.hp_loss > 0 && matches!(before, neopets_sim::juppie::Top::Slam(2)) {
+                let at = self.weapon_segment().map_or(head, |w| w.center);
                 let table = self.effect_table.clone();
-                self.effects.one_shot(&table, 222, head, neopets_sim::effect::IDENTITY, &mut self.rng);
+                self.effects.one_shot(&table, 222, at, neopets_sim::effect::IDENTITY, &mut self.rng);
             }
             // SPEC-0015 Spit: one projectile from the mouth at the hero's feet into the pool.
             if act.spit {
@@ -14229,6 +14251,8 @@ impl Play {
                     let table = self.effect_table.clone();
                     self.effects.one_shot(&table, 222, add(hero, [0.0, 1.5, 0.0]), neopets_sim::effect::IDENTITY, &mut self.rng);
                 }
+                // SPEC-0016: the lunge writes state 54 over what the hit left, on this tick.
+                self.loco.state = hero_states::GET_UP;
             }
         }
     }

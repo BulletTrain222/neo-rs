@@ -81,6 +81,8 @@ pub enum Action {
     /// yields until the fade reaches its target (SPEC-0030 rows 136 and 137).
     FadeOut { seconds: f32, wait: bool },
     FadeIn { seconds: f32, wait: bool },
+    /// A fade with its colour named (the fade calls take one; the plain forms are black).
+    FadeColour { out: bool, colour: [u8; 3], seconds: f32, wait: bool },
     /// PlayCamera(track, WAIT, end mode, speed) (SPEC-0030 row 34).
     PlayCamera { track: usize, wait: bool, end: u8, speed: f32 },
     /// ReturnToNormalCamera(preset locator or -1, release) (row 35).
@@ -382,6 +384,9 @@ pub enum Action {
     /// MoveEffectToAnimatedLocator for each placed effect of script group `group`, in its list
     /// order, to locators `locator`, `locator` + 1, ... of host `host` (face false; row 12).
     GroupEffectsToObjLocators { group: usize, host: usize, locator: usize },
+    /// MoveEffectToAnimatedLocator for placed effects 0 to `count` - 1, each to its own locator of
+    /// host object `host` (face false).
+    EffectsToObjLocators { count: usize, host: usize },
     /// SetSpeedFactor (row 14): the object's play speed; its state is not changed.
     SpeedFactor { obj: usize, factor: f32 },
     /// RegisterScriptAnimatedTrigger (row 266): record `index` of host object `host`'s inline
@@ -2110,9 +2115,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         }
         // SPEC-0044 864 Init: 287; 60 when clear; level state 3; with 58 clear triggers 1 (the
         // fight start) and 22 (the story exit); trigger 24 (the plain exit); the slot-load thread
-        // (58: set 0, else set 1; region 865 + set) into store A (slot 0). The hazard triggers 4
-        // to 9, the animated triggers, the other control threads, the object setups and the
-        // per-tick animation sequence (Medium-Low) are not reproduced. The four instance-trigger
+        // (58: set 0, else set 1; region 865 + set) into store A (slot 0); the vents (triggers 4 to
+        // 9, routine 40); the set-up of the objects the fight uses. The animated triggers and the
+        // other control threads are not reproduced. The four instance-trigger
         // registrations (groups 4, 2, 5 and 3) each start the instance-load worker (routines 34,
         // 32, 35 and 33 here, one per group). Words: 1 the stage bits, 5 the plain exit armed (by
         // the arrival), 6 busy, 10 and 11 the sets last loaded into stores A and C (-1 none).
@@ -2125,6 +2130,11 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
                 v.extend([reg(1, 1), reg(22, 22)]);
             }
             v.push(reg(24, 24));
+            v.extend((4..10).map(|t| reg(t, 40)));
+            v.extend((17..=28).chain(70..=92).map(|obj| Action::InitObjOn { obj, end: false }));
+            v.extend((29..=34).map(|obj| Action::DeactivateObj { obj }));
+            let done = state.flag(58);
+            v.extend([15, 16].map(|obj| Action::InitObjOn { obj, end: done }));
             v.extend([(4, 34), (2, 32), (5, 35), (3, 33)].map(|(group, routine)| Action::RegisterGroupTriggers { group, routine }));
             let set = !state.flag(58) as i32;
             state.set_word(pack, 10, set);
@@ -4036,6 +4046,36 @@ fn sequencer_1091(s: &mut GameState) -> Vec<Action> {
     v
 }
 
+/// SPEC-0014 Hazards (R-0161): one run of the six-drop sequence and its chains, as one timeline. Drop k
+/// starts at tick 20k and ends 39 later, when its carrier plays for 79; 2 ticks after that the burst
+/// word is on for 10 ticks and, on the first run, vent k's decal comes on.
+fn drops_864(first: bool) -> Vec<Action> {
+    let mut events = Vec::new();
+    for k in 0..6usize {
+        let t = 20 * k as u32;
+        let (drop, carrier) = (18 + 2 * k, 17 + 2 * k);
+        events.push((t, Action::PlayAnim { obj: drop, speed: 3.0, wait: false }));
+        events.push((t + 39, Action::SetObjTime { obj: drop, seconds: 0.0 }));
+        events.push((t + 39, Action::PlayAnim { obj: carrier, speed: 3.0, wait: false }));
+        events.push((t + 118, Action::SetObjTime { obj: carrier, seconds: 0.0 }));
+        events.push((t + 120, Action::Bits { word: 14, set: 1, clear: 0 }));
+        events.push((t + 130, Action::Bits { word: 14, set: 0, clear: 1 }));
+        if first {
+            events.push((t + 130, Action::InitObjOn { obj: 29 + k, end: false }));
+        }
+    }
+    events.sort_by_key(|e| e.0);
+    let (mut v, mut now) = (Vec::new(), 0);
+    for (t, a) in events {
+        if t > now {
+            v.push(Action::Sleep { ticks: t - now });
+            now = t;
+        }
+        v.push(a);
+    }
+    v
+}
+
 fn thread6_1398(j: u32) -> [Action; 2] {
     [Action::LoadRegion { slot: 0, region: None }, Action::LoadRegion { slot: 0, region: Some(1399 + j) }]
 }
@@ -5292,14 +5332,25 @@ fn arena_1428(s: &mut GameState) -> Vec<Action> {
         s.set_word(p, 1, bits | 128);
         out.extend([Action::DeactivateEntity { entity: 1 }, Action::DeactivateEntity { entity: 0 }]);
     } else if bits & 2 == 0 {
-        // The boss-room return: movie 55 counted, 326, entity 1, item 117 for item 116, the
-        // normal camera, the boss-fight refill of instance 12, a fade in, object 3, effects 24 to
-        // 26. The entity and hero moves (their locators are not given) are not built.
+        // The boss-room return (R-0175): under the black fade, in order: movie 55, 326, entity 1, item
+        // 117 for item 116, Queen Fyora at locator 1, the Darkest Faerie at 2, the hero at 3, the
+        // normal camera, the boss-fight refill of instance 12; the fade in; object 3; effects 24 to 26.
         s.set_word(p, 1, bits | 2);
-        s.queue_movie(55);
         s.set(326, true);
         s.remove_all(117);
-        out.extend([Action::ActivateEntity { entity: 1 }, Action::GiveItem { item: 116, count: 1 }, Action::ReturnCamera { preset: -1, release: true }, Action::BossFight { instance: 12 }, Action::FadeIn { seconds: 1.0, wait: false }, Action::InitObjOn { obj: 3, end: false }]);
+        out.extend([
+            Action::FadeOut { seconds: 0.5, wait: true },
+            Action::PlayFmv { movie: 55 },
+            Action::ActivateEntity { entity: 1 },
+            Action::GiveItem { item: 116, count: 1 },
+            Action::MoveEntity { entity: 0, locator: 1, face: true },
+            Action::MoveEntity { entity: 1, locator: 2, face: true },
+            Action::MoveHero { locator: 3 },
+            Action::ReturnCamera { preset: -1, release: true },
+            Action::BossFight { instance: 12 },
+            Action::FadeIn { seconds: 1.0, wait: true },
+            Action::InitObjOn { obj: 3, end: false },
+        ]);
         out.extend((24..=26).map(|slot| Action::StartEffect { slot, camera: false }));
     } else {
         // H17, the taunts (by 330, 329, 328, 327, none: the first three lines then the last two
@@ -8189,6 +8240,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                     out.actions.push(Action::LoadRegion { slot: 2, region: Some(865 + c as u32) });
                 }
             }
+        }
+        // SPEC-0044 864 the vents' inside words.
+        (864, 40) if call.object => {
+            let bit = 1 << (call.index as i32 - 4);
+            let w = state.word(pack, 16);
+            state.set_word(pack, 16, if matches!(call.state, 1 | 2) { w | bit } else { w & !bit });
         }
         // SPEC-0044 864 trigger 1 (the hero inside): stage bit 0, the fight start.
         (864, 1) if call.object && call.state != 0 => state.set_word(pack, 1, state.word(pack, 1) | 1),
@@ -11845,27 +11902,31 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 out.push(Action::DeactivateObj { obj: 1 });
             }
         }
-        // SPEC-0044 864 the stage thread and SPEC-0014 Start positions and Script timeline: level
-        // states 1 and 2 run the six falling stones (objects 18 to 28, 20 ticks apart; the thread
-        // takes no other branch meanwhile) and mark bits 5 and 6; bit 0 (the fight start: stinger 4 and the fade, the
-        // hero at locator 45 and the Chieftain at 46, the boss-fight refill of instance 8, cameras
-        // 8, 10, 11 and 7, line 6, level state 3 cleared; bits 1 and 2); bit 3 (the fight end: level
-        // state 3 held, the hero at 47 and the Chieftain at 46, camera 10, his animations 1 then 2,
-        // entity 44 off, camera 15, 668, cameras 5 and 6; bit 4, bit 2 cleared; 293); with bit 2 and
-        // level state 0 (the boss's event) bit 3 and 293. Cameras 5 and 6 run in turn on this thread
-        // and both animations wait (the spec gives neither's waits). The camera shakes (their values
-        // are not given), the effect at the spot (its id is not given) and the 32-object loop are
-        // not built.
+        // SPEC-0044 864 the stage thread and SPEC-0014 Start scene and Script timeline (R-0159,
+        // R-0160): level states 1 and 2 run the six-drop sequence (the thread takes no other branch
+        // for its 120 ticks) and mark bits 5 and 6; bit 0 the fight start, bit 3 the fight end, with
+        // bit 2 and level state 0 (the boss's event) bit 3 and 293. Words: 12 a chain to start next
+        // tick, 13 fight active, 14 the burst word, 15 the decals done, 16 the vents the hero is in.
+        // While the fight is active the module stops effects 18 to 49 on every tick, so the chain's
+        // effects never show and are left out. Not built: the crusher and lava bubble threads.
         864 => {
             let b = state.word(pack, 1);
             let has = |n: u32| b & (1 << n) != 0;
-            if state.word(pack, 6) == 0 {
+            // The vents' shared callback: 1 damage a tick to a hero inside any sphere during any burst.
+            if state.word(pack, 13) != 0 && state.word(pack, 14) != 0 && state.word(pack, 16) != 0 {
+                out.push(Action::DamageHero { amount: 1 });
+            }
+            if state.word(pack, 12) != 0 {
+                state.set_word(pack, 12, 0);
+                let first = state.word(pack, 15) == 0;
+                state.set_word(pack, 15, 1);
+                out.extend(drops_864(first));
+            } else if state.word(pack, 6) == 0 {
                 let stones = |state: &mut GameState, bit: i32| {
                     state.set_word(pack, 1, b | bit);
                     state.set_word(pack, 6, 1);
-                    let mut v: Vec<Action> = [18, 20, 22, 24, 26, 28].into_iter().flat_map(|obj| [Action::PlayAnim { obj, speed: 3.0, wait: false }, Action::Sleep { ticks: 20 }]).collect();
-                    v.push(Action::Bits { word: 6, set: 0, clear: 1 });
-                    v
+                    state.set_word(pack, 12, 1);
+                    vec![Action::Sleep { ticks: 120 }, Action::Bits { word: 6, set: 0, clear: 1 }]
                 };
                 if state.level(1) && !has(5) {
                     out.extend(stones(state, 32));
@@ -11874,23 +11935,38 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 } else if has(0) && !has(1) {
                     state.set_word(pack, 1, b | 6);
                     state.set_word(pack, 6, 1);
-                    // Level state 3, which holds the boss, clears once camera 11 has ended
-                    // (SPEC-0014 Encounter flow, pack 864).
+                    state.set_word(pack, 13, 1);
+                    let tint = [255, 64, 32];
                     out.extend([
                         Action::HoldHero,
                         Action::PlayStinger { id: 4, volume: 1.0 },
-                        Action::FadeOut { seconds: FADE, wait: true },
-                        Action::MoveHero { locator: 45 },
-                        // The boss stays free: level state 3 is what holds it.
-                        Action::MoveEntityFree { entity: 44, locator: 46, face: true },
-                        Action::BossFight { instance: 8 },
+                        Action::FadeColour { out: true, colour: tint, seconds: FADE, wait: true },
                         Action::LetterBox { on: true, seconds: 0.0, wait: false },
+                        Action::MoveHero { locator: 45 },
+                        // The boss stays free: level state 3 is what holds it (its hold plays
+                        // idle 7).
+                        Action::MoveEntityFree { entity: 44, locator: 46, face: true },
+                        Action::Equip { on: true },
+                        Action::BossFight { instance: 8 },
+                        Action::FadeColour { out: false, colour: tint, seconds: FADE, wait: false },
                         Action::PlayCamera { track: 8, wait: false, end: 1, speed: 1.0 },
-                        Action::FadeIn { seconds: FADE, wait: true },
                         Action::Message { line: 6 },
                         Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                        Action::Sleep { ticks: 30 },
+                        Action::EntityAnim { entity: 44, anim: 0, looped: false, wait: true },
+                        Action::ReleaseEntity { entity: 44 },
+                        Action::CameraShakeMode { kind: 2, duration: 3.0, strength: 1.5 },
+                        Action::Bits { word: 12, set: 1, clear: 0 },
                         Action::PlayCamera { track: 11, wait: true, end: 1, speed: 1.0 },
-                        Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
+                        Action::Sleep { ticks: 30 },
+                        Action::PlayCamera { track: 7, wait: false, end: 1, speed: 0.85 },
+                        Action::Sleep { ticks: 30 },
+                    ]);
+                    // The walkway helper: the 23 slabs sink, one every 0.1 s.
+                    out.extend((70..=92).flat_map(|obj| [Action::PlayAnim { obj, speed: 1.0, wait: false }, Action::Sleep { ticks: 6 }]));
+                    out.extend([
+                        Action::WaitObj { obj: 92 },
+                        Action::ReturnCamera { preset: -1, release: true },
                         Action::LetterBox { on: false, seconds: 1.0, wait: false },
                         Action::ReturnCamera { preset: -1, release: true },
                         Action::LevelState { flag: 3, on: false },
@@ -11899,24 +11975,42 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 } else if has(3) && !has(4) {
                     state.set_word(pack, 1, (b | 16) & !4);
                     state.set_word(pack, 6, 1);
-                    state.set(293, true);
+                    let shake = Action::CameraShakeMode { kind: 0, duration: 1.0, strength: 3.0 };
+                    let white = [255, 255, 255];
                     out.extend([
                         Action::HoldHero,
                         Action::LevelState { flag: 3, on: true },
+                        Action::FadeColour { out: true, colour: white, seconds: FADE, wait: true },
+                        Action::LetterBox { on: true, seconds: 0.0, wait: false },
                         Action::MoveHero { locator: 47 },
                         Action::MoveEntity { entity: 44, locator: 46, face: true },
+                        Action::FadeColour { out: false, colour: white, seconds: FADE, wait: false },
                         Action::PlayCamera { track: 10, wait: false, end: 1, speed: 1.0 },
+                        Action::Sleep { ticks: 30 },
                         Action::EntityAnim { entity: 44, anim: 1, looped: false, wait: true },
+                        Action::CameraShakeMode { kind: 0, duration: 2.0, strength: 3.0 },
                         Action::EntityAnim { entity: 44, anim: 2, looped: false, wait: true },
+                        // The falling-block helper, inline.
+                        Action::SetFlag { flag: 668, on: true },
+                        shake.clone(),
+                        Action::PlayCamera { track: 5, wait: false, end: 1, speed: 1.0 },
+                        Action::PlayAnim { obj: 15, speed: 1.0, wait: true },
+                        shake,
+                        Action::PlayCamera { track: 6, wait: false, end: 1, speed: 1.0 },
+                        Action::PlayAnim { obj: 16, speed: 1.0, wait: true },
+                        Action::Sleep { ticks: 180 },
                         Action::DeactivateEntity { entity: 44 },
                         Action::LevelState { flag: 3, on: false },
+                        Action::StartEffect { slot: 35, camera: false },
                         Action::PlayCamera { track: 15, wait: true, end: 1, speed: 1.0 },
-                        Action::SetFlag { flag: 668, on: true },
-                        Action::PlayCamera { track: 5, wait: true, end: 1, speed: 1.0 },
-                        Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 },
+                        Action::Sleep { ticks: 90 },
+                        Action::LetterBox { on: false, seconds: 1.0, wait: false },
                         Action::ReturnCamera { preset: -1, release: true },
-                        Action::Bits { word: 6, set: 0, clear: 1 },
+                        Action::Bits { word: 13, set: 0, clear: 1 },
                     ]);
+                    // The "32-object" sequence: placed effects 18 to 49, started in one tick.
+                    out.extend((18..=49).map(|slot| Action::StartEffect { slot, camera: false }));
+                    out.extend([Action::SetFlag { flag: 293, on: true }, Action::Bits { word: 6, set: 0, clear: 1 }]);
                 } else if !state.flag(293) && has(2) && !has(3) && state.level(0) {
                     state.set_word(pack, 1, b | 8);
                     state.set(293, true);
@@ -12168,6 +12262,9 @@ pub fn on_update(pack: u32, state: &mut GameState, dialog: bool) -> Vec<Action> 
                 state.set_word(pack, 2, 0);
                 out.push(Action::StopAnim { obj: 2 });
             }
+            // R-0176: on every tick effects 0 to 7 follow locators 0 to 7 of object 2, so they sway
+            // only while thread A's loop runs.
+            out.push(Action::EffectsToObjLocators { count: 8, host: 2 });
             let l = |n| state.level(n);
             if l(2) && !l(3) {
                 state.queue_movie(46);
@@ -18014,10 +18111,13 @@ mod tests {
         assert!(start.contains(&Action::Message { line: 6 }) && s.level(3));
         // SPEC-0014 Start positions: the placements under the fade, before the cameras.
         let at = |v: &[Action], a: Action| v.iter().position(|x| *x == a).unwrap();
-        let fade = at(&start, Action::FadeOut { seconds: FADE, wait: true });
+        let fade = at(&start, Action::FadeColour { out: true, colour: [255, 64, 32], seconds: FADE, wait: true });
         assert!(at(&start, Action::HoldHero) < fade && start.contains(&Action::PlayStinger { id: 4, volume: 1.0 }));
         let placed = at(&start, Action::MoveEntityFree { entity: 44, locator: 46, face: true });
-        assert!(fade < at(&start, Action::MoveHero { locator: 45 }) && placed < at(&start, Action::FadeIn { seconds: FADE, wait: true }));
+        let tint = [255, 64, 32];
+        assert!(fade < at(&start, Action::MoveHero { locator: 45 }) && placed < at(&start, Action::FadeColour { out: false, colour: tint, seconds: FADE, wait: false }));
+        assert!(start.contains(&Action::CameraShakeMode { kind: 2, duration: 3.0, strength: 1.5 }));
+        assert_eq!(start.iter().filter(|a| matches!(a, Action::PlayAnim { obj: 70..=92, .. })).count(), 23);
         let cam = start.iter().position(|a| matches!(a, Action::PlayCamera { track: 11, .. })).unwrap();
         assert!(start[cam..].contains(&Action::LevelState { flag: 3, on: false }));
         s.set_level(3, false);
@@ -18034,15 +18134,16 @@ mod tests {
         let second = at(&end, Action::EntityAnim { entity: 44, anim: 2, looped: false, wait: true });
         let off = at(&end, Action::DeactivateEntity { entity: 44 });
         assert!(hold < at(&end, Action::MoveHero { locator: 47 }) && hold < moved && moved < first && first < second && second < off);
-        assert!(off < at(&end, Action::SetFlag { flag: 668, on: true }));
-        // SPEC-0044: level state 2 starts the six stones once, 20 ticks apart, and holds the thread.
+        assert!(second < at(&end, Action::SetFlag { flag: 668, on: true }));
+        assert_eq!(end.iter().filter(|a| matches!(a, Action::StartEffect { slot: 18..=49, .. })).count(), 33);
+        // SPEC-0044: level state 2 starts the six drops once, 20 ticks apart, and holds the thread.
         let mut t = GameState::default();
         on_init(864, &mut t);
         t.set_level(2, true);
         t.set_level(0, true);
+        assert_eq!(on_update(864, &mut t, false)[0], Action::Sleep { ticks: 120 });
         let stones = on_update(864, &mut t, false);
-        assert_eq!(stones.iter().filter_map(|a| if let Action::PlayAnim { obj, speed, wait: false } = a { (*speed == 3.0).then_some(*obj) } else { None }).collect::<Vec<_>>(), vec![18, 20, 22, 24, 26, 28]);
-        assert_eq!(stones[1], Action::Sleep { ticks: 20 });
+        assert_eq!(stones.iter().filter_map(|a| if let Action::PlayAnim { obj, speed, wait: false } = a { (*speed == 3.0 && *obj % 2 == 0).then_some(*obj) } else { None }).collect::<Vec<_>>(), vec![18, 20, 22, 24, 26, 28]);
         assert!(on_update(864, &mut t, false).is_empty());
         t.set_word(864, 6, 0);
         assert!(!on_update(864, &mut t, false).iter().any(|a| matches!(a, Action::PlayAnim { .. })));
@@ -18407,7 +18508,7 @@ mod tests {
         assert!(s.level(5) && s.level(1) && s.movies.contains(&46));
         s.set_level(0, true);
         assert!(on_update(989, &mut s, false).contains(&Action::ReplaceExterior { slot: 78, plane: -1 }));
-        assert!(s.flag(298) && on_update(989, &mut s, false).is_empty());
+        assert!(s.flag(298) && on_update(989, &mut s, false) == vec![Action::EffectsToObjLocators { count: 8, host: 2 }]);
     }
 
     #[test]
