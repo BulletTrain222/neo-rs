@@ -15224,14 +15224,15 @@ impl Play {
     /// SPEC-0036 Status display and cues for the hero and the common enemies: a status that
     /// became active this tick runs the display start (codes 8 to 10 play their one-shot), the
     /// rotation steps, the shown status's effect follows the character (curse 1.5 above), and a
-    /// stun that ended plays 0xCD. The effects sit at the character's origin: the main attach
-    /// point is not identified (R-0045).
+    /// stun that ended plays 0xCD. The effects sit at the character's main attach point, point 7
+    /// (SPEC-0034 5.4; R-0045); fire's two more instances at points 0 and 1 are not built.
     fn status_display_step(&mut self) {
         let table = self.effect_table.clone();
-        let mut who: Vec<(u64, [bool; 14], [f32; 3])> = vec![(Self::HERO_DISPLAY, std::array::from_fn(|c| self.statuses.active(c)), self.loco.position())];
+        let hero_point = self.hero_attach(7).map(|a| a.t);
+        let mut who: Vec<(u64, [bool; 14], [f32; 3])> = vec![(Self::HERO_DISPLAY, std::array::from_fn(|c| self.statuses.active(c)), hero_point.unwrap_or(self.loco.position()))];
         for c in &self.characters {
             if let Some(e) = c.enemy.as_ref().filter(|e| !e.is_dead() && !c.inactive) {
-                who.push((c.id, std::array::from_fn(|k| e.status(k)), c.position));
+                who.push((c.id, std::array::from_fn(|k| e.status(k)), Self::attach_point(c, 7).unwrap_or(c.position)));
             }
         }
         let live: std::collections::HashSet<u64> = who.iter().map(|w| w.0).collect();

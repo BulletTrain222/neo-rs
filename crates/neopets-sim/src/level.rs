@@ -11075,9 +11075,12 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 out.actions.push(Action::Message { line: n });
             }
         }
-        // 1171 T1 (trigger 1): the exterior replacement load of eW 126. The blackboard value 120
-        // for world 126 is not added: its message type is not given (R-0053).
-        (1171, 1) if call.object && call.state == 1 => out.actions.push(Action::ReplaceExterior { slot: 126, plane: -1 }),
+        // 1171 T1 (trigger 1): the exterior replacement load of eW 126, with value 120 for world 126
+        // under message type 2 (the arrival tag 1173's activate-world reads; R-0053).
+        (1171, 1) if call.object && call.state == 1 => {
+            state.blackboard.insert((2, 126), 120);
+            out.actions.push(Action::ReplaceExterior { slot: 126, plane: -1 });
+        }
         // SPEC-0039 1244 trigger 0 (handler 1): the first fire with 272 clear in swap mode 2, the
         // story switch to Roberta at locator 16 and her scene; it ends locked to Roberta (mode
         // 1). NeedHeroAlive and the weapon sheathe sound are not reproduced.
@@ -14228,11 +14231,12 @@ pub fn on_activate(pack: u32, state: &mut GameState) -> Vec<Action> {
             };
             let mut actions: Vec<Action> = locator.map(|locator| Action::MoveHero { locator }).into_iter().collect();
             // SPEC-0021 Item 36: the stage-6 return to locator 28 grants one Rope Gun when flag 6
-            // (Free Tor's Farm) is set (the scene's staging is not reproduced).
-            if locator == Some(28) && state.flag(6) {
-                actions.push(Action::GiveItem { item: 36, count: 1 });
-            }
+            // (Free Tor's Farm) is set, in its scene after the slots.
+            let rope_scene = locator == Some(28) && state.flag(6);
             actions.extend(farm_slots(state, message == 10));
+            if rope_scene {
+                actions.extend(rope_gun_scene());
+            }
             // The talk thread's round-up flags: one already set when the world becomes current
             // counts as seen, so only a flag that rises during the visit plays its talk (the
             // spec's "first time it is seen set in this visit"; R-0025).
@@ -14766,7 +14770,7 @@ fn serving_1163(roll: i32) -> Vec<Action> {
 }
 
 /// SPEC-0045 1163 proximity routines: the keeper (0), entity 7 (with the serving scene under flags
-/// 25 and 635) and Sir Harlag (15, with his cutscene as its lines).
+/// 25 and 635) and Sir Harlag (15, with his cutscene).
 fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
     let three = |b: u16| cycle(&[b, b + 1, b + 2]);
     let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
@@ -14840,7 +14844,7 @@ fn kitchen_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
                 talk(rot.pick(1, &three(84)))
             } else if s.flag(194) {
                 s.set(195, true);
-                (21..=26).map(|line| Action::Converse { entity: 15, line }).collect()
+                harlag_scene()
             } else {
                 talk(rot.pick(2, &three(87)))
             }
@@ -15374,9 +15378,44 @@ fn castle_routine(e: usize) -> Option<u8> {
     })
 }
 
-/// SPEC-0045 1098 proximity routines. The two story scenes (entity 39's cameras 20 to 24 with
-/// lines 30 to 41, and the trigger-10 scene of lines 19 to 23) are shown as their lines in
-/// order, without their cameras.
+/// SPEC-0045 1098 entity 39's scene: each of lines 30 to 41 follows its camera.
+fn castle_scene_39() -> Vec<Action> {
+    use Action::*;
+    let mut v = vec![HoldHero, FadeOut { seconds: 0.5, wait: true }, Equip { on: false }, LetterBox { on: true, seconds: 0.0, wait: false }];
+    v.extend([MoveHero { locator: 80 }, FadeIn { seconds: 0.5, wait: false }, camera(20), Sleep { ticks: 20 }]);
+    for (line, track) in (30u16..=41).zip([22, 21, 23, 21, 22, 24, 22, 21, 23, 21, 22, 21]) {
+        v.extend([camera(track), Converse { entity: 39, line }]);
+    }
+    v.extend([FadeOut { seconds: 0.5, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, release_camera(), FadeIn { seconds: 0.5, wait: false }]);
+    v
+}
+
+/// SPEC-0045 1163's Harlag cutscene: lines 21 to 26 under cameras 6 and 5 in turn.
+fn harlag_scene() -> Vec<Action> {
+    use Action::*;
+    let mut v = vec![HoldHero, FadeOut { seconds: 0.5, wait: true }, LetterBox { on: true, seconds: 0.0, wait: false }, MoveHero { locator: 27 }];
+    v.extend([EntityAnim { entity: 15, anim: 67, looped: true, wait: false }, FadeIn { seconds: 0.5, wait: false }, WalkHero { locator: 26, wait: true, orient: false }]);
+    v.extend([PlayCamera { track: 4, wait: true, end: 1, speed: 1.0 }, wait(1.0), FadeOut { seconds: 0.7, wait: true }, camera(6), FadeIn { seconds: 0.4, wait: false }]);
+    v.extend([Converse { entity: 15, line: 21 }, camera(5), EntityAnim { entity: 15, anim: 71, looped: false, wait: true }, Converse { entity: 15, line: 22 }]);
+    v.extend([camera(6), Converse { entity: 15, line: 23 }, camera(5), Converse { entity: 15, line: 24 }, camera(6), Converse { entity: 15, line: 25 }, camera(5), Converse { entity: 15, line: 26 }]);
+    v.extend([FadeOut { seconds: 0.5, wait: true }, LetterBox { on: false, seconds: 0.0, wait: false }, release_camera(), ReleaseEntity { entity: 15 }, FadeIn { seconds: 0.5, wait: false }]);
+    v
+}
+
+/// SPEC-0045 909 stage 6 with no Rope Gun: after the fourth slot's set, the hero's second target,
+/// cameras 21 and 23 to 26 with lines 175 to 179 (the spec lists them together: the pairing is in
+/// order here) and item 36.
+fn rope_gun_scene() -> Vec<Action> {
+    use Action::*;
+    let mut v = vec![WaitLoads, HoldHero, WalkHero { locator: 27, wait: true, orient: false }];
+    for (line, track) in (175u16..=179).zip([21, 23, 24, 25, 26]) {
+        v.extend([camera(track), Message { line }]);
+    }
+    v.extend([GiveItem { item: 36, count: 1 }, release_camera()]);
+    v
+}
+
+/// SPEC-0045 1098 proximity routines. Entity 39's scene and the trigger-10 scene are full cutscenes.
 fn castle_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
     let three = |b: u16| cycle(&[b, b + 1, b + 2]);
     let talk = |line: Option<u16>| line.map(|line| vec![Action::Talk { line }]).unwrap_or_default();
@@ -15389,7 +15428,7 @@ fn castle_talk(r: u8, s: &mut GameState, rot: &mut Rotation) -> Vec<Action> {
         0 if s.flag(196) => talk(rot.pick(0, &three(0))),
         0 => {
             s.set(196, true);
-            (30..=41).map(|line| Action::Converse { entity: 39, line }).collect()
+            castle_scene_39()
         }
         1 => {
             if s.flag(204) {
