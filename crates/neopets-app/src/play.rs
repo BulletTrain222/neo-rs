@@ -3127,6 +3127,7 @@ impl Play {
                     self.open_line(line);
                     return Some(Wait::Dialog);
                 }
+                Action::HeroIdle => self.loco.enter_state(hero_states::STANCE, 0),
                 Action::MessageNoWait { line } => {
                     self.talk_partner = None;
                     self.talk_with = None;
@@ -5873,8 +5874,24 @@ impl Play {
                     step.request = Some(73);
                 }
             }
+        } else if ledge_state == ledge::CLIMB_RISE && touched {
+            // State 47's touched flag: still rising, state 7 phase 0; in the air, phase 5; else state 1.
+            if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
+                println!("      state 47 touched on tick {} sub {ledge_sub}", self.ticks);
+            }
+            let (vy, gap) = (self.loco.body.velocity[1], self.loco.body.gap);
+            self.leave_ledge(if vy > 0.0 || gap > 0.0 { hero_states::JUMP } else { hero_states::STANCE });
+            if vy <= 0.0 && gap > 0.0 {
+                self.loco.phase = 5;
+            } else if vy > 0.0 {
+                self.loco.phase = 0;
+            }
+            return true;
         } else if (ledge_state == ledge::CLIMB_FALL && ledge_sub == 2) || (ledge_state == ledge::CLIMB_RISE && matches!(ledge_sub, 1 | 2)) {
             if self.edge_obstacle(hero) {
+                if std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
+                    println!("      state {ledge_state} obstacle on tick {} sub {ledge_sub}", self.ticks);
+                }
                 if ledge_state == ledge::CLIMB_RISE {
                     self.loco.body.velocity[0] -= 2.0 * f[0];
                     self.loco.body.velocity[2] -= 2.0 * f[2];
@@ -6052,7 +6069,11 @@ impl Play {
             // t is 0 at the wall's bottom and H at its top edge: top - depth - 2H < y < top - 0.3.
             let hit = a.abs() <= r && (-r..=x.length + r).contains(&s) && t < x.height - 0.3 && t > -2.0 * HERO_HEIGHT;
             let d = [x.start[0] - held.start[0], x.start[1] - held.start[1], x.start[2] - held.start[2]];
-            hit && !(same && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= 16.0)
+            let block = hit && !(same && d[0] * d[0] + d[1] * d[1] + d[2] * d[2] <= 16.0);
+            if block && std::env::var_os("NEOPETS_TRACE_LEDGES").is_some() {
+                println!("      obstacle: kind {} entry {} (held {}) own {} a {a:.3} s {s:.3} L {:.3} t {t:.3} H {:.3} start {:?} held start {:?} face {:?}", x.kind, x.entry, held.entry, x.own, x.length, x.height, x.start, held.start, x.face);
+            }
+            block
         })
     }
 

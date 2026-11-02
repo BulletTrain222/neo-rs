@@ -5382,6 +5382,23 @@ fn play_trace(
                 }
             }
         }
+        // NEOPETS_TRACE_TOWARD="tick:x,z": from that tick the stick points at (x, z), through the camera (diagnostic).
+        if let Some((k, x, z)) = std::env::var("NEOPETS_TRACE_TOWARD").ok().as_deref().and_then(|v| {
+            let (k, p) = v.split_once(':')?;
+            let (x, z) = p.split_once(',')?;
+            Some((k.trim().parse::<u64>().ok()?, x.trim().parse::<f32>().ok()?, z.trim().parse::<f32>().ok()?))
+        }) {
+            if play.ticks >= k {
+                let h = play.loco.position();
+                let (e, c) = (play.camera.eye, play.camera.focus);
+                let (fx, fz) = (c[0] - e[0], c[2] - e[2]);
+                let l = fx.hypot(fz).max(1e-6);
+                let (fx, fz) = (fx / l, fz / l);
+                let (dx, dz) = (x - h[0], z - h[2]);
+                let d = dx.hypot(dz).max(1e-6);
+                (forward, side) = ((dx * fx + dz * fz) / d, (dx * -fz + dz * fx) / d);
+            }
+        }
         // NEOPETS_TRACE_STICK="tick:f,s;tick:f,s;...": from each tick on, the raw stick values
         // (forward, side) replace the route's, until the next entry; "tick:-" returns to the
         // route. NEOPETS_TRACE_SQUARE="a,b,...": Square press edges on these ticks.

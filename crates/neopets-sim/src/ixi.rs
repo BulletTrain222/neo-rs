@@ -816,6 +816,34 @@ mod tests {
         assert_ne!(k.state, State::Hold);
     }
 
+    /// SPEC-0062 Forcing the rarely seen states: the wide swipe and the buck kick.
+    #[test]
+    fn wide_swipe_and_buck_kick_vectors() {
+        let w = words();
+        let mut rng = Rng::seeded(6);
+        let valid = |_: Vec3| true;
+        let no = |_: u16| false;
+        let mut k = Ixi::new(1, &w);
+        k.cool = [100; 5];
+        k.cool[WIDE] = 0;
+        let mut v = view(&valid, &no, 100);
+        v.hero = [0.0, 0.0, 6.0];
+        v.hero_state = 32;
+        let hit = (0..200).any(|_| {
+            k.state = State::Idle;
+            k.cool[WIDE] = 0;
+            k.tick(&v, &w, &mut rng);
+            k.state == State::WideSwipe
+        });
+        assert!(hit, "{:?}", k.state);
+        let mut k = Ixi::new(1, &w);
+        k.cool = [100; 5];
+        let mut v = view(&valid, &no, 100);
+        v.hero = [0.0, 0.0, -3.0];
+        k.tick(&v, &w, &mut rng);
+        assert_eq!(k.state, State::BuckKick);
+    }
+
     #[test]
     fn attacks_hits_and_charge() {
         let w = words();

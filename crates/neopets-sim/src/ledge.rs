@@ -3,9 +3,8 @@
 //! the ledge-drop edge test, and the hero states 30 (hang from a ledge), 35 (climb up from a
 //! fall), 37 (drop off an edge into a hang) and 47 (climb up while rising).
 //!
-//! The host runs state 30's ladder check, the obstacle probes and state 38's hand-over. Not built: the
-//! touched-flag branch of state 47 (the wall contact is off in these states), the busy gate of the
-//! drop test, and the edge offer's replace rule beyond the facing test.
+//! The host runs state 30's ladder check, the obstacle probes, state 47's touched flag and state 38's
+//! hand-over. Not built: the busy gate of the drop test, and the edge offer's replace rule beyond the facing test.
 
 use crate::hero::Vec3;
 use crate::motion::HERO_HEIGHT;

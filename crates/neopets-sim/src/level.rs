@@ -394,6 +394,8 @@ pub enum Action {
     /// RegisterScriptAnimatedTrigger (row 266): record `index` of host object `host`'s inline
     /// trigger list to `routine`; the volume moves with the host's pose.
     RegisterAnimTrigger { host: usize, index: u16, routine: u8 },
+    /// The hero returned to idle (state 1).
+    HeroIdle,
     /// MoveObjToLocator (link false): the object's rest translation becomes the locator's point, once.
     MoveObjLocator { obj: usize, locator: usize },
     /// The next step of a plate scene (`plate_step`): the host reads the plate's live state words.
@@ -15059,7 +15061,7 @@ pub fn plate_triggers(pack: u32, routine: u8) -> (u16, Option<u16>) {
 /// SPEC-0041's plate scenes, flat call lists. `own` and `other` are the live state words of the plate's
 /// record and of the other plate. Phase 0 the start and Part A, 1 the re-read after the first
 /// animation (released, 3 or 0, is a contact of at most 18 ticks: the quick exit), 2 Part B after the
-/// wait. Not built: the hero-to-idle call of 1247's inside parts.
+/// wait.
 pub fn plate_step(pack: u32, routine: u8, phase: u8, own: u8, other: u8, s: &mut GameState) -> Vec<Action> {
     let cam = |track: usize| Action::PlayCamera { track, wait: false, end: 1, speed: 1.0 };
     let look = |track: usize, obj: usize| Action::PlayTarget { track, wait: false, end: 1, speed: 1.0, target: CameraTarget::Object(obj) };
@@ -15122,6 +15124,9 @@ pub fn plate_step(pack: u32, routine: u8, phase: u8, own: u8, other: u8, s: &mut
                 v.push(next(1));
             }
             1 if held => {
+                if pack == 1247 {
+                    v.push(Action::HeroIdle);
+                }
                 v.extend(t.inside);
                 wait_then_b(&mut v);
             }
@@ -15177,6 +15182,7 @@ pub fn plate_step(pack: u32, routine: u8, phase: u8, own: u8, other: u8, s: &mut
             }
         }
         1 if held => {
+            v.push(Action::HeroIdle);
             v.extend([cam(9), wait_anim(16), Action::PlayCamera { track: 6, wait: true, end: 1, speed: 1.0 }, wait_anim(18), normal]);
             wait_then_b(&mut v);
         }

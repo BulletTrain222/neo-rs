@@ -344,6 +344,12 @@ impl King {
                 self.state = State::Roll(if rng.range(0, 1) == 0 { 9 } else { 10 });
             }
         }
+        // The jump chooser runs every tick as well (the leash; SPEC-0019): a vector test found it only on
+        // the edge.
+        let home_d = hdist(self.home, v.position);
+        if self.free() && self.ready && d < w.jump_distance && home_d > 15.0 && (roll(rng) as f32) < Self::jump_chance(w, home_d) {
+            self.state = State::Jump { part: 0, velocity: [0.0; 3] };
+        }
         // The attacks: boomerang, flame wave, swing, lunge, combo.
         let open = |s: &Self| s.free() && s.ready;
         if open(self) && self.counters[BOOMERANG] > w.boomerang_cooldown * 60 && d > w.boomerang_range.0 && d < w.boomerang_range.1 && roll(rng) < w.boomerang_chance[p] {
@@ -825,6 +831,58 @@ mod tests {
         }
         assert_eq!(k.state, State::Swing(0x17));
         assert_eq!(k.counters[SWING_C], 0);
+    }
+
+    /// SPEC-0062 Forcing the rarely seen states: the King's other rows, with the draws left to the seed.
+    #[test]
+    fn the_rare_state_vectors() {
+        let w = words();
+        let mut rng = Rng::seeded(5);
+        let fresh = || {
+            let mut k = King::new([0.0; 3]);
+            (k.state, k.ready, k.started) = (State::Idle, true, true);
+            k.counters = [0; 5];
+            k
+        };
+        let reach = |k: &mut King, v: &View<'static>, rng: &mut Rng, want: &dyn Fn(&State) -> bool| (0..200).any(|_| {
+            k.tick(v, &w, rng);
+            want(&k.state)
+        });
+        let mut k = fresh();
+        k.counters[LUNGE_C] = 481;
+        assert!(reach(&mut k, &view([6.0, 0.0, 0.0], 100), &mut rng, &|s| *s == State::Lunge), "{:?}", k.state);
+        let mut k = fresh();
+        k.counters[COMBO_C] = 601;
+        assert!(reach(&mut k, &view([6.0, 0.0, 0.0], 100), &mut rng, &|s| matches!(s, State::Combo(_))), "{:?}", k.state);
+        // The leash: 21.0 from home, the hero 4.0 from the King.
+        let mut k = fresh();
+        let mut v = view([25.0, 0.0, 0.0], 100);
+        v.position = [21.0, 0.0, 0.0];
+        assert!(reach(&mut k, &v, &mut rng, &|s| matches!(s, State::Jump { .. })), "{:?}", k.state);
+        // The hero's attack edge: the block with the ready flag; with a boomerang out only the roll.
+        let toggled = |k: &mut King, rng: &mut Rng, want: &dyn Fn(&State) -> bool| (0..200).any(|n| {
+            let mut v = view([20.0, 0.0, 0.0], 100);
+            v.hero_attacking = n % 2 == 0;
+            k.tick(&v, &w, rng);
+            let hit = want(&k.state);
+            if !hit {
+                k.state = State::Idle;
+            }
+            hit
+        });
+        let mut k = fresh();
+        assert!(toggled(&mut k, &mut rng, &|s| matches!(s, State::Block { .. })));
+        let mut k = fresh();
+        k.ready = false;
+        assert!(toggled(&mut k, &mut rng, &|s| matches!(s, State::Roll(_))));
+        // The flame wave: phase 2 only.
+        let mut k = fresh();
+        k.phase = 1;
+        k.counters[FLAME] = 601;
+        assert!(reach(&mut k, &view([12.0, 0.0, 0.0], 70), &mut rng, &|s| matches!(s, State::Flame { .. })), "{:?}", k.state);
+        let mut k = fresh();
+        k.counters[FLAME] = 601;
+        assert!(!reach(&mut k, &view([12.0, 0.0, 0.0], 100), &mut rng, &|s| matches!(s, State::Flame { .. })));
     }
 
     #[test]
