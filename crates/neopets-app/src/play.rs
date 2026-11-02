@@ -557,14 +557,72 @@ impl World {
 /// The patrol and path walks, simplified as the script walk: straight toward the point at the
 /// townsfolk walk speed (0.08337 a tick, move type 0) on the ground, steering with weight 0.3.
 /// The navigation mesh and root-motion travel are not used.
-fn walk_toward(c: &mut Character, to: [f32; 3], world: &World) {
-    let (dx, dz) = (to[0] - c.position[0], to[2] - c.position[2]);
+/// One tick of an NPC's walk (SPEC-0056 Navigation step, Travel by root motion, Wall confinement):
+/// the navigation step over its mesh steers it, and the motion tick moves it by the walk clip's
+/// root step, kept on the mesh. A clip with no root travel moves at `speed` instead, so a walk
+/// always ends. A character with no walker walks straight at `speed`.
+fn walk_toward(c: &mut Character, to: [f32; 3], speed: f32, hero: [f32; 3], world: &World) {
+    let root = c.root_step;
+    let Some(wk) = c.walker.as_mut() else {
+        let (dx, dz) = (to[0] - c.position[0], to[2] - c.position[2]);
+        let d = dx.hypot(dz).max(1e-6);
+        c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
+        let s = speed.min(d) / d;
+        let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
+        let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
+        c.position = [x, y.unwrap_or(c.position[1]), z];
+        return;
+    };
+    wk.set_target();
+    let gait = wk.nav_step(&world.navmeshes, to, hero);
+    let moving = root[0].hypot(root[2]) > 1e-4;
+    let ground = &world.ground;
+    // An arrival (a fresh block is one) stands this tick. Standing against the edge must not read
+    // as a new block, or the walk never goes on (this build's reading; R-0194).
+    let idle = gait == neopets_sim::walker::Gait::Idle;
+    let step = if idle { [0.0; 3] } else if moving { root } else { [0.0, 0.0, speed] };
+    wk.motion_tick(step, &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
+    if idle && wk.fresh_block() {
+        wk.blocked_timer = 119;
+    }
+    c.position = wk.position();
+    c.facing = wk.facing;
+}
+
+/// SPEC-0056 Walker interruptions, Hero in front (classes 23 to 26 and 35): with no hold, the hero
+/// within 6.0 in the walker's front half starts one; it ends with the hero past 12.0 or behind.
+/// True while holding: idle for 180 ticks, then id 30, then idle. A hero under script control
+/// holds nobody here (a scene that waits on the walk has no one to move him).
+fn walk_held(c: &mut Character, hero: [f32; 3], scene: bool) -> bool {
+    let (dx, dz) = (hero[0] - c.position[0], hero[2] - c.position[2]);
     let d = dx.hypot(dz).max(1e-6);
-    c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
-    let s = 0.083_37f32.min(d) / d;
-    let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
-    let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
-    c.position = [x, y.unwrap_or(c.position[1]), z];
+    let front = (dx * c.facing[0] + dz * c.facing[2]) / d;
+    match c.walk_hold {
+        None if !scene && d < 6.0 && front > 0.0 && c.townsfolk.is_some() => c.walk_hold = Some(0),
+        Some(_) if scene || d > 12.0 || front < -0.1 => {
+            c.walk_hold = None;
+            return false;
+        }
+        None => return false,
+        _ => {}
+    }
+    let k = c.walk_hold.unwrap_or(0);
+    c.walk_hold = Some(k + 1);
+    let clip = c.anim.clip_state();
+    if k < 180 {
+        if clip.action != 0 {
+            c.anim.play(0);
+        }
+    } else if k == 180 {
+        if c.anim.has(30) {
+            c.anim.play(30);
+        }
+    } else if clip.action != 30 || clip.progress >= 0.99 {
+        if clip.action != 0 {
+            c.anim.play(0);
+        }
+    }
+    true
 }
 
 /// A world point in an owner object's rest frame: rest x inverse(current) applied to p (the
@@ -742,6 +800,11 @@ pub struct Character {
     /// volumes (radius, length) of the row (SPEC-0029 Behavior 10.2).
     pub enemy: Option<Enemy>,
     weapons: [(f32, f32); 5],
+    /// The hold of a walker with the hero in front (ticks so far), the ticks on this walk's point
+    /// (this build's guard), and whether its townsfolk mesh was assigned.
+    walk_hold: Option<u32>,
+    walk_ticks: u32,
+    meshed: bool,
     /// The placement's colour bytes (the talk partner's frame colour).
     colour: [u8; 3],
     /// The record's ordinal in its region and its monster type (SPEC-0038 state 9's lookup;
@@ -1278,6 +1341,10 @@ pub struct Play {
     /// The live Mote power-attack objects and their boot words (SPEC-0036 Charm attack hits).
     /// The Undead Draik's spit flight effects (fire, ice).
     spit_fx: [Option<usize>; 2],
+    /// NEOPETS_TRACE_NPCWALK's counters by character id: last position, ticks moving, distance,
+    /// steps crossing a wall, ticks off every kind-1 mesh, the longest still stretch while a walk
+    /// was asked for, and the current stretch.
+    npc_audit: HashMap<u64, ([f32; 3], u32, f32, u32, u32, u32, u32)>,
     /// The Darkest Faerie's cast glow.
     faerie_glow: Option<usize>,
     /// Sisters a navmesh edge turned back last tick (SPEC-0011 the blocked word).
@@ -2040,6 +2107,7 @@ impl Play {
             magic,
             last_mote: String::new(),
             spit_fx: [None; 2],
+            npc_audit: Default::default(),
             faerie_glow: None,
             sisters_blocked: Default::default(),
             mote_objects: Vec::new(),
@@ -7556,7 +7624,7 @@ impl Play {
                     patrol = Some(neopets_sim::npc::Patrol::new(vec![at, at], words));
                 }
             }
-            let wander = (pl.ai_code == 5).then(|| neopets_sim::npc::Wander::new(neopets_sim::walker::Walker::new(position, pl.facing, row.map_or(1.0, |r| r.radius), 1.0, self.next_character as u32), pl.words));
+            let wander = (pl.ai_code == 5).then(|| neopets_sim::npc::Wander::new(position, pl.words));
             if std::env::var_os("NEOPETS_TRACE_PATROL").is_some() {
                 let r = world.and_then(|w| w.route(pl.words[0] as i32));
                 eprintln!("PATROL bind pack {pack} {:?} code {} class {:?} path {} words {:?} points {} first {:?}", pl.name, pl.ai_code, row.and_then(|r| r.class), pl.words[0] as i32, pl.words, r.as_ref().map_or(0, |r| r.len()), r.as_ref().and_then(|r| r.first().copied()));
@@ -7574,7 +7642,7 @@ impl Play {
                     t.wander = wander.clone();
                     t
                 }),
-                walker: row.filter(|r| matches!(r.class, Some(1 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && tuning.is_some())).map(|r| {
+                walker: row.filter(|r| matches!(r.class, Some(1 | 6 | 7 | 8 | 11 | 12 | 14 | 20 | 21 | 32 | 33 | 39)) || (r.class == Some(17) && tuning.is_some())).map(|r| {
                     neopets_sim::walker::Walker::new(position, pl.facing, r.radius, r.weight.max(0.1), self.next_character as u32)
                 }),
                 whinny: row.filter(|r| r.class == Some(7)).map(|_| neopets_sim::whinny::Whinny::default()),
@@ -7597,6 +7665,9 @@ impl Play {
                 carried_item: None,
                 colour: pl.colour,
                 ordinal: pl.ordinal,
+                walk_hold: None,
+                walk_ticks: 0,
+                meshed: false,
                 monster_type: pl.monster_type,
                 slots: slot_colours(&pl.colours),
                 flash: 0,
@@ -7740,6 +7811,9 @@ impl Play {
             carried_item: None,
             colour: pl.colour,
             ordinal: pl.ordinal,
+            walk_hold: None,
+            walk_ticks: 0,
+            meshed: false,
             monster_type: pl.monster_type,
             slots: slot_colours(&pl.colours),
             flash: 0,
@@ -9628,6 +9702,9 @@ impl Play {
             self.entity_commands(pack, cmds);
         }
         self.run_threads();
+        if std::env::var_os("NEOPETS_TRACE_NPCWALK").is_some() {
+            self.npc_audit_step();
+        }
         // SPEC-0045 1217: the record thread steps the object records every pass.
         if self.world.pack == 1217 {
             if let Some(mut b) = self.state.burrows.take() {
@@ -9923,14 +10000,31 @@ impl Play {
         }
         let world = &self.world;
         let rng = &mut self.rng;
+        let scene_held = self.held;
         for c in &mut self.characters {
-            // SPEC-0056 Walk-to-point (classes 23 and 25), simplified: straight toward the
-            // target at the townsfolk walk speed (0.08337 a tick, move type 0) on the ground,
-            // steering with weight 0.3, walk clip 1; arrival within 1.0, then the turn to the
-            // final facing at 0.1 until the dot is 0.99, then idle (0). The navigation mesh, the
-            // hold for a near hero and root-motion travel are not used.
+            // SPEC-0056 Walk-to-point (classes 23 to 26): over the navigation mesh by the walk
+            // clip's root step; arrival within the stop distance, then the turn to the final
+            // facing at 0.1 until the dot is 0.99, then idle (0). A townsfolk gets its mesh once:
+            // the first of kind 1 holding it. So that a scene never waits for ever, a walk still
+            // going after 900 ticks on one point is placed there (this build's guard).
             if c.inactive {
                 continue;
+            }
+            if !c.meshed && c.townsfolk.is_some() {
+                c.meshed = true;
+                let pick = world.navmeshes.iter().position(|m| m.kind == 1 && m.first_holding(c.position).is_some());
+                if let Some(wk) = c.walker.as_mut() {
+                    wk.place(c.position);
+                    wk.facing = c.facing;
+                    wk.assign_mesh(pick, &world.navmeshes);
+                }
+            }
+            // A script may have moved the character.
+            if let Some(wk) = c.walker.as_mut().filter(|_| c.townsfolk.is_some()) {
+                if (wk.position()[0] - c.position[0]).hypot(wk.position()[2] - c.position[2]) > 0.01 {
+                    wk.place(c.position);
+                    wk.facing = c.facing;
+                }
             }
             if let Some((t, face, stop)) = c.script_walk {
                 let (dx, dz) = (t[0] - c.position[0], t[2] - c.position[2]);
@@ -9944,11 +10038,25 @@ impl Play {
                     _ => (0.083_37, 1),
                 };
                 if d >= stop {
-                    c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
-                    let s = speed / d;
-                    let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
-                    let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
-                    c.position = [x, y.unwrap_or(c.position[1]), z];
+                    if walk_held(c, hero, scene_held) {
+                        c.root_step = c.anim.tick();
+                        continue;
+                    }
+                    c.walk_ticks += 1;
+                    if c.walk_ticks > 900 {
+                        c.position = t;
+                        if let Some(wk) = c.walker.as_mut() {
+                            wk.place(t);
+                        }
+                    } else if c.townsfolk.is_some() {
+                        walk_toward(c, t, speed, hero, world);
+                    } else {
+                        c.facing = neopets_sim::hero::steer(c.facing, [dx, 0.0, dz], 0.3);
+                        let s = speed / d;
+                        let (x, z) = (c.position[0] + dx * s, c.position[2] + dz * s);
+                        let y = if c.pack == world.pack { world.ground_at(x, z, c.position[1] + 2.5) } else { None };
+                        c.position = [x, y.unwrap_or(c.position[1]), z];
+                    }
                     if c.anim.clip_state().action != clip {
                         c.anim.play(clip);
                     }
@@ -9956,6 +10064,8 @@ impl Play {
                     c.facing = neopets_sim::hero::steer(c.facing, g, 0.1);
                 } else {
                     c.script_walk = None;
+                    c.walk_ticks = 0;
+                    c.walk_hold = None;
                     c.anim.play(0);
                 }
                 if let Some(wk) = c.walker.as_mut() {
@@ -9965,19 +10075,32 @@ impl Play {
                 c.root_step = c.anim.tick();
                 continue;
             }
-            // SPEC-0056 Path walk (class 35): it parks the townsfolk routine; walk id 1 at the
-            // townsfolk walk speed (move type 0; table variant B's slower speed is not used).
+            // SPEC-0056 Path walk (class 35): it parks the townsfolk routine; walk id 1 by its root
+            // step (5.00 or, on table variant B, 1.71 units a second).
             if let Some(step) = c.path_walk.as_mut().map(|w| w.begin()) {
                 match step {
-                    neopets_sim::npc::PathStep::End => c.path_walk = None,
-                    neopets_sim::npc::PathStep::Next => {}
+                    neopets_sim::npc::PathStep::End => {
+                        c.path_walk = None;
+                        c.walk_ticks = 0;
+                    }
+                    neopets_sim::npc::PathStep::Next => c.walk_ticks = 0,
                     neopets_sim::npc::PathStep::Walk(to) => {
-                        walk_toward(c, to, world);
-                        if c.anim.clip_state().action != 1 {
-                            c.anim.play(1);
-                        }
-                        if let Some(w) = c.path_walk.as_mut() {
-                            w.moved(c.position);
+                        if !walk_held(c, hero, scene_held) {
+                            c.walk_ticks += 1;
+                            if c.walk_ticks > 900 {
+                                c.position = to;
+                                if let Some(wk) = c.walker.as_mut() {
+                                    wk.place(to);
+                                }
+                            } else {
+                                walk_toward(c, to, 0.083_37, hero, world);
+                            }
+                            if c.anim.clip_state().action != 1 {
+                                c.anim.play(1);
+                            }
+                            if let Some(w) = c.path_walk.as_mut() {
+                                w.moved(c.position);
+                            }
                         }
                     }
                 }
@@ -9991,24 +10114,26 @@ impl Play {
             // Base state 25 (conversation) freezes the routine.
             if let (Some(t), false) = (c.townsfolk.as_mut(), talking == Some(c.id)) {
                 let clip = c.anim.clip_state();
-                let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress, fidget_entry: c.anim.has(11), wander_fidget: c.anim.has(2) };
-                if let Some(id) = t.tick_on(&mut c.facing, view, rng, &world.navmeshes) {
+                let mesh = c.walker.as_ref().and_then(|w| w.mesh).and_then(|m| world.navmeshes.get(m));
+                let arrived = c.walker.as_ref().is_some_and(|w| w.arrived);
+                let view = neopets_sim::npc::View { position: c.position, hero, action: clip.action, progress: clip.progress, fidget_entry: c.anim.has(11), wander_fidget: c.anim.has(2), arrived };
+                if let Some(id) = t.tick_on(&mut c.facing, view, rng, mesh) {
                     // The patrol walk id 8 (speed code 6); a bank without it walks with id 1.
                     c.anim.play(if id == 8 && !c.anim.has(8) { 1 } else { id });
                 }
-                // SPEC-0056 Wander: the walker's motion tick at the townsfolk walk speed (move
-                // type 0; table variant B's slower speed is not used, as for the patrol).
-                let wandered = t.wander.as_mut().filter(|w| w.walking).map(|w| {
-                    let ground = &world.ground;
-                    w.walker.motion_tick([0.0, 0.0, 0.083_37], &world.navmeshes, |x, z, cl| ground.as_ref().map_or((0.0, UP), |g| g.probe_normal(x, z, cl)));
-                    (w.walker.position(), w.walker.facing)
-                });
                 if let Some(to) = t.walk_to {
-                    walk_toward(c, to, world);
-                }
-                if let Some((p, f)) = wandered {
-                    c.position = p;
-                    c.facing = f;
+                    let from = c.position;
+                    walk_toward(c, to, 0.083_37, hero, world);
+                    // This build's guard (R-0194): a route point the walker cannot get any nearer
+                    // to for 180 ticks counts as reached.
+                    let moved = (c.position[0] - from[0]).hypot(c.position[2] - from[2]);
+                    c.walk_ticks = if moved < 0.01 { c.walk_ticks + 1 } else { 0 };
+                    if c.walk_ticks > 180 {
+                        c.walk_ticks = 0;
+                        if let Some(p) = c.townsfolk.as_mut().and_then(|t| t.patrol.as_mut()) {
+                            p.point_stuck();
+                        }
+                    }
                 }
             }
             c.root_step = c.anim.tick();
@@ -12861,6 +12986,61 @@ impl Play {
     /// launch, the effect and the level events). The travel moves her straight at the path
     /// step's speed with her height kept (the route step, collision and the navmesh blocked flag
     /// are not built, so she never flips on a block).
+    /// NEOPETS_TRACE_NPCWALK: one tick of the walking audit of the current world's townsfolk.
+    fn npc_audit_step(&mut self) {
+        for c in self.characters.iter().filter(|c| c.pack == self.world.pack && !c.inactive && c.townsfolk.is_some()) {
+            let wants = c.walk_hold.is_none() && !c.held && (c.script_walk.is_some() || c.path_walk.is_some() || c.townsfolk.as_ref().is_some_and(|t| t.walk_to.is_some() || t.wander.as_ref().is_some_and(|w| w.walking)));
+            let e = self.npc_audit.entry(c.id).or_insert((c.position, 0, 0.0, 0, 0, 0, 0));
+            let d = (c.position[0] - e.0[0]).hypot(c.position[2] - e.0[2]);
+            if d > 1e-4 {
+                e.1 += 1;
+                e.2 += d;
+                let lift = |p: [f32; 3]| [p[0], p[1] + 1.0, p[2]];
+                if self.world.ground.as_ref().is_some_and(|g| !g.segment_clear(lift(e.0), lift(c.position), true)) {
+                    e.3 += 1;
+                }
+                if !wants || d > 0.02 {
+                    e.6 = 0;
+                } else {
+                    e.6 += 1;
+                    e.5 = e.5.max(e.6);
+                }
+            } else if wants {
+                e.6 += 1;
+                e.5 = e.5.max(e.6);
+            }
+            if wants && !self.world.navmeshes.iter().any(|m| m.kind == 1 && m.first_holding(c.position).is_some()) {
+                e.4 += 1;
+            }
+            e.0 = c.position;
+        }
+    }
+
+    /// NEOPETS_TRACE_NPCWALK: the audit's report, and each patrol route's legs: how many cross a
+    /// wall and how many points lie off every kind-1 mesh.
+    pub fn npc_audit_report(&self) {
+        for c in self.characters.iter().filter(|c| c.pack == self.world.pack && c.townsfolk.is_some()) {
+            let code = c.townsfolk.as_ref().map_or(0, |t| t.code);
+            if !matches!(code, 5 | 6) && !self.npc_audit.get(&c.id).is_some_and(|e| e.1 > 0) {
+                continue;
+            }
+            let e = self.npc_audit.get(&c.id).copied().unwrap_or_default();
+            let (mut legs, mut crossing, mut off) = (0, 0, 0);
+            if let Some(p) = c.townsfolk.as_ref().and_then(|t| t.patrol.as_ref()) {
+                let pts = p.points();
+                for w in pts.windows(2) {
+                    legs += 1;
+                    let lift = |p: [f32; 3]| [p[0], p[1] + 1.0, p[2]];
+                    if self.world.ground.as_ref().is_some_and(|g| !g.segment_clear(lift(w[0]), lift(w[1]), true)) {
+                        crossing += 1;
+                    }
+                }
+                off = pts.iter().filter(|q| !self.world.navmeshes.iter().any(|m| m.kind == 1 && m.first_holding(**q).is_some())).count();
+            }
+            println!("NPCWALK pack {} \"{}\" code {code} slot {} ordinal {} walked {:.1} in {} ticks, wall steps {}, off mesh {}, longest still {}, route legs {legs} crossing {crossing} off {off}, at {:?}, inactive {}, held {}, mesh {:?}, clip {}, root {:.4}", c.pack, c.name, c.slot, c.ordinal, e.2, e.1, e.3, e.4, e.5, c.position.map(|v| v.round() as i32), c.inactive, c.held, c.walker.as_ref().map(|w| w.mesh), c.anim.clip_state().action, c.root_step[0].hypot(c.root_step[2]));
+        }
+    }
+
     fn sisters_step(&mut self) {
         let pack = self.world.pack;
         let hero = self.loco.position();

@@ -2,14 +2,13 @@
 //! Mode from code, Animation ids by mode): the greeting entry pre-step, the mode set from the
 //! behavior code, and the bodies of modes 0, 10, 11, 12 and 13, and the patrol (mode 6) along
 //! the placement's path (SPEC-0056 Patrol; the host moves the character toward `walk_to`), and
-//! the wander (mode 5; SPEC-0056 Wander) on the first kind-1 mesh holding the character. The
+//! the wander (mode 5; SPEC-0056 Wander). The host walks them over their navigation mesh. The
 //! villager pair (never formed on disc), navigation index updates and base states other than
 //! the conversation are not covered.
 
 use crate::hero::{Vec3, steer};
-use crate::nav::{NavMesh, closest};
+use crate::nav::NavMesh;
 use crate::rng::Rng;
-use crate::walker::Walker;
 
 /// Animation ids that mark a pose for the greeting (SPEC-0056 Greeting).
 const POSES: [u32; 13] = [65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 78, 97, 98];
@@ -34,20 +33,18 @@ pub struct Townsfolk {
 }
 
 /// The townsfolk wander (mode 5; SPEC-0056 Wander): the placement's radius (+0xBC), pause range
-/// (+0xC0, +0xC4) and pause chance (+0xC8), and the walker that routes and moves the character.
+/// (+0xC0, +0xC4) and pause chance (+0xC8).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Wander {
-    pub walker: Walker,
     home: Vec3,
     radius: f32,
     pause_range: (i32, i32),
     chance: i32,
-    meshed: bool,
     point: Option<Vec3>,
     pause: i32,
     fidget: i32,
     asked: bool,
-    /// This tick the walker travels (the host runs its motion tick).
+    /// This tick the character walks.
     pub walking: bool,
     /// Ticks on one point (this build's guard: 600 ticks count as reached, so a character whose
     /// route is blocked by something the mesh does not hold does not walk in place for ever).
@@ -55,16 +52,15 @@ pub struct Wander {
 }
 
 impl Wander {
-    pub fn new(walker: Walker, words: [u32; 8]) -> Self {
-        let home = walker.position();
+    pub fn new(home: Vec3, words: [u32; 8]) -> Self {
         let (a, b) = (words[2] as i32, words[3] as i32);
-        Self { walker, home, radius: f32::from_bits(words[1]), pause_range: (a.min(b), a.max(b)), chance: words[4] as i32, meshed: false, point: None, pause: 0, fidget: 0, asked: false, walking: false, spent: 0 }
+        Self { home, radius: f32::from_bits(words[1]), pause_range: (a.min(b), a.max(b)), chance: words[4] as i32, point: None, pause: 0, fidget: 0, asked: false, walking: false, spent: 0 }
     }
 
     /// Form H of the spawn point search (SPEC-0056): a whole-number point in the square of side
     /// r about home, moved halfway toward the character while off the mesh; the 10th retry gives
     /// home. With r below 0.1, a random cell's centroid.
-    fn pick(&self, m: &NavMesh, rng: &mut Rng) -> Vec3 {
+    fn pick(&self, m: &NavMesh, p: Vec3, rng: &mut Rng) -> Vec3 {
         if self.radius < 0.1 {
             return m.centroid(rng.index(m.len() as u32) as usize);
         }
@@ -72,7 +68,6 @@ impl Wander {
         let draw = |rng: &mut Rng| if n > 0 { rng.range(0, n - 1) as f32 } else { 0.0 };
         let (a, b) = (draw(rng), draw(rng));
         let mut q = [self.home[0] + a - self.radius / 2.0, self.home[1], self.home[2] + b - self.radius / 2.0];
-        let p = self.walker.position();
         for _ in 0..10 {
             if m.first_holding(q).is_some() {
                 return q;
@@ -82,62 +77,52 @@ impl Wander {
         self.home
     }
 
-    fn tick(&mut self, v: &View, hero: Vec3, meshes: &[NavMesh], rng: &mut Rng) -> Option<u32> {
+    /// One tick on the character's mesh: the id to request and the point to walk to.
+    fn tick(&mut self, v: &View, mesh: Option<&NavMesh>, rng: &mut Rng) -> (Option<u32>, Option<Vec3>) {
         self.walking = false;
-        // A script may have moved the character.
-        if horizontal(self.walker.position(), v.position).0 > 0.01 {
-            self.walker.place(v.position);
-        }
-        if !self.meshed {
-            self.meshed = true;
-            let k = closest(meshes, v.position, 1);
-            self.walker.assign_mesh(usize::try_from(k).ok(), meshes);
-        }
         // A character outside every kind-1 mesh never walks.
-        let Some(m) = self.walker.mesh.and_then(|i| meshes.get(i)).filter(|m| !m.is_empty()) else {
-            return Some(0);
+        let Some(m) = mesh.filter(|m| !m.is_empty()) else {
+            return (Some(0), None);
         };
         if self.pause > 0 {
             self.pause -= 1;
         }
         if self.point.is_none() {
-            self.point = Some(self.pick(m, rng));
+            self.point = Some(self.pick(m, v.position, rng));
             self.spent = 0;
-            self.walker.set_target();
         }
         if self.pause < 1 {
             let point = self.point.unwrap_or(self.home);
             self.spent += 1;
-            if horizontal(v.position, point).0 < 1.5 || self.walker.arrived || self.spent >= 600 {
+            if horizontal(v.position, point).0 < 1.5 || v.arrived || self.spent >= 600 {
                 self.point = None;
                 if rng.range(1, 100) < self.chance {
                     self.pause = rng.range(self.pause_range.0, self.pause_range.1);
                     self.fidget = rng.range(self.pause_range.0, self.pause_range.1);
                     self.asked = false;
-                    return Some(0);
+                    return (Some(0), None);
                 }
-                return Some(1);
+                return (Some(1), None);
             }
-            self.walker.nav_step(meshes, point, hero);
             self.walking = true;
-            return Some(1);
+            return (Some(1), Some(point));
         }
         if self.asked {
             if v.action == 2 && v.progress >= 0.99 {
                 self.fidget = rng.range(self.pause_range.0, self.pause_range.1);
                 self.asked = false;
-                return Some(0);
+                return (Some(0), None);
             }
-            return None;
+            return (None, None);
         }
         if self.fidget >= 1 {
             if v.wander_fidget {
                 self.fidget -= 1;
             }
-            return Some(0);
+            return (Some(0), None);
         }
         self.asked = true;
-        Some(2)
+        (Some(2), None)
     }
 }
 
@@ -160,6 +145,11 @@ pub struct Patrol {
 }
 
 impl Patrol {
+    /// The route's points.
+    pub fn points(&self) -> &[Vec3] {
+        &self.points
+    }
+
     /// `points` are the route's positions; `words` the placement's +0xB8 to +0xD4.
     pub fn new(points: Vec<Vec3>, words: [u32; 8]) -> Self {
         let w = |i: usize| words[i] as i32;
@@ -201,6 +191,11 @@ impl Patrol {
             return (None, Some(self.stop));
         }
         (Some(target), None)
+    }
+
+    /// This build's guard: the point cannot be reached, so go on to the next.
+    pub fn point_stuck(&mut self) {
+        self.reached = true;
     }
 
     /// The route point now targeted.
@@ -340,6 +335,8 @@ pub struct View {
     pub fidget_entry: bool,
     /// The animation table has an entry for the wander fidget (id 2).
     pub wander_fidget: bool,
+    /// The last navigation step arrived (the settled arrival, or a fresh block).
+    pub arrived: bool,
 }
 
 fn horizontal(a: Vec3, b: Vec3) -> (f32, Vec3) {
@@ -359,14 +356,14 @@ impl Townsfolk {
         Self { patrol, ..self }
     }
 
-    /// One tick with no navigation meshes (a wander then stands).
+    /// One tick with no navigation mesh (a wander then stands).
     pub fn tick(&mut self, facing: &mut Vec3, v: View, rng: &mut Rng) -> Option<u32> {
-        self.tick_on(facing, v, rng, &[])
+        self.tick_on(facing, v, rng, None)
     }
 
     /// One tick: returns the animation id to request (None: keep what is playing), and turns
     /// `facing` where the mode says so.
-    pub fn tick_on(&mut self, facing: &mut Vec3, v: View, rng: &mut Rng, meshes: &[NavMesh]) -> Option<u32> {
+    pub fn tick_on(&mut self, facing: &mut Vec3, v: View, rng: &mut Rng, mesh: Option<&NavMesh>) -> Option<u32> {
         self.walk_to = None;
         if let Some(w) = self.wander.as_mut() {
             w.walking = false;
@@ -415,7 +412,8 @@ impl Townsfolk {
                     Some(0)
                 }
             }
-            6 => match self.patrol.as_mut() {
+            // A character outside every kind-1 mesh never walks (SPEC-0056 Walker interruptions).
+            6 => match self.patrol.as_mut().filter(|_| mesh.is_some()) {
                 Some(p) => {
                     let (id, to) = p.tick(&v, rng);
                     self.walk_to = to;
@@ -424,7 +422,11 @@ impl Townsfolk {
                 None => Some(0),
             },
             5 => match self.wander.as_mut() {
-                Some(w) => w.tick(&v, v.hero, meshes, rng),
+                Some(w) => {
+                    let (id, to) = w.tick(&v, mesh, rng);
+                    self.walk_to = to;
+                    id
+                }
                 None => Some(0),
             },
             _ => None,
@@ -437,31 +439,28 @@ mod tests {
     use super::*;
 
     fn view(hero: Vec3, action: u32, progress: f32) -> View {
-        View { position: [0.0; 3], hero, action, progress, fidget_entry: true, wander_fidget: true }
+        View { position: [0.0; 3], hero, action, progress, fidget_entry: true, wander_fidget: true, arrived: false }
     }
 
     #[test]
     fn wander_walks_pauses_and_stays_near_home() {
         // One large triangle about the origin.
         let mesh = NavMesh { kind: 1, triangles: vec![[[-60.0, 0.0, -60.0], [60.0, 0.0, -60.0], [0.0, 0.0, 60.0]]], neighbours: vec![[-1; 3]], table: Vec::new() };
-        let meshes = [mesh];
         // Radius 10, pause 5 to 5, chance 101 (always pauses).
         let mut words = [0u32; 8];
         words[1] = 10.0f32.to_bits();
         (words[2], words[3], words[4]) = (5, 5, 101);
         let mut t = Townsfolk::new(5, [0.0, 0.0, 1.0]);
-        t.wander = Some(Wander::new(Walker::new([0.0; 3], [0.0, 0.0, 1.0], 1.0, 1.0, 1), words));
+        t.wander = Some(Wander::new([0.0; 3], words));
         let (mut f, mut r) = ([0.0, 0.0, 1.0], Rng::seeded(1));
         let far = [100.0, 0.0, 100.0];
         let mut p = [0.0; 3];
         let (mut walked, mut paused) = (0, 0);
         for _ in 0..3000 {
-            let id = t.tick_on(&mut f, View { position: p, hero: far, action: 1, progress: 0.0, fidget_entry: true, wander_fidget: true }, &mut r, &meshes);
-            let w = t.wander.as_mut().unwrap();
-            if w.walking {
+            let id = t.tick_on(&mut f, View { position: p, hero: far, action: 1, progress: 0.0, fidget_entry: true, wander_fidget: true, arrived: false }, &mut r, Some(&mesh));
+            if let Some(d) = t.walk_to {
                 walked += 1;
                 assert_eq!(id, Some(1), "walking asks for the walk id");
-                let d = w.point.unwrap();
                 let (_, u) = horizontal(p, d);
                 p = [p[0] + 0.1 * u[0], 0.0, p[2] + 0.1 * u[2]];
                 assert!(d[0].abs() <= 5.0 && d[2].abs() <= 5.0, "the point stays in the square of side r");
@@ -472,29 +471,30 @@ mod tests {
         assert!(walked > 100 && paused > 10);
         // Outside every mesh: stands, and never walks.
         let mut t = Townsfolk::new(5, [0.0, 0.0, 1.0]);
-        t.wander = Some(Wander::new(Walker::new([500.0, 0.0, 0.0], [0.0, 0.0, 1.0], 1.0, 1.0, 1), words));
-        let v = View { position: [500.0, 0.0, 0.0], hero: far, action: 0, progress: 0.0, fidget_entry: true, wander_fidget: true };
-        assert_eq!(t.tick_on(&mut f, v, &mut r, &meshes), Some(0));
-        assert!(!t.wander.as_ref().unwrap().walking);
+        t.wander = Some(Wander::new([500.0, 0.0, 0.0], words));
+        let v = View { position: [500.0, 0.0, 0.0], hero: far, action: 0, progress: 0.0, fidget_entry: true, wander_fidget: true, arrived: false };
+        assert_eq!(t.tick_on(&mut f, v, &mut r, None), Some(0));
+        assert_eq!(t.walk_to, None);
     }
 
     #[test]
     fn patrol_targets_point_1_first_and_pauses_on_arrival() {
+        let mesh = NavMesh { kind: 1, triangles: vec![[[-60.0, 0.0, -60.0], [60.0, 0.0, -60.0], [0.0, 0.0, 60.0]]], neighbours: vec![[-1; 3]], table: Vec::new() };
         // Loop mode, point pause 3 to 3, no random stop.
         let pts = vec![[0.0, 0.0, 0.0], [0.0, 0.0, 10.0], [5.0, 0.0, 10.0]];
         let mut t = Townsfolk::new(6, [0.0, 0.0, 1.0]);
         t.patrol = Some(Patrol::new(pts, [0, 0, 0, 3, 3, 0, 0, 0]));
         let (mut f, mut r) = ([0.0, 0.0, 1.0], Rng::seeded(1));
         let far = [100.0, 0.0, -100.0];
-        let at = |p: Vec3| View { position: p, hero: far, action: 8, progress: 0.0, fidget_entry: true, wander_fidget: true };
-        assert_eq!(t.tick(&mut f, at([0.0; 3]), &mut r), Some(8));
+        let at = |p: Vec3| View { position: p, hero: far, action: 8, progress: 0.0, fidget_entry: true, wander_fidget: true, arrived: false };
+        assert_eq!(t.tick_on(&mut f, at([0.0; 3]), &mut r, Some(&mesh)), Some(8));
         assert_eq!(t.walk_to, Some([0.0, 0.0, 10.0]), "the first target is point 1");
         // Arriving (below 0.5): idle, no walk; three pause ticks, then on to point 2.
-        assert_eq!(t.tick(&mut f, at([0.0, 0.0, 9.6]), &mut r), Some(0));
+        assert_eq!(t.tick_on(&mut f, at([0.0, 0.0, 9.6]), &mut r, Some(&mesh)), Some(0));
         assert_eq!(t.walk_to, None);
         let mut walked = 0;
         for _ in 0..3 {
-            t.tick(&mut f, at([0.0, 0.0, 9.6]), &mut r);
+            t.tick_on(&mut f, at([0.0, 0.0, 9.6]), &mut r, Some(&mesh));
             walked += t.walk_to.is_some() as u32;
         }
         assert_eq!(walked, 1);

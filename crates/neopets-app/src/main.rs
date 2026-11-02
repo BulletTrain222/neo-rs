@@ -4649,6 +4649,10 @@ fn play_trace(
         }
         // Once: the new game's tick count starts again. A game-over exit with nothing pending
         // tears the world down the same way.
+        // NEOPETS_TRACE_NPCWALK="n": the townsfolk walking audit's report on tick n.
+        if std::env::var("NEOPETS_TRACE_NPCWALK").ok().and_then(|v| v.trim().parse::<u64>().ok()) == Some(play.ticks) {
+            play.npc_audit_report();
+        }
         // NEOPETS_TRACE_KILL="n[,n...]": the developer menu's enemy defeat on those ticks.
         if std::env::var("NEOPETS_TRACE_KILL").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
             let pk = play.world.pack;
