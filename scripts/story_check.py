@@ -109,10 +109,20 @@ def nums(s):
     return ','.join(str(x) for x in sorted(s))
 
 
+# Rows that need an exact number of presses, from their own text: goal: (trigger, presses), in order.
+PRESSES = {532: [(1, 1), (3, 1), (6, 1)], 533: [(18, 3), (19, 2), (20, 1), (21, 1)], 537: [(0, 2)], 538: [(1, 6)], 539: [(2, 7), (3, 1)]}
 lines = []
 for g in goals:
     if not first <= g['n'] <= last:
         continue
+    if g['n'] in PRESSES:
+        pack = g['packs'][0]
+        n_ = g['needs'] or dict(on=set(), off=set(), held=set())
+        for k, (trigger, times) in enumerate(PRESSES[g['n']]):
+            for _ in range(times):
+                lines.append('\t'.join([str(100000 + g['n'] * 100 + k), 'PRESS', str(pack), '', '', '', nums(n_['on']), nums(n_['off']), nums(n_['held']), '', '', '', '', '', '200', str(trigger), '', '']))
+        g['kind'] = 'WAIT'
+        g['needs'] = None
     # An exit trigger lies in the pack being left; other walks end in the last pack named.
     exits = g['done'] and g['done']['pack'] and re.search(r'[Ee]xit|[Tt]rigger', g['target']) and not re.search(r'[Ll]egs?', g['target'])
     pack = (g['packs'][-1] if g['kind'] == 'WALK' and not exits else g['packs'][0]) if g['packs'] else ''

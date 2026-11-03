@@ -1770,10 +1770,9 @@ pub fn on_init(pack: u32, state: &mut GameState) -> Vec<Action> {
         // SPEC-0039 1344 Init: triggers 0 to 4 (handlers 2, 3, 6, 4, 5), objects 2, 3, 4, 5, 1 and 0
         // off; thread 7 loads slot 0 with set 0, 1 or 2 by flags 94, 93, 92 (only when flag 92
         // was set, as that create stores the word they read) or, with 239 and 240, set 3 (only
-        // when 92 was clear); region 1345 + set. The toggles of triggers 3 and 4 (Medium) are
-        // not reproduced.
+        // when 92 was clear); region 1345 + set.
         1344 => {
-            let mut v = vec![reg(0, 2), reg(1, 3), reg(2, 6)];
+            let mut v = vec![reg(0, 2), reg(1, 3), reg(2, 6), reg(3, 4), reg(4, 5)];
             v.extend([2, 3, 4, 5, 1, 0].map(|obj| Action::InitObjOn { obj, end: false }));
             let made = state.flag(92);
             let set = if state.flag(94) {
@@ -3974,28 +3973,34 @@ pub fn collide_entities(pack: u32) -> &'static [usize] {
 /// (word 36) goes up, a 0.2 s fade, the firer deactivated, camera 7, the fade in, camera 9 for
 /// counts 1 to 3 and 8 for 4 to 7, 5 s, a fade out and in and the normal camera; at a count of 6
 /// the stage ends (word 24): camera 11, object 8 off, objects 7 and 9 played, 723, thread 6
-/// with argument 2. Not built: the six entities' SetAI_Behavior 0 and 5 and their moves to random
-/// points of group instance 1, the one-entry slot's activation, entity 23 at the firer's
-/// position, the effects along group instance 2's points, entity 22's walk from point 46 +
-/// count to 52 + count.
+/// with argument 2. The six entities take SetAI_Behavior 0 at the start and 5 at the end, and entity 22 moves to point 46 +
+/// count and walks to 52 + count. Not built: their moves to random points of group instance 1, the one-entry slot's
+/// activation, entity 23 at the firer's position and the effects along group instance 2's points (R-0100).
 fn pass_1398(firer: usize, s: &mut GameState) -> Vec<Action> {
     let p = 1398;
     let count = s.word(p, 36) + 1;
     s.set_word(p, 36, count);
     s.set_word(p, 35, 1);
-    let mut v = vec![
-        Action::FadeOut { seconds: 0.2, wait: true },
+    let harrises = |code: i16| (16..=21).map(move |entity| Action::AiBehavior { entity, code });
+    let mut v = vec![Action::FadeOut { seconds: 0.2, wait: true }];
+    v.extend(harrises(0));
+    v.extend([
         Action::DeactivateEntity { entity: firer },
         Action::PlayCamera { track: 7, wait: false, end: 1, speed: 1.0 },
         Action::FadeIn { seconds: 0.2, wait: true },
         wait(1.0),
+        Action::MoveEntity { entity: 22, locator: 46 + count as usize, face: true },
+        Action::WalkEntity { entity: 22, locator: 52 + count as usize, wait: false, orient: false, stop: 1.1 },
         Action::PlayCamera { track: if count <= 3 { 9 } else { 8 }, wait: false, end: 1, speed: 1.0 },
         wait(5.0),
         Action::FadeOut { seconds: 0.2, wait: true },
+    ]);
+    v.extend(harrises(5));
+    v.extend([
         Action::FadeIn { seconds: 0.2, wait: true },
         Action::ReturnCamera { preset: -1, release: true },
         Action::Bits { word: 35, set: 0, clear: 1 },
-    ];
+    ]);
     if count == 6 {
         s.set_word(p, 24, 1);
         s.set(723, true);
@@ -10696,6 +10701,7 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
                 Action::HoldHero,
                 Action::FadeOut { seconds: 0.5, wait: true },
                 Action::MoveHero { locator: 9 },
+                Action::PlayFmv { movie: 65 },
                 Action::DeactivateObj { obj: 9 },
                 Action::StartEffect { slot: 3, camera: false },
                 Action::FadeIn { seconds: 1.0, wait: true },
@@ -11027,6 +11033,18 @@ pub fn on_trigger(pack: u32, routine: u8, call: TriggerCall, state: &mut GameSta
         // movie 22, 30 ticks and line 10. Trigger 1: with 239 set and 240 clear, 240 and movie
         // 24. Trigger 2 (entering with the body): lines 3 and 4 with 236 set and
         // 239 clear.
+        // SPEC-0039 1344 triggers 3 and 4 (handlers 4 and 5; Medium): with 322 the pair of objects plays on the way in and
+        // back once the hero has left.
+        (1344, 4 | 5) if call.state == 1 && call.object && state.flag(322) => {
+            let (a, b) = if routine == 4 { (2, 3) } else { (4, 5) };
+            out.actions.extend([
+                Action::PlayAnim { obj: a, speed: 1.0, wait: false },
+                Action::PlayAnim { obj: b, speed: 1.0, wait: false },
+                Action::WaitInside { index: call.index },
+                Action::PlayAnim { obj: a, speed: -1.0, wait: false },
+                Action::PlayAnim { obj: b, speed: -1.0, wait: false },
+            ]);
+        }
         (1344, 2) if call.state == 1 && call.object && state.flag(237) && !state.flag(238) => {
             state.set(238, true);
             out.actions.extend([Action::PlayFmv { movie: 22 }, Action::Sleep { ticks: 30 }, Action::Message { line: 10 }]);

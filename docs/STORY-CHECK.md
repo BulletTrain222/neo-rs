@@ -7,12 +7,12 @@ The run reached the end of the list (exit 0).
 | Result | Goals | Meaning |
 | --- | --- | --- |
 | notrun | 0 | Not reached |
-| fail | 58 | The Done condition never held |
+| fail | 57 | The Done condition never held |
 | gameover | 3 | The hero died and the world was torn down |
 | manual | 42 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
 | already | 23 | Done already held from earlier goals |
-| pass | 174 | Done condition reached |
+| pass | 175 | Done condition reached |
 
 ## Failed goals
 
@@ -65,10 +65,9 @@ The run reached the end of the list (exit 0).
 - Act 4 goal 500 WAIT (1122 to 1300): Movie 54 ends and pack 1300 (Fyora's Palace Gardens, world 151) loads. Resolved: the boss end posts value 50 f Done: pack 1300 current; hero at record 1; control back. Needed and not met: 322.
 - Act 4 goal 528 WALK (1371): Wave gate 3, script trigger 3: rectangle corner (-1.1, 5.8, -1.2), extents 0.8 by 2.2. Hero moved to record 24 Done: 344 on.
 - Act 4 goal 529 WALK (1371 to 1350): Finish cylinder, script trigger 1: base (0.2, -15.6, -144.7), radius 21.3, length 10.9. Walk in: movie 61 play Done: 345, 100 on; back in pack 1350 at record 6 (0.0, 0.5, -338.1).
-- Act 4 goal 532 SQUARE (1397): Buttons (script triggers 1 to 6, cylinders radius 1.4 on the row z -140.2, y 16.9, x 113.8, 107.9, 100.9, 94.7 Done: 699 on; the grate object removed.
-- Act 4 goal 533 SQUARE (1397): Statues: turn pads at triggers 17 (440.5, -5.1, 37.0), 18 (440.5, -5.1, -37.1), 19 (589.5, -5.1, -37.1) and 20 Done: 700 on.
-- Act 4 goal 534 WALK (1397): Trigger 12: box corner (377.9, -50.7, -325.0), extents 10.0 along x by 17.7 (height 10.2). Walk in: movie 63 p Done: 102 on.
-- Act 4 goal 539 SQUARE (1353): Statue 2, script trigger 2: cylinder base (272.5, 1.2, -202.7), radius 7.1. Start angle 45: press 7 times. The Done: 694 on; pack 1392 current.
+- Act 4 goal 532 WAIT (1397): Buttons (script triggers 1 to 6, cylinders radius 1.4 on the row z -140.2, y 16.9, x 113.8, 107.9, 100.9, 94.7 Done: 699 on; the grate object removed.
+- Act 4 goal 533 WAIT (1397): Statues: turn pads at triggers 17 (440.5, -5.1, 37.0), 18 (440.5, -5.1, -37.1), 19 (589.5, -5.1, -37.1) and 20 Done: 700 on.
+- Act 4 goal 539 WAIT (1353): Statue 2, script trigger 2: cylinder base (272.5, 1.2, -202.7), radius 7.1. Start angle 45: press 7 times. The Done: 694 on; pack 1392 current.
 - Act 4 goal 556 WALK (1398): Stage 4: walk onto the arm trigger 35: box corner (-43.6, -8.5, 1079.8), extents 56.9 by 72.0 (height 88.4); t Done: 723 on (count 6); region 1399 loads.
 - Act 4 goal 574 WALK (1382 to 1411): Trigger 28 (ring centre): cylinder base (-4.8, -438.2, 298.6), radius 2.8, length 7.0. Walk in: pack 1411 load Done: pack 1411 current. Needed and not met: 337.
 - Act 4 goal 583 WAIT (1432 to 1300): Finale: the clock is hidden, object 1 (north barrier) is removed, swap mode 2, entities 0 and 5 to 7 are deact Done: pack 1300 current; 94, 365 on.
@@ -207,8 +206,8 @@ The run reached the end of the list (exit 0).
 - Act 4 goal 524 WALK (1371): Wave gate 1, script trigger 2: rectangle corner (-5.1, 5.8, -1.2), extents 0.8 along x by 2.2, height 2.3. Wal Done: the gate scene runs: fade out, camera 8, the gate object plays, the he.
 - Act 4 goal 526 WALK (1371): Wave gate 2, script trigger 4: rectangle corner (2.9, 5.8, -1.2), extents 0.8 by 2.2. Hero moved to record 25  Done: wave 2 loaded.
 - Act 4 goal 530 WALK (1350 to 1358): Back to the hub 1370 and into district 1358 (the Money district). Its teleport 2 is a vertical door plane at x Done: hero at the Treasury door.
-- Act 4 goal 537 SQUARE (1353): Statue 0, script trigger 0: cylinder base (272.5, 1.2, -231.5), radius 7.1. Square at the prompt (context 4);  Done: statue 0 at 360.
-- Act 4 goal 538 SQUARE (1353): Statue 1, script trigger 1: cylinder base (301.4, 1.2, -231.5), radius 7.1. Start angle 90: press 6 times. Done: statue 1 at 360.
+- Act 4 goal 537 WAIT (1353): Statue 0, script trigger 0: cylinder base (272.5, 1.2, -231.5), radius 7.1. Square at the prompt (context 4);  Done: statue 0 at 360.
+- Act 4 goal 538 WAIT (1353): Statue 1, script trigger 1: cylinder base (301.4, 1.2, -231.5), radius 7.1. Start angle 90: press 6 times. Done: statue 1 at 360.
 - Act 4 goal 540 WALK (1392): Arrival: the hero falls in at record 0 (6.3, 33.6, 10.9) with a long fall and camera track 10 (3 s) once per l Done: pack 1395 reached.
 - Act 4 goal 541 WALK (1395, 1393): Pack 1395 is a connector (neighbours 1392 and 1393). Pack 1393 has five guard rooms: each room has a plate lev Done: pack 1396 reached.
 - Act 4 goal 542 WALK (1396, 1394): Pack 1396 leads to pack 1394 (neighbour). Walk into the intro trigger 13: box corner (-65.6, 8.4, -1203.9), ex Done: the intro scene runs; the 50 s timer starts.

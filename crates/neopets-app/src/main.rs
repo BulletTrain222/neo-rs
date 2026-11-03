@@ -5508,7 +5508,7 @@ fn play_trace(
             // NEOPETS_TRACE_CLIMB: the grab-block (10) and stop-climbing (18) prompts are not pressed, so the hero keeps
             // walking into the block.
             // NEOPETS_TRACE_NOAUTO: prompts are not pressed (only NEOPETS_TRACE_SQUARE presses).
-            square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()) && !(play.loco.state == neopets_sim::hero::BLOCK && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some()))
+            square: (std::env::var_os("NEOPETS_TRACE_NOAUTO").is_none() && !story_order.quiet && play.prompt_shown.is_some() && !(mice && play.prompt_shown == Some(28) && !play.hero_in_cage()) && !(matches!(play.prompt_shown, Some(10 | 18)) && std::env::var_os("NEOPETS_TRACE_CLIMB").is_some()) && !(play.loco.state == neopets_sim::hero::BLOCK && std::env::var_os("NEOPETS_TRACE_BLOCK").is_some()))
                 || (stalk.is_some() && !matches!(play.loco.state, 22 | 40))
                 || play.talk_prompt || (play.buyable.is_some() && play.ticks % 30 == 0) || (play.save_prompt && play.ticks % 10 == 0) || (play.dialogue_open && play.ticks % 10 == 0),
             // NEOPETS_TRACE_GUARD=n (or "n-m"): the guard is held on every tick from tick n (up to

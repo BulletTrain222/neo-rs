@@ -95,6 +95,8 @@ pub struct Order {
     pub warp: Option<u32>,
     pub square: bool,
     pub jump: bool,
+    /// An exact-count goal: the trace's own prompt presses are off.
+    pub quiet: bool,
     /// The stick held forward: an exit rectangle is walked through, not pressed.
     pub walk: bool,
     pub finished: bool,
@@ -173,7 +175,7 @@ impl StoryRun {
                             play.state.give(i, 1);
                         }
                     }
-                    if !matches!(g.kind.as_str(), "WAIT" | "TALK" | "PICK" | "SQUARE" | "DOOR" | "WALK" | "FIGHT") {
+                    if !matches!(g.kind.as_str(), "WAIT" | "TALK" | "PICK" | "SQUARE" | "PRESS" | "DOOR" | "WALK" | "FIGHT") {
                         // Forced: a scene its flags start runs out before the next goal.
                         println!("GOAL {} manual tick {} pack {}", g.n, play.ticks, play.world.pack);
                         let g = &self.goals[self.at];
@@ -279,8 +281,9 @@ impl StoryRun {
                         play.dev_kill_enemies();
                     }
                     // Square also buys a shop's item, which a touch does not take.
-                    order.square = matches!(g.kind.as_str(), "TALK" | "SQUARE" | "DOOR" | "PICK") && t >= 30 && t % 15 == 0;
+                    order.square = (matches!(g.kind.as_str(), "TALK" | "SQUARE" | "DOOR" | "PICK") && t >= 30 && t % 15 == 0) || (g.kind == "PRESS" && t == 40);
                     order.jump = g.kind == "PICK" && t % 60 == 40;
+                    order.quiet = g.kind == "PRESS";
                     return order;
                 }
                 Phase::Settle(status) => {

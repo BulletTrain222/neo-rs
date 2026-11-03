@@ -2,15 +2,15 @@
 
 Everything the specs describe, written by `scripts/spec_list.py`. **An automatic tick means a rule found evidence, not that anyone played it.** The tag on each ticked line names the rule. An unticked line may still be built: the rules are strict and only see plain text, so most built behaviour has no automatic tick. To confirm something yourself, change `[ ]` to `[x]`; a rerun keeps it while the line's text is unchanged.
 
-**42406 items: 2349 ticked by a rule, 0 ticked by hand, 40057 open.**
+**42407 items: 2353 ticked by a rule, 0 ticked by hand, 40054 open.**
 
 | Rule | Ticks | What it found |
 | --- | --- | --- |
-| numbers match the pack code | 827 | At least two flag, line, movie, item, locator or camera numbers on the line, all found in that pack's code |
+| numbers match the pack code | 830 | At least two flag, line, movie, item, locator or camera numbers on the line, all found in that pack's code |
 | address in code | 559 | Every boot-data address on the line is read by the code |
 | title named in code | 312 | A code comment naming this spec also names the section's title |
+| story check passed by teleport | 198 | The goal's Done condition held in the story check |
 | answered | 198 | A spec answered the request |
-| story check passed by teleport | 197 | The goal's Done condition held in the story check |
 | code found | 156 | The level module has code |
 | cited in code | 62 | The game code names this spec |
 | a status note traces it | 31 | A status note says the step was traced |
@@ -84,14 +84,14 @@ Everything the specs describe, written by `scripts/spec_list.py`. **An automatic
 | SPEC-0064 Common enemy build guides | 2405 | 3 | 0 |
 | SPEC-0065 Common enemy build guides, part 2 | 2365 | 0 | 0 |
 | SPEC-0066 Unused, cut and developer worlds (the 17 world packs a new game never enters) | 162 | 3 | 0 |
-| Level modules and their lines | 3590 | 990 | 0 |
+| Level modules and their lines | 3590 | 993 | 0 |
 | Walkthrough steps | 45 | 31 | 0 |
 | Goals, Act 1 | 99 | 54 | 0 |
 | Goals, Act 2 | 56 | 23 | 0 |
 | Goals, Act 3 | 153 | 87 | 0 |
-| Goals, Act 4 | 87 | 33 | 0 |
-| Requests | 223 | 198 | 0 |
-| Stated gaps in the code | 94 | 0 | 0 |
+| Goals, Act 4 | 87 | 34 | 0 |
+| Requests | 225 | 198 | 0 |
+| Stated gaps in the code | 93 | 0 | 0 |
 
 ## 1. Every spec, in full
 
@@ -24291,7 +24291,7 @@ Cited 86 times in the game code.
 
 ### SPEC-0039: Level scripts B
 
-Cited 94 times in the game code.
+Cited 95 times in the game code.
 
 - [x] SPEC-0039 Level scripts B: the code cites this spec {auto: cited in code}
 - [ ] SPEC-0039 Summary
@@ -40153,7 +40153,7 @@ Cited 4 times in the game code.
     - [ ] Pack 1394: Final word clear: PlaySound(5), SetTimerColor, DeactivateTimer, (S0: Sleep), FadeScreenOut(0.8, wait 1), ResetAnimObjOffsets(2), MoveHero(checkpoint locator...
     - [ ] Pack 1394: The death callback H takes the same two branches (final word set: fade out 1.0 s with wait 1, MoveHero(8, control 1), Wait(1.0), FadeScreenIn(1.0, wait 1);...
   - [ ] Pack 1394: Trigger S14 (index 14): when record +0x1c is non-zero and the exit-open word is 0: the exit-open word and the final word are set, DeactivateTimer (the count...
-  - [ ] Pack 1394: Trigger S11 (index 11, the shrine room; High): when the room word is 0, record +0x1c is non-zero and record +0x10 is 1: SetHeroSwapMode(2), DeactivateTimer,...
+  - [x] Pack 1394: Trigger S11 (index 11, the shrine room; High): when the room word is 0, record +0x1c is non-zero and record +0x10 is 1: SetHeroSwapMode(2), DeactivateTimer,... {auto: numbers match the pack code}
   - [ ] Pack 1394: Trigger S12 (index 12, the exit; High): when the room word is set, record +0x1c is non-zero and record +0x10 equals the room word (1): StartExteriorReplacem...
   - [x] Pack 1394: Trigger S13 (index 13, the intro): when record +0x1c is non-zero and record +0x10 is 1. With the short-intro word clear (always in play): FadeScreenOut(0.5)... {auto: numbers match the pack code}
   - [ ] Pack 1394: Update (every tick): the countdown step above (object 2's offset, the timer colour, the run-out at 0) while the exit-open word is 0 and the countdown is arm...
@@ -40164,9 +40164,9 @@ Cited 4 times in the game code.
     - [ ] Pack 1394: Countdown at t = 25 s left: object 2's offset is -11.5. At t = 0 with no death in progress: the run-out scene, then the hero at the checkpoint and the count...
     - [x] Pack 1394: Lever S3 (index 16) pressed: hero switched to hero 0, checkpoint (15, 4); a later kill-zone touch moves the hero to locator 15 with camera 4. Pressing S3 ag... {auto: numbers match the pack code}
     - [x] Pack 1394: Death callback H before the final lever, hero Tor dies with the checkpoint (15, 4): about 48 ticks after the callback starts the hero is at locator 15 in st... {auto: numbers match the pack code}
-    - [ ] Pack 1394: S11 then S12: flags 104 and 353 set, movie 65, then the load of world 158.
+    - [x] Pack 1394: S11 then S12: flags 104 and 353 set, movie 65, then the load of world 158. {auto: numbers match the pack code}
   - [ ] Pack 1394: Edge cases:
-    - [ ] Pack 1394: Quirk: the room word is clear at the start of every module lifetime, so on a return visit S11 plays movie 65 again and sets flags 104 and 353 again before S...
+    - [x] Pack 1394: Quirk: the room word is clear at the start of every module lifetime, so on a return visit S11 plays movie 65 again and sets flags 104 and 353 again before S... {auto: numbers match the pack code}
     - [ ] Pack 1394: After S14 the countdown never runs again in that load; deaths and kill zones then use the final-word branch (locator 8).
   - [ ] Pack 1394: Open questions:
     - [ ] Pack 1394: Meaning of flags 104 and 353 (meaning unknown beyond their use).
@@ -42480,7 +42480,7 @@ Cited 4 times in the game code.
 - [x] Goal 531 SQUARE (1358 to 1397): Teleport 2 prompt: posts message 40 for world 173, sets 348 if clear, loads pack 1397. {auto: story check passed by teleport}
 - [ ] Goal 532 SQUARE (1397): Buttons (script triggers 1 to 6, cylinders radius 1.4 on the row z -140.2, y 16.9, x 113.8, 107.9, 100.9, 94.7, 87.8, 82.1). Press 1 (x 113.8),... {story check: Failed goals}
 - [ ] Goal 533 SQUARE (1397): Statues: turn pads at triggers 17 (440.5, -5.1, 37.0), 18 (440.5, -5.1, -37.1), 19 (589.5, -5.1, -37.1) and 20 (589.5, -5.1, 37.1), cylinders r... {story check: Failed goals}
-- [ ] Goal 534 WALK (1397): Trigger 12: box corner (377.9, -50.7, -325.0), extents 10.0 along x by 17.7 (height 10.2). Walk in: movie 63 plays, 102 and 349 are set and twelv... {story check: Failed goals}
+- [x] Goal 534 WALK (1397): Trigger 12: box corner (377.9, -50.7, -325.0), extents 10.0 along x by 17.7 (height 10.2). Walk in: movie 63 plays, 102 and 349 are set and twelv... {auto: story check passed by teleport}
 - [x] Goal 535 WALK (1397 to 1358): Exit trigger 13: box corner (385.9, -50.7, -322.9), extents 10.0 by 1.4. Walk in: it loads pack 1358 (message 60 for world 159). {auto: story check passed by teleport}
 - [x] Goal 536 WALK (1358 to 1353): Back to the hub 1370 and into district 1353 (the Bazaar). Aim at the statue cylinders around (287, 1.2, -217). Resolved route from the hu... {auto: story check passed by teleport}
 - [ ] Goal 537 SQUARE (1353): Statue 0, script trigger 0: cylinder base (272.5, 1.2, -231.5), radius 7.1. Square at the prompt (context 4); each press turns the statue 45 de... {story check: No readable Done condition}
@@ -42759,6 +42759,8 @@ Cited 4 times in the game code.
 - [ ] R-0220: Reaching 1098's hall characters (SPEC-0045 1098 triggers 11 to 15; SPEC-0058 Act 1 goals 70, 72 and 88)
 - [ ] R-0221: The Endless Staircase's pads and door node (SPEC-0028 Pack 1299 looping-door puzzle; SPEC-0006 Teleport plane list; SPEC-0046)
 - [ ] R-0222: Painter Howell after the council scene (SPEC-0045 1300 routine 36 and routine 35; SPEC-0058 Act 2 goals 113 and 114)
+- [ ] R-0223: How the Petpet shrine's stage 4 is won in play (SPEC-0043 1398 routines 1 and 4, thread 7; SPEC-0058 Act 4 goal 556; R-0100)
+- [ ] R-0224: Serpent, King and arena details named as not built (SPEC-0016; SPEC-0019; SPEC-0030 rows 275 and SetHeroStartPos; SPEC-0041 989)
 
 ## 6. Things the code says are not built
 
@@ -42799,7 +42801,6 @@ Cited 4 times in the game code.
 - [ ] level.rs: H1; the scene's moves and cameras are Medium in the spec and not reproduced) and entity
 - [ ] level.rs: revive is not reproduced; the hero-death callback is on_hero_death.
 - [ ] level.rs: prompt routines of triggers 1 and 2 (Low) are not reproduced.
-- [ ] level.rs: not reproduced.
 - [ ] level.rs: to Medium) are not reproduced.
 - [ ] level.rs: flag 58, else set 0 (875); the further loads by 291 and 290 are not reproduced.
 - [ ] level.rs: entity-control routine are not reproduced.
@@ -42824,7 +42825,7 @@ Cited 4 times in the game code.
 - [ ] level.rs: not built.
 - [ ] level.rs: are not built.
 - [ ] level.rs: and movie 4 (the zone reload is not reproduced).
-- [ ] level.rs: with argument 2. Not built: the six entities' SetAI_Behavior 0 and 5 and their moves to random
+- [ ] level.rs: count and walks to 52 + count. Not built: their moves to random points of group instance 1, the one-entry slot's
 - [ ] level.rs: are not built.
 - [ ] level.rs: Trigger 0, the opening (once per load, before the area is active). Not built: the
 - [ ] level.rs: 14 and line 1. The boss-fight tweak (encounter 14, stage 1) is not reproduced.

@@ -7,11 +7,11 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 | Level modules in the specs | 163 |
 | Modules with no code found | 0 |
 | Modules with a spec handler that has no code arm | 14 |
-| Comments in the code naming something not built | 94 |
+| Comments in the code naming something not built | 93 |
 | Specs no game code cites | 4 of 66 |
 | Walkthrough steps with no status note saying they were traced | 14 of 45 |
 | Automated-player goals in the spec, none run end to end | 395 (Act 1: 99, Act 2: 56, Act 3: 153, Act 4: 87) |
-| Requests waiting for an answer | 24 |
+| Requests waiting for an answer | 26 |
 
 ## Requests waiting for an answer
 
@@ -39,6 +39,8 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 - R-0220: Reaching 1098's hall characters (SPEC-0045 1098 triggers 11 to 15; SPEC-0058 Act 1 goals 70, 72 and 88)
 - R-0221: The Endless Staircase's pads and door node (SPEC-0028 Pack 1299 looping-door puzzle; SPEC-0006 Teleport plane list; SPEC-0046)
 - R-0222: Painter Howell after the council scene (SPEC-0045 1300 routine 36 and routine 35; SPEC-0058 Act 2 goals 113 and 114)
+- R-0223: How the Petpet shrine's stage 4 is won in play (SPEC-0043 1398 routines 1 and 4, thread 7; SPEC-0058 Act 4 goal 556; R-0100)
+- R-0224: Serpent, King and arena details named as not built (SPEC-0016; SPEC-0019; SPEC-0030 rows 275 and SetHeroStartPos; SPEC-0041 989)
 
 ## Walkthrough steps with no status note (SPEC-0058)
 
@@ -76,7 +78,7 @@ Weak leads. Many handlers are built as fixed rules or tables with no arm of that
 - 1230 (SPEC-0039): handlers [4] of [2, 3, 4, 5, 6]
 - 1248 (SPEC-0039): handlers [1, 2, 8, 9] of [1, 2, 3, 4, 5, 6, 7, 8, 9]
 - 1257 (SPEC-0039): handlers [3, 4, 5, 6] of [1, 2, 3, 4, 5, 6, 7]
-- 1344 (SPEC-0039): handlers [1, 4, 5] of [1, 2, 3, 4, 5, 6]
+- 1344 (SPEC-0039): handlers [1] of [1, 2, 3, 4, 5, 6]
 - 1432 (SPEC-0039): handlers [3, 4, 5, 6, 7] of [3, 4, 5, 6, 7]
 
 ## Citations of each spec (game code, status notes), fewest first
@@ -146,55 +148,54 @@ Weak leads. Many handlers are built as fixed rules or tables with no arm of that
 - level.rs:1586: H1; the scene's moves and cameras are Medium in the spec and not reproduced) and entity
 - level.rs:1651: revive is not reproduced; the hero-death callback is on_hero_death.
 - level.rs:1702: prompt routines of triggers 1 and 2 (Low) are not reproduced.
-- level.rs:1774: not reproduced.
-- level.rs:1799: to Medium) are not reproduced.
-- level.rs:1966: flag 58, else set 0 (875); the further loads by 291 and 290 are not reproduced.
-- level.rs:1994: entity-control routine are not reproduced.
-- level.rs:2012: routine (Update) is not reproduced.
-- level.rs:2034: object range are not built.
-- level.rs:2060: 987); with 88 set breakable 0 disabled. The debug registrar is not built; the navmesh
-- level.rs:2134: other control threads are not reproduced. The four instance-trigger
-- level.rs:2177: fade in follows on the flag-45-set side) are not reproduced.
-- level.rs:2250: Update's comparison tree (Low in the spec) are not reproduced.
-- level.rs:2273: state 10) and thread B run from Update; the effect moves of Update are not built.
-- level.rs:2320: ActivateTransitionAssets is not built); the navmesh table runs in Update.
-- level.rs:2354: groups (given only by example) are not reproduced.
-- level.rs:2391: (Low or not listed) are not reproduced.
-- level.rs:2484: mapping), the navmesh cache and the locks' breakables are not built.
-- level.rs:2538: not reproduced.
-- level.rs:2651: callback (it refuses ordinal 73) and the empty breakable routine are not built.
-- level.rs:2708: object 2. The animated-object offset loop of groups 0 to 5 is not built.
-- level.rs:2737: swaps (their slots are not given) are not reproduced.
-- level.rs:2790: group 0's points) is not built (the navmesh assignment runs in Update); the line-37
-- level.rs:2952: object sound is not reproduced).
-- level.rs:3028: its load flag clear) and the slot each load names are not reproduced (open in the
-- level.rs:3416: not built.
-- level.rs:3470: are not built.
-- level.rs:3582: and movie 4 (the zone reload is not reproduced).
-- level.rs:3977: with argument 2. Not built: the six entities' SetAI_Behavior 0 and 5 and their moves to random
-- level.rs:4341: are not built.
-- level.rs:5752: Trigger 0, the opening (once per load, before the area is active). Not built: the
-- level.rs:6134: 14 and line 1. The boss-fight tweak (encounter 14, stage 1) is not reproduced.
-- level.rs:6423: The reward scene: object 5 shown (its colour ramp is not built) and object 4 off.
-- level.rs:8007: BlockPlayerControl and ReturnHeroAnimToIdle calls are not reproduced).
-- level.rs:8725: locators 12 to 62. The sparkle effect is not built.
-- level.rs:8860: +-3-degree swing, which ends where it began, is not reproduced.)
-- level.rs:8955: data, not reproduced).
-- level.rs:8983: sequencers, no damage) are not reproduced.
-- level.rs:9067: not given) are not reproduced.
-- level.rs:9397: item 36 (64 or 65; which hero gets which is not resolved) is not built.
-- level.rs:9582: listed until the end); the character (de)activations are not built.
-- level.rs:9655: SetHeroStartPos is not built.
-- level.rs:10097: the avoidance points are not given or not built.
-- level.rs:10323: data) are not reproduced.
-- level.rs:11411: 1). NeedHeroAlive and the weapon sheathe sound are not reproduced.
-- level.rs:13074: 77 to 79 with animation 82, and AI 5 made aggressive (the spec's quirk). Not built: the
-- level.rs:13280: its load. The loss scene (Medium in the spec) is not reproduced.
-- level.rs:13333: normal camera (preset 10). ReturnHeroAnimToIdle is not reproduced.
-- level.rs:13664: waypoints. The Harlag cutscene's parking of entity 15 is not built (its cutscene runs as
-- level.rs:13745: it also makes are not reproduced.
-- level.rs:14633: (object 8 and the entity animations are not reproduced; the fade is taken as
-- level.rs:15808: objects, effects and navmesh steps are not built; the hero-death callback is on_hero_death.
+- level.rs:1798: to Medium) are not reproduced.
+- level.rs:1965: flag 58, else set 0 (875); the further loads by 291 and 290 are not reproduced.
+- level.rs:1993: entity-control routine are not reproduced.
+- level.rs:2011: routine (Update) is not reproduced.
+- level.rs:2033: object range are not built.
+- level.rs:2059: 987); with 88 set breakable 0 disabled. The debug registrar is not built; the navmesh
+- level.rs:2133: other control threads are not reproduced. The four instance-trigger
+- level.rs:2176: fade in follows on the flag-45-set side) are not reproduced.
+- level.rs:2249: Update's comparison tree (Low in the spec) are not reproduced.
+- level.rs:2272: state 10) and thread B run from Update; the effect moves of Update are not built.
+- level.rs:2319: ActivateTransitionAssets is not built); the navmesh table runs in Update.
+- level.rs:2353: groups (given only by example) are not reproduced.
+- level.rs:2390: (Low or not listed) are not reproduced.
+- level.rs:2483: mapping), the navmesh cache and the locks' breakables are not built.
+- level.rs:2537: not reproduced.
+- level.rs:2650: callback (it refuses ordinal 73) and the empty breakable routine are not built.
+- level.rs:2707: object 2. The animated-object offset loop of groups 0 to 5 is not built.
+- level.rs:2736: swaps (their slots are not given) are not reproduced.
+- level.rs:2789: group 0's points) is not built (the navmesh assignment runs in Update); the line-37
+- level.rs:2951: object sound is not reproduced).
+- level.rs:3027: its load flag clear) and the slot each load names are not reproduced (open in the
+- level.rs:3415: not built.
+- level.rs:3469: are not built.
+- level.rs:3581: and movie 4 (the zone reload is not reproduced).
+- level.rs:3977: count and walks to 52 + count. Not built: their moves to random points of group instance 1, the one-entry slot's
+- level.rs:4346: are not built.
+- level.rs:5757: Trigger 0, the opening (once per load, before the area is active). Not built: the
+- level.rs:6139: 14 and line 1. The boss-fight tweak (encounter 14, stage 1) is not reproduced.
+- level.rs:6428: The reward scene: object 5 shown (its colour ramp is not built) and object 4 off.
+- level.rs:8012: BlockPlayerControl and ReturnHeroAnimToIdle calls are not reproduced).
+- level.rs:8730: locators 12 to 62. The sparkle effect is not built.
+- level.rs:8865: +-3-degree swing, which ends where it began, is not reproduced.)
+- level.rs:8960: data, not reproduced).
+- level.rs:8988: sequencers, no damage) are not reproduced.
+- level.rs:9072: not given) are not reproduced.
+- level.rs:9402: item 36 (64 or 65; which hero gets which is not resolved) is not built.
+- level.rs:9587: listed until the end); the character (de)activations are not built.
+- level.rs:9660: SetHeroStartPos is not built.
+- level.rs:10102: the avoidance points are not given or not built.
+- level.rs:10328: data) are not reproduced.
+- level.rs:11429: 1). NeedHeroAlive and the weapon sheathe sound are not reproduced.
+- level.rs:13092: 77 to 79 with animation 82, and AI 5 made aggressive (the spec's quirk). Not built: the
+- level.rs:13298: its load. The loss scene (Medium in the spec) is not reproduced.
+- level.rs:13351: normal camera (preset 10). ReturnHeroAnimToIdle is not reproduced.
+- level.rs:13682: waypoints. The Harlag cutscene's parking of entity 15 is not built (its cutscene runs as
+- level.rs:13763: it also makes are not reproduced.
+- level.rs:14651: (object 8 and the entity animations are not reproduced; the fade is taken as
+- level.rs:15826: objects, effects and navmesh steps are not built; the hero-death callback is on_hero_death.
 - movie.rs:2: The dead second counter (newly pressed buttons, threshold 3) is not built, as the spec says.
 - object.rs:4: record, which only the MoveObjToLocator link forms set; they are not built).
 - roberta.rs:506: rebuilt-frame quirk of a second bounce is not reproduced.
