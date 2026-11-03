@@ -606,6 +606,7 @@ fn main() {
     let mut show_info = false;
     let mut catch_up = MAX_CATCH_UP;
     let mut play_mode = false;
+    let mut goal_start = None;
     let mut play_pack = PLAY_PACK;
     let mut autowalk = None;
     let mut shot_at = 4.0f32;
@@ -727,6 +728,9 @@ fn main() {
             flags.extend(args.next().and_then(|v| v.parse::<u16>().ok()));
         } else if arg == "--play" {
             play_mode = true;
+        } else if arg == "--goal" {
+            play_mode = true;
+            goal_start = args.next().and_then(|v| v.parse::<u32>().ok()).or(Some(1));
         } else if arg == "--original-pacing" {
             catch_up = 1;
         } else if arg == "--hide-hud" {
@@ -953,6 +957,9 @@ fn main() {
     app.add_systems(Update, (display::window_mouse.before(step_sim), display::show_window.after(step_sim)));
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(Update, dev_spawn::picker_show);
+    app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
+    app.add_systems(Startup, story_run::spawn_goal_panel);
+    app.add_systems(Update, (story_run::goal_walk_step.before(play_frame), story_run::show_goal_panel));
     app.add_systems(PostUpdate, ui_fit::fit_to_window.after(bevy::ui::UiSystems::Layout));
     app.add_systems(Update, button_style::apply);
     app.add_systems(Last, display::limit_frame);

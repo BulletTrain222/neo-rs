@@ -3,7 +3,9 @@
 //! words and flags carry on from goal to goal as in play, but walking is not tested. A fight is ended by the developer
 //! defeat. A goal that fails has its Done flags and items forced so that the next goal can run.
 
+use crate::dev_menu::DevMenu;
 use crate::play::Play;
+use bevy::prelude::*;
 
 #[derive(Debug, Default, PartialEq)]
 pub struct Goal {
@@ -29,6 +31,8 @@ pub struct Goal {
     /// The script trigger the row names: the hero stands on a point of its volume read from the world, because a row's
     /// centre may lie outside a turned volume.
     trigger: Option<u16>,
+    /// The row's words, for the goal walk's panel.
+    text: String,
 }
 
 fn list<T: std::str::FromStr>(s: &str) -> Vec<T> {
@@ -67,6 +71,7 @@ pub fn parse_goal(line: &str) -> Option<Goal> {
         trigger: c.get(15).and_then(|t| t.trim().parse().ok()),
         others: c.get(16).map_or(Vec::new(), |t| list(t)),
         visits: c.get(17).map_or(Vec::new(), |t| list(t)),
+        text: c.get(18).map_or(String::new(), |t| t.to_string()),
     })
 }
 
@@ -313,6 +318,189 @@ impl StoryRun {
     }
 }
 
+/// The goal walk, a test tool of this build: `--goal N` starts the window at goal N of the goal file with the story
+/// state of the goals before it, and the person at the keys plays each goal. F10 goes to the next goal, F9 back one and
+/// F11 restarts this one (a load of its world, with the state set again). A goal left unfinished has its Done state
+/// forced, as in the story checker, and each goal's result is added to private/story/hand.tsv.
+#[derive(Resource, Default)]
+pub struct GoalWalk {
+    goals: Vec<Goal>,
+    at: usize,
+    begun: bool,
+    /// Frames since the hero was last put at this goal, while there is still somewhere to put him.
+    placing: Option<u32>,
+    started: u64,
+}
+
+const GOAL_FILE: &str = "private/story/goals.tsv";
+const HAND_FILE: &str = "private/story/hand.tsv";
+
+impl GoalWalk {
+    /// The walk from goal `first`, or the first goal after it in the file.
+    pub fn open(first: u32) -> Self {
+        let goals: Vec<Goal> = std::fs::read_to_string(GOAL_FILE).unwrap_or_default().lines().filter_map(parse_goal).collect();
+        if goals.is_empty() {
+            eprintln!("--goal: no goals in {GOAL_FILE}; run python scripts/story_check.py . first");
+        }
+        let at = goals.iter().position(|g| g.n >= first).unwrap_or(0);
+        Self { goals, at, ..Self::default() }
+    }
+
+    fn met(&self, p: &Play) -> bool {
+        self.goals.get(self.at).is_some_and(|g| !g.done.is_empty() && g.done.iter().all(|t| token_holds(t, &|f| p.state.flag(f), &|i| p.state.has_item(i), p.world.pack)))
+    }
+
+    fn apply_needs(g: &Goal, p: &mut Play) {
+        for &f in &g.needs_on {
+            p.state.set(f, true);
+        }
+        for &f in &g.needs_off {
+            p.state.set(f, false);
+        }
+        for &i in &g.needs_items {
+            if !p.state.has_item(i) {
+                p.state.give(i, 1);
+            }
+        }
+    }
+
+    fn apply_done(g: &Goal, p: &mut Play) {
+        for &f in &g.force_on {
+            p.state.set(f, true);
+        }
+        for &f in &g.force_off {
+            p.state.set(f, false);
+        }
+        for &i in &g.force_held {
+            if !p.state.has_item(i) {
+                p.state.give(i, 1);
+            }
+        }
+        for &i in &g.force_gone {
+            p.state.take(i, 1);
+        }
+    }
+
+    /// The story state of every goal before this one, from nothing, and a load of this goal's world.
+    fn jump(&mut self, p: &mut Play, dev: &mut DevMenu) {
+        p.state.flags.clear();
+        p.state.items.clear();
+        p.state.set(707, true);
+        for g in &self.goals[..self.at] {
+            Self::apply_needs(g, p);
+            Self::apply_done(g, p);
+        }
+        self.enter(p, dev, true);
+    }
+
+    fn enter(&mut self, p: &mut Play, dev: &mut DevMenu, reload: bool) {
+        let g = &self.goals[self.at];
+        Self::apply_needs(g, p);
+        // Shop goals are about the buying, not the saving up.
+        p.state.neopoints = p.state.neopoints.max(5000);
+        if let Some(pack) = g.pack.filter(|&k| reload || k != p.world.pack) {
+            dev.warp = Some(pack);
+        }
+        self.placing = Some(0);
+        self.started = p.ticks;
+    }
+
+    /// The hero at the goal once the world is there: its point, its trigger's volume, then beside its character when
+    /// that has loaded.
+    fn place(&mut self, p: &mut Play, dev: &DevMenu) {
+        let Some(frames) = self.placing else { return };
+        let g = &self.goals[self.at];
+        if dev.warp.is_some() || g.pack.is_some_and(|k| k != p.world.pack) {
+            return;
+        }
+        self.placing = Some(frames + 1);
+        let talker = !(g.name.is_empty() && g.ids.is_empty());
+        if frames == 30 {
+            let inside = g.trigger.and_then(|i| p.world.volume_points().into_iter().find(|v| v.0 == i)).map(|v| v.1);
+            if let Some(&(x, z, y)) = g.spots.first() {
+                p.place_at(x, z, y.map_or(1.0e4, |y| y + 8.0));
+            } else if let Some(v) = inside {
+                p.place_at(v[0] as f32, v[2] as f32, v[1] as f32 + 8.0);
+            }
+            self.placing = (talker).then_some(31);
+        } else if frames > 30 && frames % 30 == 0 && p.dev_go_near(&g.name, &g.ids) {
+            self.placing = None;
+        } else if frames > 900 {
+            self.placing = None;
+        }
+    }
+
+    fn record(&self, p: &Play) {
+        use std::io::Write;
+        let g = &self.goals[self.at];
+        let line = format!("{}\t{}\t{}\t{}\n", g.n, g.kind, if self.met(p) { "done" } else { "left" }, p.ticks.saturating_sub(self.started));
+        if let Ok(mut f) = std::fs::OpenOptions::new().create(true).append(true).open(HAND_FILE) {
+            let _ = f.write_all(line.as_bytes());
+        }
+    }
+}
+
+/// The goal walk's keys.
+pub fn goal_walk_step(keys: Res<ButtonInput<KeyCode>>, mut walk: ResMut<GoalWalk>, play: Option<ResMut<crate::PlayState>>, mut dev: ResMut<DevMenu>) {
+    let walk = &mut *walk;
+    let Some(mut play) = play else { return };
+    if walk.goals.is_empty() {
+        return;
+    }
+    let p = &mut play.play;
+    if !walk.begun {
+        walk.begun = true;
+        walk.jump(p, &mut dev);
+    } else if keys.just_pressed(KeyCode::F10) && walk.at + 1 < walk.goals.len() {
+        walk.record(p);
+        if !walk.met(p) {
+            GoalWalk::apply_done(&walk.goals[walk.at], p);
+        }
+        walk.at += 1;
+        walk.enter(p, &mut dev, false);
+    } else if keys.just_pressed(KeyCode::F9) && walk.at > 0 {
+        walk.at -= 1;
+        walk.jump(p, &mut dev);
+    } else if keys.just_pressed(KeyCode::F11) {
+        walk.jump(p, &mut dev);
+    }
+    walk.place(p, &dev);
+}
+
+#[derive(Component)]
+pub struct GoalPanel;
+
+#[derive(Component)]
+pub struct GoalPanelText;
+
+pub fn spawn_goal_panel(mut commands: Commands, walk: Res<GoalWalk>) {
+    if walk.goals.is_empty() {
+        return;
+    }
+    commands
+        .spawn((
+            Node { position_type: PositionType::Absolute, top: px(8), right: px(8), max_width: percent(45), padding: UiRect::all(px(8)), ..default() },
+            BackgroundColor(Color::srgba(0.0, 0.0, 0.0, 0.7)),
+            GlobalZIndex(4000),
+            GoalPanel,
+        ))
+        .with_children(|ui| {
+            ui.spawn((Text::default(), TextFont { font_size: bevy::text::FontSize::Px(14.0), ..default() }, TextColor(Color::WHITE), GoalPanelText));
+        });
+}
+
+pub fn show_goal_panel(walk: Res<GoalWalk>, play: Option<Res<crate::PlayState>>, mut text: Query<&mut Text, With<GoalPanelText>>) {
+    let (Some(g), Some(play)) = (walk.goals.get(walk.at), play) else { return };
+    let state = if walk.met(&play.play) { "DONE: press F10" } else if g.done.is_empty() { "the game cannot tell when this is done" } else { "not done yet" };
+    let pack = g.pack.map_or(String::from("any world"), |k| format!("world {k}"));
+    let s = format!("Goal {} ({}, {pack}): {state}\n{}\nF10 next   F9 back   F11 restart", g.n, g.kind, g.text);
+    for mut t in &mut text {
+        if t.0 != s {
+            t.0 = s.clone();
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -326,6 +514,7 @@ mod tests {
         assert_eq!((g.needs_on, g.needs_off, g.needs_items), (vec![111], vec![112], vec![6]));
         assert_eq!(g.done, ["f112", "i7", "!i6"]);
         assert!(parse_goal("too\tshort").is_none());
+        assert_eq!(parse_goal("6\tWAIT\t909\t\t\t\t\t\t\t\t\t\t\t\t1500\t\t\t\tThe words").unwrap().text, "The words");
     }
 
     #[test]

@@ -183,7 +183,7 @@ for g in goals:
     z = d or dict(on=set(), off=set(), held=set(), gone=set())
     place = ';'.join(f'{a},{c}' + (f',{b}' if b is not None else '') for a, b, c in spots(g))
     place = SPOTS.get(g['n'], place)
-    lines.append('\t'.join([str(g['n']), g['kind'], str(pack), place, name, ids, nums(n['on']), nums(n['off']), nums(n['held']), ','.join(done), nums(set(z['on']) | set(g['raised'])), nums(z['off']), nums(z['held']), nums(z['gone']), str(TICKS.get(g['kind'], 1500)), trigger, others, visits]))
+    lines.append('\t'.join([str(g['n']), g['kind'], str(pack), place, name, ids, nums(n['on']), nums(n['off']), nums(n['held']), ','.join(done), nums(set(z['on']) | set(g['raised'])), nums(z['off']), nums(z['held']), nums(z['gone']), str(TICKS.get(g['kind'], 1500)), trigger, others, visits, re.sub(r'\s+', ' ', (g['target'] + ' ' + g['notes']).strip())[:600]]))
 path = os.path.join(private, 'goals.tsv')
 open(path, 'w', encoding='utf-8', newline='\n').write('\n'.join(lines) + '\n')
 env = {k: v for k, v in os.environ.items() if not k.startswith('NEOPETS_')}
