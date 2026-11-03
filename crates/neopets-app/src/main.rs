@@ -4684,6 +4684,23 @@ fn play_trace(
             }
         }
     }
+    // NEOPETS_TRACE_PART_VERTS=n: the scene parts of this world with n vertices: their vertex alpha, in tenths, and material (diagnostic).
+    if let Some(n) = std::env::var("NEOPETS_TRACE_PART_VERTS").ok().and_then(|v| v.parse::<usize>().ok()) {
+        if let Ok(bytes) = archive.index.read(&mut archive.disc, play.world.pack) {
+            if let Ok(chain) = neopets_data::resource::walk_chunks(&bytes, None) {
+                if let Ok(m) = neopets_data::model::build_world(&bytes, &chain.chunks, u32::MAX) {
+                    for (i, q) in m.parts.iter().enumerate().filter(|(_, q)| q.positions.len() == n) {
+                        let mut tenths = [0usize; 13];
+                        for c in &q.colors {
+                            tenths[((c[3] * 10.0) as usize).min(12)] += 1;
+                        }
+                        let tex = q.texture.and_then(|t| m.textures.get(t)).map(|t| { let a: Vec<u8> = t.image.rgba.chunks_exact(4).map(|p| p[3]).collect(); (t.image.width, t.image.height, a.iter().copied().min(), a.iter().copied().max()) });
+                        println!("      PARTV {i} group {:?} program {:?} zone {:?} pass {} bucket {:?} scroll {:?} flip {} env {} lit {} pass1 {} alpha tenths {tenths:?} tex {:?} fades {}", q.group, q.program, q.zone, q.pass, q.bucket, q.scroll, q.flipbook.is_some(), q.env_map, q.lit, q.pass1.is_some(), tex, vertex_fades(q));
+                    }
+                }
+            }
+        }
+    }
     let trees: Vec<String> = play.world.patches.iter().filter(|p| p.key == 4).take(3).map(|p| format!("({:.1},{:.1})", (p.area[0] + p.area[1]) / 2.0, (p.area[2] + p.area[3]) / 2.0)).collect();
     println!("Foliage of {}: {} patches; key-4 tree patches at {}", play.world.pack, play.world.patches.len(), trees.join(" "));
     let kinds: Vec<String> = play.world.groups.iter().enumerate().map(|(i, g)| format!("{i}:k{} t{:?} o{:?}", g.kind, g.triggers.first(), g.objects.iter().take(2).collect::<Vec<_>>())).collect();

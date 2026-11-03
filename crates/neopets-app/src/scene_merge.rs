@@ -18,6 +18,16 @@ use crate::{model_texture, part_signature, pass1, pass1_assets, DrawCull, PartSi
 /// The area cell a merged group covers, in world units.
 const CELL: f32 = 64.0;
 
+/// A part's triangles split into those solid at all three corners (vertex alpha at or above 120 of 128) and the others.
+fn split_fading(p: &neopets_data::model::MeshPart) -> (Vec<u32>, Vec<u32>) {
+    let (mut solid, mut faded) = (Vec::new(), Vec::new());
+    for t in p.indices.chunks_exact(3) {
+        let whole = t.iter().all(|&v| p.colors.get(v as usize).is_some_and(|c| c[3] >= 120.0 / 128.0));
+        (if whole { &mut solid } else { &mut faded }).extend_from_slice(t);
+    }
+    (solid, faded)
+}
+
 /// A built scene kept for a respawn: its model, its pass-0 part signatures, its materials and
 /// which parts were spawned as twins of another drawn scene.
 pub struct Built {
@@ -176,7 +186,25 @@ pub fn spawn(
             groups.entry(key).or_insert_with(|| (material, Vec::new())).1.push(i);
             continue;
         }
-        let mesh = meshes.add(part_mesh(p));
+        // SPEC-0003 TEST: a pixel at or above 120 of 128 writes depth, a softer one only blends. A fading part's triangles
+        // solid at all three corners draw as solid, so that what lies behind them stays hidden (user's F8 view 16); the rest
+        // blend. Done by triangle, as Bevy's prepass does not see vertex alpha (see `vertex_fades`).
+        let split = (fades && !scrolling && env.is_none()).then(|| split_fading(p)).filter(|(solid, _)| !solid.is_empty());
+        let mesh = match &split {
+            Some((solid, faded)) => {
+                let t = p.texture.unwrap_or(0);
+                let mut e = commands.spawn((Mesh3d(meshes.add(part_mesh(&neopets_data::model::MeshPart { indices: solid.clone(), ..p.clone() }))), MeshMaterial3d(b.textures[t].clone()), Transform::IDENTITY, part, b.sigs[i]));
+                count += 1;
+                if let Some(z) = p.zone {
+                    e.insert(ZoneGate(pack, z));
+                }
+                if let Some((at, d1, _)) = p.cull {
+                    e.insert(DrawCull(Vec3::from(at), d1));
+                }
+                meshes.add(part_mesh(&neopets_data::model::MeshPart { indices: faded.clone(), ..p.clone() }))
+            }
+            None => meshes.add(part_mesh(p)),
+        };
         // A soft part's blended layer over its cut core.
         if let (true, Some(t)) = (soft, p.texture) {
             if let Some(m) = b.blend.get(&t) {
