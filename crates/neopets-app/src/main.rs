@@ -7,6 +7,7 @@ mod controls;
 mod dev_menu;
 mod dev_spawn;
 mod stage_view;
+mod story_run;
 mod ui_fit;
 mod display;
 mod perf;
@@ -4698,6 +4699,9 @@ fn play_trace(
     });
     let mut last_pickup = String::new();
     let mut statuses_shown: Vec<usize> = Vec::new();
+    // NEOPETS_TRACE_STORY=path: the story checker's goal file, run through in order (scripts/story_check.py).
+    let mut story = std::env::var("NEOPETS_TRACE_STORY").ok().and_then(|p| story_run::StoryRun::from_file(&p));
+    let mut story_order = story_run::Order::default();
     // NEOPETS_TRACE_QUIT=n: Quit's world teardown on tick n (diagnostic; the pause page's Quit).
     let mut quit_at: Option<u64> = std::env::var("NEOPETS_TRACE_QUIT").ok().and_then(|v| v.trim().parse().ok());
     for _ in 0..ticks {
@@ -4913,6 +4917,24 @@ fn play_trace(
                     println!("      after {:?}; {}", held(&play), play.status());
                 }
                 Err(e) => println!("      Quit teardown failed: {e}"),
+            }
+        }
+        if let Some(run) = story.as_mut() {
+            story_order = run.step(&mut play);
+            if story_order.finished {
+                println!("STORY finished on tick {}, world {}", play.ticks, play.world.pack);
+                break;
+            }
+            if let Some(pack) = story_order.warp {
+                match warp(&mut archive.disc, &archive.index, &play, pack) {
+                    Ok(new) => {
+                        play = new;
+                        if let Ok(second) = archive.disc.reopen() {
+                            streamer = Streamer::start(second, archive.index.clone(), play.boot.clone());
+                        }
+                    }
+                    Err(e) => println!("STORY warp to {pack} failed: {e}"),
+                }
             }
         }
         // The trace waits for region loads (characters) before the next tick, up to a minute,
@@ -5532,6 +5554,8 @@ fn play_trace(
         if std::env::var("NEOPETS_TRACE_SQUARE").is_ok_and(|v| v.split(',').any(|t| t.trim().parse::<u64>().ok() == Some(play.ticks))) {
             input.square = true;
         }
+        input.square |= story_order.square;
+        input.jump |= story_order.jump;
         // In a fight below half health the trace drinks: it opens the quick panel, selects the
         // first entry it owns and presses Cross (or closes the panel with Triangle).
         let mut input = input;

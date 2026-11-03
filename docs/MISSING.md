@@ -11,7 +11,7 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 | Specs no game code cites | 4 of 66 |
 | Walkthrough steps with no status note saying they were traced | 14 of 45 |
 | Automated-player goals in the spec, none run end to end | 384 (Act 1: 89, Act 2: 55, Act 3: 153, Act 4: 87) |
-| Requests waiting for an answer | 19 |
+| Requests waiting for an answer | 20 |
 
 ## Requests waiting for an answer
 
@@ -34,6 +34,7 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 - R-0215: The final fight's timeout, seen from a trace (SPEC-0054 What the player must do item 7; SPEC-0058 Endings)
 - R-0216: Whether Queen Fyora can be hit (SPEC-0029 Behaviors 19 and 30; SPEC-0054 pack 1428)
 - R-0217: Pack 874's slot thread (SPEC-0039 874 Thread 3; SPEC-0044 864)
+- R-0218: Flag 706 after the opening (SPEC-0058 Act 1 goal 1; SPEC-0045 909 Update and arrival step)
 
 ## Walkthrough steps with no status note (SPEC-0058)
 
@@ -76,17 +77,17 @@ Weak leads. Many handlers are built as fixed rules or tables with no arm of that
 
 ## Citations of each spec (game code, status notes), fewest first
 
-- SPEC-0065 common-enemies-build-guides-2: 0 in code, 3 in notes
-- SPEC-0017 encounter-spyder-nest: 0 in code, 4 in notes
-- SPEC-0061 not-needed-for-play: 0 in code, 5 in notes
-- SPEC-0062 boss-encounter-atlas: 0 in code, 6 in notes
+- SPEC-0065 common-enemies-build-guides-2: 0 in code, 4 in notes
+- SPEC-0017 encounter-spyder-nest: 0 in code, 5 in notes
+- SPEC-0061 not-needed-for-play: 0 in code, 6 in notes
+- SPEC-0062 boss-encounter-atlas: 0 in code, 7 in notes
 - SPEC-0063 arena-fighters: 1 in code, 5 in notes
 - SPEC-0064 common-enemies-build-guides: 1 in code, 9 in notes
 - SPEC-0057 environmental-hazards: 4 in code, 4 in notes
 - SPEC-0066 unused-and-developer-worlds: 4 in code, 4 in notes
-- SPEC-0058 main-story: 4 in code, 24 in notes
 - SPEC-0002 resource-identification: 5 in code, 4 in notes
 - SPEC-0007 game-timing: 5 in code, 5 in notes
+- SPEC-0058 main-story: 5 in code, 25 in notes
 - SPEC-0049 story-progression: 7 in code, 13 in notes
 - SPEC-0001 archive-index: 11 in code, 8 in notes
 - SPEC-0024 design-tables: 11 in code, 11 in notes
