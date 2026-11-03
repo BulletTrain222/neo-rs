@@ -92,7 +92,7 @@ goals = []
 for act in ('Act 1', 'Act 2', 'Act 3', 'Act 4'):
     i = story.index(f'## Goal list for an automated player ({act})')
     j = story.find('\n## ', i + 10)
-    goals.append((act, len(re.findall(r'(?m)^\| *\d+ *\| *[A-Z]+ *\|', story[i:j]))))
+    goals.append((act, len(re.findall(r'(?m)^\| *\d+ *\| *[A-Z, ]+? *\|', story[i:j]))))
 
 # 5. Open requests, and the older status notes' words.
 opens = []

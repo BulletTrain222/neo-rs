@@ -10,7 +10,7 @@ Written by `scripts/missing.py` from the specs, the code and docs/STATUS.md, wit
 | Comments in the code naming something not built | 94 |
 | Specs no game code cites | 4 of 66 |
 | Walkthrough steps with no status note saying they were traced | 14 of 45 |
-| Automated-player goals in the spec, none run end to end | 384 (Act 1: 89, Act 2: 55, Act 3: 153, Act 4: 87) |
+| Automated-player goals in the spec, none run end to end | 395 (Act 1: 99, Act 2: 56, Act 3: 153, Act 4: 87) |
 | Requests waiting for an answer | 22 |
 
 ## Requests waiting for an answer

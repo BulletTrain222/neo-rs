@@ -7,26 +7,33 @@ The run reached the end of the list (exit 0).
 | Result | Goals | Meaning |
 | --- | --- | --- |
 | notrun | 0 | Not reached |
-| fail | 51 | The Done condition never held |
+| fail | 58 | The Done condition never held |
 | gameover | 3 | The hero died and the world was torn down |
 | manual | 42 | Kind not automated (minigames, pushes, climbs, shots) |
 | nocheck | 95 | Ran, but its Done condition is not machine-readable |
 | already | 22 | Done already held from earlier goals |
-| pass | 171 | Done condition reached |
+| pass | 175 | Done condition reached |
 
 ## Failed goals
 
 - Act 1 goal 1 WAIT (909): New Game opening: movies 88 and 1, act start 1 (about 95 s). The hero stands at entry 0, (-1852.802, y, 1137.4 Done: 1 on, 706 on.
 - Act 1 goal 19 SQUARE (951): The chest (lock chest 0, key item 15): Square inside the sphere. Done: item 15 gone, item 98 held. Needed and not met: item15.
-- Act 1 goal 55 WALK (1056): Stand in the chain talk zone again. Done: 632 on.
-- Act 1 goal 60 WALK (1056): Spin talk zone again. Done: 633 on.
+- Act 1 goal 49 TALK (951 to 1148): Leave 951 (goal 21), walk the legs of goal 26 to town, then talk to Officer Kendrick (1148, town door 5). Done: 150 and 142 on, 3 and 8 on, item 0 gone, item 120 held.
+- Act 1 goal 55 WALK (1056): Stand in the chain talk zone again. script trigger 10 Done: 632 on.
+- Act 1 goal 56 TALK (1056 to 1163): 1056 door 1 (centre (140.3, 22.3, 573.4)); arrival locator 15 (-43.7, -126.3, 100.4). Then talk to the Miamice Done: 156 on.
+- Act 1 goal 60 WALK (1056): Spin talk zone again. script trigger 11 Done: 633 on.
+- Act 1 goal 61 TALK (1056 to 1152): 1056 door 0 (centre (140.3, 22.3, 483.6)) to 1098; then 1098 door 2 (centre (78.3, -130.2, -54.6)); arrival in Done: 162 on.
+- Act 1 goal 63 SQUARE (1173 to 1171): Script trigger 0: cylinder base (28.9, -148.6, -12.1), radius 7.5, height 7.8; press Square at the prompt. Done: pack 1171 current (arrival locator 2 (-345.4, 2.1, -71.4)).
 - Act 1 goal 65 WALK (1171 to 1056):  Done: 1056 current; flag 24 on (set at 1056's start from 167).
 - Act 1 goal 69 WALK (1056): Mote talk zone again. script trigger 12 Done: 634 on.
 - Act 1 goal 70 TALK (1098): Entity 49 (reach 1098 as goals 49 and 50 show, or by 1056 door 0). Done: 174 on.
 - Act 1 goal 72 TALK (1098): Entity 49. Done: 180 and 185 on.
 - Act 1 goal 77 TALK (1098): Entity 35 or 36 (the cutscene routine). Done: 194 on.
+- Act 1 goal 78 TALK (1098 to 1163): 1098 door 5 (centre (-69.8, -128.6, -54.6)) to 1163; Sir Harlag, entity 15, placed at (-84.7, -126.6, -28.8). Done: 195 on.
 - Act 1 goal 88 TALK (1098): Entity 39. Done: 206 on.
-- Act 2 goal 114 TALK (1300): Painter Howell (entity 18). Done: 399 on, item 61 held. Needed and not met: 222.
+- Act 1 goal 95 WALK (956): Leave the top sphere (script trigger 16, centre (-702.1, 68.2, -824.9), radius 11.1) by more than 11.1 units,  Done: 212 on.
+- Act 2 goal 113 WAIT (1300): Council sphere, script trigger 1: centre (0.0, 1536.8, -212.9), radius 10.2 (the gardens' north end, locator 3 Done: 222 on, 396 on.
+- Act 2 goal 114 TALK (1300): Painter Howell (entity 18). Done: 399 on, item 61 held.
 - Act 3 goal 300 WAIT (886): Brightvale arrival after movie 30 (return world 64). The module's Init sets 249 because 248 is on and movie 30 Done: control back; 249 on.
 - Act 3 goal 317 WALK (753): Walk out of the sphere (more than 30 from its centre). Done: movie 37 plays on the next tick; 258 on.
 - Act 3 goal 328 FIGHT (735): The Plague Serpent (boss instance 10, AI 73; SPEC-0016). Its only damage route is one strike on the head while Done: 263, 75, 50 and 70 on (set by the victory scene).
@@ -84,9 +91,9 @@ The run reached the end of the list (exit 0).
 - Act 1 goal 11 CLIMB (909): From the crate, jump with the stick toward the ladder face at x about -1934, z 1077.45 to 1079.08 (ladder base Done: hero y at least 58.5 within 6 of (-1934, 1078).
 - Act 1 goal 12 CLIMB (909): Second ladder: face origin (-1914.73, 73.44, 1059.04), spans y 55.865 to 73.441, to the roof at y about 73.4. Done: hero y at least 73.
 - Act 1 goal 28 GAME (1023): Chase Meerouladen: for k = 0 to 7 get within 30 units of locator 477 + k, in order: (-25.464, 29.043, 547.337) Done: 128 to 135 on in turn, then 136 on, item 32 held, movie 4 played.
-- Act 1 goal 54 ATTACK (1056): Chain lesson: perform the chain attack (attack state 4) so that it hits the dummy, entity 4, while standing in Done: 155 on. Needed and not met: 154.
-- Act 1 goal 57 GAME (1163): Catch five Miamice in the field (x -108.0 to -57.4, z 60.5 to 109.3; start points (-88.51, -125.82, 63.55), (- Done: 158 and 23 on. Needed and not met: 156.
-- Act 1 goal 59 ATTACK (1056): Spin lesson: one spin attack (attack states 7 and 8) must hit all three dummies, entities 7, 8 and 9, inside t Done: 161 on. Needed and not met: 160.
+- Act 1 goal 54 ATTACK (1056): Chain lesson: perform the chain attack (attack state 4) so that it hits the dummy, entity 4, while standing in Done: 155 on.
+- Act 1 goal 57 GAME (1163): Catch five Miamice in the field (x -108.0 to -57.4, z 60.5 to 109.3; start points (-88.51, -125.82, 63.55), (- Done: 158 and 23 on.
+- Act 1 goal 59 ATTACK (1056): Spin lesson: one spin attack (attack states 7 and 8) must hit all three dummies, entities 7, 8 and 9, inside t Done: 161 on.
 - Act 1 goal 64 ATTACK (1171): Clear the five drains: for drain i break its three breakables in order (23, 24, 25; 26, 27, 28; 29, 30, 31; 32 Done: 637 to 641 on, 163 to 167 on, 33 on.
 - Act 1 goal 68 ATTACK (1056): Mote tasks in the mote area (script trigger 7, slab centre (-33.8, 27.1, 327.1), 75.0 wide, 45.6 deep): a fire Done: 171, 172, 658 and 173 on.
 - Act 1 goal 71 GAME (1056): Break the five nest breakables 24, 27, 30, 33 and 36 (entities 15 to 19 are the targets). Done: 179 on (175 to 178 and 625 to 629 on along the way).
