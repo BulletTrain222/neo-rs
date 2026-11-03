@@ -5563,6 +5563,11 @@ impl Play {
 
     /// Diagnostic: what pushes the hero where it stands: the push boxes and spheres that move a
     /// point 1.0 around it, and the frame records whose wall push does.
+    /// Diagnostic: a line of the current world opens as a level message.
+    pub fn diag_say(&mut self, line: u16) {
+        self.apply(&[Action::Message { line }]);
+    }
+
     /// Diagnostic: the characters on a scripted walk: name, the clip playing, and whether the walk's clip was found.
     pub fn walkers(&self) -> Vec<(String, u32, f32, bool)> {
         self.characters.iter().filter(|c| c.script_walk.is_some()).map(|c| (c.name.clone(), c.anim.clip_state().action, c.anim.clip_state().progress, c.townsfolk.is_some())).collect()
@@ -16896,6 +16901,9 @@ impl Play {
         // SPEC-0022 Dialogue control records 0x11 to 0x13: set or clear progress flags (the range
         // rule) and give items (a count of exactly 18 gives 1; item 135 is a Neopoint reward).
         for (kind, a0, a1) in std::mem::take(&mut self.textbox.commands) {
+            if std::env::var_os("NEOPETS_TRACE_SAY").is_some() {
+                println!("      TEXT COMMAND kind {kind:#x} args {a0} {a1}");
+            }
             let range = |a0: i32, a1: i32| if a1 < 1 || a1 <= a0 { a0..=a0 } else { a0..=a1 };
             match kind {
                 0x11 | 0x12 => {

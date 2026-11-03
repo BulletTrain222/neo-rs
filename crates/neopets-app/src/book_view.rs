@@ -5,6 +5,7 @@
 use bevy::camera::visibility::RenderLayers;
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::asset::RenderAssetUsages;
+use bevy::camera::RenderTarget;
 use bevy::prelude::*;
 use neopets_data::model::ModelData;
 
@@ -24,15 +25,21 @@ pub struct BookView {
     index: Option<usize>,
 }
 
-pub fn spawn_camera(mut commands: Commands) {
-    commands.spawn((
+/// The book's camera exists only while a book is open: other systems take the first 3D camera they find as the view
+/// (the effects' sprites, the item popups), so an idle one would turn them all to its own frame.
+fn spawn_camera(commands: &mut Commands, target: Option<RenderTarget>, msaa: Msaa) {
+    let mut e = commands.spawn((
         Camera3d::default(),
-        Camera { order: 1, is_active: false, clear_color: ClearColorConfig::None, ..default() },
+        Camera { order: 1, clear_color: ClearColorConfig::None, ..default() },
         bevy::core_pipeline::tonemapping::Tonemapping::None,
         Projection::Perspective(PerspectiveProjection { near: 0.02, far: 100.0, ..default() }),
         RenderLayers::layer(BOOK_LAYER),
+        msaa,
         BookCamera,
     ));
+    if let Some(t) = target {
+        e.insert(t);
+    }
 }
 
 fn part_mesh(part: &neopets_data::model::MeshPart) -> Mesh {
@@ -104,22 +111,25 @@ pub fn sync_book(
     mut materials: ResMut<Assets<StandardMaterial>>,
     mut images: ResMut<Assets<Image>>,
     mut parts: Query<(Entity, &mut Transform), (With<BookPart>, Without<BookCamera>)>,
-    mut cameras: Query<(&mut Camera, &mut Transform), With<BookCamera>>,
+    mut cameras: Query<(Entity, &mut Transform), With<BookCamera>>,
+    main: Query<(Option<&RenderTarget>, Option<&Msaa>), (With<Camera3d>, Without<BookCamera>)>,
 ) {
     let open = menu.as_ref().filter(|m| m.flow.current == crate::menus::BOOK).and_then(|m| m.flow.book.as_ref().map(|b| (m, b)));
-    for (mut c, _) in &mut cameras {
-        if c.is_active != open.is_some() {
-            c.is_active = open.is_some();
-        }
-    }
     let Some((m, b)) = open else {
         if view.index.take().is_some() {
             for (e, _) in &parts {
                 commands.entity(e).despawn();
             }
         }
+        for (e, _) in &cameras {
+            commands.entity(e).despawn();
+        }
         return;
     };
+    if cameras.is_empty() {
+        let (target, msaa) = main.iter().next().map_or((None, Msaa::Off), |(t, a)| (t.cloned(), a.copied().unwrap_or(Msaa::Off)));
+        spawn_camera(&mut commands, target, msaa);
+    }
     if view.index != Some(b.index) {
         view.index = Some(b.index);
         for (e, _) in &parts {

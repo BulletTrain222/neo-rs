@@ -959,7 +959,6 @@ fn main() {
     app.add_systems(Update, controls_page::show_page.after(dev_menu::show_panel));
     app.add_systems(Update, dev_spawn::picker_show);
     app.init_resource::<book_view::BookView>();
-    app.add_systems(Startup, book_view::spawn_camera);
     app.add_systems(Update, book_view::sync_book.after(play_frame));
     app.insert_resource(goal_start.map_or_else(story_run::GoalWalk::default, story_run::GoalWalk::open));
     app.add_systems(Startup, story_run::spawn_goal_panel);
@@ -2203,7 +2202,7 @@ fn mask_never_cuts(t: &neopets_data::model::ModelTexture, part: &neopets_data::m
 fn drawn_indices(part: &neopets_data::model::MeshPart) -> Vec<u32> {
     // Only a textured part draws Mask(0.5); an untextured one draws solid whatever its vertex
     // alpha, so it keeps every triangle.
-    if part.colors.is_empty() || part.texture.is_none() {
+    if part.colors.is_empty() || part.texture.is_none() || std::env::var_os("NEOPETS_KEEP_CUT").is_some() {
         return part.indices.clone();
     }
     let cut = |i: u32| part.colors.get(i as usize).is_none_or(|c| c[3].min(1.0) < 0.5);
@@ -2925,8 +2924,9 @@ impl PartSig {
         // NEOPETS_DUP_LEVEL=k (diagnostic): only the first k of the wider rules below.
         let level = dup_level();
         (level >= 1 && ((size > 200.0 && diff <= 0.05 * size) || (size > 800.0 && diff <= 0.25 * size)))
-            || (level >= 2 && size > 100.0 && self.overlap(o) >= 0.4)
-            || (level >= 3 && self.contains(o) >= 0.9)
+            // Only 696 and 1023 hold such low-detail copies: elsewhere overlapping boxes are different
+            // pieces, and hiding them cut holes in 1066's mountains (user's F8 view 13).
+            || (matches!((self.pack, o.pack), (696, 1023) | (1023, 696)) && ((level >= 2 && size > 100.0 && self.overlap(o) >= 0.4) || (level >= 3 && self.contains(o) >= 0.9)))
     }
 
     /// The part of `o`'s box that lies inside this one's (each extent at least 1 unit).
@@ -5400,6 +5400,20 @@ fn play_trace(
         if std::env::var("NEOPETS_TRACE_SPRITES").ok().and_then(|v| v.parse::<u64>().ok()) == Some(play.ticks) {
             for (p, group) in play.effects.sprites(&play.effect_table).take(24) {
                 println!("      SPRITE group {group} at {:?} spin {:.3} half {:?} node {}", p.position, p.spin, p.half, p.node);
+            }
+        }
+        // NEOPETS_TRACE_LINES="a,b": those lines of the current world's table with their control bytes (diagnostic).
+        if play.ticks == 2 {
+            if let Ok(v) = std::env::var("NEOPETS_TRACE_LINES") {
+                for n in v.split(',').filter_map(|t| t.trim().parse::<usize>().ok()) {
+                    println!("      LINE {n}: {:?} gives {}", play.world.lines.line(n).map(|l| l.text.clone()), play.world.lines.line(n).is_some_and(|l| l.raw.windows(4).any(|w| w[0] == 1 && w[3] == 0x13)));
+                }
+            }
+        }
+        // NEOPETS_TRACE_SAY="tick:line": that line of the current world opens on that tick (diagnostic).
+        if let Some((k, n)) = std::env::var("NEOPETS_TRACE_SAY").ok().as_deref().and_then(|v| v.split_once(':')).and_then(|(a, b)| Some((a.parse::<u64>().ok()?, b.parse::<u16>().ok()?))) {
+            if k == play.ticks {
+                play.diag_say(n);
             }
         }
         // NEOPETS_TRACE_HELD=id: each change in how many of that item the hero holds (diagnostic).
